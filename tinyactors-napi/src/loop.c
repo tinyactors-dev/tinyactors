@@ -7,7 +7,6 @@
  * arms no timer (section 3; ROADMAP.md, M1). */
 #include "addon.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 const napi_type_tag ta_napi_clock_tag = {0x7461636c6f636b4eu, 0x41504963636c6f63u};
@@ -21,9 +20,14 @@ const napi_type_tag ta_napi_clock_tag = {0x7461636c6f636b4eu, 0x41504963636c6f63
 /* A simulated clock and the hosts it drives. */
 struct ta_napi_clock {
     double milliseconds;
-    ta_napi_host **hosts;
-    uint32_t count, capacity;
+    ta_napi_buffer hosts; /* ta_napi_host *, `count` of them */
+    uint32_t count;
+    ta_napi_buffer self;  /* this struct's memory */
 };
+
+static ta_napi_host **ta_napi_clock_hosts(const ta_napi_clock *clock) {
+    return (ta_napi_host **)clock->hosts.pointer;
+}
 
 /* ---- the runtime's globals ------------------------------------------------------------ */
 
@@ -196,7 +200,7 @@ void ta_napi_loop_turn(ta_napi_host *host) {
             ta_napi_keep_exception(host);
         }
         ta_host_effects_ack(host->host);
-        ta_napi_datamodel_drain(host->native); /* the run and the ack returned */
+        ta_napi_datamodel_drain(&host->native); /* the run and the ack returned */
         if (host->closing) break;
         if (run.status == TA_RUN_EFFECTS_FULL || run.status == TA_RUN_EFFECTS) continue;
         if (run.status == TA_RUN_YIELDED) {
@@ -231,7 +235,7 @@ void ta_napi_loop_turn(ta_napi_host *host) {
 }
 
 void ta_napi_loop_input(ta_napi_host *host) {
-    if (!host->running) ta_napi_datamodel_drain(host->native); /* the input's call into core returned */
+    if (!host->running) ta_napi_datamodel_drain(&host->native); /* the input's call into core returned */
     if (host->running) {
         host->again = 1;
     } else if (host->clock) {
@@ -268,21 +272,17 @@ void ta_napi_loop_advance(ta_napi_host *host) {
 /* ---- SimulatedClock ------------------------------------------------------------------------- */
 
 ta_status ta_napi_clock_add(ta_napi_clock *clock, ta_napi_host *host) {
-    if (clock->count == clock->capacity) {
-        uint32_t capacity = clock->capacity ? clock->capacity * 2 : 4;
-        ta_napi_host **hosts = (ta_napi_host **)realloc(clock->hosts, capacity * sizeof *hosts);
-        if (!hosts) return TA_ERROR_NO_MEMORY;
-        clock->hosts = hosts;
-        clock->capacity = capacity;
-    }
-    clock->hosts[clock->count++] = host;
+    if (!ta_napi_buffer_reserve(&clock->hosts, ((size_t)clock->count + 1) * sizeof(ta_napi_host *)))
+        return TA_ERROR_NO_MEMORY;
+    ta_napi_clock_hosts(clock)[clock->count++] = host;
     return TA_OK;
 }
 
 void ta_napi_clock_forget(ta_napi_clock *clock, ta_napi_host *host) {
+    ta_napi_host **hosts = ta_napi_clock_hosts(clock);
     for (uint32_t i = 0; i < clock->count; i++) {
-        if (clock->hosts[i] != host) continue;
-        clock->hosts[i] = clock->hosts[--clock->count];
+        if (hosts[i] != host) continue;
+        hosts[i] = hosts[--clock->count];
         return;
     }
 }
@@ -292,21 +292,25 @@ static void ta_napi_clock_finalize(node_api_basic_env env, void *data, void *hin
     (void)hint;
     ta_napi_clock *clock = (ta_napi_clock *)data;
     for (uint32_t i = 0; i < clock->count; i++)
-        clock->hosts[i]->clock = NULL;
-    free(clock->hosts);
-    free(clock);
+        ta_napi_clock_hosts(clock)[i]->clock = NULL;
+    ta_napi_buffer_free(&clock->hosts);
+    ta_napi_buffer self = clock->self;
+    ta_napi_buffer_free(&self);
 }
 
 static napi_value ta_napi_clock_new(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     if (!ta_napi_call_read(env, info, &call)) return NULL;
-    ta_napi_clock *clock = (ta_napi_clock *)calloc(1, sizeof *clock);
-    if (!clock) {
+    ta_napi_buffer memory = {NULL, 0};
+    if (!ta_napi_buffer_reserve(&memory, sizeof(ta_napi_clock))) {
         ta_napi_throw_status(env, "SimulatedClock", TA_ERROR_NO_MEMORY);
         return NULL;
     }
+    ta_napi_clock *clock = (ta_napi_clock *)memory.pointer;
+    memset(clock, 0, sizeof *clock);
+    clock->self = memory;
     if (napi_wrap(env, call.self, clock, ta_napi_clock_finalize, NULL, NULL) != napi_ok) {
-        free(clock);
+        ta_napi_buffer_free(&memory);
         return NULL;
     }
     napi_type_tag_object(env, call.self, &ta_napi_clock_tag);
@@ -338,7 +342,7 @@ static napi_value ta_napi_clock_increment(napi_env env, napi_callback_info info)
     }
     clock->milliseconds += milliseconds;
     for (uint32_t i = 0; i < clock->count && !ta_napi_exception_pending(env); i++)
-        ta_napi_loop_turn(clock->hosts[i]);
+        ta_napi_loop_turn(ta_napi_clock_hosts(clock)[i]);
     return NULL;
 }
 

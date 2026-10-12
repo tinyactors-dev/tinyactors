@@ -223,6 +223,23 @@ Progress:
   the rules' tests and the value table's tests are in `mise run test`.
 - **Open:** the request to core below; the API review.
 
+After M1's check, at the coordinator's request (core `3efac6c1`:
+bindings.md section 6, "The binding allocates almost nothing"; AGENTS.md,
+"The binding's memory"):
+
+- The addon's memory, restructured: this commit. Allocator calls in
+  `src/` went from 104 in 9 files to 11 in 2 (`src/datamodel/handles.c`
+  4, `src/host.c` 7): one scratch of reused buffers per environment
+  (`encode`, `decode`, `compile`), per host (its calls, requests,
+  effects) and per native datamodel (its entries), grown by doubling
+  through `ta_napi_buffer_reserve`; bytes borrowed for the call
+  (`ta_napi_values_bytes`); an image's bytes and its `ta_image` held in
+  JavaScript objects until `TA_HOST_EFFECT_SEGMENT_FREED`; sessions,
+  charts (their functions in two JavaScript arrays), payloads,
+  iterations and images as rows of tables; the module, a clock and the
+  datamodel's state without allocations of their own. The lint rule
+  `allocation-in-tables-and-host` keeps it so.
+
 ## Later milestones
 
 From the root ROADMAP.md, step 8: the whole W3C suite (M2), every effect,

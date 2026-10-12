@@ -5,7 +5,6 @@
  * everything else here is ours. */
 #include "addon.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 ta_napi_module *ta_napi_module_of(napi_env env) {
@@ -18,7 +17,10 @@ ta_napi_module *ta_napi_module_of(napi_env env) {
 static void ta_napi_module_free(node_api_basic_env env, void *data, void *hint) {
     (void)env;
     (void)hint;
-    free(data);
+    ta_napi_module *module = (ta_napi_module *)data;
+    ta_napi_scratch_free(&module->scratch);
+    ta_napi_buffer self = module->self;
+    ta_napi_buffer_free(&self);
 }
 
 /* ---- TinyactorsError ------------------------------------------------------------ */
@@ -129,13 +131,17 @@ void ta_napi_throw_reply(napi_env env, napi_value reply_error) {
 /* ---- init ------------------------------------------------------------------------- */
 
 NAPI_MODULE_INIT() {
-    ta_napi_module *module = (ta_napi_module *)calloc(1, sizeof *module);
-    if (!module) {
+    ta_napi_buffer memory = {NULL, 0};
+    if (!ta_napi_buffer_reserve(&memory, sizeof(ta_napi_module))) {
         napi_throw_error(env, NULL, "TA_ERROR_NO_MEMORY");
         return NULL;
     }
+    ta_napi_module *module = (ta_napi_module *)memory.pointer;
+    memset(module, 0, sizeof *module);
+    module->self = memory;
+    module->scratch.env = env;
     if (napi_set_instance_data(env, module, ta_napi_module_free, NULL) != napi_ok) {
-        free(module);
+        ta_napi_buffer_free(&memory);
         return NULL;
     }
     napi_value source, error_class;

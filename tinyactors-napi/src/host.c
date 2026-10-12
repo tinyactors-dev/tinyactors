@@ -29,6 +29,34 @@ static void ta_napi_host_free_block(void *context, void *ptr, size_t size) {
     napi_adjust_external_memory((node_api_basic_env)context, -(int64_t)size, &adjusted);
 }
 
+/* ---- the addon's buffers (AGENTS.md, "The binding's memory") ----------------------- */
+
+int ta_napi_buffer_reserve(ta_napi_buffer *buffer, size_t need) {
+    if (buffer->pointer && need <= buffer->capacity) return 1;
+    size_t capacity = buffer->capacity ? buffer->capacity : 256;
+    while (capacity < need)
+        capacity *= 2;
+    char *pointer = (char *)realloc(buffer->pointer, capacity);
+    if (!pointer) return 0;
+    buffer->pointer = pointer;
+    buffer->capacity = capacity;
+    return 1;
+}
+
+void ta_napi_buffer_free(ta_napi_buffer *buffer) {
+    free(buffer->pointer);
+    buffer->pointer = NULL;
+    buffer->capacity = 0;
+}
+
+void ta_napi_scratch_free(ta_napi_scratch *scratch) {
+    ta_napi_buffer *buffers[] = {&scratch->text,   &scratch->utf16, &scratch->strings,
+                                 &scratch->tokens, &scratch->read_tokens, &scratch->out,
+                                 &scratch->wire,   &scratch->events, &scratch->values};
+    for (size_t i = 0; i < sizeof buffers / sizeof buffers[0]; i++)
+        ta_napi_buffer_free(buffers[i]);
+}
+
 /* ---- arguments --------------------------------------------------------------------- */
 
 int ta_napi_call_read(napi_env env, napi_callback_info info, ta_napi_call *call) {
@@ -55,7 +83,7 @@ static ta_napi_host *ta_napi_host_this(napi_env env, napi_callback_info info, ta
         return NULL;
     }
     /* what a refused call before this one released (its payload) */
-    if (!((ta_napi_host *)host)->running) ta_napi_datamodel_drain(((ta_napi_host *)host)->native);
+    if (!((ta_napi_host *)host)->running) ta_napi_datamodel_drain(&((ta_napi_host *)host)->native);
     return (ta_napi_host *)host;
 }
 
@@ -112,6 +140,18 @@ static napi_value ta_napi_undefined(napi_env env) {
 
 /* ---- new Host(options) -------------------------------------------------------- */
 
+/* The images' references: dropped when their segment is freed, or here. */
+static void ta_napi_images_free(ta_napi_host *host) {
+    for (uint32_t i = 0; i < host->images.count; i++) {
+        ta_napi_image *image = (ta_napi_image *)ta_napi_table_row(&host->images, i);
+        if (!image) continue;
+        napi_delete_reference(host->env, image->bytes);
+        napi_delete_reference(host->env, image->view);
+    }
+    ta_napi_table_free(&host->images);
+}
+
+/* The host's free path: core, its datamodel, the images, the buffers, once. */
 void ta_napi_host_release(ta_napi_host *host) {
     if (host->closed) return;
     host->closed = 1;
@@ -121,15 +161,9 @@ void ta_napi_host_release(ta_napi_host *host) {
     host->host = NULL;
     if (host->quickjs) ta_datamodel_ecmascript_free(host->quickjs);
     host->quickjs = NULL;
-    ta_napi_datamodel_free(host->native);
-    host->native = NULL;
-    for (uint32_t i = 0; i < host->image_count; i++) {
-        free(host->images[i]->bytes);
-        free(host->images[i]);
-    }
-    free(host->images);
-    host->images = NULL;
-    host->image_count = host->image_capacity = 0;
+    ta_napi_datamodel_release(&host->native);
+    ta_napi_images_free(host);
+    ta_napi_scratch_free(&host->scratch);
 }
 
 /* Deletes the references a host holds; a finalizer may (napi_delete_reference
@@ -160,34 +194,27 @@ static void ta_napi_host_finalize(node_api_basic_env env, void *data, void *hint
  * step 6). */
 static ta_status ta_napi_host_datamodel(ta_napi_host *host, napi_value options) {
     napi_env env = host->env;
-    napi_value name = ta_napi_member(env, options, "datamodel");
-    ta_string_view text = {NULL, 0};
-    ta_status status = ta_napi_is_undefined(env, name) ? TA_OK : ta_napi_values_text(env, name, &text);
-    int quickjs = status == TA_OK && text.length == 7 && !memcmp(text.pointer, "quickjs", 7);
-    int native = status == TA_OK && (!text.length || (text.length == 6 && !memcmp(text.pointer, "native", 6)));
-    free((void *)text.pointer);
+    napi_value settings = ta_napi_member(env, options, "quickjs");
+    napi_value names[2] = {ta_napi_member(env, options, "datamodel"), ta_napi_member(env, settings, "realm")};
+    ta_string_view texts[2];
+    ta_napi_texts reading = {names, 2, texts};
+    ta_status status = ta_napi_values_texts(&host->scratch, &reading);
     if (status != TA_OK) return status;
+    ta_string_view name = texts[0], realm = texts[1];
+    int quickjs = name.length == 7 && !memcmp(name.pointer, "quickjs", 7);
     if (!quickjs) {
-        if (!native) return TA_ERROR_INVALID;
-        host->native = ta_napi_datamodel_new(host->env);
-        if (!host->native) return TA_ERROR_NO_MEMORY;
-        host->binding = ta_napi_datamodel_binding(host->native);
+        if (name.length && !(name.length == 6 && !memcmp(name.pointer, "native", 6))) return TA_ERROR_INVALID;
+        if (!ta_napi_datamodel_init(&host->native, env)) return TA_ERROR_NO_MEMORY;
+        host->binding = ta_napi_datamodel_binding(&host->native);
         return TA_OK;
     }
     ta_datamodel_ecmascript_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
-    napi_value settings = ta_napi_member(env, options, "quickjs");
-    napi_value realm = ta_napi_member(env, settings, "realm");
-    if (!ta_napi_is_undefined(env, realm)) {
-        status = ta_napi_values_text(env, realm, &text);
-        if (status == TA_OK && text.length == 8 && !memcmp(text.pointer, "isolated", 8))
-            config.realm = TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED;
-        else if (status == TA_OK && !(text.length == 4 && !memcmp(text.pointer, "auto", 4)))
-            status = TA_ERROR_INVALID;
-        free((void *)text.pointer);
-        if (status != TA_OK) return status;
-    }
+    if (realm.length == 8 && !memcmp(realm.pointer, "isolated", 8))
+        config.realm = TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED;
+    else if (realm.length && !(realm.length == 4 && !memcmp(realm.pointer, "auto", 4)))
+        return TA_ERROR_INVALID;
     host->quickjs = ta_datamodel_ecmascript_new(&config);
     if (!host->quickjs) return TA_ERROR_NO_MEMORY;
     host->binding = ta_datamodel_ecmascript_binding(host->quickjs);
@@ -201,6 +228,8 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     ta_napi_host *host = (ta_napi_host *)calloc(1, sizeof *host);
     if (!host) return ta_napi_refused(env, "Host", TA_ERROR_NO_MEMORY);
     host->env = env;
+    host->scratch.env = env;
+    host->images.row_size = sizeof(ta_napi_image);
     if (napi_wrap(env, call.self, host, ta_napi_host_finalize, NULL, NULL) != napi_ok) {
         free(host);
         return NULL;
@@ -211,34 +240,32 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     napi_type_tag_object(env, call.self, &ta_napi_host_tag);
     ta_status status = ta_napi_host_datamodel(host, options);
     napi_value config = ta_napi_member(env, options, "config");
-    ta_buffer bytes = {NULL, 0, 0};
-    if (status == TA_OK) status = ta_napi_values_encode(env, config, &bytes);
+    ta_bytes bytes = {NULL, 0};
+    if (status == TA_OK) status = ta_napi_values_encode(&host->scratch, config, &bytes);
+    /* a refused config's error, written by core into the host's wire buffer */
+    if (status == TA_OK && !ta_napi_buffer_reserve(&host->scratch.wire, 16384)) status = TA_ERROR_NO_MEMORY;
     if (status != TA_OK) {
-        free(bytes.pointer);
         ta_napi_host_release(host);
         return ta_napi_refused(env, "ta_host_create", status);
     }
-    ta_buffer refusal = {malloc(65536), 65536, 0};
+    ta_buffer refusal = {host->scratch.wire.pointer, host->scratch.wire.capacity, 0};
     ta_host_environment environment;
     memset(&environment, 0, sizeof environment);
     environment.size = sizeof environment;
     environment.datamodel_count = 1;
     environment.datamodels = &host->binding;
     environment.allocator = (ta_allocator){(void *)env, ta_napi_host_alloc, ta_napi_host_free_block};
-    environment.error = refusal.pointer ? &refusal : NULL;
-    status = ta_host_create((ta_bytes){bytes.pointer, bytes.length}, &environment, &host->host);
-    free(bytes.pointer);
+    environment.error = &refusal;
+    status = ta_host_create(bytes, &environment, &host->host);
     if (status != TA_OK) {
         host->host = NULL;
-        ta_napi_host_release(host);
-        if (status == TA_ERROR_INVALID && refusal.length)
+        if (status == TA_ERROR_INVALID && refusal.length && refusal.length <= refusal.capacity)
             ta_napi_throw_config(env, (ta_bytes){refusal.pointer, refusal.length});
         else
             ta_napi_throw_status(env, "ta_host_create", status);
-        free(refusal.pointer);
+        ta_napi_host_release(host);
         return NULL;
     }
-    free(refusal.pointer);
     status = ta_napi_host_read_ticks(host);
     if (status != TA_OK) {
         ta_napi_host_release(host);
@@ -268,20 +295,21 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
 
 /* ---- images --------------------------------------------------------------------- */
 
-/* compile(charts, {resolve}): the image bytes of ta_compile_charts. */
+/* compile(charts, {resolve}): the image bytes of ta_compile_charts. The
+ * texts the compiler reads (the charts', and what resolve gives during the
+ * compile) are held in ArrayBuffers of the call's handle scope, so a
+ * resolve that runs JavaScript cannot move them. */
 typedef struct ta_napi_resolving {
-    napi_env env;
+    ta_napi_scratch *scratch;
     napi_value resolve;
-    char *text[64]; /* what resolve gave, freed after the compile */
-    uint32_t count;
 } ta_napi_resolving;
 
 /* A static src="": the application's resolve({base, source}) gives
  * {name, text}, or undefined for none. */
 static ta_status ta_napi_resolve(void *context, const ta_resolve_request *request, ta_source *out) {
     ta_napi_resolving *resolving = (ta_napi_resolving *)context;
-    napi_env env = resolving->env;
-    if (ta_napi_is_undefined(env, resolving->resolve) || resolving->count + 2 > 64) return TA_ERROR_INVALID;
+    napi_env env = resolving->scratch->env;
+    if (ta_napi_is_undefined(env, resolving->resolve)) return TA_ERROR_INVALID;
     napi_value argument, base, source, result, global;
     napi_create_object(env, &argument);
     napi_create_string_utf8(env, request->base.pointer ? request->base.pointer : "", request->base.length, &base);
@@ -292,16 +320,12 @@ static ta_status ta_napi_resolve(void *context, const ta_resolve_request *reques
     napi_get_global(env, &global);
     if (napi_call_function(env, global, resolving->resolve, 1, &argument, &result) != napi_ok) return TA_ERROR_INVALID;
     if (ta_napi_is_undefined(env, result)) return TA_ERROR_INVALID;
-    ta_string_view name, text;
-    if (ta_napi_values_text(env, ta_napi_member(env, result, "name"), &name) != TA_OK) return TA_ERROR_INVALID;
-    if (ta_napi_values_text(env, ta_napi_member(env, result, "text"), &text) != TA_OK) {
-        free((void *)name.pointer);
+    ta_napi_held_text name, text;
+    if (ta_napi_values_hold_text(resolving->scratch, ta_napi_member(env, result, "name"), &name) != TA_OK ||
+        ta_napi_values_hold_text(resolving->scratch, ta_napi_member(env, result, "text"), &text) != TA_OK)
         return TA_ERROR_INVALID;
-    }
-    resolving->text[resolving->count++] = (char *)name.pointer;
-    resolving->text[resolving->count++] = (char *)text.pointer;
-    out->name = name;
-    out->text = text;
+    out->name = name.text;
+    out->text = text.text;
     return TA_OK;
 }
 
@@ -333,55 +357,43 @@ static napi_value ta_napi_diagnostics(napi_env env, const ta_compile_result *res
     return list;
 }
 
-/* The charts of compile()'s first argument, as ta_source views over
- * malloc'd text (free each name and text). */
-typedef struct ta_napi_sources {
-    ta_source *items;
-    uint32_t count;
-} ta_napi_sources;
-
-static void ta_napi_sources_free(ta_napi_sources *sources) {
-    for (uint32_t i = 0; i < sources->count; i++) {
-        free((void *)sources->items[i].name.pointer);
-        free((void *)sources->items[i].text.pointer);
-    }
-    free(sources->items);
-}
-
-static ta_status ta_napi_sources_read(napi_env env, napi_value charts, ta_napi_sources *out) {
+/* The charts of compile()'s first argument, as ta_source views in
+ * scratch->events over texts held in ArrayBuffers. */
+static ta_status ta_napi_sources_read(ta_napi_scratch *scratch, napi_value charts, ta_source_list *out) {
+    napi_env env = scratch->env;
     bool array = false;
     uint32_t count = 0;
-    out->items = NULL;
+    out->pointer = NULL;
     out->count = 0;
     if (napi_is_array(env, charts, &array) != napi_ok || !array || napi_get_array_length(env, charts, &count) != napi_ok ||
         !count)
         return TA_ERROR_INVALID;
-    out->items = (ta_source *)calloc(count, sizeof *out->items);
-    if (!out->items) return TA_ERROR_NO_MEMORY;
+    if (!ta_napi_buffer_reserve(&scratch->events, (size_t)count * sizeof(ta_source))) return TA_ERROR_NO_MEMORY;
+    ta_source *sources = (ta_source *)scratch->events.pointer;
     for (uint32_t i = 0; i < count; i++) {
         napi_value chart;
-        if (napi_get_element(env, charts, i, &chart) != napi_ok) return TA_ERROR_INVALID;
-        out->count = i + 1;
-        if (ta_napi_values_text(env, ta_napi_member(env, chart, "name"), &out->items[i].name) != TA_OK ||
-            ta_napi_values_text(env, ta_napi_member(env, chart, "text"), &out->items[i].text) != TA_OK)
+        ta_napi_held_text name, text;
+        if (napi_get_element(env, charts, i, &chart) != napi_ok ||
+            ta_napi_values_hold_text(scratch, ta_napi_member(env, chart, "name"), &name) != TA_OK ||
+            ta_napi_values_hold_text(scratch, ta_napi_member(env, chart, "text"), &text) != TA_OK)
             return TA_ERROR_INVALID;
+        sources[i].name = name.text;
+        sources[i].text = text.text;
     }
+    out->pointer = sources;
+    out->count = count;
     return TA_OK;
 }
 
 napi_value ta_napi_compile(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     if (!ta_napi_call_read(env, info, &call)) return NULL;
-    ta_napi_sources sources;
-    ta_status status = ta_napi_sources_read(env, call.argv[0], &sources);
-    if (status != TA_OK) {
-        ta_napi_sources_free(&sources);
-        return ta_napi_refused(env, "compile", status);
-    }
-    ta_napi_resolving resolving;
-    memset(&resolving, 0, sizeof resolving);
-    resolving.env = env;
-    resolving.resolve = ta_napi_member(env, call.argv[1], "resolve");
+    ta_napi_module *module = ta_napi_module_of(env);
+    if (module->compiling) return ta_napi_refused(env, "compile", TA_ERROR_STATE); /* from a resolve */
+    ta_source_list sources;
+    ta_status status = ta_napi_sources_read(&module->scratch, call.argv[0], &sources);
+    if (status != TA_OK) return ta_napi_refused(env, "compile", status);
+    ta_napi_resolving resolving = {&module->scratch, ta_napi_member(env, call.argv[1], "resolve")};
     ta_compile_options options;
     memset(&options, 0, sizeof options);
     options.size = sizeof options;
@@ -389,7 +401,9 @@ napi_value ta_napi_compile(napi_env env, napi_callback_info info) {
     options.resolve = ta_napi_resolve;
     options.resolve_context = &resolving;
     ta_compile_result *result = NULL;
-    status = ta_compile_charts(&options, (ta_source_list){sources.items, sources.count}, &result);
+    module->compiling = 1;
+    status = ta_compile_charts(&options, sources, &result);
+    module->compiling = 0;
     napi_value image = NULL;
     if (status == TA_OK) {
         ta_string_view bytes = ta_compile_image(result);
@@ -403,46 +417,35 @@ napi_value ta_napi_compile(napi_env env, napi_callback_info info) {
         }
     }
     if (result) ta_compile_free(result);
-    for (uint32_t i = 0; i < resolving.count; i++)
-        free(resolving.text[i]);
-    ta_napi_sources_free(&sources);
     return image;
 }
 
-/* addImage(image): a copy of the bytes, opened (ta_image_open) and added
- * (ta_host_add_image); the segment. */
+/* addImage(image): the bytes, held (a reference to the caller's
+ * Uint8Array or ArrayBuffer, which must not change while the segment
+ * runs), opened (ta_image_open) into an ArrayBuffer the host also holds,
+ * and added (ta_host_add_image), until TA_HOST_EFFECT_SEGMENT_FREED; the
+ * segment. */
 static napi_value ta_napi_host_add_image(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     ta_napi_host *host = ta_napi_host_this(env, info, &call);
     if (!host) return NULL;
     ta_bytes bytes;
+    void *data = NULL;
+    napi_value view;
     if (!ta_napi_values_bytes(env, call.argv[0], &bytes)) return ta_napi_refused(env, "Host.addImage", TA_ERROR_INVALID);
-    ta_napi_image *image = (ta_napi_image *)calloc(1, sizeof *image);
-    if (host->image_count == host->image_capacity) {
-        uint32_t capacity = host->image_capacity ? host->image_capacity * 2 : 4;
-        ta_napi_image **images = (ta_napi_image **)realloc(host->images, capacity * sizeof *images);
-        if (images) {
-            host->images = images;
-            host->image_capacity = capacity;
-        }
-    }
-    if (!image || host->image_count == host->image_capacity) {
-        free(image);
-        free((void *)bytes.pointer);
+    if (napi_create_arraybuffer(env, sizeof(ta_image), &data, &view) != napi_ok)
         return ta_napi_refused(env, "Host.addImage", TA_ERROR_NO_MEMORY);
-    }
-    image->bytes = (void *)bytes.pointer;
-    image->length = bytes.length;
-    ta_status status = ta_image_open(bytes, &image->image);
-    if (status == TA_OK) status = ta_host_add_image(host->host, &image->image, &image->segment);
-    if (status != TA_OK) {
-        free(image->bytes);
-        free(image);
-        return ta_napi_refused(env, "ta_host_add_image", status);
-    }
-    image->live = 1;
-    host->images[host->image_count++] = image;
-    return ta_napi_bigint(env, image->segment);
+    ta_status status = ta_image_open(bytes, (ta_image *)data);
+    uint32_t segment = 0;
+    if (status == TA_OK) status = ta_host_add_image(host->host, (const ta_image *)data, &segment);
+    if (status != TA_OK) return ta_napi_refused(env, "ta_host_add_image", status);
+    uint64_t handle = ta_napi_table_add(&host->images);
+    ta_napi_image *image = (ta_napi_image *)ta_napi_table_get(&host->images, handle);
+    if (!image || napi_create_reference(env, call.argv[0], 1, &image->bytes) != napi_ok ||
+        napi_create_reference(env, view, 1, &image->view) != napi_ok)
+        return ta_napi_refused(env, "Host.addImage", TA_ERROR_NO_MEMORY); /* added: held by the call only */
+    image->segment = segment;
+    return ta_napi_bigint(env, segment);
 }
 
 /* boot(segment): the actors the image declares (ta_host_boot). */
@@ -462,55 +465,39 @@ static napi_value ta_napi_host_boot(napi_env env, napi_callback_info info) {
 /* ---- actors ---------------------------------------------------------------------- */
 
 /* spawn(chart, {name, params, traceparent}): ta_host_chart (the current
- * version of the chart named), ta_host_spawn; the session. */
+ * version of the chart named), ta_host_spawn; the session. The params
+ * first (a getter may run JavaScript), then the texts, in the host's text
+ * buffer. */
 static napi_value ta_napi_host_spawn(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     ta_napi_host *host = ta_napi_host_this(env, info, &call);
     if (!host) return NULL;
-    ta_string_view chart = {NULL, 0}, name = {NULL, 0}, traceparent = {NULL, 0};
     ta_spawn spawn;
     memset(&spawn, 0, sizeof spawn);
     ta_host_chart_ref reference;
     napi_value options = call.argv[1];
-    ta_status status = ta_napi_values_text(env, call.argv[0], &chart);
-    napi_value value = ta_napi_member(env, options, "name");
-    if (status == TA_OK && !ta_napi_is_undefined(env, value)) status = ta_napi_values_text(env, value, &name);
-    value = ta_napi_member(env, options, "traceparent");
-    if (status == TA_OK && !ta_napi_is_undefined(env, value)) status = ta_napi_values_text(env, value, &traceparent);
-    if (status == TA_OK) status = ta_host_chart(host->host, chart, &reference);
-    if (status == TA_OK) status = ta_napi_values_payload(host, ta_napi_member(env, options, "params"), &spawn.params);
+    ta_status status = ta_napi_values_payload(host, ta_napi_member(env, options, "params"), &spawn.params);
+    napi_value names[3] = {call.argv[0], ta_napi_member(env, options, "name"), ta_napi_member(env, options, "traceparent")};
+    ta_string_view texts[3];
+    ta_napi_texts reading = {names, 3, texts};
+    if (status == TA_OK && ta_napi_is_undefined(env, call.argv[0])) status = TA_ERROR_INVALID;
+    if (status == TA_OK) status = ta_napi_values_texts(&host->scratch, &reading);
+    if (status == TA_OK) status = ta_host_chart(host->host, texts[0], &reference);
     uint64_t session = 0;
     if (status == TA_OK) {
         spawn.segment = reference.segment;
         spawn.chart = reference.chart;
-        spawn.name = name;
-        spawn.traceparent = traceparent;
+        spawn.name = texts[1];
+        spawn.traceparent = texts[2];
         ta_napi_loop_advance(host);
         status = ta_host_spawn(host->host, &spawn, &session);
-        if (status != TA_OK && spawn.params) host->binding.vtable->release(host->binding.datamodel, spawn.params);
     }
-    free((void *)chart.pointer);
-    free((void *)name.pointer);
-    free((void *)traceparent.pointer);
-    if (status != TA_OK) return ta_napi_refused(env, "ta_host_spawn", status);
+    if (status != TA_OK) {
+        if (spawn.params) host->binding.vtable->release(host->binding.datamodel, spawn.params);
+        return ta_napi_refused(env, "ta_host_spawn", status);
+    }
     ta_napi_loop_input(host);
     return ta_napi_bigint(env, session);
-}
-
-/* An event of send() or sendMany(): its strings are malloc'd. */
-static void ta_napi_event_free(ta_event_in *event) {
-    free((void *)event->name.pointer);
-    event->name.pointer = NULL;
-}
-
-static ta_status ta_napi_event_read(ta_napi_host *host, const napi_value *argv, ta_event_in *event) {
-    napi_env env = host->env;
-    memset(event, 0, sizeof *event);
-    event->size = sizeof *event;
-    if (!ta_napi_id(env, argv[0], &event->session)) return TA_ERROR_INVALID;
-    ta_status status = ta_napi_values_text(env, argv[1], &event->name);
-    if (status == TA_OK) status = ta_napi_values_payload(host, argv[2], &event->data);
-    return status;
 }
 
 /* send(session, event, data): ta_host_send. */
@@ -519,19 +506,26 @@ static napi_value ta_napi_host_send(napi_env env, napi_callback_info info) {
     ta_napi_host *host = ta_napi_host_this(env, info, &call);
     if (!host) return NULL;
     ta_event_in event;
-    ta_status status = ta_napi_event_read(host, call.argv, &event);
-    if (status == TA_OK) {
-        status = ta_host_send(host->host, &event);
-        if (status != TA_OK && event.data) host->binding.vtable->release(host->binding.datamodel, event.data);
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    ta_status status = ta_napi_id(env, call.argv[0], &event.session) ? TA_OK : TA_ERROR_INVALID;
+    if (status == TA_OK) status = ta_napi_values_payload(host, call.argv[2], &event.data);
+    ta_napi_texts reading = {&call.argv[1], 1, &event.name};
+    if (status == TA_OK && ta_napi_is_undefined(env, call.argv[1])) status = TA_ERROR_INVALID;
+    if (status == TA_OK) status = ta_napi_values_texts(&host->scratch, &reading);
+    if (status == TA_OK) status = ta_host_send(host->host, &event);
+    if (status != TA_OK) {
+        if (event.data) host->binding.vtable->release(host->binding.datamodel, event.data);
+        return ta_napi_refused(env, "ta_host_send", status);
     }
-    ta_napi_event_free(&event);
-    if (status != TA_OK) return ta_napi_refused(env, "ta_host_send", status);
     ta_napi_loop_input(host);
     return ta_napi_undefined(env);
 }
 
 /* sendMany([{session, event, data}]): ta_host_send_many; the length of the
- * accepted prefix. */
+ * accepted prefix. The events and their names' views live in the host's
+ * buffers: every payload is made first (a getter may run JavaScript), then
+ * every name is read at once. */
 static napi_value ta_napi_host_send_many(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     ta_napi_host *host = ta_napi_host_this(env, info, &call);
@@ -541,31 +535,41 @@ static napi_value ta_napi_host_send_many(napi_env env, napi_callback_info info) 
     if (napi_is_array(env, call.argv[0], &array) != napi_ok || !array ||
         napi_get_array_length(env, call.argv[0], &count) != napi_ok)
         return ta_napi_refused(env, "Host.sendMany", TA_ERROR_INVALID);
-    ta_event_in *events = (ta_event_in *)calloc(count ? count : 1, sizeof *events);
-    if (!events) return ta_napi_refused(env, "Host.sendMany", TA_ERROR_NO_MEMORY);
+    if (host->batching) return ta_napi_refused(env, "Host.sendMany", TA_ERROR_STATE); /* from a getter */
+    ta_napi_scratch *scratch = &host->scratch;
+    size_t views = (size_t)count * sizeof(napi_value);
+    if (!ta_napi_buffer_reserve(&scratch->events, ((size_t)count + 1) * sizeof(ta_event_in)) ||
+        !ta_napi_buffer_reserve(&scratch->values, views + ((size_t)count + 1) * sizeof(ta_string_view)))
+        return ta_napi_refused(env, "Host.sendMany", TA_ERROR_NO_MEMORY);
+    ta_event_in *events = (ta_event_in *)scratch->events.pointer;
+    napi_value *names = (napi_value *)scratch->values.pointer;
+    ta_string_view *texts = (ta_string_view *)(scratch->values.pointer + views);
     ta_status status = TA_OK;
     uint32_t read = 0;
+    host->batching = 1;
     for (; read < count && status == TA_OK; read++) {
-        napi_value item, argv[3];
-        if (napi_get_element(env, call.argv[0], read, &item) != napi_ok) {
+        napi_value item;
+        ta_event_in *event = &events[read];
+        memset(event, 0, sizeof *event);
+        event->size = sizeof *event;
+        if (napi_get_element(env, call.argv[0], read, &item) != napi_ok ||
+            !ta_napi_id(env, ta_napi_member(env, item, "session"), &event->session)) {
             status = TA_ERROR_INVALID;
             break;
         }
-        argv[0] = ta_napi_member(env, item, "session");
-        argv[1] = ta_napi_member(env, item, "event");
-        argv[2] = ta_napi_member(env, item, "data");
-        status = ta_napi_event_read(host, argv, &events[read]);
-        if (status != TA_OK) {
-            ta_napi_event_free(&events[read]);
-            break;
-        }
+        names[read] = ta_napi_member(env, item, "event");
+        if (ta_napi_is_undefined(env, names[read])) status = TA_ERROR_INVALID;
+        if (status == TA_OK) status = ta_napi_values_payload(host, ta_napi_member(env, item, "data"), &event->data);
+        if (status != TA_OK) break;
     }
+    host->batching = 0;
+    ta_napi_texts reading = {names, count, texts};
+    if (status == TA_OK) status = ta_napi_values_texts(scratch, &reading);
+    for (uint32_t i = 0; status == TA_OK && i < count; i++)
+        events[i].name = texts[i];
     uint32_t taken = status == TA_OK ? ta_host_send_many(host->host, events, count) : 0;
-    for (uint32_t i = 0; i < read; i++) {
-        if (i >= taken && events[i].data) host->binding.vtable->release(host->binding.datamodel, events[i].data);
-        ta_napi_event_free(&events[i]);
-    }
-    free(events);
+    for (uint32_t i = taken; i < read; i++)
+        if (events[i].data) host->binding.vtable->release(host->binding.datamodel, events[i].data);
     if (status != TA_OK) return ta_napi_refused(env, "ta_host_send_many", status);
     if (taken) ta_napi_loop_input(host);
     napi_value result;
@@ -596,19 +600,21 @@ static napi_value ta_napi_host_add_peer(napi_env env, napi_callback_info info) {
     ta_peer_config peer;
     memset(&peer, 0, sizeof peer);
     peer.size = sizeof peer;
-    ta_status status = ta_napi_values_text(env, ta_napi_member(env, call.argv[0], "id"), &peer.id);
+    napi_value id = ta_napi_member(env, call.argv[0], "id");
+    ta_napi_texts reading = {&id, 1, &peer.id};
+    ta_status status = ta_napi_is_undefined(env, id) ? TA_ERROR_INVALID : ta_napi_values_texts(&host->scratch, &reading);
     bool trusted = false;
     napi_get_value_bool(env, ta_napi_member(env, call.argv[0], "trusted"), &trusted);
     peer.flags = trusted ? TA_PEER_TRUSTED : 0;
     uint32_t handle = 0;
     if (status == TA_OK) status = ta_host_peer_add(host->host, &peer, &handle);
-    free((void *)peer.id.pointer);
     if (status != TA_OK) return ta_napi_refused(env, "ta_host_peer_add", status);
     ta_napi_loop_input(host);
     return ta_napi_bigint(env, handle);
 }
 
-/* deliver(peer, envelope): ta_host_envelope_read, then ta_host_deliver, also
+/* deliver(peer, envelope): the bytes borrowed for the call;
+ * ta_host_envelope_read, then ta_host_deliver, also
  * when the read failed with the envelope's size set (its data is not one
  * item: core refuses it as malformed and answers the sender, host.h); the
  * TA_ROUTE_* outcome. */
@@ -625,7 +631,6 @@ static napi_value ta_napi_host_deliver(napi_env env, napi_callback_info info) {
     ta_napi_loop_advance(host);
     ta_status status = ta_host_envelope_read(host->host, bytes, &envelope);
     int32_t route = status == TA_OK || envelope.size ? ta_host_deliver(host->host, (uint32_t)peer, &envelope) : status;
-    free((void *)bytes.pointer);
     if (route < 0) return ta_napi_refused(env, "ta_host_deliver", route);
     ta_napi_loop_input(host);
     napi_value result;

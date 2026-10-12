@@ -36,7 +36,8 @@ host.send(session, 'inc', { by: 2 });           // logs 1n n 2, on the next turn
   'native'`, the default), or in quickjs-ng inside the addon
   (`datamodel: 'quickjs'`, with `quickjs: { realm: 'auto' | 'isolated' }`).
 - **`compile(charts, { resolve })`** compiles SCXML into an image's
-  bytes; **`addImage(image)`** adds it as a segment, **`boot(segment)`**
+  bytes; **`addImage(image)`** adds it as a segment (the host holds those
+  bytes, not a copy, until the segment is freed: do not change them), **`boot(segment)`**
   spawns the actors a system image declares.
 - **`spawn`, `send`, `sendMany`, `terminate`** are the host's inputs; ids
   are `BigInt`.

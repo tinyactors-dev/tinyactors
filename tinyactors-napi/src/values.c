@@ -13,7 +13,6 @@
  * address text and never written. */
 #include "addon.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 /* 2^53 - 1: the integers a number holds exactly. */
@@ -22,38 +21,26 @@
 
 /* ---- written: a value's tokens ------------------------------------------------ */
 
-/* Tokens and the text and bytes they point into, both grown with malloc. */
+/* A value being written: its tokens (scratch->tokens) and the text and
+ * bytes they point into (scratch->strings), both reused by every encode on
+ * the scratch. */
 typedef struct ta_napi_writer {
     napi_env env;
-    ta_cbor_token *tokens;
-    uint32_t count, capacity;
-    char *strings;
-    size_t length, room;
+    ta_napi_scratch *scratch;
+    uint32_t count;
+    size_t length;
     ta_status status;
-    uint16_t *utf16; /* a string's UTF-16 code units, while it is written */
-    size_t utf16_room;
 } ta_napi_writer;
-
-static void ta_napi_writer_free(ta_napi_writer *writer) {
-    free(writer->tokens);
-    free(writer->strings);
-    free(writer->utf16);
-}
 
 /* Append a token; its index, or TA_NIL (and the status set). */
 static uint32_t ta_napi_writer_token(ta_napi_writer *writer, const ta_cbor_token *token) {
     if (writer->status != TA_OK) return TA_NIL;
-    if (writer->count == writer->capacity) {
-        uint32_t capacity = writer->capacity ? writer->capacity * 2 : 64;
-        ta_cbor_token *tokens = (ta_cbor_token *)realloc(writer->tokens, capacity * sizeof *tokens);
-        if (!tokens) {
-            writer->status = TA_ERROR_NO_MEMORY;
-            return TA_NIL;
-        }
-        writer->tokens = tokens;
-        writer->capacity = capacity;
+    ta_napi_buffer *tokens = &writer->scratch->tokens;
+    if (!ta_napi_buffer_reserve(tokens, ((size_t)writer->count + 1) * sizeof(ta_cbor_token))) {
+        writer->status = TA_ERROR_NO_MEMORY;
+        return TA_NIL;
     }
-    writer->tokens[writer->count] = *token;
+    ((ta_cbor_token *)tokens->pointer)[writer->count] = *token;
     return writer->count++;
 }
 
@@ -64,19 +51,12 @@ static char *ta_napi_writer_room(ta_napi_writer *writer, size_t more) {
         writer->status = TA_ERROR_INVALID;
         return NULL;
     }
-    if (!writer->strings || writer->room - writer->length < more) {
-        size_t room = writer->room ? writer->room : 1024;
-        while (room - writer->length < more)
-            room *= 2;
-        char *strings = (char *)realloc(writer->strings, room);
-        if (!strings) {
-            writer->status = TA_ERROR_NO_MEMORY;
-            return NULL;
-        }
-        writer->strings = strings;
-        writer->room = room;
+    ta_napi_buffer *strings = &writer->scratch->strings;
+    if (!ta_napi_buffer_reserve(strings, writer->length + more + 1)) {
+        writer->status = TA_ERROR_NO_MEMORY;
+        return NULL;
     }
-    return writer->strings + writer->length;
+    return strings->pointer + writer->length;
 }
 
 /* A text or byte token over the `length` bytes just written at the end of
@@ -113,39 +93,40 @@ static int ta_napi_writer_check(ta_napi_writer *writer, napi_status status) {
     return 0;
 }
 
-/* A string as UTF-8 text. A lone surrogate is refused, never replaced:
- * Node-API's UTF-8 conversion would write U+FFFD for it silently
- * (bindings.md, section 9), so the string is read as UTF-16 and encoded
- * here. */
-static void ta_napi_writer_text(ta_napi_writer *writer, napi_value value) {
-    napi_env env = writer->env;
-    size_t units = 0;
-    if (!ta_napi_writer_check(writer, napi_get_value_string_utf16(env, value, NULL, 0, &units))) return;
-    if (writer->utf16_room < units + 1) {
-        uint16_t *utf16 = (uint16_t *)realloc(writer->utf16, (units + 1) * sizeof *utf16);
-        if (!utf16) {
-            writer->status = TA_ERROR_NO_MEMORY;
-            return;
-        }
-        writer->utf16 = utf16;
-        writer->utf16_room = units + 1;
-    }
-    size_t read = 0;
-    if (!ta_napi_writer_check(writer, napi_get_value_string_utf16(env, value, (char16_t *)writer->utf16,
-                                                                  units + 1, &read)))
-        return;
-    char *out = ta_napi_writer_room(writer, units * 3); /* at most 3 bytes per unit */
-    if (!out) return;
-    size_t length = 0;
-    const uint16_t *utf16 = writer->utf16;
+/* A string's UTF-16 code units, read into scratch->utf16; how many. A
+ * lone surrogate is refused later, by ta_napi_utf8: Node-API's UTF-8
+ * conversion would write U+FFFD for it silently (bindings.md, section 9),
+ * so the addon reads UTF-16 and encodes UTF-8 itself. */
+static ta_status ta_napi_utf16(ta_napi_scratch *scratch, napi_value value, size_t *units) {
+    size_t length = 0, read = 0;
+    if (napi_get_value_string_utf16(scratch->env, value, NULL, 0, &length) != napi_ok) return TA_ERROR_INVALID;
+    if (!ta_napi_buffer_reserve(&scratch->utf16, (length + 1) * sizeof(uint16_t))) return TA_ERROR_NO_MEMORY;
+    if (napi_get_value_string_utf16(scratch->env, value, (char16_t *)scratch->utf16.pointer, length + 1, &read) !=
+        napi_ok)
+        return TA_ERROR_INVALID;
+    *units = read;
+    return TA_OK;
+}
+
+/* `count` UTF-16 units as UTF-8 at `out` (room for 3 bytes a unit). */
+typedef struct ta_napi_utf8_out {
+    const uint16_t *units;
+    size_t count;
+    char *out;
+} ta_napi_utf8_out;
+
+/* Its length, or TA_NIL for a lone surrogate. */
+static size_t ta_napi_utf8(const ta_napi_utf8_out *conversion) {
+    const uint16_t *utf16 = conversion->units;
+    char *out = conversion->out;
+    size_t length = 0, read = conversion->count;
     for (size_t i = 0; i < read; i++) {
         uint32_t c = utf16[i];
         if (c >= 0xD800 && c <= 0xDBFF && i + 1 < read && utf16[i + 1] >= 0xDC00 && utf16[i + 1] <= 0xDFFF) {
             c = 0x10000 + ((c - 0xD800) << 10) + (utf16[i + 1] - 0xDC00u);
             i++;
         } else if (c >= 0xD800 && c <= 0xDFFF) {
-            writer->status = TA_ERROR_INVALID; /* a lone surrogate */
-            return;
+            return TA_NIL; /* a lone surrogate */
         }
         if (c < 0x80) {
             out[length++] = (char)c;
@@ -162,6 +143,26 @@ static void ta_napi_writer_text(ta_napi_writer *writer, napi_value value) {
             out[length++] = (char)(0x80 | ((c >> 6) & 0x3F));
             out[length++] = (char)(0x80 | (c & 0x3F));
         }
+    }
+    return length;
+}
+
+/* A string as UTF-8 text; a lone surrogate is refused, never replaced. */
+static void ta_napi_writer_text(ta_napi_writer *writer, napi_value value) {
+    size_t units = 0;
+    if (writer->status != TA_OK) return;
+    ta_status status = ta_napi_utf16(writer->scratch, value, &units);
+    if (status != TA_OK) {
+        writer->status = status;
+        return;
+    }
+    char *out = ta_napi_writer_room(writer, units * 3);
+    if (!out) return;
+    ta_napi_utf8_out conversion = {(const uint16_t *)writer->scratch->utf16.pointer, units, out};
+    size_t length = ta_napi_utf8(&conversion);
+    if (length == TA_NIL) {
+        writer->status = TA_ERROR_INVALID;
+        return;
     }
     ta_napi_written written = {TA_CBOR_TEXT, length};
     ta_napi_writer_string(writer, &written);
@@ -209,38 +210,39 @@ static void ta_napi_writer_bigint(ta_napi_writer *writer, napi_value value) {
     ta_napi_writer_token(writer, &token);
 }
 
-/* The bytes of an ArrayBuffer, a typed array (its own bytes) or a
- * DataView; 0 when the value is none of them. */
-static int ta_napi_writer_buffer(ta_napi_writer *writer, napi_value value) {
-    napi_env env = writer->env;
+int ta_napi_values_bytes(napi_env env, napi_value value, ta_bytes *out) {
     bool is = false;
-    ta_bytes bytes = {NULL, 0};
     void *data = NULL;
+    size_t length = 0;
+    out->pointer = NULL;
+    out->length = 0;
     if (napi_is_arraybuffer(env, value, &is) == napi_ok && is) {
-        size_t length = 0;
-        if (!ta_napi_writer_check(writer, napi_get_arraybuffer_info(env, value, &data, &length))) return 1;
-        bytes = (ta_bytes){data, length};
+        if (napi_get_arraybuffer_info(env, value, &data, &length) != napi_ok) return 0;
     } else if (napi_is_typedarray(env, value, &is) == napi_ok && is) {
         napi_typedarray_type type;
-        size_t length = 0;
-        if (!ta_napi_writer_check(writer, napi_get_typedarray_info(env, value, &type, &length, &data, NULL, NULL)))
-            return 1;
+        if (napi_get_typedarray_info(env, value, &type, &length, &data, NULL, NULL) != napi_ok) return 0;
         static const size_t sizes[] = {
             [napi_int8_array] = 1,      [napi_uint8_array] = 1,     [napi_uint8_clamped_array] = 1,
             [napi_int16_array] = 2,     [napi_uint16_array] = 2,    [napi_int32_array] = 4,
             [napi_uint32_array] = 4,    [napi_float32_array] = 4,   [napi_float64_array] = 8,
             [napi_bigint64_array] = 8,  [napi_biguint64_array] = 8,
         };
-        size_t size = (size_t)type < sizeof sizes / sizeof sizes[0] && sizes[type] ? sizes[type] : 1;
-        bytes = (ta_bytes){data, length * size};
+        length *= (size_t)type < sizeof sizes / sizeof sizes[0] && sizes[type] ? sizes[type] : 1;
     } else if (napi_is_dataview(env, value, &is) == napi_ok && is) {
-        size_t length = 0;
-        if (!ta_napi_writer_check(writer, napi_get_dataview_info(env, value, &length, &data, NULL, NULL))) return 1;
-        bytes = (ta_bytes){data, length};
+        if (napi_get_dataview_info(env, value, &length, &data, NULL, NULL) != napi_ok) return 0;
     } else {
         return 0;
     }
-    if (!bytes.pointer) bytes.length = 0; /* detached */
+    out->pointer = data;
+    out->length = data ? length : 0; /* detached: empty */
+    return 1;
+}
+
+/* The bytes of an ArrayBuffer, a typed array (its own bytes) or a
+ * DataView, written; 0 when the value is none of them. */
+static int ta_napi_writer_buffer(ta_napi_writer *writer, napi_value value) {
+    ta_bytes bytes;
+    if (!ta_napi_values_bytes(writer->env, value, &bytes)) return 0;
     ta_napi_writer_bytes(writer, bytes);
     return 1;
 }
@@ -287,7 +289,7 @@ static void ta_napi_writer_object(ta_napi_writer *writer, napi_value value, uint
             writer->count = mark;
             writer->length = strings;
         } else if (writer->status == TA_OK) {
-            writer->tokens[map].count++;
+            ((ta_cbor_token *)writer->scratch->tokens.pointer)[map].count++;
         }
     }
 }
@@ -348,27 +350,27 @@ static int ta_napi_writer_value(ta_napi_writer *writer, napi_value value, uint32
     return writer->status == TA_OK ? 1 : -1;
 }
 
-ta_status ta_napi_values_encode(napi_env env, napi_value value, ta_buffer *out) {
-    ta_napi_writer writer;
-    memset(&writer, 0, sizeof writer);
-    writer.env = env;
+ta_status ta_napi_values_encode(ta_napi_scratch *scratch, napi_value value, ta_bytes *out) {
     out->pointer = NULL;
-    out->capacity = out->length = 0;
+    out->length = 0;
+    if (scratch->writing) return TA_ERROR_STATE;
+    ta_napi_writer writer = {scratch->env, scratch, 0, 0, TA_OK};
+    scratch->writing = 1;
     if (!ta_napi_writer_value(&writer, value, 0)) ta_napi_writer_simple(&writer, TA_CBOR_NULL);
+    scratch->writing = 0;
     ta_status status = writer.status;
-    if (status == TA_OK) {
-        ta_cbor_document document = {{writer.strings, writer.length}, writer.tokens, writer.capacity, writer.count};
-        ta_buffer buffer = {NULL, 0, 0};
-        status = ta_cbor_encode(&document, &buffer); /* measures */
-        if (status == TA_ERROR_NO_MEMORY) {
-            buffer.pointer = malloc(buffer.length ? buffer.length : 1);
-            buffer.capacity = buffer.length;
-            status = buffer.pointer ? ta_cbor_encode(&document, &buffer) : TA_ERROR_NO_MEMORY;
-        }
-        if (status == TA_OK) *out = buffer;
-        else free(buffer.pointer);
+    if (status != TA_OK) return status;
+    ta_cbor_document document = {{scratch->strings.pointer, writer.length},
+                                 (ta_cbor_token *)scratch->tokens.pointer,
+                                 writer.count,
+                                 writer.count};
+    ta_buffer buffer = {scratch->out.pointer, scratch->out.capacity, 0};
+    status = ta_cbor_encode(&document, &buffer);
+    if (status == TA_ERROR_NO_MEMORY && ta_napi_buffer_reserve(&scratch->out, buffer.length)) {
+        buffer = (ta_buffer){scratch->out.pointer, scratch->out.capacity, 0};
+        status = ta_cbor_encode(&document, &buffer);
     }
-    ta_napi_writer_free(&writer);
+    if (status == TA_OK) *out = (ta_bytes){scratch->out.pointer, buffer.length};
     return status;
 }
 
@@ -467,62 +469,45 @@ static ta_status ta_napi_reader_value(ta_napi_reader *reader, napi_value *out) {
     return status == napi_ok ? TA_OK : TA_ERROR_NO_MEMORY;
 }
 
-ta_status ta_napi_values_decode(napi_env env, ta_bytes cbor, napi_value *out) {
+ta_status ta_napi_values_decode(ta_napi_scratch *scratch, ta_bytes cbor, napi_value *out) {
     ta_cbor_token small[64];
     ta_cbor_document document = {cbor, small, sizeof small / sizeof small[0], 0};
     ta_status status = ta_cbor_decode(&document);
     if (status == TA_ERROR_NO_MEMORY) {
-        document.tokens = (ta_cbor_token *)malloc((size_t)document.count * sizeof *document.tokens);
-        if (!document.tokens) return TA_ERROR_NO_MEMORY;
+        if (!ta_napi_buffer_reserve(&scratch->read_tokens, (size_t)document.count * sizeof(ta_cbor_token)))
+            return TA_ERROR_NO_MEMORY;
+        document.tokens = (ta_cbor_token *)scratch->read_tokens.pointer;
         document.capacity = document.count;
         status = ta_cbor_decode(&document);
     }
     if (status == TA_OK) {
-        ta_napi_reader reader = {env, &document, 0};
+        ta_napi_reader reader = {scratch->env, &document, 0};
         status = ta_napi_reader_value(&reader, out);
     }
-    if (document.tokens != small) free(document.tokens);
     return status;
 }
 
 /* ---- the exports ------------------------------------------------------------- */
 
-/* The bytes of an ArrayBuffer, a typed array or a DataView `value`; 0 when it
- * is none of them. */
-int ta_napi_values_bytes(napi_env env, napi_value value, ta_bytes *out) {
-    ta_napi_writer writer;
-    memset(&writer, 0, sizeof writer);
-    writer.env = env;
-    int is = ta_napi_writer_buffer(&writer, value);
-    if (is && writer.status == TA_OK) *out = (ta_bytes){writer.strings, writer.length};
-    else free(writer.strings);
-    free(writer.tokens);
-    return is && writer.status == TA_OK;
-}
-
-/* encode(value) -> Uint8Array: ta_cbor_encode of the value's tokens. */
+/* encode(value) -> Uint8Array: ta_cbor_encode of the value's tokens, on
+ * the environment's scratch. */
 napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value argv[1], result = NULL;
     napi_get_undefined(env, &argv[0]);
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) return NULL;
-    ta_buffer cbor;
-    ta_status status = ta_napi_values_encode(env, argv[0], &cbor);
+    ta_bytes cbor;
+    ta_status status = ta_napi_values_encode(&ta_napi_module_of(env)->scratch, argv[0], &cbor);
     if (status != TA_OK) {
         ta_napi_throw_status(env, "encode", status);
         return NULL;
     }
-    void *data = NULL;
-    napi_value buffer;
-    if (napi_create_arraybuffer(env, cbor.length, &data, &buffer) == napi_ok) {
-        if (cbor.length) memcpy(data, cbor.pointer, cbor.length);
-        napi_create_typedarray(env, napi_uint8_array, cbor.length, buffer, 0, &result);
-    }
-    free(cbor.pointer);
+    if (ta_napi_values_uint8array(env, cbor, &result) != napi_ok) return NULL;
     return result;
 }
 
-/* decode(bytes) -> value: one ta_cbor_decode, then the values. */
+/* decode(bytes) -> value: one ta_cbor_decode of the bytes, borrowed, then
+ * the values. */
 napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value argv[1], result = NULL;
@@ -533,8 +518,7 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
         ta_napi_throw_status(env, "decode", TA_ERROR_INVALID);
         return NULL;
     }
-    ta_status status = ta_napi_values_decode(env, cbor, &result);
-    free((void *)cbor.pointer);
+    ta_status status = ta_napi_values_decode(&ta_napi_module_of(env)->scratch, cbor, &result);
     if (status != TA_OK) {
         ta_napi_throw_status(env, "decode", status);
         return NULL;
@@ -544,23 +528,54 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
 
 /* ---- for the API ----------------------------------------------------------------- */
 
-ta_status ta_napi_values_text(napi_env env, napi_value value, ta_string_view *out) {
-    napi_valuetype type = napi_undefined;
-    out->pointer = NULL;
-    out->length = 0;
-    if (napi_typeof(env, value, &type) != napi_ok || type != napi_string) return TA_ERROR_INVALID;
-    ta_napi_writer writer;
-    memset(&writer, 0, sizeof writer);
-    writer.env = env;
-    ta_napi_writer_text(&writer, value);
-    ta_status status = writer.status;
-    if (status == TA_OK) {
-        out->pointer = writer.strings;
-        out->length = (uint32_t)writer.length;
-        writer.strings = NULL;
+ta_status ta_napi_values_texts(ta_napi_scratch *scratch, const ta_napi_texts *texts) {
+    napi_env env = scratch->env;
+    size_t total = 0;
+    for (uint32_t i = 0; i < texts->count; i++) {
+        napi_valuetype type = napi_undefined;
+        size_t units = 0;
+        texts->out[i].pointer = NULL;
+        texts->out[i].length = 0;
+        if (napi_typeof(env, texts->values[i], &type) != napi_ok) return TA_ERROR_INVALID;
+        if (type == napi_undefined) continue;
+        if (type != napi_string || napi_get_value_string_utf16(env, texts->values[i], NULL, 0, &units) != napi_ok)
+            return TA_ERROR_INVALID;
+        total += units * 3;
     }
-    ta_napi_writer_free(&writer);
-    return status;
+    /* reserved at once: the views stay put while the next is written */
+    if (!ta_napi_buffer_reserve(&scratch->text, total + 1)) return TA_ERROR_NO_MEMORY;
+    size_t at = 0;
+    for (uint32_t i = 0; i < texts->count; i++) {
+        napi_valuetype type = napi_undefined;
+        size_t units = 0;
+        napi_typeof(env, texts->values[i], &type);
+        if (type == napi_undefined) continue;
+        ta_status status = ta_napi_utf16(scratch, texts->values[i], &units);
+        if (status != TA_OK) return status;
+        ta_napi_utf8_out conversion = {(const uint16_t *)scratch->utf16.pointer, units, scratch->text.pointer + at};
+        size_t length = ta_napi_utf8(&conversion);
+        if (length == TA_NIL) return TA_ERROR_INVALID;
+        texts->out[i].pointer = scratch->text.pointer + at;
+        texts->out[i].length = (uint32_t)length;
+        at += length;
+    }
+    return TA_OK;
+}
+
+ta_status ta_napi_values_hold_text(ta_napi_scratch *scratch, napi_value value, ta_napi_held_text *out) {
+    napi_valuetype type = napi_undefined;
+    size_t units = 0;
+    void *data = NULL;
+    if (napi_typeof(scratch->env, value, &type) != napi_ok || type != napi_string) return TA_ERROR_INVALID;
+    ta_status status = ta_napi_utf16(scratch, value, &units);
+    if (status != TA_OK) return status;
+    if (napi_create_arraybuffer(scratch->env, units * 3 + 1, &data, &out->holder) != napi_ok) return TA_ERROR_NO_MEMORY;
+    ta_napi_utf8_out conversion = {(const uint16_t *)scratch->utf16.pointer, units, (char *)data};
+    size_t length = ta_napi_utf8(&conversion);
+    if (length == TA_NIL) return TA_ERROR_INVALID;
+    out->text.pointer = (const char *)data;
+    out->text.length = (uint32_t)length;
+    return TA_OK;
 }
 
 napi_status ta_napi_values_uint8array(napi_env env, ta_bytes bytes, napi_value *out) {
@@ -577,31 +592,44 @@ ta_status ta_napi_values_payload(ta_napi_host *host, napi_value value, ta_payloa
     napi_valuetype type = napi_undefined;
     *out = 0;
     if (napi_typeof(host->env, value, &type) != napi_ok || type == napi_undefined) return TA_OK;
-    ta_buffer cbor;
-    ta_status status = ta_napi_values_encode(host->env, value, &cbor);
+    ta_bytes cbor;
+    ta_status status = ta_napi_values_encode(&host->scratch, value, &cbor);
     if (status != TA_OK) return status;
-    const ta_datamodel_vtable *vtable = host->binding.vtable;
-    status = vtable->from_wire(host->binding.datamodel, (ta_bytes){cbor.pointer, cbor.length}, out);
-    free(cbor.pointer);
+    return host->binding.vtable->from_wire(host->binding.datamodel, cbor, out);
+}
+
+ta_status ta_napi_wire(ta_napi_scratch *scratch, const ta_napi_writing *writing, ta_bytes *out) {
+    if (!scratch->wire.capacity && !ta_napi_buffer_reserve(&scratch->wire, 1024)) return TA_ERROR_NO_MEMORY;
+    ta_buffer buffer = {scratch->wire.pointer, scratch->wire.capacity, 0};
+    ta_status status = writing->write(writing->context, &buffer);
+    if (status == TA_ERROR_NO_MEMORY && buffer.length > buffer.capacity &&
+        ta_napi_buffer_reserve(&scratch->wire, buffer.length)) {
+        buffer = (ta_buffer){scratch->wire.pointer, scratch->wire.capacity, 0};
+        status = writing->write(writing->context, &buffer);
+    }
+    out->pointer = scratch->wire.pointer;
+    out->length = status == TA_OK ? buffer.length : 0;
     return status;
 }
 
-/* Through the datamodel's to_wire, grown until it fits. */
+/* A payload's to_wire into the host's wire buffer. */
+typedef struct ta_napi_to_wire_call {
+    const ta_napi_host *host;
+    ta_payload payload;
+} ta_napi_to_wire_call;
+
+static ta_status ta_napi_to_wire_write(void *context, ta_buffer *out) {
+    const ta_napi_to_wire_call *call = (const ta_napi_to_wire_call *)context;
+    return call->host->binding.vtable->to_wire(call->host->binding.datamodel, call->payload, out);
+}
+
+/* Through the datamodel's to_wire, then the value table. */
 ta_status ta_napi_values_of_payload(ta_napi_host *host, const ta_napi_payload_read *read, napi_value *out) {
-    if (!read->payload || read->datamodel != 0) return napi_get_undefined(host->env, out) == napi_ok ? TA_OK : TA_ERROR_NO_MEMORY;
-    const ta_datamodel_vtable *vtable = host->binding.vtable;
-    ta_buffer cbor = {malloc(256), 256, 0};
-    if (!cbor.pointer) return TA_ERROR_NO_MEMORY;
-    ta_status status = vtable->to_wire(host->binding.datamodel, read->payload, &cbor);
-    if (status == TA_ERROR_NO_MEMORY && cbor.length > cbor.capacity) {
-        void *bigger = realloc(cbor.pointer, cbor.length);
-        if (bigger) {
-            cbor.pointer = bigger;
-            cbor.capacity = cbor.length;
-            status = vtable->to_wire(host->binding.datamodel, read->payload, &cbor);
-        }
-    }
-    if (status == TA_OK) status = ta_napi_values_decode(host->env, (ta_bytes){cbor.pointer, cbor.length}, out);
-    free(cbor.pointer);
-    return status;
+    if (!read->payload || read->datamodel != 0)
+        return napi_get_undefined(host->env, out) == napi_ok ? TA_OK : TA_ERROR_NO_MEMORY;
+    ta_napi_to_wire_call call = {host, read->payload};
+    ta_napi_writing writing = {ta_napi_to_wire_write, &call};
+    ta_bytes cbor;
+    ta_status status = ta_napi_wire(&host->scratch, &writing, &cbor);
+    return status == TA_OK ? ta_napi_values_decode(&host->scratch, cbor, out) : status;
 }

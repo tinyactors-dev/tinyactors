@@ -4,88 +4,69 @@
  * only ta_datamodel_environment_*, ta_image_* and ta_cbor_* (the lint rule
  * datamodel-calls-environment-and-node-api), and Node-API.
  *
- *   handles.c      the two slot tables, payloads and sessions: a slot and a
- *                  generation per handle, never a pointer; a payload's
- *                  reference count; the drops deferred until the outer call
- *                  into core returns
+ *   handles.c      tables of rows: payloads (with reference counts),
+ *                  sessions, charts, iterations, a host's images; the drops
+ *                  deferred until the outer call into core returns
  *   expressions.c  a chart's expressions, compiled once at chart_attach as
  *                  strict functions inside `with (scope)`
- *   datamodel.c    the vtable: scopes, _event, In(), the entries */
+ *   datamodel.c    the vtable: scopes, _event, In(), the entries
+ *
+ * Its state (ta_napi_datamodel) is a part of its Host (addon.h): a session,
+ * a chart and a payload are rows, not allocations of their own (AGENTS.md,
+ * "The binding's memory"). */
 #ifndef TA_NAPI_DATAMODEL_H
 #define TA_NAPI_DATAMODEL_H
 
 #include "../addon.h"
 
-/* ---- handles.c ----------------------------------------------------------------- */
+/* A payload: its value, held in a one-item array, since Node-API version 8
+ * references only objects, functions and symbols, and a payload may be a
+ * number, a string or undefined. Its reference count is the row's. */
+typedef struct ta_napi_payload_row {
+    ta_napi_row row;
+    napi_ref holder;
+} ta_napi_payload_row;
 
-/* A slot: a JavaScript value (a payload's, or a session's scope) and what
- * the table keeps beside it. */
-typedef struct ta_napi_slot {
-    napi_ref value;
-    void *data;          /* a session's state; NULL for a payload */
-    uint32_t references; /* a payload's reference count; 0: the slot is free */
-    uint32_t generation; /* bumped when the slot is freed: an older handle is stale */
-    uint32_t next_free;
-} ta_napi_slot;
+/* A session: its scope, the spawn's or invoke's params, and its chart. */
+typedef struct ta_napi_session_row {
+    ta_napi_row row;
+    napi_ref scope;
+    napi_ref init;  /* an object, or NULL */
+    uint64_t chart; /* a row of the charts table */
+} ta_napi_session_row;
 
-typedef struct ta_napi_slots {
-    ta_napi_slot *items;
-    uint32_t count, capacity;
-    uint32_t free; /* first free slot, or TA_NIL */
-} ta_napi_slots;
-
-/* What a new slot holds. */
-typedef struct ta_napi_slot_init {
-    napi_value value;
-    void *data;
-} ta_napi_slot_init;
-
-/* A handle of a new slot holding `init` (one reference); 0 when out of memory. */
-uint64_t ta_napi_slots_add(ta_napi_datamodel *datamodel, ta_napi_slots *slots, const ta_napi_slot_init *init);
-/* The live slot `handle` names, or NULL (stale, freed, or never one). */
-ta_napi_slot *ta_napi_slots_get(ta_napi_slots *slots, uint64_t handle);
-/* Free slot `handle`: its value's reference goes to the deferred drops. */
-void ta_napi_slots_remove(ta_napi_datamodel *datamodel, ta_napi_slots *slots, uint64_t handle);
-/* A reference to drop once the outer call into core returns: dropping the
- * last one can let JavaScript run (a finalizer), and core calls release
- * outside a run too (bindings.md, section 8). */
-void ta_napi_defer_drop(ta_napi_datamodel *datamodel, napi_ref reference);
-/* The value of a live slot. */
-napi_status ta_napi_slot_value(ta_napi_datamodel *datamodel, const ta_napi_slot *slot, napi_value *out);
-
-/* ---- expressions.c --------------------------------------------------------------- */
-
-/* A chart's compiled expressions: per expression its kind and a function
- * (NULL when the source did not compile: evaluating it is
- * error.execution, as quickjs compiles lazily and fails then). */
-typedef struct ta_napi_chart {
+/* A chart attached: its compiled expressions, in two JavaScript arrays
+ * indexed by expression (a function, or undefined where the source did
+ * not compile: evaluating it is error.execution, as quickjs compiles lazily
+ * and fails then). The row's references are the attachment and each
+ * session of it (sessions may outlive the detach). */
+typedef struct ta_napi_chart_row {
+    ta_napi_row row;
     const ta_image *image;
     uint32_t chart;
     uint32_t count;
-    uint32_t *kinds;
-    napi_ref *getters; /* (scope) => value; a script: (scope) => undefined */
-    napi_ref *setters; /* locations: (scope, value) => assigns */
-} ta_napi_chart;
+    napi_ref getters; /* (scope) => value; a script: (scope) => undefined */
+    napi_ref setters; /* locations: (scope, value) => assigns */
+} ta_napi_chart_row;
 
-ta_status ta_napi_chart_compile(ta_napi_datamodel *datamodel, const ta_datamodel_chart *chart, ta_napi_chart **out);
-void ta_napi_chart_free(ta_napi_datamodel *datamodel, ta_napi_chart *chart);
-/* The source of expression `expression`. */
-ta_string_view ta_napi_chart_source(const ta_napi_chart *chart, ta_expression expression);
+/* A <foreach> in progress: a shallow copy of its array. */
+typedef struct ta_napi_iteration_row {
+    ta_napi_row row;
+    napi_ref items;
+} ta_napi_iteration_row;
 
-/* ---- datamodel.c: the datamodel's state -------------------------------------------- */
+/* ---- expressions.c --------------------------------------------------------------- */
 
-struct ta_napi_datamodel {
-    napi_env env;
-    ta_napi_slots payloads, sessions;
-    napi_ref *drops; /* the deferred drops (handles.c) */
-    uint32_t drop_count, drop_capacity;
-    napi_ref helpers;  /* the helper functions of datamodel.c */
-    napi_ref in;       /* In(), shared by every scope */
-    napi_ref *iterations; /* <foreach> arrays in progress, by iter - 1 */
-    uint32_t iteration_count, iteration_capacity;
-    /* the entry running, for In() */
-    ta_datamodel_environment *environment;
-    const ta_napi_chart *chart;
-};
+/* Compile chart `attach`'s expressions into a new row of the charts
+ * table; its handle in *out. */
+ta_status ta_napi_chart_compile(ta_napi_datamodel *datamodel, const ta_datamodel_chart *attach, uint64_t *out);
+/* Drop one reference to chart `handle`; at the last, its functions go. */
+void ta_napi_chart_unuse(ta_napi_datamodel *datamodel, uint64_t handle);
+/* The source of expression `expression`, and its kind. */
+typedef struct ta_napi_expression {
+    ta_string_view source;
+    uint32_t kind;
+} ta_napi_expression;
+ta_napi_expression ta_napi_chart_expression(const ta_napi_chart_row *chart, ta_expression expression);
 
 #endif /* TA_NAPI_DATAMODEL_H */

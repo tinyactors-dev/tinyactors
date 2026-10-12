@@ -1,0 +1,38 @@
+# The addon allocates almost nothing (AGENTS.md, "The binding's memory";
+# tinyactors-core/docs/bindings.md, section 6): malloc, calloc, realloc and
+# free are called only by the tables of rows (src/datamodel/handles.c) and
+# by host.c's create (ta_napi_host_new), free (ta_napi_host_finalize), the
+# buffers every call reuses (ta_napi_buffer_reserve, ta_napi_buffer_free)
+# and the host's allocator (ta_napi_host_alloc, ta_napi_host_free_block).
+# Nothing per call, per event or per evaluation: a string goes through a
+# buffer, bytes are borrowed, an image is held, a session, a chart or a
+# payload is a row.
+id: allocation-in-tables-and-host
+language: c
+severity: error
+message: "the allocator is called only in src/datamodel/handles.c and in host.c's create, free, buffers and allocator (AGENTS.md, \"The binding's memory\"): use a buffer, borrow, hold, or a row"
+files:
+  - src/**/*.c
+  - src/**/*.h
+ignores:
+  - src/datamodel/handles.c
+rule:
+  kind: call_expression
+  has:
+    field: function
+    kind: identifier
+    regex: '^(malloc|calloc|realloc|free)$'
+  not:
+    inside:
+      kind: function_definition
+      stopBy: end
+      has:
+        field: declarator
+        any:
+          - kind: function_declarator
+          - kind: pointer_declarator
+        has:
+          stopBy: end
+          field: declarator
+          kind: identifier
+          regex: '^(ta_napi_host_new|ta_napi_host_finalize|ta_napi_host_alloc|ta_napi_host_free_block|ta_napi_buffer_reserve|ta_napi_buffer_free)$'

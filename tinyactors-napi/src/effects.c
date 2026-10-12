@@ -8,7 +8,6 @@
  * envelope bytes (ta_host_envelope). */
 #include "addon.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 /* One record being built: the host, the effect's index and the object. */
@@ -56,41 +55,45 @@ static void ta_napi_record_data(const ta_napi_record *record, const char *name) 
     napi_set_named_property(host->env, record->object, name, value);
 }
 
-/* A PEER or PEER_ERROR effect as envelope bytes, grown until it fits. */
+/* A PEER or PEER_ERROR effect as envelope bytes, written into the host's
+ * wire buffer (ta_host_envelope), then into a Uint8Array. */
+typedef struct ta_napi_envelope_call {
+    ta_host *host;
+    const ta_host_effect *effect;
+} ta_napi_envelope_call;
+
+static ta_status ta_napi_envelope_write(void *context, ta_buffer *out) {
+    const ta_napi_envelope_call *call = (const ta_napi_envelope_call *)context;
+    return ta_host_envelope(call->host, call->effect, out);
+}
+
 static void ta_napi_record_envelope(const ta_napi_record *record) {
     ta_napi_host *host = record->host;
     napi_env env = host->env;
     const ta_host_effect *effects = NULL;
     ta_host_effects(host->host, &effects);
-    ta_buffer out = {malloc(1024), 1024, 0};
-    ta_status status = out.pointer ? ta_host_envelope(host->host, &effects[record->index], &out) : TA_ERROR_NO_MEMORY;
-    if (status == TA_ERROR_NO_MEMORY && out.pointer && out.length > out.capacity) {
-        void *bigger = realloc(out.pointer, out.length);
-        if (bigger) {
-            out.pointer = bigger;
-            out.capacity = out.length;
-            status = ta_host_envelope(host->host, &effects[record->index], &out);
-        }
-    }
+    ta_napi_envelope_call call = {host->host, &effects[record->index]};
+    ta_napi_writing writing = {ta_napi_envelope_write, &call};
+    ta_bytes envelope;
+    ta_status status = ta_napi_wire(&host->scratch, &writing, &envelope);
     napi_value value;
-    if (status == TA_OK && ta_napi_values_uint8array(env, (ta_bytes){out.pointer, out.length}, &value) == napi_ok)
+    if (status == TA_OK && ta_napi_values_uint8array(env, envelope, &value) == napi_ok)
         napi_set_named_property(env, record->object, "envelope", value);
     else
         ta_napi_throw_status(env, "ta_host_envelope", status);
-    free(out.pointer);
     uint64_t peer = ta_host_effect_number(host->host, record->index, TA_EFFECT_FIELD_PEER);
     if (napi_create_bigint_uint64(env, peer, &value) == napi_ok) napi_set_named_property(env, record->object, "peer", value);
 }
 
-/* A retired segment: its image bytes may go (bindings.md, section 4). */
+/* A retired segment: its image is let go (bindings.md, section 4). */
 static void ta_napi_segment_freed(ta_napi_host *host, uint32_t index) {
     uint32_t segment = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT);
-    for (uint32_t i = 0; i < host->image_count; i++) {
-        ta_napi_image *image = host->images[i];
-        if (image->segment != segment || !image->live) continue;
-        free(image->bytes);
-        free(image);
-        host->images[i] = host->images[--host->image_count];
+    for (uint32_t i = 0; i < host->images.count; i++) {
+        ta_napi_image *image = (ta_napi_image *)ta_napi_table_row(&host->images, i);
+        if (!image || image->segment != segment) continue;
+        napi_delete_reference(host->env, image->bytes);
+        napi_delete_reference(host->env, image->view);
+        ta_napi_table_remove(&host->images, (uint64_t)image->row.generation << 32 | (uint64_t)(i + 1));
         return;
     }
 }

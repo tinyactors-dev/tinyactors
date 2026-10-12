@@ -134,7 +134,10 @@ export interface HostOptions {
 /** One tinyactors host (`ta_host`), its turn on the runtime's event loop. */
 export class Host {
   constructor(options: HostOptions);
-  /** An image's bytes (`compile`), added as a segment. */
+  /**
+   * An image's bytes (`compile`), added as a segment. The host holds the
+   * bytes themselves until the segment is freed: do not change them.
+   */
   addImage(image: ArrayBuffer | ArrayBufferView): ID;
   /** The actors a system image declares. */
   boot(segment: ID): void;

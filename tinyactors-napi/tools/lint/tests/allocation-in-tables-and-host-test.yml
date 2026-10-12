@@ -1,0 +1,11 @@
+id: allocation-in-tables-and-host
+valid:
+  - "int ta_napi_buffer_reserve(ta_napi_buffer *buffer, size_t need) { char *pointer = (char *)realloc(buffer->pointer, need); return pointer != NULL; }"
+  - "void ta_napi_buffer_free(ta_napi_buffer *buffer) { free(buffer->pointer); }"
+  - "static void *ta_napi_host_alloc(void *context, size_t size, size_t align) { return malloc(size); }"
+  - "static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) { ta_napi_host *host = (ta_napi_host *)calloc(1, sizeof *host); return NULL; }"
+  - "static void ta_napi_send(ta_napi_host *host) { ta_napi_buffer_reserve(&host->scratch.text, 64); }"
+invalid:
+  - "static void ta_napi_send(ta_napi_host *host) { char *name = malloc(64); free(name); }"
+  - "static ta_status ta_napi_create(void *data, const ta_datamodel_start *start, uint64_t *instance) { void *session = calloc(1, 32); return TA_OK; }"
+  - "static char *ta_napi_grow(char *text, size_t length) { return (char *)realloc(text, length); }"
