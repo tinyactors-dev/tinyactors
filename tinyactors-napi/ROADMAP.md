@@ -180,11 +180,16 @@ Progress:
   so the gate (`GATE` in `mise/napi.rb`) will hold the protocol suite
   when the runner skips them. The run budget is `docs/decisions.md`, "The
   run budget".
-- Step 5: this commit. The gate holds the M1 scenarios on quickjs under
+- Step 5: `f3236c51`. The gate holds the M1 scenarios on quickjs under
   node and bun (4 of 4 each). The protocol suite on quickjs passes 107
   cases and fails 10, all of them cases the request to core names (9 of
   requests.txt, config.txt "not CBOR"); it joins the gate when the runner
   skips them.
+- Step 6: this commit. The native datamodel passes what quickjs passes,
+  under node and bun: the scenarios 4 of 4 and the protocol vectors 112
+  of 122, the 10 left being the request to core's. The gate holds the
+  scenarios on both datamodels. Decisions: `docs/decisions.md`, "The
+  native datamodel".
 
 ## Later milestones
 

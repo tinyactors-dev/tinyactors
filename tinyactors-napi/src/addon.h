@@ -25,6 +25,17 @@ extern const napi_type_tag ta_napi_host_tag;
 extern const napi_type_tag ta_napi_clock_tag;
 
 typedef struct ta_napi_clock ta_napi_clock;
+typedef struct ta_napi_datamodel ta_napi_datamodel;
+
+/* ---- the native "ecmascript" datamodel (src/datamodel/) ---------------------------- */
+
+ta_napi_datamodel *ta_napi_datamodel_new(napi_env env);
+/* After ta_host_free: its references are dropped. */
+void ta_napi_datamodel_free(ta_napi_datamodel *datamodel);
+ta_datamodel_binding ta_napi_datamodel_binding(ta_napi_datamodel *datamodel);
+/* Drop the references released during the outer call into core that just
+ * returned (bindings.md, section 8); how many. NULL: none. */
+uint32_t ta_napi_datamodel_drain(ta_napi_datamodel *datamodel);
 
 /* An image the host runs: its bytes, copied, and the view core reads
  * (both stay put until TA_HOST_EFFECT_SEGMENT_FREED or the host goes). */
@@ -41,6 +52,7 @@ typedef struct ta_napi_host {
     napi_env env;
     ta_host *host;
     ta_datamodel_ecmascript *quickjs;
+    ta_napi_datamodel *native;
     ta_datamodel_binding binding;
     ta_napi_image **images;
     uint32_t image_count, image_capacity;

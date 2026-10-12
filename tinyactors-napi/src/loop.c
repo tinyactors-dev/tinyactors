@@ -176,6 +176,7 @@ void ta_napi_loop_turn(ta_napi_host *host) {
             ta_napi_keep_exception(host);
         }
         ta_host_effects_ack(host->host);
+        ta_napi_datamodel_drain(host->native); /* the run and the ack returned */
         if (host->closing) break;
         if (run.status == TA_RUN_EFFECTS_FULL || run.status == TA_RUN_EFFECTS) continue;
         if (run.status == TA_RUN_YIELDED) {
@@ -210,6 +211,7 @@ void ta_napi_loop_turn(ta_napi_host *host) {
 }
 
 void ta_napi_loop_input(ta_napi_host *host) {
+    if (!host->running) ta_napi_datamodel_drain(host->native); /* the input's call into core returned */
     if (host->running) {
         host->again = 1;
     } else if (host->clock) {

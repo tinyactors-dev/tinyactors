@@ -61,6 +61,7 @@ napi_value ta_napi_request(napi_env env, napi_callback_info info) {
     ta_buffer reply = {NULL, 0, 0};
     status = ta_napi_ask(host->host, (ta_bytes){request.pointer, request.length}, &reply);
     free(request.pointer);
+    if (!host->running) ta_napi_datamodel_drain(host->native); /* a request can release payloads */
     napi_value value = NULL;
     if (status == TA_OK) status = ta_napi_values_decode(env, (ta_bytes){reply.pointer, reply.length}, &value);
     free(reply.pointer);

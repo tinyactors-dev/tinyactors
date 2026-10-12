@@ -54,6 +54,8 @@ static ta_napi_host *ta_napi_host_this(napi_env env, napi_callback_info info, ta
         ta_napi_throw_status(env, "Host", TA_ERROR_STATE);
         return NULL;
     }
+    /* what a refused call before this one released (its payload) */
+    if (!((ta_napi_host *)host)->running) ta_napi_datamodel_drain(((ta_napi_host *)host)->native);
     return (ta_napi_host *)host;
 }
 
@@ -119,6 +121,8 @@ void ta_napi_host_release(ta_napi_host *host) {
     host->host = NULL;
     if (host->quickjs) ta_datamodel_ecmascript_free(host->quickjs);
     host->quickjs = NULL;
+    ta_napi_datamodel_free(host->native);
+    host->native = NULL;
     for (uint32_t i = 0; i < host->image_count; i++) {
         free(host->images[i]->bytes);
         free(host->images[i]);
@@ -160,9 +164,16 @@ static ta_status ta_napi_host_datamodel(ta_napi_host *host, napi_value options) 
     ta_string_view text = {NULL, 0};
     ta_status status = ta_napi_is_undefined(env, name) ? TA_OK : ta_napi_values_text(env, name, &text);
     int quickjs = status == TA_OK && text.length == 7 && !memcmp(text.pointer, "quickjs", 7);
+    int native = status == TA_OK && (!text.length || (text.length == 6 && !memcmp(text.pointer, "native", 6)));
     free((void *)text.pointer);
     if (status != TA_OK) return status;
-    if (!quickjs) return TA_ERROR_UNSUPPORTED; /* the native datamodel is not there yet */
+    if (!quickjs) {
+        if (!native) return TA_ERROR_INVALID;
+        host->native = ta_napi_datamodel_new(host->env);
+        if (!host->native) return TA_ERROR_NO_MEMORY;
+        host->binding = ta_napi_datamodel_binding(host->native);
+        return TA_OK;
+    }
     ta_datamodel_ecmascript_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;

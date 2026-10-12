@@ -226,3 +226,46 @@ it from its caller, `host.h`): it is how long one macrotask of this
 binding's loop may hold the event loop, I/O behaviour like the timer, not
 a policy of core's. With a `SimulatedClock` the loop runs until idle
 whatever the budget.
+
+## The native datamodel
+
+**Decision.** `src/datamodel/` implements core's vtable over the
+application's engine as quickjs's shared realm does
+(`tinyactors-core/src/datamodel_ecmascript/datamodel_ecmascript.c`), with
+what Node-API asks:
+
+- **A session is a scope object** with a null prototype
+  (`Object.create(null)`, from a helper compiled once per datamodel): its
+  `<data>` ids, `_event`, and the read-only `_sessionid`, `_name`,
+  `_ioprocessors` and `In` are its own properties; every other name
+  resolves to the application's realm. A `<script>` runs as a strict
+  function body, so its top-level `var`, `let`, `const` and `function`
+  are local to it: quickjs gives such a chart isolated sessions instead,
+  which Node-API cannot make (chart code runs in the application's realm,
+  README.md). Whether the W3C suite needs it is M2's question.
+- **Expressions are compiled once, at `chart_attach`**
+  (`napi_run_script`), each as quickjs wraps it; one that does not compile
+  is kept as a failure, and evaluating it is `error.execution`, as quickjs's
+  lazy compile gives.
+- **Slots hold their value in a one-item array.** Node-API version 8
+  references only objects, functions and symbols (`napi_create_reference`
+  answers `napi_invalid_arg` for a number), and a payload may be
+  `undefined` or a number: values.txt "ECMAScript: undefined at the top is
+  null" failed with `TA_ERROR_NO_MEMORY` until then.
+- **What crosses is copied through the value table**: `capture` writes the
+  value as CBOR and reads it back (`ta_napi_values_encode`, `_decode`),
+  so a `<send>`'s data shares nothing with the sender, and a value the
+  table refuses is `error.execution`. It is CBOR inside the datamodel, once
+  per send; a direct copy by the same table is a later optimisation, with
+  the torture chamber's numbers.
+- **`<content>` text** is JSON when it parses, else its text with
+  whitespace runs collapsed (quickjs's `content_value`); quickjs's small
+  XML DOM for XML content is M2's (the W3C suite).
+- **Not in M1:** `serialize`, `deserialize`, `migrate`,
+  `payload_serialize` and `payload_deserialize` (hibernation, migration,
+  export: M4), and `custom`.
+
+**Evidence.** The M1 set on the native datamodel under node and bun
+(ROADMAP.md, M1, step 6): the scenarios 4 of 4, the protocol vectors 112
+of 122 with the 10 the request to core names failing, the same as on
+quickjs.
