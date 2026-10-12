@@ -146,6 +146,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
   - the event data stays CBOR (`ta_envelope.wire`) until the host delivers it: the target chart’s datamodel reads it, and a relay forwards the bytes without reading them. Bytes that are not an envelope are `TA_ERROR_INVALID`; data the target cannot read is refused and answered with an error envelope to its origin.
 - **Envelopes within one process** (two hosts in one process, one per worker) never touch CBOR: fill a `ta_envelope` from the `PEER` effect’s fields (copying `wire` when it is set) and call `ta_host_deliver`.
 - How envelopes travel between processes (a socket, a queue, a database) is the application’s. Core speaks no transport protocol.
+- **The CBOR module may be exposed** as the language's own `encode` and `decode` (Python's `tinyactors.encode(value) -> bytes` and `tinyactors.decode(data) -> object`, Node's `encode` and `decode` exports): the same value table and the same calls (`ta_cbor_encode`, `ta_cbor_decode`, one per message), not a second codec, each with its row in the mapping table. The binding's suite adapter frames the driver's calls with it and imports no other codec (section 12). The vectors then cross the binding's codec both ways, so the binding's own tests of its value table catch a value mapped wrong the same way in both directions.
 
 ## 10 · Requests
 
