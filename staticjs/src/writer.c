@@ -103,8 +103,8 @@ static void string_piece(sjs_writer *w) {
     say_scratch(w, sjs_json_escape((uint8_t)s.ptr[i], (char *)w->scratch));
 }
 
-/* The map or the set whose entries a map or an iterator of its entries
- * writes, or NULL for any other value. */
+/* The map, the set or the array whose entries a map or an iterator of its
+ * entries writes, or NULL for any other value. */
 static const sjs_array *entries_of(sjs_value v) {
     if (v.kind == SJS_MAP) return SJS_AS_ARRAY(v);
     if (v.kind != SJS_ITERATOR) return NULL;
@@ -119,15 +119,17 @@ static uint32_t written_from(sjs_value v) {
 }
 
 /* The key (`part` 0) or the value (1) of the entry at `index` of what
- * entries_of gives: a map's, or a set's member, which is both. */
+ * entries_of gives: a map's, a set's member, which is both, or an array's
+ * element, whose key is its index. */
 static sjs_value entry_part(const sjs_array *entries, uint32_t index, uint32_t part) {
-    if (entries->h.type == SJS_HEAP_SET) return entries->items[index];
-    return entries->items[2u * index + part];
+    if (entries->h.type == SJS_HEAP_MAP) return entries->items[2u * index + part];
+    if (entries->h.type == SJS_HEAP_ARRAY && part == 0) return sjs_num((double)index);
+    return entries->items[index];
 }
 
 /* The value an iterator yields at `index`: from its items, a set's member,
- * or its map's key or value (an entry's is written by entries_of's
- * phases). */
+ * an array's element or index, or its map's key or value (an entry's is
+ * written by entries_of's phases). */
 static sjs_value iterated(sjs_value v, uint32_t index) {
     const sjs_iterator *it = SJS_AS_ITERATOR(v);
     index += it->position; /* MUTATION */

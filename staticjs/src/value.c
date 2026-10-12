@@ -1168,7 +1168,7 @@ uint32_t sjs_iterator_count(const sjs_iterator *it) {
         n = SJS_AS_ARRAY(it->items)->length;
     } else {
         const sjs_array *source = SJS_AS_ARRAY(it->source);
-        n = it->source.kind == SJS_SET ? source->length : source->length / 2u;
+        n = it->source.kind == SJS_MAP ? source->length / 2u : source->length;
     }
     return n - it->position; /* MUTATION: what next() took is gone. Restore: n. */
 }

@@ -195,7 +195,7 @@
 typeof "x".localeCompare
 --- fault calls methods
 
-=== reading an array method staticjs does not have
+=== reading an array method as a value
 [1].forEach
 --- fault calls methods
 
@@ -203,7 +203,7 @@ typeof "x".localeCompare
 new Set([1]).forEach
 --- fault calls methods
 
-=== in finds an array method staticjs does not have
+=== in finds an array method
 "forEach" in []
 --- fault no prototype
 

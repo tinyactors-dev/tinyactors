@@ -998,6 +998,28 @@ static void test_iterator_flat_map_fuel(sjs_context *context) {
     CHECK(many - one >= 2 * 999);
 }
 
+/* The growth in fuel from one element of an array to 1000, of `body` with
+ * `xs` the array. */
+static uint64_t fuel_growth(sjs_context *context, const char *body) {
+    char one[256];
+    char many[256];
+    snprintf(one, sizeof one, "(xs => %s)('x'.split(''))", body);
+    snprintf(many, sizeof many, "(xs => %s)('x'.repeat(1000).split(''))", body);
+    return fuel_of(context, many) - fuel_of(context, one);
+}
+
+/* An array's keys(), values() and entries() charge a unit for each value
+ * read out of the array (an entry's new [index, element] array included),
+ * as a map's and a set's do; its forEach runs as a map's forEach's loop, so
+ * reading its values first and then iterating costs those units more. */
+static void test_array_iterator_fuel(sjs_context *context) {
+    uint64_t base = fuel_growth(context, "xs.length");
+    CHECK(fuel_growth(context, "xs.values().toArray().length") - base == 999);
+    CHECK(fuel_growth(context, "xs.keys().toArray().length") - base == 999);
+    CHECK(fuel_growth(context, "xs.entries().toArray().length") - base == 999);
+    CHECK(fuel_growth(context, "xs.values().forEach(x => x)") - fuel_growth(context, "xs.forEach(x => x)") == 999);
+}
+
 static void test_fuel_and_reset(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
@@ -1033,6 +1055,7 @@ static void test_fuel_and_reset(void) {
     test_to_spliced_fuel(context);
     test_set_fuel_linear(context);
     test_iterator_flat_map_fuel(context);
+    test_array_iterator_fuel(context);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
 }
