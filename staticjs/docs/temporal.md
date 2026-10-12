@@ -1,7 +1,7 @@
 # Temporal values
 
 How staticjs holds and computes Temporal's types: `Temporal.PlainDate`,
-`PlainTime` and `PlainDateTime` (built), and `Duration`, `Instant` and
+`PlainTime`, `PlainDateTime` and `Duration` (built), and `Instant` and
 `Temporal.Now` (to build, on the same design). Read `builtins.md` and
 `extending.md` ("To add a value kind") first; this note says only what is
 particular to Temporal.
@@ -68,7 +68,9 @@ As a value among the others:
   `Temporal.Instant.from("2024-01-31T10:00:00Z")`,
   `Temporal.Duration.from("P1D")`. That is JavaScript that evaluates to an
   equal value; diff-node's `show()` writes the same.
-  `sjs_temporal_text` gives the string, `sjs_temporal_type_name` the type.
+  `sjs_temporal_text` gives the string (at most `SJS_TEMPORAL_TEXT_MAX`,
+  128 bytes: a Duration's reaches about 110), `sjs_temporal_type_name`
+  the type.
 - `JSON.stringify` writes the ISO string, quoted (its `toJSON` is
   `toString()`), whatever the replacer's keys.
 
@@ -129,7 +131,8 @@ Calling a constructor without `new` is unsupported (its namespace without
 a member).
 
 A plain type's constructor, `from` and `compare` are three IDs in a row,
-and `sjs_temporal_function` finds the type by the first (`TYPES`); one
+and `sjs_temporal_function` finds the type by the first (`TYPES`), after
+a Duration's three, which it switches on; one
 `construct_plain`, one `convert` (`to_date`, `to_time`, `to_date_time`:
 what `from`, `compare`, `equals`, `withPlainTime` and `toPlainDateTime`
 read) and one `compare_iso` serve the three.
@@ -186,6 +189,95 @@ that, staticjs faults where JavaScript would convert what it does not:
   `"1214"`, `"0229"`, but not `"2021-13"` or `"0231"`. A time annotated
   with another calendar faults on purpose (both polyfills ignore it).
 
+## Wide integers
+
+A Duration's time reaches 2^53 seconds, 9 x 10^24 nanoseconds, and an
+epoch 8.64 x 10^21: past an int64. `wide` (`temporal.c`, "Wide
+integers") is a sign and a 128-bit magnitude of two 64-bit halves, every
+operation built from 64-bit ones (a product from 32-bit halves, a
+quotient bit by bit past 64 bits), as no 128-bit type is allowed (its
+multiplication and division need a library). `round_wide` rounds one to
+an increment of any size (a day by 10^9 is 8.64 x 10^22 ns) by the nine
+modes, as `TimeDuration.round` does (`rounds_away` is
+GetUnsignedRoundingMode and ApplyUnsignedRoundingMode). `ratio_double`
+gives a quotient as the nearest double (`sjs_number_from_top`), which is
+what @js-temporal/polyfill's 50-digit division gives: `total` and a
+field past 2^53 (a Duration's nanoseconds as one double, as
+`TemporalDurationFromInternal` makes them) are that.
+
+## Durations
+
+A Duration's ten fields are doubles, each an integer, all of one sign,
+-0 made 0 (both polyfills do); `check_duration` is IsValidDuration, exact
+as temporal-polyfill computes it in BigInts: years, months and weeks below
+2^32, and the days (24 hours each) and time below 2^53 seconds (a field
+past 10^25 ns faults before it is added). Arithmetic goes through the
+internal form (`internal_duration`): the date units as int64s and the time
+as one wide integer of nanoseconds; `fields_of_internal` balances it back
+up to a largest unit (TemporalDurationFromInternal).
+
+- The constructor and a bag's fields are ToIntegerIfIntegral: a number,
+  a boolean or `null` that is an integer; a fraction, NaN and the
+  infinities fault (a RangeError), and so do a string, an array and an
+  object (JavaScript converts them). A bag (`from`, `with`, `add`,
+  `compare`) is an object with at least one of the ten fields, or a
+  Duration; anything else faults (a TypeError).
+- A string (`parse_duration`) is what both polyfills read: a sign (`+` or
+  `-`), `P`, whole years, months, weeks and days in that order, then `T`
+  and hours, minutes and seconds, the last of them with a fraction of 1
+  to 9 digits after `.` or `,`, spread over the smaller fields (`PT1.5H`
+  is `PT1H30M`); the letters in either case; at least one part, and one
+  after a `T`. Digits past 2^64 are 2^64 - 1, far past every limit.
+- `add` and `subtract` take no `relativeTo` (the current specification):
+  years, months or weeks in either fault (a RangeError); 24-hour days and
+  time add, balanced up to the larger of the two largest units.
+- `round` and `total` take `relativeTo`: a PlainDate, a PlainDateTime (its
+  date), a string or a bag of a date (its time is read, and not used), at
+  whose midnight the Duration starts. A time zone (a bag's `timeZone`, or
+  `offset`, a string's bracketed annotation) makes JavaScript's
+  relativeTo a ZonedDateTime, which staticjs does not have: it faults
+  (deliberate, where JavaScript gives a value); a string with `Z` and no
+  annotation is a RangeError. A string with a time must be within the
+  date-time limits, as `PlainDate.from` reads one, which faults on
+  `-271821-04-19T00:00`, whose date both polyfills read.
+- Relative to a date, `round` is the difference from it to where the
+  Duration reaches (`reached`: the years, months and weeks added,
+  constrained, and the days and time as 24-hour days), rounded
+  (`difference_rounded`, DifferencePlainDateTimeWithRounding), and `total`
+  its total in the unit (`difference_total`). Without one, a calendar unit
+  in the Duration or the options faults (a RangeError), and they round or
+  total 24-hour days and time. `compare` counts years, months and weeks
+  in days from `relativeTo` (DateDurationDays), and needs it for them.
+- `toString` rounds the seconds to the digits it writes (`trunc` by
+  default), carried up to the Duration's largest unit (a second at least);
+  `smallestUnit` is a second or smaller.
+
+## Differences, rounded
+
+`date_until` is the ISO calendar's CalendarDateUntil (years, then months,
+counted while the day, unconstrained, does not pass the end date; then the
+days from the constrained date), `add_date` its CalendarDateAdd (the year
+and month balanced, the day constrained or rejected, then weeks and days,
+within the limits), and `difference_iso` DifferenceISODateTime (a day
+borrowed when the time runs against the date). `round_relative` is the
+2024 revision's RoundRelativeDuration: `nudge_calendar`
+(NudgeToCalendarUnit: the span from the smallest unit truncated to its
+increment to the next multiple, where the destination falls, which
+rounds, and whose fraction is the `total`), `nudge_time`
+(NudgeToDayOrTime: days and time as nanoseconds) and `bubble`
+(BubbleRelativeDuration: a rounding that reached the end of a larger unit
+carries into it).
+
+temporal-polyfill computes the same differently, and the polyfills give
+different values in two places, which no case tests (temporal_test leaves
+them out, `DIFFERING`): counting months from the end of a month across a
+shorter one (from January 31, 2024 to March 1 at 01:30, or a Duration
+of a month and 12 hours from it, is a month and some days in
+temporal-polyfill, less than a month in the specification), and a
+`total` in months or years whose last bit temporal-polyfill's
+floating-point division rounds differently. staticjs follows the
+specification (and @js-temporal/polyfill).
+
 ## Rounding
 
 `round_to` rounds an int64 of nanoseconds to a multiple of an increment by
@@ -211,9 +303,9 @@ leaves them out).
 
 ## Testing
 
-- `tests/spec/temporal_plain_date.spec`, `temporal_plain_time.spec` and
-  `temporal_plain_date_time.spec`: cases written by hand, values from the
-  polyfill. A case named "deliberate" faults where JavaScript gives a
+- `tests/spec/temporal_plain_date.spec`, `temporal_plain_time.spec`,
+  `temporal_plain_date_time.spec` and `temporal_duration.spec`: cases
+  written by hand, values from the polyfill. A case named "deliberate" faults where JavaScript gives a
   value.
 - `tests/temporal_test.c`: sweeps from fixed lists (no randomness, at most
   10,000 cases per built-in), each a JavaScript expression. With
@@ -222,7 +314,13 @@ leaves them out).
   the polyfill: a fault where it throws, its value where staticjs gives
   one, and a fault on every deliberate line. Add each type's sweeps there:
   every option value claimed (overflow, rounding modes, units) against the
-  polyfill. Check them against @js-temporal/polyfill too, outside the
+  polyfill. A Duration's: its strings (signs, date and time parts, each
+  varied with the others, in both cases), `round` relative to five dates
+  at month ends and leap days over every pair of units and every mode
+  (and increments of the largest unit), `round` without one over every
+  unit up to a day, its increments and modes and largest units, `total`
+  in every unit, `toString`'s digits by every mode, `compare`, `add` and
+  `subtract`. Check them against @js-temporal/polyfill too, outside the
   tests: a value staticjs gives must be both polyfills', and a line on
   which they disagree must fault (deliberately, where temporal-polyfill
   gives a value) or be left out.
@@ -239,7 +337,7 @@ leaves them out).
   time of day as an int64 of nanoseconds and on days since the epoch
   (`time_of_day`, `epoch_days`, `date_of_days`); a Duration's `add` to
   them can use the same, with `round_iso`'s day carry and limit check.
-- Duration: its fields as doubles; `add` must make `mutate()` pass a
-  receiver (above).
+- Duration: built, but `toLocaleString`, which faults (locale data), and
+  a ZonedDateTime `relativeTo`.
 - Instant and Temporal.Now: the host clock (docs/builtins-status.md, the
   introduction); `Temporal.Now` is a namespace already.

@@ -1,7 +1,7 @@
 /*
  * Temporal values (docs/temporal.md): Temporal.PlainDate, PlainTime and
- * PlainDateTime in the ISO 8601 calendar, their constructors, from,
- * compare, getters and methods. The other types (Duration, Instant) and
+ * PlainDateTime in the ISO 8601 calendar, and Temporal.Duration, their
+ * constructors, from, compare, getters and methods. Instant and
  * Temporal.Now build on the same kind, SJS_TEMPORAL, and the same tables.
  *
  * The rule: what JavaScript (temporal-polyfill 1.0.5, checked against
@@ -256,6 +256,284 @@ static bool round_iso(sjs_iso_date_time *d, rounding r, bool dated) {
 }
 
 /* ------------------------------------------------------------------------
+ * Wide integers: nanoseconds past an int64. A Duration's time reaches 2^53
+ * seconds (9 x 10^24 ns), an epoch 8.64 x 10^21 ns. A sign and a 128-bit
+ * magnitude of two 64-bit halves, every operation built from 64-bit ones:
+ * no 128-bit type, whose multiplication and division need a library
+ * (check-freestanding refuses them).
+ */
+
+typedef struct {
+    uint64_t hi;
+    uint64_t lo;
+} u128;
+
+static u128 u128_add(u128 a, u128 b) {
+    u128 r = { a.hi + b.hi, a.lo + b.lo };
+    if (r.lo < a.lo) r.hi++;
+    return r;
+}
+
+/* a - b, b no greater than a. */
+static u128 u128_sub(u128 a, u128 b) {
+    u128 r = { a.hi - b.hi, a.lo - b.lo };
+    if (a.lo < b.lo) r.hi--;
+    return r;
+}
+
+static int u128_cmp(u128 a, u128 b) {
+    if (a.hi != b.hi) return a.hi < b.hi ? -1 : 1;
+    if (a.lo != b.lo) return a.lo < b.lo ? -1 : 1;
+    return 0;
+}
+
+static bool u128_zero(u128 a) {
+    return (a.hi | a.lo) == 0;
+}
+
+/* The full product of two 64-bit numbers, from 32-bit halves. */
+static u128 mul_64(uint64_t a, uint64_t b) {
+    const uint64_t mask = 0xffffffffu;
+    uint64_t a0 = a & mask, a1 = a >> 32, b0 = b & mask, b1 = b >> 32;
+    uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    uint64_t middle = (p00 >> 32) + (p01 & mask) + (p10 & mask);
+    return (u128){ p11 + (p01 >> 32) + (p10 >> 32) + (middle >> 32), (middle << 32) | (p00 & mask) };
+}
+
+/* a * b, which must fit. */
+static u128 u128_mul(u128 a, uint64_t b) {
+    u128 r = mul_64(a.lo, b);
+    r.hi += a.hi * b;
+    return r;
+}
+
+/* The number of bits `a` needs: 0 for 0. */
+static uint32_t u128_bits(u128 a) {
+    uint32_t n = 0;
+    uint64_t top = a.hi != 0 ? a.hi : a.lo;
+    while (top != 0) {
+        top >>= 1;
+        n++;
+    }
+    return a.hi != 0 ? n + 64u : n;
+}
+
+static uint64_t u128_bit(u128 a, uint32_t i) {
+    return i >= 64u ? (a.hi >> (i - 64u)) & 1u : (a.lo >> i) & 1u;
+}
+
+static u128 u128_shl1(u128 a, uint64_t bit) {
+    return (u128){ (a.hi << 1) | (a.lo >> 63), (a.lo << 1) | bit };
+}
+
+/* a / b, and a % b into `rest`; b is not zero. Bit by bit beyond 64 bits:
+ * a quotient of an epoch or a Duration has at most 84. */
+static u128 u128_divmod(u128 a, u128 b, u128 *rest) {
+    if (a.hi == 0 && b.hi == 0) {
+        *rest = (u128){ 0, a.lo % b.lo };
+        return (u128){ 0, a.lo / b.lo };
+    }
+    u128 q = { 0, 0 };
+    u128 r = { 0, 0 };
+    for (uint32_t i = u128_bits(a); i-- > 0;) {
+        r = u128_shl1(r, u128_bit(a, i));
+        q = u128_shl1(q, 0);
+        if (u128_cmp(r, b) >= 0) {
+            r = u128_sub(r, b);
+            q.lo |= 1u;
+        }
+    }
+    *rest = r;
+    return q;
+}
+
+/* A signed wide integer: its magnitude and sign (never a negative zero). */
+typedef struct {
+    u128 m;
+    bool negative;
+} wide;
+
+static wide wide_make(u128 m, bool negative) {
+    return (wide){ m, negative && !u128_zero(m) };
+}
+
+static wide wide_of(int64_t v) {
+    return v < 0 ? (wide){ { 0, (uint64_t)0 - (uint64_t)v }, true } : (wide){ { 0, (uint64_t)v }, false };
+}
+
+static int wide_sign(wide a) {
+    return u128_zero(a.m) ? 0 : a.negative ? -1 : 1;
+}
+
+static wide wide_neg(wide a) {
+    return wide_make(a.m, !a.negative);
+}
+
+static wide wide_add(wide a, wide b) {
+    if (a.negative == b.negative) return wide_make(u128_add(a.m, b.m), a.negative);
+    if (u128_cmp(a.m, b.m) >= 0) return wide_make(u128_sub(a.m, b.m), a.negative);
+    return wide_make(u128_sub(b.m, a.m), b.negative);
+}
+
+static wide wide_sub(wide a, wide b) {
+    return wide_add(a, wide_neg(b));
+}
+
+static int wide_cmp(wide a, wide b) {
+    return wide_sign(wide_sub(a, b));
+}
+
+/* a * b, which must fit. */
+static wide wide_mul(wide a, int64_t b) {
+    uint64_t magnitude = b < 0 ? (uint64_t)0 - (uint64_t)b : (uint64_t)b;
+    return wide_make(u128_mul(a.m, magnitude), a.negative != (b < 0));
+}
+
+/* a / d truncated, and the rest (of a's sign); d is not zero. */
+static wide wide_quotient(wide a, u128 d, wide *rest) {
+    u128 r;
+    u128 q = u128_divmod(a.m, d, &r);
+    *rest = wide_make(r, a.negative);
+    return wide_make(q, a.negative);
+}
+
+/* a / d rounded toward negative infinity, and the rest, from 0 to d. */
+static wide wide_floor(wide a, u128 d, wide *rest) {
+    wide q = wide_quotient(a, d, rest);
+    if (wide_sign(*rest) < 0) {
+        q = wide_sub(q, wide_of(1));
+        *rest = wide_add(*rest, wide_make(d, false));
+    }
+    return q;
+}
+
+/* The value of a wide integer that fits an int64. */
+static int64_t wide_int64(wide a) {
+    return a.negative ? (int64_t)((uint64_t)0 - a.m.lo) : (int64_t)a.m.lo;
+}
+
+/* p / q as the nearest double, ties to even, q not zero: the integer part,
+ * then as many bits of the fraction as make 64, and whether more follow. */
+static double ratio_double(wide p, wide q) {
+    if (u128_zero(p.m)) return 0;
+    u128 r;
+    u128 n = u128_divmod(p.m, q.m, &r);
+    int32_t e2 = 0;
+    uint32_t bits = u128_bits(n);
+    bool sticky = !u128_zero(r);
+    uint64_t top;
+    if (bits > 64u) {
+        uint32_t shift = bits - 64u;
+        top = shift == 64u ? n.hi : (n.hi << (64u - shift)) | (n.lo >> shift);
+        sticky = sticky || (shift == 64u ? n.lo : n.lo << (64u - shift)) != 0;
+        e2 = (int32_t)shift;
+    } else {
+        top = n.lo;
+        while ((top >> 63) == 0) {
+            r = u128_shl1(r, 0);
+            uint64_t bit = u128_cmp(r, q.m) >= 0 ? 1u : 0u;
+            if (bit != 0) r = u128_sub(r, q.m);
+            top = (top << 1) | bit;
+            e2--;
+        }
+        sticky = !u128_zero(r);
+    }
+    double d = sjs_number_from_top((sjs_number_top){ top, e2, sticky });
+    return p.negative != q.negative ? -d : d;
+}
+
+static double wide_double(wide a) {
+    return ratio_double(a, wide_of(1));
+}
+
+typedef union {
+    double d;
+    uint64_t u;
+} double_word;
+
+/* An integral double below 2^100 in magnitude, exactly. */
+static wide wide_of_double(double x) {
+    double_word w;
+    w.d = x;
+    int32_t exponent = (int32_t)((w.u >> 52) & 0x7ffu);
+    if (exponent == 0) return wide_of(0);
+    uint64_t mantissa = (w.u & ((UINT64_C(1) << 52) - 1u)) | (UINT64_C(1) << 52);
+    int32_t shift = exponent - 1075;
+    u128 m = { 0, mantissa };
+    if (shift < 0) {
+        m.lo = shift <= -64 ? 0 : mantissa >> (uint32_t)-shift;
+    } else if (shift > 0) {
+        m.hi = shift >= 64 ? mantissa << (uint32_t)(shift - 64) : mantissa >> (uint32_t)(64 - shift);
+        m.lo = shift >= 64 ? 0 : mantissa << (uint32_t)shift;
+    }
+    return wide_make(m, (w.u >> 63) != 0);
+}
+
+/* a * b, which must fit. */
+static u128 u128_product(u128 a, u128 b) {
+    return b.hi == 0 ? u128_mul(a, b.lo) : u128_mul(b, a.lo);
+}
+
+/* Does rounding by `mode` take the multiple further from zero? `cmp`
+ * compares the rest with half the increment; `even`, whether the nearer
+ * multiple is an even one (GetUnsignedRoundingMode, then
+ * ApplyUnsignedRoundingMode). */
+typedef struct {
+    rounding_mode mode;
+    bool negative;
+    int cmp;
+    bool even;
+} rounding_case;
+
+static bool rounds_away(rounding_case c) {
+    switch (c.mode) {
+    case MODE_CEIL:
+        return !c.negative;
+    case MODE_FLOOR:
+        return c.negative;
+    case MODE_EXPAND:
+        return true;
+    case MODE_TRUNC:
+        return false;
+    default:
+        break;
+    }
+    if (c.cmp != 0) return c.cmp > 0;
+    switch (c.mode) {
+    case MODE_HALF_CEIL:
+        return !c.negative;
+    case MODE_HALF_FLOOR:
+        return c.negative;
+    case MODE_HALF_EXPAND:
+        return true;
+    case MODE_HALF_TRUNC:
+        return false;
+    default:
+        return !c.even;
+    }
+}
+
+/* x rounded to a multiple of `increment` by `mode`, relative to its sign. */
+typedef struct {
+    u128 increment;
+    rounding_mode mode;
+} wide_rounding;
+
+static wide round_wide(wide x, wide_rounding r) {
+    u128 rest;
+    u128 q = u128_divmod(x.m, r.increment, &rest);
+    if (u128_zero(rest)) return x;
+    int cmp = u128_cmp(u128_add(rest, rest), r.increment);
+    if (rounds_away((rounding_case){ r.mode, x.negative, cmp, (q.lo & 1u) == 0 })) q = u128_add(q, (u128){ 0, 1 });
+    return wide_make(u128_product(q, r.increment), x.negative);
+}
+
+/* RoundNumberToIncrement of an integer, as round_wide. */
+static int64_t round_number(int64_t x, int64_t increment, rounding_mode mode) {
+    return wide_int64(round_wide(wide_of(x), (wide_rounding){ { 0, (uint64_t)increment }, mode }));
+}
+
+/* ------------------------------------------------------------------------
  * Text
  */
 
@@ -329,12 +607,16 @@ static uint32_t put_iso(char *out, iso_value v, int32_t digits) {
     return n;
 }
 
+static uint32_t put_duration(char *out, const double *f, int32_t digits);
+
 uint32_t sjs_temporal_text(const sjs_temporal *t, char *out) {
     switch ((sjs_temporal_type)t->h.flags) {
     case SJS_TEMPORAL_PLAIN_DATE:
     case SJS_TEMPORAL_PLAIN_TIME:
     case SJS_TEMPORAL_PLAIN_DATE_TIME:
         return put_iso(out, (iso_value){ (sjs_temporal_type)t->h.flags, &t->as.iso }, DIGITS_AUTO);
+    case SJS_TEMPORAL_DURATION:
+        return put_duration(out, t->as.duration, DIGITS_AUTO);
     default:
         return 0;
     }
@@ -386,6 +668,7 @@ static bool equal_ignoring_case(sjs_str text, sjs_str lower) {
 typedef struct {
     sjs_str text;
     uint32_t at;
+    bool time_zone;   /* scan_annotations read a time zone annotation */
 } iso_scan;
 
 static int scan_peek(const iso_scan *s) {
@@ -489,7 +772,7 @@ static bool time_zone_name(sjs_str name) {
 /* A time zone annotation's identifier: an offset to the minute, or a name. */
 static bool time_zone_identifier(sjs_str id) {
     if (id.length > 0 && (id.ptr[0] == '+' || id.ptr[0] == '-')) {
-        iso_scan s = { id, 1u };
+        iso_scan s = { id, 1u, false };
         clock_parts offset;
         return scan_clock(&s, (clock_grammar){ false, 59u }, &offset) && s.at == id.length;
     }
@@ -538,6 +821,7 @@ static bool scan_annotations(iso_scan *s) {
         if (equals == 0) {
             /* A time zone: only the first part. */
             if (parts != 1u || !time_zone_identifier(inside)) return false;
+            s->time_zone = true;
             continue;
         }
         sjs_str key = { s->text.ptr + start, equals - start };
@@ -577,10 +861,11 @@ static bool scan_offset(iso_scan *s) {
 typedef struct {
     sjs_iso_date_time when;
     bool has_time;
+    bool zoned;   /* with a time zone annotation: a ZonedDateTime's */
 } iso_parse;
 
 static bool parse_iso(sjs_str text, iso_parse *out) {
-    iso_scan s = { text, 0 };
+    iso_scan s = { text, 0, false };
     sjs_iso_date_time *d = &out->when;
     *out = (iso_parse){ 0 };
     uint32_t year;
@@ -608,7 +893,9 @@ static bool parse_iso(sjs_str text, iso_parse *out) {
         set_clock(d, &time);
         if (!scan_offset(&s)) return false;
     }
-    return scan_annotations(&s);
+    if (!scan_annotations(&s)) return false;
+    out->zoned = s.time_zone;
+    return true;
 }
 
 /* Is a time's text (with its offset) also a year and month, YYYY-MM or
@@ -631,7 +918,7 @@ static bool reads_as_date(sjs_str text) {
 /* A time alone: T or t, then the clock, an offset and annotations as
  * after a date; without the T, a time that reads as a date is refused. */
 static bool parse_time_only(sjs_str text, sjs_iso_date_time *d) {
-    iso_scan s = { text, 0 };
+    iso_scan s = { text, 0, false };
     bool designated = scan_take(&s, 'T') || scan_take(&s, 't');
     uint32_t start = s.at;
     clock_parts time;
@@ -1219,6 +1506,814 @@ static int compare_iso(sjs_temporal_type type, const sjs_iso_date_time *a, const
     return type == SJS_TEMPORAL_PLAIN_DATE ? compare_dates(a, b) : type == SJS_TEMPORAL_PLAIN_TIME ? compare_times(a, b) : compare_date_times(a, b);
 }
 
+/* ------------------------------------------------------------------------
+ * Durations: ten fields, years to nanoseconds, each an integer in a
+ * double, all of one sign. Arithmetic goes through an internal form
+ * (ToInternalDurationRecord): the date units as int64s and the time units
+ * as one wide integer of nanoseconds.
+ */
+
+#define DURATION_FIELD_COUNT 10u
+static const char *const DURATION_FIELDS[DURATION_FIELD_COUNT] = {
+    "years", "months", "weeks", "days", "hours", "minutes", "seconds", "milliseconds", "microseconds", "nanoseconds",
+};
+
+/* Field i holds the unit UNIT_YEAR - i. */
+#define FIELD_OF_UNIT(unit) (UNIT_YEAR - (unit))
+
+static sjs_result outside_duration(sjs_vm *vm) {
+    return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration whose days and time reach 2^53 seconds");
+}
+
+static double field_magnitude(double x) {
+    return x < 0 ? -x : x;
+}
+
+/* A Duration's sign: of its first field that is not zero. */
+static int duration_sign(const double f[DURATION_FIELD_COUNT]) {
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) {
+        if (f[i] != 0) return f[i] < 0 ? -1 : 1;
+    }
+    return 0;
+}
+
+/* The largest unit whose field is not zero (DefaultTemporalLargestUnit). */
+static time_unit largest_unit_of(const double f[DURATION_FIELD_COUNT]) {
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT - 1u; i++) {
+        if (f[i] != 0) return (time_unit)(UNIT_YEAR - i);
+    }
+    return UNIT_NANOSECOND;
+}
+
+static bool is_calendar_unit(time_unit unit) {
+    return unit >= UNIT_WEEK;
+}
+
+/* The time fields' nanoseconds, the days' as 24 hours with `days`. Only of
+ * fields check_duration accepts (or as small): every product is below 10^25. */
+static wide duration_time(const double f[DURATION_FIELD_COUNT], bool days) {
+    wide total = wide_of(0);
+    for (uint32_t i = days ? 3u : 4u; i < DURATION_FIELD_COUNT; i++) {
+        total = wide_add(total, wide_mul(wide_of_double(f[i]), UNIT_NANOSECONDS[UNIT_YEAR - i]));
+    }
+    return total;
+}
+
+/* Below 2^53 seconds, as 9,007,199,254,740,991.999999999 at most. */
+static bool time_within_limits(wide ns) {
+    wide rest;
+    wide seconds = wide_quotient(ns, (u128){ 0, 1000000000u }, &rest);
+    return seconds.m.hi == 0 && seconds.m.lo < (UINT64_C(1) << 53);
+}
+
+/* IsValidDuration: finite integers of one sign, years, months and weeks
+ * below 2^32, and the days and time below 2^53 seconds, exactly (as
+ * temporal-polyfill computes them, in BigInts). */
+static sjs_result check_duration(sjs_vm *vm, const double f[DURATION_FIELD_COUNT]) {
+    int sign = 0;
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) {
+        if (!sjs_number_is_finite(f[i])) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration field that is not finite");
+        if (f[i] == 0) continue;
+        int s = f[i] < 0 ? -1 : 1;
+        if (sign != 0 && s != sign) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration whose fields have different signs");
+        sign = s;
+    }
+    for (uint32_t i = 0; i < 3u; i++) {
+        if (field_magnitude(f[i]) >= 4294967296.0) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration's years, months or weeks of 2^32 or more");
+    }
+    for (uint32_t i = 3u; i < DURATION_FIELD_COUNT; i++) {
+        /* Far past the limit, which is below 10^25 ns: not added. */
+        if (field_magnitude(f[i]) * (double)UNIT_NANOSECONDS[UNIT_YEAR - i] >= 1e25) return outside_duration(vm);
+    }
+    return time_within_limits(duration_time(f, true)) ? SJS_OK : outside_duration(vm);
+}
+
+/* A Duration of `f`'s fields, checked; a zero field is +0. */
+static sjs_result new_duration(sjs_vm *vm, const double f[DURATION_FIELD_COUNT], sjs_value *out) {
+    if (check_duration(vm, f) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_temporal *t;
+    sjs_result r = sjs_temporal_make(vm->context, SJS_TEMPORAL_DURATION, &t);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) t->as.duration[i] = f[i] + 0.0;
+    *out = sjs_heap_value(SJS_TEMPORAL, &t->h);
+    return SJS_OK;
+}
+
+static void negate_fields(double f[DURATION_FIELD_COUNT]) {
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) f[i] = 0.0 - f[i];
+}
+
+/* The internal form: a date part and a time part. */
+typedef struct {
+    int64_t years;
+    int64_t months;
+    int64_t weeks;
+    int64_t days;
+} date_duration;
+
+typedef struct {
+    date_duration date;
+    wide time;
+} internal_duration;
+
+/* ToInternalDurationRecord, and with `days` ...With24HourDays: the days
+ * in the time as 24 hours each. */
+static internal_duration internal_of(const double f[DURATION_FIELD_COUNT], bool days) {
+    internal_duration d = { { (int64_t)f[0], (int64_t)f[1], (int64_t)f[2], days ? 0 : (int64_t)f[3] }, duration_time(f, days) };
+    return d;
+}
+
+static int date_duration_sign(const date_duration *d) {
+    int64_t fields[4] = { d->years, d->months, d->weeks, d->days };
+    for (uint32_t i = 0; i < 4u; i++) {
+        if (fields[i] != 0) return fields[i] < 0 ? -1 : 1;
+    }
+    return 0;
+}
+
+static int internal_sign(const internal_duration *d) {
+    int sign = date_duration_sign(&d->date);
+    return sign != 0 ? sign : wide_sign(d->time);
+}
+
+/* TemporalDurationFromInternal: the time balanced up to `largest` (a day
+ * at most, 24 hours), its largest unit's field rounded to a double when it
+ * is past 2^53; the fields unchecked. */
+typedef struct {
+    internal_duration duration;
+    time_unit largest;
+} duration_balance;
+
+static void fields_of_internal(duration_balance b, double f[DURATION_FIELD_COUNT]) {
+    const internal_duration *d = &b.duration;
+    double date[4] = { (double)d->date.years, (double)d->date.months, (double)d->date.weeks, (double)d->date.days };
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) f[i] = i < 4u ? date[i] : 0;
+    int sign = wide_sign(d->time);
+    wide rest = wide_make(d->time.m, false);
+    for (uint32_t u = b.largest > UNIT_DAY ? UNIT_DAY : b.largest;; u--) {
+        wide q = wide_quotient(rest, (u128){ 0, (uint64_t)UNIT_NANOSECONDS[u] }, &rest);
+        double v = wide_double(q);
+        f[FIELD_OF_UNIT(u)] += sign < 0 ? -v : v;
+        if (u == UNIT_NANOSECOND) break;
+    }
+}
+
+/* The Duration of an internal one, checked. */
+static sjs_result duration_of_internal(sjs_vm *vm, duration_balance b, sjs_value *out) {
+    double f[DURATION_FIELD_COUNT];
+    fields_of_internal(b, f);
+    return new_duration(vm, f, out);
+}
+
+
+/* A Duration's text (TemporalDurationToString): the sign, P, each date
+ * field that is not zero, then T and the hours and minutes that are not
+ * zero and the seconds, with the smaller fields as their fraction, when
+ * they are not zero, or no larger field is, or `digits` asks for a
+ * fraction: DIGITS_AUTO or 0 to 9. At most about 110 bytes. */
+static uint32_t put_duration(char *out, const double *f, int32_t digits) {
+    static const char LETTERS[] = "YMWDHM";
+    double seconds_fields[DURATION_FIELD_COUNT] = { 0, 0, 0, 0, 0, 0, f[6], f[7], f[8], f[9] };
+    wide seconds = duration_time(seconds_fields, false);
+    bool with_seconds = !u128_zero(seconds.m) || largest_unit_of(f) <= UNIT_SECOND || digits != DIGITS_AUTO;
+    uint32_t n = 0;
+    if (duration_sign(f) < 0) out[n++] = '-';
+    out[n++] = 'P';
+    for (uint32_t i = 0; i < 6u; i++) {
+        if (i == 4u && (f[4] != 0 || f[5] != 0 || with_seconds)) out[n++] = 'T';
+        if (f[i] == 0) continue;
+        n += put_digits(out + n, (uint64_t)field_magnitude(f[i]), 1u);
+        out[n++] = LETTERS[i];
+    }
+    if (!with_seconds) return n;
+    u128 fraction;
+    u128 whole = u128_divmod(seconds.m, (u128){ 0, 1000000000u }, &fraction);
+    n += put_digits(out + n, whole.lo, 1u);
+    char room[9];
+    put_digits(room, fraction.lo, 9u);
+    uint32_t count = (uint32_t)digits;
+    if (digits == DIGITS_AUTO) {
+        count = 9u;
+        while (count > 0 && room[count - 1u] == '0') count--;
+    }
+    if (count > 0) {
+        out[n++] = '.';
+        for (uint32_t i = 0; i < count; i++) out[n++] = room[i];
+    }
+    out[n++] = 'S';
+    return n;
+}
+
+/* An ISO 8601 duration, as both polyfills read one: a sign (+ or -), P,
+ * then whole years, months, weeks and days, each digits and its letter;
+ * then T and hours, minutes and seconds, the last of them with a fraction
+ * of 1 to 9 digits after . or , if any. The letters in either case; at
+ * least one part, and something after a T. A fraction is nanoseconds of
+ * its unit, spread over the smaller fields. */
+typedef struct {
+    uint64_t whole;
+    uint32_t fraction;   /* nanoseconds of a unit, 0 to 999,999,999 */
+    bool fractional;
+    char letter;         /* uppercase */
+} duration_part;
+
+/* Digits, then a fraction where `fractions` allows, then a letter. The
+ * value of digits past 2^64 is 2^64 - 1: a Duration's limits are far
+ * below it, so it faults as theirs does. */
+static bool scan_duration_part(iso_scan *s, bool fractions, duration_part *out) {
+    *out = (duration_part){ 0 };
+    if (!ascii_digit(scan_peek(s))) return false;
+    while (ascii_digit(scan_peek(s))) {
+        uint64_t digit = (uint64_t)(scan_peek(s) - '0');
+        out->whole = out->whole > (UINT64_MAX - digit) / 10u ? UINT64_MAX : out->whole * 10u + digit;
+        s->at++;
+    }
+    if (fractions && (scan_peek(s) == '.' || scan_peek(s) == ',')) {
+        if (!scan_fraction(s, &out->fraction)) return false;
+        out->fractional = true;
+    }
+    int c = scan_peek(s);
+    if (!ascii_letter(c)) return false;
+    out->letter = (char)(c >= 'a' ? c - 'a' + 'A' : c);
+    s->at++;
+    return true;
+}
+
+static bool parse_duration(sjs_str text, double f[DURATION_FIELD_COUNT]) {
+    static const char DATE_LETTERS[] = "YMWD";
+    static const char TIME_LETTERS[] = "HMS";
+    iso_scan s = { text, 0, false };
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) f[i] = 0;
+    double sign = 1;
+    if (scan_take(&s, '-')) {
+        sign = -1;
+    } else {
+        scan_take(&s, '+');
+    }
+    if (!scan_take(&s, 'P') && !scan_take(&s, 'p')) return false;
+    bool any = false;
+    uint32_t next = 0;
+    duration_part part;
+    while (s.at < text.length && scan_peek(&s) != 'T' && scan_peek(&s) != 't') {
+        if (!scan_duration_part(&s, false, &part)) return false;
+        while (next < 4u && DATE_LETTERS[next] != part.letter) next++;
+        if (next == 4u) return false;
+        f[next++] = (double)part.whole;
+        any = true;
+    }
+    uint64_t excess = 0;   /* a fraction's nanoseconds */
+    if (s.at < text.length) {
+        s.at++;
+        if (s.at == text.length) return false;
+        next = 0;
+        bool fraction = false;
+        while (s.at < text.length) {
+            if (fraction || !scan_duration_part(&s, true, &part)) return false;
+            while (next < 3u && TIME_LETTERS[next] != part.letter) next++;
+            if (next == 3u) return false;
+            f[4u + next] = (double)part.whole;
+            static const uint64_t UNIT[] = { 3600u, 60u, 1u };
+            excess = (uint64_t)part.fraction * UNIT[next];
+            fraction = part.fractional;
+            next++;
+            any = true;
+        }
+    }
+    if (!any) return false;
+    f[9] = (double)(excess % 1000u);
+    f[8] = (double)(excess / 1000u % 1000u);
+    f[7] = (double)(excess / 1000000u % 1000u);
+    f[6] += (double)(excess / 1000000000u % 60u);
+    f[5] += (double)(excess / 60000000000u);
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) f[i] = f[i] * sign + 0.0;
+    return true;
+}
+
+/* ToIntegerIfIntegral: a number, a boolean or null that is an integer; a
+ * fraction, NaN or an infinity throws a RangeError in JavaScript; a
+ * string, an array or an object it would convert. */
+static sjs_result integral_of(sjs_vm *vm, sjs_value v, double *out) {
+    double d;
+    if (sjs_vm_to_number(vm, v, &d) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (!sjs_number_is_integer(d)) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration field that is not an integer");
+    *out = d + 0.0;
+    return SJS_OK;
+}
+
+/* ToTemporalPartialDurationRecord: the fields an object has (not
+ * undefined), at least one; `f` keeps the others. A Duration's are all
+ * its fields. */
+static sjs_result partial_duration(sjs_vm *vm, sjs_value item, double f[DURATION_FIELD_COUNT]) {
+    if (is_temporal(item, SJS_TEMPORAL_DURATION)) {
+        for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) f[i] = SJS_AS_TEMPORAL(item)->as.duration[i];
+        return SJS_OK;
+    }
+    if (item.kind != SJS_OBJECT) return sjs_vm_fault(vm, "a Duration's fields are an object of years, months, ..., nanoseconds");
+    bool any = false;
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) {
+        const sjs_entry *e = sjs_object_find(SJS_AS_OBJECT(item), sjs_cstr(DURATION_FIELDS[i]));
+        if (e == NULL || e->value.kind == SJS_UNDEFINED) continue;
+        if (integral_of(vm, e->value, &f[i]) != SJS_OK) return SJS_ERR_PROGRAM;
+        any = true;
+    }
+    if (!any) return sjs_vm_fault(vm, "JavaScript throws a TypeError for a Duration's fields without years, months, ..., or nanoseconds");
+    return SJS_OK;
+}
+
+/* ToTemporalDuration: a Duration's fields, a string's, or an object's,
+ * the fields it lacks 0; checked. */
+static sjs_result to_duration(sjs_vm *vm, sjs_value item, double f[DURATION_FIELD_COUNT]) {
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) f[i] = 0;
+    if (item.kind == SJS_STRING) {
+        sjs_str text = parsed_text(vm, item);
+        if (!parse_duration(text, f)) return unparsed(vm, "staticjs reads a Duration from an ISO 8601 duration, and this is not one", text);
+    } else if (partial_duration(vm, item, f) != SJS_OK) {
+        return SJS_ERR_PROGRAM;
+    }
+    return check_duration(vm, f);
+}
+
+/* ------------------------------------------------------------------------
+ * Date arithmetic in the ISO calendar, and the difference of two dates or
+ * date-times rounded as the 2024 revision of the specification rounds it
+ * (the "nudge" of RoundRelativeDuration), as both polyfills compute it.
+ */
+
+static sjs_iso_date_time date_at(int64_t days) {
+    sjs_iso_date_time d = { 0 };
+    date_of_days(days, &d);
+    return d;
+}
+
+/* The epoch nanoseconds of a date (days since the epoch) at a time of day. */
+static wide epoch_nanoseconds(int64_t days, int64_t time) {
+    return wide_add(wide_mul(wide_of(days), NS_PER_DAY), wide_of(time));
+}
+
+static int64_t days_of(const sjs_iso_date_time *d) {
+    return epoch_days(d->year, d->month, d->day);
+}
+
+/* CalendarDateAdd: the years and months added, the month balanced into
+ * the year, the day constrained to the month's last or, with `reject`,
+ * faulting past it; then the weeks and days. Into `*out` (days since the
+ * epoch); faults outside Temporal's limits. */
+typedef struct {
+    const sjs_iso_date_time *date;
+    date_duration duration;
+    bool reject;
+} date_addition;
+
+static sjs_result add_date(sjs_vm *vm, date_addition a, int64_t *out) {
+    int64_t month = (int64_t)a.date->month - 1 + a.duration.months;
+    int64_t year = (int64_t)a.date->year + a.duration.years + floor_div(month, 12);
+    uint32_t m = (uint32_t)floor_mod(month, 12) + 1u;
+    uint32_t day = a.date->day;
+    uint32_t last = days_in_month(year, m);
+    if (day > last) {
+        if (a.reject) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a day past its month's last with overflow \"reject\"");
+        day = last;
+    }
+    int64_t days = epoch_days(year, m, day) + a.duration.days + 7 * a.duration.weeks;
+    if (days < DAYS_MIN || days > DAYS_MAX) return outside_limits(vm);
+    *out = days;
+    return SJS_OK;
+}
+
+/* Is the date y-m-d (d past the month's end, perhaps) past `two`, in the
+ * direction of `sign`? (ISODateSurpasses) */
+typedef struct {
+    int64_t year;
+    int64_t month;
+    int64_t day;
+} loose_date;
+
+static bool surpasses(int sign, loose_date a, const sjs_iso_date_time *two) {
+    int64_t delta = a.year != two->year ? a.year - two->year : a.month != two->month ? a.month - two->month : a.day - two->day;
+    return sign * delta > 0;
+}
+
+/* The year and month `months` after `year`-`month`. */
+static loose_date months_after(loose_date d, int64_t months) {
+    int64_t month = d.month - 1 + months;
+    return (loose_date){ d.year + floor_div(month, 12), floor_mod(month, 12) + 1, d.day };
+}
+
+/* CalendarDateUntil: from `one` to `two` in years, months, weeks and days,
+ * as large as `largest` allows (a day at least). */
+static date_duration date_until(const sjs_iso_date_time *one, const sjs_iso_date_time *two, time_unit largest) {
+    date_duration r = { 0, 0, 0, 0 };
+    int sign = -compare_dates(one, two);
+    if (sign == 0) return r;
+    loose_date start = { one->year, one->month, one->day };
+    if (largest == UNIT_YEAR || largest == UNIT_MONTH) {
+        int64_t candidate = (int64_t)two->year - one->year;
+        if (candidate != 0) candidate -= sign;
+        while (!surpasses(sign, (loose_date){ one->year + candidate, one->month, one->day }, two)) {
+            r.years = candidate;
+            candidate += sign;
+        }
+        int64_t months = sign;
+        loose_date at = months_after((loose_date){ one->year + r.years, one->month, one->day }, months);
+        while (!surpasses(sign, at, two)) {
+            r.months = months;
+            months += sign;
+            at = months_after(at, sign);
+        }
+        if (largest == UNIT_MONTH) {
+            r.months += r.years * 12;
+            r.years = 0;
+        }
+    }
+    loose_date at = months_after((loose_date){ start.year + r.years, start.month, start.day }, r.months);
+    uint32_t last = days_in_month(at.year, (uint32_t)at.month);
+    r.days = days_of(two) - epoch_days(at.year, (uint32_t)at.month, at.day > last ? last : (uint32_t)at.day);
+    if (largest == UNIT_WEEK) {
+        r.weeks = r.days / 7;
+        r.days %= 7;
+    }
+    return r;
+}
+
+/* DifferenceISODateTime: from `a` to `b`, the date part as large as
+ * `largest` (the days in the time when it is below a day). */
+typedef struct {
+    const sjs_iso_date_time *from;
+    const sjs_iso_date_time *to;
+} date_time_pair;
+
+static internal_duration difference_iso(date_time_pair p, time_unit largest) {
+    int64_t time = time_of_day(p.to) - time_of_day(p.from);
+    int time_sign = time < 0 ? -1 : time > 0 ? 1 : 0;
+    sjs_iso_date_time adjusted = date_at(days_of(p.to));
+    if (compare_dates(p.from, p.to) == time_sign && time_sign != 0) {
+        adjusted = date_at(days_of(p.to) + time_sign);
+        time -= time_sign * NS_PER_DAY;
+    }
+    internal_duration d = { date_until(p.from, &adjusted, largest > UNIT_DAY ? largest : UNIT_DAY), wide_of(time) };
+    if (largest < UNIT_DAY) {
+        d.time = wide_add(d.time, wide_mul(wide_of(d.date.days), NS_PER_DAY));
+        d.date.days = 0;
+    }
+    return d;
+}
+
+/* How to round a difference: its units, increment and mode. */
+typedef struct {
+    time_unit largest;
+    time_unit smallest;
+    int64_t increment;
+    rounding_mode mode;
+} difference_settings;
+
+/* A difference to round, from `origin` (a date and time) to `dest` (its
+ * epoch nanoseconds). */
+typedef struct {
+    internal_duration duration;
+    wide dest;
+    const sjs_iso_date_time *origin;
+    difference_settings s;
+} relative_rounding;
+
+typedef struct {
+    internal_duration duration;
+    wide nudged;   /* the destination moved by the rounding */
+    bool expanded;
+    double total;
+} nudge;
+
+/* The epoch nanoseconds of an origin's date plus `duration`
+ * (constrained), at the origin's time. */
+typedef struct {
+    const sjs_iso_date_time *origin;
+    date_duration duration;
+} origin_shift;
+
+static sjs_result epoch_after(sjs_vm *vm, origin_shift shift, wide *out) {
+    int64_t days;
+    if (add_date(vm, (date_addition){ shift.origin, shift.duration, false }, &days) != SJS_OK) return SJS_ERR_PROGRAM;
+    *out = epoch_nanoseconds(days, time_of_day(shift.origin));
+    return SJS_OK;
+}
+
+/* NudgeToCalendarUnit: the smallest unit (a day to a year) truncated to
+ * the increment, and the span from it to the next multiple; the
+ * destination's place in the span rounds, and gives the total. */
+static sjs_result nudge_calendar(sjs_vm *vm, const relative_rounding *r, nudge *out) {
+    const date_duration *d = &r->duration.date;
+    int64_t sign = internal_sign(&r->duration) < 0 ? -1 : 1;
+    int64_t increment = r->s.increment;
+    date_duration start = { 0, 0, 0, 0 };
+    int64_t r1;
+    switch (r->s.smallest) {
+    case UNIT_YEAR:
+        r1 = round_number(d->years, increment, MODE_TRUNC);
+        start.years = r1;
+        break;
+    case UNIT_MONTH:
+        r1 = round_number(d->months, increment, MODE_TRUNC);
+        start = (date_duration){ d->years, r1, 0, 0 };
+        break;
+    case UNIT_WEEK: {
+        int64_t weeks_start;
+        if (add_date(vm, (date_addition){ r->origin, { d->years, d->months, 0, 0 }, false }, &weeks_start) != SJS_OK) return SJS_ERR_PROGRAM;
+        sjs_iso_date_time from = date_at(weeks_start);
+        sjs_iso_date_time to = date_at(weeks_start + d->days);
+        r1 = round_number(d->weeks + date_until(&from, &to, UNIT_WEEK).weeks, increment, MODE_TRUNC);
+        start = (date_duration){ d->years, d->months, r1, 0 };
+        break;
+    }
+    default:
+        r1 = round_number(d->days, increment, MODE_TRUNC);
+        start = (date_duration){ d->years, d->months, d->weeks, r1 };
+        break;
+    }
+    int64_t r2 = r1 + increment * sign;
+    date_duration end = start;
+    int64_t *field = r->s.smallest == UNIT_YEAR ? &end.years : r->s.smallest == UNIT_MONTH ? &end.months : r->s.smallest == UNIT_WEEK ? &end.weeks : &end.days;
+    *field = r2;
+    wide start_ns;
+    wide end_ns;
+    if (epoch_after(vm, (origin_shift){ r->origin, start }, &start_ns) != SJS_OK || epoch_after(vm, (origin_shift){ r->origin, end }, &end_ns) != SJS_OK) {
+        return SJS_ERR_PROGRAM;
+    }
+    wide numerator = wide_sub(r->dest, start_ns);
+    wide denominator = wide_sub(end_ns, start_ns);
+    bool expanded;
+    if (wide_sign(numerator) == 0) {
+        expanded = false;
+    } else if (wide_cmp(numerator, denominator) == 0) {
+        expanded = true;
+    } else {
+        int cmp = u128_cmp(u128_add(numerator.m, numerator.m), denominator.m);
+        bool even = ((r1 < 0 ? -r1 : r1) / increment) % 2 == 0;
+        expanded = rounds_away((rounding_case){ r->s.mode, sign < 0, cmp, even });
+    }
+    out->total = ratio_double(wide_add(wide_mul(denominator, r1), wide_mul(numerator, increment * sign)), denominator);
+    out->duration = (internal_duration){ expanded ? end : start, wide_of(0) };
+    out->nudged = expanded ? end_ns : start_ns;
+    out->expanded = expanded;
+    return SJS_OK;
+}
+
+/* NudgeToDayOrTime: the days and time as nanoseconds, rounded; whether
+ * that crossed into another day. */
+static nudge nudge_time(const relative_rounding *r) {
+    const internal_duration *d = &r->duration;
+    wide time = wide_add(d->time, wide_mul(wide_of(d->date.days), NS_PER_DAY));
+    u128 increment = u128_mul((u128){ 0, (uint64_t)UNIT_NANOSECONDS[r->s.smallest] }, (uint64_t)r->s.increment);
+    wide rounded = round_wide(time, (wide_rounding){ increment, r->s.mode });
+    wide rest;
+    int64_t whole_days = wide_int64(wide_quotient(time, (u128){ 0, (uint64_t)NS_PER_DAY }, &rest));
+    int64_t rounded_days = wide_int64(wide_quotient(rounded, (u128){ 0, (uint64_t)NS_PER_DAY }, &rest));
+    int64_t delta = rounded_days - whole_days;
+    nudge n = { *d, wide_add(r->dest, wide_sub(rounded, time)), (delta < 0 ? -1 : delta > 0 ? 1 : 0) == wide_sign(time), 0 };
+    n.duration.date.days = 0;
+    n.duration.time = rounded;
+    if (r->s.largest >= UNIT_DAY) {
+        n.duration.date.days = rounded_days;
+        n.duration.time = rest;
+    }
+    return n;
+}
+
+/* BubbleRelativeDuration: a rounding that reached the end of a larger unit
+ * (a week only when it is the largest) carries into it, up to `largest`. */
+static sjs_result bubble(sjs_vm *vm, const relative_rounding *r, nudge *n) {
+    int64_t sign = internal_sign(&r->duration) < 0 ? -1 : 1;
+    time_unit from = r->s.smallest > UNIT_DAY ? r->s.smallest : UNIT_DAY;
+    if (from == r->s.largest) return SJS_OK;
+    for (uint32_t unit = from + 1u; unit <= r->s.largest; unit++) {
+        if (unit == UNIT_WEEK && r->s.largest != UNIT_WEEK) continue;
+        date_duration end = n->duration.date;
+        if (unit == UNIT_YEAR) end = (date_duration){ end.years + sign, 0, 0, 0 };
+        if (unit == UNIT_MONTH) end = (date_duration){ end.years, end.months + sign, 0, 0 };
+        if (unit == UNIT_WEEK) end = (date_duration){ end.years, end.months, end.weeks + sign, 0 };
+        wide end_ns;
+        if (epoch_after(vm, (origin_shift){ r->origin, end }, &end_ns) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (wide_cmp(n->nudged, end_ns) == -sign) break;
+        n->duration = (internal_duration){ end, wide_of(0) };
+    }
+    return SJS_OK;
+}
+
+/* RoundRelativeDuration. */
+static sjs_result round_relative(sjs_vm *vm, const relative_rounding *r, internal_duration *out) {
+    nudge n;
+    if (is_calendar_unit(r->s.smallest)) {
+        if (nudge_calendar(vm, r, &n) != SJS_OK) return SJS_ERR_PROGRAM;
+    } else {
+        n = nudge_time(r);
+    }
+    if (n.expanded && r->s.smallest != UNIT_WEEK && bubble(vm, r, &n) != SJS_OK) return SJS_ERR_PROGRAM;
+    *out = n.duration;
+    return SJS_OK;
+}
+
+/* DifferencePlainDateTimeWithRounding: zero for equal date-times; each
+ * within Temporal's limits. */
+typedef struct {
+    date_time_pair pair;
+    difference_settings s;
+} rounded_difference;
+
+static sjs_result difference_rounded(sjs_vm *vm, rounded_difference d, internal_duration *out) {
+    date_time_pair p = d.pair;
+    difference_settings s = d.s;
+    *out = (internal_duration){ { 0, 0, 0, 0 }, wide_of(0) };
+    if (compare_date_times(p.from, p.to) == 0) return SJS_OK;
+    if (!within_limits(p.from, true) || !within_limits(p.to, true)) return outside_limits(vm);
+    *out = difference_iso(p, s.largest);
+    if (s.smallest == UNIT_NANOSECOND && s.increment == 1) return SJS_OK;
+    relative_rounding r = { *out, epoch_nanoseconds(days_of(p.to), time_of_day(p.to)), p.from, s };
+    return round_relative(vm, &r, out);
+}
+
+/* DifferencePlainDateTimeWithTotal, in `unit`. */
+typedef struct {
+    date_time_pair pair;
+    time_unit unit;
+} total_difference;
+
+static sjs_result difference_total(sjs_vm *vm, total_difference t, double *out) {
+    date_time_pair p = t.pair;
+    time_unit unit = t.unit;
+    *out = 0;
+    if (compare_date_times(p.from, p.to) == 0) return SJS_OK;
+    if (!within_limits(p.from, true) || !within_limits(p.to, true)) return outside_limits(vm);
+    internal_duration d = difference_iso(p, unit);
+    if (is_calendar_unit(unit)) {
+        relative_rounding r = { d, epoch_nanoseconds(days_of(p.to), time_of_day(p.to)), p.from, { unit, unit, 1, MODE_TRUNC } };
+        nudge n;
+        if (nudge_calendar(vm, &r, &n) != SJS_OK) return SJS_ERR_PROGRAM;
+        *out = n.total;
+        return SJS_OK;
+    }
+    wide time = wide_add(d.time, wide_mul(wide_of(d.date.days), NS_PER_DAY));
+    *out = ratio_double(time, wide_of(UNIT_NANOSECONDS[unit]));
+    return SJS_OK;
+}
+
+/* A unit option (largestUnit, smallestUnit, unit): a unit's name from a
+ * string, in `range`, or "auto" where `automatic`; UNIT_NONE when it is
+ * undefined. Any other value faults (a RangeError, or a conversion). */
+#define UNIT_NONE ((uint32_t)UNIT_COUNT)
+#define UNIT_AUTO ((uint32_t)UNIT_COUNT + 1u)
+
+typedef struct {
+    sjs_value options;
+    const char *name;
+    unit_range range;
+    bool automatic;
+} unit_request;
+
+static sjs_result unit_value(sjs_vm *vm, unit_request request, uint32_t *out) {
+    sjs_value v;
+    *out = UNIT_NONE;
+    if (option_of(vm, (option_name){ request.options, sjs_cstr(request.name) }, &v) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (v.kind == SJS_UNDEFINED) return SJS_OK;
+    if (v.kind != SJS_STRING) return sjs_vm_fault(vm, "staticjs reads a Temporal option only from a string, where JavaScript would convert this value to one");
+    sjs_str text = sjs_string_view(SJS_AS_STRING(v));
+    if (request.automatic && sjs_str_equal(text, SJS_STR("auto"))) {
+        *out = UNIT_AUTO;
+        return SJS_OK;
+    }
+    time_unit unit;
+    if (unit_in_range(vm, (unit_text){ text, request.range }, &unit) != SJS_OK) return SJS_ERR_PROGRAM;
+    *out = unit;
+    return SJS_OK;
+}
+
+/* relativeTo: a PlainDate's date, or a PlainDateTime's, a string's or an
+ * object's fields' (with their time, which is read but not used);
+ * `*given` false when it is undefined. JavaScript reads a time zone, an
+ * offset with one or a time zone annotation as a ZonedDateTime, which
+ * staticjs does not have. */
+typedef struct {
+    sjs_iso_date_time date;
+    bool given;
+} relative_date;
+
+static sjs_result zoned_relative_to(sjs_vm *vm) {
+    return sjs_vm_fault(vm, "staticjs has no Temporal.ZonedDateTime: a relativeTo with a time zone needs time zone data");
+}
+
+static sjs_result relative_to_option(sjs_vm *vm, sjs_value options, relative_date *out) {
+    sjs_value v;
+    out->given = false;
+    if (option_of(vm, (option_name){ options, SJS_STR("relativeTo") }, &v) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (v.kind == SJS_UNDEFINED) return SJS_OK;
+    out->given = true;
+    if (v.kind == SJS_STRING) {
+        sjs_str text = parsed_text(vm, v);
+        iso_parse parsed;
+        if (parse_iso(text, &parsed) && parsed.zoned) return zoned_relative_to(vm);
+    } else if (v.kind == SJS_OBJECT) {
+        const sjs_object *bag = SJS_AS_OBJECT(v);
+        const sjs_entry *zone = sjs_object_find(bag, SJS_STR("timeZone"));
+        const sjs_entry *offset = sjs_object_find(bag, SJS_STR("offset"));
+        if ((zone != NULL && zone->value.kind != SJS_UNDEFINED) || (offset != NULL && offset->value.kind != SJS_UNDEFINED)) return zoned_relative_to(vm);
+        time_fields g = { 0 };
+        if (read_time_fields(vm, bag, &g) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    return to_date(vm, (date_source){ v, sjs_undefined() }, &out->date);
+}
+
+/* ------------------------------------------------------------------------
+ * A Duration's functions and methods
+ */
+
+/* new Temporal.Duration(years, ..., nanoseconds): each undefined is 0. */
+static sjs_result construct_duration(sjs_vm *vm, sjs_leaf_call *call) {
+    double f[DURATION_FIELD_COUNT];
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) {
+        sjs_value v = arg_of(call, i);
+        f[i] = 0;
+        if (v.kind != SJS_UNDEFINED && integral_of(vm, v, &f[i]) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    return new_duration(vm, f, &call->result);
+}
+
+/* The days the years, months and weeks of `d` span from `date`, and its
+ * days (DateDurationDays). */
+typedef struct {
+    const date_duration *duration;
+    const sjs_iso_date_time *date;
+} dated_duration;
+
+static sjs_result days_from(sjs_vm *vm, dated_duration from, int64_t *out) {
+    const date_duration *d = from.duration;
+    const sjs_iso_date_time *date = from.date;
+    *out = d->days;
+    if (d->years == 0 && d->months == 0 && d->weeks == 0) return SJS_OK;
+    int64_t later;
+    if (add_date(vm, (date_addition){ date, { d->years, d->months, d->weeks, 0 }, false }, &later) != SJS_OK) return SJS_ERR_PROGRAM;
+    *out += later - days_of(date);
+    return SJS_OK;
+}
+
+/* Temporal.Duration.compare(one, two, { relativeTo }): equal fields are 0;
+ * years, months or weeks in either need relativeTo, from which they count
+ * in days; a day is 24 hours. */
+static sjs_result compare_durations(sjs_vm *vm, sjs_leaf_call *call) {
+    double a[DURATION_FIELD_COUNT];
+    double b[DURATION_FIELD_COUNT];
+    relative_date relative;
+    if (to_duration(vm, arg_of(call, 0), a) != SJS_OK || to_duration(vm, arg_of(call, 1u), b) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (relative_to_option(vm, arg_of(call, 2u), &relative) != SJS_OK) return SJS_ERR_PROGRAM;
+    call->result = sjs_num(0);
+    uint32_t i = 0;
+    while (i < DURATION_FIELD_COUNT && a[i] == b[i]) i++;
+    if (i == DURATION_FIELD_COUNT) return SJS_OK;
+    internal_duration x = internal_of(a, false);
+    internal_duration y = internal_of(b, false);
+    int64_t x_days = x.date.days;
+    int64_t y_days = y.date.days;
+    if (is_calendar_unit(largest_unit_of(a)) || is_calendar_unit(largest_unit_of(b))) {
+        if (!relative.given) return sjs_vm_fault(vm, "JavaScript throws a RangeError for comparing years, months or weeks without relativeTo");
+        if (days_from(vm, (dated_duration){ &x.date, &relative.date }, &x_days) != SJS_OK ||
+            days_from(vm, (dated_duration){ &y.date, &relative.date }, &y_days) != SJS_OK) {
+            return SJS_ERR_PROGRAM;
+        }
+    }
+    wide x_time = wide_add(x.time, wide_mul(wide_of(x_days), NS_PER_DAY));
+    wide y_time = wide_add(y.time, wide_mul(wide_of(y_days), NS_PER_DAY));
+    call->result = sjs_num((double)wide_cmp(x_time, y_time));
+    return SJS_OK;
+}
+
+
+/* A Duration's getter. */
+static sjs_value duration_field(const double f[DURATION_FIELD_COUNT], sjs_temporal_field field) {
+    switch (field) {
+    case SJS_FIELD_SIGN:
+        return sjs_num((double)duration_sign(f));
+    case SJS_FIELD_BLANK:
+        return sjs_boolean(duration_sign(f) == 0);
+    case SJS_FIELD_YEARS:
+        return sjs_num(f[0]);
+    case SJS_FIELD_MONTHS:
+        return sjs_num(f[1]);
+    case SJS_FIELD_WEEKS:
+        return sjs_num(f[2]);
+    case SJS_FIELD_DAYS:
+        return sjs_num(f[3]);
+    case SJS_FIELD_HOURS:
+        return sjs_num(f[4]);
+    case SJS_FIELD_MINUTES:
+        return sjs_num(f[5]);
+    case SJS_FIELD_SECONDS:
+        return sjs_num(f[6]);
+    case SJS_FIELD_MILLISECONDS:
+        return sjs_num(f[7]);
+    case SJS_FIELD_MICROSECONDS:
+        return sjs_num(f[8]);
+    default:
+        return sjs_num(f[9]);
+    }
+}
+
+
 sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     static const struct {
         sjs_builtin_id id;
@@ -1228,7 +2323,24 @@ sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *c
         { SJS_BUILTIN_TEMPORAL_PLAIN_TIME, SJS_TEMPORAL_PLAIN_TIME },
         { SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME, SJS_TEMPORAL_PLAIN_DATE_TIME },
     };
-    /* Each type's constructor, from and compare are three IDs in a row. */
+    switch (id) {
+    case SJS_BUILTIN_TEMPORAL_DURATION:
+        return construct_duration(vm, call);
+    case SJS_BUILTIN_TEMPORAL_DURATION_FROM: {
+        double f[DURATION_FIELD_COUNT];
+        sjs_value item = arg_of(call, 0);
+        if (to_duration(vm, item, f) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (!is_temporal(item, SJS_TEMPORAL_DURATION)) return new_duration(vm, f, &call->result);
+        call->result = item;
+        sjs_ref(item);
+        return SJS_OK;
+    }
+    case SJS_BUILTIN_TEMPORAL_DURATION_COMPARE:
+        return compare_durations(vm, call);
+    default:
+        break;
+    }
+    /* Each plain type's constructor, from and compare are three IDs in a row. */
     uint32_t t = 0;
     while (t + 1u < sizeof TYPES / sizeof TYPES[0] && id >= TYPES[t + 1u].id) t++;
     sjs_temporal_type type = TYPES[t].type;
@@ -1441,10 +2553,14 @@ sjs_result sjs_temporal_property(sjs_vm *vm, sjs_member member, sjs_value *out) 
     sjs_temporal_field field = temporal_field_of(n, v);
     if (field != SJS_FIELD_NONE) {
         sjs_temporal_type type = sjs_temporal_type_of(v);
+        vm->fuel_used++;
+        if (type == SJS_TEMPORAL_DURATION) {
+            *out = duration_field(SJS_AS_TEMPORAL(v)->as.duration, field);
+            return SJS_OK;
+        }
         if (type != SJS_TEMPORAL_PLAIN_DATE && type != SJS_TEMPORAL_PLAIN_TIME && type != SJS_TEMPORAL_PLAIN_DATE_TIME) {
             return sjs_vm_fault(vm, "staticjs does not build this Temporal type's getters yet");
         }
-        vm->fuel_used++;
         return date_field(vm, (date_getter){ &SJS_AS_TEMPORAL(v)->as.iso, field }, out);
     }
     if (temporal_method_of(n, v) != SJS_BUILTIN_NONE || (n != NULL && (n->flags & SJS_NAME_OBJECT) != 0)) {
@@ -1572,7 +2688,15 @@ static sjs_result digits_option(sjs_vm *vm, sjs_value options, int32_t *digits) 
     return sjs_vm_fault(vm, "JavaScript throws a RangeError for a fractionalSecondDigits other than \"auto\" or a number from 0 to 9");
 }
 
-static sjs_result precision_of(sjs_vm *vm, sjs_value options, text_precision *out) {
+/* The options, and the largest smallestUnit: a minute, or a Duration's
+ * second. */
+typedef struct {
+    sjs_value options;
+    time_unit most;
+} precision_request;
+
+static sjs_result precision_of(sjs_vm *vm, precision_request request, text_precision *out) {
+    sjs_value options = request.options;
     *out = (text_precision){ DIGITS_AUTO, { 1, MODE_TRUNC } };
     if (digits_option(vm, options, &out->digits) != SJS_OK || mode_option(vm, options, &out->r.mode) != SJS_OK) return SJS_ERR_PROGRAM;
     sjs_value v;
@@ -1583,7 +2707,7 @@ static sjs_result precision_of(sjs_vm *vm, sjs_value options, text_precision *ou
         return sjs_vm_fault(vm, "staticjs refuses toString's smallestUnit \"auto\", which the polyfills read differently");
     }
     unit_choice unit;
-    if (smallest_unit(vm, (unit_option){ options, { UNIT_NANOSECOND, UNIT_MINUTE } }, &unit) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (smallest_unit(vm, (unit_option){ options, { UNIT_NANOSECOND, request.most } }, &unit) != SJS_OK) return SJS_ERR_PROGRAM;
     if (unit.given) {
         static const int32_t DIGITS[] = { 9, 6, 3, 0, DIGITS_MINUTE };
         out->digits = DIGITS[unit.unit];
@@ -1604,7 +2728,7 @@ static sjs_result iso_to_string(sjs_vm *vm, text_request request, sjs_value *out
     text_precision precision = { DIGITS_AUTO, { 1, MODE_TRUNC } };
     sjs_iso_date_time d = t->as.iso;
     if (type != SJS_TEMPORAL_PLAIN_DATE) {
-        if (precision_of(vm, request.options, &precision) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (precision_of(vm, (precision_request){ request.options, UNIT_MINUTE }, &precision) != SJS_OK) return SJS_ERR_PROGRAM;
         if (!round_iso(&d, precision.r, type == SJS_TEMPORAL_PLAIN_DATE_TIME)) return outside_limits(vm);
     }
     char text[SJS_TEMPORAL_TEXT_MAX + 16u];
@@ -1615,10 +2739,188 @@ static sjs_result iso_to_string(sjs_vm *vm, text_request request, sjs_value *out
     return temporal_string(vm, (sjs_str){ text, n + suffix.length }, out);
 }
 
+/* The date and time a Duration (its days as 24 hours) reaches from
+ * relativeTo's date at midnight, the years, months and weeks added to it
+ * constrained, into `to`. */
+typedef struct {
+    const double *fields;
+    const relative_date *relative;
+} relative_duration;
+
+static sjs_result reached(sjs_vm *vm, relative_duration r, sjs_iso_date_time *to) {
+    const relative_date *relative = r.relative;
+    internal_duration d = internal_of(r.fields, true);
+    wide time;
+    int64_t days = wide_int64(wide_floor(d.time, (u128){ 0, (uint64_t)NS_PER_DAY }, &time));
+    int64_t target;
+    if (add_date(vm, (date_addition){ &relative->date, { d.date.years, d.date.months, d.date.weeks, days }, false }, &target) != SJS_OK) return SJS_ERR_PROGRAM;
+    *to = date_at(target);
+    set_time_of_day(to, wide_int64(time));
+    return SJS_OK;
+}
+
+static sjs_result needs_relative_to(sjs_vm *vm) {
+    return sjs_vm_fault(vm, "JavaScript throws a RangeError for years, months or weeks without relativeTo");
+}
+
+static const unit_range ALL_UNITS = { UNIT_NANOSECOND, UNIT_YEAR };
+
+/* round(smallestUnit) or round({ largestUnit, relativeTo,
+ * roundingIncrement, roundingMode, smallestUnit }): one of the units at
+ * least; largestUnit by default the larger of smallestUnit and the
+ * Duration's largest; roundingMode halfExpand. Relative to a date, as the
+ * difference from it to where the Duration reaches; without one, of 24-hour
+ * days and time, and no years, months or weeks. */
+static sjs_result duration_round(sjs_vm *vm, const double f[DURATION_FIELD_COUNT], sjs_leaf_call *call) {
+    sjs_value options = arg_of(call, 0);
+    uint32_t largest = UNIT_NONE;
+    uint32_t smallest = UNIT_NONE;
+    relative_date relative = { { 0 }, false };
+    difference_settings s = { UNIT_NANOSECOND, UNIT_NANOSECOND, 1, MODE_HALF_EXPAND };
+    if (options.kind == SJS_UNDEFINED) return sjs_vm_fault(vm, "JavaScript throws a TypeError for round without options");
+    if (options.kind == SJS_STRING) {
+        time_unit unit;
+        if (unit_in_range(vm, (unit_text){ sjs_string_view(SJS_AS_STRING(options)), ALL_UNITS }, &unit) != SJS_OK) return SJS_ERR_PROGRAM;
+        smallest = unit;
+    } else {
+        if (unit_value(vm, (unit_request){ options, "largestUnit", ALL_UNITS, true }, &largest) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (relative_to_option(vm, options, &relative) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (increment_option(vm, options, &s.increment) != SJS_OK || mode_option(vm, options, &s.mode) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (unit_value(vm, (unit_request){ options, "smallestUnit", ALL_UNITS, false }, &smallest) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    if (smallest == UNIT_NONE && (largest == UNIT_NONE)) return sjs_vm_fault(vm, "JavaScript throws a RangeError for round without a smallestUnit or a largestUnit");
+    s.smallest = smallest == UNIT_NONE ? UNIT_NANOSECOND : (time_unit)smallest;
+    time_unit existing = largest_unit_of(f);
+    time_unit larger = existing > s.smallest ? existing : s.smallest;
+    s.largest = largest == UNIT_NONE || largest == UNIT_AUTO ? larger : (time_unit)largest;
+    if (s.largest < s.smallest) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a largestUnit smaller than the smallestUnit");
+    if (s.smallest < UNIT_DAY && check_increment(vm, s.increment, s.smallest) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (s.increment > 1 && s.smallest >= UNIT_DAY && s.largest != s.smallest) {
+        return sjs_vm_fault(vm, "JavaScript throws a RangeError for a roundingIncrement above 1 of a day or a calendar unit other than the largestUnit");
+    }
+    internal_duration d;
+    if (relative.given) {
+        sjs_iso_date_time to;
+        if (reached(vm, (relative_duration){ f, &relative }, &to) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (difference_rounded(vm, (rounded_difference){ { &relative.date, &to }, s }, &d) != SJS_OK) return SJS_ERR_PROGRAM;
+        return duration_of_internal(vm, (duration_balance){ d, s.largest }, &call->result);
+    }
+    if (is_calendar_unit(existing) || is_calendar_unit(s.largest)) return needs_relative_to(vm);
+    d = internal_of(f, true);
+    u128 increment = u128_mul((u128){ 0, (uint64_t)UNIT_NANOSECONDS[s.smallest] }, (uint64_t)s.increment);
+    d.time = round_wide(d.time, (wide_rounding){ increment, s.mode });
+    return duration_of_internal(vm, (duration_balance){ d, s.largest }, &call->result);
+}
+
+/* total(unit) or total({ relativeTo, unit }): the Duration in the unit, a
+ * number; relative to a date as round is; else of 24-hour days. */
+static sjs_result duration_total(sjs_vm *vm, const double f[DURATION_FIELD_COUNT], sjs_leaf_call *call) {
+    sjs_value options = arg_of(call, 0);
+    uint32_t unit = UNIT_NONE;
+    relative_date relative = { { 0 }, false };
+    if (options.kind == SJS_UNDEFINED) return sjs_vm_fault(vm, "JavaScript throws a TypeError for total without options");
+    if (options.kind == SJS_STRING) {
+        time_unit u;
+        if (unit_in_range(vm, (unit_text){ sjs_string_view(SJS_AS_STRING(options)), ALL_UNITS }, &u) != SJS_OK) return SJS_ERR_PROGRAM;
+        unit = u;
+    } else {
+        if (relative_to_option(vm, options, &relative) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (unit_value(vm, (unit_request){ options, "unit", ALL_UNITS, false }, &unit) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (unit == UNIT_NONE) return sjs_vm_fault(vm, "JavaScript throws a RangeError for total without a unit");
+    }
+    double total;
+    if (relative.given) {
+        sjs_iso_date_time to;
+        if (reached(vm, (relative_duration){ f, &relative }, &to) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (difference_total(vm, (total_difference){ { &relative.date, &to }, (time_unit)unit }, &total) != SJS_OK) return SJS_ERR_PROGRAM;
+    } else {
+        if (is_calendar_unit(largest_unit_of(f)) || is_calendar_unit((time_unit)unit)) return needs_relative_to(vm);
+        total = ratio_double(internal_of(f, true).time, wide_of(UNIT_NANOSECONDS[unit]));
+    }
+    call->result = sjs_num(total);
+    return SJS_OK;
+}
+
+/* toString({ fractionalSecondDigits, roundingMode, smallestUnit }): the
+ * seconds rounded (trunc by default) to the digits written, carried into
+ * the larger units up to the Duration's largest. */
+typedef struct {
+    const double *fields;
+    sjs_value options;
+} duration_text;
+
+static sjs_result duration_to_string(sjs_vm *vm, duration_text request, sjs_value *out) {
+    const double *f = request.fields;
+    text_precision precision;
+    if (precision_of(vm, (precision_request){ request.options, UNIT_SECOND }, &precision) != SJS_OK) return SJS_ERR_PROGRAM;
+    double g[DURATION_FIELD_COUNT];
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) g[i] = f[i];
+    if (precision.r.increment != 1) {
+        time_unit largest = largest_unit_of(f);
+        internal_duration d = internal_of(f, false);
+        d.time = round_wide(d.time, (wide_rounding){ { 0, (uint64_t)precision.r.increment }, precision.r.mode });
+        fields_of_internal((duration_balance){ d, largest > UNIT_SECOND ? largest : UNIT_SECOND }, g);
+        if (check_duration(vm, g) != SJS_OK) return SJS_ERR_PROGRAM;
+    }
+    char text[SJS_TEMPORAL_TEXT_MAX];
+    uint32_t n = put_duration(text, g, precision.digits);
+    vm->fuel_used += n;
+    return temporal_string(vm, (sjs_str){ text, n }, out);
+}
+
+/* add(other) and subtract(other): of 24-hour days and time only (years,
+ * months or weeks in either fault: JavaScript throws a RangeError),
+ * balanced up to the larger of the two's largest units. */
+static sjs_result duration_add(sjs_vm *vm, sjs_leaf_call *call, bool subtract) {
+    const double *f = SJS_AS_TEMPORAL(call->receiver)->as.duration;
+    double g[DURATION_FIELD_COUNT];
+    if (to_duration(vm, arg_of(call, 0), g) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (subtract) negate_fields(g);
+    time_unit a = largest_unit_of(f);
+    time_unit b = largest_unit_of(g);
+    time_unit largest = a > b ? a : b;
+    if (is_calendar_unit(largest)) return sjs_vm_fault(vm, "JavaScript throws a RangeError for adding Durations with years, months or weeks");
+    internal_duration d = { { 0, 0, 0, 0 }, wide_add(internal_of(f, true).time, internal_of(g, true).time) };
+    return duration_of_internal(vm, (duration_balance){ d, largest }, &call->result);
+}
+
+static sjs_result duration_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    const double *f = SJS_AS_TEMPORAL(call->receiver)->as.duration;
+    double g[DURATION_FIELD_COUNT];
+    for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) g[i] = f[i];
+    switch (id) {
+    case SJS_METHOD_TEMPORAL_WITH:
+        if (partial_duration(vm, arg_of(call, 0), g) != SJS_OK) return SJS_ERR_PROGRAM;
+        return new_duration(vm, g, &call->result);
+    case SJS_METHOD_TEMPORAL_NEGATED:
+        negate_fields(g);
+        return new_duration(vm, g, &call->result);
+    case SJS_METHOD_TEMPORAL_ABS:
+        for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) g[i] = field_magnitude(g[i]);
+        return new_duration(vm, g, &call->result);
+    case SJS_METHOD_TEMPORAL_ADD:
+    case SJS_METHOD_TEMPORAL_SUBTRACT:
+        return duration_add(vm, call, id == SJS_METHOD_TEMPORAL_SUBTRACT);
+    case SJS_METHOD_TEMPORAL_ROUND:
+        return duration_round(vm, f, call);
+    case SJS_METHOD_TEMPORAL_TOTAL:
+        return duration_total(vm, f, call);
+    case SJS_METHOD_TEMPORAL_TO_STRING:
+        return duration_to_string(vm, (duration_text){ f, arg_of(call, 0) }, &call->result);
+    case SJS_METHOD_TEMPORAL_TO_JSON:
+        return duration_to_string(vm, (duration_text){ f, sjs_undefined() }, &call->result);
+    case SJS_METHOD_TEMPORAL_TO_LOCALE_STRING:
+        return sjs_vm_fault(vm, "toLocaleString depends on locale data, which staticjs does not have");
+    default:
+        return sjs_vm_fault(vm, "JavaScript throws a TypeError for valueOf of a Temporal value: compare with equals or compare");
+    }
+}
+
 sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (call->receiver.kind != SJS_TEMPORAL) return sjs_vm_fault(vm, "this method is a Temporal value's");
     const sjs_temporal *t = SJS_AS_TEMPORAL(call->receiver);
     sjs_temporal_type type = (sjs_temporal_type)t->h.flags;
+    if (type == SJS_TEMPORAL_DURATION) return duration_method(vm, id, call);
     if (type != SJS_TEMPORAL_PLAIN_DATE && type != SJS_TEMPORAL_PLAIN_TIME && type != SJS_TEMPORAL_PLAIN_DATE_TIME) {
         return sjs_vm_fault(vm, "staticjs does not build this Temporal type's methods yet");
     }

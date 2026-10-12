@@ -162,7 +162,7 @@ Expressions: numbers (read to the nearest double, ties to even, however
 many digits a literal has, in any radix), BigInts (`10n`, `0x1Fn`, `0o7n`,
 `0b1n`; see "BigInts" below), strings, template literals, `true`, `false`, `null`,
 `undefined`, `NaN`, `Infinity`, arrays and objects (spread, computed and
-shorthand keys), `new Set(...)`, `new Map(...)` (see "Maps" below), `new Temporal.PlainDate(...)`, `new Temporal.PlainTime(...)`, `new Temporal.PlainDateTime(...)` (see "Temporal" below); `+ - * / %`, `**` (of BigInts), `< <= > >=`, `=== !==`,
+shorthand keys), `new Set(...)`, `new Map(...)` (see "Maps" below), `new Temporal.PlainDate(...)`, `new Temporal.PlainTime(...)`, `new Temporal.PlainDateTime(...)`, `new Temporal.Duration(...)` (see "Temporal" below); `+ - * / %`, `**` (of BigInts), `< <= > >=`, `=== !==`,
 `&& || ??`, `?:`, `!`, unary `-` and `+`, `typeof`, `in`; members, calls
 and spread arguments, with `?.`; arrow functions with an expression body,
 or a block body of statements: `const`, `if`/`else` (with `else if`), nested
@@ -221,7 +221,7 @@ Built-ins:
 | numbers | `toFixed` `toExponential` `toPrecision`: the exact decimal value of the double, rounded half up, as V8 gives it; digits 0 to 100 (precision 1 to 100), else a fault where JavaScript throws a RangeError |
 | functions | `String` `String.fromCharCode` `String.fromCodePoint` `String.raw` (called as a function: staticjs has no tagged templates) `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Object.hasOwn` `Object.assign` (see "Owned mutation" below) `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` `encodeURI` `encodeURIComponent` `decodeURI` `decodeURIComponent` |
 | `JSON` | `parse` `stringify` (see "JSON" below) |
-| `Temporal` | `Temporal.PlainDate`: `new Temporal.PlainDate(y, m, d)`, `from` (a string, a property bag or a PlainDate; `overflow`), `compare`; `year` `month` `monthCode` `day` `dayOfWeek` `dayOfYear` `weekOfYear` `yearOfWeek` `daysInWeek` `daysInMonth` `daysInYear` `monthsInYear` `inLeapYear` (calendarId) `era` `eraYear`; `with` `equals` `toString` (`calendarName`) `toJSON` `toPlainDateTime`. `Temporal.PlainTime`: `new Temporal.PlainTime(h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainTime or a PlainDateTime; `overflow`), `compare`; `hour` `minute` `second` `millisecond` `microsecond` `nanosecond`; `with` `equals` `round` (`smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.PlainDateTime`: `new Temporal.PlainDateTime(y, m, d, h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainDateTime or a PlainDate), `compare`; a PlainDate's getters and a PlainTime's; `with` `withPlainTime` `equals` `round` `toString` (and `calendarName`) `toJSON` `toPlainDate` `toPlainTime` (see "Temporal" below) |
+| `Temporal` | `Temporal.PlainDate`: `new Temporal.PlainDate(y, m, d)`, `from` (a string, a property bag or a PlainDate; `overflow`), `compare`; `year` `month` `monthCode` `day` `dayOfWeek` `dayOfYear` `weekOfYear` `yearOfWeek` `daysInWeek` `daysInMonth` `daysInYear` `monthsInYear` `inLeapYear` (calendarId) `era` `eraYear`; `with` `equals` `toString` (`calendarName`) `toJSON` `toPlainDateTime`. `Temporal.PlainTime`: `new Temporal.PlainTime(h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainTime or a PlainDateTime; `overflow`), `compare`; `hour` `minute` `second` `millisecond` `microsecond` `nanosecond`; `with` `equals` `round` (`smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.PlainDateTime`: `new Temporal.PlainDateTime(y, m, d, h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainDateTime or a PlainDate), `compare`; a PlainDate's getters and a PlainTime's; `with` `withPlainTime` `equals` `round` `toString` (and `calendarName`) `toJSON` `toPlainDate` `toPlainTime`. `Temporal.Duration`: `new Temporal.Duration(y, mo, w, d, h, mi, s, ms, us, ns)`, `from` (a string, a property bag or a Duration), `compare` (`relativeTo`); `years` to `nanoseconds` `sign` `blank`; `with` `negated` `abs` `add` `subtract` `round` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`, `relativeTo`) `total` (`unit`, `relativeTo`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON` (see "Temporal" below) |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear`; objects: `Object.assign(x, ...sources)` |
@@ -410,7 +410,8 @@ the containers open, a unit of fuel per 16 bytes and per value.
 
 A Temporal value is an object, immutable, in the ISO 8601 calendar
 ([docs/temporal.md](docs/temporal.md)): `Temporal.PlainDate`,
-`Temporal.PlainTime` and `Temporal.PlainDateTime` are built, their limits
+`Temporal.PlainTime`, `Temporal.PlainDateTime` and `Temporal.Duration`
+are built, the first three's limits
 Temporal's (-271821-04-19 to +275760-09-13; a date and time a nanosecond
 past -271821-04-19T00:00 to +275760-09-13T23:59:59.999999999). The writer
 writes one as its type's `from` of its ISO string,
@@ -423,8 +424,12 @@ time; the calendar annotation must be `iso8601`; a time alone that reads
 as a date, as `"2021-12"` does, needs its `T`), a property bag (`year`,
 `month` or `monthCode`, `day`, `hour` to `nanosecond`, with `overflow`
 `"constrain"` or `"reject"`) or a value of a type it reads. `round` and
-`toString` round by any of the nine rounding modes. `add`, `subtract`,
-`until` and `since` fault until Duration is built.
+`toString` round by any of the nine rounding modes. A Duration
+(`Temporal.Duration.from("P1Y2M")`) is exact to its limit of 2^53
+seconds; it reads ISO 8601 durations (`PT1.5H`), and its `round`, `total`
+and `compare` count years, months and weeks from a `relativeTo` date, as
+the specification's 2024 revision rounds. `add`, `subtract`, `until` and
+`since` of the other types fault until they are built.
 
 ## Where it faults instead of following JavaScript
 
@@ -546,7 +551,8 @@ compare identities, or find something on a prototype.
   argument, a bag or a string's annotation; a string the polyfill reads
   past the specification's grammar (`+24:00`, `[foo=-bar]`), or that the
   two polyfills read differently; `toLocaleString` (locale data) and
-  `valueOf`, which throws in JavaScript.
+  `valueOf`, which throws in JavaScript; a Duration's `relativeTo` with a
+  time zone (a ZonedDateTime, which staticjs does not have).
 
 ## Refused when compiled
 
