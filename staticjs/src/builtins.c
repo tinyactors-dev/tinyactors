@@ -63,6 +63,13 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Math", "log1p", SJS_BUILTIN_MATH_LOG1P },
     { "Math", "log2", SJS_BUILTIN_MATH_LOG2 },
     { "Math", "log10", SJS_BUILTIN_MATH_LOG10 },
+    { "Math", "sin", SJS_BUILTIN_MATH_SIN },
+    { "Math", "cos", SJS_BUILTIN_MATH_COS },
+    { "Math", "tan", SJS_BUILTIN_MATH_TAN },
+    { "Math", "asin", SJS_BUILTIN_MATH_ASIN },
+    { "Math", "acos", SJS_BUILTIN_MATH_ACOS },
+    { "Math", "atan", SJS_BUILTIN_MATH_ATAN },
+    { "Math", "atan2", SJS_BUILTIN_MATH_ATAN2 },
     { "", "BigInt", SJS_BUILTIN_BIGINT },
     { "BigInt", "asIntN", SJS_BUILTIN_BIGINT_AS_INT_N },
     { "BigInt", "asUintN", SJS_BUILTIN_BIGINT_AS_UINT_N },
@@ -413,6 +420,13 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_MATH_LOG1P),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_LOG2),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_LOG10),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_SIN),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_COS),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_TAN),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_ASIN),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_ACOS),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_ATAN),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_ATAN2),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_INT_N),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_UINT_N),
@@ -942,7 +956,8 @@ static sjs_result object_integrity(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call 
 static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Math.sqrt, hypot, fround, clz32 and imul, at the end of the file. */
 static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
-/* Math.pow, as V8's fdlibm computes it, at the end of the file. */
+/* Math.pow, exp, log, sin, atan2 and the others V8's fdlibm computes, at
+ * the end of the file. */
 static sjs_result math_v8(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* BigInt, BigInt.asIntN and asUintN, a BigInt's toString, and Number,
  * parseInt and parseFloat of a BigInt: at the end of the file. */
@@ -1035,6 +1050,13 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_MATH_LOG1P:
     case SJS_BUILTIN_MATH_LOG2:
     case SJS_BUILTIN_MATH_LOG10:
+    case SJS_BUILTIN_MATH_SIN:
+    case SJS_BUILTIN_MATH_COS:
+    case SJS_BUILTIN_MATH_TAN:
+    case SJS_BUILTIN_MATH_ASIN:
+    case SJS_BUILTIN_MATH_ACOS:
+    case SJS_BUILTIN_MATH_ATAN:
+    case SJS_BUILTIN_MATH_ATAN2:
         return math_v8(vm, id, call);
     case SJS_BUILTIN_MATH_RANDOM:
         /* The host's seed (sjs_vm_set_seed), never one of the library's;
@@ -3322,10 +3344,12 @@ static sjs_result math_v8(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (sjs_vm_to_number(vm, arg(call, 0), &x) != SJS_OK) return SJS_ERR_PROGRAM;
     double result;
     switch (id) {
-    case SJS_BUILTIN_MATH_POW: {
+    case SJS_BUILTIN_MATH_POW:
+    case SJS_BUILTIN_MATH_ATAN2: {
         double y;
         if (sjs_vm_to_number(vm, arg(call, 1), &y) != SJS_OK) return SJS_ERR_PROGRAM;
-        result = sjs_math_pow(x, y);
+        /* Math.atan2(y, x): its first argument is y. */
+        result = id == SJS_BUILTIN_MATH_POW ? sjs_math_pow(x, y) : sjs_math_atan2(x, y);
         break;
     }
     case SJS_BUILTIN_MATH_EXP:
@@ -3343,8 +3367,26 @@ static sjs_result math_v8(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     case SJS_BUILTIN_MATH_LOG2:
         result = sjs_math_log2(x);
         break;
-    default: /* LOG10 */
+    case SJS_BUILTIN_MATH_LOG10:
         result = sjs_math_log10(x);
+        break;
+    case SJS_BUILTIN_MATH_SIN:
+        result = sjs_math_sin(x);
+        break;
+    case SJS_BUILTIN_MATH_COS:
+        result = sjs_math_cos(x);
+        break;
+    case SJS_BUILTIN_MATH_TAN:
+        result = sjs_math_tan(x);
+        break;
+    case SJS_BUILTIN_MATH_ASIN:
+        result = sjs_math_asin(x);
+        break;
+    case SJS_BUILTIN_MATH_ACOS:
+        result = sjs_math_acos(x);
+        break;
+    default: /* ATAN */
+        result = sjs_math_atan(x);
         break;
     }
     call->result = sjs_num(result);

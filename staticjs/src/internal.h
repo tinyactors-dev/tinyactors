@@ -153,7 +153,8 @@ uint32_t sjs_number_to_uint32(double x);
 double sjs_number_sqrt(double x);
 double sjs_number_fround(double x);
 /* Math functions as V8 computes them (math.c, V8's fdlibm): x ** y and
- * Math.pow(x, y), Math.exp, expm1, log, log1p, log2 and log10. */
+ * Math.pow(x, y), Math.exp, expm1, log, log1p, log2 and log10, Math.sin,
+ * cos, tan, asin, acos, atan and atan2. */
 double sjs_math_pow(double x, double y);
 double sjs_math_exp(double x);
 double sjs_math_expm1(double x);
@@ -161,6 +162,13 @@ double sjs_math_log(double x);
 double sjs_math_log1p(double x);
 double sjs_math_log2(double x);
 double sjs_math_log10(double x);
+double sjs_math_sin(double x);
+double sjs_math_cos(double x);
+double sjs_math_tan(double x);
+double sjs_math_asin(double x);
+double sjs_math_acos(double x);
+double sjs_math_atan(double x);
+double sjs_math_atan2(double y, double x);
 /* Math.random: V8's generator (number.c), the public sjs_random and the
  * state whose first word gives the next value, which is sjs_random's
  * state stepped back 64 - left times. A state of zeros was never seeded. */
@@ -784,6 +792,13 @@ typedef enum {
     SJS_BUILTIN_MATH_LOG1P,
     SJS_BUILTIN_MATH_LOG2,
     SJS_BUILTIN_MATH_LOG10,
+    SJS_BUILTIN_MATH_SIN,
+    SJS_BUILTIN_MATH_COS,
+    SJS_BUILTIN_MATH_TAN,
+    SJS_BUILTIN_MATH_ASIN,
+    SJS_BUILTIN_MATH_ACOS,
+    SJS_BUILTIN_MATH_ATAN,
+    SJS_BUILTIN_MATH_ATAN2,
     SJS_BUILTIN_BIGINT,
     SJS_BUILTIN_BIGINT_AS_INT_N,
     SJS_BUILTIN_BIGINT_AS_UINT_N,

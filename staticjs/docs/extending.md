@@ -278,7 +278,15 @@ The examples are BigInt, `Map` and iterators.
      (`third_party/glibc`, `V8_USE_LIBM_TRIG_FUNCTIONS`, flag
      `--use-libm-trig-functions`), but Node 22's build does not: `node
      --v8-options` has no such flag, so `sin` and `cos` are fdlibm's too
-     (`fdlibm_sin`, `fdlibm_cos`, in the same file).
+     (the same file's `fdlibm_sin` and `fdlibm_cos`, which without that
+     macro are named `sin` and `cos`, and which `ieee754_sin_function`
+     points to). They differ from glibc's in the last bit for many inputs
+     (`Math.sin(18)`, `Math.cos(0.1)`, `Math.tan(4)`), as `asin`, `acos`,
+     `atan` and `atan2` do. `Math.atan2(y, x)` converts y first.
+     `__kernel_rem_pio2` calls the C library's `scalbn` and `floor`, both
+     exact, so `src/math.c` uses fdlibm's own `scalbn` and number.c's
+     floor; V8's `volatile` constants (atan2's `tiny`, atan's `atanlo[3]`)
+     only keep additions that round to the same bits.
 4. **Add a sweep:** `number_test --print N` writes lines that
    `diff-node` compares with Node on every test run. Use 100,000 cases per
    function, or for a Math function a fixed list of at most 10,000 inputs
@@ -293,7 +301,14 @@ The examples are BigInt, `Map` and iterators.
    wasm32-freestanding` and run in Node), and so did a million inputs to
    each of `exp`, `expm1`, `log`, `log1p`, `log2` and `log10` (random bits,
    the main range, values next to 1 or 0, the thresholds of each range,
-   integers, subnormals, powers of two and ten, multiples of ln 2).
+   integers, subnormals, powers of two and ten, multiples of ln 2), and to
+   each of `sin`, `cos`, `tan`, `asin`, `acos` and `atan` and pairs to
+   `atan2` (also the doubles next to multiples of pi/2 and pi/4, huge
+   arguments, the doubles closest to multiples of pi/2, values in [-1, 1]
+   and next to +-1 and 0.5; for `atan2`, every special case and quotients
+   next to 2^60). A function of its own list, such as the trigonometric
+   ones, is printed with `print_trig_input` beside `print_unary_input`;
+   a two-argument one has its own tag (V for `atan2`).
 
 ## To verify a change
 
