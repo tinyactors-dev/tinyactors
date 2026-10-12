@@ -84,7 +84,8 @@ the host injects in the same way. UTC is the default everywhere.
 | Name | Status | Note |
 |---|---|---|
 | `from`, `isArray`, `of` | built | |
-| `at`, `concat`, `every`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `flat`, `flatMap`, `includes`, `indexOf`, `join`, `lastIndexOf`, `map`, `reduce`, `reduceRight`, `slice`, `some`, `toReversed`, `toSorted`, `toSpliced`, `with`, `keys`, `values`, `entries`, `forEach`, `length` | built | `keys`, `values`, `entries` as listed in the README. `reduceRight` runs no shape's C path (SUM adds from the first element); an iterator has none, as in JavaScript. |
+| `at`, `concat`, `every`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `flat`, `flatMap`, `includes`, `indexOf`, `join`, `lastIndexOf`, `map`, `reduce`, `reduceRight`, `slice`, `some`, `toReversed`, `toSorted`, `toSpliced`, `with`, `length` | built | `reduceRight` runs no shape's C path (SUM adds from the first element); an iterator has none, as in JavaScript. |
+| `keys`, `values`, `entries`, `forEach` on an array | named, not built | Each faults ("staticjs does not have this method"): the array column of their name entries is 0. Iterate a map or a set, or use `map` and `Array.from`. |
 | `push`, `pop`, `shift`, `unshift`, `sort`, `reverse`, `fill`, `splice` | built | Changing a variable, under the owned-mutation rules. |
 | `copyWithin` | build later | Registered, no method; mutates its receiver. |
 | `new Array(...)` | refused | Array holes cannot be represented. |
