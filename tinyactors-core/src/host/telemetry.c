@@ -242,7 +242,8 @@ static ta_status otlp_end(ta_host *host) {
 }
 
 static const host_encoder encoder_otlp = {otlp_mark,     otlp_drain, otlp_effects, otlp_note,
-                                          otlp_deadline, otlp_take,  otlp_metrics, otlp_end};
+                                          otlp_deadline, otlp_take,  otlp_metrics, otlp_end,
+                                          host_definitions_otlp};
 
 /* ---- the null encoder: no encoder memory was given --------------------------- */
 /* The journals stay with the caller, nothing is staged, no effect and no
@@ -267,8 +268,12 @@ static ta_status null_end(ta_host *host) {
     (void)host;
     return TA_ERROR_STATE;
 }
+static void null_definitions(ta_host *host, uint32_t kind, uint32_t segment) {
+    (void)host, (void)kind, (void)segment;
+}
 static const host_encoder encoder_null = {null_mark, null_run,      null_run,  null_run,
-                                          null_deadline, null_take, null_metrics, null_end};
+                                          null_deadline, null_take, null_metrics, null_end,
+                                          null_definitions};
 
 ta_status ta_host_traces(ta_host *host, ta_buffer *out) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */

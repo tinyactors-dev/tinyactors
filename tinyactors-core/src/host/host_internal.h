@@ -295,9 +295,15 @@ typedef struct host_encoder {
     ta_status (*take)(ta_host *h, uint32_t kind, ta_buffer *out); /* ta_host_traces, _logs */
     ta_status (*metrics)(ta_host *h, ta_buffer *out);             /* ta_host_metrics */
     ta_status (*end)(ta_host *h); /* trace.end: end every open span, staged for a take */
+    void (*definitions)(ta_host *h, uint32_t kind, uint32_t segment); /* definitions.c */
 } host_encoder;
 ta_status host_telemetry_init(ta_host *h);
 void host_telemetry_free(ta_host *h);
+
+/* definitions.c: the definition logs. LINKED: the charts of a segment just
+ * added, and each version they retire; FREED: the charts of a segment going. */
+enum { HOST_DEFINITION_LINKED = 0, HOST_DEFINITION_RETIRED = 1, HOST_DEFINITION_FREED = 2 };
+void host_definitions_otlp(ta_host *h, uint32_t kind, uint32_t segment);
 
 ta_status ta_router_outbound(ta_host *h, uint32_t si, const ta_effect *f);
 void ta_router_time(ta_host *h);              /* expire queued envelopes */

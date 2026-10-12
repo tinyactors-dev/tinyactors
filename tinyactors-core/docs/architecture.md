@@ -990,3 +990,33 @@ A chart version is a new image, so a new version of a system is a new
   timers kept, old versions freed); `tests/unit/test_migrate.c` covers the
   translation cases.
 
+
+### 16.3 Definition logs
+
+The host writes one OTLP log record when a chart version changes, through
+its encoder like every other log (`TA_HOST_EFFECT_LOGS`, `ta_host_logs`;
+`src/host/definitions.c`). They come only from `ta_host_add_image` and from
+the run that frees a segment, never per event; a host without telemetry
+(the null encoder) writes none, and neither does one whose config says
+`"logs": false`.
+
+| Event name | Severity | When |
+|---|---|---|
+| `tinyactors.definition.linked` | DEBUG | `ta_host_add_image`: once per chart of the new image |
+| `tinyactors.definition.retired` | INFO | the same call, for the chart of the same name it replaces: the newest older segment that has it |
+| `tinyactors.definition.freed` | DEBUG | the run that frees a segment no longer current and without actors: once per chart of its image |
+
+Each record's body reads `linked pinged (segment 1)`,
+`retired pinged (segment 0, 3 actors)` or `freed pinged (segment 0)`, its
+time is the wall time of the last `ta_host_advance_time`, and its
+attributes are:
+
+| Attribute | Type | Value |
+|---|---|---|
+| `tinyactors.chart.name` | text | the chart's name (its source when it has none) |
+| `tinyactors.image.hash` | text | the image's content hash, 16 hex digits: tells two versions apart |
+| `tinyactors.segment` | int | the segment the version lives in |
+| `tinyactors.chart.actors` | int | retired only: the actors still on the old version, which finish there or migrate |
+
+A staging with no room drops a definition log, as it drops any record it
+cannot hold, and makes the logs due at once.

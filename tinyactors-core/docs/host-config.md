@@ -100,8 +100,9 @@ watch later without making the host again).
 - `values` (bool, `false`): event data and assigned values in the spans.
   They can hold personal data, so an operator turns them on knowingly
   (ADR 0006 in the repository root);
-- `logs` (bool, `true`): `<log>` and failed actions as log records. They
-  are few and they are what an operator looks for first;
+- `logs` (bool, `true`): `<log>`, failed actions and definition logs
+  ([architecture.md](architecture.md), 16.3) as log records. They are few
+  and they are what an operator looks for first;
 - `resource`: a map of text to text, at most 32 attributes, on every
   request (`service.name`, ...). None by default: only the application
   knows its name.

@@ -1888,6 +1888,52 @@ static void otlp_string_attributes_put(otlp_out *out, uint32_t field,
     }
 }
 
+static ta_string_view otlp_severity_text(uint32_t severity) {
+    return severity >= TA_OTLP_SEVERITY_WARN   ? TEXT("WARN")
+           : severity >= TA_OTLP_SEVERITY_INFO ? TEXT("INFO")
+                                               : TEXT("DEBUG");
+}
+
+ta_status ta_otlp_add_log(ta_otlp *otlp, const ta_otlp_log *log) {
+    if (otlp->config.flags & TA_OTLP_NO_LOGS) return TA_OK;
+    ta_string_view severity = otlp_severity_text(log->severity);
+    uint64_t fields = 2u * OTLP_FIXED_FIELD + 1u + otlp_varint_size(log->severity) +
+                      otlp_field_size(F_LOG_SEVERITY_TEXT, severity.length) +
+                      otlp_field_size(F_LOG_BODY, otlp_any_string_size(log->body.length)) +
+                      otlp_field_size(F_LOG_EVENT_NAME, log->event_name.length) +
+                      otlp_string_attributes_size(log->texts, log->text_count, F_LOG_ATTRIBUTES);
+    for (uint32_t i = 0; i < log->integer_count; i++)
+        fields += otlp_field_size(F_LOG_ATTRIBUTES,
+                                  otlp_key_value_size(log->integers[i].key,
+                                                      otlp_any_int_size(log->integers[i].value)));
+    if (fields > otlp->config.log_bytes) return TA_ERROR_NO_MEMORY;
+    uint32_t record = otlp_field_size(F_SS_ITEMS, (uint32_t)fields);
+    if (record > otlp->config.log_bytes - otlp->logs_used) return TA_ERROR_NO_MEMORY;
+    unsigned char *logs = OTLP_POINTER(otlp, logs_relative, unsigned char) + otlp->logs_used;
+    otlp_out out = {logs, logs + record};
+    otlp_put_length(&out, F_SS_ITEMS, (uint32_t)fields);
+    otlp_put_tag(&out, F_LOG_TIME, WIRE_I64);
+    otlp_put_fixed64(&out, log->time_ns);
+    otlp_put_tag(&out, F_LOG_OBSERVED_TIME, WIRE_I64);
+    otlp_put_fixed64(&out, log->time_ns);
+    otlp_put_tag(&out, F_LOG_SEVERITY_NUMBER, WIRE_VARINT);
+    otlp_put_varint(&out, log->severity);
+    otlp_put_length(&out, F_LOG_SEVERITY_TEXT, severity.length);
+    otlp_put_bytes(&out, severity.pointer, severity.length);
+    otlp_put_length(&out, F_LOG_BODY, otlp_any_string_size(log->body.length));
+    otlp_put_length(&out, F_ANY_STRING, log->body.length);
+    otlp_put_bytes(&out, log->body.pointer, log->body.length);
+    otlp_put_length(&out, F_LOG_EVENT_NAME, log->event_name.length);
+    otlp_put_bytes(&out, log->event_name.pointer, log->event_name.length);
+    otlp_string_attributes_put(&out, F_LOG_ATTRIBUTES, log->texts, log->text_count);
+    for (uint32_t i = 0; i < log->integer_count; i++)
+        otlp_kv_int(otlp, &out, F_LOG_ATTRIBUTES, log->integers[i].key, log->integers[i].value);
+    TA_ASSERT(out.at == out.end);
+    otlp->logs_used += record;
+    otlp->log_count++;
+    return TA_OK;
+}
+
 static void otlp_exemplars_put(otlp_out *out, uint32_t field, const ta_otlp_exemplar *exemplars,
                                uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {

@@ -476,6 +476,7 @@ ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segm
     host->segment_count++;
     reserve_serials(host, index);
     versions_recompute(host);
+    host->encoder->definitions(host, HOST_DEFINITION_LINKED, index);
     if (segment) *segment = index;
     return TA_OK;
 }
@@ -1577,6 +1578,7 @@ static int retire(ta_host *host) {
             all = 0;
             continue;
         }
+        host->encoder->definitions(host, HOST_DEFINITION_FREED, si);
         ta_system_deinit(segment->system);
         host_free(host, segment->memory, segment->memory_size);
         segment->memory = NULL;

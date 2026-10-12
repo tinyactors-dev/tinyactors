@@ -465,6 +465,18 @@
       "value": 0
     },
     {
+      "name": "TA_OTLP_SEVERITY_DEBUG",
+      "value": 5
+    },
+    {
+      "name": "TA_OTLP_SEVERITY_INFO",
+      "value": 9
+    },
+    {
+      "name": "TA_OTLP_SEVERITY_WARN",
+      "value": 13
+    },
+    {
       "name": "TA_OTLP_SPAN_CLIENT",
       "value": 3
     },
@@ -5642,6 +5654,126 @@
         }
       }
     },
+    "ta_otlp_integer_attribute": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "key",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "value",
+          "type": "int64_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 8
+          }
+        }
+      }
+    },
+    "ta_otlp_log": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "time_ns",
+          "type": "uint64_t"
+        },
+        {
+          "name": "severity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "text_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "integer_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "event_name",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "body",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "texts",
+          "type": "const ta_otlp_attribute *"
+        },
+        {
+          "name": "integers",
+          "type": "const ta_otlp_integer_attribute *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "time_ns": 0,
+            "severity": 8,
+            "text_count": 12,
+            "integer_count": 16,
+            "event_name": 24,
+            "body": 40,
+            "texts": 56,
+            "integers": 64
+          }
+        },
+        "aarch64": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "time_ns": 0,
+            "severity": 8,
+            "text_count": 12,
+            "integer_count": 16,
+            "event_name": 24,
+            "body": 40,
+            "texts": 56,
+            "integers": 64
+          }
+        },
+        "wasm32": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "time_ns": 0,
+            "severity": 8,
+            "text_count": 12,
+            "integer_count": 16,
+            "event_name": 20,
+            "body": 28,
+            "texts": 36,
+            "integers": 40
+          }
+        }
+      }
+    },
     "ta_otlp_exemplar": {
       "kind": "struct",
       "fields": [
@@ -10520,6 +10652,23 @@
         {
           "name": "sid",
           "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_otlp_add_log",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "otlp",
+          "type": "ta_otlp *"
+        },
+        {
+          "name": "log",
+          "type": "const ta_otlp_log *"
         }
       ],
       "public": true,

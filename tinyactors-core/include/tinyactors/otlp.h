@@ -147,6 +147,25 @@ TA_API void ta_otlp_end_all(ta_otlp *otlp, uint64_t wall_ns);
 TA_API ta_status ta_otlp_put_traces(ta_otlp *otlp, ta_buffer *out);
 TA_API ta_status ta_otlp_put_logs(ta_otlp *otlp, ta_buffer *out);
 
+/* A log record from the caller, staged beside the records ta_otlp_read
+ * writes (a host's definition logs, docs/architecture.md). Whole or not at
+ * all: TA_ERROR_NO_MEMORY when the staging (log_bytes) has no room (put the
+ * logs and add again). With TA_OTLP_NO_LOGS it is TA_OK and nothing. */
+enum { TA_OTLP_SEVERITY_DEBUG = 5, TA_OTLP_SEVERITY_INFO = 9, TA_OTLP_SEVERITY_WARN = 13 };
+typedef struct ta_otlp_integer_attribute {
+    ta_string_view key;
+    int64_t value;
+} ta_otlp_integer_attribute;
+typedef struct ta_otlp_log {
+    uint64_t time_ns;  /* since the Unix epoch */
+    uint32_t severity; /* TA_OTLP_SEVERITY_* */
+    uint32_t text_count, integer_count;
+    ta_string_view event_name, body;
+    const ta_otlp_attribute *texts; /* attributes with text values */
+    const ta_otlp_integer_attribute *integers;
+} ta_otlp_log;
+TA_API ta_status ta_otlp_add_log(ta_otlp *otlp, const ta_otlp_log *log);
+
 /* ---- metrics (docs/adr/0007 in the repository root) ---------------------------
  * One ExportMetricsServiceRequest (`/v1/metrics`) gathers the metrics added
  * since the last put, under one scope (`tinyactors`) and the resource of
