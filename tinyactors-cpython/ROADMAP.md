@@ -104,7 +104,59 @@ pitfalls, before changing this copy.
 ### Plan and progress
 
 The session writes its plan here as a list of steps, each with the commit
-that finished it, and keeps it current. Empty until the session starts.
+that finished it, and keeps it current.
+
+**The gate grows with the work.** `mise run test` runs the suite only
+where the adapter can already pass it: `GATE` in `mise/cpython.rb` names
+the suites and datamodels it runs now (`--milestone M1` narrowed by
+`--suite`), and each step below that makes more of the M1 set pass widens
+it in the same commit. M1 is done only when `GATE` is the whole M1 set on
+both datamodels, which is what the step 8 gates ask.
+
+1. **The plan** (this list).
+2. **The extension builds and imports** on both interpreters: `mise run
+   build` compiles `src/` against core's amalgamation with
+   `Toolchain::Target.host`, abi3 (`Py_LIMITED_API 0x030D0000`) for 3.13
+   and again without it for 3.14t; `tests/` runs on both from `mise run
+   test`.
+3. **Values:** `src/values.c`, `tinyactors.encode` and `tinyactors.decode`
+   (`ta_cbor_encode`, `ta_cbor_decode`), `UNDEFINED`, `Address`, the
+   error type; the open rows of `docs/values.md` decided
+   (reasoned-analysis); the value table's own tests against
+   `values.txt`'s `python` lines and each row.
+4. **`Host`:** `ta_host_create` from a Python config, the host's
+   allocator (`PyMem_RawMalloc`), quickjs registered, `request(method,
+   params)` with `TinyactorsError`, `close()` and the context manager,
+   the creating thread checked.
+5. **Charts and actors:** compiling charts into an image, adding and
+   booting it, spawn, send, terminate; the loop with every run status;
+   `DONE`, `ERROR`, `LOG` to the application; `SimulatedClock` and
+   `increment(ms)`; a handler's exception raised after the turn.
+6. **The adapter**, `python -m conform`: frames with `tinyactors.encode`
+   and `decode`, the methods the scenarios need (`host.create`,
+   `host.free`, `scenario.run`). Gate: the M1 scenarios on quickjs.
+7. **Peers:** adding a peer, delivering envelope bytes
+   (`ta_host_envelope_read`, `ta_host_deliver`), `PEER` and `PEER_ERROR`
+   as bytes (`ta_host_envelope`); the adapter's vector methods. Gate: the
+   M1 protocol vectors on quickjs (after the request to core below).
+8. **The `"python"` datamodel, expressions:** the two slot tables
+   (`src/datamodel/handles.c`), expressions compiled once at
+   `chart_attach`, one globals dict per session, `<data>`, `cond`,
+   `assign`, `<script>`, `<log>`, the `*expr` strings, `_event`, `In()`,
+   the system variables kept as they were, `BaseException` raised again
+   after the run, the last drop of a payload deferred.
+9. **The `"python"` datamodel, values:** `<send>` with params, namelist
+   and content, `<donedata>`, `<foreach>`, `to_wire` and `from_wire`,
+   `variable`. Gate: the whole M1 set on both datamodels.
+10. **What the suite cannot see:** a test of its own for each rule of
+    AGENTS.md's "Rules the suite cannot see" not yet covered, the cycle
+    collector's slots (`Py_tp_traverse`, `Py_tp_clear`), the README's
+    limits, the mapping table complete with "Core functions no item
+    uses".
+
+Progress:
+
+- Step 1: this commit.
 
 ## Later milestones
 
