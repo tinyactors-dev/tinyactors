@@ -646,6 +646,21 @@ up, and answers here.
   native datamodel copies what crosses between actors all the same
   (`bindings.md` section 8, "Actors share no mutable value"); on quickjs
   the sharing stays until the fix, and no scenario mutates sent data.
+- **A binding cannot read a host's tick rate** (2026-10-12; both
+  bindings: `tinyactors-napi/ROADMAP.md` and `tinyactors-cpython/ROADMAP.md`,
+  "Requests to core", commits `e1aa3c27` and `4081125b`). What: a binding
+  converts its clock to ticks for `ta_host_advance_time` and
+  `next_deadline`, but a config without `ticksPerSecond` got the system's
+  default, 1e9, stated nowhere, and core hard-coded it again in the host.
+  Done (`9bd33f03`): the host keeps its effective config, every default
+  filled in at `ta_host_create` by the system's and the encoder's own code
+  (`ta_system_config_normalize`, `ta_otlp_config_normalize`), and the
+  request `host.config` answers it in the shape `ta_host_create` takes
+  (`tinyactors-core/docs/requests.md`; vectors in `requests.txt` and
+  `config.txt`). A binding reads `result.system.ticksPerSecond` once
+  after creating the host and converts with it, never with a default of
+  its own (`bindings.md` sections 3 and 7). `docs/host-config.md` states
+  every default.
 
 ## Now
 
