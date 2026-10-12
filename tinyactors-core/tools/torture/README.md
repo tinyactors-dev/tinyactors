@@ -27,10 +27,11 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
 - `--param KEY=VALUE` (repeatable) reaches scripts as `bench.params` (numbers parsed).
 - `--param tracing=disabled|records|otlp` (and `traceDetail=summary|decisions|full`,
   `traceSample=0..1`: the share of the traces each system starts that is sampled)
-  sets every system's tracing: `records` (the default) reads and counts each
-  record after every slice, `otlp` also encodes them, `disabled` turns tracing
-  off in the library (`TA_TRACING_DISABLED`). Samples report `traceRecords`,
-  `traceBytes` and `otlpBytes` per second, `traceBusy` (the share of time
+  sets every system's tracing: `records` (the default) reads each record
+  after every slice and lets it go, `otlp` has the host encode them and takes
+  the requests, `disabled` turns tracing off in the library
+  (`TA_TRACING_DISABLED`). Samples report `traceRecords` and `otlpBytes` per
+  second, `traceBusy` (the share of time
   spent draining), and `traceDropped`; a scenario's `config` takes the same
   `tracing`, `traceDetail` and `traceBytes`.
 - Exit status 1 when an expectation fails or a script throws.

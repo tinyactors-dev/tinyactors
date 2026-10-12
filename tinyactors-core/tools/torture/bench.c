@@ -200,8 +200,7 @@ typedef struct bench_system {
     int trace_mode; /* TRACE_DISABLED, TRACE_RECORDS (read them), TRACE_OTLP (the host encodes them) */
     unsigned char *otlp_out;
     uint32_t otlp_out_capacity;
-    uint64_t trace_records, trace_bytes, otlp_bytes, previous_trace_records, previous_trace_bytes,
-        previous_otlp_bytes;
+    uint64_t trace_records, otlp_bytes, previous_trace_records, previous_otlp_bytes;
     double trace_ms, previous_trace_ms;
 } bench_system;
 
@@ -1115,7 +1114,6 @@ static JSValue stats_object(JSContext *context, bench_system *system) {
     F("migrateFailed", system->migrate_failed);
     F("versionsRetired", system->retired);
     F("traceRecordsTotal", system->trace_records);
-    F("traceBytesTotal", system->trace_bytes);
     F("otlpBytesTotal", system->otlp_bytes);
     F("traceMs", system->trace_ms);
     F("traceRecordsLost", stats.trace_records_lost);
@@ -2244,7 +2242,7 @@ static int trace_flush(bench_system *system) {
     return 1;
 }
 
-/* Every segment's records: read (and counted), or encoded as OTLP and let go. */
+/* Every segment's records: read and let go, or encoded as OTLP and taken. */
 static void trace_drain(bench_system *system) {
     if (system->trace_mode == TRACE_DISABLED) return;
     uint64_t started = ta_runtime_now_ns();
@@ -2258,10 +2256,8 @@ static void trace_drain(bench_system *system) {
             ta_system *segment = ta_host_system(system->host, k);
             if (!segment) continue;
             ta_trace_view view;
-            while (ta_system_trace(segment, &view)) {
-                system->trace_bytes += view.length;
+            while (ta_system_trace(segment, &view))
                 ta_system_trace_ack(segment, view.length);
-            }
         }
     }
     system->trace_ms += (double)(ta_runtime_now_ns() - started) / 1e6;
@@ -2338,11 +2334,9 @@ static void sample(void) {
         double busy = (system->busy_ms - system->previous_busy) / (dt * 1000);
         double trace_records =
             (double)(system->trace_records - system->previous_trace_records) / dt;
-        double trace_bytes = (double)(system->trace_bytes - system->previous_trace_bytes) / dt;
         double otlp_bytes = (double)(system->otlp_bytes - system->previous_otlp_bytes) / dt;
         double trace_busy = (system->trace_ms - system->previous_trace_ms) / (dt * 1000);
         system->previous_trace_records = system->trace_records;
-        system->previous_trace_bytes = system->trace_bytes;
         system->previous_otlp_bytes = system->otlp_bytes;
         system->previous_trace_ms = system->trace_ms;
         system->previous = stats;
@@ -2360,7 +2354,7 @@ static void sample(void) {
                   "\"timersFired\":%.1f,\"remoteOut\":%.1f,\"remoteIn\":%.1f,\"logs\":%.1f,"
                   "\"toBench\":%.1f,\"hostSent\":%.1f,\"busy\":%.4f,\"jsHeap\":%zu,"
                   "\"deliveredTotal\":%llu,\"remoteFailed\":%llu,\"done\":%llu,\"faults\":%llu,"
-                  "\"traceRecords\":%.1f,\"traceBytes\":%.1f,\"otlpBytes\":%.1f,"
+                  "\"traceRecords\":%.1f,\"otlpBytes\":%.1f,"
                   "\"traceBusy\":%.4f,\"traceRecordsTotal\":%llu,\"traceDropped\":%llu}",
                   first ? "" : ",", system->name, stats.actors, stats.actors_capacity,
                   stats.runnable, stats.events, stats.events_capacity, stats.timers,
@@ -2371,7 +2365,7 @@ static void sample(void) {
                   to_bench_rate, hs, busy > 1 ? 1.0 : busy, system->js_heap,
                   (unsigned long long)stats.delivered, (unsigned long long)system->remote_fail,
                   (unsigned long long)system->done, (unsigned long long)system->faults,
-                  trace_records, trace_bytes, otlp_bytes, trace_busy > 1 ? 1.0 : trace_busy,
+                  trace_records, otlp_bytes, trace_busy > 1 ? 1.0 : trace_busy,
                   (unsigned long long)system->trace_records,
                   (unsigned long long)stats.trace_records_lost);
         first = 0;
