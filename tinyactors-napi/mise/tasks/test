@@ -9,9 +9,9 @@
 # the mapping table) and the suite's, so a change to either reruns this
 # task from the root's `mise run test` (AGENTS.md, "Tests: what to run").
 #
-# Without code, it passes on: the lint rules' tests and an empty src/, the
-# mapping table's empty table, core's amalgamation built into build/core,
-# and both runtimes found. The conformance suite needs the adapter
+# It lints, builds the addon, and runs the binding's own tests (test/,
+# what the suite cannot see) under each runtime, each file a program of its
+# own (test/harness.mjs). The conformance suite needs the adapter
 # (conform.mjs): without it, this task says so and skips it; with it, the
 # suite's set named by NodeAPI::MILESTONE must pass (`mise run conform --
 # --milestone <it>`). `mise run conform` on its own runs the whole suite,
@@ -26,6 +26,10 @@ NodeAPI::RUNTIMES.each do |runtime|
   program = NodeAPI.pinned(runtime)
   version = IO.popen([program, '--version'], &:read).strip
   puts "test: #{runtime} #{version}: #{program}"
+  NodeAPI.tests.each do |file|
+    puts "test: #{runtime} #{file.relative_path_from(NodeAPI::ROOT)}"
+    NodeAPI.run(program, file.to_s)
+  end
 end
 
 if NodeAPI::ADAPTER.exist?

@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Build core's amalgamation into build/core, from tinyactors-core's sources (its amalgamate task with --out), which the addon compiles against"
+#MISE description="Build the addon, build/tinyactors.node: core's amalgamation into build/core (tinyactors-core's amalgamate task with --out), then it and src/ compiled and linked as a Node-API module"
 # vim:ft=ruby
 
 # Core is built from its amalgamation in this project's own build/, never
@@ -8,8 +8,13 @@
 # on its own (tinyactors-core/mise/tasks/amalgamate).
 # The addon links tinyactors.c, tinyactors_runtime.c with its hosted
 # platform file, and tinyactors_datamodel_ecmascript.c (quickjs beside the
-# native datamodel, tinyactors-core/docs/bindings.md, section 8).
+# native datamodel, tinyactors-core/docs/bindings.md, section 8), compiled
+# with the pinned clang for this machine (Toolchain::Target.host), and
+# linked with Target#plugin: Node-API's functions stay undefined, for the
+# runtime that loads it to provide (mise/napi.rb, NodeAPI.build_addon).
 
 require_relative '../napi'
 
 NodeAPI.run('mise', 'run', '//tinyactors-core:amalgamate', '--', '--out', NodeAPI::CORE_BUILD.to_s)
+NodeAPI.build_addon
+puts "build: #{NodeAPI::ADDON.relative_path_from(NodeAPI::ROOT)}"

@@ -170,7 +170,8 @@ item gets its `docs/api-map.md` row in the commit that adds it.
 
 Progress:
 
-- Step 1: this commit.
+- Step 1: `75e99ae2`.
+- Step 2: this commit.
 
 ## Later milestones
 
