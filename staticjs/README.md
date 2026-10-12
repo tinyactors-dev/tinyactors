@@ -229,7 +229,7 @@ Built-ins:
 | `Temporal` | `Temporal.PlainDate`: `new Temporal.PlainDate(y, m, d)`, `from` (a string, a property bag or a PlainDate; `overflow`), `compare`; `year` `month` `monthCode` `day` `dayOfWeek` `dayOfYear` `weekOfYear` `yearOfWeek` `daysInWeek` `daysInMonth` `daysInYear` `monthsInYear` `inLeapYear` (calendarId) `era` `eraYear`; `with` `equals` `add` `subtract` (`overflow`) `until` `since` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`calendarName`) `toJSON` `toPlainDateTime`. `Temporal.PlainTime`: `new Temporal.PlainTime(h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainTime or a PlainDateTime; `overflow`), `compare`; `hour` `minute` `second` `millisecond` `microsecond` `nanosecond`; `with` `equals` `add` `subtract` `until` `since` `round` (`smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.PlainDateTime`: `new Temporal.PlainDateTime(y, m, d, h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainDateTime or a PlainDate), `compare`; a PlainDate's getters and a PlainTime's; `with` `withPlainTime` `equals` `add` `subtract` `until` `since` `round` `toString` (and `calendarName`) `toJSON` `toPlainDate` `toPlainTime`. `Temporal.Duration`: `new Temporal.Duration(y, mo, w, d, h, mi, s, ms, us, ns)`, `from` (a string, a property bag or a Duration), `compare` (`relativeTo`); `years` to `nanoseconds` `sign` `blank`; `with` `negated` `abs` `add` `subtract` `round` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`, `relativeTo`) `total` (`unit`, `relativeTo`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.Instant`: `new Temporal.Instant(epochNanoseconds)`, `from` (a string with `Z` or an offset, or an Instant), `fromEpochMilliseconds` `fromEpochNanoseconds` `compare`; `epochMilliseconds` `epochNanoseconds`; `equals` `add` `subtract` `until` `since` `round` `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`, `timeZone`: UTC or a fixed offset) `toJSON`. `Temporal.Now` (the host clock): `instant` `plainDateISO` `plainDateTimeISO` `plainTimeISO` (a time zone: UTC or a fixed offset) timeZoneId (see "Temporal" below) |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
-| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear`; objects: `Object.assign(x, ...sources)` |
+| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear`; iterators: `next` `return`; objects: `Object.assign(x, ...sources)` |
 
 **Owned mutation.** A method that changes its receiver may be called on a
 variable that the function owns: a parameter or a `const` of the function,
@@ -355,8 +355,13 @@ JavaScript, but their callbacks change nothing, so running them at once
 gives the same values; a callback of `map`, `filter` or `flatMap` runs on
 every value, also those a later `take`, `some`, `every` or `find` never
 reads, so it can fault where JavaScript gives a value. `some`, `every` and
-`find` stop at the first value that decides them. `next` faults ("does not
-have this method"); a property an iterator lacks is `undefined`. The writer writes an iterator as
+`find` stop at the first value that decides them. `next()` on a variable
+the function owns advances the iterator and gives a new `{ value, done }`,
+and a later reader gets the rest; `return()` closes a helper's result, and
+faults on a map's, a set's or `matchAll`'s iterator, which has none; on an
+iterator nothing else holds (`m.keys().next()`) both give the same, and on
+one held elsewhere they fault (docs/mutation.md, "Iterators"). A property an
+iterator lacks is `undefined`. The writer writes an iterator as
 `[...].values()`, an iterator that yields the same values.
 
 `m.set(key, value)`, `m.delete(key)` and `m.clear()` change a map a
@@ -496,7 +501,8 @@ compare identities, or find something on a prototype.
   a BigInt is its digits.
 - An iterator read where something else holds it too (`[[...it], [...it]]`,
   a closure's capture), where JavaScript gives nothing the second time; an
-  iterator's `next`; a callback of an iterator's `map`, `filter` or
+  iterator's `next` or `return` where something else holds it too, or
+  through a path (`o.it.next()`); a callback of an iterator's `map`, `filter` or
   `flatMap` that faults on a value a later `take`, `some`, `every` or
   `find` would not read, as staticjs runs them to the end; `take` and
   `drop` of a string or an object, which JavaScript converts to a number;

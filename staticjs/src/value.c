@@ -1157,14 +1157,20 @@ sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_v
     it->h.flags = spec.mode;
     it->source = spec.source;
     it->items = spec.items;
+    it->position = 0; /* MUTATION */
     *out = sjs_heap_value(SJS_ITERATOR, &it->h);
     return SJS_OK;
 }
 
 uint32_t sjs_iterator_count(const sjs_iterator *it) {
-    if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->length;
-    const sjs_array *source = SJS_AS_ARRAY(it->source);
-    return it->source.kind == SJS_SET ? source->length : source->length / 2u;
+    uint32_t n;
+    if (it->items.kind == SJS_ARRAY) {
+        n = SJS_AS_ARRAY(it->items)->length;
+    } else {
+        const sjs_array *source = SJS_AS_ARRAY(it->source);
+        n = it->source.kind == SJS_SET ? source->length : source->length / 2u;
+    }
+    return n - it->position; /* MUTATION: what next() took is gone. Restore: n. */
 }
 
 /* What an array, a set or a map holds beside its items: a set's or a map's

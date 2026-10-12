@@ -32,9 +32,10 @@ rules recognise and the compiler rewrites into the path machinery of step
 2 ("Methods through a path", below); appending to a `let` (`s += x`),
 whose value moves to the `+`, which extends a string nothing else holds
 ("Appending to a let", below); a map's `set`, `delete` and `clear`,
-on a variable or a path, by the same rules (README.md, "Maps"); and
+on a variable or a path, by the same rules (README.md, "Maps");
 `Object.assign(x, ...sources)` of such a variable ("Object.assign",
-below).
+below); and an iterator's `next` and `return` on such a variable
+("Iterators", below).
 
 ## The methods
 
@@ -54,6 +55,8 @@ below).
 | map | `set(key, value)` | the map |
 | map | `delete(key)` | whether the map had it |
 | map | `clear()` | `undefined` |
+| iterator | `next()` | a new `{ value, done }` |
+| iterator helper's result | `return()` | a new `{ value: undefined, done: true }` |
 
 Each has JavaScript's semantics and return value. `sort` takes a compare
 function and sorts as `toSorted` does, with the same merge sort, fuel and
@@ -544,6 +547,57 @@ JavaScript's assign would call (`object_spread` in `src/vm.c` says why).
 Fuel: a unit per property put, and for an ordinary call a unit per key of
 the target it copies.
 
+## Iterators
+
+An iterator (README.md, "Iterators") yields its values once. `next()`
+takes the next one and advances the iterator; a spread, a helper or any
+other reader of it afterwards gets the rest, as in JavaScript. So `next` is
+a mutation of the iterator, by the rules above, of the kind `SJS_ITERATOR`:
+
+- **On a variable the function owns** (`const it = m.values(); it.next()`),
+  checked when compiled and again when it runs, it gives a new object
+  `{ value, done }`, its keys in that order: the value the iterator yields
+  next (an entry's a new `[key, value]` array, as a spread makes it) and
+  `false`, or `undefined` and `true` once the iterator has yielded
+  everything, as often as it is called. Its argument is not read. The
+  iterator keeps a position (`sjs_iterator.position`), the count of values
+  taken: `sjs_iterator_count` and `iterator_range` (`src/builtins.c`), which
+  every reader goes through, start there, and the writer writes the rest.
+  An iterator still holds its map or its set when it has yielded
+  everything, so a mutation of that faults ("held elsewhere") while the
+  iterator lives.
+- **`return()`** is an iterator helper's (`take`, `drop`, `map`, `filter`,
+  `flatMap`, marked `SJS_ITERATE_HELPER`): on such a variable it moves the
+  position to the end and gives `{ value: undefined, done: true }`; its
+  argument is not read, as JavaScript's helper gives `undefined`. A map's,
+  a set's and `matchAll`'s iterators have no `return` in JavaScript, which
+  throws a TypeError calling it; staticjs faults ("no return method"). Read
+  as a value, either name faults ("does not read them"), where JavaScript
+  gives a function or `undefined`.
+- **On an iterator nothing else holds** (`m.keys().next()`, `new
+  Set([1]).values().take(1).return()`, or a variable's last read, which
+  moves its value): an ordinary method call (`SJS_METHOD_ITERATOR_NEXT`,
+  `_RETURN`) gives the same result, without the move, which no program can
+  see, as nothing reads that iterator again. That part is not mutation, but
+  exists only with it.
+- **Anything else faults when it runs**, where JavaScript gives a value: an
+  iterator held elsewhere too (another variable, an array's element, a
+  callback's element, a path from a variable that is read again:
+  `o.it.next()`), as that holder would see it advance ("nothing else
+  holds"). A method through a path (`o.it.next()`) is an ordinary call:
+  `next` and `return` are not in the shape rules' `MUTATE_PATH`. An iterator
+  read before the call (`[...it]; it.next()`) faults as a second read does
+  ("yields its values once").
+- **Refused when compiled**, as for any mutation: an iterator variable
+  captured (before or after), copied, passed or stored before `next`.
+  `next` and `return` are names of mutations now, so an object's own
+  method of either name follows the same rules: on a variable the function
+  owns it is called as any method is (`const o = { next: f }; o.next()`),
+  and on a captured one it is refused, as `o.add()` and `o.set()` are.
+
+Fuel: a unit for the call, and what `iterator_range` charges for the value
+it copies, a unit (an entry's new array included).
+
 ## Removal
 
 Removing an item from a set or an object, and shrinking a container that
@@ -753,6 +807,15 @@ A map's `set`, `delete` and `clear`:
 | `tests/api_test.c` | `test_mutation_map_removal`, `test_mutation_map_removal_out_of_memory` |
 | `bench/bench.c` | `eval.map.set-reduce`, `CHECK_MAP_N` |
 
+An iterator's `next` and `return`:
+
+| File | What is tagged |
+|---|---|
+| `src/internal.h` | `sjs_iterator.position`; `SJS_ITERATE_HELPER`; `SJS_METHOD_ITERATOR_NEXT`, `SJS_METHOD_ITERATOR_RETURN`, `SJS_METHOD_ITERATOR_ADVANCE`, `SJS_METHOD_ITERATOR_CLOSE` |
+| `src/value.c` | the position in `sjs_iterator_make` and `sjs_iterator_count` |
+| `src/builtins.c` | the names `next` and `return` (restore `NAME(text, SJS_NAME_ON_ITERATOR, 0, 0, 0)`); `mutation_kind`'s first line; `iterator_step`'s declaration and its cases in `sjs_mutation_call` and `iterator_method`; the position in `iterator_range`; `SJS_ITERATE_HELPER` in `late_done` and `iterator_limit`; the section at the end of the file |
+| `src/writer.c` | `written_from` and its uses, and the position in `iterated` |
+
 Object.assign of a variable:
 
 | File | What is tagged |
@@ -806,7 +869,11 @@ that matches the rewrites alone. Before step 3, `delete` was
 refused as a word staticjs does not have ("does not have this"); no case
 tested it. `let` moved two cases from `tests/spec/statements.spec` to `mutation.spec`
 ("let" and "let with its name on the next line", which were refused,
-"declares with const"). The README, `AGENTS.md`, `docs/builtins.md` and
+"declares with const"). An iterator's `next` moved `map.spec`'s "next is
+not staticjs's" and "next of a set's iterator is not staticjs's", which
+faulted ("does not have this method"), to `mutation.spec`, where they give
+a value ("next of an iterator nothing else holds"); rolling back restores
+them. The README, `AGENTS.md`, `docs/builtins.md` and
 `docs/matcher.md` point here.
 
 **Not mutation: `STRING_APPEND`.** `+`, a template and a string's `concat`

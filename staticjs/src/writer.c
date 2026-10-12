@@ -112,6 +112,12 @@ static const sjs_array *entries_of(sjs_value v) {
     return it->items.kind == SJS_UNDEFINED && it->h.flags == SJS_ITERATE_ENTRIES ? SJS_AS_ARRAY(it->source) : NULL;
 }
 
+/* MUTATION: where what an iterator yields starts, past what next() took;
+ * 0 for any other value. Restore: without it, and its uses. */
+static uint32_t written_from(sjs_value v) {
+    return v.kind == SJS_ITERATOR ? SJS_AS_ITERATOR(v)->position : 0u;
+}
+
 /* The key (`part` 0) or the value (1) of the entry at `index` of what
  * entries_of gives: a map's, or a set's member, which is both. */
 static sjs_value entry_part(const sjs_array *entries, uint32_t index, uint32_t part) {
@@ -124,6 +130,7 @@ static sjs_value entry_part(const sjs_array *entries, uint32_t index, uint32_t p
  * phases). */
 static sjs_value iterated(sjs_value v, uint32_t index) {
     const sjs_iterator *it = SJS_AS_ITERATOR(v);
+    index += it->position; /* MUTATION */
     if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->items[index];
     return entry_part(SJS_AS_ARRAY(it->source), index, it->h.flags == SJS_ITERATE_VALUES ? 1u : 0u);
 }
@@ -265,7 +272,7 @@ static sjs_result next(sjs_writer *w, bool *more) {
         if (entries_of(v) != NULL) {
             say(w, "[");
             f->phase = W_ENTRY_VALUE;
-            return push(w, entry_part(entries_of(v), f->index, 0));
+            return push(w, entry_part(entries_of(v), f->index + written_from(v), 0)); /* MUTATION: written_from */
         }
         f->phase = W_ITEM;
         if (v.kind == SJS_ITERATOR) return push(w, iterated(v, f->index++));
@@ -277,7 +284,7 @@ static sjs_result next(sjs_writer *w, bool *more) {
     case W_ENTRY_VALUE:
         say(w, ",");
         f->phase = W_ENTRY_END;
-        return push(w, entry_part(entries_of(v), f->index, 1));
+        return push(w, entry_part(entries_of(v), f->index + written_from(v), 1)); /* MUTATION: written_from */
     case W_ENTRY_END:
         say(w, "]");
         f->index++;

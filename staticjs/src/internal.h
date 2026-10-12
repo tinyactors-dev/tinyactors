@@ -403,11 +403,15 @@ bool sjs_set_contains(const sjs_array *set, sjs_value element);
 #define SJS_ITERATE_KEYS 0u
 #define SJS_ITERATE_VALUES 1u
 #define SJS_ITERATE_ENTRIES 2u
+/* MUTATION: with SJS_ITERATE_VALUES, an iterator helper's result (take,
+ * drop, map, filter, flatMap), which has return() as JavaScript's does. */
+#define SJS_ITERATE_HELPER 4u
 
 typedef struct {
     sjs_heap h;           /* h.flags: SJS_ITERATE_*, for a map's or a set's own */
     sjs_value source;     /* the map or the set */
     sjs_value items;      /* an array of what it yields, or undefined for a map's or a set's own */
+    uint32_t position;    /* MUTATION: how many values next() has taken (docs/mutation.md) */
 } sjs_iterator;
 
 #define SJS_AS_ITERATOR(v) ((sjs_iterator *)(void *)(v).as.heap)
@@ -420,7 +424,7 @@ typedef struct {
     uint8_t mode;
 } sjs_iterator_spec;
 sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_value *out);
-/* How many values an iterator yields. */
+/* How many values an iterator yields (MUTATION: after its position). */
 uint32_t sjs_iterator_count(const sjs_iterator *it);
 
 /* A map with room for `entries` entries. */
@@ -859,6 +863,10 @@ typedef enum {
     SJS_METHOD_ITERATOR_TO_ARRAY,
     SJS_METHOD_ITERATOR_TAKE,
     SJS_METHOD_ITERATOR_DROP,
+    /* MUTATION: next() and return() of an iterator nothing else holds, which
+     * no program sees again (a temporary): the value, not advanced. */
+    SJS_METHOD_ITERATOR_NEXT,
+    SJS_METHOD_ITERATOR_RETURN,
     /* Loops over maps and iterators, which sjs_loop_start hands to
      * late_start first: from SJS_METHOD_MAP_FOR_EACH to
      * SJS_METHOD_ITERATOR_FLAT_MAP. */
@@ -891,6 +899,10 @@ typedef enum {
     SJS_METHOD_MAP_SET,
     SJS_METHOD_MAP_DELETE,
     SJS_METHOD_MAP_CLEAR,
+    /* MUTATION: an iterator's next() and return() on a variable that holds
+     * it alone, which advance it and close it (docs/mutation.md). */
+    SJS_METHOD_ITERATOR_ADVANCE,
+    SJS_METHOD_ITERATOR_CLOSE,
     /* The loops of the regular expression methods: a method whose match is
      * too long for a leaf goes on as one (regex_match.c), the loop of
      * SJS_REGEX_LOOP_FIRST plus its sjs_regex_op. Last, so that
@@ -954,7 +966,7 @@ sjs_builtin_id sjs_method_of(const sjs_name *name, uint8_t kind);
 sjs_value sjs_builtin_value(sjs_builtin_id id);
 bool sjs_builtin_loops(sjs_builtin_id id);
 /* MUTATION: the method `name` names that changes a receiver of kind `kind`
- * (SJS_ARRAY, SJS_SET or SJS_MAP); NONE if it names none. sjs_mutation_named:
+ * (SJS_ARRAY, SJS_SET, SJS_MAP or SJS_ITERATOR); NONE if it names none. sjs_mutation_named:
  * the one of whichever kind has it, what the compiler knows from the name
  * (a set's delete and clear for a map's too, which return alike). */
 sjs_builtin_id sjs_mutation_of(const sjs_name *name, uint8_t kind);
