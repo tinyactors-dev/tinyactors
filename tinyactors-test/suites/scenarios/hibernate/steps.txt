@@ -1,0 +1,21 @@
+# hibernate: an idle actor with variables and a pending delayed send
+# leaves memory; an event wakes it; its timer firing while it is
+# hibernated wakes it too. The implementation keeps the blobs and answers
+# WAKE (docs/driver.md, "The scenario environment"). Ported from
+# tinyactors-core/tests/conformance/hibernate.json.
+#
+# Not checked here (a chart cannot see it):
+# - whether the actor is in the store or in memory between steps
+#   ("hibernated", "awake"): the chart sees only that it went on with its
+#   variables. Covered by tests/unit/test_hibernate.c
+#   (test_roundtrip_and_single_wake, test_timer_wakes_actor: one WAKE per
+#   wake) and core's conformance program (tests/conformance/run_c.c on
+#   hibernate.json, until ta-conform).
+
+image sleeper
+spawn s sleeper
+send s touch {"who": "a"}
+hibernate s
+send s touch {"who": "b"}
+hibernate s
+advance 250

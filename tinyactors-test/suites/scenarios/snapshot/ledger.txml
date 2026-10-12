@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<!-- The judge of snapshot. Var1 is the balance and Var2 counts deposits.
+The steps snapshot the host after the first deposit (5), deposit 7 (12,
+checked), then restore the snapshot: a restart, after which the 7 is gone.
+In the restored host, "ask" pings the echo actor, whose address came in
+the event, with the balance, and the pong carries it back plus one (6).
+A deposit of 1 makes 6 again. The close it sent itself before the
+snapshot fires at 300 ms, after "check6" (250 ms), with 6 in 2 deposits and
+one pong. -->
+<scxml initial="open" conf:datamodel="" version="1.0" name="ledger"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1" conf:expr="0"/>
+    <data conf:id="2" conf:expr="0"/>
+    <data conf:id="3"/>
+    <data conf:id="4"/>
+    <data conf:id="5" conf:expr="0"/>
+    <data conf:id="6" conf:expr="0"/>
+  </datamodel>
+
+  <state id="open">
+    <onentry>
+      <send event="close" delay="300ms"/>
+    </onentry>
+    <transition event="deposit">
+      <assign conf:location="3" conf:eventDataFieldValue="amount"/>
+      <conf:sumVars id1="1" id2="3"/>
+      <conf:incrementID id="2"/>
+    </transition>
+    <transition event="check12" conf:idVal="1=12"/>
+    <transition event="check12" conf:targetfail=""/>
+    <transition event="ask">
+      <assign conf:location="4" conf:eventDataFieldValue="peer"/>
+      <send event="ping" conf:targetVar="4">
+        <param conf:name="1" conf:varExpr="1"/>
+      </send>
+    </transition>
+    <transition event="pong" conf:eventvarVal="1=6">
+      <conf:incrementID id="5"/>
+    </transition>
+    <transition event="pong" conf:targetfail=""/>
+    <transition event="check6" conf:idVal="1=6">
+      <conf:incrementID id="6"/>
+    </transition>
+    <transition event="check6" conf:targetfail=""/>
+    <transition event="close" target="balance"/>
+  </state>
+
+  <state id="balance">
+    <transition conf:idVal="1=6" target="deposits"/>
+    <transition conf:targetfail=""/>
+  </state>
+  <state id="deposits">
+    <transition conf:idVal="2=2" target="pongs"/>
+    <transition conf:targetfail=""/>
+  </state>
+  <state id="pongs">
+    <transition conf:idVal="5=1" target="checked"/>
+    <transition conf:targetfail=""/>
+  </state>
+  <state id="checked">
+    <transition conf:idVal="6=1" conf:targetpass=""/>
+    <transition conf:targetfail=""/>
+  </state>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>

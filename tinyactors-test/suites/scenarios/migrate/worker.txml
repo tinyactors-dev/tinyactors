@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!-- Version 1 of "worker". Var1 counts jobs, Var2 is the version (1).
+Var6, Var7 and Var9 come with spawn params: 1 for an actor that must never
+be upgraded, the jobs it will have done when its deadline comes, and the
+judge's address. Its deadline (500 ms) must not come in this version: the
+steps migrate it to version 2 first. -->
+<scxml initial="busy" conf:datamodel="" version="1.0" name="worker"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1" conf:expr="0"/>
+    <data conf:id="2" conf:expr="1"/>
+    <data conf:id="6" conf:expr="0"/>
+    <data conf:id="7" conf:expr="0"/>
+    <data conf:id="9"/>
+  </datamodel>
+
+  <state id="busy">
+    <onentry>
+      <send event="deadline" delay="500ms"/>
+    </onentry>
+    <transition event="job">
+      <conf:incrementID id="1"/>
+    </transition>
+    <transition event="deadline" conf:targetfail=""/>
+  </state>
+
+  <conf:fail/>
+</scxml>

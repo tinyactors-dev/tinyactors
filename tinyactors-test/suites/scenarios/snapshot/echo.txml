@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<!-- Answers each "ping" to its origin with "pong", Var1 plus one. -->
+<scxml initial="e" conf:datamodel="" version="1.0" name="echo"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1"/>
+    <data conf:id="2"/>
+  </datamodel>
+
+  <state id="e">
+    <transition event="ping">
+      <assign conf:location="1" conf:eventDataFieldValue="Var1"/>
+      <conf:incrementID id="1"/>
+      <assign conf:location="2" conf:eventField="origin"/>
+      <send event="pong" conf:targetVar="2">
+        <param conf:name="1" conf:varExpr="1"/>
+      </send>
+    </transition>
+  </state>
+</scxml>

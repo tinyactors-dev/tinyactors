@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<!-- The judge of invoke. It invokes child.scxml, a chart of its image, with
+Var1 = 21; the child answers through #_parent with Var1 = 42, and this
+chart thanks it through #_kid. The child's done.invoke.kid comes after
+that. Then an <invoke> whose srcexpr names no chart of the image: the host
+gets a request for it, answers that there is none, and the invoke is
+error.execution. -->
+<scxml initial="s" conf:datamodel="" version="1.0" name="parent"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="2"/>
+    <data conf:id="3" conf:quoteExpr="missing.scxml"/>
+  </datamodel>
+
+  <state id="s" initial="s1">
+    <invoke src="child.scxml" id="kid">
+      <param conf:name="1" conf:expr="21"/>
+    </invoke>
+    <state id="s1">
+      <transition event="answer" conf:eventvarVal="1=42" target="s2">
+        <assign conf:location="2" conf:eventField="invokeid"/>
+        <send target="#_kid" event="thanks"/>
+      </transition>
+      <transition event="answer" conf:targetfail=""/>
+      <transition event="done.invoke.kid" conf:targetfail=""/>
+    </state>
+    <state id="s2">
+      <transition conf:idQuoteVal="2=kid" target="s3"/>
+      <transition conf:targetfail=""/>
+    </state>
+    <state id="s3">
+      <transition event="done.invoke.kid" target="after"/>
+    </state>
+  </state>
+
+  <state id="after">
+    <invoke conf:srcExpr="3" id="ghost"/>
+    <transition event="error.execution" conf:targetpass=""/>
+    <transition event="done.invoke.ghost" conf:targetfail=""/>
+  </state>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>

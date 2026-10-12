@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<!-- Version 2 of "worker": an image added after version 1 makes it the
+current version, for new actors at once and for running ones when they
+migrate. Var3 counts jobs and Var4 is the version (2); Var1 and Var2 are
+not declared. A migrated actor gets error.platform.upgrade with version
+1's bindings as its data: it must come from version 1 and must not be an
+actor spawned on version 2 (Var6), and it takes its count, its expected
+count (Var7) and the judge's address (Var9) from there. The deadline set
+in version 1 survives the move. When it comes, the count must be the one
+expected, and the worker tells the judge. -->
+<scxml initial="busy" conf:datamodel="" version="1.0" name="worker"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="3" conf:expr="0"/>
+    <data conf:id="4" conf:expr="2"/>
+    <data conf:id="6" conf:expr="0"/>
+    <data conf:id="7" conf:expr="0"/>
+    <data conf:id="9"/>
+  </datamodel>
+
+  <state id="busy">
+    <onentry>
+      <send event="deadline" delay="500ms"/>
+    </onentry>
+    <transition event="error.platform.upgrade" conf:eventvarVal="6=1" conf:targetfail=""/>
+    <transition event="error.platform.upgrade" conf:eventvarVal="2=1">
+      <assign conf:location="3" conf:eventDataFieldValue="Var1"/>
+      <assign conf:location="7" conf:eventDataFieldValue="Var7"/>
+      <assign conf:location="9" conf:eventDataFieldValue="Var9"/>
+    </transition>
+    <transition event="error.platform.upgrade" conf:targetfail=""/>
+    <transition event="job">
+      <conf:incrementID id="3"/>
+    </transition>
+    <transition event="deadline" target="late"/>
+  </state>
+
+  <state id="late">
+    <transition conf:VarEqVar="3 7" target="report"/>
+    <transition conf:targetfail=""/>
+  </state>
+
+  <final id="report">
+    <onentry>
+      <send event="late" conf:targetVar="9"/>
+    </onentry>
+  </final>
+
+  <conf:fail/>
+</scxml>

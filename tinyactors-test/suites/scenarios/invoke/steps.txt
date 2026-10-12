@@ -1,0 +1,15 @@
+# invoke: <invoke> of a chart in the same image with params, the child to
+# #_parent, the parent to #_<invokeid>, done.invoke; an <invoke srcexpr>
+# the image does not have becomes a request the host answers with an
+# error (error.execution). Ported from
+# tinyactors-core/tests/conformance/invoke.json.
+#
+# Not checked here (a chart cannot see it):
+# - that the parent's session is done (its DONE effect): it ends in pass
+#   instead. Covered by core's conformance program
+#   (tests/conformance/run_c.c on invoke.json, until ta-conform).
+# - that the host saw a REQUEST effect for "missing.scxml": the chart sees
+#   only the answer. Covered by run_c.c (answer_request) on invoke.json.
+
+image parent child
+spawn p parent

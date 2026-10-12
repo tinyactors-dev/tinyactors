@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<!-- The judge of hibernate. Each "touch" counts (Var1), appends its "who"
+to Var2 and 4 to the array Var4. The steps hibernate it between touches:
+the second touch wakes it, and so does its own delayed send, which fires
+at 200 ms while it is hibernated. When the alarm comes, its variables have
+survived two hibernations: 2 touches, "ab", and the array [1,2,3,4,4],
+whose items sum to 14. -->
+<scxml initial="idle" conf:datamodel="" version="1.0" name="sleeper"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1" conf:expr="0"/>
+    <data conf:id="2" conf:quoteExpr=""/>
+    <data conf:id="3"/>
+    <data conf:id="4">
+      <conf:array123/>
+    </data>
+    <data conf:id="5"/>
+    <data conf:id="6" conf:expr="0"/>
+  </datamodel>
+
+  <state id="idle">
+    <onentry>
+      <send event="alarm" delay="200ms"/>
+    </onentry>
+    <transition event="touch">
+      <conf:incrementID id="1"/>
+      <assign conf:location="3" conf:eventDataFieldValue="who"/>
+      <conf:concatVars id1="2" id2="3"/>
+      <conf:extendArray id="4"/>
+    </transition>
+    <transition event="alarm" target="touches">
+      <foreach conf:item="5" conf:arrayVar="4">
+        <conf:sumVars id1="6" id2="5"/>
+      </foreach>
+    </transition>
+  </state>
+
+  <state id="touches">
+    <transition conf:idVal="1=2" target="who"/>
+    <transition conf:targetfail=""/>
+  </state>
+  <state id="who">
+    <transition conf:idQuoteVal="2=ab" target="array"/>
+    <transition conf:targetfail=""/>
+  </state>
+  <state id="array">
+    <transition conf:idVal="6=14" conf:targetpass=""/>
+    <transition conf:targetfail=""/>
+  </state>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>

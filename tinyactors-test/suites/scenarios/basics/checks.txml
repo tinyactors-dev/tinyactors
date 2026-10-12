@@ -1,0 +1,59 @@
+<?xml version="1.0"?>
+<!-- The judge of basics, spawned after the counter is done. In a parallel
+state, "go" takes a transition in each region, and r's condition In('l1')
+is evaluated before l leaves l1. r's transition runs a foreach over
+[1,2,3]: Var4 sums the items and the indexes, 6 + 3. "bad" assigns to an
+invalid location: error.execution, and the rest of the block does not run
+(Var5 stays 0). -->
+<scxml initial="p" conf:datamodel="" version="1.0" name="checks"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1"/>
+    <data conf:id="2"/>
+    <data conf:id="3">
+      <conf:array123/>
+    </data>
+    <data conf:id="4" conf:expr="0"/>
+    <data conf:id="5" conf:expr="0"/>
+  </datamodel>
+
+  <parallel id="p">
+    <state id="l" initial="l1">
+      <state id="l1">
+        <transition event="go" target="l2"/>
+      </state>
+      <state id="l2"/>
+    </state>
+    <state id="r" initial="r1">
+      <state id="r1">
+        <transition event="go" conf:inState="l1" target="r2">
+          <foreach conf:item="1" conf:index="2" conf:arrayVar="3">
+            <conf:sumVars id1="4" id2="1"/>
+            <conf:sumVars id1="4" id2="2"/>
+          </foreach>
+        </transition>
+        <transition event="go" conf:targetfail=""/>
+        <transition event="bad" conf:targetfail=""/>
+      </state>
+      <state id="r2">
+        <transition conf:idVal="4=9" target="r3"/>
+        <transition conf:targetfail=""/>
+      </state>
+      <state id="r3">
+        <transition event="bad">
+          <assign conf:invalidLocation="" conf:expr="1"/>
+          <conf:incrementID id="5"/>
+        </transition>
+        <transition event="error.execution" conf:idVal="5=0" target="r4"/>
+        <transition event="error.execution" conf:targetfail=""/>
+      </state>
+      <state id="r4">
+        <transition conf:inState="l2" conf:targetpass=""/>
+        <transition conf:targetfail=""/>
+      </state>
+    </state>
+  </parallel>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>

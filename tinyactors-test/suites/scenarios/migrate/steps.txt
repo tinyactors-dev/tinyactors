@@ -1,0 +1,34 @@
+# migrate: a new version of a chart (new actors run it at once), then the
+# running actors, one of them hibernated and woken for it, migrate to it:
+# error.platform.upgrade carries version 1's <datamodel> bindings, states
+# match by id, delayed sends survive the move. Ported from
+# tinyactors-core/tests/conformance/migrate.json; the workers report to a
+# judge, which the original did not need.
+#
+# Each worker is spawned with what it must count by its deadline (Var7)
+# and the judge's address (Var9); w3 is spawned on version 2 and must
+# never be upgraded (Var6).
+#
+# Not checked here (a chart cannot see it):
+# - that w2 is in memory after the migration ("awake"); the chart sees only
+#   that it was upgraded before its deadline. Covered by
+#   tests/unit/test_host.c (test_migration_wake_and_timeout) and core's
+#   conformance program (tests/conformance/run_c.c on migrate.json, until
+#   ta-conform).
+# - that the migration job ended (JOB_DONE): the implementation's migrate
+#   step waits for it (docs/driver.md); a migration that does not end
+#   leaves the workers on version 1, whose deadline fails.
+
+image judge
+image worker
+spawn j judge
+spawn w1 worker {"Var7": 2, "Var9": "@j"}
+spawn w2 worker {"Var7": 0, "Var9": "@j"}
+send w1 job
+hibernate w2
+image worker-v2
+spawn w3 worker {"Var6": 1, "Var7": 1, "Var9": "@j"}
+send w3 job
+migrate wake
+send w1 job
+advance 510

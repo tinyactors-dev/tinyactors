@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!-- Invoked by parent.scxml with Var1 = 21, which overrides its <data>. It
+answers its parent with twice that, and ends when it is thanked. -->
+<scxml initial="c" conf:datamodel="" version="1.0" name="child"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1" conf:expr="0"/>
+  </datamodel>
+
+  <state id="c">
+    <onentry>
+      <conf:sumVars id1="1" id2="1"/>
+      <send target="#_parent" event="answer">
+        <param conf:name="1" conf:varExpr="1"/>
+      </send>
+    </onentry>
+    <transition event="thanks" target="bye"/>
+  </state>
+
+  <final id="bye"/>
+</scxml>

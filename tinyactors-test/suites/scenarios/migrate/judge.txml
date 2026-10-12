@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!-- The judge of migrate: passes when all three workers have reported that
+their deadline came in version 2 with the count expected. -->
+<scxml initial="wait" conf:datamodel="" version="1.0" name="judge"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1" conf:expr="0"/>
+  </datamodel>
+
+  <state id="wait">
+    <transition event="late" target="count">
+      <conf:incrementID id="1"/>
+    </transition>
+  </state>
+
+  <state id="count">
+    <transition conf:idVal="1=3" conf:targetpass=""/>
+    <transition target="wait"/>
+  </state>
+
+  <conf:pass/>
+</scxml>

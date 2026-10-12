@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<!-- Spawned with params {"Var1": 10}, which override Var1's <data>. One
+send with data, then one batch: an event without data (counts 1) and two
+with data, in order. A delayed send of its own fires after 100 ms of the
+host's clock, not before. Var1 is the count, Var2 the items as text. -->
+<scxml initial="idle" conf:datamodel="" version="1.0" name="counter"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1" conf:expr="0"/>
+    <data conf:id="2" conf:quoteExpr=""/>
+    <data conf:id="3"/>
+  </datamodel>
+
+  <state id="idle">
+    <onentry>
+      <send event="tick" delay="100ms"/>
+    </onentry>
+    <transition event="inc" conf:emptyEventData="">
+      <conf:incrementID id="1"/>
+    </transition>
+    <transition event="inc">
+      <assign conf:location="3" conf:eventDataFieldValue="by"/>
+      <conf:sumVars id1="1" id2="3"/>
+    </transition>
+    <transition event="add">
+      <assign conf:location="3" conf:eventDataFieldValue="item"/>
+      <conf:concatVars id1="2" id2="3"/>
+    </transition>
+    <!-- after the first send: 10 + 2 -->
+    <transition event="check12" conf:idVal="1=12"/>
+    <transition event="check12" conf:targetfail=""/>
+    <transition event="tick" target="count"/>
+    <transition event="stop" conf:targetfail=""/>
+  </state>
+
+  <!-- the tick: after the batch, 10 + 2 + 1 and "xy" -->
+  <state id="count">
+    <transition conf:idVal="1=13" target="items"/>
+    <transition conf:targetfail=""/>
+  </state>
+  <state id="items">
+    <transition conf:idQuoteVal="2=xy" target="ticked"/>
+    <transition conf:targetfail=""/>
+  </state>
+
+  <state id="ticked">
+    <!-- sent after 50 ms: the tick came too early -->
+    <transition event="early" conf:targetfail=""/>
+    <transition event="stop" target="done"/>
+  </state>
+
+  <final id="done">
+    <donedata>
+      <param name="total" conf:varExpr="1"/>
+    </donedata>
+  </final>
+  <conf:fail/>
+</scxml>
