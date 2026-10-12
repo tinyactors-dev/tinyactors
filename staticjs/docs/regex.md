@@ -598,7 +598,7 @@ implement, the refusal is `unsupported`.
 | a match, capture or `split` piece that begins or ends inside a surrogate pair | staticjs strings cannot hold a lone surrogate, as for `slice` (`README.md:450-457`) |
 | `exec` or `test` with `g` or `y`; `replace` or `match` with `y` and without `g` | section 7.3 |
 | a `split` or a `replace` with an empty match, without `u`, that would put text between the halves of a pair (`"😀".split(/(?:)/)`) | a lone surrogate, as `replaceAll` with an empty pattern faults today (`README.md:454-455`) |
-| a non-string argument where JavaScript converts it (`re.test(1)`, `s.split(re, "2")`) | as other string methods fault on a search argument that is not a string (`README.md:458-466`) |
+| a non-string argument where JavaScript converts it (`re.test(1)`), or a split limit that is a string or an object (`s.split(re, "2")`) | as other string methods fault on a search argument that is not a string (`README.md:458-466`) |
 | `replace` with a function that returns an object or a BigInt | as `+` of an object faults *(proposed)*. This is a new rule: `replaceAll` today faults on any function as the replacement (`builtins.c:2545`) |
 | property reads of `m.groups` that JavaScript finds nowhere but staticjs's objects treat as prototype names | section 7.2 |
 | exceeding a limit | a limit error (section 9) |
@@ -1081,9 +1081,12 @@ Each departure below was made because Node or the code said otherwise.
   `spec_test` checks on every case with a `/`, and `regex_test` on every
   random input. The loops are tested for in `sjs_loop_step` only where a
   loop ends, as a test at its top cost the predicate loops 5 to 13%.
-- **`split` with a limit (8.5)** takes a number (`ToUint32`), as
-  JavaScript does; only a limit of another kind faults. `split` with a
-  string still faults on any limit, as before.
+- **`split` with a limit (8.5)** takes a number, a boolean, `null` or
+  `undefined` (`ToUint32`, 2^32 - 1 for `undefined`: `sjs_split_limit` in
+  `src/vm.h`), as JavaScript does, and stops once the result has that many
+  elements, each capture counting as one; only a limit of another kind (a
+  string, an object, a BigInt) faults. `split` with a string separator
+  takes the same limits.
 - **A replacement that is a primitive (8.6)** is its text, as `ToString`
   gives it (`"a".replace(/a/, 1)` is `"1"`); a BigInt or an object faults.
 - **Match results (7.2)** are arrays with a flag (`SJS_ARRAY_EXTRA` in

@@ -1231,8 +1231,8 @@ static sjs_result rx_job_start(rx_work *w, const rx_method *m, uint32_t *words) 
     }
     if (r != SJS_OK) return sjs_vm_fail(w->vm, r);
     if (m->op == RX_SPLIT) {
-        j->limit = UINT32_MAX;
-        if (m->operands.second.kind == SJS_NUMBER) j->limit = sjs_number_to_uint32(m->operands.second.as.number);
+        /* rx_method_check accepted the limit. */
+        (void)sjs_split_limit(m->operands.second, &j->limit);
         if (j->limit == 0) {
             j->done = true;
         } else if (input->length == 0) {
@@ -1285,8 +1285,9 @@ static bool rx_method_check(sjs_vm *vm, const rx_method *m) {
         sjs_vm_fault(vm, "a regular expression with y and without g changes its lastIndex when it matches, and staticjs values do not change");
         return false;
     }
-    if (m->op == RX_SPLIT && o->second.kind != SJS_UNDEFINED && o->second.kind != SJS_NUMBER) {
-        sjs_vm_fault(vm, "staticjs splits with a limit that is a number");
+    uint32_t limit;
+    if (m->op == RX_SPLIT && !sjs_split_limit(o->second, &limit)) {
+        sjs_vm_fault(vm, "staticjs splits with a limit that is a number, a boolean, null or undefined");
         return false;
     }
     if (m->op == RX_REPLACE && o->second.kind == SJS_FUNCTION && o->second.internal == SJS_INTERNAL_NONE) return true;

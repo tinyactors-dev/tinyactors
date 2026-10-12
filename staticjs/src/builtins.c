@@ -1418,13 +1418,21 @@ static bool is_trim_space(uint32_t p) {
     return sjs_is_white_space(p);
 }
 
+/* split with a string or undefined as the separator: the pieces between
+ * its occurrences, at most `limit` of them (ToUint32; sjs_split_limit). */
 static sjs_result string_split(sjs_vm *vm, sjs_str s, sjs_leaf_call *call) {
     sjs_value separator = arg(call, 0);
-    if (call->count > 1 && call->args[1].kind != SJS_UNDEFINED) return sjs_vm_fault(vm, "staticjs splits without a limit");
+    uint32_t limit;
+    if (!sjs_split_limit(arg(call, 1), &limit)) {
+        return sjs_vm_fault(vm, "staticjs splits with a limit that is a number, a boolean, null or undefined");
+    }
+    sjs_str sep = { 0 };
+    if (separator.kind != SJS_UNDEFINED && string_arg(vm, separator, &sep) != SJS_OK) return SJS_ERR_PROGRAM;
     sjs_array *out;
     if (new_array(vm, 4, &out) != SJS_OK) return SJS_ERR_PROGRAM;
     call->result = sjs_heap_value(SJS_ARRAY, &out->h);
     call->cost = s.length;
+    if (limit == 0) return SJS_OK;
     if (separator.kind == SJS_UNDEFINED) {
         sjs_value whole;
         if (new_string(vm, s, &whole) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -1432,11 +1440,11 @@ static sjs_result string_split(sjs_vm *vm, sjs_str s, sjs_leaf_call *call) {
         call->result.as.heap = &out->h;
         return SJS_OK;
     }
-    sjs_str sep;
-    if (string_arg(vm, separator, &sep) != SJS_OK) return SJS_ERR_PROGRAM;
     uint32_t start = 0;
     if (sep.length == 0) {
-        while (start < s.length) {
+        /* A piece per code unit: one of a pair would be a lone surrogate,
+         * unless the limit stops before it. */
+        while (start < s.length && out->length < limit) {
             uint32_t next = start;
             int32_t point = sjs_utf8_next(s, &next);
             if (point >= 0x10000) return sjs_vm_fault(vm, "splitting would cut a character outside the BMP in two");
@@ -1455,7 +1463,7 @@ static sjs_result string_split(sjs_vm *vm, sjs_str s, sjs_leaf_call *call) {
         if (new_string(vm, (sjs_str){ s.ptr + start, end - start }, &piece) != SJS_OK) return SJS_ERR_PROGRAM;
         if (array_add(vm, &out, piece) != SJS_OK) return SJS_ERR_PROGRAM;
         call->result.as.heap = &out->h;
-        if (at < 0) return SJS_OK;
+        if (at < 0 || out->length == limit) return SJS_OK;
         start = end + sep.length;
     }
 }
