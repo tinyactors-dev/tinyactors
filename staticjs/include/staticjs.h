@@ -28,7 +28,7 @@
 #endif
 
 #define SJS_VERSION_MAJOR 0
-#define SJS_VERSION_MINOR 8
+#define SJS_VERSION_MINOR 9
 #define SJS_VERSION_PATCH 0
 /* (major << 16) | (minor << 8) | patch; sjs_version() answers it for the library linked. */
 #define SJS_VERSION ((SJS_VERSION_MAJOR << 16) | (SJS_VERSION_MINOR << 8) | SJS_VERSION_PATCH)
@@ -700,6 +700,38 @@ SJS_API sjs_result sjs_vm_advance_clock(sjs_vm *vm, uint64_t nanoseconds);
 /* The clock's value, for a host that keeps it (a paused evaluation saved
  * and resumed elsewhere); SJS_ERR_NOT_FOUND when it was never set. */
 SJS_API sjs_result sjs_vm_clock(const sjs_vm *vm, sjs_epoch *out);
+
+/*
+ * The host seed (docs/temporal.md, "Host seed"): what Math.random draws
+ * from, pushed as the clock is. The evaluator holds V8's generator
+ * (xorshift128+, its state hashed from the seed by MurmurHash3's
+ * finalizer, its doubles drawn from a cache of 64 from the last): a seed
+ * gives the values `node --random-seed=<seed>` gives, for every seed that
+ * flag takes (a nonzero int32; 0 there means "the machine's entropy").
+ * Each draw advances the state; nothing else reads or changes it. It stays
+ * across sjs_vm_start, sjs_vm_reset and pauses until set again, so a
+ * second evaluation continues the first one's sequence; a host that wants
+ * each evaluation to draw the same values sets the seed before each
+ * sjs_vm_start. A program that calls Math.random on an evaluator whose seed
+ * was never set faults. No call allocates.
+ */
+SJS_API sjs_result sjs_vm_set_seed(sjs_vm *vm, int64_t seed);
+
+/* The generator's state between draws, for a host that saves a paused
+ * evaluation and resumes it elsewhere: V8's xorshift128+ state as of its
+ * last refill of the cache (or as seeded, before the first), and how many
+ * of the cache's 64 values are left to draw. */
+typedef struct {
+    uint64_t state[2];
+    uint32_t left;  /* 0 to 64 */
+} sjs_random;
+
+/* The generator's state; SJS_ERR_NOT_FOUND when the seed was never set. */
+SJS_API sjs_result sjs_vm_random(const sjs_vm *vm, sjs_random *out);
+/* Restore a state sjs_vm_random gave. SJS_ERR_INVALID, the generator
+ * unchanged, when the state is all zero (no seed gives it) or more than 64
+ * are left. */
+SJS_API sjs_result sjs_vm_set_random(sjs_vm *vm, const sjs_random *state);
 
 /* ========================================================================
  * Writer

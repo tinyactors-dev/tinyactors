@@ -40,6 +40,13 @@
  *                                   clock is never set, and Temporal.Now
  *                                   faults. diff-node gives the polyfill's
  *                                   Temporal.Now the same instant)
+ *   @seed 42                       (optional: Math.random's seed, an integer
+ *                                   of any sign; sjs_vm_set_seed before every
+ *                                   evaluation of the case. Without it the
+ *                                   seed is never set, and Math.random
+ *                                   faults. diff-node runs the case in a
+ *                                   `node --random-seed=<seed>` of its own,
+ *                                   so the seed is a nonzero int32)
  *   source lines
  *   --- value
  *   what sjs_writer writes for the result
@@ -118,6 +125,8 @@ typedef struct {
     char shapes[1024];
     int has_clock;
     sjs_epoch clock;
+    int has_seed;
+    int64_t seed;
 } spec_case;
 
 typedef struct {
@@ -196,6 +205,7 @@ typedef struct {
     const sjs_value *globals;
     uint32_t global_count;
     const sjs_epoch *clock;    /* the host clock, or NULL: never set */
+    const int64_t *seed;       /* Math.random's seed, or NULL: never set */
 } environment;
 
 typedef struct {
@@ -456,7 +466,8 @@ static sjs_result evaluate(const environment *env, sjs_program *program, uint64_
     sjs_vm_config config = { env->context, evaluate_no_regex_leaf };
     sjs_result made = sjs_vm_init(&vm, &config);
     if (made != SJS_OK) return made;
-    if (env->clock != NULL && sjs_vm_set_clock(vm, env->clock) != SJS_OK) {
+    if ((env->clock != NULL && sjs_vm_set_clock(vm, env->clock) != SJS_OK) ||
+        (env->seed != NULL && sjs_vm_set_seed(vm, *env->seed) != SJS_OK)) {
         sjs_vm_destroy(vm);
         return SJS_ERR_INVALID;
     }
@@ -700,7 +711,7 @@ static int sweep(const spec_case *c, const outcome *expected, const char *file, 
     if (sjs_context_init(&context, &config) != SJS_OK) return 0;
     static registry loaded;
     loaded.count = 0;
-    environment env = { context, { &f, &failing_vtable }, &loaded, NULL, NULL, 0, NULL };
+    environment env = { context, { &f, &failing_vtable }, &loaded, NULL, NULL, 0, NULL, NULL };
     int result = load_modules(&env, modules, &loaded);
     if (!result) fprintf(stderr, "%s:%d: %s: the modules before it do not evaluate again\n", file, c->line, c->name);
     size_t base = sjs_context_live_bytes(context);
@@ -731,6 +742,7 @@ static int sweep(const spec_case *c, const outcome *expected, const char *file, 
             with.globals = values;
             with.global_count = (uint32_t)c->global_count;
             with.clock = c->has_clock ? &c->clock : NULL;
+            with.seed = c->has_seed ? &c->seed : NULL;
             run_case(&with, c, (mode){ 1u << 30, UINT64_MAX, false, false }, &got);
             if (strcmp(got.text, expected->text) == 0) {
                 done = 1;
@@ -785,6 +797,7 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
     with.globals = values;
     with.global_count = (uint32_t)c->global_count;
     with.clock = c->has_clock ? &c->clock : NULL;
+    with.seed = c->has_seed ? &c->seed : NULL;
     static outcome whole;
     static outcome bytes;
     static outcome chunks;
@@ -852,6 +865,7 @@ static void finish_case(environment *env, spec_case *c, const char *file, tally 
         sjs_value exports;
         environment clocked = *env;
         clocked.clock = c->has_clock ? &c->clock : NULL;
+        clocked.seed = c->has_seed ? &c->seed : NULL;
         if (compile(env, c->source, SJS_GOAL_MODULE, (mode){ 4096, 0, false, false }, &program, &error) == SJS_OK) {
             if (evaluate(&clocked, program, UINT64_MAX, &exports, &error) == SJS_OK &&
                 register_module(env->context, env->modules, c->module_name, c->source, exports)) {
@@ -896,6 +910,19 @@ static int parse_clock(const char *text, sjs_epoch *out) {
     return 1;
 }
 
+/* @seed's integer, of any sign, within an int64. */
+static int parse_seed(const char *text, int64_t *out) {
+    int negative = *text == '-';
+    if (negative) text++;
+    size_t n = strspn(text, "0123456789");
+    if (n == 0 || n > 19 || (text[n] != '\0' && text[n] != '\n' && text[n] != '\r')) return 0;
+    uint64_t magnitude = 0;
+    for (size_t i = 0; i < n; i++) magnitude = magnitude * 10u + (uint64_t)(text[i] - '0');
+    if (magnitude > (negative ? (uint64_t)INT64_MAX + 1u : (uint64_t)INT64_MAX)) return 0;
+    *out = negative ? (int64_t)(0u - magnitude) : (int64_t)magnitude;
+    return 1;
+}
+
 static void run_file(sjs_context *context, const char *path, tally *t) {
     FILE *f = fopen(path, "r");
     if (f == NULL) {
@@ -905,7 +932,7 @@ static void run_file(sjs_context *context, const char *path, tally *t) {
     }
     static registry modules;
     modules.count = 0;
-    environment env = { context, { NULL, &heap_vtable }, &modules, NULL, NULL, 0, NULL };
+    environment env = { context, { NULL, &heap_vtable }, &modules, NULL, NULL, 0, NULL, NULL };
     static spec_case c;
     static char line[MAX_TEXT];
     enum { OUTSIDE, SOURCE, EXPECTED } where = OUTSIDE;
@@ -946,6 +973,14 @@ static void run_file(sjs_context *context, const char *path, tally *t) {
                 t->failed++;
             }
             c.has_clock = 1;
+            continue;
+        }
+        if (where == SOURCE && c.source[0] == '\0' && strncmp(line, "@seed ", 6) == 0) {
+            if (!parse_seed(line + 6, &c.seed)) {
+                fprintf(stderr, "%s:%d: @seed takes an integer\n", path, number);
+                t->failed++;
+            }
+            c.has_seed = 1;
             continue;
         }
         if (where == SOURCE && c.source[0] == '\0' && strncmp(line, "@shapes ", 8) == 0) {

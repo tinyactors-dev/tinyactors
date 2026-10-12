@@ -27,12 +27,23 @@
 // date and time at a fixed offset, which a nanosecond moves as it moves the
 // instant).
 //
+// Math.random draws from a seed, which a case fixes with `@seed <n>`
+// (spec_test sets it with sjs_vm_set_seed). V8 seeds Math.random only from
+// its --random-seed flag, the first time a context draws, so a seeded case
+// runs in a child `node --random-seed=<n>` of its own (this script with
+// --seeded <file> <line>), which prints what the case gives; only seeded
+// cases spawn one. The flag takes a nonzero int32 (0 is the machine's
+// entropy), and a seeded case is an expression, not a module. A case
+// without @seed that draws faults in staticjs (Node draws from the
+// machine's entropy), and is not compared.
+//
 // numbers.txt, if given, holds the lines number_test --print, json_test
 // --print and regex_test --print write: what staticjs computed from an input
 // (a double formatted, a decimal read, a JSON document read and written, a
 // regular expression classified or matched, ...), each of which must be
 // what Node computes from it; temporal_test --print writes Temporal
 // expressions and what staticjs gave for each.
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -100,7 +111,7 @@ function parseSpec(path) {
   let where = 'outside';
   readFileSync(path, 'utf8').split('\n').forEach((line, index) => {
     if (line.startsWith('=== ')) {
-      current = { name: line.slice(4).trim(), line: index + 1, source: [], expected: [], globals: [], module: null, clock: null };
+      current = { name: line.slice(4).trim(), line: index + 1, source: [], expected: [], globals: [], module: null, clock: null, seed: null };
       cases.push(current);
       where = 'source';
       return;
@@ -114,6 +125,10 @@ function parseSpec(path) {
     }
     if (where === 'source' && current.source.length === 0 && line.startsWith('@clock ')) {
       current.clock = BigInt(line.slice(7).trim());
+      return;
+    }
+    if (where === 'source' && current.source.length === 0 && line.startsWith('@seed ')) {
+      current.seed = BigInt(line.slice(6).trim());
       return;
     }
     if (where === 'source' && current.source.length === 0 && line.startsWith('@shapes ')) {
@@ -208,6 +223,11 @@ async function runFile(path) {
       continue;
     }
     checked++;
+    if (c.seed !== null) {
+      const problem = seededProblem(c, path);
+      if (problem) failures.push(`${where}: ${problem}`);
+      continue;
+    }
     try {
       let value = await evaluate(c, modules);
       if (c.module) {
@@ -220,6 +240,31 @@ async function runFile(path) {
       failures.push(`${where}: JavaScript threw ${error}`);
     }
   }
+}
+
+// A seeded case: its value from a child Node seeded with --random-seed, or
+// what is wrong.
+function seededProblem(c, path) {
+  if (c.module) return 'a seeded module is not compared';
+  if (c.seed === 0n || BigInt.asIntN(32, c.seed) !== c.seed) return `@seed ${c.seed}: node --random-seed takes a nonzero int32`;
+  const output = execFileSync(process.execPath, [`--random-seed=${c.seed}`, '--no-warnings=ExperimentalWarning',
+    '--experimental-vm-modules', fileURLToPath(import.meta.url), '--seeded', path, String(c.line)], { encoding: 'utf8' });
+  const got = JSON.parse(output);
+  if (got.threw !== undefined) return `JavaScript threw ${got.threw}`;
+  return got.value === c.expected ? null : `\n  spec:       ${c.expected}\n  JavaScript: ${got.value}`;
+}
+
+if (process.argv[2] === '--seeded') {
+  const [path, line] = process.argv.slice(3);
+  const c = parseSpec(path).find((x) => x.line === Number(line));
+  let got;
+  try {
+    got = { value: show(await evaluate(c, new Map())) };
+  } catch (error) {
+    got = { threw: String(error) };
+  }
+  console.log(JSON.stringify(got));
+  process.exit(0);
 }
 
 const [specs, numbers] = process.argv.slice(2);

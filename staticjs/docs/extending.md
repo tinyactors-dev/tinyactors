@@ -51,7 +51,10 @@ This guide links them into procedures. It does not repeat them.
      when compiled;
    - `@shapes` to name each function's shape;
    - `@clock <epoch nanoseconds>` to set the host clock that `Temporal.Now`
-     reads (`docs/temporal.md`, "Host clock").
+     reads (`docs/temporal.md`, "Host clock");
+   - `@seed <n>` to set the seed `Math.random` draws from, a nonzero
+     int32 (`docs/temporal.md`, "Host seed"): diff-node runs the case in
+     a `node --random-seed=<n>` of its own.
 2. **Never type an expected value by hand.** Put the expression in a small
    Node script, `eval` it, and paste what it prints. The cases in
    `group_by.spec`, `array_methods.spec`, `numbers.spec`, `bigint.spec`,
