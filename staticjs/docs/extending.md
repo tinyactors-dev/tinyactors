@@ -255,13 +255,13 @@ The examples are BigInt, `Map` and iterators.
      them; every other check, and every Math case in `tests/spec`, runs
      there too: a spec case uses inputs whose value is the same in Node on
      x86_64 and on arm64.
-   - **parseInt is the exception, for the maintainer to decide.** `parseInt`
-     in a radix that is not a power of two (`radix_accumulate` in
-     `src/number.c`, `RADIX_FUSED`) rounds as Node does on the same
-     machine: fused on aarch64, as Node's arm64 build is. That is the other
-     reference (the machine's Node), not the one Math follows (V8 without
-     contraction on every target), so staticjs's arm64 build gives other
-     `parseInt` bits than its x86_64 build.
+   - **parseInt is the exception, by the maintainer's decision.**
+     `parseInt` in a radix that is not a power of two (`radix_accumulate`
+     in `src/number.c`, `RADIX_FUSED`) rounds as Node does on the platform
+     staticjs runs on: fused on aarch64, as Node's arm64 build is. So
+     staticjs's arm64 build gives other `parseInt` bits than its x86_64
+     build, each equal to its own platform's Node, while Math gives V8's
+     bits without contraction on every target.
 3. **Where JavaScript's specification isn't one IEEE operation,** copy V8's
    algorithm (`Math.hypot`, `parseInt` in other radixes). musl's libm (MIT)
    can be cloned from `git.musl-libc.org`; keep its notice.
