@@ -83,3 +83,15 @@ Object.groupBy("abc", x => x)
 === callback that is not a function
 Object.groupBy([1], 5)
 --- fault
+
+=== number keys from a key callback in C, at the edges of their text
+@shapes PLUCK(k)
+Object.groupBy([{k: 4294967295}, {k: -0}, {k: 1.5}, {k: 4294967296}, {k: NaN}, {k: 0}, {k: -1}, {k: 2**53}, {k: 1e21}, {k: "1"}, {k: 1}, {k: 4294967295}, {k: -4294967296}, {k: 0.1}, {k: Infinity}, {k: -Infinity}], x => x.k)
+--- value
+{"0":[{"k":-0},{"k":0}],"1":[{"k":"1"},{"k":1}],"4294967295":[{"k":4294967295},{"k":4294967295}],"1.5":[{"k":1.5}],"4294967296":[{"k":4294967296}],"NaN":[{"k":NaN}],"-1":[{"k":-1}],"9007199254740992":[{"k":9007199254740992}],"1e+21":[{"k":1e+21}],"-4294967296":[{"k":-4294967296}],"0.1":[{"k":0.1}],"Infinity":[{"k":Infinity}],"-Infinity":[{"k":-Infinity}]}
+
+=== number and string keys from a key callback in C share a group
+@shapes PLUCK(k)
+Object.keys(Object.groupBy([{k: 3}, {k: "3"}, {k: "b"}, {k: 3}, {k: 2}, {k: "2"}, {k: true}, {k: "true"}, {k: null}, {k: undefined}], x => x.k))
+--- value
+["2","3","b","true","null","undefined"]
