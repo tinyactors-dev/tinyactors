@@ -15,6 +15,9 @@
 #   diag <text>         the cbor or back line before it in diagnostic notation
 #                       (ta_cbor_diagnostic), checked too
 #   ecmascript <expr>   a value made by this ECMAScript expression
+#   python <expr>       the same value made by this Python expression, where
+#                       Python has it: for the Python binding's own tests of
+#                       its conversion (value.encode is ECMAScript's)
 # The kinds:
 #   roundtrip   from_wire of `cbor`, then to_wire, writes `back` (or `cbor`):
 #               the echo's envelope back carries it as its data
@@ -27,7 +30,11 @@
 # Integers within ±(2^53-1) are numbers in ECMAScript and others BigInts, so
 # every integer comes back as itself. ECMAScript has no reference type: a
 # reference (tag 32) arrives as its address, and goes back as text. It has
-# no integer type either: a float holding an integer comes back as one.
+# no integer type either: a float holding an integer comes back as one. A
+# language with a reference type and a second empty value (Python's Address
+# and UNDEFINED) keeps both: the "not ECMAScript" cases. Text is valid
+# UTF-8: a lone surrogate is refused, never replaced, and the UTF-8 form of
+# a surrogate (CESU-8) is not text.
 
 roundtrip scalars
 cbor 8901f9c10000f5f4f66064746578746fc3bc6ec3af63c3b864c3a920e29c93
@@ -78,6 +85,18 @@ cbor f7
 diag undefined
 back f6
 
+roundtrip not ECMAScript: an actor reference stays a reference
+cbor a166706c61796572d820781e74696e796163746f72733a2f2f7461622d3766332f235f7363786d6c5f34
+diag {"player":32("tinyactors://tab-7f3/#_scxml_4")}
+
+roundtrip not ECMAScript: undefined stays undefined, at the top
+cbor f7
+diag undefined
+
+roundtrip not ECMAScript: undefined stays undefined, in arrays and maps
+cbor 83f7a16161f7f6
+diag [undefined,{"a":undefined},null]
+
 encode undefined properties are dropped
 ecmascript ({a: undefined, b: 1})
 cbor a1616201
@@ -95,26 +114,31 @@ diag null
 
 encode non-finite numbers are floats
 ecmascript [NaN, Infinity, -Infinity]
+python [float('nan'), float('inf'), float('-inf')]
 cbor 83f97e00f97c00f9fc00
 diag [NaN,Infinity,-Infinity]
 
 encode -0 is a float
 ecmascript -0
+python -0.0
 cbor f98000
 diag -0.0
 
 encode a number past 2^53 is a float
 ecmascript 2 ** 53 + 2
+python 2.0 ** 53 + 2
 cbor fb4340000000000001
 diag 9007199254740994.0
 
 encode a BigInt is an integer
 ecmascript [12345678901234567890n, -5n, -(2n ** 64n)]
+python [12345678901234567890, -5, -(2 ** 64)]
 cbor 831bab54a98ceb1f0ad2243bffffffffffffffff
 diag [12345678901234567890,-5,-18446744073709551616]
 
 encode Uint8Array as bytes
 ecmascript new Uint8Array([0, 1, 2, 255])
+python bytes([0, 1, 2, 255])
 cbor 44000102ff
 diag h'000102ff'
 
@@ -130,6 +154,7 @@ diag h'0203'
 
 encode keys starting with $ are plain
 ecmascript ({$x: 1, y: {$z: 2}})
+python {'$x': 1, 'y': {'$z': 2}}
 cbor a2622478016179a162247a02
 diag {"$x":1,"y":{"$z":2}}
 
@@ -150,17 +175,29 @@ diag {"g":1}
 
 encode shared (acyclic) references are copied
 ecmascript (() => { const s = {k: 1}; return [s, s]; })()
+python (lambda s: [s, s])({'k': 1})
 cbor 82a1616b01a1616b01
 diag [{"k":1},{"k":1}]
 
 invalid cycles
 ecmascript (() => { const o = {}; o.self = o; return o; })()
+python (lambda o: o.update(self=o) or o)({})
 
 invalid a BigInt past 64 bits
 ecmascript 2n ** 64n
+python 2 ** 64
 
 invalid nested deeper than 64
 ecmascript (() => { let v = 0; for (let i = 0; i < 65; i++) v = [v]; return v; })()
+python (lambda f: f(f, 65))(lambda f, n: [f(f, n - 1)] if n else 0)
+
+invalid a lone surrogate in text
+ecmascript "a\udc00b"
+python 'a\udc00b'
+
+invalid a lone surrogate in a key
+ecmascript ({"\ud800": 1})
+python {'\ud800': 1}
 
 malformed a key that is not text
 cbor a10102
@@ -179,6 +216,12 @@ cbor 8201
 
 malformed text that is not UTF-8
 cbor 62c328
+
+malformed an encoded surrogate (CESU-8) is not UTF-8
+cbor 63eda080
+
+malformed an encoded surrogate in a key
+cbor a163eda08001
 
 malformed bytes after the item
 cbor 0101

@@ -764,6 +764,13 @@ static void values_run(ta_datamodel_ecmascript *ecmascript, const values_case *c
     if (payload) vtable->release(ecmascript, payload);
 }
 
+/* A case to run here: every one but those for a language with a reference
+ * type and a second empty value ("not ECMAScript: ..."). */
+static int values_for_ecmascript(const values_case *c) {
+    static const char other[] = "not ECMAScript:";
+    return c->kind[0] && strncmp(c->name, other, sizeof other - 1) != 0;
+}
+
 static void test_wire_values(void) {
     size_t n = 0;
     char *text = slurp_file(TA_VALUES, &n);
@@ -791,6 +798,8 @@ static void test_wire_values(void) {
             last_back = 1;
         } else if (!strcmp(line, "ecmascript")) {
             snprintf(c.expression, sizeof c.expression, "%s", rest);
+        } else if (!strcmp(line, "python")) {
+            /* the Python binding's: the same value made in Python */
         } else if (!strcmp(line, "diag")) {
             char got[512];
             ta_buffer out = {got, sizeof got - 1, 0};
@@ -804,7 +813,7 @@ static void test_wire_values(void) {
             CHECK(strcmp(got, rest) == 0);
             diagnostics++;
         } else { /* a new case: run the one before */
-            if (c.kind[0]) values_run(ecmascript, &c), cases++;
+            if (values_for_ecmascript(&c)) values_run(ecmascript, &c), cases++;
             memset(&c, 0, sizeof c);
             snprintf(c.kind, sizeof c.kind, "%s", line);
             snprintf(c.name, sizeof c.name, "%s", rest);
@@ -812,7 +821,7 @@ static void test_wire_values(void) {
                   !strcmp(line, "invalid") || !strcmp(line, "malformed"));
         }
     }
-    if (c.kind[0]) values_run(ecmascript, &c), cases++;
+    if (values_for_ecmascript(&c)) values_run(ecmascript, &c), cases++;
     CHECK(cases > 30);
     CHECK(diagnostics > 20);
     ta_datamodel_ecmascript_free(ecmascript);
