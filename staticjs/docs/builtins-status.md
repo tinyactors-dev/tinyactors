@@ -51,10 +51,9 @@ the host injects in the same way. UTC is the default everywhere.
 
 | Name | Status | Note |
 |---|---|---|
-| `at`, `charAt`, `charCodeAt`, `codePointAt`, `concat`, `endsWith`, `includes`, `indexOf`, `lastIndexOf`, `padEnd`, `padStart`, `repeat`, `replace`, `replaceAll`, `slice`, `split`, `startsWith`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `match`, `matchAll`, `search`, `length`, indexing | built | Regex forms as in `docs/regex.md`. |
+| `at`, `charAt`, `charCodeAt`, `codePointAt`, `concat`, `endsWith`, `includes`, `indexOf`, `lastIndexOf`, `padEnd`, `padStart`, `repeat`, `replace`, `replaceAll`, `slice`, `split`, `startsWith`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `trimLeft`, `trimRight`, `match`, `matchAll`, `search`, `length`, indexing | built | Regex forms as in `docs/regex.md`. `trimLeft` and `trimRight` are `trimStart` and `trimEnd`, as in JavaScript. |
 | `substring`, `substr` | built | By UTF-16 code unit, arguments converted as `slice` converts them; a cut through a surrogate pair faults. |
 | `isWellFormed`, `toWellFormed` | built | Always true and the string itself: staticjs cannot hold a lone surrogate. |
-| `trimLeft`, `trimRight` | named, not built | Legacy aliases of `trimStart` and `trimEnd`; not in the agreed plan. |
 | `localeCompare`, `toLocaleLowerCase`, `toLocaleUpperCase` | refused | Depend on locale data. Registered, so refused explicitly. |
 | `normalize` | refused | Needs Unicode normalisation tables. |
 | `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup` | refused | Deprecated HTML methods: pure, but not worth the code. Registered, so refused explicitly. |
