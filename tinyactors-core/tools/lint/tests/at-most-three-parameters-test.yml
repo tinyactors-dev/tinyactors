@@ -3,7 +3,10 @@ valid:
   - "TA_API ta_status ta_host_spawn(ta_host *h, const ta_spawn *spawn, uint64_t *session);"
   - "TA_API void ta_host_free(ta_host *h);"
   - "static int helper(int a, int b, int c, int d);"
-  - "typedef ta_status (*ta_resolve_function)(void *context, int a, int b, int c);"
+  - "typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request *r, ta_source *out);"
+  - "typedef struct v { ta_status (*eval)(const ta_datamodel_call *call, ta_expression e, int *out); } v;"
 invalid:
+  - "typedef ta_status (*ta_resolve_function)(void *context, int a, int b, int c);"
+  - "typedef struct v { ta_status (*eval)(void *d, uint64_t i, ta_expression e, int *out); } v;"
   - "TA_API ta_status ta_four(ta_system *system, uint32_t a, void *b, size_t c);"
   - "TA_API const void *ta_pointer(const void *a, size_t b, uint32_t c, size_t *d);"

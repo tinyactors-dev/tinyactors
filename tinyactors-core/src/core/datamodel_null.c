@@ -38,22 +38,15 @@ static uint32_t parse_in(const ta_image *image, uint32_t chart, ta_string_view s
     return ta_image_state_by_name(image, chart, id);
 }
 
-static ta_status null_create(void *datamodel, void *chart_context,
-                             const ta_datamodel_system_variables *variables, ta_payload init,
-                             uint64_t *instance) {
+static ta_status null_create(void *datamodel, const ta_datamodel_start *start, uint64_t *instance) {
     (void)datamodel;
-    (void)chart_context;
-    (void)variables;
-    (void)init;
+    (void)start;
     *instance = 1;
     return TA_OK;
 }
 
-static ta_status null_condition(void *datamodel, uint64_t instance,
-                                ta_datamodel_environment *environment, ta_expression expression,
-                                int *out) {
-    (void)datamodel;
-    (void)instance;
+static ta_status null_condition(const ta_datamodel_call *call, ta_expression expression, int *out) {
+    ta_datamodel_environment *environment = call->environment;
     const ta_image *image = ta_datamodel_environment_image(environment);
     uint32_t chart = ta_datamodel_environment_chart(environment);
     ta_expression_info info;
@@ -65,12 +58,9 @@ static ta_status null_condition(void *datamodel, uint64_t instance,
     return TA_OK;
 }
 
-static ta_status null_capture(void *datamodel, uint64_t instance,
-                              ta_datamodel_environment *environment,
-                              const ta_datamodel_capture *capture, ta_payload *out) {
-    (void)datamodel;
-    (void)instance;
-    (void)environment;
+static ta_status null_capture(const ta_datamodel_call *call, const ta_datamodel_capture *capture,
+                              ta_payload *out) {
+    (void)call;
     *out = 0;
     return (capture->namelist_count || capture->param_count || capture->content != TA_NIL)
                ? TA_ERROR_EXECUTION
@@ -79,10 +69,9 @@ static ta_status null_capture(void *datamodel, uint64_t instance,
 
 /* <log expr="'text'"/>: the null datamodel has no expressions, but a quoted
  * string literal is passed through so logs remain useful. */
-static ta_status null_log(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                          ta_expression expression, ta_string_view *out) {
-    (void)datamodel;
-    (void)instance;
+static ta_status null_log(const ta_datamodel_call *call, ta_expression expression,
+                          ta_string_view *out) {
+    ta_datamodel_environment *environment = call->environment;
     ta_expression_info info;
     if (ta_image_expression(
             ta_datamodel_environment_image(environment),
@@ -105,24 +94,16 @@ static ta_status null_log(void *datamodel, uint64_t instance, ta_datamodel_envir
 }
 
 /* No state at all: hibernation stores nothing. */
-static ta_status null_serialize(void *datamodel, uint64_t instance, void *buffer, size_t capacity,
-                                size_t *length) {
-    (void)datamodel;
-    (void)instance;
-    (void)buffer;
-    (void)capacity;
-    *length = 0;
+static ta_status null_serialize(const ta_datamodel_call *call, ta_buffer *out) {
+    (void)call;
+    out->length = 0;
     return TA_OK;
 }
 
-static ta_status null_deserialize(void *datamodel, void *chart_context,
-                                  const ta_datamodel_system_variables *variables,
-                                  const void *buffer, size_t length, uint64_t *instance) {
+static ta_status null_deserialize(void *datamodel, const ta_datamodel_start *start,
+                                  uint64_t *instance) {
     (void)datamodel;
-    (void)chart_context;
-    (void)variables;
-    (void)buffer;
-    (void)length;
+    (void)start;
     *instance = 1;
     return TA_OK;
 }

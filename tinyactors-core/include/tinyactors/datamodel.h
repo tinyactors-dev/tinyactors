@@ -96,6 +96,37 @@ enum {
     << 0 /* detach_event() materializes _event; core may free it */
 };
 
+/* One call into a datamodel for one instance: what every per-instance entry
+ * of the vtable takes first. `environment` is NULL for the entries that run
+ * outside a step (destroy, detach_event, assign_string, foreach_item,
+ * foreach_end, serialize, variable). */
+typedef struct ta_datamodel_call {
+    void *datamodel;
+    uint64_t instance;
+    ta_datamodel_environment *environment;
+} ta_datamodel_call;
+
+/* What a new instance starts from: create reads `init` (the invoke's or the
+ * spawn's data, 0 for none), deserialize reads `state` (the bytes serialize
+ * wrote). The system variables are supplied again on every start. */
+typedef struct ta_datamodel_start {
+    void *chart_context;
+    const ta_datamodel_system_variables *system_variables;
+    ta_payload init;
+    ta_bytes state;
+} ta_datamodel_start;
+
+/* A <foreach>: foreach_begin sets `iter` and `n` (the number of items);
+ * foreach_item binds item `i` to the locations `item` and `index` (index
+ * TA_NIL: none); foreach_end ends `iter`. */
+typedef struct ta_datamodel_loop {
+    uint64_t iter;
+    uint32_t n;
+    uint32_t i;
+    ta_expression item;
+    ta_expression index;
+} ta_datamodel_loop;
+
 typedef struct ta_datamodel_vtable {
     uint32_t size;
     uint32_t flags;
@@ -104,60 +135,44 @@ typedef struct ta_datamodel_vtable {
     ta_status (*chart_attach)(void *datamodel, const ta_datamodel_chart *chart,
                               void **chart_context);
     void (*chart_detach)(void *datamodel, void *chart_context);
-    ta_status (*create)(void *datamodel, void *chart_context,
-                        const ta_datamodel_system_variables *sv, ta_payload init,
-                        uint64_t *instance);
-    void (*destroy)(void *datamodel, uint64_t instance);
+    ta_status (*create)(void *datamodel, const ta_datamodel_start *start, uint64_t *instance);
+    void (*destroy)(const ta_datamodel_call *call);
 
-    ta_status (*init_data)(void *datamodel, uint64_t instance,
-                           ta_datamodel_environment *environment, uint32_t data_declaration);
-    ta_status (*bind_event)(void *datamodel, uint64_t instance,
-                            ta_datamodel_environment *environment, const ta_event_view *event);
-    void (*detach_event)(void *datamodel, uint64_t instance);
+    ta_status (*init_data)(const ta_datamodel_call *call, uint32_t data_declaration);
+    ta_status (*bind_event)(const ta_datamodel_call *call, const ta_event_view *event);
+    void (*detach_event)(const ta_datamodel_call *call);
 
-    ta_status (*eval_condition)(void *datamodel, uint64_t instance,
-                                ta_datamodel_environment *environment, ta_expression e, int *out);
-    ta_status (*eval_string)(void *datamodel, uint64_t instance,
-                             ta_datamodel_environment *environment, ta_expression e,
-                             ta_string_view *out);
-    ta_status (*assign)(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                        ta_expression loc, ta_expression value);
-    ta_status (*assign_string)(void *datamodel, uint64_t instance, ta_expression loc,
+    ta_status (*eval_condition)(const ta_datamodel_call *call, ta_expression e, int *out);
+    ta_status (*eval_string)(const ta_datamodel_call *call, ta_expression e, ta_string_view *out);
+    ta_status (*assign)(const ta_datamodel_call *call, ta_expression loc, ta_expression value);
+    ta_status (*assign_string)(const ta_datamodel_call *call, ta_expression loc,
                                ta_string_view value);
-    ta_status (*script)(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                        ta_expression e);
-    ta_status (*log)(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                     ta_expression e, ta_string_view *out);
+    ta_status (*script)(const ta_datamodel_call *call, ta_expression e);
+    ta_status (*log)(const ta_datamodel_call *call, ta_expression e, ta_string_view *out);
 
-    ta_status (*foreach_begin)(void *datamodel, uint64_t instance,
-                               ta_datamodel_environment *environment, ta_expression array,
-                               uint64_t *iter, uint32_t *n);
-    ta_status (*foreach_item)(void *datamodel, uint64_t instance, uint64_t iter, uint32_t i,
-                              ta_expression item, ta_expression index);
-    void (*foreach_end)(void *datamodel, uint64_t instance, uint64_t iter);
+    ta_status (*foreach_begin)(const ta_datamodel_call *call, ta_expression array,
+                               ta_datamodel_loop *loop);
+    ta_status (*foreach_item)(const ta_datamodel_call *call, const ta_datamodel_loop *loop);
+    void (*foreach_end)(const ta_datamodel_call *call, const ta_datamodel_loop *loop);
 
-    ta_status (*capture)(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                         const ta_datamodel_capture *spec, ta_payload *out);
+    ta_status (*capture)(const ta_datamodel_call *call, const ta_datamodel_capture *spec,
+                         ta_payload *out);
     void (*retain)(void *datamodel, ta_payload p);
     void (*release)(void *datamodel, ta_payload p);
 
-    ta_status (*custom)(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                        uint32_t custom_def);
+    ta_status (*custom)(const ta_datamodel_call *call, uint32_t custom_def);
 
     /* Hibernation (optional; present when `size` covers them and non-NULL).
      * serialize: write the instance's state — its variables and the bound
-     * _event, NOT the system variables — to buffer. Sets *length to the bytes
-     * needed; returns TA_ERROR_NO_MEMORY if capacity is too small (nothing changes),
-     * TA_ERROR_UNSUPPORTED if the state cannot be serialized (e.g. functions in
-     * the data). The core calls destroy right after a successful serialize.
-     * deserialize: create an instance from those bytes; the system variables
+     * _event, NOT the system variables — into `out` (ta_buffer: on
+     * TA_ERROR_NO_MEMORY out->length is what it needs and nothing changed),
+     * TA_ERROR_UNSUPPORTED if the state cannot be serialized (e.g. functions
+     * in the data). The core calls destroy right after a successful serialize.
+     * deserialize: create an instance from start->state; the system variables
      * are supplied again (same _sessionid/_name/_ioprocessors). Called only
      * at a stable point with the same chart context. */
-    ta_status (*serialize)(void *datamodel, uint64_t instance, void *buffer, size_t capacity,
-                           size_t *length);
-    ta_status (*deserialize)(void *datamodel, void *chart_context,
-                             const ta_datamodel_system_variables *sv, const void *buffer,
-                             size_t length, uint64_t *instance);
+    ta_status (*serialize)(const ta_datamodel_call *call, ta_buffer *out);
+    ta_status (*deserialize)(void *datamodel, const ta_datamodel_start *start, uint64_t *instance);
 
     /* Live migration (optional): called by ta_system_adopt after deserialize
      * when the state was written for an older version of the chart (the
@@ -166,8 +181,7 @@ typedef struct ta_datamodel_vtable {
      * drop variables the new chart does not declare. The core then
      * initializes the new chart's added <data> and raises
      * error.platform.upgrade with that payload as its data. */
-    ta_status (*migrate)(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                         ta_payload *bindings);
+    ta_status (*migrate)(const ta_datamodel_call *call, ta_payload *bindings);
 
     /* Neutral values (optional; docs/protocol.md, "Values"): event data
      * between systems, and in traces, is one CBOR item (RFC 8949): integers,
@@ -187,21 +201,18 @@ typedef struct ta_datamodel_vtable {
      * payload_serialize, and ta_system_adopt creates it again with
      * payload_deserialize (one reference), so an export blob is a value that
      * any datamodel host can adopt: another process, after a restart.
-     * Conventions as for serialize (*length = bytes needed, TA_ERROR_NO_MEMORY if capacity
-     * is too small, TA_ERROR_UNSUPPORTED if the value cannot be written).
+     * Conventions as for serialize (ta_buffer; TA_ERROR_UNSUPPORTED if the
+     * value cannot be written).
      * Without them, delayed-send payloads travel as handles: such a blob is
      * valid only in the process (datamodel host) that wrote it. */
-    ta_status (*payload_serialize)(void *datamodel, ta_payload p, void *buffer, size_t capacity,
-                                   size_t *length);
-    ta_status (*payload_deserialize)(void *datamodel, const void *buffer, size_t length,
-                                     ta_payload *out);
+    ta_status (*payload_serialize)(void *datamodel, ta_payload p, ta_buffer *out);
+    ta_status (*payload_deserialize)(void *datamodel, ta_bytes blob, ta_payload *out);
 
     /* A variable for inspection (optional; the actor.context request,
      * docs/requests.md): the value of the location `name` (a <data> id) in
      * `instance`, as a new payload (one reference). It must have no effect the
      * chart can see. TA_ERROR_INVALID when the instance has no such value. */
-    ta_status (*variable)(void *datamodel, uint64_t instance, ta_string_view name,
-                          ta_payload *out);
+    ta_status (*variable)(const ta_datamodel_call *call, ta_string_view name, ta_payload *out);
 } ta_datamodel_vtable;
 
 /* Binding of a datamodel implementation to a system. */

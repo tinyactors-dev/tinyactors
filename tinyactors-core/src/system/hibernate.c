@@ -296,9 +296,11 @@ static unsigned char *put_body(const ta_core *core, const ta_instance *instance,
 static ta_status put_datamodel(const ta_core *core, const ta_instance *instance, unsigned char *out,
                                size_t capacity, size_t fixed, size_t *dml) {
     const ta_datamodel_binding *binding = ta_core_datamodel(core, instance->chart);
-    ta_status status = binding->vtable->serialize(binding->datamodel, instance->datamodel,
-                                                  capacity > fixed ? out + fixed : (void *)0,
-                                                  capacity > fixed ? capacity - fixed : 0, dml);
+    ta_buffer state = {capacity > fixed ? out + fixed : (void *)0,
+                       capacity > fixed ? capacity - fixed : 0, 0};
+    ta_status status = binding->vtable->serialize(
+        &(ta_datamodel_call){binding->datamodel, instance->datamodel, 0}, &state);
+    *dml = state.length;
     return status == TA_ERROR_NO_MEMORY ? TA_OK : status; /* the caller compares sizes */
 }
 
@@ -357,9 +359,9 @@ static ta_status write_session(ta_system *system, uint32_t index, uint32_t root,
         if (event->payload && event->datamodel < core->datamodel_count &&
             datamodel_payload_bytes(&core->datamodels[event->datamodel])) {
             const ta_datamodel_binding *pb = &core->datamodels[event->datamodel];
-            size_t pl = 0;
-            status =
-                pb->vtable->payload_serialize(pb->datamodel, event->payload, (void *)0, 0, &pl);
+            ta_buffer probe = {(void *)0, 0, 0};
+            status = pb->vtable->payload_serialize(pb->datamodel, event->payload, &probe);
+            size_t pl = probe.length;
             if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
             if (pl >= TA_NIL) return TA_ERROR_UNSUPPORTED;
             timer_bytes += align4((uint32_t)pl);
@@ -405,7 +407,9 @@ static ta_status write_session(ta_system *system, uint32_t index, uint32_t root,
         size_t pl = 0;
         if (pb && datamodel_payload_bytes(pb)) { /* the value itself (sized above) */
             r.payload_kind = TP_BYTES;
-            pb->vtable->payload_serialize(pb->datamodel, event->payload, (void *)0, 0, &pl);
+            ta_buffer probe = {(void *)0, 0, 0};
+            pb->vtable->payload_serialize(pb->datamodel, event->payload, &probe);
+            pl = probe.length;
             r.payload_length = (uint32_t)pl;
         } else if (pb) { /* a handle: this process only */
             r.payload_kind = TP_HANDLE;
@@ -441,7 +445,9 @@ static ta_status write_session(ta_system *system, uint32_t index, uint32_t root,
         q = put_text(q, ta_shared_string_get(core, event->name), r.name_length);
         q = put_text(q, ta_shared_string_get(core, event->sendid), r.sendid_length);
         if (r.payload_kind == TP_BYTES) {
-            status = pb->vtable->payload_serialize(pb->datamodel, event->payload, q, pl, &pl);
+            ta_buffer value = {q, pl, 0};
+            status = pb->vtable->payload_serialize(pb->datamodel, event->payload, &value);
+            pl = value.length;
             if (status != TA_OK || pl != r.payload_length)
                 return status != TA_OK ? status : TA_ERROR_UNSUPPORTED;
             ta_memset(q + pl, 0, align4(r.payload_length) - pl);
@@ -481,7 +487,8 @@ static void unload(ta_system *system, uint32_t index) {
     if (instance->current_event != TA_NIL) ta_event_release(core, instance->current_event);
     for (uint32_t i = 0; i < chart_record->invoke_count; i++)
         ta_shared_string_release(core, ids[i]);
-    if (binding->vtable->destroy) binding->vtable->destroy(binding->datamodel, instance->datamodel);
+    if (binding->vtable->destroy)
+        binding->vtable->destroy(&(ta_datamodel_call){binding->datamodel, instance->datamodel, 0});
     ta_slab_free(&system->slab, actor->instance);
     actor->instance = chart;
     actor->state = TA_ACTOR_HIBERNATED;
@@ -692,9 +699,11 @@ static ta_status restore(ta_system *system, uint32_t index, uint32_t chart, cons
         ta_system_variables_buffer buffer;
         ta_datamodel_system_variables variables;
         ta_system_actor_variables(system, actor, &buffer, &variables);
-        status = binding->vtable->deserialize(binding->datamodel, core->chart_context[chart],
-                                              &variables, view->datamodel,
-                                              (size_t)view->datamodel_bytes, &instance->datamodel);
+        ta_datamodel_start start = {core->chart_context[chart],
+                                    &variables,
+                                    0,
+                                    {view->datamodel, (size_t)view->datamodel_bytes}};
+        status = binding->vtable->deserialize(binding->datamodel, &start, &instance->datamodel);
     }
     if (status != TA_OK) {
         for (uint32_t i = 0; i < chart_record->invoke_count; i++)
@@ -868,8 +877,8 @@ static ta_status arm_timers(ta_system *system, uint32_t index, uint32_t chart,
         if (r.payload_kind == TP_BYTES) { /* a new payload, ours */
             if (!datamodel_payload_bytes(binding)) return TA_ERROR_UNSUPPORTED;
             ta_payload payload = 0;
-            status = binding->vtable->payload_deserialize(binding->datamodel, tx[3],
-                                                          r.payload_length, &payload);
+            status = binding->vtable->payload_deserialize(
+                binding->datamodel, (ta_bytes){tx[3], r.payload_length}, &payload);
             if (status != TA_OK) return status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID;
             event->payload = payload;
             event->datamodel = core->chart_datamodel[chart];

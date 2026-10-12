@@ -33,12 +33,9 @@ ABI_CHECK(offsetof(ta_datamodel_ecmascript_config, abort_flag) >
               offsetof(ta_datamodel_ecmascript_config, realm),
           ecmascript_config_abort_last);
 ABI_CHECK(offsetof(ta_compile_options, size) == 0, compile_options_size_first);
-ABI_CHECK(offsetof(ta_compile_options, abort_flag) > offsetof(ta_compile_options, pad),
-          compile_options_abort_last);
 ABI_CHECK(offsetof(ta_compile_options, abort_flag) ==
-              (offsetof(ta_compile_options, pad) + 4 + sizeof(void *) - 1) / sizeof(void *) *
-                  sizeof(void *),
-          compile_options_abort_offset);
+              offsetof(ta_compile_options, resolve_context) + sizeof(void *),
+          compile_options_abort_last);
 ABI_CHECK(TA_ERROR_ABORTED == -9, status_aborted);
 ABI_CHECK(sizeof(ta_cbor_token) == 16, cbor_token_fixed);
 ABI_CHECK(offsetof(ta_cbor_token, value) == 8, cbor_token_value_offset);

@@ -218,59 +218,6 @@
         }
       }
     },
-    "ta_datamodel_compiler": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "name",
-          "type": "const char *"
-        },
-        {
-          "name": "context",
-          "type": "void *"
-        },
-        {
-          "name": "check",
-          "type": "ta_status (*)(void *, uint32_t, ta_string_view, ta_diagnostic *)"
-        },
-        {
-          "name": "emit_ahead_of_time",
-          "type": "ta_status (*)(void *, const void *, size_t, ta_allocator *, void **, size_t *)"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "name": 0,
-            "context": 8,
-            "check": 16,
-            "emit_ahead_of_time": 24
-          }
-        },
-        "aarch64": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "name": 0,
-            "context": 8,
-            "check": 16,
-            "emit_ahead_of_time": 24
-          }
-        },
-        "wasm32": {
-          "size": 16,
-          "align": 4,
-          "offsets": {
-            "name": 0,
-            "context": 4,
-            "check": 8,
-            "emit_ahead_of_time": 12
-          }
-        }
-      }
-    },
     "ta_compile_options": {
       "kind": "struct",
       "fields": [
@@ -295,25 +242,13 @@
           "type": "void *"
         },
         {
-          "name": "datamodel_compilers",
-          "type": "const ta_datamodel_compiler *"
-        },
-        {
-          "name": "datamodel_compiler_count",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
           "name": "abort_flag",
           "type": "const volatile int *"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 72,
+          "size": 56,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -321,14 +256,11 @@
             "alloc": 8,
             "resolve": 32,
             "resolve_context": 40,
-            "datamodel_compilers": 48,
-            "datamodel_compiler_count": 56,
-            "pad": 60,
-            "abort_flag": 64
+            "abort_flag": 48
           }
         },
         "aarch64": {
-          "size": 72,
+          "size": 56,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -336,14 +268,11 @@
             "alloc": 8,
             "resolve": 32,
             "resolve_context": 40,
-            "datamodel_compilers": 48,
-            "datamodel_compiler_count": 56,
-            "pad": 60,
-            "abort_flag": 64
+            "abort_flag": 48
           }
         },
         "wasm32": {
-          "size": 44,
+          "size": 32,
           "align": 4,
           "offsets": {
             "size": 0,
@@ -351,10 +280,7 @@
             "alloc": 8,
             "resolve": 20,
             "resolve_context": 24,
-            "datamodel_compilers": 28,
-            "datamodel_compiler_count": 32,
-            "pad": 36,
-            "abort_flag": 40
+            "abort_flag": 28
           }
         }
       }

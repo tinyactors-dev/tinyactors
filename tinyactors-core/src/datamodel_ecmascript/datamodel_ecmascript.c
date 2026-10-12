@@ -1211,9 +1211,11 @@ static JSValue instance_variables(ecmascript_instance *instance) {
                                            : JS_GetGlobalObject(instance->context);
 }
 
-static ta_status ecmascript_create(void *datamodel, void *chart_context,
-                                   const ta_datamodel_system_variables *variables, ta_payload init,
+static ta_status ecmascript_create(void *datamodel, const ta_datamodel_start *start_,
                                    uint64_t *out) {
+    void *chart_context = start_->chart_context;
+    const ta_datamodel_system_variables *variables = start_->system_variables;
+    ta_payload init = start_->init;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     ecmascript_chart *chart = (ecmascript_chart *)chart_context;
     /* freed sessions stay in their slot as non-live tombstones, threaded
@@ -1312,7 +1314,9 @@ static void instance_free(ta_datamodel_ecmascript *ecmascript, ecmascript_instan
     chart_unused(ecmascript, instance->chart_context);
 }
 
-static void ecmascript_destroy(void *datamodel, uint64_t handle) {
+static void ecmascript_destroy(const ta_datamodel_call *call) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     ecmascript_instance *instance = I(ecmascript, handle);
     if (!instance || !instance->live) return;
@@ -1437,8 +1441,10 @@ static ta_status ecmascript_assign_(void *datamodel, uint64_t handle,
     return status;
 }
 
-static ta_status ecmascript_assign_string(void *datamodel, uint64_t handle, ta_expression location,
+static ta_status ecmascript_assign_string(const ta_datamodel_call *call, ta_expression location,
                                           ta_string_view v) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     ENTER(ecmascript, handle, NULL);
     return assign_to(ecmascript, instance, location,
@@ -1513,8 +1519,14 @@ static ta_status ecmascript_foreach_begin_(void *datamodel, uint64_t handle,
     return TA_OK;
 }
 
-static ta_status ecmascript_foreach_item(void *datamodel, uint64_t handle, uint64_t iter,
-                                         uint32_t i, ta_expression item, ta_expression index) {
+static ta_status ecmascript_foreach_item(const ta_datamodel_call *call,
+                                         const ta_datamodel_loop *loop) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    uint64_t iter = loop->iter;
+    uint32_t i = loop->i;
+    ta_expression item = loop->item;
+    ta_expression index = loop->index;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     ENTER(ecmascript, handle, NULL);
     ecmascript_iterator *iterator = &ecmascript->iterations[iter - 1];
@@ -1528,9 +1540,10 @@ static ta_status ecmascript_foreach_item(void *datamodel, uint64_t handle, uint6
     return status;
 }
 
-static void ecmascript_foreach_end(void *datamodel, uint64_t handle, uint64_t iter) {
+static void ecmascript_foreach_end(const ta_datamodel_call *call, const ta_datamodel_loop *loop) {
+    void *datamodel = call->datamodel;
+    uint64_t iter = loop->iter;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
-    (void)handle;
     if (!iter || iter > ecmascript->iteration_count) return;
     ecmascript_iterator *iterator = &ecmascript->iterations[iter - 1];
     for (uint32_t i = 0; i < iterator->count; i++)
@@ -2377,8 +2390,12 @@ static void explain_session(ta_datamodel_ecmascript *ecmascript, ecmascript_inst
     }
 }
 
-static ta_status ecmascript_serialize(void *datamodel, uint64_t handle, void *buffer,
-                                      size_t capacity, size_t *length) {
+static ta_status ecmascript_serialize(const ta_datamodel_call *call, ta_buffer *out) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    void *buffer = out->pointer;
+    size_t capacity = out->capacity;
+    size_t *length = &out->length;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     ecmascript_instance *instance = I(ecmascript, handle);
     *length = 0;
@@ -2445,11 +2462,13 @@ static ta_status apply_value(ta_datamodel_ecmascript *ecmascript, ecmascript_ins
     return status;
 }
 
-static ta_status ecmascript_deserialize(void *datamodel, void *chart_context,
-                                        const ta_datamodel_system_variables *variables,
-                                        const void *buffer, size_t length, uint64_t *out) {
+static ta_status ecmascript_deserialize(void *datamodel, const ta_datamodel_start *start,
+                                        uint64_t *out) {
+    const void *buffer = start->state.pointer;
+    size_t length = start->state.length;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
-    ta_status status = ecmascript_create(datamodel, chart_context, variables, 0, out);
+    ta_datamodel_start fresh = {start->chart_context, start->system_variables, 0, {0, 0}};
+    ta_status status = ecmascript_create(datamodel, &fresh, out);
     if (status != TA_OK) return status;
     ecmascript_instance *instance = I(ecmascript, *out);
     JSContext *context = instance->context;
@@ -2458,14 +2477,16 @@ static ta_status ecmascript_deserialize(void *datamodel, void *chart_context,
     status = JS_IsException(o) ? TA_ERROR_INVALID : apply_value(ecmascript, instance, o, 0);
     clear_exception(context);
     JS_FreeValue(context, o);
-    if (status != TA_OK) ecmascript_destroy(datamodel, *out);
+    if (status != TA_OK) ecmascript_destroy(&(ta_datamodel_call){datamodel, *out, 0});
     return status;
 }
 
 /* Payloads in export blobs: the value itself, so another datamodel host
  * (another process, after a restart) can adopt the blob. */
-static ta_status ecmascript_payload_serialize(void *datamodel, ta_payload payload, void *buffer,
-                                              size_t capacity, size_t *length) {
+static ta_status ecmascript_payload_serialize(void *datamodel, ta_payload payload, ta_buffer *out) {
+    void *buffer = out->pointer;
+    size_t capacity = out->capacity;
+    size_t *length = &out->length;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     *length = 0;
     if (!payload || payload > ecmascript->payload_count || !ecmascript->payload_refs[payload - 1])
@@ -2488,8 +2509,9 @@ static ta_status ecmascript_payload_serialize(void *datamodel, ta_payload payloa
     return status;
 }
 
-static ta_status ecmascript_payload_deserialize(void *datamodel, const void *buffer, size_t length,
-                                                ta_payload *out) {
+static ta_status ecmascript_payload_deserialize(void *datamodel, ta_bytes blob, ta_payload *out) {
+    const void *buffer = blob.pointer;
+    size_t length = blob.length;
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
     *out = 0;
     JSContext *context = shared_realm(ecmascript);
@@ -3074,57 +3096,79 @@ ta_payload ta_datamodel_ecmascript_payload_eval(ta_datamodel_ecmascript *ecmascr
     ta_status st_ = call;                                                                          \
     es_->environment = prev_;                                                                      \
     return st_
-static ta_status ecmascript_init_data(void *datamodel, uint64_t handle,
-                                      ta_datamodel_environment *environment, uint32_t declaration) {
+static ta_status ecmascript_init_data(const ta_datamodel_call *call, uint32_t declaration) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_init_data_(datamodel, handle, environment, declaration));
 }
-static ta_status ecmascript_bind_event(void *datamodel, uint64_t handle,
-                                       ta_datamodel_environment *environment,
-                                       const ta_event_view *view) {
+static ta_status ecmascript_bind_event(const ta_datamodel_call *call, const ta_event_view *view) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_bind_event_(datamodel, handle, environment, view));
 }
-static ta_status ecmascript_condition(void *datamodel, uint64_t handle,
-                                      ta_datamodel_environment *environment,
-                                      ta_expression expression, int *out) {
+static ta_status ecmascript_condition(const ta_datamodel_call *call, ta_expression expression,
+                                      int *out) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_condition_(datamodel, handle, environment, expression, out));
 }
-static ta_status ecmascript_string(void *datamodel, uint64_t handle,
-                                   ta_datamodel_environment *environment, ta_expression expression,
+static ta_status ecmascript_string(const ta_datamodel_call *call, ta_expression expression,
                                    ta_string_view *out) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_string_(datamodel, handle, environment, expression, out));
 }
-static ta_status ecmascript_assign(void *datamodel, uint64_t handle,
-                                   ta_datamodel_environment *environment, ta_expression location,
+static ta_status ecmascript_assign(const ta_datamodel_call *call, ta_expression location,
                                    ta_expression value) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_assign_(datamodel, handle, environment, location, value));
 }
-static ta_status ecmascript_script(void *datamodel, uint64_t handle,
-                                   ta_datamodel_environment *environment,
-                                   ta_expression expression) {
+static ta_status ecmascript_script(const ta_datamodel_call *call, ta_expression expression) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_script_(datamodel, handle, environment, expression));
 }
-static ta_status ecmascript_log(void *datamodel, uint64_t handle,
-                                ta_datamodel_environment *environment, ta_expression expression,
+static ta_status ecmascript_log(const ta_datamodel_call *call, ta_expression expression,
                                 ta_string_view *out) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_log_(datamodel, handle, environment, expression, out));
 }
-static ta_status ecmascript_foreach_begin(void *datamodel, uint64_t handle,
-                                          ta_datamodel_environment *environment, ta_expression arr,
-                                          uint64_t *iter, uint32_t *n) {
+static ta_status ecmascript_foreach_begin(const ta_datamodel_call *call, ta_expression arr,
+                                          ta_datamodel_loop *loop) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
+    uint64_t *iter = &loop->iter;
+    uint32_t *n = &loop->n;
     WITH_ENVIRONMENT(ecmascript_foreach_begin_(datamodel, handle, environment, arr, iter, n));
 }
-static ta_status ecmascript_capture(void *datamodel, uint64_t handle,
-                                    ta_datamodel_environment *environment,
+static ta_status ecmascript_capture(const ta_datamodel_call *call,
                                     const ta_datamodel_capture *capture, ta_payload *out) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_capture_(datamodel, handle, environment, capture, out));
 }
-static ta_status ecmascript_migrate(void *datamodel, uint64_t handle,
-                                    ta_datamodel_environment *environment, ta_payload *bindings) {
+static ta_status ecmascript_migrate(const ta_datamodel_call *call, ta_payload *bindings) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     WITH_ENVIRONMENT(ecmascript_migrate_(datamodel, handle, environment, bindings));
 }
 
-static ta_status ecmascript_variable(void *datamodel, uint64_t handle, ta_string_view name,
+static ta_status ecmascript_variable(const ta_datamodel_call *call, ta_string_view name,
                                      ta_payload *out) {
+    void *datamodel = call->datamodel;
+    uint64_t handle = call->instance;
     *out = ta_datamodel_ecmascript_payload_eval((ta_datamodel_ecmascript *)datamodel, handle, name);
     return *out ? TA_OK : TA_ERROR_INVALID;
 }
@@ -3253,7 +3297,9 @@ ta_datamodel_ecmascript *ta_datamodel_ecmascript_new(const ta_datamodel_ecmascri
 void ta_datamodel_ecmascript_free(ta_datamodel_ecmascript *ecmascript) {
     if (!ecmascript) return;
     for (uint32_t i = 0; i < ecmascript->iteration_count; i++)
-        if (ecmascript->iterations[i].items) ecmascript_foreach_end(ecmascript, 0, (uint64_t)i + 1);
+        if (ecmascript->iterations[i].items)
+            ecmascript_foreach_end(&(ta_datamodel_call){ecmascript, 0, 0},
+                                   &(ta_datamodel_loop){(uint64_t)i + 1, 0, 0, 0, 0});
     for (uint32_t i = 0; i < ecmascript->payload_count; i++)
         if (ecmascript->payload_refs[i])
             JS_FreeValueRT(ecmascript->runtime, ecmascript->payloads[i]);

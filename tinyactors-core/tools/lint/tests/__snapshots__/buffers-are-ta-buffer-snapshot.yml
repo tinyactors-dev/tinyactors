@@ -108,3 +108,47 @@ snapshots:
       style: secondary
       start: 74
       end: 91
+  typedef struct v { ta_status (*load)(void *d, const void *buffer, size_t length); } v;:
+    labels:
+    - source: const void *buffer
+      style: primary
+      start: 46
+      end: 64
+    - source: (*load)
+      style: secondary
+      start: 29
+      end: 36
+    - source: (*load)(void *d, const void *buffer, size_t length)
+      style: secondary
+      start: 29
+      end: 80
+    - source: (void *d, const void *buffer, size_t length)
+      style: secondary
+      start: 36
+      end: 80
+    - source: size_t length
+      style: secondary
+      start: 66
+      end: 79
+  typedef struct v { ta_status (*serialize)(void *d, uint64_t i, void *buffer, size_t capacity); } v;:
+    labels:
+    - source: void *buffer
+      style: primary
+      start: 63
+      end: 75
+    - source: (*serialize)
+      style: secondary
+      start: 29
+      end: 41
+    - source: (*serialize)(void *d, uint64_t i, void *buffer, size_t capacity)
+      style: secondary
+      start: 29
+      end: 93
+    - source: (void *d, uint64_t i, void *buffer, size_t capacity)
+      style: secondary
+      start: 41
+      end: 93
+    - source: size_t capacity
+      style: secondary
+      start: 77
+      end: 92

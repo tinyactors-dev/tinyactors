@@ -3841,6 +3841,165 @@
         }
       }
     },
+    "ta_datamodel_call": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "datamodel",
+          "type": "void *"
+        },
+        {
+          "name": "instance",
+          "type": "uint64_t"
+        },
+        {
+          "name": "environment",
+          "type": "ta_datamodel_environment *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "datamodel": 0,
+            "instance": 8,
+            "environment": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "datamodel": 0,
+            "instance": 8,
+            "environment": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "datamodel": 0,
+            "instance": 8,
+            "environment": 16
+          }
+        }
+      }
+    },
+    "ta_datamodel_start": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "chart_context",
+          "type": "void *"
+        },
+        {
+          "name": "system_variables",
+          "type": "const ta_datamodel_system_variables *"
+        },
+        {
+          "name": "init",
+          "type": "ta_payload"
+        },
+        {
+          "name": "state",
+          "type": "ta_bytes"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "chart_context": 0,
+            "system_variables": 8,
+            "init": 16,
+            "state": 24
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "chart_context": 0,
+            "system_variables": 8,
+            "init": 16,
+            "state": 24
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "chart_context": 0,
+            "system_variables": 4,
+            "init": 8,
+            "state": 16
+          }
+        }
+      }
+    },
+    "ta_datamodel_loop": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "iter",
+          "type": "uint64_t"
+        },
+        {
+          "name": "n",
+          "type": "uint32_t"
+        },
+        {
+          "name": "i",
+          "type": "uint32_t"
+        },
+        {
+          "name": "item",
+          "type": "ta_expression"
+        },
+        {
+          "name": "index",
+          "type": "ta_expression"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "iter": 0,
+            "n": 8,
+            "i": 12,
+            "item": 16,
+            "index": 20
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "iter": 0,
+            "n": 8,
+            "i": 12,
+            "item": 16,
+            "index": 20
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "iter": 0,
+            "n": 8,
+            "i": 12,
+            "item": 16,
+            "index": 20
+          }
+        }
+      }
+    },
     "ta_datamodel_vtable": {
       "kind": "struct",
       "fields": [
@@ -3866,63 +4025,63 @@
         },
         {
           "name": "create",
-          "type": "ta_status (*)(void *, void *, const ta_datamodel_system_variables *, ta_payload, uint64_t *)"
+          "type": "ta_status (*)(void *, const ta_datamodel_start *, uint64_t *)"
         },
         {
           "name": "destroy",
-          "type": "void (*)(void *, uint64_t)"
+          "type": "void (*)(const ta_datamodel_call *)"
         },
         {
           "name": "init_data",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, uint32_t)"
+          "type": "ta_status (*)(const ta_datamodel_call *, uint32_t)"
         },
         {
           "name": "bind_event",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, const ta_event_view *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, const ta_event_view *)"
         },
         {
           "name": "detach_event",
-          "type": "void (*)(void *, uint64_t)"
+          "type": "void (*)(const ta_datamodel_call *)"
         },
         {
           "name": "eval_condition",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, int *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_expression, int *)"
         },
         {
           "name": "eval_string",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, ta_string_view *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_expression, ta_string_view *)"
         },
         {
           "name": "assign",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, ta_expression)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_expression, ta_expression)"
         },
         {
           "name": "assign_string",
-          "type": "ta_status (*)(void *, uint64_t, ta_expression, ta_string_view)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_expression, ta_string_view)"
         },
         {
           "name": "script",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_expression)"
         },
         {
           "name": "log",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, ta_string_view *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_expression, ta_string_view *)"
         },
         {
           "name": "foreach_begin",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_expression, uint64_t *, uint32_t *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_expression, ta_datamodel_loop *)"
         },
         {
           "name": "foreach_item",
-          "type": "ta_status (*)(void *, uint64_t, uint64_t, uint32_t, ta_expression, ta_expression)"
+          "type": "ta_status (*)(const ta_datamodel_call *, const ta_datamodel_loop *)"
         },
         {
           "name": "foreach_end",
-          "type": "void (*)(void *, uint64_t, uint64_t)"
+          "type": "void (*)(const ta_datamodel_call *, const ta_datamodel_loop *)"
         },
         {
           "name": "capture",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, const ta_datamodel_capture *, ta_payload *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, const ta_datamodel_capture *, ta_payload *)"
         },
         {
           "name": "retain",
@@ -3934,19 +4093,19 @@
         },
         {
           "name": "custom",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, uint32_t)"
+          "type": "ta_status (*)(const ta_datamodel_call *, uint32_t)"
         },
         {
           "name": "serialize",
-          "type": "ta_status (*)(void *, uint64_t, void *, size_t, size_t *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_buffer *)"
         },
         {
           "name": "deserialize",
-          "type": "ta_status (*)(void *, void *, const ta_datamodel_system_variables *, const void *, size_t, uint64_t *)"
+          "type": "ta_status (*)(void *, const ta_datamodel_start *, uint64_t *)"
         },
         {
           "name": "migrate",
-          "type": "ta_status (*)(void *, uint64_t, ta_datamodel_environment *, ta_payload *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_payload *)"
         },
         {
           "name": "to_wire",
@@ -3958,15 +4117,15 @@
         },
         {
           "name": "payload_serialize",
-          "type": "ta_status (*)(void *, ta_payload, void *, size_t, size_t *)"
+          "type": "ta_status (*)(void *, ta_payload, ta_buffer *)"
         },
         {
           "name": "payload_deserialize",
-          "type": "ta_status (*)(void *, const void *, size_t, ta_payload *)"
+          "type": "ta_status (*)(void *, ta_bytes, ta_payload *)"
         },
         {
           "name": "variable",
-          "type": "ta_status (*)(void *, uint64_t, ta_string_view, ta_payload *)"
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_string_view, ta_payload *)"
         }
       ],
       "layout": {

@@ -121,9 +121,9 @@ static void release_workspace(kernel_context *kernel) {
     while (workspace->foreach_top) {
         workspace->foreach_top--;
         if (kernel->datamodel->vtable->foreach_end)
-            kernel->datamodel->vtable->foreach_end(kernel->datamodel->datamodel,
-                                                   kernel->instance->datamodel,
-                                                   frame[workspace->foreach_top].iteration);
+            kernel->datamodel->vtable->foreach_end(
+                &(ta_datamodel_call){kernel->datamodel->datamodel, kernel->instance->datamodel, 0},
+                &(ta_datamodel_loop){frame[workspace->foreach_top].iteration, 0, 0, 0, 0});
     }
     ta_trace_context_release(kernel->core, workspace->trace);
     ta_pool_free(kernel->core->workspaces, kernel->instance->workspace);
@@ -380,11 +380,13 @@ static void begin_macrostep(ta_core *core, ta_instance *instance, uint32_t event
 
 static int datamodel_condition(kernel_context *kernel, uint32_t e) {
     int v = 0;
-    ta_status status = kernel->datamodel->vtable->eval_condition
-                           ? kernel->datamodel->vtable->eval_condition(kernel->datamodel->datamodel,
-                                                                       kernel->instance->datamodel,
-                                                                       &kernel->environment, e, &v)
-                           : TA_ERROR_EXECUTION;
+    ta_status status =
+        kernel->datamodel->vtable->eval_condition
+            ? kernel->datamodel->vtable->eval_condition(
+                  &(ta_datamodel_call){kernel->datamodel->datamodel, kernel->instance->datamodel,
+                                       &kernel->environment},
+                  e, &v)
+            : TA_ERROR_EXECUTION;
     charge(kernel);
     if (status != TA_OK) {
         error_exec(kernel);
@@ -396,11 +398,13 @@ static int datamodel_condition(kernel_context *kernel, uint32_t e) {
 static ta_status datamodel_string(kernel_context *kernel, uint32_t e, ta_string_view *out) {
     out->pointer = (const char *)0;
     out->length = 0;
-    ta_status status = kernel->datamodel->vtable->eval_string
-                           ? kernel->datamodel->vtable->eval_string(kernel->datamodel->datamodel,
-                                                                    kernel->instance->datamodel,
-                                                                    &kernel->environment, e, out)
-                           : TA_ERROR_EXECUTION;
+    ta_status status =
+        kernel->datamodel->vtable->eval_string
+            ? kernel->datamodel->vtable->eval_string(
+                  &(ta_datamodel_call){kernel->datamodel->datamodel, kernel->instance->datamodel,
+                                       &kernel->environment},
+                  e, out)
+            : TA_ERROR_EXECUTION;
     charge(kernel);
     return status;
 }
@@ -417,11 +421,13 @@ static ta_status datamodel_capture(kernel_context *kernel, uint32_t capacity, ui
     capture_spec.content = capture->content;
     capture_spec.namelist = kernel->core->image_view.u32 + capture->namelist_offset;
     capture_spec.params = kernel->core->image_view.u32 + capture->params_offset;
-    ta_status status = kernel->datamodel->vtable->capture
-                           ? kernel->datamodel->vtable->capture(
-                                 kernel->datamodel->datamodel, kernel->instance->datamodel,
-                                 &kernel->environment, &capture_spec, out)
-                           : TA_ERROR_EXECUTION;
+    ta_status status =
+        kernel->datamodel->vtable->capture
+            ? kernel->datamodel->vtable->capture(&(ta_datamodel_call){kernel->datamodel->datamodel,
+                                                                      kernel->instance->datamodel,
+                                                                      &kernel->environment},
+                                                 &capture_spec, out)
+            : TA_ERROR_EXECUTION;
     charge(kernel);
     return status;
 }
@@ -432,11 +438,13 @@ static void datamodel_release(struct kernel_context *kernel, ta_payload payload)
 }
 
 static void init_data(kernel_context *kernel, uint32_t d) {
-    ta_status status = kernel->datamodel->vtable->init_data
-                           ? kernel->datamodel->vtable->init_data(kernel->datamodel->datamodel,
-                                                                  kernel->instance->datamodel,
-                                                                  &kernel->environment, d)
-                           : TA_OK;
+    ta_status status =
+        kernel->datamodel->vtable->init_data
+            ? kernel->datamodel->vtable->init_data(
+                  &(ta_datamodel_call){kernel->datamodel->datamodel, kernel->instance->datamodel,
+                                       &kernel->environment},
+                  d)
+            : TA_OK;
     charge(kernel);
     if (status != TA_OK) error_exec(kernel);
 }
@@ -452,8 +460,8 @@ static void bind_event(ta_core *core, ta_instance *instance, uint32_t event) {
         ta_event_view view;
         struct ta_datamodel_environment environment = {core, instance, 0};
         ta_event_view_of(core, event, &view);
-        (void)binding->vtable->bind_event(binding->datamodel, instance->datamodel, &environment,
-                                          &view);
+        (void)binding->vtable->bind_event(
+            &(ta_datamodel_call){binding->datamodel, instance->datamodel, &environment}, &view);
     }
 }
 
@@ -462,8 +470,8 @@ static void maybe_detach(kernel_context *kernel) {
         !(kernel->datamodel->vtable->flags & TA_DATAMODEL_EVENT_DETACHABLE))
         return;
     if (kernel->datamodel->vtable->detach_event)
-        kernel->datamodel->vtable->detach_event(kernel->datamodel->datamodel,
-                                                kernel->instance->datamodel);
+        kernel->datamodel->vtable->detach_event(
+            &(ta_datamodel_call){kernel->datamodel->datamodel, kernel->instance->datamodel, 0});
     ta_event_release(kernel->core, kernel->instance->current_event);
     kernel->instance->current_event = TA_NIL;
     kernel->instance->flags |= INSTANCE_FLAG_DETACHED;
@@ -837,9 +845,9 @@ static void abort_block(kernel_context *kernel) {
     while (kernel->workspace->foreach_top) {
         kernel->workspace->foreach_top--;
         if (kernel->datamodel->vtable->foreach_end)
-            kernel->datamodel->vtable->foreach_end(kernel->datamodel->datamodel,
-                                                   kernel->instance->datamodel,
-                                                   frame[kernel->workspace->foreach_top].iteration);
+            kernel->datamodel->vtable->foreach_end(
+                &(ta_datamodel_call){kernel->datamodel->datamodel, kernel->instance->datamodel, 0},
+                &(ta_datamodel_loop){frame[kernel->workspace->foreach_top].iteration, 0, 0, 0, 0});
     }
     kernel->workspace->instruction = kernel->workspace->block_end;
 }
@@ -1087,8 +1095,9 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
         ta_string_view v = ta_shared_string_get(core, sendid);
         ta_status assign_status = kernel->datamodel->vtable->assign_string
                                       ? kernel->datamodel->vtable->assign_string(
-                                            kernel->datamodel->datamodel,
-                                            kernel->instance->datamodel, send->idlocation, v)
+                                            &(ta_datamodel_call){kernel->datamodel->datamodel,
+                                                                 kernel->instance->datamodel, 0},
+                                            send->idlocation, v)
                                       : TA_ERROR_EXECUTION;
         if (assign_status != TA_OK) {
             status = SEND_ERROR_EXECUTION;
@@ -1182,8 +1191,9 @@ static void trace_assign(kernel_context *kernel, uint32_t location) {
         capture.content = location;
         ta_payload value = 0;
         uint32_t charge_before = kernel->environment.charge;
-        if (kernel->datamodel->vtable->capture(kernel->datamodel->datamodel,
-                                               kernel->instance->datamodel, &kernel->environment,
+        if (kernel->datamodel->vtable->capture(&(ta_datamodel_call){kernel->datamodel->datamodel,
+                                                                    kernel->instance->datamodel,
+                                                                    &kernel->environment},
                                                &capture, &value) == TA_OK &&
             value) {
             assign->payload = value;
@@ -1260,7 +1270,8 @@ static uint32_t vm(kernel_context *kernel) {
         }
         case TA_OPCODE_ASSIGN:
             status = vtable->assign
-                         ? vtable->assign(datamodel, di, &kernel->environment, w[0], w[1])
+                         ? vtable->assign(&(ta_datamodel_call){datamodel, di, &kernel->environment},
+                                          w[0], w[1])
                          : TA_ERROR_EXECUTION;
             charge(kernel);
             if (status != TA_OK) {
@@ -1272,8 +1283,10 @@ static uint32_t vm(kernel_context *kernel) {
             }
             break;
         case TA_OPCODE_SCRIPT:
-            status = vtable->script ? vtable->script(datamodel, di, &kernel->environment, w[0])
-                                    : TA_ERROR_EXECUTION;
+            status = vtable->script
+                         ? vtable->script(&(ta_datamodel_call){datamodel, di, &kernel->environment},
+                                          w[0])
+                         : TA_ERROR_EXECUTION;
             charge(kernel);
             if (status != TA_OK) {
                 error_exec(kernel);
@@ -1285,8 +1298,11 @@ static uint32_t vm(kernel_context *kernel) {
         case TA_OPCODE_LOG: {
             ta_string_view text = {(const char *)0, 0};
             if (w[1] != TA_NIL) {
-                status = vtable->log ? vtable->log(datamodel, di, &kernel->environment, w[1], &text)
-                                     : TA_ERROR_EXECUTION;
+                status =
+                    vtable->log
+                        ? vtable->log(&(ta_datamodel_call){datamodel, di, &kernel->environment},
+                                      w[1], &text)
+                        : TA_ERROR_EXECUTION;
                 charge(kernel);
                 if (status != TA_OK) {
                     error_exec(kernel);
@@ -1311,12 +1327,14 @@ static uint32_t vm(kernel_context *kernel) {
                 core->out.fault = 1;
                 return TA_STEP_FAULT;
             }
-            uint64_t iter = 0;
-            uint32_t n = 0;
+            ta_datamodel_loop loop = {0, 0, 0, TA_NIL, TA_NIL};
             status =
                 vtable->foreach_begin
-                    ? vtable->foreach_begin(datamodel, di, &kernel->environment, w[0], &iter, &n)
+                    ? vtable->foreach_begin(
+                          &(ta_datamodel_call){datamodel, di, &kernel->environment}, w[0], &loop)
                     : TA_ERROR_EXECUTION;
+            uint64_t iter = loop.iter;
+            uint32_t n = loop.n;
             charge(kernel);
             if (status != TA_OK) {
                 error_exec(kernel);
@@ -1324,7 +1342,9 @@ static uint32_t vm(kernel_context *kernel) {
                 break;
             }
             if (n == 0) {
-                if (vtable->foreach_end) vtable->foreach_end(datamodel, di, iter);
+                if (vtable->foreach_end)
+                    vtable->foreach_end(&(ta_datamodel_call){datamodel, di, 0},
+                                        &(ta_datamodel_loop){iter, 0, 0, 0, 0});
                 kernel->workspace->instruction = w[3];
                 break;
             }
@@ -1336,8 +1356,10 @@ static uint32_t vm(kernel_context *kernel) {
             frame->body = p + 5;
             frame->item = w[1];
             frame->index = w[2];
-            status = vtable->foreach_item ? vtable->foreach_item(datamodel, di, iter, 0, w[1], w[2])
-                                          : TA_ERROR_EXECUTION;
+            status = vtable->foreach_item
+                         ? vtable->foreach_item(&(ta_datamodel_call){datamodel, di, 0},
+                                                &(ta_datamodel_loop){iter, 0, 0, w[1], w[2]})
+                         : TA_ERROR_EXECUTION;
             if (status != TA_OK) {
                 error_exec(kernel);
                 abort_block(kernel);
@@ -1350,10 +1372,12 @@ static uint32_t vm(kernel_context *kernel) {
             ta_foreach_frame *frame =
                 &current_foreach_frame(kernel)[kernel->workspace->foreach_top - 1];
             if (++frame->i < frame->count) {
-                status = vtable->foreach_item
-                             ? vtable->foreach_item(datamodel, di, frame->iteration, frame->i,
-                                                    frame->item, frame->index)
-                             : TA_ERROR_EXECUTION;
+                status =
+                    vtable->foreach_item
+                        ? vtable->foreach_item(&(ta_datamodel_call){datamodel, di, 0},
+                                               &(ta_datamodel_loop){frame->iteration, 0, frame->i,
+                                                                    frame->item, frame->index})
+                        : TA_ERROR_EXECUTION;
                 if (status != TA_OK) {
                     error_exec(kernel);
                     abort_block(kernel);
@@ -1361,15 +1385,19 @@ static uint32_t vm(kernel_context *kernel) {
                 }
                 kernel->workspace->instruction = w[0];
             } else {
-                if (vtable->foreach_end) vtable->foreach_end(datamodel, di, frame->iteration);
+                if (vtable->foreach_end)
+                    vtable->foreach_end(&(ta_datamodel_call){datamodel, di, 0},
+                                        &(ta_datamodel_loop){frame->iteration, 0, 0, 0, 0});
                 kernel->workspace->foreach_top--;
                 kernel->workspace->instruction = p + 2;
             }
             break;
         }
         case TA_OPCODE_CUSTOM:
-            status = vtable->custom ? vtable->custom(datamodel, di, &kernel->environment, w[0])
-                                    : TA_ERROR_EXECUTION;
+            status = vtable->custom
+                         ? vtable->custom(&(ta_datamodel_call){datamodel, di, &kernel->environment},
+                                          w[0])
+                         : TA_ERROR_EXECUTION;
             charge(kernel);
             if (status != TA_OK) {
                 error_exec(kernel);
@@ -1435,7 +1463,8 @@ static uint32_t start_invoke(kernel_context *kernel, uint32_t slot) {
         if (invoke->idlocation != TA_NIL) {
             ta_status status = kernel->datamodel->vtable->assign_string
                                    ? kernel->datamodel->vtable->assign_string(
-                                         kernel->datamodel->datamodel, kernel->instance->datamodel,
+                                         &(ta_datamodel_call){kernel->datamodel->datamodel,
+                                                              kernel->instance->datamodel, 0},
                                          invoke->idlocation, ta_shared_string_get(core, id))
                                    : TA_ERROR_EXECUTION;
             if (status != TA_OK) goto err;
@@ -1996,8 +2025,10 @@ ta_status ta_core_instance_init(ta_core *core, ta_instance *instance, uint32_t c
         ids[i] = TA_NIL;
     const ta_datamodel_binding *binding = ta_core_datamodel(core, chart);
     if (binding->vtable->create) {
-        ta_status status = binding->vtable->create(binding->datamodel, core->chart_context[chart],
-                                                   variables, init, &instance->datamodel);
+        ta_status status = binding->vtable->create(
+            binding->datamodel,
+            &(ta_datamodel_start){core->chart_context[chart], variables, init, {0, 0}},
+            &instance->datamodel);
         if (status != TA_OK) return status;
     } else if (init && binding->vtable->release) {
         binding->vtable->release(binding->datamodel, init);
@@ -2023,7 +2054,8 @@ void ta_core_instance_deinit(ta_core *core, ta_instance *instance) {
     ta_trace_context_release(core, instance->trace);
     instance->trace = TA_NIL;
     if (kernel->datamodel->vtable->destroy)
-        kernel->datamodel->vtable->destroy(kernel->datamodel->datamodel, instance->datamodel);
+        kernel->datamodel->vtable->destroy(
+            &(ta_datamodel_call){kernel->datamodel->datamodel, instance->datamodel, 0});
     instance->datamodel = 0;
     instance->phase = PHASE_DONE;
 }
@@ -2099,7 +2131,8 @@ ta_status ta_core_datamodel_migrate(ta_core *core, ta_instance *instance, ta_pay
     if (vtable->size < offsetof(ta_datamodel_vtable, migrate) + sizeof vtable->migrate ||
         !vtable->migrate)
         return TA_OK;
-    return vtable->migrate(binding->datamodel, instance->datamodel, &environment, bindings);
+    return vtable->migrate(
+        &(ta_datamodel_call){binding->datamodel, instance->datamodel, &environment}, bindings);
 }
 
 int ta_core_in_state(const ta_core *core, ta_instance *instance, uint32_t state) {

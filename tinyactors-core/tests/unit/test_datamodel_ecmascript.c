@@ -558,7 +558,7 @@ static void test_snapshot_isolated(void) {
     written = (ta_buffer){NULL, 0, 0};
     CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(ecmascript2, &written), TA_ERROR_NO_MEMORY);
     length = written.length;
-    vtable->destroy(ecmascript2, actor_info.datamodel_instance);
+    vtable->destroy(&(ta_datamodel_call){ecmascript2, actor_info.datamodel_instance, 0});
     vtable->chart_detach(ecmascript2, cc);
     ta_datamodel_ecmascript_free(ecmascript2);
     free(snap);

@@ -52,16 +52,15 @@ typedef struct world {
 
 static world *current;
 
-static ta_status assign(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                        ta_expression location, ta_expression value) {
+static ta_status assign(const ta_datamodel_call *call, ta_expression location,
+                        ta_expression value) {
     if (current->probe) {
         current->probe = 0;
         unsigned char bytes[64];
         ta_buffer out = {bytes, sizeof bytes, 0};
         current->during_run = ta_host_traces(current->host, &out);
     }
-    return ta_datamodel_ecmascript_vtable()->assign(datamodel, instance, environment, location,
-                                                     value);
+    return ta_datamodel_ecmascript_vtable()->assign(call, location, value);
 }
 
 /* telemetry: NULL for a host without an encoder */

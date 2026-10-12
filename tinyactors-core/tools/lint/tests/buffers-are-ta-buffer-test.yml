@@ -8,7 +8,11 @@ valid:
   - "TA_API void ta_wasm_free(void *pointer, size_t size, size_t alignment);"
   - "TA_API ta_bytes ta_image_bytes(const ta_image *image);"
   - "TA_API const char *ta_name(const ta_image *image, uint32_t index);"
+  - "typedef struct v { ta_status (*serialize)(const ta_datamodel_call *call, ta_buffer *out); } v;"
+  - "typedef struct ta_allocator { void *(*alloc)(void *context, size_t size, size_t align); void (*free)(void *context, void *ptr, size_t size); } ta_allocator;"
 invalid:
+  - "typedef struct v { ta_status (*serialize)(void *d, uint64_t i, void *buffer, size_t capacity); } v;"
+  - "typedef struct v { ta_status (*load)(void *d, const void *buffer, size_t length); } v;"
   - "TA_API ta_status ta_host_snapshot(ta_host *h, void *buffer, size_t capacity);"
   - "TA_API uint32_t ta_address_name_decode(ta_string_view name, char *buffer, uint32_t capacity);"
   - "TA_API ta_status ta_actor_wake(ta_system *system, const void *blob, size_t length);"

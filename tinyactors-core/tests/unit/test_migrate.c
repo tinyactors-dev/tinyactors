@@ -594,11 +594,10 @@ static void test_session_tree(void) {
  * leaves the system as it was and the blob intact, payloads included. */
 static const ta_datamodel_vtable *real_vt;
 static int deser_calls, deser_fail_at;
-static ta_status failing_deserialize(void *datamodel, void *chart_context,
-                                     const ta_datamodel_system_variables *variables,
-                                     const void *buffer, size_t length, uint64_t *out) {
+static ta_status failing_deserialize(void *datamodel, const ta_datamodel_start *start,
+                                     uint64_t *out) {
     if (++deser_calls == deser_fail_at) return TA_ERROR_NO_MEMORY;
-    return real_vt->deserialize(datamodel, chart_context, variables, buffer, length, out);
+    return real_vt->deserialize(datamodel, start, out);
 }
 
 static void test_session_tree_rollback(void) {

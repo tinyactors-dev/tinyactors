@@ -44,3 +44,39 @@ snapshots:
       style: secondary
       start: 24
       end: 74
+  typedef struct v { ta_status (*eval)(void *d, uint64_t i, ta_expression e, int *out); } v;:
+    labels:
+    - source: (*eval)(void *d, uint64_t i, ta_expression e, int *out)
+      style: primary
+      start: 29
+      end: 84
+    - source: (*eval)
+      style: secondary
+      start: 29
+      end: 36
+    - source: int *out
+      style: secondary
+      start: 75
+      end: 83
+    - source: (void *d, uint64_t i, ta_expression e, int *out)
+      style: secondary
+      start: 36
+      end: 84
+  typedef ta_status (*ta_resolve_function)(void *context, int a, int b, int c);:
+    labels:
+    - source: (*ta_resolve_function)(void *context, int a, int b, int c)
+      style: primary
+      start: 18
+      end: 76
+    - source: (*ta_resolve_function)
+      style: secondary
+      start: 18
+      end: 40
+    - source: int c
+      style: secondary
+      start: 70
+      end: 75
+    - source: (void *context, int a, int b, int c)
+      style: secondary
+      start: 40
+      end: 76

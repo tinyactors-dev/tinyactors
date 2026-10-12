@@ -39,29 +39,16 @@ typedef struct ta_resolve_request {
 typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request *request,
                                          ta_source *out);
 
-/* Optional datamodel compile-time hook: validate expressions and emit an AOT
- * section (e.g. generated C, bytecode) keyed by the datamodel name. */
-typedef struct ta_datamodel_compiler {
-    const char *name;
-    void *context;
-    ta_status (*check)(void *context, uint32_t kind, ta_string_view source,
-                       ta_diagnostic *diagnostic);
-    ta_status (*emit_ahead_of_time)(void *context, const void *image, size_t length,
-                                    ta_allocator *a, void **out, size_t *out_length);
-} ta_datamodel_compiler;
-
 enum { TA_COMPILE_STRIP_DEBUG = 1u << 0, TA_COMPILE_WERROR = 1u << 1 };
 #define TA_COMPILE_MAX_CONTENT_NESTING 64u
 
 typedef struct ta_compile_options {
-    uint32_t size; /* sizeof(ta_compile_options); fields past `pad` are read only if covered */
+    uint32_t size; /* sizeof(ta_compile_options); fields past `resolve_context` are read only if
+                      covered */
     uint32_t flags;
     ta_allocator alloc;
     ta_resolve_function resolve;
     void *resolve_context;
-    const ta_datamodel_compiler *datamodel_compilers;
-    uint32_t datamodel_compiler_count;
-    uint32_t pad;
     /* A flag the host sets asynchronously to stop compiling (e.g. a
      * database's pending-interrupt flag). Polled at least once per markup
      * token, state, transition and executable-content element; once it reads

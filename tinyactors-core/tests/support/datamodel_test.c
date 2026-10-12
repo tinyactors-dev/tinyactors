@@ -779,8 +779,10 @@ static ta_status t_attach(void *d, const ta_datamodel_chart *chart, void **conte
     return TA_OK;
 }
 
-static ta_status t_create(void *d, void *context, const ta_datamodel_system_variables *variables,
-                          ta_payload init, uint64_t *out) {
+static ta_status t_create(void *d, const ta_datamodel_start *start_, uint64_t *out) {
+    void *context = start_->chart_context;
+    const ta_datamodel_system_variables *variables = start_->system_variables;
+    ta_payload init = start_->init;
     datamodel_test *datamodel = (datamodel_test *)d;
     test_instance *instance = (test_instance *)A(datamodel, sizeof *instance);
     instance->live = 1;
@@ -830,12 +832,16 @@ static ta_status t_create(void *d, void *context, const ta_datamodel_system_vari
     return TA_OK;
 }
 
-static void t_destroy(void *d, uint64_t h) {
+static void t_destroy(const ta_datamodel_call *call) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
     I((datamodel_test *)d, h)->live = 0;
 }
 
-static ta_status t_init_data(void *d, uint64_t h, ta_datamodel_environment *environment,
-                             uint32_t declaration) {
+static ta_status t_init_data(const ta_datamodel_call *call, uint32_t declaration) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     datamodel_test *datamodel = (datamodel_test *)d;
     test_instance *instance = I(datamodel, h);
     ta_data_info data_info;
@@ -868,9 +874,9 @@ static ta_status t_init_data(void *d, uint64_t h, ta_datamodel_environment *envi
     return TA_OK;
 }
 
-static ta_status t_bind_event(void *d, uint64_t h, ta_datamodel_environment *environment,
-                              const ta_event_view *view) {
-    (void)environment;
+static ta_status t_bind_event(const ta_datamodel_call *call, const ta_event_view *view) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
     datamodel_test *datamodel = (datamodel_test *)d;
     test_instance *instance = I(datamodel, h);
     test_value *o = mk(datamodel, V_OBJ);
@@ -895,8 +901,10 @@ static ta_status t_bind_event(void *d, uint64_t h, ta_datamodel_environment *env
     return TA_OK;
 }
 
-static ta_status t_condition(void *d, uint64_t h, ta_datamodel_environment *environment,
-                             ta_expression expression, int *out) {
+static ta_status t_condition(const ta_datamodel_call *call, ta_expression expression, int *out) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     int error;
     test_value *value = eval_expression((datamodel_test *)d, I((datamodel_test *)d, h), environment,
                                         expression, &error);
@@ -905,8 +913,11 @@ static ta_status t_condition(void *d, uint64_t h, ta_datamodel_environment *envi
     return TA_OK;
 }
 
-static ta_status t_string(void *d, uint64_t h, ta_datamodel_environment *environment,
-                          ta_expression expression, ta_string_view *out) {
+static ta_status t_string(const ta_datamodel_call *call, ta_expression expression,
+                          ta_string_view *out) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     datamodel_test *datamodel = (datamodel_test *)d;
     int error;
     test_value *value =
@@ -929,8 +940,11 @@ static ta_status assign_value(datamodel_test *datamodel, test_instance *instance
     return TA_OK;
 }
 
-static ta_status t_assign(void *d, uint64_t h, ta_datamodel_environment *environment,
-                          ta_expression location, ta_expression expression) {
+static ta_status t_assign(const ta_datamodel_call *call, ta_expression location,
+                          ta_expression expression) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     datamodel_test *datamodel = (datamodel_test *)d;
     test_instance *instance = I(datamodel, h);
     int error;
@@ -939,14 +953,19 @@ static ta_status t_assign(void *d, uint64_t h, ta_datamodel_environment *environ
     return assign_value(datamodel, instance, environment, location, x, 0);
 }
 
-static ta_status t_assign_string(void *d, uint64_t h, ta_expression location, ta_string_view v) {
+static ta_status t_assign_string(const ta_datamodel_call *call, ta_expression location,
+                                 ta_string_view v) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
     datamodel_test *datamodel = (datamodel_test *)d;
     return assign_value(datamodel, I(datamodel, h), NULL, location,
                         mkstr(datamodel, v.pointer, v.length), 0);
 }
 
-static ta_status t_script(void *d, uint64_t h, ta_datamodel_environment *environment,
-                          ta_expression expression) {
+static ta_status t_script(const ta_datamodel_call *call, ta_expression expression) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     datamodel_test *datamodel = (datamodel_test *)d;
     test_instance *instance = I(datamodel, h);
     test_parser parser;
@@ -959,13 +978,18 @@ static ta_status t_script(void *d, uint64_t h, ta_datamodel_environment *environ
     return parser.error ? TA_ERROR_EXECUTION : TA_OK;
 }
 
-static ta_status t_log(void *d, uint64_t h, ta_datamodel_environment *environment,
-                       ta_expression expression, ta_string_view *out) {
-    return t_string(d, h, environment, expression, out);
+static ta_status t_log(const ta_datamodel_call *call, ta_expression expression,
+                       ta_string_view *out) {
+    return t_string(call, expression, out);
 }
 
-static ta_status t_foreach_begin(void *d, uint64_t h, ta_datamodel_environment *environment,
-                                 ta_expression arr, uint64_t *iter, uint32_t *n) {
+static ta_status t_foreach_begin(const ta_datamodel_call *call, ta_expression arr,
+                                 ta_datamodel_loop *loop) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
+    ta_datamodel_environment *environment = call->environment;
+    uint64_t *iter = &loop->iter;
+    uint32_t *n = &loop->n;
     datamodel_test *datamodel = (datamodel_test *)d;
     int error;
     test_value *a = eval_expression(datamodel, I(datamodel, h), environment, arr, &error);
@@ -988,8 +1012,13 @@ static ta_status t_foreach_begin(void *d, uint64_t h, ta_datamodel_environment *
     return TA_OK;
 }
 
-static ta_status t_foreach_item(void *d, uint64_t h, uint64_t iter, uint32_t i, ta_expression item,
-                                ta_expression index) {
+static ta_status t_foreach_item(const ta_datamodel_call *call, const ta_datamodel_loop *loop) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
+    uint64_t iter = loop->iter;
+    uint32_t i = loop->i;
+    ta_expression item = loop->item;
+    ta_expression index = loop->index;
     datamodel_test *datamodel = (datamodel_test *)d;
     test_instance *instance = I(datamodel, h);
     if (assign_value(datamodel, instance, NULL, item, datamodel->iterations[iter - 1][i], 1) !=
@@ -1012,8 +1041,11 @@ static ta_payload new_payload(datamodel_test *datamodel, test_value *value) {
     return datamodel->payload_count;
 }
 
-static ta_status t_capture(void *d, uint64_t h, ta_datamodel_environment *environment,
-                           const ta_datamodel_capture *capture, ta_payload *out) {
+static ta_status t_capture(const ta_datamodel_call *call, const ta_datamodel_capture *capture,
+                           ta_payload *out) {
+    void *d = call->datamodel;
+    uint64_t h = call->instance;
+    ta_datamodel_environment *environment = call->environment;
     datamodel_test *datamodel = (datamodel_test *)d;
     test_instance *instance = I(datamodel, h);
     int error;

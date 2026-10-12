@@ -1,11 +1,12 @@
-# A function of the public headers takes at most three parameters
-# (AGENTS.md, "At most three parameters"; docs/adr/0009 in the repository
-# root): what travels together is grouped in a struct (ta_bytes, ta_buffer,
-# ta_spawn, ...). Run with `mise run lint`.
+# A function of the public headers takes at most three parameters, and so
+# does a callback they declare (a function pointer: a vtable entry, a
+# typedef) (AGENTS.md, "At most three parameters"; docs/adr/0009 in the
+# repository root): what travels together is grouped in a struct (ta_bytes,
+# ta_buffer, ta_spawn, ta_datamodel_call, ...). Run with `mise run lint`.
 id: at-most-three-parameters
 language: c
 severity: error
-message: "a public function takes at most three parameters; group the rest in a struct (AGENTS.md)"
+message: "a public function or callback takes at most three parameters; group the rest in a struct (AGENTS.md)"
 files:
   - include/**/*.h
 rule:
@@ -15,7 +16,9 @@ rule:
     has:
       kind: parameter_declaration
       nthChild: {position: 4, ofRule: {kind: parameter_declaration}}
-  inside:
-    kind: declaration
-    stopBy: end
-    has: {field: type, regex: '^TA_API$'}
+  any:
+    - inside:
+        kind: declaration
+        stopBy: end
+        has: {field: type, regex: '^TA_API$'}
+    - has: {kind: parenthesized_declarator} # a callback: (*name)(...)

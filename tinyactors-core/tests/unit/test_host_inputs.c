@@ -74,15 +74,14 @@ typedef struct world {
 
 static world *current;
 
-static ta_status script(void *datamodel, uint64_t instance, ta_datamodel_environment *environment,
-                        ta_expression e) {
+static ta_status script(const ta_datamodel_call *call, ta_expression e) {
     if (current->action) {
         void (*action)(world *) = current->action;
         current->action = NULL;
         action(current);
         current->actions++;
     }
-    return ta_datamodel_ecmascript_vtable()->script(datamodel, instance, environment, e);
+    return ta_datamodel_ecmascript_vtable()->script(call, e);
 }
 
 static void world_open(world *w, uint32_t max_events) {

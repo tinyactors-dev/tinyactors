@@ -718,7 +718,9 @@ static void request_run_actor_context(request *r, uint32_t map) {
         ta_payload payload = 0;
         ta_image_data(image, (ta_chart_item){info.chart, i}, &data);
         cbor_output_text(&r->out, data.id);
-        if (binding->vtable->variable(binding->datamodel, info.datamodel_instance, data.id, &payload) != TA_OK) {
+        if (binding->vtable->variable(
+                &(ta_datamodel_call){binding->datamodel, info.datamodel_instance, 0}, data.id,
+                &payload) != TA_OK) {
             cbor_output_simple(&r->out, TA_CBOR_UNDEFINED);
             continue;
         }
