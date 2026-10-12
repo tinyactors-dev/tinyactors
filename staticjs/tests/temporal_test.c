@@ -22,16 +22,28 @@
  *                            throws, JavaScript's value where staticjs gives
  *                            one, and a fault on every deliberate line.
  *
- * The cases, about 3,000, come from fixed lists, without randomness:
- *   - ISO 8601 strings for Temporal.PlainDate.from: dates, times, offsets and
+ * The cases, about 13,000, come from fixed lists, without randomness:
+ *   - ISO 8601 strings for Temporal.PlainDate.from, Temporal.PlainTime.from
+ *     and Temporal.PlainDateTime.from: dates, times, offsets and
  *     annotations, each list varied with the others held;
+ *   - times alone for Temporal.PlainTime.from: with and without their T,
+ *     clocks of every form, offsets, annotations, and times that read as a
+ *     year and month or a month and day;
  *   - dates' getters (day of week and of year, ISO weeks, leap years) over
  *     years at the edges of the calendar's cycles and of Temporal's limits,
  *     on the days around the ends of their years;
  *   - Temporal's limits through the constructor, a bag and a string;
  *   - property bags with every overflow, month, monthCode and day edge, for
  *     from and for with;
- *   - toString's calendarName.
+ *   - toString's calendarName;
+ *   - time fields in bags (from and with of a PlainTime and a
+ *     PlainDateTime) and constructors at each field's edges and at
+ *     Temporal's limits, toPlainDateTime and withPlainTime;
+ *   - round of a PlainTime and a PlainDateTime: every unit, increment and
+ *     rounding mode over times at and around each multiple and its halves
+ *     and midnight; at the limits; increments that do not divide;
+ *   - toString's fractionalSecondDigits and smallestUnit by every rounding
+ *     mode, over times at each digit's halves, and at the limits.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -239,9 +251,11 @@ static const part ANNOTATIONS[] = {
 
 #define COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
-/* Temporal.PlainDate.from of the parts joined; each string once. */
+/* `function` (Temporal.PlainDate.from, ...) of the parts joined; each
+ * string once. */
 typedef struct {
-    text seen;   /* every string so far, each followed by a NUL */
+    text seen;              /* every string so far, each followed by a NUL */
+    const char *function;
 } strings;
 
 static bool seen_before(strings *s, const text *string) {
@@ -252,17 +266,30 @@ static bool seen_before(strings *s, const text *string) {
     return false;
 }
 
+/* Dates in the grammar's form that are no day of the calendar.
+ * temporal-polyfill reads the time after one, @js-temporal/polyfill
+ * refuses it: staticjs refuses it on purpose. */
+static const char *const INVALID_DATES[] = { "2023-02-29", "2024-02-30", "2024-13-01", "2024-00-01", "2024-01-00", "2024-01-32", "2024-04-31", "1900-02-29" };
+
+static bool invalid_date(const char *date) {
+    for (size_t i = 0; i < sizeof INVALID_DATES / sizeof INVALID_DATES[0]; i++) {
+        if (strcmp(date, INVALID_DATES[i]) == 0) return true;
+    }
+    return false;
+}
+
 static void from_string(runner *r, strings *s, const part *parts[4]) {
     text string = { 0 };
     put(&string, "");
-    bool refused = false;
+    bool refused = strcmp(s->function, "Temporal.PlainTime.from") == 0 && invalid_date(parts[0]->text) && parts[1]->text[0] != '\0';
     for (int i = 0; i < 4; i++) {
         put(&string, parts[i]->text);
         refused = refused || parts[i]->refused;
     }
     if (!seen_before(s, &string)) {
         text source = { 0 };
-        put(&source, "Temporal.PlainDate.from(");
+        put(&source, s->function);
+        put(&source, "(");
         put_quoted(&source, string.ptr, string.length);
         put(&source, ")");
         evaluate(r, &source, refused);
@@ -271,12 +298,12 @@ static void from_string(runner *r, strings *s, const part *parts[4]) {
     free(string.ptr);
 }
 
-static void iso_strings(runner *r) {
+static void iso_strings(runner *r, const char *function) {
     static const part none = { "", 0 }, at_ten = { "T10:00", 0 }, plus_one = { "+01:00", 0 }, zulu = { "Z", 0 }, utc = { "[UTC]", 0 };
     static const part edges[] = { { "2024-01-31", 0 }, { "-271821-04-19", 0 }, { "+275760-09-13", 0 } };
     static const part offset_times[] = { { "T10:00", 0 }, { "T10", 0 }, { "T1000", 0 }, { "T10:00:00.5", 0 } };
     static const part bases[] = { { "2024-01-31", 0 }, { "2024-01-31T10:00", 0 }, { "2024-01-31T10:00+01:00", 0 }, { "20240131T1000-0100", 0 } };
-    strings s = { { 0 } };
+    strings s = { { 0 }, function };
     for (size_t i = 0; i < COUNT(DATES); i++) {
         from_string(r, &s, (const part *[4]){ &DATES[i], &none, &none, &none });
         from_string(r, &s, (const part *[4]){ &DATES[i], &at_ten, &none, &none });
@@ -435,13 +462,387 @@ static void calendar_names(runner *r) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * PlainTime and PlainDateTime
+ */
+
+/* `source` with `a` in place of %s, evaluated. */
+static void evaluate_with(runner *r, const char *format, const char *a, bool deliberate) {
+    text source = { 0 };
+    const char *at = strstr(format, "%s");
+    put_bytes(&source, format, (size_t)(at - format));
+    put(&source, a);
+    put(&source, at + 2);
+    evaluate(r, &source, deliberate);
+    free(source.ptr);
+}
+
+/* Times alone, as Temporal.PlainTime.from reads them: with and without
+ * their T, clocks of every form, offsets and annotations; then times that
+ * read as a year and month or a month and day, which need their T. */
+static void time_strings(runner *r) {
+    static const char *const prefixes[] = { "", "T", "t" };
+    static const char *const clocks[] = {
+        "12", "1230", "12:30", "123045", "12:30:45", "12:30:45.5", "12:30:45,123456789", "123045.000000001",
+        "12:30:45.1234567890", "23:59:60", "23:59:60.999", "24:00", "00:00", "1", "123", "12:3", "12:30:4",
+        "12:30.5", "12.5", "1230.5", "12:3045", "1230:45", "", "12:30:45.", "-12", "12 30", "\xef\xbc\x91\xef\xbc\x92",
+    };
+    static const part offsets[] = { { "", 0 }, { "+01:00", 0 }, { "-05", 0 }, { "+0530", 0 }, { "Z", 0 }, { "z", 0 }, { "-24:00", 0 },
+                                    { "+23:59:59.999999999", 0 }, { "+01:00:60", 1 }, { "+1", 0 } };
+    static const part annotations[] = {
+        { "", 0 }, { "[UTC]", 0 }, { "[u-ca=iso8601]", 0 }, { "[!u-ca=iso8601]", 0 }, { "[u-ca=gregory]", 1 },
+        { "[!u-ca=gregory]", 1 }, { "[foo=bar]", 0 }, { "[!foo=bar]", 0 }, { "[+01:00]", 0 }, { "[UTC][u-ca=iso8601]", 0 },
+        { "[u-ca=iso8601][u-ca=gregory]", 0 }, { "[u-ca=gregory][u-ca=iso8601]", 1 }, { "[UTC][UTC]", 0 }, { "[u-ca=iso8601", 0 },
+    };
+    for (size_t p = 0; p < COUNT(prefixes); p++) {
+        for (size_t c = 0; c < COUNT(clocks); c++) {
+            for (size_t o = 0; o < COUNT(offsets); o++) {
+                text string = { 0 };
+                put(&string, prefixes[p]);
+                put(&string, clocks[c]);
+                put(&string, offsets[o].text);
+                text source = { 0 };
+                put(&source, "Temporal.PlainTime.from(");
+                put_quoted(&source, string.ptr, string.length);
+                put(&source, ")");
+                evaluate(r, &source, offsets[o].refused);
+                free(source.ptr);
+                free(string.ptr);
+            }
+        }
+        static const char *const annotated[] = { "12:30", "1230-01", "12:30:45.5+01:00" };
+        for (size_t c = 0; c < COUNT(annotated); c++) {
+            for (size_t a = 0; a < COUNT(annotations); a++) {
+                text source = { 0 };
+                put(&source, "Temporal.PlainTime.from(\"");
+                put(&source, prefixes[p]);
+                put(&source, annotated[c]);
+                put(&source, annotations[a].text);
+                put(&source, "\")");
+                evaluate(r, &source, annotations[a].refused);
+                free(source.ptr);
+            }
+        }
+    }
+    /* Month and day, and year and month, against hours and minutes. */
+    static const char *const firsts[] = { "00", "01", "02", "04", "09", "11", "12", "13", "19", "20", "23", "24" };
+    static const char *const seconds[] = { "00", "01", "28", "29", "30", "31", "32", "59", "60" };
+    static const char *const forms[] = { "%s%s", "%s-%s", "T%s%s", "%s%s[UTC]", "%s%s+01", "%s-%s[u-ca=iso8601]", "%s%s00", "%s%s-01" };
+    for (size_t a = 0; a < COUNT(firsts); a++) {
+        for (size_t b = 0; b < COUNT(seconds); b++) {
+            for (size_t f = 0; f < COUNT(forms); f++) {
+                char string[64];
+                snprintf(string, sizeof string, forms[f], firsts[a], seconds[b]);
+                evaluate_with(r, "Temporal.PlainTime.from(\"%s\")", string, false);
+            }
+        }
+    }
+    static const char *const years[] = { "0000", "0012", "1214", "2012", "2021", "2359", "2400", "9999" };
+    static const char *const months[] = { "00", "01", "12", "13", "59" };
+    static const char *const year_forms[] = { "%s%s", "%s-%s", "T%s%s", "%s%s[u-ca=iso8601]", "%s-%s[UTC]", "%s%s-01" };
+    for (size_t y = 0; y < COUNT(years); y++) {
+        for (size_t m = 0; m < COUNT(months); m++) {
+            for (size_t f = 0; f < COUNT(year_forms); f++) {
+                char string[64];
+                snprintf(string, sizeof string, year_forms[f], years[y], months[m]);
+                evaluate_with(r, "Temporal.PlainTime.from(\"%s\")", string, false);
+            }
+        }
+    }
+}
+
+/* Bags of time fields, for PlainTime.from, a PlainTime's with and
+ * PlainDateTime.from, over every overflow and each field's edges. */
+static void time_bags(runner *r) {
+    static const char *const overflows[] = { "", ", { overflow: \"constrain\" }", ", { overflow: \"reject\" }" };
+    static const char *const fields[] = { "hour", "minute", "second", "millisecond", "microsecond", "nanosecond" };
+    static const char *const values[] = { "-1", "0", "1", "23", "24", "59", "60", "999", "1000", "1e9", "-0.5", "0.5", "-1e9", "null", "true" };
+    static const char *const forms[] = {
+        "Temporal.PlainTime.from({ %s })",
+        "Temporal.PlainTime.from(\"12:34:56.789\").with({ %s })",
+        "Temporal.PlainDateTime.from({ year: 2024, month: 2, day: 29, %s })",
+        "Temporal.PlainDateTime.from(\"2024-02-29T12:34:56.789\").with({ %s })",
+        "Temporal.PlainDateTime.from({ year: 275760, month: 9, day: 13, %s })",
+        "Temporal.PlainDateTime.from({ year: -271821, month: 4, day: 19, %s })",
+    };
+    for (size_t o = 0; o < COUNT(overflows); o++) {
+        for (size_t f = 0; f < COUNT(forms); f++) {
+            for (size_t i = 0; i < COUNT(fields); i++) {
+                for (size_t v = 0; v < COUNT(values); v++) {
+                    char bag[64];
+                    snprintf(bag, sizeof bag, "%s: %s", fields[i], values[v]);
+                    text source = { 0 };
+                    const char *at = strstr(forms[f], "%s");
+                    put_bytes(&source, forms[f], (size_t)(at - forms[f]));
+                    put(&source, bag);
+                    put(&source, at + 2);
+                    source.length--;   /* the closing parenthesis, after the options */
+                    source.ptr[source.length] = '\0';
+                    put(&source, overflows[o]);
+                    put(&source, ")");
+                    evaluate(r, &source, false);
+                    free(source.ptr);
+                }
+            }
+        }
+    }
+}
+
+/* The constructors at each field's edges, and PlainDateTime's at the
+ * limits. */
+static void constructors(runner *r) {
+    static const char *const values[] = { "-1", "0", "1", "23", "24", "59", "60", "999", "1000", "-0.5", "0.5", "undefined", "NaN", "Infinity", "null", "false" };
+    for (int position = 0; position < 6; position++) {
+        for (size_t v = 0; v < COUNT(values); v++) {
+            text args = { 0 };
+            for (int i = 0; i < 6; i++) {
+                if (i > 0) put(&args, ", ");
+                put(&args, i == position ? values[v] : "1");
+            }
+            evaluate_with(r, "new Temporal.PlainTime(%s)", args.ptr, false);
+            evaluate_with(r, "new Temporal.PlainDateTime(2024, 1, 31, %s)", args.ptr, false);
+            free(args.ptr);
+        }
+    }
+    static const char *const edges[] = {
+        "-271821, 4, 19", "-271821, 4, 19, 0, 0, 0, 0, 0, 1", "-271821, 4, 19, 0, 0, 0, 0, 0, 0", "-271821, 4, 18, 23, 59, 59, 999, 999, 999",
+        "-271821, 4, 20", "275760, 9, 13", "275760, 9, 13, 23, 59, 59, 999, 999, 999", "275760, 9, 14", "275760, 9, 14, 0, 0, 0, 0, 0, 0",
+        "-271822, 12, 31, 23", "275761, 1, 1", "2024, 2, 29, 23, 59, 59, 999, 999, 999", "2023, 2, 29, 12",
+    };
+    for (size_t e = 0; e < COUNT(edges); e++) {
+        evaluate_with(r, "new Temporal.PlainDateTime(%s)", edges[e], false);
+        evaluate_with(r, "(d => [d.toString(), d.toPlainDate(), d.toPlainTime(), d.dayOfWeek, d.weekOfYear])(new Temporal.PlainDateTime(%s))", edges[e], false);
+        evaluate_with(r, "Temporal.PlainDateTime.compare(new Temporal.PlainDateTime(%s), \"2000-01-01T12:00\")", edges[e], false);
+    }
+    static const char *const dates[] = { "new Temporal.PlainDate(-271821, 4, 19)", "new Temporal.PlainDate(275760, 9, 13)", "new Temporal.PlainDate(2024, 1, 31)" };
+    static const char *const times[] = { "", "\"00:00\"", "\"00:00:00.000000001\"", "\"23:59:59.999999999\"", "{ hour: 99 }", "{ hour: 99 }, { overflow: \"reject\" }" };
+    for (size_t d = 0; d < COUNT(dates); d++) {
+        for (size_t t = 0; t < COUNT(times); t++) {
+            text source = { 0 };
+            put(&source, dates[d]);
+            put(&source, ".toPlainDateTime(");
+            put(&source, times[t]);
+            put(&source, ")");
+            evaluate(r, &source, false);
+            free(source.ptr);
+            source = (text){ 0 };
+            put(&source, "Temporal.PlainDateTime.from(");
+            put(&source, dates[d]);
+            put(&source, ").withPlainTime(");
+            put(&source, times[t]);
+            put(&source, ")");
+            evaluate(r, &source, false);
+            free(source.ptr);
+        }
+    }
+}
+
+/* Rounding: every unit a PlainTime and a PlainDateTime round to, every
+ * increment that divides the next unit, every mode, over times at and
+ * around each multiple, its halves and midnight. */
+static const char *const MODES[] = { "ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven" };
+static const char *const UNIT_NAMES[] = { "nanosecond", "microsecond", "millisecond", "second", "minute", "hour", "day" };
+static const long long UNIT_NS[] = { 1, 1000, 1000000, 1000000000, 60000000000, 3600000000000, 86400000000000 };
+#define DAY_NS 86400000000000LL
+
+/* A time of day, as a constructor's arguments after `date` (a
+ * PlainDateTime's) or alone. */
+static void put_time_arguments(text *t, long long ns) {
+    char room[96];
+    snprintf(room, sizeof room, "%lld, %lld, %lld, %lld, %lld, %lld", ns / 3600000000000LL, ns / 60000000000LL % 60,
+             ns / 1000000000LL % 60, ns / 1000000LL % 1000, ns / 1000LL % 1000, ns % 1000);
+    put(t, room);
+}
+
+/* The times to round to a quantum `q`. `late_tie` leaves out the tie
+ * before midnight. */
+typedef struct {
+    long long q;
+    bool late_tie;
+} quantum;
+
+static size_t times_for(quantum quantum, long long *out) {
+    long long q = quantum.q;
+    long long half = q / 2;
+    long long candidates[] = { 0, 1, half - 1, half, half + 1, q - 1, q, q + half, 2 * q - 1, quantum.late_tie ? DAY_NS - half : 0, DAY_NS - 1,
+                               49651123456789LL };
+    size_t n = 0;
+    for (size_t i = 0; i < COUNT(candidates); i++) {
+        long long c = candidates[i];
+        bool seen = false;
+        for (size_t j = 0; j < n; j++) seen = seen || out[j] == c;
+        if (c >= 0 && c < DAY_NS && !seen) out[n++] = c;
+    }
+    return n;
+}
+
+static void put_times(text *t, bool dated, quantum q) {
+    long long times[16];
+    size_t n = times_for(q, times);
+    put(t, "[");
+    for (size_t i = 0; i < n; i++) {
+        put(t, i > 0 ? ", " : "");
+        put(t, dated ? "new Temporal.PlainDateTime(2024, 2, 29, " : "new Temporal.PlainTime(");
+        put_time_arguments(t, times[i]);
+        put(t, ")");
+    }
+    put(t, "]");
+}
+
+static void rounding_sweep(runner *r) {
+    for (int dated = 0; dated < 2; dated++) {
+        for (int unit = 0; unit < (dated ? 7 : 6); unit++) {
+            long long parts = unit == 6 ? 2 : unit == 5 ? 24 : unit >= 3 ? 60 : 1000;
+            for (long long increment = 1; increment < parts; increment++) {
+                if (parts % increment != 0) continue;
+                for (size_t m = 0; m < COUNT(MODES); m++) {
+                    /* halfEven on a tie: temporal-polyfill makes the
+                     * multiple even counted from midnight (the
+                     * specification), @js-temporal/polyfill counted from the
+                     * unit above, as the specification once did. They
+                     * differ where the unit above holds an odd number of
+                     * increments, below the hour, on the last tie of the
+                     * day: that case is left out. */
+                    bool differ = strcmp(MODES[m], "halfEven") == 0 && unit < 5 && (parts / increment) % 2 != 0;
+                    text source = { 0 };
+                    put_times(&source, dated, (quantum){ increment * UNIT_NS[unit], !differ });
+                    char options[128];
+                    snprintf(options, sizeof options, ".map(t => t.round({ smallestUnit: \"%s\", roundingIncrement: %lld, roundingMode: \"%s\" }))",
+                             UNIT_NAMES[unit], increment, MODES[m]);
+                    put(&source, options);
+                    evaluate(r, &source, false);
+                    free(source.ptr);
+                }
+            }
+            /* The unit alone, singular and plural: halfExpand. */
+            for (int plural = 0; plural < 2; plural++) {
+                text source = { 0 };
+                put_times(&source, dated, (quantum){ UNIT_NS[unit], true });
+                char options[64];
+                snprintf(options, sizeof options, ".map(t => t.round(\"%s%s\"))", UNIT_NAMES[unit], plural ? "s" : "");
+                put(&source, options);
+                evaluate(r, &source, false);
+                free(source.ptr);
+            }
+        }
+    }
+}
+
+/* Rounding at Temporal's limits, where a PlainDateTime faults if it
+ * leaves them. */
+static void rounding_limits(runner *r) {
+    static const char *const edges[] = {
+        "-271821, 4, 19, 0, 0, 0, 0, 0, 1", "-271821, 4, 19, 12", "275760, 9, 13, 23, 59, 59, 999, 999, 999", "275760, 9, 13, 12",
+        "275760, 9, 13, 11, 59, 59, 999, 999, 999",
+    };
+    for (size_t e = 0; e < COUNT(edges); e++) {
+        for (int unit = 0; unit < 7; unit++) {
+            for (size_t m = 0; m < COUNT(MODES); m++) {
+                char source[256];
+                snprintf(source, sizeof source, "new Temporal.PlainDateTime(%s).round({ smallestUnit: \"%s\", roundingMode: \"%s\" })", edges[e],
+                         UNIT_NAMES[unit], MODES[m]);
+                evaluate_with(r, "%s", source, false);
+            }
+        }
+    }
+}
+
+/* Increments that do and do not divide each unit's next, and units each
+ * type does not round to. */
+static void increments(runner *r) {
+    static const char *const values[] = { "0", "1", "2", "5", "7", "12", "23", "24", "25", "30", "59", "60", "100", "125", "999", "1000", "1001", "1e9", "1e9 + 1", "2.9", "-1" };
+    static const char *const units[] = { "nanosecond", "microsecond", "millisecond", "second", "minute", "hour", "day", "week", "month", "year", "auto" };
+    static const char *const receivers[] = { "new Temporal.PlainTime(12, 30, 30, 500, 500, 500)", "new Temporal.PlainDateTime(2024, 1, 31, 12, 30, 30, 500, 500, 500)" };
+    for (size_t t = 0; t < COUNT(receivers); t++) {
+        for (size_t u = 0; u < COUNT(units); u++) {
+            for (size_t v = 0; v < COUNT(values); v++) {
+                char source[256];
+                snprintf(source, sizeof source, "%s.round({ smallestUnit: \"%s\", roundingIncrement: %s })", receivers[t], units[u], values[v]);
+                evaluate_with(r, "%s", source, false);
+            }
+        }
+    }
+}
+
+/* toString's fractionalSecondDigits and smallestUnit by every rounding
+ * mode, over times at the halves of each digit, and at the limits. */
+static void to_string_sweep(runner *r) {
+    static const char *const precisions[] = {
+        "fractionalSecondDigits: 0", "fractionalSecondDigits: 1", "fractionalSecondDigits: 2", "fractionalSecondDigits: 3",
+        "fractionalSecondDigits: 4", "fractionalSecondDigits: 5", "fractionalSecondDigits: 6", "fractionalSecondDigits: 7",
+        "fractionalSecondDigits: 8", "fractionalSecondDigits: 9", "fractionalSecondDigits: \"auto\"", "smallestUnit: \"minute\"",
+        "smallestUnit: \"second\"", "smallestUnit: \"millisecond\"", "smallestUnit: \"microsecond\"", "smallestUnit: \"nanosecond\"",
+        "smallestUnit: \"minutes\"", "smallestUnit: \"seconds\"",
+    };
+    static const char *const times[] = {
+        "0, 0", "12, 30, 45, 678, 901, 234", "12, 30, 45, 500", "12, 30, 45, 0, 0, 5", "12, 30, 59, 999, 999, 999", "23, 59, 59, 999, 999, 999",
+        "12, 30, 45, 123, 500", "12, 30, 30", "12, 30, 45, 550", "12, 30, 45, 450", "12, 30, 45, 0, 0, 50", "12, 30, 45, 0, 0, 150",
+        "12, 30, 29, 999, 999, 999", "12, 30",
+    };
+    for (int dated = 0; dated < 2; dated++) {
+        for (size_t p = 0; p < COUNT(precisions); p++) {
+            for (size_t m = 0; m < COUNT(MODES); m++) {
+                text source = { 0 };
+                put(&source, "[");
+                for (size_t t = 0; t < COUNT(times); t++) {
+                    put(&source, t > 0 ? ", " : "");
+                    put(&source, dated ? "new Temporal.PlainDateTime(2024, 12, 31, " : "new Temporal.PlainTime(");
+                    put(&source, times[t]);
+                    put(&source, ")");
+                }
+                char options[128];
+                snprintf(options, sizeof options, "].map(t => t.toString({ %s, roundingMode: \"%s\" }))", precisions[p], MODES[m]);
+                put(&source, options);
+                evaluate(r, &source, false);
+                free(source.ptr);
+            }
+        }
+    }
+    static const char *const edges[] = { "-271821, 4, 19, 0, 0, 0, 0, 0, 1", "275760, 9, 13, 23, 59, 59, 999, 999, 999", "275760, 9, 13, 23, 59, 30" };
+    for (size_t e = 0; e < COUNT(edges); e++) {
+        for (size_t p = 0; p < COUNT(precisions); p++) {
+            for (size_t m = 0; m < COUNT(MODES); m++) {
+                char source[256];
+                snprintf(source, sizeof source, "new Temporal.PlainDateTime(%s).toString({ %s, roundingMode: \"%s\", calendarName: \"always\" })", edges[e],
+                         precisions[p], MODES[m]);
+                evaluate_with(r, "%s", source, false);
+            }
+        }
+    }
+    static const char *const options[] = {
+        "{ fractionalSecondDigits: 10 }", "{ fractionalSecondDigits: -1 }", "{ fractionalSecondDigits: 9.9 }", "{ fractionalSecondDigits: -0.1 }",
+        "{ fractionalSecondDigits: \"2\" }", "{ fractionalSecondDigits: \"Auto\" }", "{ fractionalSecondDigits: null }",
+        "{ fractionalSecondDigits: true }", "{ fractionalSecondDigits: NaN }", "{ fractionalSecondDigits: Infinity }",
+        "{ smallestUnit: \"hour\" }", "{ smallestUnit: \"day\" }", "{ smallestUnit: \"Minute\" }", "{ smallestUnit: null }",
+        "{ roundingMode: \"x\" }", "{ roundingMode: \"halfeven\" }", "{ calendarName: \"x\" }", "{ calendarName: \"always\" }",
+        "{ roundingIncrement: 5 }", "{}", "[]", "null", "undefined", "\"minute\"",
+    };
+    static const char *const receivers[] = { "new Temporal.PlainTime(12, 30, 45, 678)", "new Temporal.PlainDateTime(2024, 1, 31, 12, 30, 45, 678)" };
+    for (size_t t = 0; t < COUNT(receivers); t++) {
+        for (size_t o = 0; o < COUNT(options); o++) {
+            char source[256];
+            snprintf(source, sizeof source, "%s.toString(%s)", receivers[t], options[o]);
+            evaluate_with(r, "%s", source, false);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     runner r = { 0 };
     r.print = argc == 2 && strcmp(argv[1], "--print") == 0;
     sjs_context_config config = { { NULL, &counted_vtable }, SJS_LIMITS_DEFAULT };
     if (sjs_context_init(&r.context, &config) != SJS_OK) abort();
     if (sjs_vm_init(&r.vm, &(sjs_vm_config){ r.context, false }) != SJS_OK) abort();
-    iso_strings(&r);
+    iso_strings(&r, "Temporal.PlainDate.from");
+    iso_strings(&r, "Temporal.PlainTime.from");
+    iso_strings(&r, "Temporal.PlainDateTime.from");
+    time_strings(&r);
+    time_bags(&r);
+    constructors(&r);
+    rounding_sweep(&r);
+    rounding_limits(&r);
+    increments(&r);
+    to_string_sweep(&r);
     getters(&r);
     limits(&r);
     bags(&r);
