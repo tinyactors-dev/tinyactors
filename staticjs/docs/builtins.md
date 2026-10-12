@@ -15,7 +15,7 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, an array's, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop` (and its `next` and `return`, on a variable a mutation: docs/mutation.md), `String.raw`,
+  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), `Object.freeze`, `Object.seal`, `Object.isFrozen` and `Object.isSealed` (docs/mutation.md, "Frozen and sealed values"), the set methods, a map's `get` and `has`, an array's, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop` (and its `next` and `return`, on a variable a mutation: docs/mutation.md), `String.raw`,
   `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, Temporal's
   functions and its values' methods (`src/temporal.c`), Date's (`src/date.c`), `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
@@ -146,8 +146,12 @@ it. Values cannot form cycles, and every holder is counted, so a count of 1
 means no program can see the difference.
 
 - Check with `takes_receiver(call)`: the slot is known, the value is an
-  array and `sjs_value_unique` holds. Then call `take_receiver(call)`, which
-  moves the value out of its stack slot.
+  array and `sjs_value_unique` holds, and it is neither a match result nor
+  frozen or sealed (`SJS_INTEGRITY`: the copy JavaScript makes is
+  extensible, so a taken-over value would keep bits the result must not
+  have). Then call `take_receiver(call)`, which moves the value out of its
+  stack slot. A new path that takes a value over without `takes_receiver`
+  (a spread, `Array.from`, `toSorted`'s loop) checks the same bits.
 - Set `call->cost` for the work actually done. Taking the receiver over
   copies nothing, so the copy's cost goes.
 - Never reuse an argument this way. It is borrowed and may be the same

@@ -35,8 +35,11 @@ whose value moves to the `+`, which extends a string nothing else holds
 on a variable or a path, by the same rules (README.md, "Maps");
 `Object.assign(x, ...sources)` of such a variable ("Object.assign",
 below); an iterator's `next` and `return` on such a variable
-("Iterators", below); and a Date's `setTime` and UTC setters on such a
-variable (docs/date.md, "Setters").
+("Iterators", below); a Date's `setTime` and UTC setters on such a
+variable (docs/date.md, "Setters"); and `Object.freeze(x)` and
+`Object.seal(x)` of such a variable, with every mutation above faulting on
+a frozen or sealed value where JavaScript throws ("Frozen and sealed
+values", below).
 
 ## The methods
 
@@ -777,6 +780,108 @@ does not reallocate each time:
   freed; when it cannot be, the container keeps the larger one, which is
   still correct. Shrinking never faults.
 
+## Frozen and sealed values
+
+`Object.freeze` and `Object.seal` have JavaScript's semantics, enforced.
+Each sets a bit on an object or an array (`SJS_INTEGRITY_FROZEN`,
+`SJS_INTEGRITY_SEALED` in its `h.flags`; freezing sets both). The bit is
+the value's, so every copy of the value, which is the same value (a
+variable, an element, a property, a closure's capture), is frozen with it,
+as every reference to a JavaScript object is. staticjs code is module code,
+strict, where a write JavaScript refuses throws a TypeError; there,
+staticjs faults. (`tests/diff-node.mjs` evaluates an expression case
+sloppily, with `new Function`, where an assignment to a frozen object is
+ignored instead; it runs no fault case, so the cases' values were generated
+in strict mode, and a fault is still the answer: the rule allows a fault
+where JavaScript gives a value, never another value.)
+
+**What faults**, checked where the change happens, after the checks of
+ownership ("held elsewhere") and of the arguments, with JavaScript's
+conditions, which V8 follows:
+
+| Change | Frozen | Sealed |
+|---|---|---|
+| assign a key or an element it has (`o.a = v`, `xs[0] = v`, `o.a += 1`, `o.a++`, and `??=`, `\|\|=`, `&&=` when they store) | faults | works |
+| assign a key it lacks, append an element (`xs[xs.length] = v`) | faults | faults |
+| `delete` of a key it has; of one it lacks | faults; works | faults; works |
+| `push(...)`, `unshift(...)` with arguments | faults | faults |
+| `push()`, `unshift()` with none (they set the length) | faults | works |
+| `pop()`, `shift()` of an array with elements; of an empty one | faults; faults | faults; works |
+| `splice` that removes as many as it inserts (`splice()`, `splice(0, 1, x)`); any other | faults; faults | works; faults |
+| `sort(f)`, `reverse()` of two elements or more; of fewer | faults; works | works |
+| `fill(v, start, end)` of a range with elements; of an empty range | faults; works | works |
+| `Object.assign(x, ...)` with something to put; with nothing | faults; works | works when every key it puts is one `x` has; works |
+
+A method that works on a frozen or sealed array (`sort` of one element, a
+sealed array's `sort`) keeps its bits: `sort`'s loop takes the array over
+as it is (`toSorted`'s does not: below). Freezing is shallow: a path through
+a frozen object to one that is not changes the inner one (`o.inner.x = 1`,
+`o.items.push(x)`), and a set, a map or a Date held by a frozen object
+changes as JavaScript's does, since a frozen object only holds them. An
+`Object.assign` that is not a mutation (`Object.assign(Object.seal({a: 1}),
+{a: 2})`) follows the same table, and its result keeps the target's bits.
+
+**Freezing and sealing** change the value, so they follow the rules of a
+mutation, with a value already frozen (or sealed, to seal it) left as it is,
+whatever holds it, as JavaScript changes nothing then:
+
+- **`Object.freeze(x)` of a variable the function owns** (the whole first
+  argument a name) compiles as `Object.assign` of one does ("Object.assign"):
+  the read becomes a RECEIVER, and `OBJECT_ASSIGN` tells freeze and seal
+  from assign by its callee when it runs (`assign_variable`). As freezing a
+  frozen value changes nothing, the compiler claims such a variable whatever
+  was done with it and refuses nothing, as for a shared name ("Shared
+  names"): the run faults ("something else holds this one") unless the
+  slot holds the value alone or it is frozen already. It gives a copy of the
+  variable's value, as Object.assign does, and may be a statement:
+  `Object.freeze(o);`. On a capture, a global or an import it is an ordinary
+  call, and as a statement refused with the reason.
+- **Any other argument** (`Object.freeze({...})`, `Object.freeze(f())`) is
+  an ordinary call (`object_integrity`, `sjs_integrity_set`), which sets the
+  bits of a value nothing else holds and gives it back, and faults on one
+  something else holds (an element of an array a callback walks, a module's
+  export) unless it is already so.
+- **A primitive** is given back, and is frozen and sealed. **A set, a map, a
+  Date, a function, an iterator, a regular expression and a Temporal
+  value** fault (deliberate): JavaScript freezes their properties, of which
+  staticjs gives them none, while their internal state stays changeable
+  (`Object.freeze(new Set([1])).add(2)` works in Node). Matching that would
+  need a bit on each of those kinds for `isFrozen` alone; faulting is the
+  smaller rule, and `isFrozen` and `isSealed` of each is false, as Node
+  gives for one that was never frozen.
+
+**`Object.isFrozen` and `Object.isSealed`** read the bits, and give Node's
+answer: true for a primitive; for an object or an array, its bits, where a
+sealed one with no key or element is frozen too (JavaScript's rule for an
+object; for an array V8 says so as well, though its length stays writable,
+so `push()` still works on it, and freezing it sets the bit); false for
+every other value. A module's namespace is sealed, as JavaScript's is
+(`sjs_vm_take_result` sets the bit on a module's value), so it is frozen
+only when it has no export, and freezing one with exports faults, where
+JavaScript throws.
+
+**Copies are new values.** A copy JavaScript makes new, unfrozen and
+extensible, must not keep the bits, and an optimization that takes over a
+value nothing else holds would make it the same value. Each takeover
+checks them, and copies a frozen or sealed value instead:
+
+| Path | Guard |
+|---|---|
+| `concat`, `with`, `toSpliced` (`takes_receiver`) | `SJS_INTEGRITY` with `SJS_ARRAY_EXTRA` |
+| `toSorted`'s loop, which `sort` shares | takes a frozen or sealed array over only for `sort` (the callee in the loop's slot 1) |
+| `[...xs, ...]` (`SJS_OP_ARRAY_SPREAD`) | `SJS_INTEGRITY` with `SJS_ARRAY_EXTRA` |
+| `{...o, ...}` (`object_spread`), and so reduce's accumulator `{...acc, k: v}` | `SJS_INTEGRITY` |
+| `Array.from(xs)`, which shared `xs` (`from_list`) | `SJS_INTEGRITY` with `SJS_ARRAY_EXTRA` |
+| `Object.assign`'s ordinary call, which copies its target | the copy takes the target's bits, as it is the target |
+
+Every other way to make an array or an object builds a new one, whose bits
+are clear (`builtins.spec`, "copies JavaScript makes new are not frozen").
+The embedder's `sjs_array_append` and `sjs_object_put` refuse a frozen or
+sealed value (`SJS_ERR_INVALID`).
+
+**Fuel:** freezing, sealing and asking cost the call's unit; an
+`Object.assign` into a sealed target a unit per key it looks up.
+
 ## What is left out
 
 - **Assigning to a parameter**, and `var`: JavaScript allows both; a
@@ -793,6 +898,9 @@ does not reallocate each time:
   arguments** (`o.a.push(o.b.pop())`): refused, even where the two paths
   part, as telling them apart needs the keys' values.
 - **`sort()` without a compare function**: faults, as `toSorted()` does.
+- **`Object.isFrozen(x)` and `Object.isSealed(x)` before a mutation of
+  `x`**: they pass `x`, as any argument does, so the mutation is refused
+  when compiled ("passed"); ask after it, or freeze a value of its own.
 - **Appending, other forms**: `s = e + s` (a prepend), `s += e` where `e`
   reads `s`, `s = s + e` of a `const` or a parameter (not assignable), a
   property (`o.s += e`, whose value its object also holds), keep the
@@ -977,6 +1085,29 @@ Shared names:
 | `src/builtins.c` | `sjs_mutation_shared` |
 | `src/compiler.c` | `construct.fallback`; `fallback_site` and `c->last_fallback`; `refused_copied`, `refused_passed`, `refused_stored`, `refused_global`, `refused_import`, named once (restore the strings in place), and `refused_path_changing`, moved before them (restore it before `path_mutation_target`), `FB_*`, `fallback_reason` and `fallback_of`; `claim_receiver`'s `fallback` (restore: refuse every receiver it refuses with `fallback` NULL, and set `USE_MUTATED`); its lines in `mutation_begin` and `path_mutation_target`; the lines in `call_end` and `compile_expression_statement` |
 | `src/vm.c` | the value receiver in `mutation_method` and `mutate` (restore the chain's fault, "goes on only through an array, a set or a map") |
+
+Frozen and sealed values:
+
+| File | What is tagged |
+|---|---|
+| `src/compiler.c` | `AT_FREEZING`; `assign_callee`'s freeze and seal (restore a `bool` of Object.assign's constant); `assign_argument`'s `freezing` and its fallback |
+| `src/vm.c` | `assign_variable`'s freeze and seal, and its `sjs_assign_allowed`; the sort guards in `mutate` and `path_call`; `sjs_integrity_allows` in `path_put_element`, `path_put` and `path_delete` |
+| `src/vm.h` | nothing: the section's functions stay (below) |
+| `src/builtins.c` | `sjs_integrity_allows` in `array_insert`, `array_remove`, `array_fill`, `array_splice` and `reverse`; `sort`'s callee in `toSorted`'s takeover (restore its test without the bits) |
+
+Not mutation, and kept on a rollback: `Object.freeze`, `Object.isFrozen`,
+`Object.seal` and `Object.isSealed` themselves (`object_integrity`,
+`sjs_integrity_set` at the end of `src/builtins.c`), the bits
+(`SJS_INTEGRITY_*` in `src/internal.h`), the guards of the takeovers
+(`takes_receiver`, `from_list`, `SJS_OP_ARRAY_SPREAD`, `object_spread`),
+the namespace's bit in `sjs_vm_take_result`, the API's refusal in
+`src/value.c`, and the section "Frozen and sealed values" at the end of
+`src/vm.c` (`sjs_integrity_allows`, `sjs_assign_allowed`), which
+`Object.assign`'s ordinary call uses. Without mutation nothing changes a
+frozen value but that call, and `Object.freeze(x)` of a variable is an
+ordinary call, which faults while the variable holds the value too. Their
+cases are in `tests/spec/builtins.spec`; the enforcement's in
+`mutation.spec`, "Frozen and sealed values", which rolling back deletes.
 
 The rest of maps (values, `new Map`, `get`, `has`, `size`, iteration,
 `forEach`, `Map.groupBy`) is not mutation, and stays.

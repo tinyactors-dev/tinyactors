@@ -228,13 +228,13 @@ Built-ins:
 | iterators | `toArray` `map` `filter` `reduce` `some` `every` `find` `forEach` `flatMap` `take` `drop` |
 | BigInts | `toString` (radix 2 to 36) |
 | numbers | `toFixed` `toExponential` `toPrecision`: the exact decimal value of the double, rounded half up, as V8 gives it; digits 0 to 100 (precision 1 to 100), else a fault where JavaScript throws a RangeError; `toString` (radix 2 to 36): `String(x)` in radix 10, V8's digits in any other |
-| functions | `String` `String.fromCharCode` `String.fromCodePoint` `String.raw` (called as a function: staticjs has no tagged templates) `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Object.hasOwn` `Object.assign` (see "Owned mutation" below) `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` `encodeURI` `encodeURIComponent` `decodeURI` `decodeURIComponent` |
+| functions | `String` `String.fromCharCode` `String.fromCodePoint` `String.raw` (called as a function: staticjs has no tagged templates) `Boolean` `BigInt` `BigInt.asIntN` `BigInt.asUintN` `Array.isArray` `Array.of` `Map.groupBy` `Object.keys` `Object.values` `Object.entries` `Object.fromEntries` `Object.hasOwn` `Object.assign` (see "Owned mutation" below) `Object.freeze` `Object.isFrozen` `Object.seal` `Object.isSealed` (see "Frozen and sealed values" below) `Number.isInteger` `Number.isSafeInteger` `Number.isFinite` `Number.isNaN`, `Number` `parseInt` `parseFloat` (also as `Number.parseInt` and `Number.parseFloat`) `isNaN` `isFinite` `encodeURI` `encodeURIComponent` `decodeURI` `decodeURIComponent` |
 | `JSON` | `parse` `stringify` (see "JSON" below) |
 | `Temporal` | `Temporal.PlainDate`: `new Temporal.PlainDate(y, m, d)`, `from` (a string, a property bag or a PlainDate; `overflow`), `compare`; `year` `month` `monthCode` `day` `dayOfWeek` `dayOfYear` `weekOfYear` `yearOfWeek` `daysInWeek` `daysInMonth` `daysInYear` `monthsInYear` `inLeapYear` `calendarId` `era` `eraYear`; `with` `equals` `add` `subtract` (`overflow`) `until` `since` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`calendarName`) `toJSON` `toPlainDateTime`. `Temporal.PlainTime`: `new Temporal.PlainTime(h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainTime or a PlainDateTime; `overflow`), `compare`; `hour` `minute` `second` `millisecond` `microsecond` `nanosecond`; `with` `equals` `add` `subtract` `until` `since` `round` (`smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.PlainDateTime`: `new Temporal.PlainDateTime(y, m, d, h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainDateTime or a PlainDate), `compare`; a PlainDate's getters and a PlainTime's; `with` `withPlainTime` `equals` `add` `subtract` `until` `since` `round` `toString` (and `calendarName`) `toJSON` `toPlainDate` `toPlainTime`. `Temporal.Duration`: `new Temporal.Duration(y, mo, w, d, h, mi, s, ms, us, ns)`, `from` (a string, a property bag or a Duration), `compare` (`relativeTo`); `years` to `nanoseconds` `sign` `blank`; `with` `negated` `abs` `add` `subtract` `round` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`, `relativeTo`) `total` (`unit`, `relativeTo`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.Instant`: `new Temporal.Instant(epochNanoseconds)`, `from` (a string with `Z` or an offset, or an Instant), `fromEpochMilliseconds` `fromEpochNanoseconds` `compare`; `epochMilliseconds` `epochNanoseconds`; `equals` `add` `subtract` `until` `since` `round` `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`, `timeZone`: UTC or a fixed offset) `toJSON`. `Temporal.Now` (the host clock): `instant` `plainDateISO` `plainDateTimeISO` `plainTimeISO` (a time zone: UTC or a fixed offset) `timeZoneId` (see "Temporal" below) |
 | `Date` | `new Date()` (the host clock), `new Date(value)` (a Date, a string of the date time string format, or a number), `Date.now` `Date.parse` `Date.UTC`; `getTime` `valueOf` `getUTCFullYear` `getUTCMonth` `getUTCDate` `getUTCDay` `getUTCHours` `getUTCMinutes` `getUTCSeconds` `getUTCMilliseconds` `toISOString` `toJSON` `toUTCString` `toGMTString`; `setTime` and the UTC setters, on a variable (see "Owned mutation" and "Date" below) |
 | `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum); `random`, V8's generator from the seed the host sets (`sjs_vm_set_seed`: the values `node --random-seed=<seed>` gives) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
-| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear`; iterators: `next` `return`; Dates: `setTime` `setUTCFullYear` `setUTCMonth` `setUTCDate` `setUTCHours` `setUTCMinutes` `setUTCSeconds` `setUTCMilliseconds`; objects: `Object.assign(x, ...sources)` |
+| changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear`; iterators: `next` `return`; Dates: `setTime` `setUTCFullYear` `setUTCMonth` `setUTCDate` `setUTCHours` `setUTCMinutes` `setUTCSeconds` `setUTCMilliseconds`; objects: `Object.assign(x, ...sources)`; objects and arrays: `Object.freeze(x)` `Object.seal(x)` |
 
 **Owned mutation.** A method that changes its receiver may be called on a
 variable that the function owns: a parameter or a `const` of the function,
@@ -259,6 +259,29 @@ nothing else holds, so building a string with them is linear
 statement; any other target must be a value nothing else holds
 (`Object.assign({}, a, b)`), and faults otherwise (docs/mutation.md,
 "Object.assign").
+
+**Frozen and sealed values.** `Object.freeze(x)` and `Object.seal(x)` set
+a bit on an object or an array, which every copy of the value shares, and
+from then on each change strict JavaScript throws a TypeError at faults:
+a frozen value changes no key or element (an assignment, `delete` of a key
+it has, `push`, `sort` of two elements or more, `fill` of a range that is
+not empty, `Object.assign` with something to put, ...), and a sealed one
+takes no new key or element and loses none, while its keys' and elements'
+values change (`o.a = 1` of a key it has, `sort`, `reverse`, `fill`,
+`splice` that removes as many as it inserts). Freezing is shallow, as in
+JavaScript. `Object.isFrozen` and `Object.isSealed` give what Node gives:
+true for a primitive, the bits for an object or an array (a sealed one
+with no key or element is frozen too, as V8 tells), and false for every
+other value; a module's namespace is sealed, as in JavaScript. A copy
+JavaScript makes new (`{...o}`, `[...xs]`, `Array.from`, `concat`,
+`toSorted`, ...) is neither, so the copies that take over a value nothing
+else holds copy a frozen or sealed one instead. Freezing or sealing
+changes the value, so it needs a value nothing else holds, or a variable
+of the function that holds it alone, as a mutation does, unless the value
+is already frozen or sealed; it faults on a set, a map, a Date, a function,
+an iterator, a regular expression and a Temporal value, whose internal
+state JavaScript leaves changeable (docs/mutation.md, "Frozen and sealed
+values").
 The compiler
 refuses any other receiver or target it can see is shared, and the
 evaluator faults when the variable's value, or a container on the path,
