@@ -1745,6 +1745,14 @@ static bool push_receiver(sjs_vm *vm, uint32_t at, bool chain) {
  * the method of x's kind that changes it, or, for a value of another kind,
  * what an ordinary call finds (an object's property) or its fault. */
 __attribute__((noinline)) static void mutation_method(sjs_vm *vm, const sjs_string *key) {
+    /* MUTATION: shared names. A chain that goes on from a method that changed
+     * nothing (a Temporal value's add) has its result on top, a value: an
+     * ordinary call's receiver. A set there faults in method(). */
+    if (stack_top(vm)->internal != SJS_INTERNAL_SLOT) {
+        sjs_value callee;
+        if (method(vm, (sjs_member){ *stack_top(vm), key }, &callee) == SJS_OK) sjs_vm_push(vm, callee);
+        return;
+    }
     sjs_value receiver = vm->stack[stack_top(vm)->boolean];
     sjs_builtin_id id = sjs_mutation_of(sjs_name_of(key), receiver.kind);
     sjs_value callee = { .kind = SJS_FUNCTION, .internal = SJS_INTERNAL_METHOD, .boolean = (uint32_t)id };
@@ -1761,29 +1769,31 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
     uint32_t at = vm->stack[callee - 1u].boolean;
     bool chain = (flags & SJS_CALL_CHAIN) != 0;
     sjs_value f = vm->stack[callee];
-    if (f.internal != SJS_INTERNAL_METHOD || f.boolean < SJS_METHOD_MUTATION_FIRST) {
+    /* MUTATION: shared names. A value, not a reference, mid-chain: what a
+     * method that changed nothing gave (mutation_method). */
+    bool plain = vm->stack[callee - 1u].internal != SJS_INTERNAL_SLOT;
+    if (f.internal != SJS_INTERNAL_METHOD || f.boolean < SJS_METHOD_MUTATION_FIRST || plain) {
         /* An object's property, or a method of the name that changes no
          * value (a Temporal value's add), called as any method is: the
          * variable keeps its value. A sort's SORTED, next, would put the
-         * call's result in the variable, so it is skipped; with CHAIN it
-         * would hand a reference to the next method, which the property's
-         * result is not. */
-        vm_frame *frame = &vm->frames[vm->frame_count - 1u];
-        const uint8_t *next = frame->program->code + frame->pc;
-        if (*next == SJS_OP_SORTED) {
-            chain = (next[3] & SJS_CALL_CHAIN) != 0;
-            frame->pc += 4u;
-        }
-        if (chain) {
-            sjs_vm_fault(vm, "a chain of methods that change their receiver goes on only through an array, a set or a map"); /* MUTATION: a map */
+         * call's result in the variable, so it is skipped. With CHAIN the
+         * result goes on as a value, an ordinary call's receiver
+         * (MUTATION: shared names; it faulted before). */
+        if (plain && f.internal == SJS_INTERNAL_METHOD && f.boolean >= SJS_METHOD_MUTATION_FIRST) {
+            sjs_vm_fault(vm, "the program is damaged: a method that changes its receiver has no variable to change");
             return false;
         }
-        /* MUTATION: the receiver is the variable's value, as in any method
-         * call (a Temporal value's add makes a new value): the reference
-         * becomes a holder of it, which the call releases. */
-        sjs_value receiver = vm->stack[at];
-        sjs_ref(receiver);
-        vm->stack[callee - 1u] = receiver;
+        vm_frame *frame = &vm->frames[vm->frame_count - 1u];
+        const uint8_t *next = frame->program->code + frame->pc;
+        if (*next == SJS_OP_SORTED) frame->pc += 4u;
+        if (!plain) {
+            /* MUTATION: the receiver is the variable's value, as in any
+             * method call (a Temporal value's add makes a new value): the
+             * reference becomes a holder of it, which the call releases. */
+            sjs_value receiver = vm->stack[at];
+            sjs_ref(receiver);
+            vm->stack[callee - 1u] = receiver;
+        }
         return call(vm, argc, SJS_CALL_METHOD);
     }
     sjs_value *slot = &vm->stack[at];
