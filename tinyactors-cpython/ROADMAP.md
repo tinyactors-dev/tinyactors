@@ -170,4 +170,64 @@ Gaps in core or in the suite this session found. Each says what is
 missing, why, and which suite case or test shows it; the coordinator
 moves it into the root ROADMAP.md's "Requests to core" and answers there.
 
-None yet.
+### 1. The runner skips, for a binding, the request and config vectors its API cannot send (open, 2026-10-12)
+
+**What is missing.** `tinyactors-test/lib/runner.rb` sends every case of
+`suites/protocol/requests.txt` and `config.txt` to a binding's adapter,
+and skips only `capacity` (`runner.rb:448`). Some cases send bytes that no
+binding API of the guide's shape can make: `request(method, params)`
+builds the map from the caller's values and returns the `result` or
+raises (`tinyactors-core/docs/bindings.md:156`), and the host is created
+from the language's config value (`bindings.md:37`). The adapter may use
+only that API (`tinyactors-test/lint`), so it could pass them only by
+writing core's replies itself. The M1 set holds every vector file
+(`suites/milestones.txt`), so no binding passes M1's protocol gate today.
+
+The cases a binding cannot send (requests.txt line of each case):
+
+- not one CBOR item: "not CBOR" (`:15`), and config.txt "not CBOR"
+  (`:33`): `tinyactors.decode` is `ta_cbor_decode`, which answers a
+  `ta_status`, not core's -32700 reply (`include/tinyactors/cbor.h:54-61`);
+- not a request the binding makes: "not a map" (`:21`), "a batch" (`:27`),
+  "no method, no id" (`:33`), "no method" (`:39`; `request(None)` would
+  send `method: null`, which core answers `type`, not `missing`), "a
+  member a request does not have" (`:51`), "id is not an integer, text or
+  null" (`:63`), "id is not a float" (`:69`);
+- notifications (no `id`): "notification: no reply" (`:111`), "no error
+  either" (`:117`, `:122`), "applied" (`:130`, whose second send counts on
+  the first), "a request that is not one is answered" (`:139`), "more
+  items than a request holds" (no `id`, expects `"id": null`).
+  `request(method, params)` wants the reply, so it always sends an `id`;
+  the adapter would have to imitate core's rule of which notifications
+  are answered (`docs/requests.md:17-27`).
+
+A binding can send the rest, passing the caller's values through
+unchecked as it must (`bindings.md:24`): "method is not text" (`:45`) and
+"params is not a map" (`:57`) included, and every config case but "not
+CBOR" ("not a map" is `Host(1)`).
+
+**What we ask.** For `--kind binding`, the runner skips, with a reason as
+for `capacity`:
+
+- a request case unless each of its sends is a map holding exactly
+  `method`, an `id` that is an integer, text or null, and optionally
+  `params`, with `method` and `params` of any type (decided per case, not
+  per send, because of "applied");
+- a config case whose bytes are not one CBOR item.
+
+And `docs/driver.md` says that a binding's adapter writes each reply from
+what its API returned or raised, with the `id` of the call: so the "id:
+text", "id: a negative integer" and "id: null" cases (`:81`, `:87`, `:93`)
+then check the adapter, not core, which `ta-conform` still covers.
+
+**Why not in the binding.** A raw-bytes request API would be a second way
+to call `ta_host_request` that the guide does not have, made for the
+suite; an adapter that writes -32700 or decides which notification is
+answered would be a twin of core's request parsing (`bindings.md:22`).
+
+**What shows it.** `mise run conform -- --suite protocol` here once the
+adapter offers the vector methods (plan step 7): these cases fail and no
+other. Checked by a fresh agent's refutation (reasoned-analysis), which
+confirmed (a) to (c), corrected the `id` rule from "an integer" to "an
+integer, text or null", and found no skip, milestone or raw path that
+covers them (`runner.rb:141-175`, `test/runner_test.rb:117`).
