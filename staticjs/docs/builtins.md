@@ -17,7 +17,7 @@ A built-in is one of two kinds, and the choice decides most of its cost.
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
   `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, an array's, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop` (and its `next` and `return`, on a variable a mutation: docs/mutation.md), `String.raw`,
   `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, Temporal's
-  functions and its values' methods (`src/temporal.c`), `JSON.parse` and
+  functions and its values' methods (`src/temporal.c`), Date's (`src/date.c`), `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
@@ -91,7 +91,8 @@ Temporal value):
    lands in the wrong group's switch.
 2. Give its name's entry in `NAMES` (`src/builtins.c`) the ID in the
    column of the receiver kind: array, string, set, BigInt, map, iterator, regular expression, number or
-   Temporal value (one ID per name for every Temporal type; `temporal.c`'s
+   Temporal value (one ID per name for every Temporal type, and a Date's,
+   which is a type of the kind: docs/date.md; `temporal.c`'s
    `METHOD_TYPES` says which types have it, and a getter is the entry's
    `field`: docs/temporal.md). Every name Node 22 has
    on those prototypes is already listed, so that reading one faults instead
@@ -108,7 +109,7 @@ method lookup at run time is an index into `NAMES` plus a column. Never
 compare method names as strings at run time: the old `strlen` and `strcmp`
 lookup cost 17% of a guard.
 
-**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, `BigInt.x`, `JSON.x`, `Temporal.PlainDate.x`, or a bare global name):
+**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, `BigInt.x`, `JSON.x`, `Date.x`, `Temporal.PlainDate.x`, or a bare global name):
 add an ID before `SJS_BUILTIN_FUNCTION_COUNT`, an entry in
 `FUNCTION_TABLE`, and an immortal value in `FUNCTIONS`. The compiler
 resolves the name when it compiles (`sjs_builtin_lookup`), so the linear

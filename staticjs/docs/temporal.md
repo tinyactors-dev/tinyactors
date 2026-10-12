@@ -32,7 +32,8 @@ disagree on what they accept, staticjs accepts neither reading: it faults.
 One value kind, `SJS_TEMPORAL` (appended to `sjs_kind`; `SJS_VERSION_MINOR`
 7), heap type `SJS_HEAP_TEMPORAL`, struct `sjs_temporal` in
 `src/internal.h`. The type is in `h.flags` (`sjs_temporal_type`:
-`PLAIN_DATE`, `PLAIN_TIME`, `PLAIN_DATE_TIME`, `INSTANT`, `DURATION`).
+`PLAIN_DATE`, `PLAIN_TIME`, `PLAIN_DATE_TIME`, `INSTANT`, `DURATION`; and
+`DATE`, JavaScript's Date, which is not Temporal's: docs/date.md).
 One block, fixed size, no references inside: release frees it, and no
 limit bounds it. Its fields, by type:
 
@@ -443,8 +444,8 @@ reference polyfill instead (the adversarial review's PlainTime sweep).
 
 The current time is the host's: a read-only value that the evaluator
 holds and the host pushes, as it pushes fuel (`include/staticjs.h`,
-"The host clock"). `Temporal.Now` reads it and nothing else, and so will
-`Date.now()` and `new Date()`; staticjs reads no clock of its own and
+"The host clock"). `Temporal.Now` reads it and nothing else, and so do
+`Date.now()` and `new Date()` (docs/date.md); staticjs reads no clock of its own and
 calls back for none.
 
 ```c
@@ -602,6 +603,6 @@ arguments, `Math.random` read as a value, and the faults without a seed.
   `new_instant` of the clock's epoch nanoseconds; the ISO functions are
   its date and time at the time zone (`put_instant`'s arithmetic:
   `wide_floor` by a day, `date_at`, `set_time_of_day`), and
-  `timeZoneId()` is `"UTC"`. `zonedDateTimeISO` faults. `Date.now()` and `new Date()`,
-  when built, read the same clock (`vm->clock`), floored to
-  milliseconds.
+  `timeZoneId()` is `"UTC"`. `zonedDateTimeISO` faults. `Date.now()` and `new Date()`
+  read the same clock (`vm->clock`), floored to milliseconds
+  (docs/date.md).
