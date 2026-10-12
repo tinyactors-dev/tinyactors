@@ -34,6 +34,8 @@
  *                               radix 2 to 36: x.toString(radix)
  *     W <x> <y> <x ** y>        a fixed list of pairs, whatever COUNT is: Math.pow(x, y)
  *                               and x ** y (V8's fdlibm pow, src/math.c)
+ *     U <name> <x> <f(x)>       a fixed list of doubles, whatever COUNT is, through each
+ *                               one-argument Math function of src/math.c: Math[name](x)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -771,6 +773,87 @@ static void print_powers(void) {
     }
 }
 
+/* Math.exp, expm1, log, log1p, log2 and log10 of a fixed list of doubles,
+ * the same lines for any COUNT, each function given every input (8,391
+ * each): specials (zeros, infinities, NaN, subnormals, the largest and
+ * smallest normals); the thresholds of fdlibm's ranges and 4 units either
+ * side of each, of either sign: exp's and expm1's overflow (709.78) and
+ * underflow (-745.13), 0.5 ln2 and 1.5 ln2, 2^-28, 2^-54, 56 ln2 and
+ * the scale of k = -1021; the logs' sqrt(2) and sqrt(2)/2, the edges of
+ * log's polynomial choice (0x6147A, 0x6B851), log1p's 1 + x < sqrt(2)
+ * (0x3FDA827A and 0xBFD2BEC4), 2^-29, 2^-54 and 2^53; integers from -1100
+ * to 1100 and halves; every power of two and its neighbours, powers of
+ * ten; 1 +- 2^-j and -1 + 2^-j; and every multiple of ln2 from -1080 to
+ * 1030, where exp's k changes. */
+static const uint64_t UNARY_EDGES[] = {
+    0x40862E42FEFA39EFull, 0x40874910D52D3051ull, 0x40862E4200000000ull, 0x3FD62E4200000000ull,
+    0x3FD62E42FEFA39EFull, 0x3FF0A2B200000000ull, 0x3FF0A2B23F3BAB73ull, 0x3E30000000000000ull,
+    0x3C90000000000000ull, 0x4043687A00000000ull, 0x4043687A9F1AF2B1ull, 0x4086232BDD7ABCD2ull,
+    0x40862B7D369A5AA9ull, 0x3FF6A09E667F3BCDull, 0x3FE6A09E667F3BCDull, 0x3FF6A09E00000000ull,
+    0x3FF95F6400000000ull, 0x3FE95F6400000000ull, 0x3FF6147A00000000ull, 0x3FF6B85100000000ull,
+    0x3FF0000000000000ull, 0x3FEFFFFF00000000ull, 0x3FF0000100000000ull, 0x0010000000000000ull,
+    0x7FEFFFFFFFFFFFFFull, 0x3FDA827A00000000ull, 0x3FD2BEC400000000ull, 0x3E20000000000000ull,
+    0x4340000000000000ull, 0x3FDA827999FCEF32ull, 0x3FD2BEC333018866ull, 0x4005BF0A8B145769ull,
+};
+
+static const char *const UNARY_NAMES[] = { "exp", "expm1", "log", "log1p", "log2", "log10" };
+
+static double unary(size_t f, double x) {
+    switch (f) {
+    case 0: return sjs_math_exp(x);
+    case 1: return sjs_math_expm1(x);
+    case 2: return sjs_math_log(x);
+    case 3: return sjs_math_log1p(x);
+    case 4: return sjs_math_log2(x);
+    default: return sjs_math_log10(x);
+    }
+}
+
+static void print_unary_input(double x) {
+    for (size_t f = 0; f < sizeof UNARY_NAMES / sizeof UNARY_NAMES[0]; f++) {
+        printf("U %s %016llx %016llx\n", UNARY_NAMES[f], (unsigned long long)to_bits(x),
+               (unsigned long long)to_bits(unary(f, x)));
+    }
+}
+
+static void print_unary(void) {
+    static const double SPECIALS[] = {
+        0.0, -0.0, 1.0 / 0.0, -1.0 / 0.0, 0.0 / 0.0, 4.9406564584124654e-324, -4.9406564584124654e-324,
+        2.2250738585072009e-308, -2.2250738585072009e-308, 2.2250738585072014e-308, -2.2250738585072014e-308,
+        1.7976931348623157e308, -1.7976931348623157e308, 1e-300, 1e300, -1e300, 0.1, -0.1, 0.25, 0.75,
+        2.718281828459045, 3.141592653589793, 0.6931471805599453, 2.302585092994046, 1e-10, -1e-10,
+    };
+    for (size_t i = 0; i < sizeof SPECIALS / sizeof SPECIALS[0]; i++) print_unary_input(SPECIALS[i]);
+    for (size_t i = 0; i < sizeof UNARY_EDGES / sizeof UNARY_EDGES[0]; i++) {
+        for (int d = -4; d <= 4; d++) {
+            double x = from_bits(UNARY_EDGES[i] + (uint64_t)(int64_t)d);
+            print_unary_input(x);
+            print_unary_input(-x);
+        }
+    }
+    for (int n = -1100; n <= 1100; n++) print_unary_input((double)n);
+    for (int n = -41; n <= 41; n += 2) print_unary_input((double)n / 2.0);
+    for (int e = -1074; e <= 1023; e++) {
+        double p = e < -1022 ? from_bits(1ull << (e + 1074)) : from_bits((uint64_t)(e + 1023) << 52);
+        print_unary_input(p);
+        if (e % 8 == 0) {
+            print_unary_input(from_bits(to_bits(p) + 1));
+            print_unary_input(from_bits(to_bits(p) - 1));
+        }
+    }
+    double ten = 1.0;
+    for (int n = 0; n <= 308; n++, ten *= 10.0) print_unary_input(ten);
+    ten = 1.0;
+    for (int n = 0; n <= 323; n++, ten /= 10.0) print_unary_input(ten);
+    for (int j = 1; j <= 60; j++) {
+        double h = from_bits((uint64_t)(1023 - j) << 52); /* 2^-j */
+        print_unary_input(1.0 + h);
+        print_unary_input(1.0 - h);
+        print_unary_input(-1.0 + h);
+    }
+    for (int k = -1080; k <= 1030; k++) print_unary_input((double)k * 0.6931471805599453);
+}
+
 static int print(long count) {
     print_formats(count);
     print_decimals(count);
@@ -784,6 +867,7 @@ static int print(long count) {
     print_digit_methods();
     print_radix_methods();
     print_powers();
+    print_unary();
     return 0;
 }
 

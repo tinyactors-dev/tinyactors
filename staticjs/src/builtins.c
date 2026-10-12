@@ -57,6 +57,12 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Math", "imul", SJS_BUILTIN_MATH_IMUL },
     { "Math", "random", SJS_BUILTIN_MATH_RANDOM },
     { "Math", "pow", SJS_BUILTIN_MATH_POW },
+    { "Math", "exp", SJS_BUILTIN_MATH_EXP },
+    { "Math", "expm1", SJS_BUILTIN_MATH_EXPM1 },
+    { "Math", "log", SJS_BUILTIN_MATH_LOG },
+    { "Math", "log1p", SJS_BUILTIN_MATH_LOG1P },
+    { "Math", "log2", SJS_BUILTIN_MATH_LOG2 },
+    { "Math", "log10", SJS_BUILTIN_MATH_LOG10 },
     { "", "BigInt", SJS_BUILTIN_BIGINT },
     { "BigInt", "asIntN", SJS_BUILTIN_BIGINT_AS_INT_N },
     { "BigInt", "asUintN", SJS_BUILTIN_BIGINT_AS_UINT_N },
@@ -401,6 +407,12 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_MATH_IMUL),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_RANDOM),
     FUNCTION_VALUE(SJS_BUILTIN_MATH_POW),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_EXP),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_EXPM1),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_LOG),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_LOG1P),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_LOG2),
+    FUNCTION_VALUE(SJS_BUILTIN_MATH_LOG10),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_INT_N),
     FUNCTION_VALUE(SJS_BUILTIN_BIGINT_AS_UINT_N),
@@ -931,7 +943,7 @@ static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *
 /* Math.sqrt, hypot, fround, clz32 and imul, at the end of the file. */
 static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Math.pow, as V8's fdlibm computes it, at the end of the file. */
-static sjs_result math_v8(sjs_vm *vm, sjs_leaf_call *call);
+static sjs_result math_v8(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* BigInt, BigInt.asIntN and asUintN, a BigInt's toString, and Number,
  * parseInt and parseFloat of a BigInt: at the end of the file. */
 static sjs_result bigint_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
@@ -1017,7 +1029,13 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_MATH_IMUL:
         return math_exact(vm, id, call);
     case SJS_BUILTIN_MATH_POW:
-        return math_v8(vm, call);
+    case SJS_BUILTIN_MATH_EXP:
+    case SJS_BUILTIN_MATH_EXPM1:
+    case SJS_BUILTIN_MATH_LOG:
+    case SJS_BUILTIN_MATH_LOG1P:
+    case SJS_BUILTIN_MATH_LOG2:
+    case SJS_BUILTIN_MATH_LOG10:
+        return math_v8(vm, id, call);
     case SJS_BUILTIN_MATH_RANDOM:
         /* The host's seed (sjs_vm_set_seed), never one of the library's;
          * arguments are ignored, as in JavaScript. */
@@ -3299,12 +3317,37 @@ static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
  * functions do, and costs one unit, as they do.
  */
 
-static sjs_result math_v8(sjs_vm *vm, sjs_leaf_call *call) {
+static sjs_result math_v8(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     double x;
-    double y;
     if (sjs_vm_to_number(vm, arg(call, 0), &x) != SJS_OK) return SJS_ERR_PROGRAM;
-    if (sjs_vm_to_number(vm, arg(call, 1), &y) != SJS_OK) return SJS_ERR_PROGRAM;
-    call->result = sjs_num(sjs_math_pow(x, y));
+    double result;
+    switch (id) {
+    case SJS_BUILTIN_MATH_POW: {
+        double y;
+        if (sjs_vm_to_number(vm, arg(call, 1), &y) != SJS_OK) return SJS_ERR_PROGRAM;
+        result = sjs_math_pow(x, y);
+        break;
+    }
+    case SJS_BUILTIN_MATH_EXP:
+        result = sjs_math_exp(x);
+        break;
+    case SJS_BUILTIN_MATH_EXPM1:
+        result = sjs_math_expm1(x);
+        break;
+    case SJS_BUILTIN_MATH_LOG:
+        result = sjs_math_log(x);
+        break;
+    case SJS_BUILTIN_MATH_LOG1P:
+        result = sjs_math_log1p(x);
+        break;
+    case SJS_BUILTIN_MATH_LOG2:
+        result = sjs_math_log2(x);
+        break;
+    default: /* LOG10 */
+        result = sjs_math_log10(x);
+        break;
+    }
+    call->result = sjs_num(result);
     return SJS_OK;
 }
 

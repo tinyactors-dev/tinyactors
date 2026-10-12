@@ -78,7 +78,8 @@ seed"). UTC is the default everywhere.
 | `abs`, `min`, `max`, `floor`, `ceil`, `round`, `trunc`, `sign`, `sqrt`, `hypot`, `fround`, `clz32`, `imul`, and constants | built | |
 | `pow` | built | V8's fdlibm `pow` (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`), which `x ** y` runs too: the same bits on every target, swept against Node on a fixed list of pairs (`number_test --print`, tag W). `1 ** Infinity` is NaN, as in JavaScript. A string or object argument faults. |
 | `random` | built | V8's generator from the seed the host sets (`sjs_vm_set_seed`, docs/temporal.md "Host seed"): a seed gives what `node --random-seed=<seed>` gives, draw for draw. Faults on purpose when the host never set the seed (Node draws from the machine's entropy). |
-| `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `exp`, `expm1`, `log`, `log1p`, `log2`, `log10`, `cbrt` | defer | Not registered. Must match V8 bit for bit without libm; each needs its own algorithm and a sweep. |
+| `exp`, `expm1`, `log`, `log1p`, `log2`, `log10` | built | V8's fdlibm (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`; `Math.exp(1)` is `Math.E`, as V8 special-cases it): the same bits on every target, swept against Node on a fixed list of doubles (`number_test --print`, tag U). A string or object argument faults. |
+| `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `cbrt` | defer | Not registered. Must match V8 bit for bit without libm; each needs its own algorithm and a sweep. |
 | `f16round`, `sumPrecise` | not registered | Recent additions, not in the agreed plan; decide when the trig group is decided. |
 
 ## Array
