@@ -139,8 +139,8 @@ spike (unverified).
 
 The conformance suite cannot see these, so each has a test of its own in
 `tests/`. They come from the guide and from the spikes and their review
-(the reasoned-analysis pass of 2026-10-12, recorded in the root
-`ROADMAP.md`, step 8, M1).
+(the reasoned-analysis pass of 2026-10-12: commit `2203218f` and the
+review behind it).
 
 - **Dropping a payload's last reference can run Python code** (a
   finalizer, a weakref callback), and core calls `release` outside a run

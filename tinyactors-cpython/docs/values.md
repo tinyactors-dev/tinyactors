@@ -36,7 +36,7 @@ binding's own tests of its conversion (`value.encode` is ECMAScript's).
 | maps with text keys | `dict`, keys in the order written (a `dict` keeps insertion order); a key starting with `$` is an ordinary key | protocol.md, "Values"; values.txt "encode keys starting with $ are plain" |
 | `null` | `None` | bindings.md, section 9 |
 | `undefined` | `tinyactors.UNDEFINED`, a singleton: Python has one empty value, so `undefined` needs its own, and it stays distinct from `None` | bindings.md, section 9; values.txt "not ECMAScript: undefined stays undefined, at the top", "… in arrays and maps" |
-| tag 32 on text, an actor reference | `tinyactors.Address`, which writes tag 32 again | bindings.md, section 9; values.txt "not ECMAScript: an actor reference stays a reference"; the root ROADMAP.md, step 8, M1 ("Python keeps `Address`") |
+| tag 32 on text, an actor reference | `tinyactors.Address`, which writes tag 32 again | bindings.md, section 9; values.txt "not ECMAScript: an actor reference stays a reference"; commit `20189bdc` ("Python keeps `Address`") |
 | a value shared twice (acyclic) | copied, each time it occurs | values.txt "encode shared (acyclic) references are copied" |
 | a cycle | refused (`TA_ERROR_INVALID`) | values.txt "invalid cycles" |
 | nesting deeper than 64 | refused (`TA_ERROR_INVALID`); it stops cycles, not a value that shares subtrees, so charts are trusted code (README) | values.txt "invalid nested deeper than 64"; AGENTS.md, "Rules the suite cannot see" |

@@ -117,8 +117,8 @@ the contract).
 
 The conformance suite cannot see these, so each has a test of its own in
 `test/`. They come from the guide and from the spikes and their review
-(the reasoned-analysis pass of 2026-10-12, recorded in the root
-`ROADMAP.md`, step 8, M1).
+(the reasoned-analysis pass of 2026-10-12: commit `2203218f` and the
+review behind it).
 
 - **Dropping a payload's last reference can run JavaScript** (a
   finalizer), and core calls `release` outside a run too: at the start of
@@ -157,8 +157,8 @@ The conformance suite cannot see these, so each has a test of its own in
 - **The README says chart code is trusted:** it runs in the application's
   realm, and Node-API cannot make another.
 - **An actor reference is a string** (decided 2026-10-12; `docs/values.md`
-  says why, and the root `ROADMAP.md`, step 8, M1, records the analysis
-  and its measurements): `values.c` reads tag 32 as its text and never
+  says why, and commit `20189bdc` records the analysis and its
+  measurements): `values.c` reads tag 32 as its text and never
   writes it, as quickjs does (`docs/values.md`).
 - **The README says** that nesting is limited to 64, which stops cycles
   but not a value that shares subtrees (`a = [a, a]` sixty times), so

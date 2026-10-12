@@ -39,13 +39,13 @@ on the ECMAScript datamodel (the same rules as
 | other objects | what `JSON.stringify` keeps: `toJSON` is called, symbols are dropped as functions are | protocol.md, "Values"; `datamodel_ecmascript.c:2592-2595` |
 | `false`, `true`, `null` | themselves | protocol.md, "Values" |
 | `undefined` | written `null` at the top; read `undefined` at the top comes back `null` | values.txt "encode undefined at the top is null", "ECMAScript: undefined at the top is null" |
-| tag 32 on text, an actor reference | its address, a `string`; read as its text and never written (`values.c` reads tag 32 and writes none) | the root ROADMAP.md, step 8, M1 ("an actor reference is a string", decided 2026-10-12, with its measurements); values.txt "ECMAScript: an actor reference is its address"; bindings.md, section 9 |
+| tag 32 on text, an actor reference | its address, a `string`; read as its text and never written (`values.c` reads tag 32 and writes none) | commit `20189bdc` ("an actor reference is a string", decided 2026-10-12, with its measurements); values.txt "ECMAScript: an actor reference is its address"; bindings.md, section 9 |
 | a value shared twice (acyclic) | copied, each time it occurs | values.txt "encode shared (acyclic) references are copied" |
 | a cycle | refused (`TA_ERROR_INVALID`) | values.txt "invalid cycles" |
 | nesting deeper than 64 | refused (`TA_ERROR_INVALID`); it stops cycles, not a value that shares subtrees, so charts are trusted code (README) | values.txt "invalid nested deeper than 64"; AGENTS.md, "Rules the suite cannot see" |
 | anything else (another tag or simple value, an indefinite length, a key that is not text, text that is not UTF-8) | refused when read: `ta_host_deliver` answers `TA_ROUTE_REFUSED` and a `malformed` error envelope | values.txt, the `malformed` cases |
 
-Why a reference is a string and not a class (the root ROADMAP.md, step 8, M1):
+Why a reference is a string and not a class (commit `20189bdc`):
 core writes no tag 32 (`ta_cbor_write_tag` has no caller in
 `tinyactors-core/src`), both datamodels read a reference as its address
 text, and a string compares with `===`, is a `Map` key, prints and
