@@ -43,9 +43,9 @@ the host injects in the same way. UTC is the default everywhere.
 
 | Name | Status | Note |
 |---|---|---|
-| constructor, `size`, `add`, `has`, `delete`, `clear`, `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` | built | The set methods take only a set as their argument: a map, which JavaScript reads as set-like (its keys), faults (`builtins.spec`). |
-| `keys`, `values`, `entries` on a set | named, not built | Each faults ("staticjs does not have this method"), so the iterator helpers cannot start from a set; spread the set into an array instead. |
-| `forEach` on a set | named, not built | The README lists `forEach` for maps only; check with `builtin-table`. |
+| constructor, `size`, `add`, `has`, `delete`, `clear`, `keys`, `values`, `entries`, `forEach`, `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom` | built | The set methods take only a set as their argument: a map, which JavaScript reads as set-like (its keys), faults (`builtins.spec`). |
+| `keys`, `values`, `entries` on a set | built | An iterator that holds the set, as a map's holds its map: `keys()` is `values()`, `entries()` yields new `[value, value]` arrays; read once, and the set cannot change while it lives (owned mutation faults: "held elsewhere"). Every iterator helper, spread, `Array.from`, `new Set`, `new Map`, `Object.fromEntries` and an array pattern take it (`map.spec`). |
+| `forEach` on a set | built | A map's forEach's loop: the callback gets (value, value, set) and the result is `undefined`; the loop holds the set, so the callback cannot change it. |
 
 ## String
 

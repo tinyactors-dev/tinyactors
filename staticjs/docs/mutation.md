@@ -76,9 +76,10 @@ JavaScript keys one by its identity. Its `delete` and `clear` remove as a
 set's do, the key's value with it; `delete` of an object gives `false`.
 `delete` and `clear` name a set's method and a map's: the name's
 `mutation` column holds the set's, which returns alike, and
-`sjs_mutation_of` gives the map's for a map. A map's iterator holds the
-map, so a mutation faults ("held elsewhere") while one lives; so does
-`forEach`'s callback's, as the loop holds the map.
+`sjs_mutation_of` gives the map's for a map. A map's or a set's iterator
+holds the map or the set, so a mutation of it faults ("held elsewhere")
+while one lives; so does `forEach`'s callback's, as the loop holds the map
+or the set.
 
 ## The rule, at compile time
 

@@ -15,7 +15,7 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential` and `toPrecision`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, an iterator's `take` and `drop`, `String.raw`,
+  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential` and `toPrecision`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop`, `String.raw`,
   `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, Temporal's
   functions and its values' methods (`src/temporal.c`), `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
@@ -23,7 +23,7 @@ A built-in is one of two kinds, and the choice decides most of its cost.
   `call()` charges the cost, cuts the stack and pushes the result.
 - **A loop** calls a callback: `map`, `filter`, `reduce`, `some`, `every`,
   `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted`, `Object.groupBy`, `Array.from` (with a mapper), `Map.groupBy`, a map's
-  `forEach`, an iterator's `map`, `filter`, `reduce`, `some`, `every`,
+  or a set's `forEach`, an iterator's `map`, `filter`, `reduce`, `some`, `every`,
   `find` and `flatMap` (which run as the array's loops of their names over
   what the iterator yields: `late_start`; `flatMap` with its own step,
   `flatten_iterated`) and its `forEach` (a map's forEach's loop). It is a

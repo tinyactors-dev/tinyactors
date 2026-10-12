@@ -385,11 +385,12 @@ const sjs_entry *sjs_object_find(const sjs_object *object, sjs_str key);
 sjs_result sjs_set_insert(sjs_context *context, sjs_array **set, sjs_value element);
 bool sjs_set_contains(const sjs_array *set, sjs_value element);
 /*
- * An iterator (SJS_ITERATOR): a map's keys(), values() or entries(), which
- * yields from the map, or what an iterator's map(), filter(), flatMap(),
- * take() or drop() gave, which yields `items`. It holds the map either way,
- * so the map cannot change while it lives, as a JavaScript iterator would
- * see the change. Immutable:
+ * An iterator (SJS_ITERATOR): a map's or a set's keys(), values() or
+ * entries(), which yields from the map or the set (a set's keys are its
+ * values, and its entries [value, value]), or what an iterator's map(),
+ * filter(), flatMap(), take() or drop() gave, which yields `items`. It holds
+ * the map or the set either way, so it cannot change while the iterator
+ * lives, as a JavaScript iterator would see the change. Immutable:
  * a program reads one only where nothing else holds it (sjs_iterator_items),
  * so no program can read one twice.
  */
@@ -398,15 +399,15 @@ bool sjs_set_contains(const sjs_array *set, sjs_value element);
 #define SJS_ITERATE_ENTRIES 2u
 
 typedef struct {
-    sjs_heap h;           /* h.flags: SJS_ITERATE_*, for a map's own */
-    sjs_value source;     /* the map */
-    sjs_value items;      /* an array of what it yields, or undefined for a map's own */
+    sjs_heap h;           /* h.flags: SJS_ITERATE_*, for a map's or a set's own */
+    sjs_value source;     /* the map or the set */
+    sjs_value items;      /* an array of what it yields, or undefined for a map's or a set's own */
 } sjs_iterator;
 
 #define SJS_AS_ITERATOR(v) ((sjs_iterator *)(void *)(v).as.heap)
 
-/* An iterator over `source`, a map, taking over the references to it and to
- * `items` (undefined for a map's own, which yields as `mode` says). */
+/* An iterator over `source`, a map or a set, taking over the references to
+ * it and to `items` (undefined for its own, which yields as `mode` says). */
 typedef struct {
     sjs_value source;
     sjs_value items;

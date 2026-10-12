@@ -1242,3 +1242,309 @@ new Map().values().drop(-1).toArray()
 === isDisjointFrom of an array
 new Set([1]).isDisjointFrom([1])
 --- fault staticjs combines a set only with
+
+# A set's keys(), values() and entries(): an iterator that holds the set, as
+# a map's holds its map. keys() is values(); entries() yields a new [value,
+# value] array for each member. Read once, as any iterator. forEach calls
+# back with (value, value, set) and gives undefined.
+
+=== a set's keys, values and entries spread
+(() => { const s = new Set([1, "a", 2n]); return [[...s.keys()], [...s.values()], [...s.entries()]]; })()
+--- value
+[[1,"a",2n],[1,"a",2n],[[1,1],["a","a"],[2n,2n]]]
+
+=== a set's keys are its values
+(() => { const s = new Set(["x", "y"]); return [s.keys().toArray(), s.values().toArray()]; })()
+--- value
+[["x","y"],["x","y"]]
+
+=== an empty set's iterators
+[[...new Set().keys()], [...new Set().values()], [...new Set().entries()], new Set().values().toArray(), new Set().entries().toArray()]
+--- value
+[[],[],[],[],[]]
+
+=== a set's iterators keep -0 as 0
+[...new Set([-0]).values(), ...new Set([-0]).keys(), ...new Set([-0, 0]).entries()].flat().map(v => 1 / v)
+--- value
+[Infinity,Infinity,Infinity,Infinity]
+
+=== a set's iterators yield NaN once
+[[...new Set([NaN, 1, NaN]).values()], [...new Set([NaN]).entries()], new Set([NaN, NaN]).values().toArray().length]
+--- value
+[[NaN,1],[[NaN,NaN]],1]
+
+=== a set's iterators over members of every kind
+(() => { const s = new Set([null, undefined, true, false, 0, "0", 1n, "😀", "é", ""]); return [[...s.values()], [...s.entries()]]; })()
+--- value
+[[null,undefined,true,false,0,"0",1n,"😀","é",""],[[null,null],[undefined,undefined],[true,true],[false,false],[0,0],["0","0"],[1n,1n],["😀","😀"],["é","é"],["",""]]]
+
+=== a set's iterators past the index threshold
+(() => { const s = new Set(Array.from({ length: 20 }, (x, i) => i % 2 === 0 ? i : String(i))); return [[...s.values()], s.entries().drop(17).toArray(), s.keys().take(3).toArray(), s.values().toArray().length]; })()
+--- value
+[[0,"1",2,"3",4,"5",6,"7",8,"9",10,"11",12,"13",14,"15",16,"17",18,"19"],[["17","17"],[18,18],["19","19"]],[0,"1",2],20]
+
+=== a set's iterators after adds and deletes past the index threshold
+(() => { const s = new Set(Array.from({ length: 12 }, (x, i) => i)); s.delete(3); s.delete(0); s.add(3); s.add(40); return [[...s.values()], [...s.entries()].slice(-3)]; })()
+--- value
+[[1,2,4,5,6,7,8,9,10,11,3,40],[[11,11],[3,3],[40,40]]]
+
+=== the entries of a set are new arrays
+(() => { const s = new Set([1, 2]); const [a, b] = s.entries(); return [a, b, a.length]; })()
+--- value
+[[1,1],[2,2],2]
+
+=== the writer writes a set's iterators
+[new Set([1, "a"]).keys(), new Set([1, "a"]).values(), new Set([1, "b"]).entries(), new Set().entries()]
+--- value
+[[1,"a"].values(),[1,"a"].values(),[[1,1],["b","b"]].values(),[].values()]
+
+=== a set's iterator nested in a map, written
+new Map([["it", new Set([1, 2]).entries()]])
+--- value
+new Map([["it",[[1,1],[2,2]].values()]])
+
+=== a set's iterator is an object
+(() => { const it = new Set([1]).values(); return [typeof it, Array.isArray(it), it ? 1 : 0, it.size, it.foo, JSON.stringify(it)]; })()
+--- value
+["object",false,1,undefined,undefined,"{}"]
+
+=== Array.from, new Set and new Map of a set's iterators
+(() => { const s = new Set(["a", "b"]); return [Array.from(s.values()), Array.from(s.keys(), (v, i) => v + i), new Set(s.values()), new Map(s.entries())]; })()
+--- value
+[["a","b"],["a0","b1"],new Set(["a","b"]),new Map([["a","a"],["b","b"]])]
+
+=== Object.fromEntries of a set's entries
+Object.fromEntries(new Set(["x", "y"]).entries())
+--- value
+{"x":"x","y":"y"}
+
+=== Object.fromEntries of a set's values faults, as a member is not an entry
+Object.fromEntries(new Set(["x"]).values())
+--- fault Object.fromEntries
+
+=== new Map of a set's values faults, as a member is not an entry
+new Map(new Set([1]).values())
+--- fault an entry of new Map
+
+=== spread of a set's iterator into arguments
+Math.max(...new Set([3, 7, 5]).values())
+--- value
+7
+
+=== an array pattern over a set's iterators
+(() => { const [first, ...rest] = new Set([1, 2, 3]).values(); const [[k, v]] = new Set(["m"]).entries(); return [first, rest, k, v]; })()
+--- value
+[1,[2,3],"m","m"]
+
+=== a set's iterator in a const, read once
+(() => { const s = new Set([1, 2]); const it = s.values(); return [...it]; })()
+--- value
+[1,2]
+
+=== a set's iterator read twice faults, where JavaScript gives nothing the second time
+(() => { const it = new Set([1, 2]).values(); return [[...it], [...it]]; })()
+--- fault once
+
+=== a set's entries read twice faults
+(() => { const it = new Set([1]).entries(); return [it.toArray(), it.toArray()]; })()
+--- fault once
+
+=== a set's iterator a closure holds faults when read
+(() => { const it = new Set([1]).keys(); return [1].map(() => [...it]); })()
+--- fault once
+
+=== a helper of a set's iterator held elsewhere faults
+(() => { const it = new Set([1, 2]).values(); const a = it.map(v => v); return [[...a], it.toArray()]; })()
+--- fault once
+
+=== a set read again after its iterator is spread
+(() => { const s = new Set([1, 2]); const xs = [...s.values()]; return [xs, s.size, s.has(2), [...s]]; })()
+--- value
+[[1,2],2,true,[1,2]]
+
+=== keys, values and entries read as values fault
+new Set().values
+--- fault does not read them
+
+=== next of a set's iterator is not staticjs's
+new Set([1]).values().next()
+--- fault does not have this method
+
+# The iterator helpers from a set: each runs as it does from a map's
+# iterator, its callback getting the value and a counter.
+
+=== a set's iterator's map
+@shapes - PLUCK(k)
+new Set([1, 2]).values().map(v => ({ k: v * 2 })).map(o => o.k).toArray()
+--- value
+[2,4]
+
+=== a set's iterator's map gives an iterator
+new Set([1, 2]).keys().map(v => v * 10)
+--- value
+[10,20].values()
+
+=== a set's iterator's map is called with the value and a counter only
+new Set(["a", "b"]).values().map((v, i, rest) => [v, i, rest]).toArray()
+--- value
+[["a",0,undefined],["b",1,undefined]]
+
+=== a set's entries' map
+new Set(["a", "b"]).entries().map(([k, v], i) => k + v + i).toArray()
+--- value
+["aa0","bb1"]
+
+=== a set's iterator's filter
+@shapes ELEMENT_COMPARE(GREATER, 2)
+[...new Set([1, 2, 3, 4]).values().filter(v => v > 2)]
+--- value
+[3,4]
+
+=== a set's iterator's filter is called with the value and a counter only
+new Set([5, 6, 7]).values().filter((v, i, rest) => rest === undefined && i !== 1).toArray()
+--- value
+[5,7]
+
+=== a set's iterator's reduce
+@shapes SUM(false)
+new Set([1, 2, 3, 2]).values().reduce((a, x) => a + x, 0)
+--- value
+6
+
+=== a set's iterator's reduce without an initial value
+new Set(["a", "b", "c"]).keys().reduce((a, x) => a + x)
+--- value
+"abc"
+
+=== a set's iterator's reduce is called with the accumulator, the value and a counter only
+new Set(["a", "b"]).values().reduce((acc, v, i, rest) => [...acc, [v, i, rest]], [])
+--- value
+[["a",0,undefined],["b",1,undefined]]
+
+=== a set's iterator's reduce of nothing without an initial value faults
+new Set().values().reduce((a, x) => a + x)
+--- fault initial value
+
+=== a set's iterator's take and drop
+(() => { const s = new Set([1, 2, 3, 4]); return [s.values().take(2).toArray(), s.keys().drop(3).toArray(), s.entries().take(1).toArray(), s.values().drop(9).toArray(), s.values().take(Infinity).toArray()]; })()
+--- value
+[[1,2],[4],[[1,1]],[],[1,2,3,4]]
+
+=== a set's iterator's take and drop chained with other helpers
+new Set([1, 2, 3, 4, 5, 6]).values().drop(1).filter(v => v % 2 === 0).map(v => v * 3).take(2).toArray()
+--- value
+[6,12]
+
+=== a set's iterator's flatMap
+new Set([1, 2]).values().flatMap(v => [v, v * 10]).toArray()
+--- value
+[1,10,2,20]
+
+=== a set's iterator's flatMap of sets and set iterators
+new Set([1, 2]).values().flatMap((v, i) => i === 0 ? new Set([v, v]) : new Set([v, 9]).entries()).toArray()
+--- value
+[1,[2,2],[9,9]]
+
+=== a set's iterator's flatMap is called with the value and a counter only
+new Set(["a"]).values().flatMap((v, i, rest) => [[v, i, rest]]).toArray()
+--- value
+[["a",0,undefined]]
+
+=== a set's iterator's some
+@shapes ELEMENT_COMPARE(STRICT_EQUAL, 2) ELEMENT_COMPARE(STRICT_EQUAL, 2) ELEMENT_COMPARE(STRICT_EQUAL, 2)
+[new Set([1, 2, 3]).values().some(v => v === 2), new Set([1, 3]).values().some(v => v === 2), new Set().values().some(v => v === 2)]
+--- value
+[true,false,false]
+
+=== a set's iterator's some stops at the first true answer
+new Set([2, null]).values().some(v => v === 2 || v.length > 0)
+--- value
+true
+
+=== a set's iterator's every
+[new Set([2, 4]).values().every(v => v % 2 === 0), new Set([2, 3]).keys().every(v => v % 2 === 0), new Set().values().every(v => false)]
+--- value
+[true,false,true]
+
+=== a set's iterator's every and some are called with the value and a counter only
+[new Set(["a", "b"]).values().every((v, i, rest) => rest === undefined && typeof i === "number"), new Set(["a", "b"]).values().some((v, i) => i === 1 && v === "b")]
+--- value
+[true,true]
+
+=== a set's iterator's find
+[new Set([1, 2, 3]).values().find(v => v > 1), new Set([1]).values().find(v => v > 1), new Set(["ab", "cd"]).values().find(v => v[1] === "d"), new Set(["a", "b"]).entries().find(([k], i) => i === 1)]
+--- value
+[2,undefined,"cd",["b","b"]]
+
+=== a set's iterator's forEach gives undefined
+new Set([1, 2]).values().forEach(v => v * 2)
+--- value
+undefined
+
+=== a set's iterator's forEach is called with the value and a counter only
+new Set(["a", "b"]).values().forEach((v, i, rest) => { if (rest !== undefined || typeof i !== "number") return null.x; })
+--- value
+undefined
+
+=== a set's iterator's forEach faults at the member its callback faults on
+new Set(["a", null]).values().forEach(v => v.length)
+--- fault of null
+
+=== a set's iterator's map whose callback faults
+new Set(["a", null]).values().map(v => v.length).toArray()
+--- fault of null
+
+=== a set's iterator's helper whose callback is not a function faults
+new Set([1]).values().map(1)
+--- fault not a function
+
+=== every helper chained from a set's iterator
+(() => { const s = new Set(Array.from({ length: 12 }, (x, i) => i)); return [s.values().map(v => v * 2).filter(v => v % 3 === 0).flatMap(v => [v, -v]).drop(1).take(5).toArray(), s.keys().filter(v => v > 4).map(v => v + 1).reduce((a, x) => a + x, 0), s.entries().map(([a, b]) => a + b).some(v => v === 22), s.values().take(4).every(v => v < 4), s.values().drop(10).find(v => v > 10)]; })()
+--- value
+[[-0,6,-6,12,-12],63,true,true,11]
+
+=== a set's forEach gives undefined
+new Set([1, 2]).forEach(v => v * 2)
+--- value
+undefined
+
+=== an empty set's forEach
+new Set().forEach(v => v.x)
+--- value
+undefined
+
+=== a set's forEach with one parameter faults where its callback faults
+new Set(["a", null]).forEach(v => v.length)
+--- fault of null
+
+=== a set's forEach's callback gets the value twice
+new Set([1, "a", 2n, NaN]).forEach((v, k) => { if (v !== k && v === v) return null.x; })
+--- value
+undefined
+
+=== a set's forEach's callback gets the set third
+new Set([1, 2]).forEach((v, k, s) => { if (v !== k || !s.has(v) || s.size !== 2) return null.x; })
+--- value
+undefined
+
+=== a set's forEach's third argument is the set, whatever the parameter is named
+(() => { const s = new Set(["a"]); return s.forEach((x, y, z) => { if (z.size !== 1 || !z.has(y)) return null.x; }); })()
+--- value
+undefined
+
+=== a set's forEach's callback must be a function
+new Set([1]).forEach()
+--- fault not a function
+
+=== a set's forEach of a number faults
+new Set([1]).forEach(1)
+--- fault not a function
+
+=== a set's forEach of a large set runs every member
+new Set(Array.from({ length: 30 }, (x, i) => i === 29 ? null : i)).forEach(v => v === null ? v.x : v)
+--- fault of null
+
+=== a set's forEach past the index threshold passes each value twice
+new Set(Array.from({ length: 30 }, (x, i) => "k" + i)).forEach((v, k, s) => { if (v !== k || !s.has(k)) return null.x; })
+--- value
+undefined

@@ -3850,6 +3850,31 @@ new Map([[3,4],[5,6]])
 new Map([[1, 2]]).forEach((v, k, m) => m.set(k, v + 1))
 --- fault held elsewhere
 
+=== after its iterator is read, a set can change
+(() => { const s = new Set([1]); const xs = [...s.values()]; s.add(3); return [xs, [...s]]; })()
+--- value
+[[1],[1,3]]
+
+=== an iterator holds its set, which cannot change while it lives
+(() => { const s = new Set([1]); const it = s.values(); s.add(2); return [...it]; })()
+--- fault held elsewhere
+
+=== an entries iterator holds its set, which cannot lose a member while it lives
+(() => { const s = new Set([1, 2]); const it = s.entries(); s.delete(1); return [...it]; })()
+--- fault held elsewhere
+
+=== a set's forEach's callback cannot change its set
+new Set([1, 2]).forEach((v, k, s) => s.delete(v))
+--- fault held elsewhere
+
+=== a set's forEach's callback cannot clear its set
+(s => s.forEach((v, k, t) => t.clear()))(new Set([1, 2]))
+--- fault held elsewhere
+
+=== an iterator holds a set on a path, which cannot change while it lives
+(() => { const o = { s: new Set([1]) }; const it = o.s.values(); o.s.add(2); return [...it]; })()
+--- fault held elsewhere
+
 === set on a captured map is refused
 (() => { const m = new Map(); const f = () => m.size; m.set(1, 2); return f(); })()
 --- error unsupported captured

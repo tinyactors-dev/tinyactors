@@ -216,7 +216,7 @@ Built-ins:
 | arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `isWellFormed` `padEnd` `padStart` `repeat` `replace` `replaceAll` `slice` `split` `startsWith` `substr` `substring` `toLowerCase` `toUpperCase` `toWellFormed` `trim` `trimEnd` `trimStart`, `length`, indexing |
 | regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `search` (with a regular expression only), `replace` `replaceAll` `split` (with one or a string; `split` takes a limit, a number, with a regular expression only). A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop; where no thread is alive, a pattern that begins with an ASCII character, or with `^` past the start, skips the bytes that cannot begin a match, charging the fuel following them would. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, a primitive written as `String` writes it, or a function called once per match. A regular expression is written as `/source/flags`, `typeof` gives `"object"`, `JSON.stringify` `{}`, and a property it does not have `undefined` |
-| sets | `has` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf` `isSupersetOf` `isDisjointFrom`, `size` |
+| sets | `has` `keys` `values` `entries` `forEach` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf` `isSupersetOf` `isDisjointFrom`, `size` |
 | maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
 | iterators | `toArray` `map` `filter` `reduce` `some` `every` `find` `forEach` `flatMap` `take` `drop` |
 | BigInts | `toString` (radix 2 to 36) |
@@ -326,7 +326,9 @@ other is `undefined`. The writer writes `new Map([[key, value], ...])`, and
 an embedder builds and reads maps with `sjs_map_new`, `sjs_map_set`,
 `sjs_map_get`, `sjs_map_at` and `sjs_map_size`.
 
-**Iterators.** `m.keys()`, `m.values()` and `m.entries()` give an iterator
+**Iterators.** `m.keys()`, `m.values()` and `m.entries()` of a map, and
+`s.keys()`, `s.values()` and `s.entries()` of a set (whose keys are its
+values, and whose entries are `[value, value]` arrays), give an iterator
 (the value kind `SJS_ITERATOR`, `typeof` `"object"`), which a spread,
 `Array.from`, `new Set`, `new Map`, `Object.fromEntries`, an array pattern
 and its own `toArray()` take, and whose `map`, `filter`, `reduce`, `some`,
@@ -343,7 +345,7 @@ moves its value. Then nothing can read it again, and no program can tell
 that it was not consumed. A second read, a closure's capture or any other
 holder faults ("an iterator yields its values once"), where JavaScript
 gives nothing the second time; so does a helper of an iterator something
-else holds. An iterator also holds its map, so the map cannot change while
+else holds. An iterator also holds its map or set, so that cannot change while
 the iterator lives (owned mutation faults: "held elsewhere"), as a
 JavaScript iterator would yield what changed. The helpers are lazy in
 JavaScript, but their callbacks change nothing, so running them at once
@@ -365,7 +367,8 @@ accumulator in place. A key deleted and set again goes last; `delete` and
 through the index, and a `delete` but of the last entry its entries more.
 
 `m.forEach((value, key, map) => ...)` is a loop that calls back for each
-entry and gives `undefined`; its callback changes nothing outside, so it
+entry and gives `undefined`, and so is a set's `s.forEach((value, value,
+set) => ...)`, which passes each member twice, as JavaScript does; its callback changes nothing outside, so it
 gives `undefined` or faults where the callback faults. `Map.groupBy(items,
 f)` groups an array's elements as `Object.groupBy` does, with its C path for
 `x => x.key`, into a map whose keys are any primitive, in the order first
