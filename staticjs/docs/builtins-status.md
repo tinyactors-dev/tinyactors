@@ -66,21 +66,27 @@ seed"). UTC is the default everywhere.
 | Name | Status | Note |
 |---|---|---|
 | `isInteger`, `isSafeInteger`, `isFinite`, `isNaN`, `parseInt`, `parseFloat`, `Number()` | built | |
-| `toString(radix)` on a number | built | `String(x)` with no radix or radix 10; any other radix 2 to 36 writes the digits V8 writes (its DoubleToRadixCString, V8 12.4, without libm: `sjs_number_format_radix`), swept against Node on a fixed list of doubles in every radix (`number_test --print`, tag Q). A radix outside 2 to 36 faults where JavaScript throws a RangeError; a string or object radix faults. |
+| `toString(radix)` on a number | built | `String(x)` with no radix or radix 10; any other radix 2 to 36 writes the digits V8 writes (its DoubleToRadixCString, V8 12.4, without libm: `sjs_number_format_radix`), swept against Node on x86_64 on a fixed list of doubles in every radix (`number_test --print`, tag Q). A radix outside 2 to 36 faults where JavaScript throws a RangeError; a string or object radix faults. |
 | constants (`EPSILON`, `MAX_SAFE_INTEGER`, …) | built | As listed in the README. |
-| `toFixed`, `toPrecision`, `toExponential` | built | The exact decimal value of the double, rounded half up, without libm (`sjs_number_format_digits`); swept against Node on a fixed list of doubles and digit counts (`number_test --print`, tag P). Out of range faults where JavaScript throws a RangeError; a string or object argument faults. |
+| `toFixed`, `toPrecision`, `toExponential` | built | The exact decimal value of the double, rounded half up, without libm (`sjs_number_format_digits`); swept against Node on x86_64 on a fixed list of doubles and digit counts (`number_test --print`, tag P). Out of range faults where JavaScript throws a RangeError; a string or object argument faults. |
 | `toLocaleString` | refused | Locale data. |
 
 ## Math
 
+Each Math function gives what V8 computes without fused multiply-adds, the
+same bits on every target: Node's on x86_64. Node 22 on arm64 differs in the
+last bit for some inputs (its compiler fuses multiply-adds in V8's fdlibm),
+so diff-node compares the fixed lists (tags U, V, W) only on x86_64
+(docs/extending.md, "To make number results bit-identical to V8").
+
 | Name | Status | Note |
 |---|---|---|
 | `abs`, `min`, `max`, `floor`, `ceil`, `round`, `trunc`, `sign`, `sqrt`, `hypot`, `fround`, `clz32`, `imul`, and constants | built | |
-| `pow` | built | V8's fdlibm `pow` (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`), which `x ** y` runs too: the same bits on every target, swept against Node on a fixed list of pairs (`number_test --print`, tag W). `1 ** Infinity` is NaN, as in JavaScript. A string or object argument faults. |
+| `pow` | built | V8's fdlibm `pow` (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`), which `x ** y` runs too: the same bits on every target, swept against Node on x86_64 on a fixed list of pairs (`number_test --print`, tag W). `1 ** Infinity` is NaN, as in JavaScript. A string or object argument faults. |
 | `random` | built | V8's generator from the seed the host sets (`sjs_vm_set_seed`, docs/temporal.md "Host seed"): a seed gives what `node --random-seed=<seed>` gives, draw for draw. Faults on purpose when the host never set the seed (Node draws from the machine's entropy). |
-| `exp`, `expm1`, `log`, `log1p`, `log2`, `log10` | built | V8's fdlibm (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`; `Math.exp(1)` is `Math.E`, as V8 special-cases it): the same bits on every target, swept against Node on a fixed list of doubles (`number_test --print`, tag U). A string or object argument faults. |
-| `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2` | built | V8's fdlibm (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`, with its argument reduction `__ieee754_rem_pio2` and `__kernel_rem_pio2`; Node 22's V8 does not take `sin` and `cos` from glibc): the same bits on every target, swept against Node on a fixed list of doubles (`number_test --print`, tag U) and of pairs for `atan2` (tag V). A string or object argument faults. |
-| `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `cbrt` | built | V8's fdlibm (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`; the hyperbolic functions call V8's own `exp`, `expm1`, `log` and `log1p`, and `cbrt` is FreeBSD's, as V8's is): the same bits on every target, swept against Node on a fixed list of doubles (`number_test --print`, tag U). A string or object argument faults. |
+| `exp`, `expm1`, `log`, `log1p`, `log2`, `log10` | built | V8's fdlibm (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`; `Math.exp(1)` is `Math.E`, as V8 special-cases it): the same bits on every target, swept against Node on x86_64 on a fixed list of doubles (`number_test --print`, tag U). A string or object argument faults. |
+| `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2` | built | V8's fdlibm (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`, with its argument reduction `__ieee754_rem_pio2` and `__kernel_rem_pio2`; Node 22's V8 does not take `sin` and `cos` from glibc): the same bits on every target, swept against Node on x86_64 on a fixed list of doubles (`number_test --print`, tag U) and of pairs for `atan2` (tag V). A string or object argument faults. |
+| `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `cbrt` | built | V8's fdlibm (`src/base/ieee754.cc` of V8 12.4, ported to `src/math.c`; the hyperbolic functions call V8's own `exp`, `expm1`, `log` and `log1p`, and `cbrt` is FreeBSD's, as V8's is): the same bits on every target, swept against Node on x86_64 on a fixed list of doubles (`number_test --print`, tag U). A string or object argument faults. |
 | `f16round`, `sumPrecise` | not registered | Recent additions, not in the agreed plan; decide when the trig group is decided. |
 
 ## Array

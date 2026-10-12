@@ -503,10 +503,22 @@ const numberChecks = {
 const jsonOutcomes = { value: 0, '!S': 0, '!O': 0 };
 const regexOutcomes = { exact: 0, unsupported: 0, syntax: 0, matched: 0, lone: 0 };
 const temporalOutcomes = { value: 0, thrown: 0, deliberate: 0 };
+// The reference for Math is V8 compiled without floating-point contraction,
+// which is Node on x86_64 (docs/extending.md). Node's build turns
+// contraction off only for s390x and ppc64, so on arm64 the C compiler
+// fuses multiply-adds in V8's ieee754.cc and some Math results differ in the
+// last bit. The fixed Math lists (U, V, W) are compared only on x64; every
+// other check runs everywhere.
+const mathReference = process.arch === 'x64';
+const mathSkipped = new Map();
 if (numbers) {
   for (const line of readFileSync(numbers, 'utf8').split('\n')) {
     if (!line) continue;
     const tag = line.slice(0, line.indexOf(' '));
+    if (!mathReference && (tag === 'U' || tag === 'V' || tag === 'W')) {
+      mathSkipped.set(tag, (mathSkipped.get(tag) ?? 0) + 1);
+      continue;
+    }
     const check = numberChecks[tag];
     const problem = check ? check(line.slice(tag.length + 1)) : 'an unknown tag';
     counts.set(tag, (counts.get(tag) ?? 0) + 1);
@@ -550,3 +562,8 @@ if (failures.length > 0) {
 }
 console.log(`diff-node: ${checked} cases agree with JavaScript (${skipped} faults not compared)` +
   (numberSummary ? `; ${numberSummary}` : ''));
+if (mathSkipped.size > 0) {
+  const lists = [...mathSkipped].map(([tag, n]) => `${n} ${tag}`).join(', ');
+  console.log(`diff-node: skipped on ${process.arch}: the fixed Math lists (${lists}); Node's Math bits there ` +
+    'come from fused multiply-adds; reference is x64');
+}

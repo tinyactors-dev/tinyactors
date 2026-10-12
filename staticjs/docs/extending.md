@@ -235,6 +235,33 @@ The examples are BigInt, `Map` and iterators.
    on any libm call or 128-bit division.
 2. **Keep `#pragma STDC FP_CONTRACT OFF`** in files with float arithmetic,
    so no target fuses a multiply and an add.
+   - **The reference for Math is V8 without contraction: Node on x86_64.**
+     V8's `ieee754.cc` is plain C++, and what the C compiler fuses decides
+     its last bit. Node's build (`common.gypi`, `toolchain.gypi`) turns
+     contraction off only for s390x and ppc64; on x86_64 the baseline
+     instruction set has no fused multiply-add, so nothing is fused, but on
+     arm64 the compiler fuses where it chooses, and those choices (GCC's,
+     for Node's release builds) cannot be reproduced. So staticjs computes
+     what V8 computes without contraction, the same bits on every target
+     (its own arm64 build gives the x86_64 build's bits), and those are
+     Node's on x86_64. Node 22 on arm64 differs in the last bit for some
+     inputs: in a million inputs per function, about 6,500 for `sin`,
+     5,000 for `tan`, 3,400 for `asin`, 2,700 for `cos`, 1,900 for `log2`,
+     1,100 each for `expm1` and `acos`, 100 to 500 for `atan`, `log1p`,
+     `pow`, `exp`, `atan2` and the hyperbolic functions, 2 for `log` and
+     none for `log10` and `cbrt`. diff-node therefore compares the fixed
+     Math lists of `number_test --print` (tags U, V and W) only where
+     `process.arch` is x64, and says on any other host that it skipped
+     them; every other check, and every Math case in `tests/spec`, runs
+     there too: a spec case uses inputs whose value is the same in Node on
+     x86_64 and on arm64.
+   - **parseInt is the exception, for the maintainer to decide.** `parseInt`
+     in a radix that is not a power of two (`radix_accumulate` in
+     `src/number.c`, `RADIX_FUSED`) rounds as Node does on the same
+     machine: fused on aarch64, as Node's arm64 build is. That is the other
+     reference (the machine's Node), not the one Math follows (V8 without
+     contraction on every target), so staticjs's arm64 build gives other
+     `parseInt` bits than its x86_64 build.
 3. **Where JavaScript's specification isn't one IEEE operation,** copy V8's
    algorithm (`Math.hypot`, `parseInt` in other radixes). musl's libm (MIT)
    can be cloned from `git.musl-libc.org`; keep its notice.
