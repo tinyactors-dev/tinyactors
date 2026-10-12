@@ -1,0 +1,29 @@
+#!/usr/bin/env ruby
+#MISE description="The adapters' lint (lint/): run its rules' tests, then scan the adapter files given (an adapter imports only the binding's public module)"
+#USAGE arg "[path]..." var=#true help="the adapter's files or directories, relative to the directory mise was called from (conform.mjs; conform)"
+# vim:ft=ruby
+
+# Each binding's lint task calls this with its adapter, from its own
+# directory:
+#
+#   mise run //tinyactors-test:lint -- conform.mjs     # tinyactors-napi
+#   mise run //tinyactors-test:lint -- conform         # tinyactors-cpython
+#
+# The rules are ast-grep rules (lint/rules), with their tests (lint/tests);
+# invoke `ast-grep`, never `sg` (shadow-utils' group tool in orbs).
+
+LINT = File.expand_path('../../lint', __dir__)
+
+def run(*command, chdir:)
+  pid = Process.spawn(*command, chdir: chdir)
+  _pid, status = Process.wait2(pid)
+  exit(status.exitstatus || 1) unless status.success?
+end
+
+run('ast-grep', 'test', chdir: LINT)
+paths = ARGV.reject { |argument| argument == '--' }
+exit if paths.empty?
+
+run('ast-grep', 'scan', '--config', File.join(LINT, 'sgconfig.yml'), *paths,
+    chdir: ENV.fetch('MISE_ORIGINAL_CWD', Dir.pwd))
+puts "lint: #{paths.join(', ')} import only the binding's public module"

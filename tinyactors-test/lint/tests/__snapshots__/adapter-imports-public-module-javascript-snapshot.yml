@@ -1,0 +1,156 @@
+id: adapter-imports-public-module-javascript
+snapshots:
+  const addon = await import('./build/tinyactors.node');:
+    labels:
+    - source: import('./build/tinyactors.node')
+      style: primary
+      start: 20
+      end: 53
+    - source: import
+      style: secondary
+      start: 20
+      end: 26
+    - source: '''./build/tinyactors.node'''
+      style: secondary
+      start: 27
+      end: 52
+    - source: ('./build/tinyactors.node')
+      style: secondary
+      start: 26
+      end: 53
+  const addon = await import(path);:
+    labels:
+    - source: import(path)
+      style: primary
+      start: 20
+      end: 32
+    - source: import
+      style: secondary
+      start: 20
+      end: 26
+    - source: path
+      style: secondary
+      start: 27
+      end: 31
+    - source: (path)
+      style: secondary
+      start: 26
+      end: 32
+  const addon = require('./build/tinyactors.node');:
+    labels:
+    - source: require('./build/tinyactors.node')
+      style: primary
+      start: 14
+      end: 48
+    - source: require
+      style: secondary
+      start: 14
+      end: 21
+    - source: '''./build/tinyactors.node'''
+      style: secondary
+      start: 22
+      end: 47
+    - source: ('./build/tinyactors.node')
+      style: secondary
+      start: 21
+      end: 48
+  const addon = require(name);:
+    labels:
+    - source: require(name)
+      style: primary
+      start: 14
+      end: 27
+    - source: require
+      style: secondary
+      start: 14
+      end: 21
+    - source: name
+      style: secondary
+      start: 22
+      end: 26
+    - source: (name)
+      style: secondary
+      start: 21
+      end: 27
+  const require = createRequire(import.meta.url);:
+    labels:
+    - source: createRequire(import.meta.url)
+      style: primary
+      start: 16
+      end: 46
+  export { Host } from './index.mjs';:
+    labels:
+    - source: '''./index.mjs'''
+      style: primary
+      start: 21
+      end: 34
+    - source: export { Host } from './index.mjs';
+      style: secondary
+      start: 0
+      end: 35
+  import addon from './build/tinyactors.node';:
+    labels:
+    - source: '''./build/tinyactors.node'''
+      style: primary
+      start: 18
+      end: 43
+    - source: import addon from './build/tinyactors.node';
+      style: secondary
+      start: 0
+      end: 44
+  import x from '../tinyactors-core/build/thing.mjs';:
+    labels:
+    - source: '''../tinyactors-core/build/thing.mjs'''
+      style: primary
+      start: 14
+      end: 50
+    - source: import x from '../tinyactors-core/build/thing.mjs';
+      style: secondary
+      start: 0
+      end: 51
+  import x from '/opt/tinyactors/index.mjs';:
+    labels:
+    - source: '''/opt/tinyactors/index.mjs'''
+      style: primary
+      start: 14
+      end: 41
+    - source: import x from '/opt/tinyactors/index.mjs';
+      style: secondary
+      start: 0
+      end: 42
+  import { Host } from './index.mjs';:
+    labels:
+    - source: '''./index.mjs'''
+      style: primary
+      start: 21
+      end: 34
+    - source: import { Host } from './index.mjs';
+      style: secondary
+      start: 0
+      end: 35
+  import { internal } from '@tinyactors/node/internal';:
+    labels:
+    - source: '''@tinyactors/node/internal'''
+      style: primary
+      start: 25
+      end: 52
+    - source: import { internal } from '@tinyactors/node/internal';
+      style: secondary
+      start: 0
+      end: 53
+  import { values } from './src/values.mjs';:
+    labels:
+    - source: '''./src/values.mjs'''
+      style: primary
+      start: 23
+      end: 41
+    - source: import { values } from './src/values.mjs';
+      style: secondary
+      start: 0
+      end: 42
+  process.dlopen(module, './build/tinyactors.node');:
+    labels:
+    - source: process.dlopen(module, './build/tinyactors.node')
+      style: primary
+      start: 0
+      end: 49

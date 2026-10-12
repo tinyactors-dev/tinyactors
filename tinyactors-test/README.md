@@ -101,10 +101,15 @@ but for the values meant to be invalid (`conf:illegalItem`,
 - `mise run run -- <command…>`: the suites against a command (above).
 - `mise run test`: the vectors' hex against their diag lines
   (`encode --check`), each language's translation (`check-languages`),
-  and the runner's own tests against a fake implementation (`test/`).
+  the adapters' lint rules against their tests (`lint`), and the
+  runner's own tests against a fake implementation (`test/`).
 - `mise run encode`: write the vectors' hex from their diag lines.
 - `mise run w3c [language]`: convert the W3C suite for a language
   (ecmascript by default); prints its directory.
+- `mise run lint [path…]`: the adapters' lint (`lint/`, ast-grep): its
+  rules' tests, then the adapter files given, which must import only the
+  binding's public module (`@tinyactors/node`, `tinyactors`). Each
+  binding's lint task runs it on its adapter.
 - `mise run check-languages [language…]`: translate the suite and the
   scenarios with each stylesheet and check the result (above).
 
@@ -122,7 +127,8 @@ suites/w3c/irp/         the W3C IRP suite (vendored): manifest.xml, <id>/*.txml,
                         confEcma.xsl, confXPath.xsl, SOURCE, LICENSE
 lib/                    the runner: driver.rb (process, frames), runner.rb (suites, report),
                         vectors.rb, scenarios.rb, cbor.rb, w3c.rb (stylesheets, convert)
-mise/tasks/             run, test, encode, w3c, check-languages
+lint/                   the adapters' lint: sgconfig.yml, rules/ (ast-grep), tests/
+mise/tasks/             run, test, encode, w3c, check-languages, lint
 test/                   the runner's tests and fake_implementation.rb
 build/                  the converted suites (not in git)
 ```

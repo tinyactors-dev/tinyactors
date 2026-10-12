@@ -1,0 +1,13 @@
+# ast-grep's configuration for the adapters' lint (invoke as `ast-grep`; in
+# orbs `sg` is shadow-utils' group tool): an adapter, the command a
+# binding gives the suite (docs/driver.md), imports only the binding's
+# public module, so the suite tests what an application can call. The
+# rules are in rules/, their tests in tests/; `mise run test` here runs the
+# tests, and each binding scans its adapter with them:
+#
+#   mise run //tinyactors-test:lint -- conform.mjs       # tinyactors-napi
+#   mise run //tinyactors-test:lint -- conform           # tinyactors-cpython
+ruleDirs:
+  - rules
+testConfigs:
+  - testDir: tests

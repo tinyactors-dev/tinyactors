@@ -1,0 +1,41 @@
+# The Python adapter (tinyactors-cpython/conform, `python -m conform`)
+# reaches the binding only through its public module, the extension
+# `tinyactors` (ROADMAP.md, step 8, M0 follow-up (e)): the suite must test
+# what an application can call. The standard library, other packages and
+# the adapter's own modules (`from . import frames`) are allowed. Refused:
+# a submodule or a private name of `tinyactors` (`tinyactors._values`,
+# `from tinyactors import _host`), a module that loads native code around
+# the extension (`ctypes`, `cffi`, `importlib.machinery`, `importlib.util`,
+# a `_tinyactors*` module), a relative import out of the adapter's package
+# (`from .. import`), and changing the import path (`sys.path`), which
+# could load a build that is not the installed module.
+id: adapter-imports-public-module-python
+language: python
+severity: error
+message: "an adapter imports only the binding's public module (tinyactors): no submodule, private name, native loader, import from outside its package or sys.path change"
+rule:
+  any:
+    # import tinyactors.x; from tinyactors.x import y; ctypes, cffi, ...
+    - all:
+        - kind: dotted_name
+        - any:
+            - inside: {kind: import_statement}
+            - inside: {kind: import_from_statement, field: module_name}
+            - inside: {kind: aliased_import, inside: {kind: import_statement}}
+        - regex: '^(tinyactors\.|_tinyactors|ctypes(\.|$)|cffi(\.|$)|importlib\.(machinery|util)(\.|$))'
+    # from tinyactors import _private
+    - all:
+        - kind: dotted_name
+        - regex: '^_'
+        - any:
+            - inside: {kind: import_from_statement, has: {field: module_name, regex: '^tinyactors$'}}
+            - inside:
+                kind: aliased_import
+                inside: {kind: import_from_statement, has: {field: module_name, regex: '^tinyactors$'}}
+    # from .. import x, from ..x import y
+    - all:
+        - kind: relative_import
+        - regex: '^\.\.'
+    - pattern: sys.path.$METHOD($$$ARGUMENTS)
+    - pattern: sys.path = $VALUE
+    - pattern: sys.path += $VALUE

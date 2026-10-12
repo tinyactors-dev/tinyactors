@@ -54,6 +54,15 @@ change, and to `test/fake_implementation.rb` when the runner's tests need
 it. An implementation that does not have it answers -32601, and the runner
 skips the cases that need it.
 
+## The adapters' lint
+
+`lint/` holds ast-grep rules every binding's adapter is scanned with (an
+adapter imports only the binding's public module); a binding's lint task
+runs `mise run //tinyactors-test:lint -- <its adapter>`. A new rule comes
+with its test in `lint/tests/` (valid and invalid snippets) and its
+snapshot (`ast-grep test -U` in `lint/`, then read the snapshot); invoke
+`ast-grep`, never `sg`.
+
 ## Tests
 
 `mise run test` runs `encode --check` and `test/*_test.rb` (minitest)

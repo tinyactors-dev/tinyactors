@@ -138,7 +138,11 @@ failures, refusal during a run, threads, garbage collection, liveness.
    deleted `bindings/node` today). Each skeleton's `AGENTS.md` carries the
    prefix rule, the host's allocator (`PyMem_RawMalloc`; `malloc` with
    `napi_adjust_external_memory`), and the pitfalls M1 lists for its
-   binding.
+   binding. Each skeleton's lint task wires in the adapters' lint
+   (`mise run //tinyactors-test:lint -- conform.mjs`, `-- conform`), so
+   its adapter imports only the public module (`@tinyactors/node`,
+   `tinyactors`), and its conform task runs the suite with
+   `--kind binding`.
 
 5. **The W3C suite in git, and `confPython.xsl`.** The IRP suite is
    vendored in `tinyactors-test/suites/w3c/irp`, unmodified, with its
@@ -326,6 +330,8 @@ tinyactors-test/
 │       ├── skip.txt, skip-python.txt
 │       ├── check.py         check-languages: well-formed, no conf: left, compiles
 │       └── convert.py       the XSLT 2.0 step (SaxonC), for W3C and --scenarios
+├── lint/                    the adapters' lint (ast-grep): an adapter imports only
+│                            the binding's public module; rules/, tests/
 ├── lib/                     the runner (Ruby): driver.rb (process, frames),
 │                            runner.rb (suites, compare, wildcards, report),
 │                            vectors.rb, scenarios.rb, cbor.rb, w3c.rb; no scheduler
@@ -334,7 +340,8 @@ tinyactors-test/
 │   ├── encode               the vectors' hex from their diag lines (was protocol:encode)
 │   ├── w3c                  convert the W3C suite for a language
 │   ├── check-languages      each stylesheet's translation, checked
-│   └── test                 encode --check, check-languages, the runner's tests (test/)
+│   ├── lint                 the adapters' lint: its tests, then the adapter given
+│   └── test                 encode --check, check-languages, lint, the runner's tests (test/)
 ├── test/                    the runner's tests against fake_implementation.rb
 └── build/                   the converted W3C suite and scenarios (gitignored)
 ```

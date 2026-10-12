@@ -1,0 +1,34 @@
+# The Node adapter (tinyactors-napi/conform.mjs) reaches the binding only
+# through its public module, the package `@tinyactors/node` (ROADMAP.md,
+# step 8, M0 follow-up (e)): the suite must test what an application can
+# call. Built-ins (`node:*`) and other packages are allowed. Refused: a
+# relative or absolute path (`./build/tinyactors.node`, `./src/...`,
+# `../tinyactors-core/...`), a subpath of the package
+# (`@tinyactors/node/internal`), a `.node` addon, a computed specifier
+# (`import(path)`, `require(name)`), and loading code around the module
+# system (`process.dlopen`, `createRequire`).
+id: adapter-imports-public-module-javascript
+language: javascript
+severity: error
+message: "an adapter imports only the binding's public module (@tinyactors/node), built-ins and packages: no path, subpath, .node file or computed specifier"
+rule:
+  any:
+    # import ... from '<specifier>'; export ... from '<specifier>'
+    - all:
+        - kind: string
+        - any:
+            - inside: {kind: import_statement}
+            - inside: {kind: export_statement}
+        - regex: '^[''"](\.|/|[A-Za-z]:|file:|@tinyactors/node/)|\.node[''"]$'
+    # import('<specifier>'), require('<specifier>'): a literal that is a
+    # path, a subpath or an addon, or anything but a literal
+    - all:
+        - kind: call_expression
+        - has: {field: function, regex: '^(import|require)$'}
+        - has:
+            field: arguments
+            any:
+              - has: {nthChild: 1, kind: string, regex: '^[''"](\.|/|[A-Za-z]:|file:|@tinyactors/node/)|\.node[''"]$'}
+              - has: {nthChild: 1, not: {kind: string}}
+    - pattern: process.dlopen($$$ARGUMENTS)
+    - pattern: createRequire($$$ARGUMENTS)
