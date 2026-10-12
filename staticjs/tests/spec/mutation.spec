@@ -5442,3 +5442,496 @@ d.setTime(5)
 (() => { const o = { setUTCDate: (x) => x }; o.setUTCDate(1); return o.setUTCDate(2); })()
 --- value
 2
+
+# Frozen and sealed values (docs/mutation.md, "Frozen and sealed values"):
+# Object.freeze and Object.seal set a bit on an object or an array, and
+# every owned mutation faults where strict JavaScript throws a TypeError: a
+# frozen value changes no key or element, a sealed one takes none and loses
+# none. Object.freeze(x) and Object.seal(x) of a variable the function owns
+# change the variable's value in place. Every expected value was generated
+# by running the case in Node 22, in strict mode.
+
+=== freeze of a variable, as a statement
+(() => { const o = { a: 1 }; Object.freeze(o); return [o, Object.isFrozen(o), Object.isSealed(o)]; })()
+--- value
+[{"a":1},true,true]
+
+=== freeze of a variable gives it
+(() => { const o = { a: 1 }; const f = Object.freeze(o); return [f, Object.isFrozen(o), Object.isFrozen(f)]; })()
+--- value
+[{"a":1},true,true]
+
+=== seal of a variable, as a statement
+(() => { const xs = [1, 2]; Object.seal(xs); return [xs, Object.isSealed(xs), Object.isFrozen(xs)]; })()
+--- value
+[[1,2],true,false]
+
+=== freeze of a let, then a new value assigned to it
+(() => { let o = { a: 1 }; Object.freeze(o); o = { a: 2 }; o.a = 3; o.b = 4; return [o, Object.isFrozen(o)]; })()
+--- value
+[{"a":3,"b":4},false]
+
+=== freeze of a parameter whose argument nothing else holds
+(() => { const f = (o) => { Object.freeze(o); return Object.isFrozen(o); }; return f({ a: 1 }); })()
+--- value
+true
+
+=== freeze of a primitive variable
+(() => { const n = 5; const s = "s"; Object.freeze(n); Object.seal(s); return [Object.freeze(n), Object.seal(s), Object.isFrozen(n)]; })()
+--- value
+[5,"s",true]
+
+=== freeze of a frozen variable something else holds
+(() => { const o = Object.freeze({ a: 1 }); const p = o; Object.freeze(o); Object.seal(o); return [p, Object.isFrozen(p)]; })()
+--- value
+[{"a":1},true]
+
+=== freeze of a variable, then a closure that reads it
+(() => { const o = { a: 1 }; Object.freeze(o); const g = () => o.a; return [g(), Object.isFrozen(o)]; })()
+--- value
+[1,true]
+
+# Deliberate: JavaScript gives true.
+=== freeze of a variable something else holds
+(() => { const o = { a: 1 }; const p = o; Object.freeze(o); return Object.isFrozen(p); })()
+--- fault freezing or sealing changes a value, and something else holds
+
+# Deliberate: JavaScript gives 1.
+=== freeze of a variable a closure captured before
+(() => { const o = { a: 1 }; const g = () => o.a; Object.freeze(o); return g(); })()
+--- fault freezing or sealing changes a value, and something else holds
+
+# Deliberate: JavaScript gives true.
+=== freeze of a variable stored in an array before
+(() => { const o = { a: 1 }; const xs = [o]; Object.seal(o); return Object.isSealed(xs[0]); })()
+--- fault freezing or sealing changes a value, and something else holds
+
+# Deliberate: JavaScript gives [true,{"a":1}].
+=== freeze of a parameter whose argument the caller still holds
+(() => { const f = (o) => Object.freeze(o); const o = { a: 1 }; const r = f(o); return [Object.isFrozen(o), r]; })()
+--- fault freezing or sealing changes a value, and something else holds
+
+# Deliberate: JavaScript gives [1,2].
+=== freeze of a set variable
+(() => { const s = new Set([1]); Object.freeze(s); s.add(2); return [...s]; })()
+--- fault staticjs freezes and seals objects and arrays only
+
+# Deliberate: JavaScript gives true.
+=== freeze of a global
+@global g = { a: 1 }
+Object.isFrozen(Object.freeze(g))
+--- fault freezing or sealing changes a value, and something else holds
+
+=== freeze of a frozen global gives it
+@global g = Object.freeze({ a: 1 })
+[Object.freeze(g), Object.isFrozen(g), Object.isSealed(Object.seal(g))]
+--- value
+[{"a":1},true,true]
+
+=== freeze of a capture, as a statement
+(() => { const o = { a: 1 }; const g = () => { Object.freeze(o); return 1; }; return g(); })()
+--- error unsupported staticjs changes a variable's value only while the variable holds it alone, and a function captured this one
+
+=== freeze of a global, as a statement
+@global g = { a: 1 }
+(() => { Object.freeze(g); return 1; })()
+--- error unsupported staticjs changes only a value a variable of the function holds, and this is a global
+
+=== freeze of a capture, as a value, of a frozen value
+(() => { const o = Object.freeze({ a: 1 }); const g = () => Object.isFrozen(Object.freeze(o)); return g(); })()
+--- value
+true
+
+# Assignment to a frozen or a sealed value.
+
+=== assign an existing key of a frozen object
+(() => { const o = Object.freeze({ a: 1 }); o.a = 2; return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== assign the same value to a key of a frozen object
+(() => { const o = { a: 1 }; Object.freeze(o); o.a = 1; return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== assign a new key of a frozen object
+(() => { const o = Object.freeze({ a: 1 }); o.b = 2; return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== assign an existing key of a sealed object
+(() => { const o = Object.seal({ a: 1, b: 2 }); o.a = 3; o["b"] = 4; return [o, Object.isSealed(o)]; })()
+--- value
+[{"a":3,"b":4},true]
+
+=== assign a new key of a sealed object
+(() => { const o = Object.seal({ a: 1 }); o.b = 2; return o; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== assign a new key of a sealed empty object
+(() => { const o = {}; Object.seal(o); o[1] = 2; return o; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== assign an element of a frozen array
+(() => { const xs = Object.freeze([1, 2]); xs[0] = 1; return xs; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== append an element to a frozen array
+(() => { const xs = Object.freeze([1, 2]); xs[2] = 3; return xs; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== assign an element of a sealed array
+(() => { const xs = Object.seal([1, 2]); xs[1] = 9; xs[0] = 8; return [xs, Object.isSealed(xs)]; })()
+--- value
+[[8,9],true]
+
+=== append an element to a sealed array
+(() => { const xs = Object.seal([1, 2]); xs[xs.length] = 3; return xs; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== compound assignment to a frozen object
+(() => { const o = Object.freeze({ n: 1 }); o.n += 1; return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== ++ of a frozen array's element
+(() => { const xs = Object.freeze([1]); xs[0]++; return xs; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== compound assignment to a sealed object
+(() => { const o = Object.seal({ n: 1, s: "a" }); o.n += 1; o.s += "b"; o.n++; o.n *= 3; return o; })()
+--- value
+{"n":9,"s":"ab"}
+
+=== ??= that stores nothing on a frozen object
+(() => { const o = Object.freeze({ a: 0, b: "x" }); o.a ??= 1; o.b ||= "y"; o.a &&= 5; return o; })()
+--- value
+{"a":0,"b":"x"}
+
+=== ??= that stores on a frozen object
+(() => { const o = Object.freeze({ a: null }); o.a ??= 1; return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== ||= of a new key on a sealed object
+(() => { const o = Object.seal({ a: 1 }); o.b ||= 2; return o; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+# delete.
+
+=== delete an existing key of a frozen object
+(() => { const o = Object.freeze({ a: 1 }); delete o.a; return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== delete a missing key of a frozen object
+(() => { const o = Object.freeze({ a: 1 }); delete o.b; delete o["c"]; return [o, Object.isFrozen(o)]; })()
+--- value
+[{"a":1},true]
+
+=== delete an existing key of a sealed object
+(() => { const o = Object.seal({ a: 1, b: 2 }); delete o.b; return o; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== delete a missing key of a sealed object
+(() => { const o = Object.seal({ a: 1 }); delete o.b; return o; })()
+--- value
+{"a":1}
+
+=== delete an existing key of a sealed object with a hash index
+(() => { const o = Object.seal({ a0: 0, a1: 1, a2: 2, a3: 3, a4: 4, a5: 5, a6: 6, a7: 7, a8: 8, a9: 9 }); delete o.z; delete o.a9; return o; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+# Paths: freezing is shallow.
+
+=== assign through a frozen object into one that is not
+(() => { const o = Object.freeze({ inner: { x: 0 }, xs: [1] }); o.inner.x = 1; o.inner.y = 2; o.xs[0] = 5; o.xs[1] = 6; return [o, Object.isFrozen(o), Object.isFrozen(o.inner)]; })()
+--- value
+[{"inner":{"x":1,"y":2},"xs":[5,6]},true,false]
+
+=== assign into a frozen object through one that is not
+(() => { const o = { inner: Object.freeze({ x: 0 }) }; o.inner.x = 1; return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== assign into a sealed object through one that is not
+(() => { const o = { inner: Object.seal({ x: 0 }) }; o.inner.x = 1; return [o, Object.isSealed(o.inner)]; })()
+--- value
+[{"inner":{"x":1}},true]
+
+=== add a key to a sealed object through a path
+(() => { const o = { a: [Object.seal({ x: 0 })] }; o.a[0].y = 1; return o; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== delete through a frozen object from one that is not
+(() => { const o = Object.freeze({ inner: { x: 0, y: 1 } }); delete o.inner.x; return o; })()
+--- value
+{"inner":{"y":1}}
+
+=== delete from a frozen object through a path
+(() => { const o = { inner: Object.freeze({ x: 0 }) }; delete o.inner.x; return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== replace a frozen value on a path with a new one
+(() => { const o = { inner: Object.freeze({ x: 0 }) }; o.inner = { x: 1 }; o.inner.x = 2; return [o, Object.isFrozen(o.inner)]; })()
+--- value
+[{"inner":{"x":2}},false]
+
+=== a method through a frozen object on an array that is not
+(() => { const o = Object.freeze({ items: [2, 1], s: new Set([1]), m: new Map() }); o.items.push(3); o.items.sort((a, b) => a - b); o.s.add(2); o.m.set("k", 1); return [o.items, [...o.s], [...o.m]]; })()
+--- value
+[[1,2,3],[1,2],[["k",1]]]
+
+=== push through a path onto a frozen array
+(() => { const o = { items: Object.freeze([1]) }; o.items.push(2); return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== sort through a path of a frozen array
+(() => { const o = { items: Object.freeze([2, 1]) }; o.items.sort((a, b) => a - b); return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== sort through a path of a frozen array of one element
+(() => { const o = { items: Object.freeze([1]) }; o.items.sort((a, b) => a - b); return [o, Object.isFrozen(o.items)]; })()
+--- value
+[{"items":[1]},true]
+
+=== sort and reverse through a path of a sealed array keep it sealed
+(() => { const o = { items: Object.seal([1, 3, 2]) }; o.items.sort((a, b) => a - b).reverse(); o.items.fill(0, 2); return [o, Object.isSealed(o.items), Object.isFrozen(o.items)]; })()
+--- value
+[{"items":[3,2,0]},true,false]
+
+=== splice through a path of a sealed array
+(() => { const o = { items: Object.seal([1, 2]) }; const r = o.items.splice(0, 1, 9); return [r, o]; })()
+--- value
+[[1],{"items":[9,2]}]
+
+=== pop through a path of a sealed array
+(() => { const o = { items: Object.seal([1, 2]) }; o.items.pop(); return o; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+# A frozen array's methods: each that writes, or sets its length, faults.
+
+=== push onto a frozen array
+(() => { const xs = Object.freeze([1]); xs.push(2); return xs; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== push of nothing onto a frozen array
+(() => { const xs = Object.freeze([]); return xs.push(); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== unshift of nothing onto a frozen array
+(() => { const xs = Object.freeze([1]); return xs.unshift(); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== unshift onto a frozen array
+(() => { const xs = Object.freeze([1]); return xs.unshift(0); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== pop from a frozen array
+(() => { const xs = Object.freeze([1]); return xs.pop(); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== pop from an empty frozen array
+(() => { const xs = Object.freeze([]); return xs.pop(); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== shift from an empty frozen array
+(() => { const xs = Object.freeze([]); return xs.shift(); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== shift from a frozen array
+(() => { const xs = Object.freeze([1, 2]); return xs.shift(); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== splice of nothing from a frozen array
+(() => { const xs = Object.freeze([1, 2]); return xs.splice(); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== splice of as many as it inserts in a frozen array
+(() => { const xs = Object.freeze([1, 2]); return xs.splice(0, 1, 5); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== splice from a frozen array
+(() => { const xs = Object.freeze([1, 2]); return xs.splice(0, 1); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== sort of a frozen array
+(() => { const xs = Object.freeze([1, 2]); xs.sort((a, b) => a - b); return xs; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== sort of a frozen array of one element, and of none
+@shapes - COMPARE_NUMERIC(false) COMPARE_NUMERIC(false)
+(() => { const xs = Object.freeze([1]); const ys = Object.freeze([]); xs.sort((a, b) => a - b); ys.sort((a, b) => a - b); return [xs, ys, Object.isFrozen(xs), Object.isFrozen(ys)]; })()
+--- value
+[[1],[],true,true]
+
+=== sort of a frozen array gives it
+(() => { const xs = Object.freeze([1]); const r = xs.sort((a, b) => a - b); return [r, Object.isFrozen(r)]; })()
+--- value
+[[1],true]
+
+=== reverse of a frozen array
+(() => { const xs = Object.freeze([1, 1]); xs.reverse(); return xs; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== reverse of a frozen array of one element
+(() => { const xs = Object.freeze([1]); xs.reverse(); return [xs, Object.isFrozen(xs)]; })()
+--- value
+[[1],true]
+
+=== fill of a frozen array
+(() => { const xs = Object.freeze([1, 2]); xs.fill(0, 1); return xs; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== fill of an empty range of a frozen array
+(() => { const xs = Object.freeze([1, 2]); const ys = Object.freeze([]); xs.fill(0, 5); xs.fill(0, 1, 1); xs.fill(0, -1, 0); ys.fill(7); return [xs, ys, Object.isFrozen(xs)]; })()
+--- value
+[[1,2],[],true]
+
+=== fill of a frozen array, its arguments converted first
+(() => { const xs = Object.freeze([1]); xs.fill(0, {}); return xs; })()
+--- fault staticjs
+
+# A sealed array's methods: each that adds or removes an element faults.
+
+=== push onto a sealed array
+(() => { const xs = Object.seal([1]); xs.push(2); return xs; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== push and unshift of nothing onto a sealed array
+(() => { const xs = Object.seal([1, 2]); const ys = Object.seal([]); return [xs.push(), xs.unshift(), ys.push(), ys.unshift(), xs]; })()
+--- value
+[2,2,0,0,[1,2]]
+
+=== pop and shift of an empty sealed array
+(() => { const xs = Object.seal([]); return [xs.pop(), xs.shift(), Object.isSealed(xs)]; })()
+--- value
+[undefined,undefined,true]
+
+=== pop from a sealed array
+(() => { const xs = Object.seal([1]); return xs.pop(); })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== shift from a sealed array
+(() => { const xs = Object.seal([1, 2]); return xs.shift(); })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== unshift onto a sealed array
+(() => { const xs = Object.seal([]); return xs.unshift(1); })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== splice of a sealed array that removes as many as it inserts
+(() => { const xs = Object.seal([1, 2, 3]); const a = xs.splice(0, 2, 8, 9); const b = xs.splice(2, 5, 7); const c = xs.splice(); const d = xs.splice(9); const e = xs.splice(0, 0); return [a, b, c, d, e, xs, Object.isSealed(xs)]; })()
+--- value
+[[1,2],[3],[],[],[],[8,9,7],true]
+
+=== splice of a sealed array that removes more than it inserts
+(() => { const xs = Object.seal([1, 2]); return xs.splice(0, 2, 5); })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== splice of a sealed array that inserts more than it removes
+(() => { const xs = Object.seal([1, 2]); return xs.splice(1, 0, 5); })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== sort, reverse and fill of a sealed array keep it sealed
+@shapes - COMPARE_NUMERIC(false)
+(() => { const xs = Object.seal([3, 1, 2]); xs.sort((a, b) => a - b); xs.reverse(); xs.fill(0, 2); return [xs, Object.isSealed(xs), Object.isFrozen(xs)]; })()
+--- value
+[[3,2,0],true,false]
+
+=== a chain on a sealed array
+(() => { const xs = Object.seal([3, 1, 2]); return xs.sort((a, b) => a - b).reverse().fill(9, 0, 1); })()
+--- value
+[9,2,1]
+
+=== sort of a sealed array with a hash index of none: a long one
+(() => { const xs = Object.seal([9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 11, 10]); xs.sort((a, b) => a - b); xs[0] = -1; return [xs, Object.isSealed(xs)]; })()
+--- value
+[[-1,1,2,3,4,5,6,7,8,9,10,11],true]
+
+# Object.assign of a variable.
+
+=== Object.assign of a frozen variable with something to put
+(() => { const o = Object.freeze({ a: 1 }); Object.assign(o, { a: 2 }); return o; })()
+--- fault staticjs changes no key or element of a frozen
+
+=== Object.assign of a frozen variable with nothing to put
+(() => { const o = Object.freeze({ a: 1 }); Object.assign(o, {}, null, ""); return [Object.assign(o), Object.isFrozen(o)]; })()
+--- value
+[{"a":1},true]
+
+=== Object.assign of a sealed variable, keys it has
+(() => { const o = Object.seal({ a: 1, 0: "z" }); Object.assign(o, { a: 2 }, ["y"], "x"); return [o, Object.isSealed(o)]; })()
+--- value
+[{"0":"x","a":2},true]
+
+=== Object.assign of a sealed variable, a key it lacks
+(() => { const o = Object.seal({ a: 1 }); Object.assign(o, { a: 2, b: 3 }); return o; })()
+--- fault staticjs adds and removes no key or element of a sealed
+
+# reduce's accumulator.
+
+=== push onto a frozen accumulator
+[1, 2].reduce((acc, x) => { acc.push(x); return acc; }, Object.freeze([]))
+--- fault staticjs changes no key or element of a frozen
+
+=== assign to a frozen accumulator
+[1, 2].reduce((acc, x) => { acc[x] = x; return acc; }, Object.freeze({}))
+--- fault staticjs changes no key or element of a frozen
+
+=== Object.assign of a sealed accumulator
+[1, 2].reduce((acc, x) => Object.assign(acc, { [x]: x }), Object.seal({}))
+--- fault staticjs adds and removes no key or element of a sealed
+
+=== a sealed accumulator's keys change
+[1, 2].reduce((acc, x) => { acc.sum += x; return acc; }, Object.seal({ sum: 0 }))
+--- value
+{"sum":3}
+
+=== a frozen accumulator spread into a new one changes
+(() => { const r = [1, 2].reduce((acc, x) => { const next = { ...acc }; next[x] = x; return next; }, Object.freeze({})); return [r, Object.isFrozen(r)]; })()
+--- value
+[{"1":1,"2":2},false]
+
+=== freeze of the accumulator each step
+(() => { const r = [1, 2].reduce((acc, x) => Object.freeze([...acc, x]), Object.freeze([])); return [r, Object.isFrozen(r)]; })()
+--- value
+[[1,2],true]
+
+# Copies JavaScript makes new change; the frozen value does not.
+
+=== a let given a copy of its own frozen value
+(() => { let xs = Object.freeze([2, 1]); xs = xs.concat([3]); xs.push(4); let ys = Object.freeze([2, 1]); ys = ys.toSorted((a, b) => a - b); ys.push(3); let zs = Object.seal([1]); zs = zs.with(0, 5); zs.push(6); let o = Object.freeze({ a: 1 }); o = { ...o, b: 2 }; o.c = 3; return [xs, ys, zs, o, Object.isFrozen(xs), Object.isFrozen(ys), Object.isSealed(zs), Object.isFrozen(o)]; })()
+--- value
+[[2,1,3,4],[1,2,3],[5,6],{"a":1,"b":2,"c":3},false,false,false,false]
+
+=== a let given its own frozen value back
+(() => { let xs = Object.freeze([1]); xs = xs.filter(() => true); xs.push(2); let ys = Object.freeze([1]); ys = ys; return [xs, Object.isFrozen(ys)]; })()
+--- value
+[[1,2],true]
+
+=== a spread of a frozen object changes
+(() => { const o = Object.freeze({ a: 1 }); const c = { ...o }; c.b = 2; c.a = 0; return [c, o, Object.isFrozen(c)]; })()
+--- value
+[{"a":0,"b":2},{"a":1},false]
+
+=== a spread of a frozen array a last read moves changes
+(() => { const xs = Object.freeze([1]); const c = [...xs]; c.push(2); return [c, Object.isFrozen(c)]; })()
+--- value
+[[1,2],false]
+
+=== Array.from of a frozen array changes
+(() => { const xs = Object.freeze([2, 1]); const c = Array.from(xs); c.sort((a, b) => a - b); c.push(3); return [c, xs]; })()
+--- value
+[[1,2,3],[2,1]]
+
+=== concat of a frozen array a last read moves changes
+(() => { const mk = () => Object.freeze([1]); const c = mk().concat([2]); c.push(3); return c; })()
+--- value
+[1,2,3]
+
+=== toSorted of a frozen array changes
+(() => { const xs = Object.freeze([2, 1]); const c = xs.toSorted((a, b) => a - b); c.push(3); return [c, xs]; })()
+--- value
+[[1,2,3],[2,1]]
+
+=== a frozen object passed to a function that changes it
+(() => { const f = (o) => { o.a = 1; return o; }; return f(Object.freeze({ a: 0 })); })()
+--- fault staticjs changes no key or element of a frozen
+
+=== a sealed array passed to a function that pushes
+(() => { const f = (xs) => { xs.push(1); return xs; }; return f(Object.seal([])); })()
+--- fault staticjs adds and removes no key or element of a sealed

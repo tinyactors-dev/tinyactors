@@ -245,6 +245,17 @@ typedef struct {
  * (docs/regex.md, 7.2). */
 #define SJS_ARRAY_EXTRA 2u
 
+/* An object's or an array's integrity (Object.seal, Object.freeze): sealed,
+ * it takes no new keys or elements and loses none; frozen, it is sealed and
+ * no key or element changes either, so freezing sets both. A value that
+ * holds one is never taken over as another value's start (a spread, concat,
+ * with, toSpliced, toSorted), which JavaScript makes a new, extensible
+ * object of; the owned mutations of docs/mutation.md fault where JavaScript
+ * throws a TypeError ("Frozen and sealed values"). */
+#define SJS_INTEGRITY_SEALED 4u
+#define SJS_INTEGRITY_FROZEN 8u
+#define SJS_INTEGRITY (SJS_INTEGRITY_SEALED | SJS_INTEGRITY_FROZEN)
+
 typedef struct {
     sjs_heap h;
     uint32_t length;
@@ -752,6 +763,10 @@ typedef enum {
     SJS_BUILTIN_ENCODE_URI_COMPONENT,
     SJS_BUILTIN_DECODE_URI,
     SJS_BUILTIN_DECODE_URI_COMPONENT,
+    SJS_BUILTIN_OBJECT_FREEZE,
+    SJS_BUILTIN_OBJECT_IS_FROZEN,
+    SJS_BUILTIN_OBJECT_SEAL,
+    SJS_BUILTIN_OBJECT_IS_SEALED,
     /* Date's (date.c): `new Date(...)` (under the space "new", as Temporal's
      * constructors), Date called as a function, and its functions. */
     SJS_BUILTIN_DATE,
