@@ -16,6 +16,17 @@
 // --harmony-temporal gives wrong values. Every case sees it as the global
 // Temporal.
 //
+// Temporal.Now reads the host clock, which a case fixes with `@clock <epoch
+// nanoseconds>` (spec_test sets it with sjs_vm_set_clock). The polyfill's
+// Temporal.Now reads Date.now(), whole milliseconds, and the time zone of
+// Intl.DateTimeFormat: here the context's Date.now gives the clock's
+// milliseconds (floored), and throws in a case without @clock, as staticjs
+// faults there; TZ is UTC, the host's time zone in staticjs; and Temporal.Now
+// is the polyfill's own, each function called as it is, with the clock's
+// nanoseconds past its millisecond added to what it gives (an Instant, or a
+// date and time at a fixed offset, which a nanosecond moves as it moves the
+// instant).
+//
 // numbers.txt, if given, holds the lines number_test --print, json_test
 // --print and regex_test --print write: what staticjs computed from an input
 // (a double formatted, a decimal read, a JSON document read and written, a
@@ -28,9 +39,30 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const polyfill = join(dirname(fileURLToPath(import.meta.url)), 'vendor', 'temporal-polyfill', 'global.js');
+process.env.TZ = 'UTC';
 const temporalContext = vm.createContext({});
 vm.runInContext(readFileSync(polyfill, 'utf8'), temporalContext, { filename: polyfill });
 globalThis.Temporal = temporalContext.Temporal;
+// The clock of the case running: epoch nanoseconds (a BigInt), or null.
+let clock = null;
+const clockParts = () => {
+  if (clock === null) throw new Error('the case reads the clock and has no @clock');
+  const milliseconds = clock / 1000000n - (clock % 1000000n < 0n ? 1n : 0n);
+  return [Number(milliseconds), clock - milliseconds * 1000000n];
+};
+vm.runInContext('Date', temporalContext).now = () => clockParts()[0];
+{
+  const now = Temporal.Now;
+  const later = (value) => value.add({ nanoseconds: Number(clockParts()[1]) });
+  const clocked = Object.create(null);
+  for (const name of Object.getOwnPropertyNames(now)) clocked[name] = now[name];
+  clocked.instant = () => later(now.instant());
+  clocked.plainDateTimeISO = (...zone) => later(now.plainDateTimeISO(...zone));
+  clocked.plainDateISO = (...zone) => later(now.plainDateTimeISO(...zone)).toPlainDate();
+  clocked.plainTimeISO = (...zone) => later(now.plainDateTimeISO(...zone)).toPlainTime();
+  clocked.zonedDateTimeISO = (...zone) => later(now.zonedDateTimeISO(...zone));
+  Object.defineProperty(Temporal, 'Now', { value: clocked });
+}
 // The Temporal types, each written as its type's from() of its string.
 const temporalTypes = ['PlainDate', 'PlainTime', 'PlainDateTime', 'Instant', 'Duration', 'ZonedDateTime',
   'PlainYearMonth', 'PlainMonthDay'];
@@ -68,7 +100,7 @@ function parseSpec(path) {
   let where = 'outside';
   readFileSync(path, 'utf8').split('\n').forEach((line, index) => {
     if (line.startsWith('=== ')) {
-      current = { name: line.slice(4).trim(), line: index + 1, source: [], expected: [], globals: [], module: null };
+      current = { name: line.slice(4).trim(), line: index + 1, source: [], expected: [], globals: [], module: null, clock: null };
       cases.push(current);
       where = 'source';
       return;
@@ -78,6 +110,10 @@ function parseSpec(path) {
     if (where === 'source' && current.source.length === 0 && line.startsWith('@global ')) {
       const [name, ...rest] = line.slice(8).split(' = ');
       current.globals.push([name, rest.join(' = ')]);
+      return;
+    }
+    if (where === 'source' && current.source.length === 0 && line.startsWith('@clock ')) {
+      current.clock = BigInt(line.slice(7).trim());
       return;
     }
     if (where === 'source' && current.source.length === 0 && line.startsWith('@shapes ')) {
@@ -121,6 +157,15 @@ function parses(c) {
 // Evaluate a case: a module (linked against the modules before it) or an
 // expression. Answers the module, or the expression's value.
 async function evaluate(c, modules) {
+  clock = c.clock;
+  try {
+    return await evaluateAt(c, modules);
+  } finally {
+    clock = null;
+  }
+}
+
+async function evaluateAt(c, modules) {
   const globals = c.globals.map(([name, expression]) => [name, (0, eval)(`(${expression}\n)`)]);
   if (c.module) {
     const module = new vm.SourceTextModule(c.source, { identifier: c.module });

@@ -49,7 +49,9 @@ This guide links them into procedures. It does not repeat them.
    - `--- fault words` for a fault when it runs;
    - `--- error unsupported words` or `--- error syntax words` for a refusal
      when compiled;
-   - `@shapes` to name each function's shape.
+   - `@shapes` to name each function's shape;
+   - `@clock <epoch nanoseconds>` to set the host clock that `Temporal.Now`
+     reads (`docs/temporal.md`, "Host clock").
 2. **Never type an expected value by hand.** Put the expression in a small
    Node script, `eval` it, and paste what it prints. The cases in
    `group_by.spec`, `array_methods.spec`, `numbers.spec`, `bigint.spec`,

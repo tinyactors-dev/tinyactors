@@ -1,8 +1,8 @@
 # Temporal values
 
 How staticjs holds and computes Temporal's types: `Temporal.PlainDate`,
-`PlainTime`, `PlainDateTime`, `Duration` and `Instant` (built), and
-`Temporal.Now` (to build, on the same design). Read `builtins.md` and
+`PlainTime`, `PlainDateTime`, `Duration` and `Instant`, and
+`Temporal.Now`, which reads the host clock (all built). Read `builtins.md` and
 `extending.md` ("To add a value kind") first; this note says only what is
 particular to Temporal.
 
@@ -144,7 +144,9 @@ read) and one `compare_iso` serve the three.
 To add a type's functions: IDs before `SJS_BUILTIN_FUNCTION_COUNT`, rows in
 `FUNCTION_TABLE` (`{ "new", "Temporal.PlainTime", ... }` for the
 constructor), `FUNCTION_VALUE`s, and cases in `function_call`.
-`Temporal.Now.instant()` is `{ "Temporal.Now", "instant", ... }`.
+`Temporal.Now.instant()` is `{ "Temporal.Now", "instant", ... }`
+(`now_function`; timeZoneId's last two letters are escaped in the table,
+as calendarId's are, for `check-acronyms`).
 
 ## Conversions, options, faults
 
@@ -386,8 +388,8 @@ leaves them out).
 ## Testing
 
 - `tests/spec/temporal_plain_date.spec`, `temporal_plain_time.spec`,
-  `temporal_plain_date_time.spec`, `temporal_duration.spec` and
-  `temporal_instant.spec`: cases
+  `temporal_plain_date_time.spec`, `temporal_duration.spec`,
+  `temporal_instant.spec` and `temporal_now.spec` (`@clock`): cases
   written by hand, values from the polyfill. A case named "deliberate" faults where JavaScript gives a
   value.
 - `tests/temporal_test.c`: sweeps from fixed lists (no randomness, at most
@@ -474,8 +476,32 @@ sjs_result sjs_vm_clock(const sjs_vm *vm, sjs_epoch *out);
   further, sets it. Past the limits it is `SJS_ERR_INVALID`, the clock
   unchanged.
 - No call allocates. The precision is the host's: staticjs gives every
-  nanosecond it is given (temporal-polyfill reads `Date.now()`, whole
-  milliseconds).
+  nanosecond it is given. (temporal-polyfill reads `Date.now()`, whole
+  milliseconds; @js-temporal/polyfill adds to those a count of
+  nanoseconds from an earlier `Date.now()`. The specification leaves the
+  precision to the implementation, so neither is a value to match.)
+
+`Temporal.Now` (`now_function`): `instant()` is an Instant of the clock;
+`plainDateTimeISO(timeZone)`, `plainDateISO` and `plainTimeISO` its date
+and time at the time zone, read as an Instant's `toString` reads its
+`timeZone` (`time_zone_of`): `undefined` (the host's time zone, UTC),
+`"UTC"` in any case, or a fixed offset `+HH`, `+HHMM`, `+HH:MM`; a time
+zone's name and an ISO string (both polyfills read its time zone) fault
+on purpose, and anything but a string is a TypeError there. The time
+zone is read before the clock, as both polyfills do. timeZoneId() is
+`"UTC"`, and reads no clock. `zonedDateTimeISO` faults (no
+ZonedDateTime). Other arguments are ignored, as in JavaScript.
+
+The spec format fixes the clock with `@clock <epoch nanoseconds>`
+(`tests/spec_test.c`): spec_test sets it before each evaluation of the
+case, and diff-node gives the polyfill's `Temporal.Now` the same instant:
+the context's `Date.now()` the clock's milliseconds (floored), `TZ` UTC,
+and each of the polyfill's own `Now` functions called as the case calls
+it, with the nanoseconds past the millisecond added to its result (at
+UTC or a fixed offset a nanosecond moves the date and time as it moves
+the instant). A case without `@clock` that reads the clock faults in
+staticjs (deliberately: Node reads the machine's clock), and the
+diff-node `Date.now()` throws there.
 
 `Math.random` will read a seed the same way: a value the evaluator holds,
 `sjs_vm_set_seed` (or the like) to push it, a program that reads it
@@ -494,9 +520,10 @@ evaluator holds, so that pausing and resuming changes no value.
   a ZonedDateTime `relativeTo`.
 - Instant: built, UTC only. `toZonedDateTimeISO`, `toLocaleString` and a
   `toString` time zone other than UTC or a fixed offset fault.
-- Temporal.Now: the host clock (docs/builtins-status.md, the
-  introduction); `Temporal.Now` is a namespace already. `instant()` is
-  `new_instant` of the clock's epoch nanoseconds (a wide integer); the
-  ISO functions are its date and time at UTC (`put_instant`'s arithmetic:
+- Temporal.Now: built on the host clock ("Host clock"). `instant()` is
+  `new_instant` of the clock's epoch nanoseconds; the ISO functions are
+  its date and time at the time zone (`put_instant`'s arithmetic:
   `wide_floor` by a day, `date_at`, `set_time_of_day`), and timeZoneId()
-  is `"UTC"`.
+  is `"UTC"`. `zonedDateTimeISO` faults. `Date.now()` and `new Date()`,
+  when built, read the same clock (`vm->clock`), floored to
+  milliseconds.

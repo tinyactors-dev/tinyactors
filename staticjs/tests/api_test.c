@@ -1286,6 +1286,55 @@ static sjs_run loop_finish(loop_run *l, uint64_t per_run, char *out) {
     return status;
 }
 
+/* A program reads the clock (Temporal.Now): what the host set before the
+ * run, the same at every read with no call between them, the clock as
+ * moved at a pause after it; never set, a fault. */
+static void now_reads(loop_run *l, uint64_t advance, long long out[2]) {
+    sjs_run_params run = { l->program, NULL, 0 };
+    char text[4096];
+    CHECK(sjs_vm_start(l->vm, &run) == SJS_OK);
+    sjs_run status;
+    while ((status = sjs_vm_run(l->vm, 1)) == SJS_RUN_PAUSED) {
+        if (advance != 0) CHECK(sjs_vm_advance_clock(l->vm, advance) == SJS_OK);
+    }
+    out[0] = out[1] = -1;
+    CHECK(status == SJS_RUN_DONE);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(l->vm, &v) == SJS_OK);
+    write_text(l->context, v, text, sizeof text);
+    sjs_release(l->context, v);
+    CHECK(sscanf(text, "[%lldn,%lldn]", &out[0], &out[1]) == 2);
+}
+
+static void test_now_reads(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    loop_run l;
+    CHECK(loop_open(&l, context, "[Temporal.Now.instant().epochNanoseconds, [1, 2, 3].map(x => x * 2).length,"
+                                 " Temporal.Now.instant().epochNanoseconds].filter(x => x !== 3)"));
+    char out[4096];
+    /* Never set. */
+    CHECK(loop_finish(&l, UINT64_MAX, out) == SJS_RUN_FAULT && strstr(out, "the host has not set the clock (sjs_vm_set_clock)") != NULL);
+    long long t[2];
+    CHECK(sjs_vm_set_clock(l.vm, &(sjs_epoch){ 1704067200, 123456789 }) == SJS_OK);
+    /* Paused at every unit, the clock untouched: every read agrees. */
+    now_reads(&l, 0, t);
+    CHECK(t[0] == 1704067200123456789LL && t[1] == t[0]);
+    /* Advanced at every pause: each read sees the clock as the host left it,
+     * the second later by a microsecond for each pause between them. */
+    now_reads(&l, 1000, t);
+    CHECK(t[0] > 1704067200123456789LL && (t[0] - 1704067200123456789LL) % 1000 == 0);
+    CHECK(t[1] > t[0] && (t[1] - t[0]) % 1000 == 0);
+    sjs_epoch at;
+    CHECK(sjs_vm_clock(l.vm, &at) == SJS_OK && (long long)at.seconds * 1000000000LL + at.nanoseconds >= t[1]);
+    /* Set again: whole runs read it. */
+    CHECK(sjs_vm_set_clock(l.vm, &(sjs_epoch){ -1, 999999999 }) == SJS_OK);
+    CHECK(loop_finish(&l, UINT64_MAX, out) == SJS_RUN_DONE && strcmp(out, "[-1n,-1n]") == 0);
+    loop_close(&l);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+}
+
 /* A loop's callback runs in one frame kept for the whole loop (vm.c,
  * sjs_vm_call_back). Faults in it report where they were, the limits fall
  * where they did, an evaluation stopped at any unit frees everything, and
@@ -2937,6 +2986,7 @@ int main(int argc, char **argv) {
     test_writer_resumes();
     test_fuel_and_reset();
     test_host_clock();
+    test_now_reads();
     test_limits();
     test_loop_callbacks();
     test_reuse_leaves_others_alone();
