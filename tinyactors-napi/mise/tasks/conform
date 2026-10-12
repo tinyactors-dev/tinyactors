@@ -3,7 +3,7 @@
 #USAGE arg "[argument]..." var=#true help="options for the runner: --milestone, --suite, --timeout, --skip (tinyactors-test/README.md)"
 # vim:ft=ruby
 
-# The differential run (ROADMAP.md, step 8, "Gates"): the same suite on the
+# The differential run (AGENTS.md, "Tasks"): the same suite on the
 # native "ecmascript" datamodel and on quickjs, and both must pass, under
 # each runtime the package serves. Both datamodels are named "ecmascript",
 # so the adapter's host.create puts only the one asked for in the host
@@ -13,13 +13,13 @@
 # task, whose PATH is its own. The adapter reads and writes the driver's
 # frames with the package's own `encode` and `decode`, and imports nothing
 # but `@tinyactors/node` and `node:` built-ins (tinyactors-test/lint).
-# Without --milestone the whole suite runs; `mise run test` passes the
-# milestone (NodeAPI::MILESTONE).
+# Without --milestone the whole suite runs; `mise run test` passes
+# `--milestone NodeAPI::MILESTONE`.
 
 require_relative '../napi'
 
 unless NodeAPI::ADAPTER.exist?
-  abort "conform: no adapter yet: #{NodeAPI::ADAPTER.relative_path_from(NodeAPI::ROOT)} (written in M1)"
+  abort "conform: no adapter yet: #{NodeAPI::ADAPTER.relative_path_from(NodeAPI::ROOT)}"
 end
 
 options = ARGV.reject { |argument| argument == '--' }

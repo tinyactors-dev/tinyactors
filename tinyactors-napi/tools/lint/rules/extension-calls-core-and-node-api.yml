@@ -1,6 +1,6 @@
 # The addon calls core (ta_*, TA_* macros, our own ta_napi_*) and Node-API
-# (napi_*, node_api_*, NAPI_* macros), and nothing else (ROADMAP.md, step 8,
-# "Gates": layer lints; tinyactors-core/docs/bindings.md, sections 1 and 2):
+# (napi_*, node_api_*, NAPI_* macros), and nothing else (AGENTS.md, "C rules":
+# layers; tinyactors-core/docs/bindings.md, sections 1 and 2):
 # no other library, no twin of what C or the runtime does, and nothing of
 # a runtime beyond Node-API: Bun runs the same addon and has no libuv
 # timers (uv_*; oven-sh/bun#18546), and V8's API is Node's alone.

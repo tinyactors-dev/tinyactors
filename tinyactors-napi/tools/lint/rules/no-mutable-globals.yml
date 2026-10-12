@@ -3,7 +3,7 @@
 # at the repository root). The addon is loaded once per process and its
 # module initialized once per environment: the main thread and each worker
 # thread has its own (Node-API's per-environment instance data,
-# `napi_set_instance_data`; under Bun, unverified until M1 runs it). A
+# `napi_set_instance_data`; under Bun, unverified until a test runs it). A
 # global would be shared by all of them, and a `napi_value` or `napi_ref`
 # of one environment is meaningless in another. State
 # lives in the instance data or on the `Host` object.

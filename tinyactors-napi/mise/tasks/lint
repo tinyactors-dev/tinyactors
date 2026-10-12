@@ -33,7 +33,7 @@ if NodeAPI::ADAPTER.exist?
   NodeAPI.run('mise', 'run', '//tinyactors-test:lint', '--', 'conform.mjs')
 else
   NodeAPI.run('mise', 'run', '//tinyactors-test:lint')
-  puts 'lint: no adapter yet (conform.mjs, M1): the adapters\' lint ran its own tests only'
+  puts 'lint: no adapter yet (conform.mjs): the adapters\' lint ran its own tests only'
 end
 
 problems = APIMap.check(NodeAPI::MAPPING)

@@ -7,7 +7,7 @@
 # headers: they match through tinyactors-core's utility rules
 # (four-or-more-parameters, bytes-as-pointer-and-length, allocator-signature),
 # so the patterns are core's and are written once. The others are this
-# binding's gates (ROADMAP.md, step 8, "Gates"): the layers, one timer,
+# binding's own (AGENTS.md, "C rules"): the layers, one timer,
 # the ta_napi_ prefix, and no mutable globals.
 ruleDirs:
   - tools/lint/rules

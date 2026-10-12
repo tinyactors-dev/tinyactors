@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 # What tinyactors-napi's tasks share: where things are, how a task runs a
-# command, and the runtimes this project pins. M1 adds the addon's build
-# here (Toolchain::Target.host for the tests, Target.release for the
+# command, and the runtimes this project pins. The addon's build belongs
+# here too (Toolchain::Target.host for the tests, Target.release for the
 # packages; mise/lib/toolchain.rb).
 require 'pathname'
 
@@ -10,16 +10,15 @@ module NodeAPI
   ROOT = Pathname.new(__dir__).join('..').expand_path
   BUILD = ROOT.join('build')
   # Core's amalgamation, built from tinyactors-core's sources into this
-  # project's own build/ (ROADMAP.md, step 8, "Rules for the work").
+  # project's own build/ (AGENTS.md, "Tasks").
   CORE_BUILD = BUILD.join('core')
   # The suite's adapter, `node conform.mjs` (tinyactors-test/docs/driver.md).
   ADAPTER = ROOT.join('conform.mjs')
   # The mapping table (tinyactors-core/docs/bindings.md, section 2).
   MAPPING = ROOT.join('docs/api-map.md')
-  # The milestone of ROADMAP.md, step 8, this binding is held to: `mise run
-  # test` runs the suite's set for it (tinyactors-test/suites/milestones.txt,
-  # `--milestone`). Moved on, here only, when the milestone is done
-  # (ROADMAP.md in this directory).
+  # The suite's set `mise run test` runs (`--milestone`, a set of
+  # tinyactors-test/suites/milestones.txt), named here and nowhere else.
+  # Which set the binding is held to now is in ROADMAP.md.
   MILESTONE = 'M1'
   # The runtimes the package serves, each running the same addon.
   RUNTIMES = %w[node bun].freeze

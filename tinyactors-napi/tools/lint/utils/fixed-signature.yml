@@ -1,6 +1,6 @@
 # The parameter list of a function whose signature a typedef fixes, so its
-# parameters are not ours to group (ROADMAP.md, step 8, "Rules for the
-# work": exempt by that typedef, not by name). It is matched by the
+# parameters are not ours to group (AGENTS.md, "C rules":
+# exempt by that typedef, not by name). It is matched by the
 # parameter types, whatever the function and its parameters are called
 # (Node.js 22's include/node/js_native_api_types.h and node_api_types.h):
 #

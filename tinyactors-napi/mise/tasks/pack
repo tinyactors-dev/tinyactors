@@ -1,10 +1,10 @@
 #!/usr/bin/env ruby
-#MISE description="Pack @tinyactors/node and its per-platform packages. Not yet: packaging is M5"
+#MISE description="Pack @tinyactors/node and its per-platform packages. Not built yet (ROADMAP.md)"
 # vim:ft=ruby
 
-# ROADMAP.md, step 8, M5 ("examples and release": release tasks and
-# changelogs for both packages) and docs/adr/0001, decisions 10, 11 and 15
-# (one addon per platform package, the main package listing them as
-# optionalDependencies at its own exact version).
+# One addon per platform package, the main package listing them as
+# optionalDependencies at its own exact version (docs/adr/0001, decisions
+# 10, 11 and 15), with release tasks and a changelog. When packaging is
+# built is in ROADMAP.md.
 
-abort 'pack: not yet: the packages are built in M5 (ROADMAP.md, step 8, "M5: examples and release")'
+abort 'pack: not built yet: packaging is not written (ROADMAP.md)'
