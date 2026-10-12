@@ -15,14 +15,14 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop` (and its `next` and `return`, on a variable a mutation: docs/mutation.md), `String.raw`,
+  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, an array's, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop` (and its `next` and `return`, on a variable a mutation: docs/mutation.md), `String.raw`,
   `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, Temporal's
   functions and its values' methods (`src/temporal.c`), `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
 - **A loop** calls a callback: `map`, `filter`, `reduce`, `reduceRight`, `some`, `every`,
-  `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted`, `Object.groupBy`, `Array.from` (with a mapper), `Map.groupBy`, a map's
+  `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted`, `Object.groupBy`, `Array.from` (with a mapper), `Map.groupBy`, an array's, a map's
   or a set's `forEach`, an iterator's `map`, `filter`, `reduce`, `some`, `every`,
   `find` and `flatMap` (which run as the array's loops of their names over
   what the iterator yields: `late_start`; `flatMap` with its own step,

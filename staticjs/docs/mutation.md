@@ -79,10 +79,13 @@ JavaScript keys one by its identity. Its `delete` and `clear` remove as a
 set's do, the key's value with it; `delete` of an object gives `false`.
 `delete` and `clear` name a set's method and a map's: the name's
 `mutation` column holds the set's, which returns alike, and
-`sjs_mutation_of` gives the map's for a map. A map's or a set's iterator
-holds the map or the set, so a mutation of it faults ("held elsewhere")
-while one lives; so does `forEach`'s callback's, as the loop holds the map
-or the set.
+`sjs_mutation_of` gives the map's for a map. An array's, a map's or a
+set's iterator (`keys`, `values`, `entries`, and a helper's result from
+one) holds the array, the map or the set, so a mutation of it faults
+("held elsewhere") while one lives (`const it = xs.values(); xs.push(1)`);
+after the iterator's last read, which moves it, the mutation runs. So does
+`forEach`'s callback's, as the loop holds the array, the map or the set
+(`xs.forEach((x, i, a) => a.push(x))`).
 
 ## The rule, at compile time
 
@@ -615,20 +618,22 @@ a mutation of the iterator, by the rules above, of the kind `SJS_ITERATOR`:
 - **On a variable the function owns** (`const it = m.values(); it.next()`),
   checked when compiled and again when it runs, it gives a new object
   `{ value, done }`, its keys in that order: the value the iterator yields
-  next (an entry's a new `[key, value]` array, as a spread makes it) and
+  next (an entry's a new `[key, value]` array, as a spread makes it, an
+  array's `[index, element]`) and
   `false`, or `undefined` and `true` once the iterator has yielded
   everything, as often as it is called. Its argument is not read. The
   iterator keeps a position (`sjs_iterator.position`), the count of values
   taken: `sjs_iterator_count` and `iterator_range` (`src/builtins.c`), which
   every reader goes through, start there, and the writer writes the rest.
-  An iterator still holds its map or its set when it has yielded
+  An iterator still holds its array, its map or its set when it has yielded
   everything, so a mutation of that faults ("held elsewhere") while the
   iterator lives.
 - **`return()`** is an iterator helper's (`take`, `drop`, `map`, `filter`,
   `flatMap`, marked `SJS_ITERATE_HELPER`): on such a variable it moves the
   position to the end and gives `{ value: undefined, done: true }`; its
-  argument is not read, as JavaScript's helper gives `undefined`. A map's,
-  a set's and `matchAll`'s iterators have no `return` in JavaScript, which
+  argument is not read, as JavaScript's helper gives `undefined`. An
+  array's, a map's, a set's and `matchAll`'s iterators have no `return` in
+  JavaScript, which
   throws a TypeError calling it; staticjs faults ("no return method"). Read
   as a value, either name faults ("does not read them"), where JavaScript
   gives a function or `undefined`.
