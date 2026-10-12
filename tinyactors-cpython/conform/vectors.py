@@ -160,6 +160,26 @@ class Vectors:
         envelopes, self.envelopes = self.envelopes, []
         return {"status": 0, "envelopes": envelopes}
 
+    def peer(self, params):
+        p.check(params, ("id", "trusted"))
+        host = self.host_of()
+        try:
+            peer = host.add_peer(p.get(params, "id", str, required=True), trusted=p.get(params, "trusted", bool, False))
+        except tinyactors.TinyactorsError as error:
+            return {"status": status_of(error)}
+        return {"status": 0, "peer": peer}
+
+    def deliver(self, params):
+        p.check(params, ("peer", "cbor"))
+        host = self.host_of()
+        peer = p.get(params, "peer", int, required=True)
+        envelope = p.get(params, "cbor", bytes, required=True)
+        try:
+            route = host.deliver(peer, envelope)
+        except tinyactors.TinyactorsError as error:
+            return {"status": status_of(error)}
+        return {"status": 0, "route": route}
+
     METHODS = {
         "host.create": create,
         "host.free": free,
@@ -169,4 +189,6 @@ class Vectors:
         "actor.send": send,
         "clock.advance": advance,
         "host.run": run,
+        "peer.add": peer,
+        "envelope.deliver": deliver,
     }

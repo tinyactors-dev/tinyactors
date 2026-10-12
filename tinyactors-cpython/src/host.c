@@ -638,6 +638,59 @@ static PyObject *ta_python_host_terminate(PyObject *self, PyObject *session) {
     return ta_python_after_input(host, Py_NewRef(Py_None));
 }
 
+/* ---- peers --------------------------------------------------------------------------- */
+
+/* add_peer(id, *, trusted=False) -> peer: another system, as one
+ * transport connection (ta_host_peer_add; TA_PEER_TRUSTED). */
+static PyObject *ta_python_host_add_peer(PyObject *self, PyObject *args, PyObject *kwargs) {
+    static const char *const keywords[] = {"id", "trusted", NULL};
+    ta_python_host *host = (ta_python_host *)self;
+    PyObject *id = NULL;
+    int trusted = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "U|$p:add_peer", (char **)keywords, &id, &trusted) ||
+        !ta_python_host_usable(host))
+        return NULL;
+    ta_peer_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.flags = trusted ? TA_PEER_TRUSTED : 0;
+    if (!ta_python_text_of(id, &config.id)) return NULL;
+    uint32_t peer = 0;
+    ta_status status = ta_host_peer_add(host->host, &config, &peer);
+    if (status != TA_OK) {
+        ta_python_raise_status(ta_python_host_state(host), "ta_host_peer_add", status);
+        return NULL;
+    }
+    return ta_python_after_input(host, PyLong_FromUnsignedLong(peer));
+}
+
+/* deliver(peer, envelope) -> route: envelope bytes from `peer` (0: this
+ * host's own code), read (ta_host_envelope_read) and delivered
+ * (ta_host_deliver), also when its data is not one well-formed item, so
+ * core answers the sender; bytes that are not an envelope are refused
+ * (bindings.md, section 9). Returns core's TA_ROUTE_* outcome. */
+static PyObject *ta_python_host_deliver(PyObject *self, PyObject *args) {
+    ta_python_host *host = (ta_python_host *)self;
+    unsigned int peer = 0;
+    Py_buffer bytes;
+    if (!PyArg_ParseTuple(args, "Iy*:deliver", &peer, &bytes)) return NULL;
+    if (!ta_python_host_usable(host)) {
+        PyBuffer_Release(&bytes);
+        return NULL;
+    }
+    ta_envelope envelope;
+    memset(&envelope, 0, sizeof envelope);
+    ta_status status = ta_host_envelope_read(host->host, (ta_bytes){bytes.buf, (size_t)bytes.len}, &envelope);
+    int32_t route = status == TA_OK || envelope.size ? ta_host_deliver(host->host, peer, &envelope) : status;
+    PyBuffer_Release(&bytes);
+    if (route < 0) {
+        ta_python_raise_status(ta_python_host_state(host),
+                               status == TA_OK || envelope.size ? "ta_host_deliver" : "ta_host_envelope_read", route);
+        return NULL;
+    }
+    return ta_python_after_input(host, PyLong_FromLong(route));
+}
+
 static PyObject *ta_python_host_request_method(PyObject *self, PyObject *args, PyObject *kwargs) {
     return ta_python_host_request((ta_python_host *)self, args, kwargs);
 }
@@ -660,6 +713,10 @@ static PyMethodDef ta_python_host_methods[] = {
     {"send_many", ta_python_host_send_many, METH_O,
      "send_many(events) -> int\n\nEach event a (session, event[, data]) tuple; returns how many were taken."},
     {"terminate", ta_python_host_terminate, METH_O, "terminate(session)"},
+    {"add_peer", (PyCFunction)(void (*)(void))ta_python_host_add_peer, METH_VARARGS | METH_KEYWORDS,
+     "add_peer(id, *, trusted=False) -> peer\n\nAnother system, as one transport connection."},
+    {"deliver", ta_python_host_deliver, METH_VARARGS,
+     "deliver(peer, envelope) -> route\n\nEnvelope bytes from peer (0: this host's own code); one of ROUTE_*."},
     {"run", ta_python_host_run, METH_NOARGS,
      "run()\n\nRuns the host on the real clock until it has no deadline left, sleeping until each."},
     {"close", ta_python_host_close, METH_NOARGS, "close()\n\nFrees the host (ta_host_free)."},

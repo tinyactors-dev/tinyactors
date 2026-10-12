@@ -104,6 +104,13 @@ static int ta_python_module_exec(PyObject *module) {
     for (size_t i = 0; i < sizeof ta_python_status_names / sizeof ta_python_status_names[0]; i++)
         if (PyModule_AddIntConstant(module, ta_python_status_names[i].name, ta_python_status_names[i].status) < 0)
             return -1;
+    /* core's TA_ROUTE_* (host.h), what Host.deliver returns */
+    static const ta_python_status_name routes[] = {{TA_ROUTE_DELIVERED, "ROUTE_DELIVERED"},
+                                                   {TA_ROUTE_RELAYED, "ROUTE_RELAYED"},
+                                                   {TA_ROUTE_DUPLICATE, "ROUTE_DUPLICATE"},
+                                                   {TA_ROUTE_REFUSED, "ROUTE_REFUSED"}};
+    for (size_t i = 0; i < sizeof routes / sizeof routes[0]; i++)
+        if (PyModule_AddIntConstant(module, routes[i].name, routes[i].status) < 0) return -1;
     state->time = PyImport_ImportModule("time");
     if (!state->time || ta_python_values_init(module, state) < 0 || ta_python_host_init_type(module, state) < 0 ||
         ta_python_clock_init_type(module, state) < 0)

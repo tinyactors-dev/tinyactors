@@ -217,3 +217,52 @@ class LifetimeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+ECHO = """<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='echo' initial='s'>
+<datamodel><data id='origin'/></datamodel>
+<state id='s'><transition event='v'><assign location='origin' expr='_event.origin'/>
+<send event='back' targetexpr='origin'><content expr='_event.data'/></send></transition></state></scxml>"""
+
+
+class PeerTest(unittest.TestCase):
+    def envelope(self, session, value):
+        """An envelope whose data is `value` (CBOR bytes) as tag 24 on bytes
+        (protocol.md, Envelope), written by hand: tag 24 is not in the
+        value table."""
+        encode = tinyactors.encode
+        pairs = [("target", f"tinyactors://h/#_scxml_{session}"), ("name", "v"), ("sendid", "s1"),
+                 ("origin", "tinyactors://p/#_scxml_9"), ("msgid", "m1")]
+        body = b"".join(encode(key) + encode(item) for key, item in pairs)
+        return b"\xa6" + body + encode("data") + b"\xd8\x18" + encode(value)
+
+    def test_an_envelope_in_and_one_out(self):
+        sent = []
+        with Host(CONFIG, on_peer=lambda peer, envelope: sent.append((peer, envelope))) as host:
+            host.add_image({"echo.scxml": ECHO})
+            session = host.spawn("echo")
+            peer = host.add_peer("p", trusted=True)
+            self.assertEqual(host.deliver(peer, self.envelope(session, b"\x82\x01\x02")),
+                             tinyactors.ROUTE_DELIVERED)
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0][0], peer)
+            back = sent[0][1]  # its data is tag 24, outside the value table: read its bytes
+            self.assertIn(tinyactors.encode("name") + tinyactors.encode("back"), back)
+            self.assertIn(tinyactors.encode("tinyactors://p/#_scxml_9"), back)
+            self.assertIn(b"\xd8\x18\x43\x82\x01\x02", back)
+
+    def test_data_the_datamodel_cannot_read_is_refused_and_answered(self):
+        sent = []
+        with Host(CONFIG, on_peer=lambda peer, envelope: sent.append(envelope)) as host:
+            host.add_image({"echo.scxml": ECHO})
+            session = host.spawn("echo")
+            peer = host.add_peer("p", trusted=True)
+            # a value with tag 33, which the table does not have
+            self.assertEqual(host.deliver(peer, self.envelope(session, b"\xd8\x21\x01")), tinyactors.ROUTE_REFUSED)
+            self.assertEqual(tinyactors.decode(sent[0])["error"], "malformed")
+
+    def test_bytes_that_are_not_an_envelope(self):
+        with Host(CONFIG) as host:
+            with self.assertRaises(TinyactorsError) as raised:
+                host.deliver(0, b"\x01")
+            self.assertEqual(raised.exception.status, tinyactors.ERROR_INVALID)

@@ -161,9 +161,12 @@ Progress:
 - Step 3: `5bd5c298`. Decisions: `docs/values.md` ("Decided for Python"), `docs/errors.md`.
 - Steps 4 and 5: `7219ed78`. On quickjs; `on_peer` is in already (step 7
   adds peers and delivery).
-- Step 6: this commit. `GATE`: the M1 scenarios on quickjs (4 of 4).
+- Step 6: `2d41a15e`. `GATE`: the M1 scenarios on quickjs (4 of 4).
   The protocol vectors on quickjs: 78 pass, 14 fail, the 14 cases of
   request 1 and no other; the envelope and echo cases wait for step 7.
+- Step 7: this commit. The protocol vectors on quickjs: 103 pass, 14
+  fail (request 1's cases, and no other). `GATE` takes the protocol suite
+  when request 1 is answered.
 
 ## Later milestones
 
