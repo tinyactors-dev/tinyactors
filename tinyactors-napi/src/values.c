@@ -509,7 +509,7 @@ napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
     ta_buffer cbor;
     ta_status status = ta_napi_values_encode(env, argv[0], &cbor);
     if (status != TA_OK) {
-        ta_napi_throw_status(env, status);
+        ta_napi_throw_status(env, "encode", status);
         return NULL;
     }
     void *data = NULL;
@@ -530,14 +530,78 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) return NULL;
     ta_bytes cbor;
     if (!ta_napi_values_bytes(env, argv[0], &cbor)) {
-        ta_napi_throw_status(env, TA_ERROR_INVALID);
+        ta_napi_throw_status(env, "decode", TA_ERROR_INVALID);
         return NULL;
     }
     ta_status status = ta_napi_values_decode(env, cbor, &result);
     free((void *)cbor.pointer);
     if (status != TA_OK) {
-        ta_napi_throw_status(env, status);
+        ta_napi_throw_status(env, "decode", status);
         return NULL;
     }
     return result;
+}
+
+/* ---- for the API ----------------------------------------------------------------- */
+
+ta_status ta_napi_values_text(napi_env env, napi_value value, ta_string_view *out) {
+    napi_valuetype type = napi_undefined;
+    out->pointer = NULL;
+    out->length = 0;
+    if (napi_typeof(env, value, &type) != napi_ok || type != napi_string) return TA_ERROR_INVALID;
+    ta_napi_writer writer;
+    memset(&writer, 0, sizeof writer);
+    writer.env = env;
+    ta_napi_writer_text(&writer, value);
+    ta_status status = writer.status;
+    if (status == TA_OK) {
+        out->pointer = writer.strings;
+        out->length = (uint32_t)writer.length;
+        writer.strings = NULL;
+    }
+    ta_napi_writer_free(&writer);
+    return status;
+}
+
+napi_status ta_napi_values_uint8array(napi_env env, ta_bytes bytes, napi_value *out) {
+    void *data = NULL;
+    napi_value buffer;
+    napi_status status = napi_create_arraybuffer(env, bytes.length, &data, &buffer);
+    if (status == napi_ok && bytes.length) memcpy(data, bytes.pointer, bytes.length);
+    return status == napi_ok ? napi_create_typedarray(env, napi_uint8_array, bytes.length, buffer, 0, out) : status;
+}
+
+/* Through the datamodel's from_wire: the value as CBOR, read by the
+ * datamodel the host runs. */
+ta_status ta_napi_values_payload(ta_napi_host *host, napi_value value, ta_payload *out) {
+    napi_valuetype type = napi_undefined;
+    *out = 0;
+    if (napi_typeof(host->env, value, &type) != napi_ok || type == napi_undefined) return TA_OK;
+    ta_buffer cbor;
+    ta_status status = ta_napi_values_encode(host->env, value, &cbor);
+    if (status != TA_OK) return status;
+    const ta_datamodel_vtable *vtable = host->binding.vtable;
+    status = vtable->from_wire(host->binding.datamodel, (ta_bytes){cbor.pointer, cbor.length}, out);
+    free(cbor.pointer);
+    return status;
+}
+
+/* Through the datamodel's to_wire, grown until it fits. */
+ta_status ta_napi_values_of_payload(ta_napi_host *host, const ta_napi_payload_read *read, napi_value *out) {
+    if (!read->payload || read->datamodel != 0) return napi_get_undefined(host->env, out) == napi_ok ? TA_OK : TA_ERROR_NO_MEMORY;
+    const ta_datamodel_vtable *vtable = host->binding.vtable;
+    ta_buffer cbor = {malloc(256), 256, 0};
+    if (!cbor.pointer) return TA_ERROR_NO_MEMORY;
+    ta_status status = vtable->to_wire(host->binding.datamodel, read->payload, &cbor);
+    if (status == TA_ERROR_NO_MEMORY && cbor.length > cbor.capacity) {
+        void *bigger = realloc(cbor.pointer, cbor.length);
+        if (bigger) {
+            cbor.pointer = bigger;
+            cbor.capacity = cbor.length;
+            status = vtable->to_wire(host->binding.datamodel, read->payload, &cbor);
+        }
+    }
+    if (status == TA_OK) status = ta_napi_values_decode(host->env, (ta_bytes){cbor.pointer, cbor.length}, out);
+    free(cbor.pointer);
+    return status;
 }

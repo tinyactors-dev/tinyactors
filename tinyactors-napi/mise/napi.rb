@@ -27,10 +27,16 @@ module NodeAPI
   MILESTONE = 'M1'
   # The runtimes the package serves, each running the same addon.
   RUNTIMES = %w[node bun].freeze
-  # The datamodels the conform task runs the suite on (the differential
-  # run): quickjs until the native one exists (ROADMAP.md, M1, steps 5
-  # and 6), then both, and both must pass.
-  DATAMODELS = %w[quickjs].freeze
+  # What of that set `mise run test` runs now: the suites (`--suite`) and
+  # the datamodels (the differential run). It grows with the work
+  # (ROADMAP.md, M1, "Plan and progress"): M1 is done when it is every
+  # suite of the set on both datamodels, native and quickjs, and both
+  # pass. The protocol suite waits for a request to core (ROADMAP.md,
+  # "Requests to core").
+  GATE = { suites: %w[], datamodels: %w[] }.freeze
+  # The datamodels `mise run conform` runs the suite on: both, unless
+  # TA_NAPI_DATAMODELS names some (the test task's gate does).
+  DATAMODELS = %w[native quickjs].freeze
 
   # Core's libraries the addon links, from its amalgamation: the host and
   # the layers below it, the runtime (the compiler, ta_runtime_malloc) with

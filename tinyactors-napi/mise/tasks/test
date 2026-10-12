@@ -13,9 +13,10 @@
 # what the suite cannot see) under each runtime, each file a program of its
 # own (test/harness.mjs). The conformance suite needs the adapter
 # (conform.mjs): without it, this task says so and skips it; with it, the
-# suite's set named by NodeAPI::MILESTONE must pass (`mise run conform --
-# --milestone <it>`). `mise run conform` on its own runs the whole suite,
-# and fails without the adapter.
+# part of the set named by NodeAPI::MILESTONE that NodeAPI::GATE holds now
+# must pass (`mise run conform -- --milestone <it> --suite <each>`, on the
+# gate's datamodels). `mise run conform` on its own runs the whole suite on
+# both datamodels, and fails without the adapter.
 
 require_relative '../napi'
 
@@ -32,8 +33,13 @@ NodeAPI::RUNTIMES.each do |runtime|
   end
 end
 
-if NodeAPI::ADAPTER.exist?
-  NodeAPI.run('mise', 'run', 'conform', '--', '--milestone', NodeAPI::MILESTONE)
-else
+gate = NodeAPI::GATE
+if !NodeAPI::ADAPTER.exist?
   puts 'test: conform skipped: no adapter yet (conform.mjs)'
+elsif gate[:suites].empty? || gate[:datamodels].empty?
+  puts 'test: conform skipped: the gate holds no suite yet (GATE, mise/napi.rb)'
+else
+  NodeAPI.run('mise', 'run', 'conform', '--', '--milestone', NodeAPI::MILESTONE,
+              *gate[:suites].flat_map { |suite| ['--suite', suite] },
+              env: { 'TA_NAPI_DATAMODELS' => gate[:datamodels].join(',') })
 end

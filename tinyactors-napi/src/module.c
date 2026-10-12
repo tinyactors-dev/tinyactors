@@ -35,11 +35,32 @@ static const char ta_napi_error_source[] =
     "  }\n"
     "})";
 
-/* The names of types.h's statuses, by -status. */
-static const char *const ta_napi_status_names[] = {
-    "TA_OK",           "TA_ERROR_EXECUTION", "TA_ERROR_COMMUNICATION", "TA_ERROR_INVALID", "TA_ERROR_NO_MEMORY",
-    "TA_ERROR_STALE", "TA_ERROR_STATE",     "TA_ERROR_UNSUPPORTED",   "TA_ERROR_FATAL",   "TA_ERROR_ABORTED",
+/* Core's statuses (types.h), by name without TA_: the package's constants
+ * (OK, ERROR_INVALID, ...), and the message of an error with a status, as
+ * the Python binding has them. */
+typedef struct ta_napi_status_name {
+    ta_status status;
+    const char *name;
+} ta_napi_status_name;
+
+static const ta_napi_status_name ta_napi_status_names[] = {
+    {TA_OK, "OK"},
+    {TA_ERROR_EXECUTION, "ERROR_EXECUTION"},
+    {TA_ERROR_COMMUNICATION, "ERROR_COMMUNICATION"},
+    {TA_ERROR_INVALID, "ERROR_INVALID"},
+    {TA_ERROR_NO_MEMORY, "ERROR_NO_MEMORY"},
+    {TA_ERROR_STALE, "ERROR_STALE"},
+    {TA_ERROR_STATE, "ERROR_STATE"},
+    {TA_ERROR_UNSUPPORTED, "ERROR_UNSUPPORTED"},
+    {TA_ERROR_FATAL, "ERROR_FATAL"},
+    {TA_ERROR_ABORTED, "ERROR_ABORTED"},
 };
+
+static const char *ta_napi_status_name_of(ta_status status) {
+    for (size_t i = 0; i < sizeof ta_napi_status_names / sizeof ta_napi_status_names[0]; i++)
+        if (ta_napi_status_names[i].status == status) return ta_napi_status_names[i].name;
+    return NULL;
+}
 
 /* A TinyactorsError with `message` (a JavaScript string) and `fields`. */
 typedef struct ta_napi_error {
@@ -55,21 +76,27 @@ static void ta_napi_throw(napi_env env, const ta_napi_error *error) {
     napi_throw(env, thrown);
 }
 
-static int ta_napi_pending(napi_env env) {
+int ta_napi_exception_pending(napi_env env) {
     bool pending = false;
     napi_is_exception_pending(env, &pending);
     return pending;
 }
 
-void ta_napi_throw_status(napi_env env, ta_status status) {
-    if (ta_napi_pending(env)) return;
-    uint32_t index = status <= 0 && -status < (int32_t)(sizeof ta_napi_status_names / sizeof ta_napi_status_names[0])
-                         ? (uint32_t)-status
-                         : 0;
+void ta_napi_throw_status(napi_env env, const char *function, ta_status status) {
+    if (ta_napi_exception_pending(env)) return;
+    const char *name = ta_napi_status_name_of(status);
+    char message[160];
+    size_t length = 0;
+    const char *const parts[] = {function, ": ", name ? "TA_" : "an unknown status", name ? name : ""};
+    for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) {
+        size_t part = strlen(parts[i]);
+        if (part > sizeof message - length) part = sizeof message - length;
+        memcpy(message + length, parts[i], part);
+        length += part;
+    }
     ta_napi_error error;
     napi_value number;
-    const char *name = ta_napi_status_names[index];
-    napi_create_string_utf8(env, name, strlen(name), &error.message);
+    napi_create_string_utf8(env, message, length, &error.message);
     napi_create_object(env, &error.fields);
     napi_create_int32(env, status, &number);
     napi_set_named_property(env, error.fields, "status", number);
@@ -77,7 +104,7 @@ void ta_napi_throw_status(napi_env env, ta_status status) {
 }
 
 void ta_napi_throw_reply(napi_env env, napi_value reply_error) {
-    if (ta_napi_pending(env)) return;
+    if (ta_napi_exception_pending(env)) return;
     ta_napi_error error;
     napi_value code, data, reason, path, undefined;
     napi_get_undefined(env, &undefined);
@@ -120,9 +147,18 @@ NAPI_MODULE_INIT() {
         {"encode", NULL, ta_napi_encode, NULL, NULL, NULL, napi_enumerable, NULL},
         {"decode", NULL, ta_napi_decode, NULL, NULL, NULL, napi_enumerable, NULL},
         {"TinyactorsError", NULL, NULL, NULL, NULL, error_class, napi_enumerable, NULL},
+        {"compile", NULL, ta_napi_compile, NULL, NULL, NULL, napi_enumerable, NULL},
+        {"Host", NULL, NULL, NULL, NULL, ta_napi_host_class(env), napi_enumerable, NULL},
+        {"SimulatedClock", NULL, NULL, NULL, NULL, ta_napi_clock_class(env), napi_enumerable, NULL},
     };
     if (napi_define_properties(env, exports, sizeof exports_table / sizeof exports_table[0], exports_table) !=
         napi_ok)
         return NULL;
+    for (size_t i = 0; i < sizeof ta_napi_status_names / sizeof ta_napi_status_names[0]; i++) {
+        napi_value number;
+        if (napi_create_int32(env, ta_napi_status_names[i].status, &number) != napi_ok ||
+            napi_set_named_property(env, exports, ta_napi_status_names[i].name, number) != napi_ok)
+            return NULL;
+    }
     return exports;
 }

@@ -172,8 +172,14 @@ Progress:
 
 - Step 1: `75e99ae2`.
 - Step 2: `7a0c46d9`.
-- Step 3: this commit. The decode error is `TinyactorsError` with core's
+- Step 3: `8d6b4e29`. The decode error is `TinyactorsError` with core's
   status (`docs/decisions.md`, "Errors").
+- Step 4 (a, b and c in one commit): this commit. The API's shape is
+  `docs/decisions.md`, "The Host's API", after a fresh agent's refutation;
+  the request and config vectors it cannot send are a request to core,
+  so the gate (`GATE` in `mise/napi.rb`) will hold the protocol suite
+  when the runner skips them. The run budget is `docs/decisions.md`, "The
+  run budget".
 
 ## Later milestones
 
@@ -242,6 +248,8 @@ moves it into the root ROADMAP.md's "Requests to core" and answers there.
     `ticksPerSecond` 1000, so the suite does not fail; the binding's own
     test of a real-clock delayed send on a config without it will.
   - *Until then:* the binding converts with the `ticksPerSecond` of the
-    config the application gave (its own value, not a default), and a
-    host whose config has none refuses the clock's calls with
-    `TA_ERROR_UNSUPPORTED`; nothing else waits on this.
+    config the application gave (its own value, not a default). A host
+    whose config has none cannot take a `SimulatedClock`
+    (`TA_ERROR_UNSUPPORTED`), and on the runtime's clock its monotonic
+    time stays 0 and it arms no timer, so its delayed sends wait;
+    nothing else waits on this.

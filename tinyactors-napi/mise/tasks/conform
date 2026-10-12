@@ -25,7 +25,8 @@ end
 options = ARGV.reject { |argument| argument == '--' }
 NodeAPI::RUNTIMES.each do |runtime|
   program = NodeAPI.pinned(runtime)
-  %w[native quickjs].each do |datamodel|
+  datamodels = ENV.fetch('TA_NAPI_DATAMODELS', '').split(',')
+  (datamodels.empty? ? NodeAPI::DATAMODELS : datamodels).each do |datamodel|
     puts "conform: #{runtime}, #{datamodel}"
     NodeAPI.run('mise', 'run', '//tinyactors-test:run', '--', '--kind', 'binding', '--datamodel', datamodel, *options,
                 program, NodeAPI::ADAPTER.basename.to_s)

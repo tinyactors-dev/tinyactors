@@ -131,8 +131,10 @@ review behind it).
   generation, never a pointer (bindings.md, section 8, line 131).
 - **Text is valid UTF-8.** A lone surrogate is refused
   (`TA_ERROR_INVALID`); Node-API replaces it with U+FFFD silently, so the
-  addon checks (`String.prototype.isWellFormed`) (bindings.md, section 9,
-  line 142).
+  addon checks: it reads the string as UTF-16 and refuses a lone
+  surrogate itself, the test `String.prototype.isWellFormed` makes, with
+  no call into JavaScript (`docs/decisions.md`, "Strings are checked as
+  UTF-16 in C"; bindings.md, section 9, line 142).
 - **Expressions are compiled once as a strict-mode function inside
   `with (scope)`**, as the quickjs datamodel does, so an undeclared
   assignment throws (`tinyactors-core/src/datamodel_ecmascript/datamodel_ecmascript.c:224-227`);
