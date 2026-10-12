@@ -68,9 +68,6 @@ class Vectors:
             # ROADMAP.md, request 1: bytes that are not one item, which no
             # config value of the API can be
             raise Refused(INVALID_PARAMS, "type", "params.config", "not a config the API can take") from None
-        system = value.get("system") if isinstance(value, dict) else None
-        ticks = system.get("ticksPerSecond") if isinstance(system, dict) else None
-        self.ticks_per_second = ticks if isinstance(ticks, int) and ticks > 0 else 1000
         self.clock, self.now, self.envelopes = tinyactors.SimulatedClock(), 0, []
         try:
             self.host = tinyactors.Host(value, clock=self.clock, on_peer=self.on_peer)
@@ -78,6 +75,7 @@ class Vectors:
             if error.code is None:
                 return {"status": status_of(error)}
             return {"status": status_of(error), "error": refusal(error)}
+        self.ticks_per_second = self.host.request("host.config")["system"]["ticksPerSecond"]
         return {"status": 0, "datamodel": name}
 
     def on_peer(self, peer, envelope):

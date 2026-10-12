@@ -171,21 +171,25 @@ static int ta_python_text_of(PyObject *object, ta_string_view *out) {
 
 static const char *const ta_python_handler_names[TA_PYTHON_HANDLERS] = {"on_log", "on_done", "on_error", "on_peer"};
 
-/* The config's system.ticksPerSecond, 0 when it has none (ROADMAP.md,
- * request 2). */
-static uint64_t ta_python_config_ticks(PyObject *config) {
+/* The tick rate the host runs at: host.config's system.ticksPerSecond,
+ * read once after ta_host_create (tinyactors-core/docs/requests.md,
+ * `host.config`; bindings.md, sections 3 and 7), never a default of the
+ * binding's own. */
+static int ta_python_host_ticks(ta_python_host *host) {
+    PyObject *arguments = Py_BuildValue("(s)", "host.config");
+    PyObject *config = arguments ? ta_python_host_request(host, arguments, NULL) : NULL;
     PyObject *system = NULL, *ticks = NULL;
-    uint64_t value = 0;
-    if (PyDict_Check(config) && PyDict_GetItemStringRef(config, "system", &system) > 0 && PyDict_Check(system) &&
-        PyDict_GetItemStringRef(system, "ticksPerSecond", &ticks) > 0 && PyLong_Check(ticks) && !PyBool_Check(ticks))
-        value = PyLong_AsUnsignedLongLong(ticks);
-    if (PyErr_Occurred()) {
-        PyErr_Clear();
-        value = 0;
-    }
+    Py_XDECREF(arguments);
+    if (config && PyDict_Check(config) && PyDict_GetItemStringRef(config, "system", &system) > 0 &&
+        PyDict_Check(system) && PyDict_GetItemStringRef(system, "ticksPerSecond", &ticks) > 0 && PyLong_Check(ticks))
+        host->ticks_per_second = PyLong_AsUnsignedLongLong(ticks);
+    Py_XDECREF(config);
     Py_XDECREF(system);
     Py_XDECREF(ticks);
-    return value;
+    if (PyErr_Occurred()) return -1;
+    if (host->ticks_per_second) return 0;
+    ta_python_raise_status(ta_python_host_state(host), "host.config: no ticksPerSecond", TA_ERROR_INVALID);
+    return -1;
 }
 
 /* ta_host_create with the config's CBOR; a refused config raises the
@@ -247,7 +251,6 @@ static PyObject *ta_python_host_new(PyTypeObject *type, PyObject *args, PyObject
     host->module = Py_NewRef(module);
     host->thread = PyThread_get_thread_ident();
     host->next_deadline = UINT64_MAX;
-    host->ticks_per_second = ta_python_config_ticks(config);
     for (int i = 0; i < TA_PYTHON_HANDLERS; i++)
         host->handlers[i] = handlers[i] == Py_None ? NULL : Py_NewRef(handlers[i]);
     if (ta_python_loop_start(host) < 0) goto fail;
@@ -260,7 +263,7 @@ static PyObject *ta_python_host_new(PyTypeObject *type, PyObject *args, PyObject
         goto fail;
     }
     host->datamodels[host->datamodel_count++] = ta_datamodel_ecmascript_binding(host->ecmascript);
-    if (ta_python_host_create(host, config) < 0) goto fail;
+    if (ta_python_host_create(host, config) < 0 || ta_python_host_ticks(host) < 0) goto fail;
     if (clock != Py_None && ta_python_clock_attach(clock, host) < 0) goto fail;
     return (PyObject *)host;
 fail:

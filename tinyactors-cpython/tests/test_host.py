@@ -164,13 +164,19 @@ class ClockTest(unittest.TestCase):
         self.assertIsNone(reference())
         clock.increment(1)
 
-    def test_without_ticks_per_second_the_clock_is_refused(self):
-        # ROADMAP.md, request 2: the binding cannot read the host's tick rate
-        clock = SimulatedClock()
-        with Host({"systemID": "h"}, clock=clock):
-            with self.assertRaises(TinyactorsError) as raised:
-                clock.increment(1)
-            self.assertEqual(raised.exception.status, tinyactors.ERROR_UNSUPPORTED)
+    def test_the_clock_converts_with_the_hosts_own_tick_rate(self):
+        # host.config's ticksPerSecond (1e9 when the config has none): the
+        # 50 ms delay fires at 50 ms whatever the rate
+        for config in ({"systemID": "h"}, {"systemID": "h", "system": {"ticksPerSecond": 100}}, CONFIG):
+            with self.subTest(config):
+                record, clock = Recorder(), SimulatedClock()
+                with Host(config, clock=clock, **record.handlers()) as host:
+                    host.add_image({"counter.scxml": COUNTER})
+                    host.spawn("counter")
+                    clock.increment(49)
+                    self.assertEqual(record.done, [])
+                    clock.increment(1)
+                    self.assertEqual(len(record.done), 1)
 
 
 class LifetimeTest(unittest.TestCase):

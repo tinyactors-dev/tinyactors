@@ -121,7 +121,7 @@ typedef struct ta_python_host {
     PyObject *handlers[TA_PYTHON_HANDLERS];
     ta_python_image **images; /* by segment; NULL once freed */
     uint32_t image_count, image_capacity;
-    uint64_t ticks_per_second;  /* the config's, 0 when it has none (ROADMAP.md, request 2) */
+    uint64_t ticks_per_second;  /* host.config's system.ticksPerSecond */
     uint64_t origin_ns;         /* the real clock's start (time.monotonic_ns) */
     ta_time next_deadline;      /* of the last run: UINT64_MAX for none */
     int looping;                /* inside ta_python_loop_turn */

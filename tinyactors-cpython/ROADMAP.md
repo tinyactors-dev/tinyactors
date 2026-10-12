@@ -246,7 +246,12 @@ confirmed (a) to (c), corrected the `id` rule from "an integer" to "an
 integer, text or null", and found no skip, milestone or raw path that
 covers them (`runner.rb:141-175`, `test/runner_test.rb:117`).
 
-### 2. A binding cannot read a host's tick rate (open, 2026-10-12)
+### 2. A binding cannot read a host's tick rate (answered, 2026-10-12)
+
+**Answered** (`9bd33f03`, root ROADMAP.md "Requests to core"): the
+request `host.config` answers the host's effective config. The binding
+reads its `system.ticksPerSecond` once after `ta_host_create` and
+converts with it; the stopgap below is gone.
 
 The same gap as the Node session's first request
 (`tinyactors-napi/ROADMAP.md`, "Requests to core", "A binding cannot read
@@ -283,7 +288,7 @@ case) with a chart's `<send delay="50ms">`: no turn can compute its
 `docs/driver.md`), so only the binding's own test sees it. Confirmed by a
 fresh agent's refutation.
 
-**Until then,** as the Node binding does: the binding converts with the
+**Until then** (no longer), as the Node binding did: the binding converts with the
 `ticksPerSecond` of the config the application gave, and a host whose
 config has none refuses the clock's calls (`SimulatedClock.increment`, a
 turn that must advance real time) with `ERROR_UNSUPPORTED`. Nothing in

@@ -91,10 +91,7 @@ static PyObject *ta_python_clock_increment(PyObject *self, PyObject *argument) {
         PyObject *referent = NULL;
         if (PyWeakref_GetRef(PyList_GetItem(hosts, i), &referent) <= 0) continue;
         ta_python_host *host = (ta_python_host *)referent;
-        if (host->host && ta_python_host_usable(host) && host->ticks_per_second == 0)
-            ta_python_raise_status(ta_python_host_state(host), "SimulatedClock: no ticksPerSecond in the config",
-                                   TA_ERROR_UNSUPPORTED); /* ROADMAP.md, request 2 */
-        else if (host->host && !PyErr_Occurred()) ta_python_loop_turn(host);
+        if (host->host && ta_python_host_usable(host)) ta_python_loop_turn(host);
         if (PyErr_Occurred() && !raised) raised = PyErr_GetRaisedException();
         PyErr_Clear();
         Py_DECREF(referent);
@@ -165,12 +162,12 @@ int ta_python_loop_start(ta_python_host *host) {
 
 /* Both clocks now (bindings.md, section 3, "Both clocks in one call"): a
  * SimulatedClock's time, which is the wall clock too; else the monotonic
- * clock since the host was made and the time of day. Without the config's
- * ticksPerSecond the monotonic time stays 0 (ROADMAP.md, request 2). */
+ * clock since the host was made and the time of day. The monotonic time is
+ * in the host's ticks (host.config). */
 static int ta_python_loop_now(const ta_python_host *host, ta_host_time *out) {
     if (host->clock) {
         uint64_t milliseconds = ((ta_python_clock *)host->clock)->milliseconds;
-        out->monotonic = host->ticks_per_second ? ta_python_ticks(host, &(ta_python_duration){milliseconds, 1000}) : 0;
+        out->monotonic = ta_python_ticks(host, &(ta_python_duration){milliseconds, 1000});
         out->wall_ns = milliseconds * 1000000u;
         return 0;
     }
@@ -178,7 +175,7 @@ static int ta_python_loop_now(const ta_python_host *host, ta_host_time *out) {
     if (ta_python_nanoseconds(host, "monotonic_ns", &monotonic) < 0 || ta_python_nanoseconds(host, "time_ns", &wall) < 0)
         return -1;
     uint64_t elapsed = monotonic > host->origin_ns ? monotonic - host->origin_ns : 0;
-    out->monotonic = host->ticks_per_second ? ta_python_ticks(host, &(ta_python_duration){elapsed, 1000000000u}) : 0;
+    out->monotonic = ta_python_ticks(host, &(ta_python_duration){elapsed, 1000000000u});
     out->wall_ns = wall;
     return 0;
 }
@@ -274,11 +271,6 @@ PyObject *ta_python_loop_run(ta_python_host *host, PyObject *unused) {
     if (host->clock) Py_RETURN_NONE;
     PyObject *time = ta_python_host_state(host)->time;
     while (host->host && host->next_deadline != UINT64_MAX) {
-        if (!host->ticks_per_second) {
-            ta_python_raise_status(ta_python_host_state(host), "Host.run: no ticksPerSecond in the config",
-                                   TA_ERROR_UNSUPPORTED); /* ROADMAP.md, request 2 */
-            break;
-        }
         ta_host_time now;
         if (ta_python_loop_now(host, &now) < 0) break;
         double seconds = host->next_deadline > now.monotonic
