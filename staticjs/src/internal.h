@@ -611,7 +611,7 @@ static inline sjs_temporal_type sjs_temporal_type_of(sjs_value v) {
  * before anything else sees it. */
 sjs_result sjs_temporal_make(sjs_context *context, sjs_temporal_type type, sjs_temporal **out);
 /* The longest text sjs_temporal_text writes. */
-#define SJS_TEMPORAL_TEXT_MAX 64u
+#define SJS_TEMPORAL_TEXT_MAX 128u
 /* What toString() with no options gives (and toJSON(), and JSON.stringify
  * quotes), written to `out`: its length. */
 uint32_t sjs_temporal_text(const sjs_temporal *t, char *out);
@@ -728,6 +728,9 @@ typedef enum {
     SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME,
     SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_FROM,
     SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_COMPARE,
+    SJS_BUILTIN_TEMPORAL_DURATION,
+    SJS_BUILTIN_TEMPORAL_DURATION_FROM,
+    SJS_BUILTIN_TEMPORAL_DURATION_COMPARE,
     SJS_BUILTIN_FUNCTION_COUNT,
     /* Methods, called on a receiver. */
     SJS_METHOD_FIRST = 96,

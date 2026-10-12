@@ -69,7 +69,10 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Temporal.PlainTime", "compare", SJS_BUILTIN_TEMPORAL_PLAIN_TIME_COMPARE },
     { "new", "Temporal.PlainDateTime", SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME },
     { "Temporal.PlainDateTime", "from", SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_FROM },
-    { "Temporal.PlainDateTime", "compare", SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_COMPARE }
+    { "Temporal.PlainDateTime", "compare", SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_COMPARE },
+    { "new", "Temporal.Duration", SJS_BUILTIN_TEMPORAL_DURATION },
+    { "Temporal.Duration", "from", SJS_BUILTIN_TEMPORAL_DURATION_FROM },
+    { "Temporal.Duration", "compare", SJS_BUILTIN_TEMPORAL_DURATION_COMPARE }
 };
 
 /*
@@ -346,7 +349,10 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_PLAIN_TIME_COMPARE),
     FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME),
     FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_FROM),
-    FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_COMPARE)
+    FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_COMPARE),
+    FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_DURATION),
+    FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_DURATION_FROM),
+    FUNCTION_VALUE(SJS_BUILTIN_TEMPORAL_DURATION_COMPARE)
 };
 
 sjs_builtin_id sjs_builtin_lookup(sjs_str space, sjs_str name) {
@@ -929,6 +935,9 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME:
     case SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_FROM:
     case SJS_BUILTIN_TEMPORAL_PLAIN_DATE_TIME_COMPARE:
+    case SJS_BUILTIN_TEMPORAL_DURATION:
+    case SJS_BUILTIN_TEMPORAL_DURATION_FROM:
+    case SJS_BUILTIN_TEMPORAL_DURATION_COMPARE:
         return sjs_temporal_function(vm, id, call);
     default:
         return math(vm, id, call);

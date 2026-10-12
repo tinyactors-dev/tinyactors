@@ -22,7 +22,7 @@
  *                            throws, JavaScript's value where staticjs gives
  *                            one, and a fault on every deliberate line.
  *
- * The cases, about 13,000, come from fixed lists, without randomness:
+ * The cases, about 19,000, come from fixed lists, without randomness:
  *   - ISO 8601 strings for Temporal.PlainDate.from, Temporal.PlainTime.from
  *     and Temporal.PlainDateTime.from: dates, times, offsets and
  *     annotations, each list varied with the others held;
@@ -43,7 +43,14 @@
  *     rounding mode over times at and around each multiple and its halves
  *     and midnight; at the limits; increments that do not divide;
  *   - toString's fractionalSecondDigits and smallestUnit by every rounding
- *     mode, over times at each digit's halves, and at the limits.
+ *     mode, over times at each digit's halves, and at the limits;
+ *   - Durations: ISO 8601 durations (signs, date and time parts, each
+ *     varied with the others, in both cases) and strings at the limits;
+ *     round relative to dates at month ends and leap days over every pair
+ *     of units, every mode and increments of the largest unit; round of
+ *     24-hour days and time over every unit, increment, mode and largest
+ *     unit; total in every unit, with and without relativeTo; toString's
+ *     digits by every mode; compare, add and subtract.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -827,6 +834,193 @@ static void to_string_sweep(runner *r) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * Durations
+ */
+
+/* A Duration and a relativeTo date on which the polyfills give different
+ * values, left out: temporal-polyfill counts a month from the 31st, or
+ * from February 29, to the end of the next month, where the specification
+ * (and @js-temporal/polyfill) stops before it (every round and total of
+ * the pair, `unit` NULL); and a total in months or years whose last bit
+ * its floating-point division rounds differently (`unit`). */
+static const struct {
+    const char *duration;
+    const char *relative_to;
+    const char *unit;
+} DIFFERING[] = {
+    { "P1Y11M30DT23H59M59.999999999S", "2024-02-29", NULL },
+    { "P1MT12H", "2024-01-31", NULL },
+    { "P1MT12H", "2023-01-31", NULL },
+    { "P1M15D", "2024-12-31", "month" },
+    { "P1Y2M", "2024-01-31", "year" },
+    { "P1Y2M", "2024-12-31", "year" },
+    { "P45D", "2023-03-01", "month" },
+};
+
+static bool differing(const char *duration, const char *relative_to, const char *unit) {
+    for (size_t i = 0; i < COUNT(DIFFERING); i++) {
+        if (strcmp(duration, DIFFERING[i].duration) != 0 || strcmp(relative_to, DIFFERING[i].relative_to) != 0) continue;
+        if (DIFFERING[i].unit == NULL || (unit != NULL && strcmp(unit, DIFFERING[i].unit) == 0)) return true;
+    }
+    return false;
+}
+
+/* ISO 8601 durations: a sign, P, date parts and time parts, each list
+ * varied with the others, in both cases of their letters; then strings at
+ * the limits and past the grammar. */
+static void duration_strings(runner *r) {
+    static const char *const signs[] = { "", "-", "+" };
+    static const char *const dates[] = { "", "1Y", "2M", "3W", "4D", "1Y2M3W4D", "10Y11M", "1D1Y", "1.5D", "0D", "4294967295Y", "4294967296M",
+                                         "104249991374D", "104249991375D" };
+    static const char *const times[] = { "", "T", "T5H", "T6M", "T7S", "T7.5S", "T7,123456789S", "T7.1234567890S", "T1.5H", "T1.5M",
+                                         "T5H6M7S", "T1.5H6M", "T5H1.5M7S", "T0.000000001S", "T2501999792984H", "T9007199254740991.999999999S",
+                                         "T7S5H", "T.5S", "T1.S" };
+    static const char *const others[] = {
+        "P", "PT", "T1H", "1D", "--P1D", "+-P1D", "P1Y1Y", "PT1H1H", "P1H", "PT1D", "PT1Y", "P1DT1D", " P1D", "P1D ", "P1 D", "P1_000D",
+        "P1e3D", "P-1D", "P+1D", "P1.D", "P4294967295M", "P4294967295W", "P4294967296W", "PT2501999792983H", "PT150119987579016M",
+        "PT150119987579017M", "PT9007199254740992S", "PT9007199254740993S", "PT2501999792983.999999999H", "PT2501999792983.9H",
+        "P104249991374DT7H36M31.999999999S", "P104249991374DT7H36M32S", "P99999999999999999999D", "P00000000000000000000001D",
+        "PT18446744073709551616S", "PT0,1H", "PT0.999999999H", "PT0.999999999M", "P1dT1h", "P1Dt1H", "P1W1D", "P1Y1W", "P1YT",
+        "PT1H1M1S1", "\xe2\x88\x92P1D", "P\xef\xbc\x91\x44", "PT1.000000000S", "PT10.0000000000S", "",
+    };
+    for (size_t s = 0; s < COUNT(signs); s++) {
+        for (size_t d = 0; d < COUNT(dates); d++) {
+            for (size_t t = 0; t < COUNT(times); t++) {
+                for (int lower = 0; lower < 2; lower++) {
+                    char string[96];
+                    snprintf(string, sizeof string, "%s%s%s%s", signs[s], lower ? "p" : "P", dates[d], times[t]);
+                    for (char *c = string; lower && *c != '\0'; c++) {
+                        if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
+                    }
+                    text source = { 0 };
+                    put(&source, "Temporal.Duration.from(");
+                    put_quoted(&source, string, strlen(string));
+                    put(&source, ")");
+                    evaluate(r, &source, false);
+                    free(source.ptr);
+                }
+            }
+        }
+    }
+    for (size_t o = 0; o < COUNT(others); o++) {
+        text source = { 0 };
+        put(&source, "Temporal.Duration.from(");
+        put_quoted(&source, others[o], strlen(others[o]));
+        put(&source, ")");
+        evaluate(r, &source, false);
+        free(source.ptr);
+    }
+}
+
+/* Durations to round and total, around month ends and leap days. */
+static const char *const DURATIONS[] = {
+    "P1M15D", "-P1M15D", "P1Y2M", "P2M3W", "P1Y11M30DT23H59M59.999999999S", "-P1Y11M30DT23H59M59.999999999S", "PT36H", "-PT36H", "P45D",
+    "P1W3DT12H", "P1MT12H", "PT1H30M45.5S",
+};
+static const char *const RELATIVE_TO[] = { "2024-01-31", "2024-02-29", "2023-01-31", "2024-12-31", "2023-03-01" };
+static const char *const DURATION_UNITS[] = { "nanosecond", "microsecond", "millisecond", "second", "minute", "hour", "day", "week", "month", "year" };
+#define ALL_MODES "[\"ceil\", \"floor\", \"expand\", \"trunc\", \"halfCeil\", \"halfFloor\", \"halfExpand\", \"halfTrunc\", \"halfEven\"]"
+
+/* round relative to each date: every pair of units, every mode (in one
+ * line), and increments of the unit when it is the largest. */
+static void duration_round_relative(runner *r) {
+    static const int units[] = { 0, 3, 4, 5, 6, 7, 8, 9 };
+    for (size_t d = 0; d < COUNT(DURATIONS); d++) {
+        for (size_t t = 0; t < COUNT(RELATIVE_TO); t++) {
+            for (size_t l = 0; l < COUNT(units); l++) {
+                for (size_t s = 0; s <= l && !differing(DURATIONS[d], RELATIVE_TO[t], NULL); s++) {
+                    char source[512];
+                    snprintf(source, sizeof source,
+                             ALL_MODES ".map(m => Temporal.Duration.from(\"%s\").round({ largestUnit: \"%s\", smallestUnit: \"%s\", roundingMode: m, relativeTo: \"%s\" }))",
+                             DURATIONS[d], DURATION_UNITS[units[l]], DURATION_UNITS[units[s]], RELATIVE_TO[t]);
+                    evaluate_with(r, "%s", source, false);
+                }
+            }
+            for (int unit = 6; unit < 10 && !differing(DURATIONS[d], RELATIVE_TO[t], NULL); unit++) {
+                char source[512];
+                snprintf(source, sizeof source,
+                         "[2, 3, 7].flatMap(i => " ALL_MODES ".map(m => Temporal.Duration.from(\"%s\").round({ largestUnit: \"%s\", smallestUnit: \"%s\", roundingIncrement: i, roundingMode: m, relativeTo: \"%s\" })))",
+                         DURATIONS[d], DURATION_UNITS[unit], DURATION_UNITS[unit], RELATIVE_TO[t]);
+                evaluate_with(r, "%s", source, false);
+            }
+        }
+    }
+}
+
+/* round without relativeTo: of 24-hour days and time, to every unit of a
+ * day or less, by its increments, every mode, up to each largest unit. */
+static void duration_round_plain(runner *r) {
+    static const char *const durations[] = { "PT36H", "-PT36H", "P2DT11H59M59.999999999S", "-PT1H30M45.5S", "PT0.000000500S", "PT29M59.5S", "P10D",
+                                             "PT9007199254740991.999999999S", "PT0S" };
+    static const long long increments[][4] = { { 1, 2, 500, 0 }, { 1, 4, 250, 0 }, { 1, 8, 125, 0 }, { 1, 15, 30, 0 }, { 1, 12, 20, 0 }, { 1, 3, 8, 0 }, { 1, 2, 7, 0 } };
+    static const char *const largest[] = { "auto", "day", "hour", "second", "nanosecond" };
+    for (size_t d = 0; d < COUNT(durations); d++) {
+        for (int unit = 0; unit < 7; unit++) {
+            for (size_t i = 0; i < 3; i++) {
+                for (size_t l = 0; l < COUNT(largest); l++) {
+                    char source[512];
+                    snprintf(source, sizeof source,
+                             ALL_MODES ".map(m => Temporal.Duration.from(\"%s\").round({ largestUnit: \"%s\", smallestUnit: \"%s\", roundingIncrement: %lld, roundingMode: m }))",
+                             durations[d], largest[l], DURATION_UNITS[unit], increments[unit][i]);
+                    evaluate_with(r, "%s", source, false);
+                }
+            }
+        }
+    }
+}
+
+/* total in every unit, relative to each date and without one. */
+static void duration_total(runner *r) {
+    for (size_t d = 0; d < COUNT(DURATIONS); d++) {
+        for (int unit = 0; unit < 10; unit++) {
+            for (size_t t = 0; t <= COUNT(RELATIVE_TO); t++) {
+                char source[512];
+                if (t < COUNT(RELATIVE_TO) && differing(DURATIONS[d], RELATIVE_TO[t], DURATION_UNITS[unit])) continue;
+                if (t == COUNT(RELATIVE_TO)) {
+                    snprintf(source, sizeof source, "Temporal.Duration.from(\"%s\").total(\"%s\")", DURATIONS[d], DURATION_UNITS[unit]);
+                } else {
+                    snprintf(source, sizeof source, "Temporal.Duration.from(\"%s\").total({ unit: \"%s\", relativeTo: \"%s\" })", DURATIONS[d], DURATION_UNITS[unit],
+                             RELATIVE_TO[t]);
+                }
+                evaluate_with(r, "%s", source, false);
+            }
+        }
+    }
+}
+
+/* toString's digits and smallestUnit by every mode; compare relative to
+ * each date; add and subtract. */
+static void duration_text_and_arithmetic(runner *r) {
+    static const char *const precisions[] = {
+        "fractionalSecondDigits: 0", "fractionalSecondDigits: 1", "fractionalSecondDigits: 2", "fractionalSecondDigits: 3",
+        "fractionalSecondDigits: 4", "fractionalSecondDigits: 5", "fractionalSecondDigits: 6", "fractionalSecondDigits: 7",
+        "fractionalSecondDigits: 8", "fractionalSecondDigits: 9", "fractionalSecondDigits: \"auto\"", "smallestUnit: \"second\"",
+        "smallestUnit: \"millisecond\"", "smallestUnit: \"microseconds\"", "smallestUnit: \"nanosecond\"", "smallestUnit: \"minute\"",
+    };
+    static const char *const texts[] = { "P1Y11M30DT23H59M59.999999999S", "-P1Y11M30DT23H59M59.999999999S", "PT59M59.5S", "-P1DT0.000000005S", "P1D",
+                                         "PT0S", "PT1.050S", "PT9007199254740991.999999999S", "P3W", "PT1H0.000450S" };
+    for (size_t t = 0; t < COUNT(texts); t++) {
+        for (size_t p = 0; p < COUNT(precisions); p++) {
+            char source[512];
+            snprintf(source, sizeof source, ALL_MODES ".map(m => Temporal.Duration.from(\"%s\").toString({ %s, roundingMode: m }))", texts[t], precisions[p]);
+            evaluate_with(r, "%s", source, false);
+        }
+    }
+    for (size_t a = 0; a < COUNT(DURATIONS); a++) {
+        for (size_t b = 0; b < COUNT(DURATIONS); b++) {
+            char source[512];
+            snprintf(source, sizeof source, "[\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"].map(r => Temporal.Duration.compare(\"%s\", \"%s\", { relativeTo: r }))",
+                     RELATIVE_TO[0], RELATIVE_TO[1], RELATIVE_TO[2], RELATIVE_TO[3], RELATIVE_TO[4], DURATIONS[a], DURATIONS[b]);
+            evaluate_with(r, "%s", source, false);
+            snprintf(source, sizeof source, "Temporal.Duration.from(\"%s\").add(\"%s\")", DURATIONS[a], DURATIONS[b]);
+            evaluate_with(r, "%s", source, false);
+            snprintf(source, sizeof source, "Temporal.Duration.from(\"%s\").subtract(\"%s\")", DURATIONS[a], DURATIONS[b]);
+            evaluate_with(r, "%s", source, false);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     runner r = { 0 };
     r.print = argc == 2 && strcmp(argv[1], "--print") == 0;
@@ -847,6 +1041,11 @@ int main(int argc, char **argv) {
     limits(&r);
     bags(&r);
     calendar_names(&r);
+    duration_strings(&r);
+    duration_round_relative(&r);
+    duration_round_plain(&r);
+    duration_total(&r);
+    duration_text_and_arithmetic(&r);
     sjs_vm_destroy(r.vm);
     sjs_context_destroy(r.context);
     if (live != 0) {
