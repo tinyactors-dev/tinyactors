@@ -167,8 +167,13 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 
 ## 12 · Testing
 
-- **The protocol vectors** ([tinyactors-test/suites/protocol](../../tinyactors-test/suites/protocol/README.md)): `requests.txt`, `config.txt`, `envelopes.txt` and `values.txt`. They are byte-exact: the binding builds each case’s input with its own CBOR module from the `diag` line (or takes the hex), sends it through its own calls into core, decodes the answer into the language’s values and encodes it again, and compares it with the expected bytes, where tag 39999 is a wildcard for one item of the named type. A datamodel of its own passes the `roundtrip` and `malformed` cases of `values.txt`, except those named “ECMAScript: …”.
-- **The W3C suite** runs through the binding, with each datamodel it offers; all 191 tests must pass. The C conformance scenarios (`tests/conformance`) stay in core.
+A binding is tested by the conformance suite, [tinyactors-test](../../tinyactors-test/README.md), run against its adapter: one command over the binding’s public API that speaks the [driver protocol](../../tinyactors-test/docs/driver.md) on its standard input and output (`mise run //tinyactors-test:run -- <command…>`). The adapter implements the methods; a method it does not offer answers -32601 and the cases that need it are skipped, not passed.
+
+- **The protocol vectors** ([suites/protocol](../../tinyactors-test/suites/protocol/README.md)): `requests.txt`, `config.txt`, `envelopes.txt` and `values.txt`, byte-exact. The adapter takes each case’s bytes, sends them through the binding’s own calls into core (a `request(method, params)` that takes the language’s values decodes them first and encodes the reply again, as its API does), and the runner compares the answer with the expected bytes, where tag 39999 is a wildcard for one item of the named type. A datamodel of its own passes the `roundtrip` and `malformed` cases of `values.txt`, except those named “ECMAScript: …”.
+- **The scenarios** ([suites/scenarios](../../tinyactors-test/suites/scenarios/README.md)): core’s conformance scenarios as charts that check themselves, in the W3C IRP’s notation, and end in `pass` or `fail`. A `steps.txt` lists the host operations between runs (spawn, send, the clock, hibernation, snapshots, a new image, migration). The adapter runs them with the binding’s real loop and effect handlers in the environment the driver protocol describes (“The scenario environment”), and answers the first `Outcome` log. No effect is compared.
+- **The W3C suite** runs through the adapter (`w3c.run`), with each datamodel the binding offers; all 191 tests must pass.
+- **The differential run**: the scenarios and the W3C suite on the binding’s native datamodel and on quickjs give the same outcomes.
+- What a black box cannot show stays in the binding’s own tests: memory failures, refusal during a run, threads, garbage collection, liveness.
 - Tests run in parallel: listen on port 0, write to temporary directories, depend on no other test.
 - A test that compares timings runs alone.
 
