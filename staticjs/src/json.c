@@ -580,6 +580,12 @@ static sjs_result json_value_out(json_writer *w, sjs_value v) {
     }
     case SJS_ARRAY:
         break;
+    case SJS_TEMPORAL: {
+        /* Its toJSON gives its ISO string, which is written. */
+        char text[SJS_TEMPORAL_TEXT_MAX];
+        uint32_t n = sjs_temporal_text(SJS_AS_TEMPORAL(v), text);
+        return json_quote(w, (sjs_str){ text, n });
+    }
     default:
         return json_empty(w, v);
     }

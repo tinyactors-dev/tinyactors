@@ -270,3 +270,12 @@ loop_step sjs_regex_loop_step(sjs_vm *vm, vm_frame *frame);
 /* JSON.parse and JSON.stringify (json.c): leaves. */
 sjs_result sjs_json_parse(sjs_vm *vm, sjs_leaf_call *call);
 sjs_result sjs_json_stringify(sjs_vm *vm, sjs_leaf_call *call);
+
+/* Temporal (temporal.c, docs/temporal.md): its functions and constructors
+ * (SJS_BUILTIN_TEMPORAL_FIRST on), a Temporal value's methods
+ * (SJS_METHOD_TEMPORAL_*), a property of one, and the callee of
+ * `t.name(...)`: its method of the name, or a fault. */
+sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+sjs_result sjs_temporal_property(sjs_vm *vm, sjs_member member, sjs_value *out);
+sjs_result sjs_temporal_callee(sjs_vm *vm, sjs_member member, sjs_value *out);

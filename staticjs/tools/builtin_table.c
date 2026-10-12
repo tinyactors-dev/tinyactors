@@ -13,7 +13,9 @@
  * A name entry is four tab-separated fields:
  *   name      the property name
  *   flags     the SJS_NAME_* bits, as words, comma separated, or "-"
- *   methods   kind=method-id for each receiver kind with a method, or "-"
+ *   methods   kind=method-id for each receiver kind with a method, and
+ *             field=getter for a Temporal value's getter
+ *             (sjs_temporal_field), or "-"
  *   mutation  the method ID that changes its receiver, or "-"
  *
  * A function entry is three: the receiver ("" for a global), the name and
@@ -47,6 +49,7 @@ static const struct {
 } KINDS[] = {
     { SJS_ARRAY, "array" },   { SJS_STRING, "string" }, { SJS_SET, "set" },         { SJS_BIGINT, "bigint" },
     { SJS_MAP, "map" },       { SJS_ITERATOR, "iterator" }, { SJS_REGEXP, "regexp" }, { SJS_NUMBER, "number" },
+    { SJS_TEMPORAL, "temporal" },
 };
 
 static void print_entry(const sjs_name *entry) {
@@ -65,6 +68,10 @@ static void print_entry(const sjs_name *entry) {
         sjs_builtin_id id = sjs_method_of(entry, KINDS[i].kind);
         if (id == SJS_BUILTIN_NONE) continue;
         printf("%s%s=%u", any ? "," : "", KINDS[i].label, (unsigned)id);
+        any = 1;
+    }
+    if (entry->field != 0) {
+        printf("%sfield=%u", any ? "," : "", (unsigned)entry->field);
         any = 1;
     }
     printf("%s\t", any ? "" : "-");

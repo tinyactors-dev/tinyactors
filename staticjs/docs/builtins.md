@@ -16,7 +16,8 @@ A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
   `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential` and `toPrecision`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, an iterator's `take` and `drop`, `String.raw`,
-  `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, `JSON.parse` and
+  `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, Temporal's
+  functions and its values' methods (`src/temporal.c`), `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
@@ -77,17 +78,22 @@ For a loop built-in:
 ## 2. Register it
 
 **A method** (`xs.name(…)`, `s.name(…)`, `set.name(…)`, `x.toString()` of a
-BigInt, `m.name(…)` of a map, `x.toFixed(…)` of a number):
+BigInt, `m.name(…)` of a map, `x.toFixed(…)` of a number, `d.with(…)` of a
+Temporal value):
 
 1. Add an ID to `sjs_builtin_id` in `src/internal.h`, inside its receiver's
    group. `sjs_builtin_call` picks the group by ID range
    (`id <= SJS_METHOD_ARRAY_WITH`, `id <= SJS_METHOD_STRING_TRIM_START`,
    `id <= SJS_METHOD_SET_UNION`, `SJS_METHOD_BIGINT_TO_STRING`,
-   `id <= SJS_METHOD_NUMBER_TO_PRECISION`, then maps'
+   `id <= SJS_METHOD_NUMBER_TO_PRECISION`,
+   `id <= SJS_METHOD_TEMPORAL_WITH_PLAIN_TIME` (`temporal.c`), then maps'
    `map_method`, at the end of the file). A new last member of a group must move that bound, or the call
    lands in the wrong group's switch.
 2. Give its name's entry in `NAMES` (`src/builtins.c`) the ID in the
-   column of the receiver kind: array, string, set, BigInt, map, iterator, regular expression or number. Every name Node 22 has
+   column of the receiver kind: array, string, set, BigInt, map, iterator, regular expression, number or
+   Temporal value (one ID per name for every Temporal type; `temporal.c`'s
+   `METHOD_TYPES` says which types have it, and a getter is the entry's
+   `field`: docs/temporal.md). Every name Node 22 has
    on those prototypes is already listed, so that reading one faults instead
    of giving `undefined`. If the name is missing, add it in byte order;
    `names_test` checks the order and fails on a mistake. The flags say which
@@ -102,7 +108,7 @@ method lookup at run time is an index into `NAMES` plus a column. Never
 compare method names as strings at run time: the old `strlen` and `strcmp`
 lookup cost 17% of a guard.
 
-**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, `BigInt.x`, `JSON.x`, or a bare global name):
+**A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, `BigInt.x`, `JSON.x`, `Temporal.PlainDate.x`, or a bare global name):
 add an ID before `SJS_BUILTIN_FUNCTION_COUNT`, an entry in
 `FUNCTION_TABLE`, and an immortal value in `FUNCTIONS`. The compiler
 resolves the name when it compiles (`sjs_builtin_lookup`), so the linear

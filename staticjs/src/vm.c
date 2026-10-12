@@ -239,6 +239,8 @@ static sjs_result method(sjs_vm *vm, sjs_member member, sjs_value *out) {
     case SJS_UNDEFINED:
     case SJS_NULL:
         return sjs_property_get(vm, member, out);
+    case SJS_TEMPORAL:
+        return sjs_temporal_callee(vm, member, out);
     default:
         return fault_named(vm, "staticjs has methods on arrays, strings, sets, maps, iterators and BigInts only", name);
     }
@@ -2519,13 +2521,15 @@ __attribute__((noinline)) static sjs_result order_fault(sjs_vm *vm, sjs_value a,
  */
 
 /* A property of a value that is not an object, an array, a string or a set:
- * a map's size, and undefined for a key that is not on the prototype of a
+ * a regular expression's or a Temporal value's (their own files say), a
+ * map's size, and undefined for a key that is not on the prototype of a
  * map or an iterator (a method read as a value faults, as for a set);
  * anything else faults. */
 __attribute__((noinline)) static sjs_result property_other(sjs_vm *vm, sjs_member member, sjs_value *out) {
     sjs_value object = member.object;
     sjs_str name = sjs_string_view(member.key);
     if (object.kind == SJS_REGEXP) return sjs_regex_property(vm, member, out);
+    if (object.kind == SJS_TEMPORAL) return sjs_temporal_property(vm, member, out);
     if (object.kind != SJS_MAP && object.kind != SJS_ITERATOR) {
         return fault_named(vm, "staticjs reads properties of objects, arrays, strings, sets, maps and iterators", name);
     }

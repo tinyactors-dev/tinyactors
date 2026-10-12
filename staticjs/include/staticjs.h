@@ -28,7 +28,7 @@
 #endif
 
 #define SJS_VERSION_MAJOR 0
-#define SJS_VERSION_MINOR 6
+#define SJS_VERSION_MINOR 7
 #define SJS_VERSION_PATCH 0
 /* (major << 16) | (minor << 8) | patch; sjs_version() answers it for the library linked. */
 #define SJS_VERSION ((SJS_VERSION_MAJOR << 16) | (SJS_VERSION_MINOR << 8) | SJS_VERSION_PATCH)
@@ -198,7 +198,9 @@ typedef enum {
     SJS_MAP,
     SJS_ITERATOR,   /* a map's keys(), values() or entries(), or an iterator's map() or filter() */
     SJS_FUNCTION,
-    SJS_REGEXP      /* a regular expression literal: an object, immutable; its lastIndex is 0 */
+    SJS_REGEXP,     /* a regular expression literal: an object, immutable; its lastIndex is 0 */
+    SJS_TEMPORAL    /* a Temporal value (a Temporal.PlainDate, ...): an object, immutable;
+                     * the writer writes it as Temporal.PlainDate.from("2024-01-31") */
 } sjs_kind;
 
 typedef struct sjs_heap sjs_heap;
@@ -674,9 +676,10 @@ SJS_API void sjs_vm_destroy(sjs_vm *vm);
  *
  * Writes a value as JavaScript source that evaluates to an equal value:
  * JSON where JSON can say it, and `undefined`, `NaN`, `Infinity`, `-0`, a
- * BigInt's `10n`, `new Set([...])`, `new Map([[key, value], ...])` and an
- * iterator's `[...].values()`, an iterator that yields the same values, where
- * it cannot. Resumes when the buffer
+ * BigInt's `10n`, `new Set([...])`, `new Map([[key, value], ...])`, an
+ * iterator's `[...].values()`, an iterator that yields the same values, and
+ * a Temporal value's `Temporal.PlainDate.from("2024-01-31")`, where it
+ * cannot. Resumes when the buffer
  * is full; a BigInt's digits are made first, through the context.
  */
 
