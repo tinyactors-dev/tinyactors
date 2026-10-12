@@ -273,7 +273,7 @@ static const sjs_name NAMES[] = {
     NAME("toReversed", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_REVERSED, 0, 0),
     NAME("toSorted", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SORTED, 0, 0),
     NAME("toSpliced", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_TO_SPLICED, 0, 0),
-    { { "toString", 8u }, SJS_NAME_EVERYWHERE, { 0, 0, 0, SJS_METHOD_BIGINT_TO_STRING, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_TO_STRING }, 0, 0 },
+    { { "toString", 8u }, SJS_NAME_EVERYWHERE, { 0, 0, 0, SJS_METHOD_BIGINT_TO_STRING, 0, 0, 0, SJS_METHOD_NUMBER_TO_STRING, SJS_METHOD_TEMPORAL_TO_STRING }, 0, 0 },
     NAME("toUpperCase", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_UPPER_CASE, 0),
     NAME("toWellFormed", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_TO_WELL_FORMED, 0),
     NAME_TEMPORAL("toZonedDateTime", SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME, 0),
@@ -863,7 +863,7 @@ static sjs_result math_exact(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
 static sjs_result bigint_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 static sjs_result bigint_method(sjs_vm *vm, sjs_leaf_call *call);
 static sjs_result bigint_number(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
-/* A number's toFixed, toExponential and toPrecision: at the end of the file. */
+/* A number's toFixed, toExponential, toPrecision and toString: at the end of the file. */
 static sjs_result number_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
@@ -1497,7 +1497,7 @@ sjs_result sjs_builtin_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) 
     if (id <= SJS_METHOD_STRING_TRIM_START) return string_method(vm, id, call);
     if (id <= SJS_METHOD_SET_UNION) return set_method(vm, id, call);
     if (id == SJS_METHOD_BIGINT_TO_STRING) return bigint_method(vm, call);
-    if (id <= SJS_METHOD_NUMBER_TO_PRECISION) return number_method(vm, id, call);
+    if (id <= SJS_METHOD_NUMBER_TO_STRING) return number_method(vm, id, call);
     if (id <= SJS_METHOD_TEMPORAL_WITH_PLAIN_TIME) return sjs_temporal_method(vm, id, call);
     if (id == SJS_METHOD_REGEXP_TEST || id == SJS_METHOD_REGEXP_EXEC) {
         return regex_method(vm, id == SJS_METHOD_REGEXP_TEST ? SJS_REGEX_OP_TEST : SJS_REGEX_OP_EXEC, call);
@@ -3979,6 +3979,24 @@ __attribute__((noinline)) static sjs_result iterator_limit(sjs_vm *vm, sjs_built
 }
 
 /* ------------------------------------------------------------------------
+ * A number's toString(radix) (sjs_number_format_radix): radix 10 when
+ * undefined, else ToIntegerOrInfinity'd as toFixed's digits are; a radix
+ * outside 2 to 36 faults where JavaScript throws a RangeError. Radix 10 is
+ * String(x); any other is the digits V8 writes. A unit of fuel for each
+ * byte written: each digit is a step of double arithmetic.
+ */
+__attribute__((noinline)) static sjs_result number_to_string(sjs_vm *vm, sjs_leaf_call *call) {
+    sjs_value radix_arg = arg(call, 0);
+    double radix = 10;
+    if (radix_arg.kind != SJS_UNDEFINED && to_integer(vm, radix_arg, &radix) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (!(radix >= 2 && radix <= 36)) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a radix outside 2 to 36");
+    char text[SJS_NUMBER_RADIX_MAX];
+    uint32_t length = sjs_number_format_radix(call->receiver.as.number, (uint32_t)radix, text);
+    call->cost = length;
+    return new_string(vm, (sjs_str){ text, length }, &call->result);
+}
+
+/* ------------------------------------------------------------------------
  * A number's toFixed, toExponential and toPrecision (sjs_number_format_digits).
  * The argument is ToIntegerOrInfinity'd as JavaScript does it (undefined and
  * NaN are 0, null 0, true 1, a fraction cut toward zero), and a string or an
@@ -3988,6 +4006,7 @@ __attribute__((noinline)) static sjs_result iterator_limit(sjs_vm *vm, sjs_built
  * byte written: each digit is a step of exact arithmetic.
  */
 __attribute__((noinline)) static sjs_result number_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    if (id == SJS_METHOD_NUMBER_TO_STRING) return number_to_string(vm, call);
     sjs_value a = arg(call, 0);
     sjs_number_digits d = { call->receiver.as.number, -1, SJS_DIGITS_FIXED };
     double digits = 0;

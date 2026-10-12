@@ -513,7 +513,7 @@ BigInt.asIntN(8n, 255n)
 --- fault does not have this method
 
 === a method of a number, which staticjs does not have
-(10).toString()
+(10).valueOf()
 --- fault methods on arrays, strings, sets, maps, iterators and BigInts only
 
 === Number of BigInts, correctly rounded

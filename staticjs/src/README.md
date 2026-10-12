@@ -4,7 +4,7 @@ Implementation modules. Headers here are private; the public API is
 - `internal.h`  what the modules share: values, built-in IDs, opcodes, programs
 - `memory.c`    the allocator, growable buffers, the context, errors
 - `text.c`      UTF-8, and JavaScript's UTF-16 view of it
-- `number.c`    Number::toString, toFixed, toExponential and toPrecision, remainder and rounding, decimal literals
+- `number.c`    Number::toString and toString(radix), toFixed, toExponential and toPrecision, remainder and rounding, decimal literals
 - `value.c`     strings, arrays, objects, sets, closures; release without recursion
 - `syntax.h`    the lexer and its tokens
 - `lexer.c`     bytes to tokens, one byte at a time

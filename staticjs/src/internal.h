@@ -820,6 +820,7 @@ typedef enum {
     SJS_METHOD_NUMBER_TO_EXPONENTIAL,
     SJS_METHOD_NUMBER_TO_FIXED,
     SJS_METHOD_NUMBER_TO_PRECISION,
+    SJS_METHOD_NUMBER_TO_STRING,
     /* Temporal values (temporal.c): one ID per name, for every type that
      * has a method of the name; the method checks its receiver's type. */
     SJS_METHOD_TEMPORAL_ABS,
