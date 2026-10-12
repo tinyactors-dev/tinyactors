@@ -14,14 +14,17 @@ manifest: charts (.txml, as .scxml) and the files a src="" reads (.txt).
 The scenarios (--scenarios): applies <stylesheet> to every .txml under
 <src-dir> and writes it as .scxml at the same place under <out-dir>.
 
+<out-dir> must be new or empty: the conversion is written into a fresh
+directory, which lib/w3c.rb (W3C.publish) then puts in place with one
+rename, so that a run reading the previous conversion never sees half of
+this one. Writing over an earlier conversion is refused.
+
 Usage: uv run --with saxonche suites/w3c/convert.py <stylesheet> <irp-dir> <out-dir>
        uv run --with saxonche suites/w3c/convert.py --scenarios <stylesheet> <src-dir> <out-dir>
 """
 import pathlib
 import sys
 import xml.etree.ElementTree as ET
-
-from saxonche import PySaxonProcessor
 
 
 def w3c(proc, stylesheet, irp, out):
@@ -63,15 +66,27 @@ def scenarios(proc, stylesheet, src, out):
     print(f"converted {count} scenario documents into {out}")
 
 
+def fresh(out):
+    """Creates <out-dir>, or takes it empty; False when it holds files."""
+    out.mkdir(parents=True, exist_ok=True)
+    if any(out.iterdir()):
+        print(f"convert.py: {out} is not empty: convert into a new directory (lib/w3c.rb, W3C.publish)",
+              file=sys.stderr)
+        return False
+    return True
+
+
 def main(argv):
     paths = [pathlib.Path(arg).resolve() for arg in argv[1:] if arg != "--scenarios"]
+    if len(paths) == 3 and not fresh(paths[2]):
+        return 1
+    from saxonche import PySaxonProcessor  # imported here: refusing an out-dir needs no SaxonC
+
     if "--scenarios" in argv[1:] and len(paths) == 3:
-        paths[2].mkdir(parents=True, exist_ok=True)
         with PySaxonProcessor(license=False) as proc:
             scenarios(proc, *paths)
         return 0
     if "--scenarios" not in argv[1:] and len(paths) == 3:
-        paths[2].mkdir(parents=True, exist_ok=True)
         with PySaxonProcessor(license=False) as proc:
             w3c(proc, *paths)
         return 0

@@ -66,6 +66,10 @@ or the suite changed, and the scenarios into `build/scenarios/<language>/`
 when a template or the stylesheet changed. The echo setup's chart (`suites/protocol/setups/echo.txml`) is converted
 the same way, into `build/setups/<language>/`. The conversions need the
 pinned `uv` (`mise.toml`) for SaxonC: the W3C stylesheets are XSLT 2.0.
+Runs in parallel share them: each conversion is written into a new
+directory and `build/<kind>/<language>` is a link moved to it in one
+rename, under a lock, so a run never reads half a conversion
+(`lib/w3c.rb`, `W3C.publish`).
 
 ## Languages
 

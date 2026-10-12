@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
+require 'fileutils'
 require 'pathname'
+require 'tmpdir'
 
 # The W3C SCXML IRP suite, vendored in suites/w3c/irp (its SOURCE and
 # LICENSE), and its templates instantiated per language into
@@ -15,6 +17,11 @@ require 'pathname'
 # The W3C stylesheets are XSLT 2.0, which only SaxonC implements among
 # what we can pin, so that one step is suites/w3c/convert.py, run with the
 # pinned uv (mise.toml).
+#
+# Runs share build/: both bindings' conform tasks and core's may convert
+# for the same language at once. So a conversion is written into a new
+# directory and published by one rename (W3C.publish): a reader sees the
+# whole previous conversion or the whole new one, never half of one.
 module W3C
   ROOT = Pathname.new(__dir__).join('..').expand_path
   DIRECTORY = ROOT.join('suites/w3c')
@@ -50,10 +57,8 @@ module W3C
     out = BUILD.join('w3c', language)
     index = out.join('index.txt')
     sources = [CONVERT, stylesheet, *Dir[IRP.join('**/*').to_s]]
-    return out if index.file? && sources.all? { |source| File.mtime(source) <= index.mtime }
-
-    convert(stylesheet.to_s, IRP.to_s, out.to_s)
-    out
+    stale = -> { !index.file? || sources.any? { |source| File.mtime(source) > index.mtime } }
+    publish(out, stale) { |fresh| convert(stylesheet.to_s, IRP.to_s, fresh.to_s) }
   end
 
   # The scenarios' documents for `language`, converted again when a
@@ -67,13 +72,50 @@ module W3C
   # Every .txml under `source`, as .scxml at the same place under `out`.
   def templates(source, out, language)
     stylesheet = stylesheet(language)
-    stale = Dir[source.join('**/*.txml').to_s].any? do |template|
-      converted = out.join(Pathname.new(template).relative_path_from(source)).sub_ext('.scxml')
-      !converted.file? || [template, stylesheet, CONVERT].any? { |each| File.mtime(each) > converted.mtime }
+    stale = lambda do
+      Dir[source.join('**/*.txml').to_s].any? do |template|
+        converted = out.join(Pathname.new(template).relative_path_from(source)).sub_ext('.scxml')
+        !converted.file? || [template, stylesheet, CONVERT].any? { |each| File.mtime(each) > converted.mtime }
+      end
     end
-    return out unless stale
+    publish(out, stale) { |fresh| convert('--scenarios', stylesheet.to_s, source.to_s, fresh.to_s) }
+  end
 
-    convert('--scenarios', stylesheet.to_s, source.to_s, out.to_s)
+  # `out` written again when `stale` says so, and `out` answered. The block
+  # writes the conversion into a new, empty directory beside `out`
+  # (.<name>.v<random>); then `out`, a symbolic link, is pointed at it with
+  # one rename, which replaces the link at once, and the conversions it no
+  # longer names are deleted. A reader resolves `out` on every open, so it
+  # reads either conversion whole. A lock beside `out` (.<name>.lock) makes
+  # one run convert at a time; a run that waited for it asks `stale` again
+  # and finds the other's conversion. A block that fails leaves `out` as it
+  # was, and its directory is deleted.
+  def publish(out, stale)
+    out = Pathname.new(out)
+    return out unless stale.call
+
+    parent = out.dirname
+    parent.mkpath
+    File.open(parent.join(".#{out.basename}.lock"), File::RDWR | File::CREAT, 0o644) do |lock|
+      lock.flock(File::LOCK_EX)
+      next unless stale.call
+
+      fresh = Pathname.new(Dir.mktmpdir([".#{out.basename}.v", ''], parent.to_s))
+      begin
+        yield fresh
+        link = parent.join(".#{out.basename}.link")
+        FileUtils.rm_f(link)
+        File.symlink(fresh.basename.to_s, link)
+        FileUtils.rm_rf(out) if out.directory? && !out.symlink? # a conversion written in place, before publish
+        File.rename(link, out)
+      rescue StandardError
+        FileUtils.rm_rf(fresh)
+        raise
+      end
+      Dir[parent.join(".#{out.basename}.v*").to_s].each do |old|
+        FileUtils.rm_rf(old) unless File.basename(old) == fresh.basename.to_s
+      end
+    end
     out
   end
 
