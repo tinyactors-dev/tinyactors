@@ -119,7 +119,10 @@ but for the values meant to be invalid (`conf:illegalItem`,
   (ecmascript by default); prints its directory.
 - `mise run lint [path…]`: the adapters' lint (`lint/`, ast-grep): its
   rules' tests, then the adapter files given, which must import only the
-  binding's public module (`@tinyactors/node`, `tinyactors`). Each
+  binding's public module (`@tinyactors/node`, `tinyactors`) and the
+  language's standard library (`node:` built-ins; Python's, listed in
+  `lint/utils/`), so the adapter frames with the binding's own CBOR
+  functions. Each
   binding's lint task runs it on its adapter.
 - `mise run check-languages [language…]`: translate the suite and the
   scenarios with each stylesheet and check the result (above).

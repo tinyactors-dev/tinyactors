@@ -1,18 +1,23 @@
 # The Python adapter (tinyactors-cpython/conform, `python -m conform`)
 # reaches the binding only through its public module, the extension
 # `tinyactors` (ROADMAP.md, step 8, M0 follow-up (e)): the suite must test
-# what an application can call. The standard library, other packages and
-# the adapter's own modules (`from . import frames`) are allowed. Refused:
-# a submodule or a private name of `tinyactors` (`tinyactors._values`,
+# what an application can call. It reads and writes the driver's frames
+# with the module's own CBOR functions (`tinyactors.encode`,
+# `tinyactors.decode`; ROADMAP.md, step 8, M1), so it needs no other
+# package. Allowed: `tinyactors`, the standard library
+# (utils/python-standard-library.yml) and the adapter's own modules
+# (`from . import frames`). Refused: any other package (`cbor2`), a
+# submodule or a private name of `tinyactors` (`tinyactors._values`,
 # `from tinyactors import _host`), a module that loads native code around
 # the extension (`ctypes`, `cffi`, `importlib.machinery`, `importlib.util`,
-# a `_tinyactors*` module), a relative import out of the adapter's package
-# (`from .. import`), and changing the import path (`sys.path`), which
-# could load a build that is not the installed module.
+# a `_tinyactors*` module), an import by computed name (`__import__`,
+# `importlib.import_module`), a relative import out of the adapter's
+# package (`from .. import`), and changing the import path (`sys.path`),
+# which could load a build that is not the installed module.
 id: adapter-imports-public-module-python
 language: python
 severity: error
-message: "an adapter imports only the binding's public module (tinyactors): no submodule, private name, native loader, import from outside its package or sys.path change"
+message: "an adapter imports only the binding's public module (tinyactors) and the standard library: no other package, submodule, private name, native loader, computed import, import from outside its package or sys.path change"
 rule:
   any:
     # import tinyactors.x; from tinyactors.x import y; ctypes, cffi, ...
@@ -23,6 +28,15 @@ rule:
             - inside: {kind: import_from_statement, field: module_name}
             - inside: {kind: aliased_import, inside: {kind: import_statement}}
         - regex: '^(tinyactors\.|_tinyactors|ctypes(\.|$)|cffi(\.|$)|importlib\.(machinery|util)(\.|$))'
+    # any other top-level module: a package, or a private module (_json)
+    - all:
+        - kind: dotted_name
+        - any:
+            - inside: {kind: import_statement}
+            - inside: {kind: import_from_statement, field: module_name}
+            - inside: {kind: aliased_import, inside: {kind: import_statement}}
+        - not: {regex: '^tinyactors$'}
+        - not: {matches: python-standard-library}
     # from tinyactors import _private
     - all:
         - kind: dotted_name
@@ -39,3 +53,6 @@ rule:
     - pattern: sys.path.$METHOD($$$ARGUMENTS)
     - pattern: sys.path = $VALUE
     - pattern: sys.path += $VALUE
+    - pattern: __import__($$$ARGUMENTS)
+    - pattern: importlib.import_module($$$ARGUMENTS)
+    - pattern: import_module($$$ARGUMENTS)

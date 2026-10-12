@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="The adapters' lint (lint/): run its rules' tests, then scan the adapter files given (an adapter imports only the binding's public module)"
+#MISE description="The adapters' lint (lint/): run its rules' tests, then scan the adapter files given (an adapter imports only the binding's public module and the standard library)"
 #USAGE arg "[path]..." var=#true help="the adapter's files or directories, relative to the directory mise was called from (conform.mjs; conform)"
 # vim:ft=ruby
 
@@ -26,4 +26,4 @@ exit if paths.empty?
 
 run('ast-grep', 'scan', '--config', File.join(LINT, 'sgconfig.yml'), *paths,
     chdir: ENV.fetch('MISE_ORIGINAL_CWD', Dir.pwd))
-puts "lint: #{paths.join(', ')} import only the binding's public module"
+puts "lint: #{paths.join(', ')} import only the binding's public module and the standard library"

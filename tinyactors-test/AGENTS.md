@@ -64,11 +64,15 @@ skips the cases that need it.
 ## The adapters' lint
 
 `lint/` holds ast-grep rules every binding's adapter is scanned with (an
-adapter imports only the binding's public module); a binding's lint task
+adapter imports only the binding's public module and the language's
+standard library: no other package, so the adapter reads and writes the
+driver's frames with the binding's own CBOR functions); a binding's lint task
 runs `mise run //tinyactors-test:lint -- <its adapter>`. A new rule comes
 with its test in `lint/tests/` (valid and invalid snippets) and its
 snapshot (`ast-grep test -U` in `lint/`, then read the snapshot); invoke
-`ast-grep`, never `sg`.
+`ast-grep`, never `sg`. Python's standard library is a list,
+`lint/utils/python-standard-library.yml`, which `test/lint_test.rb` holds
+to the pinned interpreter: write it again when the pin moves.
 
 ## Tests
 

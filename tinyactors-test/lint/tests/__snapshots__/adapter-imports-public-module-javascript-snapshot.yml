@@ -72,6 +72,42 @@ snapshots:
       style: secondary
       start: 21
       end: 27
+  const cbor = await import('cbor-x');:
+    labels:
+    - source: import('cbor-x')
+      style: primary
+      start: 19
+      end: 35
+    - source: import
+      style: secondary
+      start: 19
+      end: 25
+    - source: '''cbor-x'''
+      style: secondary
+      start: 26
+      end: 34
+    - source: ('cbor-x')
+      style: secondary
+      start: 25
+      end: 35
+  const cbor = require('cbor-x');:
+    labels:
+    - source: require('cbor-x')
+      style: primary
+      start: 13
+      end: 30
+    - source: require
+      style: secondary
+      start: 13
+      end: 20
+    - source: '''cbor-x'''
+      style: secondary
+      start: 21
+      end: 29
+    - source: ('cbor-x')
+      style: secondary
+      start: 20
+      end: 30
   const require = createRequire(import.meta.url);:
     labels:
     - source: createRequire(import.meta.url)
@@ -88,6 +124,16 @@ snapshots:
       style: secondary
       start: 0
       end: 35
+  export { encode } from 'cbor-x';:
+    labels:
+    - source: '''cbor-x'''
+      style: primary
+      start: 23
+      end: 31
+    - source: export { encode } from 'cbor-x';
+      style: secondary
+      start: 0
+      end: 32
   import addon from './build/tinyactors.node';:
     labels:
     - source: '''./build/tinyactors.node'''
@@ -98,6 +144,26 @@ snapshots:
       style: secondary
       start: 0
       end: 44
+  import cbor from 'cbor-x';:
+    labels:
+    - source: '''cbor-x'''
+      style: primary
+      start: 17
+      end: 25
+    - source: import cbor from 'cbor-x';
+      style: secondary
+      start: 0
+      end: 26
+  import fs from 'fs';:
+    labels:
+    - source: '''fs'''
+      style: primary
+      start: 15
+      end: 19
+    - source: import fs from 'fs';
+      style: secondary
+      start: 0
+      end: 20
   import x from '../tinyactors-core/build/thing.mjs';:
     labels:
     - source: '''../tinyactors-core/build/thing.mjs'''
@@ -128,6 +194,26 @@ snapshots:
       style: secondary
       start: 0
       end: 35
+  import { dlopen } from 'bun:ffi';:
+    labels:
+    - source: '''bun:ffi'''
+      style: primary
+      start: 23
+      end: 32
+    - source: import { dlopen } from 'bun:ffi';
+      style: secondary
+      start: 0
+      end: 33
+  import { encode } from 'cbor';:
+    labels:
+    - source: '''cbor'''
+      style: primary
+      start: 23
+      end: 29
+    - source: import { encode } from 'cbor';
+      style: secondary
+      start: 0
+      end: 30
   import { internal } from '@tinyactors/node/internal';:
     labels:
     - source: '''@tinyactors/node/internal'''

@@ -1,5 +1,23 @@
 id: adapter-imports-public-module-python
 snapshots:
+  codec = __import__('cbor2'):
+    labels:
+    - source: __import__('cbor2')
+      style: primary
+      start: 8
+      end: 27
+  codec = import_module('cbor2'):
+    labels:
+    - source: import_module('cbor2')
+      style: primary
+      start: 8
+      end: 30
+  codec = importlib.import_module('cbor2'):
+    labels:
+    - source: importlib.import_module('cbor2')
+      style: primary
+      start: 8
+      end: 40
   from .. import build:
     labels:
     - source: ..
@@ -12,6 +30,16 @@ snapshots:
       style: primary
       start: 5
       end: 10
+  from cbor2 import loads:
+    labels:
+    - source: cbor2
+      style: primary
+      start: 5
+      end: 10
+    - source: from cbor2 import loads
+      style: secondary
+      start: 0
+      end: 23
   from ctypes import CDLL:
     labels:
     - source: ctypes
@@ -74,6 +102,26 @@ snapshots:
       style: secondary
       start: 0
       end: 36
+  import _ctypes:
+    labels:
+    - source: _ctypes
+      style: primary
+      start: 7
+      end: 14
+    - source: import _ctypes
+      style: secondary
+      start: 0
+      end: 14
+  import _json:
+    labels:
+    - source: _json
+      style: primary
+      start: 7
+      end: 12
+    - source: import _json
+      style: secondary
+      start: 0
+      end: 12
   import _tinyactors:
     labels:
     - source: _tinyactors
@@ -84,6 +132,16 @@ snapshots:
       style: secondary
       start: 0
       end: 18
+  import cbor2:
+    labels:
+    - source: cbor2
+      style: primary
+      start: 7
+      end: 12
+    - source: import cbor2
+      style: secondary
+      start: 0
+      end: 12
   import cffi:
     labels:
     - source: cffi
@@ -114,6 +172,20 @@ snapshots:
       style: secondary
       start: 0
       end: 21
+  import numpy as np:
+    labels:
+    - source: numpy
+      style: primary
+      start: 7
+      end: 12
+    - source: import numpy as np
+      style: secondary
+      start: 0
+      end: 18
+    - source: numpy as np
+      style: secondary
+      start: 7
+      end: 18
   import tinyactors._values:
     labels:
     - source: tinyactors._values

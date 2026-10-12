@@ -1,16 +1,21 @@
 # The Node adapter (tinyactors-napi/conform.mjs) reaches the binding only
 # through its public module, the package `@tinyactors/node` (ROADMAP.md,
 # step 8, M0 follow-up (e)): the suite must test what an application can
-# call. Built-ins (`node:*`) and other packages are allowed. Refused: a
-# relative or absolute path (`./build/tinyactors.node`, `./src/...`,
+# call. It reads and writes the driver's frames with the package's own
+# CBOR functions (`encode`, `decode`; ROADMAP.md, step 8, M1), so it needs
+# no other package. Allowed: `@tinyactors/node` and Node's built-in
+# modules by their `node:` names (`node:process`, `node:buffer`), which
+# Node and Bun both resolve. Refused: any other specifier, so another
+# package (`cbor-x`), a built-in without `node:`, a Bun-only module
+# (`bun:ffi`), a relative or absolute path (`./build/tinyactors.node`,
 # `../tinyactors-core/...`), a subpath of the package
-# (`@tinyactors/node/internal`), a `.node` addon, a computed specifier
-# (`import(path)`, `require(name)`), and loading code around the module
-# system (`process.dlopen`, `createRequire`).
+# (`@tinyactors/node/internal`); a computed specifier (`import(path)`,
+# `require(name)`); and loading code around the module system
+# (`process.dlopen`, `createRequire`).
 id: adapter-imports-public-module-javascript
 language: javascript
 severity: error
-message: "an adapter imports only the binding's public module (@tinyactors/node), built-ins and packages: no path, subpath, .node file or computed specifier"
+message: "an adapter imports only the binding's public module (@tinyactors/node) and node: built-ins: no other package, path, subpath, .node file or computed specifier"
 rule:
   any:
     # import ... from '<specifier>'; export ... from '<specifier>'
@@ -19,16 +24,16 @@ rule:
         - any:
             - inside: {kind: import_statement}
             - inside: {kind: export_statement}
-        - regex: '^[''"](\.|/|[A-Za-z]:|file:|@tinyactors/node/)|\.node[''"]$'
-    # import('<specifier>'), require('<specifier>'): a literal that is a
-    # path, a subpath or an addon, or anything but a literal
+        - not: {regex: '^[''"](@tinyactors/node|node:[a-z_/]+)[''"]$'}
+    # import('<specifier>'), require('<specifier>'): a literal that is not
+    # allowed, or anything but a literal
     - all:
         - kind: call_expression
         - has: {field: function, regex: '^(import|require)$'}
         - has:
             field: arguments
             any:
-              - has: {nthChild: 1, kind: string, regex: '^[''"](\.|/|[A-Za-z]:|file:|@tinyactors/node/)|\.node[''"]$'}
+              - has: {nthChild: 1, kind: string, not: {regex: '^[''"](@tinyactors/node|node:[a-z_/]+)[''"]$'}}
               - has: {nthChild: 1, not: {kind: string}}
     - pattern: process.dlopen($$$ARGUMENTS)
     - pattern: createRequire($$$ARGUMENTS)
