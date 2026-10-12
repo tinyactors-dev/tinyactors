@@ -216,7 +216,7 @@ Built-ins:
 
 | | |
 |---|---|
-| arrays | `at` `concat` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `includes` `indexOf` `join` `lastIndexOf` `map` `reduce` `reduceRight` `slice` `some` `toReversed` `toSorted` `toSpliced` `with`, `length` |
+| arrays | `at` `concat` `entries` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `forEach` `includes` `indexOf` `join` `keys` `lastIndexOf` `map` `reduce` `reduceRight` `slice` `some` `toReversed` `toSorted` `toSpliced` `values` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `isWellFormed` `padEnd` `padStart` `repeat` `replace` `replaceAll` `slice` `split` `startsWith` `substr` `substring` `toLowerCase` `toUpperCase` `toWellFormed` `trim` `trimEnd` `trimLeft` `trimRight` `trimStart`, `length`, indexing |
 | regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `search` (with a regular expression only), `replace` `replaceAll` `split` (with one or a string; `split` takes a limit, a number, with a regular expression only). A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop; where no thread is alive, a pattern that begins with an ASCII character, or with `^` past the start, skips the bytes that cannot begin a match, charging the fuel following them would. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, a primitive written as `String` writes it, or a function called once per match. A regular expression is written as `/source/flags`, `typeof` gives `"object"`, `JSON.stringify` `{}`, and a property it does not have `undefined` |
 | sets | `has` `keys` `values` `entries` `forEach` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf` `isSupersetOf` `isDisjointFrom`, `size` |
@@ -333,9 +333,12 @@ other is `undefined`. The writer writes `new Map([[key, value], ...])`, and
 an embedder builds and reads maps with `sjs_map_new`, `sjs_map_set`,
 `sjs_map_get`, `sjs_map_at` and `sjs_map_size`.
 
-**Iterators.** `m.keys()`, `m.values()` and `m.entries()` of a map, and
+**Iterators.** `m.keys()`, `m.values()` and `m.entries()` of a map,
 `s.keys()`, `s.values()` and `s.entries()` of a set (whose keys are its
-values, and whose entries are `[value, value]` arrays), give an iterator
+values, and whose entries are `[value, value]` arrays), and `xs.keys()`,
+`xs.values()` and `xs.entries()` of an array (whose keys are its indices,
+and whose entries are `[index, element]` arrays; of a match result, its
+elements only, as in JavaScript), give an iterator
 (the value kind `SJS_ITERATOR`, `typeof` `"object"`), which a spread,
 `Array.from`, `new Set`, `new Map`, `Object.fromEntries`, an array pattern
 and its own `toArray()` take, and whose `map`, `filter`, `reduce`, `some`,
@@ -352,8 +355,8 @@ moves its value. Then nothing can read it again, and no program can tell
 that it was not consumed. A second read, a closure's capture or any other
 holder faults ("an iterator yields its values once"), where JavaScript
 gives nothing the second time; so does a helper of an iterator something
-else holds. An iterator also holds its map or set, so that cannot change while
-the iterator lives (owned mutation faults: "held elsewhere"), as a
+else holds. An iterator also holds its array, map or set, so that cannot
+change while the iterator lives (owned mutation faults: "held elsewhere"), as a
 JavaScript iterator would yield what changed. The helpers are lazy in
 JavaScript, but their callbacks change nothing, so running them at once
 gives the same values; a callback of `map`, `filter` or `flatMap` runs on
@@ -362,7 +365,8 @@ reads, so it can fault where JavaScript gives a value. `some`, `every` and
 `find` stop at the first value that decides them. `next()` on a variable
 the function owns advances the iterator and gives a new `{ value, done }`,
 and a later reader gets the rest; `return()` closes a helper's result, and
-faults on a map's, a set's or `matchAll`'s iterator, which has none; on an
+faults on an array's, a map's, a set's or `matchAll`'s iterator, which has
+none; on an
 iterator nothing else holds (`m.keys().next()`) both give the same, and on
 one held elsewhere they fault (docs/mutation.md, "Iterators"). A property an
 iterator lacks is `undefined`. The writer writes an iterator as
@@ -379,9 +383,13 @@ accumulator in place. A key deleted and set again goes last; `delete` and
 through the index, and a `delete` but of the last entry its entries more.
 
 `m.forEach((value, key, map) => ...)` is a loop that calls back for each
-entry and gives `undefined`, and so is a set's `s.forEach((value, value,
-set) => ...)`, which passes each member twice, as JavaScript does; its callback changes nothing outside, so it
-gives `undefined` or faults where the callback faults. `Map.groupBy(items,
+entry and gives `undefined`, and so are a set's `s.forEach((value, value,
+set) => ...)`, which passes each member twice, as JavaScript does, and an
+array's `xs.forEach((element, index, array) => ...)`; its callback changes
+nothing outside, so it gives `undefined` or faults where the callback
+faults, and the loop holds its receiver, which the callback cannot change.
+As a statement (`xs.forEach(f);`) it can change nothing a program sees,
+so it is refused, as any expression statement with no effect is. `Map.groupBy(items,
 f)` groups an array's elements as `Object.groupBy` does, with its C path for
 `x => x.key`, into a map whose keys are any primitive, in the order first
 seen; an object as a key faults, and so do items that are not an array, as
