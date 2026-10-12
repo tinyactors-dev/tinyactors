@@ -63,25 +63,39 @@ spike (unverified).
 ## The binding's memory
 
 The binding allocates almost nothing, so allocations and frees pair by
-construction (bindings.md, section 6, "The binding allocates almost
-nothing"):
+construction (bindings.md, section 6; ADR 0010):
 
-- **Borrow.** A string goes to core as the `str` object's own UTF-8
-  (`PyUnicode_AsUTF8AndSize`, valid while the object lives), bytes through
-  the buffer protocol, for the call's duration: core copies what it
-  keeps. A string the datamodel hands back to core stays in a Python
-  object the session holds. System variables and a chart's states are
-  read from core when it supplies them, never copied.
-- **Hold, don't copy.** The image bytes the compiler writes stay in a
-  Python `bytes` object the `Host` references until
-  `TA_HOST_EFFECT_SEGMENT_FREED`.
 - **Rows, not allocations.** A session (its globals dict), a chart (its
-  code objects) and a payload are rows of the handle tables
-  (`src/datamodel/handles.c`), grown by doubling, slots reused, freed
-  once in `ta_host_free`'s path.
-- **Where:** `PyMem_Raw*` is called only in `src/datamodel/handles.c` and
-  in `src/host.c`'s create, free and the host's allocator; nothing per
-  call, per event or per evaluation. The lint rule
+  code objects), a payload, a `<foreach>` and an image are rows of the
+  handle tables (`src/datamodel/handles.c`), grown by doubling, slots
+  reused, freed once in the host's free path. An image's row holds core's
+  `ta_compile_result` until `TA_HOST_EFFECT_SEGMENT_FREED`, then
+  `ta_compile_free`; nothing is copied. The `ta_image` core points to must
+  not move, so it is not in a row (it is the result's, or a held
+  `bytearray`).
+- **One writer per call.** A config, a request's params, a payload for
+  quickjs and `tinyactors.encode` are written with a `ta_cbor_writer` of
+  that call, starting in a room on the C stack and growing through
+  `PyMem_RawMalloc`, freed before the call returns. Python code running
+  during a call (a getter, `__iter__`, `__del__`) may call the `Host`
+  again: nothing is shared.
+- **Views of what core and Python hold.** A string goes to core as the
+  `str`'s own UTF-8 (`PyUnicode_AsUTF8AndSize`), bytes through the buffer
+  protocol, for the call. The host's outputs (a reply, an envelope, OTLP,
+  a blob) are views until the next call into the host: convert or copy
+  them into Python objects before anything else runs. Core's values are
+  read with `ta_cbor_reader` as they stream.
+- **The datamodel's last output.** `to_wire`, `serialize` and
+  `payload_serialize` write with a writer the datamodel keeps, overwritten
+  by its next call; strings handed back to core (`eval_string`, `log`)
+  are the UTF-8 of a `str` the datamodel holds until its next call.
+- **Payloads are copied, not encoded,** between the API and the
+  `"python"` datamodel (`ta_python_values_copy`); CBOR only toward quickjs
+  and in envelopes.
+- **Where:** `PyMem_Raw*` is called only in `src/datamodel/handles.c`,
+  in the writers' growth, and in `src/host.c`'s create, free and the
+  host's allocator; nothing per call, per event or per evaluation beyond a
+  writer that outgrew its room. The lint rule
   `allocation-in-tables-and-host` checks it.
 
 ## C rules
@@ -208,17 +222,17 @@ like `json.dumps`/`json.loads` and `cbor2.dumps`/`cbor2.loads` but named
 for what they do (bindings.md, section 9):
 
 - `tinyactors.encode(value) -> bytes`: the value table of
-  `docs/values.md` written with `ta_cbor_encode` (core's token lists,
-  `include/tinyactors/cbor.h`) from the tokens `src/values.c` builds;
-- `tinyactors.decode(data) -> object`: `ta_cbor_decode` into tokens, then
-  the Python objects of the same table (`Address`, `UNDEFINED`, `bytes`,
+  `docs/values.md` written item by item with a `ta_cbor_writer`
+  (`include/tinyactors/cbor.h`) by `src/values.c`;
+- `tinyactors.decode(data) -> object`: read with a `ta_cbor_reader`, item
+  by item, into the Python objects of the same table (`Address`, `UNDEFINED`, `bytes`,
   `int` to 64 bits). Malformed data, a value outside the table, a lone
   surrogate, nesting past 64 are refused with an exception, never turned
   into a value (`docs/values.md` names the exception).
 
 They are the same conversion the API uses for requests, replies, config
 and event data, not a second codec: one `values.c`, called by both. Each
-has its row in `docs/api-map.md` (`ta_cbor_encode`, `ta_cbor_decode`).
+has its row in `docs/api-map.md` (`ta_cbor_writer`, `ta_cbor_reader`).
 The adapter (`conform/`) reads and writes the driver's frames with them,
 and imports nothing but `tinyactors` and the standard library (the
 adapters' lint refuses any other package), so no third-party codec stands

@@ -33,8 +33,9 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   rule file is picked up without editing a list:
   - `no-retired-abbreviations`: names are whole words;
   - `at-most-three-parameters`: a public function takes at most three;
-  - `buffers-are-ta-buffer`: bytes cross the public API as `ta_bytes` or
-    `ta_buffer *`, not a pointer and a length (ADR 0009, decision 8).
+  - `buffers-are-ta-buffer`: bytes cross the public API as `ta_bytes`, a
+    `ta_bytes *` view (its owner and lifetime stated), or `ta_buffer *`,
+    not a pointer and a length (ADR 0009, decision 8; ADR 0010).
 
   The last two are written with utility rules in `tools/lint/utils/`
   (`four-or-more-parameters`, `bytes-as-pointer-and-length`), which the

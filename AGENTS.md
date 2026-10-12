@@ -178,8 +178,11 @@ datamodel vtable entry, a typedef). Group the rest in a struct, as
 calls do
 ([ADR 0009](docs/adr/0009-one-host-two-queues.md)). When a function needs
 a fourth, change it in place to take a struct. Bytes cross the public API,
-callbacks included, as `ta_bytes` (input) or `ta_buffer *` (output), never
-as a pointer and a length.
+callbacks included, as `ta_bytes` (input), and come out as a `ta_bytes *`
+view whose owner and lifetime the declaration states (the host's outputs,
+a datamodel's outputs; [ADR 0010](docs/adr/0010-outputs-are-views-values-stream.md))
+or through a `ta_buffer *` the caller fills, never as a pointer and a
+length.
 
 The rule holds for every C function we write from now on, not only the
 public headers: internal functions, static helpers, and all of a

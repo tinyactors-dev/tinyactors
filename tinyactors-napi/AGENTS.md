@@ -69,30 +69,45 @@ the contract).
 ## The binding's memory
 
 The addon allocates almost nothing, so allocations and frees pair by
-construction (bindings.md, section 6, "The binding allocates almost
-nothing"):
+construction (bindings.md, section 6; ADR 0010):
 
-- **Borrow where Node-API gives a view.** Bytes come from a `Uint8Array`
-  or `ArrayBuffer` with `napi_get_typedarray_info` /
-  `napi_get_arraybuffer_info`, a view for the call's duration: core
-  copies what it keeps. System variables and a chart's states are read
-  from core when it supplies them, never copied.
-- **One text buffer per host.** Node-API cannot give UTF-8 without
-  copying, so every string a call or an expression passes to core is
-  converted into one buffer the host owns, reused by every call and
-  grown rarely (doubling); never a `malloc` per string. A string that
-  must outlive the call is kept as a JavaScript value, not as C memory.
-- **Hold, don't copy.** The image bytes the compiler writes stay in an
-  `ArrayBuffer` the `Host` references (a `napi_ref`) until
-  `TA_HOST_EFFECT_SEGMENT_FREED`.
 - **Rows, not allocations.** A session (its scope), a chart (its compiled
-  functions) and a payload are rows of the handle tables
-  (`src/datamodel/handles.c`), grown by doubling, slots reused, freed
-  once in the host's free path.
+  functions), a payload, a `<foreach>` and an image are rows of the
+  handle tables (`src/datamodel/handles.c`), grown by doubling, slots
+  reused, freed once in the host's free path. An image's row holds core's
+  `ta_compile_result` until `TA_HOST_EFFECT_SEGMENT_FREED`, then
+  `ta_compile_free`; nothing is copied. Image bytes a caller gives are
+  copied once into memory the addon owns and never hands out (a caller's
+  `ArrayBuffer` can be transferred, resized or shared), and the `ta_image`
+  core points to must not move, so it is not in a row.
+- **One writer per call.** A config, a request's params, a payload for
+  quickjs and `encode` are written with a `ta_cbor_writer` of that call,
+  starting in a room on the C stack and growing through the host's
+  allocator, freed before the call returns. JavaScript running during a
+  call (a getter, `toJSON`) may call the `Host` again: nothing is shared.
+- **Views of what core and JavaScript hold.** Bytes come from a typed
+  array's data (`napi_get_typedarray_info`, `napi_get_arraybuffer_info`),
+  for the call. Text is the one copy Node-API forces: it is written as
+  UTF-8 into the call's room (`napi_get_value_string_utf8`), and read again
+  as UTF-16 only when `EF BF BD` appears, to refuse a lone surrogate. The
+  host's outputs (a reply, an envelope, OTLP, a blob) are views until the
+  next call into the host: convert or copy them into JavaScript values
+  before anything else runs. Core's values are read with `ta_cbor_reader`
+  as they stream.
+- **The datamodel's last output.** `to_wire`, `serialize`,
+  `payload_serialize` and the strings handed back to core (`eval_string`,
+  `log`) are written with a writer the datamodel keeps, overwritten by its
+  next call: the one buffer kept between calls, because Node-API gives no
+  view of a string.
+- **Payloads are copied, not encoded,** between the API and the native
+  datamodel (`ta_napi_values_copy`); CBOR only toward quickjs and in
+  envelopes.
 - **Where:** `malloc`, `calloc`, `realloc` and `free` are called only in
-  `src/datamodel/handles.c` and in `src/host.c`'s create, free, the text
-  buffer and the host's allocator; nothing per call, per event or per
-  evaluation. The lint rule `allocation-in-tables-and-host` checks it.
+  `src/datamodel/handles.c`, in the writers' growth, and in `src/host.c`'s
+  create, free and the host's allocator (with
+  `napi_adjust_external_memory`); nothing per call, per event or per
+  evaluation beyond a writer that outgrew its room. The lint rule
+  `allocation-in-tables-and-host` checks it.
 
 ## C rules
 
@@ -199,17 +214,16 @@ review behind it).
 The addon exposes its CBOR conversion as two exports of the package,
 `encode(value) -> Uint8Array` and `decode(bytes) -> value` (the names and
 shapes of `cbor-x` and `cbor2`'s `encode`/`decode`; bindings.md, section
-9): `encode` builds core's tokens from the value table of
-`docs/values.md` in `src/values.c` and writes them with `ta_cbor_encode`
-(`include/tinyactors/cbor.h`); `decode` reads with `ta_cbor_decode` and
-builds JavaScript values by the same table (`BigInt` past 2^53,
+9): `encode` writes the value table of `docs/values.md` item by item
+with a `ta_cbor_writer` in `src/values.c` (`include/tinyactors/cbor.h`);
+`decode` reads with a `ta_cbor_reader`, item by item, and builds JavaScript values by the same table (`BigInt` past 2^53,
 `Uint8Array`, an actor reference as its address text). What it cannot
 read is refused with an exception, never turned into a value
 (`docs/values.md` names the exception).
 
 They are the same conversion the API uses for requests, replies, config
 and event data, not a second codec: one `values.c`, called by both. Each
-has its row in `docs/api-map.md` (`ta_cbor_encode`, `ta_cbor_decode`),
+has its row in `docs/api-map.md` (`ta_cbor_writer`, `ta_cbor_reader`),
 and `index.d.ts` types them. The adapter (`conform.mjs`) reads and writes
 the driver's frames with them, and imports nothing but
 `@tinyactors/node` and `node:` built-ins (the adapters' lint refuses any
