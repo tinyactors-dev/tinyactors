@@ -7,9 +7,12 @@ compared. A scenario adds to a W3C test only what a chart cannot do
 itself: the host operations between runs (spawn and send from outside, the
 clock, hibernation, snapshots, a new chart version, migration).
 
-They are core's conformance scenarios (`tinyactors-core/tests/conformance`)
-in this form. An expectation a chart cannot check from inside is not
-ported; each scenario's `steps.txt` says which, and where it is covered.
+They are core's former conformance scenarios
+(`tinyactors-core/tests/conformance`, in git before `ta-conform` replaced
+them) in this form. An expectation a chart cannot check from inside is not
+ported; each scenario's `steps.txt` says which, and which of core's unit
+tests covers it. Core runs them against `ta-conform` (`mise run conform`
+in `tinyactors-core`).
 
 ## A scenario
 

@@ -193,7 +193,7 @@ module Core
     # The host's memory: accounting, a fixed arena, and refusals (--full: each
     # allocation of the workload refused in turn).
     unit('test_host_memory', 'host', 'compile', *ECMASCRIPT, full: true),
-    unit('test_address', 'base', 'quickjs', defines: { 'TA_VECTORS' => ROOT.join('tests/conformance/addresses.json') }),
+    unit('test_address', 'base'),
     unit('test_journal', 'base'),
     unit('test_cbor', 'base'),
     unit('test_host_inputs', 'host', 'runtime', 'compile', *ECMASCRIPT),
@@ -202,14 +202,10 @@ module Core
     unit('test_host_request', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_effects', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
-    unit('test_trace', 'trace', 'quickjs', defines: { 'TA_SPAN_VECTORS' => ROOT.join('tests/conformance/span_ids.json'),
-                                                      'TA_TRACEPARENT_VECTORS' => ROOT.join('tests/conformance/traceparent.json') }),
+    unit('test_trace', 'trace'),
     # The torture chamber's event loop.
     Program.new(name: 'test_torture_loop', sources: %w[tests/unit/test_torture_loop.c tools/torture/loop.c], uses: [],
-                defines: {}),
-    # Host conformance (tests/conformance/*.json) through the C host.
-    Program.new(name: 'conformance', sources: %w[tests/conformance/run_c.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
-                defines: {}, arguments: [ROOT.join('tests/conformance').to_s])
+                defines: {})
   ].freeze
 
   # Programs that are built but run by their own tasks.

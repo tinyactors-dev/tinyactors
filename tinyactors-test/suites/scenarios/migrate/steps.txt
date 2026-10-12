@@ -2,7 +2,8 @@
 # running actors, one of them hibernated and woken for it, migrate to it:
 # error.platform.upgrade carries version 1's <datamodel> bindings, states
 # match by id, delayed sends survive the move. Ported from
-# tinyactors-core/tests/conformance/migrate.json; the workers report to a
+# core's conformance scenario migrate.json (tinyactors-core/tests/conformance,
+# in git before ta-conform replaced it); the workers report to a
 # judge, which the original did not need.
 #
 # Each worker is spawned with what it must count by its deadline (Var7)
@@ -12,9 +13,9 @@
 # Not checked here (a chart cannot see it):
 # - that w2 is in memory after the migration ("awake"); the chart sees only
 #   that it was upgraded before its deadline. Covered by
-#   tests/unit/test_host.c (test_migration_wake_and_timeout) and core's
-#   conformance program (tests/conformance/run_c.c on migrate.json, until
-#   ta-conform).
+#   tinyactors-core/tests/unit/test_host.c
+#   (test_migration_wake_and_timeout: one WAKE for the hibernated actor,
+#   then it is migrated, in the new segment and not hibernated).
 # - that the migration job ended (JOB_DONE): the implementation's migrate
 #   step waits for it (docs/driver.md); a migration that does not end
 #   leaves the workers on version 1, whose deadline fails.

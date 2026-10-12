@@ -278,13 +278,16 @@ tinyactors-test/
 
 ```
 tinyactors-core/
-└── tools/conform/
-    └── conform.c            ta-conform: the C reference of docs/driver.md, over ta_host
-                             and the quickjs datamodel; core's tests run the suite with it
+└── tools/conform/           ta-conform: the C reference of docs/driver.md, over ta_host
+    ├── conform.c            and the quickjs datamodel (and the tests' one); core's
+    ├── datamodel.c          `mise run conform` runs the suite with it
+    ├── vectors.c
+    ├── scenario.c
+    └── w3c.c
 ```
 
-`tests/protocol/` and `tests/w3c/` leave core; `tests/conformance/`,
-`tests/unit/` and the torture chamber stay.
+`tests/protocol/`, `tests/w3c/` and `tests/conformance/` left core (M0
+item 2); `tests/unit/` and the torture chamber stay.
 
 #### tinyactors-napi: the Node and Bun package (`@tinyactors/node`, ADR 0001)
 

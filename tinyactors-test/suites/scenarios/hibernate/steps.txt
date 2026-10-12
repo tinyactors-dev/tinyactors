@@ -1,16 +1,19 @@
 # hibernate: an idle actor with variables and a pending delayed send
 # leaves memory; an event wakes it; its timer firing while it is
 # hibernated wakes it too. The implementation keeps the blobs and answers
-# WAKE (docs/driver.md, "The scenario environment"). Ported from
-# tinyactors-core/tests/conformance/hibernate.json.
+# WAKE (docs/driver.md, "The scenario environment"). Ported from core's
+# conformance scenario hibernate.json (tinyactors-core/tests/conformance,
+# in git before ta-conform replaced it).
 #
 # Not checked here (a chart cannot see it):
 # - whether the actor is in the store or in memory between steps
 #   ("hibernated", "awake"): the chart sees only that it went on with its
-#   variables. Covered by tests/unit/test_hibernate.c
-#   (test_roundtrip_and_single_wake, test_timer_wakes_actor: one WAKE per
-#   wake) and core's conformance program (tests/conformance/run_c.c on
-#   hibernate.json, until ta-conform).
+#   variables. Covered through the host by
+#   tinyactors-core/tests/unit/test_host.c (test_hibernate_and_wake: this
+#   scenario's steps, with the actor's state after each, one WAKE per wake
+#   and its configuration after the wake), and in a system by
+#   test_hibernate.c (test_roundtrip_and_single_wake,
+#   test_timer_wakes_actor).
 
 image sleeper
 spawn s sleeper

@@ -333,8 +333,8 @@ Event I/O Processor, outside this protocol.
 
 ## Conformance
 
-- `tests/conformance/addresses.json` — address parsing and formatting
-  vectors; run by the C parser (`tests/unit/test_address.c`).
+- address parsing and formatting vectors (valid, invalid, formatted), in
+  `tests/unit/test_address.c` (`test_vectors`), against the C parser.
 - `tinyactors-test/suites/protocol/values.txt` — neutral value vectors,
   CBOR in hex with its diagnostic notation; run in C
   (`tests/unit/test_datamodel_ecmascript.c`) and by the suite.

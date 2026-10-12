@@ -150,9 +150,6 @@ implementation of that layer). Layer dependency rules are in
 │   │                             trace,journal,tracing,otlp};
 │   │                             test_torture_loop; test_durable:
 │   │                             every path out of memory vs. a run that never left it (durability.md)
-│   ├── conformance/           ✅ host conformance: JSON scenarios (spawn, send, sendMany, timers,
-│   │                             hibernate, snapshot/restore, reload/migrate, requests) run by
-│   │                             run_c.c (C host), the `conformance` program of `mise run test`
 │   └── fuzz/                  ◻ libFuzzer: image verifier, XML parser, compiler
 │
 ├── bench/                     ◻ micro (selection, VM, pool); macro load lives in tools/torture

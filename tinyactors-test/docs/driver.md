@@ -92,10 +92,11 @@ left out mean none: empty text, 0, no value.
 
 `steps` is an array of maps, each one host operation a chart cannot do
 itself. A step carries no expectation: the charts check afterwards. They
-are the steps of core's conformance scenarios
-(`tinyactors-core/tests/conformance/README.md`, "Format") without `expect`,
-with images named instead of a document per spawn: `image` replaces a
-spawn's `documents` and `reload`, and `spawn` names a chart. A document is
+are the steps of core's former conformance scenarios
+(`tinyactors-core/tests/conformance`, in git before `ta-conform` replaced
+them) without `expect`, with images named instead of a document per
+spawn: `image` replaces a spawn's `documents` and `reload`, and `spawn`
+names a chart. A document is
 named by its `name` in `documents` (`counter.scxml`); a chart by its
 `<scxml name>`, else its document's name (`ta_host_chart`).
 

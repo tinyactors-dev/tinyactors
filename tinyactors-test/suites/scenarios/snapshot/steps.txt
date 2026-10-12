@@ -1,12 +1,15 @@
 # snapshot: the whole host to bytes, more work, then the snapshot restored
 # (a restart: the later work is gone); then routing between actors, events
 # and a timer set before the snapshot work in the restored host. Ported
-# from tinyactors-core/tests/conformance/snapshot.json.
+# from core's conformance scenario snapshot.json
+# (tinyactors-core/tests/conformance, in git before ta-conform replaced it).
 #
 # Not checked here (a chart cannot see it):
 # - the ledger's <donedata> ({"balance": 6}): it ends in pass instead, and
-#   a DONE effect goes to the host. Covered by core's conformance program
-#   (tests/conformance/run_c.c on snapshot.json, until ta-conform).
+#   a DONE effect goes to the host. Covered by
+#   tinyactors-core/tests/unit/test_host.c (test_snapshot_restore: after a
+#   restore, the <donedata> of an actor that ends in the restored host
+#   reaches the host with its DONE).
 # - the states of both actors after the pong ("open", "e"): the ledger
 #   handles the pong and the checks only in "open".
 

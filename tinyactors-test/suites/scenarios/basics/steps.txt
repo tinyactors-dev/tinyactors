@@ -1,15 +1,17 @@
 # basics: spawn with params, send, a batch, a delayed send on the host's
 # clock, then a parallel state with In(), foreach and error.execution.
-# Ported from tinyactors-core/tests/conformance/basics.json.
+# Ported from core's conformance scenario basics.json
+# (tinyactors-core/tests/conformance, in git before ta-conform replaced it).
 #
 # Not checked here (a chart cannot see it):
 # - the counter's states after spawn and after 50 ms ("idle"): the
 #   "early" and "stop" events check that the tick came after 50 ms and by
 #   110 ms, not which state the actor is in;
 # - the counter's <donedata> ({"total": 13}): a DONE effect of a spawned
-#   actor goes to the host, not to a chart. Covered by core's conformance
-#   program (tests/conformance/run_c.c on basics.json, until ta-conform)
-#   and DONE payloads in tests/unit/test_e2e.c (test_supervisor_workers).
+#   actor goes to the host, not to a chart. Covered by
+#   tinyactors-core/tests/unit/test_host.c (test_snapshot_restore: a
+#   spawned actor's <donedata> param in the DONE payload the host gets)
+#   and test_e2e.c (test_supervisor_workers: a <donedata> content).
 
 image counter
 image checks

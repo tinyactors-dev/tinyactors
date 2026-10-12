@@ -1,6 +1,6 @@
 /* ta_host: many systems as one — segments sharing a base URI, routing between
  * them inside the library, versions and retirement, migration jobs (wake,
- * timeout), hibernation through the host, growth, enumeration. */
+ * timeout), hibernation through the host, requests, growth, enumeration. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
@@ -8,6 +8,7 @@
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
 #include "../support/host_config.h"
+#include "../support/payload_text.h"
 
 #define BASE "tinyactors://h/"
 #define SC(name, body)                                                                             \
@@ -26,6 +27,11 @@ typedef struct host_world {
     uint32_t last_job;
     ta_host_effect last_done;
     uint64_t wake_session;
+    uint64_t done_session;  /* the last DONE effect's */
+    char done_data[256];    /* and its payload as text ("" for none) */
+    int request_count;      /* REQUEST effects, and the last one's: */
+    uint32_t request_segment, request_token;
+    char request_source[64];
     unsigned char blob[1 << 16];
     size_t blob_length;
 } host_world;
@@ -84,7 +90,19 @@ static void drain(host_world *e) {
             e->wake_count++;
             e->wake_session = effect->session;
         }
-        if (effect->kind == TA_EFFECT_DONE) e->done_count++;
+        if (effect->kind == TA_EFFECT_DONE) {
+            e->done_count++;
+            e->done_session = effect->session;
+            e->done_data[0] = 0;
+            if (effect->payload) payload_text(e->ecmascript, effect->payload, e->done_data, sizeof e->done_data);
+        }
+        if (effect->kind == TA_EFFECT_REQUEST) {
+            e->request_count++;
+            e->request_segment = effect->segment;
+            e->request_token = effect->token;
+            snprintf(e->request_source, sizeof e->request_source, "%.*s", (int)effect->auxiliary.length,
+                     effect->auxiliary.pointer ? effect->auxiliary.pointer : "");
+        }
         if (effect->kind == TA_HOST_EFFECT_SEGMENT_FREED) e->freed_count++;
         if (effect->kind == TA_HOST_EFFECT_MIGRATED) e->migrated_count++;
         if (effect->kind == TA_HOST_EFFECT_JOB_DONE) {
@@ -477,6 +495,11 @@ static void test_migration_wake_and_timeout(void) {
     CHECK_EQUAL(ta_host_locate(e.host, a, &location), TA_OK);
     at = location.segment;
     CHECK_EQUAL(at, 1u);
+    ta_actor_info info; /* woken for the move: in memory, not hibernated */
+    memset(&info, 0, sizeof info);
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_actor_info_get(ta_host_system(e.host, location.segment), location.actor, &info), TA_OK);
+    CHECK(info.state != TA_ACTOR_HIBERNATED && info.state != TA_ACTOR_FREE);
     (void)b;
     /* the sweep reports actors that did not run since the previous sweep */
     uint64_t cold[8];
@@ -644,7 +667,8 @@ static void test_snapshot_restore(void) {
                           "<state id='b'><onentry><log expr=\"'ticked:' + n\"/>"
                           "<send targetexpr=\"'" BASE "#_scxml_' + peer\" event='ping'/></onentry>"
                           "<transition event='pong' target='done'/></state>"
-                          "<final id='done'><onentry><log expr=\"'done'\"/></onentry></final>"));
+                          "<final id='done'><onentry><log expr=\"'done'\"/></onentry>"
+                          "<donedata><param name='n' expr='n'/></donedata></final>"));
     world_add(&e, ECHO); /* another segment */
     uint64_t c = spawn(&e, "c"), echo = spawn(&e, "echo");
     run(&e);
@@ -709,6 +733,10 @@ static void test_snapshot_restore(void) {
     run(&e);
     if (strcmp(e.log, "n=5;ticked:5;done;")) fprintf(stderr, "  log: %s\n", e.log);
     CHECK(strcmp(e.log, "n=5;ticked:5;done;") == 0); /* routed to the other segment and back */
+    /* its <donedata> reaches the host with DONE, from the restored datamodel */
+    CHECK_EQUAL(e.done_session, c);
+    if (strcmp(e.done_data, "{\"n\":5}")) fprintf(stderr, "  donedata: %s\n", e.done_data);
+    CHECK(strcmp(e.done_data, "{\"n\":5}") == 0);
     ta_host_stats stats;
     stats.size = sizeof stats;
     host_stats_fill(e.host, &stats);
@@ -976,8 +1004,102 @@ static void test_snapshot_pack(void) {
     world_close(&e);
 }
 
+/* Whether a session is hibernated (1), in memory (0), or neither (-1). */
+static int hibernated(host_world *e, uint64_t session) {
+    ta_host_location location;
+    if (ta_host_locate(e->host, session, &location) != TA_OK) return -1;
+    ta_actor_info info;
+    memset(&info, 0, sizeof info);
+    info.size = sizeof info;
+    if (ta_actor_info_get(ta_host_system(e->host, location.segment), location.actor, &info) != TA_OK) return -1;
+    return info.state == TA_ACTOR_HIBERNATED;
+}
+
+/* Hibernation through the host, which keeps the blob: an event for the
+ * hibernated actor asks for it once (WAKE) and waits; so does the actor's
+ * own timer firing; woken, it goes on with its variables and its state. */
+#define SLEEPER                                                                                    \
+    SC("sleeper", "initial='idle'><datamodel><data id='hits' expr='0'/></datamodel>"               \
+                  "<state id='idle'><onentry><send event='alarm' delay='200ms'/></onentry>"        \
+                  "<transition event='touch'><assign location='hits' expr='hits + 1'/>"            \
+                  "<log expr=\"'touched ' + hits\"/></transition>"                                 \
+                  "<transition event='alarm'><log expr=\"'alarm after ' + hits\"/></transition>"   \
+                  "</state>")
+
+static void test_hibernate_and_wake(void) {
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    world_add(&e, SLEEPER);
+    uint64_t s = spawn(&e, "sleeper");
+    run(&e);
+    CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "touched 1;") == 0);
+    ta_buffer written = {e.blob, sizeof e.blob, 0};
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    e.blob_length = written.length;
+    CHECK_EQUAL(hibernated(&e, s), 1);
+    CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
+    run(&e);
+    CHECK(e.wake_count == 1 && e.wake_session == s);
+    CHECK(strcmp(e.log, "touched 1;") == 0); /* the event waits for the blob */
+    CHECK_EQUAL(hibernated(&e, s), 1);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){e.blob, e.blob_length}), TA_OK);
+    run(&e);
+    CHECK_EQUAL(hibernated(&e, s), 0);
+    CHECK(strcmp(e.log, "touched 1;touched 2;") == 0);
+    char value[64];
+    CHECK_EQUAL(ask_state(e.host, s, value, sizeof value), TA_OK);
+    CHECK(strcmp(value, "\"idle\"") == 0);
+    /* again, and the alarm it set before both hibernations wakes it */
+    written = (ta_buffer){e.blob, sizeof e.blob, 0};
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    e.blob_length = written.length;
+    CHECK_EQUAL(hibernated(&e, s), 1);
+    ta_host_advance_time(e.host, (ta_host_time){250, 0});
+    run(&e);
+    CHECK(e.wake_count == 2 && e.wake_session == s);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){e.blob, e.blob_length}), TA_OK);
+    run(&e);
+    CHECK_EQUAL(hibernated(&e, s), 0);
+    if (strcmp(e.log, "touched 1;touched 2;alarm after 2;")) fprintf(stderr, "  log: %s\n", e.log);
+    CHECK(strcmp(e.log, "touched 1;touched 2;alarm after 2;") == 0);
+    world_close(&e);
+}
+
+/* An <invoke srcexpr> the image does not resolve is a REQUEST effect for the
+ * host, with the source as written and the segment to answer in. Answered
+ * with an error, the invoke is error.execution; the actor ends, and the host
+ * gets its DONE. */
+#define ASKER                                                                                      \
+    SC("asker", "initial='a'><state id='a'><invoke id='ghost' srcexpr=\"'missing.scxml'\"/>"       \
+                "<transition event='error.execution' target='end'>"                               \
+                "<log expr=\"'cannot invoke'\"/></transition>"                                     \
+                "<transition event='done.invoke.ghost' target='bad'/></state>"                     \
+                "<final id='end'/><final id='bad'/>")
+
+static void test_request_answered_with_an_error(void) {
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    world_add(&e, ECHO);
+    uint32_t segment = world_add(&e, ASKER);
+    uint64_t s = spawn(&e, "asker");
+    run(&e);
+    CHECK_EQUAL(e.request_count, 1);
+    CHECK_EQUAL(e.request_segment, segment);
+    CHECK(strcmp(e.request_source, "missing.scxml") == 0);
+    CHECK_EQUAL(e.done_count, 0); /* it waits for the answer */
+    CHECK_EQUAL(ta_host_resume(e.host, &(ta_resume){segment, e.request_token, TA_ERROR_INVALID, 0, 0}), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "cannot invoke;") == 0);
+    CHECK(e.done_count == 1 && e.done_session == s);
+    world_close(&e);
+}
+
 int main(void) {
     RUN(test_snapshot_pack);
+    RUN(test_hibernate_and_wake);
+    RUN(test_request_answered_with_an_error);
     RUN(test_state_value);
     RUN(test_export_adopt_between_hosts);
     RUN(test_adopt_tree_collision);

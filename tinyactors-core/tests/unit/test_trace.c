@@ -1,74 +1,12 @@
-/* ta_trace values: span IDs, traceparent text, the generator and sampling,
- * against the shared vectors tests/conformance/span_ids.json and
- * traceparent.json. The vectors are read with quickjs (JSON only). */
+/* ta_trace values: span IDs, traceparent text, the generator and sampling.
+ * The span ID and traceparent vectors are every implementation's (docs/adr/0006
+ * in the repository root, section 2). */
 #include "../harness/harness.h"
 #include <tinyactors/trace.h>
-#include "quickjs.h"
 #include "trace/record.h"
 
 #include <stdlib.h>
 #include <string.h>
-
-#ifndef TA_SPAN_VECTORS
-#define TA_SPAN_VECTORS "tests/conformance/span_ids.json"
-#endif
-#ifndef TA_TRACEPARENT_VECTORS
-#define TA_TRACEPARENT_VECTORS "tests/conformance/traceparent.json"
-#endif
-
-static JSContext *J;
-
-static char *slurp(const char *path) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *b = malloc((size_t)n + 1);
-    if (b && fread(b, 1, (size_t)n, f) != (size_t)n) {
-        free(b);
-        b = NULL;
-    }
-    fclose(f);
-    if (b) b[n] = 0;
-    return b;
-}
-
-static JSValue load(const char *path) {
-    char *text = slurp(path);
-    CHECK(text != NULL);
-    if (!text) return JS_UNDEFINED;
-    JSValue v = JS_ParseJSON(J, text, strlen(text), path);
-    free(text);
-    return v;
-}
-
-static const char *str_of(JSValueConst o, const char *k, char *buffer, size_t capacity) {
-    JSValue v = JS_GetPropertyStr(J, o, k);
-    buffer[0] = 0;
-    int has = JS_IsString(v);
-    if (has) {
-        size_t n;
-        const char *s = JS_ToCStringLen(J, &n, v);
-        if (n < capacity) {
-            memcpy(buffer, s, n);
-            buffer[n] = 0;
-        }
-        JS_FreeCString(J, s);
-    }
-    JS_FreeValue(J, v);
-    return has ? buffer : NULL;
-}
-
-static uint64_t u64_of(JSValueConst o, const char *k) {
-    char text[32];
-    if (str_of(o, k, text, sizeof text)) return strtoull(text, NULL, 10);
-    JSValue v = JS_GetPropertyStr(J, o, k);
-    double d = 0;
-    JS_ToFloat64(J, &d, v);
-    JS_FreeValue(J, v);
-    return (uint64_t)d;
-}
 
 static uint64_t hex_of(const char *text) {
     return strtoull(text, NULL, 16);
@@ -78,39 +16,42 @@ static ta_string_view S(const char *s) {
     return (ta_string_view){s, (uint32_t)strlen(s)};
 }
 
-static void each(JSValueConst root, const char *list, void (*function)(JSValueConst)) {
-    JSValue arr = JS_GetPropertyStr(J, root, list);
-    int64_t n = 0;
-    JS_GetLength(J, arr, &n);
-    CHECK(n > 0);
-    for (int64_t i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(J, arr, (uint32_t)i);
-        function(e);
-        JS_FreeValue(J, e);
-    }
-    JS_FreeValue(J, arr);
-}
-
 /* ---- span IDs ------------------------------------------------------------------------- */
 
-static void span_vector(JSValueConst e) {
-    char span[32];
-    ta_step_key key = {u64_of(e, "session"), u64_of(e, "macrostep"),
-                       (uint32_t)u64_of(e, "microstep"), 0};
-    str_of(e, "span", span, sizeof span);
-    ta_span_id got = ta_step_key_span_id(key);
-    CHECK_EQUAL(got, hex_of(span));
-    char text[17] = {0};
-    ta_buffer out = {text, 16, 0};
-    CHECK_EQUAL(ta_span_id_format(got, &out), TA_OK);
-    CHECK_EQUAL(out.length, 16);
-    CHECK(strcmp(text, span) == 0);
-}
+/* The span ID of a step key (ta_step_key_span_id, ported bit for bit from
+ * 0.1); a key with session 0 is a host's cause and returns its macrostep. */
+typedef struct span_vector {
+    uint64_t session, macrostep;
+    uint32_t microstep;
+    const char *span;
+} span_vector;
+
+static const span_vector span_vectors[] = {
+    {1, 1, 0, "049e7f1d71e53363"},
+    {1, 1, 1, "304917c348f35bf4"},
+    {1, 2, 0, "79368ebf22c90f5b"},
+    {2, 1, 0, "6412a7d0f1c7345a"},
+    {1, 0, 1, "65c672b9ddbfb556"},
+    {1, 0, 3, "b4ed65a25541f516"},
+    {4294967297u, 7, 3, "4e8137c818db79ba"},
+    {8589934593u, 4, 1, "c94a2a9027fa8e30"},
+    {9007199254740993u, 1, 0, "686d5315f8778237"},
+    {UINT64_MAX, UINT64_MAX, UINT32_MAX, "03938147c4082ae7"},
+    {0, 4660, 0, "0000000000001234"},
+    {0, 0, 0, "0000000000000000"},
+};
 
 static void test_span_ids(void) {
-    JSValue root = load(TA_SPAN_VECTORS);
-    each(root, "keys", span_vector);
-    JS_FreeValue(J, root);
+    for (size_t i = 0; i < sizeof span_vectors / sizeof span_vectors[0]; i++) {
+        const span_vector *vector = &span_vectors[i];
+        ta_span_id got = ta_step_key_span_id((ta_step_key){vector->session, vector->macrostep, vector->microstep, 0});
+        CHECK_EQUAL(got, hex_of(vector->span));
+        char text[17] = {0};
+        ta_buffer out = {text, 16, 0};
+        CHECK_EQUAL(ta_span_id_format(got, &out), TA_OK);
+        CHECK_EQUAL(out.length, 16);
+        CHECK(strcmp(text, vector->span) == 0);
+    }
     /* the padding is not part of the key */
     ta_span_id a = ta_step_key_span_id((ta_step_key){1, 1, 0, 0});
     CHECK(a == ta_step_key_span_id((ta_step_key){1, 1, 0, 7})); /* pad is not part of the key */
@@ -118,20 +59,53 @@ static void test_span_ids(void) {
 
 /* ---- traceparent ---------------------------------------------------------------------- */
 
-static void valid_vector(JSValueConst e) {
-    char text[128], trace[40], parent[24], format[128];
-    str_of(e, "text", text, sizeof text);
-    str_of(e, "trace", trace, sizeof trace);
-    str_of(e, "parent", parent, sizeof parent);
+/* W3C traceparent text that parses (ta_traceparent_parse), and the text the
+ * context formats back to (ta_traceparent_format): `format`, or NULL when it
+ * is the same text. */
+typedef struct traceparent_vector {
+    const char *text, *trace, *parent;
+    uint32_t flags;
+    const char *format;
+} traceparent_vector;
+
+static const traceparent_vector traceparent_vectors[] = {
+    {"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "4bf92f3577b34da6a3ce929d0e0e4736",
+     "00f067aa0ba902b7", 1, NULL},
+    {" \t00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00 ", "4bf92f3577b34da6a3ce929d0e0e4736",
+     "00f067aa0ba902b7", 0, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"},
+    {"cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-09-extra", "4bf92f3577b34da6a3ce929d0e0e4736",
+     "00f067aa0ba902b7", 9, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-09"},
+    {"01-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-03", "0af7651916cd43dd8448eb211c80319c",
+     "b7ad6b7169203331", 3, "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-03"},
+    {"00-00000000000000000000000000000001-0000000000000001-ff", "00000000000000000000000000000001",
+     "0000000000000001", 255, NULL},
+};
+
+/* Text that does not parse, and why. */
+static const char *const invalid_traceparents[][2] = {
+    {"", "empty"},
+    {"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-0", "short"},
+    {"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-x", "version 00 is exactly 55 characters"},
+    {"cc-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01x", "no dash after the flags"},
+    {"ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "version ff"},
+    {"00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01", "uppercase"},
+    {"00-00000000000000000000000000000000-00f067aa0ba902b7-01", "zero trace ID"},
+    {"00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01", "zero parent ID"},
+    {"00_4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", "separator"},
+    {"00-4bf92f3577b34da6a3ce929d0e0e473g-00f067aa0ba902b7-01", "not hex"},
+    {"0-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-", "short version"},
+};
+
+static void valid_traceparent(const traceparent_vector *vector) {
     ta_trace_context context;
-    CHECK_EQUAL(ta_traceparent_parse(S(text), &context), TA_OK);
+    CHECK_EQUAL(ta_traceparent_parse(S(vector->text), &context), TA_OK);
     char high[17] = {0};
-    memcpy(high, trace, 16);
+    memcpy(high, vector->trace, 16);
     CHECK_EQUAL(context.trace.high, hex_of(high));
-    CHECK_EQUAL(context.trace.low, hex_of(trace + 16));
-    CHECK_EQUAL(context.parent, hex_of(parent));
-    CHECK_EQUAL(context.flags, u64_of(e, "flags"));
-    const char *want = str_of(e, "format", format, sizeof format) ? format : text;
+    CHECK_EQUAL(context.trace.low, hex_of(vector->trace + 16));
+    CHECK_EQUAL(context.parent, hex_of(vector->parent));
+    CHECK_EQUAL(context.flags, vector->flags);
+    const char *want = vector->format ? vector->format : vector->text;
     char out[TA_TRACEPARENT_LENGTH + 1] = {0};
     ta_buffer written = {out, TA_TRACEPARENT_LENGTH, 0};
     CHECK_EQUAL(ta_traceparent_format(&context, &written), TA_OK);
@@ -142,24 +116,19 @@ static void valid_vector(JSValueConst e) {
     written = (ta_buffer){id, 32, 0};
     CHECK_EQUAL(ta_trace_id_format(context.trace, &written), TA_OK);
     CHECK_EQUAL(written.length, 32);
-    CHECK(strcmp(id, trace) == 0);
-}
-
-static void invalid_vector(JSValueConst e) {
-    char text[128], why[128];
-    str_of(e, "text", text, sizeof text);
-    str_of(e, "why", why, sizeof why);
-    ta_trace_context context;
-    ta_status status = ta_traceparent_parse(S(text), &context);
-    if (status != TA_ERROR_INVALID) fprintf(stderr, "  accepted (%s): %s\n", why, text);
-    CHECK_EQUAL(status, TA_ERROR_INVALID);
+    CHECK(strcmp(id, vector->trace) == 0);
 }
 
 static void test_traceparent_vectors(void) {
-    JSValue root = load(TA_TRACEPARENT_VECTORS);
-    each(root, "valid", valid_vector);
-    each(root, "invalid", invalid_vector);
-    JS_FreeValue(J, root);
+    for (size_t i = 0; i < sizeof traceparent_vectors / sizeof traceparent_vectors[0]; i++)
+        valid_traceparent(&traceparent_vectors[i]);
+    for (size_t i = 0; i < sizeof invalid_traceparents / sizeof invalid_traceparents[0]; i++) {
+        ta_trace_context context;
+        ta_status status = ta_traceparent_parse(S(invalid_traceparents[i][0]), &context);
+        if (status != TA_ERROR_INVALID)
+            fprintf(stderr, "  accepted (%s): %s\n", invalid_traceparents[i][1], invalid_traceparents[i][0]);
+        CHECK_EQUAL(status, TA_ERROR_INVALID);
+    }
 }
 
 /* The IDs are read eight digits at a time: every byte value at every position
@@ -454,8 +423,6 @@ static void test_names(void) {
 }
 
 int main(void) {
-    JSRuntime *runtime = JS_NewRuntime();
-    J = JS_NewContext(runtime);
     RUN(test_names);
     RUN(test_span_ids);
     RUN(test_traceparent_vectors);
@@ -468,7 +435,5 @@ int main(void) {
     RUN(test_records_dropped);
     RUN(test_records_malformed);
     RUN(test_records_strings);
-    JS_FreeContext(J);
-    JS_FreeRuntime(runtime);
     TEST_MAIN_END();
 }

@@ -1,52 +1,10 @@
-/* ta_address: the one address parser (docs/protocol.md, Addresses), against
- * the shared vectors tests/conformance/addresses.json. The vectors are read
- * with quickjs (JSON only, no evaluation of code). */
+/* ta_address: the one address parser (docs/protocol.md, Addresses): the
+ * address vectors (valid, invalid, formatted), then the edges. */
 #include "../harness/harness.h"
 #include <tinyactors/address.h>
-#include "quickjs.h"
 
 #include <stdlib.h>
 #include <string.h>
-
-#ifndef TA_VECTORS
-#define TA_VECTORS "tests/conformance/addresses.json"
-#endif
-
-static JSContext *J;
-
-static char *slurp(const char *path, size_t *length) {
-    FILE *f = fopen(path, "rb");
-    if (!f) return NULL;
-    fseek(f, 0, SEEK_END);
-    long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char *b = malloc((size_t)n + 1);
-    if (b && fread(b, 1, (size_t)n, f) != (size_t)n) {
-        free(b);
-        b = NULL;
-    }
-    fclose(f);
-    if (b) b[n] = 0;
-    *length = (size_t)n;
-    return b;
-}
-
-static const char *str_of(JSValueConst o, const char *k, char *buffer, size_t capacity) {
-    JSValue v = JS_GetPropertyStr(J, o, k);
-    buffer[0] = 0;
-    if (JS_IsString(v)) {
-        size_t n;
-        const char *s = JS_ToCStringLen(J, &n, v);
-        if (n < capacity) {
-            memcpy(buffer, s, n);
-            buffer[n] = 0;
-        }
-        JS_FreeCString(J, s);
-    }
-    int has = !JS_IsUndefined(v);
-    JS_FreeValue(J, v);
-    return has ? buffer : NULL;
-}
 
 static ta_string_view S(const char *s) {
     return (ta_string_view){s, (uint32_t)strlen(s)};
@@ -56,102 +14,126 @@ static int string_equal(ta_string_view a, const char *b) {
     return a.length == strlen(b) && (!a.length || memcmp(a.pointer, b, a.length) == 0);
 }
 
-static void each(JSValueConst root, const char *list, void (*function)(JSValueConst)) {
-    JSValue arr = JS_GetPropertyStr(J, root, list);
-    int64_t n = 0;
-    JS_GetLength(J, arr, &n);
-    CHECK(n > 0);
-    for (int64_t i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(J, arr, (uint32_t)i);
-        function(e);
-        JS_FreeValue(J, e);
-    }
-    JS_FreeValue(J, arr);
-}
+/* Addresses that parse, into their system and their session or name. */
+typedef struct valid_address {
+    const char *text, *system;
+    uint64_t session; /* 0: a name */
+    const char *name;
+} valid_address;
 
-static void valid(JSValueConst e) {
-    char text[512], system_text[300], kind[16], session[32], name[256];
-    str_of(e, "text", text, sizeof text);
-    str_of(e, "system", system_text, sizeof system_text);
-    str_of(e, "kind", kind, sizeof kind);
+static const valid_address valid_addresses[] = {
+    {"tinyactors://a/#_scxml_1", "a", 1, NULL},
+    {"tinyactors://orders/#_scxml_42", "orders", 42, NULL},
+    {"tinyactors://eu.orders-2/#_scxml_9007199254740993", "eu.orders-2", 9007199254740993u, NULL},
+    {"tinyactors://db/#_scxml_4611686018427387904", "db", 4611686018427387904u, NULL},
+    {"tinyactors://db/#_scxml_18446744073709551615", "db", UINT64_MAX, NULL},
+    {"tinyactors://chess/@lobby", "chess", 0, "lobby"},
+    {"tinyactors://chess/@order-1", "chess", 0, "order-1"},
+    {"tinyactors://x/@a.b_c~d", "x", 0, "a.b_c~d"},
+    {"tinyactors://x/@link%3Aserver", "x", 0, "link:server"},
+    {"tinyactors://x/@caf%C3%A9", "x", 0, "caf\xc3\xa9"},
+    {"tinyactors://x/@a%2Fb", "x", 0, "a/b"},
+    {"tinyactors://0/#_scxml_7", "0", 7, NULL},
+};
+
+/* Addresses that do not parse, and why. */
+static const char *const invalid_addresses[][2] = {
+    {"tinyactors://a/#_scxml_0", "session 0"},
+    {"tinyactors://a/#_scxml_01", "leading zero"},
+    {"tinyactors://a/#_scxml_18446744073709551616", "above 2^64-1"},
+    {"tinyactors://a/#_scxml_", "no digits"},
+    {"tinyactors://a/#_scxml_12x", "not a number"},
+    {"tinyactors://a/#_scxml_-1", "negative"},
+    {"tinyactors://A/#_scxml_1", "uppercase system id"},
+    {"tinyactors://-a/#_scxml_1", "label starts with -"},
+    {"tinyactors://a-/#_scxml_1", "label ends with -"},
+    {"tinyactors://a..b/#_scxml_1", "empty label"},
+    {"tinyactors://a_b/#_scxml_1", "underscore in system id"},
+    {"tinyactors:///#_scxml_1", "empty system id"},
+    {"tinyactors://a/", "empty local part"},
+    {"tinyactors://a", "no local part"},
+    {"tinyactors://a/@", "empty name"},
+    {"tinyactors://a/@a b", "space in name"},
+    {"tinyactors://a/@a%2", "truncated escape"},
+    {"tinyactors://a/@a%zz", "bad escape"},
+    {"tinyactors://a/#_parent", "SCXML-local target, not an address"},
+    {"scxml://a/#_scxml_1", "wrong scheme"},
+    {"#_scxml_1", "local part only"},
+};
+
+/* Addresses written from a system and a session or a name. */
+typedef struct formatted_address {
+    const char *system;
+    uint64_t session; /* 0: the name */
+    const char *name, *text;
+} formatted_address;
+
+static const formatted_address formatted_addresses[] = {
+    {"a", 1, NULL, "tinyactors://a/#_scxml_1"},
+    {"db", UINT64_MAX, NULL, "tinyactors://db/#_scxml_18446744073709551615"},
+    {"x", 0, "link:server", "tinyactors://x/@link%3Aserver"},
+    {"x", 0, "caf\xc3\xa9", "tinyactors://x/@caf%C3%A9"},
+    {"x", 0, "a b/c", "tinyactors://x/@a%20b%2Fc"},
+};
+
+static void valid(const valid_address *vector) {
     ta_address address;
-    ta_status status = ta_address_parse(S(text), &address);
+    ta_status status = ta_address_parse(S(vector->text), &address);
     CHECK_EQUAL(status, TA_OK);
     if (status != TA_OK) {
-        fprintf(stderr, "  should parse: %s\n", text);
+        fprintf(stderr, "  should parse: %s\n", vector->text);
         return;
     }
-    CHECK(string_equal(address.system, system_text));
-    if (!strcmp(kind, "session")) {
-        str_of(e, "session", session, sizeof session);
+    CHECK(string_equal(address.system, vector->system));
+    if (vector->session) {
         CHECK_EQUAL(address.kind, TA_ADDRESS_SESSION);
-        CHECK_EQUAL(address.session, strtoull(session, NULL, 10));
+        CHECK_EQUAL(address.session, vector->session);
         char back[TA_ADDRESS_SESSION_MAX]; /* formats back to the same text */
         ta_buffer out = {back, sizeof back, 0};
         CHECK_EQUAL(ta_address_format(address.system, address.session, &out), TA_OK);
         size_t n = out.length;
-        CHECK(n == strlen(text) && !memcmp(back, text, n));
+        CHECK(n == strlen(vector->text) && !memcmp(back, vector->text, n));
     } else {
-        str_of(e, "name", name, sizeof name);
         CHECK_EQUAL(address.kind, TA_ADDRESS_NAME);
-        char dec[256];
-        ta_buffer out = {dec, sizeof dec, 0};
+        char decoded[256];
+        ta_buffer out = {decoded, sizeof decoded, 0};
         CHECK_EQUAL(ta_address_name_decode(address.name, &out), TA_OK);
         size_t n = out.length;
-        CHECK(n == strlen(name) && !memcmp(dec, name, n));
-        if (!(n == strlen(name) && !memcmp(dec, name, n)))
-            fprintf(stderr, "  name of %s: %.*s, want %s\n", text, (int)n, dec, name);
+        CHECK(n == strlen(vector->name) && !memcmp(decoded, vector->name, n));
+        if (!(n == strlen(vector->name) && !memcmp(decoded, vector->name, n)))
+            fprintf(stderr, "  name of %s: %.*s, want %s\n", vector->text, (int)n, decoded, vector->name);
     }
     /* the local part alone parses the same */
-    ta_address l;
-    CHECK_EQUAL(ta_address_parse_local(address.local, &l), TA_OK);
-    CHECK_EQUAL(l.kind, address.kind);
+    ta_address local;
+    CHECK_EQUAL(ta_address_parse_local(address.local, &local), TA_OK);
+    CHECK_EQUAL(local.kind, address.kind);
 }
 
-static void invalid(JSValueConst e) {
-    char text[512], why[128];
-    str_of(e, "text", text, sizeof text);
-    str_of(e, "why", why, sizeof why);
-    ta_address address;
-    ta_status status = ta_address_parse(S(text), &address);
-    CHECK_EQUAL(status, TA_ERROR_INVALID);
-    if (status != TA_ERROR_INVALID) fprintf(stderr, "  should not parse (%s): %s\n", why, text);
-}
-
-static void format(JSValueConst e) {
-    char system[300], session[32], name[256], want[512];
-    str_of(e, "system", system, sizeof system);
-    str_of(e, "text", want, sizeof want);
+static void format(const formatted_address *vector) {
     char out[512];
     ta_buffer written = {out, sizeof out, 0};
-    if (str_of(e, "session", session, sizeof session))
-        CHECK_EQUAL(ta_address_format(S(system), strtoull(session, NULL, 10), &written), TA_OK);
+    if (vector->session)
+        CHECK_EQUAL(ta_address_format(S(vector->system), vector->session, &written), TA_OK);
     else
-        CHECK_EQUAL(
-            ta_address_format_name(S(system), S(str_of(e, "name", name, sizeof name)), &written),
-            TA_OK);
+        CHECK_EQUAL(ta_address_format_name(S(vector->system), S(vector->name), &written), TA_OK);
     size_t n = written.length;
-    CHECK(n == strlen(want) && !memcmp(out, want, n));
-    if (!(n == strlen(want) && !memcmp(out, want, n)))
-        fprintf(stderr, "  format: %.*s, want %s\n", (int)n, out, want);
+    CHECK(n == strlen(vector->text) && !memcmp(out, vector->text, n));
+    if (!(n == strlen(vector->text) && !memcmp(out, vector->text, n)))
+        fprintf(stderr, "  format: %.*s, want %s\n", (int)n, out, vector->text);
 }
 
 static void test_vectors(void) {
-    size_t length;
-    char *text = slurp(TA_VECTORS, &length);
-    CHECK(text != NULL);
-    if (!text) return;
-    JSRuntime *rt = JS_NewRuntime();
-    J = JS_NewContext(rt);
-    JSValue root = JS_ParseJSON(J, text, length, "addresses.json");
-    CHECK(JS_IsObject(root));
-    each(root, "valid", valid);
-    each(root, "invalid", invalid);
-    each(root, "format", format);
-    JS_FreeValue(J, root);
-    JS_FreeContext(J);
-    JS_FreeRuntime(rt);
-    free(text);
+    for (size_t i = 0; i < sizeof valid_addresses / sizeof valid_addresses[0]; i++)
+        valid(&valid_addresses[i]);
+    for (size_t i = 0; i < sizeof invalid_addresses / sizeof invalid_addresses[0]; i++) {
+        ta_address address;
+        ta_status status = ta_address_parse(S(invalid_addresses[i][0]), &address);
+        CHECK_EQUAL(status, TA_ERROR_INVALID);
+        if (status != TA_ERROR_INVALID)
+            fprintf(stderr, "  should not parse (%s): %s\n", invalid_addresses[i][1], invalid_addresses[i][0]);
+    }
+    for (size_t i = 0; i < sizeof formatted_addresses / sizeof formatted_addresses[0]; i++)
+        format(&formatted_addresses[i]);
 }
 
 static void test_edges(void) {
