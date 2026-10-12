@@ -297,23 +297,30 @@ missing, why, and the suite case or test that shows it.
 
 (none yet)
 
-## Open follow-ups
+## Now
 
-- **Open spans at `ta_host_free`** are lost; ending and taking them needs a
-  design (end, flush, then free).
-- **The torture bench's `traceBytesTotal`** reads 0 since the host drains
-  the journals (5c).
+In progress beside M0, in core:
+
+- **Open spans are ended, not lost.** A host stopped with spans open ends
+  them, so the binding's last take of traces includes them, and
+  `ta_host_free` drops nothing a caller could still have taken.
+- **The torture bench's `traceBytesTotal` is removed:** it reads 0 since
+  the host drains the journals (5c).
+- **Definition logs:** a log record when a chart version is linked,
+  retired and freed (0.1's `tinyactors.definition.*`).
+
+## Deferred
+
+Decided not to do now; each comes back as its own proposal or roadmap
+entry.
+
 - **Payload fields as span attributes.** `scxml.event.data` and
   `scxml.value` are text (CBOR diagnostic notation); opt-in flattening of
   top-level scalar fields into typed attributes would make them queryable.
 - **Tracing:** `tracestate` for the detail class across processes; traces
-  for host work and waits (ADR 0007, open questions); definition logs (a
-  record when a chart version is linked, retired and freed).
-- **Release packaging:** the browser package and PostgreSQL wait for their
+  for host work and waits (ADR 0007, open questions).
+- **Release packaging** of the browser package and PostgreSQL, with their
   bindings.
-
-## Open questions
-
 - **Refusing a send to the sending chart.** A full pool stops the run until
   the host grows the block; the chart never hears about it. An
   `error.execution` to the sender when a pool is full would let charts
