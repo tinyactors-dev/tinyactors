@@ -422,7 +422,7 @@ Object.entries([1, 2, 3, 4].reduce((acc, x) => { const k = x % 2 ? "odd" : "even
 
 === an object whose property has a mutating name, in a chain
 (() => { const o = {add: x => x}; return o.add(1).add(2); })()
---- fault chain
+--- fault format digits
 
 # MUTATION: shared names. A Temporal value's add shares its name with a
 # set's, which changes its receiver (sjs_mutation_shared). The compiler
@@ -430,9 +430,9 @@ Object.entries([1, 2, 3, 4].reduce((acc, x) => { const k = x % 2 ? "odd" : "even
 # the run to decide: on a variable of the function, whatever was done with
 # it, the call is a mutation, which calls a Temporal value's add as an
 # ordinary call and checks a set's receiver has one holder; on a capture, a
-# global or an import, an ordinary call, which faults on a set. A chain on
-# a variable still faults when it runs (docs/mutation.md, "Shared names";
-# docs/temporal.md).
+# global or an import, an ordinary call, which faults on a set; and a chain
+# goes on from a method that changed nothing with its result as a value
+# (docs/mutation.md, "Shared names"; docs/temporal.md).
 === a Temporal value's add on a variable makes a new value
 (() => { const d = Temporal.Duration.from("PT1H"); return d.add({ minutes: 30 }); })()
 --- value
@@ -462,9 +462,25 @@ Temporal.Duration.from("PT3H")
 (() => { const d = Temporal.Duration.from("P1M"); return d.add("PT1H"); })()
 --- fault adding Durations with years
 
-=== a chain of a Temporal value's add, deliberate
+=== a chain of a Temporal value's add
 (() => { const d = Temporal.Duration.from("PT1H"); return d.add("PT1H").add("PT1H"); })()
---- fault chain
+--- value
+Temporal.Duration.from("PT3H")
+
+=== a chain of three of a Temporal value's add
+(() => { const d = Temporal.PlainDate.from("2024-01-31"); return [d.add({ months: 1 }).add({ days: 1 }).add({ years: 1 }), d]; })()
+--- value
+[Temporal.PlainDate.from("2025-03-01"),Temporal.PlainDate.from("2024-01-31")]
+
+=== a chain of a Temporal value's add, as a statement
+(() => { const d = Temporal.PlainDate.from("2024-01-31"); d.add({ days: 1 }).add({ days: 1 }); return d; })()
+--- value
+Temporal.PlainDate.from("2024-01-31")
+
+=== a chain of a Temporal value's add read as a value afterwards
+(() => { const d = Temporal.PlainDate.from("2024-01-31"); return d.add({ months: 1 }).add({ days: 1 }).day; })()
+--- value
+1
 
 === a Temporal value's add after a copy
 (() => { const d = Temporal.Duration.from("PT1H"); const e = d; return d.add(e); })()
@@ -658,6 +674,26 @@ new Set([1,3])
 
 === a set's add on a capture, in a callback whose earlier step made a closure of it
 (() => { const s = new Set(); return [1, 2].reduce((f, x) => { const g = () => s.size; return s.add(x) && g; }, null)(); })()
+--- fault changes its receiver
+
+=== a set mid-chain, from an object's own function
+(() => { const o = { add: x => new Set([x]) }; return o.add(1).add(2); })()
+--- fault changes its receiver
+
+=== a chain on a plain value through an object's own function
+(() => { const h = { add: x => [x] }; const o = { add: x => h }; return o.add(1).add(2); })()
+--- value
+[2]
+
+=== a sort on a plain value mid-chain, an object's own function
+@shapes - - - COMPARE_NUMERIC(false)
+(() => { const h = { sort: f => 7 }; const o = { add: x => h }; return [o.add(1).sort((a, b) => a - b), o]; })()
+--- value
+[7,{"add":<function>}]
+
+=== a sort on a plain value mid-chain, then a chain on what it gave
+@shapes - - - COMPARE_NUMERIC(false)
+(() => { const h = { sort: f => [3, 1] }; const o = { add: x => h }; return o.add(1).sort((a, b) => a - b).reverse(); })()
 --- fault changes its receiver
 
 === a module whose export is a set
@@ -3263,8 +3299,8 @@ export const f = () => { state.xs.push(3); return state; };
 
 # An object's own function named like a method that changes its receiver,
 # called on a variable: an ordinary call of the property, which leaves the
-# variable as it was. A chain through one faults (it need not return its
-# object), where JavaScript calls on what it returned.
+# variable as it was. A chain goes on from what it returned, as a value: an
+# ordinary call's receiver (MUTATION: shared names; it faulted before).
 === sort of an object's own function, as a value
 (() => { const o = {sort: f => 5}; const r = o.sort(x => x); return [r, o]; })()
 --- value
@@ -3411,27 +3447,29 @@ export const f = () => { state.xs.push(3); return state; };
 
 === sort then reverse of an object's own functions
 (() => { const o = {sort: f => 5}; return o.sort(x => x).reverse(); })()
---- fault goes on only through an array, a set or a map
+--- fault format digits
 
 === sort then reverse of an object's own functions, as a statement
 (() => { const o = {sort: f => 5}; o.sort(x => x).reverse(); return o; })()
---- fault goes on only through an array, a set or a map
+--- fault format digits
 
 === add then add of an object's own functions
 (() => { const h = {add: x => x.length}; const o = {add: x => h}; return o.add(1).add([1, 2]); })()
---- fault goes on only through an array, a set or a map
+--- value
+2
 
 === add then add of an object's own functions, as a statement
 (() => { const h = {add: x => x}; const o = {add: x => h}; o.add(1).add(2); return o; })()
---- fault goes on only through an array, a set or a map
+--- value
+{"add":<function>}
 
 === push after sort of an object's own functions
 (() => { const o = {sort: f => [1]}; return o.sort(x => x).push(2); })()
---- fault goes on only through an array, a set or a map
+--- fault changes its receiver
 
 === fill then sort of an object's own functions
 (() => { const o = {fill: v => [2, 1]}; return o.fill(0).sort((a, b) => a - b); })()
---- fault goes on only through an array, a set or a map
+--- fault changes its receiver
 
 === sort of an object's property that is not a function
 (() => { const o = {sort: 5}; return o.sort((a, b) => a - b); })()
