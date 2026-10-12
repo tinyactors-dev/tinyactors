@@ -122,7 +122,9 @@ sjs_compiler_finish(compiler, &program);
 sjs_vm *vm;
 sjs_vm_init(&vm, &(sjs_vm_config){ context });
 sjs_vm_start(vm, &(sjs_run_params){ program, values, global_count });
-while (sjs_vm_run(vm, 1000) == SJS_RUN_PAUSED) { /* do other work */ }
+/* The current time, if the program reads it (Temporal.Now): pushed, never read by the library. */
+sjs_vm_set_clock(vm, &(sjs_epoch){ seconds, nanoseconds });
+while (sjs_vm_run(vm, 1000) == SJS_RUN_PAUSED) { /* do other work; sjs_vm_advance_clock(vm, ns) */ }
 
 /* A value out as text, into a buffer of any size. */
 sjs_value result;

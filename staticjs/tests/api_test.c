@@ -1037,6 +1037,91 @@ static void test_fuel_and_reset(void) {
     sjs_context_destroy(context);
 }
 
+/* The host clock (sjs_vm_set_clock): set, advanced and read back; kept
+ * across a pause, sjs_vm_start and sjs_vm_reset; refused past Temporal's
+ * limits and before it is set; never allocating. */
+static bool same_epoch(const sjs_epoch *a, int64_t seconds, uint32_t nanoseconds) {
+    return a->seconds == seconds && a->nanoseconds == nanoseconds;
+}
+
+static void test_host_clock(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    sjs_vm *vm;
+    sjs_vm_config config = { context, false };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    long allocations = c.allocations;
+    sjs_epoch t = { 0, 0 };
+    /* Never set. */
+    CHECK(sjs_vm_clock(vm, &t) == SJS_ERR_NOT_FOUND);
+    CHECK(sjs_vm_advance_clock(vm, 1) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_ERR_NOT_FOUND);
+    /* Set and read. */
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ 1704067200, 123456789 }) == SJS_OK);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, 1704067200, 123456789));
+    /* Advanced: the nanoseconds carry into the seconds. */
+    CHECK(sjs_vm_advance_clock(vm, 876543211) == SJS_OK);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, 1704067201, 0));
+    CHECK(sjs_vm_advance_clock(vm, UINT64_C(2999999999)) == SJS_OK);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, 1704067203, 999999999));
+    CHECK(sjs_vm_advance_clock(vm, 0) == SJS_OK);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, 1704067203, 999999999));
+    CHECK(sjs_vm_advance_clock(vm, UINT64_MAX) == SJS_OK);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, INT64_C(1704067203) + INT64_C(18446744073) + 1, 709551614));
+    /* Before the epoch: seconds toward negative infinity. */
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ -1, 999999999 }) == SJS_OK);
+    CHECK(sjs_vm_advance_clock(vm, 1) == SJS_OK);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, 0, 0));
+    /* Temporal's limits, 8.64 x 10^12 seconds either way; a refused call
+     * leaves the clock as it was. */
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ INT64_C(-8640000000000), 0 }) == SJS_OK);
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ INT64_C(8640000000000), 0 }) == SJS_OK);
+    CHECK(sjs_vm_advance_clock(vm, 1) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ INT64_C(8640000000000), 1 }) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ INT64_C(-8640000000001), 999999999 }) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ 0, 1000000000 }) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ INT64_MIN, 0 }) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ INT64_MAX, 0 }) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, INT64_C(8640000000000), 0));
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ INT64_C(8639999999999), 999999999 }) == SJS_OK);
+    CHECK(sjs_vm_advance_clock(vm, 2) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_advance_clock(vm, 1) == SJS_OK);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, INT64_C(8640000000000), 0));
+    /* Null handles. */
+    CHECK(sjs_vm_set_clock(NULL, &t) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_set_clock(vm, NULL) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_advance_clock(NULL, 1) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_clock(NULL, &t) == SJS_ERR_INVALID);
+    CHECK(sjs_vm_clock(vm, NULL) == SJS_ERR_INVALID);
+    CHECK(c.allocations == allocations);
+    /* Set while an evaluation is paused, kept across sjs_vm_reset and
+     * sjs_vm_start. */
+    const char *source = "[1, 2, 3].map(x => x * 2)";
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, 2) == SJS_RUN_PAUSED);
+    CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ -86400, 1 }) == SJS_OK);
+    CHECK(sjs_vm_run(vm, 2) == SJS_RUN_PAUSED);
+    CHECK(sjs_vm_advance_clock(vm, 1000) == SJS_OK);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, -86400, 1001));
+    sjs_vm_reset(vm);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, -86400, 1001));
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    CHECK(sjs_vm_clock(vm, &t) == SJS_OK && same_epoch(&t, -86400, 1001));
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
+    sjs_release(context, v);
+    sjs_program_release(program);
+    sjs_vm_destroy(vm);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+}
+
 static void test_limits(void) {
     counting c = { 0 };
     sjs_limits limits = SJS_LIMITS_DEFAULT;
@@ -2851,6 +2936,7 @@ int main(int argc, char **argv) {
     test_sink();
     test_writer_resumes();
     test_fuel_and_reset();
+    test_host_clock();
     test_limits();
     test_loop_callbacks();
     test_reuse_leaves_others_alone();

@@ -28,7 +28,7 @@
 #endif
 
 #define SJS_VERSION_MAJOR 0
-#define SJS_VERSION_MINOR 7
+#define SJS_VERSION_MINOR 8
 #define SJS_VERSION_PATCH 0
 /* (major << 16) | (minor << 8) | patch; sjs_version() answers it for the library linked. */
 #define SJS_VERSION ((SJS_VERSION_MAJOR << 16) | (SJS_VERSION_MINOR << 8) | SJS_VERSION_PATCH)
@@ -670,6 +670,36 @@ SJS_API uint64_t sjs_vm_fuel_used(const sjs_vm *vm);
 /* Abandon an evaluation and release what it holds. */
 SJS_API void sjs_vm_reset(sjs_vm *vm);
 SJS_API void sjs_vm_destroy(sjs_vm *vm);
+
+/*
+ * The host clock (docs/temporal.md, "Host clock"): the one source of the
+ * current time a program reads (Temporal.Now). It is a value the evaluator
+ * holds and the host pushes: set it, and advance it, between runs. The
+ * library never reads a clock of its own, and nothing calls back for one.
+ * A program sees the value set when it reads it; two reads with no call
+ * here between them agree, as a run calls nothing here. The value stays
+ * across sjs_vm_start, sjs_vm_reset and pauses until set again. A program
+ * that reads the clock of an evaluator whose clock was never set faults.
+ *
+ * An instant is whole seconds since 1970-01-01T00:00Z, rounded toward
+ * negative infinity, and the nanoseconds past them: the 1 ns before the
+ * epoch is { -1, 999999999 }. It reaches Temporal.Instant's limits, 8.64 x
+ * 10^21 ns either way (an int64 of nanoseconds reaches only 292 years).
+ */
+typedef struct {
+    int64_t seconds;
+    uint32_t nanoseconds;  /* 0 to 999,999,999 */
+} sjs_epoch;
+
+/* SJS_ERR_INVALID when the nanoseconds are past 999,999,999 or the instant
+ * is past Temporal's limits; the clock is unchanged then. */
+SJS_API sjs_result sjs_vm_set_clock(sjs_vm *vm, const sjs_epoch *now);
+/* Move a set clock forward. SJS_ERR_INVALID, the clock unchanged, when it
+ * was never set or would pass Temporal's limits. */
+SJS_API sjs_result sjs_vm_advance_clock(sjs_vm *vm, uint64_t nanoseconds);
+/* The clock's value, for a host that keeps it (a paused evaluation saved
+ * and resumed elsewhere); SJS_ERR_NOT_FOUND when it was never set. */
+SJS_API sjs_result sjs_vm_clock(const sjs_vm *vm, sjs_epoch *out);
 
 /* ========================================================================
  * Writer

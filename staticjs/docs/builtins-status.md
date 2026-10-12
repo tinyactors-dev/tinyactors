@@ -18,7 +18,8 @@ Statuses:
 
 Rules behind the refusals are in `README.md` ("Refused when compiled") and
 `docs/extending.md`. The clock is host-provided: a read-only value the host
-sets and advances with a call. `Date.now()`, `new Date()` with no arguments
+sets and advances with a call (`sjs_vm_set_clock`, `sjs_vm_advance_clock`:
+`docs/temporal.md`, "Host clock"). `Date.now()`, `new Date()` with no arguments
 and `Temporal.Now` read that value and nothing else. `Math.random` reads a seed
 the host injects in the same way. UTC is the default everywhere.
 

@@ -1676,6 +1676,42 @@ uint64_t sjs_vm_fuel_used(const sjs_vm *vm) {
     return vm == NULL ? 0 : vm->fuel_used;
 }
 
+/* The host clock: within Temporal's limits, 8.64 x 10^21 ns either way,
+ * which are 8.64 x 10^12 whole seconds. */
+#define CLOCK_SECONDS_MAX INT64_C(8640000000000)
+#define CLOCK_NS_PER_SECOND 1000000000u
+
+static bool clock_within_limits(const sjs_epoch *t) {
+    if (t->nanoseconds >= CLOCK_NS_PER_SECOND) return false;
+    if (t->seconds < -CLOCK_SECONDS_MAX || t->seconds > CLOCK_SECONDS_MAX) return false;
+    return t->seconds != CLOCK_SECONDS_MAX || t->nanoseconds == 0;
+}
+
+sjs_result sjs_vm_set_clock(sjs_vm *vm, const sjs_epoch *now) {
+    if (vm == NULL || now == NULL || !clock_within_limits(now)) return SJS_ERR_INVALID;
+    vm->clock = *now;
+    vm->clock_set = true;
+    return SJS_OK;
+}
+
+sjs_result sjs_vm_advance_clock(sjs_vm *vm, uint64_t nanoseconds) {
+    if (vm == NULL || !vm->clock_set) return SJS_ERR_INVALID;
+    /* At most 1.8 x 10^10 seconds: no overflow past the limit's 8.64 x 10^12. */
+    uint64_t past = vm->clock.nanoseconds + nanoseconds % CLOCK_NS_PER_SECOND;
+    sjs_epoch next = { vm->clock.seconds + (int64_t)(nanoseconds / CLOCK_NS_PER_SECOND + past / CLOCK_NS_PER_SECOND),
+                       (uint32_t)(past % CLOCK_NS_PER_SECOND) };
+    if (!clock_within_limits(&next)) return SJS_ERR_INVALID;
+    vm->clock = next;
+    return SJS_OK;
+}
+
+sjs_result sjs_vm_clock(const sjs_vm *vm, sjs_epoch *out) {
+    if (vm == NULL || out == NULL) return SJS_ERR_INVALID;
+    if (!vm->clock_set) return SJS_ERR_NOT_FOUND;
+    *out = vm->clock;
+    return SJS_OK;
+}
+
 void sjs_vm_destroy(sjs_vm *vm) {
     if (vm == NULL) return;
     const sjs_allocator *a = &vm->context->counting;
