@@ -173,10 +173,18 @@ Progress:
   pass. The datamodel's own tests: `tests/test_datamodel.py`.
 - Request 2 answered by core (`9bd33f03`); the binding reads
   `host.config` (`e44845eb`).
-- Step 10: this commit. The decisions of the datamodel and of the API's
+- Step 10: `31f99462`. The decisions of the datamodel and of the API's
   shape, refuted by a fresh agent and fixed where it found them wrong
   (`docs/datamodel.md`, `docs/api.md`); the README's limits and example,
   each with a test; the mapping table's "Core functions no item uses".
+- The binding's memory (the coordinator's rules, `3efac6c1`): this
+  commit. Allocation call sites went from 55 (`PyMem_*` and `PyMem_Raw*`
+  in host.c, values.c, datamodel.c, expressions.c, handles.c, effects.c,
+  request.c) to 5: the tables (`handles.c`, 3) and the host's allocator
+  (`host.c`, 2). Sessions, charts, payloads and loops are table rows; the
+  datamodel lives in the `Host`; images are held `bytearray`s; core's
+  outputs are written straight into `bytes`; `send_many` batches on the
+  stack. The lint rule `allocation-in-tables-and-host` keeps it so.
 
 ## Later milestones
 

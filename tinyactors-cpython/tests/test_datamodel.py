@@ -321,5 +321,26 @@ class HandlesTest(unittest.TestCase):
                 host.terminate(session)
 
 
+    def test_tables_grow_while_rows_are_live(self):
+        # 100 sessions and 40 charts alive at once: each table doubles past
+        # its first 16 rows and its rows move; every session keeps its own
+        charts = {f"c{i}.scxml": chart("<state id='s'/>", "<data id='Var1'/>", name=f"c{i}") for i in range(40)}
+        with Host(CONFIG, clock=SimulatedClock()) as host:
+            host.add_image(charts)
+            sessions = [host.spawn(f"c{i % 40}", {"Var1": i}) for i in range(100)]
+            for i, session in enumerate(sessions):
+                self.assertEqual(host.request("actor.context", {"session": session})["variables"], {"Var1": i})
+
+    def test_a_value_past_the_stacks_room(self):
+        value = {"items": list(range(5000)), "text": "x" * 10000}
+        run = Run(chart("<state id='s'><transition event='v' target='f'><assign location='Var1' expr='_event.data'/>"
+                        "</transition></state><final id='f'><donedata><content expr='Var1'/></donedata></final>",
+                        "<data id='Var1'/>"))
+        run.host.send(run.session, "v", value)
+        self.assertEqual(run.done, [value])
+        self.assertEqual(tinyactors.decode(tinyactors.encode(value)), value)
+        run.close()
+
+
 if __name__ == "__main__":
     unittest.main()

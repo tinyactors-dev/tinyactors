@@ -215,7 +215,7 @@ static ta_run ta_python_loop_runs(ta_python_host *host) {
         uint32_t count = ta_host_effects(host->host, &effects);
         ta_python_effects_dispatch(host, &(ta_python_batch){effects, count});
         ta_host_effects_ack(host->host); /* whatever a handler raised */
-        if (host->python && ta_python_datamodel_interrupted(host->python))
+        if (ta_python_datamodel_interrupted(&host->python))
             return run; /* a chart's evaluation raised KeyboardInterrupt or SystemExit: the turn stops */
         switch (run.status) {
         case TA_RUN_IDLE: return run;
@@ -251,10 +251,10 @@ int ta_python_loop_turn(ta_python_host *host) {
         ta_host_advance_time(host->host, now);
         run = ta_python_loop_runs(host);
     } while (host->pending && (run.status == TA_RUN_IDLE || run.status == TA_RUN_YIELDED) &&
-             !(host->python && ta_python_datamodel_interrupted(host->python)));
+             !(ta_python_datamodel_interrupted(&host->python)));
     host->looping = 0;
     host->next_deadline = run.next_deadline;
-    if (host->python && ta_python_datamodel_settle(host->python) < 0) {
+    if (ta_python_datamodel_settle(&host->python) < 0) {
         /* a run's BaseException comes first; a handler's exception becomes
          * its __context__ when it has none */
         PyObject *kept = PyErr_GetRaisedException();

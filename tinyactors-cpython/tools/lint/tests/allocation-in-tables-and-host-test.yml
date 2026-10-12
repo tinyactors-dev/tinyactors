@@ -1,0 +1,14 @@
+id: allocation-in-tables-and-host
+valid:
+  - "static void *ta_python_alloc(void *context, size_t size, size_t align) { return PyMem_RawMalloc(size); }"
+  - "static void ta_python_free(void *context, void *ptr, size_t size) { PyMem_RawFree(ptr); }"
+  - "void ta_python_host_free(ta_python_host *host) { PyMem_RawFree(host->rows); }"
+  - "static PyObject *ta_python_held(Py_ssize_t length) { return PyByteArray_FromStringAndSize(NULL, length); }"
+  - "static void ta_python_drop(ta_python_host *host) { ta_python_host_free(host); }"
+invalid:
+  - "static void *ta_python_room(size_t length) { return PyMem_RawMalloc(length); }"
+  - "static void ta_python_drop(void *room) { PyMem_Free(room); }"
+  - "static char *ta_python_copy(size_t length) { return PyMem_Malloc(length); }"
+  - "static void *ta_python_object(size_t length) { return PyObject_Malloc(length); }"
+  - "static void *ta_python_libc(size_t length) { return malloc(length); }"
+  - "static void ta_python_release(void *room) { free(room); }"

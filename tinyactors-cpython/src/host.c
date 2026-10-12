@@ -53,19 +53,10 @@ void ta_python_host_free(ta_python_host *host) {
     if (host->clock) ta_python_clock_detach(host->clock, host);
     if (host->host) ta_host_free(host->host);
     host->host = NULL;
-    if (host->python && ta_python_datamodel_settle(host->python) < 0) PyErr_Clear(); /* a run's KeyboardInterrupt, after the host went */
-    ta_python_datamodel_free(host->python);
-    host->python = NULL;
+    ta_python_datamodel_clear(&host->python); /* a run's KeyboardInterrupt, after the host went, is dropped */
     if (host->ecmascript) ta_datamodel_ecmascript_free(host->ecmascript);
     host->ecmascript = NULL;
-    for (uint32_t i = 0; i < host->image_count; i++) {
-        if (!host->images[i]) continue;
-        PyMem_RawFree(host->images[i]->bytes);
-        PyMem_RawFree(host->images[i]);
-    }
-    PyMem_RawFree(host->images);
-    host->images = NULL;
-    host->image_count = host->image_capacity = 0;
+    Py_CLEAR(host->images); /* the segments' images, held until now */
     host->closing = 0;
     PyErr_SetRaisedException(pending);
 }
@@ -76,8 +67,8 @@ ta_status ta_python_payload_make(ta_python_host *host, const ta_python_payload_m
     *out = 0;
     if (!making->value) return TA_OK;
     if (making->datamodel >= host->datamodel_count) return TA_ERROR_INVALID; /* a chart of no datamodel we have */
-    if (host->datamodels[making->datamodel].datamodel == host->python)
-        return ta_python_datamodel_payload(host->python, making->value, out);
+    if (host->datamodels[making->datamodel].datamodel == &host->python)
+        return ta_python_datamodel_payload(&host->python, making->value, out);
     const ta_datamodel_binding *binding = &host->datamodels[making->datamodel];
     if (!binding->vtable->from_wire) return TA_ERROR_UNSUPPORTED;
     PyObject *bytes = NULL;
@@ -89,24 +80,28 @@ ta_status ta_python_payload_make(ta_python_host *host, const ta_python_payload_m
     return status;
 }
 
+/* A payload's to_wire, as a ta_python_writing. */
+struct ta_python_wire {
+    const ta_datamodel_binding *binding;
+    ta_payload payload;
+};
+
+static ta_status ta_python_wire_write(const void *context, ta_buffer *out) {
+    const struct ta_python_wire *wire = context;
+    return wire->binding->vtable->to_wire(wire->binding->datamodel, wire->payload, out);
+}
+
 PyObject *ta_python_payload_value(ta_python_host *host, const ta_python_payload_reading *reading) {
     const ta_python_state *state = ta_python_host_state(host);
     if (!reading->payload || reading->datamodel >= host->datamodel_count) Py_RETURN_NONE;
-    if (host->datamodels[reading->datamodel].datamodel == host->python)
-        return ta_python_datamodel_value(host->python, reading->payload);
-    const ta_datamodel_binding *binding = &host->datamodels[reading->datamodel];
-    char room[1024];
-    ta_buffer buffer = {room, sizeof room, 0};
-    ta_status status = binding->vtable->to_wire(binding->datamodel, reading->payload, &buffer);
-    if (status == TA_ERROR_NO_MEMORY && buffer.length > buffer.capacity) {
-        size_t length = buffer.length;
-        buffer = (ta_buffer){PyMem_Malloc(length), length, 0};
-        status = buffer.pointer ? binding->vtable->to_wire(binding->datamodel, reading->payload, &buffer)
-                                : TA_ERROR_NO_MEMORY;
-    }
-    PyObject *value = NULL;
-    if (status == TA_OK) status = ta_python_values_read(state, (ta_bytes){buffer.pointer, buffer.length}, &value);
-    if (buffer.pointer != room) PyMem_Free(buffer.pointer);
+    if (host->datamodels[reading->datamodel].datamodel == &host->python)
+        return ta_python_datamodel_value(&host->python, reading->payload);
+    struct ta_python_wire wire = {&host->datamodels[reading->datamodel], reading->payload};
+    PyObject *bytes = NULL, *value = NULL;
+    ta_status status = ta_python_written(&(ta_python_writing){ta_python_wire_write, &wire}, &bytes);
+    if (status == TA_OK)
+        status = ta_python_values_read(state, (ta_bytes){PyBytes_AsString(bytes), (size_t)PyBytes_Size(bytes)}, &value);
+    Py_XDECREF(bytes);
     if (status != TA_OK && !PyErr_Occurred()) ta_python_raise_status(state, "to_wire", status);
     return value;
 }
@@ -254,9 +249,9 @@ static PyObject *ta_python_host_new(PyTypeObject *type, PyObject *args, PyObject
     for (int i = 0; i < TA_PYTHON_HANDLERS; i++)
         host->handlers[i] = handlers[i] == Py_None ? NULL : Py_NewRef(handlers[i]);
     if (ta_python_loop_start(host) < 0) goto fail;
-    host->python = ta_python_datamodel_new(state);
-    if (!host->python) goto fail;
-    host->datamodels[host->datamodel_count++] = (ta_datamodel_binding){ta_python_datamodel_vtable(), host->python};
+    host->images = PyDict_New();
+    if (!host->images || ta_python_datamodel_init(&host->python, state) < 0) goto fail;
+    host->datamodels[host->datamodel_count++] = (ta_datamodel_binding){ta_python_datamodel_vtable(), &host->python};
     host->ecmascript = ta_datamodel_ecmascript_new(NULL);
     if (!host->ecmascript) {
         PyErr_NoMemory();
@@ -279,7 +274,8 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     for (int i = 0; i < TA_PYTHON_HANDLERS; i++)
         Py_VISIT(host->handlers[i]);
     Py_VISIT(host->raised);
-    return 0;
+    Py_VISIT(host->images);
+    return ta_python_datamodel_traverse(&host->python, visit, arg); /* the sessions' globals, the payloads */
 }
 
 /* The cycle collector breaks a cycle through a handler here (bindings.md,
@@ -387,15 +383,29 @@ typedef struct ta_python_compiling {
     PyObject *files;
 } ta_python_compiling;
 
-static ta_python_image *ta_python_compile(ta_python_host *host, const ta_python_compiling *compiling) {
+/* The sources of a compile: each name and text the str's own UTF-8,
+ * borrowed while the dict holds them; up to 32 on the stack, more in a
+ * bytearray (a Python object), so the binding allocates nothing. */
+#define TA_PYTHON_SOURCES 32
+
+/* A segment's image, held in one bytearray the Host references until
+ * TA_HOST_EFFECT_SEGMENT_FREED (bindings.md, section 6, "Hold, don't
+ * copy"): its ta_image first, which core keeps a pointer to, then the
+ * bytes the compiler wrote, which the ta_image points into. A bytearray's
+ * buffer never moves while it is not resized, and is aligned for both
+ * (CPython's allocator gives 16 bytes; core asks for 8). */
+static PyObject *ta_python_compile(ta_python_host *host, const ta_python_compiling *compiling) {
     const ta_python_state *state = ta_python_host_state(host);
     Py_ssize_t count = PyDict_Size(compiling->charts), position = 0, i = 0;
-    ta_source *sources = PyMem_Malloc((size_t)(count ? count : 1) * sizeof *sources);
-    if (!sources) return (ta_python_image *)PyErr_NoMemory();
+    ta_source room[TA_PYTHON_SOURCES];
+    PyObject *more = count > TA_PYTHON_SOURCES ? PyByteArray_FromStringAndSize(NULL, count * (Py_ssize_t)sizeof(ta_source))
+                                               : NULL;
+    if (count > TA_PYTHON_SOURCES && !more) return NULL;
+    ta_source *sources = more ? (ta_source *)PyByteArray_AsString(more) : room;
     PyObject *name, *text;
     while (PyDict_Next(compiling->charts, &position, &name, &text)) {
         if (!ta_python_text_of(name, &sources[i].name) || !ta_python_text_of(text, &sources[i].text)) {
-            PyMem_Free(sources);
+            Py_XDECREF(more);
             return NULL;
         }
         i++;
@@ -408,51 +418,25 @@ static ta_python_image *ta_python_compile(ta_python_host *host, const ta_python_
     options.resolve_context = compiling->files;
     ta_compile_result *result = NULL;
     ta_status status = ta_compile_charts(&options, (ta_source_list){sources, (uint32_t)count}, &result);
-    PyMem_Free(sources);
+    Py_XDECREF(more);
     if (status != TA_OK) {
         ta_python_compile_refused(state, result, status);
         if (result) ta_compile_free(result);
         return NULL;
     }
     ta_string_view bytes = ta_compile_image(result);
-    ta_python_image *image = PyMem_RawMalloc(sizeof *image);
-    void *copy = PyMem_RawMalloc(bytes.length ? bytes.length : 1);
-    if (!image || !copy) {
-        PyMem_RawFree(image);
-        PyMem_RawFree(copy);
-        ta_compile_free(result);
-        return (ta_python_image *)PyErr_NoMemory();
-    }
-    memcpy(copy, bytes.pointer, bytes.length);
+    PyObject *held = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)(sizeof(ta_image) + bytes.length));
+    if (held) memcpy(PyByteArray_AsString(held) + sizeof(ta_image), bytes.pointer, bytes.length);
     ta_compile_free(result);
-    image->bytes = copy;
-    status = ta_image_open((ta_bytes){copy, bytes.length}, &image->image);
+    if (!held) return NULL;
+    char *buffer = PyByteArray_AsString(held);
+    status = ta_image_open((ta_bytes){buffer + sizeof(ta_image), bytes.length}, (ta_image *)(void *)buffer);
     if (status != TA_OK) {
-        PyMem_RawFree(copy);
-        PyMem_RawFree(image);
+        Py_DECREF(held);
         ta_python_raise_status(state, "ta_image_open", status);
         return NULL;
     }
-    return image;
-}
-
-/* Keeps `image` as segment `segment`'s. */
-static int ta_python_image_keep(ta_python_host *host, ta_python_image *image, uint32_t segment) {
-    if (segment >= host->image_capacity) {
-        uint32_t capacity = host->image_capacity ? host->image_capacity * 2 : 4;
-        while (capacity <= segment)
-            capacity *= 2;
-        ta_python_image **grown = PyMem_RawMalloc(capacity * sizeof *grown);
-        if (!grown) return -1;
-        memset(grown, 0, capacity * sizeof *grown);
-        if (host->image_count) memcpy(grown, host->images, host->image_count * sizeof *grown);
-        PyMem_RawFree(host->images);
-        host->images = grown;
-        host->image_capacity = capacity;
-    }
-    host->images[segment] = image;
-    if (segment >= host->image_count) host->image_count = segment + 1;
-    return 0;
+    return held;
 }
 
 /* add_image(charts, files=None) -> segment */
@@ -470,30 +454,30 @@ static PyObject *ta_python_host_add_image(PyObject *self, PyObject *args, PyObje
         return NULL;
     }
     compiling.files = files == Py_None ? NULL : files;
-    ta_python_image *image = ta_python_compile(host, &compiling);
-    if (!image) return NULL;
+    PyObject *held = ta_python_compile(host, &compiling);
+    if (!held) return NULL;
     uint32_t segment = 0;
-    ta_status status = ta_host_add_image(host->host, &image->image, &segment);
-    if (status == TA_OK && ta_python_image_keep(host, image, segment) < 0) {
-        PyMem_RawFree(image->bytes); /* never reached core's segment: it holds the image, so this cannot be */
-        PyMem_RawFree(image);
-        return PyErr_NoMemory();
-    }
+    ta_status status = ta_host_add_image(host->host, (const ta_image *)(void *)PyByteArray_AsString(held), &segment);
+    PyObject *key = status == TA_OK ? PyLong_FromUnsignedLong(segment) : NULL;
+    int kept = key ? PyDict_SetItem(host->images, key, held) : -1;
+    Py_DECREF(held);
     if (status != TA_OK) {
-        PyMem_RawFree(image->bytes);
-        PyMem_RawFree(image);
         ta_python_raise_status(ta_python_host_state(host), "ta_host_add_image", status);
         return NULL;
     }
-    return PyLong_FromUnsignedLong(segment);
+    if (kept < 0) { /* the segment runs the image: it must stay; the host cannot be used safely */
+        Py_XDECREF(key);
+        return NULL;
+    }
+    return key;
 }
 
 /* Drops segment `segment`'s image (TA_HOST_EFFECT_SEGMENT_FREED). */
 void ta_python_image_drop(ta_python_host *host, uint32_t segment) {
-    if (segment >= host->image_count || !host->images[segment]) return;
-    PyMem_RawFree(host->images[segment]->bytes);
-    PyMem_RawFree(host->images[segment]);
-    host->images[segment] = NULL;
+    PyObject *key = PyLong_FromUnsignedLong(segment);
+    if (!key) return;
+    if (PyDict_DelItem(host->images, key) < 0) PyErr_Clear(); /* a bytearray: no finalizer */
+    Py_DECREF(key);
 }
 
 /* ---- inputs ------------------------------------------------------------------------------ */
@@ -607,37 +591,63 @@ static PyObject *ta_python_host_send(PyObject *self, PyObject *args, PyObject *k
 }
 
 /* send_many(events) -> int: each a (session, event) or (session, event,
- * data) tuple; how many core took, in order (ta_host_send_many). */
+ * data) tuple; how many core took, in order (ta_host_send_many), which
+ * stops at the first it refuses. The events go in batches of 64 from the
+ * stack: nothing is allocated per call. Every event's shape is checked
+ * before any is sent; a value outside the table raises, after the events
+ * before its batch were sent. */
+#define TA_PYTHON_BATCH 64
+
+/* The reading of item `index` of `list`, or 0 with a TypeError. */
+static int ta_python_event_item(PyObject *list, Py_ssize_t index, ta_python_event_reading *reading) {
+    PyObject *item = PyList_GetItem(list, index);
+    Py_ssize_t size = PyTuple_Check(item) ? PyTuple_Size(item) : 0;
+    if (size != 2 && size != 3) {
+        PyErr_SetString(PyExc_TypeError, "an event is a (session, event) or (session, event, data) tuple");
+        return 0;
+    }
+    PyObject *data = size == 3 ? PyTuple_GetItem(item, 2) : Py_None;
+    *reading = (ta_python_event_reading){PyTuple_GetItem(item, 0), PyTuple_GetItem(item, 1),
+                                         data == Py_None ? NULL : data};
+    return 1;
+}
+
 static PyObject *ta_python_host_send_many(PyObject *self, PyObject *events) {
     ta_python_host *host = (ta_python_host *)self;
     if (!ta_python_host_usable(host)) return NULL;
     PyObject *list = PySequence_List(events);
     if (!list) return NULL;
-    Py_ssize_t count = PyList_Size(list), read = 0;
-    ta_event_in *batch = PyMem_Malloc((size_t)(count ? count : 1) * sizeof *batch);
-    if (!batch) {
-        Py_DECREF(list);
-        return PyErr_NoMemory();
-    }
-    for (; read < count; read++) {
-        PyObject *item = PyList_GetItem(list, read);
-        Py_ssize_t size = PyTuple_Check(item) ? PyTuple_Size(item) : 0;
-        if (size != 2 && size != 3) {
-            PyErr_SetString(PyExc_TypeError, "an event is a (session, event) or (session, event, data) tuple");
-            break;
+    Py_ssize_t count = PyList_Size(list), taken = 0;
+    ta_python_event_reading reading;
+    for (Py_ssize_t i = 0; i < count; i++)
+        if (!ta_python_event_item(list, i, &reading) || !PyLong_Check(reading.session) ||
+            !PyUnicode_Check(reading.event)) {
+            if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "a session is an int and an event a str");
+            Py_DECREF(list);
+            return NULL;
         }
-        PyObject *data = size == 3 ? PyTuple_GetItem(item, 2) : Py_None;
-        ta_python_event_reading reading = {PyTuple_GetItem(item, 0), PyTuple_GetItem(item, 1),
-                                           data == Py_None ? NULL : data};
-        if (!ta_python_event_read(host, &reading, &batch[read])) break;
+    ta_event_in batch[TA_PYTHON_BATCH];
+    int failed = 0;
+    for (Py_ssize_t start = 0; start < count && !failed; start += TA_PYTHON_BATCH) {
+        uint32_t size = (uint32_t)(count - start < TA_PYTHON_BATCH ? count - start : TA_PYTHON_BATCH), read = 0;
+        for (; read < size; read++) {
+            ta_python_event_item(list, start + read, &reading);
+            if (!ta_python_event_read(host, &reading, &batch[read])) break;
+        }
+        uint32_t sent = read == size ? ta_host_send_many(host->host, batch, size) : 0;
+        for (uint32_t i = sent; i < read; i++)
+            ta_python_event_release(host, &batch[i]);
+        taken += sent;
+        failed = read < size || sent < size;
     }
-    uint32_t taken = read == count ? ta_host_send_many(host->host, batch, (uint32_t)count) : 0;
-    for (Py_ssize_t i = taken; i < read; i++)
-        ta_python_event_release(host, &batch[i]);
-    PyMem_Free(batch);
     Py_DECREF(list);
-    if (read < count) return NULL;
-    return ta_python_after_input(host, PyLong_FromUnsignedLong(taken));
+    PyObject *error = PyErr_GetRaisedException(); /* the events sent before it still run their turn */
+    PyObject *result = ta_python_after_input(host, PyLong_FromSsize_t(taken));
+    if (!error) return result;
+    Py_XDECREF(result);
+    PyErr_Clear();
+    PyErr_SetRaisedException(error);
+    return NULL;
 }
 
 /* terminate(session) */

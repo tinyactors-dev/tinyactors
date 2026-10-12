@@ -5,24 +5,27 @@
  * The caller's values pass through unchecked: core validates them. */
 #include "extension.h"
 
-/* The reply to `request` (CBOR) into a buffer grown to the length core
- * asks for (ta_buffer: TA_ERROR_NO_MEMORY applied nothing). */
+/* The reply to `request` (CBOR), written by ta_host_request straight into
+ * a bytes object (ta_buffer: TA_ERROR_NO_MEMORY applied nothing, so the
+ * second call is the request's only effect). */
+typedef struct ta_python_request_writing {
+    ta_host *host;
+    ta_bytes request;
+} ta_python_request_writing;
+
+static ta_status ta_python_request_write(const void *context, ta_buffer *out) {
+    const ta_python_request_writing *writing = context;
+    return ta_host_request(writing->host, writing->request, out);
+}
+
 static ta_status ta_python_request_send(ta_python_host *host, ta_bytes request, PyObject **reply) {
-    const ta_python_state *state = ta_python_host_state(host);
-    char room[4096];
-    ta_buffer buffer = {room, sizeof room, 0};
-    ta_status status = ta_host_request(host->host, request, &buffer);
-    if (status == TA_ERROR_NO_MEMORY && buffer.length > buffer.capacity) {
-        size_t length = buffer.length;
-        buffer = (ta_buffer){PyMem_Malloc(length), length, 0};
-        if (!buffer.pointer) {
-            PyErr_NoMemory();
-            return TA_ERROR_NO_MEMORY;
-        }
-        status = ta_host_request(host->host, request, &buffer);
-    }
-    if (status == TA_OK) status = ta_python_values_read(state, (ta_bytes){buffer.pointer, buffer.length}, reply);
-    if (buffer.pointer != room) PyMem_Free(buffer.pointer);
+    ta_python_request_writing writing = {host->host, request};
+    PyObject *bytes = NULL;
+    ta_status status = ta_python_written(&(ta_python_writing){ta_python_request_write, &writing}, &bytes);
+    if (status == TA_OK)
+        status = ta_python_values_read(ta_python_host_state(host),
+                                       (ta_bytes){PyBytes_AsString(bytes), (size_t)PyBytes_Size(bytes)}, reply);
+    Py_XDECREF(bytes);
     return status;
 }
 
@@ -53,7 +56,7 @@ PyObject *ta_python_host_request(ta_python_host *host, PyObject *args, PyObject 
     if (PyDict_Check(reply) && PyDict_GetItemStringRef(reply, "result", &result) <= 0 && !PyErr_Occurred())
         ta_python_raise_status(state, "ta_host_request", TA_ERROR_INVALID); /* a reply that is neither */
 done:
-    if (host->python && ta_python_datamodel_settle(host->python) < 0) Py_CLEAR(result); /* the drops of actor.context */
+    if (ta_python_datamodel_settle(&host->python) < 0) Py_CLEAR(result); /* the drops of actor.context */
     Py_XDECREF(request);
     Py_XDECREF(id);
     Py_XDECREF(bytes);

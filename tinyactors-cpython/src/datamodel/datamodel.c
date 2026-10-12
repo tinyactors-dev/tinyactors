@@ -22,23 +22,33 @@
 #include "datamodel/datamodel.h"
 
 #define TA_PYTHON_DATAMODEL(call) ((ta_python_datamodel *)(call)->datamodel)
+#define TA_PYTHON_EVALUATION(call)                                                                 \
+    (&(ta_python_evaluation){TA_PYTHON_DATAMODEL(call), (call)->instance, (call)->environment})
 
-/* The session of a call, or NULL for a stale handle. */
+/* The session of a call, or NULL for a stale handle. A row: read it again
+ * after anything that runs Python. */
 static ta_python_session *ta_python_session_of_call(const ta_datamodel_call *call) {
-    ta_python_slot *slot = ta_python_handle_slot(&TA_PYTHON_DATAMODEL(call)->sessions, call->instance);
-    return slot ? (ta_python_session *)slot->item : NULL;
+    return ta_python_table_row(&TA_PYTHON_DATAMODEL(call)->sessions, call->instance);
+}
+
+/* The chart of a session row. */
+static ta_python_chart *ta_python_chart_of(ta_python_datamodel *datamodel, const ta_python_session *session) {
+    return session ? ta_python_table_row(&datamodel->charts, session->chart) : NULL;
 }
 
 /* The payload's value, borrowed; NULL for a stale handle. */
 static PyObject *ta_python_payload_object(ta_python_datamodel *datamodel, ta_payload payload) {
-    ta_python_slot *slot = ta_python_handle_slot(&datamodel->payloads, payload);
-    return slot ? (PyObject *)slot->item : NULL;
+    ta_python_value *row = ta_python_table_row(&datamodel->payloads, payload);
+    return row ? row->value : NULL;
 }
 
-/* A new payload holding `value` (its reference is the payload's). */
+/* A new payload holding `value` (its reference is the payload's row's). */
 static ta_status ta_python_payload_new(ta_python_datamodel *datamodel, PyObject *value, ta_payload *out) {
-    *out = ta_python_handle_add(&datamodel->payloads, value);
-    if (*out) return TA_OK;
+    ta_python_value *row = ta_python_table_add(&datamodel->payloads, out);
+    if (row) {
+        row->value = value;
+        return TA_OK;
+    }
     ta_python_datamodel_defer(datamodel, value);
     return TA_ERROR_NO_MEMORY;
 }
@@ -84,10 +94,9 @@ static PyObject *ta_python_in(PyObject *capsule, PyObject *name) {
         if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "In() takes a state's id");
         return NULL;
     }
-    ta_python_session *session = datamodel->current;
-    if (!datamodel->environment || !session) Py_RETURN_FALSE;
-    uint32_t state = ta_image_state_by_name(session->chart->image, session->chart->chart,
-                                            (ta_string_view){text, (uint32_t)length});
+    ta_python_chart *chart = ta_python_chart_of(datamodel, ta_python_table_row(&datamodel->sessions, datamodel->current));
+    if (!datamodel->environment || !chart) Py_RETURN_FALSE;
+    uint32_t state = ta_image_state_by_name(chart->image, chart->chart, (ta_string_view){text, (uint32_t)length});
     if (state == TA_NIL) Py_RETURN_FALSE;
     return PyBool_FromLong(ta_datamodel_environment_in(datamodel->environment, state));
 }
@@ -120,35 +129,47 @@ static PyObject *ta_python_text_or_none(ta_string_view text) {
 
 /* ---- charts and sessions --------------------------------------------------------------------- */
 
-static ta_status ta_python_chart_attach(void *datamodel, const ta_datamodel_chart *chart, void **context) {
-    ta_python_chart *attached = PyMem_RawMalloc(sizeof *attached);
-    if (!attached) return TA_ERROR_NO_MEMORY;
-    memset(attached, 0, sizeof *attached);
-    attached->image = chart->image;
-    attached->chart = chart->chart;
-    ta_status status = ta_python_chart_compile((ta_python_datamodel *)datamodel, attached);
-    if (status != TA_OK) {
-        ta_python_chart_free(attached);
-        PyMem_RawFree(attached);
-        return status;
+/* A chart is a row; core keeps its handle as the chart's context. */
+static ta_status ta_python_chart_attach(void *data, const ta_datamodel_chart *chart, void **context) {
+    ta_python_datamodel *datamodel = (ta_python_datamodel *)data;
+    PyObject *expressions = ta_python_chart_compile(&(ta_python_chart_source){chart->image, chart->chart});
+    if (!expressions) {
+        PyErr_Clear();
+        return TA_ERROR_NO_MEMORY;
     }
-    *context = attached;
+    uint64_t handle = 0;
+    ta_python_chart *row = ta_python_table_add(&datamodel->charts, &handle);
+    if (!row) {
+        ta_python_datamodel_defer(datamodel, expressions);
+        return TA_ERROR_NO_MEMORY;
+    }
+    row->image = chart->image;
+    row->chart = chart->chart;
+    row->expressions = expressions;
+    *context = (void *)(uintptr_t)handle;
     return TA_OK;
 }
 
-static void ta_python_chart_detach(void *datamodel, void *context) {
-    (void)datamodel;
-    ta_python_chart_free((ta_python_chart *)context);
-    PyMem_RawFree(context);
+static void ta_python_chart_detach(void *data, void *context) {
+    ta_python_datamodel *datamodel = (ta_python_datamodel *)data;
+    uint64_t handle = (uint64_t)(uintptr_t)context;
+    ta_python_chart *row = ta_python_table_row(&datamodel->charts, handle);
+    if (!row) return;
+    ta_python_datamodel_defer(datamodel, row->expressions);
+    ta_python_table_remove(&datamodel->charts, handle);
 }
 
-static void ta_python_session_free(ta_python_datamodel *datamodel, ta_python_session *session) {
+/* Drops what a session row holds, later (its variables' last drop:
+ * outside core), and frees the row. */
+static void ta_python_session_end(ta_python_datamodel *datamodel, uint64_t handle) {
+    ta_python_session *session = ta_python_table_row(&datamodel->sessions, handle);
+    if (!session) return;
     if (session->globals && PyList_Append(datamodel->ended, session->globals) < 0) PyErr_Clear();
-    ta_python_datamodel_defer(datamodel, session->globals); /* its variables' last drop: outside core */
+    ta_python_datamodel_defer(datamodel, session->globals);
     for (int i = 0; i < TA_PYTHON_SYSTEM_VARIABLES; i++)
         ta_python_datamodel_defer(datamodel, session->system[i]);
     ta_python_datamodel_defer(datamodel, session->init);
-    PyMem_RawFree(session);
+    ta_python_table_remove(&datamodel->sessions, handle);
 }
 
 /* `name` = `value` in the globals, and kept as a system variable. */
@@ -182,10 +203,15 @@ static PyObject *ta_python_ioprocessors(const ta_datamodel_system_variables *var
     return processors;
 }
 
+/* A new session row's globals and system variables. Nothing here adds a
+ * row, so `session` stays where it is. */
 static int ta_python_session_fill(ta_python_datamodel *datamodel, ta_python_session *session,
                                   const ta_datamodel_start *start) {
     const ta_datamodel_system_variables *variables = start->system_variables;
-    if (ta_python_bind_system(session, &(ta_python_binding){TA_PYTHON_BUILTINS, "__builtins__"},
+    ta_python_chart *chart = ta_python_chart_of(datamodel, session);
+    session->globals = PyDict_New();
+    if (!chart || !session->globals ||
+        ta_python_bind_system(session, &(ta_python_binding){TA_PYTHON_BUILTINS, "__builtins__"},
                               Py_NewRef(datamodel->builtins)) < 0 ||
         ta_python_bind_system(session, &(ta_python_binding){TA_PYTHON_IN, "In"}, Py_NewRef(datamodel->in)) < 0 ||
         ta_python_bind_system(session, &(ta_python_binding){TA_PYTHON_SESSIONID, "_sessionid"},
@@ -196,10 +222,10 @@ static int ta_python_session_fill(ta_python_datamodel *datamodel, ta_python_sess
                               ta_python_ioprocessors(variables)) < 0)
         return -1;
     /* every <data> id is declared from the start: None until initialized */
-    uint32_t count = ta_image_data_count(session->chart->image, session->chart->chart);
+    uint32_t count = ta_image_data_count(chart->image, chart->chart);
     for (uint32_t i = 0; i < count; i++) {
         ta_data_info data;
-        if (ta_image_data(session->chart->image, (ta_chart_item){session->chart->chart, i}, &data) != TA_OK) continue;
+        if (ta_image_data(chart->image, (ta_chart_item){chart->chart, i}, &data) != TA_OK) continue;
         PyObject *id = PyUnicode_DecodeUTF8(data.id.pointer, (Py_ssize_t)data.id.length, "strict");
         int set = id ? PyDict_SetItem(session->globals, id, Py_None) : -1;
         Py_XDECREF(id);
@@ -212,61 +238,50 @@ static int ta_python_session_fill(ta_python_datamodel *datamodel, ta_python_sess
 
 static ta_status ta_python_create(void *data, const ta_datamodel_start *start, uint64_t *instance) {
     ta_python_datamodel *datamodel = (ta_python_datamodel *)data;
-    ta_python_session *session = PyMem_RawMalloc(sizeof *session);
+    ta_python_session *session = ta_python_table_add(&datamodel->sessions, instance);
     if (!session) return TA_ERROR_NO_MEMORY;
-    memset(session, 0, sizeof *session);
-    session->chart = (ta_python_chart *)start->chart_context;
-    session->globals = PyDict_New();
-    if (!session->globals || ta_python_session_fill(datamodel, session, start) < 0) {
-        PyErr_Clear();
-        ta_python_session_free(datamodel, session);
-        return TA_ERROR_NO_MEMORY;
-    }
-    *instance = ta_python_handle_add(&datamodel->sessions, session);
-    if (*instance) return TA_OK;
-    ta_python_session_free(datamodel, session);
+    session->chart = (uint64_t)(uintptr_t)start->chart_context;
+    if (ta_python_session_fill(datamodel, session, start) == 0) return TA_OK;
+    PyErr_Clear();
+    ta_python_session_end(datamodel, *instance);
     return TA_ERROR_NO_MEMORY;
 }
 
 static void ta_python_destroy(const ta_datamodel_call *call) {
-    ta_python_session *session = ta_python_handle_remove(&TA_PYTHON_DATAMODEL(call)->sessions, call->instance);
-    if (session) ta_python_session_free(TA_PYTHON_DATAMODEL(call), session);
+    ta_python_session_end(TA_PYTHON_DATAMODEL(call), call->instance);
 }
 
 /* ---- data, events, expressions ------------------------------------------------------------------ */
 
-#define TA_PYTHON_EVALUATION(call, session)                                                        \
-    (&(ta_python_evaluation){TA_PYTHON_DATAMODEL(call), (session), (call)->environment})
-
 static ta_status ta_python_init_data(const ta_datamodel_call *call, uint32_t declaration) {
+    ta_python_datamodel *datamodel = TA_PYTHON_DATAMODEL(call);
     ta_python_session *session = ta_python_session_of_call(call);
+    ta_python_chart *chart = ta_python_chart_of(datamodel, session);
     ta_data_info data;
-    if (!session || ta_image_data(session->chart->image, (ta_chart_item){session->chart->chart, declaration}, &data) !=
-                        TA_OK)
+    if (!chart || ta_image_data(chart->image, (ta_chart_item){chart->chart, declaration}, &data) != TA_OK)
         return TA_ERROR_EXECUTION;
     PyObject *id = PyUnicode_DecodeUTF8(data.id.pointer, (Py_ssize_t)data.id.length, "strict");
     if (!id) {
         PyErr_Clear();
         return TA_ERROR_EXECUTION;
     }
-    PyObject *value = NULL;
+    PyObject *globals = Py_NewRef(session->globals), *value = NULL;
     ta_status status = TA_OK;
     if (session->init && PyDict_GetItemRef(session->init, id, &value) < 0) PyErr_Clear(); /* the spawn's params win */
-    if (!value && data.expression != TA_NIL)
-        value = ta_python_evaluate(TA_PYTHON_EVALUATION(call, session), data.expression, &status);
-    if (PyDict_SetItem(session->globals, id, value ? value : Py_None) < 0) {
+    if (!value && data.expression != TA_NIL) value = ta_python_evaluate(TA_PYTHON_EVALUATION(call), data.expression, &status);
+    if (PyDict_SetItem(globals, id, value ? value : Py_None) < 0) {
         PyErr_Clear();
         status = TA_ERROR_EXECUTION;
     }
     Py_XDECREF(value);
     Py_DECREF(id);
+    Py_DECREF(globals);
     return status;
 }
 
 static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_event_view *view) {
     ta_python_datamodel *datamodel = TA_PYTHON_DATAMODEL(call);
-    ta_python_session *session = ta_python_session_of_call(call);
-    if (!session) return TA_ERROR_EXECUTION;
+    if (!ta_python_session_of_call(call)) return TA_ERROR_EXECUTION;
     static const char *const types[] = {"platform", "internal", "external"};
     PyObject *event = PyStructSequence_New((PyTypeObject *)datamodel->state->event_type);
     if (!event) {
@@ -291,7 +306,8 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
     }
     int memory = PyErr_ExceptionMatches(PyExc_MemoryError);
     PyErr_Clear();
-    if (!complete) {
+    ta_python_session *session = ta_python_session_of_call(call);
+    if (!complete || !session) {
         ta_python_datamodel_defer(datamodel, event);
         return memory ? TA_ERROR_NO_MEMORY : TA_ERROR_INVALID;
     }
@@ -307,10 +323,8 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
 }
 
 static ta_status ta_python_eval_condition(const ta_datamodel_call *call, ta_expression expression, int *out) {
-    ta_python_session *session = ta_python_session_of_call(call);
-    if (!session) return TA_ERROR_EXECUTION;
     ta_status status;
-    PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call, session), expression, &status);
+    PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call), expression, &status);
     if (!value) return status;
     int truth = PyObject_IsTrue(value);
     Py_DECREF(value);
@@ -322,13 +336,13 @@ static ta_status ta_python_eval_condition(const ta_datamodel_call *call, ta_expr
     return TA_OK;
 }
 
-/* The value as text (str()), its UTF-8 valid until the next call. */
+/* The value as text (str()), its UTF-8 borrowed from the str, which the
+ * datamodel holds until the next call (datamodel.h: "valid until the next
+ * call on the same datamodel instance"). */
 static ta_status ta_python_eval_text(const ta_datamodel_call *call, ta_expression expression, ta_string_view *out) {
     ta_python_datamodel *datamodel = TA_PYTHON_DATAMODEL(call);
-    ta_python_session *session = ta_python_session_of_call(call);
-    if (!session) return TA_ERROR_EXECUTION;
     ta_status status;
-    PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call, session), expression, &status);
+    PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call), expression, &status);
     if (!value) return status;
     PyObject *text = PyObject_Str(value);
     ta_python_datamodel_defer(datamodel, value);
@@ -346,46 +360,37 @@ static ta_status ta_python_eval_text(const ta_datamodel_call *call, ta_expressio
 }
 
 static ta_status ta_python_assign(const ta_datamodel_call *call, ta_expression location, ta_expression value) {
-    ta_python_session *session = ta_python_session_of_call(call);
-    if (!session) return TA_ERROR_EXECUTION;
     ta_status status;
-    PyObject *result = ta_python_evaluate(TA_PYTHON_EVALUATION(call, session), value, &status);
+    PyObject *result = ta_python_evaluate(TA_PYTHON_EVALUATION(call), value, &status);
     if (!result) return status;
-    status = ta_python_assign_to(TA_PYTHON_EVALUATION(call, session), &(ta_python_assignment){location, result, 0});
+    status = ta_python_assign_to(TA_PYTHON_EVALUATION(call), &(ta_python_assignment){location, result, 0});
     Py_DECREF(result);
     return status;
 }
 
 static ta_status ta_python_assign_string(const ta_datamodel_call *call, ta_expression location, ta_string_view value) {
-    ta_python_session *session = ta_python_session_of_call(call);
-    if (!session) return TA_ERROR_EXECUTION;
     PyObject *text = PyUnicode_DecodeUTF8(value.pointer, (Py_ssize_t)value.length, "strict");
     if (!text) {
         PyErr_Clear();
         return TA_ERROR_EXECUTION;
     }
-    ta_status status =
-        ta_python_assign_to(TA_PYTHON_EVALUATION(call, session), &(ta_python_assignment){location, text, 0});
+    ta_status status = ta_python_assign_to(TA_PYTHON_EVALUATION(call), &(ta_python_assignment){location, text, 0});
     Py_DECREF(text);
     return status;
 }
 
 static ta_status ta_python_script(const ta_datamodel_call *call, ta_expression expression) {
-    ta_python_session *session = ta_python_session_of_call(call);
-    if (!session) return TA_ERROR_EXECUTION;
-    return ta_python_execute(TA_PYTHON_EVALUATION(call, session), expression);
+    return ta_python_execute(TA_PYTHON_EVALUATION(call), expression);
 }
 
 /* ---- <foreach> --------------------------------------------------------------------------------- */
 
 /* The array (a list or a tuple), copied shallowly so the body may change
- * it (SCXML 4.6). */
+ * it (SCXML 4.6), in a row of the loops table. */
 static ta_status ta_python_foreach_begin(const ta_datamodel_call *call, ta_expression array, ta_datamodel_loop *loop) {
     ta_python_datamodel *datamodel = TA_PYTHON_DATAMODEL(call);
-    ta_python_session *session = ta_python_session_of_call(call);
-    if (!session) return TA_ERROR_EXECUTION;
     ta_status status;
-    PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call, session), array, &status);
+    PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call), array, &status);
     if (!value) return status;
     PyObject *items = PyList_Check(value) || PyTuple_Check(value) ? PySequence_List(value) : NULL;
     ta_python_datamodel_defer(datamodel, value);
@@ -394,24 +399,25 @@ static ta_status ta_python_foreach_begin(const ta_datamodel_call *call, ta_expre
         return TA_ERROR_EXECUTION;
     }
     loop->n = (uint32_t)PyList_Size(items);
-    loop->iter = ta_python_handle_add(&datamodel->loops, items);
-    if (loop->iter) return TA_OK;
+    ta_python_value *row = ta_python_table_add(&datamodel->loops, &loop->iter);
+    if (row) {
+        row->value = items;
+        return TA_OK;
+    }
     ta_python_datamodel_defer(datamodel, items);
     return TA_ERROR_NO_MEMORY;
 }
 
 static ta_status ta_python_foreach_item(const ta_datamodel_call *call, const ta_datamodel_loop *loop) {
     ta_python_datamodel *datamodel = TA_PYTHON_DATAMODEL(call);
-    ta_python_session *session = ta_python_session_of_call(call);
-    ta_python_slot *slot = ta_python_handle_slot(&datamodel->loops, loop->iter);
-    if (!session || !slot || loop->i >= (uint32_t)PyList_Size((PyObject *)slot->item)) return TA_ERROR_EXECUTION;
-    PyObject *item = PyList_GetItem((PyObject *)slot->item, loop->i);
-    ta_status status = ta_python_assign_to(TA_PYTHON_EVALUATION(call, session),
-                                           &(ta_python_assignment){loop->item, item, 1});
+    ta_python_value *row = ta_python_table_row(&datamodel->loops, loop->iter);
+    if (!row || loop->i >= (uint32_t)PyList_Size(row->value)) return TA_ERROR_EXECUTION;
+    PyObject *item = Py_NewRef(PyList_GetItem(row->value, loop->i)); /* held: assigning runs Python */
+    ta_status status = ta_python_assign_to(TA_PYTHON_EVALUATION(call), &(ta_python_assignment){loop->item, item, 1});
+    Py_DECREF(item);
     if (status == TA_OK && loop->index != TA_NIL) {
         PyObject *index = PyLong_FromUnsignedLong(loop->i);
-        status = index ? ta_python_assign_to(TA_PYTHON_EVALUATION(call, session),
-                                             &(ta_python_assignment){loop->index, index, 1})
+        status = index ? ta_python_assign_to(TA_PYTHON_EVALUATION(call), &(ta_python_assignment){loop->index, index, 1})
                        : TA_ERROR_NO_MEMORY;
         Py_XDECREF(index);
     }
@@ -421,7 +427,10 @@ static ta_status ta_python_foreach_item(const ta_datamodel_call *call, const ta_
 
 static void ta_python_foreach_end(const ta_datamodel_call *call, const ta_datamodel_loop *loop) {
     ta_python_datamodel *datamodel = TA_PYTHON_DATAMODEL(call);
-    ta_python_datamodel_defer(datamodel, ta_python_handle_remove(&datamodel->loops, loop->iter));
+    ta_python_value *row = ta_python_table_row(&datamodel->loops, loop->iter);
+    if (!row) return;
+    ta_python_datamodel_defer(datamodel, row->value);
+    ta_python_table_remove(&datamodel->loops, loop->iter);
 }
 
 /* ---- payloads ----------------------------------------------------------------------------------- */
@@ -430,23 +439,27 @@ static void ta_python_foreach_end(const ta_datamodel_call *call, const ta_datamo
  * namelist's locations and the params. */
 static PyObject *ta_python_capture_value(const ta_datamodel_call *call, const ta_datamodel_capture *capture,
                                          ta_status *status) {
-    ta_python_session *session = ta_python_session_of_call(call);
+    ta_python_datamodel *datamodel = TA_PYTHON_DATAMODEL(call);
     *status = TA_ERROR_EXECUTION;
-    if (!session) return NULL;
-    if (capture->content != TA_NIL) return ta_python_evaluate(TA_PYTHON_EVALUATION(call, session), capture->content, status);
+    ta_python_chart *chart = ta_python_chart_of(datamodel, ta_python_session_of_call(call));
+    if (!chart) return NULL;
+    const ta_image *image = chart->image; /* read now: the row may move while Python runs */
+    if (capture->content != TA_NIL) return ta_python_evaluate(TA_PYTHON_EVALUATION(call), capture->content, status);
     PyObject *map = PyDict_New();
     *status = map ? TA_OK : TA_ERROR_NO_MEMORY;
     for (uint32_t i = 0; map && i < capture->namelist_count; i++) {
-        PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call, session), capture->namelist[i], status);
-        PyObject *name = ta_python_expression_source(session, capture->namelist[i]);
-        PyObject *key = name ? PyObject_CallMethod(name, "strip", NULL) : NULL;
+        PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call), capture->namelist[i], status);
+        PyObject *record = value ? ta_python_expression_of(TA_PYTHON_EVALUATION(call), capture->namelist[i]) : NULL;
+        PyObject *name = record ? PyTuple_GetItem(record, TA_PYTHON_EXPRESSION_SOURCE) : NULL;
+        PyObject *key = name && name != Py_None ? PyObject_CallMethod(name, "strip", NULL) : NULL;
         if (!value || !key || PyDict_SetItem(map, key, value) < 0) Py_CLEAR(map);
         Py_XDECREF(key);
+        Py_XDECREF(record);
         Py_XDECREF(value);
     }
     for (uint32_t i = 0; map && i < capture->param_count; i++) {
-        ta_string_view name = ta_image_string(session->chart->image, capture->params[2 * i]);
-        PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call, session), capture->params[2 * i + 1], status);
+        ta_string_view name = ta_image_string(image, capture->params[2 * i]);
+        PyObject *value = ta_python_evaluate(TA_PYTHON_EVALUATION(call), capture->params[2 * i + 1], status);
         PyObject *key = value ? PyUnicode_DecodeUTF8(name.pointer, (Py_ssize_t)name.length, "strict") : NULL;
         if (!value || !key || PyDict_SetItem(map, key, value) < 0) Py_CLEAR(map);
         Py_XDECREF(key);
@@ -470,8 +483,8 @@ static ta_status ta_python_capture(const ta_datamodel_call *call, const ta_datam
 }
 
 static void ta_python_retain(void *data, ta_payload payload) {
-    ta_python_slot *slot = ta_python_handle_slot(&((ta_python_datamodel *)data)->payloads, payload);
-    if (slot) slot->count++;
+    ta_python_value *row = ta_python_table_row(&((ta_python_datamodel *)data)->payloads, payload);
+    if (row) row->row.count++;
 }
 
 /* The last release drops the value later, outside core (AGENTS.md, "Rules
@@ -479,8 +492,10 @@ static void ta_python_retain(void *data, ta_payload payload) {
  * requests and deliver too, where a finalizer must not reenter it. */
 static void ta_python_release(void *data, ta_payload payload) {
     ta_python_datamodel *datamodel = (ta_python_datamodel *)data;
-    ta_python_slot *slot = ta_python_handle_slot(&datamodel->payloads, payload);
-    if (slot && --slot->count == 0) ta_python_datamodel_defer(datamodel, ta_python_handle_remove(&datamodel->payloads, payload));
+    ta_python_value *row = ta_python_table_row(&datamodel->payloads, payload);
+    if (!row || --row->row.count) return;
+    ta_python_datamodel_defer(datamodel, row->value);
+    ta_python_table_remove(&datamodel->payloads, payload);
 }
 
 static ta_status ta_python_to_wire(void *data, ta_payload payload, ta_buffer *out) {
@@ -548,6 +563,10 @@ static const ta_datamodel_vtable ta_python_vtable = {
     .variable = ta_python_variable,
 };
 
+const ta_datamodel_vtable *ta_python_datamodel_vtable(void) {
+    return &ta_python_vtable;
+}
+
 ta_status ta_python_datamodel_payload(ta_python_datamodel *datamodel, PyObject *value, ta_payload *out) {
     PyObject *copy = NULL;
     ta_status status = ta_python_values_copy(datamodel->state, value, &copy);
@@ -563,17 +582,15 @@ PyObject *ta_python_datamodel_value(ta_python_datamodel *datamodel, ta_payload p
     return copy;
 }
 
-const ta_datamodel_vtable *ta_python_datamodel_vtable(void) {
-    return &ta_python_vtable;
-}
-
-ta_python_datamodel *ta_python_datamodel_new(const ta_python_state *state) {
-    ta_python_datamodel *datamodel = PyMem_RawMalloc(sizeof *datamodel);
-    if (!datamodel) return (ta_python_datamodel *)PyErr_NoMemory();
+int ta_python_datamodel_init(ta_python_datamodel *datamodel, const ta_python_state *state) {
     memset(datamodel, 0, sizeof *datamodel);
     datamodel->state = state;
+    datamodel->sessions.size = sizeof(ta_python_session);
+    datamodel->charts.size = sizeof(ta_python_chart);
+    datamodel->payloads.size = sizeof(ta_python_value);
+    datamodel->loops.size = sizeof(ta_python_value);
     PyObject *builtins = PyImport_ImportModule("builtins"), *json = PyImport_ImportModule("json");
-    PyObject *capsule = PyCapsule_New(datamodel, NULL, NULL);
+    PyObject *capsule = PyCapsule_New(datamodel, NULL, NULL); /* the Host holds the datamodel: it does not move */
     datamodel->builtins = builtins ? Py_XNewRef(PyModule_GetDict(builtins)) : NULL;
     datamodel->json_loads = json ? PyObject_GetAttrString(json, "loads") : NULL;
     /* int('NaN') raises, so json.loads refuses the constants JSON has not */
@@ -584,26 +601,42 @@ ta_python_datamodel *ta_python_datamodel_new(const ta_python_state *state) {
     Py_XDECREF(builtins);
     Py_XDECREF(json);
     Py_XDECREF(capsule);
-    if (!datamodel->builtins || !datamodel->json_loads || !datamodel->refuse_constant || !datamodel->in || !datamodel->deferred || !datamodel->ended) {
-        ta_python_datamodel_free(datamodel);
-        return NULL;
-    }
-    return datamodel;
+    if (datamodel->builtins && datamodel->json_loads && datamodel->refuse_constant && datamodel->in &&
+        datamodel->deferred && datamodel->ended)
+        return 0;
+    return -1;
 }
 
-void ta_python_datamodel_free(ta_python_datamodel *datamodel) {
-    if (!datamodel) return;
+/* Each row's references, by table. */
+static void ta_python_rows_drop(ta_python_datamodel *datamodel, ta_python_table *table) {
+    for (uint32_t slot = 0; slot < table->count; slot++) {
+        void *row = ta_python_table_slot(table, slot);
+        if (!row) continue;
+        if (table == &datamodel->sessions) {
+            ta_python_session *session = row;
+            ta_python_datamodel_defer(datamodel, session->globals);
+            for (int i = 0; i < TA_PYTHON_SYSTEM_VARIABLES; i++)
+                ta_python_datamodel_defer(datamodel, session->system[i]);
+            ta_python_datamodel_defer(datamodel, session->init);
+        } else if (table == &datamodel->charts) {
+            ta_python_datamodel_defer(datamodel, ((ta_python_chart *)row)->expressions);
+        } else {
+            ta_python_datamodel_defer(datamodel, ((ta_python_value *)row)->value);
+        }
+    }
+    ta_python_table_free(table);
+}
+
+void ta_python_datamodel_clear(ta_python_datamodel *datamodel) {
     /* core destroyed every session and released every payload first
-     * (ta_host_free); what a stale table still holds goes now */
-    for (uint32_t i = 0; i < datamodel->payloads.count; i++)
-        if (datamodel->payloads.slots[i].item) ta_python_datamodel_defer(datamodel, datamodel->payloads.slots[i].item);
-    for (uint32_t i = 0; i < datamodel->loops.count; i++)
-        if (datamodel->loops.slots[i].item) ta_python_datamodel_defer(datamodel, datamodel->loops.slots[i].item);
-    for (uint32_t i = 0; i < datamodel->sessions.count; i++)
-        if (datamodel->sessions.slots[i].item) ta_python_session_free(datamodel, datamodel->sessions.slots[i].item);
-    ta_python_handles_free(&datamodel->payloads);
-    ta_python_handles_free(&datamodel->loops);
-    ta_python_handles_free(&datamodel->sessions);
+     * (ta_host_free); what a table still holds goes now, and the tables
+     * are freed, once */
+    if (datamodel->deferred) {
+        ta_python_rows_drop(datamodel, &datamodel->payloads);
+        ta_python_rows_drop(datamodel, &datamodel->loops);
+        ta_python_rows_drop(datamodel, &datamodel->sessions);
+        ta_python_rows_drop(datamodel, &datamodel->charts);
+    }
     Py_CLEAR(datamodel->text);
     Py_CLEAR(datamodel->kept);
     ta_python_datamodel_settle(datamodel);
@@ -614,5 +647,33 @@ void ta_python_datamodel_free(ta_python_datamodel *datamodel) {
     Py_CLEAR(datamodel->json_loads);
     Py_CLEAR(datamodel->refuse_constant);
     Py_CLEAR(datamodel->in);
-    PyMem_RawFree(datamodel);
+}
+
+int ta_python_datamodel_traverse(ta_python_datamodel *datamodel, visitproc visit, void *arg) {
+    for (uint32_t slot = 0; slot < datamodel->sessions.count; slot++) {
+        ta_python_session *session = ta_python_table_slot(&datamodel->sessions, slot);
+        if (!session) continue;
+        Py_VISIT(session->globals);
+        Py_VISIT(session->init);
+        for (int i = 0; i < TA_PYTHON_SYSTEM_VARIABLES; i++)
+            Py_VISIT(session->system[i]);
+    }
+    for (uint32_t slot = 0; slot < datamodel->charts.count; slot++) {
+        ta_python_chart *chart = ta_python_table_slot(&datamodel->charts, slot);
+        if (chart) Py_VISIT(chart->expressions);
+    }
+    for (uint32_t slot = 0; slot < datamodel->payloads.count; slot++) {
+        ta_python_value *row = ta_python_table_slot(&datamodel->payloads, slot);
+        if (row) Py_VISIT(row->value);
+    }
+    for (uint32_t slot = 0; slot < datamodel->loops.count; slot++) {
+        ta_python_value *row = ta_python_table_slot(&datamodel->loops, slot);
+        if (row) Py_VISIT(row->value);
+    }
+    Py_VISIT(datamodel->deferred);
+    Py_VISIT(datamodel->ended);
+    Py_VISIT(datamodel->kept);
+    Py_VISIT(datamodel->text);
+    Py_VISIT(datamodel->in);
+    return 0;
 }

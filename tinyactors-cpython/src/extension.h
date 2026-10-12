@@ -51,6 +51,17 @@ typedef struct ta_python_refusal {
 } ta_python_refusal;
 void ta_python_raise_reply(const ta_python_state *state, const ta_python_refusal *refusal);
 
+/* A core call that writes into a ta_buffer (ta_buffer: TA_ERROR_NO_MEMORY
+ * with the length it needs), made into a new bytes object: written into a
+ * room on the stack, and when that is too small, again straight into a
+ * bytes object of the length core asked for. No allocation of the
+ * binding's own (AGENTS.md, "The binding's memory"). */
+typedef struct ta_python_writing {
+    ta_status (*write)(const void *context, ta_buffer *out);
+    const void *context;
+} ta_python_writing;
+ta_status ta_python_written(const ta_python_writing *writing, PyObject **out);
+
 /* ---- values (values.c) ------------------------------------------------------------ */
 
 int ta_python_values_init(PyObject *module, ta_python_state *state);
@@ -76,11 +87,64 @@ PyObject *ta_python_decode(PyObject *module, PyObject *data);
 
 /* ---- the host (host.c) ------------------------------------------------------------- */
 
-/* The "python" datamodel (datamodel/datamodel.h). */
-typedef struct ta_python_datamodel ta_python_datamodel;
+/* ---- the handle tables (datamodel/handles.c) -------------------------------------------- */
+
+/* A table's rows: each starts with this header. A handle is (generation <<
+ * 32) | (slot + 1), so 0 is no handle. */
+typedef struct ta_python_row {
+    uint32_t generation;
+    uint32_t count; /* payloads: references; free rows: the next free slot + 1 */
+    uint32_t used;
+    uint32_t pad;
+} ta_python_row;
+
+/* One block of rows of `size` bytes, grown by doubling, freed once. */
+typedef struct ta_python_table {
+    void *rows;
+    uint32_t size, count, capacity;
+    uint32_t free; /* the first free slot + 1, 0: none */
+} ta_python_table;
+
+/* A new zeroed row (its header set, one reference) and its handle; NULL
+ * when memory ran out. */
+void *ta_python_table_add(ta_python_table *table, uint64_t *handle);
+/* The row of `handle`, or NULL for a handle that is not (any more). */
+void *ta_python_table_row(const ta_python_table *table, uint64_t handle);
+/* The row at slot `slot` (0 …), or NULL when it is free: for walking. */
+void *ta_python_table_slot(const ta_python_table *table, uint32_t slot);
+/* Frees the row of `handle` (its references dropped first). */
+void ta_python_table_remove(ta_python_table *table, uint64_t handle);
+void ta_python_table_free(ta_python_table *table);
+
+/* ---- the "python" datamodel (datamodel/) --------------------------------------------- */
+
+/* Held by its Host, in the Host object itself: no allocation of its own. */
+typedef struct ta_python_datamodel {
+    const ta_python_state *state;
+    ta_python_table sessions; /* ta_python_session rows */
+    ta_python_table charts;   /* ta_python_chart rows */
+    ta_python_table payloads; /* ta_python_value rows: a payload's value, count its references */
+    ta_python_table loops;    /* ta_python_value rows: a <foreach>'s items */
+    PyObject *builtins;        /* the builtins module's dict, each session's __builtins__ */
+    PyObject *json_loads;      /* json.loads, for <content> */
+    PyObject *refuse_constant; /* json.loads's parse_constant, int: NaN and Infinity are not JSON */
+    PyObject *in;              /* In(state), bound to this datamodel */
+    PyObject *deferred;        /* a list: objects whose last reference waits for the outer call to return */
+    PyObject *ended;           /* a list: the globals of ended sessions, cleared at settle (they make cycles) */
+    PyObject *kept;            /* the first BaseException that is not an Exception, raised after the run */
+    PyObject *text;            /* the str whose UTF-8 eval_string and log returned last */
+    ta_datamodel_environment *environment; /* of the call in progress, for In() */
+    uint64_t current;                      /* the session of the call in progress */
+} ta_python_datamodel;
+
 const ta_datamodel_vtable *ta_python_datamodel_vtable(void);
-ta_python_datamodel *ta_python_datamodel_new(const ta_python_state *state);
-void ta_python_datamodel_free(ta_python_datamodel *datamodel);
+/* Fills a datamodel for a host: -1 with a Python error. */
+int ta_python_datamodel_init(ta_python_datamodel *datamodel, const ta_python_state *state);
+/* After core destroyed every session and released every payload
+ * (ta_host_free): drops what is left and frees the tables. */
+void ta_python_datamodel_clear(ta_python_datamodel *datamodel);
+/* What the datamodel holds, for the host's Py_tp_traverse. */
+int ta_python_datamodel_traverse(ta_python_datamodel *datamodel, visitproc visit, void *arg);
 int ta_python_datamodel_settle(ta_python_datamodel *datamodel);
 /* A chart's evaluation raised a BaseException that is not an Exception:
  * the turn stops, and settle raises it. */
@@ -91,13 +155,6 @@ int ta_python_event_init_type(PyObject *module, ta_python_state *state);
 ta_status ta_python_datamodel_payload(ta_python_datamodel *datamodel, PyObject *value, ta_payload *out);
 /* A copy of a payload's value, a new reference (0: None). */
 PyObject *ta_python_datamodel_value(ta_python_datamodel *datamodel, ta_payload payload);
-
-/* An image the host runs, kept until its segment is freed
- * (TA_HOST_EFFECT_SEGMENT_FREED) or the host is (bindings.md, section 6). */
-typedef struct ta_python_image {
-    void *bytes; /* PyMem_RawMalloc: the compiled image, aligned as core asks */
-    ta_image image;
-} ta_python_image;
 
 /* What effects the application handles: one callable per kind, or NULL. */
 enum {
@@ -115,15 +172,15 @@ typedef struct ta_python_host {
     PyObject_HEAD
     PyObject *module; /* the module whose state it uses */
     ta_host *host;    /* NULL once closed */
-    ta_python_datamodel *python; /* datamodels[0] */
+    ta_python_datamodel python; /* datamodels[0], held here: no allocation of its own */
     ta_datamodel_ecmascript *ecmascript;
     ta_datamodel_binding datamodels[2];
     uint32_t datamodel_count;
     unsigned long thread; /* PyThread_get_thread_ident of the creating thread */
     PyObject *clock;      /* a SimulatedClock, or NULL for the real clock */
     PyObject *handlers[TA_PYTHON_HANDLERS];
-    ta_python_image **images; /* by segment; NULL once freed */
-    uint32_t image_count, image_capacity;
+    PyObject *images; /* {segment: bytearray}: each segment's ta_image and image bytes, held until
+                         TA_HOST_EFFECT_SEGMENT_FREED (bindings.md, section 6: "Hold, don't copy") */
     uint64_t ticks_per_second;  /* host.config's system.ticksPerSecond */
     uint64_t origin_ns;         /* the real clock's start (time.monotonic_ns) */
     ta_time next_deadline;      /* of the last run: UINT64_MAX for none */

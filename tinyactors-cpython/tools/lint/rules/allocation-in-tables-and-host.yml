@@ -1,0 +1,45 @@
+# The binding allocates almost nothing (AGENTS.md, "The binding's memory";
+# tinyactors-core/docs/bindings.md, section 6, "The binding allocates
+# almost nothing"): it borrows what core or Python already holds, holds a
+# Python object instead of copying bytes, and keeps what core cannot hold
+# as rows of the handle tables. So an allocator is called in two places
+# only:
+#
+#   - src/datamodel/handles.c, the tables, grown by doubling and freed once;
+#   - src/host.c's create (ta_python_host_new), free (ta_python_host_free)
+#     and the host's allocator (ta_python_alloc, ta_python_free), which
+#     core calls for every block of the host.
+#
+# Everywhere else a call to CPython's allocators (PyMem_*, PyObject_Malloc
+# and its kin) or the C library's (malloc, calloc, realloc, free, ...) is
+# refused. Python objects (a bytes, a bytearray) are not this rule's: they
+# are the objects the binding holds.
+id: allocation-in-tables-and-host
+language: c
+severity: error
+message: "allocation happens only in the handle tables (src/datamodel/handles.c) and in the host's create, free and allocator (src/host.c): borrow, hold a Python object, or use a table row"
+files:
+  - src/**/*.c
+  - src/**/*.h
+ignores:
+  - src/datamodel/handles.c
+rule:
+  kind: call_expression
+  has:
+    field: function
+    kind: identifier
+    regex: '^(PyMem_\w+|PyObject_(Malloc|Calloc|Realloc|Free)|malloc|calloc|realloc|free|aligned_alloc|posix_memalign|strdup|strndup)$'
+  not:
+    inside:
+      kind: function_definition
+      stopBy: end
+      has:
+        field: declarator
+        any:
+          - kind: function_declarator
+            has: {field: declarator, regex: '^ta_python_(alloc|free|host_new|host_free)$'}
+          - kind: pointer_declarator
+            has:
+              field: declarator
+              kind: function_declarator
+              has: {field: declarator, regex: '^ta_python_(alloc|free|host_new|host_free)$'}

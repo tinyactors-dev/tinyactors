@@ -70,80 +70,73 @@ static PyObject *ta_python_dedent(PyObject *text) {
     return dedented;
 }
 
-static ta_status ta_python_expression_compile(ta_python_expression *expression, const ta_expression_info *info,
-                                              const char *filename) {
-    expression->kind = info->kind;
-    expression->source = PyUnicode_DecodeUTF8(info->source.pointer, (Py_ssize_t)info->source.length, "strict");
-    if (!expression->source) {
-        PyErr_Clear();
-        return TA_OK; /* evaluates to error.execution */
-    }
-    switch (info->kind) {
-    case TA_EXPRESSION_CONTENT: return TA_OK;
-    case TA_EXPRESSION_SCRIPT: {
-        PyObject *text = ta_python_dedent(expression->source);
+/* A record (kind, source, code, assign, root) of expression `info`. */
+static PyObject *ta_python_expression_compile(const ta_expression_info *info, const char *filename) {
+    PyObject *source = PyUnicode_DecodeUTF8(info->source.pointer, (Py_ssize_t)info->source.length, "strict");
+    PyObject *code = NULL, *assign = NULL, *root = NULL;
+    if (!source) PyErr_Clear(); /* evaluates to error.execution */
+    else if (info->kind == TA_EXPRESSION_SCRIPT) {
+        PyObject *text = ta_python_dedent(source);
         if (!text) PyErr_Clear();
-        expression->code = ta_python_compile_text(&(ta_python_compiling){text, filename, Py_file_input});
+        code = ta_python_compile_text(&(ta_python_compiling){text, filename, Py_file_input});
         Py_XDECREF(text);
-        return TA_OK;
-    }
-    case TA_EXPRESSION_LOCATION: {
-        PyObject *stripped = PyObject_CallMethod(expression->source, "strip", NULL);
-        PyObject *assignment = stripped ? PyUnicode_FromFormat("%U = " TA_PYTHON_VALUE_NAME, stripped) : NULL;
-        expression->assign = ta_python_compile_text(&(ta_python_compiling){assignment, filename, Py_file_input});
-        expression->root = ta_python_root_of(info->source);
-        if (!expression->root) PyErr_Clear();
-        Py_XDECREF(assignment);
+    } else if (info->kind != TA_EXPRESSION_CONTENT) {
+        PyObject *stripped = PyObject_CallMethod(source, "strip", NULL);
+        if (info->kind == TA_EXPRESSION_LOCATION && stripped) {
+            PyObject *assignment = PyUnicode_FromFormat("%U = " TA_PYTHON_VALUE_NAME, stripped);
+            assign = ta_python_compile_text(&(ta_python_compiling){assignment, filename, Py_file_input});
+            root = ta_python_root_of(info->source);
+            Py_XDECREF(assignment);
+        }
+        /* a location is read as an expression too (namelist) */
+        code = ta_python_compile_text(&(ta_python_compiling){stripped, filename, Py_eval_input});
         Py_XDECREF(stripped);
-        if (PyErr_Occurred()) PyErr_Clear();
-    } /* fall through: a location is read as an expression too (namelist) */
-    default: {
-        PyObject *stripped = PyObject_CallMethod(expression->source, "strip", NULL);
-        expression->code = ta_python_compile_text(&(ta_python_compiling){stripped, filename, Py_eval_input});
-        Py_XDECREF(stripped);
-        if (PyErr_Occurred()) PyErr_Clear();
-        return TA_OK;
     }
-    }
+    PyErr_Clear();
+    PyObject *record = Py_BuildValue("(IOOOO)", info->kind, source ? source : Py_None, code ? code : Py_None,
+                                     assign ? assign : Py_None, root ? root : Py_None);
+    Py_XDECREF(source);
+    Py_XDECREF(code);
+    Py_XDECREF(assign);
+    Py_XDECREF(root);
+    return record;
 }
 
-ta_status ta_python_chart_compile(ta_python_datamodel *datamodel, ta_python_chart *chart) {
-    (void)datamodel;
-    chart->count = ta_image_expression_count(chart->image, chart->chart);
-    chart->expressions = PyMem_RawMalloc((chart->count ? chart->count : 1) * sizeof *chart->expressions);
-    if (!chart->expressions) return TA_ERROR_NO_MEMORY;
-    memset(chart->expressions, 0, (chart->count ? chart->count : 1) * sizeof *chart->expressions);
+PyObject *ta_python_chart_compile(const ta_python_chart_source *chart) {
+    uint32_t count = ta_image_expression_count(chart->image, chart->chart);
     ta_string_view source = ta_image_chart_source(chart->image, chart->chart);
     PyObject *filename = PyUnicode_DecodeUTF8(source.pointer, (Py_ssize_t)source.length, "replace");
-    const char *name = filename ? PyUnicode_AsUTF8AndSize(filename, NULL) : "<chart>";
+    const char *name = filename ? PyUnicode_AsUTF8AndSize(filename, NULL) : NULL;
     if (!name) {
         PyErr_Clear();
         name = "<chart>";
     }
-    for (uint32_t i = 0; i < chart->count; i++) {
+    PyObject *records = PyList_New(count);
+    for (uint32_t i = 0; records && i < count; i++) {
         ta_expression_info info;
-        if (ta_image_expression(chart->image, (ta_chart_item){chart->chart, i}, &info) != TA_OK) continue;
-        ta_python_expression_compile(&chart->expressions[i], &info, name);
+        memset(&info, 0, sizeof info);
+        PyObject *record = ta_image_expression(chart->image, (ta_chart_item){chart->chart, i}, &info) == TA_OK
+                               ? ta_python_expression_compile(&info, name)
+                               : Py_BuildValue("(IOOOO)", 0u, Py_None, Py_None, Py_None, Py_None);
+        if (!record) Py_CLEAR(records);
+        else PyList_SetItem(records, i, record);
     }
     Py_XDECREF(filename);
-    return TA_OK;
+    return records;
 }
 
-void ta_python_chart_free(ta_python_chart *chart) {
-    for (uint32_t i = 0; i < chart->count; i++) {
-        Py_CLEAR(chart->expressions[i].source);
-        Py_CLEAR(chart->expressions[i].code);
-        Py_CLEAR(chart->expressions[i].assign);
-        Py_CLEAR(chart->expressions[i].root);
-    }
-    PyMem_RawFree(chart->expressions);
-    chart->expressions = NULL;
-    chart->count = 0;
+PyObject *ta_python_expression_of(const ta_python_evaluation *evaluation, ta_expression expression) {
+    ta_python_datamodel *datamodel = evaluation->datamodel;
+    ta_python_session *session = ta_python_table_row(&datamodel->sessions, evaluation->session);
+    ta_python_chart *chart = session ? ta_python_table_row(&datamodel->charts, session->chart) : NULL;
+    if (!chart || expression >= (uint32_t)PyList_Size(chart->expressions)) return NULL;
+    return Py_NewRef(PyList_GetItem(chart->expressions, expression));
 }
 
-PyObject *ta_python_expression_source(const ta_python_session *session, ta_expression expression) {
-    if (expression >= session->chart->count) return NULL;
-    return session->chart->expressions[expression].source;
+/* A field of a record, borrowed; NULL for None. */
+static PyObject *ta_python_field(PyObject *record, int field) {
+    PyObject *value = PyTuple_GetItem(record, field);
+    return value == Py_None ? NULL : value;
 }
 
 /* ---- evaluating ---------------------------------------------------------------------------- */
@@ -162,9 +155,11 @@ static ta_status ta_python_raised(ta_python_datamodel *datamodel) {
 }
 
 /* The system variables after an evaluation: each as the session keeps it,
- * else restored, and the evaluation fails. */
+ * else restored, and the evaluation fails. The row is read again: it may
+ * have moved while Python ran. */
 static ta_status ta_python_guard(const ta_python_evaluation *evaluation) {
-    ta_python_session *session = evaluation->session;
+    ta_python_session *session = ta_python_table_row(&evaluation->datamodel->sessions, evaluation->session);
+    if (!session) return TA_ERROR_EXECUTION;
     ta_status status = TA_OK;
     for (int i = 0; i < TA_PYTHON_SYSTEM_VARIABLES; i++) {
         PyObject *now = NULL;
@@ -182,21 +177,29 @@ static ta_status ta_python_guard(const ta_python_evaluation *evaluation) {
     return status;
 }
 
+/* The session's globals, a new reference, or NULL for a stale session. */
+static PyObject *ta_python_globals(const ta_python_evaluation *evaluation) {
+    ta_python_session *session = ta_python_table_row(&evaluation->datamodel->sessions, evaluation->session);
+    return session ? Py_NewRef(session->globals) : NULL;
+}
+
 /* `code` run in the session's globals. */
 static PyObject *ta_python_run(const ta_python_evaluation *evaluation, PyObject *code, ta_status *status) {
     ta_python_datamodel *datamodel = evaluation->datamodel;
-    if (!code) {
+    PyObject *globals = code ? ta_python_globals(evaluation) : NULL;
+    if (!globals) {
         *status = TA_ERROR_EXECUTION;
         return NULL;
     }
     if (evaluation->environment) ta_datamodel_environment_charge(evaluation->environment, 1);
     ta_datamodel_environment *outer = datamodel->environment;
-    ta_python_session *current = datamodel->current;
+    uint64_t current = datamodel->current;
     datamodel->environment = evaluation->environment;
     datamodel->current = evaluation->session;
-    PyObject *result = PyEval_EvalCode(code, evaluation->session->globals, evaluation->session->globals);
+    PyObject *result = PyEval_EvalCode(code, globals, globals);
     datamodel->environment = outer;
     datamodel->current = current;
+    Py_DECREF(globals);
     int interrupted = datamodel->kept != NULL;
     *status = result ? TA_OK : ta_python_raised(datamodel);
     /* A KeyboardInterrupt or SystemExit stops the run: the evaluation that
@@ -218,7 +221,8 @@ static PyObject *ta_python_run(const ta_python_evaluation *evaluation, PyObject 
 /* <content>: JSON if it parses (JSON's: NaN and Infinity are not), else
  * the text, its runs of space, tab, CR and LF one space, and trimmed: the
  * ECMAScript datamodel's content_value (datamodel_ecmascript.c:340), but
- * for its XML DOM. */
+ * for its XML DOM. The text is made one space in a bytearray of its own
+ * UTF-8, a Python object: no allocation of the binding's. */
 static PyObject *ta_python_content(ta_python_datamodel *datamodel, PyObject *source) {
     PyObject *arguments = PyTuple_Pack(1, source);
     PyObject *keywords = Py_BuildValue("{sO}", "parse_constant", datamodel->refuse_constant);
@@ -229,11 +233,12 @@ static PyObject *ta_python_content(ta_python_datamodel *datamodel, PyObject *sou
     PyErr_Clear();
     Py_ssize_t length = 0;
     const char *text = PyUnicode_AsUTF8AndSize(source, &length);
-    char *buffer = text ? PyMem_Malloc((size_t)length + 1) : NULL;
-    if (!buffer) return text ? PyErr_NoMemory() : NULL;
+    PyObject *room = text ? PyByteArray_FromStringAndSize(text, length) : NULL;
+    if (!room) return NULL;
+    char *buffer = PyByteArray_AsString(room);
     Py_ssize_t written = 0;
     for (Py_ssize_t i = 0; i < length; i++) {
-        char c = text[i];
+        char c = buffer[i];
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
             if (written && buffer[written - 1] != ' ') buffer[written++] = ' ';
         } else {
@@ -243,30 +248,33 @@ static PyObject *ta_python_content(ta_python_datamodel *datamodel, PyObject *sou
     while (written && buffer[written - 1] == ' ')
         written--;
     value = PyUnicode_DecodeUTF8(buffer, written, "strict");
-    PyMem_Free(buffer);
+    Py_DECREF(room);
     return value;
 }
 
 PyObject *ta_python_evaluate(const ta_python_evaluation *evaluation, ta_expression expression, ta_status *status) {
-    ta_python_session *session = evaluation->session;
     *status = TA_ERROR_EXECUTION;
-    if (expression >= session->chart->count) return NULL;
-    const ta_python_expression *compiled = &session->chart->expressions[expression];
-    if (compiled->kind == TA_EXPRESSION_CONTENT) {
-        PyObject *value = compiled->source ? ta_python_content(evaluation->datamodel, compiled->source) : NULL;
+    PyObject *record = ta_python_expression_of(evaluation, expression), *value = NULL;
+    if (!record) return NULL;
+    long kind = PyLong_AsLong(PyTuple_GetItem(record, TA_PYTHON_EXPRESSION_KIND));
+    PyObject *source = ta_python_field(record, TA_PYTHON_EXPRESSION_SOURCE);
+    if (kind == TA_EXPRESSION_CONTENT) {
+        value = source ? ta_python_content(evaluation->datamodel, source) : NULL;
         *status = value ? TA_OK : ta_python_raised(evaluation->datamodel);
-        return value;
+    } else if (kind != TA_EXPRESSION_SCRIPT) {
+        value = ta_python_run(evaluation, ta_python_field(record, TA_PYTHON_EXPRESSION_CODE), status);
     }
-    if (compiled->kind == TA_EXPRESSION_SCRIPT) return NULL;
-    return ta_python_run(evaluation, compiled->code, status);
+    Py_DECREF(record);
+    return value;
 }
 
 ta_status ta_python_execute(const ta_python_evaluation *evaluation, ta_expression expression) {
-    ta_python_session *session = evaluation->session;
-    if (expression >= session->chart->count) return TA_ERROR_EXECUTION;
+    PyObject *record = ta_python_expression_of(evaluation, expression);
+    if (!record) return TA_ERROR_EXECUTION;
     ta_status status;
-    PyObject *result = ta_python_run(evaluation, session->chart->expressions[expression].code, &status);
+    PyObject *result = ta_python_run(evaluation, ta_python_field(record, TA_PYTHON_EXPRESSION_CODE), &status);
     Py_XDECREF(result); /* None */
+    Py_DECREF(record);
     return status;
 }
 
@@ -276,25 +284,45 @@ static int ta_python_is_system_name(PyObject *name) {
     return 0;
 }
 
-ta_status ta_python_assign_to(const ta_python_evaluation *evaluation, const ta_python_assignment *assignment) {
-    ta_python_session *session = evaluation->session;
-    if (assignment->location >= session->chart->count) return TA_ERROR_EXECUTION;
-    const ta_python_expression *location = &session->chart->expressions[assignment->location];
-    if (!location->root || !location->assign || ta_python_is_system_name(location->root)) return TA_ERROR_EXECUTION;
-    int declared = PyDict_Contains(session->globals, location->root);
-    PyObject *stripped = PyObject_CallMethod(location->source, "strip", NULL);
-    int plain = stripped && PyUnicode_Compare(stripped, location->root) == 0;
+/* How a location is assigned: TA_OK to run its assignment, a name to set,
+ * or the error. */
+static ta_status ta_python_location_check(const ta_python_evaluation *evaluation, PyObject *record,
+                                          const ta_python_assignment *assignment) {
+    PyObject *root = ta_python_field(record, TA_PYTHON_EXPRESSION_ROOT);
+    PyObject *source = ta_python_field(record, TA_PYTHON_EXPRESSION_SOURCE);
+    if (!root || !ta_python_field(record, TA_PYTHON_EXPRESSION_ASSIGN) || ta_python_is_system_name(root))
+        return TA_ERROR_EXECUTION;
+    PyObject *globals = ta_python_globals(evaluation);
+    int declared = globals ? PyDict_Contains(globals, root) : -1;
+    PyObject *stripped = source ? PyObject_CallMethod(source, "strip", NULL) : NULL;
+    int plain = stripped && PyUnicode_Compare(stripped, root) == 0;
     Py_XDECREF(stripped);
-    if (PyErr_Occurred()) PyErr_Clear();
-    if (declared < 0 || (!declared && !(plain && assignment->declare))) return TA_ERROR_EXECUTION; /* undeclared */
-    if (plain) /* a name: set it, with no code to run */
-        return PyDict_SetItem(session->globals, location->root, assignment->value) < 0 ? ta_python_raised(evaluation->datamodel)
-                                                                                       : TA_OK;
-    if (PyDict_SetItemString(session->globals, TA_PYTHON_VALUE_NAME, assignment->value) < 0)
-        return ta_python_raised(evaluation->datamodel);
-    ta_status status;
-    PyObject *result = ta_python_run(evaluation, location->assign, &status);
-    Py_XDECREF(result);
-    if (PyDict_DelItemString(session->globals, TA_PYTHON_VALUE_NAME) < 0) PyErr_Clear();
+    PyErr_Clear();
+    ta_status status = TA_OK;
+    if (declared < 0 || (!declared && !(plain && assignment->declare))) status = TA_ERROR_EXECUTION; /* undeclared */
+    else if (plain) /* a name: set it, with no code to run */
+        status = PyDict_SetItem(globals, root, assignment->value) < 0 ? ta_python_raised(evaluation->datamodel)
+                                                                     : TA_ERROR_STALE; /* done */
+    Py_XDECREF(globals);
+    return status;
+}
+
+ta_status ta_python_assign_to(const ta_python_evaluation *evaluation, const ta_python_assignment *assignment) {
+    PyObject *record = ta_python_expression_of(evaluation, assignment->location);
+    if (!record) return TA_ERROR_EXECUTION;
+    ta_status status = ta_python_location_check(evaluation, record, assignment);
+    if (status == TA_ERROR_STALE) status = TA_OK; /* a plain name, set */
+    else if (status == TA_OK) {
+        PyObject *globals = ta_python_globals(evaluation);
+        if (!globals || PyDict_SetItemString(globals, TA_PYTHON_VALUE_NAME, assignment->value) < 0) {
+            status = globals ? ta_python_raised(evaluation->datamodel) : TA_ERROR_EXECUTION;
+        } else {
+            PyObject *result = ta_python_run(evaluation, ta_python_field(record, TA_PYTHON_EXPRESSION_ASSIGN), &status);
+            Py_XDECREF(result);
+            if (PyDict_DelItemString(globals, TA_PYTHON_VALUE_NAME) < 0) PyErr_Clear();
+        }
+        Py_XDECREF(globals);
+    }
+    Py_DECREF(record);
     return status;
 }

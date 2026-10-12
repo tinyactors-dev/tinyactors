@@ -29,19 +29,23 @@ static PyObject *ta_python_effect_number(ta_python_host *host, const ta_python_f
     return PyLong_FromUnsignedLongLong(ta_host_effect_number(host->host, field->index, field->field));
 }
 
-/* The PEER or PEER_ERROR effect `effect` as envelope bytes. */
+/* The PEER or PEER_ERROR effect `effect` as envelope bytes, written by
+ * ta_host_envelope straight into a bytes object. */
+typedef struct ta_python_envelope_writing {
+    ta_host *host;
+    const ta_host_effect *effect;
+} ta_python_envelope_writing;
+
+static ta_status ta_python_envelope_write(const void *context, ta_buffer *out) {
+    const ta_python_envelope_writing *writing = context;
+    return ta_host_envelope(writing->host, writing->effect, out);
+}
+
 static PyObject *ta_python_effect_envelope(ta_python_host *host, const ta_host_effect *effect) {
-    char room[1024];
-    ta_buffer buffer = {room, sizeof room, 0};
-    ta_status status = ta_host_envelope(host->host, effect, &buffer);
-    if (status == TA_ERROR_NO_MEMORY && buffer.length > buffer.capacity) {
-        size_t length = buffer.length;
-        buffer = (ta_buffer){PyMem_Malloc(length), length, 0};
-        status = buffer.pointer ? ta_host_envelope(host->host, effect, &buffer) : TA_ERROR_NO_MEMORY;
-    }
-    PyObject *bytes = status == TA_OK ? PyBytes_FromStringAndSize(buffer.pointer, (Py_ssize_t)buffer.length) : NULL;
-    if (buffer.pointer != room) PyMem_Free(buffer.pointer);
-    if (status != TA_OK) ta_python_raise_status(ta_python_host_state(host), "ta_host_envelope", status);
+    ta_python_envelope_writing writing = {host->host, effect};
+    PyObject *bytes = NULL;
+    ta_status status = ta_python_written(&(ta_python_writing){ta_python_envelope_write, &writing}, &bytes);
+    if (status != TA_OK && !PyErr_Occurred()) ta_python_raise_status(ta_python_host_state(host), "ta_host_envelope", status);
     return bytes;
 }
 

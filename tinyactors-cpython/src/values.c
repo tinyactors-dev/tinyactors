@@ -30,7 +30,7 @@ static PyObject *ta_python_address_new(PyTypeObject *type, PyObject *args, PyObj
 static void ta_python_address_dealloc(PyObject *self) {
     PyTypeObject *type = Py_TYPE(self);
     Py_CLEAR(((ta_python_address *)self)->text);
-    PyObject_Free(self);
+    ((freefunc)PyType_GetSlot(type, Py_tp_free))(self); /* the type's own free, as a heap type's dealloc does */
     Py_DECREF(type);
 }
 
@@ -85,7 +85,7 @@ static int ta_python_undefined_bool(PyObject *self) {
 
 static void ta_python_undefined_dealloc(PyObject *self) {
     PyTypeObject *type = Py_TYPE(self);
-    PyObject_Free(self);
+    ((freefunc)PyType_GetSlot(type, Py_tp_free))(self); /* the type's own free, as a heap type's dealloc does */
     Py_DECREF(type);
 }
 
@@ -140,6 +140,7 @@ typedef struct ta_python_tokens {
     uint32_t capacity, count;
     ta_buffer strings;
     ta_status status;
+    PyObject *held; /* past the stack's room: a bytearray holding the tokens, then the strings */
 } ta_python_tokens;
 
 static void ta_python_token_add(ta_python_tokens *list, const ta_cbor_token *token) {
@@ -297,17 +298,16 @@ static ta_status ta_python_tokens_of(ta_python_tokens *list, PyObject *value) {
         if (list->status != TA_OK) return list->status;
         if (list->count <= list->capacity && list->strings.length <= list->strings.capacity) return TA_OK;
         if (pass) break;
-        ta_cbor_token *tokens = PyMem_Malloc(list->count * sizeof *tokens);
-        void *strings = PyMem_Malloc(list->strings.length ? list->strings.length : 1);
-        if (!tokens || !strings) {
-            PyMem_Free(tokens);
-            PyMem_Free(strings);
-            PyErr_NoMemory();
-            return TA_ERROR_NO_MEMORY;
-        }
-        list->tokens = tokens;
+        /* a value bigger than the stack's room: its tokens and strings in a
+         * bytearray, a Python object, never an allocation of the binding's
+         * (AGENTS.md, "The binding's memory") */
+        size_t tokens = (size_t)list->count * sizeof(ta_cbor_token), strings = list->strings.length;
+        list->held = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)(tokens + strings + 1));
+        if (!list->held) return TA_ERROR_NO_MEMORY;
+        char *room = PyByteArray_AsString(list->held);
+        list->tokens = (ta_cbor_token *)(void *)room;
         list->capacity = list->count;
-        list->strings = (ta_buffer){strings, list->strings.length, 0};
+        list->strings = (ta_buffer){room + tokens, strings, 0};
     }
     return TA_ERROR_INVALID; /* the value changed between the passes */
 }
@@ -315,32 +315,56 @@ static ta_status ta_python_tokens_of(ta_python_tokens *list, PyObject *value) {
 ta_status ta_python_values_write(const ta_python_state *state, PyObject *value, ta_buffer *out) {
     ta_cbor_token tokens[64];
     char strings[1024];
-    ta_python_tokens list = {state, tokens, 64, 0, {strings, sizeof strings, 0}, TA_OK};
+    ta_python_tokens list = {state, tokens, 64, 0, {strings, sizeof strings, 0}, TA_OK, NULL};
     ta_status status = ta_python_tokens_of(&list, value);
     if (status == TA_OK) {
         ta_cbor_document document = {{list.strings.pointer, list.strings.length}, list.tokens, list.count, list.count};
         status = ta_cbor_encode(&document, out);
     }
-    if (list.tokens != tokens) {
-        PyMem_Free(list.tokens);
-        PyMem_Free(list.strings.pointer);
-    }
+    Py_XDECREF(list.held);
     return status;
 }
 
-ta_status ta_python_values_bytes(const ta_python_state *state, PyObject *value, PyObject **out) {
+ta_status ta_python_written(const ta_python_writing *writing, PyObject **out) {
     char room[1024];
     ta_buffer buffer = {room, sizeof room, 0};
-    ta_status status = ta_python_values_write(state, value, &buffer);
-    if (status == TA_ERROR_NO_MEMORY && !PyErr_Occurred()) {
-        buffer = (ta_buffer){PyMem_Malloc(buffer.length), buffer.length, 0};
-        status = buffer.pointer ? ta_python_values_write(state, value, &buffer) : TA_ERROR_NO_MEMORY;
-        if (!buffer.pointer) PyErr_NoMemory();
+    *out = NULL;
+    ta_status status = writing->write(writing->context, &buffer);
+    if (status == TA_OK) {
+        *out = PyBytes_FromStringAndSize(room, (Py_ssize_t)buffer.length);
+        return *out ? TA_OK : TA_ERROR_NO_MEMORY;
     }
-    if (status == TA_OK) *out = PyBytes_FromStringAndSize(buffer.pointer, (Py_ssize_t)buffer.length);
-    if (buffer.pointer != room) PyMem_Free(buffer.pointer);
-    if (status == TA_OK && !*out) return TA_ERROR_NO_MEMORY;
+    if (status != TA_ERROR_NO_MEMORY || buffer.length <= buffer.capacity || PyErr_Occurred()) return status;
+    /* straight into a bytes object of the length core asked for: no copy,
+     * and nothing the binding allocates */
+    size_t length = buffer.length;
+    PyObject *bytes = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)length);
+    if (!bytes) return TA_ERROR_NO_MEMORY;
+    buffer = (ta_buffer){PyBytes_AsString(bytes), length, 0};
+    status = writing->write(writing->context, &buffer);
+    if (status == TA_OK && buffer.length == length) *out = bytes;
+    else if (status == TA_OK) { /* shorter than asked: its own copy */
+        *out = PyBytes_FromStringAndSize(PyBytes_AsString(bytes), (Py_ssize_t)buffer.length);
+        Py_DECREF(bytes);
+        if (!*out) status = TA_ERROR_NO_MEMORY;
+    } else Py_DECREF(bytes);
     return status;
+}
+
+/* values_write as a ta_python_writing. */
+typedef struct ta_python_value_writing {
+    const ta_python_state *state;
+    PyObject *value;
+} ta_python_value_writing;
+
+static ta_status ta_python_value_write(const void *context, ta_buffer *out) {
+    const ta_python_value_writing *writing = context;
+    return ta_python_values_write(writing->state, writing->value, out);
+}
+
+ta_status ta_python_values_bytes(const ta_python_state *state, PyObject *value, PyObject **out) {
+    ta_python_value_writing writing = {state, value};
+    return ta_python_written(&(ta_python_writing){ta_python_value_write, &writing}, out);
 }
 
 /* ---- tokens to Python ------------------------------------------------------------------ */
@@ -437,12 +461,11 @@ ta_status ta_python_values_read(const ta_python_state *state, ta_bytes cbor, PyO
     ta_cbor_token room[256];
     ta_cbor_document document = {cbor, room, 256, 0};
     ta_status status = ta_cbor_decode(&document);
+    PyObject *held = NULL; /* past the stack's room: the tokens in a bytearray, a Python object */
     if (status == TA_ERROR_NO_MEMORY) {
-        document.tokens = PyMem_Malloc(document.count * sizeof *document.tokens);
-        if (!document.tokens) {
-            PyErr_NoMemory();
-            return TA_ERROR_NO_MEMORY;
-        }
+        held = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)(document.count * sizeof *document.tokens));
+        if (!held) return TA_ERROR_NO_MEMORY;
+        document.tokens = (ta_cbor_token *)(void *)PyByteArray_AsString(held);
         document.capacity = document.count;
         status = ta_cbor_decode(&document);
     }
@@ -452,7 +475,7 @@ ta_status ta_python_values_read(const ta_python_state *state, ta_bytes cbor, PyO
         status = *out ? TA_OK : reading.status != TA_OK ? reading.status : TA_ERROR_NO_MEMORY;
         if (reading.status != TA_OK) PyErr_Clear(); /* the table's refusal, not Python's */
     }
-    if (document.tokens != room) PyMem_Free(document.tokens);
+    Py_XDECREF(held);
     return status;
 }
 

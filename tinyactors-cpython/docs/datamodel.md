@@ -116,9 +116,15 @@ Each has a test in `tests/test_datamodel.py`.
   goes on at the next turn, so a chart that would raise again forever is
   stopped by one Ctrl-C. A handler's exception from the same turn becomes
   its `__context__` when it has none.
-- **Handles are slots with generations**, for sessions, payloads and
-  `<foreach>` loops (`src/datamodel/handles.c`): core holds a slot and its
-  generation, never a pointer, and a stale handle is refused.
+- **Handles are slots with generations**, for sessions, charts,
+  payloads and `<foreach>` loops (`src/datamodel/handles.c`): core holds
+  a slot and its generation, never a pointer (a chart's context is its
+  handle), and a stale handle is refused. Each is a row of its table, not
+  an allocation of its own: the tables grow by doubling, reuse freed
+  slots and are freed once, with the host (AGENTS.md, "The binding's
+  memory"). A row moves when its table grows, so the datamodel holds
+  handles, and the Python objects a row refers to, across anything that
+  runs Python.
 
 ## Not in M1
 
