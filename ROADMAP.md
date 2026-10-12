@@ -70,7 +70,9 @@ guide and the headers. Three decisions replace theirs:
 - **Rewrites with ast-grep**, rules and checks as ast-grep rules with
   tests. The repository's rules hold in every binding: at most three
   parameters, `ta_bytes`/`ta_buffer`, no serialization on the hot path,
-  acronyms. A function a platform's typedef fixes (CPython's `PyCMethod`
+  acronyms. At most three parameters applies to every C function a
+  binding defines, static helpers included, and its lint checks all of
+  its C; a function a platform's typedef fixes (CPython's `PyCMethod`
   with five parameters, a `METH_FASTCALL | METH_KEYWORDS` method with four)
   is exempt by that typedef, not by name.
 - **Our names carry the binding's prefix**: `ta_python_*` in

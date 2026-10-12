@@ -163,7 +163,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 - Link the release’s libraries (the amalgamation, or the release sources compiled into a wasm module for browsers). The binding has no C of its own beyond its addon.
 - **Wasm:** memory growth detaches every view, so the loader refreshes its views after any call that can allocate, and nothing else keeps one. Memory never shrinks: hibernation makes room for other actors, not a smaller footprint, so size for the peak. The page’s Content Security Policy can forbid `new Function`: offer the ECMAScript datamodel in a separate module for a strict policy, so pages that do not need it do not download it.
 - Tasks as Ruby file tasks under `mise/tasks/`; its `test` task lists core’s sources in `#MISE sources` so a core change reruns it.
-- Repository rules apply: acronyms in capitals or lowercase, at most three parameters per C function (a function whose signature a platform typedef fixes is exempt by that typedef), no serialization on the hot path, a `CHANGELOG.md` per released component, commits scoped by component.
+- Repository rules apply: acronyms in capitals or lowercase, at most three parameters for every C function the binding defines, static helpers included (a function whose signature a platform typedef fixes is exempt by that typedef), no serialization on the hot path, a `CHANGELOG.md` per released component, commits scoped by component.
 
 ## 12 · Testing
 

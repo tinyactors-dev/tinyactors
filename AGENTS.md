@@ -174,9 +174,18 @@ a fourth, change it in place to take a struct. Bytes cross the public API,
 callbacks included, as `ta_bytes` (input) or `ta_buffer *` (output), never
 as a pointer and a length.
 
-`mise run lint` in `tinyactors-core` enforces both, with the ast-grep rules
-`at-most-three-parameters` and `buffers-are-ta-buffer`
-(`tinyactors-core/tools/lint/rules/`).
+The rule holds for every C function we write from now on, not only the
+public headers: internal functions, static helpers, and all of a
+binding's C. A function whose signature a platform's typedef fixes
+(CPython's `PyCMethod`, a `METH_FASTCALL | METH_KEYWORDS` method, a
+Node-API callback) is exempt by that typedef. It is a rule for C, not for
+the API a binding gives its language.
+
+`mise run lint` in `tinyactors-core` enforces both on the public headers,
+with the ast-grep rules `at-most-three-parameters` and
+`buffers-are-ta-buffer` (`tinyactors-core/tools/lint/rules/`); a binding's
+lint enforces them on all of its C. Core's existing internal functions
+predate the wider rule: change one to follow it when you change it.
 
 ## No serialization on the hot path
 
