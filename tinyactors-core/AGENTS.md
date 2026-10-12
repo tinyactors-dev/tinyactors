@@ -35,6 +35,13 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   - `at-most-three-parameters`: a public function takes at most three;
   - `buffers-are-ta-buffer`: bytes cross the public API as `ta_bytes` or
     `ta_buffer *`, not a pointer and a length (ADR 0009, decision 8).
+
+  The last two are written with utility rules in `tools/lint/utils/`
+  (`four-or-more-parameters`, `bytes-as-pointer-and-length`), which the
+  bindings' rules of the same names use for all of their C
+  (`tinyactors-napi/sgconfig.yml`, `tinyactors-cpython/sgconfig.yml`):
+  a change to a utility changes their lint too, so run their
+  `mise run lint` with it.
 - `mise run torture` opens the torture chamber with its dashboard.
 - `third_party/` is vendored (`mise run vendor-quickjs`): never edit or
   format it.

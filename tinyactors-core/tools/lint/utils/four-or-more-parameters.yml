@@ -1,0 +1,12 @@
+# A parameter list with a fourth parameter (AGENTS.md, "At most three
+# parameters"). A utility rule (sgconfig.yml, utilDirs): core's
+# `at-most-three-parameters` uses it for the public headers, and each
+# binding's rule of the same name (tinyactors-napi, tinyactors-cpython) for
+# all of its C, through its own sgconfig.yml.
+id: four-or-more-parameters
+language: c
+rule:
+  kind: parameter_list
+  has:
+    kind: parameter_declaration
+    nthChild: {position: 4, ofRule: {kind: parameter_declaration}}

@@ -1,0 +1,15 @@
+# The parameter list of a function whose signature `ta_allocator` fixes
+# (include/tinyactors/allocator.h): `alloc(void *context, size_t size,
+# size_t align)` and `free(void *context, void *ptr, size_t size)`. They
+# manage memory (a pointer and its size), not bytes, so a function that
+# fills those members is exempt from `buffers-are-ta-buffer` by that
+# signature, whatever its name (core's rule exempts the struct itself). A
+# utility rule for the bindings' rules (tinyactors-napi, tinyactors-cpython),
+# whose hosts get an allocator of their own (ROADMAP.md, step 8, M0 item 4).
+id: allocator-signature
+language: c
+rule:
+  kind: parameter_list
+  any:
+    - regex: '^\(\s*void\s*\*\s*\w*\s*,\s*size_t\s+\w*\s*,\s*size_t\s+\w*\s*\)$'
+    - regex: '^\(\s*void\s*\*\s*\w*\s*,\s*void\s*\*\s*\w*\s*,\s*size_t\s+\w*\s*\)$'

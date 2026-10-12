@@ -2,5 +2,10 @@
 # `mise run lint` scans the C sources with these rules and runs their tests.
 ruleDirs:
   - tools/lint/rules
+# Utility rules (`matches:`) that the bindings' rules use too: each
+# binding's sgconfig.yml lists this directory (tinyactors-napi,
+# tinyactors-cpython).
+utilDirs:
+  - tools/lint/utils
 testConfigs:
   - testDir: tools/lint/tests

@@ -11,11 +11,7 @@ files:
   - include/**/*.h
 rule:
   kind: function_declarator
-  has:
-    kind: parameter_list
-    has:
-      kind: parameter_declaration
-      nthChild: {position: 4, ofRule: {kind: parameter_declaration}}
+  has: {matches: four-or-more-parameters} # tools/lint/utils/
   any:
     - inside:
         kind: declaration

@@ -1,0 +1,34 @@
+# Bytes passed as a loose pointer and length instead of ta_bytes (input) or
+# ta_buffer * (output) (AGENTS.md, "At most three parameters"; docs/adr/0009
+# in the repository root, decision 8). Matches the parameter that gives it
+# away:
+#
+#   - a byte pointer followed by its capacity or length:
+#     `void *buffer, size_t capacity`, `const uint8_t *bytes, size_t length`;
+#   - a length out-parameter of a function that returns a byte pointer:
+#     `const void *f(..., size_t *length)`.
+#
+# A utility rule (sgconfig.yml, utilDirs): core's `buffers-are-ta-buffer`
+# uses it for the public headers, and each binding's rule of the same name
+# (tinyactors-napi, tinyactors-cpython) for all of its C.
+id: bytes-as-pointer-and-length
+language: c
+rule:
+  any:
+    # a byte pointer followed by its capacity or length
+    - kind: parameter_declaration
+      regex: '^(const\s+)?(void|char|unsigned\s+char|uint8_t)\s*\*'
+      precedes:
+        stopBy: {kind: parameter_declaration}
+        kind: parameter_declaration
+        regex: '^(const\s+)?(size_t|uint32_t)\s*\*?\s*\w*$'
+    # a returned byte pointer whose length comes back through a parameter:
+    # a public declaration (TA_API), or a binding's declaration or definition
+    - kind: parameter_declaration
+      regex: '^(size_t|uint32_t)\s*\*'
+      inside:
+        any:
+          - kind: declaration
+          - kind: function_definition
+        stopBy: end
+        regex: '^((TA_API|static|inline|extern)\s+)*(const\s+)?(void|char|unsigned\s+char|uint8_t)\s*\*'
