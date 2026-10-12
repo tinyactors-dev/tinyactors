@@ -5,15 +5,16 @@ The W3C stylesheets are XSLT 2.0 (xsl:analyze-string), so this uses SaxonC
 (saxonche); libxslt-based processors silently produce empty conditions.
 
 The W3C suite: reads <irp-dir>/manifest.xml, keeps automatic
-(manual="false") tests, applies confEcma.xsl to every start/dep .txml and
-writes .scxml files plus an index ("<id> <conformance> <start.scxml>
+(manual="false") tests, applies <stylesheet> (one language's: W3C's
+confEcma.xsl, our confPython.xsl) to every start/dep .txml and writes
+.scxml files plus an index ("<id> <conformance> <start.scxml>
 <deps|->" per line) into <out-dir>. The deps are every <dep> of the
 manifest: charts (.txml, as .scxml) and the files a src="" reads (.txt).
 
 The scenarios (--scenarios): applies <stylesheet> to every .txml under
 <src-dir> and writes it as .scxml at the same place under <out-dir>.
 
-Usage: uv run --with saxonche suites/w3c/convert.py <irp-dir> <out-dir>
+Usage: uv run --with saxonche suites/w3c/convert.py <stylesheet> <irp-dir> <out-dir>
        uv run --with saxonche suites/w3c/convert.py --scenarios <stylesheet> <src-dir> <out-dir>
 """
 import pathlib
@@ -23,9 +24,9 @@ import xml.etree.ElementTree as ET
 from saxonche import PySaxonProcessor
 
 
-def w3c(proc, irp, out):
+def w3c(proc, stylesheet, irp, out):
     xslt = proc.new_xslt30_processor()
-    exe = xslt.compile_stylesheet(stylesheet_file=str(irp / "confEcma.xsl"))
+    exe = xslt.compile_stylesheet(stylesheet_file=str(stylesheet))
     manifest = ET.parse(irp / "manifest.xml")
     index = []
     for test in manifest.iter("test"):
@@ -69,8 +70,8 @@ def main(argv):
         with PySaxonProcessor(license=False) as proc:
             scenarios(proc, *paths)
         return 0
-    if "--scenarios" not in argv[1:] and len(paths) == 2:
-        paths[1].mkdir(parents=True, exist_ok=True)
+    if "--scenarios" not in argv[1:] and len(paths) == 3:
+        paths[2].mkdir(parents=True, exist_ok=True)
         with PySaxonProcessor(license=False) as proc:
             w3c(proc, *paths)
         return 0

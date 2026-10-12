@@ -12,7 +12,7 @@ it ([ROADMAP.md](../ROADMAP.md), step 8).
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | [`suites/protocol`](suites/protocol/README.md)   | what crosses core's API as CBOR: requests and replies, host configs, envelopes, neutral values                                                                                    | the bytes, compared with the expected ones (tag 39999 is a wildcard) |
 | [`suites/scenarios`](suites/scenarios/README.md) | core's conformance scenarios (spawn, send, time, invoke, hibernation, migration, snapshots) as charts that check themselves, with the host operations between runs in `steps.txt` | the outcome the charts log: `pass` or not                            |
-| `suites/w3c`                                     | the W3C SCXML IRP suite, fetched from w3.org and converted per datamodel (`skip.txt`, `convert.py`)                                                                               | the outcome its charts log, as for scenarios                         |
+| [`suites/w3c`](suites/w3c/irp/SOURCE)            | the W3C SCXML IRP suite, vendored in `irp/` (its `SOURCE` and `LICENSE`) and converted per datamodel (`skip.txt`, `convert.py`)                                                   | the outcome its charts log, as for scenarios                         |
 
 Nothing compares effects. As in the W3C IRP, a chart checks what happened
 and ends in `pass` or `fail`; the implementation runs it with its own loop
@@ -44,9 +44,11 @@ command answers -32601 to, once per method). A crash or a hang fails that
 case; the runner starts the command again and goes on. The exit status is
 1 when any case fails.
 
-The W3C suite is downloaded once into `build/w3c/` (`mise run w3c`) and
-converted again when `convert.py` changes, and the scenarios are converted into `build/scenarios/<language>/` when a
-template changed. Both conversions need the pinned `uv` (`mise.toml`) for
+The W3C suite is in git (`suites/w3c/irp`, from w3.org under W3C's
+3-clause BSD license: `SOURCE`, `LICENSE`). It is converted into
+`build/w3c/<language>/` (`mise run w3c`) when `convert.py`, the stylesheet
+or the suite changed, and the scenarios into `build/scenarios/<language>/`
+when a template or the stylesheet changed. Both conversions need the pinned `uv` (`mise.toml`) for
 SaxonC: the W3C stylesheets are XSLT 2.0.
 
 ## Tasks
@@ -56,7 +58,8 @@ SaxonC: the W3C stylesheets are XSLT 2.0.
   (`encode --check`), and the runner's own tests against a fake
   implementation (`test/`).
 - `mise run encode`: write the vectors' hex from their diag lines.
-- `mise run w3c`: fetch and convert the W3C suite; prints its directory.
+- `mise run w3c [language]`: convert the W3C suite for a language
+  (ecmascript by default); prints its directory.
 
 ## Layout
 
@@ -65,9 +68,11 @@ docs/driver.md          the protocol a conforming command speaks
 suites/protocol/        vectors, and setups/ (the charts of their setups)
 suites/scenarios/       <name>/<document>.txml and steps.txt
 suites/w3c/             convert.py (both conversions), skip.txt
+suites/w3c/irp/         the W3C IRP suite (vendored): manifest.xml, <id>/*.txml,
+                        confEcma.xsl, confXPath.xsl, SOURCE, LICENSE
 lib/                    the runner: driver.rb (process, frames), runner.rb (suites, report),
-                        vectors.rb, scenarios.rb, cbor.rb, w3c.rb (fetch, convert)
+                        vectors.rb, scenarios.rb, cbor.rb, w3c.rb (stylesheets, convert)
 mise/tasks/             run, test, encode, w3c
 test/                   the runner's tests and fake_implementation.rb
-build/                  the fetched and converted suites (not in git)
+build/                  the converted suites (not in git)
 ```

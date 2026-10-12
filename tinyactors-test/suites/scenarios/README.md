@@ -20,7 +20,7 @@ A directory with:
 
 - **documents** `<name>.txml`: SCXML in the W3C IRP's neutral notation,
   the `conf:` attributes and elements of the W3C stylesheets
-  (`confEcma.xsl`, fetched with the suite into `build/w3c/irp`). A document
+  (`confEcma.xsl`, vendored with the suite in `suites/w3c/irp`). A document
   is translated per datamodel by that language's stylesheet, as the W3C
   tests are (`suites/w3c/convert.py --scenarios`, into
   `build/scenarios/<language>/`); `<name>.txml` becomes `<name>.scxml`,

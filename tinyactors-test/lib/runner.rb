@@ -40,7 +40,8 @@ class Runner
 
   # `scenarios`: the templates and steps; `documents`: their conversion for
   # `language` (default: converted now); `w3c`: the converted W3C suite
-  # (default: fetched and converted now); `skip`: W3C test ids and reasons.
+  # (default: converted for `language` now); `skip`: W3C test ids and
+  # reasons (default: suites/w3c/skip.txt and the language's skip list).
   def initialize(command, datamodel: 'quickjs', realm: nil, language: 'ecmascript', timeout: 60, out: $stdout,
                  chdir: Dir.pwd, protocol: PROTOCOL, scenarios: Scenarios::ROOT, documents: nil, w3c: nil, skip: nil)
     @driver = Driver.new(command, timeout: timeout, chdir: chdir)
@@ -185,10 +186,8 @@ class Runner
   end
 
   def w3c
-    raise "w3c: the W3C suite is converted for ecmascript only, not #{@language}" unless @w3c || @language == 'ecmascript'
-
-    directory = Pathname.new(@w3c || W3C.suite)
-    skip = @skip || W3C.skipped
+    directory = Pathname.new(@w3c || W3C.suite(@language))
+    skip = @skip || W3C.skipped(language: @language)
     W3C.tests(directory).each do |test|
       next record('w3c', test.id, :skip, skip[test.id]) if skip.key?(test.id)
 

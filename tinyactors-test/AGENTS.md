@@ -28,7 +28,7 @@ Commits on `main`. Commits here use the scope `test`.
   with the driver's methods.
 - **A scenario:** a directory in `suites/scenarios/` with `<name>.txml`
   documents and a `steps.txt` (`suites/scenarios/README.md`). Use only the
-  `conf:` vocabulary of `confEcma.xsl` (fetched into `build/w3c/irp`) for
+  `conf:` vocabulary of `confEcma.xsl` (`suites/w3c/irp`) for
   expressions and conditions; check each attribute you use is defined
   there. In `steps.txt`, say in comments which expectations a chart cannot
   check and which test covers them. A scenario must fail when what it

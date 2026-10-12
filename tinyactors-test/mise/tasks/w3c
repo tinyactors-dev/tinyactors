@@ -1,7 +1,8 @@
 #!/usr/bin/env ruby
-#MISE description="Download the W3C SCXML IRP suite once and instantiate it for ECMAScript into build/w3c/ecma (prints that directory)"
+#MISE description="Instantiate the vendored W3C SCXML IRP suite (suites/w3c/irp) for a language into build/w3c/<language>, ecmascript by default, and print that directory"
+#USAGE arg "[language]" help="the datamodel a stylesheet in suites/w3c or suites/w3c/irp writes: ecmascript, python, …"
 # vim:ft=ruby
 
 require_relative '../../lib/w3c'
 
-puts W3C.suite
+puts W3C.suite(ARGV.first || 'ecmascript')
