@@ -55,7 +55,7 @@ class RunnerTest < Minitest::Test
 
   def test_a_capacity_line_measures_first
     vectors('requests.txt', [['request big', 'capacity 10', 'send {"id":1,"method":"big"}', 'reply 39999("any")']])
-    ok, = run_suites('protocol')
+    ok, = run_suites('protocol', kind: 'reference')
     assert ok, @out.string
   end
 
@@ -75,11 +75,70 @@ class RunnerTest < Minitest::Test
   def test_a_method_not_offered_is_skipped
     vectors('envelopes.txt', [['roundtrip one', 'cbor {"target":"tinyactors://h/@a","name":"x"}'],
                               ['roundtrip two', 'cbor {"target":"tinyactors://h/@a","name":"y"}']])
+    vectors('requests.txt', [['request echo', 'send {"id":1,"method":"echo","params":[]}', 'reply {"id":1,"result":[]}']])
     ok, results = run_suites('protocol')
-    assert ok
-    assert_equal %i[skip skip], results.map(&:verdict)
+    assert ok, @out.string
+    assert_equal %i[pass skip skip], results.map(&:verdict)
     assert_equal 1, @out.string.scan('envelope.read is not offered').size
     assert_includes @out.string, 'not offered: envelope.read'
+  end
+
+  # ---- runs that prove nothing (docs/driver.md, "Kinds") -----------------------
+
+  def test_a_suite_that_passes_nothing_fails_the_run
+    vectors('envelopes.txt', [['roundtrip one', 'cbor {"target":"tinyactors://h/@a","name":"x"}']])
+    ok, results = run_suites('protocol')
+    refute ok
+    assert_equal %i[skip], results.map(&:verdict)
+    assert_includes @out.string, 'FAIL no case passed in protocol'
+  end
+
+  def test_the_reference_must_offer_the_c_level_methods
+    vectors('envelopes.txt', [['roundtrip one', 'cbor {"target":"tinyactors://h/@a","name":"x"}']])
+    vectors('requests.txt', [['request echo', 'send {"id":1,"method":"echo","params":[]}', 'reply {"id":1,"result":[]}']])
+    ok, = run_suites('protocol', kind: 'reference')
+    refute ok
+    assert_includes @out.string, 'FAIL not offered, but a reference must offer: envelope.read'
+  end
+
+  def test_a_binding_is_sent_no_capacity
+    vectors('requests.txt', [['request big', 'capacity 10', 'send {"id":1,"method":"big"}', 'reply 39999("any")'],
+                             ['request echo', 'send {"id":1,"method":"echo","params":[]}', 'reply {"id":1,"result":[]}']])
+    ok, results = run_suites('protocol')
+    assert ok, @out.string
+    assert_equal({ 'requests.txt "big"' => :skip, 'requests.txt "echo"' => :pass }, verdicts(results))
+    assert_includes @out.string, "host.request's capacity is C-level"
+  end
+
+  def test_a_method_a_binding_must_offer
+    scenario('a', 'pass')
+    w3c = File.join(@directory, 'w3c')
+    FileUtils.mkdir_p(File.join(w3c, '144'))
+    File.write(File.join(w3c, 'index.txt'), "144 mandatory 144/test144.scxml -\n")
+    File.write(File.join(w3c, '144/test144.scxml'), '<scxml/>')
+    runner = Runner.new(FAKE, out: @out, w3c: w3c, scenarios: File.join(@directory, 'scenarios'),
+                              documents: File.join(@directory, 'converted'))
+    refute runner.run(%w[scenarios w3c])
+    assert_includes @out.string, 'FAIL not offered, but a binding must offer: w3c.run'
+  end
+
+  # ---- the chart language (docs/driver.md, "Datamodels") -------------------------
+
+  def test_the_language_is_the_datamodel_host_create_reports
+    scenario('a', 'pass')
+    runner = Runner.new(FAKE, out: @out, datamodel: 'native', scenarios: File.join(@directory, 'scenarios'),
+                              documents: File.join(@directory, 'converted'))
+    assert runner.run(['scenarios']), @out.string
+    assert_equal 'python', runner.language('scenarios')
+  end
+
+  def test_a_datamodel_no_stylesheet_writes_fails
+    scenario('a', 'pass')
+    runner = Runner.new(FAKE, out: @out, datamodel: 'cobol', scenarios: File.join(@directory, 'scenarios'),
+                              documents: File.join(@directory, 'converted'))
+    refute runner.run(['scenarios'])
+    assert_equal [%w[language fail]], runner.results.map { |result| [result.name, result.verdict.to_s] }
+    assert_includes @out.string, 'the datamodel cobol is "cobol", and no stylesheet writes it'
   end
 
   # ---- scenarios ---------------------------------------------------------------
@@ -135,9 +194,11 @@ class RunnerTest < Minitest::Test
     FileUtils.mkdir_p(File.join(w3c, '144'))
     File.write(File.join(w3c, '144/test144.scxml'), '<scxml/>')
     File.write(File.join(w3c, 'index.txt'), "144 mandatory 144/test144.scxml -\n145 mandatory 145/test145.scxml -\n")
+    skip = File.join(@directory, 'skip.txt')
+    File.write(skip, "145 a reason\n")
     out = StringIO.new
-    runner = Runner.new(FAKE, out: out, w3c: w3c, skip: { '145' => 'a reason' })
-    assert runner.run(['w3c'])
+    runner = Runner.new(FAKE, out: out, w3c: w3c, skip: [skip])
+    refute runner.run(['w3c'])
     assert_equal [%w[144 skip], %w[145 skip]], runner.results.map { |result| [result.name, result.verdict.to_s] }
     assert_includes out.string, 'w3c.run is not offered'
     assert_includes out.string, 'skip w3c 145: a reason'
@@ -188,8 +249,8 @@ class RunnerTest < Minitest::Test
     File.write(File.join(@directory, 'converted', name, "#{document}.scxml"), "<scxml/><!-- outcome: #{outcome} -->")
   end
 
-  def run_suites(suite, timeout: 10)
-    runner = Runner.new(FAKE, out: @out, timeout: timeout, protocol: File.join(@directory, 'protocol'),
+  def run_suites(suite, timeout: 10, kind: 'binding')
+    runner = Runner.new(FAKE, out: @out, timeout: timeout, kind: kind, protocol: File.join(@directory, 'protocol'),
                               scenarios: File.join(@directory, 'scenarios'), documents: File.join(@directory, 'converted'))
     [runner.run([suite]), runner.results]
   end

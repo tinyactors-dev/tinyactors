@@ -28,6 +28,15 @@ class Runner
   # The setups' system ids (suites/protocol/README.md, "Setups").
   SYSTEMS = { 'empty' => 'h', 'pinged' => 'h', 'pinged2' => 'h', 'pinger' => 'a', 'relay' => 'b' }.freeze
 
+  # The methods of docs/driver.md, and those each kind of implementation
+  # must offer (docs/driver.md, "Kinds"): the reference all of them, a
+  # binding all but the C-level ones, which call core below the API a
+  # binding exposes (it sends a binding no `capacity` either).
+  METHODS = %w[scenario.run w3c.run host.create host.free host.request image.add actor.spawn actor.send
+               clock.advance host.run peer.add envelope.read envelope.deliver value.roundtrip value.encode].freeze
+  C_LEVEL = %w[envelope.read value.roundtrip value.encode].freeze
+  REQUIRED = { 'reference' => METHODS, 'binding' => METHODS - C_LEVEL }.freeze
+
   Result = Struct.new(:suite, :name, :verdict, :detail)
 
   # A case that cannot pass, and why.
@@ -38,16 +47,20 @@ class Runner
 
   attr_reader :results
 
-  # `scenarios`: the templates and steps; `documents`: their conversion for
-  # `language` (default: converted now); `w3c`: the converted W3C suite
-  # (default: converted for `language` now); `skip`: W3C test ids and
-  # reasons (default: suites/w3c/skip.txt and the language's skip list).
-  def initialize(command, datamodel: 'quickjs', realm: nil, language: 'ecmascript', timeout: 60, out: $stdout,
-                 chdir: Dir.pwd, protocol: PROTOCOL, scenarios: Scenarios::ROOT, documents: nil, w3c: nil, skip: nil)
+  # `kind`: "reference" or "binding", the methods the command must offer
+  # (REQUIRED). `scenarios`: the templates and steps; `documents`: their
+  # conversion (default: converted now for the datamodel's language);
+  # `w3c`: the converted W3C suite (default: likewise); `skip`: files of W3C
+  # test ids and reasons skipped besides suites/w3c/skip.txt and the
+  # language's skip list.
+  def initialize(command, datamodel: 'quickjs', realm: nil, kind: 'binding', timeout: 60, out: $stdout,
+                 chdir: Dir.pwd, protocol: PROTOCOL, scenarios: Scenarios::ROOT, documents: nil, w3c: nil, skip: [])
+    raise ArgumentError, "kind #{kind.inspect}: #{REQUIRED.keys.join(' or ')}" unless REQUIRED.key?(kind)
+
     @driver = Driver.new(command, timeout: timeout, chdir: chdir)
     @datamodel = datamodel
     @realm = realm
-    @language = language
+    @kind = kind
     @out = out
     @protocol = Pathname.new(protocol)
     @scenarios = scenarios
@@ -58,12 +71,42 @@ class Runner
     @results = []
   end
 
+  # True when no case failed, every suite run passed a case, and the
+  # command offered every method its kind must offer that the run called.
   def run(suites = SUITES)
     suites.each { |suite| send(suite) }
-    summary
-    @results.none? { |result| result.verdict == :fail }
+    summary(suites)
   ensure
     @driver.close
+  end
+
+  # The chart language of the datamodel under test: the name its vtable
+  # gives (`datamodel` in host.create's result, docs/driver.md), which is
+  # the datamodel a stylesheet writes ("ecmascript", "python"). The charts
+  # are converted for it, so a run that asks for a native datamodel gets
+  # charts only that datamodel runs. Nil, with the suite's case failed,
+  # when host.create refuses or names a datamodel no stylesheet writes.
+  def language(suite)
+    return @language if @language
+
+    created = create(config('h'), @datamodel)
+    free
+    raise Failed, "host.create: status #{created['status'].inspect}" unless created['status'] == OK
+
+    name = created['datamodel'].to_s
+    unless W3C.stylesheets.key?(name)
+      raise Failed, "the datamodel #{@datamodel} is #{name.inspect}, and no stylesheet writes it " \
+                    "(#{W3C.stylesheets.keys.join(', ')})"
+    end
+    @language = name
+  rescue Failed, Skipped => e
+    record(suite, 'language', :fail, "the chart language from host.create: #{e.message}")
+    nil
+  rescue Driver::Crashed => e
+    @driver.restart
+    @host = false
+    record(suite, 'language', :fail, "the chart language from host.create: #{e.message}")
+    nil
   end
 
   # ---- the protocol vectors --------------------------------------------------
@@ -174,7 +217,8 @@ class Runner
   # ---- scenarios and W3C: outcomes -----------------------------------------------
 
   def scenarios
-    directory = Pathname.new(@documents || W3C.scenarios(@language))
+    language = language('scenarios') or return
+    directory = Pathname.new(@documents || W3C.scenarios(language))
     Scenarios.all(@scenarios).each do |scenario|
       run_case('scenarios', scenario.name) do
         documents = scenario.documents.map do |name|
@@ -186,8 +230,9 @@ class Runner
   end
 
   def w3c
-    directory = Pathname.new(@w3c || W3C.suite(@language))
-    skip = @skip || W3C.skipped(language: @language)
+    language = language('w3c') or return
+    directory = Pathname.new(@w3c || W3C.suite(language))
+    skip = W3C.skipped(*@skip, language: language)
     W3C.tests(directory).each do |test|
       next record('w3c', test.id, :skip, skip[test.id]) if skip.key?(test.id)
 
@@ -258,12 +303,21 @@ class Runner
     end
   end
 
-  def summary
-    @results.group_by(&:suite).each do |suite, results|
+  # The counts of each suite, and why the run fails though no case did: a
+  # suite that passed nothing proves nothing, and a method the kind must
+  # offer was not.
+  def summary(suites)
+    empty = suites.select do |suite|
+      results = @results.select { |each| each.suite == suite }
       counts = %i[pass fail skip].map { |verdict| "#{results.count { |each| each.verdict == verdict }} #{verdict}" }
       @out.puts "#{suite}: #{counts.join(', ')}"
+      results.none? { |each| each.verdict == :pass }
     end
     @out.puts "not offered: #{@unsupported.join(', ')}" unless @unsupported.empty?
+    missing = @unsupported & REQUIRED.fetch(@kind)
+    @out.puts "FAIL no case passed in #{empty.join(', ')}: a run that passes nothing proves nothing" unless empty.empty?
+    @out.puts "FAIL not offered, but a #{@kind} must offer: #{missing.join(', ')} (docs/driver.md, \"Kinds\")" unless missing.empty?
+    @results.none? { |result| result.verdict == :fail } && empty.empty? && missing.empty?
   end
 
   # ---- setups (suites/protocol/README.md) -----------------------------------------
@@ -333,6 +387,8 @@ class Runner
   # the length it asked for is the reply.
   def ask(request, want, capacity)
     params = { 'request' => bytes(request) }
+    raise Skipped, "host.request's capacity is C-level, and the command is a binding" if capacity && @kind == 'binding'
+
     if capacity
       refused = call('host.request', params.merge('capacity' => capacity))
       unless refused['status'] == NO_MEMORY && refused['length'].to_i > capacity

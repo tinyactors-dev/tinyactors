@@ -74,6 +74,37 @@ or another name it documents; `ta-conform` offers `"quickjs"` and
 `"test"` (core's tests' datamodel, `tinyactors-core/tests/support/datamodel_test.h`),
 and no native one. A name it does not offer answers -32602 `range`.
 
+**The chart language** is the datamodel's own name, the vtable's `name`
+that `host.create` answers as `datamodel` (`"ecmascript"`, `"python"`).
+Before the scenarios and the W3C suite, the runner creates a host on the
+datamodel under test, reads that name, frees the host, and converts the
+charts with the stylesheet that writes that datamodel (README.md,
+"Languages"); a name no stylesheet writes fails the suite. So the charts
+of a run on a native datamodel name it (`datamodel="python"`), and a host
+that holds quickjs beside it cannot run them on quickjs. Where the native
+datamodel is ECMAScript too (Node's), both are `"ecmascript"`: there the
+adapter's `host.create` puts only the datamodel asked for in the host's
+environment.
+
+## Kinds
+
+A run fails when it proves nothing, even when no case failed: when a
+suite it runs passes no case, or when the command answers -32601 to a
+method its kind must offer. The run task's `--kind` says which kind the
+command is; it is stated by whoever runs the suite (a project's task), not
+by the command under test, so an adapter cannot lower its own bar.
+
+| Kind | Must offer | Used by |
+|---|---|---|
+| `reference` | every method above | `ta-conform` (`tinyactors-core`'s `mise run conform`) |
+| `binding` (the default) | every method but the C-level ones: `envelope.read`, `value.roundtrip` and `value.encode`; `host.request` without `capacity`, which the runner does not send it | each binding's adapter |
+
+The C-level methods reach core below the API a binding exposes: a
+binding's API reads an envelope only to deliver it (`envelope.deliver`),
+calls no datamodel's `from_wire`, `to_wire` or `payload_eval` itself, and
+answers a request with its whole reply. A binding may offer them; the
+runner skips their cases when it does not.
+
 **`src`.** A chart's `src` attribute (`<invoke src>`, `<data src>`) names
 a document of the call's `documents`, by its `name` with a leading
 `file://`, `file:` or `./` removed. Core reads it at compile time through

@@ -24,6 +24,7 @@ describes, and answers the outcome.
     mise run //tinyactors-test:run -- <command…>
     mise run //tinyactors-test:run -- <command…> --suite protocol --suite scenarios
     mise run //tinyactors-test:run -- <command…> --datamodel native
+    mise run //tinyactors-test:run -- <command…> --kind reference
 
 The command runs in the directory you call mise from, and speaks the
 [driver protocol](docs/driver.md) on its standard input and output:
@@ -35,14 +36,21 @@ length-prefixed CBOR calls and replies in JSON-RPC 2.0's shape. Options:
 | `--datamodel quickjs\|native\|<name>` | `quickjs`            | the datamodel scenarios, W3C tests and `values.txt` run on; an implementation may offer others by name (`ta-conform`: `test`, core's tests' datamodel)              |
 | `--realm auto\|isolated`              | the implementation's | quickjs only                                                                                                                                                        |
 | `--skip <file>`                       | none                 | W3C test ids with reasons (the format of `suites/w3c/skip.txt`) skipped besides that list: what a datamodel that implements less cannot pass; repeat it for several |
-| `--language ecmascript\|python`       | `ecmascript`         | the stylesheet the W3C suite and the scenarios are converted with, and the language's skip list (`suites/w3c/skip-<language>.txt`)                                  |
+| `--kind binding\|reference`          | `binding`            | the methods the command must offer ([docs/driver.md](docs/driver.md), "Kinds"): `ta-conform` is the reference, a binding's adapter a binding                                     |
 | `--timeout <s>`                       | 60                   | how long one reply may take before the command counts as hung                                                                                                       |
+
+The scenarios and the W3C suite are converted for the language of the
+datamodel under test: the name `host.create` answers for it
+([docs/driver.md](docs/driver.md), "Datamodels"), so a run on a native
+datamodel runs charts only that datamodel takes.
 
 Each case prints `pass`, `fail` (with why: a diff for bytes, the outcome
 and the command's standard error for a chart) or `skip` (a method the
 command answers -32601 to, once per method). A crash or a hang fails that
 case; the runner starts the command again and goes on. The exit status is
-1 when any case fails.
+1 when any case fails, and when the run proves nothing: a suite that
+passed no case, or a method the command's kind must offer that it did not
+([docs/driver.md](docs/driver.md), "Kinds").
 
 The W3C suite is in git (`suites/w3c/irp`, from w3.org under W3C's
 3-clause BSD license: `SOURCE`, `LICENSE`). It is converted into
@@ -57,7 +65,8 @@ A chart language is a stylesheet from the W3C suite's `conf:` notation to
 that language: W3C's `confEcma.xsl` (ecmascript) and `confXPath.xsl`
 (xpath) in `suites/w3c/irp`, ours in `suites/w3c` (`confPython.xsl`,
 python). The language's name is the datamodel its `conf:datamodel`
-template writes, and `--language` takes it. The W3C tests and the
+template writes, and the runner picks it by the name `host.create`
+reports for the datamodel under test. The W3C tests and the
 scenarios are written in that notation, so each language runs all of
 them, but for the tests its skip list names.
 

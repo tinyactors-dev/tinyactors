@@ -1,24 +1,28 @@
 #!/usr/bin/env ruby
-#MISE description="Run the suites against an implementation: run -- <command…> [--suite protocol|scenarios|w3c]… [--datamodel quickjs|native|<name>] [--realm auto|isolated] [--language ecmascript|<language>] [--skip <file>]… [--timeout <s>]"
+#MISE description="Run the suites against an implementation: run -- <command…> [--suite protocol|scenarios|w3c]… [--datamodel quickjs|native|<name>] [--realm auto|isolated] [--kind binding|reference] [--skip <file>]… [--timeout <s>]"
 # vim:ft=ruby
 
 # The command is every argument that is not one of the options below, or
 # everything after a second `--`. It runs in the directory mise was called
 # from, and speaks docs/driver.md on its standard input and output. The
 # suites are protocol (suites/protocol), scenarios (suites/scenarios) and
-# w3c (the W3C IRP suite in suites/w3c/irp, converted for --language);
-# without --suite, all three. --skip names a file of W3C test ids with
-# reasons, in the format of suites/w3c/skip.txt, skipped besides that list
-# and the language's (suites/w3c/skip-<language>.txt). Exit status 1 when
-# a case fails.
+# w3c (the W3C IRP suite in suites/w3c/irp); without --suite, all three.
+# The scenarios and the W3C suite are converted for the language of the
+# datamodel host.create reports (docs/driver.md, "Datamodels"). --kind says
+# which methods the command must offer (docs/driver.md, "Kinds"): binding
+# (the default) or reference (ta-conform). --skip names a file of W3C test
+# ids with reasons, in the format of suites/w3c/skip.txt, skipped besides
+# that list and the language's (suites/w3c/skip-<language>.txt). Exit
+# status 1 when a case fails, when a suite passes no case, or when a method
+# the kind must offer is not offered.
 
 require_relative '../../lib/runner'
 
-OPTIONS = %w[--suite --datamodel --realm --language --skip --timeout].freeze
+OPTIONS = %w[--suite --datamodel --realm --kind --skip --timeout].freeze
 
 def usage(message)
   abort "run: #{message}\nusage: mise run //tinyactors-test:run -- <command…> [--suite protocol|scenarios|w3c]… " \
-        '[--datamodel quickjs|native|<name>] [--realm auto|isolated] [--language ecmascript|<language>] [--skip <file>]… [--timeout <s>]'
+        '[--datamodel quickjs|native|<name>] [--realm auto|isolated] [--kind binding|reference] [--skip <file>]… [--timeout <s>]'
 end
 
 arguments = ARGV.dup
@@ -41,14 +45,15 @@ suites = options['--suite'].empty? ? Runner::SUITES : options['--suite']
 unknown = suites - Runner::SUITES
 usage("no suite #{unknown.join(', ')}") unless unknown.empty?
 
+kind = options['--kind'].last || 'binding'
+usage("no kind #{kind}") unless Runner::REQUIRED.key?(kind)
+
 cwd = ENV.fetch('MISE_ORIGINAL_CWD', Dir.pwd)
-language = options['--language'].last || 'ecmascript'
-skip = options['--skip'].empty? ? nil : W3C.skipped(*options['--skip'].map { |path| File.expand_path(path, cwd) }, language: language)
 runner = Runner.new(command,
                     datamodel: options['--datamodel'].last || 'quickjs',
                     realm: options['--realm'].last,
-                    language: language,
+                    kind: kind,
                     timeout: Integer(options['--timeout'].last || 60),
-                    skip: skip,
+                    skip: options['--skip'].map { |path| File.expand_path(path, cwd) },
                     chdir: cwd)
 exit(runner.run(suites) ? 0 : 1)

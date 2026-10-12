@@ -16,12 +16,14 @@ conform = Core.program_path('dev', 'ta-conform').to_s
 # - the tests' datamodel (tests/support/datamodel_test.c): W3C, but for
 #   the tests its skip list names with a reason (it implements a subset
 #   of ECMAScript); every other one must pass.
+# ta-conform is the reference: it must offer every method, the C-level
+# ones too (--kind reference; ../tinyactors-test/docs/driver.md, "Kinds").
 runs = {
   'quickjs' => [],
   'quickjs isolated' => %w[--suite scenarios --suite w3c --realm isolated],
   'test datamodel' => ['--suite', 'w3c', '--datamodel', 'test',
                        '--skip', Core::ROOT.join('tests/support/datamodel_test_w3c_skip.txt').to_s]
-}
+}.transform_values { |options| ['--kind', 'reference', *options] }
 
 # One after another: the first converts the W3C suite and the scenarios
 # when they are new or stale (tinyactors-test/lib/w3c.rb), and each run

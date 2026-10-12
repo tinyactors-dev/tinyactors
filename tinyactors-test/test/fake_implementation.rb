@@ -4,7 +4,9 @@
 # speaks the frames and answers from rules, with no host behind it.
 #
 # - host.create: status 0 for a config that is a map with "systemID", else
-#   -3 with an error naming systemID; host.free: {}.
+#   -3 with an error naming systemID; its `datamodel` is "ecmascript" for
+#   quickjs, "python" for native, and the name asked for otherwise;
+#   host.free: {}.
 # - host.request: "echo" replies its params as the result, "wrong" replies
 #   {"n": 2}, "big" replies 300 bytes (with capacity: TA_ERROR_NO_MEMORY
 #   below that), anything else -32601 with a message to match by wildcard.
@@ -47,7 +49,8 @@ def answer(method, params)
   when 'host.create'
     config = CBOR.load(params['config'].data)
     if config.is_a?(Hash) && config.key?('systemID')
-      { 'status' => 0, 'datamodel' => 'ecmascript' }
+      name = params['datamodel'] || 'quickjs'
+      { 'status' => 0, 'datamodel' => { 'quickjs' => 'ecmascript', 'native' => 'python' }.fetch(name, name) }
     else
       { 'status' => -3,
         'error' => CBOR::Bytes.new(CBOR.encode({ 'error' => error(-32_602, 'missing', 'systemID is missing', 'systemID') })) }
