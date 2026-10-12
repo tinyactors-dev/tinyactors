@@ -258,7 +258,7 @@
     },
     {
       "name": "TA_EFFECT_FIELD_WIRE",
-      "value": 40
+      "value": 64
     },
     {
       "name": "TA_EFFECT_FLAG_NEEDS_RESPONSE",
@@ -7016,7 +7016,7 @@
         },
         {
           "name": "wire",
-          "type": "ta_string_view"
+          "type": "ta_bytes"
         }
       ],
       "layout": {
@@ -9034,6 +9034,27 @@
         {
           "name": "envelope",
           "type": "const ta_envelope *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_effect_bytes",
+      "returns": "ta_bytes",
+      "params": [
+        {
+          "name": "h",
+          "type": "const ta_host *"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "field",
+          "type": "uint32_t"
         }
       ],
       "public": true,

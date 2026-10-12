@@ -63,7 +63,7 @@ on wake (timer fired, input arrived, I/O completed):
 
 ## 4 · Effects: what to do with each
 
-Read an effect’s fields with `ta_host_effect_number` and `ta_host_effect_text` (`TA_EFFECT_FIELD_*`, in `host.h`), by its index in the list `ta_host_effects` returned.
+Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` and `ta_host_effect_bytes` (the relayed value's `WIRE`) (`TA_EFFECT_FIELD_*`, in `host.h`), by its index in the list `ta_host_effects` returned.
 
 | Effect                  | The binding                                                                                                                                                                                                                       | Answers with                                                                                                                         |
 |-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|

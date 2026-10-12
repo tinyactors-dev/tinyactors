@@ -233,18 +233,18 @@ typedef struct ta_host_effect {
     ta_string_view deduplication_key;   /* PEER: the envelope's dedup key (may be empty) */
     ta_trace_context trace; /* as in ta_effect; PEER: the envelope's traceparent (format it
                                with ta_traceparent_format for the wire) */
-    ta_string_view wire; /* PEER relaying an envelope that arrived as bytes: its value as CBOR,
-                            as it arrived (bytes, not text; payload is 0). Copy it to
-                            ta_envelope.wire */
+    ta_bytes wire; /* PEER relaying an envelope that arrived as bytes: its value as CBOR,
+                      as it arrived (payload is 0). Copy it to ta_envelope.wire */
 } ta_host_effect;
 TA_API uint32_t ta_host_effects(ta_host *h, const ta_host_effect **out);
 TA_API void ta_host_effects_ack(ta_host *h);
 
 /* A field of effect `index` of the batch ta_host_effects published, so that a
  * binding reads effects without knowing ta_host_effect's layout. Numbers:
- * KIND .. PEER; text: TARGET .. WIRE (WIRE's view holds bytes). An index past the batch, a field
- * the effect kind does not set, or a text field asked as a number (or the
- * reverse) answers 0 or an empty view. Text is borrowed like the effect
+ * KIND .. PEER (ta_host_effect_number); text: TARGET .. DEDUPLICATION_KEY
+ * (ta_host_effect_text); bytes: WIRE (ta_host_effect_bytes). An index past
+ * the batch, a field the effect kind does not set, or a field asked through
+ * the wrong accessor answers 0 or empty. Text and bytes are borrowed like the effect
  * (until the ack, the next run or ta_host_free); TRACEPARENT's text is
  * written for the call and lasts until the next ta_host_effect_text.
  *
@@ -279,10 +279,11 @@ enum {
     TA_EFFECT_FIELD_TRACEPARENT = 37, /* W3C text of `trace`; empty when untraced */
     TA_EFFECT_FIELD_ORIGINTYPE = 38,
     TA_EFFECT_FIELD_DEDUPLICATION_KEY = 39,
-    TA_EFFECT_FIELD_WIRE = 40 /* PEER: the relayed value's CBOR (bytes in the view) */
+    TA_EFFECT_FIELD_WIRE = 64 /* bytes (ta_host_effect_bytes). PEER: the relayed value's CBOR */
 };
 TA_API uint64_t ta_host_effect_number(const ta_host *h, uint32_t index, uint32_t field);
 TA_API ta_string_view ta_host_effect_text(ta_host *h, uint32_t index, uint32_t field);
+TA_API ta_bytes ta_host_effect_bytes(const ta_host *h, uint32_t index, uint32_t field);
 
 /* ---- telemetry ------------------------------------------------------------------ */
 /* The ExportTraceServiceRequest (`/v1/traces`, application/x-protobuf) of

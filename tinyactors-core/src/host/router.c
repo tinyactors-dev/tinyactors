@@ -270,9 +270,10 @@ static ta_status emit_peer(ta_host *host, uint32_t handle, const ta_envelope *en
     effect_string_put(host, 5, envelope->origintype, &x->origintype);
     effect_string_put(host, 6, envelope->deduplication_key, &x->deduplication_key);
     /* a value that arrived as bytes leaves as the same bytes: never decoded here */
-    effect_string_put(host, 7, (ta_string_view){(const char *)envelope->wire.pointer,
-                                                (uint32_t)envelope->wire.length},
-                      &x->wire);
+    ta_string_view wire = {(const char *)envelope->wire.pointer, (uint32_t)envelope->wire.length};
+    ta_string_view put = {0, 0};
+    effect_string_put(host, 7, wire, &put);
+    x->wire.length = put.length;
     if (envelope->data &&
         envelope->datamodel <
             host->config.datamodel_count) { /* the effect owns the payload until ack */

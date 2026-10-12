@@ -200,7 +200,7 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
                 CHECK_EQUAL(ta_datamodel_ecmascript_payload_from_cbor(
                                 nodes[j].ecmascript, (ta_bytes){cbor, wire.length}, &envelope.data),
                             TA_OK);
-            envelope.wire = (ta_bytes){effect->wire.pointer, effect->wire.length}; /* relayed */
+            envelope.wire = effect->wire; /* relayed */
             int32_t outcome = ta_host_deliver(nodes[j].host, nodes[j].peer[i], &envelope);
             CHECK(outcome >= 0);
             if (outcome != TA_ROUTE_DELIVERED && outcome != TA_ROUTE_RELAYED && envelope.data)
@@ -518,6 +518,7 @@ static void relay_keeps_envelope(int bytes) {
     CHECK_EQUAL(status.duplicates, 1u);
     /* the effect and its accessors (taken here, so not forwarded) */
     envelope.msgid = (ta_string_view){"r3", 2};
+    envelope.wire = (ta_bytes){"\x18\x2a", 2}; /* 42, relayed as bytes */
     CHECK_EQUAL(ta_host_deliver(nodes[B].host, nodes[B].peer[A], &envelope), TA_ROUTE_RELAYED);
     {
         const ta_host_effect *effects;
@@ -531,6 +532,10 @@ static void relay_keeps_envelope(int bytes) {
         CHECK(origintype.length == 10 && !memcmp(origintype.pointer, "urn:x-test", 10));
         CHECK(key.length == 7 && !memcmp(key.pointer, "order-9", 7));
         CHECK_EQUAL(effects[0].flags, 1u); /* hops */
+        ta_bytes wire = ta_host_effect_bytes(nodes[B].host, 0, TA_EFFECT_FIELD_WIRE);
+        CHECK(wire.length == 2 && !memcmp(wire.pointer, "\x18\x2a", 2));
+        CHECK_EQUAL(ta_host_effect_text(nodes[B].host, 0, TA_EFFECT_FIELD_WIRE).length, 0u);
+        CHECK_EQUAL(ta_host_effect_bytes(nodes[B].host, 0, TA_EFFECT_FIELD_MSGID).length, (size_t)0);
     }
     close_all();
 }

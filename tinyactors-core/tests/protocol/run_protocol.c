@@ -391,7 +391,7 @@ static ta_status write_back(ta_host *host, const ta_envelope *envelope, const ta
     effect.msgid = envelope->msgid;
     effect.deduplication_key = envelope->deduplication_key;
     effect.flags = envelope->hops;
-    effect.wire = (ta_string_view){(const char *)envelope->wire.pointer, (uint32_t)envelope->wire.length};
+    effect.wire = envelope->wire;
     effect.datamodel = TA_NIL;
     if (envelope->traceparent.length && ta_traceparent_parse(envelope->traceparent, &effect.trace) != TA_OK)
         return TA_ERROR_INVALID;

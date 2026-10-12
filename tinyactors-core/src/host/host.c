@@ -755,14 +755,14 @@ static void effects_block_replaced(ta_host *host, void *block, size_t size) {
     host->held_size[host->held_count++] = size;
 }
 
-/* The pool offset of string k (EFFECT_STRINGS, in that order) of effect e,
- * and its length. */
+/* The pool offset of string k (EFFECT_STRINGS, in that order: seven texts,
+ * then the wire bytes) of effect e, and its length. */
 static size_t *effect_string(ta_host *host, uint32_t e, uint32_t k, uint32_t *length) {
     const ta_host_effect *effect = &host->effects[e];
-    const ta_string_view *views[EFFECT_STRINGS] = {
-        &effect->target, &effect->event,      &effect->sendid,            &effect->auxiliary,
-        &effect->msgid,  &effect->origintype, &effect->deduplication_key, &effect->wire};
-    *length = views[k]->length;
+    const ta_string_view *views[EFFECT_STRINGS - 1] = {
+        &effect->target, &effect->event,      &effect->sendid,           &effect->auxiliary,
+        &effect->msgid,  &effect->origintype, &effect->deduplication_key};
+    *length = k < EFFECT_STRINGS - 1 ? views[k]->length : (uint32_t)effect->wire.length;
     return &host->effect_strings[e].offset[k];
 }
 
@@ -981,13 +981,15 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
         host->effect_count; /* these are seen now: released by the next ack or run */
     for (uint32_t i = 0; i < host->effect_count; i++) {
         ta_host_effect *effect = &host->effects[i];
-        ta_string_view *dst[EFFECT_STRINGS] = {
-            &effect->target, &effect->event,      &effect->sendid,            &effect->auxiliary,
-            &effect->msgid,  &effect->origintype, &effect->deduplication_key, &effect->wire};
-        for (int k = 0; k < EFFECT_STRINGS; k++)
-            dst[k]->pointer = host->effect_strings[i].offset[k] == (size_t)-1
-                                  ? ""
-                                  : host->pool + host->effect_strings[i].offset[k];
+        ta_string_view *dst[EFFECT_STRINGS - 1] = {
+            &effect->target, &effect->event,      &effect->sendid,           &effect->auxiliary,
+            &effect->msgid,  &effect->origintype, &effect->deduplication_key};
+        const size_t *offset = host->effect_strings[i].offset;
+        for (int k = 0; k < EFFECT_STRINGS - 1; k++)
+            dst[k]->pointer = offset[k] == (size_t)-1 ? "" : host->pool + offset[k];
+        effect->wire.pointer = offset[EFFECT_STRINGS - 1] == (size_t)-1
+                                   ? (const void *)""
+                                   : host->pool + offset[EFFECT_STRINGS - 1];
     }
     *out = host->effects;
     return host->effect_count;
@@ -1018,6 +1020,16 @@ uint64_t ta_host_effect_number(const ta_host *host, uint32_t index, uint32_t fie
     }
 }
 
+ta_bytes ta_host_effect_bytes(const ta_host *host, uint32_t index, uint32_t field) {
+    ta_bytes none = {"", 0};
+    if (index >= host->effects_ready) return none;
+    const ta_host_effect *effect = &host->effects[index];
+    switch (field) {
+    case TA_EFFECT_FIELD_WIRE: return effect->wire;
+    default: return none;
+    }
+}
+
 ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field) {
     ta_string_view none = {"", 0};
     if (index >= host->effects_ready) return none;
@@ -1030,7 +1042,6 @@ ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field
     case TA_EFFECT_FIELD_MSGID: return effect->msgid;
     case TA_EFFECT_FIELD_ORIGINTYPE: return effect->origintype;
     case TA_EFFECT_FIELD_DEDUPLICATION_KEY: return effect->deduplication_key;
-    case TA_EFFECT_FIELD_WIRE: return effect->wire;
     case TA_EFFECT_FIELD_TRACEPARENT: {
         ta_buffer out = {host->effect_traceparent, sizeof host->effect_traceparent, 0};
         if (ta_traceparent_format(&effect->trace, &out) != TA_OK) return none;
