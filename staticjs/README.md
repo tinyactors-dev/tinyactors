@@ -35,7 +35,11 @@ list of 100 doubles (ties, values just under and over a half, subnormals,
 `toPrecision` with 24 counts of digits each, 0 to 100, and 123 doubles
 (integers to the largest double, fractions to the smallest subnormal,
 negatives) with each radix's powers and their neighbours through
-`toString(radix)` in every radix 2 to 36 (`number_test --print`); and random JSON documents read by `JSON.parse` and written back
+`toString(radix)` in every radix 2 to 36, and a fixed list of 7,909 pairs
+(specials, subnormals, integers odd and even, halves, negative bases,
+bases next to 1 to huge powers, results next to overflow and underflow and
+in the subnormals) through `Math.pow(x, y)` and `x ** y`
+(`number_test --print`); and random JSON documents read by `JSON.parse` and written back
 by `JSON.stringify`, the same documents with a byte or two changed (a
 SyntaxError where JavaScript throws one), and `JSON.stringify` calls with
 replacers and spaces (`json_test --print`).
@@ -171,7 +175,7 @@ Expressions: numbers (read to the nearest double, ties to even, however
 many digits a literal has, in any radix), BigInts (`10n`, `0x1Fn`, `0o7n`,
 `0b1n`; see "BigInts" below), strings, template literals, `true`, `false`, `null`,
 `undefined`, `NaN`, `Infinity`, arrays and objects (spread, computed and
-shorthand keys), `new Set(...)`, `new Map(...)` (see "Maps" below), `new Temporal.PlainDate(...)`, `new Temporal.PlainTime(...)`, `new Temporal.PlainDateTime(...)`, `new Temporal.Duration(...)`, `new Temporal.Instant(...)` (see "Temporal" below), `new Date(...)` (see "Date" below); `+ - * / %`, `**` (of BigInts), `< <= > >=`, `=== !==`,
+shorthand keys), `new Set(...)`, `new Map(...)` (see "Maps" below), `new Temporal.PlainDate(...)`, `new Temporal.PlainTime(...)`, `new Temporal.PlainDateTime(...)`, `new Temporal.Duration(...)`, `new Temporal.Instant(...)` (see "Temporal" below), `new Date(...)` (see "Date" below); `+ - * / % **`, `< <= > >=`, `=== !==`,
 `&& || ??`, `?:`, `!`, unary `-` and `+`, `typeof`, `in`; members, calls
 and spread arguments, with `?.`; arrow functions with an expression body,
 or a block body of statements: `const`, `if`/`else` (with `else if`), nested
@@ -232,7 +236,7 @@ Built-ins:
 | `JSON` | `parse` `stringify` (see "JSON" below) |
 | `Temporal` | `Temporal.PlainDate`: `new Temporal.PlainDate(y, m, d)`, `from` (a string, a property bag or a PlainDate; `overflow`), `compare`; `year` `month` `monthCode` `day` `dayOfWeek` `dayOfYear` `weekOfYear` `yearOfWeek` `daysInWeek` `daysInMonth` `daysInYear` `monthsInYear` `inLeapYear` `calendarId` `era` `eraYear`; `with` `equals` `add` `subtract` (`overflow`) `until` `since` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`calendarName`) `toJSON` `toPlainDateTime`. `Temporal.PlainTime`: `new Temporal.PlainTime(h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainTime or a PlainDateTime; `overflow`), `compare`; `hour` `minute` `second` `millisecond` `microsecond` `nanosecond`; `with` `equals` `add` `subtract` `until` `since` `round` (`smallestUnit`, `roundingIncrement`, `roundingMode`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.PlainDateTime`: `new Temporal.PlainDateTime(y, m, d, h, m, s, ms, us, ns)`, `from` (a string, a property bag, a PlainDateTime or a PlainDate), `compare`; a PlainDate's getters and a PlainTime's; `with` `withPlainTime` `equals` `add` `subtract` `until` `since` `round` `toString` (and `calendarName`) `toJSON` `toPlainDate` `toPlainTime`. `Temporal.Duration`: `new Temporal.Duration(y, mo, w, d, h, mi, s, ms, us, ns)`, `from` (a string, a property bag or a Duration), `compare` (`relativeTo`); `years` to `nanoseconds` `sign` `blank`; `with` `negated` `abs` `add` `subtract` `round` (`largestUnit`, `smallestUnit`, `roundingIncrement`, `roundingMode`, `relativeTo`) `total` (`unit`, `relativeTo`) `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`) `toJSON`. `Temporal.Instant`: `new Temporal.Instant(epochNanoseconds)`, `from` (a string with `Z` or an offset, or an Instant), `fromEpochMilliseconds` `fromEpochNanoseconds` `compare`; `epochMilliseconds` `epochNanoseconds`; `equals` `add` `subtract` `until` `since` `round` `toString` (`fractionalSecondDigits`, `smallestUnit`, `roundingMode`, `timeZone`: UTC or a fixed offset) `toJSON`. `Temporal.Now` (the host clock): `instant` `plainDateISO` `plainDateTimeISO` `plainTimeISO` (a time zone: UTC or a fixed offset) `timeZoneId` (see "Temporal" below) |
 | `Date` | `new Date()` (the host clock), `new Date(value)` (a Date, a string of the date time string format, or a number), `Date.now` `Date.parse` `Date.UTC`; `getTime` `valueOf` `getUTCFullYear` `getUTCMonth` `getUTCDate` `getUTCDay` `getUTCHours` `getUTCMinutes` `getUTCSeconds` `getUTCMilliseconds` `toISOString` `toJSON` `toUTCString` `toGMTString`; `setTime` and the UTC setters, on a variable (see "Owned mutation" and "Date" below) |
-| `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum); `random`, V8's generator from the seed the host sets (`sjs_vm_set_seed`: the values `node --random-seed=<seed>` gives) |
+| `Math` | `abs` `min` `max` `floor` `ceil` `round` `trunc` `sign` `sqrt` `hypot` `fround` `clz32` `imul` `pow`, and its constants: each the same bits as V8 on every target, without a C library (`sqrt` is the hardware's correctly rounded instruction, `hypot` V8's own sum, `pow` V8's fdlibm, as `**` is); `random`, V8's generator from the seed the host sets (`sjs_vm_set_seed`: the values `node --random-seed=<seed>` gives) |
 | constants | `Number.EPSILON` `MAX_SAFE_INTEGER` `MIN_SAFE_INTEGER` `MAX_VALUE` `MIN_VALUE` `POSITIVE_INFINITY` `NEGATIVE_INFINITY` `NaN`; `Math.PI` `E` `LN2` `LN10` `LOG2E` `LOG10E` `SQRT2` `SQRT1_2`: number constants when compiled |
 | changing a variable | arrays: `push` `pop` `shift` `unshift` `sort` `reverse` `fill` `splice`; sets: `add` `delete` `clear`; maps: `set` `delete` `clear`; iterators: `next` `return`; Dates: `setTime` `setUTCFullYear` `setUTCMonth` `setUTCDate` `setUTCHours` `setUTCMinutes` `setUTCSeconds` `setUTCMilliseconds`; objects: `Object.assign(x, ...sources)`; objects and arrays: `Object.freeze(x)` `Object.seal(x)` |
 
@@ -309,8 +313,8 @@ embedder the digits.
 `%` takes the dividend's sign, `0n ** 0n` is `1n`. Division by `0n` and a
 negative exponent fault (RangeErrors in JavaScript), as do unary `+` of a
 BigInt and arithmetic that mixes a BigInt with any other value (TypeErrors).
-`**` exists for BigInts only: of numbers it faults, as staticjs cannot give
-V8's `Math.pow` bits. `< <= > >=` compare BigInts with each other and with
+`**` of two numbers is V8's: its fdlibm `pow` (`src/math.c`), the same bits
+as `Math.pow`. `< <= > >=` compare BigInts with each other and with
 numbers exactly (`1n < 1.5`, `9007199254740993n > 2 ** 53`'s double;
 anything with NaN is false); with a string or a boolean they fault, where
 JavaScript would convert. staticjs has no bitwise operators, for numbers or
@@ -528,7 +532,7 @@ compare identities, or find something on a prototype.
 
 - `===` on two objects (identity); `+` of a string and an object; arithmetic
   or `<` on values that are not both numbers (or, for `<`, both strings), or
-  BigInts (and, for `<`, a BigInt and a number); `**` of numbers.
+  BigInts (and, for `<`, a BigInt and a number).
 - Converting an object to a number or a string where JavaScript would call
   its methods: `Number([])`, `parseInt({})`, `parseFloat([1])`. A string
   converted to a number on the way to something else: `isNaN("x")`,

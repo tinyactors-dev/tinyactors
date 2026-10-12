@@ -1000,7 +1000,8 @@ a = x => 1
 
 === ** with a parenthesized unary operand
 ((-1) ** 2)
---- fault ** for BigInts only
+--- value
+1
 
 === new.target in a script's function
 (x => new.target)

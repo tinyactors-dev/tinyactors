@@ -258,7 +258,8 @@ static sjs_result key_of(sjs_vm *vm, sjs_value v, sjs_string **out) {
  * Operators
  */
 
-/* BigInts, and the faults of arithmetic: at the end of the file. */
+/* **, BigInts, and the faults of arithmetic: at the end of the file. */
+static sjs_result power(sjs_vm *vm, sjs_value *out);
 static sjs_result bigint_binary(sjs_vm *vm, uint8_t operator, sjs_value *out);
 static sjs_result bigint_unary(sjs_vm *vm, uint8_t operator, sjs_value *out);
 static int bigint_order(uint8_t operator, sjs_value a, sjs_value b);
@@ -389,7 +390,7 @@ static sjs_result apply_binary(sjs_vm *vm, uint8_t operator, sjs_value *out) {
         return SJS_OK;
     }
     case SJS_OP_EXPONENT:
-        return bigint_binary(vm, operator, out);
+        return power(vm, out);
     default: {
         if (a.kind != SJS_NUMBER || b.kind != SJS_NUMBER) return bigint_binary(vm, operator, out);
         double x = a.as.number;
@@ -2555,6 +2556,16 @@ __attribute__((noinline)) static sjs_result string_append(sjs_vm *vm, sjs_values
     return SJS_OK;
 }
 
+/* ** of two numbers, as V8 computes it (math.c); of anything else,
+ * BigInts' ** or the faults of arithmetic. Out of line, at the end of the
+ * file, as the BigInts' operations are. */
+__attribute__((noinline)) static sjs_result power(sjs_vm *vm, sjs_value *out) {
+    const sjs_value *pair = &vm->stack[vm->sp - 2];
+    if (pair[0].kind != SJS_NUMBER || pair[1].kind != SJS_NUMBER) return bigint_binary(vm, SJS_OP_EXPONENT, out);
+    *out = sjs_num(sjs_math_pow(pair[0].as.number, pair[1].as.number));
+    return SJS_OK;
+}
+
 /* ------------------------------------------------------------------------
  * BigInts: + - * / % ** and unary - of two BigInts, and their comparison
  * with each other and with numbers, exactly. Out of line and at the end of
@@ -2570,7 +2581,6 @@ __attribute__((noinline)) static sjs_result bigint_binary(sjs_vm *vm, uint8_t op
     bool b = pair[1].kind == SJS_BIGINT;
     if (a != b) return sjs_vm_fault(vm, "JavaScript throws a TypeError for arithmetic that mixes a BigInt with another value");
     if (!a) {
-        if (operator == SJS_OP_EXPONENT) return sjs_vm_fault(vm, "staticjs has ** for BigInts only");
         if (operator == SJS_OP_ADD) return sjs_vm_fault(vm, "staticjs adds two numbers, or a string and a primitive");
         return sjs_vm_fault(vm, "arithmetic in staticjs is on numbers");
     }

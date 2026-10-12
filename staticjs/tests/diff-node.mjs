@@ -398,6 +398,16 @@ const numberChecks = {
     const theirs = toDouble(bits).toString(Number(radix));
     return text === theirs ? null : `${toDouble(bits)}.toString(${radix}): staticjs ${text}, JavaScript ${theirs}`;
   },
+  W(rest) { // <x> <y> <x ** y>: Math.pow(x, y) and x ** y, bit for bit (a NaN is any NaN)
+    const [a, b, result] = rest.split(' ');
+    const [x, y] = [toDouble(a), toDouble(b)];
+    for (const [name, want] of [['Math.pow', Math.pow(x, y)], ['**', x ** y]]) {
+      if (Number.isNaN(want) ? !Number.isNaN(toDouble(result)) : toHex(want) !== result) {
+        return `${name} of ${x} and ${y}: staticjs ${result}, JavaScript ${toHex(want)}`;
+      }
+    }
+    return null;
+  },
   J(rest) { // <document> <text>: JSON.stringify(JSON.parse(document)), never a fault
     const [document, ours] = rest.split('\t');
     const want = JSON.stringify(JSON.parse(JSON.parse(document)));
@@ -504,6 +514,7 @@ const numberSummary = [
   ['A', 'BigInts wrap as BigInt.asIntN and asUintN do'],
   ['P', 'doubles of a fixed list give toFixed, toExponential and toPrecision as JavaScript does'],
   ['Q', 'doubles of a fixed list give toString(radix) in every radix as JavaScript does'],
+  ['W', 'pairs of a fixed list give Math.pow(x, y) and x ** y bit for bit'],
   ['J', 'random JSON documents give JSON.stringify(JSON.parse(t))'],
   ['E', `mutated JSON documents read as JSON.parse reads them (${jsonOutcomes.value} read, ` +
     `${jsonOutcomes['!S']} SyntaxErrors where JavaScript throws one, ${jsonOutcomes['!O']} faults of staticjs's own not compared)`],

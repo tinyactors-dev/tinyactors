@@ -306,9 +306,9 @@ let => 1
 new WeakMap()
 --- error unsupported constructs only Set and Map
 
-=== exponent operator
-2 ** 10
---- fault ** for BigInts only
+=== exponent operator of a string
+"2" ** 10
+--- fault arithmetic in staticjs is on numbers
 
 === bitwise operators
 5 & 3

@@ -435,10 +435,6 @@ Math.max(...[3, 9, 4])
 [["b","a"],[1,2],[["x",[1]]],{"a":1,"b":2},["0","1"]]
 
 === Number
-[Number.isInteger(5), Number.isInteger(5.5), Number.isInteger("5"), Number.isSafeInteger(2 ** 0 * 9007199254740992), Number.isFinite(Infinity), Number.isNaN(NaN), Number.MAX_SAFE_INTEGER]
---- fault ** for BigInts only
-
-=== Number without **
 [Number.isInteger(5), Number.isInteger(5.5), Number.isInteger("5"), Number.isSafeInteger(9007199254740992), Number.isFinite(Infinity), Number.isNaN(NaN), Number.MAX_SAFE_INTEGER]
 --- value
 [true,false,false,false,false,true,9007199254740991]

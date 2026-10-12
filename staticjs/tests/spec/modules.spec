@@ -1097,32 +1097,32 @@ import "dflt" with { "\uD800": "x" };
 @module e
 const a = 1;
 export { a, a };
-const b = 2 ** 2;
+const b = 1 << 2;
 --- error syntax exported twice
 
 === export default twice, the second of what staticjs leaves out
 @module e
 export const a = 1;
 export default 1;
-export default 2 ** 2;
+export default 1 << 2;
 --- error syntax exported twice
 
 === a list's default, then export default of what staticjs leaves out
 @module e
 const a = 1; export { a as default };
-export default 2 ** 2;
+export default 1 << 2;
 --- error syntax exported twice
 
 === export * as default, then export default
 @module e
 export * as default from "dflt";
-export default 2 ** 2;
+export default 1 << 2;
 --- error syntax exported twice
 
 === a string default and export default
 @module e
 const a = 1; export { a as "default" };
-export default 2 ** 2;
+export default 1 << 2;
 --- error syntax exported twice
 
 # export *
