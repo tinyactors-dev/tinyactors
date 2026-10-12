@@ -74,7 +74,7 @@ static void ta_napi_record_envelope(const ta_napi_record *record) {
     if (napi_create_bigint_uint64(env, peer, &value) == napi_ok) napi_set_named_property(env, record->object, "peer", value);
 }
 
-/* A retired segment: its image is let go (bindings.md, section 4). */
+/* A retired segment: its image's block is freed (bindings.md, section 4). */
 static void ta_napi_segment_freed(ta_napi_host *host, uint32_t index) {
     ta_napi_image_free(host, (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT));
 }

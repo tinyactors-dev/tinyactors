@@ -117,13 +117,12 @@ static napi_value ta_napi_undefined(napi_env env) {
 
 /* ---- new Host(options) -------------------------------------------------------- */
 
-/* The images' references: dropped when their segment is freed, or here. */
+/* The images' blocks: freed when their segment is freed, or here, after
+ * the host that read them. */
 static void ta_napi_images_free(ta_napi_host *host) {
     for (uint32_t i = 0; i < host->images.count; i++) {
         ta_napi_image *image = (ta_napi_image *)ta_napi_table_row(&host->images, i);
-        if (!image) continue;
-        napi_delete_reference(host->env, image->bytes);
-        napi_delete_reference(host->env, image->view);
+        if (image) host->allocator.free(host->allocator.context, image->block, image->size);
     }
     ta_napi_table_free(&host->images);
 }
@@ -132,8 +131,7 @@ void ta_napi_image_free(ta_napi_host *host, uint32_t segment) {
     for (uint32_t i = 0; i < host->images.count; i++) {
         ta_napi_image *image = (ta_napi_image *)ta_napi_table_row(&host->images, i);
         if (!image || image->segment != segment) continue;
-        napi_delete_reference(host->env, image->bytes);
-        napi_delete_reference(host->env, image->view);
+        host->allocator.free(host->allocator.context, image->block, image->size);
         ta_napi_table_remove(&host->images, ta_napi_table_handle(&host->images, i));
         return;
     }
@@ -419,30 +417,40 @@ napi_value ta_napi_compile(napi_env env, napi_callback_info info) {
     return image;
 }
 
-/* addImage(image): the bytes, held (a reference to the caller's
- * Uint8Array or ArrayBuffer, which must not change while the segment
- * runs), opened (ta_image_open) into an ArrayBuffer the host also holds,
- * and added (ta_host_add_image), until TA_HOST_EFFECT_SEGMENT_FREED; the
- * segment. */
+/* addImage(image): the bytes copied once into a block the addon owns,
+ * after the ta_image core reads (ta_image_open), its row added, then the
+ * segment (ta_host_add_image); the block is freed at
+ * TA_HOST_EFFECT_SEGMENT_FREED or with the host. A copy, not the caller's
+ * memory: an ArrayBuffer can be transferred, resized or shared, and the
+ * segment reads its bytes as long as it runs. */
 static napi_value ta_napi_host_add_image(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     ta_napi_host *host = ta_napi_host_this(env, info, &call);
     if (!host) return NULL;
     ta_bytes bytes;
-    void *data = NULL;
-    napi_value view;
     if (!ta_napi_values_bytes(env, call.argv[0], &bytes)) return ta_napi_refused(env, "Host.addImage", TA_ERROR_INVALID);
-    if (napi_create_arraybuffer(env, sizeof(ta_image), &data, &view) != napi_ok)
-        return ta_napi_refused(env, "Host.addImage", TA_ERROR_NO_MEMORY);
-    ta_status status = ta_image_open(bytes, (ta_image *)data);
-    uint32_t segment = 0;
-    if (status == TA_OK) status = ta_host_add_image(host->host, (const ta_image *)data, &segment);
-    if (status != TA_OK) return ta_napi_refused(env, "ta_host_add_image", status);
+    /* the bytes 8-aligned, after the ta_image (runtime.h: ta_image_open
+     * reads an 8-aligned buffer); the allocator's blocks are (addon.h) */
+    size_t offset = (sizeof(ta_image) + 7) & ~(size_t)7, size = offset + bytes.length;
     uint64_t handle = ta_napi_table_add(&host->images);
     ta_napi_image *image = (ta_napi_image *)ta_napi_table_get(&host->images, handle);
-    if (!image || napi_create_reference(env, call.argv[0], 1, &image->bytes) != napi_ok ||
-        napi_create_reference(env, view, 1, &image->view) != napi_ok)
-        return ta_napi_refused(env, "Host.addImage", TA_ERROR_NO_MEMORY); /* added: held by the call only */
+    char *block = image ? (char *)host->allocator.alloc(host->allocator.context, size, 8) : NULL;
+    if (!block) {
+        if (image) ta_napi_table_remove(&host->images, handle);
+        return ta_napi_refused(env, "Host.addImage", TA_ERROR_NO_MEMORY);
+    }
+    if (bytes.length) memcpy(block + offset, bytes.pointer, bytes.length);
+    image->block = (ta_image *)(void *)block;
+    image->size = size;
+    ta_status status = ta_image_open((ta_bytes){block + offset, bytes.length}, image->block);
+    uint32_t segment = 0;
+    if (status == TA_OK) status = ta_host_add_image(host->host, image->block, &segment);
+    if (status != TA_OK) {
+        host->allocator.free(host->allocator.context, block, size);
+        ta_napi_table_remove(&host->images, handle);
+        return ta_napi_refused(env, "ta_host_add_image", status);
+    }
+    image = (ta_napi_image *)ta_napi_table_get(&host->images, handle);
     image->segment = segment;
     return ta_napi_bigint(env, segment);
 }

@@ -260,6 +260,35 @@ request, after core implemented it (`2eef3d25..ad11e7ea`):
   eval_string, log) is the one buffer it keeps; `sendMany` goes in
   batches of 64 from the stack. `test/memory.test.mjs` holds the nested
   calls.
+- An image is the addon's copy: this commit. `addImage` held the
+  caller's bytes and gave core a pointer into them: a `transfer()` and a
+  collection made the next spawn read freed memory, `resize(0)` on a
+  resizable buffer crashed with a bus error, a `SharedArrayBuffer` let
+  another worker change the bytes under the segment, and a failed row
+  left a segment running on bytes nobody held. Now the bytes are copied
+  once into a block of the addon's allocator, after the `ta_image` core
+  reads (8-aligned, `runtime.h`); the row is added before the segment and
+  holds the block, which never moves; `TA_HOST_EFFECT_SEGMENT_FREED` or
+  the host's free path frees it. `test/memory.test.mjs` changes the bytes
+  each of those ways after `addImage`, on both datamodels.
+- **For the API review: images.** `compile()` returns the image's bytes
+  and `addImage` copies them, so an image is in memory twice while the
+  caller keeps its `Uint8Array`, and once more for each host it is added
+  to. AGENTS.md ("The binding's memory") would rather hold core's
+  `ta_compile_result` in the images row until the segment is freed, with
+  nothing copied. Two shapes would do it; the review decides, and until
+  then the copy stays:
+  - *an opaque compiled object:* `compile(charts, {resolve})` returns a
+    `Compiled` wrapping the `ta_compile_result` (its `bytes` a view for
+    saving to disk, its `diagnostics`), and `addImage(compiled)` holds it
+    by reference, freed when the last host's segment is freed and the
+    object collected; `addImage(bytes)` still copies, for an image read
+    from disk.
+  - *compile inside the host:* `addImage(charts, {resolve})`, as the
+    Python binding's `add_image(charts, files)`
+    (`tinyactors-cpython/src/host.c:473`): the addon compiles, holds the
+    result in the images row, and frees it with the segment; `compile()` stays for an image's
+    bytes (to save, or to add to another host by copy).
 
 ## Later milestones
 

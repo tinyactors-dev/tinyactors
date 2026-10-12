@@ -135,8 +135,8 @@ export interface HostOptions {
 export class Host {
   constructor(options: HostOptions);
   /**
-   * An image's bytes (`compile`), added as a segment. The host holds the
-   * bytes themselves until the segment is freed: do not change them.
+   * An image's bytes (`compile`), added as a segment: a copy, kept until
+   * the segment is freed, so the bytes given may change or go afterwards.
    */
   addImage(image: ArrayBuffer | ArrayBufferView): ID;
   /** The actors a system image declares. */

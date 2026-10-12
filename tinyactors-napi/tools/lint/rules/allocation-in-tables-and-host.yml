@@ -6,8 +6,8 @@
 # ta_napi_host_free_block). A writer or a room that outgrows the stack
 # grows through that allocator (ta_napi_allocator), not by a call of its
 # own: nothing per call, per event or per evaluation beyond that growth.
-# Bytes are borrowed, an image is held, a session, a chart or a payload is
-# a row.
+# Bytes are borrowed, an image is copied once into a block of the
+# allocator's, a session, a chart or a payload is a row.
 id: allocation-in-tables-and-host
 language: c
 severity: error

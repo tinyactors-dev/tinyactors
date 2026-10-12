@@ -137,14 +137,17 @@ ta_datamodel_binding ta_napi_datamodel_binding(ta_napi_datamodel *datamodel);
  * returned; how many. A datamodel not live: none. */
 uint32_t ta_napi_datamodel_drain(ta_napi_datamodel *datamodel);
 
-/* An image the host runs: the bytes compile() wrote and the opened view
- * core reads, both held in ArrayBuffers until TA_HOST_EFFECT_SEGMENT_FREED
- * or the host goes (bindings.md, section 6: hold, don't copy). */
+/* An image the host runs: one block the addon owns, the ta_image core
+ * reads and, after it, a copy of the caller's bytes, made once (a caller's
+ * ArrayBuffer can be transferred, resized or shared); freed at
+ * TA_HOST_EFFECT_SEGMENT_FREED or with the host. The block never moves,
+ * so the ta_image is not in the row (rows move as the table grows). */
 typedef struct ta_napi_image {
     ta_napi_row row;
-    napi_ref bytes; /* the image's Uint8Array or ArrayBuffer */
-    napi_ref view;  /* an ArrayBuffer holding the ta_image */
+    ta_image *block; /* the ta_image, then the bytes */
+    size_t size;
     uint32_t segment;
+    uint32_t pad;
 } ta_napi_image;
 
 /* A Host: one ta_host, its datamodel and the loop's state. */
@@ -234,7 +237,7 @@ ta_status ta_napi_clock_add(ta_napi_clock *clock, ta_napi_host *host);
 /* The clock's time for a host: simulated, or the runtime's. */
 ta_napi_time ta_napi_loop_now(ta_napi_host *host);
 
-/* Let go of the image of segment `segment` (TA_HOST_EFFECT_SEGMENT_FREED). */
+/* Free the image of segment `segment` (TA_HOST_EFFECT_SEGMENT_FREED). */
 void ta_napi_image_free(ta_napi_host *host, uint32_t segment);
 
 /* Handle effect `index` of the batch the run published. */

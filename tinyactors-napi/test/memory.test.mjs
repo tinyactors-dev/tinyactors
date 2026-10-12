@@ -1,6 +1,8 @@
 // The addon's memory (AGENTS.md, "The binding's memory"; ADR 0010): what
 // the suite cannot see. Nested calls share nothing, so JavaScript a call
-// runs (a getter, a toJSON, a resolve) may call the Host again.
+// runs (a getter, a toJSON, a resolve) may call the Host again; and an
+// image is the addon's copy, so what a caller does to its bytes afterwards
+// changes nothing.
 import assert from 'node:assert/strict';
 import { test, run } from './harness.mjs';
 import { Host, SimulatedClock, compile, encode, decode, TinyactorsError, ERROR_STATE } from '@tinyactors/node';
@@ -114,6 +116,43 @@ test('a resolve that compiles, inside compile', () => {
   assert.deepEqual(logs, ['{"a":1}']);
   h.close();
 });
+
+// The bytes a caller gave addImage, changed afterwards in each way the
+// caller can: the segment still runs on the addon's copy. Each change
+// gives the bytes to add, and what it does to them once they are added.
+const CHANGES = {
+  'filled with zeros': (image) => ({ given: image, after: () => image.fill(0) }),
+  'transferred away and overwritten': (image) => ({
+    given: image,
+    after: () => new Uint8Array(image.buffer.transfer()).fill(0xa5),
+  }),
+  'resized to nothing': (image) => {
+    const buffer = new ArrayBuffer(image.length, { maxByteLength: image.length * 2 });
+    const resizable = new Uint8Array(buffer);
+    resizable.set(image);
+    return { given: resizable, after: () => buffer.resize(0) };
+  },
+  'shared and overwritten': (image) => {
+    const shared = new Uint8Array(new SharedArrayBuffer(image.length));
+    shared.set(image);
+    return { given: shared, after: () => shared.fill(0xff) };
+  },
+};
+
+for (const [name, change] of Object.entries(CHANGES)) {
+  test(`an image whose bytes are ${name} after addImage still runs`, () => {
+    const logs = [];
+    const h = new Host({ config: { systemID: 'h', system: { ticksPerSecond: 1000 } }, datamodel, clock: new SimulatedClock(),
+                         on: { log: (record) => logs.push(record.text) } });
+    const { given, after } = change(compile([{ name: 'echo.scxml', text: ECHO }]));
+    h.addImage(given);
+    after();
+    const session = h.spawn('echo');
+    h.send(session, 'e', { n: 1 });
+    assert.deepEqual(logs, ['e {"n":1}']);
+    h.close();
+  });
+}
 
 for (const each of DATAMODELS) {
   datamodel = each;
