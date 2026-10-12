@@ -585,7 +585,9 @@ a mutation of the iterator, by the rules above, of the kind `SJS_ITERATOR`:
   callback's element, a path from a variable that is read again:
   `o.it.next()`), as that holder would see it advance ("nothing else
   holds"). A method through a path (`o.it.next()`) is an ordinary call:
-  `next` and `return` are not in the shape rules' `MUTATE_PATH`. An iterator
+  `next` and `return` are not in the shape rules' `MUTATE_PATH`. So is a
+  computed name (`it["next"]()`), which faults the same way on a variable
+  read again. An iterator
   read before the call (`[...it]; it.next()`) faults as a second read does
   ("yields its values once").
 - **Refused when compiled**, as for any mutation: an iterator variable
