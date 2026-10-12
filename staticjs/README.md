@@ -351,7 +351,9 @@ or of the rest. A JavaScript iterator yields its values once and is then empty;
 a staticjs value cannot change. So staticjs reads an iterator only where
 nothing else holds it (`sjs_value_unique`, as for updating a value in
 place): a temporary (`[...m.keys()]`), or a variable's last read, which
-moves its value. Then nothing can read it again, and no program can tell
+moves its value: the last on its path, in each branch of an `if` or a
+conditional (`c ? it.drop(1) : it`), and in a `let`'s reassignment from
+itself (`it = it.map(f)`; docs/mutation.md). Then nothing can read it again, and no program can tell
 that it was not consumed. A second read, a closure's capture or any other
 holder faults ("an iterator yields its values once"), where JavaScript
 gives nothing the second time; so does a helper of an iterator something
