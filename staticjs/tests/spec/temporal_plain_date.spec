@@ -536,9 +536,10 @@ new Temporal.PlainDate(2024, 1, 31).until("2024-02-01").days
 new Temporal.PlainDate(2024, 1, 31).since("2024-01-01").days
 --- fault does not build add, subtract, until and since
 
-=== toPlainDateTime, deliberate
+=== toPlainDateTime
 new Temporal.PlainDate(2024, 1, 31).toPlainDateTime().hour
---- fault toPlainDateTime yet
+--- value
+0
 
 === toZonedDateTime, deliberate
 new Temporal.PlainDate(2024, 1, 31).toZonedDateTime("UTC").year
@@ -639,8 +640,8 @@ Temporal.PlainDate.prototype
 Temporal.Calendar.from("iso8601")
 --- error unsupported does not have this built-in
 
-=== a type staticjs does not build yet
-Temporal.PlainTime.from("10:00")
+=== a type staticjs does not have
+Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]")
 --- error unsupported does not have this built-in
 
 === Temporal.Now, which staticjs does not build yet
