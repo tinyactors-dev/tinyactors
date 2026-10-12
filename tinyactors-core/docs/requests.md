@@ -173,6 +173,44 @@ All the numbers are unsigned integers.
    "errorsCommunication": 0, "errorsPlatform": 0, "faults": 0}]}}
 ```
 
+### `host.config`
+
+The host's effective config: what `ta_host_create` was given, with every
+default filled in ([host-config.md](host-config.md)), in the shape it takes.
+A binding reads `system.ticksPerSecond` here once, after creating the host,
+to convert its clock to the host's ticks. No params: absent or an empty
+map; any param is refused (`unknown`, -32602).
+
+Result: a map, its keys in this order:
+- `systemID`;
+- `system`: `maxActors`, `maxEvents`, `maxTimers`, `workspaces`,
+  `maxRequests`, `outbox`, `quantum`, `instanceBytes`, `stringBytes`,
+  `ticksPerSecond`, `traceBytes`, `traceContexts`, `traceRules`,
+  `traceSeed` (unsigned integers), then `tracing` (bool).
+  `instanceBytes` 0 means derived from each segment's image;
+- `ioProcessors`: a list of `{"type", "location", "sync"}`, as given;
+- `migrateQuantum`, `maxSubscriptions`;
+- `telemetry`, only when the host has an encoder: `stagingBytes`,
+  `logBytes`, `openSpans`, `chunks`, `scopes`, `valueLimit`, `renderBytes`,
+  `resourceBytes`, `metricBytes`, `spanMetricCharts`, `flushInterval`
+  (unsigned integers), `linkParents`, `values`, `logs` (bools), and
+  `resource` (a map of text to text).
+
+Every member is present, with the value the host runs with: a host made
+from the result answers the same result. The capacities are those of each
+new segment and of the encoder when it was made; a segment or the encoder
+that grew since has more.
+
+```
+{"id": 1, "method": "host.config"}
+→ {"id": 1, "result": {"systemID": "h", "system": {"maxActors": 64, "maxEvents": 256,
+   "maxTimers": 64, "workspaces": 4, "maxRequests": 16, "outbox": 64, "quantum": 1000,
+   "instanceBytes": 0, "stringBytes": 17408, "ticksPerSecond": 1000000000,
+   "traceBytes": 131072, "traceContexts": 256, "traceRules": 16, "traceSeed": 0,
+   "tracing": true},
+   "ioProcessors": [], "migrateQuantum": 256, "maxSubscriptions": 64}}
+```
+
 ### `actor.list`
 
 Lists the host's sessions, one page at a time.

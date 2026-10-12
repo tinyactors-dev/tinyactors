@@ -138,6 +138,12 @@ uint32_t ta_system_resolve_actor(const ta_system *s, uint32_t handle); /* index 
 uint32_t ta_system_spawn_actor(ta_system *s, uint32_t chart, ta_string_view name, ta_payload params,
                                uint32_t parent, uint32_t parent_slot, ta_string_view traceparent,
                                ta_status *status);
+/* `in` with every default filled in and every count clamped (system.c): the
+ * config a system runs with. The host fills its copy of the system config
+ * with it (view NULL: instance_bytes stays as given, 0 derives it from each
+ * segment's image), so a host and a system created alone share the defaults. */
+void ta_system_config_normalize(const ta_image_view *view, const ta_system_config *in,
+                                ta_system_config *config);
 /* Free an actor and everything it holds. RECLAIM_ENDED: its session ended
  * here (finished, terminated, faulted): a `destroyed` record, counted as
  * ended. RECLAIM_LEFT: it lives on elsewhere (exported, or an adoption

@@ -1653,7 +1653,9 @@ void ta_otlp_stats_get(const ta_otlp *otlp, ta_otlp_stats *out) {
 
 /* ---- the block ------------------------------------------------------------------------------ */
 
-static void otlp_normalize(const ta_otlp_config *in, ta_otlp_config *config) {
+/* `in` with every default filled in and every capacity clamped: the config
+ * an encoder runs with (the host's copy of its telemetry config too). */
+void ta_otlp_config_normalize(const ta_otlp_config *in, ta_otlp_config *config) {
     ta_memset(config, 0, sizeof *config);
     if (in)
         ta_memcpy(config, in, in->size && in->size < sizeof *config ? in->size : sizeof *config);
@@ -1719,7 +1721,7 @@ static void otlp_carve(ta_arena *arena, const ta_otlp_config *config, otlp_carve
 
 ta_status ta_otlp_layout(const ta_otlp_config *config, size_t *bytes) {
     ta_otlp_config normalized;
-    otlp_normalize(config, &normalized);
+    ta_otlp_config_normalize(config, &normalized);
     ta_arena arena;
     otlp_carved o;
     ta_arena_init_measure(&arena);
@@ -1770,7 +1772,7 @@ ta_status ta_otlp_init(ta_memory memory, const ta_otlp_config *config, ta_otlp *
     *out = (ta_otlp *)0;
     if (!memory.pointer) return TA_ERROR_INVALID;
     ta_otlp_config normalized;
-    otlp_normalize(config, &normalized);
+    ta_otlp_config_normalize(config, &normalized);
     ta_otlp *otlp = otlp_place(memory.pointer, memory.length, &normalized);
     if (!otlp) return TA_ERROR_NO_MEMORY;
     *out = otlp;
@@ -1780,7 +1782,7 @@ ta_status ta_otlp_init(ta_memory memory, const ta_otlp_config *config, ta_otlp *
 ta_status ta_otlp_relocate(ta_otlp **relocated, ta_memory memory, const ta_otlp_config *config) {
     ta_otlp *otlp = *relocated;
     ta_otlp_config normalized;
-    otlp_normalize(config ? config : &otlp->config, &normalized);
+    ta_otlp_config_normalize(config ? config : &otlp->config, &normalized);
     uint32_t entry_capacity = normalized.staging_bytes / 64u + 16u;
     if (normalized.open_spans < otlp->open_count || normalized.open_spans < otlp->skip_count ||
         normalized.chunks < otlp->chunk_high || normalized.staging_bytes < otlp->spans_used ||

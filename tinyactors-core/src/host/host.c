@@ -18,6 +18,8 @@
 #include "base/cbor_output.h"
 #include "base/memory.h"
 #include "host/host_internal.h"
+#include "otlp/otlp_internal.h"
+#include "system/system_internal.h"
 
 /* ---- memory ------------------------------------------------------------------------------ */
 
@@ -166,10 +168,12 @@ static ta_status segment_grow(ta_host *host, host_segment *segment) {
     config.workspaces = config.workspaces * 2;
     config.instance_bytes = 0; /* derived from max_actors */
     config.string_bytes = config.string_bytes * 2;
-    /* the context pool keeps up with the events (0 is max_events anyway) */
+    /* the trace contexts and the journal keep up with the events, as their
+     * defaults do (ta_system_config_normalize clamps the journal) */
     config.trace_contexts = config.trace_contexts * 2 > TA_SYSTEM_MAX_POOL
                                 ? TA_SYSTEM_MAX_POOL
                                 : config.trace_contexts * 2;
+    config.trace_bytes = config.trace_bytes * 2;
     size_t need;
     if (ta_system_layout(segment->image, &config, &need) != TA_OK) return TA_ERROR_INVALID;
     void *memory = host_alloc(host, need);
@@ -280,6 +284,33 @@ static int host_policy_copy(ta_host *host, const ta_trace_policy *policy) {
 
 static void rules_free(ta_host *host, host_rules *r);
 
+/* The resource attributes and their strings in one block, kept until
+ * ta_host_free: the encoder copies them, and host.config answers them. */
+static int resource_copy(ta_host *host, const host_telemetry *telemetry) {
+    uint32_t count = telemetry->resource_count;
+    if (!count) return 1;
+    size_t bytes = sizeof(ta_otlp_attribute) * count;
+    for (uint32_t i = 0; i < count; i++)
+        bytes += telemetry->resource[i].key.length + telemetry->resource[i].value.length;
+    ta_otlp_attribute *attributes = (ta_otlp_attribute *)host_alloc(host, bytes);
+    if (!attributes) return 0;
+    char *text = (char *)(attributes + count);
+    for (uint32_t i = 0; i < count; i++) {
+        ta_string_view key = telemetry->resource[i].key, value = telemetry->resource[i].value;
+        ta_memcpy(text, key.pointer, key.length);
+        attributes[i].key = (ta_string_view){text, key.length};
+        text += key.length;
+        ta_memcpy(text, value.pointer, value.length);
+        attributes[i].value = (ta_string_view){text, value.length};
+        text += value.length;
+    }
+    host->resource_block = attributes;
+    host->resource_bytes = bytes;
+    host->config.telemetry.resource = attributes;
+    host->config.telemetry.resource_count = count;
+    return 1;
+}
+
 /* A host from its config, read and checked (host_config_read): the strings
  * it keeps are copied, the rest of the config is not looked at again. */
 static ta_status host_new(const host_config *config, ta_host **out) {
@@ -288,8 +319,15 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     if (!host) return TA_ERROR_NO_MEMORY;
     ta_memset(host, 0, sizeof *host);
     host->config = *config;
+    /* the effective config: the defaults filled in by the code that fills
+     * them for a system and an encoder, so host.config answers what runs */
+    ta_system_config_normalize((const ta_image_view *)0, &config->system, &host->config.system);
+    if (config->telemetry.otlp.size)
+        ta_otlp_config_normalize(&config->telemetry.otlp, &host->config.telemetry.otlp);
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
     if (!host->config.max_subscriptions) host->config.max_subscriptions = 64;
+    host->config.telemetry.resource = (const ta_otlp_attribute *)0; /* the config's: copied below */
+    host->config.telemetry.resource_count = 0;
     host->trace_kinds = host->config.system.trace_policy
                             ? host->config.system.trace_policy->kinds[TA_TRACE_DETAIL_SAMPLED]
                             : TA_TRACE_FULL;
@@ -340,9 +378,11 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     host->config.io_processors = (const ta_io_processor_descriptor *)0; /* the config's: gone */
     host->io_processor_count = 1 + config->io_processor_count;
     host->draining = TA_NIL;
+    if (!resource_copy(host, &config->telemetry)) {
+        ta_host_free(host);
+        return TA_ERROR_NO_MEMORY;
+    }
     ta_status status = host_telemetry_init(host);
-    host->config.telemetry.resource = (const ta_otlp_attribute *)0; /* copied: the config's */
-    host->config.telemetry.resource_count = 0;
     if (status != TA_OK) {
         ta_host_free(host);
         return status;
@@ -417,6 +457,7 @@ void ta_host_free(ta_host *host) {
                   host->retired_charts[i].name_length ? host->retired_charts[i].name_length : 1);
     host_free(host, host->retired_charts, sizeof(retired_chart) * host->retired_chart_capacity);
     host_free(host, host->trace_rules, host->trace_rules_bytes);
+    host_free(host, host->resource_block, host->resource_bytes);
     host_telemetry_free(host);
     rules_free(host, &host->trace_options);
     for (uint32_t i = 0; i < host->watch_count; i++)
@@ -439,14 +480,7 @@ ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segm
     host_segment *segment_record = &host->segments[index];
     ta_memset(segment_record, 0, sizeof *segment_record);
     segment_record->image = image;
-    segment_record->config = host->config.system;
-    segment_record->config.size = sizeof segment_record->config;
-    if (!segment_record->config.max_actors) segment_record->config.max_actors = 64;
-    if (!segment_record->config.max_events) segment_record->config.max_events = 256;
-    if (!segment_record->config.max_timers) segment_record->config.max_timers = 64;
-    if (!segment_record->config.max_requests) segment_record->config.max_requests = 16;
-    if (!segment_record->config.workspaces) segment_record->config.workspaces = 4;
-    if (!segment_record->config.string_bytes) segment_record->config.string_bytes = 32768;
+    segment_record->config = host->config.system; /* the effective config (host_new) */
     segment_record->config.io_processors = host->io_processors;
     segment_record->config.io_processor_count = host->io_processor_count;
     segment_record->config.first_serial = (uint64_t)index << SERIALS_SHIFT;

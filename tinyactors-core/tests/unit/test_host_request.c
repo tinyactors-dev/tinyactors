@@ -363,10 +363,85 @@ static void test_create(void) {
     CHECK_EQUAL(ta_host_create((ta_bytes){"\xa0", 1}, &environment, &host), TA_ERROR_INVALID);
 }
 
+/* host.config answers the effective config: the system's defaults where the
+ * config has none (ticksPerSecond 1e9), its own values where it has them,
+ * and a watch's seconds are counted in the effective rate. The reply is a
+ * config ta_host_create takes, and a host made from it answers the same. */
+static uint64_t config_ticks(ta_host *host) {
+    static host_ask a;
+    ask_begin(&a, "host.config", 0);
+    if (ask_send(host, &a) != TA_OK) return UINT64_MAX;
+    return ask_uint(&a, ask_field(&a, 0, "system"), "ticksPerSecond");
+}
+
+/* trace.watch for `seconds` at time 0: the run's next deadline, its end. */
+static ta_time watch_end(ta_host *host, uint64_t seconds) {
+    static host_ask a;
+    ta_cbor_writer *w = ask_begin(&a, "trace.watch", 2);
+    ta_cbor_write_text(w, ta_string("rules"));
+    ta_cbor_write_array(w, 1);
+    ta_cbor_write_map(w, 0);
+    ta_cbor_write_text(w, ta_string("seconds"));
+    ta_cbor_write_uint(w, seconds);
+    if (ask_send(host, &a) != TA_OK || a.result == TA_NIL) return 0;
+    return ta_host_run(host, 1000).next_deadline;
+}
+
+static void test_config_effective(void) {
+    char text[1024];
+    ta_host *host = NULL;
+    static host_ask a, b;
+    /* {"systemID": "h"}: every default */
+    CHECK_EQUAL(create("\xa1\x68systemID\x61h", 12, text, &host), TA_OK);
+    CHECK_EQUAL(config_ticks(host), 1000000000u);
+    ask_begin(&a, "host.config", 0);
+    CHECK_EQUAL(ask_send(host, &a), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{\"systemID\":\"h\",\"system\":{\"maxActors\":64,\"maxEvents\":256,"
+                                  "\"maxTimers\":64,\"workspaces\":4,\"maxRequests\":16,\"outbox\":64,"
+                                  "\"quantum\":1000,\"instanceBytes\":0,\"stringBytes\":17408,"
+                                  "\"ticksPerSecond\":1000000000,\"traceBytes\":131072,"
+                                  "\"traceContexts\":256,\"traceRules\":16,\"traceSeed\":0,"
+                                  "\"tracing\":true},\"ioProcessors\":[],\"migrateQuantum\":256,"
+                                  "\"maxSubscriptions\":64}")));
+    CHECK_EQUAL(watch_end(host, 2), 2000000000u);
+    /* the reply is a config: a host made from it answers the same */
+    ta_host *again = NULL;
+    size_t prefix = 12; /* {"id": 1, "result": ... */
+    CHECK_EQUAL(create(a.reply + prefix, a.answer.length - prefix, text, &again), TA_OK);
+    ask_begin(&b, "host.config", 0);
+    CHECK_EQUAL(ask_send(again, &b), TA_OK);
+    CHECK(reply_is(b.text, a.text));
+    ta_host_free(again);
+    /* params: none, or an empty map; anything else is refused */
+    ask_begin(&a, "host.config", 1);
+    ta_cbor_write_text(&a.writer, ta_string("x"));
+    ta_cbor_write_uint(&a.writer, 1);
+    CHECK_EQUAL(ask_send(host, &a), TA_OK);
+    CHECK(a.result == TA_NIL);
+    CHECK(strstr(a.text, "\"code\":-32602") != NULL && strstr(a.text, "\"path\":\"params.x\"") != NULL);
+    ta_host_free(host);
+    /* {"systemID": "h", "system": {"ticksPerSecond": 1000}, "telemetry": {}} */
+    CHECK_EQUAL(create("\xa3\x68systemID\x61h\x66system\xa1\x6eticksPerSecond\x19\x03\xe8"
+                       "\x69telemetry\xa0",
+                       49, text, &host),
+                TA_OK);
+    CHECK_EQUAL(config_ticks(host), 1000u);
+    CHECK_EQUAL(watch_end(host, 2), 2000u);
+    ask_begin(&a, "host.config", 0);
+    CHECK_EQUAL(ask_send(host, &a), TA_OK);
+    uint32_t telemetry = ask_field(&a, 0, "telemetry");
+    CHECK_EQUAL(ask_uint(&a, telemetry, "stagingBytes"), TA_OTLP_STAGING_BYTES_DEFAULT);
+    CHECK_EQUAL(ask_uint(&a, telemetry, "logBytes"), TA_OTLP_STAGING_BYTES_DEFAULT / 4u);
+    CHECK_EQUAL(ask_uint(&a, telemetry, "openSpans"), 1024u);
+    CHECK_EQUAL(ask_uint(&a, telemetry, "chunks"), 8192u);
+    ta_host_free(host);
+}
+
 int main(void) {
     RUN(test_spans_and_metrics);
     RUN(test_actor_context);
     RUN(test_subscribe);
     RUN(test_create);
+    RUN(test_config_effective);
     TEST_MAIN_END();
 }

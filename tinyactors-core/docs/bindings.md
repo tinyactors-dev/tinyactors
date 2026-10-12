@@ -30,10 +30,12 @@ config  = cbor_encode({ systemID: "app", system: {...}, telemetry: {...} })
 error   = ta_buffer of your own
 env     = { allocator, datamodels[], datamodel_count, trace_policy, error: &error }
 ta_host_create(config, &env, &host)      # TA_ERROR_INVALID: error holds the reply
+rate    = ta_host_request(host, {"id": 1, "method": "host.config"}).result.system.ticksPerSecond
+                                         # once: the ticks per second of the monotonic clock
 ta_host_add_image(host, image, &segment); ta_host_boot(host, segment)
 ```
 
-- **The config is CBOR** ([host-config.md](host-config.md)): the system id, each segment’s capacities, the host’s I/O processors, the OTLP encoder and the host’s limits. Build it with the CBOR module from the language’s data. Core fills the defaults and validates it; a refused config answers in `environment->error` with the same `{"error": {"code", "message", "data": {"reason", "path"}}}` as a refused request. Raise it as the language’s exception, unchanged.
+- **The config is CBOR** ([host-config.md](host-config.md)): the system id, each segment’s capacities, the host’s I/O processors, the OTLP encoder and the host’s limits. Build it with the CBOR module from the language’s data. Core fills the defaults and validates it, and the request `host.config` ([requests.md](requests.md)) answers the effective config, every default filled in; a refused config answers in `environment->error` with the same `{"error": {"code", "message", "data": {"reason", "path"}}}` as a refused request. Raise it as the language’s exception, unchanged.
 - **The environment** holds what cannot be data: the allocator, the datamodels (at most 8), the trace policy and the error buffer.
 
 ```
@@ -56,7 +58,7 @@ on wake (timer fired, input arrived, I/O completed):
 ```
 
 - **One timer,** re-armed after every loop; never one per actor or per deadline. `next_deadline` already holds every deadline the host has: timers and delayed sends, a migration job’s timeout, the TTL of envelopes queued for a peer that is down, the end of a trace watch, and the encoder’s flush interval.
-- **Both clocks in one call.** `monotonic` (`ta_time`, the config’s `ticksPerSecond`, 1000 for milliseconds) drives timers, deadlines and TTLs; `wall_ns` (nanoseconds since the Unix epoch) stamps the trace records written since the last call. Call it before every run.
+- **Both clocks in one call.** `monotonic` (`ta_time`, in ticks at the rate `host.config` answers as `system.ticksPerSecond`) drives timers, deadlines and TTLs; `wall_ns` (nanoseconds since the Unix epoch) stamps the trace records written since the last call. Call it before every run.
 - **Bound each turn.** The budget caps work per run; across many runs, yield to the runtime’s event loop (a macrotask in a browser, a callback in Node, a Looper message on Android) so a busy system never blocks it.
 - **A caller’s own clock** (simulation, tests) replaces the timer: time moves only when the caller advances it and runs the loop. A binding offers it as a simulated clock in its public API (the shape of xstate’s `SimulatedClock` and `increment(ms)`, the meaning ours): a host created with one arms no timer; `increment(ms)` calls `ta_host_advance_time`, with the simulated time as the wall clock, and runs the loop until idle; inputs run the turn at the current time (`ROADMAP.md`, step 8, M1).
 - **Not every program has an event loop.** Offer the same turn under two drivers where the language has both: a synchronous one (run until idle, sleeping to the next deadline or following the caller’s clock) and the language’s event loop (asyncio, a Looper, a dispatch queue).
@@ -119,7 +121,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 
 ## 7 · Time
 
-- One monotonic clock in the config’s `ticksPerSecond` (1000: milliseconds), advanced with the wall clock before every run and every input that depends on it (spawn, deliver, adopt).
+- One monotonic clock in ticks, at the rate `host.config` answers as `system.ticksPerSecond` (a config without the key gets the system’s default, 1000000000: nanoseconds). Read it once, after creating the host, and convert the language’s clock with it, both ways: a time for `ta_host_advance_time`, and `next_deadline` back to the clock of the timer you arm. Never assume a rate of your own; a caller who wants milliseconds sets `ticksPerSecond` 1000 in the config. Advance the clock with the wall clock before every run and every input that depends on it (spawn, deliver, adopt).
 - A host restored from a snapshot (same build, while its actors were out of memory) resumes at the snapshot’s time: start the clock there.
 - A blob that leaves for another host is rebased to time 0 on export and to the receiver’s clock on adopt (`ta_blob_rebase`).
 - Span times are wall-clock nanoseconds, interpolated between the `wall_ns` of two calls to `ta_host_advance_time`; 0 means unknown.
@@ -150,7 +152,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 
 ## 10 · Requests
 
-- **Everything rarely called is a method of `ta_host_request`:** trace configuration, watches, stats, inspection, state values, a session’s variables, subscriptions and decoded spans. The catalogue is [requests.md](requests.md): every method, its params, defaults, replies and errors. An API item whose method is not there does not exist; what is not a method is listed there too.
+- **Everything rarely called is a method of `ta_host_request`:** trace configuration, watches, stats, the effective config, inspection, state values, a session’s variables, subscriptions and decoded spans. The catalogue is [requests.md](requests.md): every method, its params, defaults, replies and errors. An API item whose method is not there does not exist; what is not a method is listed there too.
 - **The shape is JSON-RPC 2.0’s, without its `"jsonrpc"` member, in CBOR:** `{"method", "params", "id"}` in; `{"id", "result"}` or `{"id", "error": {"code", "message", "data": {"reason", "path"}}}` out. A request without `"id"` is a notification: applied, with no reply and no error reported. Pass an id whenever the caller wants the answer.
 - An API method is one line: build the map from the caller’s arguments with the CBOR module, send it, return the `result`. An `error` becomes the language’s exception, with its `code`, `reason`, `path` and `message` unchanged. Match on `code` and `reason`, never on `message`.
 - `TA_ERROR_NO_MEMORY` means nothing was applied: grow the reply buffer and send the same request again.

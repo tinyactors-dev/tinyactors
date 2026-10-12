@@ -21,7 +21,12 @@ it: a converter from its language's object to the struct. A CBOR map is
 the shape a binding already writes for requests. A new key needs no new
 code in a binding that passes the application's map through.
 
-**Core validates and fills defaults.** The host knows which keys it
+**Core validates and fills defaults.** The host keeps the effective
+config: at `ta_host_create` it fills in every default with the code a
+system and an encoder fill theirs with, and the request `host.config`
+([requests.md](requests.md)) answers it, every key present, in the shape
+below. A binding reads what it needs from there (the clock's
+`ticksPerSecond`) and never assumes a default. The host knows which keys it
 takes, their types and their limits, and it reports a refusal the way it
 answers a request: a code, a reason, a path such as `system.maxActors`,
 and a message. A binding does not check the config, does not keep its own
@@ -76,20 +81,40 @@ Why these defaults:
   needs a binding that takes its effects and posts the bytes. A host that
   does not export pays nothing (a null encoder).
 
-`system` (each a uint; 0 or absent: the system's default,
-`ta_system_config` in `tinyactors/system.h`): `maxActors`, `maxEvents`,
-`maxTimers`, `workspaces`, `maxRequests`, `outbox`, `quantum`,
-`instanceBytes`, `stringBytes`, `ticksPerSecond`, `traceBytes`,
-`traceContexts`, `traceRules`, `traceSeed`; and `tracing` (bool, default
-`true`: the trace records are written, so a binding can turn on export or a
-watch later without making the host again).
+`system` (each a uint; 0 or absent: the system's default, filled in by
+`ta_system_config`'s code in `src/system/system.c`; larger values are
+clamped to the limits in `tinyactors/system.h`):
+
+| Key | Default |
+|---|---|
+| `maxActors` | 64 (at most 8388606) |
+| `maxEvents` | 256 |
+| `maxTimers` | 64 |
+| `workspaces` | 4 |
+| `maxRequests` | 16 |
+| `outbox` | 64 |
+| `quantum` | 1000 |
+| `instanceBytes` | 0: derived from each segment's image and `maxActors` |
+| `stringBytes` | 16384 + 16 × `maxActors` |
+| `ticksPerSecond` | 1000000000 (the monotonic clock in nanoseconds; 1000 for milliseconds) |
+| `traceBytes` | 512 × `maxEvents`, at least 65536 (0 when `tracing` is false) |
+| `traceContexts` | `maxEvents` (0 when `tracing` is false) |
+| `traceRules` | 16, at most 255 (0 when `tracing` is false) |
+| `traceSeed` | 0 |
+
+and `tracing` (bool, default `true`: the trace records are written, so a
+binding can turn on export or a watch later without making the host
+again).
 
 `telemetry` (present: the host has an encoder and gives
 `TA_HOST_EFFECT_TRACES` and `TA_HOST_EFFECT_LOGS`):
 - uints, 0 or absent for the encoder's default (`ta_otlp_config` in
-  `tinyactors/otlp.h`, for the same reason as `system`): `stagingBytes`,
-  `logBytes`, `openSpans`, `chunks`, `scopes`, `valueLimit`, `renderBytes`,
-  `resourceBytes`, `metricBytes`, `spanMetricCharts`;
+  `tinyactors/otlp.h`, filled in by the encoder's code, for the same reason
+  as `system`): `stagingBytes` 1048576 (from 65536 to 1073741824), `logBytes` a
+  quarter of `stagingBytes`, `openSpans` 1024, `chunks` 8 × `openSpans`,
+  `scopes` 64, `valueLimit` 256, `renderBytes` 16384 (at least
+  `valueLimit` + 4), `resourceBytes` 4096, `metricBytes` 65536,
+  `spanMetricCharts` 64;
 - `flushInterval` (uint, host clock): a request is ready this long after its
   first record was staged; 0 or absent: only when the staging is full. The
   host has no idea how often a backend wants data; a full staging is the

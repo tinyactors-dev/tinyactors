@@ -16,8 +16,11 @@ static uint32_t slab_class(uint32_t n) {
     }
 }
 
-static void normalize_config(const ta_image_view *view, const ta_system_config *in,
-                             ta_system_config *config) {
+/* `in` with every default filled in and every count clamped: the config a
+ * system runs with. Without a view (the host, before it has an image)
+ * instance_bytes stays as given: 0 derives it from each image's charts. */
+void ta_system_config_normalize(const ta_image_view *view, const ta_system_config *in,
+                                ta_system_config *config) {
     ta_memset(config, 0, sizeof *config);
     if (in)
         ta_memcpy(config, in, in->size && in->size < sizeof *config ? in->size : sizeof *config);
@@ -60,7 +63,7 @@ static void normalize_config(const ta_image_view *view, const ta_system_config *
     } else {
         config->trace_bytes = config->trace_contexts = config->trace_rules = 0;
     }
-    if (!config->instance_bytes) {
+    if (!config->instance_bytes && view) {
         uint32_t m = 0;
         for (uint32_t i = 0; i < view->chart_count; i++) {
             uint32_t s = ta_instance_layout_of(&view->charts[i]).size;
@@ -139,7 +142,7 @@ ta_status ta_system_layout(const ta_image *image, const ta_system_config *config
     const ta_image_view *view = ta_image_view_of(image);
     if (!view->base) return TA_ERROR_INVALID;
     ta_system_config normalized;
-    normalize_config(view, config, &normalized);
+    ta_system_config_normalize(view, config, &normalized);
     ta_arena arena;
     carved o;
     ta_arena_init_measure(&arena);
@@ -300,7 +303,7 @@ ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
     *out = (ta_system *)0;
     if (!memory || !view->base) return TA_ERROR_INVALID;
     ta_system_config normalized;
-    normalize_config(view, config, &normalized);
+    ta_system_config_normalize(view, config, &normalized);
     ta_arena arena;
     carved o;
     ta_system *system = place(memory, length, view, &normalized, &o, &arena);
@@ -885,10 +888,10 @@ ta_status ta_system_relocate(ta_system **relocated, ta_memory memory,
     size_t new_length = memory.length;
     const ta_image_view *view = &system->core.image_view;
     ta_system_config config, wanted;
-    normalize_config(view, new_config ? new_config : &system->config, &wanted);
+    ta_system_config_normalize(view, new_config ? new_config : &system->config, &wanted);
     /* a system keeps tracing on or off for its life: events hold contexts */
     wanted.tracing = system->config.tracing;
-    normalize_config(view, &wanted, &config);
+    ta_system_config_normalize(view, &wanted, &config);
     config.io_processors = system->config.io_processors;
     config.io_processor_count = system->config.io_processor_count;
     config.trace_policy = (const ta_trace_policy *)0; /* the system keeps its own */

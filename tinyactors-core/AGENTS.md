@@ -65,6 +65,12 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 - Scheduler yields must never change SCXML-observable state (`_event`,
   queue order). Only semantic transitions touch `instance.current_event`.
 - Every building block gets a unit test in `tests/unit/`.
+- A default lives in one place: `ta_system_config_normalize`
+  (`src/system/system.c`) for a system's config, `ta_otlp_config_normalize`
+  (`src/otlp/otlp.c`) for an encoder's. The host fills its copy of the
+  config with them at `ta_host_create` (the effective config, which
+  `host.config` answers) and reads values from there; never write a
+  default again elsewhere, and never test a field for 0 to apply one.
 - A rarely called host operation is a method of `ta_host_request`: follow
   "Adding a method" in `docs/requests.md` for what belongs there and how.
 - Bytes that cross the API (requests, configs, envelopes, values) are

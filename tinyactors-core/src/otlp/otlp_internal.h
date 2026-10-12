@@ -193,4 +193,9 @@ struct ta_otlp {
     uint64_t records, dropped, skipped, truncated;
 };
 
+/* `in` with every default filled in and every capacity clamped (otlp.c): the
+ * config an encoder runs with. The host fills its copy of the telemetry
+ * config with it, so the copy is the effective one. */
+void ta_otlp_config_normalize(const ta_otlp_config *in, ta_otlp_config *config);
+
 #endif /* TINYACTORS_OTLP_OTLP_INTERNAL_H */

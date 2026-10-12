@@ -19,7 +19,6 @@
 #define REQUEST_ACTORS     512u  /* sessions an "actor.list" reply holds */
 #define WATCH_SECONDS      900u  /* a watch's default length: 15 minutes */
 #define SAMPLE_WHOLE       1000000u
-#define TICKS_PER_SECOND   1000000000ull /* ta_system_config's default */
 
 /* Error codes: JSON-RPC's where they fit, the server range for the host's own. */
 enum {
@@ -451,8 +450,8 @@ static void request_run_trace_watch(request *r, uint32_t map) {
             request_refuse(r, "range", "seconds is between 0 and 1e9, or null for no end");
             return;
         }
-        uint64_t tps = r->host->config.system.ticks_per_second;
-        watch.until = r->host->now + (uint64_t)(seconds * (double)(tps ? tps : TICKS_PER_SECOND) + 0.5);
+        watch.until = r->host->now +
+                      (uint64_t)(seconds * (double)r->host->config.system.ticks_per_second + 0.5);
     }
     cbor_output_head(&r->out, CBOR_MAJOR_MAP, 1);
     request_put_key(r, "id");
@@ -885,6 +884,8 @@ typedef struct request_method {
     void (*run)(request *r, uint32_t params); /* params: the map, or TA_NIL for none */
 } request_method;
 
+static void request_run_host_config(request *r, uint32_t map); /* with the config's tables */
+
 static const request_method REQUEST_METHODS[] = {
     {"trace.configure", request_run_trace_configure},
     {"trace.watch", request_run_trace_watch},
@@ -892,6 +893,7 @@ static const request_method REQUEST_METHODS[] = {
     {"trace.end", request_run_trace_end},
     {"trace.spans.decode", request_run_trace_spans_decode},
     {"host.stats", request_run_host_stats},
+    {"host.config", request_run_host_config},
     {"actor.list", request_run_actor_list},
     {"actor.get", request_run_actor_get},
     {"actor.context", request_run_actor_context},
@@ -1032,6 +1034,83 @@ static const config_number OTLP_NUMBERS[] = {
     CONFIG_U32("metricBytes", ta_otlp_config, metric_bytes),
     CONFIG_U32("spanMetricCharts", ta_otlp_config, span_metric_charts),
 };
+
+/* ---- host.config: the effective config, in the shape ta_host_create takes ---------- */
+
+/* Each number of `table` in `base`, as a key and an unsigned integer. */
+static void config_put_numbers(request *r, const config_number *table, uint32_t count,
+                               const void *base) {
+    for (uint32_t i = 0; i < count; i++) {
+        const unsigned char *at = (const unsigned char *)base + table[i].offset;
+        uint64_t value = 0;
+        if (table[i].wide) ta_memcpy(&value, at, sizeof value);
+        else {
+            uint32_t narrow;
+            ta_memcpy(&narrow, at, sizeof narrow);
+            value = narrow;
+        }
+        request_put_key(r, table[i].name);
+        cbor_output_uint(&r->out, value);
+    }
+}
+
+static void config_put_telemetry(request *r, const host_telemetry *telemetry) {
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 15);
+    config_put_numbers(r, OTLP_NUMBERS, sizeof OTLP_NUMBERS / sizeof OTLP_NUMBERS[0],
+                       &telemetry->otlp);
+    request_put_key(r, "flushInterval");
+    cbor_output_uint(&r->out, telemetry->flush_interval);
+    request_put_key(r, "linkParents");
+    request_put_bool(r, (telemetry->otlp.flags & TA_OTLP_LINK_PARENTS) != 0);
+    request_put_key(r, "values");
+    request_put_bool(r, (telemetry->otlp.flags & TA_OTLP_VALUES) != 0);
+    request_put_key(r, "logs");
+    request_put_bool(r, (telemetry->otlp.flags & TA_OTLP_NO_LOGS) == 0);
+    request_put_key(r, "resource");
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, telemetry->resource_count);
+    for (uint32_t i = 0; i < telemetry->resource_count; i++) {
+        cbor_output_text(&r->out, telemetry->resource[i].key);
+        cbor_output_text(&r->out, telemetry->resource[i].value);
+    }
+}
+
+/* host.config (docs/requests.md): every member of the host's config with the
+ * value it runs with, defaults filled in, keys in host-config.md's order. */
+static void request_run_host_config(request *r, uint32_t map) {
+    static const char *const fields[] = {NULL};
+    if (!request_keys_known(r, map, NULL, 0, fields)) return;
+    const ta_host *host = r->host;
+    const host_config *config = &host->config;
+    int telemetry = config->telemetry.otlp.size != 0;
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, telemetry ? 6u : 5u);
+    request_put_key(r, "systemID");
+    cbor_output_text(&r->out, config->system_id);
+    request_put_key(r, "system");
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 15);
+    config_put_numbers(r, SYSTEM_NUMBERS, sizeof SYSTEM_NUMBERS / sizeof SYSTEM_NUMBERS[0],
+                       &config->system);
+    request_put_key(r, "tracing");
+    request_put_bool(r, config->system.tracing != TA_TRACING_DISABLED);
+    request_put_key(r, "ioProcessors"); /* [0] is the host's own remote processor */
+    cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, host->io_processor_count - 1u);
+    for (uint32_t i = 1; i < host->io_processor_count; i++) {
+        cbor_output_head(&r->out, CBOR_MAJOR_MAP, 3);
+        request_put_key(r, "type");
+        cbor_output_text(&r->out, host->io_processors[i].type);
+        request_put_key(r, "location");
+        cbor_output_text(&r->out, host->io_processors[i].location);
+        request_put_key(r, "sync");
+        request_put_bool(r, (host->io_processors[i].flags & TA_IO_PROCESSOR_SYNC) != 0);
+    }
+    request_put_key(r, "migrateQuantum");
+    cbor_output_uint(&r->out, config->migrate_quantum);
+    request_put_key(r, "maxSubscriptions");
+    cbor_output_uint(&r->out, config->max_subscriptions);
+    if (telemetry) {
+        request_put_key(r, "telemetry");
+        config_put_telemetry(r, &config->telemetry);
+    }
+}
 
 /* The numbers of `table` found in the map at `map` (`scope`: its name) into `base`. */
 static int config_read_numbers(request *r, uint32_t map, const char *scope, const config_number *table,

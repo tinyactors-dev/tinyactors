@@ -20,9 +20,9 @@
 /* The host's config, read from ta_host_create's CBOR (docs/host-config.md)
  * and its environment. Strings point into memory the host owns. */
 typedef struct host_telemetry {
-    ta_otlp_config otlp;               /* size 0: no encoder */
+    ta_otlp_config otlp;               /* size 0: no encoder; else defaults filled in */
     ta_time flush_interval;            /* host clock; 0: only when the staging is full */
-    const ta_otlp_attribute *resource; /* copied by host_telemetry_init */
+    const ta_otlp_attribute *resource; /* the host's copy (host_new) */
     uint32_t resource_count;
     uint32_t pad;
 } host_telemetry;
@@ -31,8 +31,9 @@ typedef struct host_config {
     uint32_t datamodel_count;
     uint32_t io_processor_count;
     ta_string_view system_id;
-    ta_system_config system; /* capacities of each new segment; io_processors and
-                                first_serial are set by the host layer */
+    ta_system_config system; /* capacities of each new segment, defaults filled in
+                                (the effective config, host.config); io_processors
+                                and first_serial are set by the host layer */
     const ta_datamodel_binding *datamodels;
     const ta_io_processor_descriptor *io_processors;
     uint32_t migrate_quantum;   /* default 256 */
@@ -142,6 +143,8 @@ struct ta_host {
     uint32_t watch_count, watch_capacity, watch_sequence;
     char *io_processor_text; /* the strings of io_processors[1..] */
     size_t io_processor_text_length;
+    void *resource_block; /* config.telemetry.resource and its strings (host_new) */
+    size_t resource_bytes;
     uint64_t *subscriptions; /* actor.subscribe: config.max_subscriptions sessions, allocated
                                 with the first subscription (never during a run) */
     uint32_t subscription_count;

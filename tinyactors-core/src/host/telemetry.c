@@ -7,24 +7,13 @@
 #include "base/memory.h"
 #include "host/host_internal.h"
 
-static void encoder_capacities(ta_otlp_config *config) {
-    if (!config->open_spans) config->open_spans = 1024;
-    if (!config->chunks) config->chunks = 8u * config->open_spans;
-    if (!config->scopes) config->scopes = 64;
-}
-
 static const host_encoder encoder_null, encoder_otlp;
 
 ta_status host_telemetry_init(ta_host *host) {
     const host_telemetry *telemetry = &host->config.telemetry;
     host->encoder = &encoder_null;
     if (!telemetry->otlp.size) return TA_OK;
-    ta_otlp_config config;
-    ta_memset(&config, 0, sizeof config);
-    ta_memcpy(&config, &telemetry->otlp,
-              telemetry->otlp.size < sizeof config ? telemetry->otlp.size : sizeof config);
-    config.size = sizeof config;
-    encoder_capacities(&config);
+    ta_otlp_config config = telemetry->otlp; /* defaults filled in (host_new) */
     size_t bytes = 0;
     ta_status status = ta_otlp_layout(&config, &bytes);
     if (status != TA_OK) return status;
@@ -216,9 +205,8 @@ static ta_status otlp_metrics(ta_host *host, ta_buffer *out) {
         ta_host_stats stats;
         stats.size = sizeof stats;
         host_stats_get(host, &stats);
-        uint64_t tps = host->config.system.ticks_per_second;
         ta_otlp_stats_input input = {sizeof input, charts, chart_stats, systems, live, 0, &stats,
-                                     tps ? tps : 1000000000ull, host->wall_start_ns,
+                                     host->config.system.ticks_per_second, host->wall_start_ns,
                                      host->wall_ns};
         ta_status status = ta_otlp_add_stats(host->otlp, &input);
         if (bytes) host_free(host, block, bytes);
