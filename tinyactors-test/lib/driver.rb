@@ -24,10 +24,12 @@ class Driver
 
   attr_reader :command
 
-  # `timeout`: seconds a reply may take before the command counts as hung.
-  def initialize(command, timeout: 60)
+  # `timeout`: seconds a reply may take before the command counts as hung;
+  # `chdir`: the directory it runs in.
+  def initialize(command, timeout: 60, chdir: Dir.pwd)
     @command = command
     @timeout = timeout
+    @chdir = chdir
     @next_id = 0
     start
   end
@@ -54,15 +56,19 @@ class Driver
   # The same result as Ruby values (CBOR.value).
   def call(method, params = nil) = CBOR.value(call_item(method, params))
 
-  # The end of what the command wrote on its standard error.
-  def stderr_tail(lines = 20)
-    @stderr_lines.last(lines).join
+  # How many lines of standard error there are so far, and the lines after
+  # such a count: what the command said during one case.
+  def stderr_count = @stderr_lines.size
+
+  def stderr_since(count, lines = 20)
+    sleep(0.05) # the reader thread may not have the last lines yet
+    @stderr_lines.drop(count).last(lines).join
   end
 
   def close
     @stdin.close unless @stdin.closed?
     @stdout.close unless @stdout.closed?
-    @wait.join(5)
+    @wait.join(2)
     @stderr_thread.join(1)
     Process.kill('KILL', @wait.pid) if @wait.alive?
   rescue Errno::ESRCH, IOError
@@ -78,7 +84,7 @@ class Driver
   private
 
   def start
-    @stdin, @stdout, stderr, @wait = Open3.popen3(*@command)
+    @stdin, @stdout, stderr, @wait = Open3.popen3(*@command, chdir: @chdir)
     @stdin.binmode
     @stdout.binmode
     @stderr_lines = []

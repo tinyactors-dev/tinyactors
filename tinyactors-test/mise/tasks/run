@@ -1,0 +1,47 @@
+#!/usr/bin/env ruby
+#MISE description="Run the suites against an implementation: run -- <command…> [--suite protocol|scenarios|w3c]… [--datamodel quickjs|native] [--realm auto|isolated] [--language ecmascript] [--timeout <s>]"
+# vim:ft=ruby
+
+# The command is every argument that is not one of the options below, or
+# everything after a second `--`. It runs in the directory mise was called
+# from, and speaks docs/driver.md on its standard input and output. The
+# suites are protocol (suites/protocol), scenarios (suites/scenarios) and
+# w3c (the W3C IRP suite, fetched and converted on first use); without
+# --suite, all three. Exit status 1 when a case fails.
+
+require_relative '../../lib/runner'
+
+OPTIONS = %w[--suite --datamodel --realm --language --timeout].freeze
+
+def usage(message)
+  abort "run: #{message}\nusage: mise run //tinyactors-test:run -- <command…> [--suite protocol|scenarios|w3c]… " \
+        '[--datamodel quickjs|native] [--realm auto|isolated] [--language ecmascript] [--timeout <s>]'
+end
+
+arguments = ARGV.dup
+command = []
+options = Hash.new { |hash, key| hash[key] = [] }
+until arguments.empty?
+  argument = arguments.shift
+  if argument == '--' && !command.empty?
+    command.concat(arguments)
+    break
+  elsif OPTIONS.include?(argument)
+    usage("#{argument} needs a value") if arguments.empty?
+    options[argument] << arguments.shift
+  elsif argument != '--'
+    command << argument
+  end
+end
+usage('no command') if command.empty?
+suites = options['--suite'].empty? ? Runner::SUITES : options['--suite']
+unknown = suites - Runner::SUITES
+usage("no suite #{unknown.join(', ')}") unless unknown.empty?
+
+runner = Runner.new(command,
+                    datamodel: options['--datamodel'].last || 'quickjs',
+                    realm: options['--realm'].last,
+                    language: options['--language'].last || 'ecmascript',
+                    timeout: Integer(options['--timeout'].last || 60),
+                    chdir: ENV.fetch('MISE_ORIGINAL_CWD', Dir.pwd))
+exit(runner.run(suites) ? 0 : 1)

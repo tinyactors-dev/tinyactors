@@ -2,7 +2,7 @@
 
 The bytes a host takes and gives across its API, written down case by case.
 They are protocol tests, not conformance tests in the W3C sense: they fix
-the encoding, not the SCXML semantics (those are the transcripts and the
+the encoding, not the SCXML semantics (those are the scenarios and the
 W3C suite beside this directory). Every binding reproduces them through its own CBOR module and
 its own calls into core: the same request bytes in, the same reply bytes
 out ([ADR 0009](../../../docs/adr/0009-one-host-two-queues.md), decision 11).
@@ -80,8 +80,14 @@ Everything else is pinned: system ids, the trace seed, the clock.
 ## Setups
 
 A case names the host it runs on (`setup`); each case gets a new one. All of
-them run the ECMAScript datamodel, with `ticksPerSecond` 1000, `maxActors` 8,
-`traceSeed` 1, `maxSubscriptions` 1 and no telemetry encoder.
+them run the ECMAScript datamodel (quickjs, whatever datamodel the runner
+was given: their charts are ECMAScript), with `ticksPerSecond` 1000,
+`maxActors` 8, `traceSeed` 1, `maxSubscriptions` 1 and no telemetry
+encoder. The charts are in `setups/`; after spawning, a setup runs the host
+until it is idle with the wall clock at 1700000000000000000 ns. The runner
+builds them with the driver's methods (`lib/runner.rb`, `setup`), as core's
+`run_protocol.c` does with its calls (`world_open`). `values.txt` runs on the
+datamodel the runner was given, on a host as `empty`.
 
 | Setup | The host |
 |---|---|

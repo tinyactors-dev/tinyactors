@@ -1,0 +1,1 @@
+<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='pinged' initial='s'><datamodel><data id='n' expr='1'/><data id='who' expr="'bob'"/><data id='nothing'/></datamodel><state id='s'><transition event='ping' target='t'><assign location='n' expr='n + 1'/></transition></state><state id='t'/></scxml>

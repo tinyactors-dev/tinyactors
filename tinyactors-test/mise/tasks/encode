@@ -15,9 +15,9 @@
 
 require 'pathname'
 require_relative '../../lib/cbor'
+require_relative '../../lib/vectors'
 
 ROOT = Pathname.new(__dir__).join('../..').expand_path
-HEX_KEYS = %w[send reply cbor back error envelope].freeze
 
 # The notation that is not an item: the hex stays as written.
 def diagnostic?(diag) = !diag.start_with?('(')
@@ -59,7 +59,7 @@ Dir[ROOT.join('suites/protocol/*.txt').to_s].sort.each do |path|
   changed = false
   lines.each_with_index do |line, index|
     key, hex = line.split(' ', 2)
-    next unless HEX_KEYS.include?(key) && hex
+    next unless Vectors::HEX_KEYS.include?(key) && hex
 
     following = lines[index + 1].to_s
     next unless following.start_with?('diag ')
