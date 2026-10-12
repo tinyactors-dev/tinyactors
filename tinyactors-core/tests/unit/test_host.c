@@ -236,8 +236,8 @@ static void test_class_across_segments(void) {
     CHECK(strcmp(e.log, "pong:1;") == 0);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_WATCHED); /* echo's, in segment 1 */
     CHECK_EQUAL(begin_class(&e, 0, "pong"), TA_TRACE_DETAIL_WATCHED); /* and back */
-    CHECK(unwatch(e.host, id, "{\"result\":{}}"));
-    CHECK(unwatch(e.host, id, "{\"error\":{\"code\":-32001,\"message\":\"no such watch: it ended or never was\",\"data\":{\"reason\":\"stale\",\"path\":\"params.id\"}}}"));
+    CHECK(unwatch(e.host, id, "{\"id\":1,\"result\":{}}"));
+    CHECK(unwatch(e.host, id, "{\"id\":1,\"error\":{\"code\":-32001,\"message\":\"no such watch: it ended or never was\",\"data\":{\"reason\":\"stale\",\"path\":\"params.id\"}}}"));
     CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
     run(&e);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);
@@ -247,7 +247,7 @@ static void test_class_across_segments(void) {
     drain(&e);
     CHECK_EQUAL(result.next_deadline, 500u);
     ta_host_advance_time(e.host, (ta_host_time){500, 0});
-    CHECK(unwatch(e.host, id, "{\"error\":{\"code\":-32001,\"message\":\"no such watch: it ended or never was\",\"data\":{\"reason\":\"stale\",\"path\":\"params.id\"}}}"));
+    CHECK(unwatch(e.host, id, "{\"id\":1,\"error\":{\"code\":-32001,\"message\":\"no such watch: it ended or never was\",\"data\":{\"reason\":\"stale\",\"path\":\"params.id\"}}}"));
     CHECK_EQUAL(send(&e, w, "ask", message), TA_OK);
     run(&e);
     CHECK_EQUAL(begin_class(&e, 1, "ping"), TA_TRACE_DETAIL_SAMPLED);

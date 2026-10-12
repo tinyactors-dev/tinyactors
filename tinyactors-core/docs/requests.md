@@ -13,22 +13,29 @@ here, it does not exist. Examples are in CBOR diagnostic notation.
   - `method` (text, required): the method's name;
   - `params` (map, optional): the method's params, text keys; absent means
     none. A param that the method does not take is refused;
-  - `id` (uint or text, optional): echoed in the reply.
+  - `id` (an integer, text or null, optional): echoed in the reply.
+- **A notification** is a request without `id`, as in JSON-RPC 2.0. The
+  host applies it and writes no reply: `ta_host_request` returns `TA_OK`
+  with `reply->length` 0, and its errors are not reported, including a
+  method that does not exist and the host's allocator refusing. Send an
+  `id` to learn the outcome. A request that is not one (the errors with
+  code -32700 and -32600 below) is answered even without an `id`.
 - **A reply** is a map, its keys in this order:
-  - `id`, when the request had a valid one;
+  - `id`: the request's, the same item; `null` when the request could not
+    be read (codes -32700 and -32600), as JSON-RPC 2.0 has it;
   - then `result` (the method's result), or `error`:
     `{"code": int, "message": text, "data": {"reason": text, "path": text}}`.
   - `code` is from the table below; `reason` names the condition; `path`
     names the member or param: `"method"`, `"params.sample"`,
     `"params.rules[1].from"`, or `""` for the request as a whole.
   - `message` is for people. Do not match on it.
-- **One difference from JSON-RPC:** a request without an `id` still gets a
-  reply. There are no notifications; the caller asked, and the host answers
-  in the caller's buffer either way.
+- **Batches** (a CBOR array of requests) are not supported yet: one is
+  refused with -32600, as anything but a map is. They may come later.
 - **Keys in replies** come in the order shown on this page, which is
   always the same (ADR 0009, decision 3). Byte strings stay bytes.
 - **The status of `ta_host_request`:**
-  - `TA_OK`: `reply` holds a result or an error reply.
+  - `TA_OK`: `reply` holds a result or an error reply (a notification:
+    nothing).
   - `TA_ERROR_NO_MEMORY`: the reply did not fit. `reply->length` is what it
     needs and nothing was applied. Grow the buffer and send the request
     again.
@@ -40,7 +47,7 @@ here, it does not exist. Examples are in CBOR diagnostic notation.
 | Code | Reason | Meaning |
 |---|---|---|
 | -32700 | `malformed` | not one well-formed CBOR item |
-| -32600 | `type`, `missing`, `unknown` | not a request: not a map, no text `method`, `params` not a map, `id` neither uint nor text, or a member other than these three |
+| -32600 | `type`, `missing`, `unknown` | not a request: not a map (a batch too), no text `method`, `params` not a map, `id` not an integer, text or null, or a member other than these three |
 | -32601 | `unknown` | no such method |
 | -32602 | `type`, `missing`, `unknown`, `range` | a param has the wrong type, is missing, is not one the method takes, or is out of range |
 | -32001 | `stale` | the session or watch does not exist (any more) |
@@ -89,8 +96,8 @@ or more different details or rules than the host's systems hold), `invalid`,
 `state` (the host's systems do not trace).
 
 ```
-{"method": "trace.configure", "params": {"detail": "summary", "sample": 0.01,
- "rules": [{"at": "start", "from": ["host"], "perSecond": 5}]}, "id": 1}
+{"id": 1, "method": "trace.configure", "params": {"detail": "summary", "sample": 0.01,
+ "rules": [{"at": "start", "from": ["host"], "perSecond": 5}]}}
 → {"id": 1, "result": {}}
 ```
 
@@ -107,9 +114,9 @@ Result: `{"id": uint}`. When the watch ends is a deadline of `ta_host_run`.
 Errors: as `trace.configure`; `missing` without rules.
 
 ```
-{"method": "trace.watch", "params": {"rules": [{"chart": "checkout",
+{"id": 1, "method": "trace.watch", "params": {"rules": [{"chart": "checkout",
  "sample": "sample", "detail": "full"}], "seconds": 60}}
-→ {"result": {"id": 1}}
+→ {"id": 1, "result": {"id": 1}}
 ```
 
 ### `trace.unwatch`
@@ -118,10 +125,10 @@ Ends a watch early. Param: `id` (uint, required). Result: `{}`. Errors:
 `missing`, `stale` (it ended, or never was).
 
 ```
-{"method": "trace.unwatch", "params": {"id": 1}}
-→ {"result": {}}
-{"method": "trace.unwatch", "params": {"id": 1}}
-→ {"error": {"code": -32001, "message": "no such watch: it ended or never was",
+{"id": 1, "method": "trace.unwatch", "params": {"id": 1}}
+→ {"id": 1, "result": {}}
+{"id": 1, "method": "trace.unwatch", "params": {"id": 1}}
+→ {"id": 1, "error": {"code": -32001, "message": "no such watch: it ended or never was",
    "data": {"reason": "stale", "path": "params.id"}}}
 ```
 
@@ -141,8 +148,8 @@ Result: `{"host": {...}, "charts": [...]}`:
 All the numbers are unsigned integers.
 
 ```
-{"method": "stats"}
-→ {"result": {"host": {"segments": 1, "actors": 1, "hibernated": 0, "runnable": 0, "jobs": 0,
+{"id": 1, "method": "stats"}
+→ {"id": 1, "result": {"host": {"segments": 1, "actors": 1, "hibernated": 0, "runnable": 0, "jobs": 0,
    "regionBytes": 131072, "delivered": 0, "routed": 0, "migrated": 0, "retired": 0,
    "fuelClock": 3},
    "charts": [{"name": "pinged", "actors": 1, "hibernated": 0, "spawned": 1,
@@ -163,8 +170,8 @@ Result: `{"sessions": [uint, ...], "cursor": uint or null}`. `null` means
 every session was listed. Errors: `type`, `range`.
 
 ```
-{"method": "actors", "params": {"limit": 2}}
-→ {"result": {"sessions": [1, 2], "cursor": 2}}   (opaque: send it back as it is)
+{"id": 1, "method": "actors", "params": {"limit": 2}}
+→ {"id": 1, "result": {"sessions": [1, 2], "cursor": 2}}   (opaque: send it back as it is)
 ```
 
 ### `actor`
@@ -180,8 +187,8 @@ Result: `{"session", "segment", "chart", "parent", "mailbox", "invocations"}`:
 Errors: `missing`, `type`, `stale`.
 
 ```
-{"method": "actor", "params": {"session": 1}}
-→ {"result": {"session": 1, "segment": 0, "chart": "pinged", "parent": null,
+{"id": 1, "method": "actor", "params": {"session": 1}}
+→ {"id": 1, "result": {"session": 1, "segment": 0, "chart": "pinged", "parent": null,
    "mailbox": 0, "invocations": 0}}
 ```
 
@@ -199,8 +206,8 @@ hibernated, or its datamodel does not show variables (no `variable` entry in
 its vtable, as with a binding's own datamodel, which keeps its scope).
 
 ```
-{"method": "actor.context", "params": {"session": 1}}
-→ {"result": {"variables": {"n": 2, "who": "bob", "nothing": null}}}
+{"id": 1, "method": "actor.context", "params": {"session": 1}}
+→ {"id": 1, "result": {"variables": {"n": 2, "who": "bob", "nothing": null}}}
 ```
 
 ### `actor.subscribe`, `actor.unsubscribe`
@@ -224,8 +231,8 @@ unsubscribe: not subscribed), `limit` (-32003: the host holds
 `maxSubscriptions`, 64 by default).
 
 ```
-{"method": "actor.subscribe", "params": {"session": 1}}
-→ {"result": {}}
+{"id": 1, "method": "actor.subscribe", "params": {"session": 1}}
+→ {"id": 1, "result": {}}
 ```
 
 ### `state`
@@ -242,8 +249,8 @@ Param: `session` (uint, required). Result: `{"value": <state value>}`.
 Errors: `missing`, `type`, `stale`, `limit` (more than 1024 active states).
 
 ```
-{"method": "state", "params": {"session": 1}}
-→ {"result": {"value": {"top": {"p": {"r1": "x", "r2": {}, "r3": {"k": "k1"}}}}}}
+{"id": 1, "method": "state", "params": {"session": 1}}
+→ {"id": 1, "result": {"value": {"top": {"p": {"r1": "x", "r2": {}, "r3": {"k": "k1"}}}}}}
 ```
 
 ### `trace.spans.decode`
@@ -269,8 +276,8 @@ The resource, the scope and links are not in the reply.
 Errors: `missing`, `type`, `malformed` (-32006: not OTLP).
 
 ```
-{"method": "trace.spans.decode", "params": {"traces": h'0a8a...'}}
-→ {"result": {"spans": [{"trace": "4bf9...", "span": "00f0...", "parent": null,
+{"id": 1, "method": "trace.spans.decode", "params": {"traces": h'0a8a...'}}
+→ {"id": 1, "result": {"spans": [{"trace": "4bf9...", "span": "00f0...", "parent": null,
    "name": "pinged", "kind": 1, "start": 1700000000000000000, "end": ...,
    "status": 0, "statusMessage": "", "attributes": {...}, "events": []}]}}
 ```
@@ -320,7 +327,11 @@ binding gets the same answers.
 5. **Atomic:** write the result first and apply the change only when it
    fits, so `TA_ERROR_NO_MEMORY` means nothing changed.
 6. **Refused during a run:** `ta_host_request` does this for every method.
-7. **Tests** in `tests/unit/test_host_request.c`: the result, each param's
-   errors, and `TA_ERROR_NO_MEMORY` for a method that changes the host.
+   **Notifications** need nothing either: a method runs the same with or
+   without an `id`, and `ta_host_request` drops what it would write.
+7. **Vectors** in `tests/protocol/requests.txt`: the result, its defaults,
+   each param's error, and a `capacity` case for a method that changes the
+   host. Unit tests (`tests/unit/test_host_request.c`) only for what a
+   vector cannot show: a failing allocator, a call during a run.
 8. **The entry on this page**, with its params, result, errors and one
-   example. Once request and reply vectors exist (ADR 0009 step 6), add one.
+   example.

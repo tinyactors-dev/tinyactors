@@ -627,8 +627,11 @@ TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
  * JSON-RPC's shape without its "jsonrpc" member, in CBOR: one map in,
  * {"method", "params", "id"}; one map out, {"id", "result"} or {"id",
  * "error": {"code", "message", "data": {"reason", "path"}}} for a request the
- * host refuses ("id" only when the request had one). Trace configuration,
- * watches, stats, inspection, state values and decoded spans are methods;
+ * host refuses. As in JSON-RPC 2.0, "id" is an integer, text or null and is
+ * echoed; it is null in the reply when the request could not be read; a
+ * request without "id" is a notification: applied, with no reply (TA_OK,
+ * reply->length 0) and no error reported. Trace configuration, watches,
+ * stats, inspection, state values and decoded spans are methods;
  * docs/requests.md lists every method, its params, defaults and errors.
  * TA_OK: `reply` holds the reply (a result or an error). TA_ERROR_NO_MEMORY:
  * nothing was applied and reply->length is what the reply needs; grow and

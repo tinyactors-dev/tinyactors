@@ -91,6 +91,14 @@ an id still gets a reply. Methods are named `area.verb` (`trace.watch`,
 `trace.spans.decode`). `tinyactors-core/docs/requests.md` lists the methods
 and says how to add one.
 
+**Amended (2026-10-11), before step 6:** ids and notifications follow
+JSON-RPC 2.0, so a JSON-RPC transport needs no rules of its own. An `id` is
+an integer, text or null, echoed as the same item; it is `null` in the
+reply when the request could not be read (-32700, -32600). A request
+without an `id` is a notification: applied, with no reply and no error
+reported. This replaces "a request without an id still gets a reply"
+above. A batch is still refused (-32600); batches may come later.
+
 ### 3. CBOR as token lists, in caller memory
 
 `src/base/cbor` and `include/tinyactors/cbor.h` (RFC 8949):

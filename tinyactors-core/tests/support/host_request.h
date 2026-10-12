@@ -27,14 +27,17 @@ typedef struct host_ask {
     char text[1 << 16];        /* the reply in diagnostic notation */
 } host_ask;
 
-/* A request {"method": method, "params": {...}}: `params` pairs follow,
- * written with ta_cbor_write_* on the returned writer (none: no "params"). */
+/* A request {"id": 1, "method": method, "params": {...}}: `params` pairs
+ * follow, written with ta_cbor_write_* on the returned writer (none: no
+ * "params"). The id makes it a request, not a notification: it gets a reply. */
 TEST_UNUSED static ta_cbor_writer *ask_begin(host_ask *a, const char *method, uint32_t params) {
     memset(&a->writer, 0, sizeof a->writer);
     a->writer.document.tokens = a->tokens;
     a->writer.document.capacity = 128;
     a->writer.strings = (ta_buffer){a->strings, sizeof a->strings, 0};
-    ta_cbor_write_map(&a->writer, params ? 2 : 1);
+    ta_cbor_write_map(&a->writer, params ? 3 : 2);
+    ta_cbor_write_text(&a->writer, ta_string("id"));
+    ta_cbor_write_uint(&a->writer, 1);
     ta_cbor_write_text(&a->writer, ta_string("method"));
     ta_cbor_write_text(&a->writer, ta_string(method));
     if (params) {
@@ -99,8 +102,8 @@ TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *te
     if (capacity) text[0] = 0;
     if (status != TA_OK) return status;
     const char *value = a.text;
-    if (strncmp(value, "{\"result\":{\"value\":", 19) == 0) {
-        value += 19;
+    if (strncmp(value, "{\"id\":1,\"result\":{\"value\":", 26) == 0) {
+        value += 26;
         size_t n = strlen(value);
         if (n >= 2 && value[n - 1] == '}' && value[n - 2] == '}') n -= 2;
         if (n >= capacity) n = capacity ? capacity - 1 : 0;

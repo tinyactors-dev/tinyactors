@@ -99,6 +99,7 @@ static const char *raw(world *w, const void *bytes, size_t length) {
     ta_buffer out = {reply, sizeof reply, 0};
     text[0] = 0;
     if (ta_host_request(w->host, (ta_bytes){bytes, length}, &out) != TA_OK) return "(status)";
+    if (out.length == 0) return "(none)"; /* a notification */
     ta_buffer diagnostic = {text, sizeof text - 1, 0};
     if (ta_cbor_diagnostic((ta_bytes){reply, out.length}, &diagnostic) != TA_OK) return "(cbor)";
     text[diagnostic.length] = 0;
@@ -111,33 +112,43 @@ static int reply_is(const char *got, const char *expected) {
 }
 
 #define RAW(w, literal) raw(w, literal, sizeof literal - 1)
-#define RESULT(value) "{\"result\":" value "}"
-#define ERROR(code, reason, path, message)                                                         \
-    "{\"error\":{\"code\":" code ",\"message\":\"" message "\",\"data\":{\"reason\":\"" reason      \
+#define RESULT(value) "{\"id\":1,\"result\":" value "}"
+#define ERROR_BODY(code, reason, path, message)                                                    \
+    "\"error\":{\"code\":" code ",\"message\":\"" message "\",\"data\":{\"reason\":\"" reason         \
     "\",\"path\":\"" path "\"}}}"
+#define ERROR(code, reason, path, message) "{\"id\":1," ERROR_BODY(code, reason, path, message)
+/* the request's id could not be read: null, as JSON-RPC 2.0 has it */
+#define ERROR_NULL(code, reason, path, message) "{\"id\":null," ERROR_BODY(code, reason, path, message)
 
 static void test_refused_requests(void) {
     world w;
     world_open(&w, 0, NULL);
-    CHECK(reply_is(RAW(&w, "\xff"), ERROR("-32700", "malformed", "",
-                                         "the request is not one well-formed CBOR item")));
-    CHECK(reply_is(RAW(&w, "\x01"), ERROR("-32600", "type", "", "a request is a map")));
+    /* not a request: the reply's id is null */
+    CHECK(reply_is(RAW(&w, "\xff"), ERROR_NULL("-32700", "malformed", "",
+                                              "the request is not one well-formed CBOR item")));
+    CHECK(reply_is(RAW(&w, "\x01"), ERROR_NULL("-32600", "type", "", "a request is a map")));
+    CHECK(reply_is(RAW(&w, "\x81\xa0"), ERROR_NULL("-32600", "type", "", "a request is a map"))); /* a batch */
     CHECK(reply_is(RAW(&w, "\xa0"),
-                   ERROR("-32600", "missing", "method", "method names what the request does")));
-    CHECK(reply_is(RAW(&w, "\xa1\x66method\x01"), ERROR("-32600", "type", "method", "method is text")));
-    CHECK(reply_is(RAW(&w, "\xa1\x66method\x64nope"),
-                   ERROR("-32601", "unknown", "method", "no such method")));
-    /* a member the request does not have, params that are not a map, an id that is neither */
+                   ERROR_NULL("-32600", "missing", "method", "method names what the request does")));
+    CHECK(reply_is(RAW(&w, "\xa1\x66method\x01"), ERROR_NULL("-32600", "type", "method", "method is text")));
     CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x61x\x01"),
-                   ERROR("-32600", "unknown", "x", "a request has only method, params and id")));
+                   ERROR_NULL("-32600", "unknown", "x", "a request has only method, params and id")));
     CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x66params\x01"),
-                   ERROR("-32600", "type", "params", "params is a map")));
+                   ERROR_NULL("-32600", "type", "params", "params is a map")));
     CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x62id\x80"),
-                   ERROR("-32600", "type", "id", "id is an unsigned integer or text")));
-    CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x66params\xa1\x61x\x01"),
+                   ERROR_NULL("-32600", "type", "id", "id is an integer, text or null")));
+    CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x62id\xf9\x3c\x00"),
+                   ERROR_NULL("-32600", "type", "id", "id is an integer, text or null")));
+    /* a notification (no id) gets no reply, not even an error */
+    CHECK(reply_is(RAW(&w, "\xa1\x66method\x64nope"), "(none)"));
+    CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x66params\xa1\x61x\x01"), "(none)"));
+    CHECK(reply_is(RAW(&w, "\xa2\x62id\x01\x66method\x64nope"), ERROR("-32601", "unknown", "method", "no such method")));
+    CHECK(reply_is(RAW(&w, "\xa3\x62id\x01\x66method\x65stats\x66params\xa1\x61x\x01"),
                    ERROR("-32602", "unknown", "params.x", "params has a field this method does not take")));
-    /* the id comes back first, as it was: a number or text */
+    /* the id comes back first, the same item: an integer, text or null */
     CHECK(strncmp(RAW(&w, "\xa2\x66method\x65stats\x62id\x07"), "{\"id\":7,\"result\":{\"host\":", 25) == 0);
+    CHECK(strncmp(RAW(&w, "\xa2\x66method\x65stats\x62id\x24"), "{\"id\":-5,\"result\":{\"host\":", 26) == 0);
+    CHECK(strncmp(RAW(&w, "\xa2\x66method\x65stats\x62id\xf6"), "{\"id\":null,\"result\":{\"host\":", 28) == 0);
     CHECK(reply_is(RAW(&w, "\xa2\x66method\x64nope\x62id\x61" "a"),
                    "{\"id\":\"a\",\"error\":{\"code\":-32601,\"message\":\"no such method\","
                    "\"data\":{\"reason\":\"unknown\",\"path\":\"method\"}}}"));
@@ -147,7 +158,11 @@ static void test_refused_requests(void) {
     memcpy(big, "\xa2\x66method\x65stats\x66params\xa1\x61x\x99\x01\x2c", n); /* "x": [300 items] */
     for (int i = 0; i < 300; i++)
         big[n++] = 0x01;
-    CHECK(reply_is(raw(&w, big, n), ERROR("-32003", "limit", "", "a request has at most 256 items")));
+    CHECK(reply_is(raw(&w, big, n), ERROR_NULL("-32003", "limit", "", "a request has at most 256 items")));
+    /* a notification is applied: this watch takes id 1, so the next one gets 2 */
+    CHECK(reply_is(RAW(&w, "\xa2\x66method\x6btrace.watch\x66params\xa1\x65rules\x81\xa0"), "(none)"));
+    CHECK(reply_is(RAW(&w, "\xa3\x62id\x01\x66method\x6btrace.watch\x66params\xa1\x65rules\x81\xa0"),
+                   RESULT("{\"id\":2}")));
     world_close(&w);
 }
 
@@ -252,7 +267,7 @@ static void test_trace_configure_and_watch(void) {
     ta_buffer out = {small, sizeof small, 0};
     CHECK_EQUAL(ta_host_request(w.host, (ta_bytes){a.request, request.length}, &out),
                 TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, 13u); /* {"result": {"id": 1}} */
+    CHECK_EQUAL(out.length, 17u); /* {"id": 1, "result": {"id": 1}} */
     CHECK(reply_is(raw(&w, a.request, request.length), RESULT("{\"id\":1}")));
     CHECK(reply_is(raw(&w, a.request, request.length), RESULT("{\"id\":2}")));
     writer = ask_begin(&a, "trace.watch", 0);
@@ -277,7 +292,7 @@ static void test_spans_and_metrics(void) {
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     CHECK(out.length > 0);
     /* the request, built by hand: {"method": "trace.spans.decode", "params": {"traces": bytes}} */
-#define DECODE "\xa2\x66method\x72trace.spans.decode\x66params\xa1\x66traces"
+#define DECODE "\xa3\x62id\x01\x66method\x72trace.spans.decode\x66params\xa1\x66traces"
     static unsigned char request[(1 << 16) + 64];
     size_t n = sizeof DECODE - 1;
     memcpy(request, DECODE "\x59", n + 1);
@@ -302,7 +317,7 @@ static void test_spans_and_metrics(void) {
     /* not OTLP */
     CHECK(reply_is(RAW(&w, DECODE "\x41\xff"),
                    ERROR("-32006", "malformed", "params.traces", "traces is not an ExportTraceServiceRequest")));
-    CHECK(reply_is(RAW(&w, "\xa1\x66method\x72trace.spans.decode"),
+    CHECK(reply_is(RAW(&w, "\xa2\x62id\x01\x66method\x72trace.spans.decode"),
                    ERROR("-32602", "missing", "params.traces",
                          "traces is the bytes of an ExportTraceServiceRequest")));
     /* metrics on demand: measured, then written; the second call puts the same */
@@ -489,7 +504,7 @@ static ta_status create(const void *bytes, size_t length, char *text, ta_host **
 }
 
 #define CREATE(literal, text, host) create(literal, sizeof literal - 1, text, host)
-#define CONFIG_ERROR(code, reason, path, message) ERROR(code, reason, path, message)
+#define CONFIG_ERROR(code, reason, path, message) "{" ERROR_BODY(code, reason, path, message) /* no id */
 
 static void test_create(void) {
     char text[1024];

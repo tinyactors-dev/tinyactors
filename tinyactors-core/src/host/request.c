@@ -1,9 +1,10 @@
 /* request.c — the rarely called host API as CBOR requests and replies
  * (ta_host_request, docs/requests.md; docs/adr/0009 in the repository root,
  * decision 2). A request has JSON-RPC's shape without its "jsonrpc" member:
- * {"method", "params", "id"} in, {"id", "result"} or {"id", "error"} out. It
- * is decoded into tokens on the stack, its params are checked here, and the
- * reply is written straight into the caller's buffer.
+ * {"method", "params", "id"} in, {"id", "result"} or {"id", "error"} out; a
+ * request without "id" is a notification and gets no reply. It is decoded
+ * into tokens on the stack, its params are checked here, and the reply is
+ * written straight into the caller's buffer.
  * A request that changes the host writes its reply first and applies itself
  * only when the reply fits, so TA_ERROR_NO_MEMORY means nothing changed. */
 #include <tinyactors/cbor.h>
@@ -38,7 +39,9 @@ typedef struct request {
     ta_host *host;
     ta_cbor_document *document;
     cbor_output out;
-    uint32_t id;   /* the request's "id" token; TA_NIL: none */
+    uint32_t id;   /* the request's "id" token; TA_NIL: none (or not readable) */
+    int replies;   /* 1: a request, whose reply carries "id" (null when unreadable); 0: a config */
+    int notification; /* no "id": applied, nothing written, errors not reported */
     const char *prefix; /* of a field's path: "params." (a request) or "" (a config) */
     int refused;   /* an error reply was written */
     char path[96]; /* where the error is, for {"error": {"data": {"path"}}} */
@@ -74,15 +77,19 @@ static void request_put_bool(request *r, int value) { cbor_output_simple(&r->out
 
 /* ---- the reply's frame ------------------------------------------------------------- */
 
-/* {"id": <the request's>, `key`: ...}: the id first when the request had one;
- * the caller writes the value of `key` next. */
+/* {"id": <the request's>, `key`: ...}: a request's reply has its id first,
+ * the same item (null when it could not be read, as JSON-RPC 2.0 has it); a
+ * config's error has none. The caller writes the value of `key` next. */
 static void request_open(request *r, const char *key) {
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, r->id != TA_NIL ? 2u : 1u);
-    if (r->id != TA_NIL) {
-        const ta_cbor_token *id = &r->document->tokens[r->id];
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, r->replies ? 2u : 1u);
+    if (r->replies) {
+        const ta_cbor_token *id = r->id != TA_NIL ? &r->document->tokens[r->id] : (const ta_cbor_token *)0;
         request_put_key(r, "id");
-        if (id->kind == TA_CBOR_UINT) cbor_output_uint(&r->out, id->value);
-        else cbor_output_text(&r->out, ta_cbor_string(r->document, r->id));
+        if (!id) request_put_null(r);
+        else if (id->kind == TA_CBOR_UINT) cbor_output_head(&r->out, CBOR_MAJOR_UINT, id->value);
+        else if (id->kind == TA_CBOR_NEGINT) cbor_output_head(&r->out, CBOR_MAJOR_NEGINT, id->value);
+        else if (id->kind == TA_CBOR_TEXT) cbor_output_text(&r->out, ta_cbor_string(r->document, r->id));
+        else request_put_null(r);
     }
     request_put_key(r, key);
 }
@@ -394,7 +401,8 @@ static void request_refuse_trace(request *r, ta_status status) {
 
 /* ---- operations ---------------------------------------------------------------------- */
 
-static int request_fits(const request *r) { return r->out.length <= r->out.capacity; }
+/* A notification writes nothing, so its (unwritten) reply always fits. */
+static int request_fits(const request *r) { return r->notification || r->out.length <= r->out.capacity; }
 
 static void request_run_trace_configure(request *r, uint32_t map) {
     static const char *const fields[] = {"detail", "values", "sample", "records", "rules", NULL};
@@ -883,10 +891,11 @@ static const request_method *request_envelope(request *r, uint32_t *params) {
     static const char *const members[] = {"method", "params", "id", NULL};
     uint32_t id = ta_cbor_member(r->document, 0, request_text_of("id"));
     if (id != TA_NIL) {
-        uint32_t kind = request_token(r, id)->kind;
-        if (kind != TA_CBOR_UINT && kind != TA_CBOR_TEXT) {
+        const ta_cbor_token *token = request_token(r, id);
+        if (token->kind != TA_CBOR_UINT && token->kind != TA_CBOR_NEGINT && token->kind != TA_CBOR_TEXT &&
+            !(token->kind == TA_CBOR_SIMPLE && token->value == TA_CBOR_NULL)) {
             request_path_member(r, "id");
-            request_refuse_with(r, REQUEST_INVALID, "type", "id is an unsigned integer or text");
+            request_refuse_with(r, REQUEST_INVALID, "type", "id is an integer, text or null");
             return NULL;
         }
         r->id = id;
@@ -921,10 +930,13 @@ static const request_method *request_envelope(request *r, uint32_t *params) {
         request_refuse_with(r, REQUEST_INVALID, "type", "params is a map");
         return NULL;
     }
+    /* A well-formed request without "id" is a notification: from here on
+     * nothing is written, not even an error (JSON-RPC 2.0). */
+    r->notification = r->id == TA_NIL;
     ta_string_view name = ta_cbor_string(r->document, method);
     for (uint32_t i = 0; i < sizeof REQUEST_METHODS / sizeof REQUEST_METHODS[0]; i++)
         if (request_text_is(name, REQUEST_METHODS[i].name)) return &REQUEST_METHODS[i];
-    request_refuse_with(r, REQUEST_METHOD, "unknown", "no such method");
+    if (!r->notification) request_refuse_with(r, REQUEST_METHOD, "unknown", "no such method");
     return NULL;
 }
 
@@ -938,6 +950,7 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
     r.host = host;
     r.document = &document;
     r.id = TA_NIL;
+    r.replies = 1;
     r.prefix = "params.";
     r.out = (cbor_output){(unsigned char *)reply->pointer, reply->pointer ? reply->capacity : 0, 0};
     ta_status status = ta_cbor_decode(&document);
@@ -950,6 +963,11 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
     } else {
         uint32_t params = TA_NIL;
         const request_method *method = request_envelope(&r, &params);
+        if (r.notification) { /* applied; nothing is written, not even an error */
+            r.out = (cbor_output){(unsigned char *)0, 0, 0};
+            if (method) method->run(&r, params);
+            return TA_OK;
+        }
         if (method) {
             request_open(&r, "result");
             method->run(&r, params);

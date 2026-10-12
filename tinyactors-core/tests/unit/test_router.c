@@ -1140,7 +1140,7 @@ static void test_trace_set(void) {
     ta_cbor_write_text(configure, ta_string("records"));
     ta_cbor_write_simple(configure, TA_CBOR_FALSE);
     CHECK_EQUAL(ask_send(nodes[A].host, &ask), TA_OK);
-    CHECK(strcmp(ask.text, "{\"result\":{}}") == 0);
+    CHECK(strcmp(ask.text, "{\"id\":1,\"result\":{}}") == 0);
     size_t length;
     void *echo_bytes = compile_chart("e.scxml", ECHO, NULL, &length, 0);
     ta_image echo_image;
@@ -1169,7 +1169,7 @@ static void test_trace_set(void) {
     ta_cbor_write_text(configure, ta_string("detail"));
     ta_cbor_write_text(configure, ta_string("full"));
     CHECK_EQUAL(ask_send(nodes[A].host, &ask), TA_OK);
-    CHECK(strcmp(ask.text, "{\"result\":{}}") == 0);
+    CHECK(strcmp(ask.text, "{\"id\":1,\"result\":{}}") == 0);
     event.data = ta_datamodel_ecmascript_payload_eval(
         nodes[A].ecmascript, 0, (ta_string_view){json, (uint32_t)strlen(json)});
     event.session = p;
