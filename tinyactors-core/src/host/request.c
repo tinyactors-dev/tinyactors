@@ -835,6 +835,18 @@ static void request_put_span(request *r, const ta_otlp_span *span) {
     }
 }
 
+/* trace.end: the host is stopping; every open span ends now, staged for
+ * ta_host_traces (docs/requests.md). */
+static void request_run_trace_end(request *r, uint32_t map) {
+    static const char *const fields[] = {NULL};
+    if (!request_keys_known(r, map, NULL, 0, fields)) return;
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 0);
+    if (!request_fits(r)) return;
+    request_path_set(r, NULL, 0, "");
+    if (r->host->encoder->end(r->host) != TA_OK)
+        request_refuse(r, "state", "the host has no telemetry: there are no spans to end");
+}
+
 static void request_run_trace_spans_decode(request *r, uint32_t map) {
     static const char *const fields[] = {"traces", NULL};
     if (!request_keys_known(r, map, NULL, 0, fields)) return;
@@ -877,6 +889,7 @@ static const request_method REQUEST_METHODS[] = {
     {"trace.configure", request_run_trace_configure},
     {"trace.watch", request_run_trace_watch},
     {"trace.unwatch", request_run_trace_unwatch},
+    {"trace.end", request_run_trace_end},
     {"trace.spans.decode", request_run_trace_spans_decode},
     {"host.stats", request_run_host_stats},
     {"actor.list", request_run_actor_list},

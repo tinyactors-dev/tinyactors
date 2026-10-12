@@ -80,6 +80,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 | `TA_HOST_EFFECT_TRACES`, `TA_HOST_EFFECT_LOGS` | The encoder has a request ready. Call `ta_host_traces` (`ta_host_logs`) with a buffer of your own, then post it (`application/x-protobuf` to `/v1/traces`, `/v1/logs`) or give it to a sink. Retries and a cap on what waits are yours. At most one of each is outstanding: the next comes after a take. | Nothing.                                                                                                                             |
 
 - **A host without telemetry** has a null encoder: it never gives `TRACES` or `LOGS`, and `ta_host_traces`, `ta_host_logs` and `ta_host_metrics` answer `TA_ERROR_STATE`.
+- **Stopping ends the open spans.** A macrostep cut short has its span still open. `stop()` sends the `trace.end` request, takes traces with `ta_host_traces` until a take writes nothing, posts them, and then calls `ta_host_free`. Ended spans carry `scxml.incomplete` and end at the last `wall_ns`; `ta_host_free` drops what was not taken.
 - **Metrics are pulled.** `ta_host_metrics` writes the counters, as an OTLP metrics request, into your buffer whenever you call it. There is no metrics timer or effect: read them when the application asks, on `stop()`, or on a cadence the application chooses.
 
 ## 5 · Inputs and reentrancy

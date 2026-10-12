@@ -85,6 +85,8 @@ typedef struct ta_host_environment {
 } ta_host_environment;
 TA_API ta_status ta_host_create(ta_bytes config, const ta_host_environment *environment,
                                 ta_host **out);
+/* Spans still open are ended and dropped with the host: a caller who wants
+ * them sends the trace.end request and takes the traces first. */
 TA_API void ta_host_free(ta_host *h);
 
 /* ---- segments and versions ----------------------------------------------- */

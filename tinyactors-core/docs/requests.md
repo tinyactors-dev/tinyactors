@@ -134,6 +134,20 @@ Ends a watch early. Param: `id` (uint, required). Result: `{}`. Errors:
    "data": {"reason": "stale", "path": "params.id"}}}
 ```
 
+### `trace.end`
+
+The host is stopping: every open span ends now, at the wall time of the last
+`ta_host_advance_time`, marked `scxml.incomplete`, and is staged for
+`ta_host_traces`. A `TRACES` effect follows with the next
+`ta_host_effects`. When the staging cannot hold them all, the rest end as
+takes make room: take until a take writes nothing. No params. Result:
+`{}`. Errors: `state` (the host has no telemetry).
+
+```
+{"id": 1, "method": "trace.end"}
+→ {"id": 1, "result": {}}
+```
+
 ### `host.stats`
 
 The host's counters (`ta_host_stats`) and each chart's

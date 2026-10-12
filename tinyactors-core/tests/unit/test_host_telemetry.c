@@ -344,6 +344,77 @@ static void test_same_bytes(void) {
 }
 
 /* Refused inside a run; without an encoder, refused and the journals are the caller's. */
+/* Spans an ended span count: those marked scxml.incomplete, and the end
+ * time of the last of them. */
+static uint32_t incomplete_spans(const void *bytes, size_t length, uint64_t *end) {
+    ta_otlp_cursor cursor;
+    memset(&cursor, 0, sizeof cursor);
+    ta_otlp_span span;
+    uint32_t n = 0;
+    while (ta_otlp_next_span((ta_bytes){bytes, length}, &cursor, &span) > 0) {
+        uint32_t at = 0;
+        ta_otlp_key_value attribute;
+        while (ta_otlp_next_attribute(span.attributes, &at, &attribute) > 0)
+            if (attribute.key.length == 16 && !memcmp(attribute.key.pointer, "scxml.incomplete", 16)) {
+                n++;
+                *end = span.end;
+            }
+    }
+    return n;
+}
+
+/* trace.end ends the open spans at the latest wall time, marked
+ * scxml.incomplete; a TRACES effect follows and the take holds them. */
+static void test_end_open_spans(void) {
+    test_host_telemetry telemetry = encoder(0);
+    world w;
+    world_open(&w, &telemetry);
+    advance(&w, 10);
+    run_once(&w);
+    ping(&w, 1);
+    ta_host_run(w.host, 1); /* a budget too small to finish the macrostep */
+    ta_host_effects_ack(w.host);
+    advance(&w, 30);
+    static host_ask a;
+    ask_begin(&a, "trace.end", 0);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(strcmp(a.text, "{\"id\":1,\"result\":{}}") == 0);
+    const ta_host_effect *effects;
+    uint32_t n = ta_host_effects(w.host, &effects), traces = 0;
+    for (uint32_t i = 0; i < n; i++)
+        traces += effects[i].kind == TA_HOST_EFFECT_TRACES;
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(traces, 1u); /* due at once */
+    static unsigned char bytes[1 << 16];
+    ta_buffer out = {bytes, sizeof bytes, 0};
+    CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
+    uint64_t end = 0;
+    CHECK(incomplete_spans(bytes, out.length, &end) >= 1);
+    CHECK_EQUAL(end, 1700000000000000030ull);
+    world_close(&w);
+
+    world_open(&w, NULL); /* the null encoder has no spans to end */
+    ask_begin(&a, "trace.end", 0);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(strstr(a.text, "\"reason\":\"state\"") != NULL);
+    world_close(&w);
+}
+
+/* A host freed with spans open ends them and frees everything (ASan). */
+static void test_free_with_open_spans(void) {
+    test_host_telemetry telemetry = encoder(0);
+    world w;
+    world_open(&w, &telemetry);
+    advance(&w, 10);
+    run_once(&w);
+    ping(&w, 1);
+    ta_host_run(w.host, 1);
+    ta_host_effects_ack(w.host);
+    advance(&w, 20);
+    run_once(&w);
+    world_close(&w);
+}
+
 static void test_refusals(void) {
     test_host_telemetry telemetry = encoder(0);
     world w;
@@ -374,6 +445,8 @@ int main(void) {
     RUN(test_flush_deadline);
     RUN(test_staging_full);
     RUN(test_same_bytes);
+    RUN(test_end_open_spans);
+    RUN(test_free_with_open_spans);
     RUN(test_refusals);
     TEST_MAIN_END();
 }

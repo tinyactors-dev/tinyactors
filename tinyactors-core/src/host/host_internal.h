@@ -202,6 +202,7 @@ struct ta_host {
     uint32_t traces_pending, logs_pending; /* an effect is out, not taken yet */
     uint32_t staging_full; /* a read stopped at a full staging */
     uint32_t staged;       /* something is staged, since staged_since */
+    uint32_t ending;       /* trace.end left spans open (staging full): each take ends more */
     ta_time staged_since;
     uint64_t wall_ns, wall_start_ns; /* the latest wall time, and the first (metrics) */
 };
@@ -293,6 +294,7 @@ typedef struct host_encoder {
     ta_time (*deadline)(const ta_host *h);      /* the flush interval's end (UINT64_MAX: none) */
     ta_status (*take)(ta_host *h, uint32_t kind, ta_buffer *out); /* ta_host_traces, _logs */
     ta_status (*metrics)(ta_host *h, ta_buffer *out);             /* ta_host_metrics */
+    ta_status (*end)(ta_host *h); /* trace.end: end every open span, staged for a take */
 } host_encoder;
 ta_status host_telemetry_init(ta_host *h);
 void host_telemetry_free(ta_host *h);

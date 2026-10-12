@@ -344,6 +344,13 @@ diag {"id":1,"method":"trace.unwatch","params":{"id":"x"}}
 reply a262696401656572726f72a364636f6465397f59676d657373616765d99c3f64746578746464617461a266726561736f6e6474797065647061746869706172616d732e6964
 diag {"id":1,"error":{"code":-32602,"message":39999("text"),"data":{"reason":"type","path":"params.id"}}}
 
+request trace.end: no telemetry
+setup pinged
+send a262696401666d6574686f646974726163652e656e64
+diag {"id":1,"method":"trace.end"}
+reply a262696401656572726f72a364636f6465397d01676d657373616765d99c3f64746578746464617461a266726561736f6e657374617465647061746860
+diag {"id":1,"error":{"code":-32002,"message":39999("text"),"data":{"reason":"state","path":""}}}
+
 request host.stats
 setup pinged
 send a262696401666d6574686f646a686f73742e7374617473

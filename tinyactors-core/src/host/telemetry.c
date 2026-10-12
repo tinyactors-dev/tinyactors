@@ -45,7 +45,10 @@ ta_status host_telemetry_init(ta_host *host) {
     return TA_OK;
 }
 
+/* Spans still open are ended before the encoder goes, and dropped with it:
+ * a caller who wants them sends trace.end and takes the traces first. */
 void host_telemetry_free(ta_host *host) {
+    if (host->otlp) ta_otlp_end_all(host->otlp, host->wall_ns);
     host_free(host, host->otlp_memory, host->otlp_bytes);
     host->otlp = NULL;
     host->otlp_memory = NULL;
@@ -157,6 +160,17 @@ static ta_time otlp_deadline(const ta_host *host) {
     return host->staged_since + interval;
 }
 
+/* End what fits of the open spans at the latest wall time, marked
+ * scxml.incomplete; spans left open (the staging is full) are ended by the
+ * takes that make room. */
+static void otlp_end_open(ta_host *host) {
+    ta_otlp_end_all(host->otlp, host->wall_ns);
+    ta_otlp_stats stats;
+    stats.size = sizeof stats;
+    ta_otlp_stats_get(host->otlp, &stats);
+    host->ending = stats.open != 0;
+}
+
 static ta_status otlp_take(ta_host *host, uint32_t kind, ta_buffer *out) {
     otlp_drain(host);
     ta_status status = kind == TA_HOST_EFFECT_TRACES ? ta_otlp_put_traces(host->otlp, out)
@@ -167,6 +181,7 @@ static ta_status otlp_take(ta_host *host, uint32_t kind, ta_buffer *out) {
     else
         host->logs_pending = 0;
     host->staging_full = 0;
+    if (host->ending && kind == TA_HOST_EFFECT_TRACES) otlp_end_open(host);
     if (!staged(host, TA_HOST_EFFECT_TRACES) && !staged(host, TA_HOST_EFFECT_LOGS))
         host->staged = 0;
     return TA_OK;
@@ -215,8 +230,19 @@ static ta_status otlp_metrics(ta_host *host, ta_buffer *out) {
     return ta_otlp_put_metrics(host->otlp, out);
 }
 
+/* trace.end: the journals' records first, then every open span ends; they
+ * are due at once, so a TRACES effect follows (outside a run, with the next
+ * ta_host_effects). */
+static ta_status otlp_end(ta_host *host) {
+    otlp_drain(host);
+    otlp_end_open(host);
+    host->staging_full = 1; /* due now, whatever the flush interval */
+    otlp_effects(host);
+    return TA_OK;
+}
+
 static const host_encoder encoder_otlp = {otlp_mark,     otlp_drain, otlp_effects, otlp_note,
-                                          otlp_deadline, otlp_take,  otlp_metrics};
+                                          otlp_deadline, otlp_take,  otlp_metrics, otlp_end};
 
 /* ---- the null encoder: no encoder memory was given --------------------------- */
 /* The journals stay with the caller, nothing is staged, no effect and no
@@ -237,8 +263,12 @@ static ta_status null_metrics(ta_host *host, ta_buffer *out) {
     out->length = 0;
     return TA_ERROR_STATE;
 }
+static ta_status null_end(ta_host *host) {
+    (void)host;
+    return TA_ERROR_STATE;
+}
 static const host_encoder encoder_null = {null_mark, null_run,      null_run,  null_run,
-                                          null_deadline, null_take, null_metrics};
+                                          null_deadline, null_take, null_metrics, null_end};
 
 ta_status ta_host_traces(ta_host *host, ta_buffer *out) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
