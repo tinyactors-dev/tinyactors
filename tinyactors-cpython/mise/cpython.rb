@@ -16,6 +16,11 @@ module CPython
   ADAPTER = ROOT.join('conform')
   # The mapping table (tinyactors-core/docs/bindings.md, section 2).
   MAPPING = ROOT.join('docs/api-map.md')
+  # The milestone of ROADMAP.md, step 8, this binding is held to: `mise run
+  # test` runs the suite's set for it (tinyactors-test/suites/milestones.txt,
+  # `--milestone`). Moved on, here only, when the milestone is done
+  # (ROADMAP.md in this directory).
+  MILESTONE = 'M1'
 
   module_function
 
@@ -29,7 +34,7 @@ module CPython
 
   # The path of a program this project's mise.toml pins (python, uv). A
   # command another project's task runs gets it by path: that project's
-  # pins come first on its PATH (tinyactors-test pins python 3.13).
+  # pins come first on its PATH (tinyactors-test pins its own python).
   def pinned(program)
     path = IO.popen(['mise', 'which', program], chdir: ROOT.to_s, err: File::NULL, &:read).strip
     abort "#{program} is not installed: run `mise install` in #{ROOT}" if path.empty?
