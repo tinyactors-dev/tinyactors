@@ -43,6 +43,20 @@ typedef struct world {
 static world *current;
 static int to_wire_calls, serialize_calls, payload_serialize_calls;
 
+/* The host's allocator, counted: the C library's. */
+static size_t allocations;
+static void *counting_alloc(void *context, size_t size, size_t align) {
+    (void)context;
+    allocations++;
+    ta_allocator c = ta_runtime_malloc();
+    return c.alloc(c.context, size, align);
+}
+static void counting_free(void *context, void *pointer, size_t size) {
+    (void)context;
+    ta_allocator c = ta_runtime_malloc();
+    c.free(c.context, pointer, size);
+}
+
 /* {"id": 1, "method": "host.stats"} */
 #define STATS "\xa2\x62id\x01\x66method\x6ahost.stats"
 
@@ -144,7 +158,7 @@ static void world_open(world *w, int telemetry) {
     }
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
-    config.allocator = ta_runtime_malloc();
+    config.allocator = (ta_allocator){NULL, counting_alloc, counting_free};
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
     w->image_bytes = compile_guarded(&length);
@@ -401,6 +415,48 @@ static void test_each_output_once(void) {
     world_close(&w);
 }
 
+/* ---- the host's outputs grow between runs only (tinyactors-core/AGENTS.md) -------------- */
+
+/* In a datamodel call inside a run: hibernate and export are refused before
+ * anything is written, so the host's output does not grow. */
+static void in_a_run(world *w) {
+    size_t before = allocations;
+    ta_bytes out;
+    CHECK_EQUAL(ta_host_hibernate(w->host, w->other, &out), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_export_actor(w->host, w->other, &out), TA_ERROR_STATE);
+    CHECK_EQUAL(allocations, before);
+}
+
+static void test_outputs_grow_between_runs(void) {
+    world w;
+    world_open(&w, 0);
+    CHECK_EQUAL(ta_host_terminate(w.host, w.session), TA_OK);
+    w.hook = in_a_run; /* in its destroy, when it exits during the run */
+    ta_host_run(w.host, 100000);
+    CHECK_EQUAL(w.hooks, 1);
+    ta_host_effects_ack(w.host);
+    /* outside a run, the system's writer grows the host's output through the
+     * host's allocator, in one pass: serialize once */
+    serialize_calls = 0;
+    size_t before = allocations;
+    ta_bytes out;
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.other, &out), TA_OK);
+    CHECK(allocations > before);
+    CHECK_EQUAL(serialize_calls, 1);
+    static unsigned char blob[1 << 16];
+    CHECK(out.length <= sizeof blob);
+    memcpy(blob, out.pointer, out.length);
+    size_t length = out.length;
+    CHECK_EQUAL(ta_host_wake(w.host, w.other, (ta_bytes){blob, length}), TA_OK);
+    run_once(&w);
+    /* the block is kept at its largest: the same blob again needs none */
+    before = allocations;
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.other, &out), TA_OK);
+    CHECK_EQUAL(out.length, length);
+    CHECK_EQUAL(allocations, before);
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_request);
     RUN(test_envelope_and_ack);
@@ -409,5 +465,6 @@ int main(void) {
     RUN(test_traces);
     RUN(test_free);
     RUN(test_each_output_once);
+    RUN(test_outputs_grow_between_runs);
     TEST_MAIN_END();
 }

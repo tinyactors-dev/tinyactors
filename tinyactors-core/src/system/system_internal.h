@@ -153,8 +153,17 @@ enum { RECLAIM_ENDED = 0, RECLAIM_LEFT = 1 };
 /* ta_actor_hibernate and ta_actor_export into an output that may grow
  * (base/output.h), written in one pass: each datamodel output (serialize,
  * payload_serialize) is asked for once and copied before the datamodel is
- * called again. TA_ERROR_NO_MEMORY when the output did not fit (its length is
- * what it needs; nothing changed). */
+ * called again (docs/adr/0010 in the repository root, decision 1), so a
+ * value is never serialized twice to size a buffer. TA_ERROR_NO_MEMORY when
+ * the output did not fit (its length is what it needs; nothing changed).
+ *
+ * The one way system code reaches an allocator after ta_system_init: when
+ * `out` has one (the host's output or its blob scratch), writing grows it
+ * through that allocator. Only outside a run: TA_ERROR_STATE inside this
+ * system's run (in_call), and the host takes its outputs only outside a run,
+ * before it opens its guard (host.c, host_output). The blocks are the
+ * host's, never region memory: the region is unchanged until the write has
+ * fit, and then only the actor leaves it. */
 ta_status ta_actor_write_hibernation(ta_system *s, uint32_t actor, ta_output *out);
 ta_status ta_actor_write_export(ta_system *s, uint32_t actor, ta_output *out);
 void ta_system_reclaim(ta_system *s, uint32_t index, uint32_t how);

@@ -18,6 +18,10 @@ int ta_output_reserve(ta_output *output, size_t more) {
     if (output->length > output->capacity) return 0; /* it already did not fit */
     if (more <= output->capacity - output->length) return 1;
     if (!output->allocator || more > (size_t)-1 / 2 - output->length) return 0;
+    /* The growth: a block from the allocator the output was given (the
+     * host's, for its outputs), never the region of a system. Whoever gives
+     * one decides when this may run; the host gives its own only to calls
+     * made outside a run (host_output, blob_scratch). */
     size_t need = output->length + more;
     size_t grown = output->capacity > 64 ? output->capacity : 64;
     while (grown < need)

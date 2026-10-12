@@ -510,8 +510,12 @@ static void unload(ta_system *system, uint32_t index) {
     core->chart_stats[chart].hibernated++;
 }
 
+/* One pass into `out` (system_internal.h): serialize is called once and its
+ * bytes copied into `out` before destroy. A growing `out` (the host's
+ * output) calls its allocator here, outside a run only: in_call refuses one,
+ * and the host takes its output before its guard. */
 ta_status ta_actor_write_hibernation(ta_system *system, uint32_t actor, ta_output *out) {
-    if (system->in_call) return TA_ERROR_STATE;
+    if (system->in_call) return TA_ERROR_STATE; /* inside a run: nothing allocates */
     uint32_t index = ta_system_resolve_actor(system, actor);
     if (index == TA_NIL) return TA_ERROR_STALE;
     ta_status status = hibernatable(system, index);
@@ -523,6 +527,11 @@ ta_status ta_actor_write_hibernation(ta_system *system, uint32_t actor, ta_outpu
     return TA_OK;
 }
 
+/* The public call keeps ta_buffer (docs/adr/0010, decision 2): a system has
+ * no allocator, so the output is the caller's room alone. When it is too
+ * small nothing changes and out->length is what it needs; the caller grows
+ * the room and calls again, and serialize runs again then. The host avoids
+ * that second run by growing its own output instead. */
 ta_status ta_actor_hibernate(ta_system *system, uint32_t actor, ta_buffer *out) {
     ta_output output = ta_output_over(*out, (const ta_allocator *)0);
     ta_status status = ta_actor_write_hibernation(system, actor, &output);
@@ -556,8 +565,13 @@ static void leave(ta_system *system, uint32_t index) {
     ta_system_reclaim(system, index, RECLAIM_LEFT);
 }
 
+/* One pass into `out` (system_internal.h): serialize once per session and
+ * payload_serialize once per delayed send, the header patched last. A
+ * growing `out` (the host's output, or its blob scratch for migration and
+ * adoption) calls its allocator here, outside a run only, as for
+ * ta_actor_write_hibernation. */
 ta_status ta_actor_write_export(ta_system *system, uint32_t actor, ta_output *out) {
-    if (system->in_call) return TA_ERROR_STATE;
+    if (system->in_call) return TA_ERROR_STATE; /* inside a run: nothing allocates */
     uint32_t root = ta_system_resolve_actor(system, actor);
     if (root == TA_NIL) return TA_ERROR_STALE;
     if (ta_actor_at(system, root)->parent)
@@ -587,6 +601,7 @@ ta_status ta_actor_write_export(ta_system *system, uint32_t actor, ta_output *ou
     return TA_OK;
 }
 
+/* ta_buffer, as ta_actor_hibernate: the caller's room, no allocator. */
 ta_status ta_actor_export(ta_system *system, uint32_t actor, ta_buffer *out) {
     ta_output output = ta_output_over(*out, (const ta_allocator *)0);
     ta_status status = ta_actor_write_export(system, actor, &output);

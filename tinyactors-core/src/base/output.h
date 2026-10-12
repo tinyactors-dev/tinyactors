@@ -26,7 +26,12 @@ typedef struct ta_output {
 /* An output over the caller's `room` (its pointer and capacity), growing
  * through `allocator` (NULL: never). */
 ta_output ta_output_over(ta_buffer room, const ta_allocator *allocator);
-/* Room for `more` bytes past `length`: 1, or 0 when it cannot grow. */
+/* Room for `more` bytes past `length`: 1, or 0 when it cannot grow. This is
+ * the one place an output allocates, and the only allocation the layers
+ * below the host reach after ta_system_init: the system's one-pass writers
+ * (ta_actor_write_hibernation, ta_actor_write_export) grow the host's output
+ * here, through the host's allocator, between runs, never into region
+ * memory (tinyactors-core/AGENTS.md, "Region memory is fixed"). */
 int ta_output_reserve(ta_output *output, size_t more);
 /* Append `length` bytes (counted only when they do not fit). */
 void ta_output_write(ta_output *output, const void *bytes, size_t length);

@@ -31,7 +31,16 @@ void host_free(ta_host *host, void *pointer, size_t size) {
     if (pointer) host->config.allocator.free(host->config.allocator.context, pointer, size);
 }
 
+/* The host's outputs grow through its allocator, also from system code
+ * (ta_actor_write_hibernation, ta_actor_write_export): this and blob_scratch
+ * are the only ways to them, and both are taken by a call the caller made
+ * outside a run, before the host opens its guard around the datamodel calls
+ * the write makes. So an output never grows inside a run (ta_host_run sets
+ * `running` around ta_system_run), nor inside a datamodel a guard is around:
+ * a datamodel calling back gets TA_ERROR_STATE from the entry checks first
+ * (tinyactors-core/AGENTS.md, "Region memory is fixed"). */
 ta_output *host_output(ta_host *host) {
+    TA_ASSERT(!host->running);
     host->output.length = 0;
     host->output.allocator = &host->config.allocator;
     return &host->output;
@@ -43,8 +52,10 @@ ta_status host_output_view(ta_host *host, ta_bytes *out) {
     return fits ? TA_OK : TA_ERROR_NO_MEMORY;
 }
 
-/* The scratch block for blobs, emptied, growing through the host's allocator. */
+/* The scratch block for blobs, emptied, growing through the host's
+ * allocator: taken outside a run and before the guard, as host_output. */
 static ta_output *blob_scratch(ta_host *host) {
+    TA_ASSERT(!host->running);
     host->blob.length = 0;
     host->blob.allocator = &host->config.allocator;
     return &host->blob;
@@ -1366,8 +1377,11 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint
     /* everything the move needs once the actor has left its segment */
     if (!host_effects_reserve(host, 1, key.length) || !moved_reserve(host, 1))
         return MIGRATE_NO_MEMORY;
+    /* between the segments' runs (ta_host_run's job step): the blob grows
+     * through the host's allocator while it is written, once */
+    ta_output *scratch = blob_scratch(host);
     uint32_t was = host_guard(host); /* serialize, payload_serialize, destroy */
-    ta_status status = ta_actor_write_export(from->system, actor, blob_scratch(host));
+    ta_status status = ta_actor_write_export(from->system, actor, scratch);
     host_unguard(host, was);
     if (status == TA_ERROR_NO_MEMORY) return MIGRATE_NO_MEMORY; /* it stays where it was */
     if (status == TA_ERROR_STATE) return MIGRATE_LATER;
@@ -1874,8 +1888,12 @@ ta_status ta_host_hibernate(ta_host *host, uint64_t session, ta_bytes *out) {
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
+    /* one pass (serialize once) into the host's output, which grows through
+     * the host's allocator as it is written: outside a run (checked above),
+     * taken before the guard */
+    ta_output *output = host_output(host);
     uint32_t was = host_guard(host); /* serialize, destroy */
-    status = ta_actor_write_hibernation(host->segments[si].system, actor, host_output(host));
+    status = ta_actor_write_hibernation(host->segments[si].system, actor, output);
     host_unguard(host, was);
     return status == TA_OK ? host_output_view(host, out) : status;
 }
@@ -1904,8 +1922,11 @@ ta_status ta_host_export_actor(ta_host *host, uint64_t session, ta_bytes *out) {
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
+    /* one pass, as ta_host_hibernate: the host's output grows as it is
+     * written, outside a run (checked above), taken before the guard */
+    ta_output *output = host_output(host);
     uint32_t was = host_guard(host); /* serialize, payload_serialize, destroy */
-    status = ta_actor_write_export(host->segments[si].system, actor, host_output(host));
+    status = ta_actor_write_export(host->segments[si].system, actor, output);
     host_unguard(host, was);
     if (status == TA_OK) status = host_output_view(host, out);
     if (status == TA_OK) {
@@ -1996,8 +2017,9 @@ ta_status ta_host_adopt(ta_host *host, const ta_host_adoption *adoption, uint64_
     if (elsewhere || !moved_reserve(host, count)) {
         /* one of its sessions lives in another segment, or no room to route
          * to them: out again, nothing changed */
+        ta_output *scratch = blob_scratch(host); /* reserved above: room for the blob */
         uint32_t was = host_guard(host);
-        ta_actor_write_export(segment_record->system, root, blob_scratch(host));
+        ta_actor_write_export(segment_record->system, root, scratch);
         host_unguard(host, was);
         return elsewhere ? TA_ERROR_STATE : TA_ERROR_NO_MEMORY;
     }

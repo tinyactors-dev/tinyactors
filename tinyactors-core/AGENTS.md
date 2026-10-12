@@ -57,8 +57,22 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 - No pointers stored in mutable system memory: u32 indices, generation
   handles, or self-relative offsets (`ta_pointer_add`). Region must stay
   relocatable by `memcpy`.
-- No allocation after `ta_system_init`. New capacity = new config field
-  carved by the shared layout function (measure mode + real mode).
+- **Region memory is fixed at `ta_system_init`, and nothing allocates
+  during a run.** The system never allocates region memory after init:
+  new capacity is a new config field carved by the shared layout function
+  (measure mode + real mode), and a bigger region is a new block its
+  caller allocates and moves it into (`ta_system_relocate`). Outside a run
+  the system may write an output through an allocator its caller passes,
+  never one of its own: `ta_actor_write_hibernation` and
+  `ta_actor_write_export` (`src/system/hibernate.c`) write in one pass into
+  a `ta_output` (`src/base/output.h`) that grows through the host's
+  allocator (`host_output`, `blob_scratch` in `src/host/host.c`). They
+  refuse inside their system's run (`in_call`), and the host takes those
+  outputs only outside a run and before it opens the guard
+  (`TA_ASSERT(!host->running)`), so a datamodel calling back cannot reach
+  them. The public `ta_actor_hibernate` / `ta_actor_export` pass no
+  allocator: they fill the caller's `ta_buffer` or report the length it
+  needs.
 - Public ABI (`include/tinyactors/`): fixed-width ints, `uint32_t` instead of enums
   in structs, `uint32_t size` first in extensible structs, no callbacks except
   the datamodel vtable. Update `tests/unit/test_headers.c` ABI checks when

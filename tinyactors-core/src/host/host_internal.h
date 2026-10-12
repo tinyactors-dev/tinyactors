@@ -134,7 +134,10 @@ struct ta_host {
     /* inside ta_system_run, or inside a datamodel the host calls outside a
      * run (host_guard), where a datamodel may call back: only the inputs
      * (spawn, send, send_many, terminate) and lookups are taken, nothing
-     * grows, every other call is TA_ERROR_STATE (host.h, "During a run") */
+     * grows, every other call is TA_ERROR_STATE (host.h, "During a run").
+     * The host's own output may grow inside a guard it opened: the write
+     * that calls the datamodel (hibernate, export, migration) took the
+     * output before the guard, while this was 0 (host_output) */
     uint32_t running;
     uint32_t closing; /* inside ta_host_free: the inputs are refused as well */
     ta_trace_policy trace_policy; /* every segment's, and new ones' (config.system points here) */
@@ -241,7 +244,10 @@ void *host_alloc(ta_host *h, size_t size);
  * datamodel without them). */
 void host_retain(ta_host *h, const ta_datamodel_binding *binding, ta_payload payload);
 void host_release(ta_host *h, const ta_datamodel_binding *binding, ta_payload payload);
-/* The host's output, emptied for the next one (its block kept). */
+/* The host's output, emptied for the next one (its block kept). It grows
+ * through the host's allocator as it is written, from host code or from the
+ * system's one-pass writers; take it outside a run and before host_guard
+ * (asserted), so it never grows during a run. */
 ta_output *host_output(ta_host *h);
 /* What was written there, as the caller's view; TA_ERROR_NO_MEMORY (and an
  * empty view) when the allocator refused room for it. */
