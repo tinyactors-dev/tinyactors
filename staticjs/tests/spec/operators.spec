@@ -220,3 +220,85 @@ Math.max(0 && 1, null ?? 3)
 [true ? 0 || 1 : null ?? 2, false ? 0 || 1 : null ?? 2]
 --- value
 [1,2]
+
+# **: its binding next to unary operators, its zeros, and **= on every
+# kind of target (values from Node 22).
+
+=== ** binds tighter than unary operators on its right, and parentheses lift a unary base
+[2 ** -2, 2 ** - - 2, 2 ** +2, 2 ** -(-3), (-2) ** 3, (-2) ** 2, -(2 ** 2), (2 ** -2) ** 2, 2**-1, 2 **3**2]
+--- value
+[0.25,4,4,8,-8,4,-4,0.0625,0.5,512]
+
+=== ** at zeros and infinities: signs
+[(-0) ** -1, (-0) ** -2, 0 ** -1, (-Infinity) ** 3, (-Infinity) ** 0.5, 1 ** NaN, NaN ** 0, (-1) ** Infinity].map(String).concat([1 / (-0) ** 3 === -Infinity, 1 / (-0) ** 2 === Infinity, 1 / (-Infinity) ** -3 === -Infinity, 1 / (-0) ** 0.5 === Infinity])
+--- value
+["-Infinity","Infinity","Infinity","-Infinity","Infinity","NaN","1","NaN",true,true,true,true]
+
+=== **= of a path, a computed key and a let in a callback
+(() => { const k = "n"; const o = {n: 3, p: {q: [2, 5]}}; o[k] **= 2; o.p.q[0] **= 10; o.p.q[1] **= -1; const ys = [2, 3].map(x => { let y = x; y **= y; y **= 2; return y; }); return [o, ys]; })()
+--- value
+[{"n":9,"p":{"q":[1024,0.2]}},[16,729]]
+
+=== a unary operator before ** on the right of **
+2 ** -2 ** 2
+--- error syntax cannot follow a unary operator
+
+=== a parenthesized operand of unary minus before **
+-(2) ** 2
+--- error syntax cannot follow a unary operator
+
+=== two unary minuses before **
+- -2 ** 2
+--- error syntax cannot follow a unary operator
+
+=== typeof before **
+typeof 2 ** 2
+--- error syntax cannot follow a unary operator
+
+=== ! before **
+!2 ** 2
+--- error syntax cannot follow a unary operator
+
+=== a unary minus of a variable before ** in a function
+(() => { const x = 3; return 2 ** -x ** 2; })()
+--- error syntax cannot follow a unary operator
+
+=== **= of a const
+(() => { const a = 2; a **= 2; return a; })()
+--- error unsupported declared with let
+
+=== **= of a captured let
+(() => { let x = 2; const f = () => { x **= 2; return x; }; return f(); })()
+--- error unsupported captures this let
+
+=== **= as a value
+(() => { let v = 2; return v **= 3; })()
+--- error unsupported no assignment as a value
+
+=== **= chained
+(() => { let a = 2, b = 3; a **= b **= 2; return [a, b]; })()
+--- error unsupported no assignment as a value
+
+=== **= of a missing key faults, where JavaScript gives NaN
+(() => { const o = {}; o.n **= 2; return String(o.n); })()
+--- fault arithmetic in staticjs is on numbers
+
+=== **= of a let holding undefined faults, where JavaScript gives NaN
+(() => { let a; a **= 2; return String(a); })()
+--- fault arithmetic in staticjs is on numbers
+
+=== ** of a boolean faults, where JavaScript converts it
+true ** 2
+--- fault arithmetic in staticjs is on numbers
+
+=== ** of undefined faults, where JavaScript gives NaN
+String(undefined ** 2)
+--- fault arithmetic in staticjs is on numbers
+
+=== **= of a frozen object's key faults
+(() => { const o = Object.freeze({n: 2}); o.n **= 2; return o.n; })()
+--- fault frozen
+
+=== **= of an array's length faults
+(() => { const xs = [2, 3]; xs.length **= 2; return xs.length; })()
+--- fault does not assign an array's length
