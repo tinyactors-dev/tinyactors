@@ -4193,3 +4193,373 @@ new Map().set(1, 2)
 === Object.assign of the result of Object.assign on a variable faults
 (() => { const o = {}; return Object.assign(Object.assign(o, { a: 1 }), { b: 2 }); })()
 --- fault something else holds this one
+
+# An iterator's next() and return() (docs/mutation.md, "Iterators"): on a
+# variable the function owns, next() takes a value and advances the
+# iterator, which then yields the rest; return() closes an iterator
+# helper's result. Each gives a new { value, done }.
+=== next of a map's values iterator, then the rest
+(() => { const it = new Map([[1, "a"], [2, "b"], [3, "c"]]).values(); const r = it.next(); return [r, [...it]]; })()
+--- value
+[{"value":"a","done":false},["b","c"]]
+
+=== next of a map's keys iterator
+(() => { const m = new Map([[1, "a"], [2, "b"]]); const it = m.keys(); const a = it.next(); const b = it.next(); return [a, b, m.size]; })()
+--- value
+[{"value":1,"done":false},{"value":2,"done":false},2]
+
+=== next of a map's entries iterator gives new [key, value] arrays
+(() => { const it = new Map([[1, "a"], [2, "b"]]).entries(); const a = it.next(); const b = it.next(); return [a, b, a.value, b.done]; })()
+--- value
+[{"value":[1,"a"],"done":false},{"value":[2,"b"],"done":false},[1,"a"],false]
+
+=== next past the end keeps giving done
+(() => { const it = new Map([[1, "a"]]).values(); const a = it.next(); const b = it.next(); const c = it.next(); return [a, b, c, [...it]]; })()
+--- value
+[{"value":"a","done":false},{"value":undefined,"done":true},{"value":undefined,"done":true},[]]
+
+=== next of an empty map's iterator
+(() => { const it = new Map().entries(); return it.next(); })()
+--- value
+{"value":undefined,"done":true}
+
+=== next of a set's values, keys and entries
+(() => { const s = new Set([1, -0, NaN]); const v = s.values(); const k = s.keys(); const e = s.entries(); const a = v.next(); const b = k.next(); const c = e.next(); const d = e.next(); return [a, b, c, d, [...v], [...k], [...e]]; })()
+--- value
+[{"value":1,"done":false},{"value":1,"done":false},{"value":[1,1],"done":false},{"value":[0,0],"done":false},[0,NaN],[0,NaN],[[NaN,NaN]]]
+
+=== next of matchAll's iterator
+(() => { const it = "a1b22c3".matchAll(/\d+/g); const r = it.next(); return [r.value[0], r.value.index, r.done, [...it].map(m => m[0])]; })()
+--- value
+["1",1,false,["22","3"]]
+
+=== next ignores its argument
+(() => { const it = new Set(["x", "y"]).values(); const r = it.next(9); return [r, [...it]]; })()
+--- value
+[{"value":"x","done":false},["y"]]
+
+=== next as a statement advances
+(() => { const it = new Map([[1, "a"], [2, "b"], [3, "c"]]).values(); it.next(); it.next(); return [...it]; })()
+--- value
+["c"]
+
+=== next's value and done read from its result
+(() => { const it = new Set([7, 8]).values(); const a = it.next().value; const b = it.next().done; const c = it.next().done; return [a, b, c]; })()
+--- value
+[7,false,true]
+
+=== an advanced iterator written as its rest
+(() => { const it = new Map([[1, "a"], [2, "b"]]).values(); it.next(); return it; })()
+--- value
+["b"].values()
+
+=== an advanced entries iterator written as its rest
+(() => { const it = new Map([[1, "a"], [2, "b"], [3, "c"]]).entries(); it.next(); return it; })()
+--- value
+[[2,"b"],[3,"c"]].values()
+
+=== an exhausted iterator written as empty
+(() => { const it = new Set([1]).values(); it.next(); return it; })()
+--- value
+[].values()
+
+=== advanced, then toArray
+(() => { const it = new Map([[1, "a"], [2, "b"], [3, "c"]]).values(); it.next(); return it.toArray(); })()
+--- value
+["b","c"]
+
+=== advanced, then map and toArray
+(() => { const it = new Map([[1, 10], [2, 20], [3, 30]]).values(); it.next(); return it.map((x, i) => x + i).toArray(); })()
+--- value
+[20,31]
+
+=== advanced, then filter
+(() => { const it = new Set([1, 2, 3, 4]).values(); it.next(); return [...it.filter(x => x % 2 === 0)]; })()
+--- value
+[2,4]
+
+=== advanced, then take
+(() => { const it = new Set([1, 2, 3, 4]).values(); it.next(); return [...it.take(2)]; })()
+--- value
+[2,3]
+
+=== advanced, then take past the end
+(() => { const it = new Set([1, 2]).values(); it.next(); return it.take(5).toArray(); })()
+--- value
+[2]
+
+=== advanced, then drop
+(() => { const it = new Set([1, 2, 3, 4]).values(); it.next(); return it.drop(1).toArray(); })()
+--- value
+[3,4]
+
+=== advanced, then flatMap
+(() => { const it = new Map([[1, "a"], [2, "b"]]).entries(); it.next(); return it.flatMap(e => e).toArray(); })()
+--- value
+[2,"b"]
+
+=== advanced, then reduce
+(() => { const it = new Set([1, 2, 3]).values(); it.next(); return it.reduce((a, x) => a + x); })()
+--- value
+5
+
+=== advanced, then some, every and find
+(() => { const a = new Set([1, 2, 3]).values(); a.next(); const b = new Set([1, 2, 3]).values(); b.next(); const c = new Set([1, 2, 3]).values(); c.next(); return [a.some(x => x === 1), b.every(x => x > 1), c.find(x => x > 0)]; })()
+--- value
+[false,true,2]
+
+=== advanced, then forEach
+(() => { const it = new Set([1, 2, 3]).values(); it.next(); return it.forEach(x => x); })()
+--- value
+undefined
+
+=== advanced, then Array.from, new Set and new Map
+(() => { const a = new Set([1, 2]).values(); a.next(); const b = new Set([1, 2]).values(); b.next(); const c = new Map([[1, 2], [3, 4]]).entries(); c.next(); return [Array.from(a), new Set(b), new Map(c)]; })()
+--- value
+[[2],new Set([2]),new Map([[3,4]])]
+
+=== advanced, then Object.fromEntries
+(() => { const it = new Map([["a", 1], ["b", 2]]).entries(); it.next(); return Object.fromEntries(it); })()
+--- value
+{"b":2}
+
+=== advanced, then an array pattern
+(() => { const it = new Set([1, 2, 3]).values(); it.next(); const [a, ...rest] = it; return [a, rest]; })()
+--- value
+[2,[3]]
+
+=== advanced, then spread into arguments
+(() => { const it = new Set([5, 1, 3]).values(); it.next(); return Math.max(...it); })()
+--- value
+3
+
+=== next of take's result
+(() => { const h = new Map([[1, "a"], [2, "b"], [3, "c"]]).values().take(2); const a = h.next(); const b = h.next(); const c = h.next(); return [a, b, c]; })()
+--- value
+[{"value":"a","done":false},{"value":"b","done":false},{"value":undefined,"done":true}]
+
+=== next of drop's result
+(() => { const h = new Set([1, 2, 3]).values().drop(1); const a = h.next(); return [a, [...h]]; })()
+--- value
+[{"value":2,"done":false},[3]]
+
+=== next of map's result
+(() => { const h = new Set([1, 2, 3]).values().map(x => x * 2); const a = h.next(); return [a, h.toArray()]; })()
+--- value
+[{"value":2,"done":false},[4,6]]
+
+=== next of filter's result
+(() => { const h = new Set([1, 2, 3, 4]).values().filter(x => x > 2); const a = h.next(); const b = h.next(); const c = h.next(); return [a, b, c]; })()
+--- value
+[{"value":3,"done":false},{"value":4,"done":false},{"value":undefined,"done":true}]
+
+=== next of flatMap's result
+(() => { const h = new Set([1, 2]).values().flatMap(x => [x, x]); const a = h.next(); const b = h.next(); return [a, b, [...h]]; })()
+--- value
+[{"value":1,"done":false},{"value":1,"done":false},[2,2]]
+
+=== next of matchAll's take
+(() => { const h = "a1b2c3".matchAll(/\d/g).take(2); const a = h.next(); return [a.value[0], [...h].map(m => m[0])]; })()
+--- value
+["1",["2"]]
+
+=== next of a helper's result, then take again
+(() => { const h = new Set([1, 2, 3, 4]).values().map(x => x); h.next(); return h.take(2).toArray(); })()
+--- value
+[2,3]
+
+=== next of a let, assigned a new iterator
+(() => { let it = new Set([1, 2]).values(); it.next(); it = new Set([3, 4]).values(); it.next(); return [...it]; })()
+--- value
+[4]
+
+=== next of a parameter
+(it => { it.next(); return [...it]; })(new Set([1, 2, 3]).values())
+--- value
+[2,3]
+
+=== next of a reduce's accumulator
+[1, 2].reduce((it, x) => { it.next(); return it; }, new Set(["a", "b", "c"]).values()).toArray()
+--- value
+["c"]
+
+=== next of an iterator in a callback's own const
+[new Set([1, 2]), new Set([3])].map(s => { const it = s.values(); const r = it.next(); return [r.value, [...it]]; })
+--- value
+[[1,[2]],[3,[]]]
+
+=== an object's own next is called as any method
+(() => { const o = { next: () => 5 }; return o.next(); })()
+--- value
+5
+
+=== an object's own return is called as any method
+(() => { const o = { return: x => x + 1 }; return o.return(1); })()
+--- value
+2
+
+=== return of take's result closes it
+(() => { const h = new Map([[1, "a"], [2, "b"]]).values().take(2); const a = h.return(); const b = h.next(); return [a, b, [...h]]; })()
+--- value
+[{"value":undefined,"done":true},{"value":undefined,"done":true},[]]
+
+=== return ignores its argument
+(() => { const h = new Set([1]).values().drop(0); return h.return(5); })()
+--- value
+{"value":undefined,"done":true}
+
+=== return after next
+(() => { const h = new Set([1, 2, 3]).values().map(x => x); const a = h.next(); const b = h.return(); const c = h.next(); return [a, b, c, h.toArray()]; })()
+--- value
+[{"value":1,"done":false},{"value":undefined,"done":true},{"value":undefined,"done":true},[]]
+
+=== return of each helper's result
+(() => { const a = new Set([1]).values().filter(x => true); const b = new Set([1]).values().flatMap(x => [x]); const c = new Set([1]).values().take(1); const d = a.return(); const e = b.return(); const f = c.return(); return [d, e, f, [...a], [...b], [...c]]; })()
+--- value
+[{"value":undefined,"done":true},{"value":undefined,"done":true},{"value":undefined,"done":true},[],[],[]]
+
+=== return as a statement
+(() => { const h = new Set([1, 2]).values().take(2); h.return(); return [...h]; })()
+--- value
+[]
+
+=== return twice
+(() => { const h = new Set([1]).values().take(1); const a = h.return(); const b = h.return(); return [a, b]; })()
+--- value
+[{"value":undefined,"done":true},{"value":undefined,"done":true}]
+
+=== next of an iterator nothing else holds
+new Map([[1, 2]]).keys().next()
+--- value
+{"value":1,"done":false}
+
+=== next of a set's iterator nothing else holds
+new Set([1]).values().next()
+--- value
+{"value":1,"done":false}
+
+=== next of an empty iterator nothing else holds
+new Set().values().next()
+--- value
+{"value":undefined,"done":true}
+
+=== next's value of an iterator nothing else holds: a map's first key
+new Map([["k", 1], ["j", 2]]).keys().next().value
+--- value
+"k"
+
+=== next of an entries iterator nothing else holds
+new Map([["k", 1]]).entries().next()
+--- value
+{"value":["k",1],"done":false}
+
+=== next of a helper's result nothing else holds
+new Set([1, 2, 3]).values().drop(1).next()
+--- value
+{"value":2,"done":false}
+
+=== next of matchAll nothing else holds
+"x9".matchAll(/\d/g).next().value[0]
+--- value
+"9"
+
+=== return of a helper's result nothing else holds
+new Set([1]).values().take(1).return()
+--- value
+{"value":undefined,"done":true}
+
+=== next of an iterator moved into an array, which nothing else holds
+(() => { const it = new Map([[1, 2]]).values(); const xs = [it]; return xs[0].next(); })()
+--- value
+{"value":2,"done":false}
+
+=== next of an iterator a moved object held
+(() => { const o = { it: new Set([1]).values() }; return o.it.next(); })()
+--- value
+{"value":1,"done":false}
+
+# next() and return() refused or faulting where JavaScript gives a value:
+# the iterator is shared, so another holder would see it advance.
+=== next of an iterator a callback captures is refused
+(() => { const it = new Set([1, 2, 3]).values(); it.next(); return [0].values().flatMap(x => it).toArray(); })()
+--- error unsupported captured
+
+=== next of a captured iterator is refused
+(() => { const it = new Set([1]).values(); const f = () => it; return it.next(); })()
+--- error unsupported captured
+
+=== next in a callback of an iterator it captures is refused
+(() => { const it = new Set([1, 2]).values(); return [1, 2].map(x => it.next().value); })()
+--- error unsupported captured
+
+=== next of an iterator copied before is refused
+(() => { const it = new Set([1, 2]).values(); const j = it; const r = it.next(); return [r, j]; })()
+--- error unsupported copied
+
+=== next of an iterator stored before is refused
+(() => { const it = new Set([1, 2]).values(); const xs = [it]; const r = it.next(); return [r, xs]; })()
+--- error unsupported stored
+
+=== next of an iterator passed before is refused
+(() => { const f = x => 1; const it = new Set([1, 2]).values(); const n = f(it); const r = it.next(); return [n, r]; })()
+--- error unsupported passed
+
+=== return of a captured helper's result is refused
+(() => { const h = new Set([1]).values().take(1); const f = () => h; return h.return(); })()
+--- error unsupported captured
+
+=== next of a captured object's own next is refused
+(() => { const o = { next: () => 5 }; return [1].map(x => o.next()); })()
+--- error unsupported captured
+
+=== next of an iterator read before faults
+(() => { const it = new Set([1, 2]).values(); const xs = [...it]; const r = it.next(); return [xs, r]; })()
+--- fault yields its values once
+
+=== next of an iterator another variable holds faults
+(() => { const it = new Set([1, 2]).values(); const j = [it][0]; const r = j.next(); return [r, [...it]]; })()
+--- fault held elsewhere
+
+=== next of an iterator an array's element holds faults
+[new Set([1]).values()].map(it => it.next())
+--- fault held elsewhere
+
+=== next through a path faults
+(() => { const o = { it: new Set([1, 2]).values() }; const r = o.it.next(); return [r, [...o.it]]; })()
+--- fault nothing else holds
+
+=== next of an element of an array a variable holds faults
+(() => { const xs = [new Set([1]).values()]; const r = xs[0].next(); return [r, xs.length]; })()
+--- fault nothing else holds
+
+=== an iterator advanced to its end still holds its map
+(() => { const m = new Map([[1, 2]]); const it = m.keys(); it.next(); it.next(); m.set(3, 4); return m; })()
+--- fault held elsewhere
+
+=== return of a map's iterator faults
+(() => { const it = new Map([[1, 2]]).values(); return it.return(); })()
+--- fault no return method
+
+=== return of a set's entries iterator faults
+(() => { const it = new Set([1]).entries(); return it.return(); })()
+--- fault no return method
+
+=== return of matchAll's iterator faults
+(() => { const it = "a1".matchAll(/\d/g); return it.return(); })()
+--- fault no return method
+
+=== return of a map's iterator nothing else holds faults
+new Map().keys().return()
+--- fault no return method
+
+=== next of an array faults
+(() => { const xs = [1]; return xs.next(); })()
+--- fault does not have this method
+
+=== a chain of next faults
+(() => { const it = new Set([1]).values(); return it.next().next(); })()
+--- fault not a function
+
+=== next through a chain from add faults
+(() => { const s = new Set(); return s.add(1).next(); })()
+--- fault does not have this method

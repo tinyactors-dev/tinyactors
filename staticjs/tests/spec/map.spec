@@ -485,12 +485,17 @@ new Map().keys().foo
 --- value
 undefined
 
-=== next is not staticjs's
-new Map([[1, 2]]).keys().next()
---- fault does not have this method
-
 === next read as a value faults
 new Map().keys().next
+--- fault does not read them
+
+# Node gives undefined: a map's iterator has no return, a helper's has one.
+=== return read as a value faults
+new Map().values().return
+--- fault does not read them
+
+=== a helper's return read as a value faults
+new Set().values().take(1).return
 --- fault does not read them
 
 === a name of Object.prototype read on an iterator faults
@@ -1365,10 +1370,6 @@ Math.max(...new Set([3, 7, 5]).values())
 === keys, values and entries read as values fault
 new Set().values
 --- fault does not read them
-
-=== next of a set's iterator is not staticjs's
-new Set([1]).values().next()
---- fault does not have this method
 
 # The iterator helpers from a set: each runs as it does from a map's
 # iterator, its callback getting the value and a counter.

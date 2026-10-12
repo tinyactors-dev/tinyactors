@@ -216,7 +216,8 @@ static const sjs_name NAMES[] = {
     NAME_TEMPORAL("nanosecond", 0, SJS_FIELD_NANOSECOND),
     NAME_TEMPORAL("nanoseconds", 0, SJS_FIELD_NANOSECONDS),
     NAME_TEMPORAL("negated", SJS_METHOD_TEMPORAL_NEGATED, 0),
-    NAME("next", SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    /* MUTATION: an iterator's next. Restore: NAME("next", SJS_NAME_ON_ITERATOR, 0, 0, 0). */
+    { { "next", 4u }, SJS_NAME_ON_ITERATOR, { 0, 0, 0, 0, 0, SJS_METHOD_ITERATOR_NEXT, 0, 0, 0 }, SJS_METHOD_ITERATOR_ADVANCE, 0 },
     NAME("normalize", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("padEnd", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_END, 0),
     NAME("padStart", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_PAD_START, 0),
@@ -228,7 +229,8 @@ static const sjs_name NAMES[] = {
     NAME("repeat", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPEAT, 0),
     NAME("replace", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE, 0),
     NAME("replaceAll", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE_ALL, 0),
-    NAME("return", SJS_NAME_ON_ITERATOR, 0, 0, 0),
+    /* MUTATION: an iterator's return. Restore: NAME("return", SJS_NAME_ON_ITERATOR, 0, 0, 0). */
+    { { "return", 6u }, SJS_NAME_ON_ITERATOR, { 0, 0, 0, 0, 0, SJS_METHOD_ITERATOR_RETURN, 0, 0, 0 }, SJS_METHOD_ITERATOR_CLOSE, 0 },
     NAME_MUTATION("reverse", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_REVERSE), /* MUTATION */
     NAME_TEMPORAL("round", SJS_METHOD_TEMPORAL_ROUND, 0),
     NAME("search", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_SEARCH, 0),
@@ -2467,6 +2469,7 @@ sjs_builtin_id sjs_mutation_named(const sjs_name *name) {
 
 /* The kind of receiver a method that changes it is a method of. */
 static uint8_t mutation_kind(sjs_builtin_id id) {
+    if (id >= SJS_METHOD_ITERATOR_ADVANCE) return SJS_ITERATOR; /* MUTATION: an iterator's next and return */
     if (id >= SJS_METHOD_MAP_SET) return SJS_MAP; /* MUTATION: a map's set, delete and clear */
     return id == SJS_METHOD_SET_ADD || id == SJS_METHOD_SET_CLEAR || id == SJS_METHOD_SET_DELETE ? SJS_SET : SJS_ARRAY;
 }
@@ -2488,6 +2491,8 @@ bool sjs_mutation_returns_receiver(sjs_builtin_id id) {
 
 /* MUTATION: a map's set, delete and clear, at the end of the file. */
 static sjs_result map_change(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* MUTATION: an iterator's next and return, at the end of the file. */
+static sjs_result iterator_step(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     call->result = sjs_undefined();
@@ -2520,6 +2525,9 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
     case SJS_METHOD_MAP_DELETE:
     case SJS_METHOD_MAP_CLEAR:
         return map_change(vm, id, call);
+    case SJS_METHOD_ITERATOR_ADVANCE: /* MUTATION */
+    case SJS_METHOD_ITERATOR_CLOSE:
+        return iterator_step(vm, id, call);
     default: { /* SET_ADD: appends, as a set keeps insertion order */
         sjs_value x = arg(call, 0);
         if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs sets hold primitives only");
@@ -3293,6 +3301,7 @@ static sjs_result iterator_limit(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *c
  * what it yields, a unit each. */
 static sjs_result iterator_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (id == SJS_METHOD_ITERATOR_TAKE || id == SJS_METHOD_ITERATOR_DROP) return iterator_limit(vm, id, call);
+    if (id == SJS_METHOD_ITERATOR_NEXT || id == SJS_METHOD_ITERATOR_RETURN) return iterator_step(vm, id, call); /* MUTATION */
     if (id == SJS_METHOD_ITERATOR_TO_ARRAY) {
         sjs_array *a;
         if (sjs_iterator_items(vm, call->receiver, &a) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -3426,9 +3435,13 @@ static sjs_result iterator_range(sjs_vm *vm, item_range range, sjs_array **out) 
     uint32_t n = sjs_iterator_count(it);
     uint32_t to = range.to < n ? range.to : n;
     uint32_t from = range.from < to ? range.from : to;
+    /* MUTATION: past what next() took. Restore: without these lines. */
+    uint32_t taken = it->position;
+    from += taken;
+    to += taken;
     const sjs_array *m = SJS_AS_ARRAY(it->source);
     if (it->items.kind == SJS_ARRAY) {
-        if (from == 0 && to == n) {
+        if (from == 0 && to == n) { /* MUTATION: from == 0 when nothing was taken */
             sjs_ref(it->items);
             *out = SJS_AS_ARRAY(it->items);
             return SJS_OK;
@@ -3589,7 +3602,8 @@ __attribute__((noinline)) static loop_step late_done(sjs_vm *vm, vm_frame *frame
     sjs_value *source = &vm->stack[frame->base + 1u];
     sjs_value *output = slot(vm, frame, LOOP_OUTPUT);
     sjs_value it;
-    sjs_result r = sjs_iterator_make(vm->context, (sjs_iterator_spec){ *source, *output, SJS_ITERATE_VALUES }, &it);
+    /* MUTATION: SJS_ITERATE_HELPER. Restore: SJS_ITERATE_VALUES alone. */
+    sjs_result r = sjs_iterator_make(vm->context, (sjs_iterator_spec){ *source, *output, SJS_ITERATE_VALUES | SJS_ITERATE_HELPER }, &it);
     if (r != SJS_OK) {
         sjs_vm_fail(vm, r);
         return LOOP_FAULT;
@@ -3971,7 +3985,8 @@ __attribute__((noinline)) static sjs_result iterator_limit(sjs_vm *vm, sjs_built
     sjs_value source = SJS_AS_ITERATOR(call->receiver)->source;
     sjs_value items = sjs_heap_value(SJS_ARRAY, &a->h);
     sjs_ref(source);
-    sjs_result r = sjs_iterator_make(vm->context, (sjs_iterator_spec){ source, items, SJS_ITERATE_VALUES }, &call->result);
+    /* MUTATION: SJS_ITERATE_HELPER. Restore: SJS_ITERATE_VALUES alone. */
+    sjs_result r = sjs_iterator_make(vm->context, (sjs_iterator_spec){ source, items, SJS_ITERATE_VALUES | SJS_ITERATE_HELPER }, &call->result);
     if (r == SJS_OK) return SJS_OK;
     sjs_unref(vm->context, source);
     sjs_unref(vm->context, items);
@@ -4070,4 +4085,86 @@ __attribute__((noinline)) static loop_step reduce_right_call(sjs_vm *vm, vm_fram
     loop_step step = call_back(vm, frame, (sjs_values){ args, 4u });
     sjs_vm_release(vm, acc);
     return step;
+}
+
+/* ------------------------------------------------------------------------
+ * MUTATION: an iterator's next() and return() (docs/mutation.md). On a
+ * variable that holds the iterator alone (SJS_OP_MUTATE: ADVANCE and
+ * CLOSE), next() takes the value at the iterator's position and moves past
+ * it, and return() moves it to the end; JavaScript's later next(), spread
+ * or helper sees the rest. On an iterator nothing else holds, which no
+ * program reads again (NEXT and RETURN, an ordinary call: `m.keys().next()`),
+ * the same value, without the move nothing could see. On one held
+ * elsewhere, either faults: that holder would see the move. This section
+ * exists only for mutation.
+ */
+
+/* { value, done }, a new object, with the keys in JavaScript's order, into
+ * call->result. Takes over `value`. */
+typedef struct {
+    sjs_value value;
+    bool done;
+} iterator_result;
+
+/* A key of the result and its value, taken over. */
+typedef struct {
+    sjs_str name;
+    sjs_value value;
+} iterator_result_key;
+
+static sjs_result iterator_result_put(sjs_vm *vm, sjs_leaf_call *call, iterator_result_key p) {
+    sjs_object *o = SJS_AS_OBJECT(call->result);
+    sjs_string *key;
+    sjs_result r = sjs_string_intern(vm->context, p.name, &key);
+    if (r == SJS_OK) {
+        r = sjs_object_put_key(vm->context, &o, (sjs_put){ key, p.value });
+        call->result.as.heap = &o->h;
+        if (r != SJS_OK) sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &key->h));
+    }
+    if (r == SJS_OK) return SJS_OK;
+    sjs_unref(vm->context, p.value);
+    return sjs_vm_fail(vm, r);
+}
+
+static sjs_result iterator_result_make(sjs_vm *vm, sjs_leaf_call *call, iterator_result step) {
+    sjs_object *o;
+    sjs_result r = sjs_object_make(vm->context, 2, &o);
+    if (r != SJS_OK) {
+        sjs_unref(vm->context, step.value);
+        return sjs_vm_fail(vm, r);
+    }
+    call->result = sjs_heap_value(SJS_OBJECT, &o->h);
+    if (iterator_result_put(vm, call, (iterator_result_key){ SJS_STR("value"), step.value }) != SJS_OK) return SJS_ERR_PROGRAM;
+    return iterator_result_put(vm, call, (iterator_result_key){ SJS_STR("done"), sjs_boolean(step.done) });
+}
+
+/* next() and return(), a unit of fuel each, and a unit for an entry's new
+ * [key, value] array (iterator_range). return() is an iterator helper's
+ * only (take, drop, map, filter, flatMap): a map's, a set's and matchAll's
+ * iterator have none in JavaScript, which throws a TypeError calling it.
+ * Its argument is not read: JavaScript's helper gives undefined. */
+__attribute__((noinline)) static sjs_result iterator_step(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    bool owned = id == SJS_METHOD_ITERATOR_ADVANCE || id == SJS_METHOD_ITERATOR_CLOSE;
+    bool closes = id == SJS_METHOD_ITERATOR_RETURN || id == SJS_METHOD_ITERATOR_CLOSE;
+    sjs_value receiver = call->receiver;
+    sjs_iterator *it = SJS_AS_ITERATOR(receiver);
+    call->cost = 1;
+    if (closes && (it->h.flags & SJS_ITERATE_HELPER) == 0) {
+        return sjs_vm_fault(vm, "a map's, a set's or matchAll's iterator has no return method: JavaScript throws a TypeError");
+    }
+    if (!owned && !sjs_value_unique(receiver)) {
+        return sjs_vm_fault(vm, "next and return change an iterator: staticjs calls them only on a variable of the function that holds it alone, or on an iterator nothing else holds");
+    }
+    if (closes) {
+        if (owned) it->position += sjs_iterator_count(it);
+        return iterator_result_make(vm, call, (iterator_result){ sjs_undefined(), true });
+    }
+    sjs_array *a;
+    if (iterator_range(vm, (item_range){ receiver, 0, 1 }, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+    bool done = a->length == 0;
+    sjs_value value = done ? sjs_undefined() : a->items[0];
+    sjs_ref(value);
+    sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &a->h));
+    if (!done && owned) it->position++;
+    return iterator_result_make(vm, call, (iterator_result){ value, done });
 }

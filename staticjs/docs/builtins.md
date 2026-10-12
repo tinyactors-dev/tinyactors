@@ -15,7 +15,7 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop`, `String.raw`,
+  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), the set methods, a map's `get` and `has`, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop` (and its `next` and `return`, on a variable a mutation: docs/mutation.md), `String.raw`,
   `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, Temporal's
   functions and its values' methods (`src/temporal.c`), `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
@@ -231,7 +231,7 @@ callback's own instructions.
   `Number(s)`, `parseInt` and `parseFloat` (and `String` of a primitive);
   one JavaScript does on the way to something else (`isNaN(s)`,
   `Math.abs(s)`) faults on a string, through `sjs_vm_to_number`.
-- **Mutating methods** (`push`, `sort`, `splice`, `add`, ...) change the
+- **Mutating methods** (`push`, `sort`, `splice`, `add`, an iterator's `next`, ...) change the
   receiver and return something else in JavaScript, so never implement
   them as copies. One that changes a variable the function owns, or a
   container on a path from one, is a mutation (`docs/mutation.md`): called
