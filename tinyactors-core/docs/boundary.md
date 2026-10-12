@@ -3,7 +3,6 @@
 **Status:** Current (2026-10-13). Records [ADR 0009](../../docs/adr/0009-one-host-two-queues.md),
 [ADR 0010](../../docs/adr/0010-outputs-are-views-values-stream.md) and
 [ADR 0011](../../docs/adr/0011-the-control-plane-is-posted-messages.md).
-Where ADR 0011 is not implemented yet, a section says so.
 
 How a binding and core talk: what crosses, who owns it, for how long,
 and every alternative that was considered and rejected, with the reason
@@ -128,18 +127,43 @@ tokens for 64 KB). `ta_cbor_encode` (deleted). A codec in the language.
 
 ## 6. The control plane
 
-**Design (ADR 0011; not implemented yet).** `ta_host_post(h, message)`:
-a JSON-RPC 2.0 message without `"jsonrpc"`, in CBOR, answered at the
-call; its reply is the last effect the call appends,
-`TA_HOST_EFFECT_REPLY`. Core's notifications are
-`TA_HOST_EFFECT_NOTIFICATION` effects; the first is `actor.changed`
-`{"session", "value"}` at the end of a run, replacing the host-level
-CHANGED. A binding's synchronous `request` is a facade: post, take its
+**Design (ADR 0011, decisions 1 to 6).** `ta_host_post(h, message)`: a
+JSON-RPC 2.0 message without `"jsonrpc"`, in CBOR, read during the call
+and answered at it (`src/host/request.c`). Its reply is the last effect
+the call appends, `TA_HOST_EFFECT_REPLY` (WIRE `{"id", "result"}` or
+`{"id", "error"}`), after the effects the method appends itself
+(`trace.end`'s TRACES and LOGS). The reply is written into the host's
+output, then copied once into the effect pool (string slot 7, WIRE, as the
+router's PEER relay keeps a value). A method that changes the host
+reserves room by capacity for the reply and three records before it
+applies (`request_fits`), so `TA_ERROR_NO_MEMORY` means nothing was
+applied and no REPLY appended; a method that only reads, and a refusal
+after a method tried, reserve after writing. A message without an id is
+applied with no REPLY; one that is not a request is answered with `"id":
+null`; batches are refused (-32600). `TA_ERROR_STATE` during a run or
+inside the datamodel guard.
+
+Core's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects (WIRE
+`{"method", "params"}`, EVENT the method, SESSION the session). The first
+is `actor.changed` `{"session", "value"}`: the system's CHANGED marks the
+subscription (one byte each) during the drain, and the end of the run
+appends one notification per marked or ended session with the state value
+written then (`subscriptions_notify`, `src/host/host.c`); a refused one
+keeps its mark for the next run. It replaces the host-level CHANGED; the
+system's CHANGED and `ta_actor_watch` stay below the host.
+
+`ta_host_effects` publishes everything appended since the last ack, run or
+not. A binding's drain re-reads it until the count is stable and acks at
+its outermost level; its synchronous `request` is a facade: post, take its
 REPLY at the last index, drain the rest. A JSON-RPC transport is a pipe:
 frames to `ta_host_post`, REPLY and NOTIFICATION bytes to the socket.
 
-Until it lands: `ta_host_request(h, request, &reply)` answers with a view
-of host memory valid until the next call into the host (ADR 0010).
+| Object | Owner | Created | Read | Ends |
+|---|---|---|---|---|
+| the posted message | caller | before the call | parsed into tokens on the C stack during `ta_host_post` | the call returns |
+| the reply's first writing | the host's output | during the call | copied into the effect pool at the end of the call | the next call that writes the host's output |
+| a REPLY or NOTIFICATION's WIRE | the effect pool | the post (REPLY), the end of a run (NOTIFICATION) | `ta_host_effect_bytes` after `ta_host_effects` | `ta_host_effects_ack`, the next `ta_host_run`, `ta_host_free` |
+| a subscription's mark | the subscription table's block (1 byte each) | the drain of a system CHANGED | the end of the run | cleared when its notification is appended |
 
 **Rejected.** Keeping `ta_host_request` beside `ta_host_post` (two ways;
 a view that ends at the next call). A queue of posted messages (answering
@@ -147,8 +171,11 @@ at the call orders the reply as well). Requests on an input queue (the
 deferred read of section 1). Binary records for the control plane (the
 catalogue grows; JSON-RPC faces outward). "Valid until released" for
 replies as a separate rule (with replies as effects, the ack is that
-release). Context in notifications (user code, unbounded size). Batches
-in core.
+release). The REPLY before the method's own effects (the reservation is
+by capacity before applying; the reply is written last). The state value
+written when the macrostep ends (it can be older than the state at the
+end of the run, which goes on). Context in notifications (user code,
+unbounded size). Batches in core.
 
 ## 7. Host outputs
 
@@ -166,14 +193,27 @@ only for large outputs.
 
 ## 8. Images
 
-**Design (ADR 0011, decision 7; not implemented yet).**
-`ta_host_add_image(h, ta_bytes image, &segment)`: the host copies the
-bytes into a block it owns, opens them there, and frees the block when
-the segment is freed. The binding keeps nothing.
+**Design (ADR 0011, decision 7).** `ta_host_add_image(h, ta_bytes image,
+&segment)`: the host reads the bytes during the call only, copies them
+into one block from its allocator, `[ta_image | bytes]`, 8-aligned (a
+block of its own, since `host->segments` grows by copying), opens them
+there before any datamodel code runs, and frees the block after the
+segment's `ta_system_deinit`: when it retires (which clears the segment's
+image), with `ta_host_free`, and for every segment a failed restore left.
+`ta_host_snapshot_input.images` are `ta_bytes`, copied the same way.
+`ta_host_segment_info.image` is the host's copy, NULL once freed.
+`TA_HOST_EFFECT_SEGMENT_FREED` stays as a retirement signal. The
+ECMAScript datamodel's `chart_by_hash` compares the hash stored at attach,
+among attached charts, and never reads an idle chart's image, which the
+host may have freed. `host.stats`' `regionBytes` counts regions, not image
+copies. The binding keeps nothing.
 
-Until it lands: the caller keeps the opened `ta_image` and its bytes,
-unmoved, until `TA_HOST_EFFECT_SEGMENT_FREED`; bindings hold core's
-`ta_compile_result` (Python) or a copy (Node).
+| Object | Owner | Created | Read | Ends |
+|---|---|---|---|---|
+| the caller's image bytes | caller | before the call | copied during `ta_host_add_image` / `ta_host_restore` | the call returns |
+| the image block | the host (environment's allocator) | `ta_host_add_image`, `ta_host_restore` | the segment's system, the datamodels' charts, requests, definitions, snapshot packs | after the segment's `ta_system_deinit` |
+| `ta_host_segment_info.image` | the host (borrowed) | `ta_host_segment_info_get` | while the segment lives | the segment is freed (then NULL) |
+| a datamodel's idle chart | the datamodel | `chart_attach` | its stored hash only | eviction, or adoption by an image with that hash |
 
 **Rejected.** Holding a caller's language buffer (transfer, resize or a
 shared buffer made core read freed memory: napi `38fc05c9`).

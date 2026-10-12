@@ -1,11 +1,16 @@
-# Requests
+# Requests: the control plane
 
-`ta_host_request` (`include/tinyactors/host.h`) is the rarely called part of
+`ta_host_post` (`include/tinyactors/host.h`) is the rarely called part of
 the host's API ([ADR 0009](../../docs/adr/0009-one-host-two-queues.md),
-decision 2). One CBOR map goes in and one CBOR map comes out, in the shape of
-JSON-RPC 2.0 without its `"jsonrpc"` member, so that a JSON-RPC transport is
-a thin mapping. This page lists every method. If a method is not listed
-here, it does not exist. Examples are in CBOR diagnostic notation.
+decision 2; [ADR 0011](../../docs/adr/0011-the-control-plane-is-posted-messages.md)).
+A message is one CBOR map in the shape of JSON-RPC 2.0 without its
+`"jsonrpc"` member; its reply, and the host's notifications, are effects
+the host appends, read like every other effect. Requests, replies and
+notifications are one ordered stream, so that a JSON-RPC transport is a
+pipe: frames to `ta_host_post`, the bytes of `TA_HOST_EFFECT_REPLY` and
+`TA_HOST_EFFECT_NOTIFICATION` effects to the socket. This page lists every
+method and notification. If one is not listed here, it does not exist.
+Examples are in CBOR diagnostic notation.
 
 ## The envelope
 
@@ -14,16 +19,18 @@ here, it does not exist. Examples are in CBOR diagnostic notation.
   - `params` (map, optional): the method's params, text keys; absent means
     none. A param that the method does not take is refused;
   - `id` (an integer, text or null, optional): echoed in the reply.
-- **A notification** is a request without `id`, as in JSON-RPC 2.0. The
-  host applies it and writes no reply: `ta_host_request` returns `TA_OK`
-  with an empty reply, and its errors are not reported, including a
-  method that does not exist and the host's allocator refusing. Send an
-  `id` to learn the outcome. A request that is not one (the errors with
-  code -32700 and -32600 below, and too many items) is answered even
-  without an `id`.
-- **A reply** is a map, its keys in this order:
+- **A message without `id`** is a JSON-RPC notification. The host applies
+  it and appends no reply: `ta_host_post` returns `TA_OK`, and its errors
+  are not reported, including a method that does not exist and the host's
+  allocator refusing. Send an `id` to learn the outcome. A message that is
+  not a request (the errors with code -32700 and -32600 below, and too
+  many items) is answered even without an `id`.
+- **The reply** is the last effect the post appends,
+  `TA_HOST_EFFECT_REPLY`, after the effects the method appends itself
+  (`trace.end`'s `TRACES` and `LOGS`). Its `WIRE` field
+  (`ta_host_effect_bytes`) is a map, its keys in this order:
   - `id`: the request's, the same item; `null` when it could not be read
-    (the request is not one CBOR item, holds too many, is not a map, or its
+    (the message is not one CBOR item, holds too many, is not a map, or its
     `id` is not an integer, text or null), as JSON-RPC 2.0 has it;
   - then `result` (the method's result), or `error`:
     `{"code": int, "message": text, "data": {"reason": text, "path": text}}`.
@@ -31,20 +38,31 @@ here, it does not exist. Examples are in CBOR diagnostic notation.
     names the member or param: `"method"`, `"params.sample"`,
     `"params.rules[1].from"`, or `""` for the request as a whole.
   - `message` is for people. Do not match on it.
-- **Batches** (a CBOR array of requests) are not supported yet: one is
-  refused with -32600, as anything but a map is. They may come later.
-- **Keys in replies** come in the order shown on this page, which is
-  always the same (ADR 0009, decision 3). Byte strings stay bytes.
-- **The status of `ta_host_request`:**
-  - `TA_OK`: `reply` is a result or an error reply (a notification:
-    nothing), a view of the host's memory, valid until the next call into
-    the host: read or copy it before anything else calls in (ADR 0010,
-    decision 2).
-  - `TA_ERROR_NO_MEMORY`: the host's allocator refused room for the reply,
-    and nothing was applied. Send the request again when it has room.
-  - `TA_ERROR_STATE`: the call was made during a run (from a datamodel).
-    Nothing was written.
-- **Limits:** a request is decoded into at most `TA_HOST_REQUEST_TOKENS`
+- **Publication:** `ta_host_effects` publishes everything appended since
+  the last ack, with or without a run. A batch holds, in order: the
+  effects appended between runs in call order (earlier replies, a
+  deliver's `PEER_ERROR`, `trace.end`'s `TRACES`), then a run's effects in
+  drain order, then the run's notifications at its end. A reply and its
+  bytes live until `ta_host_effects_ack`, the next `ta_host_run` or
+  `ta_host_free`. A caller's synchronous `request(method, params)` posts
+  with a fresh id, calls `ta_host_effects`, and finds its reply at the last
+  index of that call's array (bindings.md, section 5, for how it drains).
+- **Batches** (a CBOR array of requests) are not supported: one is
+  refused with -32600, as anything but a map is. A transport splits a
+  JSON-RPC batch into messages and assembles the array from the replies.
+- **Keys in replies and notifications** come in the order shown on this
+  page, which is always the same (ADR 0009, decision 3). Byte strings stay
+  bytes.
+- **The status of `ta_host_post`:**
+  - `TA_OK`: the message was read and, with an id, answered; a JSON-RPC
+    error travels inside the reply.
+  - `TA_ERROR_NO_MEMORY`: the host's allocator refused room for the reply
+    (or the published batch holds as many replaced blocks as it can), and
+    nothing was applied and no reply appended. Post the message again when
+    it has room.
+  - `TA_ERROR_STATE`: the call was made during a run, or while the host was
+    inside a datamodel (from a datamodel's code). Nothing was appended.
+- **Limits:** a message is decoded into at most `TA_HOST_REQUEST_TOKENS`
   (256) items, on the stack. One more is the error `limit`.
 
 | Code | Reason | Meaning |
@@ -139,8 +157,8 @@ Ends a watch early. Param: `id` (uint, required). Result: `{}`. Errors:
 
 The host is stopping: every open span ends now, at the wall time of the last
 `ta_host_advance_time`, marked `scxml.incomplete`, and is staged for
-`ta_host_traces`. A `TRACES` effect follows with the next
-`ta_host_effects`. When the staging cannot hold them all, the rest end as
+`ta_host_traces`. Its `TRACES` effect (and `LOGS`, when logs are staged)
+comes before the reply, in the same batch, without a run. When the staging cannot hold them all, the rest end as
 takes make room: take until a take writes nothing. No params. Result:
 `{}`. Errors: `state` (the host has no telemetry).
 
@@ -158,6 +176,8 @@ versions included. No params.
 Result: `{"host": {...}, "charts": [...]}`:
 - `host`: `segments`, `actors`, `hibernated`, `runnable`, `jobs`,
   `regionBytes`, `delivered`, `routed`, `migrated`, `retired`, `fuelClock`.
+  `regionBytes` sums the live segments' regions; the host's copies of
+  their images (`ta_host_add_image`) are not in it.
 - each chart: `name`, `actors`, `hibernated`, `spawned`, `ended`, `turns`,
   `macrosteps`, `fuel`, `errorsExecution`, `errorsCommunication`,
   `errorsPlatform`, `faults`.
@@ -267,19 +287,20 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 
 ### `actor.subscribe`, `actor.unsubscribe`
 
-`actor.subscribe` asks for a `TA_EFFECT_CHANGED` effect each run in which
-the session finished a macrostep: at most one per session per run, after
-which the binding reads what it needs (`actor.state`, `actor.context`). Other
-sessions cost nothing. Subscribing twice is one subscription; a session that
-ends leaves the list. `actor.unsubscribe` stops it. Param: `session` (uint,
-required). Result: `{}`.
+`actor.subscribe` asks for the notification `actor.changed` (below) at the
+end of each run in which the session finished a macrostep: at most one per
+session per run. Other sessions cost nothing. Subscribing twice is one
+subscription; a session that ends gets one last notification, with
+`value` null, and leaves the list. `actor.unsubscribe` stops it. Param:
+`session` (uint, required). Result: `{}`. The first notification comes
+after the reply: the host watches the session from the next run's start.
 
 Hibernation does not end a subscription. The subscription is the host's;
-what makes the effect is a watch on the actor, which the host sets again
+what marks the session is a watch on the actor, which the host sets again
 before every run and which ends when the actor hibernates. So a hibernated
-session can be subscribed and unsubscribed; once woken, it gets `CHANGED`
-effects from its next run on if it is still subscribed then, and none if it
-is not.
+session can be subscribed and unsubscribed; once woken, it gets
+notifications from its next run on if it is still subscribed then, and
+none if it is not.
 
 Errors: `missing`, `type`, `stale` (subscribe: no such session;
 unsubscribe: not subscribed), `limit` (-32003: the host holds
@@ -337,11 +358,46 @@ Errors: `missing`, `type`, `malformed` (-32006: not OTLP).
    "status": 0, "statusMessage": "", "attributes": {...}, "events": []}]}}
 ```
 
+## Notifications
+
+The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects: their
+`WIRE` is a JSON-RPC notification, `{"method", "params"}`, their `EVENT`
+the method's name, and their `SESSION` the session it is about (0: none).
+They live until the ack, like every effect. A notification never stands
+for an effect a binding must act on (`WAKE`, `PEER`, `TRACES`, ... stay
+effects of their own).
+
+### `actor.changed`
+
+A subscribed session (`actor.subscribe`) finished a macrostep in the run,
+or ended. Appended at the end of that run, after the run's other effects:
+at most one per session per run.
+
+Params: `session` (uint); `value`: the session's state value after the
+run, as `actor.state` answers it (the watch fires at the first macrostep,
+but a run goes on, so the value is written when the run ends), or `null`
+when the session ended or left the host (`ta_host_export_actor`), and its
+subscription with it. `value` is left
+out when the configuration has more states than a state value holds
+(`actor.state` answers `limit`). The context is not in it: reading
+variables runs the datamodel's code, and its size has no bound; post
+`actor.context` for it.
+
+When the host's allocator refuses room for a notification at the end of a
+run, the session keeps its mark, the run answers `TA_RUN_EXHAUSTED`, and
+the notification is appended at the end of the next run.
+
+```
+{"method": "actor.changed", "params": {"session": 1, "value": "t"}}
+{"method": "actor.changed", "params": {"session": 1, "value": null}}
+```
+
 ## Not methods
 
 These stay C calls:
 - **The hot path:** spawn, send, send_many, terminate, deliver,
   advance_time, resume, run, and the effects and their ack.
+- **Images:** `ta_host_add_image` takes the image's bytes and keeps a copy.
 - **Bytes that the host writes or takes:** `ta_host_traces`, `ta_host_logs`,
   `ta_host_metrics`, hibernate, wake, export_actor, adopt, migrate, snapshot,
   restore and `snapshot_pack`.
@@ -380,11 +436,18 @@ binding gets the same answers.
 3. **The result:** a map with its keys in a fixed order.
 4. **Errors:** use a reason from the table above. A new reason needs its own
    code in the -32000 to -32099 range, added to the table.
-5. **Atomic:** write the result first and apply the change only when the
-   host had room for it, so `TA_ERROR_NO_MEMORY` means nothing changed.
-6. **Refused during a run:** `ta_host_request` does this for every method.
-   **Notifications** need nothing either: a method runs the same with or
-   without an `id`, and `ta_host_request` drops what it would write.
+5. **Atomic:** write the result first and apply the change only when
+   `request_fits` says the host had room for it: the reply fits, and the
+   effect pool holds room for the reply and three records (the method's own
+   effects and the REPLY), so `TA_ERROR_NO_MEMORY` means nothing changed.
+   A method that appends more than two effects of its own raises
+   `POST_EFFECTS` (`src/host/request.c`). A method that only reads needs
+   nothing: `ta_host_post` reserves room for its reply after it is written.
+6. **Refused during a run:** `ta_host_post` does this for every method.
+   **Messages without an id** need nothing either: a method runs the same
+   with or without an `id`, and `ta_host_post` drops what it would write.
+   A notification the host sends is a method name in the section above,
+   appended as an effect where the host learns of it.
 7. **Vectors** in `tinyactors-test/suites/protocol/requests.txt`: the result, its defaults,
    each param's error, and a `refused` case for a method that changes the
    host (the host's allocator refuses room for the reply: nothing applied). Unit tests (`tests/unit/test_host_request.c`) only for what a

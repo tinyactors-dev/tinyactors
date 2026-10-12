@@ -97,12 +97,12 @@ implementation of that layer). Layer dependency rules are in
 │   │
 │   ├── host/                  the policy every embedder would rebuild, once (freestanding; its caller's ta_allocator)
 │   │   ├── host_internal.h    ✅ host state shared by host.c and router.c
-│   │   ├── host.c             ✅ segments + session ranges, cross-segment routing, versions and
-│   │   │                         retirement, quantum-bounded migration jobs, CLOCK sweep, growth,
-│   │   │                         boot, whole-host snapshot/restore
+│   │   ├── host.c             ✅ segments + session ranges, image copies, cross-segment routing,
+│   │   │                         versions and retirement, quantum-bounded migration jobs, CLOCK
+│   │   │                         sweep, growth, boot, whole-host snapshot/restore, actor.changed
 │   │   ├── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
 │   │   ├── telemetry.c        ✅ the host's OTLP encoder, or the null one (traces, logs, metrics)
-│   │   └── request.c          ✅ ta_host_request: the rarely called API as CBOR (docs/requests.md); the host's CBOR config (docs/host-config.md)
+│   │   └── request.c          ✅ ta_host_post: the control plane, JSON-RPC messages as CBOR answered by REPLY effects (docs/requests.md); the host's CBOR config (docs/host-config.md)
 │   │
 │   ├── otlp/                  the OTLP codec (freestanding, one block, relocatable; uses trace + image)
 │   │   ├── otlp_internal.h    ✅ the encoder's block, protobuf primitives

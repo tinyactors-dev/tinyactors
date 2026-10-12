@@ -19,10 +19,11 @@ drain tagged effects.
 - [docs/layout.md](docs/layout.md) — file tree, tooling, tasks
 - [docs/distribution.md](docs/distribution.md) — what is released (the C libraries), the
   release targets and tasks
-- [docs/bindings.md](docs/bindings.md) — writing a binding: the queue loop, effects,
-  requests, values and envelopes, what a binding owns and what it must not do
-- [docs/requests.md](docs/requests.md) — `ta_host_request`'s methods (JSON-RPC's shape, in
-  CBOR), and how to add one
+- [docs/bindings.md](docs/bindings.md) — writing a binding: the queue loop, effects and
+  the drain rule, posted messages, values and envelopes, what a binding owns and what it
+  must not do
+- [docs/requests.md](docs/requests.md) — the messages `ta_host_post` takes, their replies
+  and the host's notifications (JSON-RPC's shape, in CBOR), and how to add a method
 - [docs/host-config.md](docs/host-config.md) — `ta_host_create`'s CBOR config and its
   environment of pointers
 

@@ -700,6 +700,21 @@ In progress beside M0, in core:
   bindings migrate to the new calls (their call sites are listed in the
   coordinator's report), then delete their rooms, hints and retries
   (`bindings.md` sections 6 and 9).
+- **ADR 0011: the control plane is posted messages; images are bytes the
+  host keeps.** Implemented in core (2026-10-13), in the ADR's order:
+  `ta_host_post` answers a message with a `TA_HOST_EFFECT_REPLY` effect,
+  and `ta_host_request` is deleted (`42401f69`); `actor.changed`
+  notifications replace the host-level CHANGED (`db7d1220`);
+  `ta_host_add_image` takes bytes and the host keeps a copy, freed with
+  its segment, `ta_host_snapshot_input.images` as `ta_bytes`, and the
+  ECMAScript datamodel's restore reads no freed image (`71f6547c`); the
+  driver's `host.post` and `host.run`'s notifications, with a subscribe
+  exchange in `requests.txt` (`770d94d6`); the guide, `requests.md` and
+  `boundary.md`. Next: both bindings migrate, each from one message
+  (their call sites are listed in the coordinator's report): the request
+  facade and the drain rule (`bindings.md` sections 5 and 10), the
+  NOTIFICATION effect instead of CHANGED, the image rows and their
+  `SEGMENT_FREED` handling gone, and their adapters' `host.post`.
 
 ## Deferred
 
