@@ -264,7 +264,7 @@ global have no kind the compiler knows.
 
 An assignment is a statement of its own: `o.k = v;`, `o[k] = v;`,
 `a.b[i].c = v;`, and the compound forms `+=`, `-=`, `*=`, `/=`, `%=`,
-`&&=`, `||=` and `??=`; and `++` and `--`, prefix or postfix, of such a
+`**=`, `&&=`, `||=` and `??=`; and `++` and `--`, prefix or postfix, of such a
 target, as a statement. Each has JavaScript's semantics and evaluation
 order: the target's keys from left to right, a compound assignment's read
 of the target, then the value, then the store. `&&=`, `||=` and `??=`
@@ -285,7 +285,7 @@ changes the root's variable inside the target's keys or the value
 (`xs[0] = xs.push(1)`): JavaScript holds the containers on the path from
 before the value runs, and staticjs finds them again when it stores. An
 assignment anywhere but as a statement (`f(o.k = 1)`, `o.a = o.b = 1`),
-a pattern as the target (`[o.a, o.b] = xs`), and `**=` and the bitwise
+a pattern as the target (`[o.a, o.b] = xs`), and the bitwise
 forms are unsupported; a target that cannot be assigned to (`1++`,
 `o?.a = 1`) is a syntax error, as in JavaScript.
 

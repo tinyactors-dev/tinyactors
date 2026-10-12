@@ -690,7 +690,7 @@ JavaScript would throw, or would find another binding, as parameters have a
 scope of their own. An assignment, `++` and `--` are refused as
 unsupported where JavaScript can assign but staticjs does not (anywhere
 but as a statement, `[a] = xs`, a target whose root is not a variable the
-function owns, `**=` and the bitwise forms: docs/mutation.md), and as a
+function owns, and the bitwise forms: docs/mutation.md), and as a
 syntax error where JavaScript cannot (`1 = 2`, `a + b = 1`, `1++`).
 `delete` is refused as unsupported anywhere but as a statement, and of
 anything but a property on such a path; of a name it is a syntax error in a

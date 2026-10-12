@@ -2727,7 +2727,8 @@ static const char *const refused_target = "staticjs assigns only to a property o
 static const char *const refused_changing = "staticjs does not change a variable with one of its methods while it assigns to it";
 
 static bool assign_operator(uint32_t op) {
-    return op == 0 || (op >= SJS_OP_ADD && op <= SJS_OP_REMAINDER) || op == SJS_OP_AND || op == SJS_OP_OR || op == SJS_OP_COALESCE;
+    return op == 0 || (op >= SJS_OP_ADD && op <= SJS_OP_REMAINDER) || op == SJS_OP_AND || op == SJS_OP_OR || op == SJS_OP_COALESCE ||
+           op == SJS_OP_EXPONENT;
 }
 
 static bool logical_operator(uint32_t op) {
