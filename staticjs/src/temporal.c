@@ -1,8 +1,9 @@
 /*
  * Temporal values (docs/temporal.md): Temporal.PlainDate, PlainTime and
- * PlainDateTime in the ISO 8601 calendar, and Temporal.Duration, their
- * constructors, from, compare, getters and methods. Instant and
- * Temporal.Now build on the same kind, SJS_TEMPORAL, and the same tables.
+ * PlainDateTime in the ISO 8601 calendar, Temporal.Duration and
+ * Temporal.Instant (UTC only), their constructors, from, compare, getters
+ * and methods. Temporal.Now builds on the same kind, SJS_TEMPORAL, and the
+ * same tables.
  *
  * The rule: what JavaScript (temporal-polyfill 1.0.5, checked against
  * @js-temporal/polyfill 0.5.1) gives, or a fault. A RangeError or a
@@ -608,6 +609,7 @@ static uint32_t put_iso(char *out, iso_value v, int32_t digits) {
 }
 
 static uint32_t put_duration(char *out, const double *f, int32_t digits);
+static uint32_t put_instant_text(const sjs_temporal *t, char *out);
 
 uint32_t sjs_temporal_text(const sjs_temporal *t, char *out) {
     switch ((sjs_temporal_type)t->h.flags) {
@@ -618,7 +620,7 @@ uint32_t sjs_temporal_text(const sjs_temporal *t, char *out) {
     case SJS_TEMPORAL_DURATION:
         return put_duration(out, t->as.duration, DIGITS_AUTO);
     default:
-        return 0;
+        return put_instant_text(t, out);
     }
 }
 
@@ -668,7 +670,8 @@ static bool equal_ignoring_case(sjs_str text, sjs_str lower) {
 typedef struct {
     sjs_str text;
     uint32_t at;
-    bool time_zone;   /* scan_annotations read a time zone annotation */
+    bool time_zone;      /* scan_annotations read a time zone annotation */
+    bool any_calendar;   /* an Instant's: a calendar annotation is ignored */
 } iso_scan;
 
 static int scan_peek(const iso_scan *s) {
@@ -772,7 +775,7 @@ static bool time_zone_name(sjs_str name) {
 /* A time zone annotation's identifier: an offset to the minute, or a name. */
 static bool time_zone_identifier(sjs_str id) {
     if (id.length > 0 && (id.ptr[0] == '+' || id.ptr[0] == '-')) {
-        iso_scan s = { id, 1u, false };
+        iso_scan s = { id, 1u, false, false };
         clock_parts offset;
         return scan_clock(&s, (clock_grammar){ false, 59u }, &offset) && s.at == id.length;
     }
@@ -828,7 +831,7 @@ static bool scan_annotations(iso_scan *s) {
         sjs_str value = { s->text.ptr + equals + 1u, s->at - 1u - (equals + 1u) };
         if (!annotation_key(key) || !annotation_value(value)) return false;
         if (sjs_str_equal(key, SJS_STR("u-ca"))) {
-            if (++calendars == 1u && !equal_ignoring_case(value, SJS_STR("iso8601"))) return false;
+            if (++calendars == 1u && !s->any_calendar && !equal_ignoring_case(value, SJS_STR("iso8601"))) return false;
             critical_calendar = critical_calendar || critical;
         } else if (critical) {
             return false;
@@ -864,26 +867,32 @@ typedef struct {
     bool zoned;   /* with a time zone annotation: a ZonedDateTime's */
 } iso_parse;
 
-static bool parse_iso(sjs_str text, iso_parse *out) {
-    iso_scan s = { text, 0, false };
-    sjs_iso_date_time *d = &out->when;
-    *out = (iso_parse){ 0 };
+/* A date, YYYY-MM-DD or YYYYMMDD or with a sign and six digits, into `d`. */
+static bool scan_date(iso_scan *s, sjs_iso_date_time *d) {
     uint32_t year;
-    int sign = scan_peek(&s);
+    int sign = scan_peek(s);
     if (sign == '+' || sign == '-') {
-        s.at++;
-        if (!scan_digits(&s, 6u, &year) || (sign == '-' && year == 0)) return false;
-    } else if (!scan_digits(&s, 4u, &year)) {
+        s->at++;
+        if (!scan_digits(s, 6u, &year) || (sign == '-' && year == 0)) return false;
+    } else if (!scan_digits(s, 4u, &year)) {
         return false;
     }
     d->year = sign == '-' ? -(int32_t)year : (int32_t)year;
-    bool extended = scan_take(&s, '-');
+    bool extended = scan_take(s, '-');
     uint32_t month;
     uint32_t day;
-    if (!scan_digits(&s, 2u, &month) || (extended && !scan_take(&s, '-')) || !scan_digits(&s, 2u, &day)) return false;
+    if (!scan_digits(s, 2u, &month) || (extended && !scan_take(s, '-')) || !scan_digits(s, 2u, &day)) return false;
     if (month < 1u || month > 12u || day < 1u || day > days_in_month(d->year, month)) return false;
     d->month = (uint8_t)month;
     d->day = (uint8_t)day;
+    return true;
+}
+
+static bool parse_iso(sjs_str text, iso_parse *out) {
+    iso_scan s = { text, 0, false, false };
+    sjs_iso_date_time *d = &out->when;
+    *out = (iso_parse){ 0 };
+    if (!scan_date(&s, d)) return false;
     int separator = scan_peek(&s);
     if (separator == 'T' || separator == 't' || separator == ' ') {
         s.at++;
@@ -918,7 +927,7 @@ static bool reads_as_date(sjs_str text) {
 /* A time alone: T or t, then the clock, an offset and annotations as
  * after a date; without the T, a time that reads as a date is refused. */
 static bool parse_time_only(sjs_str text, sjs_iso_date_time *d) {
-    iso_scan s = { text, 0, false };
+    iso_scan s = { text, 0, false, false };
     bool designated = scan_take(&s, 'T') || scan_take(&s, 't');
     uint32_t start = s.at;
     clock_parts time;
@@ -1742,7 +1751,7 @@ static bool scan_duration_part(iso_scan *s, bool fractions, duration_part *out) 
 static bool parse_duration(sjs_str text, double f[DURATION_FIELD_COUNT]) {
     static const char DATE_LETTERS[] = "YMWD";
     static const char TIME_LETTERS[] = "HMS";
-    iso_scan s = { text, 0, false };
+    iso_scan s = { text, 0, false, false };
     for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) f[i] = 0;
     double sign = 1;
     if (scan_take(&s, '-')) {
@@ -2200,10 +2209,10 @@ static rounding_mode negated_mode(rounding_mode mode) {
 }
 
 /* GetDifferenceSettings of until and since: the units of the receiver's
- * type (a date's day to year, a time's nanosecond to hour, both for a date
- * and time), smallestUnit by default the least of them but a date's day,
- * largestUnit by default ("auto") the larger of smallestUnit and a day (an
- * hour for a time); roundingMode trunc by default, its direction negated
+ * type (a date's day to year, a time's and an Instant's nanosecond to hour,
+ * both for a date and time), smallestUnit by default the least of them but
+ * a date's day, largestUnit by default ("auto") the larger of smallestUnit
+ * and a day (an hour for a time, a second for an Instant); roundingMode trunc by default, its direction negated
  * for since; an increment of a time unit divides the unit above. */
 typedef struct {
     sjs_value options;
@@ -2213,9 +2222,10 @@ typedef struct {
 
 static sjs_result difference_options(sjs_vm *vm, difference_request request, difference_settings *out) {
     sjs_temporal_type type = request.type;
-    unit_range range = { type == SJS_TEMPORAL_PLAIN_DATE ? UNIT_DAY : UNIT_NANOSECOND, type == SJS_TEMPORAL_PLAIN_TIME ? UNIT_HOUR : UNIT_YEAR };
+    bool timed = type == SJS_TEMPORAL_PLAIN_TIME || type == SJS_TEMPORAL_INSTANT;
+    unit_range range = { type == SJS_TEMPORAL_PLAIN_DATE ? UNIT_DAY : UNIT_NANOSECOND, timed ? UNIT_HOUR : UNIT_YEAR };
     time_unit fallback = type == SJS_TEMPORAL_PLAIN_DATE ? UNIT_DAY : UNIT_NANOSECOND;
-    time_unit default_largest = type == SJS_TEMPORAL_PLAIN_TIME ? UNIT_HOUR : UNIT_DAY;
+    time_unit default_largest = type == SJS_TEMPORAL_INSTANT ? UNIT_SECOND : type == SJS_TEMPORAL_PLAIN_TIME ? UNIT_HOUR : UNIT_DAY;
     uint32_t largest;
     uint32_t smallest;
     *out = (difference_settings){ UNIT_DAY, fallback, 1, MODE_TRUNC };
@@ -2361,6 +2371,8 @@ static sjs_value duration_field(const double f[DURATION_FIELD_COUNT], sjs_tempor
 }
 
 
+static sjs_result instant_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+
 sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     static const struct {
         sjs_builtin_id id;
@@ -2384,6 +2396,12 @@ sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *c
     }
     case SJS_BUILTIN_TEMPORAL_DURATION_COMPARE:
         return compare_durations(vm, call);
+    case SJS_BUILTIN_TEMPORAL_INSTANT:
+    case SJS_BUILTIN_TEMPORAL_INSTANT_FROM:
+    case SJS_BUILTIN_TEMPORAL_INSTANT_COMPARE:
+    case SJS_BUILTIN_TEMPORAL_INSTANT_FROM_EPOCH_MILLISECONDS:
+    case SJS_BUILTIN_TEMPORAL_INSTANT_FROM_EPOCH_NANOSECONDS:
+        return instant_function(vm, id, call);
     default:
         break;
     }
@@ -2593,6 +2611,14 @@ static sjs_result date_field(sjs_vm *vm, date_getter getter, sjs_value *out) {
     }
 }
 
+/* An Instant's getter (below). */
+typedef struct {
+    const sjs_temporal *instant;
+    sjs_temporal_field field;
+} instant_getter;
+
+static sjs_result instant_field(sjs_vm *vm, instant_getter getter, sjs_value *out);
+
 sjs_result sjs_temporal_property(sjs_vm *vm, sjs_member member, sjs_value *out) {
     sjs_value v = member.object;
     const sjs_name *n = sjs_name_of(member.key);
@@ -2605,9 +2631,7 @@ sjs_result sjs_temporal_property(sjs_vm *vm, sjs_member member, sjs_value *out) 
             *out = duration_field(SJS_AS_TEMPORAL(v)->as.duration, field);
             return SJS_OK;
         }
-        if (type != SJS_TEMPORAL_PLAIN_DATE && type != SJS_TEMPORAL_PLAIN_TIME && type != SJS_TEMPORAL_PLAIN_DATE_TIME) {
-            return sjs_vm_fault(vm, "staticjs does not build this Temporal type's getters yet");
-        }
+        if (type == SJS_TEMPORAL_INSTANT) return instant_field(vm, (instant_getter){ SJS_AS_TEMPORAL(v), field }, out);
         return date_field(vm, (date_getter){ &SJS_AS_TEMPORAL(v)->as.iso, field }, out);
     }
     if (temporal_method_of(n, v) != SJS_BUILTIN_NONE || (n != NULL && (n->flags & SJS_NAME_OBJECT) != 0)) {
@@ -2677,26 +2701,36 @@ static sjs_result at_time(sjs_vm *vm, const sjs_temporal *t, sjs_leaf_call *call
 }
 
 /* round(smallestUnit) or round({ smallestUnit, roundingIncrement,
- * roundingMode }): a PlainTime to an hour at most, a PlainDateTime to a
- * day. smallestUnit is required (a TypeError without options, a
- * RangeError without the unit); roundingMode is halfExpand by default. */
+ * roundingMode }) of a PlainTime, a PlainDateTime or an Instant: the unit
+ * in `range`, the increment as given (the caller checks it), roundingMode
+ * halfExpand by default. smallestUnit is required (a TypeError without
+ * options, a RangeError without the unit). */
+typedef struct {
+    time_unit unit;
+    rounding r;
+} round_choice;
+
+static sjs_result round_options(sjs_vm *vm, unit_option request, round_choice *out) {
+    sjs_value options = request.options;
+    unit_choice unit = { UNIT_NANOSECOND, true };
+    out->r = (rounding){ 1, MODE_HALF_EXPAND };
+    if (options.kind == SJS_STRING) return unit_in_range(vm, (unit_text){ sjs_string_view(SJS_AS_STRING(options)), request.range }, &out->unit);
+    if (options.kind == SJS_UNDEFINED) return sjs_vm_fault(vm, "JavaScript throws a TypeError for round without a smallestUnit");
+    if (increment_option(vm, options, &out->r.increment) != SJS_OK || mode_option(vm, options, &out->r.mode) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (smallest_unit(vm, request, &unit) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (!unit.given) return sjs_vm_fault(vm, "JavaScript throws a RangeError for round's options without a smallestUnit");
+    out->unit = unit.unit;
+    return SJS_OK;
+}
+
+/* round: a PlainTime to an hour at most, a PlainDateTime to a day. */
 static sjs_result iso_round(sjs_vm *vm, const sjs_temporal *t, sjs_leaf_call *call) {
     sjs_temporal_type type = (sjs_temporal_type)t->h.flags;
     unit_range range = { UNIT_NANOSECOND, type == SJS_TEMPORAL_PLAIN_TIME ? UNIT_HOUR : UNIT_DAY };
-    sjs_value options = arg_of(call, 0);
-    rounding r = { 1, MODE_HALF_EXPAND };
-    unit_choice unit = { UNIT_NANOSECOND, false };
-    if (options.kind == SJS_STRING) {
-        unit.given = true;
-        if (unit_in_range(vm, (unit_text){ sjs_string_view(SJS_AS_STRING(options)), range }, &unit.unit) != SJS_OK) return SJS_ERR_PROGRAM;
-    } else {
-        if (options.kind == SJS_UNDEFINED) return sjs_vm_fault(vm, "JavaScript throws a TypeError for round without a smallestUnit");
-        if (increment_option(vm, options, &r.increment) != SJS_OK || mode_option(vm, options, &r.mode) != SJS_OK) return SJS_ERR_PROGRAM;
-        if (smallest_unit(vm, (unit_option){ options, range }, &unit) != SJS_OK) return SJS_ERR_PROGRAM;
-        if (!unit.given) return sjs_vm_fault(vm, "JavaScript throws a RangeError for round's options without a smallestUnit");
-    }
-    if (check_increment(vm, r.increment, unit.unit) != SJS_OK) return SJS_ERR_PROGRAM;
-    r.increment *= UNIT_NANOSECONDS[unit.unit];
+    round_choice choice;
+    if (round_options(vm, (unit_option){ arg_of(call, 0), range }, &choice) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (check_increment(vm, choice.r.increment, choice.unit) != SJS_OK) return SJS_ERR_PROGRAM;
+    rounding r = { choice.r.increment * UNIT_NANOSECONDS[choice.unit], choice.r.mode };
     sjs_iso_date_time made = t->as.iso;
     if (!round_iso(&made, r, type == SJS_TEMPORAL_PLAIN_DATE_TIME)) return outside_limits(vm);
     return new_iso(vm, (iso_value){ type, &made }, &call->result);
@@ -3037,14 +3071,358 @@ static sjs_result iso_difference(sjs_vm *vm, sjs_leaf_call *call, bool since) {
     return new_duration(vm, f, &call->result);
 }
 
+/* ------------------------------------------------------------------------
+ * Temporal.Instant: an exact time in nanoseconds since 1970-01-01T00:00Z,
+ * within 8.64 x 10^21 of it (10^8 days) either way, held as whole seconds
+ * (rounded toward negative infinity) and the nanoseconds past them. UTC
+ * only: toString writes Z, or the offset of UTC or of a fixed offset.
+ */
+
+#define NS_PER_SECOND INT64_C(1000000000)
+
+static wide epoch_of(const sjs_temporal *t) {
+    return wide_add(wide_mul(wide_of(t->as.instant.seconds), NS_PER_SECOND), wide_of((int64_t)t->as.instant.nanoseconds));
+}
+
+/* IsValidEpochNanoseconds: at most 8.64 x 10^21 either way. */
+static bool epoch_within_limits(wide ns) {
+    return u128_cmp(ns.m, wide_mul(wide_of(INT64_C(8640000000000)), NS_PER_SECOND).m) <= 0;
+}
+
+static sjs_result outside_instants(sjs_vm *vm) {
+    return sjs_vm_fault(vm, "JavaScript throws a RangeError for an Instant more than 8.64 x 10^21 nanoseconds from the epoch");
+}
+
+/* An Instant at `ns`, which must be within the limits. */
+static sjs_result new_instant(sjs_vm *vm, wide ns, sjs_value *out) {
+    if (!epoch_within_limits(ns)) return outside_instants(vm);
+    sjs_temporal *t;
+    sjs_result r = sjs_temporal_make(vm->context, SJS_TEMPORAL_INSTANT, &t);
+    if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    wide rest;
+    t->as.instant.seconds = wide_int64(wide_floor(ns, (u128){ 0, (uint64_t)NS_PER_SECOND }, &rest));
+    t->as.instant.nanoseconds = (uint32_t)rest.m.lo;
+    *out = sjs_heap_value(SJS_TEMPORAL, &t->h);
+    return SJS_OK;
+}
+
+/* An Instant's text: its date and time at `offset` nanoseconds (whole
+ * minutes) from UTC, the seconds and fraction as `digits` says, then Z, or
+ * with `zoned` the offset, +HH:MM (+00:00 for UTC). */
+typedef struct {
+    wide epoch;
+    int64_t offset;
+    int32_t digits;
+    bool zoned;
+} instant_text;
+
+static uint32_t put_instant(char *out, instant_text t) {
+    wide time;
+    int64_t days = wide_int64(wide_floor(wide_add(t.epoch, wide_of(t.offset)), (u128){ 0, (uint64_t)NS_PER_DAY }, &time));
+    sjs_iso_date_time d = date_at(days);
+    set_time_of_day(&d, wide_int64(time));
+    uint32_t n = put_iso(out, (iso_value){ SJS_TEMPORAL_PLAIN_DATE_TIME, &d }, t.digits);
+    if (!t.zoned) {
+        out[n++] = 'Z';
+        return n;
+    }
+    int64_t minutes = t.offset / UNIT_NANOSECONDS[UNIT_MINUTE];
+    out[n++] = minutes < 0 ? '-' : '+';
+    if (minutes < 0) minutes = -minutes;
+    n += put_digits(out + n, (uint64_t)(minutes / 60), 2u);
+    out[n++] = ':';
+    n += put_digits(out + n, (uint64_t)(minutes % 60), 2u);
+    return n;
+}
+
+static uint32_t put_instant_text(const sjs_temporal *t, char *out) {
+    return put_instant(out, (instant_text){ epoch_of(t), 0, DIGITS_AUTO, false });
+}
+
+/* An Instant's ISO 8601 string (TemporalInstantString), as both polyfills
+ * read one: a date, T (or t or a space) and a time, as after a date; then Z
+ * (or z) or a UTC offset, +HH to +HH:MM:SS.fffffffff, applied exactly; then
+ * annotations as after a date and time, a time zone's and a calendar's
+ * (any calendar) read and ignored. Its epoch nanoseconds into `out`, not
+ * yet checked against the limits. */
+static bool parse_instant(sjs_str text, wide *out) {
+    iso_scan s = { text, 0, false, true };
+    sjs_iso_date_time d = { 0 };
+    if (!scan_date(&s, &d)) return false;
+    int separator = scan_peek(&s);
+    if (separator != 'T' && separator != 't' && separator != ' ') return false;
+    s.at++;
+    clock_parts time;
+    if (!scan_clock(&s, (clock_grammar){ true, 60u }, &time)) return false;
+    set_clock(&d, &time);
+    int64_t offset = 0;
+    if (!scan_take(&s, 'Z') && !scan_take(&s, 'z')) {
+        int sign = scan_peek(&s);
+        clock_parts o;
+        if (sign != '+' && sign != '-') return false;
+        s.at++;
+        if (!scan_clock(&s, (clock_grammar){ true, 59u }, &o)) return false;
+        offset = (((int64_t)o.hour * 60 + o.minute) * 60 + o.second) * NS_PER_SECOND + o.nanoseconds;
+        if (sign == '-') offset = -offset;
+    }
+    if (!scan_annotations(&s)) return false;
+    *out = wide_sub(epoch_nanoseconds(days_of(&d), time_of_day(&d)), wide_of(offset));
+    return true;
+}
+
+/* ToTemporalInstant: an Instant's epoch, or a string's. JavaScript also
+ * converts an object to a string (a ZonedDateTime gives its own instant),
+ * which staticjs does not; any other value is a TypeError there. */
+static sjs_result to_instant(sjs_vm *vm, sjs_value item, wide *out) {
+    if (is_temporal(item, SJS_TEMPORAL_INSTANT)) {
+        *out = epoch_of(SJS_AS_TEMPORAL(item));
+        return SJS_OK;
+    }
+    if (item.kind == SJS_STRING) {
+        sjs_str text = parsed_text(vm, item);
+        if (!parse_instant(text, out)) {
+            return unparsed(vm, "staticjs reads an Instant from an ISO 8601 date and time with Z or a UTC offset, and this is not one", text);
+        }
+        return epoch_within_limits(*out) ? SJS_OK : outside_instants(vm);
+    }
+    if (sjs_is_primitive(item)) return sjs_vm_fault(vm, "JavaScript throws a TypeError for an Instant from a value that is neither an Instant nor a string");
+    return sjs_vm_fault(vm, "staticjs makes an Instant from an Instant or a string, where JavaScript would convert this object to a string");
+}
+
+/* ToBigInt of epoch nanoseconds: a BigInt, or a boolean (0n or 1n); within
+ * the limits. JavaScript also parses a string and converts an object,
+ * which staticjs does not; a number, undefined or null is a TypeError
+ * there. */
+static sjs_result epoch_argument(sjs_vm *vm, sjs_value v, wide *out) {
+    if (v.kind == SJS_BOOLEAN) {
+        *out = wide_of(v.boolean ? 1 : 0);
+        return SJS_OK;
+    }
+    if (v.kind == SJS_BIGINT) {
+        const sjs_bigint *b = SJS_AS_BIGINT(v);
+        uint32_t limbs[3] = { 0, 0, 0 };
+        if (b->length > 3u) return outside_instants(vm);
+        for (uint32_t i = 0; i < b->length; i++) limbs[i] = b->limbs[i];
+        *out = wide_make((u128){ limbs[2], ((uint64_t)limbs[1] << 32) | limbs[0] }, sjs_bigint_negative(b));
+        return epoch_within_limits(*out) ? SJS_OK : outside_instants(vm);
+    }
+    if (v.kind == SJS_STRING || !sjs_is_primitive(v)) {
+        return sjs_vm_fault(vm, "staticjs reads epoch nanoseconds from a BigInt, where JavaScript would convert this value to one");
+    }
+    return sjs_vm_fault(vm, "JavaScript throws a TypeError for epoch nanoseconds that are not a BigInt");
+}
+
+/* fromEpochMilliseconds' argument: ToNumber (a number, a boolean or null;
+ * undefined is NaN), which must be an integer (a RangeError in JavaScript)
+ * within the limits, 8.64 x 10^15. */
+static sjs_result epoch_milliseconds_argument(sjs_vm *vm, sjs_value v, wide *out) {
+    double d;
+    if (sjs_vm_to_number(vm, v, &d) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (!sjs_number_is_integer(d)) return sjs_vm_fault(vm, "JavaScript throws a RangeError for epoch milliseconds that are not an integer");
+    if (d < -8.64e15 || d > 8.64e15) return outside_instants(vm);
+    *out = wide_mul(wide_of((int64_t)d), 1000000);
+    return SJS_OK;
+}
+
+/* new Temporal.Instant(epochNanoseconds), from, fromEpochMilliseconds,
+ * fromEpochNanoseconds and compare. */
+static sjs_result instant_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_value item = arg_of(call, 0);
+    wide a;
+    wide b;
+    switch (id) {
+    case SJS_BUILTIN_TEMPORAL_INSTANT:
+    case SJS_BUILTIN_TEMPORAL_INSTANT_FROM_EPOCH_NANOSECONDS:
+        if (epoch_argument(vm, item, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+        return new_instant(vm, a, &call->result);
+    case SJS_BUILTIN_TEMPORAL_INSTANT_FROM_EPOCH_MILLISECONDS:
+        if (epoch_milliseconds_argument(vm, item, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+        return new_instant(vm, a, &call->result);
+    case SJS_BUILTIN_TEMPORAL_INSTANT_FROM:
+        if (to_instant(vm, item, &a) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (!is_temporal(item, SJS_TEMPORAL_INSTANT)) return new_instant(vm, a, &call->result);
+        /* Equal, and immutable: the same value serves. */
+        call->result = item;
+        sjs_ref(item);
+        return SJS_OK;
+    default:
+        if (to_instant(vm, item, &a) != SJS_OK || to_instant(vm, arg_of(call, 1u), &b) != SJS_OK) return SJS_ERR_PROGRAM;
+        call->result = sjs_num((double)wide_cmp(a, b));
+        return SJS_OK;
+    }
+}
+
+/* A BigInt of a wide integer, through its hexadecimal digits. */
+static sjs_result bigint_of_wide(sjs_vm *vm, wide v, sjs_value *out) {
+    static const char HEX[] = "0123456789abcdef";
+    char digits[32];
+    for (uint32_t i = 0; i < 16u; i++) {
+        digits[i] = HEX[(v.m.hi >> (60u - 4u * i)) & 15u];
+        digits[16u + i] = HEX[(v.m.lo >> (60u - 4u * i)) & 15u];
+    }
+    sjs_result r = sjs_bigint_from_digits(vm->context, (sjs_bigint_digits){ { digits, 32u }, 16u, v.negative }, out);
+    return r == SJS_OK ? SJS_OK : sjs_vm_fail(vm, r);
+}
+
+/* epochMilliseconds (rounded toward negative infinity, a number) and
+ * epochNanoseconds (a BigInt). */
+static sjs_result instant_field(sjs_vm *vm, instant_getter getter, sjs_value *out) {
+    const sjs_temporal *t = getter.instant;
+    if (getter.field == SJS_FIELD_EPOCH_NANOSECONDS) return bigint_of_wide(vm, epoch_of(t), out);
+    *out = sjs_num((double)(t->as.instant.seconds * 1000 + (int64_t)(t->as.instant.nanoseconds / 1000000u)));
+    return SJS_OK;
+}
+
+/* RoundTemporalInstant: the epoch rounded to a multiple of `r.increment`,
+ * which divides a day, by `r.mode` as if it were positive
+ * (RoundNumberToIncrementAsIfPositive: trunc toward negative infinity,
+ * expand toward positive infinity). False where temporal-polyfill gives
+ * another value: it rounds the time of day with the quotient's parity, and
+ * below zero, at an odd quotient, trunc and expand, and halfExpand and
+ * halfTrunc on a tie, go the other way (@js-temporal/polyfill follows the
+ * specification). */
+static bool round_epoch(wide x, rounding r, wide *out) {
+    wide rest;
+    wide q = wide_floor(x, (u128){ 0, (uint64_t)r.increment }, &rest);
+    *out = x;
+    if (wide_sign(rest) == 0) return true;
+    int cmp = u128_cmp(u128_add(rest.m, rest.m), (u128){ 0, (uint64_t)r.increment });
+    bool odd = (q.m.lo & 1u) != 0;
+    bool by_sign = r.mode == MODE_TRUNC || r.mode == MODE_EXPAND || (cmp == 0 && (r.mode == MODE_HALF_EXPAND || r.mode == MODE_HALF_TRUNC));
+    bool differs = wide_sign(q) < 0 && odd && by_sign;
+    if (rounds_away((rounding_case){ r.mode, false, cmp, !odd })) q = wide_add(q, wide_of(1));
+    *out = wide_mul(q, r.increment);
+    return !differs;
+}
+
+static sjs_result rounded_differently(sjs_vm *vm) {
+    return sjs_vm_fault(vm, "staticjs refuses this rounding of an Instant before 1970, which temporal-polyfill and the specification round differently");
+}
+
+/* round: to an hour at most, by an increment that divides a day's worth
+ * of the unit (a day's 24 hours included). */
+static sjs_result instant_round(sjs_vm *vm, wide epoch, sjs_leaf_call *call) {
+    round_choice choice;
+    if (round_options(vm, (unit_option){ arg_of(call, 0), { UNIT_NANOSECOND, UNIT_HOUR } }, &choice) != SJS_OK) return SJS_ERR_PROGRAM;
+    int64_t per_day = NS_PER_DAY / UNIT_NANOSECONDS[choice.unit];
+    if (choice.r.increment > per_day || per_day % choice.r.increment != 0) {
+        return sjs_vm_fault(vm, "JavaScript throws a RangeError for a roundingIncrement that does not divide a day");
+    }
+    wide rounded;
+    if (!round_epoch(epoch, (rounding){ choice.r.increment * UNIT_NANOSECONDS[choice.unit], choice.r.mode }, &rounded)) return rounded_differently(vm);
+    return new_instant(vm, rounded, &call->result);
+}
+
+/* toString's timeZone: undefined (Z), or a string: UTC in any case of its
+ * letters, or a UTC offset, +HH, +HHMM or +HH:MM (-00:00 is +00:00).
+ * JavaScript also reads a time zone's name (with its data) and an ISO
+ * string's time zone; staticjs has UTC only. A value that is not a string
+ * is a TypeError there (staticjs has no ZonedDateTime). */
+typedef struct {
+    int64_t offset;   /* nanoseconds, whole minutes */
+    bool zoned;
+} time_zone;
+
+static sjs_result time_zone_option(sjs_vm *vm, sjs_value options, time_zone *out) {
+    sjs_value v;
+    *out = (time_zone){ 0, false };
+    if (option_of(vm, (option_name){ options, SJS_STR("timeZone") }, &v) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (v.kind == SJS_UNDEFINED) return SJS_OK;
+    if (v.kind != SJS_STRING) return sjs_vm_fault(vm, "JavaScript throws a TypeError for a timeZone that is neither a string nor a ZonedDateTime");
+    sjs_str text = sjs_string_view(SJS_AS_STRING(v));
+    out->zoned = true;
+    if (equal_ignoring_case(text, SJS_STR("utc"))) return SJS_OK;
+    iso_scan s = { text, 1u, false, false };
+    clock_parts offset;
+    if (text.length > 0 && (text.ptr[0] == '+' || text.ptr[0] == '-') && scan_clock(&s, (clock_grammar){ false, 59u }, &offset) && s.at == text.length) {
+        out->offset = ((int64_t)offset.hour * 60 + offset.minute) * UNIT_NANOSECONDS[UNIT_MINUTE];
+        if (text.ptr[0] == '-') out->offset = -out->offset;
+        return SJS_OK;
+    }
+    return unparsed(vm, "staticjs has the time zone UTC and fixed UTC offsets only", text);
+}
+
+/* toString({ fractionalSecondDigits, roundingMode, smallestUnit,
+ * timeZone }): rounded as round rounds (trunc by default) to the digits
+ * written, then at the time zone's offset. */
+static sjs_result instant_to_string(sjs_vm *vm, text_request request, sjs_value *out) {
+    text_precision precision;
+    time_zone zone;
+    if (precision_of(vm, (precision_request){ request.options, UNIT_MINUTE }, &precision) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (time_zone_option(vm, request.options, &zone) != SJS_OK) return SJS_ERR_PROGRAM;
+    wide rounded;
+    if (!round_epoch(epoch_of(request.value), precision.r, &rounded)) return rounded_differently(vm);
+    char text[SJS_TEMPORAL_TEXT_MAX];
+    uint32_t n = put_instant(text, (instant_text){ rounded, zone.offset, precision.digits, zone.zoned });
+    vm->fuel_used += n;
+    return temporal_string(vm, (sjs_str){ text, n }, out);
+}
+
+/* add(duration) and subtract: of hours to nanoseconds only (years, months,
+ * weeks or days fault: JavaScript throws a RangeError), within the limits.
+ * There are no options. */
+static sjs_result instant_add(sjs_vm *vm, sjs_leaf_call *call, bool subtract) {
+    double f[DURATION_FIELD_COUNT];
+    if (to_duration(vm, arg_of(call, 0), f) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (f[0] != 0 || f[1] != 0 || f[2] != 0 || f[3] != 0) {
+        return sjs_vm_fault(vm, "JavaScript throws a RangeError for adding years, months, weeks or days to an Instant");
+    }
+    wide time = internal_of(f, false).time;
+    return new_instant(vm, wide_add(epoch_of(SJS_AS_TEMPORAL(call->receiver)), subtract ? wide_neg(time) : time), &call->result);
+}
+
+/* until(other, options) and since: the nanoseconds from the receiver to
+ * other (since: negated), rounded as difference_options say, balanced up
+ * to largestUnit (a second by default, an hour at most). */
+static sjs_result instant_difference(sjs_vm *vm, sjs_leaf_call *call, bool since) {
+    wide other;
+    difference_settings s;
+    if (to_instant(vm, arg_of(call, 0), &other) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (difference_options(vm, (difference_request){ arg_of(call, 1u), SJS_TEMPORAL_INSTANT, since }, &s) != SJS_OK) return SJS_ERR_PROGRAM;
+    u128 increment = u128_mul((u128){ 0, (uint64_t)UNIT_NANOSECONDS[s.smallest] }, (uint64_t)s.increment);
+    wide difference = wide_sub(other, epoch_of(SJS_AS_TEMPORAL(call->receiver)));
+    internal_duration d = { { 0, 0, 0, 0 }, round_wide(difference, (wide_rounding){ increment, s.mode }) };
+    double f[DURATION_FIELD_COUNT];
+    fields_of_internal((duration_balance){ d, s.largest }, f);
+    if (since) negate_fields(f);
+    return new_duration(vm, f, &call->result);
+}
+
+static sjs_result instant_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    const sjs_temporal *t = SJS_AS_TEMPORAL(call->receiver);
+    wide other;
+    switch (id) {
+    case SJS_METHOD_TEMPORAL_EQUALS:
+        if (to_instant(vm, arg_of(call, 0), &other) != SJS_OK) return SJS_ERR_PROGRAM;
+        call->result = sjs_boolean(wide_cmp(epoch_of(t), other) == 0);
+        return SJS_OK;
+    case SJS_METHOD_TEMPORAL_ADD:
+    case SJS_METHOD_TEMPORAL_SUBTRACT:
+        return instant_add(vm, call, id == SJS_METHOD_TEMPORAL_SUBTRACT);
+    case SJS_METHOD_TEMPORAL_UNTIL:
+    case SJS_METHOD_TEMPORAL_SINCE:
+        return instant_difference(vm, call, id == SJS_METHOD_TEMPORAL_SINCE);
+    case SJS_METHOD_TEMPORAL_ROUND:
+        return instant_round(vm, epoch_of(t), call);
+    case SJS_METHOD_TEMPORAL_TO_STRING:
+        return instant_to_string(vm, (text_request){ t, arg_of(call, 0) }, &call->result);
+    case SJS_METHOD_TEMPORAL_TO_JSON:
+        return instant_to_string(vm, (text_request){ t, sjs_undefined() }, &call->result);
+    case SJS_METHOD_TEMPORAL_TO_LOCALE_STRING:
+        return sjs_vm_fault(vm, "toLocaleString depends on locale data, which staticjs does not have");
+    case SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME_ISO:
+        return sjs_vm_fault(vm, "staticjs has no Temporal.ZonedDateTime: it needs time zone data");
+    default:
+        return sjs_vm_fault(vm, "JavaScript throws a TypeError for valueOf of a Temporal value: compare with equals or compare");
+    }
+}
+
 sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (call->receiver.kind != SJS_TEMPORAL) return sjs_vm_fault(vm, "this method is a Temporal value's");
     const sjs_temporal *t = SJS_AS_TEMPORAL(call->receiver);
     sjs_temporal_type type = (sjs_temporal_type)t->h.flags;
     if (type == SJS_TEMPORAL_DURATION) return duration_method(vm, id, call);
-    if (type != SJS_TEMPORAL_PLAIN_DATE && type != SJS_TEMPORAL_PLAIN_TIME && type != SJS_TEMPORAL_PLAIN_DATE_TIME) {
-        return sjs_vm_fault(vm, "staticjs does not build this Temporal type's methods yet");
-    }
+    if (type == SJS_TEMPORAL_INSTANT) return instant_method(vm, id, call);
     switch (id) {
     case SJS_METHOD_TEMPORAL_EQUALS: {
         sjs_iso_date_time other;
