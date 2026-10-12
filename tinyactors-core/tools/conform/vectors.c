@@ -44,7 +44,7 @@ static payload_reading payload_read(conform *state, conform_call *call, const ch
     return reading;
 }
 
-/* ---- host.create, host.free, host.request ---------------------------------------- */
+/* ---- host.create, host.free, host.post ------------------------------------------- */
 
 /* The C library's allocator, refusing every block while `refusing` is set. */
 static void *vectors_alloc(void *context, size_t size, size_t align) {
@@ -91,31 +91,59 @@ static void host_free(conform *state, conform_call *call, conform_result *result
     if (host_of(state, call)) conform_vectors_close(&state->vectors);
 }
 
-/* ta_host_post, then its REPLY, the last effect of the batch ta_host_effects
- * publishes: its bytes kept (copied) at once, and the batch acknowledged
- * when the REPLY is all it holds. No REPLY (a message without an id): an
- * empty reply. With `refuse`, the host's allocator refuses every block
- * during the call. */
-static void host_request(conform *state, conform_call *call, conform_result *result) {
+/* The notifications of the batch ta_host_effects published, from `from`
+ * on: each NOTIFICATION's bytes, kept, appended to `list` (up to 64). */
+typedef struct kept_list {
+    ta_bytes items[64];
+    uint32_t count;
+} kept_list;
+
+static void notifications_keep(conform *state, uint32_t from, kept_list *list) {
+    ta_host *host = state->vectors.host;
+    const ta_host_effect *effects;
+    uint32_t count = ta_host_effects(host, &effects);
+    for (uint32_t i = from; i < count; i++)
+        if (effects[i].kind == TA_HOST_EFFECT_NOTIFICATION &&
+            list->count < sizeof list->items / sizeof list->items[0])
+            list->items[list->count++] = conform_keep(state, ta_host_effect_bytes(host, i, TA_EFFECT_FIELD_WIRE));
+}
+
+/* ta_host_post, then the batch ta_host_effects publishes: the REPLY at its
+ * last index (when the post appended one) and the NOTIFICATIONs not answered
+ * yet, their bytes kept (copied) at once. The batch is acknowledged when it
+ * holds nothing else; else host.run takes it before it runs. With `refuse`,
+ * the host's allocator refuses every block during the call. */
+static void host_post(conform *state, conform_call *call, conform_result *result) {
+    conform_vectors *vectors = &state->vectors;
     ta_host *host = host_of(state, call);
-    ta_bytes request = {NULL, 0};
+    ta_bytes message = {NULL, 0};
     int refuse = 0;
-    if (!host || !conform_required(call, "request") || !conform_bytes(call, "request", &request) ||
+    if (!host || !conform_required(call, "message") || !conform_bytes(call, "message", &message) ||
         !conform_boolean(call, "refuse", &refuse))
         return;
     const ta_host_effect *effects;
     uint32_t before = ta_host_effects(host, &effects);
-    state->vectors.refusing = refuse;
-    ta_status status = ta_host_post(host, request);
-    state->vectors.refusing = 0;
+    vectors->refusing = refuse;
+    ta_status status = ta_host_post(host, message);
+    vectors->refusing = 0;
     conform_result_integer(result, "status", status);
     if (status != TA_OK) return;
     uint32_t count = ta_host_effects(host, &effects);
-    ta_bytes reply = {NULL, 0};
+    static kept_list notifications;
+    notifications.count = 0;
+    notifications_keep(state, vectors->answered, &notifications);
+    vectors->answered = count;
     if (count > before && effects[count - 1].kind == TA_HOST_EFFECT_REPLY)
-        reply = ta_host_effect_bytes(host, count - 1, TA_EFFECT_FIELD_WIRE);
-    conform_result_bytes(result, "reply", conform_keep(state, reply));
-    if (count == 1 && reply.length) ta_host_effects_ack(host);
+        conform_result_bytes(result, "reply",
+                             conform_keep(state, ta_host_effect_bytes(host, count - 1, TA_EFFECT_FIELD_WIRE)));
+    conform_result_list(result, "notifications", (conform_bytes_list){notifications.items, notifications.count});
+    int others = 0;
+    for (uint32_t i = 0; i < count; i++)
+        others |= effects[i].kind != TA_HOST_EFFECT_REPLY && effects[i].kind != TA_HOST_EFFECT_NOTIFICATION;
+    if (!others) {
+        ta_host_effects_ack(host);
+        vectors->answered = 0;
+    }
 }
 
 /* ---- image.add, actor.spawn, actor.send, clock.advance, host.run ------------------ */
@@ -190,31 +218,45 @@ static void clock_advance(conform *state, conform_call *call, conform_result *re
     ta_host_advance_time(host, (ta_host_time){(ta_time)monotonic, (uint64_t)wall});
 }
 
-/* Runs while the host yields or its effects are full; each PEER and
- * PEER_ERROR effect written as an envelope, in order. */
+/* The PEER and PEER_ERROR effects of the batch ta_host_effects publishes,
+ * each written as an envelope and kept, and its NOTIFICATIONs from `from`
+ * on; then the batch is acknowledged. */
+static void batch_take(conform *state, uint32_t from, kept_list *envelopes, kept_list *notifications) {
+    ta_host *host = state->vectors.host;
+    const ta_host_effect *effects;
+    uint32_t effect_count = ta_host_effects(host, &effects);
+    for (uint32_t i = 0; i < effect_count; i++) {
+        if (effects[i].kind != TA_HOST_EFFECT_PEER && effects[i].kind != TA_HOST_EFFECT_PEER_ERROR) continue;
+        ta_bytes out = {NULL, 0}; /* the host's, until the next call into it: kept */
+        ta_status status = ta_host_envelope(host, &effects[i], &out);
+        if (status != TA_OK) fprintf(stderr, "ta-conform: ta_host_envelope refused an effect: %d\n", (int)status);
+        else if (envelopes->count < sizeof envelopes->items / sizeof envelopes->items[0])
+            envelopes->items[envelopes->count++] = conform_keep(state, out);
+    }
+    notifications_keep(state, from, notifications);
+    ta_host_effects_ack(host);
+    state->vectors.answered = 0;
+}
+
+/* First the batch a post left published (or effects appended since the
+ * last ack), which the run would release; then runs while the host yields
+ * or its effects are full. Each PEER and PEER_ERROR effect written as an
+ * envelope, in order, and each NOTIFICATION's bytes no post answered. */
 static void host_run(conform *state, conform_call *call, conform_result *result) {
     ta_host *host = host_of(state, call);
     if (!host) return;
-    static ta_bytes envelopes[64];
-    uint32_t count = 0;
+    static kept_list envelopes, notifications;
+    envelopes.count = notifications.count = 0;
+    batch_take(state, state->vectors.answered, &envelopes, &notifications);
     ta_run run;
     int rounds = 0;
     do {
         run = ta_host_run(host, 1000000);
-        const ta_host_effect *effects;
-        uint32_t effect_count = ta_host_effects(host, &effects);
-        for (uint32_t i = 0; i < effect_count; i++) {
-            if (effects[i].kind != TA_HOST_EFFECT_PEER && effects[i].kind != TA_HOST_EFFECT_PEER_ERROR) continue;
-            ta_bytes out = {NULL, 0}; /* the host's, until the next call into it: kept */
-            ta_status status = ta_host_envelope(host, &effects[i], &out);
-            if (status != TA_OK) fprintf(stderr, "ta-conform: ta_host_envelope refused an effect: %d\n", (int)status);
-            else if (count < sizeof envelopes / sizeof envelopes[0])
-                envelopes[count++] = conform_keep(state, out);
-        }
-        ta_host_effects_ack(host);
+        batch_take(state, 0, &envelopes, &notifications);
     } while ((run.status == TA_RUN_YIELDED || run.status == TA_RUN_EFFECTS_FULL) && ++rounds < 1000);
     conform_result_integer(result, "status", run.status);
-    conform_result_list(result, "envelopes", (conform_bytes_list){envelopes, count});
+    conform_result_list(result, "envelopes", (conform_bytes_list){envelopes.items, envelopes.count});
+    conform_result_list(result, "notifications", (conform_bytes_list){notifications.items, notifications.count});
 }
 
 /* ---- peer.add, envelope.read, envelope.deliver ------------------------------------- */
@@ -332,7 +374,7 @@ static void value_encode(conform *state, conform_call *call, conform_result *res
 
 static const char *const create_params[] = {"config", "datamodel", "realm", NULL};
 static const char *const no_params[] = {NULL};
-static const char *const request_params[] = {"request", "refuse", NULL};
+static const char *const post_params[] = {"message", "refuse", NULL};
 static const char *const image_params[] = {"charts", NULL};
 static const char *const spawn_params[] = {"chart", "params", NULL};
 static const char *const send_params[] = {"session", "event", "data", NULL};
@@ -345,7 +387,7 @@ static const char *const encode_params[] = {"expression", NULL};
 const conform_method conform_vector_methods[] = {
     {"host.create", host_create, create_params},
     {"host.free", host_free, no_params},
-    {"host.request", host_request, request_params},
+    {"host.post", host_post, post_params},
     {"image.add", image_add, image_params},
     {"actor.spawn", actor_spawn, spawn_params},
     {"actor.send", actor_send, send_params},

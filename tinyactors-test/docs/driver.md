@@ -24,7 +24,8 @@ Every method names the core calls behind it; header references are to
   order. Standard error is free text; the runner shows its end when a case
   fails. The command exits with status 0 when its input ends.
 - **Calls and replies** take JSON-RPC 2.0's shape without its `"jsonrpc"`
-  member, as `ta_host_request` does (`tinyactors-core/docs/requests.md`):
+  member, as messages posted to a host do (`ta_host_post`,
+  `tinyactors-core/docs/requests.md`):
   `{"method", "params", "id"}` in, `{"id", "result"}` or
   `{"id", "error": {"code", "message", "data": {"reason", "path"}}}` out.
   Every call has an integer `id`; there are no notifications or batches.
@@ -56,12 +57,12 @@ Every method names the core calls behind it; header references are to
 | `w3c.run` | `documents`: the test's start document first, then its dependencies: charts (`.scxml`) and the files a `src` reads (`.txt`); `datamodel`, `realm` | `outcome`, as `scenario.run` | one W3C IRP test in the W3C environment (below) |
 | `host.create` | `config` (bytes); `datamodel`, `realm` | `status`; `datamodel`: the vtable's `name` (`datamodel.h`); `error` (bytes) when refused | `ta_host_create` (`host.h`) with `environment->error` set; quickjs: `ta_datamodel_ecmascript_new` with `realm` (`datamodel_ecmascript.h`); native: the implementation's own vtable, or -32602 `range` when it has none |
 | `host.free` | — | `{}` | `ta_host_free` |
-| `host.request` | `request` (bytes); `refuse` (bool) | `status`; `reply` (bytes) when `status` is 0 | `ta_host_request`; the reply is a view of the host's memory, copied at once. With `refuse`, the host's allocator refuses every block during the call: `TA_ERROR_NO_MEMORY`, and nothing applied |
-| `image.add` | `charts`: array of `{"name", "text"}` | `status`; `segment` | `ta_compile_charts`, `ta_compile_image` (`compile.h`), `ta_image_open` (`image.h`), `ta_host_add_image` |
+| `host.post` | `message` (bytes); `refuse` (bool) | `status`; when it is 0, `reply` (bytes): the `TA_HOST_EFFECT_REPLY`'s WIRE, left out when the post appended none (a message without an id), and `notifications`: array of bytes, the WIRE of each `TA_HOST_EFFECT_NOTIFICATION` the batch holds that no call answered yet, in order | `ta_host_post`, then `ta_host_effects`: the REPLY is the batch's last effect (`host.h`); its bytes and the notifications' are copied at once. The batch is acknowledged when it holds only REPLY and NOTIFICATION effects; otherwise `host.run` takes it before it runs. With `refuse`, the host's allocator refuses every block during the call: `TA_ERROR_NO_MEMORY`, nothing applied and no REPLY |
+| `image.add` | `charts`: array of `{"name", "text"}` | `status`; `segment` | `ta_compile_charts`, `ta_compile_image` (`compile.h`), `ta_host_add_image` with the image's bytes (the host copies them; the compile result is freed once added) |
 | `actor.spawn` | `chart` (its name); `params` (value) | `status`; `session` | `ta_host_chart`, `ta_host_spawn` |
 | `actor.send` | `session`, `event`; `data` (value) | `status` | `ta_host_send` |
 | `clock.advance` | `monotonic` (ticks), `wallNs` | `{}` | `ta_host_advance_time` |
-| `host.run` | — | `status` of the last run; `envelopes`: array of bytes | `ta_host_run`, again while it answers `TA_RUN_YIELDED` or `TA_RUN_EFFECTS_FULL` (`system.h`), at most 1,000 times, acknowledging the effects after each run; for each `PEER` and `PEER_ERROR` effect, in order, the bytes `ta_host_envelope` writes. No other effect is handled |
+| `host.run` | — | `status` of the last run; `envelopes`: array of bytes; `notifications`: array of bytes | First the batch left published since the last acknowledgement (by `host.post`, or appended by `envelope.deliver`), which `ta_host_run` would release unread: `ta_host_effects`, handled as below, then `ta_host_effects_ack`. Then `ta_host_run`, again while it answers `TA_RUN_YIELDED` or `TA_RUN_EFFECTS_FULL` (`system.h`), at most 1,000 times, acknowledging the effects after each run. For each `PEER` and `PEER_ERROR` effect, in order, the bytes `ta_host_envelope` writes; for each `NOTIFICATION` no `host.post` answered, its WIRE. No other effect is handled |
 | `peer.add` | `id`; `trusted` (bool) | `status`; `peer` | `ta_host_peer_add` (`TA_PEER_TRUSTED`) |
 | `envelope.read` | `cbor` (bytes); `error` (bool: an error envelope) | `status`; `back` (bytes): what was read, written again | `ta_host_envelope_read` or `ta_host_peer_error_read`, then `ta_host_envelope` of a `PEER` (`PEER_ERROR`) effect holding it |
 | `envelope.deliver` | `peer`, `cbor` (bytes) | `status`; `route` (`TA_ROUTE_*`) | `ta_host_envelope_read`, then `ta_host_deliver`, also when the read failed with the envelope's `size` set (data that is not one well-formed item: `ta_host_deliver` refuses it as malformed and answers the sender, `host.h`); `status` is the read's when it failed with `size` 0 (nothing to answer), and `ta_host_deliver`'s answer when it is negative |
@@ -96,7 +97,7 @@ by the command under test, so an adapter cannot lower its own bar.
 | Kind | Must offer | Used by |
 |---|---|---|
 | `reference` | every method above | `ta-conform` (`tinyactors-core`'s `mise run conform`) |
-| `binding` (the default) | every method but the C-level ones: `envelope.read` and `value.encode`; `host.request` without `refuse`, which the runner does not send it | each binding's adapter |
+| `binding` (the default) | every method but the C-level ones: `envelope.read` and `value.encode`; `host.post` without `refuse`, which the runner does not send it | each binding's adapter |
 
 The reference runs every case. A binding's run skips, besides the
 C-level methods' cases and those with `refused`, the envelope-level
@@ -106,8 +107,9 @@ reference` ("envelope-level: reference only";
 cases"): bytes that are not CBOR or not one request map, a member or an id
 the binding's `request(method, params)` never writes, and notifications.
 Since the binding writes the map and its id itself, its adapter answers
-`host.request` with a reply it builds from what the call returned or
-raised, with the request's `id`.
+`host.post` with a reply it builds from what its `request(method, params)`
+returned or raised, with the message's `id`, and `host.run` with the
+notifications its API delivered, written as CBOR again.
 
 The C-level methods reach core below the API a binding exposes: a
 binding's API reads an envelope only to deliver it (`envelope.deliver`),

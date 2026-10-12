@@ -206,7 +206,8 @@ const char *conform_outcome(const ta_host_effect *effect);
 /* What lives between calls: the host of the vector methods. */
 typedef struct conform_vectors {
     ta_host *host;
-    int refusing; /* the host's allocator refuses every block (host.request's `refuse`) */
+    int refusing; /* the host's allocator refuses every block (host.post's `refuse`) */
+    uint32_t answered; /* effects of the published batch whose notifications a post answered */
     conform_datamodel datamodel;
 } conform_vectors;
 

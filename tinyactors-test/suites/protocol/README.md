@@ -9,7 +9,7 @@ out ([ADR 0009](../../../docs/adr/0009-one-host-two-queues.md), decision 11).
 
 | File | What | Read by |
 |---|---|---|
-| `requests.txt` | requests and replies of `ta_host_request` (`tinyactors-core/docs/requests.md`) | the runner |
+| `requests.txt` | messages posted with `ta_host_post`, their replies, and the notifications of the runs between them (`tinyactors-core/docs/requests.md`) | the runner |
 | `config.txt` | configs of `ta_host_create`, and the error it writes for a refused one (`tinyactors-core/docs/host-config.md`) | the runner |
 | `envelopes.txt` | envelopes and error envelopes between systems (`tinyactors-core/docs/protocol.md`, Envelope) | the runner |
 | `values.txt` | neutral values (`tinyactors-core/docs/protocol.md`, Values), through the echo setup | the runner; core's `tests/unit/test_datamodel_ecmascript.c` too |
@@ -65,7 +65,7 @@ not guess this from the bytes; the line says it. (The line is `only`, not
 | "id is not an integer, text or null", "id is not a float" | the id is the binding's own |
 | "id: an unsigned integer", "id: a negative integer", "id: text", "id: null" | the id is the binding's own: the adapter writes it back, so the case would test the adapter, not core |
 | "more items than a request holds" | no id, answered `"id": null`; the binding sends an id |
-| "notification: no reply", "notification: no error either", "notification: applied", "notification: a request that is not one is answered" | notifications: the binding's request always has an id and wants the reply |
+| "notification: no reply", "notification: no error either", "notification: applied", "notification: a request that is not one is answered" | messages without an id (JSON-RPC's notifications, not the host's NOTIFICATION effects): the binding's request always has an id and wants the reply |
 
 A binding passes the caller's values through unchecked, so the cases of
 the method level stay a binding's: a method that is not text (`"method":
@@ -143,5 +143,7 @@ language like the scenarios (`build/setups/<language>/`, checked by
 What bytes cannot show stays in `tinyactors-core/tests/unit`: a call during a run
 (`test_host_inputs.c`), an allocator that refuses (`test_host_memory.c`),
 `actor.context` of a hibernated actor or of a datamodel without variables,
-CHANGED effects (`test_host_request.c`), and moving envelopes between hosts
+a post's REPLY after its method's own effects, `actor.changed` for a
+session that ended or that the allocator refused (`test_host_request.c`),
+and moving envelopes between hosts
 (`test_router.c`).

@@ -7,9 +7,13 @@
 #   -3 with an error naming systemID; its `datamodel` is "ecmascript" for
 #   quickjs, "python" for native, and the name asked for otherwise;
 #   host.free: {}.
-# - host.request: "echo" replies its params as the result, "wrong" replies
+# - host.post: "echo" replies its params as the result, "wrong" replies
 #   {"n": 2}, "big" replies 300 bytes (with refuse: TA_ERROR_NO_MEMORY),
-#   anything else -32601 with a message to match by wildcard.
+#   "subscribe" replies {} and subscribes its params' session, anything else
+#   -32601 with a message to match by wildcard; a message without "id" gets
+#   no reply.
+# - actor.send: status 0; the next host.run answers one notification,
+#   actor.changed with value "t", for each subscribed session sent an event.
 # - scenario.run: the outcome written in the first document as
 #   "outcome: <word>"; "crash" exits with status 3, "hang" never answers.
 # - image.add, actor.spawn (session 1), peer.add (peer 1), clock.advance:
@@ -34,19 +38,34 @@ def error(code, reason, message = 'no such method', path = '')
   { 'code' => code, 'message' => message, 'data' => { 'reason' => reason, 'path' => path } }
 end
 
+$subscribed = []
+$changed = []
+
 def reply_to(request, refuse)
   call = CBOR.load(request)
   id = call['id']
+  return { 'status' => -4 } if refuse
+
   reply = case call['method']
           when 'echo' then { 'id' => id, 'result' => call['params'] }
+          when 'subscribe'
+            $subscribed << call['params']['session']
+            { 'id' => id, 'result' => {} }
           when 'wrong' then { 'id' => id, 'result' => { 'n' => 2 } }
           when 'big' then { 'id' => id, 'result' => { 'text' => 'x' * 280 } }
           else { 'id' => id, 'error' => error(-32_601, 'unknown', "no method #{call['method']}") }
           end
-  bytes = CBOR.encode(reply)
-  return { 'status' => -4 } if refuse
+  return { 'status' => 0, 'notifications' => [] } unless call.key?('id')
 
-  { 'status' => 0, 'reply' => CBOR::Bytes.new(bytes) }
+  { 'status' => 0, 'reply' => CBOR::Bytes.new(CBOR.encode(reply)), 'notifications' => [] }
+end
+
+def notifications
+  changed = $changed.uniq.map do |session|
+    CBOR::Bytes.new(CBOR.encode({ 'method' => 'actor.changed', 'params' => { 'session' => session, 'value' => 't' } }))
+  end
+  $changed = []
+  changed
 end
 
 $sent = []
@@ -80,7 +99,10 @@ def answer(method, params)
         'error' => CBOR::Bytes.new(CBOR.encode({ 'error' => error(-32_602, 'missing', 'systemID is missing', 'systemID') })) }
     end
   when 'host.free' then {}
-  when 'host.request' then reply_to(params['request'].data, params['refuse'])
+  when 'host.post' then reply_to(params['message'].data, params['refuse'])
+  when 'actor.send'
+    $changed << params['session'] if $subscribed.include?(params['session'])
+    { 'status' => 0 }
   when 'echo.frame' then params
   when 'image.add', 'clock.advance' then { 'status' => 0 }
   when 'actor.spawn' then { 'status' => 0, 'session' => 1 }
@@ -89,7 +111,7 @@ def answer(method, params)
   when 'host.run'
     envelopes = $sent.map { |envelope| CBOR::Bytes.new(CBOR.encode(envelope)) }
     $sent = []
-    { 'status' => 0, 'envelopes' => envelopes }
+    { 'status' => 0, 'envelopes' => envelopes, 'notifications' => notifications }
   when 'scenario.run'
     outcome = params['documents'].first['text'][/outcome: (\w+)/, 1]
     if outcome == 'crash'

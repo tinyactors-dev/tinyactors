@@ -40,7 +40,7 @@ class Runner
   # must offer (docs/driver.md, "Kinds"): the reference all of them, a
   # binding all but the C-level ones, which call core below the API a
   # binding exposes (it sends a binding no `refuse` either).
-  METHODS = %w[scenario.run w3c.run host.create host.free host.request image.add actor.spawn actor.send
+  METHODS = %w[scenario.run w3c.run host.create host.free host.post image.add actor.spawn actor.send
                clock.advance host.run peer.add envelope.read envelope.deliver value.encode].freeze
   C_LEVEL = %w[envelope.read value.encode].freeze
   REQUIRED = { 'reference' => METHODS, 'binding' => METHODS - C_LEVEL }.freeze
@@ -153,13 +153,20 @@ class Runner
   end
 
   # Every send with the reply after it, in order, on one host; a refused
-  # line applies to the send after it.
+  # line applies to the send after it. An event line sends an event, and a
+  # run line runs the host: the notifications it answers are the
+  # notification lines after it, in order (none when there are none).
   def requests_case(vector)
     setup(vector.get('setup') || 'empty')
     refused = false
     request = nil
     asked = 0
+    ran = nil
     vector.lines.each do |key, value|
+      unless %w[notification diag].include?(key) || ran.nil?
+        notifications!(ran)
+        ran = nil
+      end
       case key
       when 'refused' then refused = true
       when 'send' then request = value
@@ -170,8 +177,15 @@ class Runner
         request = nil
         refused = false
         asked += 1
+      when 'event' then event(value)
+      when 'run' then ran = { got: run_host.fetch('notifications', []), want: [] }
+      when 'notification'
+        raise Failed, 'a notification line without a run before it' unless ran
+
+        ran[:want] << value
       end
     end
+    notifications!(ran) if ran
     raise Failed, 'each send needs a reply line (or reply none)' if asked.zero? || request
   end
 
@@ -451,32 +465,63 @@ class Runner
   end
 
   def settle
+    run_host
+  end
+
+  # host.run with the setups' wall clock; its result.
+  def run_host
     call('clock.advance', 'monotonic' => 0, 'wallNs' => WALL_NS)
     call('host.run')
   end
 
+  # "event <name> <session>": an event without data.
+  def event(value)
+    name, session = value.to_s.split(' ', 2)
+    raise Failed, "an event line is \"event <name> <session>\", not #{value.inspect}" unless session.to_s.match?(/\A\d+\z/)
+
+    status!(call('actor.send', 'session' => Integer(session), 'event' => name), OK, "event #{name}")
+  end
+
   # ---- checks --------------------------------------------------------------------
 
-  # One request and its expected reply ("none": a notification's). Refused:
-  # first sent while the host's allocator refuses, which is TA_ERROR_NO_MEMORY
-  # with nothing applied; the send after it is the reply.
+  # One message posted and its expected REPLY ("none": a message without an
+  # id gets no REPLY). Refused: first posted while the host's allocator
+  # refuses, which is TA_ERROR_NO_MEMORY with nothing applied and no REPLY;
+  # the post after it is the reply. A post publishes no notification here:
+  # the runs before it answered theirs.
   def ask(request, want, refused)
-    params = { 'request' => bytes(request) }
-    raise Skipped, "host.request's refuse is C-level, and the command is a binding" if refused && @kind == 'binding'
+    params = { 'message' => bytes(request) }
+    raise Skipped, "host.post's refuse is C-level, and the command is a binding" if refused && @kind == 'binding'
 
     if refused
-      answer = call('host.request', params.merge('refuse' => true))
+      answer = call('host.post', params.merge('refuse' => true))
       unless answer['status'] == NO_MEMORY
-        raise Failed, "a request the host has no room for is not TA_ERROR_NO_MEMORY (status #{answer['status']})"
+        raise Failed, "a message the host has no room for is not TA_ERROR_NO_MEMORY (status #{answer['status']})"
       end
     end
-    answered = call('host.request', params)
-    status!(answered, OK, 'ta_host_request')
-    reply = data(answered['reply'])
+    answered = call('host.post', params)
+    status!(answered, OK, 'ta_host_post')
+    unexpected = answered.fetch('notifications', [])
+    unless unexpected.empty?
+      raise Failed, "the post published notifications no run answered\n  got  #{unexpected.map { |each| diagnostic(each) }.join("\n       ")}"
+    end
     return same!('the reply', want, answered['reply']) unless want == 'none'
-    return if reply.empty?
+    return if answered['reply'].nil?
 
-    raise Failed, "a notification got a reply\n  want (nothing)\n  got  #{diagnostic(reply)}"
+    raise Failed, "a message without an id got a reply\n  want (nothing)\n  got  #{diagnostic(answered['reply'])}"
+  end
+
+  # The notifications a run answered (ran[:got]) against the notification
+  # lines after it (ran[:want]), in order.
+  def notifications!(ran)
+    got = ran[:got]
+    want = ran[:want]
+    got.each_with_index do |notification, index|
+      raise Failed, "a notification more than expected\n  got  #{diagnostic(notification)}" unless want[index]
+
+      same!("notification #{index + 1}", want[index], notification)
+    end
+    raise Failed, "#{got.size} notifications after the run, expected #{want.size}" if got.size < want.size
   end
 
   # The envelopes of the host's next run, against the vector's envelope

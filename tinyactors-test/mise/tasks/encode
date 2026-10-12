@@ -5,7 +5,7 @@
 #MISE sources=["suites/protocol/*.txt", "lib/cbor.rb", "mise/tasks/encode"]
 # vim:ft=ruby
 
-# A vector's hex line (send, reply, cbor, back, error, envelope) is followed
+# A vector's hex line (send, reply, cbor, back, error, envelope, notification) is followed
 # by a diag line: the same item in CBOR diagnostic notation. This task parses
 # the diag line and writes the hex line from it, in the form core writes
 # (lib/cbor.rb). A diag line that is not an item, such as

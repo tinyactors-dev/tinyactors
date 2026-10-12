@@ -10,7 +10,7 @@ it ([ROADMAP.md](../ROADMAP.md), step 8).
 
 | Suite                                            | What                                                                                                                                                                              | Judged by                                                            |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| [`suites/protocol`](suites/protocol/README.md)   | what crosses core's API as CBOR: requests and replies, host configs, envelopes, neutral values                                                                                    | the bytes, compared with the expected ones (tag 39999 is a wildcard) |
+| [`suites/protocol`](suites/protocol/README.md)   | what crosses core's API as CBOR: posted messages, replies and notifications, host configs, envelopes, neutral values                                                                | the bytes, compared with the expected ones (tag 39999 is a wildcard) |
 | [`suites/scenarios`](suites/scenarios/README.md) | core's conformance scenarios (spawn, send, time, invoke, hibernation, migration, snapshots) as charts that check themselves, with the host operations between runs in `steps.txt` | the outcome the charts log: `pass` or not                            |
 | [`suites/w3c`](suites/w3c/irp/SOURCE)            | the W3C SCXML IRP suite, vendored in `irp/` (its `SOURCE` and `LICENSE`) and converted per datamodel (`skip.txt`, `convert.py`)                                                   | the outcome its charts log, as for scenarios                         |
 
@@ -55,7 +55,7 @@ passed no case, or a method the command's kind must offer that it did not
 ([docs/driver.md](docs/driver.md), "Kinds"). A binding's run also skips
 the protocol suite's envelope-level cases, each marked `only reference`
 in its file: requests and configs whose bytes no binding's API makes (not
-CBOR, not one request map, an id of the caller's, notifications), which
+CBOR, not one request map, an id of the caller's, messages without an id), which
 `ta-conform` runs ([suites/protocol/README.md](suites/protocol/README.md),
 "Envelope-level cases").
 

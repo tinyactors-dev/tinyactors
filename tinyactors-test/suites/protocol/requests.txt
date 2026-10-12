@@ -1,17 +1,24 @@
-# Requests and replies (docs/requests.md): byte for byte, every binding
-# reproduces them (README.md). Run by the suite's runner.
+# Messages posted to the host and what it answers (docs/requests.md): byte
+# for byte, every binding reproduces them (README.md). Run by the suite's
+# runner.
 #
 # A case is a line "request <name>", then:
 #   setup <name>      the host it runs on (README.md, "Setups"; default empty)
-#   send <hex>        a request, as CBOR
-#   reply <hex>       the reply it gets; "reply none": no reply (a notification)
+#   send <hex>        a message posted (ta_host_post), as CBOR
+#   reply <hex>       its REPLY; "reply none": the post appends no REPLY (a
+#                     message without an id)
 #   refused           the next send is first refused memory (the host's
-#                     allocator refuses every block): TA_ERROR_NO_MEMORY, and
-#                     nothing applied; then sent again: the reply
+#                     allocator refuses every block): TA_ERROR_NO_MEMORY,
+#                     nothing applied and no REPLY; then sent again: the reply
+#   event <name> <n>  the event <name>, without data, for session <n>
+#   run               the host runs until idle (host.run); the notification
+#                     lines after it are its NOTIFICATIONs, in order (none
+#                     when there are none)
+#   notification <hex> a NOTIFICATION of the run before it
 #   diag <text>       the hex line before it, in diagnostic notation
 #   only reference    an envelope-level case: run by the reference (ta-conform)
 #                     alone; a binding skips it (README.md, "Envelope-level cases")
-# A case's sends go in order to one host. In a reply, 39999("<type>") is a
+# A case's lines go in order to one host. In a reply, 39999("<type>") is a
 # wildcard (README.md); an error's message always is one.
 
 request not CBOR
@@ -527,6 +534,29 @@ send a362696401666d6574686f64716163746f722e756e73756273637269626566706172616d73a
 diag {"id":1,"method":"actor.unsubscribe","params":{"session":1}}
 reply a26269640166726573756c74a0
 diag {"id":1,"result":{}}
+
+request actor.subscribe: actor.changed after a run
+setup pinged
+send a362696401666d6574686f646f6163746f722e73756273637269626566706172616d73a16773657373696f6e01
+diag {"id":1,"method":"actor.subscribe","params":{"session":1}}
+reply a26269640166726573756c74a0
+diag {"id":1,"result":{}}
+run
+event ping 1
+run
+notification a2666d6574686f646d6163746f722e6368616e67656466706172616d73a26773657373696f6e016576616c75656174
+diag {"method":"actor.changed","params":{"session":1,"value":"t"}}
+run
+event ping 1
+run
+notification a2666d6574686f646d6163746f722e6368616e67656466706172616d73a26773657373696f6e016576616c75656174
+diag {"method":"actor.changed","params":{"session":1,"value":"t"}}
+send a362696402666d6574686f64716163746f722e756e73756273637269626566706172616d73a16773657373696f6e01
+diag {"id":2,"method":"actor.unsubscribe","params":{"session":1}}
+reply a26269640266726573756c74a0
+diag {"id":2,"result":{}}
+event ping 1
+run
 
 request actor.subscribe: maxSubscriptions
 setup pinged2

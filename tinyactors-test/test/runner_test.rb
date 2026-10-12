@@ -27,17 +27,40 @@ class RunnerTest < Minitest::Test
     vectors('requests.txt', [
               ['request echo', 'send {"id":1,"method":"echo","params":{"n":1}}', 'reply {"id":1,"result":{"n":1}}'],
               ['request wrong', 'send {"id":1,"method":"wrong"}', 'reply {"id":1,"result":{"n":1}}'],
-              ['request a notification', 'send {"id":1,"method":"echo"}', 'reply none']
+              ['request a notification', 'send {"id":1,"method":"echo"}', 'reply none'],
+              ['request no id', 'send {"method":"echo"}', 'reply none']
             ])
     ok, results = run_suites('protocol')
     refute ok
     assert_equal({ 'requests.txt "echo"' => :pass, 'requests.txt "wrong"' => :fail,
-                   'requests.txt "a notification"' => :fail }, verdicts(results))
+                   'requests.txt "a notification"' => :fail, 'requests.txt "no id"' => :pass }, verdicts(results))
     assert_includes @out.string, 'the reply differs at {"result"}{"n"}'
     assert_includes @out.string, 'want {"id":1,"result":{"n":1}}'
     assert_includes @out.string, 'got  {"id":1,"result":{"n":2}}'
     assert_includes @out.string, "got  #{CBOR.from_diagnostic('{"id":1,"result":{"n":2}}').unpack1('H*')}"
-    assert_includes @out.string, 'a notification got a reply'
+    assert_includes @out.string, 'a message without an id got a reply'
+  end
+
+  def test_notifications_after_a_run
+    subscribe = ['send {"id":1,"method":"subscribe","params":{"session":1}}', 'reply {"id":1,"result":{}}']
+    changed = 'notification {"method":"actor.changed","params":{"session":1,"value":"t"}}'
+    vectors('requests.txt', [
+              ['request one after an event', *subscribe, 'run', 'event ping 1', 'run', changed, 'run'],
+              ['request expected but none', *subscribe, 'run', changed],
+              ['request one more than expected', *subscribe, 'event ping 1', 'run'],
+              ['request another value', *subscribe, 'event ping 1', 'run',
+               'notification {"method":"actor.changed","params":{"session":1,"value":"s"}}'],
+              ['request a notification without a run', *subscribe, changed]
+            ])
+    ok, results = run_suites('protocol')
+    refute ok
+    assert_equal({ 'requests.txt "one after an event"' => :pass, 'requests.txt "expected but none"' => :fail,
+                   'requests.txt "one more than expected"' => :fail, 'requests.txt "another value"' => :fail,
+                   'requests.txt "a notification without a run"' => :fail }, verdicts(results))
+    assert_includes @out.string, '0 notifications after the run, expected 1'
+    assert_includes @out.string, 'a notification more than expected'
+    assert_includes @out.string, 'notification 1 differs at {"params"}{"value"}'
+    assert_includes @out.string, 'a notification line without a run before it'
   end
 
   def test_wildcards_match_by_type
@@ -120,7 +143,7 @@ class RunnerTest < Minitest::Test
     ok, results = run_suites('protocol')
     assert ok, @out.string
     assert_equal({ 'requests.txt "big"' => :skip, 'requests.txt "echo"' => :pass }, verdicts(results))
-    assert_includes @out.string, "host.request's refuse is C-level"
+    assert_includes @out.string, "host.post's refuse is C-level"
   end
 
   def test_an_envelope_level_case_is_the_references
