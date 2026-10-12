@@ -171,7 +171,9 @@ item gets its `docs/api-map.md` row in the commit that adds it.
 Progress:
 
 - Step 1: `75e99ae2`.
-- Step 2: this commit.
+- Step 2: `7a0c46d9`.
+- Step 3: this commit. The decode error is `TinyactorsError` with core's
+  status (`docs/decisions.md`, "Errors").
 
 ## Later milestones
 

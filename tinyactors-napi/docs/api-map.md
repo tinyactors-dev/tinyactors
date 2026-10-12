@@ -27,8 +27,9 @@ commit that adds the item removes the mark.
 
 | API item | Core | Notes |
 |---|---|---|
-| `encode(value): Uint8Array` (planned) | `ta_cbor_encode` | The value table (`docs/values.md`) as tokens built by `src/values.c`, written in one call; the same conversion as requests and event data. The adapter writes the driver's frames with it. |
-| `decode(bytes): unknown` (planned) | `ta_cbor_decode` | One call into tokens, then JavaScript values by the same table; what it cannot read is refused, never made into a value. The adapter reads the driver's frames with it. |
+| `encode(value): Uint8Array` | `ta_cbor_encode` | The value table (`docs/values.md`) as tokens built by `src/values.c`, written in one call; the same conversion as requests and event data. The adapter writes the driver's frames with it. |
+| `decode(bytes): unknown` | `ta_cbor_decode` | One call into tokens, then JavaScript values by the same table; what it cannot read is refused, never made into a value. The adapter reads the driver's frames with it. |
+| `TinyactorsError` (`code`, `reason`, `path`, `status`) | `ta_host_request`, `ta_host_create`, `TA_ERROR_INVALID` | What core refused: a request's or a config's error reply, unchanged (`code`, `reason`, `path`, the message), or a call's status (`status`, the status's name as the message). `docs/decisions.md`, "Errors". |
 | `SimulatedClock`, `increment(ms)` (planned) | `ta_host_advance_time`, `ta_host_run`, `TA_RUN_IDLE` | A host created with it arms no timer. `increment(ms)` advances the clock by `ms` (the wall clock is the simulated time) and runs the loop until `TA_RUN_IDLE`; inputs run the turn at the current time. The adapter's `advance` steps use it. |
 
 ## Core functions no item uses

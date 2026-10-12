@@ -43,7 +43,14 @@ on the ECMAScript datamodel (the same rules as
 | a value shared twice (acyclic) | copied, each time it occurs | values.txt "encode shared (acyclic) references are copied" |
 | a cycle | refused (`TA_ERROR_INVALID`) | values.txt "invalid cycles" |
 | nesting deeper than 64 | refused (`TA_ERROR_INVALID`); it stops cycles, not a value that shares subtrees, so charts are trusted code (README) | values.txt "invalid nested deeper than 64"; AGENTS.md, "Rules the suite cannot see" |
-| anything else (another tag or simple value, an indefinite length, a key that is not text, text that is not UTF-8) | refused when read: `ta_host_deliver` answers `TA_ROUTE_REFUSED` and a `malformed` error envelope | values.txt, the `malformed` cases |
+| anything else (another tag or simple value, an indefinite length, a key that is not text, text that is not UTF-8) | refused when read: `ta_host_deliver` answers `TA_ROUTE_REFUSED` and a `malformed` error envelope; `decode` throws `TinyactorsError` | values.txt, the `malformed` cases |
+
+**Refused** means: `encode` and `decode` throw `TinyactorsError` with
+`status` -3 (`TA_ERROR_INVALID`), or -7 (`TA_ERROR_UNSUPPORTED`) for an
+indefinite length (`ta_cbor_decode`), and the status's name as the
+message; an exception the value throws itself (a getter, `toJSON`)
+propagates as it is (`docs/decisions.md`, "Errors"). The native
+datamodel's `to_wire` and `from_wire` answer the status instead.
 
 Why a reference is a string and not a class (commit `20189bdc`):
 core writes no tag 32 (`ta_cbor_write_tag` has no caller in
