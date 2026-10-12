@@ -747,6 +747,6 @@ Temporal.Calendar.from("iso8601")
 Temporal.ZonedDateTime.from("2024-01-31T10:00[UTC]")
 --- error unsupported does not have this built-in
 
-=== Temporal.Now, which staticjs does not build yet
-Temporal.Now.plainDateISO()
+=== a name Temporal.Now does not have
+Temporal.Now.plainDate("iso8601")
 --- error unsupported does not have this built-in

@@ -2372,6 +2372,7 @@ static sjs_value duration_field(const double f[DURATION_FIELD_COUNT], sjs_tempor
 
 
 static sjs_result instant_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+static sjs_result now_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
 sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     static const struct {
@@ -2402,6 +2403,13 @@ sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *c
     case SJS_BUILTIN_TEMPORAL_INSTANT_FROM_EPOCH_MILLISECONDS:
     case SJS_BUILTIN_TEMPORAL_INSTANT_FROM_EPOCH_NANOSECONDS:
         return instant_function(vm, id, call);
+    case SJS_BUILTIN_TEMPORAL_NOW_INSTANT:
+    case SJS_BUILTIN_TEMPORAL_NOW_PLAIN_DATE_ISO:
+    case SJS_BUILTIN_TEMPORAL_NOW_PLAIN_DATE_TIME_ISO:
+    case SJS_BUILTIN_TEMPORAL_NOW_PLAIN_TIME_ISO:
+    case SJS_BUILTIN_TEMPORAL_NOW_TIME_ZONE_ID:
+    case SJS_BUILTIN_TEMPORAL_NOW_ZONED_DATE_TIME_ISO:
+        return now_function(vm, id, call);
     default:
         break;
     }
@@ -3323,10 +3331,8 @@ typedef struct {
     bool zoned;
 } time_zone;
 
-static sjs_result time_zone_option(sjs_vm *vm, sjs_value options, time_zone *out) {
-    sjs_value v;
+static sjs_result time_zone_of(sjs_vm *vm, sjs_value v, time_zone *out) {
     *out = (time_zone){ 0, false };
-    if (option_of(vm, (option_name){ options, SJS_STR("timeZone") }, &v) != SJS_OK) return SJS_ERR_PROGRAM;
     if (v.kind == SJS_UNDEFINED) return SJS_OK;
     if (v.kind != SJS_STRING) return sjs_vm_fault(vm, "JavaScript throws a TypeError for a timeZone that is neither a string nor a ZonedDateTime");
     sjs_str text = sjs_string_view(SJS_AS_STRING(v));
@@ -3340,6 +3346,39 @@ static sjs_result time_zone_option(sjs_vm *vm, sjs_value options, time_zone *out
         return SJS_OK;
     }
     return unparsed(vm, "staticjs has the time zone UTC and fixed UTC offsets only", text);
+}
+
+static sjs_result time_zone_option(sjs_vm *vm, sjs_value options, time_zone *out) {
+    sjs_value v;
+    if (option_of(vm, (option_name){ options, SJS_STR("timeZone") }, &v) != SJS_OK) return SJS_ERR_PROGRAM;
+    return time_zone_of(vm, v, out);
+}
+
+/* ------------------------------------------------------------------------
+ * Temporal.Now: the host clock (sjs_vm_set_clock, docs/temporal.md "Host
+ * clock"), read and nothing else; a clock never set faults.
+ */
+
+/* instant(), the time zone's ID ("UTC": the host's time zone is UTC), and
+ * plainDateISO(timeZone), plainDateTimeISO and plainTimeISO: the clock's
+ * date and time at the time zone, read as toString's timeZone (undefined
+ * is UTC). zonedDateTimeISO faults: there is no ZonedDateTime. */
+static sjs_result now_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    static const sjs_temporal_type TYPES[] = { SJS_TEMPORAL_PLAIN_DATE, SJS_TEMPORAL_PLAIN_DATE_TIME, SJS_TEMPORAL_PLAIN_TIME };
+    time_zone zone = { 0, false };
+    if (id == SJS_BUILTIN_TEMPORAL_NOW_TIME_ZONE_ID) return temporal_string(vm, SJS_STR("UTC"), &call->result);
+    if (id == SJS_BUILTIN_TEMPORAL_NOW_ZONED_DATE_TIME_ISO) {
+        return sjs_vm_fault(vm, "staticjs has no Temporal.ZonedDateTime: it needs time zone data");
+    }
+    if (id != SJS_BUILTIN_TEMPORAL_NOW_INSTANT && time_zone_of(vm, arg_of(call, 0), &zone) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (!vm->clock_set) return sjs_vm_fault(vm, "the host has not set the clock (sjs_vm_set_clock)");
+    wide epoch = wide_add(wide_mul(wide_of(vm->clock.seconds), NS_PER_SECOND), wide_of((int64_t)vm->clock.nanoseconds));
+    if (id == SJS_BUILTIN_TEMPORAL_NOW_INSTANT) return new_instant(vm, epoch, &call->result);
+    wide time;
+    int64_t days = wide_int64(wide_floor(wide_add(epoch, wide_of(zone.offset)), (u128){ 0, (uint64_t)NS_PER_DAY }, &time));
+    sjs_iso_date_time d = date_at(days);
+    set_time_of_day(&d, wide_int64(time));
+    return new_iso(vm, (iso_value){ TYPES[id - SJS_BUILTIN_TEMPORAL_NOW_PLAIN_DATE_ISO], &d }, &call->result);
 }
 
 /* toString({ fractionalSecondDigits, roundingMode, smallestUnit,
