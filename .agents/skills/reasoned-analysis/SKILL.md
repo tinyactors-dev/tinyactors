@@ -78,7 +78,9 @@ The rules below come from one answer that had to be retracted:
    primary sources. Report only what survives, marked **confirmed**
    (evidence and scenario hold) or **plausible** (scenario holds, evidence
    incomplete, with what would settle it). Mention what was dropped and why,
-   in one line each.
+   in one line each. A fork cannot spawn agents: when the analysis runs in
+   a fork, the session that started it runs this step, and the fork's
+   findings stay unconfirmed until it has.
 
 9. **Word it as checked.** Confident wording only for confirmed claims.
    Keep the answer as short as what survives; do not pad it with the
