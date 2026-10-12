@@ -29,6 +29,17 @@ static void ta_python_free(void *context, void *ptr, size_t size) {
 
 static const ta_allocator ta_python_allocator = {NULL, ta_python_alloc, ta_python_free};
 
+/* A call's writer grows through the host's allocator: the one place a
+ * writer gets it (the lint rule allocation-in-tables-and-host). */
+void ta_python_cbor_init(ta_python_cbor *cbor) {
+    ta_cbor_writer_init(&cbor->writer, (ta_buffer){cbor->room, sizeof cbor->room, 0}, &ta_python_allocator);
+    cbor->bytes = (ta_bytes){NULL, 0};
+}
+
+void ta_python_cbor_free(ta_python_cbor *cbor) {
+    ta_cbor_writer_free(&cbor->writer);
+}
+
 /* ---- the host's state ----------------------------------------------------------------- */
 
 const ta_python_state *ta_python_host_state(const ta_python_host *host) {
@@ -48,6 +59,8 @@ int ta_python_host_usable(ta_python_host *host) {
     return 1;
 }
 
+static void ta_python_images_free(ta_python_host *host);
+
 void ta_python_host_free(ta_python_host *host) {
     PyObject *pending = PyErr_GetRaisedException(); /* the error a failed Host() raises */
     if (host->clock) ta_python_clock_detach(host->clock, host);
@@ -56,7 +69,7 @@ void ta_python_host_free(ta_python_host *host) {
     ta_python_datamodel_clear(&host->python); /* a run's KeyboardInterrupt, after the host went, is dropped */
     if (host->ecmascript) ta_datamodel_ecmascript_free(host->ecmascript);
     host->ecmascript = NULL;
-    Py_CLEAR(host->images); /* the segments' images, held until now */
+    ta_python_images_free(host); /* the segments' images, held until now */
     host->closing = 0;
     PyErr_SetRaisedException(pending);
 }
@@ -71,24 +84,12 @@ ta_status ta_python_payload_make(ta_python_host *host, const ta_python_payload_m
         return ta_python_datamodel_payload(&host->python, making->value, out);
     const ta_datamodel_binding *binding = &host->datamodels[making->datamodel];
     if (!binding->vtable->from_wire) return TA_ERROR_UNSUPPORTED;
-    PyObject *bytes = NULL;
-    ta_status status = ta_python_values_bytes(ta_python_host_state(host), making->value, &bytes);
-    if (status != TA_OK) return status;
-    status = binding->vtable->from_wire(binding->datamodel,
-                                        (ta_bytes){PyBytes_AsString(bytes), (size_t)PyBytes_Size(bytes)}, out);
-    Py_DECREF(bytes);
+    ta_python_cbor cbor;
+    ta_python_cbor_init(&cbor);
+    ta_status status = ta_python_values_write(ta_python_host_state(host), making->value, &cbor);
+    if (status == TA_OK) status = binding->vtable->from_wire(binding->datamodel, cbor.bytes, out);
+    ta_python_cbor_free(&cbor);
     return status;
-}
-
-/* A payload's to_wire, as a ta_python_writing. */
-struct ta_python_wire {
-    const ta_datamodel_binding *binding;
-    ta_payload payload;
-};
-
-static ta_status ta_python_wire_write(const void *context, ta_buffer *out) {
-    const struct ta_python_wire *wire = context;
-    return wire->binding->vtable->to_wire(wire->binding->datamodel, wire->payload, out);
 }
 
 PyObject *ta_python_payload_value(ta_python_host *host, const ta_python_payload_reading *reading) {
@@ -96,11 +97,15 @@ PyObject *ta_python_payload_value(ta_python_host *host, const ta_python_payload_
     if (!reading->payload || reading->datamodel >= host->datamodel_count) Py_RETURN_NONE;
     if (host->datamodels[reading->datamodel].datamodel == &host->python)
         return ta_python_datamodel_value(&host->python, reading->payload);
-    struct ta_python_wire wire = {&host->datamodels[reading->datamodel], reading->payload};
+    const ta_datamodel_binding *binding = &host->datamodels[reading->datamodel];
+    ta_bytes wire = {NULL, 0};
     PyObject *bytes = NULL, *value = NULL;
-    ta_status status = ta_python_written(&(ta_python_writing){ta_python_wire_write, &wire}, &bytes);
-    if (status == TA_OK)
-        status = ta_python_values_read(state, (ta_bytes){PyBytes_AsString(bytes), (size_t)PyBytes_Size(bytes)}, &value);
+    ta_status status = binding->vtable->to_wire(binding->datamodel, reading->payload, &wire);
+    /* the datamodel's view, copied before the values are made: making
+     * them can run a finalizer that calls the datamodel again */
+    if (status == TA_OK) bytes = PyBytes_FromStringAndSize(wire.pointer, (Py_ssize_t)wire.length);
+    if (bytes) status = ta_python_values_read(state, (ta_bytes){PyBytes_AsString(bytes), wire.length}, &value);
+    else if (status == TA_OK) status = TA_ERROR_NO_MEMORY;
     Py_XDECREF(bytes);
     if (status != TA_OK && !PyErr_Occurred()) ta_python_raise_status(state, "to_wire", status);
     return value;
@@ -191,10 +196,12 @@ static int ta_python_host_ticks(ta_python_host *host) {
  * error core wrote, unchanged (bindings.md, section 3). */
 static int ta_python_host_create(ta_python_host *host, PyObject *config) {
     const ta_python_state *state = ta_python_host_state(host);
-    PyObject *bytes = NULL;
-    ta_status status = ta_python_values_bytes(state, config, &bytes);
+    ta_python_cbor cbor;
+    ta_python_cbor_init(&cbor);
+    ta_status status = ta_python_values_write(state, config, &cbor);
     if (status != TA_OK) {
-        if (!PyErr_Occurred()) ta_python_raise_status(state, "ta_cbor_encode", status);
+        ta_python_cbor_free(&cbor);
+        if (!PyErr_Occurred()) ta_python_raise_status(state, "ta_cbor_writer_bytes", status);
         return -1;
     }
     char error[8192];
@@ -206,9 +213,8 @@ static int ta_python_host_create(ta_python_host *host, PyObject *config) {
     environment.datamodels = host->datamodels;
     environment.allocator = ta_python_allocator;
     environment.error = &refusal;
-    status = ta_host_create((ta_bytes){PyBytes_AsString(bytes), (size_t)PyBytes_Size(bytes)}, &environment,
-                            &host->host);
-    Py_DECREF(bytes);
+    status = ta_host_create(cbor.bytes, &environment, &host->host);
+    ta_python_cbor_free(&cbor);
     if (status == TA_OK) return 0;
     host->host = NULL;
     PyObject *reply = NULL, *refused = NULL;
@@ -249,8 +255,8 @@ static PyObject *ta_python_host_new(PyTypeObject *type, PyObject *args, PyObject
     for (int i = 0; i < TA_PYTHON_HANDLERS; i++)
         host->handlers[i] = handlers[i] == Py_None ? NULL : Py_NewRef(handlers[i]);
     if (ta_python_loop_start(host) < 0) goto fail;
-    host->images = PyDict_New();
-    if (!host->images || ta_python_datamodel_init(&host->python, state) < 0) goto fail;
+    host->images.size = sizeof(ta_python_image);
+    if (ta_python_datamodel_init(&host->python, state) < 0) goto fail;
     host->datamodels[host->datamodel_count++] = (ta_datamodel_binding){ta_python_datamodel_vtable(), &host->python};
     host->ecmascript = ta_datamodel_ecmascript_new(NULL);
     if (!host->ecmascript) {
@@ -274,7 +280,6 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     for (int i = 0; i < TA_PYTHON_HANDLERS; i++)
         Py_VISIT(host->handlers[i]);
     Py_VISIT(host->raised);
-    Py_VISIT(host->images);
     return ta_python_datamodel_traverse(&host->python, visit, arg); /* the sessions' globals, the payloads */
 }
 
@@ -388,13 +393,8 @@ typedef struct ta_python_compiling {
  * bytearray (a Python object), so the binding allocates nothing. */
 #define TA_PYTHON_SOURCES 32
 
-/* A segment's image, held in one bytearray the Host references until
- * TA_HOST_EFFECT_SEGMENT_FREED (bindings.md, section 6, "Hold, don't
- * copy"): its ta_image first, which core keeps a pointer to, then the
- * bytes the compiler wrote, which the ta_image points into. A bytearray's
- * buffer never moves while it is not resized, and is aligned for both
- * (CPython's allocator gives 16 bytes; core asks for 8). */
-static PyObject *ta_python_compile(ta_python_host *host, const ta_python_compiling *compiling) {
+/* The charts compiled: core's result, or NULL with the error raised. */
+static ta_compile_result *ta_python_compile(ta_python_host *host, const ta_python_compiling *compiling) {
     const ta_python_state *state = ta_python_host_state(host);
     Py_ssize_t count = PyDict_Size(compiling->charts), position = 0, i = 0;
     ta_source room[TA_PYTHON_SOURCES];
@@ -419,24 +419,55 @@ static PyObject *ta_python_compile(ta_python_host *host, const ta_python_compili
     ta_compile_result *result = NULL;
     ta_status status = ta_compile_charts(&options, (ta_source_list){sources, (uint32_t)count}, &result);
     Py_XDECREF(more);
-    if (status != TA_OK) {
-        ta_python_compile_refused(state, result, status);
-        if (result) ta_compile_free(result);
-        return NULL;
+    if (status == TA_OK) return result;
+    ta_python_compile_refused(state, result, status);
+    if (result) ta_compile_free(result);
+    return NULL;
+}
+
+/* An image row's handle, from its slot. */
+static uint64_t ta_python_image_handle(const ta_python_image *image, uint32_t slot) {
+    return (uint64_t)image->row.generation << 32 | (uint64_t)(slot + 1);
+}
+
+/* Gives back what an image row holds and frees the row. */
+static void ta_python_image_remove(ta_python_host *host, uint64_t handle) {
+    ta_python_image *image = ta_python_table_row(&host->images, handle);
+    if (!image) return;
+    if (image->result) ta_compile_free(image->result);
+    Py_CLEAR(image->image); /* a bytearray: no finalizer */
+    ta_python_table_remove(&host->images, handle);
+}
+
+/* Each segment's image, once core let every segment go (ta_host_free). */
+static void ta_python_images_free(ta_python_host *host) {
+    for (uint32_t slot = 0; slot < host->images.count; slot++) {
+        ta_python_image *image = ta_python_table_slot(&host->images, slot);
+        if (image) ta_python_image_remove(host, ta_python_image_handle(image, slot));
     }
+    ta_python_table_free(&host->images);
+}
+
+/* A compiled image as a row of the images table: the result held as it
+ * is (bindings.md, section 6, "Hold, don't copy"), and the ta_image over
+ * its bytes in a bytearray, whose buffer never moves while it is not
+ * resized. -1 with the error raised; the result is the row's either way. */
+static int ta_python_image_hold(ta_python_host *host, ta_compile_result *result, uint64_t *handle) {
+    ta_python_image *image = ta_python_table_add(&host->images, handle);
+    if (!image) {
+        ta_compile_free(result);
+        PyErr_NoMemory();
+        return -1;
+    }
+    image->result = result;
+    image->image = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)sizeof(ta_image));
+    if (!image->image) return -1;
     ta_string_view bytes = ta_compile_image(result);
-    PyObject *held = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)(sizeof(ta_image) + bytes.length));
-    if (held) memcpy(PyByteArray_AsString(held) + sizeof(ta_image), bytes.pointer, bytes.length);
-    ta_compile_free(result);
-    if (!held) return NULL;
-    char *buffer = PyByteArray_AsString(held);
-    status = ta_image_open((ta_bytes){buffer + sizeof(ta_image), bytes.length}, (ta_image *)(void *)buffer);
-    if (status != TA_OK) {
-        Py_DECREF(held);
-        ta_python_raise_status(state, "ta_image_open", status);
-        return NULL;
-    }
-    return held;
+    ta_status status = ta_image_open((ta_bytes){bytes.pointer, bytes.length},
+                                     (ta_image *)(void *)PyByteArray_AsString(image->image));
+    if (status == TA_OK) return 0;
+    ta_python_raise_status(ta_python_host_state(host), "ta_image_open", status);
+    return -1;
 }
 
 /* add_image(charts, files=None) -> segment */
@@ -454,30 +485,37 @@ static PyObject *ta_python_host_add_image(PyObject *self, PyObject *args, PyObje
         return NULL;
     }
     compiling.files = files == Py_None ? NULL : files;
-    PyObject *held = ta_python_compile(host, &compiling);
-    if (!held) return NULL;
+    ta_compile_result *result = ta_python_compile(host, &compiling);
+    uint64_t handle = 0;
+    if (!result) return NULL;
+    if (ta_python_image_hold(host, result, &handle) < 0) {
+        ta_python_image_remove(host, handle);
+        return NULL;
+    }
+    ta_python_image *image = ta_python_table_row(&host->images, handle);
     uint32_t segment = 0;
-    ta_status status = ta_host_add_image(host->host, (const ta_image *)(void *)PyByteArray_AsString(held), &segment);
-    PyObject *key = status == TA_OK ? PyLong_FromUnsignedLong(segment) : NULL;
-    int kept = key ? PyDict_SetItem(host->images, key, held) : -1;
-    Py_DECREF(held);
+    ta_status status = ta_host_add_image(host->host, (const ta_image *)(void *)PyByteArray_AsString(image->image),
+                                         &segment);
     if (status != TA_OK) {
+        ta_python_image_remove(host, handle);
         ta_python_raise_status(ta_python_host_state(host), "ta_host_add_image", status);
         return NULL;
     }
-    if (kept < 0) { /* the segment runs the image: it must stay; the host cannot be used safely */
-        Py_XDECREF(key);
-        return NULL;
-    }
-    return key;
+    image = ta_python_table_row(&host->images, handle); /* the table may have grown: a row moves */
+    image->segment = segment;
+    return PyLong_FromUnsignedLong(segment);
 }
 
-/* Drops segment `segment`'s image (TA_HOST_EFFECT_SEGMENT_FREED). */
+/* Drops segment `segment`'s image (TA_HOST_EFFECT_SEGMENT_FREED):
+ * ta_compile_free, and its row. */
 void ta_python_image_drop(ta_python_host *host, uint32_t segment) {
-    PyObject *key = PyLong_FromUnsignedLong(segment);
-    if (!key) return;
-    if (PyDict_DelItem(host->images, key) < 0) PyErr_Clear(); /* a bytearray: no finalizer */
-    Py_DECREF(key);
+    for (uint32_t slot = 0; slot < host->images.count; slot++) {
+        ta_python_image *image = ta_python_table_slot(&host->images, slot);
+        if (image && image->segment == segment && image->result) {
+            ta_python_image_remove(host, ta_python_image_handle(image, slot));
+            return;
+        }
+    }
 }
 
 /* ---- inputs ------------------------------------------------------------------------------ */

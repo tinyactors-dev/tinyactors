@@ -27,16 +27,16 @@ commit that adds the item removes the mark.
 
 | API item | Core | Notes |
 |---|---|---|
-| `tinyactors.encode(value) -> bytes` | `ta_cbor_encode` | The value table (`docs/values.md`) as tokens built by `src/values.c`, written in one call; the same conversion as requests and event data. The adapter writes the driver's frames with it. |
-| `tinyactors.decode(data) -> object` | `ta_cbor_decode` | One call into tokens, then Python objects by the same table; what it cannot read is refused, never made into a value. The adapter reads the driver's frames with it. |
-| `tinyactors.Address(text)` | `ta_cbor_encode`, `ta_cbor_decode` | An actor reference in a value: tag 32 on its text, which the CBOR functions write and read (`docs/values.md`). |
-| `tinyactors.UNDEFINED` | `ta_cbor_encode`, `ta_cbor_decode` | CBOR's `undefined` in a value, distinct from `None` (`docs/values.md`). |
-| `tinyactors.TinyactorsError` (`status`, `code`, `reason`, `path`) | `ta_host_request`, `ta_host_create`, `ta_cbor_decode` | What core refused: a request's or config's error reply unchanged, or the status of a call that failed (`docs/errors.md`). |
+| `tinyactors.encode(value) -> bytes` | `ta_cbor_writer_init`, `ta_cbor_write_map`, `ta_cbor_write_array`, `ta_cbor_write_text`, `ta_cbor_write_bytes`, `ta_cbor_write_int`, `ta_cbor_write_uint`, `ta_cbor_write_negative`, `ta_cbor_write_float`, `ta_cbor_write_simple`, `ta_cbor_write_tag`, `ta_cbor_writer_bytes`, `ta_cbor_writer_free` | The value table (`docs/values.md`) written item by item by `src/values.c` with a writer of the call (a room on the C stack, grown through the host's allocator); the same conversion as requests, config and event data. The adapter writes the driver's frames with it. |
+| `tinyactors.decode(data) -> object` | `ta_cbor_reader_init`, `ta_cbor_read` | Read item by item into Python objects by the same table; what it cannot read is refused, never made into a value. The adapter reads the driver's frames with it. |
+| `tinyactors.Address(text)` | `ta_cbor_write_tag`, `ta_cbor_read` | An actor reference in a value: tag 32 on its text, which the CBOR functions write and read (`docs/values.md`). |
+| `tinyactors.UNDEFINED` | `ta_cbor_write_simple`, `ta_cbor_read` | CBOR's `undefined` in a value, distinct from `None` (`docs/values.md`). |
+| `tinyactors.TinyactorsError` (`status`, `code`, `reason`, `path`) | `ta_host_request`, `ta_host_create`, `ta_cbor_read` | What core refused: a request's or config's error reply unchanged, or the status of a call that failed (`docs/errors.md`). |
 | `tinyactors.OK`, `ERROR_EXECUTION` … `ERROR_ABORTED` | `TA_OK`, `TA_ERROR_EXECUTION`, `TA_ERROR_COMMUNICATION`, `TA_ERROR_INVALID`, `TA_ERROR_NO_MEMORY`, `TA_ERROR_STALE`, `TA_ERROR_STATE`, `TA_ERROR_UNSUPPORTED`, `TA_ERROR_FATAL`, `TA_ERROR_ABORTED` | Core's statuses (`types.h`), which a `TinyactorsError`'s `status` holds. |
 | `Host(config, *, clock=None, on_log=None, on_done=None, on_error=None, on_peer=None)` | `ta_host_create`, `ta_datamodel_ecmascript_new`, `ta_datamodel_ecmascript_binding`, `host.config` | The config (`docs/host-config.md`) as Python values, written with the value table and passed through unchecked; the environment holds the datamodels (the `"python"` datamodel first, then quickjs), the host's allocator (`PyMem_RawMalloc`) and the error buffer, whose reply a refused config raises unchanged. Then `host.config`, once, for the tick rate the clocks convert with. The handlers are called for effects, one call each (`effects.c`). |
 | `Host.request(method, params=None) -> result` | `ta_host_request` | The map `{"method", "params", "id"}` from the caller's values, unchecked; the reply's `result` returned, its `error` raised as `TinyactorsError` (`code`, `reason`, `path`, message). Any method of `docs/requests.md`. |
 | `Host.close()`, `with Host(...)` | `ta_host_free`, `ta_datamodel_ecmascript_free` | Frees the host now, or after the turn when called from a handler (bindings.md, section 5). |
-| `Host.add_image(charts, files=None) -> segment` | `ta_compile_charts`, `ta_compile_image`, `ta_compile_diagnostics`, `ta_image_open`, `ta_host_add_image`, `TA_HOST_EFFECT_SEGMENT_FREED` | Compiles a dict of name to SCXML text (the first the default chart; `files` answers a `src`) and adds the image as a segment: its `ta_image` and bytes in one `bytearray` the host holds until `TA_HOST_EFFECT_SEGMENT_FREED`. A refused compile raises with core's `diagnostics`. |
+| `Host.add_image(charts, files=None) -> segment` | `ta_compile_charts`, `ta_compile_image`, `ta_compile_diagnostics`, `ta_image_open`, `ta_host_add_image`, `TA_HOST_EFFECT_SEGMENT_FREED` | Compiles a dict of name to SCXML text (the first the default chart; `files` answers a `src`) and adds the image as a segment: core's compile result, held as it is in a row of the images table, and its `ta_image` in a `bytearray` (it must not move), until `TA_HOST_EFFECT_SEGMENT_FREED` gives the result back with `ta_compile_free`. A refused compile raises with core's `diagnostics`. |
 | `Host.boot(segment)` | `ta_host_boot` | Then the turn. |
 | `Host.spawn(chart, params=None, name=None) -> session` | `ta_host_chart`, `ta_host_spawn`, `ta_host_segment_info_get`, `ta_image_chart_datamodel` | `params` become a payload of the chart's datamodel (its `from_wire`); then the turn. |
 | `Host.send(session, event, data=None)` | `ta_host_send`, `ta_host_locate`, `ta_host_system`, `ta_actor_info_get` | `data` becomes a payload of the target's datamodel; then the turn. |
@@ -59,8 +59,7 @@ commit that adds the item removes the mark.
 
 **Used inside an item, with no item of their own:**
 
-- `ta_cbor_string` (`src/values.c`): the text and bytes of a decoded token.
-- `ta_compile_free` (`src/host.c`): the compile result, once its image is copied.
+- `ta_compile_free` (`src/host.c`): the compile result, at `TA_HOST_EFFECT_SEGMENT_FREED` or when the host is freed.
 - `ta_image_chart_source` (`src/datamodel/expressions.c`): the file name a chart's Python code is compiled under, so a traceback names the chart.
 
 **Not exposed in M1, for a later milestone of the plan** (ROADMAP.md,
@@ -112,10 +111,12 @@ and 2: the binding drives `ta_host`):
   `ta_traceparent_parse`, `ta_span_id_format`, `ta_step_key_span_id`.
 - Addresses: text the binding passes through; core parses them
   (`ta_address_parse`, `ta_address_format`, ...).
-- The CBOR writer and readers: `src/values.c` builds token lists itself
-  and encodes them with `ta_cbor_encode` (`ta_cbor_write_*`,
-  `ta_cbor_finish`, `ta_cbor_member`, `ta_cbor_next`); and the diagnostic
-  notation, for tools (`ta_cbor_diagnostic`).
+- The CBOR token index and the parts of the writer the value table does
+  not need: `src/values.c` streams values with the writer and the reader,
+  so the random-access tokens (`ta_cbor_decode`, `ta_cbor_next`,
+  `ta_cbor_member`, `ta_cbor_string`) and the counted-later containers
+  (`ta_cbor_write_end`; every count is known when a container opens) are
+  unused; and the diagnostic notation, for tools (`ta_cbor_diagnostic`).
 - Charts built by calls instead of text: `ta_xml_writer_*`.
 - Image inspection, which the requests answer: `ta_image_get_info`,
   `ta_image_bytes`, `ta_image_boot_actor`, `ta_image_chart_by_name`,

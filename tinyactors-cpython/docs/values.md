@@ -9,7 +9,8 @@ it.
 
 The same table is the module's public CBOR conversion,
 `tinyactors.encode(value) -> bytes` and `tinyactors.decode(data) ->
-object` (`docs/api-map.md`; `ta_cbor_encode`, `ta_cbor_decode`), which
+object` (`docs/api-map.md`; core's streaming `ta_cbor_writer` and
+`ta_cbor_reader`), which
 the adapter frames the driver's calls with. So the vectors go through
 this table both ways: a value mapped wrong the same way when read and
 when written still passes them, and only this binding's own tests of the

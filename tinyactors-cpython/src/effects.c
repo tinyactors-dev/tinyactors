@@ -29,24 +29,17 @@ static PyObject *ta_python_effect_number(ta_python_host *host, const ta_python_f
     return PyLong_FromUnsignedLongLong(ta_host_effect_number(host->host, field->index, field->field));
 }
 
-/* The PEER or PEER_ERROR effect `effect` as envelope bytes, written by
- * ta_host_envelope straight into a bytes object. */
-typedef struct ta_python_envelope_writing {
-    ta_host *host;
-    const ta_host_effect *effect;
-} ta_python_envelope_writing;
-
-static ta_status ta_python_envelope_write(const void *context, ta_buffer *out) {
-    const ta_python_envelope_writing *writing = context;
-    return ta_host_envelope(writing->host, writing->effect, out);
-}
-
+/* The PEER or PEER_ERROR effect `effect` as envelope bytes: ta_host_envelope's
+ * view of the host's memory, copied into a bytes object before anything
+ * else can call into the host. */
 static PyObject *ta_python_effect_envelope(ta_python_host *host, const ta_host_effect *effect) {
-    ta_python_envelope_writing writing = {host->host, effect};
-    PyObject *bytes = NULL;
-    ta_status status = ta_python_written(&(ta_python_writing){ta_python_envelope_write, &writing}, &bytes);
-    if (status != TA_OK && !PyErr_Occurred()) ta_python_raise_status(ta_python_host_state(host), "ta_host_envelope", status);
-    return bytes;
+    ta_bytes envelope = {NULL, 0};
+    ta_status status = ta_host_envelope(host->host, effect, &envelope);
+    if (status != TA_OK) {
+        ta_python_raise_status(ta_python_host_state(host), "ta_host_envelope", status);
+        return NULL;
+    }
+    return PyBytes_FromStringAndSize(envelope.pointer, (Py_ssize_t)envelope.length);
 }
 
 /* The arguments of the handler for effect `index`, a new tuple, or NULL

@@ -196,6 +196,15 @@ class RowsTest(unittest.TestCase):
         with self.assertRaises(TinyactorsError):
             encode(nested(65))
 
+    def test_values_past_the_writers_room(self):
+        """A call's writer starts in a room on the stack and grows through
+        the host's allocator (AGENTS.md, "The binding's memory")."""
+        text = "x" * 100000
+        self.assertEqual(encode(text)[:5], b"\x7a\x00\x01\x86\xa0")
+        self.assertEqual(decode(encode(text)), text)
+        many = [{"i": i, "b": bytes(i % 7)} for i in range(5000)]
+        self.assertEqual(decode(encode(many)), many)
+
     def test_other_objects_are_refused(self):
         import datetime
         import decimal
@@ -223,7 +232,7 @@ class ErrorTest(unittest.TestCase):
         error = raised.exception
         self.assertEqual(error.status, tinyactors.ERROR_INVALID)
         self.assertEqual((error.code, error.reason, error.path), (None, None, None))
-        self.assertEqual(str(error), "ta_cbor_decode: TA_ERROR_INVALID")
+        self.assertEqual(str(error), "ta_cbor_read: TA_ERROR_INVALID")
 
     def test_status_constants_are_cores(self):
         self.assertEqual((tinyactors.OK, tinyactors.ERROR_EXECUTION, tinyactors.ERROR_INVALID,

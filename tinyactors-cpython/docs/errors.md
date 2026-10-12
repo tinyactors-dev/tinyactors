@@ -18,7 +18,7 @@ sections 2 and 10: "An `error` becomes the language's exception, with its
 |---|---|---|---|
 | `status` | `None` | the call's status, `ERROR_INVALID` | the call's status (`ERROR_INVALID`, ...) |
 | `code`, `reason`, `path` | the reply's `error.code`, `error.data.reason`, `error.data.path` | the same, from the error core wrote (`environment->error`) | `None` |
-| the message (`str(error)`) | the reply's `error.message` | the same | the core function and the status's name: `ta_cbor_decode: TA_ERROR_INVALID` |
+| the message (`str(error)`) | the reply's `error.message` | the same | the core function and the status's name: `ta_cbor_read: TA_ERROR_INVALID` |
 
 - **A refused request has no status.** `ta_host_request` answers `TA_OK`
   when its reply holds an error ("TA_OK: `reply` holds the reply (a result
@@ -40,7 +40,7 @@ sections 2 and 10: "An `error` becomes the language's exception, with its
 
 ## `decode` and `encode`
 
-- `tinyactors.decode(data)` raises it with `ta_cbor_decode`'s status:
+- `tinyactors.decode(data)` raises it with `ta_cbor_read`'s status:
   `ERROR_INVALID` (malformed, not UTF-8, nested deeper than 64, bytes
   after the item) or `ERROR_UNSUPPORTED` (an indefinite length); and
   with `ERROR_INVALID` for a well-formed item outside the value table (a
@@ -48,7 +48,9 @@ sections 2 and 10: "An `error` becomes the language's exception, with its
   undefined, a map key that is not text).
 - `tinyactors.encode(value)` raises it with `ERROR_INVALID` for a value
   outside the table (an `int` past 64 bits, a lone surrogate, a cycle,
-  nesting past 64, an object of another type: `values.md`).
+  nesting past 64, an object of another type: `values.md`), and with
+  `ERROR_NO_MEMORY` when the host's allocator refused the writer room;
+  its message names `ta_cbor_writer_bytes`.
 
 ## Not chosen
 

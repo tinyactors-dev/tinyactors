@@ -51,29 +51,33 @@ typedef struct ta_python_refusal {
 } ta_python_refusal;
 void ta_python_raise_reply(const ta_python_state *state, const ta_python_refusal *refusal);
 
-/* A core call that writes into a ta_buffer (ta_buffer: TA_ERROR_NO_MEMORY
- * with the length it needs), made into a new bytes object: written into a
- * room on the stack, and when that is too small, again straight into a
- * bytes object of the length core asked for. No allocation of the
- * binding's own (AGENTS.md, "The binding's memory"). */
-typedef struct ta_python_writing {
-    ta_status (*write)(const void *context, ta_buffer *out);
-    const void *context;
-} ta_python_writing;
-ta_status ta_python_written(const ta_python_writing *writing, PyObject **out);
+/* The writer of one call (AGENTS.md, "The binding's memory"; docs/adr/0010
+ * in the repository root, decision 4): it starts in `room`, on the C stack
+ * with the call, and grows through the host's allocator (PyMem_RawMalloc)
+ * when a value outgrows it; ta_python_cbor_free gives that back before the
+ * call returns. Each call has its own, so a call made while it writes
+ * (Python code, a nested call into the Host) cannot overwrite it. It must
+ * not move while it is in use: the writer points into `room`. */
+typedef struct ta_python_cbor {
+    ta_cbor_writer writer;
+    ta_bytes bytes; /* what ta_python_values_write wrote: a view of the writer's memory */
+    unsigned char room[1024];
+} ta_python_cbor;
+void ta_python_cbor_init(ta_python_cbor *cbor);
+void ta_python_cbor_free(ta_python_cbor *cbor);
 
 /* ---- values (values.c) ------------------------------------------------------------ */
 
 int ta_python_values_init(PyObject *module, ta_python_state *state);
-/* `value` as CBOR into `out` (ta_buffer: TA_ERROR_NO_MEMORY with
- * out->length what it needs, and no Python error). TA_ERROR_INVALID: a
- * value outside the table (docs/values.md). A Python error stays set when
- * Python's allocator failed. */
-ta_status ta_python_values_write(const ta_python_state *state, PyObject *value, ta_buffer *out);
-/* The same as a new bytes object. */
-ta_status ta_python_values_bytes(const ta_python_state *state, PyObject *value, PyObject **out);
-/* One CBOR item as a new Python value: ta_cbor_decode's status, or
- * TA_ERROR_INVALID for an item outside the table. */
+/* `value` as CBOR, written by `out`'s writer, in out->bytes (a view of the
+ * writer's memory). TA_ERROR_INVALID: a value outside the table
+ * (docs/values.md); TA_ERROR_NO_MEMORY: the allocator refused room. */
+ta_status ta_python_values_write(const ta_python_state *state, PyObject *value, ta_python_cbor *out);
+/* One CBOR item as a new Python value, read as it streams: the reader's
+ * status (malformed, not UTF-8, too deep, bytes after it), or
+ * TA_ERROR_INVALID for an item outside the table. The bytes must not
+ * change while it reads: it makes Python objects, and a finalizer the
+ * cycle collector runs then may call into the host. */
 ta_status ta_python_values_read(const ta_python_state *state, ta_bytes cbor, PyObject **out);
 /* `value` copied through the value table, as what crosses between actors
  * is (bindings.md, section 8): containers made again, the table's
@@ -133,6 +137,7 @@ typedef struct ta_python_datamodel {
     PyObject *ended;           /* a list: the globals of ended sessions, cleared at settle (they make cycles) */
     PyObject *kept;            /* the first BaseException that is not an Exception, raised after the run */
     PyObject *text;            /* the str whose UTF-8 eval_string and log returned last */
+    ta_python_cbor wire;       /* the writer of the last to_wire, its view valid until the next call */
     ta_datamodel_environment *environment; /* of the call in progress, for In() */
     uint64_t current;                      /* the session of the call in progress */
 } ta_python_datamodel;
@@ -165,6 +170,17 @@ enum {
     TA_PYTHON_HANDLERS = 4
 };
 
+/* A segment's image: core's compile result, held as it is, and the
+ * ta_image over its bytes, which core keeps a pointer to and so must not
+ * move with the row: it is in a bytearray of its own. */
+typedef struct ta_python_image {
+    ta_python_row row;
+    ta_compile_result *result;
+    PyObject *image; /* a bytearray holding the ta_image */
+    uint32_t segment;
+    uint32_t pad;
+} ta_python_image;
+
 /* tinyactors.Host: one ta_host, its datamodels, its images, its clock and
  * its handlers. Single-threaded: every call from the thread that made it
  * (bindings.md, section 5). */
@@ -179,8 +195,8 @@ typedef struct ta_python_host {
     unsigned long thread; /* PyThread_get_thread_ident of the creating thread */
     PyObject *clock;      /* a SimulatedClock, or NULL for the real clock */
     PyObject *handlers[TA_PYTHON_HANDLERS];
-    PyObject *images; /* {segment: bytearray}: each segment's ta_image and image bytes, held until
-                         TA_HOST_EFFECT_SEGMENT_FREED (bindings.md, section 6: "Hold, don't copy") */
+    ta_python_table images; /* ta_python_image rows: each segment's compile result, held until
+                               TA_HOST_EFFECT_SEGMENT_FREED (bindings.md, section 6: "Hold, don't copy") */
     uint64_t ticks_per_second;  /* host.config's system.ticksPerSecond */
     uint64_t origin_ns;         /* the real clock's start (time.monotonic_ns) */
     ta_time next_deadline;      /* of the last run: UINT64_MAX for none */

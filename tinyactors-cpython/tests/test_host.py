@@ -257,6 +257,23 @@ class PeerTest(unittest.TestCase):
             self.assertIn(tinyactors.encode("tinyactors://p/#_scxml_9"), back)
             self.assertIn(b"\xd8\x18\x43\x82\x01\x02", back)
 
+    def test_data_past_a_writers_room_both_ways(self):
+        """A value larger than any room on the stack, through each
+        datamodel's from_wire and to_wire and the host's envelope view."""
+        value = {"blob": bytes(range(256)) * 256, "text": "y" * 70000}
+        for datamodel in ("ecmascript", "python"):
+            with self.subTest(datamodel=datamodel):
+                sent = []
+                with Host(CONFIG, on_peer=lambda peer, envelope: sent.append(envelope)) as host:
+                    host.add_image({"echo.scxml": ECHO.replace("'ecmascript'", f"'{datamodel}'")})
+                    session = host.spawn("echo")
+                    peer = host.add_peer("p", trusted=True)
+                    self.assertEqual(host.deliver(peer, self.envelope(session, tinyactors.encode(value))),
+                                     tinyactors.ROUTE_DELIVERED)
+                    self.assertEqual(len(sent), 1)
+                    self.assertIn(tinyactors.encode(value["blob"]), sent[0])
+                    self.assertIn(tinyactors.encode(value["text"]), sent[0])
+
     def test_data_the_datamodel_cannot_read_is_refused_and_answered(self):
         sent = []
         with Host(CONFIG, on_peer=lambda peer, envelope: sent.append(envelope)) as host:

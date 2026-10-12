@@ -1,6 +1,7 @@
-/* values.c — the value table (docs/values.md): Python objects to core's
- * CBOR token lists and back (tinyactors/cbor.h), one ta_cbor_encode or
- * ta_cbor_decode per value (tinyactors-core/docs/bindings.md, section 9).
+/* values.c — the value table (docs/values.md): Python objects to CBOR and
+ * back, streamed item by item with core's ta_cbor_writer and
+ * ta_cbor_reader (tinyactors/cbor.h; tinyactors-core/docs/bindings.md,
+ * section 9; docs/adr/0010 in the repository root, decision 4).
  * The API (config, requests, replies, event data), the module's
  * tinyactors.encode and tinyactors.decode, and the "python" datamodel's
  * to_wire and from_wire all convert here; there is no second codec.
@@ -128,65 +129,45 @@ PyObject *ta_python_address_from(const ta_python_state *state, ta_string_view te
     return (PyObject *)address;
 }
 
-/* ---- Python to tokens -------------------------------------------------------------- */
+/* ---- Python to CBOR ------------------------------------------------------------------------ */
 
-/* A token list being built: tokens, and the bytes their text and byte
- * tokens point into (`strings`). Past its capacity it goes on counting,
- * so a second pass with that much room fits (the ta_cbor_writer
- * convention, cbor.h). The first error sticks. */
-typedef struct ta_python_tokens {
+/* A value being written item by item with a ta_cbor_writer (cbor.h). The
+ * table's refusal sticks in `status`; the writer's own (no memory, text
+ * that is not UTF-8) in the writer, read at the end. */
+typedef struct ta_python_writing {
     const ta_python_state *state;
-    ta_cbor_token *tokens;
-    uint32_t capacity, count;
-    ta_buffer strings;
+    ta_cbor_writer *writer;
     ta_status status;
-    PyObject *held; /* past the stack's room: a bytearray holding the tokens, then the strings */
-} ta_python_tokens;
-
-static void ta_python_token_add(ta_python_tokens *list, const ta_cbor_token *token) {
-    if (list->count < list->capacity) list->tokens[list->count] = *token;
-    list->count++;
-}
-
-/* A text or byte token over `bytes`, copied into the strings. */
-static void ta_python_token_string(ta_python_tokens *list, uint32_t kind, ta_bytes bytes) {
-    if (bytes.length > UINT32_MAX) {
-        list->status = TA_ERROR_INVALID;
-        return;
-    }
-    ta_cbor_token token = {kind, (uint32_t)bytes.length, list->strings.length};
-    if (list->strings.length + bytes.length <= list->strings.capacity && bytes.length)
-        memcpy((char *)list->strings.pointer + list->strings.length, bytes.pointer, bytes.length);
-    list->strings.length += bytes.length;
-    ta_python_token_add(list, &token);
-}
+} ta_python_writing;
 
 /* Text: valid UTF-8, so a lone surrogate is refused, never replaced
  * (bindings.md, section 9). */
-static void ta_python_token_text(ta_python_tokens *list, PyObject *text) {
+static void ta_python_write_text(ta_python_writing *writing, PyObject *text) {
     Py_ssize_t length = 0;
     const char *utf8 = PyUnicode_AsUTF8AndSize(text, &length);
     if (!utf8) {
         PyErr_Clear();
-        list->status = TA_ERROR_INVALID;
+        writing->status = TA_ERROR_INVALID;
         return;
     }
-    ta_python_token_string(list, TA_CBOR_TEXT, (ta_bytes){utf8, (size_t)length});
+    if ((size_t)length > UINT32_MAX) {
+        writing->status = TA_ERROR_INVALID;
+        return;
+    }
+    ta_cbor_write_text(writing->writer, (ta_string_view){utf8, (uint32_t)length});
 }
 
 /* An int, exact to 64 bits either way: -2^64 … 2^64-1. */
-static void ta_python_token_integer(ta_python_tokens *list, PyObject *integer) {
+static void ta_python_write_integer(ta_python_writing *writing, PyObject *integer) {
     int overflow = 0;
     long long value = PyLong_AsLongLongAndOverflow(integer, &overflow);
     if (value == -1 && PyErr_Occurred()) {
         PyErr_Clear();
-        list->status = TA_ERROR_INVALID;
+        writing->status = TA_ERROR_INVALID;
         return;
     }
     if (!overflow) {
-        ta_cbor_token token = value >= 0 ? (ta_cbor_token){TA_CBOR_UINT, 0, (uint64_t)value}
-                                         : (ta_cbor_token){TA_CBOR_NEGINT, 0, (uint64_t)(-1 - value)};
-        ta_python_token_add(list, &token);
+        ta_cbor_write_int(writing->writer, value);
         return;
     }
     /* Past 63 bits: n itself, or ~n (-1 - n) for a negative one. */
@@ -195,50 +176,49 @@ static void ta_python_token_integer(ta_python_tokens *list, PyObject *integer) {
     Py_XDECREF(magnitude);
     if (PyErr_Occurred()) {
         PyErr_Clear();
-        list->status = TA_ERROR_INVALID;
+        writing->status = TA_ERROR_INVALID;
         return;
     }
-    ta_cbor_token token = {overflow > 0 ? TA_CBOR_UINT : TA_CBOR_NEGINT, 0, bits};
-    ta_python_token_add(list, &token);
+    if (overflow > 0) ta_cbor_write_uint(writing->writer, bits);
+    else ta_cbor_write_negative(writing->writer, bits);
 }
 
-static void ta_python_token_value(ta_python_tokens *list, PyObject *value, uint32_t depth);
+static void ta_python_write_value(ta_python_writing *writing, PyObject *value, uint32_t depth);
 
-/* A container's items, `count` of them; the count is set by the caller. */
-static void ta_python_token_items(ta_python_tokens *list, PyObject *sequence, uint32_t depth) {
+/* A list's or a tuple's items. */
+static void ta_python_write_items(ta_python_writing *writing, PyObject *sequence, uint32_t depth) {
     Py_ssize_t count = PySequence_Size(sequence);
-    for (Py_ssize_t i = 0; i < count && list->status == TA_OK; i++) {
+    ta_cbor_write_array(writing->writer, (uint32_t)count);
+    for (Py_ssize_t i = 0; i < count && writing->status == TA_OK; i++) {
         PyObject *item = PyList_Check(sequence) ? PyList_GetItemRef(sequence, i) : PySequence_GetItem(sequence, i);
         if (!item) {
             PyErr_Clear();
-            list->status = TA_ERROR_INVALID;
+            writing->status = TA_ERROR_INVALID;
             return;
         }
-        ta_python_token_value(list, item, depth);
+        ta_python_write_value(writing, item, depth);
         Py_DECREF(item);
     }
 }
 
-static void ta_python_token_map(ta_python_tokens *list, PyObject *map, uint32_t depth) {
-    PyObject *items = PyDict_Items(map); /* a snapshot: the dict may change while it is written */
+static void ta_python_write_map(ta_python_writing *writing, PyObject *map, uint32_t depth) {
+    PyObject *items = PyDict_Items(map); /* a snapshot: another thread may change the dict */
     if (!items) {
         PyErr_Clear();
-        list->status = TA_ERROR_INVALID;
+        writing->status = TA_ERROR_INVALID;
         return;
     }
     Py_ssize_t count = PyList_Size(items);
-    ta_cbor_token token = {TA_CBOR_MAP, (uint32_t)count, 0};
-    ta_python_token_add(list, &token);
-    for (Py_ssize_t i = 0; i < count && list->status == TA_OK; i++) {
-        PyObject *pair = PyList_GetItemRef(items, i);
-        PyObject *key = pair ? PyTuple_GetItem(pair, 0) : NULL;
-        if (!key || !PyUnicode_Check(key)) {
-            list->status = TA_ERROR_INVALID; /* a map's keys are text */
-        } else {
-            ta_python_token_text(list, key);
-            if (list->status == TA_OK) ta_python_token_value(list, PyTuple_GetItem(pair, 1), depth);
+    ta_cbor_write_map(writing->writer, (uint32_t)count);
+    for (Py_ssize_t i = 0; i < count && writing->status == TA_OK; i++) {
+        PyObject *pair = PyList_GetItem(items, i);
+        PyObject *key = PyTuple_GetItem(pair, 0);
+        if (!PyUnicode_Check(key)) {
+            writing->status = TA_ERROR_INVALID; /* a map's keys are text */
+            break;
         }
-        Py_XDECREF(pair);
+        ta_python_write_text(writing, key);
+        if (writing->status == TA_OK) ta_python_write_value(writing, PyTuple_GetItem(pair, 1), depth);
     }
     Py_DECREF(items);
 }
@@ -246,150 +226,82 @@ static void ta_python_token_map(ta_python_tokens *list, PyObject *map, uint32_t 
 /* One value and its children. `depth` counts the containers and tags
  * around it: past TA_CBOR_DEPTH_MAX, core's limit, the value is refused,
  * which also ends a cycle (values.txt "invalid cycles"). */
-static void ta_python_token_value(ta_python_tokens *list, PyObject *value, uint32_t depth) {
-    const ta_python_state *state = list->state;
-    if (list->status != TA_OK) return;
+static void ta_python_write_value(ta_python_writing *writing, PyObject *value, uint32_t depth) {
+    const ta_python_state *state = writing->state;
+    ta_cbor_writer *writer = writing->writer;
+    if (writing->status != TA_OK) return;
     if (depth > TA_CBOR_DEPTH_MAX) {
-        list->status = TA_ERROR_INVALID;
+        writing->status = TA_ERROR_INVALID;
         return;
     }
     if (value == Py_None) {
-        ta_python_token_add(list, &(ta_cbor_token){TA_CBOR_SIMPLE, 0, TA_CBOR_NULL});
+        ta_cbor_write_simple(writer, TA_CBOR_NULL);
     } else if (value == state->undefined) {
-        ta_python_token_add(list, &(ta_cbor_token){TA_CBOR_SIMPLE, 0, TA_CBOR_UNDEFINED});
+        ta_cbor_write_simple(writer, TA_CBOR_UNDEFINED);
     } else if (PyBool_Check(value)) { /* before int: bool is a subclass of int */
-        ta_python_token_add(list, &(ta_cbor_token){TA_CBOR_SIMPLE, 0, value == Py_True ? TA_CBOR_TRUE : TA_CBOR_FALSE});
+        ta_cbor_write_simple(writer, value == Py_True ? TA_CBOR_TRUE : TA_CBOR_FALSE);
     } else if (PyLong_Check(value)) {
-        ta_python_token_integer(list, value);
+        ta_python_write_integer(writing, value);
     } else if (PyFloat_Check(value)) {
-        double number = PyFloat_AsDouble(value);
-        uint64_t bits;
-        memcpy(&bits, &number, sizeof bits);
-        ta_python_token_add(list, &(ta_cbor_token){TA_CBOR_FLOAT, 0, bits});
+        ta_cbor_write_float(writer, PyFloat_AsDouble(value));
     } else if (PyUnicode_Check(value)) {
-        ta_python_token_text(list, value);
+        ta_python_write_text(writing, value);
     } else if (PyBytes_Check(value)) {
-        ta_python_token_string(list, TA_CBOR_BYTES, (ta_bytes){PyBytes_AsString(value), (size_t)PyBytes_Size(value)});
+        ta_cbor_write_bytes(writer, (ta_bytes){PyBytes_AsString(value), (size_t)PyBytes_Size(value)});
     } else if (PyByteArray_Check(value)) {
-        ta_python_token_string(list, TA_CBOR_BYTES,
-                               (ta_bytes){PyByteArray_AsString(value), (size_t)PyByteArray_Size(value)});
+        ta_cbor_write_bytes(writer, (ta_bytes){PyByteArray_AsString(value), (size_t)PyByteArray_Size(value)});
     } else if (PyObject_TypeCheck(value, (PyTypeObject *)state->address_type)) {
-        ta_python_token_add(list, &(ta_cbor_token){TA_CBOR_TAG, 0, TA_CBOR_TAG_URI});
-        ta_python_token_text(list, ((ta_python_address *)value)->text);
+        ta_cbor_write_tag(writer, TA_CBOR_TAG_URI);
+        ta_python_write_text(writing, ((ta_python_address *)value)->text);
     } else if (PyList_Check(value) || PyTuple_Check(value)) {
-        Py_ssize_t count = PySequence_Size(value);
-        ta_python_token_add(list, &(ta_cbor_token){TA_CBOR_ARRAY, (uint32_t)count, 0});
-        ta_python_token_items(list, value, depth + 1);
+        ta_python_write_items(writing, value, depth + 1);
     } else if (PyDict_Check(value)) {
-        ta_python_token_map(list, value, depth + 1);
+        ta_python_write_map(writing, value, depth + 1);
     } else {
-        list->status = TA_ERROR_INVALID; /* outside the table (docs/values.md) */
+        writing->status = TA_ERROR_INVALID; /* outside the table (docs/values.md) */
     }
 }
 
-/* The tokens of `value` into `list`, twice when the first pass did not
- * fit: then with room for what it counted. */
-static ta_status ta_python_tokens_of(ta_python_tokens *list, PyObject *value) {
-    for (int pass = 0; pass < 2; pass++) {
-        list->count = 0;
-        list->strings.length = 0;
-        list->status = TA_OK;
-        ta_python_token_value(list, value, 0);
-        if (list->status != TA_OK) return list->status;
-        if (list->count <= list->capacity && list->strings.length <= list->strings.capacity) return TA_OK;
-        if (pass) break;
-        /* a value bigger than the stack's room: its tokens and strings in a
-         * bytearray, a Python object, never an allocation of the binding's
-         * (AGENTS.md, "The binding's memory") */
-        size_t tokens = (size_t)list->count * sizeof(ta_cbor_token), strings = list->strings.length;
-        list->held = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)(tokens + strings + 1));
-        if (!list->held) return TA_ERROR_NO_MEMORY;
-        char *room = PyByteArray_AsString(list->held);
-        list->tokens = (ta_cbor_token *)(void *)room;
-        list->capacity = list->count;
-        list->strings = (ta_buffer){room + tokens, strings, 0};
-    }
-    return TA_ERROR_INVALID; /* the value changed between the passes */
+ta_status ta_python_values_write(const ta_python_state *state, PyObject *value, ta_python_cbor *out) {
+    ta_python_writing writing = {state, &out->writer, TA_OK};
+    ta_python_write_value(&writing, value, 0);
+    if (writing.status != TA_OK) return writing.status;
+    return ta_cbor_writer_bytes(&out->writer, &out->bytes);
 }
 
-ta_status ta_python_values_write(const ta_python_state *state, PyObject *value, ta_buffer *out) {
-    ta_cbor_token tokens[64];
-    char strings[1024];
-    ta_python_tokens list = {state, tokens, 64, 0, {strings, sizeof strings, 0}, TA_OK, NULL};
-    ta_status status = ta_python_tokens_of(&list, value);
-    if (status == TA_OK) {
-        ta_cbor_document document = {{list.strings.pointer, list.strings.length}, list.tokens, list.count, list.count};
-        status = ta_cbor_encode(&document, out);
-    }
-    Py_XDECREF(list.held);
-    return status;
-}
+/* ---- CBOR to Python -------------------------------------------------------------------------- */
 
-ta_status ta_python_written(const ta_python_writing *writing, PyObject **out) {
-    char room[1024];
-    ta_buffer buffer = {room, sizeof room, 0};
-    *out = NULL;
-    ta_status status = writing->write(writing->context, &buffer);
-    if (status == TA_OK) {
-        *out = PyBytes_FromStringAndSize(room, (Py_ssize_t)buffer.length);
-        return *out ? TA_OK : TA_ERROR_NO_MEMORY;
-    }
-    if (status != TA_ERROR_NO_MEMORY || buffer.length <= buffer.capacity || PyErr_Occurred()) return status;
-    /* straight into a bytes object of the length core asked for: no copy,
-     * and nothing the binding allocates */
-    size_t length = buffer.length;
-    PyObject *bytes = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)length);
-    if (!bytes) return TA_ERROR_NO_MEMORY;
-    buffer = (ta_buffer){PyBytes_AsString(bytes), length, 0};
-    status = writing->write(writing->context, &buffer);
-    if (status == TA_OK && buffer.length == length) *out = bytes;
-    else if (status == TA_OK) { /* shorter than asked: its own copy */
-        *out = PyBytes_FromStringAndSize(PyBytes_AsString(bytes), (Py_ssize_t)buffer.length);
-        Py_DECREF(bytes);
-        if (!*out) status = TA_ERROR_NO_MEMORY;
-    } else Py_DECREF(bytes);
-    return status;
-}
-
-/* values_write as a ta_python_writing. */
-typedef struct ta_python_value_writing {
-    const ta_python_state *state;
-    PyObject *value;
-} ta_python_value_writing;
-
-static ta_status ta_python_value_write(const void *context, ta_buffer *out) {
-    const ta_python_value_writing *writing = context;
-    return ta_python_values_write(writing->state, writing->value, out);
-}
-
-ta_status ta_python_values_bytes(const ta_python_state *state, PyObject *value, PyObject **out) {
-    ta_python_value_writing writing = {state, value};
-    return ta_python_written(&(ta_python_writing){ta_python_value_write, &writing}, out);
-}
-
-/* ---- tokens to Python ------------------------------------------------------------------ */
-
+/* A value being read item by item with a ta_cbor_reader (cbor.h): the
+ * reader's refusal (malformed, not UTF-8, too deep) or the table's (a
+ * value outside it) sticks in `status`. */
 typedef struct ta_python_reading {
     const ta_python_state *state;
-    const ta_cbor_document *document;
-    uint32_t at; /* the next token */
+    ta_cbor_reader reader;
     ta_status status;
 } ta_python_reading;
 
+/* The next item into *item: 0 with reading->status set when there is
+ * none or the reader refused. */
 static PyObject *ta_python_read_value(ta_python_reading *reading);
 
-static PyObject *ta_python_read_integer(const ta_cbor_token *token) {
-    if (token->kind == TA_CBOR_UINT) return PyLong_FromUnsignedLongLong(token->value);
-    if (token->value <= INT64_MAX) return PyLong_FromLongLong(-1 - (long long)token->value);
-    PyObject *magnitude = PyLong_FromUnsignedLongLong(token->value);
+static int ta_python_read_item(ta_python_reading *reading, ta_cbor_item *item) {
+    int32_t read = ta_cbor_read(&reading->reader, item);
+    if (read == 1) return 1;
+    reading->status = read < 0 ? (ta_status)read : TA_ERROR_INVALID;
+    return 0;
+}
+
+static PyObject *ta_python_read_integer(const ta_cbor_item *item) {
+    if (item->kind == TA_CBOR_UINT) return PyLong_FromUnsignedLongLong(item->value);
+    if (item->value <= INT64_MAX) return PyLong_FromLongLong(-1 - (long long)item->value);
+    PyObject *magnitude = PyLong_FromUnsignedLongLong(item->value);
     PyObject *integer = magnitude ? PyNumber_Invert(magnitude) : NULL; /* -1 - n */
     Py_XDECREF(magnitude);
     return integer;
 }
 
-static PyObject *ta_python_read_text(ta_python_reading *reading, uint32_t at) {
-    ta_string_view text = ta_cbor_string(reading->document, at);
-    return PyUnicode_DecodeUTF8(text.pointer, (Py_ssize_t)text.length, "strict");
+static PyObject *ta_python_read_text(const ta_cbor_item *item) {
+    return PyUnicode_DecodeUTF8((const char *)item->bytes.pointer, (Py_ssize_t)item->bytes.length, "strict");
 }
 
 static PyObject *ta_python_read_array(ta_python_reading *reading, uint32_t count) {
@@ -405,14 +317,13 @@ static PyObject *ta_python_read_array(ta_python_reading *reading, uint32_t count
 static PyObject *ta_python_read_map(ta_python_reading *reading, uint32_t count) {
     PyObject *map = PyDict_New();
     for (uint32_t i = 0; map && i < count; i++) {
-        uint32_t at = reading->at;
-        if (reading->document->tokens[at].kind != TA_CBOR_TEXT) {
-            reading->status = TA_ERROR_INVALID; /* a key that is not text */
+        ta_cbor_item item;
+        if (!ta_python_read_item(reading, &item) || item.kind != TA_CBOR_TEXT) {
+            if (reading->status == TA_OK) reading->status = TA_ERROR_INVALID; /* a key that is not text */
             Py_CLEAR(map);
             break;
         }
-        reading->at++;
-        PyObject *key = ta_python_read_text(reading, at);
+        PyObject *key = ta_python_read_text(&item);
         PyObject *value = key ? ta_python_read_value(reading) : NULL;
         if (!value || PyDict_SetItem(map, key, value) < 0) Py_CLEAR(map);
         Py_XDECREF(key);
@@ -421,62 +332,55 @@ static PyObject *ta_python_read_map(ta_python_reading *reading, uint32_t count) 
     return map;
 }
 
-/* The value at reading->at, and past it. NULL with reading->status set
- * for a value outside the table; with a Python error for Python's. */
+/* The next value. NULL with reading->status set for one the reader or
+ * the table refuses; with a Python error for Python's. */
 static PyObject *ta_python_read_value(ta_python_reading *reading) {
-    const ta_cbor_token *token = &reading->document->tokens[reading->at];
-    uint32_t at = reading->at++;
-    switch (token->kind) {
+    ta_cbor_item item;
+    if (!ta_python_read_item(reading, &item)) return NULL;
+    switch (item.kind) {
     case TA_CBOR_UINT:
-    case TA_CBOR_NEGINT: return ta_python_read_integer(token);
-    case TA_CBOR_TEXT: return ta_python_read_text(reading, at);
-    case TA_CBOR_BYTES: {
-        ta_string_view bytes = ta_cbor_string(reading->document, at);
-        return PyBytes_FromStringAndSize(bytes.pointer, (Py_ssize_t)bytes.length);
-    }
-    case TA_CBOR_ARRAY: return ta_python_read_array(reading, token->count);
-    case TA_CBOR_MAP: return ta_python_read_map(reading, token->count);
+    case TA_CBOR_NEGINT: return ta_python_read_integer(&item);
+    case TA_CBOR_TEXT: return ta_python_read_text(&item);
+    case TA_CBOR_BYTES: return PyBytes_FromStringAndSize((const char *)item.bytes.pointer, (Py_ssize_t)item.bytes.length);
+    case TA_CBOR_ARRAY: return ta_python_read_array(reading, item.count);
+    case TA_CBOR_MAP: return ta_python_read_map(reading, item.count);
     case TA_CBOR_FLOAT: {
         double number;
-        memcpy(&number, &token->value, sizeof number);
+        memcpy(&number, &item.value, sizeof number);
         return PyFloat_FromDouble(number);
     }
     case TA_CBOR_SIMPLE:
-        if (token->value == TA_CBOR_FALSE) Py_RETURN_FALSE;
-        if (token->value == TA_CBOR_TRUE) Py_RETURN_TRUE;
-        if (token->value == TA_CBOR_NULL) Py_RETURN_NONE;
-        if (token->value == TA_CBOR_UNDEFINED) return Py_NewRef(reading->state->undefined);
+        if (item.value == TA_CBOR_FALSE) Py_RETURN_FALSE;
+        if (item.value == TA_CBOR_TRUE) Py_RETURN_TRUE;
+        if (item.value == TA_CBOR_NULL) Py_RETURN_NONE;
+        if (item.value == TA_CBOR_UNDEFINED) return Py_NewRef(reading->state->undefined);
         break;
-    case TA_CBOR_TAG:
-        if (token->value == TA_CBOR_TAG_URI && reading->document->tokens[reading->at].kind == TA_CBOR_TEXT)
-            return ta_python_address_from(reading->state, ta_cbor_string(reading->document, reading->at++));
+    case TA_CBOR_TAG: {
+        ta_cbor_item text;
+        if (item.value == TA_CBOR_TAG_URI && ta_python_read_item(reading, &text) && text.kind == TA_CBOR_TEXT)
+            return ta_python_address_from(reading->state,
+                                          (ta_string_view){(const char *)text.bytes.pointer, (uint32_t)text.bytes.length});
         break;
+    }
     default: break;
     }
-    reading->status = TA_ERROR_INVALID; /* another tag or simple value */
+    if (reading->status == TA_OK) reading->status = TA_ERROR_INVALID; /* another tag or simple value */
     return NULL;
 }
 
 ta_status ta_python_values_read(const ta_python_state *state, ta_bytes cbor, PyObject **out) {
-    ta_cbor_token room[256];
-    ta_cbor_document document = {cbor, room, 256, 0};
-    ta_status status = ta_cbor_decode(&document);
-    PyObject *held = NULL; /* past the stack's room: the tokens in a bytearray, a Python object */
-    if (status == TA_ERROR_NO_MEMORY) {
-        held = PyByteArray_FromStringAndSize(NULL, (Py_ssize_t)(document.count * sizeof *document.tokens));
-        if (!held) return TA_ERROR_NO_MEMORY;
-        document.tokens = (ta_cbor_token *)(void *)PyByteArray_AsString(held);
-        document.capacity = document.count;
-        status = ta_cbor_decode(&document);
+    ta_python_reading reading = {state, {0}, TA_OK};
+    ta_cbor_reader_init(&reading.reader, cbor);
+    *out = ta_python_read_value(&reading);
+    ta_cbor_item rest;
+    if (*out && ta_cbor_read(&reading.reader, &rest) != 0) { /* bytes after the item, or an error past it */
+        reading.status = TA_ERROR_INVALID;
+        Py_CLEAR(*out);
     }
-    if (status == TA_OK) {
-        ta_python_reading reading = {state, &document, 0, TA_OK};
-        *out = ta_python_read_value(&reading);
-        status = *out ? TA_OK : reading.status != TA_OK ? reading.status : TA_ERROR_NO_MEMORY;
-        if (reading.status != TA_OK) PyErr_Clear(); /* the table's refusal, not Python's */
-    }
-    Py_XDECREF(held);
-    return status;
+    if (*out) return TA_OK;
+    if (reading.status == TA_OK) return TA_ERROR_NO_MEMORY; /* Python's, with its error set */
+    PyErr_Clear(); /* the reader's or the table's refusal, not Python's */
+    return reading.status;
 }
 
 /* ---- copying through the table ----------------------------------------------------------- */
@@ -559,10 +463,14 @@ ta_status ta_python_values_copy(const ta_python_state *state, PyObject *value, P
 
 PyObject *ta_python_encode(PyObject *module, PyObject *value) {
     const ta_python_state *state = ta_python_state_of(module);
-    PyObject *bytes = NULL;
-    ta_status status = ta_python_values_bytes(state, value, &bytes);
-    if (status != TA_OK && !PyErr_Occurred()) ta_python_raise_status(state, "ta_cbor_encode", status);
-    return status == TA_OK ? bytes : NULL;
+    ta_python_cbor cbor;
+    ta_python_cbor_init(&cbor);
+    ta_status status = ta_python_values_write(state, value, &cbor);
+    PyObject *bytes = status == TA_OK ? PyBytes_FromStringAndSize(cbor.bytes.pointer, (Py_ssize_t)cbor.bytes.length)
+                                      : NULL;
+    ta_python_cbor_free(&cbor);
+    if (status != TA_OK && !PyErr_Occurred()) ta_python_raise_status(state, "ta_cbor_writer_bytes", status);
+    return bytes;
 }
 
 PyObject *ta_python_decode(PyObject *module, PyObject *data) {
@@ -572,6 +480,6 @@ PyObject *ta_python_decode(PyObject *module, PyObject *data) {
     PyObject *value = NULL;
     ta_status status = ta_python_values_read(state, (ta_bytes){view.buf, (size_t)view.len}, &value);
     PyBuffer_Release(&view);
-    if (status != TA_OK && !PyErr_Occurred()) ta_python_raise_status(state, "ta_cbor_decode", status);
+    if (status != TA_OK && !PyErr_Occurred()) ta_python_raise_status(state, "ta_cbor_read", status);
     return status == TA_OK ? value : NULL;
 }

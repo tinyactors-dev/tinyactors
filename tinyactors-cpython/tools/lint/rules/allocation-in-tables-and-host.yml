@@ -14,32 +14,84 @@
 # and its kin) or the C library's (malloc, calloc, realloc, free, ...) is
 # refused. Python objects (a bytes, a bytearray) are not this rule's: they
 # are the objects the binding holds.
+#
+# The host's allocator (ta_python_allocator) reaches core in three places
+# only: the host's environment (ta_python_host_create), the compiler's
+# options (ta_python_compile), and a call's CBOR writer
+# (ta_python_cbor_init), which grows through it when a value outgrows its
+# room on the stack and gives that back with ta_cbor_writer_free
+# (ta_python_cbor_free) before the call returns (docs/adr/0010 in the
+# repository root, decision 4). Any other use of it is refused, and so is
+# a writer started anywhere but there (ta_cbor_writer_init).
 id: allocation-in-tables-and-host
 language: c
 severity: error
-message: "allocation happens only in the handle tables (src/datamodel/handles.c) and in the host's create, free and allocator (src/host.c): borrow, hold a Python object, or use a table row"
+message: "allocation happens only in the handle tables (src/datamodel/handles.c), in the host's create, free and allocator (src/host.c), and in a call's writer (ta_python_cbor_init): borrow, hold a Python object, or use a table row"
 files:
   - src/**/*.c
   - src/**/*.h
 ignores:
   - src/datamodel/handles.c
 rule:
-  kind: call_expression
-  has:
-    field: function
+  any:
+    - matches: allocation-call
+    - matches: allocator-elsewhere
+    - matches: writer-elsewhere
+utils:
+  allocation-call:
+    kind: call_expression
+    has:
+      field: function
+      kind: identifier
+      regex: '^(PyMem_\w+|PyObject_(Malloc|Calloc|Realloc|Free)|malloc|calloc|realloc|free|aligned_alloc|posix_memalign|strdup|strndup)$'
+    not:
+      inside:
+        kind: function_definition
+        stopBy: end
+        has:
+          field: declarator
+          any:
+            - kind: function_declarator
+              has: {field: declarator, regex: '^ta_python_(alloc|free|host_new|host_free)$'}
+            - kind: pointer_declarator
+              has:
+                field: declarator
+                kind: function_declarator
+                has: {field: declarator, regex: '^ta_python_(alloc|free|host_new|host_free)$'}
+  allocator-elsewhere:
     kind: identifier
-    regex: '^(PyMem_\w+|PyObject_(Malloc|Calloc|Realloc|Free)|malloc|calloc|realloc|free|aligned_alloc|posix_memalign|strdup|strndup)$'
-  not:
-    inside:
-      kind: function_definition
-      stopBy: end
-      has:
-        field: declarator
-        any:
-          - kind: function_declarator
-            has: {field: declarator, regex: '^ta_python_(alloc|free|host_new|host_free)$'}
-          - kind: pointer_declarator
+    regex: '^ta_python_allocator$'
+    not:
+      any:
+        - inside: {kind: init_declarator, inside: {kind: declaration, inside: {kind: translation_unit}}}
+        - inside:
+            kind: function_definition
+            stopBy: end
             has:
               field: declarator
               kind: function_declarator
-              has: {field: declarator, regex: '^ta_python_(alloc|free|host_new|host_free)$'}
+              has: {field: declarator, regex: '^ta_python_(host_create|compile|cbor_init)$'}
+        - inside:
+            kind: function_definition
+            stopBy: end
+            has:
+              field: declarator
+              kind: pointer_declarator
+              has:
+                field: declarator
+                kind: function_declarator
+                has: {field: declarator, regex: '^ta_python_(host_create|compile|cbor_init)$'}
+  writer-elsewhere:
+    kind: call_expression
+    has:
+      field: function
+      kind: identifier
+      regex: '^ta_cbor_writer_init$'
+    not:
+      inside:
+        kind: function_definition
+        stopBy: end
+        has:
+          field: declarator
+          kind: function_declarator
+          has: {field: declarator, regex: '^ta_python_cbor_init$'}

@@ -120,7 +120,8 @@ both datamodels, which is what the step 8 gates ask.
    and again without it for 3.14t; `tests/` runs on both from `mise run
    test`.
 3. **Values:** `src/values.c`, `tinyactors.encode` and `tinyactors.decode`
-   (`ta_cbor_encode`, `ta_cbor_decode`), `UNDEFINED`, `Address`, the
+   (core's `ta_cbor_writer` and `ta_cbor_reader` since ADR 0010; token
+   lists before), `UNDEFINED`, `Address`, the
    error type; the open rows of `docs/values.md` decided
    (reasoned-analysis); the value table's own tests against
    `values.txt`'s `python` lines and each row.
@@ -192,6 +193,28 @@ Progress:
   cases, the other datamodel's round trips), 0 fail; 4 of 4 scenarios.
   "M1 done means" holds; the coordinator's audit and the API review are
   next.
+- ADR 0010, outputs are views and values stream (core `2eef3d25` to
+  `ad11e7ea`; the coordinator's brief): this commit. `src/values.c`
+  writes with core's `ta_cbor_writer` and reads with `ta_cbor_reader`, so
+  the token lists, their two passes, the `bytearray`s past the stack's
+  room and `ta_python_written`'s retry are gone. Each call has its own
+  writer (`ta_python_cbor`: a 1 KiB room on the C stack, grown through
+  the host's allocator and given back before the call returns); the
+  `"python"` datamodel keeps the writer of its last `to_wire`, whose view
+  core reads until the datamodel's next `to_wire`. The host's outputs
+  (`ta_host_request`'s reply, `ta_host_envelope`) are views. An image is
+  core's `ta_compile_result`, held in a row of the Host's images table
+  until `TA_HOST_EFFECT_SEGMENT_FREED` (`ta_compile_free`), its
+  `ta_image` in a 256-byte `bytearray` (it must not move); the image's
+  bytes are no longer copied. `variable()` lends the variable instead of
+  copying it. `PyMem_Raw*` call sites stay 5 (the tables 3, the host's
+  allocator 2); the allocator reaches core in three places only (the
+  environment, the compiler, `ta_python_cbor_init`), which the lint rule
+  `allocation-in-tables-and-host` now checks too. `decode`'s error names
+  `ta_cbor_read`, `encode`'s `ta_cbor_writer_bytes`. A reply and a
+  quickjs `to_wire` view are copied into one `bytes` before their values
+  are made: making Python objects can run the cycle collector, whose
+  finalizers may call into the host and end the view.
 
 ## Later milestones
 

@@ -88,7 +88,7 @@ class Vectors:
         return {}
 
     def request(self, params):
-        p.check(params, ("request", "capacity"))
+        p.check(params, ("request",))
         host = self.host_of()
         data = p.get(params, "request", bytes, required=True)
         try:

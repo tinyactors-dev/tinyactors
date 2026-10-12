@@ -13,10 +13,10 @@
  * These are the assumptions of the suite's stylesheet for this datamodel
  * (tinyactors-test/suites/w3c/confPython.xsl, its header).
  *
- * What crosses to another actor (<send> data, <donedata>, a session's
- * variable for actor.context) is copied through the value table; an
- * object outside it fails the capture with error.execution (bindings.md,
- * section 8). Hibernation, export and migration are later milestones'
+ * What crosses to another actor (<send> data, <donedata>) is copied
+ * through the value table; an object outside it fails the capture with
+ * error.execution (bindings.md, section 8). A variable for actor.context
+ * is not copied: core only reads it, with to_wire. Hibernation, export and migration are later milestones'
  * (ROADMAP.md): serialize, deserialize, payload_serialize, migrate are
  * NULL, so core answers TA_ERROR_UNSUPPORTED. */
 #include "datamodel/datamodel.h"
@@ -498,12 +498,18 @@ static void ta_python_release(void *data, ta_payload payload) {
     ta_python_table_remove(&datamodel->payloads, payload);
 }
 
-static ta_status ta_python_to_wire(void *data, ta_payload payload, ta_buffer *out) {
+/* The payload as CBOR, written by the datamodel's own writer: the view
+ * core gets is valid until the datamodel's next to_wire (datamodel.h,
+ * "Lifetimes"), which gives back what this one grew. */
+static ta_status ta_python_to_wire(void *data, ta_payload payload, ta_bytes *out) {
     ta_python_datamodel *datamodel = (ta_python_datamodel *)data;
     PyObject *value = ta_python_payload_object(datamodel, payload);
     if (!value) return TA_ERROR_INVALID;
-    ta_status status = ta_python_values_write(datamodel->state, value, out);
+    ta_python_cbor_free(&datamodel->wire);
+    ta_python_cbor_init(&datamodel->wire);
+    ta_status status = ta_python_values_write(datamodel->state, value, &datamodel->wire);
     PyErr_Clear();
+    *out = status == TA_OK ? datamodel->wire.bytes : (ta_bytes){NULL, 0};
     return status;
 }
 
@@ -516,8 +522,9 @@ static ta_status ta_python_from_wire(void *data, ta_bytes cbor, ta_payload *out)
     return ta_python_payload_new(datamodel, value, out);
 }
 
-/* actor.context: a copy of the variable, through the value table; never
- * __builtins__ (AGENTS.md, "Rules the suite cannot see"). */
+/* actor.context: the variable itself, which core only reads with to_wire
+ * (no copy); never __builtins__ (AGENTS.md, "Rules the suite cannot
+ * see"). */
 static ta_status ta_python_variable(const ta_datamodel_call *call, ta_string_view name, ta_payload *out) {
     ta_python_datamodel *datamodel = TA_PYTHON_DATAMODEL(call);
     ta_python_session *session = ta_python_session_of_call(call);
@@ -527,11 +534,7 @@ static ta_status ta_python_variable(const ta_datamodel_call *call, ta_string_vie
     Py_XDECREF(key);
     PyErr_Clear();
     if (found <= 0) return TA_ERROR_INVALID;
-    PyObject *copy = NULL;
-    ta_status status = ta_python_values_copy(datamodel->state, value, &copy);
-    Py_DECREF(value);
-    if (status != TA_OK) return status;
-    return ta_python_payload_new(datamodel, copy, out);
+    return ta_python_payload_new(datamodel, value, out);
 }
 
 /* ---- the vtable ---------------------------------------------------------------------------------- */
@@ -585,6 +588,7 @@ PyObject *ta_python_datamodel_value(ta_python_datamodel *datamodel, ta_payload p
 int ta_python_datamodel_init(ta_python_datamodel *datamodel, const ta_python_state *state) {
     memset(datamodel, 0, sizeof *datamodel);
     datamodel->state = state;
+    ta_python_cbor_init(&datamodel->wire);
     datamodel->sessions.size = sizeof(ta_python_session);
     datamodel->charts.size = sizeof(ta_python_chart);
     datamodel->payloads.size = sizeof(ta_python_value);
@@ -638,6 +642,7 @@ void ta_python_datamodel_clear(ta_python_datamodel *datamodel) {
         ta_python_rows_drop(datamodel, &datamodel->charts);
     }
     Py_CLEAR(datamodel->text);
+    ta_python_cbor_free(&datamodel->wire);
     Py_CLEAR(datamodel->kept);
     ta_python_datamodel_settle(datamodel);
     PyErr_Clear();
