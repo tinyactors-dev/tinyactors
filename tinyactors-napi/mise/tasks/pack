@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+#MISE description="Pack @tinyactors/node and its per-platform packages. Not yet: packaging is M5"
+# vim:ft=ruby
+
+# ROADMAP.md, step 8, M5 ("examples and release": release tasks and
+# changelogs for both packages) and docs/adr/0001, decisions 10, 11 and 15
+# (one addon per platform package, the main package listing them as
+# optionalDependencies at its own exact version).
+
+abort 'pack: not yet: the packages are built in M5 (ROADMAP.md, step 8, "M5: examples and release")'

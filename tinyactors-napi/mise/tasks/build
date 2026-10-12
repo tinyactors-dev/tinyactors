@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+#MISE description="Build core's amalgamation into build/core, from tinyactors-core's sources (its amalgamate task with --out); M1 adds the addon, compiled against it"
+# vim:ft=ruby
+
+# Core is built from its amalgamation in this project's own build/, never
+# by running tinyactors-core's build (ROADMAP.md, step 8, "Rules for the
+# work"): the amalgamate task writes the headers and sources there and
+# checks that each compiles on its own (tinyactors-core/mise/tasks/amalgamate).
+# The addon links tinyactors.c, tinyactors_runtime.c with its hosted
+# platform file, and tinyactors_datamodel_ecmascript.c (quickjs beside the
+# native datamodel, tinyactors-core/docs/bindings.md, section 8).
+
+require_relative '../napi'
+
+NodeAPI.run('mise', 'run', '//tinyactors-core:amalgamate', '--', '--out', NodeAPI::CORE_BUILD.to_s)

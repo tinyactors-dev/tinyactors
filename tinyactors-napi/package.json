@@ -1,0 +1,31 @@
+{
+  "name": "@tinyactors/node",
+  "version": "0.2.0",
+  "description": "SCXML statecharts as actors on the tinyactors host, from Node.js and Bun (a Node-API addon)",
+  "keywords": [
+    "actor",
+    "actors",
+    "statechart",
+    "scxml",
+    "state-machine",
+    "napi",
+    "bun"
+  ],
+  "homepage": "https://github.com/dhamidi/tinyactors/tree/main/tinyactors-napi#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhamidi/tinyactors.git",
+    "directory": "tinyactors-napi"
+  },
+  "bugs": {
+    "url": "https://github.com/dhamidi/tinyactors/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    }
+  }
+}
