@@ -1,5 +1,5 @@
 # Host configs (docs/host-config.md): what ta_host_create takes, and the
-# error it writes for a config it refuses. Run by the suite's runner and core's run_protocol.c.
+# error it writes for a config it refuses. Run by the suite's runner.
 #
 # A case is a line "config <name>", then:
 #   cbor <hex>        the config

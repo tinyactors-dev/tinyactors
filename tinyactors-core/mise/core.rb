@@ -208,9 +208,6 @@ module Core
     # The torture chamber's event loop.
     Program.new(name: 'test_torture_loop', sources: %w[tests/unit/test_torture_loop.c tools/torture/loop.c], uses: [],
                 defines: {}),
-    # Protocol vectors (tinyactors-test/suites/protocol): requests, configs and envelopes, byte for byte.
-    Program.new(name: 'protocol', sources: %w[tests/protocol/run_protocol.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
-                defines: {}, arguments: [SUITE.join('suites/protocol').to_s]),
     # Host conformance (tests/conformance/*.json) through the C host.
     Program.new(name: 'conformance', sources: %w[tests/conformance/run_c.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
                 defines: {}, arguments: [ROOT.join('tests/conformance').to_s])
@@ -220,6 +217,12 @@ module Core
   TOOLS = [
     # The W3C IRP runner (mise run w3c).
     Program.new(name: 'run_w3c', sources: %w[tests/w3c/run_w3c.c], uses: %w[runtime test_datamodel basic_http] + ECMASCRIPT,
+                defines: {}),
+    # The C reference implementation of the conformance suite's driver
+    # protocol (../tinyactors-test/docs/driver.md); `mise run conform` runs
+    # the suite against it.
+    Program.new(name: 'ta-conform', uses: %w[host runtime compile basic_http test_datamodel] + ECMASCRIPT,
+                sources: %w[conform.c datamodel.c vectors.c scenario.c w3c.c].map { |s| "tools/conform/#{s}" },
                 defines: {}),
     # The torture chamber's host (tools/torture/README.md).
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,

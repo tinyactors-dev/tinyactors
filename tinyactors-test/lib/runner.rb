@@ -22,12 +22,10 @@ class Runner
   NO_MEMORY = -4
   ROUTES = { 'relay' => 1, 'refused' => 3 }.freeze
 
-  # The wall clock a setup's runs see, as run_protocol.c's world_settle and
-  # check_effects set it (tinyactors-core/tests/protocol/run_protocol.c).
+  # The wall clock a setup's runs see (suites/protocol/README.md, "Setups").
   WALL_NS = 1_700_000_000_000_000_000
 
-  # The setups' system ids (suites/protocol/README.md, "Setups"; world_open
-  # in run_protocol.c).
+  # The setups' system ids (suites/protocol/README.md, "Setups").
   SYSTEMS = { 'empty' => 'h', 'pinged' => 'h', 'pinged2' => 'h', 'pinger' => 'a', 'relay' => 'b' }.freeze
 
   Result = Struct.new(:suite, :name, :verdict, :detail)
@@ -81,7 +79,7 @@ class Runner
   end
 
   # Every send with the reply after it, in order, on one host; a capacity
-  # line applies to the send after it (run_protocol.c, run_request).
+  # line applies to the send after it.
   def requests_case(vector)
     setup(vector.get('setup') || 'empty')
     capacity = nil
@@ -269,7 +267,7 @@ class Runner
     @out.puts "not offered: #{@unsupported.join(', ')}" unless @unsupported.empty?
   end
 
-  # ---- setups (suites/protocol/README.md; world_open in run_protocol.c) ----------
+  # ---- setups (suites/protocol/README.md) -----------------------------------------
 
   def config(system)
     CBOR.encode({ 'systemID' => system,
@@ -333,7 +331,7 @@ class Runner
 
   # One request and its expected reply ("none": a notification's). With a
   # capacity: first refused in that many bytes and measured; the retry in
-  # the length it asked for is the reply (run_protocol.c, ask).
+  # the length it asked for is the reply.
   def ask(request, want, capacity)
     params = { 'request' => bytes(request) }
     if capacity
@@ -358,7 +356,7 @@ class Runner
   end
 
   # The envelopes of the host's next run, against the vector's envelope
-  # lines in order (run_protocol.c, check_effects).
+  # lines in order.
   def envelopes!(vector)
     call('clock.advance', 'monotonic' => 0, 'wallNs' => WALL_NS)
     got = call('host.run').fetch('envelopes', [])

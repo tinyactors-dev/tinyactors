@@ -78,8 +78,8 @@ Do it at release time, not between releases.
   | You changed                         | These projects' tests run                |
   |-------------------------------------|------------------------------------------|
   | `tinyactors-core` (code, bindings, tests, tools) | core                  |
-  | `tinyactors-test/suites`, its W3C fetch (`lib/w3c.rb`) | tinyactors-test, core (core's runners read them) |
-  | the rest of `tinyactors-test` (the runner) | tinyactors-test                       |
+  | `tinyactors-test` (`lib`, `suites`, `mise`, `mise.toml`) | tinyactors-test, core (core's test runs the suite against `ta-conform`) |
+  | `tinyactors-test/test` (the runner's own tests) | tinyactors-test                  |
   | `tinyxml`                           | tinyxml                                  |
   | `tinyparse`                         | tinyparse                                |
   | `staticjs`                          | staticjs                                 |

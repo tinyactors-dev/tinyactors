@@ -9,10 +9,10 @@ out ([ADR 0009](../../../docs/adr/0009-one-host-two-queues.md), decision 11).
 
 | File | What | Read by |
 |---|---|---|
-| `requests.txt` | requests and replies of `ta_host_request` (`tinyactors-core/docs/requests.md`) | the runner; core's `run_protocol.c` |
-| `config.txt` | configs of `ta_host_create`, and the error it writes for a refused one (`tinyactors-core/docs/host-config.md`) | the runner; core's `run_protocol.c` |
-| `envelopes.txt` | envelopes and error envelopes between systems (`tinyactors-core/docs/protocol.md`, Envelope) | the runner; core's `run_protocol.c` |
-| `values.txt` | neutral values (`tinyactors-core/docs/protocol.md`, Values) | the runner; core's `tests/unit/test_datamodel_ecmascript.c` |
+| `requests.txt` | requests and replies of `ta_host_request` (`tinyactors-core/docs/requests.md`) | the runner |
+| `config.txt` | configs of `ta_host_create`, and the error it writes for a refused one (`tinyactors-core/docs/host-config.md`) | the runner |
+| `envelopes.txt` | envelopes and error envelopes between systems (`tinyactors-core/docs/protocol.md`, Envelope) | the runner |
+| `values.txt` | neutral values (`tinyactors-core/docs/protocol.md`, Values) | the runner; core's `tests/unit/test_datamodel_ecmascript.c` too |
 
 ## Running them
 
@@ -21,12 +21,12 @@ Against an implementation, through the protocol it speaks
 
     mise run //tinyactors-test:run -- --suite protocol <command…>
 
-`mise run test` in `tinyactors-core` runs them through core's own programs
-until `ta-conform` replaces them (the program `protocol`, and
-`test_datamodel_ecmascript` for `values.txt`). Alone, in `tinyactors-core`:
+`mise run test` in `tinyactors-core` runs them against `ta-conform`, core's
+reference implementation (`tinyactors-core/tools/conform/`). Alone, in
+`tinyactors-core`:
 
     mise run build
-    build/dev/bin/protocol ../tinyactors-test/suites/protocol
+    mise run //tinyactors-test:run -- build/dev/bin/ta-conform --suite protocol
 
 A failure prints the expected and the actual bytes in diagnostic notation,
 and the actual bytes in hex.
@@ -85,8 +85,8 @@ was given: their charts are ECMAScript), with `ticksPerSecond` 1000,
 `maxActors` 8, `traceSeed` 1, `maxSubscriptions` 1 and no telemetry
 encoder. The charts are in `setups/`; after spawning, a setup runs the host
 until it is idle with the wall clock at 1700000000000000000 ns. The runner
-builds them with the driver's methods (`lib/runner.rb`, `setup`), as core's
-`run_protocol.c` does with its calls (`world_open`). `values.txt` runs on the
+builds them with the driver's methods (`lib/runner.rb`, `setup`).
+`values.txt` runs on the
 datamodel the runner was given, on a host as `empty`.
 
 | Setup | The host |

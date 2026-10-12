@@ -337,10 +337,11 @@ Event I/O Processor, outside this protocol.
   vectors; run by the C parser (`tests/unit/test_address.c`).
 - `tinyactors-test/suites/protocol/values.txt` — neutral value vectors,
   CBOR in hex with its diagnostic notation; run in C
-  (`tests/unit/test_datamodel_ecmascript.c`).
+  (`tests/unit/test_datamodel_ecmascript.c`) and by the suite.
 - `tinyactors-test/suites/protocol/envelopes.txt` — envelopes and error
-  envelopes as bytes: written, read, refused and relayed
-  (`tests/protocol/run_protocol.c`; see its README.md).
+  envelopes as bytes: written, read, refused and relayed (see its
+  README.md); core runs it through the suite against `ta-conform`
+  (`tools/conform/`, `mise run conform`).
 - `tests/unit/test_router.c` — the router: routes, relaying, hop limit,
   origin validation, policy, errors, dedup, route status.
 
