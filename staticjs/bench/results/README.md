@@ -1,9 +1,10 @@
 # Benchmark results, keyed by machine
 
-What `mise run bench` and `mise run bench-compare --store` recorded. The
-same build can measure tens of percent apart on two days on one machine
-(tinyactors-napi measured one 30% apart), so figures are only comparable
-under one **machine signature**, and best side by side: `mise run
+What `mise run bench`, `mise run bench-compare --store` and `mise run
+bench-engines` recorded. The same build can measure tens of percent apart
+on two days on one machine (tinyactors-napi measured one 30% apart), so
+figures are only comparable under one **machine signature**, and best
+side by side: `mise run
 bench-compare <commit>` builds the other commit and runs both alternately.
 Never compare with numbers from another day or another machine.
 
@@ -18,6 +19,13 @@ Never compare with numbers from another day or another machine.
 - `<signature>/machine.json`: those fields, readable.
 - `<signature>/<commit>.jsonl`: one JSON record per line, appended by each
   run at that commit.
+- `<signature>/engines-<commit>.jsonl`: the records of `mise run
+  bench-engines` (staticjs beside Node, Node --jitless and quickjs-wasi),
+  appended by each full run at that commit; see "An engines record".
+- `<signature>/engines-<commit>.md`: the report of the latest full run of
+  `mise run bench-engines` at that commit, generated from its records.
+  `bench/engines/REPORT.md` is a copy of the latest one stored on any
+  machine.
 
 ## A record
 
@@ -48,3 +56,21 @@ Read a folder with `jq`, leaving out dirty records, for example the median
 ns per element of every `eval.array` case of each commit:
 
     jq -c 'select((.dirty | not) and (.bench | startswith("eval.array"))) | [.commit, .bench, .n, .nsPerOp.median / .unitsPerOp, .memory.peakBytes]' 92727593a59b/*.jsonl
+
+## An engines record
+
+Each line of `engines-<commit>.jsonl` carries `run` (the run's start, UTC:
+one run's records share it), `machine`, `commit`, `dirty`, and a `kind`:
+
+| `kind` | Fields |
+|---|---|
+| `run` | `fields` (the signature's), `time`, `conditionsBefore` |
+| `verify` | `case`, `n`, `sizes` checked, `result` (`len`, `hash`, `fold` at n), `problems` (empty, or the run stopped) |
+| `settings` | `rounds`, `samples`, `sampleMs`, warm-ups, `quick`, `filter`, `cases`, `node`, `v8` |
+| `time` | `case`, `n`, `round`, `engine` (`staticjs`, `node`, `node-jitless`, `quickjs-wasi`), `load1`, `nsPerOp` (that run's median); staticjs adds `p25`, `p75`, `unit`, `unitsPerOp`, `memory` (as in a bench record), `fuelPerOp`; the others `samples` and `k` (ops per sample), quickjs-wasi `versions` |
+| `startup` | `label`, `engine`, `mode`, `includes`, `round`, `nsPerOp` |
+| `memory` | `case`, `n`, `engine`, `before`, `afterFixtures`, `heldBytes`, `afterRelease` (bytes), `linearMemoryBytes` (quickjs-wasi) |
+| `end` | `conditionsAfter`, `seconds` |
+
+A record with `error` could not run. `node bench/engines/report.mjs FILE`
+writes the report of one run's records (select them by `run` first).

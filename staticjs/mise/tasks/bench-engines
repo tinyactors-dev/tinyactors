@@ -1,0 +1,98 @@
+#!/usr/bin/env ruby
+#MISE description="Compare staticjs with Node (JIT and --jitless) and quickjs-wasi on bench.c's cases: verify that all compute the same, time them interleaved, and write a report stored by machine signature"
+#USAGE arg "[filter]" help="Only cases whose name starts with this (eval.array, compile); a partial run, not stored"
+#USAGE flag "--quick" help="Three rounds of shorter samples, for a look; not stored"
+#USAGE flag "--rounds <n>" help="Rounds per case (default 5, or 3 with --quick)"
+#USAGE flag "--no-store" help="Write the report to build/engines/ only, not to bench/results/ and bench/engines/REPORT.md"
+# vim:ft=ruby
+
+# Builds the release bench (`mise run bench`'s) and bench/engines/dump.c,
+# installs the pinned quickjs-wasi (bench/engines/package-lock.json; the
+# first run needs the network), then runs bench/engines/compare.mjs twice:
+# `verify` checks, for every case of bench/engines/cases.mjs, that the
+# fixtures guest.js builds and every engine's result equal bench.c's, and
+# stops the run naming the case if not; `measure` times the four engines one
+# at a time, in interleaved rounds, then the start-up rows and the memory.
+# report.mjs writes the report. A full run (no filter, no --quick) stores
+# its records in bench/results/<signature>/engines-<commit>.jsonl (appended,
+# like `mise run bench`'s) and its report in engines-<commit>.md there and
+# in bench/engines/REPORT.md; a partial run writes build/engines/report.md
+# only. Never part of `mise run test`: it times, and takes 15 to 20 minutes.
+
+require 'time'
+require_relative '../engines'
+
+Bench = StaticJS::Bench
+Engines = StaticJS::Engines
+
+args = ARGV.dup
+rounds = ENV['usage_rounds'].to_s.empty? ? nil : ENV['usage_rounds']
+if (at = args.index('--rounds'))
+  rounds = args[at + 1]
+  args.slice!(at, 2)
+end
+args.reject! { |arg| arg.start_with?('--rounds=') && (rounds = arg.delete_prefix('--rounds=')) }
+abort "staticjs: --rounds takes a positive number, not #{rounds}" if rounds && rounds.to_i < 1
+quick = ENV['usage_quick'] == 'true' || !args.delete('--quick').nil?
+no_store = ENV['usage_no_store'] == 'true' || !args.delete('--no-store').nil?
+filter = ENV['usage_filter'].to_s.empty? ? args.find { |arg| !arg.start_with?('--') } : ENV['usage_filter']
+store = !no_store && !quick && filter.nil?
+
+failure = Bench.build(source_root: StaticJS::ROOT, bench_source: Bench::PROGRAM, into: Bench::RELEASE_BUILD)
+abort "staticjs: bench/bench.c does not build:\n#{failure}" if failure
+dump = Engines.build_dump
+Engines.install
+
+FileUtils.mkdir_p(Engines::BUILD)
+cases = Engines::BUILD.join('cases.jsonl')
+File.open(cases, 'w') { |file| Engines.run!([dump, 'cases'], timeout: 60, out: file) }
+records = Engines::BUILD.join('records.jsonl')
+signature = Bench.signature
+commit = Bench.commit
+dirty = Bench.dirty?
+started = Time.now
+File.write(records, "#{JSON.generate({ 'kind' => 'run', 'machine' => signature['hash'], 'fields' => signature['fields'],
+                                       'commit' => commit, 'dirty' => dirty, 'time' => started.utc.iso8601,
+                                       'conditionsBefore' => Bench.conditions })}\n")
+
+compare = ['node', Engines::DIR.join('compare.mjs'), "--cases=#{cases}", "--dump=#{dump}",
+           "--bench=#{Bench::RELEASE_BUILD.join('bench')}", "--records=#{records}",
+           *(filter ? ["--filter=#{filter}"] : []), *(rounds ? ["--rounds=#{rounds.to_i}"] : []),
+           *(quick ? ['--quick'] : [])]
+puts "staticjs bench-engines: #{commit}#{dirty ? ' (dirty)' : ''}, #{Bench.describe(signature)}"
+abort 'staticjs: verification failed; nothing was timed' unless Engines.run([compare[0], compare[1], 'verify', *compare[2..]],
+                                                                           timeout: 1800)
+measured = Engines.run([compare[0], compare[1], 'measure', *compare[2..]], timeout: 7200)
+File.open(records, 'a') do |file|
+  file.puts(JSON.generate({ 'kind' => 'end', 'conditionsAfter' => Bench.conditions,
+                            'seconds' => (Time.now - started).round }))
+end
+abort 'staticjs: the measuring run failed; its records are in build/engines/records.jsonl' unless measured
+
+report = Engines::BUILD.join('report.md')
+File.open(report, 'w') { |file| Engines.run!(['node', Engines::DIR.join('report.mjs'), records], timeout: 120, out: file) }
+written = [report]
+if store
+  dir = Engines.results(signature)
+  FileUtils.mkdir_p(dir)
+  machine = dir.join('machine.json')
+  File.write(machine, "#{JSON.pretty_generate(signature['fields'])}\n") unless machine.exist?
+  run_id = started.utc.iso8601
+  File.open(dir.join("engines-#{commit}.jsonl"), 'a') do |file|
+    File.foreach(records) do |line|
+      file.puts(JSON.generate({ 'run' => run_id, 'machine' => signature['hash'], 'commit' => commit, 'dirty' => dirty }
+                                .merge(JSON.parse(line))))
+    end
+  end
+  stored = dir.join("engines-#{commit}.md")
+  FileUtils.cp(report, stored)
+  path = stored.relative_path_from(Engines::DIR)
+  File.write(Engines::LATEST, "<!-- The latest stored report of `mise run bench-engines`, a copy of #{path}. -->\n\n" \
+                              "#{File.read(report)}")
+  written += [stored, Engines::LATEST]
+end
+puts File.read(report).lines.grep(/Geometric means/).first
+puts "report: #{written.map { |file| file.relative_path_from(StaticJS::ROOT) }.join(', ')}" \
+     "#{store ? '' : ' (a partial or --no-store run is not stored)'}"
+failed = File.foreach(records).count { |line| JSON.parse(line)['error'] }
+abort "staticjs: #{failed} timed run(s) failed; the report lists them" if failed.positive?

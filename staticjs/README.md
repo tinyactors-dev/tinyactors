@@ -824,6 +824,43 @@ reported as within the noise, not as slower, and `?` marks a row whose
 runs or samples vary past 5%, which cannot resolve a 5% change; rerun
 those cases with `--runs=8` before reading anything into them.
 
+**Other engines.** `mise run bench-engines` runs the cases listed in
+`bench/engines/cases.mjs` (bench.c's own, each at one size) in staticjs,
+in Node with its JIT, in Node `--jitless`, and in quickjs-wasi (QuickJS-NG
+compiled to WebAssembly, run by Node), and writes a report: time per op
+in each, the ratios to staticjs and their geometric means, the cost of
+starting an evaluation, and memory, with the method and its caveats.
+
+- **What it needs:** Node (pinned in the root `mise.toml`), and npm the
+  first time, to install the quickjs-wasi pinned in
+  `bench/engines/package-lock.json` into `bench/engines/node_modules/`
+  (ignored by git): the first run needs the network, later ones do not.
+- **How long:** a full run takes 15 to 20 minutes on a 4-core machine,
+  with nothing else running (`--quick` with a filter, under a minute).
+- **Verified first.** The JavaScript engines build bench.c's fixtures with
+  `bench/engines/guest.js`, a hand-written copy of its generators. Before
+  timing anything, the task checks, at each case's smoke size and its
+  measured size, that every fixture and every engine's result equals
+  staticjs's (length and hash, through `bench/engines/dump.c`, which
+  includes bench.c), and that each engine gives bench.c's expected value
+  at the smoke size. A difference stops the run, naming the case: after a
+  change to a fixture in bench.c, change guest.js to match.
+- **Interleaved.** Each case runs 5 rounds (`--rounds <n>`); a round runs
+  the four engines one after another, each in a process of its own, never
+  two at once, and the next round in the reverse order. A cell is the
+  median of the rounds.
+- **Where the report goes.** A full run appends its records to
+  `bench/results/<signature>/engines-<commit>.jsonl` and writes its report
+  to `engines-<commit>.md` beside them and to `bench/engines/REPORT.md`,
+  which always holds the latest; commit them. A run with a filter
+  (`mise run bench-engines eval.array`) or `--quick` is a look, not a
+  record: it writes `build/engines/report.md` only, as `--no-store` does.
+- **Reading it.** A ratio is the other engine's time over staticjs's, so
+  "3× faster" means staticjs took a third of the time. `±x%` follows a
+  figure whose middle rounds spread past 10%. `≈` marks a ratio whose two
+  ranges overlap: it is not resolved, the engines may be equal. The
+  compile rows favour Node, which compiles inner functions lazily.
+
 **Reporting.** Give throughput and memory together, name the machine
 signature, and compare builds side by side with `bench-compare`, never
 against numbers from another day or another machine.
