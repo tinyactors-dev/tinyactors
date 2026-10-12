@@ -247,7 +247,22 @@ static const int64_t UNIT_NANOSECONDS[] = { 1, 1000, 1000000, 1000000000, INT64_
  * within Temporal's limits (else false), and a PlainTime's wraps to
  * midnight. */
 static bool round_iso(sjs_iso_date_time *d, rounding r, bool dated) {
-    int64_t ns = round_to(time_of_day(d), r);
+    /* RoundTime counts the quantity from the start of the unit above the
+     * one rounded to (a minute's from the hour, an hour's from midnight).
+     * An increment is always less than that unit and divides it, so the
+     * start is a multiple of the increment: only halfEven's parity can
+     * tell it from counting from midnight. */
+    static const int64_t ABOVE[] = { 1000, 1000000, 1000000000, INT64_C(60000000000), INT64_C(3600000000000) };
+    int64_t above = NS_PER_DAY;
+    for (uint32_t i = 0; i < sizeof ABOVE / sizeof ABOVE[0]; i++) {
+        if (r.increment < ABOVE[i]) {
+            above = ABOVE[i];
+            break;
+        }
+    }
+    int64_t of_day = time_of_day(d);
+    int64_t base = of_day - of_day % above;
+    int64_t ns = base + round_to(of_day - base, r);
     if (ns == NS_PER_DAY) {
         ns = 0;
         if (dated) date_of_days(epoch_days(d->year, d->month, d->day) + 1, d);

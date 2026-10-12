@@ -376,14 +376,17 @@ faults; a PlainTime wraps to midnight. `toString` rounds the same way to
 the digits it writes (`roundingMode` `trunc` by default).
 
 The polyfills differ on one kind of tie: `halfEven` makes the multiple
-even counted from midnight in temporal-polyfill (the specification now),
-counted from the unit above in @js-temporal/polyfill (as the
-specification once did). They give different values where the unit above
-holds an odd number of increments (12, 20 or 4 minutes or seconds; 8, 40
-or 200 of a smaller unit) on a tie that is not in the unit's first span:
-`23:54` to 12 minutes is `00:00` in one, `23:48` in the other. staticjs
-follows temporal-polyfill, and no case tests those ties (temporal_test
-leaves them out).
+even counted from midnight in temporal-polyfill, counted from the start of
+the unit above in @js-temporal/polyfill, as the specification's RoundTime
+does (its quantity for a minute is the minute and what is below it, not the
+hour; the reference polyfill of tc39/proposal-temporal agrees). They give
+different values where the unit above holds an odd number of increments
+(12, 20 or 4 minutes or seconds; 8, 40 or 200 of a smaller unit) on a tie
+that is not in the unit's first span: `23:54` to 12 minutes is `23:48` in
+the specification and `00:00` in temporal-polyfill. staticjs follows the
+specification (`round_iso`). temporal_test leaves those ties out, since
+diff-node's oracle is temporal-polyfill; they were checked against the
+reference polyfill instead (the adversarial review's PlainTime sweep).
 
 ## Testing
 

@@ -715,12 +715,13 @@ static void rounding_sweep(runner *r) {
                 if (parts % increment != 0) continue;
                 for (size_t m = 0; m < COUNT(MODES); m++) {
                     /* halfEven on a tie: temporal-polyfill makes the
-                     * multiple even counted from midnight (the
-                     * specification), @js-temporal/polyfill counted from the
-                     * unit above, as the specification once did. They
-                     * differ where the unit above holds an odd number of
-                     * increments, below the hour, on the last tie of the
-                     * day: that case is left out. */
+                     * multiple even counted from midnight, the
+                     * specification (and @js-temporal/polyfill, and
+                     * staticjs) counted from the unit above. They differ
+                     * where the unit above holds an odd number of
+                     * increments, below the hour: that case is left out,
+                     * since diff-node's oracle is temporal-polyfill
+                     * (docs/temporal.md, "Rounding"). */
                     bool differ = strcmp(MODES[m], "halfEven") == 0 && unit < 5 && (parts / increment) % 2 != 0;
                     text source = { 0 };
                     put_times(&source, dated, (quantum){ increment * UNIT_NS[unit], !differ });
