@@ -170,15 +170,24 @@ typedef struct conform_image {
     void *bytes;
     ta_image image;
 } conform_image;
-/* Documents to compile into one image: the first is the default chart. */
+/* Charts to compile into one image (the first is the default chart), and
+ * the documents a src="" of theirs may name (`files`, by name, with a
+ * leading file://, file: or ./ removed). */
 typedef struct conform_documents {
-    const ta_source *pointer;
-    uint32_t count;
+    ta_source_list charts;
+    ta_source_list files;
 } conform_documents;
 /* ta_compile_charts, ta_compile_image, ta_image_open; the diagnostics go to
  * standard error. Its status. */
 ta_status conform_image_compile(const conform_documents *documents, conform_image *out);
 void conform_image_free(conform_image *image);
+
+/* ---- outcomes ---------------------------------------------------------------------- */
+
+/* A LOG effect with the label "Outcome" (the W3C IRP's final states, and
+ * the scenarios'): "pass" when its text is pass, else "fail"; NULL for any
+ * other effect. */
+const char *conform_outcome(const ta_host_effect *effect);
 
 /* ---- methods ------------------------------------------------------------------------ */
 

@@ -104,8 +104,8 @@ Do it at release time, not between releases.
   after each edit.
   - one core test program: `tinyactors-core/build/dev/bin/<name>` after
     `mise run build` in `tinyactors-core` (the sanitizer build);
-  - one part of core's suite, as a task in `tinyactors-core`: `w3c`,
-    `wasm:test`, `torture:test`, `check:wasm`, `check:freestanding`
+  - one part of core's suite, as a task in `tinyactors-core`: `conform`
+    (the conformance suite against `ta-conform`), `wasm:test`, `torture:test`, `check:wasm`, `check:freestanding`
     (`mise tasks` lists them);
   - one tinyparse gate: `mise run //tinyparse:gate:cc-diff` (`--full` for
     its exhaustive version);

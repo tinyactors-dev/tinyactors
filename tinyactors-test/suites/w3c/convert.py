@@ -7,7 +7,8 @@ The W3C stylesheets are XSLT 2.0 (xsl:analyze-string), so this uses SaxonC
 The W3C suite: reads <irp-dir>/manifest.xml, keeps automatic
 (manual="false") tests, applies confEcma.xsl to every start/dep .txml and
 writes .scxml files plus an index ("<id> <conformance> <start.scxml>
-<deps|->" per line) into <out-dir>.
+<deps|->" per line) into <out-dir>. The deps are every <dep> of the
+manifest: charts (.txml, as .scxml) and the files a src="" reads (.txt).
 
 The scenarios (--scenarios): applies <stylesheet> to every .txml under
 <src-dir> and writes it as .scxml at the same place under <out-dir>.
@@ -43,7 +44,7 @@ def w3c(proc, irp, out):
                 dst.with_suffix(".scxml").write_text(res)
             else:
                 dst.write_bytes(src.read_bytes())
-        deps = [str(pathlib.Path(d).with_suffix(".scxml")) for d in files[1:] if d.endswith(".txml")]
+        deps = [str(pathlib.Path(d).with_suffix(".scxml")) if d.endswith(".txml") else d for d in files[1:]]
         index.append(f"{tid} {conf} {pathlib.Path(start).with_suffix('.scxml')} {','.join(deps) or '-'}")
     (out / "index.txt").write_text("\n".join(index) + "\n")
     print(f"converted {len(index)} tests into {out}")

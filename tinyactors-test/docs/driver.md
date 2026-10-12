@@ -52,8 +52,8 @@ Every method names the core calls behind it; header references are to
 
 | Method | Params | Result | Core |
 |---|---|---|---|
-| `scenario.run` | `documents`: array of `{"name", "text"}`, SCXML; `steps` (below); `datamodel` (`"quickjs"` or `"native"`, default `"quickjs"`); `realm` (`"auto"` or `"isolated"`, quickjs only) | `outcome`: `"pass"`, `"fail"`, `"compile"` or `"timeout"` | a host of its own in the scenario environment (below): `ta_host_create`, then each step's calls, each followed by the loop until idle |
-| `w3c.run` | `documents`: the test's start document first, then its dependencies; `datamodel`, `realm` | `outcome`, as `scenario.run` | one W3C IRP test in the W3C environment (below) |
+| `scenario.run` | `documents`: array of `{"name", "text"}`, SCXML; `steps` (below); `datamodel` (`"quickjs"` or `"native"`, default `"quickjs"`, or another name the implementation offers); `realm` (`"auto"` or `"isolated"`, quickjs only) | `outcome`: `"pass"`, `"fail"`, `"compile"` or `"timeout"` | a host of its own in the scenario environment (below): `ta_host_create`, then each step's calls, each followed by the loop until idle |
+| `w3c.run` | `documents`: the test's start document first, then its dependencies: charts (`.scxml`) and the files a `src` reads (`.txt`); `datamodel`, `realm` | `outcome`, as `scenario.run` | one W3C IRP test in the W3C environment (below) |
 | `host.create` | `config` (bytes); `datamodel`, `realm` | `status`; `datamodel`: the vtable's `name` (`datamodel.h`); `error` (bytes) when refused | `ta_host_create` (`host.h`) with `environment->error` set; quickjs: `ta_datamodel_ecmascript_new` with `realm` (`datamodel_ecmascript.h`); native: the implementation's own vtable, or -32602 `range` when it has none |
 | `host.free` | — | `{}` | `ta_host_free` |
 | `host.request` | `request` (bytes); `capacity` | `status`; `length`; `reply` (bytes) when `status` is 0 | `ta_host_request` into a `ta_buffer` of `capacity` bytes (default: enough); on `TA_ERROR_NO_MEMORY` `length` is what it needs |
@@ -64,9 +64,24 @@ Every method names the core calls behind it; header references are to
 | `host.run` | — | `status` of the last run; `envelopes`: array of bytes | `ta_host_run`, again while it answers `TA_RUN_YIELDED` or `TA_RUN_EFFECTS_FULL` (`system.h`), at most 1,000 times, acknowledging the effects after each run; for each `PEER` and `PEER_ERROR` effect, in order, the bytes `ta_host_envelope` writes. No other effect is handled |
 | `peer.add` | `id`; `trusted` (bool) | `status`; `peer` | `ta_host_peer_add` (`TA_PEER_TRUSTED`) |
 | `envelope.read` | `cbor` (bytes); `error` (bool: an error envelope) | `status`; `back` (bytes): what was read, written again | `ta_host_envelope_read` or `ta_host_peer_error_read`, then `ta_host_envelope` of a `PEER` (`PEER_ERROR`) effect holding it |
-| `envelope.deliver` | `peer`, `cbor` (bytes) | `status`; `route` (`TA_ROUTE_*`) | `ta_host_envelope_read`, then `ta_host_deliver` |
+| `envelope.deliver` | `peer`, `cbor` (bytes) | `status`; `route` (`TA_ROUTE_*`) | `ta_host_envelope_read`, then `ta_host_deliver`; `status` is the read's when it fails, and `ta_host_deliver`'s answer when it is negative |
 | `value.roundtrip` | `cbor` (bytes) | `status`; `back` (bytes) | the host's datamodel's `from_wire`, then `to_wire` (`datamodel.h`) |
-| `value.encode` | `expression` (text, ECMAScript) | `status`; `cbor` (bytes) | ECMAScript datamodels only: the expression's value, then `to_wire` (quickjs: `ta_datamodel_ecmascript_payload_eval`) |
+| `value.encode` | `expression` (text, ECMAScript) | `status`; `cbor` (bytes) | ECMAScript datamodels only: the expression's value, then `to_wire` (quickjs: `ta_datamodel_ecmascript_payload_eval`); an expression that throws is `TA_ERROR_EXECUTION`, another datamodel `TA_ERROR_UNSUPPORTED` |
+
+**Datamodels.** `datamodel` names one the implementation offers:
+`"quickjs"` (`ta_datamodel_ecmascript`), `"native"` (the binding's own),
+or another name it documents; `ta-conform` offers `"quickjs"` and
+`"test"` (core's tests' datamodel, `tinyactors-core/tests/support/datamodel_test.h`),
+and no native one. A name it does not offer answers -32602 `range`.
+
+**`src`.** A chart's `src` attribute (`<invoke src>`, `<data src>`) names
+a document of the call's `documents`, by its `name` with a leading
+`file://`, `file:` or `./` removed. Core reads it at compile time through
+the resolver it is given (`ta_compile_options.resolve`, `compile.h`), and
+refuses the chart without one ("requires a resolver",
+`tinyactors-core/src/compile/scxml.c`, `fetch_source`), even when the
+document is one of those compiled. In `w3c.run`, the documents whose names
+do not end in `.scxml` are files a `src` reads, not charts.
 
 The methods from `host.create` on serve the protocol vectors; they need a
 host (`host.create` makes one and its datamodel, `host.free` frees both),
@@ -97,37 +112,37 @@ named by its `name` in `documents` (`counter.scxml`); a chart by its
 | `{"migrate": {"wake"?: bool, "timeout"?: ticks}}` | `ta_host_migrate` of every chart (`TA_HOST_MIGRATE_WAKE` with `wake`), then the loop until its `JOB_DONE` |
 
 In `params` and `data`, a text `"@alias"` (at any depth) stands for that
-actor's address, `#_scxml_<session>`, as core's conformance runner
-substitutes it (`tests/conformance/run_c.c`, `payload`). A step the host
+actor's address, `#_scxml_<session>` (`ta-conform`:
+`tinyactors-core/tools/conform/conform.c`, `conform_item_bytes`). A step the host
 refuses (a status other than `TA_OK`, or fewer events taken) ends the
 scenario as `fail`, and the implementation says why on standard error.
 
 ## The scenario environment
 
-What the world does around a scenario. It is what core's conformance
-runner does today (`tests/conformance/run_c.c`), and nothing more:
+What the world does around a scenario, and nothing more (`ta-conform`:
+`tinyactors-core/tools/conform/scenario.c`):
 
 - **The host:** config `{"systemID": "conformance", "system":
-  {"ticksPerSecond": 1000}}` (`run_c.c`, `host_config`), one datamodel, no
+  {"ticksPerSecond": 1000}}` (`config_write`), one datamodel, no
   I/O processors, no peers. The scenarios send only to actors of the same
   host (`#_scxml_<session>`, `#_parent`, `#_<invokeid>`).
 - **Time:** the monotonic clock starts at 0 and moves only with `advance`
-  steps; `wallNs` is 0 (`run_c.c`, `run_scenario`).
+  steps; `wallNs` is 0 (`step_advance`).
 - **After every step** the loop runs until the host is idle at the current
   time: `ta_host_run`, the effects handled as below and acknowledged, again
   until `TA_RUN_IDLE` with nothing left to answer, at most 1,000 times
-  (`run_c.c`, `settle`).
+  (`settle`).
 - **`WAKE`:** the actor's blob from the store, `ta_host_wake`
-  (`run_c.c`, `settle`; `tinyactors-core/docs/bindings.md` section 4).
+  (`wake`; `tinyactors-core/docs/bindings.md` section 4).
 - **`REQUEST`** (a `<invoke srcexpr>` the image did not resolve): its
   `auxiliary` with a leading `file://`, `file:` or `./` removed names a
   chart of the effect's segment's image; `ta_host_resume` with that chart's
   index + 1, or with `TA_ERROR_INVALID` when there is none, which the
-  invoking chart sees as `error.execution` (`run_c.c`, `answer_request`).
+  invoking chart sees as `error.execution` (`request_answer`).
 - **`JOB_DONE`** ends a `migrate` step.
 - **`LOG`** with the label `Outcome` decides the outcome: the first one,
   `pass` or anything else (`fail`), from any session, and the scenario
-  stops there, as for a W3C test (`tests/w3c/run_w3c.c`, `run_one`).
+  stops there, as for a W3C test (`conform_outcome`, `conform.c`).
   Other logs, `DONE` and `ERROR` are ignored.
 - **The outcome** is `compile` when a document does not compile, and
   `timeout` when the steps are done, the host is idle and no `Outcome` was
@@ -135,18 +150,24 @@ runner does today (`tests/conformance/run_c.c`), and nothing more:
 
 ## The W3C environment
 
-What `tinyactors-core/tests/w3c/run_w3c.c` does around a test:
+What the world does around a W3C test (`ta-conform`:
+`tinyactors-core/tools/conform/w3c.c`):
 
 - **The host:** `ticksPerSecond` 1000, `maxEvents` 1024, `maxActors` 64,
   one I/O processor: BasicHTTP (`basic_http.h`, `TA_BASIC_HTTP_TYPE`) at
-  `http://localhost:8080/scxml`, synchronous (`TA_IO_PROCESSOR_SYNC`).
-  The image holds the start document and its dependencies, and the start
-  chart is booted.
+  `http://localhost:8080/scxml`, synchronous (`"sync": true`,
+  `TA_IO_PROCESSOR_SYNC`). The image holds the start document and the
+  dependencies that are charts, and the start chart is booted
+  (`ta_host_boot`: `ta_compile_charts` makes the first chart the image's
+  boot actor).
 - **A `SEND` to that processor** is written as an HTTP POST
   (`ta_http_encode_post`) and, after the acknowledgement, read back
   (`ta_http_parse_request`) and delivered to the sender: the POST's event
   name, `origin` the location, `origintype` the BasicHTTP type, `raw` the
-  message, and `data` an object of its form fields, as text. A send that
+  message, and `data` an object of its form fields, as text. The fields
+  are those of the send's data when it is a map (each value as text:
+  text as it is, anything else in diagnostic notation), and its body is
+  the data when it is text (`<content>`). A send that
   cannot be written is answered with `TA_EVENT_IN_ERROR_COMMUNICATION`
   and its sendid.
 - **Time:** when the host is idle, the clock moves to its next deadline;

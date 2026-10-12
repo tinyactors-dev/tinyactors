@@ -16,13 +16,17 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   (`build/dev/lib`, `build/dev/bin`); `--release` builds `build/release`.
 - `mise run test` builds and runs every test program, then `lint`,
   `check:freestanding`, `api --check` (after `amalgamate`), `wasm:test`,
-  `w3c` and `check:wasm`; `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
+  `conform` and `check:wasm`; `--full` adds `torture:test` and `check:cross`. Each also runs on its own.
 - `mise run check:freestanding` must pass for any change under
   `src/{base,image,core,system}`; `mise run check:wasm` builds the tests for
   wasm32-wasi and runs them under wasmtime.
-- `mise run w3c` runs the W3C IRP suite (downloaded and converted on first
-  use, by `tinyactors-test`); every test not listed in
-  `../tinyactors-test/suites/w3c/skip.txt` must pass.
+- `mise run conform` runs the conformance suite (`../tinyactors-test`:
+  protocol vectors, scenarios, the W3C IRP suite) against `ta-conform`
+  (`tools/conform/`), core's reference implementation of the suite's
+  driver protocol: on quickjs in both realms, and W3C on the tests'
+  datamodel, but for the tests `tests/support/datamodel_test_w3c_skip.txt`
+  names. Every case must pass. A change to `docs/driver.md` changes
+  `ta-conform` in the same commit.
 - `mise run lint` runs every ast-grep rule in `tools/lint/rules/` over the
   C sources, after their tests in `tools/lint/tests/` (always invoke
   `ast-grep`, never `sg`, which is shadow-utils' group tool in orbs). A new

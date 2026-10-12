@@ -16,9 +16,8 @@ require 'platform_files'
 module Core
   ROOT = Pathname.new(__dir__).join('..').expand_path
   BUILD = ROOT.join('build')
-  # The protocol vectors and the W3C suite live in tinyactors-test; core's
-  # runners read them there until ta-conform replaces them (ROADMAP.md,
-  # step 8, M0).
+  # The conformance suite: `mise run conform` runs it against ta-conform
+  # (tools/conform), and test_datamodel_ecmascript reads its values.txt.
   SUITE = ROOT.join('../tinyactors-test').expand_path
 
   # A layer is a static archive, libtinyactors_<name>.a. `uses` are the
@@ -215,9 +214,6 @@ module Core
 
   # Programs that are built but run by their own tasks.
   TOOLS = [
-    # The W3C IRP runner (mise run w3c).
-    Program.new(name: 'run_w3c', sources: %w[tests/w3c/run_w3c.c], uses: %w[runtime test_datamodel basic_http] + ECMASCRIPT,
-                defines: {}),
     # The C reference implementation of the conformance suite's driver
     # protocol (../tinyactors-test/docs/driver.md); `mise run conform` runs
     # the suite against it.
@@ -355,15 +351,6 @@ module Core
       end
     end.each(&:join)
     raise failure if failure
-  end
-
-  # --- the conformance suite (tinyactors-test) ------------------------------
-
-  # The W3C IRP suite, instantiated for ECMAScript by tinyactors-test's w3c
-  # task (downloaded and converted once).
-  def w3c_suite
-    run('mise', 'run', '//tinyactors-test:w3c')
-    SUITE.join('build/w3c/ecma')
   end
 
   def run(*command, chdir: ROOT, env: {})

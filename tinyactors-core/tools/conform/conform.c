@@ -233,6 +233,12 @@ void conform_result_list(conform_result *result, const char *name, conform_bytes
     if (field) field->list = list;
 }
 
+const char *conform_outcome(const ta_host_effect *effect) {
+    if (effect->kind != TA_EFFECT_LOG || effect->auxiliary.length != 7 || memcmp(effect->auxiliary.pointer, "Outcome", 7))
+        return NULL;
+    return effect->event.length == 4 && !memcmp(effect->event.pointer, "pass", 4) ? "pass" : "fail";
+}
+
 /* ---- replies ------------------------------------------------------------------------ */
 
 /* What a reply holds: the call's id (TA_NIL: null), and a result or an

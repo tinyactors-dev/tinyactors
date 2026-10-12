@@ -143,6 +143,14 @@ class RunnerTest < Minitest::Test
     assert_includes out.string, 'skip w3c 145: a reason'
   end
 
+  def test_skip_files_add_to_the_suites_list
+    path = File.join(@directory, 'skip.txt')
+    File.write(path, "# a datamodel's own list\n\n145 a reason\n")
+    skipped = W3C.skipped(path)
+    assert_equal 'a reason', skipped['145']
+    assert_equal W3C.skipped.size + 1, skipped.size
+  end
+
   private
 
   # A vector file from cases written as lines; a hex line is written from

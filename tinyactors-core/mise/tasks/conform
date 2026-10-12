@@ -1,31 +1,39 @@
 #!/usr/bin/env ruby
-#MISE description="The conformance suite (tinyactors-test) against ta-conform, core's reference implementation of its driver protocol: the protocol vectors"
+#MISE description="The conformance suite (tinyactors-test) against ta-conform, core's reference implementation of its driver protocol: protocol vectors, scenarios and the W3C IRP suite, on quickjs in both realms and W3C on the tests' datamodel"
 #MISE depends=["build"]
 # vim:ft=ruby
 
 # Each run is `mise run //tinyactors-test:run -- <ta-conform> <options>`
-# (../tinyactors-test/README.md); every case of it must pass. The runs go
-# side by side; a run's report is printed when it fails, else its summary.
+# (../tinyactors-test/README.md); every case of it must pass. A run's
+# report is printed when it fails, else its summary.
 
 require_relative '../core'
 require 'open3'
 
 conform = Core.program_path('dev', 'ta-conform').to_s
+# - quickjs, auto realm: every suite;
+# - quickjs, isolated realms: scenarios and W3C;
+# - the tests' datamodel (tests/support/datamodel_test.c): W3C, but for
+#   the tests its skip list names with a reason (it implements a subset
+#   of ECMAScript); every other one must pass.
 runs = {
-  'protocol' => %w[--suite protocol]
+  'quickjs' => [],
+  'quickjs isolated' => %w[--suite scenarios --suite w3c --realm isolated],
+  'test datamodel' => ['--suite', 'w3c', '--datamodel', 'test',
+                       '--skip', Core::ROOT.join('tests/support/datamodel_test_w3c_skip.txt').to_s]
 }
 
+# One after another: the first converts the W3C suite and the scenarios
+# when they are new or stale (tinyactors-test/lib/w3c.rb), and each run
+# takes about a second.
 failed = []
-lock = Mutex.new
-Core.in_parallel(runs.to_a) do |name, options|
+runs.each do |name, options|
   output, status = Open3.capture2e('mise', 'run', '//tinyactors-test:run', '--', conform, *options,
                                    chdir: Core::ROOT.to_s)
-  lock.synchronize do
-    summary = output.lines.grep(/\A(protocol|scenarios|w3c): \d+ pass/).map(&:strip).join('; ')
-    next puts("ok   conform #{name}: #{summary}") if status.success?
+  summary = output.lines.grep(/\A(protocol|scenarios|w3c): \d+ pass/).map(&:strip).join('; ')
+  next puts("ok   conform #{name}: #{summary}") if status.success?
 
-    failed << name
-    puts "FAIL conform #{name} (#{options.join(' ')})", output.lines.reject { |line| line.start_with?('pass ') }.last(60).join
-  end
+  failed << name
+  puts "FAIL conform #{name} (#{options.join(' ')})", output.lines.reject { |line| line.start_with?('pass ') }.last(60).join
 end
-abort "tinyactors-core: the suite failed against ta-conform: #{failed.sort.join(', ')}" unless failed.empty?
+abort "tinyactors-core: the suite failed against ta-conform: #{failed.join(', ')}" unless failed.empty?

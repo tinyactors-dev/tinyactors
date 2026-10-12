@@ -1,0 +1,29 @@
+# W3C IRP tests the tests' datamodel (datamodel_test.c, an ECMAScript
+# subset) does not pass, one per line: <test id> <reason>. Core's
+# `mise run conform` runs the W3C suite on it with this list
+# (`--skip`); every other test must pass. Mandatory tests first.
+224 mandatory: function expressions, String() and slice in a condition
+330 mandatory: the `in` operator
+525 mandatory: method calls ([].concat)
+201 optional: BasicHTTP: _ioprocessors has no short names ('basichttp')
+444 optional: prefix ++ in a condition
+446 optional: instanceof, and JSON data read by src=""
+452 optional: `new` and constructor functions in <script>
+453 optional: function expressions
+456 optional: compound assignment (+=) in <script>
+460 optional: method calls ([].concat)
+509 optional: BasicHTTP: _ioprocessors['basichttp'], and method calls (_event.raw.search)
+510 optional: BasicHTTP: _ioprocessors['basichttp']
+518 optional: BasicHTTP: _ioprocessors['basichttp'], and regular expressions
+519 optional: BasicHTTP: _ioprocessors['basichttp'], and method calls (_event.raw.search)
+520 optional: BasicHTTP: _ioprocessors['basichttp'], and regular expressions
+522 optional: BasicHTTP: _ioprocessors['basichttp']
+531 optional: BasicHTTP: _ioprocessors['basichttp']
+532 optional: BasicHTTP: _ioprocessors['basichttp']
+534 optional: BasicHTTP: _ioprocessors['basichttp'], and method calls (_event.raw.search)
+557 optional: XML DOM data (getElementsByTagName)
+558 optional: text data that is not an expression
+561 optional: XML DOM data (getElementsByTagName)
+562 optional: text content that is not an expression, as _event.data
+567 optional: BasicHTTP: _ioprocessors['basichttp'], and no from_wire for event data
+569 optional: _ioprocessors has no short names ('scxml')

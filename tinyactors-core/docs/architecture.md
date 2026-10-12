@@ -812,7 +812,7 @@ All six layers are implemented (`src/{base,image,core,system,compile,runtime}`)
 and tested (`mise run test`). With the quickjs-ng ECMAScript datamodel
 (`src/datamodel_ecmascript`) **all 191 automatic W3C IRP tests pass** — 158
 mandatory and 33 optional, including BasicHTTP via `src/basic_http` and a
-loopback host (`mise run w3c`). Where the implementation differs
+loopback host (`ta-conform`'s `w3c.run`, `tools/conform/w3c.c`; `mise run conform`). Where the implementation differs
 from the sections above, this list is authoritative:
 
 | Topic | As built |

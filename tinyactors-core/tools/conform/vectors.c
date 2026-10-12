@@ -124,7 +124,8 @@ static void image_add(conform *state, conform_call *call, conform_result *result
     }
     conform_image *image = &vectors->images[vectors->image_count];
     uint32_t segment = 0;
-    ta_status status = conform_image_compile(&(conform_documents){sources.items, sources.count}, image);
+    ta_status status = conform_image_compile(
+        &(conform_documents){{sources.items, sources.count}, {sources.items, sources.count}}, image);
     if (status == TA_OK) {
         vectors->image_count++;
         status = ta_host_add_image(vectors->host, &image->image, &segment);

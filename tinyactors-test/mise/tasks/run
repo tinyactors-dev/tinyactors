@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Run the suites against an implementation: run -- <command…> [--suite protocol|scenarios|w3c]… [--datamodel quickjs|native] [--realm auto|isolated] [--language ecmascript] [--timeout <s>]"
+#MISE description="Run the suites against an implementation: run -- <command…> [--suite protocol|scenarios|w3c]… [--datamodel quickjs|native|<name>] [--realm auto|isolated] [--language ecmascript] [--skip <file>]… [--timeout <s>]"
 # vim:ft=ruby
 
 # The command is every argument that is not one of the options below, or
@@ -7,15 +7,17 @@
 # from, and speaks docs/driver.md on its standard input and output. The
 # suites are protocol (suites/protocol), scenarios (suites/scenarios) and
 # w3c (the W3C IRP suite, fetched and converted on first use); without
-# --suite, all three. Exit status 1 when a case fails.
+# --suite, all three. --skip names a file of W3C test ids with reasons, in
+# the format of suites/w3c/skip.txt, skipped besides that list. Exit
+# status 1 when a case fails.
 
 require_relative '../../lib/runner'
 
-OPTIONS = %w[--suite --datamodel --realm --language --timeout].freeze
+OPTIONS = %w[--suite --datamodel --realm --language --skip --timeout].freeze
 
 def usage(message)
   abort "run: #{message}\nusage: mise run //tinyactors-test:run -- <command…> [--suite protocol|scenarios|w3c]… " \
-        '[--datamodel quickjs|native] [--realm auto|isolated] [--language ecmascript] [--timeout <s>]'
+        '[--datamodel quickjs|native|<name>] [--realm auto|isolated] [--language ecmascript] [--skip <file>]… [--timeout <s>]'
 end
 
 arguments = ARGV.dup
@@ -38,10 +40,13 @@ suites = options['--suite'].empty? ? Runner::SUITES : options['--suite']
 unknown = suites - Runner::SUITES
 usage("no suite #{unknown.join(', ')}") unless unknown.empty?
 
+cwd = ENV.fetch('MISE_ORIGINAL_CWD', Dir.pwd)
+skip = options['--skip'].empty? ? nil : W3C.skipped(*options['--skip'].map { |path| File.expand_path(path, cwd) })
 runner = Runner.new(command,
                     datamodel: options['--datamodel'].last || 'quickjs',
                     realm: options['--realm'].last,
                     language: options['--language'].last || 'ecmascript',
                     timeout: Integer(options['--timeout'].last || 60),
-                    chdir: ENV.fetch('MISE_ORIGINAL_CWD', Dir.pwd))
+                    skip: skip,
+                    chdir: cwd)
 exit(runner.run(suites) ? 0 : 1)

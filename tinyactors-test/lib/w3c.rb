@@ -23,8 +23,10 @@ module W3C
 
   module_function
 
+  # Converted again when convert.py is newer than the index it wrote.
   def suite
-    return CONVERTED if CONVERTED.join('index.txt').file?
+    index = CONVERTED.join('index.txt')
+    return CONVERTED if index.file? && index.mtime >= ROOT.join('suites/w3c/convert.py').mtime
 
     fetch
     convert(IRP.to_s, CONVERTED.to_s)
@@ -84,7 +86,7 @@ module W3C
   end
 
   # One test of index.txt: its id, conformance, start document and
-  # dependencies.
+  # dependencies (charts, and the files a src="" reads).
   Test = Struct.new(:id, :conformance, :start, :dependencies)
 
   def tests(directory = suite)
@@ -94,9 +96,13 @@ module W3C
     end
   end
 
-  # The ids skip.txt lists, with their reasons.
-  def skipped
-    SKIP.readlines(chomp: true).reject { |line| line.start_with?('#') || line.strip.empty? }
-        .to_h { |line| line.split(' ', 2) }
+  # The ids skip.txt lists, with their reasons, and those of the files
+  # given (the run task's --skip: an implementation's own list, in the same
+  # format, such as a datamodel that implements less).
+  def skipped(*files)
+    [SKIP, *files].each_with_object({}) do |path, ids|
+      Pathname.new(path).readlines(chomp: true).reject { |line| line.start_with?('#') || line.strip.empty? }
+              .each { |line| ids.store(*line.split(' ', 2)) }
+    end
   end
 end

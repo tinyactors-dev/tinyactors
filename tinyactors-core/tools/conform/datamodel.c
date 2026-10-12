@@ -121,13 +121,35 @@ ta_host_environment conform_datamodel_environment(const conform_datamodel *datam
 
 /* ---- images ------------------------------------------------------------------------ */
 
+/* A src="" of a chart: the document of that name (ta_resolve_function). */
+static ta_status document_resolve(void *context, const ta_resolve_request *request, ta_source *out) {
+    const ta_source_list *files = (const ta_source_list *)context;
+    ta_string_view name = request->source;
+    static const char *const prefixes[] = {"file://", "file:", "./"};
+    for (size_t i = 0; i < sizeof prefixes / sizeof prefixes[0]; i++) {
+        size_t length = strlen(prefixes[i]);
+        if (name.length > length && !memcmp(name.pointer, prefixes[i], length)) {
+            name.pointer += length;
+            name.length -= (uint32_t)length;
+        }
+    }
+    for (uint32_t i = 0; i < files->count; i++)
+        if (files->pointer[i].name.length == name.length && !memcmp(files->pointer[i].name.pointer, name.pointer, name.length)) {
+            *out = files->pointer[i];
+            return TA_OK;
+        }
+    return TA_ERROR_INVALID;
+}
+
 ta_status conform_image_compile(const conform_documents *documents, conform_image *out) {
     memset(out, 0, sizeof *out);
     ta_compile_options options;
     memset(&options, 0, sizeof options);
     options.size = sizeof options;
+    options.resolve = document_resolve;
+    options.resolve_context = (void *)&documents->files;
     ta_compile_result *result = NULL;
-    ta_status status = ta_compile_charts(&options, (ta_source_list){documents->pointer, documents->count}, &result);
+    ta_status status = ta_compile_charts(&options, documents->charts, &result);
     if (status != TA_OK) {
         const ta_diagnostic *diagnostics;
         uint32_t count = result ? ta_compile_diagnostics(result, &diagnostics) : 0;

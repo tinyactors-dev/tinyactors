@@ -121,6 +121,11 @@ implementation of that layer). Layer dependency rules are in
 │   └── datamodel_cgen/        ◻ "C switch" datamodel: expressions compiled to C
 │
 ├── tools/
+│   ├── conform/               ✅ ta-conform: the C reference implementation of the conformance
+│   │                             suite's driver protocol (../tinyactors-test/docs/driver.md):
+│   │                             frames and replies (conform.c), datamodels and images
+│   │                             (datamodel.c), the vector methods (vectors.c), scenario.run
+│   │                             (scenario.c), w3c.run with a BasicHTTP loopback (w3c.c)
 │   ├── lint/rules/            ✅ ast-grep rules (no-retired-abbreviations: the naming lint)
 │   ├── torture/               ✅ torture-bench: scenario host (bench.c: systems, router, the
 │   │   │                         test runtime's `system` I/O processor, scenario switching),
@@ -137,15 +142,14 @@ implementation of that layer). Layer dependency rules are in
 │
 ├── tests/
 │   ├── harness/harness.h      ✅ dependency-free test macros
-│   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel), compile/system/file helpers, payloads as text
+│   ├── support/               ✅ datamodel_test (ECMAScript-subset test datamodel) and the W3C tests it
+│   │                             does not pass (datamodel_test_w3c_skip.txt), compile/system/file
+│   │                             helpers, payloads as text
 │   ├── unit/                  ✅ test_{base,image,compile,compile_scale,core,system,scenarios,runtime,e2e,
 │   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,cbor,headers,
 │   │                             trace,journal,tracing,otlp};
 │   │                             test_torture_loop; test_durable:
 │   │                             every path out of memory vs. a run that never left it (durability.md)
-│   ├── w3c/run_w3c.c          ✅ IRP runner + BasicHTTP loopback host; with the ECMAScript datamodel
-│   │                             all 191 tests pass; the suite, its conversion and skip.txt are in
-│   │                             ../tinyactors-test/suites/w3c
 │   ├── conformance/           ✅ host conformance: JSON scenarios (spawn, send, sendMany, timers,
 │   │                             hibernate, snapshot/restore, reload/migrate, requests) run by
 │   │                             run_c.c (C host), the `conformance` program of `mise run test`
@@ -185,7 +189,7 @@ implementation of that layer). Layer dependency rules are in
 | `mise run check:freestanding` | *test* · prove `base/image/core/system/basic_http` compile and link with no libc for 4 targets |
 | `mise run amalgamate` | *test* · `dist/<library>.{h,c}` and `dist/<library>_<platform>.c` for `tinyactors` and `tinyactors_runtime`, each compiled on its own |
 | `mise run api [--check]` | *test* · `include/<library>.api.json`, the API descriptions the release and the changelog read |
-| `mise run w3c` | *test* · W3C IRP with the test datamodel (153 mandatory passes at least) and with quickjs-ng in both realm modes: everything not in `../tinyactors-test/suites/w3c/skip.txt` must pass |
+| `mise run conform` | *test* · the conformance suite (`../tinyactors-test`: protocol vectors, scenarios, W3C IRP) against `ta-conform`: on quickjs-ng in both realm modes, and W3C on the test datamodel but for the tests `tests/support/datamodel_test_w3c_skip.txt` names; every case must pass |
 | `mise run check:wasm` | *test* · the test programs built for wasm32-wasi, run under wasmtime |
 | `mise run torture:test` | *full* · every torture scenario headless, plus the dashboard server test |
 | `mise run check:cross` | *full* · every layer, test program and tool cross-compiled for each native release target (macOS included) |

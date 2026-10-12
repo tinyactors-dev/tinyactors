@@ -32,8 +32,9 @@ length-prefixed CBOR calls and replies in JSON-RPC 2.0's shape. Options:
 | Option | Default | |
 |---|---|---|
 | `--suite protocol\|scenarios\|w3c` | all three | repeat it for several |
-| `--datamodel quickjs\|native` | `quickjs` | the datamodel scenarios, W3C tests and `values.txt` run on |
+| `--datamodel quickjs\|native\|<name>` | `quickjs` | the datamodel scenarios, W3C tests and `values.txt` run on; an implementation may offer others by name (`ta-conform`: `test`, core's tests' datamodel) |
 | `--realm auto\|isolated` | the implementation's | quickjs only |
+| `--skip <file>` | none | W3C test ids with reasons (the format of `suites/w3c/skip.txt`) skipped besides that list: what a datamodel that implements less cannot pass; repeat it for several |
 | `--language ecmascript` | `ecmascript` | the W3C stylesheet the scenarios are converted with; others join with their stylesheet |
 | `--timeout <s>` | 60 | how long one reply may take before the command counts as hung |
 
@@ -43,8 +44,8 @@ command answers -32601 to, once per method). A crash or a hang fails that
 case; the runner starts the command again and goes on. The exit status is
 1 when any case fails.
 
-The W3C suite is downloaded once into `build/w3c/` (`mise run w3c`), and
-the scenarios are converted into `build/scenarios/<language>/` when a
+The W3C suite is downloaded once into `build/w3c/` (`mise run w3c`) and
+converted again when `convert.py` changes, and the scenarios are converted into `build/scenarios/<language>/` when a
 template changed. Both conversions need the pinned `uv` (`mise.toml`) for
 SaxonC: the W3C stylesheets are XSLT 2.0.
 

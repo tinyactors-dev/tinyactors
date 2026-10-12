@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyactors-core: every test program under AddressSanitizer and UBSan, the W3C IRP suite, and the freestanding and wasm builds; --full adds every torture scenario and the cross builds"
+#MISE description="Test tinyactors-core: every test program under AddressSanitizer and UBSan, the conformance suite (protocol vectors, scenarios, W3C IRP) against ta-conform, and the freestanding and wasm builds; --full adds every torture scenario and the cross builds"
 #USAGE flag "--full" help="Also run every torture scenario, the test programs' exhaustive modes, and cross-compile for each release target"
 #MISE sources=["include/**/*", "src/**/*", "tests/**/*", "third_party/**/*", "tools/**/*", "web/**/*", "sgconfig.yml", "mise/**/*", "mise.toml", "../mise/lib/**/*", "../mise.toml", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml"]
 #MISE outputs={auto=true}
@@ -44,6 +44,6 @@ puts "tinyactors-core: #{runs.size} test programs pass"
 # API description no longer matches its library; `wasm:test` builds and
 # tests the release's wasm modules; `conform` runs the conformance suite
 # (tinyactors-test) against ta-conform.
-tasks = [%w[lint], %w[check:freestanding], %w[api --check], %w[wasm:test], %w[conform], %w[w3c], %w[check:wasm]]
+tasks = [%w[lint], %w[check:freestanding], %w[api --check], %w[wasm:test], %w[conform], %w[check:wasm]]
 tasks += [%w[torture:test], %w[check:cross]] if full
 tasks.each { |task| Core.run('mise', 'run', *task) }

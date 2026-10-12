@@ -43,7 +43,9 @@ system (freestanding: no libc/malloc/OS, checked for wasm32, x86_64,
 Cortex-M and RISC-V), compile and runtime (`libtinyactors_<layer>.a`); plus the ECMAScript
 datamodel on quickjs-ng (`ta_datamodel_ecmascript`, linked like a tree-sitter
 language) and a BasicHTTP codec (`tinyactors/basic_http.h`). All 191 automatic W3C
-SCXML IRP tests pass (`mise run w3c`). There is no language binding until
+SCXML IRP tests pass, run by the conformance suite
+([`tinyactors-test`](../tinyactors-test)) against `ta-conform`, core's
+reference implementation of its driver (`tools/conform`, `mise run conform`). There is no language binding until
 [ADR 0009](../docs/adr/0009-one-host-two-queues.md) regenerates them over
 `ta_host`. The
 [torture chamber](tools/torture) (`mise run torture`, `mise run torture:test`) runs
