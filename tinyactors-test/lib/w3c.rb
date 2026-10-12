@@ -133,12 +133,21 @@ module W3C
           scenarios(language).to_s, setups(language).to_s, *skips)
   end
 
-  # Runs a script of suites/w3c with SaxonC, under the pinned uv.
+  # Runs a script of suites/w3c with SaxonC, under the pinned uv and the
+  # pinned python of mise.toml. Without --python, uv takes the newest
+  # interpreter it manages, which can be a free-threaded build installed
+  # for another project's tests.
   def saxon(script, *arguments)
-    pid = Process.spawn('uv', 'run', '--quiet', '--with', 'saxonche', 'python', script.to_s, *arguments,
-                        chdir: ROOT.to_s)
+    pid = Process.spawn('uv', 'run', '--quiet', '--python', pinned_python, '--with', 'saxonche',
+                        'python', script.to_s, *arguments, chdir: ROOT.to_s)
     _pid, status = Process.wait2(pid)
     status.success?
+  end
+
+  # The python version mise.toml pins for this project.
+  def pinned_python
+    ROOT.join('mise.toml').read[/^python\s*=\s*"([^"]+)"/, 1] or
+      raise 'tinyactors-test/mise.toml pins no python'
   end
 
   # One test of index.txt: its id, conformance, start document and
