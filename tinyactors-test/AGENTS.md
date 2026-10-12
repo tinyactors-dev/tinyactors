@@ -35,6 +35,13 @@ Commits on `main`. Commits here use the scope `test`.
   check and which test covers them. A scenario must fail when what it
   checks is broken: try a mutation (other params, a step left out) before
   committing.
+- **Every vector file and scenario is in a milestone**
+  (`suites/milestones.txt`): a new one gets a line there in the change
+  that adds it, in the milestone whose gate it belongs to (ROADMAP.md,
+  step 8); `test/milestones_test.rb` fails on one in no milestone. A
+  binding runs its milestone's set (`--milestone`), so a case added to an
+  earlier milestone than the bindings have reached holds them to it at
+  once: say so to the binding sessions.
 - **A W3C test** is skipped only with a reason in `suites/w3c/skip.txt`,
   or, when one language's stylesheet cannot translate it, in that
   language's `suites/w3c/skip-<language>.txt`.

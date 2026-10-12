@@ -2,6 +2,7 @@
 
 require 'pathname'
 require_relative 'driver'
+require_relative 'milestones'
 require_relative 'scenarios'
 require_relative 'vectors'
 require_relative 'w3c'
@@ -59,9 +60,12 @@ class Runner
   # conversion (default: converted now for the datamodel's language);
   # `w3c`: the converted W3C suite and `setups` the setups' templates
   # (default: likewise); `skip`: files of W3C test ids and reasons skipped
-  # besides suites/w3c/skip.txt and the language's skip list.
+  # besides suites/w3c/skip.txt and the language's skip list; `only`: a
+  # Milestones::Selection, the vector files and scenarios a milestone runs
+  # (default: all of them).
   def initialize(command, datamodel: 'quickjs', realm: nil, kind: 'binding', timeout: 60, out: $stdout, chdir: Dir.pwd,
-                 protocol: PROTOCOL, scenarios: Scenarios::ROOT, documents: nil, w3c: nil, setups: nil, skip: [])
+                 protocol: PROTOCOL, scenarios: Scenarios::ROOT, documents: nil, w3c: nil, setups: nil, skip: [],
+                 only: nil)
     raise ArgumentError, "kind #{kind.inspect}: #{REQUIRED.keys.join(' or ')}" unless REQUIRED.key?(kind)
 
     @driver = Driver.new(command, timeout: timeout, chdir: chdir)
@@ -75,6 +79,7 @@ class Runner
     @w3c = w3c
     @setups = setups
     @skip = skip
+    @only = only
     @unsupported = []
     @results = []
   end
@@ -123,6 +128,7 @@ class Runner
     %w[requests config envelopes values].each do |kind|
       path = @protocol.join("#{kind}.txt")
       next unless path.file?
+      next if @only && !@only.protocol.include?(kind)
 
       Vectors.read(path).each do |vector|
         run_case('protocol', vector.to_s) { send("#{kind}_case", vector) }
@@ -255,6 +261,8 @@ class Runner
     language = language('scenarios') or return
     directory = Pathname.new(@documents || W3C.scenarios(language))
     Scenarios.all(@scenarios).each do |scenario|
+      next if @only && !@only.scenarios.include?(scenario.name)
+
       run_case('scenarios', scenario.name) do
         documents = scenario.documents.map do |name|
           { 'name' => "#{name}.scxml", 'text' => directory.join(scenario.name, "#{name}.scxml").read }

@@ -25,6 +25,7 @@ describes, and answers the outcome.
     mise run //tinyactors-test:run -- <command…> --suite protocol --suite scenarios
     mise run //tinyactors-test:run -- <command…> --datamodel native
     mise run //tinyactors-test:run -- <command…> --kind reference
+    mise run //tinyactors-test:run -- <command…> --milestone M1
 
 The command runs in the directory you call mise from, and speaks the
 [driver protocol](docs/driver.md) on its standard input and output:
@@ -32,6 +33,7 @@ length-prefixed CBOR calls and replies in JSON-RPC 2.0's shape. Options:
 
 | Option                                | Default              |                                                                                                                                                                     |
 | ------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--milestone M1\|…\|M5`               | every case           | the set of one milestone of the bindings' plan ([`suites/milestones.txt`](suites/milestones.txt)): its vector files, scenarios and suites and those of the milestones before it; `--suite` narrows it |
 | `--suite protocol\|scenarios\|w3c`    | all three            | repeat it for several                                                                                                                                               |
 | `--datamodel quickjs\|native\|<name>` | `quickjs`            | the datamodel scenarios, W3C tests and `values.txt` run on; an implementation may offer others by name (`ta-conform`: `test`, core's tests' datamodel)              |
 | `--realm auto\|isolated`              | the implementation's | quickjs only                                                                                                                                                        |
@@ -51,6 +53,11 @@ case; the runner starts the command again and goes on. The exit status is
 1 when any case fails, and when the run proves nothing: a suite that
 passed no case, or a method the command's kind must offer that it did not
 ([docs/driver.md](docs/driver.md), "Kinds").
+
+A binding's `test` task runs the set of the milestone it is working on
+(`--milestone M1`), named once in its `conform` task, and moves it on
+when the milestone is done; `ta-conform` runs everything. Every vector
+file and scenario is in some milestone (`test/milestones_test.rb`).
 
 The W3C suite is in git (`suites/w3c/irp`, from w3.org under W3C's
 3-clause BSD license: `SOURCE`, `LICENSE`). It is converted into
@@ -117,6 +124,7 @@ but for the values meant to be invalid (`conf:illegalItem`,
 
 ```
 docs/driver.md          the protocol a conforming command speaks
+suites/milestones.txt   the cases each milestone of the bindings' plan runs (--milestone)
 suites/protocol/        vectors, and setups/ (the charts of their setups; echo.txml in the
                         conf: notation, converted per language)
 suites/scenarios/       <name>/<document>.txml and steps.txt
@@ -126,7 +134,8 @@ suites/w3c/             convert.py (both conversions), check.py (check-languages
 suites/w3c/irp/         the W3C IRP suite (vendored): manifest.xml, <id>/*.txml,
                         confEcma.xsl, confXPath.xsl, SOURCE, LICENSE
 lib/                    the runner: driver.rb (process, frames), runner.rb (suites, report),
-                        vectors.rb, scenarios.rb, cbor.rb, w3c.rb (stylesheets, convert)
+                        vectors.rb, scenarios.rb, cbor.rb, w3c.rb (stylesheets, convert),
+                        milestones.rb (--milestone)
 lint/                   the adapters' lint: sgconfig.yml, rules/ (ast-grep), tests/
 mise/tasks/             run, test, encode, w3c, check-languages, lint
 test/                   the runner's tests and fake_implementation.rb

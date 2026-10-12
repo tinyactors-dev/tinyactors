@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Run the suites against an implementation: run -- <command…> [--suite protocol|scenarios|w3c]… [--datamodel quickjs|native|<name>] [--realm auto|isolated] [--kind binding|reference] [--skip <file>]… [--timeout <s>]"
+#MISE description="Run the suites against an implementation: run -- <command…> [--milestone M1|M2|…] [--suite protocol|scenarios|w3c]… [--datamodel quickjs|native|<name>] [--realm auto|isolated] [--kind binding|reference] [--skip <file>]… [--timeout <s>]"
 # vim:ft=ruby
 
 # The command is every argument that is not one of the options below, or
@@ -7,6 +7,11 @@
 # from, and speaks docs/driver.md on its standard input and output. The
 # suites are protocol (suites/protocol), scenarios (suites/scenarios) and
 # w3c (the W3C IRP suite in suites/w3c/irp); without --suite, all three.
+# --milestone runs the set of one milestone of the bindings' plan
+# (suites/milestones.txt: its vector files, scenarios and suites, and those
+# of the milestones before it); --suite then narrows it, and naming a suite
+# the milestone does not run is an error. Without --milestone, every case
+# runs.
 # The scenarios and the W3C suite are converted for the language of the
 # datamodel host.create reports (docs/driver.md, "Datamodels"). --kind says
 # which methods the command must offer (docs/driver.md, "Kinds"): binding
@@ -18,10 +23,11 @@
 
 require_relative '../../lib/runner'
 
-OPTIONS = %w[--suite --datamodel --realm --kind --skip --timeout].freeze
+OPTIONS = %w[--milestone --suite --datamodel --realm --kind --skip --timeout].freeze
 
 def usage(message)
-  abort "run: #{message}\nusage: mise run //tinyactors-test:run -- <command…> [--suite protocol|scenarios|w3c]… " \
+  abort "run: #{message}\nusage: mise run //tinyactors-test:run -- <command…> [--milestone M1|M2|…] " \
+        '[--suite protocol|scenarios|w3c]… ' \
         '[--datamodel quickjs|native|<name>] [--realm auto|isolated] [--kind binding|reference] [--skip <file>]… [--timeout <s>]'
 end
 
@@ -45,6 +51,19 @@ suites = options['--suite'].empty? ? Runner::SUITES : options['--suite']
 unknown = suites - Runner::SUITES
 usage("no suite #{unknown.join(', ')}") unless unknown.empty?
 
+only = nil
+if (milestone = options['--milestone'].last)
+  begin
+    only = Milestones.select(milestone)
+  rescue Milestones::Error => e
+    usage(e.message)
+  end
+  outside = suites - only.suites
+  usage("#{milestone} does not run #{outside.join(', ')}") unless options['--suite'].empty? || outside.empty?
+  suites = options['--suite'].empty? ? only.suites : suites
+  puts "run: milestone #{only}"
+end
+
 kind = options['--kind'].last || 'binding'
 usage("no kind #{kind}") unless Runner::REQUIRED.key?(kind)
 
@@ -55,5 +74,6 @@ runner = Runner.new(command,
                     kind: kind,
                     timeout: Integer(options['--timeout'].last || 60),
                     skip: options['--skip'].map { |path| File.expand_path(path, cwd) },
-                    chdir: cwd)
+                    chdir: cwd,
+                    only: only)
 exit(runner.run(suites) ? 0 : 1)
