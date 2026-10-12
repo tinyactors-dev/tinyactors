@@ -288,6 +288,7 @@ typedef struct {
     bool fault;
     text out;
     uint64_t fuel;
+    uint64_t pauses;    /* the hash of the fuel used at each pause */
 } ran;
 
 typedef struct {
@@ -295,22 +296,24 @@ typedef struct {
     sjs_program *program;
     bool loops;         /* every match a loop frame */
     uint64_t fuel;      /* per sjs_vm_run */
+    bool no_dfa;        /* every match by the automaton, not a test's cache of its steps */
 } runner;
 
 static void run(const runner *r, const text *s, ran *out) {
     out->out.length = 0;
     out->fault = false;
     sjs_vm *vm;
-    sjs_vm_config config = { r->context, r->loops };
+    sjs_vm_config config = { r->context, r->loops, r->no_dfa };
     if (sjs_vm_init(&vm, &config) != SJS_OK) abort();
     sjs_value global;
     if (sjs_string_new(r->context, (sjs_str){ s->ptr == NULL ? "" : s->ptr, (uint32_t)s->length }, &global) != SJS_OK) abort();
     sjs_run_params params = { r->program, &global, 1 };
     if (sjs_vm_start(vm, &params) != SJS_OK) abort();
     sjs_run state;
-    do {
-        state = sjs_vm_run(vm, r->fuel);
-    } while (state == SJS_RUN_PAUSED);
+    out->pauses = 14695981039346656037ull;
+    while ((state = sjs_vm_run(vm, r->fuel)) == SJS_RUN_PAUSED) {
+        out->pauses = (out->pauses ^ sjs_vm_fuel_used(vm)) * 1099511628211ull;
+    }
     if (state == SJS_RUN_DONE) {
         sjs_value result;
         if (sjs_vm_take_result(vm, &result) != SJS_OK || result.kind != SJS_STRING) abort();
@@ -354,10 +357,11 @@ static void match_inputs(sjs_context *context, const text *pat, const text *flag
     ran leaf = { 0 };
     ran loops = { 0 };
     ran paused = { 0 };
+    ran uncached = { 0 };
     for (int k = 0; k < 3; k++) {
         s.length = 0;
         input(&s);
-        run(&(runner){ context, program, false, UINT64_MAX }, &s, &leaf);
+        run(&(runner){ context, program, false, UINT64_MAX, false }, &s, &leaf);
         if (print) {
             line.length = 0;
             put(&line, "X ");
@@ -372,14 +376,21 @@ static void match_inputs(sjs_context *context, const text *pat, const text *flag
             puts(line.ptr);
             continue;
         }
-        run(&(runner){ context, program, true, UINT64_MAX }, &s, &loops);
-        run(&(runner){ context, program, true, 1 }, &s, &paused);
+        run(&(runner){ context, program, true, UINT64_MAX, false }, &s, &loops);
+        run(&(runner){ context, program, true, 1, false }, &s, &paused);
+        run(&(runner){ context, program, true, 1, true }, &s, &uncached);
         bool same = leaf.out.length == loops.out.length && memcmp(leaf.out.ptr, loops.out.ptr, leaf.out.length) == 0 &&
-                    leaf.out.length == paused.out.length && memcmp(leaf.out.ptr, paused.out.ptr, leaf.out.length) == 0;
-        if ((!same || leaf.fuel != loops.fuel) && failures++ < 20) {
-            fprintf(stderr, "regex_test: %s on %s\n  leaf:   %s (fuel %llu)\n  loops:  %s (fuel %llu)\n  paused: %s\n", source.ptr,
-                    s.ptr == NULL ? "" : s.ptr, leaf.out.ptr, (unsigned long long)leaf.fuel, loops.out.ptr,
-                    (unsigned long long)loops.fuel, paused.out.ptr);
+                    leaf.out.length == paused.out.length && memcmp(leaf.out.ptr, paused.out.ptr, leaf.out.length) == 0 &&
+                    leaf.out.length == uncached.out.length && memcmp(leaf.out.ptr, uncached.out.ptr, leaf.out.length) == 0;
+        /* Paused after each unit, a test's cache of the automaton's steps
+         * pauses where the automaton does. */
+        bool fuel = leaf.fuel == loops.fuel && leaf.fuel == paused.fuel && leaf.fuel == uncached.fuel && paused.pauses == uncached.pauses;
+        if ((!same || !fuel) && failures++ < 20) {
+            fprintf(stderr, "regex_test: %s on %s\n  leaf:     %s (fuel %llu)\n  loops:    %s (fuel %llu)\n  paused:   %s (fuel %llu)\n"
+                    "  uncached: %s (fuel %llu, %s pauses)\n", source.ptr, s.ptr == NULL ? "" : s.ptr, leaf.out.ptr,
+                    (unsigned long long)leaf.fuel, loops.out.ptr, (unsigned long long)loops.fuel, paused.out.ptr,
+                    (unsigned long long)paused.fuel, uncached.out.ptr, (unsigned long long)uncached.fuel,
+                    paused.pauses == uncached.pauses ? "the same" : "other");
         }
     }
     sjs_program_release(program);
@@ -389,6 +400,7 @@ static void match_inputs(sjs_context *context, const text *pat, const text *flag
     free(leaf.out.ptr);
     free(loops.out.ptr);
     free(paused.out.ptr);
+    free(uncached.out.ptr);
 }
 
 static void check(long count, bool print) {

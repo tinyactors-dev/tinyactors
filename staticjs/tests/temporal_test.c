@@ -1685,7 +1685,7 @@ int main(int argc, char **argv) {
     r.print = argc == 2 && strcmp(argv[1], "--print") == 0;
     sjs_context_config config = { { NULL, &counted_vtable }, SJS_LIMITS_DEFAULT };
     if (sjs_context_init(&r.context, &config) != SJS_OK) abort();
-    if (sjs_vm_init(&r.vm, &(sjs_vm_config){ r.context, false }) != SJS_OK) abort();
+    if (sjs_vm_init(&r.vm, &(sjs_vm_config){ r.context, false, false }) != SJS_OK) abort();
     iso_strings(&r, "Temporal.PlainDate.from");
     iso_strings(&r, "Temporal.PlainTime.from");
     iso_strings(&r, "Temporal.PlainDateTime.from");

@@ -115,10 +115,12 @@ struct sjs_vm {
      * against the key, so instructions of other programs that share a slot
      * cost a scan and nothing else. */
     uint32_t member_guess[VM_MEMBER_GUESSES];
-    /* Regular expressions: every match runs as a loop frame (a test's
-     * switch, sjs_vm_config), and the state of one short enough to run
+    /* Regular expressions: every match runs as a loop frame, and every
+     * test by the automaton alone, without the cache of its steps (tests'
+     * switches, sjs_vm_config); and the state of one short enough to run
      * whole as a leaf (regex_match.c). */
     bool no_regex_leaf;
+    bool no_regex_dfa;
     uint64_t regex_leaf[SJS_REGEX_LEAF_WORDS / 2u];  /* aligned for the job's pointers */
     /* The host clock (sjs_vm_set_clock): what Temporal.Now reads, valid
      * when clock_set. */
