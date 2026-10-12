@@ -21,7 +21,7 @@ A built-in is one of two kinds, and the choice decides most of its cost.
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
-- **A loop** calls a callback: `map`, `filter`, `reduce`, `some`, `every`,
+- **A loop** calls a callback: `map`, `filter`, `reduce`, `reduceRight`, `some`, `every`,
   `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted`, `Object.groupBy`, `Array.from` (with a mapper), `Map.groupBy`, a map's
   or a set's `forEach`, an iterator's `map`, `filter`, `reduce`, `some`, `every`,
   `find` and `flatMap` (which run as the array's loops of their names over
@@ -269,7 +269,8 @@ x.key` is SUM_KEY. A loop built-in may run such a callback in C, as `map`
 does with PLUCK (so do `Object.groupBy`, `Array.from` and `Map.groupBy`, and an iterator's `map`, which runs as map), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC (and so `sort`, which is its loop: docs/mutation.md),
 `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `some` and `every` with
 KEY_COMPARE and ELEMENT_COMPARE (and an iterator's `filter`, `find`,
-`some` and `every`, which run as those), and `reduce` with SUM and SUM_KEY (an iterator's too)
+`some` and `every`, which run as those), and `reduce` with SUM and SUM_KEY (an iterator's too, but not `reduceRight`,
+which adds from the last element: another order, another floating-point sum)
 (`pluck_step`, `sort_by_key`, `sort_numbers`, `predicate_step` and
 `sum_step` in `src/builtins.c`). The tag only
 says what the bytecode computes; the bytecode is still there, and the C

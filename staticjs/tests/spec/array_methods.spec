@@ -116,3 +116,113 @@ Array.from([1], 5)
 === findLastIndex with no predicate
 [1].findLastIndex()
 --- fault
+
+# reduceRight: reduce from the last element to the first, values from Node 22.
+# No shape's C path runs it (SUM adds from the first element), but the
+# matcher tags the callbacks all the same, so @shapes names their tags.
+
+=== reduceRight with an initial value
+@shapes SUM(false)
+[1, 2, 3, 4].reduceRight((a, x) => a + x, 0)
+--- value
+10
+
+=== reduceRight concatenates strings from the end
+@shapes SUM(false) SUM(false) SUM(true)
+[["a", "b", "c"].reduceRight((a, x) => a + x), ["a", "b", "c"].reduceRight((a, x) => a + x, ""), ["a", "b", "c"].reduceRight((a, x) => x + a, "z")]
+--- value
+["cba","cba","abcz"]
+
+=== reduceRight passes the index and the array
+[[1, 2, 3].reduceRight((a, x, i) => a.concat([[x, i]]), []), [10, 20, 30].reduceRight((a, x, i, xs) => a.concat([[x, i, xs.length, xs[i] === x]]), [])]
+--- value
+[[[3,2],[2,1],[1,0]],[[30,2,3,true],[20,1,3,true],[10,0,3,true]]]
+
+=== reduceRight without an initial value starts at the last element, index one before it
+[5, 6, 7].reduceRight((a, x, i) => String(a) + "," + String(i))
+--- value
+"7,1,0"
+
+=== reduceRight of an empty array with an initial value gives it uncalled
+@shapes SUM(false) SUM(false) SUM(false)
+[[].reduceRight((a, x) => a + x, 0), [].reduceRight((a, x) => a + x, "start"), [].reduceRight((a, x) => a + x, undefined) === undefined]
+--- value
+[0,"start",true]
+
+=== reduceRight of one element without an initial value gives it uncalled
+@shapes SUM(false) PLUCK(k) SUM(false)
+[[7].reduceRight((a, x) => a + x), [{k: 1}].reduceRight(a => a.k), [7].reduceRight((a, x) => a + x, 1)]
+--- value
+[7,{"k":1},8]
+
+=== reduceRight adds floating-point numbers in its own order
+@shapes SUM(false) SUM(false) SUM(false) SUM(false) SUM(true) SUM_KEY(k, false) SUM_KEY(k, false)
+[[0.1, 0.2, 0.3].reduceRight((a, x) => a + x, 0), [0.1, 0.2, 0.3].reduce((a, x) => a + x, 0), [1, 1e16, -1e16].reduceRight((a, x) => a + x, 0), [1, 1e16, -1e16].reduce((a, x) => a + x, 0), [0.1, 0.2, 0.3].reduceRight((a, x) => x + a, 0), [{k: 0.1}, {k: 0.2}, {k: 0.3}].reduceRight((a, x) => a + x.k, 0), [{k: 0.1}, {k: 0.2}, {k: 0.3}].reduce((a, x) => a + x.k, 0)]
+--- value
+[0.6,0.6000000000000001,1,0,0.6,0.6,0.6000000000000001]
+
+=== reduceRight without an initial value on 1e16, 1, -1e16
+@shapes SUM(false)
+[1e16, 1, -1e16].reduceRight((a, x) => a + x)
+--- value
+0
+
+=== reduceRight subtracts and divides from the end
+[[3, 1, 2].reduceRight((a, x) => a - x), [2, 3, 4].reduceRight((a, x) => a / x)]
+--- value
+[-2,0.6666666666666666]
+
+=== reduceRight with an object accumulator
+[Object.entries(["x", "y", "x", "z"].reduceRight((acc, k, i) => ({...acc, [k]: i}), {})), ["a", "b", "c"].reduceRight((acc, k, i) => ({...acc, [k]: i}), {}), [1, 2, 3, 4].reduceRight((acc, x) => x % 2 ? {...acc, odd: acc.odd.concat([x])} : {...acc, even: acc.even.concat([x])}, {odd: [], even: []})]
+--- value
+[[["z",3],["x",0],["y",1]],{"c":2,"b":1,"a":0},{"odd":[3,1],"even":[4,2]}]
+
+=== reduceRight with an array accumulator nothing else holds
+[[1, 2, 3].reduceRight((a, x) => a.toSpliced(a.length, 0, x), []), [1, 2, 3].reduceRight((a, x) => [x].concat(a), []), [[1, 2], [3], [4, 5]].reduceRight((a, x) => a.concat(x), []), [1, 2, 3].map(x => x * 2).reduceRight((a, x) => a.concat([x]), [])]
+--- value
+[[3,2,1],[1,2,3],[4,5,3,1,2],[6,4,2]]
+
+=== reduceRight nested, BigInts and booleans
+[[[1, 2], [3, 4]].reduceRight((a, row) => a + row.reduceRight((b, x) => b * 10 + x, 0), 0), [1n, 2n, 3n].reduceRight((a, x) => a * 10n + x, 0n).toString(), [true, false, true].reduceRight((a, x) => a && x), [1, 2].reduceRight((a, x) => a + x, 0, 9)]
+--- value
+[64,"321",false,3]
+
+=== reduceRight of an empty array without an initial value faults
+[].reduceRight((a, x) => a + x)
+--- fault reduceRight of an empty array needs an initial value
+
+=== reduceRight with a callback that is not a function faults
+[1, 2].reduceRight(5)
+--- fault the callback is not a function
+
+=== reduceRight with no callback faults
+[1, 2].reduceRight()
+--- fault the callback is not a function
+
+=== reduceRight of an empty array with a callback that is not a function faults
+[].reduceRight("f", 0)
+--- fault the callback is not a function
+
+=== reduceRight with a callback that faults
+[1, 2].reduceRight((a, x) => a.k.m, {})
+--- fault cannot read a property of undefined
+
+=== reduceRight with a callback that faults on the middle element
+[1, 2, 3].reduceRight((a, x) => { if (x === 2) return a.q.r; return a + x; }, 0)
+--- fault reads properties of objects
+
+=== a map's iterator has no reduceRight
+new Map([[1, 2]]).values().reduceRight((a, x) => a + x)
+--- fault does not have this method
+
+=== an iterator helper's iterator has no reduceRight
+new Set([1, 2]).values().map(x => x).reduceRight((a, x) => a + x, 0)
+--- fault does not have this method
+
+=== a set's iterator has no reduceRight
+new Set([1]).values().reduceRight((a, x) => a + x, 0)
+--- fault does not have this method
+
+=== a string has no reduceRight
+"abc".reduceRight((a, x) => a + x)
+--- fault does not have this method
