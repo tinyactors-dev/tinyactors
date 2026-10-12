@@ -355,6 +355,54 @@ static void test_modules(void) {
     sjs_context_destroy(context);
 }
 
+/* The value a program gives, compiled for `goal`. */
+static sjs_value result_of(sjs_context *context, sjs_goal goal, const char *source) {
+    sjs_program *program;
+    sjs_compile_params params = { { context, goal, NULL, 0, { NULL, NULL }, false }, { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { context, false };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    sjs_value v;
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+    return v;
+}
+
+/* An array or an object a program froze or sealed, and a module's
+ * namespace, which is sealed, take nothing from the embedder either. */
+static void test_frozen_values(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    sjs_property p = { SJS_STR("a"), sjs_number(2) };
+    sjs_value frozen = result_of(context, SJS_GOAL_EXPRESSION, "Object.freeze({ a: 1 })");
+    CHECK(sjs_object_put(context, &frozen, &p) == SJS_ERR_INVALID);
+    sjs_value sealed = result_of(context, SJS_GOAL_EXPRESSION, "Object.seal([1])");
+    CHECK(sjs_array_append(context, &sealed, sjs_number(2)) == SJS_ERR_INVALID);
+    sjs_value plain = result_of(context, SJS_GOAL_EXPRESSION, "[{ a: 1 }, [1]]");
+    sjs_value inner = sjs_array_at(plain, 0);
+    sjs_retain(inner);
+    sjs_release(context, plain);
+    CHECK(sjs_object_put(context, &inner, &p) == SJS_OK);
+    sjs_value namespace = result_of(context, SJS_GOAL_MODULE, "export const a = 1;\n");
+    CHECK(sjs_object_put(context, &namespace, &p) == SJS_ERR_INVALID);
+    char text[4096];
+    write_text(context, frozen, text, sizeof text);
+    CHECK(strcmp(text, "{\"a\":1}") == 0);
+    write_text(context, inner, text, sizeof text);
+    CHECK(strcmp(text, "{\"a\":2}") == 0);
+    sjs_release(context, frozen);
+    sjs_release(context, sealed);
+    sjs_release(context, inner);
+    sjs_release(context, namespace);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+}
+
 static sjs_value object_of(sjs_context *context, const char *const *keys, int count) {
     sjs_value o;
     CHECK(sjs_object_new(context, 2, &o) == SJS_OK);
@@ -3074,6 +3122,7 @@ int main(int argc, char **argv) {
     test_natives_and_globals();
     test_unbound_where_it_never_runs();
     test_modules();
+    test_frozen_values();
     test_embedder_namespaces();
     test_compile_costs();
     test_module_events();

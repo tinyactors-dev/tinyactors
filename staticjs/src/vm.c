@@ -561,7 +561,8 @@ static sjs_result copy_properties(sjs_vm *vm, sjs_value *object, sjs_value sourc
  * literal is still empty, an object nothing else holds becomes the literal
  * itself (sjs_value_unique says why no program can tell), and the literal's
  * later properties update it in place, as a put does: a key it has keeps its
- * place, as in JavaScript, whose order the source has already. An object
+ * place, as in JavaScript, whose order the source has already; but for a
+ * frozen or sealed object, as the literal is extensible. An object
  * something else holds is copied in one step. Anything else is spread
  * property by property. Neither the takeover nor the copy goes through
  * object_put's check for __proto__: no object holds that key, as every
@@ -571,7 +572,7 @@ static sjs_result copy_properties(sjs_vm *vm, sjs_value *object, sjs_value sourc
 static sjs_result object_spread(sjs_vm *vm, sjs_value *object, sjs_value source) {
     sjs_result r;
     if (source.kind == SJS_OBJECT && SJS_AS_OBJECT(*object)->count == 0) {
-        if (sjs_value_unique(source)) {
+        if (sjs_value_unique(source) && (source.as.heap->flags & SJS_INTEGRITY) == 0) {
             sjs_unref(vm->context, *object);
             *object = source;
             return SJS_OK;
@@ -1377,9 +1378,10 @@ __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *
         sjs_value *array = stack_top(vm);
         /* The literal is still empty and nothing else holds the array: the
          * array becomes the literal, which appends what follows in place;
-         * not a match result, whose index, input and groups a spread drops. */
+         * not a match result, whose index, input and groups a spread drops,
+         * nor a frozen or sealed array, as the literal is extensible. */
         if (v.kind == SJS_ARRAY && SJS_AS_ARRAY(*array)->length == 0 && sjs_value_unique(v) &&
-            (v.as.heap->flags & SJS_ARRAY_EXTRA) == 0) {
+            (v.as.heap->flags & (SJS_ARRAY_EXTRA | SJS_INTEGRITY)) == 0) {
             sjs_unref(vm->context, *array);
             *array = v;
             return;
@@ -1660,6 +1662,9 @@ sjs_run sjs_vm_run(sjs_vm *vm, uint64_t fuel) {
 
 sjs_result sjs_vm_take_result(sjs_vm *vm, sjs_value *out) {
     if (vm == NULL || out == NULL || vm->status != VM_DONE) return SJS_ERR_INVALID;
+    /* A module's value is its namespace, which JavaScript seals: it takes
+     * no new key and loses none (Object.isSealed). */
+    if (vm->program->goal == SJS_GOAL_MODULE && vm->result.kind == SJS_OBJECT) vm->result.as.heap->flags |= SJS_INTEGRITY_SEALED;
     *out = vm->result;
     vm->result = sjs_undefined();
     return SJS_OK;
@@ -1828,6 +1833,8 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
             sjs_array_extra_fault(vm);
             return false;
         }
+        /* MUTATION: sort writes the elements of a frozen array of two or more. */
+        if (SJS_AS_ARRAY(*slot)->length >= 2u && !sjs_integrity_allows(vm, *slot, SJS_INTEGRITY_FROZEN)) return false;
         /* toSorted's loop, which takes over a receiver it holds alone; the
          * SORTED after this instruction puts its result back. */
         vm->stack[callee - 1u] = *slot;
@@ -1862,6 +1869,16 @@ __attribute__((noinline)) static bool assign_variable(sjs_vm *vm, uint32_t argc,
     uint32_t at = vm->stack[reference].boolean;
     sjs_value *slot = &vm->stack[at];
     sjs_values sources = { &vm->stack[reference + 1u], argc };
+    /* MUTATION: Object.freeze and Object.seal of a variable the function
+     * owns, compiled as Object.assign's: the variable's value frozen or
+     * sealed (its other arguments are ignored), then a copy of it. */
+    sjs_heap *callee = vm->stack[reference - 1u].as.heap;
+    if (callee != sjs_builtin_value(SJS_BUILTIN_OBJECT_ASSIGN).as.heap) {
+        bool freeze = callee == sjs_builtin_value(SJS_BUILTIN_OBJECT_FREEZE).as.heap;
+        if (sjs_integrity_set(vm, *slot, freeze ? SJS_INTEGRITY_FROZEN : SJS_INTEGRITY_SEALED) != SJS_OK) return false;
+        cut(vm, reference - 1u);
+        return push_receiver(vm, at, false);
+    }
     if (sjs_is_primitive(*slot)) {
         sjs_vm_fault(vm, "Object.assign takes an object as its target, where JavaScript would make one of a primitive");
         return false;
@@ -1875,6 +1892,7 @@ __attribute__((noinline)) static bool assign_variable(sjs_vm *vm, uint32_t argc,
             sjs_vm_fault(vm, "staticjs changes a value only while one variable holds it, and this one is held elsewhere too");
             return false;
         }
+        if (!sjs_assign_allowed(vm, *slot, sources)) return false; /* MUTATION: frozen and sealed values */
         if (sjs_vm_object_assign(vm, slot, sources) != SJS_OK) return false;
     }
     cut(vm, reference - 1u);
@@ -2096,6 +2114,12 @@ typedef struct {
  * appended. Takes the value over. */
 static bool path_put_element(sjs_vm *vm, const path_store *s, uint32_t index) {
     sjs_array *a = SJS_AS_ARRAY(*s->place);
+    /* MUTATION: frozen and sealed values: an element replaced, or one
+     * appended. */
+    if (!sjs_integrity_allows(vm, *s->place, index < a->length ? SJS_INTEGRITY_FROZEN : SJS_INTEGRITY_SEALED)) {
+        sjs_vm_release(vm, s->value);
+        return false;
+    }
     if (index < a->length) {
         sjs_value old = a->items[index];
         a->items[index] = s->value;
@@ -2125,6 +2149,11 @@ static bool path_put(sjs_vm *vm, const path_store *s) {
     if (s->place->kind == SJS_OBJECT) {
         sjs_object *o = SJS_AS_OBJECT(*s->place);
         sjs_entry *e = (sjs_entry *)sjs_object_find(o, name);
+        /* MUTATION: frozen and sealed values: a key's value replaced. */
+        if (e != NULL && !sjs_integrity_allows(vm, *s->place, SJS_INTEGRITY_FROZEN)) {
+            sjs_vm_release(vm, value);
+            return false;
+        }
         if (e != NULL) {
             sjs_value old = e->value;
             e->value = value;
@@ -2133,6 +2162,9 @@ static bool path_put(sjs_vm *vm, const path_store *s) {
         }
         if (sjs_str_equal(name, SJS_STR("__proto__")) || on_prototype(SJS_OBJECT, s->key)) {
             refused = "staticjs objects have no prototype";
+        } else if (!sjs_integrity_allows(vm, *s->place, SJS_INTEGRITY_SEALED)) { /* MUTATION: a new key */
+            sjs_vm_release(vm, value);
+            return false;
         } else {
             sjs_string *key = (sjs_string *)(uintptr_t)s->key;
             sjs_ref(sjs_heap_value(SJS_STRING, &key->h));
@@ -2202,6 +2234,12 @@ static bool path_delete(sjs_vm *vm, sjs_value *place, sjs_value *key) {
     if (!path_key_string(vm, key)) return false;
     const sjs_string *name = SJS_AS_STRING(*key);
     sjs_object *o = SJS_AS_OBJECT(*place);
+    /* MUTATION: frozen and sealed values: a key they have stays; one they
+     * do not have is fine, as in JavaScript. */
+    if ((o->h.flags & SJS_INTEGRITY) != 0 && sjs_object_find(o, sjs_string_view(name)) != NULL &&
+        !sjs_integrity_allows(vm, *place, SJS_INTEGRITY_SEALED)) {
+        return false;
+    }
     sjs_removal removal = sjs_object_remove(vm->context, &o, sjs_string_view(name));
     place->as.heap = &o->h;
     vm->fuel_used += removal.cost;
@@ -2387,6 +2425,8 @@ __attribute__((noinline)) static void path_call(sjs_vm *vm, path_call_site site)
             sjs_array_extra_fault(vm);
             return;
         }
+        /* MUTATION: sort writes the elements of a frozen array of two or more. */
+        if (SJS_AS_ARRAY(*place)->length >= 2u && !sjs_integrity_allows(vm, *place, SJS_INTEGRITY_FROZEN)) return;
         /* toSorted's loop takes the array over from its place, which holds
          * undefined until PATH_SORTED puts the sorted array back. */
         sjs_vm_release(vm, name);
@@ -2806,4 +2846,48 @@ sjs_result sjs_vm_object_assign(sjs_vm *vm, sjs_value *target, sjs_values source
         if (r != SJS_OK) return SJS_ERR_PROGRAM;
     }
     return SJS_OK;
+}
+
+/* ------------------------------------------------------------------------
+ * Frozen and sealed values (docs/mutation.md, "Frozen and sealed values").
+ * Object.freeze and Object.seal set a bit on the object or the array
+ * (SJS_INTEGRITY_*), and a change that JavaScript would throw a TypeError
+ * at faults: before a key or an element comes or goes on a sealed one, and
+ * before one changes on a frozen one. The owned mutations call these
+ * (MUTATION, where they do); so does Object.assign's ordinary call, which
+ * is not mutation, so rolling mutation back keeps this section.
+ */
+
+bool sjs_integrity_allows(sjs_vm *vm, sjs_value v, uint8_t bit) {
+    if ((v.kind != SJS_OBJECT && v.kind != SJS_ARRAY) || (v.as.heap->flags & bit) == 0) return true;
+    sjs_vm_fault(vm, (v.as.heap->flags & SJS_INTEGRITY_FROZEN) != 0
+                         ? "staticjs changes no key or element of a frozen object or array, where JavaScript throws a TypeError"
+                         : "staticjs adds and removes no key or element of a sealed object or array, where JavaScript throws a TypeError");
+    return false;
+}
+
+/* An index's key, as a string, in `buffer` (32 bytes). */
+static sjs_str index_key(uint32_t index, char *buffer) {
+    return (sjs_str){ buffer, sjs_number_format((double)index, buffer) };
+}
+
+bool sjs_assign_allowed(sjs_vm *vm, sjs_value target, sjs_values sources) {
+    if (target.kind != SJS_OBJECT || (target.as.heap->flags & SJS_INTEGRITY) == 0) return true;
+    if (!sjs_integrity_allows(vm, target, SJS_INTEGRITY_FROZEN)) return false;
+    /* Sealed: each key put must be one it has, whose value a put replaces. */
+    const sjs_object *o = SJS_AS_OBJECT(target);
+    char buffer[32];
+    for (uint32_t i = 0; i < sources.count; i++) {
+        sjs_value s = sources.ptr[i];
+        uint32_t n = 0;
+        if (s.kind == SJS_OBJECT) n = SJS_AS_OBJECT(s)->count;
+        else if (s.kind == SJS_ARRAY) n = SJS_AS_ARRAY(s)->length;
+        else if (s.kind == SJS_STRING) n = SJS_AS_STRING(s)->utf16_length;
+        vm->fuel_used += n;
+        for (uint32_t k = 0; k < n; k++) {
+            sjs_str key = s.kind == SJS_OBJECT ? sjs_string_view(SJS_AS_OBJECT(s)->entries[k].key) : index_key(k, buffer);
+            if (sjs_object_find(o, key) == NULL) return sjs_integrity_allows(vm, target, SJS_INTEGRITY_SEALED);
+        }
+    }
+    return true;
 }

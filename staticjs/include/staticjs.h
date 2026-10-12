@@ -240,7 +240,8 @@ SJS_API sjs_str sjs_string_text(sjs_value string);
  * Building arrays, objects and sets. A new one is empty, with room for
  * `capacity` items; it can be added to while the caller holds its only
  * reference, and grows when full. Adding takes over the caller's reference to
- * the item.
+ * the item. An array or an object a program froze or sealed (Object.freeze,
+ * Object.seal) is not added to: SJS_ERR_INVALID.
  */
 SJS_API sjs_result sjs_array_new(sjs_context *context, uint32_t capacity, sjs_value *out);
 SJS_API sjs_result sjs_array_append(sjs_context *context, sjs_value *array, sjs_value element);

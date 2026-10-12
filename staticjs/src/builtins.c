@@ -27,6 +27,10 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Object", "groupBy", SJS_BUILTIN_OBJECT_GROUP_BY },
     { "Object", "hasOwn", SJS_BUILTIN_OBJECT_HAS_OWN },
     { "Object", "assign", SJS_BUILTIN_OBJECT_ASSIGN },
+    { "Object", "freeze", SJS_BUILTIN_OBJECT_FREEZE },
+    { "Object", "isFrozen", SJS_BUILTIN_OBJECT_IS_FROZEN },
+    { "Object", "seal", SJS_BUILTIN_OBJECT_SEAL },
+    { "Object", "isSealed", SJS_BUILTIN_OBJECT_IS_SEALED },
     { "Number", "isInteger", SJS_BUILTIN_NUMBER_IS_INTEGER },
     { "Number", "isSafeInteger", SJS_BUILTIN_NUMBER_IS_SAFE_INTEGER },
     { "Number", "isFinite", SJS_BUILTIN_NUMBER_IS_FINITE },
@@ -405,6 +409,10 @@ static const sjs_builtin_function FUNCTIONS[SJS_BUILTIN_FUNCTION_COUNT] = {
     FUNCTION_VALUE(SJS_BUILTIN_ENCODE_URI_COMPONENT),
     FUNCTION_VALUE(SJS_BUILTIN_DECODE_URI),
     FUNCTION_VALUE(SJS_BUILTIN_DECODE_URI_COMPONENT),
+    FUNCTION_VALUE(SJS_BUILTIN_OBJECT_FREEZE),
+    FUNCTION_VALUE(SJS_BUILTIN_OBJECT_IS_FROZEN),
+    FUNCTION_VALUE(SJS_BUILTIN_OBJECT_SEAL),
+    FUNCTION_VALUE(SJS_BUILTIN_OBJECT_IS_SEALED),
     FUNCTION_VALUE(SJS_BUILTIN_DATE),
     FUNCTION_VALUE(SJS_BUILTIN_DATE_CALL),
     FUNCTION_VALUE(SJS_BUILTIN_DATE_NOW),
@@ -845,9 +853,12 @@ static sjs_result assign_call(sjs_vm *vm, sjs_leaf_call *call) {
     if (!sjs_value_unique(target)) {
         return sjs_vm_fault(vm, "Object.assign changes its target, and something else holds this one: staticjs changes a value only through a variable of the function that holds it alone");
     }
+    if (!sjs_assign_allowed(vm, target, sources)) return SJS_ERR_PROGRAM;
     sjs_object *o;
     sjs_result r = sjs_object_copy(vm->context, SJS_AS_OBJECT(target), &o);
     if (r != SJS_OK) return sjs_vm_fail(vm, r);
+    /* The copy is the target, sealed as it was (a frozen one faulted). */
+    o->h.flags |= (uint8_t)(target.as.heap->flags & SJS_INTEGRITY);
     call->result = sjs_heap_value(SJS_OBJECT, &o->h);
     call->cost = o->count;
     return sjs_vm_object_assign(vm, &call->result, sources);
@@ -911,6 +922,8 @@ static sjs_result string_from(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call
 static sjs_result string_raw(sjs_vm *vm, sjs_leaf_call *call);
 static sjs_result uri_encode(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 static sjs_result uri_decode(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* Object.freeze, isFrozen, seal and isSealed, at the end of the file. */
+static sjs_result object_integrity(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Number, parseInt, parseFloat, isNaN and isFinite, at the end of the file. */
 static sjs_result number_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 /* Math.sqrt, hypot, fround, clz32 and imul, at the end of the file. */
@@ -1045,6 +1058,11 @@ static sjs_result function_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *ca
     case SJS_BUILTIN_DATE_PARSE:
     case SJS_BUILTIN_DATE_UTC:
         return sjs_date_function(vm, id, call);
+    case SJS_BUILTIN_OBJECT_FREEZE:
+    case SJS_BUILTIN_OBJECT_IS_FROZEN:
+    case SJS_BUILTIN_OBJECT_SEAL:
+    case SJS_BUILTIN_OBJECT_IS_SEALED:
+        return object_integrity(vm, id, call);
     default:
         return math(vm, id, call);
     }
@@ -1105,10 +1123,11 @@ static sjs_result array_join(sjs_vm *vm, sjs_leaf_call *call) {
 
 /* Does the method get its receiver to itself? Only an array nothing else
  * holds: an argument that is the same array counts too. Not a match result,
- * whose copy JavaScript gives without its index, input and groups. */
+ * whose copy JavaScript gives without its index, input and groups, nor a
+ * frozen or sealed array, whose copy JavaScript gives extensible. */
 __attribute__((always_inline)) static inline bool takes_receiver(const sjs_leaf_call *call) {
     return call->receiver_slot != NULL && call->receiver.kind == SJS_ARRAY && sjs_value_unique(call->receiver) &&
-           (call->receiver.as.heap->flags & SJS_ARRAY_EXTRA) == 0;
+           (call->receiver.as.heap->flags & (SJS_ARRAY_EXTRA | SJS_INTEGRITY)) == 0;
 }
 
 /* Move the receiver out of its slot into the result, to change in place.
@@ -1596,13 +1615,14 @@ static const sjs_array *receiver(sjs_vm *vm, const vm_frame *frame) {
  * result, and the loop ends before its first step. */
 static sjs_result from_list(sjs_vm *vm, sjs_value items, sjs_value *list) {
     sjs_array *a;
-    if (items.kind == SJS_ARRAY && !sjs_array_extra(items)) {
+    if (items.kind == SJS_ARRAY && (items.as.heap->flags & (SJS_ARRAY_EXTRA | SJS_INTEGRITY)) == 0) {
         sjs_ref(items);
         *list = items;
         return SJS_OK;
     }
     /* A match result's elements, copied: JavaScript's array has no index,
-     * input or groups. */
+     * input or groups; and a frozen or sealed array's, as JavaScript's is
+     * extensible. */
     if (items.kind == SJS_SET || items.kind == SJS_ARRAY) {
         const sjs_array *s = SJS_AS_ARRAY(items);
         if (new_array(vm, s->length, &a) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -2255,9 +2275,13 @@ static loop_step sort_step(sjs_vm *vm, vm_frame *frame) {
         /* Choose the next pair of runs. */
         if (frame->width >= n) {
             /* A receiver nothing else holds takes the order itself: the same
-             * elements, so no count changes. The comparator never saw it. */
+             * elements, so no count changes. The comparator never saw it. A
+             * frozen or sealed one only when sort changes it in place
+             * (MUTATION: the callee is sort's; toSorted gives a new,
+             * extensible array). */
             sjs_value *held = slot(vm, frame, LOOP_RECEIVER);
-            if (sjs_value_unique(*held) && !sjs_array_extra(*held)) {
+            if (sjs_value_unique(*held) && !sjs_array_extra(*held) &&
+                ((held->as.heap->flags & SJS_INTEGRITY) == 0 || slot(vm, frame, 1u)->boolean == SJS_METHOD_ARRAY_SORT)) {
                 sjs_value sorted = *held;
                 *held = sjs_undefined();
                 sjs_copy(SJS_AS_ARRAY(sorted)->items, src, (size_t)n * sizeof(sjs_value));
@@ -2421,6 +2445,9 @@ static sjs_result receiver_grow(sjs_vm *vm, sjs_leaf_call *call, uint32_t extra)
 static sjs_result array_insert(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     uint32_t n = SJS_AS_ARRAY(*call->receiver_slot)->length;
     uint32_t count = call->count;
+    /* MUTATION: frozen and sealed values: elements added; with none, the
+     * length set, which a frozen array's is not. */
+    if (!sjs_integrity_allows(vm, *call->receiver_slot, count != 0 ? SJS_INTEGRITY_SEALED : SJS_INTEGRITY_FROZEN)) return SJS_ERR_PROGRAM;
     if (receiver_grow(vm, call, count) != SJS_OK) return SJS_ERR_PROGRAM;
     sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
     uint32_t at = n;
@@ -2445,6 +2472,9 @@ static sjs_result array_insert(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
 static sjs_result array_remove(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
     uint32_t n = a->length;
+    /* MUTATION: frozen and sealed values: an element removed; from an empty
+     * array, the length set, which a frozen array's is not. */
+    if (!sjs_integrity_allows(vm, *call->receiver_slot, n != 0 ? SJS_INTEGRITY_SEALED : SJS_INTEGRITY_FROZEN)) return SJS_ERR_PROGRAM;
     if (n == 0) return SJS_OK;
     if (id == SJS_METHOD_ARRAY_POP) {
         call->result = a->items[n - 1u];
@@ -2469,6 +2499,8 @@ static sjs_result array_fill(sjs_vm *vm, sjs_leaf_call *call) {
     if (arg(call, 2).kind != SJS_UNDEFINED && to_integer(vm, arg(call, 2), &end) != SJS_OK) return SJS_ERR_PROGRAM;
     uint32_t from = relative(start, n);
     uint32_t to = relative(end, n);
+    /* MUTATION: frozen values: an element written, if any. */
+    if (to > from && !sjs_integrity_allows(vm, *call->receiver_slot, SJS_INTEGRITY_FROZEN)) return SJS_ERR_PROGRAM;
     sjs_value v = arg(call, 0);
     for (uint32_t i = from; i < to; i++) {
         sjs_ref(v);
@@ -2492,6 +2524,9 @@ static sjs_result array_splice(sjs_vm *vm, sjs_leaf_call *call) {
     uint32_t skip = span.skip;
     uint32_t added = span.added;
     uint32_t tail = n - start - skip;
+    /* MUTATION: frozen and sealed values: elements removed or added; else
+     * written, and the length set, which a frozen array's is not. */
+    if (!sjs_integrity_allows(vm, *call->receiver_slot, skip != added ? SJS_INTEGRITY_SEALED : SJS_INTEGRITY_FROZEN)) return SJS_ERR_PROGRAM;
     sjs_array *removed;
     if (new_array(vm, skip, &removed) != SJS_OK) return SJS_ERR_PROGRAM;
     call->result = sjs_heap_value(SJS_ARRAY, &removed->h);
@@ -2582,6 +2617,8 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
         return array_fill(vm, call);
     case SJS_METHOD_ARRAY_REVERSE: {
         sjs_array *a = SJS_AS_ARRAY(*call->receiver_slot);
+        /* MUTATION: frozen values: reverse writes two elements or more. */
+        if (a->length >= 2u && !sjs_integrity_allows(vm, *call->receiver_slot, SJS_INTEGRITY_FROZEN)) return SJS_ERR_PROGRAM;
         for (uint32_t i = 0, j = a->length; i + 1u < j; i++, j--) {
             sjs_value swap = a->items[i];
             a->items[i] = a->items[j - 1u];
@@ -4276,4 +4313,52 @@ bool sjs_mutation_shared(const sjs_name *name) {
         if (name->methods[i] != 0 && columns[i] != own) return true;
     }
     return false;
+}
+
+/* ------------------------------------------------------------------------
+ * Object.freeze, Object.isFrozen, Object.seal and Object.isSealed
+ * (docs/mutation.md, "Frozen and sealed values"). A primitive is frozen and
+ * sealed, and freezing or sealing one gives it back. An object or an array
+ * holds its integrity in its bits (SJS_INTEGRITY_*); every other value is an
+ * extensible object in JavaScript, which staticjs neither freezes nor seals.
+ */
+
+/* Is `v`, an object or an array, frozen? Frozen, or sealed and empty: with
+ * no key or element to change, as V8 tells a sealed empty array, whose
+ * length JavaScript leaves writable. */
+static bool integrity_frozen(sjs_value v) {
+    uint8_t flags = v.as.heap->flags;
+    if ((flags & SJS_INTEGRITY_FROZEN) != 0) return true;
+    return (flags & SJS_INTEGRITY_SEALED) != 0 && sjs_length(v) == 0;
+}
+
+sjs_result sjs_integrity_set(sjs_vm *vm, sjs_value v, uint8_t level) {
+    if (sjs_is_primitive(v)) return SJS_OK;
+    if (v.kind != SJS_OBJECT && v.kind != SJS_ARRAY) return sjs_vm_fault(vm, "staticjs freezes and seals objects and arrays only");
+    uint8_t flags = v.as.heap->flags;
+    if ((flags & level) != 0) return SJS_OK;
+    /* A sealed empty object has nothing freezing would change; a sealed
+     * empty array has its length. */
+    if (level == SJS_INTEGRITY_FROZEN && v.kind == SJS_OBJECT && integrity_frozen(v)) return SJS_OK;
+    if (!sjs_value_unique(v)) {
+        return sjs_vm_fault(vm, "freezing or sealing changes a value, and something else holds this one: staticjs changes a value only while one holder has it");
+    }
+    v.as.heap->flags = (uint8_t)(flags | SJS_INTEGRITY_SEALED | level);
+    return SJS_OK;
+}
+
+__attribute__((noinline)) static sjs_result object_integrity(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
+    sjs_value v = arg(call, 0);
+    bool object = v.kind == SJS_OBJECT || v.kind == SJS_ARRAY;
+    if (id == SJS_BUILTIN_OBJECT_IS_FROZEN || id == SJS_BUILTIN_OBJECT_IS_SEALED) {
+        bool answer = sjs_is_primitive(v);
+        if (object) answer = id == SJS_BUILTIN_OBJECT_IS_FROZEN ? integrity_frozen(v) : (v.as.heap->flags & SJS_INTEGRITY_SEALED) != 0;
+        call->result = sjs_boolean(answer);
+        return SJS_OK;
+    }
+    uint8_t level = id == SJS_BUILTIN_OBJECT_FREEZE ? SJS_INTEGRITY_FROZEN : SJS_INTEGRITY_SEALED;
+    if (sjs_integrity_set(vm, v, level) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_ref(v);
+    call->result = v;
+    return SJS_OK;
 }

@@ -404,7 +404,7 @@ sjs_result sjs_array_append(sjs_context *context, sjs_value *array, sjs_value el
     if (context == NULL || array == NULL || array->kind != SJS_ARRAY || array->internal != 0) return SJS_ERR_INVALID;
     if (element.internal != 0) return SJS_ERR_INVALID;
     sjs_array *a = SJS_AS_ARRAY(*array);
-    if (a->h.refs != 1) return SJS_ERR_INVALID;
+    if (a->h.refs != 1 || (a->h.flags & SJS_INTEGRITY) != 0) return SJS_ERR_INVALID;
     sjs_result r = sjs_array_grow(context, &a, 1);
     if (r != SJS_OK) return r;
     a->items[a->length++] = element;
@@ -612,7 +612,9 @@ sjs_result sjs_object_put(sjs_context *context, sjs_value *object, const sjs_pro
         return SJS_ERR_INVALID;
     }
     sjs_object *o = SJS_AS_OBJECT(*object);
-    if (o->h.refs != 1 || property->value.internal != 0 || !sjs_utf8_valid(property->key)) return SJS_ERR_INVALID;
+    if (o->h.refs != 1 || (o->h.flags & SJS_INTEGRITY) != 0 || property->value.internal != 0 || !sjs_utf8_valid(property->key)) {
+        return SJS_ERR_INVALID;
+    }
     if (sjs_str_equal(property->key, SJS_STR("__proto__"))) return SJS_ERR_INVALID;
     sjs_string *key;
     sjs_result r = sjs_string_intern(context, property->key, &key);

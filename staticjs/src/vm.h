@@ -187,6 +187,16 @@ sjs_result sjs_iterator_items(sjs_vm *vm, sjs_value iterator, sjs_array **out);
  * receiver is the value of the variable at `receiver_slot`, which holds it
  * alone; the method updates the slot when the value moves. */
 sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* Frozen and sealed values (docs/mutation.md, "Frozen and sealed values"):
+ * false, after a fault, when `v` is an object or an array with `bit`
+ * (SJS_INTEGRITY_SEALED before a key or an element comes or goes,
+ * SJS_INTEGRITY_FROZEN before one changes), where JavaScript throws a
+ * TypeError. */
+bool sjs_integrity_allows(sjs_vm *vm, sjs_value v, uint8_t bit);
+/* Object.freeze (SJS_INTEGRITY_FROZEN) or Object.seal (SEALED) of `v`: a
+ * primitive or a value already so is left as it is; an object or an array
+ * nothing else holds takes the bits; anything else faults. */
+sjs_result sjs_integrity_set(sjs_vm *vm, sjs_value v, uint8_t level);
 
 /* LOOP_AGAIN: the loop did a unit of work itself, without calling back
  * (a shape's C path), and stays on top to be stepped again. */
@@ -208,6 +218,10 @@ typedef struct {
 
 /* Object.assign: does any of its sources have a property to put? */
 bool sjs_assign_puts(sjs_values sources);
+/* Object.assign into `target`, which has something to put: false, after a
+ * fault, when it is frozen, or sealed and a source puts a key it lacks. A
+ * unit of fuel per key a sealed target looks up. */
+bool sjs_assign_allowed(sjs_vm *vm, sjs_value target, sjs_values sources);
 /* Object.assign's sources put, in order, into the object at `*target`,
  * which the caller holds alone and which may move: a key the object has
  * keeps its place, a new one goes in as a put does. A unit of fuel per

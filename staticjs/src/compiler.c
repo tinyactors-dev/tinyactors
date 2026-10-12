@@ -250,8 +250,9 @@ typedef struct {
 } construct;
 
 /* MUTATION: construct.assigns: a call of Object.assign before its first
- * argument ends, and one whose first argument is a variable it changes. */
-enum { AT_NONE = 0, AT_PENDING, AT_VARIABLE };
+ * argument ends, and one whose first argument is a variable it changes;
+ * AT_FREEZING, a call of Object.freeze or Object.seal before it ends. */
+enum { AT_NONE = 0, AT_PENDING, AT_VARIABLE, AT_FREEZING };
 
 /* An array or object pattern being compiled. An object pattern keeps its
  * keys, for a rest element to leave out: the constants of the static ones,
@@ -2313,20 +2314,39 @@ static sjs_result mutation_end(sjs_compiler *c, const construct *k, const sjs_ev
  * the variable's object in place. Any other first argument is an ordinary
  * call's, which changes nothing a program can see (assign_call). CALL_BEGIN
  * notes a callee that is Object.assign's constant; its first ARGUMENT (or
- * SPREAD_ARGUMENT) decides, before note_use would count the read as passed. */
-static bool assign_callee(const sjs_compiler *c) {
-    if (!c->last_op_valid || c->last_label > c->last_op || c->code.ptr[c->last_op] != SJS_OP_CONSTANT) return false;
+ * SPREAD_ARGUMENT) decides, before note_use would count the read as passed.
+ * Object.freeze and Object.seal of such a variable compile the same way,
+ * OBJECT_ASSIGN telling them by the callee when it runs; as their call
+ * changes nothing when the value is already frozen or sealed, a variable
+ * the function owns is their receiver whatever was done with it before,
+ * and the run decides, as for a shared name (docs/mutation.md, "Frozen and
+ * sealed values"). AT_PENDING, AT_FREEZING, or AT_NONE for another callee. */
+static uint8_t assign_callee(const sjs_compiler *c) {
+    if (!c->last_op_valid || c->last_label > c->last_op || c->code.ptr[c->last_op] != SJS_OP_CONSTANT) return AT_NONE;
     sjs_value v = SJS_BUF_AT(c->constants, sjs_value, sjs_read32(c->code.ptr + c->last_op + 1u));
-    return v.kind == SJS_FUNCTION && v.as.heap == sjs_builtin_value(SJS_BUILTIN_OBJECT_ASSIGN).as.heap;
+    if (v.kind != SJS_FUNCTION) return AT_NONE;
+    if (v.as.heap == sjs_builtin_value(SJS_BUILTIN_OBJECT_ASSIGN).as.heap) return AT_PENDING;
+    if (v.as.heap == sjs_builtin_value(SJS_BUILTIN_OBJECT_FREEZE).as.heap) return AT_FREEZING;
+    return v.as.heap == sjs_builtin_value(SJS_BUILTIN_OBJECT_SEAL).as.heap ? AT_FREEZING : AT_NONE;
 }
 
 static void assign_argument(sjs_compiler *c, const sjs_event *e) {
     construct *k = top_construct(c);
-    if (k == NULL || k->kind != K_CALL || k->assigns != AT_PENDING) return;
+    if (k == NULL || k->kind != K_CALL || (k->assigns != AT_PENDING && k->assigns != AT_FREEZING)) return;
+    bool freezing = k->assigns == AT_FREEZING;
     k->assigns = AT_NONE;
     const name_read *read = &c->last_name;
     if (e->kind != SJS_EV_ARGUMENT || read->pc != k->target_pc || read->end != here(c) || c->last_label > read->pc ||
-        read->kind == NR_NONE || !claim_receiver(c, read, NULL)) {
+        read->kind == NR_NONE) {
+        return;
+    }
+    uint8_t fallback = FB_NONE;
+    if (!claim_receiver(c, read, freezing ? &fallback : NULL)) {
+        /* MUTATION: Object.freeze or Object.seal of a capture, a global or
+         * an import: an ordinary call, which a statement refuses with the
+         * reason. */
+        k->fallback = fallback;
+        k->receiver = read->which;
         return;
     }
     k->assigns = AT_VARIABLE;
@@ -2478,11 +2498,10 @@ static sjs_result call_begin(sjs_compiler *c, const sjs_event *e) {
     k.held = c->call_holds_path ? 1u : 0u;
     c->call_holds_path = false;
     if (k.held && top_path(c)->root.kind == NR_OWN) k.root_use = SJS_BUF_AT(c->bindings, binding, top_path(c)->root.which).use;
-    /* MUTATION: Object.assign, whose first argument may be a variable it changes. */
-    if (assign_callee(c)) {
-        k.assigns = AT_PENDING;
-        k.target_pc = here(c);
-    }
+    /* MUTATION: Object.assign, Object.freeze and Object.seal, whose first
+     * argument may be a variable they change. */
+    k.assigns = assign_callee(c);
+    if (k.assigns != AT_NONE) k.target_pc = here(c);
     /* `a.b(...)` and `a[b](...)` call with a receiver. */
     if (c->last_op_valid && c->last_label <= c->last_op) {
         uint8_t *last = c->code.ptr + c->last_op;
