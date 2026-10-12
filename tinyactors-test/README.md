@@ -8,11 +8,11 @@ it ([ROADMAP.md](../ROADMAP.md), step 8).
 
 ## What it holds
 
-| Suite | What | Judged by |
-|---|---|---|
-| [`suites/protocol`](suites/protocol/README.md) | what crosses core's API as CBOR: requests and replies, host configs, envelopes, neutral values | the bytes, compared with the expected ones (tag 39999 is a wildcard) |
-| [`suites/scenarios`](suites/scenarios/README.md) | core's conformance scenarios (spawn, send, time, invoke, hibernation, migration, snapshots) as charts that check themselves, with the host operations between runs in `steps.txt` | the outcome the charts log: `pass` or not |
-| `suites/w3c` | the W3C SCXML IRP suite, fetched from w3.org and converted per datamodel (`skip.txt`, `convert.py`) | the outcome its charts log, as for scenarios |
+| Suite                                            | What                                                                                                                                                                              | Judged by                                                            |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [`suites/protocol`](suites/protocol/README.md)   | what crosses core's API as CBOR: requests and replies, host configs, envelopes, neutral values                                                                                    | the bytes, compared with the expected ones (tag 39999 is a wildcard) |
+| [`suites/scenarios`](suites/scenarios/README.md) | core's conformance scenarios (spawn, send, time, invoke, hibernation, migration, snapshots) as charts that check themselves, with the host operations between runs in `steps.txt` | the outcome the charts log: `pass` or not                            |
+| `suites/w3c`                                     | the W3C SCXML IRP suite, fetched from w3.org and converted per datamodel (`skip.txt`, `convert.py`)                                                                               | the outcome its charts log, as for scenarios                         |
 
 Nothing compares effects. As in the W3C IRP, a chart checks what happened
 and ends in `pass` or `fail`; the implementation runs it with its own loop
@@ -29,14 +29,14 @@ The command runs in the directory you call mise from, and speaks the
 [driver protocol](docs/driver.md) on its standard input and output:
 length-prefixed CBOR calls and replies in JSON-RPC 2.0's shape. Options:
 
-| Option | Default | |
-|---|---|---|
-| `--suite protocol\|scenarios\|w3c` | all three | repeat it for several |
-| `--datamodel quickjs\|native\|<name>` | `quickjs` | the datamodel scenarios, W3C tests and `values.txt` run on; an implementation may offer others by name (`ta-conform`: `test`, core's tests' datamodel) |
-| `--realm auto\|isolated` | the implementation's | quickjs only |
-| `--skip <file>` | none | W3C test ids with reasons (the format of `suites/w3c/skip.txt`) skipped besides that list: what a datamodel that implements less cannot pass; repeat it for several |
-| `--language ecmascript` | `ecmascript` | the W3C stylesheet the scenarios are converted with; others join with their stylesheet |
-| `--timeout <s>` | 60 | how long one reply may take before the command counts as hung |
+| Option                                | Default              |                                                                                                                                                                     |
+| ------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--suite protocol\|scenarios\|w3c`    | all three            | repeat it for several                                                                                                                                               |
+| `--datamodel quickjs\|native\|<name>` | `quickjs`            | the datamodel scenarios, W3C tests and `values.txt` run on; an implementation may offer others by name (`ta-conform`: `test`, core's tests' datamodel)              |
+| `--realm auto\|isolated`              | the implementation's | quickjs only                                                                                                                                                        |
+| `--skip <file>`                       | none                 | W3C test ids with reasons (the format of `suites/w3c/skip.txt`) skipped besides that list: what a datamodel that implements less cannot pass; repeat it for several |
+| `--language ecmascript`               | `ecmascript`         | the W3C stylesheet the scenarios are converted with; others join with their stylesheet                                                                              |
+| `--timeout <s>`                       | 60                   | how long one reply may take before the command counts as hung                                                                                                       |
 
 Each case prints `pass`, `fail` (with why: a diff for bytes, the outcome
 and the command's standard error for a chart) or `skip` (a method the
