@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Run the conformance suite against the adapter (conform.mjs) as a binding (--kind binding), under node and bun, on the native datamodel and on quickjs; arguments go to the runner (--suite protocol, ...)"
-#USAGE arg "[argument]..." var=#true help="options for the runner: --suite, --timeout, --skip (tinyactors-test/README.md)"
+#USAGE arg "[argument]..." var=#true help="options for the runner: --milestone, --suite, --timeout, --skip (tinyactors-test/README.md)"
 # vim:ft=ruby
 
 # The differential run (ROADMAP.md, step 8, "Gates"): the same suite on the
@@ -10,7 +10,11 @@
 # (tinyactors-test/docs/driver.md, "The chart language"). The kind is
 # stated here, by the project that runs the suite, not by the adapter
 # ("Kinds"). The runtimes run by path: the runner is tinyactors-test's
-# task, whose PATH is its own.
+# task, whose PATH is its own. The adapter reads and writes the driver's
+# frames with the package's own `encode` and `decode`, and imports nothing
+# but `@tinyactors/node` and `node:` built-ins (tinyactors-test/lint).
+# Without --milestone the whole suite runs; `mise run test` passes the
+# milestone (NodeAPI::MILESTONE).
 
 require_relative '../napi'
 

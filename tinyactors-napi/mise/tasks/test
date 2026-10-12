@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyactors-napi: lint (rules, the addon's C, the adapter, the mapping table), the build, the runtimes, and the conformance suite against the adapter under node and bun on both datamodels"
-#MISE sources=["src/**/*", "conform.mjs", "index.mjs", "index.d.ts", "test/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise.toml", "../LICENSE"]
+#MISE description="Test tinyactors-napi: lint (rules, the addon's C, the adapter, the mapping table, the build scripts, acronyms), the build, the runtimes, and the milestone's conformance set against the adapter under node and bun on both datamodels"
+#MISE sources=["src/**/*", "conform.mjs", "index.mjs", "index.d.ts", "test/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -13,8 +13,9 @@
 # src/, the mapping table's empty table, core's amalgamation built into
 # build/core, and both runtimes found. The conformance suite needs the
 # adapter (conform.mjs, M1): without it, this task says so and skips it;
-# with it, `mise run conform` must pass. `mise run conform` on its own fails
-# without the adapter.
+# with it, the suite's set of the milestone this binding is working on must
+# pass (`mise run conform -- --milestone M1`; NodeAPI::MILESTONE). `mise run
+# conform` on its own runs the whole suite, and fails without the adapter.
 
 require_relative '../napi'
 
@@ -28,7 +29,7 @@ NodeAPI::RUNTIMES.each do |runtime|
 end
 
 if NodeAPI::ADAPTER.exist?
-  NodeAPI.run('mise', 'run', 'conform')
+  NodeAPI.run('mise', 'run', 'conform', '--', '--milestone', NodeAPI::MILESTONE)
 else
   puts 'test: conform skipped: no adapter yet (conform.mjs, M1)'
 end

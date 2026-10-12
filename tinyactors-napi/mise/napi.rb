@@ -16,6 +16,11 @@ module NodeAPI
   ADAPTER = ROOT.join('conform.mjs')
   # The mapping table (tinyactors-core/docs/bindings.md, section 2).
   MAPPING = ROOT.join('docs/api-map.md')
+  # The milestone of ROADMAP.md, step 8, this binding is held to: `mise run
+  # test` runs the suite's set for it (tinyactors-test/suites/milestones.txt,
+  # `--milestone`). Moved on, here only, when the milestone is done
+  # (ROADMAP.md in this directory).
+  MILESTONE = 'M1'
   # The runtimes the package serves, each running the same addon.
   RUNTIMES = %w[node bun].freeze
 
