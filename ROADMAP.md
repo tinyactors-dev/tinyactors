@@ -70,7 +70,16 @@ guide and the headers. Three decisions replace theirs:
 - **Rewrites with ast-grep**, rules and checks as ast-grep rules with
   tests. The repository's rules hold in every binding: at most three
   parameters, `ta_bytes`/`ta_buffer`, no serialization on the hot path,
-  acronyms.
+  acronyms. A function a platform's typedef fixes (CPython's `PyCMethod`
+  with five parameters, a `METH_FASTCALL | METH_KEYWORDS` method with four)
+  is exempt by that typedef, not by name.
+- **Our names carry the binding's prefix**: `ta_python_*` in
+  `tinyactors-cpython`, `ta_napi_*` in `tinyactors-napi`. A platform's names
+  appear only where the platform requires them (the CPython slot
+  `Py_tp_traverse` filled with `ta_python_host_traverse`).
+- **Findings are checked before they change the plan**
+  (`.agents/skills/reasoned-analysis`): a scenario in this design, evidence
+  or a spike, and a refutation by a fresh agent.
 - **An audit after each milestone**, by the coordinator: both bindings
   against the guide's "never" list, against each other file by file, and
   against their mapping tables. It writes no code; what it finds is fixed
@@ -113,9 +122,13 @@ failures, refusal during a run, threads, garbage collection, liveness.
    (`mise run //tinyactors-test:record -- …`; a recording is reviewed as a
    diff, never accepted blind).
 4. **The project skeletons** `tinyactors-napi/` and `tinyactors-cpython/`
-   (`mise.toml`, tasks, lint configuration, empty mapping tables), and the
-   changelog components in `mise/lib/changelog/components.rb` (the `napi`
-   component points at the deleted `bindings/node` today).
+   (`mise.toml`, tasks, lint configuration with the typedef exemption,
+   empty mapping tables), and the changelog components in
+   `mise/lib/changelog/components.rb` (the `napi` component points at the
+   deleted `bindings/node` today). Each skeleton's `AGENTS.md` carries the
+   prefix rule, the host's allocator (`PyMem_RawMalloc`; `malloc` with
+   `napi_adjust_external_memory`), and the pitfalls M1 lists for its
+   binding.
 
 Done when: the whole suite passes against `ta-conform`, and core's tests
 run through it.
@@ -136,6 +149,52 @@ Gates: protocol vectors; the basic transcripts on both datamodels;
 lints. **Then the API review**, both bindings side by side: how a Python
 chart reads, how a Node program reads.
 
+Pitfalls each binding handles in M1, with a test of its own for each (the
+suite cannot see them; spikes and their review: the reasoned-analysis
+pass of 2026-10-12):
+
+- **Both: dropping a payload's last reference can run the language's
+  code.** Core calls `release` outside a run as well (the start of
+  `ta_host_run`, ack, `ta_host_free`, requests, deliver), where the host
+  does not refuse reentry. Defer the last drop to a list emptied after the
+  outer call into core returns.
+- **Both: two slot tables** (`handles.c`), for payloads and for sessions,
+  each with a generation (guide section 8).
+- **Both: text is valid UTF-8.** A lone surrogate is refused
+  (`TA_ERROR_INVALID`); Node-API replaces it with U+FFFD silently, so the
+  addon checks (`String.prototype.isWellFormed`).
+- **Python:**
+  - one globals dict per session and no locals: with separate locals,
+    generator expressions and lambdas do not see session variables;
+  - system variables (`_event`, `_sessionid`, `_name`, `_ioprocessors`,
+    `_x`) stay as they were: after each evaluation, a changed one is
+    restored and the evaluation is `error.execution`; `assign` checks that
+    its location is declared; `variable` and `serialize` skip
+    `__builtins__`;
+  - `bool` before `int` when converting values;
+  - a `BaseException` that is not an `Exception` (`KeyboardInterrupt`,
+    `SystemExit`) still gives `error.execution` to the chart, and the
+    binding raises the same object again after the run;
+  - handler closures make cycles: fill `Py_tp_traverse` and `Py_tp_clear`.
+- **Node:**
+  - expressions are compiled once as a strict-mode function inside
+    `with (scope)`, as the quickjs datamodel does, so an undeclared
+    assignment throws; `assign` keeps quickjs's check of the location;
+  - one handle scope per vtable entry, since a run is one native call;
+  - reference counts live in the slot table, one `napi_ref` per slot,
+    deleted at zero: a finalizer may call only basic-env functions, and
+    `napi_reference_unref` is not one;
+  - `napi_get_value_int64` saturates silently: ids are always `BigInt`,
+    and a number in event data is checked with `Number.isSafeInteger`;
+  - `napi_type_tag_object` on every wrapped object;
+  - the timer is the global `setTimeout`, ref'd while a deadline is
+    pending: Bun has no `uv_timer_*` (oven-sh/bun#18546);
+  - the README says chart code is trusted: it runs in the application's
+    realm, and Node-API cannot make another.
+- **Both READMEs:** nesting is limited to 64, which stops cycles but not
+  a value that shares subtrees (`a = [a, a]` sixty times): charts are
+  trusted code.
+
 #### M2: W3C in each language
 
 `confPython.xsl` beside the W3C stylesheets (ours, checked in), the suite
@@ -150,7 +209,12 @@ I/O processors (`SEND`, sync sends), `INVOKE`/`UNINVOKE`, `REQUEST` and
 `ta_host_resume`, `CHANGED` with `actor.subscribe`, `TRACES`, `LOGS` and
 `ta_host_metrics`, inputs during a run (an expression calling
 `host.send`), both drivers in Python (`run_until_idle`, `attach`), and
-Node's liveness. Gates: the invoke transcripts on both datamodels.
+Node's liveness. Graceful shutdown: a signal is an event on the loop, so
+`stop()` runs between turns, drains until a deadline the application
+gives, ends the open spans (`trace.end`), takes the traces and frees the
+host; a server with several hosts stops each on its own loop. Gates: the
+invoke transcripts on both datamodels, and a shutdown transcript (spans
+marked `scxml.incomplete`, nothing after the stop).
 
 #### M4: lifecycle and peers
 
@@ -229,14 +293,14 @@ tinyactors-napi/
 │   ├── addon.h
 │   ├── module.c             module init, per-environment state, the classes
 │   ├── host.c               Host: one function per method → ta_* or a request
-│   ├── loop.c               the turn, statuses, one timer (ref'd while a deadline is pending)
+│   ├── loop.c               the turn, statuses, one setTimeout (ref'd while a deadline is pending)
 │   ├── effects.c            one record per effect, built with the accessors; dispatch
 │   ├── request.c            JSON-RPC request and reply; TinyactorsError(code, reason, path)
 │   ├── values.c             CBOR tokens ↔ JavaScript values: BigInt, Uint8Array, Address
 │   └── datamodel/           the native "ecmascript" datamodel: vtable entries only
 │       ├── datamodel.c      the vtable; scopes, _event, In()
-│       ├── payloads.c       slot table: generation and slot, reference counts
-│       └── expressions.c    functions compiled once per chart, by kind
+│       ├── handles.c        slot tables for payloads and sessions: generation, reference counts
+│       └── expressions.c    strict functions compiled once per chart, by kind
 ├── conform.mjs              the suite's adapter, over the public API only
 ├── test/                    what the suite cannot see: liveness, workers, GC, refusals
 ├── build/                   core's amalgamation and the addon (gitignored)
@@ -253,12 +317,12 @@ tinyactors-cpython/
 │                            (trusted code; values outside the host's allocator)
 ├── CHANGELOG.md
 ├── mise.toml                pins python (3.11+, and a free-threaded build for tests), uv, zig
-├── pyproject.toml           one abi3 wheel per platform, built by the mise task
+├── pyproject.toml           one abi3 wheel (3.11+) per platform, built by the mise task
 ├── docs/
 │   ├── api-map.md           each API item → ta_* function, request method or effect (checked)
 │   └── values.md            the Python side of the value table
 ├── src/                     one extension module, tinyactors; no .py files in the wheel
-│   ├── extension.h
+│   ├── extension.h          and the few macros the free-threaded test build needs
 │   ├── module.c             PyInit_tinyactors, per-interpreter state (PEP 489), the types
 │   ├── host.c               Host: one function per method → ta_* or a request
 │   ├── loop.c               the turn; run_until_idle and attach(loop), one TimerHandle
@@ -267,7 +331,7 @@ tinyactors-cpython/
 │   ├── values.c             CBOR tokens ↔ Python objects; Address, UNDEFINED; deep copy
 │   └── datamodel/           the "python" datamodel: vtable entries only
 │       ├── datamodel.c      the vtable; per-session globals, _event, In()
-│       ├── payloads.c       slot table: generation and slot, reference counts
+│       ├── handles.c        slot tables for payloads and sessions: generation, reference counts
 │       └── expressions.c    code objects compiled once per chart, by kind
 ├── conform/                 the suite's adapter (python -m conform), not in the wheel
 ├── tests/                   what the suite cannot see: threads, GC, asyncio, refusals
@@ -278,6 +342,16 @@ tinyactors-cpython/
 
 The two bindings have the same files on purpose: the audit compares them
 file by file.
+
+**The free-threaded build is for tests only.** The limited API cannot be
+compiled for a free-threaded interpreter before 3.15 (`Python.h` refuses
+it), so the shipped wheel is abi3 from 3.11, and the test task builds the
+same sources a second time without `Py_LIMITED_API` for the free-threaded
+interpreter. The functions that differ (`PyDict_GetItemRef`,
+`PyList_GetItemRef`, `Py_mod_gil`, limited only from 3.13) sit behind
+macros in `extension.h`; module state comes from `PyType_GetModule` and
+`METH_METHOD`, limited since 3.9. A free-threaded wheel waits for the
+stable ABI of free-threaded builds (abi3t, 3.15).
 
 ### Decided later
 
