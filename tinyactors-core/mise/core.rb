@@ -180,7 +180,7 @@ module Core
     unit('test_scenarios', 'system', 'compile', 'test_datamodel'),
     unit('test_runtime', 'runtime', 'test_datamodel', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch }),
     unit('test_datamodel_ecmascript', 'system', 'compile', *ECMASCRIPT,
-         defines: { 'TA_VALUES' => ROOT.join('tests/conformance/values.txt') }),
+         defines: { 'TA_VALUES' => ROOT.join('tests/protocol/values.txt') }),
     unit('test_e2e', 'runtime', 'test_datamodel', defines: { 'TA_TEST_TEMPORARY_DIRECTORY' => :scratch }),
     unit('test_hibernate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_migrate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),
@@ -203,6 +203,9 @@ module Core
     # The torture chamber's event loop.
     Program.new(name: 'test_torture_loop', sources: %w[tests/unit/test_torture_loop.c tools/torture/loop.c], uses: [],
                 defines: {}),
+    # Protocol vectors (tests/protocol): requests, configs and envelopes, byte for byte.
+    Program.new(name: 'protocol', sources: %w[tests/protocol/run_protocol.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
+                defines: {}, arguments: [ROOT.join('tests/protocol').to_s]),
     # Host conformance (tests/conformance/*.json) through the C host.
     Program.new(name: 'conformance', sources: %w[tests/conformance/run_c.c], uses: ['host', 'runtime', 'compile', *ECMASCRIPT],
                 defines: {}, arguments: [ROOT.join('tests/conformance').to_s])

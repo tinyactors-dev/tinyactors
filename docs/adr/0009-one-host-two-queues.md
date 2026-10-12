@@ -94,7 +94,7 @@ and says how to add one.
 **Amended (2026-10-11), before step 6:** ids and notifications follow
 JSON-RPC 2.0, so a JSON-RPC transport needs no rules of its own. An `id` is
 an integer, text or null, echoed as the same item; it is `null` in the
-reply when the request could not be read (-32700, -32600). A request
+reply when it could not be read (not CBOR, not a map, a bad `id`). A request
 without an `id` is a notification: applied, with no reply and no error
 reported. This replaces "a request without an id still gets a reply"
 above. A batch is still refused (-32600); batches may come later.
@@ -214,6 +214,13 @@ Pairs of CBOR, shown in diagnostic notation, in `tests/conformance`, run
 by a C runner, that every regenerated binding must reproduce. They
 replace the surface check; the C conformance scenarios and the W3C suite
 (all 191) stay.
+
+**Amended (2026-10-11), step 6:** these are protocol vectors, not
+conformance tests in the W3C sense: they fix bytes, not SCXML semantics.
+They live in `tinyactors-core/tests/protocol/` (`requests.txt`,
+`config.txt`, `envelopes.txt`, and `values.txt`, moved there), run by
+`run_protocol.c`; an expected item may be a wildcard, tag 39999 on the
+type's name, for what the build or a generator decides.
 
 ## What stays
 

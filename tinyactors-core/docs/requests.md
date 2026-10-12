@@ -19,10 +19,12 @@ here, it does not exist. Examples are in CBOR diagnostic notation.
   with `reply->length` 0, and its errors are not reported, including a
   method that does not exist and the host's allocator refusing. Send an
   `id` to learn the outcome. A request that is not one (the errors with
-  code -32700 and -32600 below) is answered even without an `id`.
+  code -32700 and -32600 below, and too many items) is answered even
+  without an `id`.
 - **A reply** is a map, its keys in this order:
-  - `id`: the request's, the same item; `null` when the request could not
-    be read (codes -32700 and -32600), as JSON-RPC 2.0 has it;
+  - `id`: the request's, the same item; `null` when it could not be read
+    (the request is not one CBOR item, holds too many, is not a map, or its
+    `id` is not an integer, text or null), as JSON-RPC 2.0 has it;
   - then `result` (the method's result), or `error`:
     `{"code": int, "message": text, "data": {"reason": text, "path": text}}`.
   - `code` is from the table below; `reason` names the condition; `path`

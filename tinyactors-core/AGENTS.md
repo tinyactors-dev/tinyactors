@@ -55,6 +55,9 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 - Every building block gets a unit test in `tests/unit/`.
 - A rarely called host operation is a method of `ta_host_request`: follow
   "Adding a method" in `docs/requests.md` for what belongs there and how.
+- Bytes that cross the API (requests, configs, envelopes, values) are
+  fixed by the protocol vectors in `tests/protocol/` (its README.md): a
+  change to them changes a vector, and every binding follows it.
 - Names are whole words (docs/layout.md, "Naming"): the product is
   `tinyactors` (`<tinyactors/system.h>`, `libtinyactors_<layer>.a`), `ta_` /
   `TA_` is the only short prefix, files carry no prefix, internal includes are

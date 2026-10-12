@@ -1,6 +1,8 @@
 /* ta_host_request (docs/requests.md; docs/adr/0009 in the repository root,
- * decision 2): every method's reply, every way a request is refused, and
- * TA_ERROR_NO_MEMORY leaving the host as it was. Also ta_host_metrics. */
+ * decision 2), beyond its protocol vectors (tests/protocol): what bytes
+ * alone cannot show — spans of real traces, variables after a run,
+ * hibernation, a datamodel without variables, CHANGED effects, a config
+ * nothing points into afterwards. Also ta_host_metrics. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
@@ -92,196 +94,16 @@ static void settle(world *w) {
     } while (result.status != TA_RUN_IDLE);
 }
 
-/* Send raw request bytes; the reply's diagnostic text into a static buffer. */
-static const char *raw(world *w, const void *bytes, size_t length) {
-    static unsigned char reply[4096];
-    static char text[4096];
-    ta_buffer out = {reply, sizeof reply, 0};
-    text[0] = 0;
-    if (ta_host_request(w->host, (ta_bytes){bytes, length}, &out) != TA_OK) return "(status)";
-    if (out.length == 0) return "(none)"; /* a notification */
-    ta_buffer diagnostic = {text, sizeof text - 1, 0};
-    if (ta_cbor_diagnostic((ta_bytes){reply, out.length}, &diagnostic) != TA_OK) return "(cbor)";
-    text[diagnostic.length] = 0;
-    return text;
-}
-
 static int reply_is(const char *got, const char *expected) {
     if (strcmp(got, expected) != 0) fprintf(stderr, "  got:      %s\n  expected: %s\n", got, expected);
     return strcmp(got, expected) == 0;
 }
 
-#define RAW(w, literal) raw(w, literal, sizeof literal - 1)
 #define RESULT(value) "{\"id\":1,\"result\":" value "}"
 #define ERROR_BODY(code, reason, path, message)                                                    \
     "\"error\":{\"code\":" code ",\"message\":\"" message "\",\"data\":{\"reason\":\"" reason         \
     "\",\"path\":\"" path "\"}}}"
 #define ERROR(code, reason, path, message) "{\"id\":1," ERROR_BODY(code, reason, path, message)
-/* the request's id could not be read: null, as JSON-RPC 2.0 has it */
-#define ERROR_NULL(code, reason, path, message) "{\"id\":null," ERROR_BODY(code, reason, path, message)
-
-static void test_refused_requests(void) {
-    world w;
-    world_open(&w, 0, NULL);
-    /* not a request: the reply's id is null */
-    CHECK(reply_is(RAW(&w, "\xff"), ERROR_NULL("-32700", "malformed", "",
-                                              "the request is not one well-formed CBOR item")));
-    CHECK(reply_is(RAW(&w, "\x01"), ERROR_NULL("-32600", "type", "", "a request is a map")));
-    CHECK(reply_is(RAW(&w, "\x81\xa0"), ERROR_NULL("-32600", "type", "", "a request is a map"))); /* a batch */
-    CHECK(reply_is(RAW(&w, "\xa0"),
-                   ERROR_NULL("-32600", "missing", "method", "method names what the request does")));
-    CHECK(reply_is(RAW(&w, "\xa1\x66method\x01"), ERROR_NULL("-32600", "type", "method", "method is text")));
-    CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x61x\x01"),
-                   ERROR_NULL("-32600", "unknown", "x", "a request has only method, params and id")));
-    CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x66params\x01"),
-                   ERROR_NULL("-32600", "type", "params", "params is a map")));
-    CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x62id\x80"),
-                   ERROR_NULL("-32600", "type", "id", "id is an integer, text or null")));
-    CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x62id\xf9\x3c\x00"),
-                   ERROR_NULL("-32600", "type", "id", "id is an integer, text or null")));
-    /* a notification (no id) gets no reply, not even an error */
-    CHECK(reply_is(RAW(&w, "\xa1\x66method\x64nope"), "(none)"));
-    CHECK(reply_is(RAW(&w, "\xa2\x66method\x65stats\x66params\xa1\x61x\x01"), "(none)"));
-    CHECK(reply_is(RAW(&w, "\xa2\x62id\x01\x66method\x64nope"), ERROR("-32601", "unknown", "method", "no such method")));
-    CHECK(reply_is(RAW(&w, "\xa3\x62id\x01\x66method\x65stats\x66params\xa1\x61x\x01"),
-                   ERROR("-32602", "unknown", "params.x", "params has a field this method does not take")));
-    /* the id comes back first, the same item: an integer, text or null */
-    CHECK(strncmp(RAW(&w, "\xa2\x66method\x65stats\x62id\x07"), "{\"id\":7,\"result\":{\"host\":", 25) == 0);
-    CHECK(strncmp(RAW(&w, "\xa2\x66method\x65stats\x62id\x24"), "{\"id\":-5,\"result\":{\"host\":", 26) == 0);
-    CHECK(strncmp(RAW(&w, "\xa2\x66method\x65stats\x62id\xf6"), "{\"id\":null,\"result\":{\"host\":", 28) == 0);
-    CHECK(reply_is(RAW(&w, "\xa2\x66method\x64nope\x62id\x61" "a"),
-                   "{\"id\":\"a\",\"error\":{\"code\":-32601,\"message\":\"no such method\","
-                   "\"data\":{\"reason\":\"unknown\",\"path\":\"method\"}}}"));
-    /* more items than the tokens on the stack hold */
-    unsigned char big[32 + 300];
-    size_t n = sizeof "\xa2\x66method\x65stats\x66params\xa1\x61x\x99\x01\x2c" - 1;
-    memcpy(big, "\xa2\x66method\x65stats\x66params\xa1\x61x\x99\x01\x2c", n); /* "x": [300 items] */
-    for (int i = 0; i < 300; i++)
-        big[n++] = 0x01;
-    CHECK(reply_is(raw(&w, big, n), ERROR_NULL("-32003", "limit", "", "a request has at most 256 items")));
-    /* a notification is applied: this watch takes id 1, so the next one gets 2 */
-    CHECK(reply_is(RAW(&w, "\xa2\x66method\x6btrace.watch\x66params\xa1\x65rules\x81\xa0"), "(none)"));
-    CHECK(reply_is(RAW(&w, "\xa3\x62id\x01\x66method\x6btrace.watch\x66params\xa1\x65rules\x81\xa0"),
-                   RESULT("{\"id\":2}")));
-    world_close(&w);
-}
-
-static void test_stats_actors_actor_state(void) {
-    world w;
-    world_open(&w, 0, NULL);
-    settle(&w);
-    static host_ask a;
-    ask_begin(&a, "stats", 0);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK_EQUAL(ask_uint(&a, ask_field(&a, 0, "host"), "segments"), 1u);
-    CHECK_EQUAL(ask_uint(&a, ask_field(&a, 0, "host"), "actors"), 1u);
-    CHECK(strstr(a.text, "\"charts\":[{\"name\":\"pinged\",\"actors\":1,\"hibernated\":0,"
-                         "\"spawned\":1,\"ended\":0,") != NULL);
-    /* actors: one page, then a second actor and pages of one */
-    ta_cbor_writer *writer = ask_begin(&a, "actors", 0);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, RESULT("{\"sessions\":[1],\"cursor\":null}")));
-    ta_spawn spawn;
-    memset(&spawn, 0, sizeof spawn);
-    spawn.segment = w.segment;
-    uint64_t second;
-    CHECK_EQUAL(ta_host_spawn(w.host, &spawn, &second), TA_OK);
-    settle(&w);
-    uint64_t cursor = 0, sessions[1];
-    uint32_t total = 0, got;
-    while ((got = host_actors_page(w.host, &cursor, (ta_uint64_array){sessions, 1})) != 0)
-        total += got;
-    CHECK_EQUAL(total, 2u);
-    writer = ask_begin(&a, "actors", 1);
-    ta_cbor_write_text(writer, ta_string("limit"));
-    ta_cbor_write_uint(writer, 0);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32602", "range", "params.limit", "limit is between 1 and 512")));
-    /* actor and state */
-    writer = ask_begin(&a, "actor", 1);
-    ta_cbor_write_text(writer, ta_string("session"));
-    ta_cbor_write_uint(writer, w.session);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, RESULT("{\"session\":1,\"segment\":0,\"chart\":\"pinged\",\"parent\":null,"
-                                  "\"mailbox\":0,\"invocations\":0}")));
-    writer = ask_begin(&a, "actor", 1);
-    ta_cbor_write_text(writer, ta_string("session"));
-    ta_cbor_write_uint(writer, 99);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32001", "stale", "params.session", "no such session in this host")));
-    ask_begin(&a, "state", 0);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32602", "missing", "params.session", "session is the actor's session id")));
-    char value[64];
-    CHECK_EQUAL(ask_state(w.host, w.session, value, sizeof value), TA_OK);
-    CHECK(reply_is(value, "\"s\""));
-    world_close(&w);
-}
-
-static void test_trace_configure_and_watch(void) {
-    world w;
-    world_open(&w, 0, NULL);
-    static host_ask a;
-    ta_cbor_writer *writer = ask_begin(&a, "trace.configure", 2);
-    ta_cbor_write_text(writer, ta_string("detail"));
-    ta_cbor_write_text(writer, ta_string("decisions"));
-    ta_cbor_write_text(writer, ta_string("sample"));
-    ta_cbor_write_float(writer, 0.25);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, RESULT("{}")));
-    writer = ask_begin(&a, "trace.configure", 1);
-    ta_cbor_write_text(writer, ta_string("detail"));
-    ta_cbor_write_text(writer, ta_string("loud"));
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32602", "unknown", "params.detail", "detail is one of summary, decisions, full, off")));
-    writer = ask_begin(&a, "trace.configure", 1);
-    ta_cbor_write_text(writer, ta_string("sample"));
-    ta_cbor_write_uint(writer, 2);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32602", "range", "params.sample", "a share is between 0 and 1")));
-    writer = ask_begin(&a, "trace.configure", 1);
-    ta_cbor_write_text(writer, ta_string("rules"));
-    ta_cbor_write_array(writer, 2);
-    ta_cbor_write_map(writer, 1);
-    ta_cbor_write_text(writer, ta_string("chart"));
-    ta_cbor_write_text(writer, ta_string("pinged"));
-    ta_cbor_write_map(writer, 1);
-    ta_cbor_write_text(writer, ta_string("from"));
-    ta_cbor_write_array(writer, 1);
-    ta_cbor_write_text(writer, ta_string("elsewhere"));
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32602", "unknown", "params.rules[1].from",
-                                 "from is a list of host, actor, timer, spawn, sampled, unsampled")));
-    /* a watch: its reply does not fit, so it is not applied (the next one gets id 1) */
-    writer = ask_begin(&a, "trace.watch", 1);
-    ta_cbor_write_text(writer, ta_string("rules"));
-    ta_cbor_write_array(writer, 1);
-    ta_cbor_write_map(writer, 2);
-    ta_cbor_write_text(writer, ta_string("chart"));
-    ta_cbor_write_text(writer, ta_string("pinged"));
-    ta_cbor_write_text(writer, ta_string("sample"));
-    ta_cbor_write_text(writer, ta_string("sample"));
-    ta_buffer request = {a.request, sizeof a.request, 0};
-    CHECK_EQUAL(ta_cbor_finish(writer, &request), TA_OK);
-    unsigned char small[4];
-    ta_buffer out = {small, sizeof small, 0};
-    CHECK_EQUAL(ta_host_request(w.host, (ta_bytes){a.request, request.length}, &out),
-                TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, 17u); /* {"id": 1, "result": {"id": 1}} */
-    CHECK(reply_is(raw(&w, a.request, request.length), RESULT("{\"id\":1}")));
-    CHECK(reply_is(raw(&w, a.request, request.length), RESULT("{\"id\":2}")));
-    writer = ask_begin(&a, "trace.watch", 0);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32602", "missing", "params.rules", "a watch has at least one rule")));
-    writer = ask_begin(&a, "trace.unwatch", 1);
-    ta_cbor_write_text(writer, ta_string("id"));
-    ta_cbor_write_uint(writer, 1);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, RESULT("{}")));
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32001", "stale", "params.id", "no such watch: it ended or never was")));
-    world_close(&w);
-}
 
 static void test_spans_and_metrics(void) {
     world w;
@@ -314,12 +136,6 @@ static void test_spans_and_metrics(void) {
     CHECK(name != TA_NIL && tokens[name].kind == TA_CBOR_TEXT);
     uint32_t trace = ta_cbor_member(&document, spans + 1, ta_string("trace"));
     CHECK(trace != TA_NIL && tokens[trace].count == 32);
-    /* not OTLP */
-    CHECK(reply_is(RAW(&w, DECODE "\x41\xff"),
-                   ERROR("-32006", "malformed", "params.traces", "traces is not an ExportTraceServiceRequest")));
-    CHECK(reply_is(RAW(&w, "\xa2\x62id\x01\x66method\x72trace.spans.decode"),
-                   ERROR("-32602", "missing", "params.traces",
-                         "traces is the bytes of an ExportTraceServiceRequest")));
     /* metrics on demand: measured, then written; the second call puts the same */
     ta_buffer metrics = {NULL, 0, 0};
     CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_ERROR_NO_MEMORY);
@@ -357,21 +173,6 @@ static void test_actor_context(void) {
     settle(&w);
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
     CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":null}}")));
-    /* measured: the reply that does not fit changes nothing and says its size */
-    ta_buffer request = {a.request, sizeof a.request, 0};
-    CHECK_EQUAL(ta_cbor_finish(&a.writer, &request), TA_OK);
-    ta_buffer out = {NULL, 0, 0};
-    CHECK_EQUAL(ta_host_request(w.host, (ta_bytes){a.request, request.length}, &out), TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, a.answer.length);
-    /* no such session; no session */
-    writer = ask_begin(&a, "actor.context", 1);
-    ta_cbor_write_text(writer, ta_string("session"));
-    ta_cbor_write_uint(writer, 99);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32001", "stale", "params.session", "no such session in this host")));
-    ask_begin(&a, "actor.context", 0);
-    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, ERROR("-32602", "missing", "params.session", "session is the actor's session id")));
     /* hibernated: wake it first */
     static unsigned char blob[1 << 16];
     ta_buffer hibernated = {blob, sizeof blob, 0};
@@ -454,17 +255,9 @@ static void test_subscribe(void) {
     CHECK_EQUAL(changed(&w, other), 0u);
     ping(&w, w.session);
     CHECK_EQUAL(changed(&w, w.session), 1u); /* the next run watches it again */
-    /* the host holds one subscription (max_subscriptions) */
-    CHECK(reply_is(subscription(&w, "actor.subscribe", other),
-                   ERROR("-32003", "limit", "",
-                         "the host watches as many sessions as it holds (maxSubscriptions)")));
-    CHECK(reply_is(subscription(&w, "actor.subscribe", 99),
-                   ERROR("-32001", "stale", "params.session", "no such session in this host")));
     CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session), RESULT("{}")));
     ping(&w, w.session);
     CHECK_EQUAL(changed(&w, w.session), 0u);
-    CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session),
-                   ERROR("-32001", "stale", "params.session", "the session is not subscribed")));
 
     /* across hibernation: the subscription is the host's, the watch the actor's */
     static unsigned char blob[1 << 16];
@@ -503,8 +296,6 @@ static ta_status create(const void *bytes, size_t length, char *text, ta_host **
     return status;
 }
 
-#define CREATE(literal, text, host) create(literal, sizeof literal - 1, text, host)
-#define CONFIG_ERROR(code, reason, path, message) "{" ERROR_BODY(code, reason, path, message) /* no id */
 
 static void test_create(void) {
     char text[1024];
@@ -564,34 +355,6 @@ static void test_create(void) {
     ta_buffer traces = {NULL, 0, 0};
     CHECK_EQUAL(ta_host_traces(host, &traces), TA_OK); /* an encoder: nothing staged */
     ta_host_free(host);
-    /* the smallest config */
-    CHECK_EQUAL(CREATE("\xa1\x68systemID\x61h", text, &host), TA_OK);
-    ta_host_free(host);
-    /* refused, and why */
-    CHECK_EQUAL(CREATE("\xff", text, &host), TA_ERROR_INVALID);
-    CHECK(host == NULL);
-    CHECK(reply_is(text, CONFIG_ERROR("-32700", "malformed", "", "the config is not one well-formed CBOR item")));
-    CHECK_EQUAL(CREATE("\x01", text, &host), TA_ERROR_INVALID);
-    CHECK(reply_is(text, CONFIG_ERROR("-32600", "type", "", "a config is a map")));
-    CHECK_EQUAL(CREATE("\xa0", text, &host), TA_ERROR_INVALID);
-    CHECK(reply_is(text, CONFIG_ERROR("-32602", "missing", "systemID",
-                                      "systemID names this system in its addresses")));
-    CHECK_EQUAL(CREATE("\xa1\x68systemID\x63" "a/b", text, &host), TA_ERROR_INVALID);
-    CHECK(reply_is(text, CONFIG_ERROR("-32602", "range", "systemID",
-                                      "systemID is not a valid system id (docs/protocol.md, Addresses)")));
-    CHECK_EQUAL(CREATE("\xa2\x68systemID\x61h\x61x\x01", text, &host), TA_ERROR_INVALID);
-    CHECK(reply_is(text, CONFIG_ERROR("-32602", "unknown", "x",
-                                      "the config has a field the host does not take")));
-    CHECK_EQUAL(CREATE("\xa2\x68systemID\x61h\x66system\xa1\x69maxActors\x61" "8", text, &host),
-                TA_ERROR_INVALID);
-    CHECK(reply_is(text, CONFIG_ERROR("-32602", "type", "system.maxActors", "expected an unsigned integer")));
-    CHECK_EQUAL(CREATE("\xa2\x68systemID\x61h\x6cioProcessors\x81\xa0", text, &host), TA_ERROR_INVALID);
-    CHECK(reply_is(text, CONFIG_ERROR("-32602", "missing", "ioProcessors[0].type",
-                                      "type is the I/O processor's URI")));
-    CHECK_EQUAL(CREATE("\xa2\x68systemID\x61h\x69telemetry\xa1\x68resource\xa1\x61k\x01", text, &host),
-                TA_ERROR_INVALID);
-    CHECK(reply_is(text, CONFIG_ERROR("-32602", "type", "telemetry.resource",
-                                      "resource is a map of text to text")));
     /* without an error buffer: refused all the same */
     ta_host_environment environment;
     memset(&environment, 0, sizeof environment);
@@ -601,9 +364,6 @@ static void test_create(void) {
 }
 
 int main(void) {
-    RUN(test_refused_requests);
-    RUN(test_stats_actors_actor_state);
-    RUN(test_trace_configure_and_watch);
     RUN(test_spans_and_metrics);
     RUN(test_actor_context);
     RUN(test_subscribe);

@@ -96,6 +96,8 @@ An envelope is a CBOR map with text keys. A writer puts the keys in the
 order of this table and leaves out the empty ones. A reader takes them in
 any order and refuses a map with an unknown key, a repeated key or a value
 of the wrong type: such bytes are not an envelope, and nobody is answered.
+An envelope without `target` or `name` is read, so that its sender can be
+answered: delivery refuses it as `malformed` (see *Errors*).
 
 The data is wrapped (RFC 8949, tag 24: an encoded CBOR data item) so that a
 router reads the envelope without reading the value. Only the datamodel
@@ -333,8 +335,11 @@ Event I/O Processor, outside this protocol.
 
 - `tests/conformance/addresses.json` — address parsing and formatting
   vectors; run by the C parser (`tests/unit/test_address.c`).
-- `tests/conformance/values.txt` — neutral value vectors, CBOR in hex with
+- `tests/protocol/values.txt` — neutral value vectors, CBOR in hex with
   its diagnostic notation; run in C (`tests/unit/test_datamodel_ecmascript.c`).
+- `tests/protocol/envelopes.txt` — envelopes and error envelopes as bytes:
+  written, read, refused and relayed (`tests/protocol/run_protocol.c`; see
+  `tests/protocol/README.md`).
 - `tests/unit/test_router.c` — the router: routes, relaying, hop limit,
   origin validation, policy, errors, dedup, route status.
 

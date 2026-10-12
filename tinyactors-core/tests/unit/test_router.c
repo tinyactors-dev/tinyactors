@@ -1269,24 +1269,7 @@ static void test_envelope_bytes(void) {
     effect.kind = TA_EFFECT_LOG;
     CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_ERROR_INVALID);
 
-    /* not envelopes: nothing to answer */
-    static const unsigned char not_cbor[] = {0xff};
-    static const unsigned char not_map[] = {0x01};
-    static const unsigned char unknown_key[] = {0xa1, 0x63, 'f', 'o', 'o', 0x01};
-    static const unsigned char bad_type[] = {0xa1, 0x64, 'h', 'o', 'p', 's', 0x61, 'x'};
-    static const unsigned char bad_reason[] = {0xa2, 0x65, 'e', 'r', 'r', 'o', 'r', 0x61, 'x',
-                                               0x66, 'o', 'r', 'i', 'g', 'i', 'n', 0x61, 'o'};
-    const ta_bytes bad[] = {{not_cbor, sizeof not_cbor},
-                            {not_map, sizeof not_map},
-                            {unknown_key, sizeof unknown_key},
-                            {bad_type, sizeof bad_type}};
-    for (uint32_t k = 0; k < sizeof bad / sizeof bad[0]; k++) {
-        CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, bad[k], &envelope), TA_ERROR_INVALID);
-        CHECK_EQUAL(envelope.size, 0u);
-        CHECK_EQUAL(ta_host_peer_error_read(bad[k], &error), TA_ERROR_INVALID);
-    }
-    CHECK_EQUAL(ta_host_peer_error_read((ta_bytes){bad_reason, sizeof bad_reason}, &error),
-                TA_ERROR_INVALID);
+    /* bytes that are not envelopes: tests/protocol/envelopes.txt */
 
     /* data that is not a neutral value: refused as malformed, answered */
     static const char bad_data_prefix[] = "\xa5"
