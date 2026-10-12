@@ -1,0 +1,37 @@
+#!/usr/bin/env ruby
+#MISE description="Test tinyactors-cpython: lint (rules, the binding's C, the adapter, the mapping table), the build, the interpreters, and the conformance suite against the adapter on both datamodels"
+#MISE sources=["src/**/*", "conform/**/*", "tests/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "pyproject.toml", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise.toml", "../LICENSE"]
+#MISE outputs={auto=true}
+# vim:ft=ruby
+
+# The sources are this project's files and those it builds and tests
+# against: core's (its amalgamation, the lint utilities, requests.md for
+# the mapping table) and the suite's, so a change to either reruns this
+# task from the root's `mise run test` (AGENTS.md, "Tests: what to run").
+#
+# With no code yet (M0), it passes on: the lint rules' tests and an empty
+# src/, the mapping table's empty table, core's amalgamation built into
+# build/core, and both interpreters found. The conformance suite needs the
+# adapter (conform/, M1): without it, this task says so and skips it; with
+# it, `mise run conform` must pass. `mise run conform` on its own fails
+# without the adapter.
+
+require_relative '../cpython'
+
+CPython.run('mise', 'run', 'lint')
+CPython.run('mise', 'run', 'build')
+
+python = CPython.pinned('python')
+free_threaded = CPython.free_threaded_python
+[[python, 'the abi3 floor'], [free_threaded, 'the tests\' build without Py_LIMITED_API']].each do |interpreter, role|
+  version = IO.popen([interpreter, '-c', 'import sys, sysconfig; print(sys.version.split()[0], ' \
+                                         '"free-threaded" if sysconfig.get_config_var("Py_GIL_DISABLED") else "with the GIL")'],
+                     &:read).strip
+  puts "test: python #{version} (#{role}): #{interpreter}"
+end
+
+if CPython::ADAPTER.exist?
+  CPython.run('mise', 'run', 'conform')
+else
+  puts 'test: conform skipped: no adapter yet (conform/, M1)'
+end

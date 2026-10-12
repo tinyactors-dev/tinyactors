@@ -1,0 +1,23 @@
+# tinyactors-cpython's toolchain (ROADMAP.md, step 8, "File trees"): only
+# this project downloads it. Tasks are Ruby file tasks in mise/tasks/.
+#
+# The C compiler, LLVM's binutils, ast-grep and zig are the root mise.toml's
+# (mise/lib/toolchain/): the extension compiles with Toolchain::Target, and a
+# release with the root's zig (docs/adr/0001, decision 5). A second pin of
+# zig here could drift from the one every other release uses.
+
+[tools]
+# The wheel is abi3 from 3.11 (Py_LIMITED_API 0x030B0000): the extension
+# is built and tested on the oldest interpreter it claims.
+python = "3.11"
+# Installs the free-threaded interpreter below, and runs Python tools.
+uv = "0.12.22"
+
+[env]
+# The free-threaded interpreter the tests build the same sources for a
+# second time, without Py_LIMITED_API (ROADMAP.md, step 8, "The
+# free-threaded build is for tests only"). mise builds a free-threaded
+# python from source (pyenv's python-build); uv installs a prebuilt one:
+# `uv python install` and `uv python find` take this request
+# (CPython.free_threaded_python, mise/cpython.rb).
+TA_PYTHON_FREE_THREADED = "3.14.8t"

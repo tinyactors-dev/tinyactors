@@ -1,0 +1,30 @@
+#!/usr/bin/env ruby
+#MISE description="Run the conformance suite against the adapter (python -m conform) as a binding (--kind binding), on the native datamodel and on quickjs; arguments go to the runner (--suite protocol, ...)"
+#USAGE arg "[argument]..." var=#true help="options for the runner: --suite, --timeout, --skip (tinyactors-test/README.md)"
+# vim:ft=ruby
+
+# The differential run (ROADMAP.md, step 8, "Gates"): the same suite on the
+# native "python" datamodel and on quickjs, and both must pass. The kind is
+# stated here, by the project that runs the suite, not by the adapter
+# (tinyactors-test/docs/driver.md, "Kinds"). The adapter runs on the pinned
+# interpreter, by path: the runner is tinyactors-test's task, whose PATH has
+# its own python first.
+#
+# M1: the adapter imports the built extension as `tinyactors`; put it on
+# the import path here (PYTHONPATH), never in the adapter, whose lint
+# refuses `sys.path` (tinyactors-test/lint).
+
+require_relative '../cpython'
+
+unless CPython::ADAPTER.exist?
+  abort "conform: no adapter yet: #{CPython::ADAPTER.relative_path_from(CPython::ROOT)}/ " \
+        '(python -m conform, written in M1)'
+end
+
+python = CPython.pinned('python')
+options = ARGV.reject { |argument| argument == '--' }
+%w[native quickjs].each do |datamodel|
+  puts "conform: #{datamodel}"
+  CPython.run('mise', 'run', '//tinyactors-test:run', '--', '--kind', 'binding', '--datamodel', datamodel, *options,
+              python, '-m', 'conform')
+end

@@ -1,0 +1,32 @@
+#!/usr/bin/env ruby
+#MISE description="Lint: the ast-grep rules' tests, then the binding's C (parameters, buffers, layers, one timer, the ta_python_ prefix), the adapter's imports, and the mapping table"
+# vim:ft=ruby
+
+# 1. tools/lint/rules (sgconfig.yml), after their tests in tools/lint/tests:
+#    at most three parameters and ta_bytes/ta_buffer for every function of
+#    src/ (with the utility rules of tinyactors-core/tools/lint/utils), the
+#    layer rules, one timer in src/loop.c, and the ta_python_ prefix.
+# 2. The adapters' lint (tinyactors-test/lint): the adapter imports only
+#    the public module, `tinyactors`.
+# 3. docs/api-map.md: every API item names a core function, constant or
+#    request method (mise/lib/api_map.rb).
+#
+# Invoke `ast-grep`, never `sg` (shadow-utils' group tool in orbs).
+
+require_relative '../cpython'
+require 'api_map'
+
+CPython.run('ast-grep', 'test')
+CPython.run('ast-grep', 'scan')
+
+if CPython::ADAPTER.exist?
+  CPython.run('mise', 'run', '//tinyactors-test:lint', '--', 'conform')
+else
+  CPython.run('mise', 'run', '//tinyactors-test:lint')
+  puts 'lint: no adapter yet (conform/, M1): the adapters\' lint ran its own tests only'
+end
+
+problems = APIMap.check(CPython::MAPPING)
+problems.each { |problem| warn "lint: docs/api-map.md: #{problem}" }
+abort "lint: docs/api-map.md: #{problems.size} problem(s)" unless problems.empty?
+puts 'lint: docs/api-map.md names core behind every API item'

@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+#MISE description="Build the wheel: one abi3 wheel (3.11+) per platform, no .py files in it. Not yet: packaging is M5"
+# vim:ft=ruby
+
+# ROADMAP.md, step 8, M5 ("examples and release": release tasks and
+# changelogs for both packages) and the file tree of tinyactors-cpython
+# (pyproject.toml: one abi3 wheel per platform, built by this task).
+
+abort 'wheel: not yet: the wheel is built in M5 (ROADMAP.md, step 8, "M5: examples and release")'
