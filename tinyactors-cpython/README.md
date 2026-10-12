@@ -18,7 +18,9 @@ walking skeleton:
   effects;
 - `request` with `TinyactorsError` (code, reason, path);
 - values converted between CBOR and Python ([docs/values.md](docs/values.md)),
-  with `Address` for an actor reference and `UNDEFINED` beside `None`;
+  with `Address` for an actor reference and `UNDEFINED` beside `None`,
+  and the same conversion as `tinyactors.encode(value) -> bytes` and
+  `tinyactors.decode(data) -> object`;
 - the `"python"` datamodel: `<data>`, `cond`, `assign`, `<script>`,
   `_event`, `In()`, `<send>` with params, `<foreach>` in Python, and the
   ECMAScript datamodel (quickjs) beside it;
@@ -27,7 +29,7 @@ walking skeleton:
 
 Later milestones add the W3C suite in Python (M2), every effect and both
 drivers (M3), hibernation, migration and peers (M4), and the release:
-one abi3 wheel per platform for Python 3.11 and later (M5).
+one abi3 wheel per platform for Python 3.13 and later (M5).
 
 ## Limits, to be documented here
 

@@ -4,9 +4,11 @@ The Python extension `tinyactors`: one C extension module, written against
 the CPython C API, that drives `ta_host` (README.md). The repository root's
 `AGENTS.md` applies too; this file adds what the Python session needs.
 Read first: [`tinyactors-core/docs/bindings.md`](../tinyactors-core/docs/bindings.md)
-(the guide), the public headers it names, and
-[`ROADMAP.md`](../ROADMAP.md), step 8. Build from the guide and the
-headers, not from an older binding or the proposals' sketches.
+(the guide), the public headers it names,
+[`ROADMAP.md`](../ROADMAP.md), step 8 (the plan of both bindings), and
+this project's [`ROADMAP.md`](ROADMAP.md) (this session's plan, progress
+and requests to core). Build from the guide and the headers, not from an
+older binding or the proposals' sketches.
 
 ## Whom it serves
 
@@ -23,16 +25,29 @@ effect (`docs/api-map.md`); what core does not have is not in the API.
 - **This session owns `tinyactors-cpython/` and nothing else.** A Node
   session owns `tinyactors-napi/` at the same time, in the same checkout;
   a coordinating session owns `tinyactors-core` and `tinyactors-test`.
+- **This project's `ROADMAP.md` is the session's.** It holds the plan
+  and the progress of the milestone the session is on (`MILESTONE` in
+  `mise/cpython.rb`), and its "Requests to core". The session keeps it up
+  to date as it works, and never edits the root `ROADMAP.md`: the
+  coordinator reads this file, moves a request into the root's
+  "Requests to core", and marks a milestone done there.
 - **Core is frozen.** A gap in core (or in the suite) is written under
-  "Requests to core" in `ROADMAP.md`: what is missing, why, and which
-  suite case or test shows it. The binding waits for it or works around
-  nothing; it never patches core. The coordinator makes the change and
-  says when to go on. Commit the request alone (`git commit -- ROADMAP.md`,
-  `docs: request to core: ...`).
-- **One checkout, on `main`, commits scoped to this path:**
-  `git commit -- tinyactors-cpython/`. Never `git add -A`, `git commit -a`,
+  "Requests to core" in this project's `ROADMAP.md`: what is missing, why,
+  and which suite case or test shows it. The binding waits for it or
+  works around nothing; it never patches core or the suite. The
+  coordinator makes the change and says when to go on. Commit the request
+  alone (`docs(cpython): request to core: ...`).
+- **One checkout, on `main`, commits of this project's paths only:**
+  `git commit -- tinyactors-cpython/` (`git add` a new file by its path
+  first). Never `git add -A`, `git add .` at the root, `git commit -a`,
   `git stash`, `git checkout -- .` or `git reset --hard`: they take or
-  undo the other sessions' work. History stays linear.
+  undo the other sessions' work. History stays linear: `git pull
+  --rebase` when `main` moved.
+- **`.git/index.lock` belongs to another session's git command.** When
+  git says the index is locked, wait a few seconds and run the same
+  command again, as often as it takes. Never delete the lock: the other
+  command is still writing the index, and removing it can lose that
+  session's staged work.
 - **Commit subjects are the changelog's input** (root `AGENTS.md`,
   "Releases and changelogs"): scope `cpython` (`feat(cpython): ...`), `!`
   for a breaking change with a body that says what a caller does.
@@ -67,16 +82,32 @@ is. The lint rule `functions-carry-the-prefix` checks functions.
 The host allocates through the `ta_allocator` its environment gives it
 (`tinyactors-core/include/tinyactors/allocator.h`; bindings.md, section 6),
 and this binding gives it `PyMem_RawMalloc` and `PyMem_RawFree`
-(ROADMAP.md, step 8, M0 item 4): the raw domain needs no GIL ("the GIL is
-not held when the allocator is called", CPython's
-`Include/cpython/pymem.h`, 3.11: line 73), which a free-threaded build
-has none of anyway. Python's own
-objects stay outside the host's allocator; the README says so
-(bindings.md, section 8). Core asks for an alignment (`align`): check
-what `PyMem_RawMalloc` guarantees against what core asks before relying
-on it (unverified). The two functions take core's parameter lists
-(`void *context, size_t size, size_t align` and `void *context, void
-*ptr, size_t size`), which the lint exempts by that signature.
+(ROADMAP.md, step 8, M0 item 4), which are in the limited API from 3.13
+(CPython's `Include/pymem.h`, 3.13: lines 90-98), the wheel's floor. The
+raw domain needs no GIL ("Memory allocator which doesn't require the GIL
+to be held", the same file, line 91), which a free-threaded build has
+none of anyway. Python's own objects stay outside the host's allocator;
+the README says so (bindings.md, section 8). The two functions take
+core's parameter lists (`void *context, size_t size, size_t align` and
+`void *context, void *ptr, size_t size`), which the lint exempts by that
+signature. `malloc`, `calloc`, `realloc` and `free` stay refused by the
+layer lint.
+
+**Alignment: `align` is at most 8, and `PyMem_RawMalloc` gives 16.** The
+host passes 8 on every allocation it makes
+(`tinyactors-core/src/host/host.c:25`, `host_alloc`, and `:287`, the host
+itself; no other call in `src/host`, `src/system` or `src/base` reaches
+the allocator), the largest alignment a region object needs is 8
+(`src/base/config.h:46`, `TA_ALIGN_MAX`), and the allocator's contract
+says "a power of two, at most 8 from this library"
+(`include/tinyactors/allocator.h:9`). A spike on CPython 3.13.16
+(macOS arm64) called `PyMem_RawMalloc` 800 times, sizes 1 to 100000,
+under `PYTHONMALLOC` default, `debug`, `malloc` and `pymalloc`: the
+smallest alignment seen was 16 in every mode. So `PyMem_RawMalloc`
+meets what core asks, and the binding's `alloc` need not align by hand
+(an `assert(align <= 8)` states the contract). A raw allocator an
+application installs with `PyMem_SetAllocator` is not covered by the
+spike (unverified).
 
 ## C rules
 
@@ -112,15 +143,46 @@ on it (unverified). The two functions take core's parameter lists
     never call ta_system_* functions").
   - `one-timer-in-loop`: the loop's timer and wakes (`call_at`,
     `call_later`, `call_soon`, `sleep`) appear in `src/loop.c` only.
-- **The free-threaded build is for tests only.** The wheel is abi3 from
-  3.11 (`Py_LIMITED_API`); the test task builds the same sources again
-  without it for the free-threaded interpreter (`TA_PYTHON_FREE_THREADED`
-  in `mise.toml`, installed by uv: `CPython.free_threaded_python`). The
-  functions that differ (`PyDict_GetItemRef`, `PyList_GetItemRef`,
-  `Py_mod_gil`, limited only from 3.13) sit behind `TA_PYTHON_*` macros
-  in `src/extension.h`; module state comes from `PyType_GetModule` and
-  `METH_METHOD` (ROADMAP.md, step 8, "The free-threaded build is for
-  tests only").
+- **No mutable globals** (`no-mutable-globals`): no global and no static
+  local the extension writes. The module is imported once per
+  interpreter, and a host may be driven from any thread of the
+  free-threaded build, so state lives in the module's state
+  (`PyModule_GetState`) or on the `Host`. A constant is a `const` object
+  (`static const char *const names[]`; `static const char *p` is a
+  mutable pointer). CPython's tables, which its API takes by non-const
+  pointer, are exempt by type: `PyMethodDef`, `PyMemberDef`,
+  `PyGetSetDef`, `PyType_Slot`, `PyType_Spec`, `PyModuleDef`,
+  `PyModuleDef_Slot`, `PyStructSequence_Desc`, `PyStructSequence_Field`.
+- **The wheel is abi3 from 3.13** (`Py_LIMITED_API 0x030D0000`;
+  `pyproject.toml`, `mise.toml`). Every CPython function this file and
+  ROADMAP.md name for M1 is in the 3.13 limited API: a spike compiled
+  `PyMem_RawMalloc`, `PyMem_RawFree`, `PyType_GetModuleByDef`,
+  `PyType_GetModule`, `PyModule_GetState`, `PyType_FromModuleAndSpec`,
+  `PyErr_SetInterruptEx`, `PyStructSequence_NewType`, `Py_CompileString`,
+  `PyEval_EvalCode`, `PyDict_GetItemRef`, `PyList_GetItemRef`,
+  `PyErr_GetRaisedException`, `PyErr_SetRaisedException`,
+  `PyUnicode_AsUTF8AndSize`, `PyObject_GetAttrString`,
+  `PyObject_CallMethod`, `PyErr_SetString`, the slots `Py_mod_exec`,
+  `Py_mod_gil` (with `Py_MOD_GIL_NOT_USED`), `Py_tp_traverse`,
+  `Py_tp_clear`, the flags `METH_METHOD | METH_FASTCALL | METH_KEYWORDS`
+  and the typedefs `PyCMethod` and `PyCFunctionFastWithKeywords` with
+  clang 22 against CPython 3.13.16's headers and `Py_LIMITED_API
+  0x030D0000`, with no error; at `0x030C0000` (3.12),
+  `PyMem_Raw*`, `PyDict_GetItemRef`, `PyList_GetItemRef`,
+  `PyType_GetModuleByDef` and `Py_mod_gil` are undeclared. Module state
+  comes from `PyType_GetModuleByDef` (it searches the type's MRO, so a
+  method called on a subclass finds the module: CPython's C API
+  documentation of that function) and `METH_METHOD`.
+- **The free-threaded build is for tests only.** The limited API cannot
+  be compiled for a free-threaded interpreter before 3.15 (`Python.h`
+  refuses `Py_LIMITED_API` with `Py_GIL_DISABLED`: 3.13, line 51), so the
+  test task builds the same sources again without `Py_LIMITED_API` for
+  the free-threaded interpreter (`TA_PYTHON_FREE_THREADED` in
+  `mise.toml`, installed by uv: `CPython.free_threaded_python`). Every
+  function above is in the limited API from 3.13 and in the full API of
+  3.14t alike, so the sources need no compatibility macros: write
+  `PyDict_GetItemRef`, `PyList_GetItemRef` and `Py_mod_gil` directly.
+  A free-threaded wheel waits for abi3t (3.15).
 
 ## Pitfalls M1 handles, each with a test of its own
 
@@ -161,6 +223,32 @@ review: the reasoned-analysis pass of 2026-10-12").
   allocator (bindings.md, section 8, "Say what the language cannot
   bound").
 
+## The module's CBOR: `tinyactors.encode` and `tinyactors.decode`
+
+The module exposes its CBOR conversion as two top-level functions, shaped
+like `json.dumps`/`json.loads` and `cbor2.dumps`/`cbor2.loads` but named
+for what they do (ROADMAP.md, step 8, M1; bindings.md, section 9):
+
+- `tinyactors.encode(value) -> bytes`: the value table of
+  `docs/values.md` written with `ta_cbor_encode` (core's token lists,
+  `include/tinyactors/cbor.h`) from the tokens `src/values.c` builds;
+- `tinyactors.decode(data) -> object`: `ta_cbor_decode` into tokens, then
+  the Python objects of the same table (`Address`, `UNDEFINED`, `bytes`,
+  `int` to 64 bits). Malformed data, a value outside the table, a lone
+  surrogate, nesting past 64 are refused with an exception, never turned
+  into a value (which exception is decided in M1, in `docs/values.md`).
+
+They are the same conversion the API uses for requests, replies, config
+and event data, not a second codec: one `values.c`, called by both. Each
+has its row in `docs/api-map.md` (`ta_cbor_encode`, `ta_cbor_decode`).
+The adapter (`conform/`) reads and writes the driver's frames with them,
+and imports nothing but `tinyactors` and the standard library (the
+adapters' lint refuses any other package). The vectors then go through
+this binding's codec both ways, so a value that is mapped wrong the same
+way in `decode` and `encode` passes them: the binding's own value tests
+(`tests/`, against `values.txt`'s `python` lines and `docs/values.md`)
+are what catch it (ROADMAP.md, step 8, M1, "Known limit").
+
 ## Tasks
 
 - `mise run build`: core's amalgamation into `build/core`
@@ -169,12 +257,18 @@ review: the reasoned-analysis pass of 2026-10-12").
   `mise/lib/toolchain.rb`; never a compiler from `PATH`, never `$CC`).
 - `mise run lint`: the rules' tests, the rules over `src/`, the adapters'
   lint (`mise run //tinyactors-test:lint -- conform`: the adapter imports
-  only `tinyactors`), and `docs/api-map.md` against core
-  (`mise/lib/api_map.rb`).
+  only `tinyactors` and the standard library), `docs/api-map.md` against
+  core (`mise/lib/api_map.rb`), and the root's checks on this project's
+  files: the build scripts' portability (`mise/lib/build_scripts.rb`) and
+  acronyms (`mise/lib/acronym_case.rb`, `.py` files included).
 - `mise run conform [-- runner options]`: the suite against
   `python -m conform`, with `--kind binding`, on the native datamodel and
-  on quickjs (the differential run). Fails while there is no adapter.
-- `mise run test`: lint, build, both interpreters, and conform once the
+  on quickjs (the differential run); `-- --milestone M1` runs M1's set
+  only (`tinyactors-test/suites/milestones.txt`). Without `--milestone`,
+  the whole suite. Fails while there is no adapter.
+- `mise run test`: lint, build, both interpreters, and the suite's set of
+  the milestone the session is on (`conform -- --milestone M1`, from
+  `MILESTONE` in `mise/cpython.rb`, the one place to move it) once the
   adapter exists (until then it prints `conform skipped: no adapter yet`).
   Its `#MISE sources` list this project's files, core's and the suite's.
   An exhaustive test goes behind a `--full` flag (root `AGENTS.md`,
@@ -184,6 +278,36 @@ review: the reasoned-analysis pass of 2026-10-12").
 The adapter (`conform/`) runs on the pinned interpreter. Put the built
 extension on its import path in the conform task (`PYTHONPATH`), never in
 the adapter: its lint refuses `sys.path`.
+
+## M1 done means
+
+M1 of ROADMAP.md, step 8, for this binding; the plan and its progress are
+in this project's [`ROADMAP.md`](ROADMAP.md).
+
+- **Scope:** the `tinyactors` module and its `Host` type;
+  `ta_host_create` from Python options; images, boot, spawn, send,
+  terminate; the loop with every run status; `DONE`, `ERROR`, `LOG`;
+  `request` with `TinyactorsError` (code, reason, path); the CBOR
+  conversion with the value table (`Address`, `UNDEFINED`, big integers,
+  bytes) and `tinyactors.encode`/`tinyactors.decode`; the `"python"`
+  datamodel for `<data>`, `cond`, `assign`, `<script>`, `_event`, `In()`,
+  `<send>` with params, `<foreach>`; quickjs beside it; the adapter
+  (`conform/`); and each pitfall above with a test of its own.
+- **`SimulatedClock`**, `increment(ms)` (xstate's shape, our meaning): a
+  host created with it arms no timer; `increment(ms)` calls
+  `ta_host_advance_time` and runs the loop until idle; inputs run the
+  turn at the current time. It has its row in `docs/api-map.md`
+  (`ta_host_advance_time`, `ta_host_run`), and the adapter uses it for
+  the scenarios' `advance` steps.
+- **Gates**, all in `mise run test`: the suite's M1 set
+  (`--milestone M1`: every protocol vector file, the basics scenario and
+  the outcome canaries) on the native datamodel and on quickjs; the
+  mapping table; the layer lints, the prefix, `no-mutable-globals`; both
+  interpreters (the abi3 build on 3.13, the free-threaded test build).
+- **Then the API review**, by the coordinator, both bindings side by
+  side: how a Python chart reads, how a Node program reads. M2 starts
+  after it, when the coordinator marks M1 done in the root `ROADMAP.md`
+  and this session moves `MILESTONE` on.
 
 ## Done means
 
@@ -205,6 +329,7 @@ compares them file by file.
 
 ```
 README.md, CHANGELOG.md, mise.toml, pyproject.toml, sgconfig.yml
+ROADMAP.md           this session's plan, progress and requests to core
 docs/api-map.md      each API item → ta_* function, request method or effect (checked)
 docs/values.md       the Python side of the value table
 src/                 extension.h, module.c, host.c, loop.c, effects.c, request.c, values.c,

@@ -7,6 +7,15 @@ datamodel's `to_wire` and `from_wire`. Each row gives its source; a row
 without one is not decided yet and stays under TODO until M1 decides it
 with a test.
 
+The same table is the module's public CBOR conversion,
+`tinyactors.encode(value) -> bytes` and `tinyactors.decode(data) ->
+object` (`docs/api-map.md`; `ta_cbor_encode`, `ta_cbor_decode`), which
+the adapter frames the driver's calls with. So the vectors go through
+this table both ways: a value mapped wrong the same way when read and
+when written still passes them, and only this binding's own tests of the
+table, from the rows below and the `python` lines of `values.txt`, catch
+it (ROADMAP.md, step 8, M1, "Known limit").
+
 The vectors that hold it: `tinyactors-test/suites/protocol/values.txt`.
 A datamodel in another language than ECMAScript passes every roundtrip
 and malformed case but those named "ECMAScript: ..."; its `python` lines
