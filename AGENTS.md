@@ -10,10 +10,11 @@ and core does not handle bytes it has no use for. `tinyactors-core/AGENTS.md`
 has the rules of the C layers themselves (freestanding layers, no pointers
 in system memory, no allocation after init).
 
-**Bindings expose the core, nothing else.** There is no binding until
-[ADR 0009](docs/adr/0009-one-host-two-queues.md) regenerates them from
-`tinyactors-core/docs/bindings.md` (drafted in
-[the proposal](docs/proposals/one-host-two-queues/bindings.md)). Before
+**Bindings expose the core, nothing else.** The bindings are built in
+[ADR 0009](docs/adr/0009-one-host-two-queues.md)'s step 8 from
+`tinyactors-core/docs/bindings.md`, in `tinyactors-napi` and
+`tinyactors-cpython`, each with an `AGENTS.md` of its own
+([ROADMAP.md](ROADMAP.md), step 8). Before
 designing a binding's API: inventory the public headers, write the table
 mapping each API item to the core functions behind it, borrow names and
 call shapes from other libraries (xstate) but never their semantics, and
@@ -45,8 +46,8 @@ what is out of scope. A proposal or ADR states this near its start.
 
 ## Releases and changelogs
 
-Each component (core, napi, tinyxml) has a `CHANGELOG.md` in
-its directory, and a release of it needs a section there that passes
+Each component (core, napi, cpython, tinyxml) has a `CHANGELOG.md` in
+its directory (`tinyactors-napi`, `tinyactors-cpython` for the bindings), and a release of it needs a section there that passes
 `mise run changelog:check <component>`
 ([ADR 0002](docs/adr/0002-changelogs.md)). To prepare a release, use the
 **`release-changelog` skill**: it reads the evidence
@@ -55,7 +56,8 @@ upgrading text, has them reviewed, and stops for the maintainer's approval.
 Do it at release time, not between releases.
 
 - **Commit subjects and scopes are the input.** Scope a commit with the
-  component it changes (`feat(core)`, `fix(napi)`, `feat(core,napi)`); a
+  component it changes (`feat(core)`, `fix(napi)`, `fix(cpython)`,
+  `feat(core,napi)`); a
   breaking change has `!` (`refactor(core,napi)!:`), and its body says what a
   caller does. A subject that says only an ADR number gives the changelog
   nothing to summarize.
@@ -77,9 +79,12 @@ Do it at release time, not between releases.
 
   | You changed                         | These projects' tests run                |
   |-------------------------------------|------------------------------------------|
-  | `tinyactors-core` (code, bindings, tests, tools) | core                  |
-  | `tinyactors-test` (`lib`, `suites`, `mise`, `mise.toml`) | tinyactors-test, core (core's test runs the suite against `ta-conform`) |
+  | `tinyactors-core` (code, bindings, tests, tools) | core, napi, cpython (each binding builds core's amalgamation and lints with its rules) |
+  | `tinyactors-test` (`lib`, `suites`, `mise`, `mise.toml`) | tinyactors-test, core, napi, cpython (each runs the suite against its implementation) |
+  | `tinyactors-test/lint` (the adapters' lint) | tinyactors-test, napi, cpython       |
   | `tinyactors-test/test` (the runner's own tests) | tinyactors-test                  |
+  | `tinyactors-napi`                   | napi                                     |
+  | `tinyactors-cpython`                | cpython                                  |
   | `tinyxml`                           | tinyxml                                  |
   | `tinyparse`                         | tinyparse                                |
   | `staticjs`                          | staticjs                                 |

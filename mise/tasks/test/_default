@@ -37,6 +37,11 @@ steps = [
   # the W3C IRP suite on each, the examples, the freestanding and wasm builds.
   # --full: every torture scenario and the cross builds.
   ['core', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('tinyactors-core')],
+  # The bindings (ROADMAP.md, step 8): their lint, core's amalgamation in
+  # their own build/, and the suite against their adapters. No --full yet:
+  # neither has an exhaustive test.
+  ['napi', ['mise', 'run', *flags.call], root.join('tinyactors-napi')],
+  ['cpython', ['mise', 'run', *flags.call], root.join('tinyactors-cpython')],
   ['tinyxml', ['mise', 'run', *flags.call], root.join('tinyxml')],
   # Depends on nothing else here. --full: each gate's exhaustive version (tinyparse/mise/tasks/gate/).
   ['tinyparse', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('tinyparse')],

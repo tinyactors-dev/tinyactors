@@ -13,15 +13,10 @@ module Changelog
   #
   # `api_ignore` names what changes at every release and so says nothing
   # about the API (the version macros).
-  #
-  # `tag_prefix` is the prefix of its release tags when that is not its
-  # directory's: a component that moved keeps its release line.
-  Component = Struct.new(:name, :dir, :scopes, :api_json, :api_files, :api_ignore, :tag_prefix, keyword_init: true) do
-    # The tag prefix of the component's releases (Release.released_versions).
-    def prefix = tag_prefix || path_prefix
-
-    # What the paths of its files begin with.
-    def path_prefix = "#{dir}/"
+  Component = Struct.new(:name, :dir, :scopes, :api_json, :api_files, :api_ignore, keyword_init: true) do
+    # What the paths of its files and its release tags begin with
+    # (`tinyactors-napi/` and `tinyactors-napi/v0.2.0`).
+    def prefix = "#{dir}/"
 
     def tag(version) = "#{prefix}v#{version}"
 
@@ -39,11 +34,16 @@ module Changelog
                   api_json: %w[include/tinyactors.api.json include/tinyactors_runtime.api.json
                              include/tinyactors_datamodel_ecmascript.api.json],
                   api_ignore: VERSION_MACROS),
-    # The Node.js binding, @tinyactors/node. Its addon lived in
-    # tinyactors-napi/ until the standalone runtime replaced it, and its
-    # releases keep that line of tags.
-    Component.new(name: 'napi', dir: 'tinyactors-core/bindings/node', scopes: %w[napi node],
-                  api_files: %w[index.d.ts], api_ignore: nil, tag_prefix: 'tinyactors-napi/'),
+    # The Node.js binding, @tinyactors/node: the Node-API addon of ADR 0009
+    # step 8, back in tinyactors-napi/ (from tinyactors-core/bindings/node,
+    # deleted in its step 2), continuing the package's tags and versions.
+    Component.new(name: 'napi', dir: 'tinyactors-napi', scopes: %w[napi node],
+                  api_files: %w[index.d.ts], api_ignore: nil),
+    # The Python extension, `tinyactors`. Its API is defined in C and has no
+    # declaration file yet, so no API delta is read for it until one is
+    # named here in `api_files`.
+    Component.new(name: 'cpython', dir: 'tinyactors-cpython', scopes: %w[cpython python],
+                  api_files: [], api_ignore: nil),
     Component.new(name: 'tinyxml', dir: 'tinyxml', scopes: %w[tinyxml txml],
                   api_json: 'include/txml.api.json', api_ignore: VERSION_MACROS)
   ].freeze

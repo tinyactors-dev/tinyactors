@@ -1,6 +1,6 @@
 ---
 name: release-changelog
-description: Write the changelog section for a release of tinyactors-core, tinyactors-napi or tinyxml, and stop for the maintainer's review before the release. Use when asked to cut or prepare a release, write or update a CHANGELOG.md, summarize what changed since the last release, or when a release task fails on "is not fit to release". Releases only; do not use it to draft a changelog between releases.
+description: Write the changelog section for a release of tinyactors-core, tinyactors-napi, tinyactors-cpython or tinyxml, and stop for the maintainer's review before the release. Use when asked to cut or prepare a release, write or update a CHANGELOG.md, summarize what changed since the last release, or when a release task fails on "is not fit to release". Releases only; do not use it to draft a changelog between releases.
 ---
 
 # Release changelog
@@ -17,8 +17,8 @@ releases.
 
 ## Steps
 
-Work in the order below. Components: `core`, `host`, `napi`,
-`tinyxml`.
+Work in the order below. Components: `core`, `napi`, `cpython`,
+`tinyxml` (`mise/lib/changelog/components.rb`).
 
 1. **Scope.** Ask which component and, if not said, whether the maintainer
    has a version in mind. The working tree of the repository must be on
@@ -131,10 +131,11 @@ Work in the order below. Components: `core`, `host`, `napi`,
    `changelog:check` first and puts the section in the GitHub release:
 
    - core, tinyxml: `mise run //<directory>:release -- <version>`
-   - napi: `mise run //tinyactors-napi:release -- <version>`
+   - napi, cpython: no release task yet (`ROADMAP.md`, step 8, M5 adds
+     them; `pack` and `wheel` fail until then)
 
    Without `--publish` these are dry runs; show what they report, and let the
-   maintainer decide on `--publish`. The host has no release task yet.
+   maintainer decide on `--publish`.
 
 ## When a check fails
 
@@ -155,7 +156,8 @@ Work in the order below. Components: `core`, `host`, `napi`,
   your report when you see one.
 - The packet's API delta for core and tinyxml comes from the
   checked-in `include/*.api.json` at the last release and at `HEAD`; for napi
-  from the declarations `index.d.ts` exports; for the host from its headers.
+  from the declarations `index.d.ts` exports; cpython has no declaration
+  file yet, so its packet has no API delta.
   Struct layout changes (size, offset) count as changes: they break the ABI.
 - This skill does not change the release tasks' other checks, builds or
   publishing.
