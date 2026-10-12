@@ -101,8 +101,10 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
 #define NAME_MAP(text, flags, set, map) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map, 0, 0, 0, 0 }, 0, 0 }
 /* A name with an iterator's method: on an array too, and iterators'. */
 #define NAME_ITERATOR(text, flags, array, iterator) { { text, sizeof(text) - 1u }, flags, { array, 0, 0, 0, 0, iterator, 0, 0, 0 }, 0, 0 }
-/* A name with a set's method, a map's and an iterator's: forEach. */
-#define NAME_MAP_ITERATOR(text, flags, set, map, iterator) { { text, sizeof(text) - 1u }, flags, { 0, 0, set, 0, map, iterator, 0, 0, 0 }, 0, 0 }
+/* A name with one method on an array, a set and a map, and an iterator's
+ * method or 0: keys, values and entries (an iterator over the receiver), and
+ * forEach. */
+#define NAME_ITERABLE(text, flags, each, iterator) { { text, sizeof(text) - 1u }, flags, { each, 0, each, 0, each, iterator, 0, 0, 0 }, 0, 0 }
 /* A name on RegExp.prototype, with the regular expressions' method of the
  * name (docs/regex.md), or 0. */
 #define NAME_REGEXP(text, regexp) { { text, sizeof(text) - 1u }, SJS_NAME_ON_REGEXP, { 0, 0, 0, 0, 0, 0, regexp, 0, 0 }, 0, 0 }
@@ -155,7 +157,7 @@ static const sjs_name NAMES[] = {
     NAME_REGEXP("dotAll", 0),
     NAME_ITERATOR("drop", SJS_NAME_ON_ITERATOR, 0, SJS_METHOD_ITERATOR_DROP),
     NAME("endsWith", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_ENDS_WITH, 0),
-    NAME_MAP("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_MAP_ENTRIES, SJS_METHOD_MAP_ENTRIES),
+    NAME_ITERABLE("entries", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_MAP_ENTRIES, 0),
     NAME_TEMPORAL("epochMilliseconds", 0, SJS_FIELD_EPOCH_MILLISECONDS),
     NAME_TEMPORAL("epochNanoseconds", 0, SJS_FIELD_EPOCH_NANOSECONDS),
     NAME_TEMPORAL("equals", SJS_METHOD_TEMPORAL_EQUALS, 0),
@@ -175,7 +177,7 @@ static const sjs_name NAMES[] = {
     NAME_ITERATOR("flatMap", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_FLAT_MAP, SJS_METHOD_ITERATOR_FLAT_MAP),
     NAME("fontcolor", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("fontsize", SJS_NAME_ON_STRING, 0, 0, 0),
-    NAME_MAP_ITERATOR("forEach", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, SJS_METHOD_MAP_FOR_EACH, SJS_METHOD_MAP_FOR_EACH, SJS_METHOD_ITERATOR_FOR_EACH),
+    NAME_ITERABLE("forEach", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR, SJS_METHOD_MAP_FOR_EACH, SJS_METHOD_ITERATOR_FOR_EACH),
     NAME_MAP("get", SJS_NAME_ON_MAP, 0, SJS_METHOD_MAP_GET),
     NAME_REGEXP("global", 0),
     NAME_MAP("has", SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_SET_HAS, SJS_METHOD_MAP_HAS),
@@ -195,7 +197,7 @@ static const sjs_name NAMES[] = {
     NAME("isWellFormed", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_IS_WELL_FORMED, 0),
     NAME("italics", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("join", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_JOIN, 0, 0),
-    NAME_MAP("keys", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_MAP_KEYS, SJS_METHOD_MAP_KEYS),
+    NAME_ITERABLE("keys", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_MAP_KEYS, 0),
     NAME("lastIndexOf", SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING, SJS_METHOD_ARRAY_LAST_INDEX_OF, 0, 0),
     NAME("link", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("localeCompare", SJS_NAME_ON_STRING, 0, 0, 0),
@@ -292,7 +294,7 @@ static const sjs_name NAMES[] = {
     NAME_MUTATION("unshift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_UNSHIFT), /* MUTATION */
     NAME_TEMPORAL("until", SJS_METHOD_TEMPORAL_UNTIL, 0),
     { { "valueOf", 7u }, SJS_NAME_EVERYWHERE, { 0, 0, 0, 0, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_VALUE_OF }, 0, 0 },
-    NAME_MAP("values", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_MAP_VALUES, SJS_METHOD_MAP_VALUES),
+    NAME_ITERABLE("values", SJS_NAME_ON_ARRAY | SJS_NAME_ON_SET | SJS_NAME_ON_MAP, SJS_METHOD_MAP_VALUES, 0),
     NAME_TEMPORAL("weekOfYear", 0, SJS_FIELD_WEEK_OF_YEAR),
     NAME_TEMPORAL("weeks", 0, SJS_FIELD_WEEKS),
     { { "with", 4u }, SJS_NAME_ON_ARRAY, { SJS_METHOD_ARRAY_WITH, 0, 0, 0, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_WITH }, 0, 0 },
@@ -3296,9 +3298,9 @@ static uint64_t map_lookup_cost(const sjs_array *map) {
 /* take and drop: at the end of the file. */
 static sjs_result iterator_limit(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 
-/* keys(), values() and entries() of a map or a set: an iterator that holds
- * it, one unit (a set's keys() is its values()); an iterator's toArray():
- * what it yields, a unit each. */
+/* keys(), values() and entries() of an array, a map or a set: an iterator
+ * that holds it, one unit (an array's keys are its indices, a set's keys()
+ * is its values()); an iterator's toArray(): what it yields, a unit each. */
 static sjs_result iterator_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (id == SJS_METHOD_ITERATOR_TAKE || id == SJS_METHOD_ITERATOR_DROP) return iterator_limit(vm, id, call);
     if (id == SJS_METHOD_ITERATOR_NEXT || id == SJS_METHOD_ITERATOR_RETURN) return iterator_step(vm, id, call); /* MUTATION */
@@ -3337,8 +3339,9 @@ __attribute__((noinline)) static sjs_result map_method(sjs_vm *vm, sjs_builtin_i
     return SJS_OK;
 }
 
-/* Entries [from, to) of a map, as [key, value] arrays, or members of a
- * set, as [value, value] arrays: what map_pairs makes. */
+/* Entries [from, to) of a map, as [key, value] arrays, members of a set,
+ * as [value, value] arrays, or elements of an array, as [index, element]
+ * arrays: what map_pairs makes. */
 typedef struct {
     const sjs_array *map;
     uint32_t from;
@@ -3346,12 +3349,15 @@ typedef struct {
 } map_slice;
 
 /* The entries of a map_slice as a new array of new [key, value] arrays
- * ([value, value] of a set's member), a unit of fuel each. */
+ * ([value, value] of a set's member, [index, element] of an array's), a
+ * unit of fuel each. */
 static sjs_result map_pairs(sjs_vm *vm, map_slice slice, sjs_array **out) {
     const sjs_array *map = slice.map;
-    /* A map's key and value are one apart; a set's member is both. */
-    uint32_t step = map->h.type == SJS_HEAP_SET ? 1u : 2u;
+    /* A map's key and value are one apart; a set's member is both; an
+     * array's key is the element's index. */
+    uint32_t step = map->h.type == SJS_HEAP_MAP ? 2u : 1u;
     uint32_t value = step - 1u;
+    bool indices = map->h.type == SJS_HEAP_ARRAY;
     sjs_array *a;
     if (new_array(vm, slice.to - slice.from, &a) != SJS_OK) return SJS_ERR_PROGRAM;
     for (uint32_t i = slice.from; i < slice.to; i++) {
@@ -3361,7 +3367,7 @@ static sjs_result map_pairs(sjs_vm *vm, map_slice slice, sjs_array **out) {
             sjs_unref(vm->context, sjs_heap_value(SJS_ARRAY, &a->h));
             return sjs_vm_fail(vm, r);
         }
-        pair->items[0] = map->items[step * i];
+        pair->items[0] = indices ? sjs_num((double)i) : map->items[step * i];
         pair->items[1] = map->items[step * i + value];
         sjs_ref(pair->items[0]);
         sjs_ref(pair->items[1]);
@@ -3424,9 +3430,10 @@ typedef struct {
 } item_range;
 
 /* What an iterator yields in `range`, as an array: its own when the range
- * covers it, or a new one, a unit of fuel for each value copied; a map's or
- * a set's own iterator copies only the range. Faults unless nothing but the
- * caller's stack slot holds the iterator, as sjs_iterator_items says. */
+ * covers it, or a new one, a unit of fuel for each value copied; an
+ * array's, a map's or a set's own iterator copies only the range. Faults
+ * unless nothing but the caller's stack slot holds the iterator, as
+ * sjs_iterator_items says. */
 static sjs_result iterator_range(sjs_vm *vm, item_range range, sjs_array **out) {
     if (!sjs_value_unique(range.iterator)) {
         return sjs_vm_fault(vm, "an iterator yields its values once: staticjs reads one only where nothing else holds it");
@@ -3450,13 +3457,15 @@ static sjs_result iterator_range(sjs_vm *vm, item_range range, sjs_array **out) 
     } else if (it->h.flags == SJS_ITERATE_ENTRIES) {
         return map_pairs(vm, (map_slice){ m, from, to }, out);
     }
-    /* A list's or a set's values one apart; a map's keys or values two apart. */
-    uint32_t step = it->items.kind == SJS_ARRAY || it->source.kind == SJS_SET ? 1u : 2u;
+    /* A list's, an array's or a set's values one apart; a map's keys or
+     * values two apart; an array's keys are its indices. */
+    uint32_t step = it->items.kind == SJS_ARRAY || it->source.kind != SJS_MAP ? 1u : 2u;
     uint32_t value = step == 2u && it->h.flags == SJS_ITERATE_VALUES ? 1u : 0u;
+    bool indices = it->items.kind != SJS_ARRAY && it->source.kind == SJS_ARRAY && it->h.flags == SJS_ITERATE_KEYS;
     sjs_array *a;
     if (new_array(vm, to - from, &a) != SJS_OK) return SJS_ERR_PROGRAM;
     for (uint32_t i = from; i < to; i++) {
-        sjs_value v = m->items[step * i + value];
+        sjs_value v = indices ? sjs_num((double)i) : m->items[step * i + value];
         sjs_ref(v);
         a->items[a->length++] = v;
     }
@@ -3470,8 +3479,9 @@ __attribute__((noinline)) sjs_result sjs_iterator_items(sjs_vm *vm, sjs_value it
 }
 
 /* ------------------------------------------------------------------------
- * Loops over maps and iterators: Map.groupBy, a map's or a set's forEach,
- * and an iterator's map, filter, reduce, some, every, find, forEach and flatMap.
+ * Loops over maps and iterators: Map.groupBy, an array's, a map's or a
+ * set's forEach, and an iterator's map, filter, reduce, some, every, find,
+ * forEach and flatMap.
  * sjs_loop_start hands them to late_start, and sjs_loop_step a forEach's
  * call to for_each_call. An iterator's helper runs as the array's loop of
  * its name over what the iterator yields (`iterated`: its callback gets the
@@ -3552,7 +3562,7 @@ __attribute__((noinline)) static sjs_result late_start(sjs_vm *vm, vm_frame *fra
     }
     if (frame->builtin == SJS_METHOD_MAP_FOR_EACH) {
         uint32_t length = SJS_AS_ARRAY(*held)->length;
-        return for_each_start(vm, frame, held->kind == SJS_SET ? length : length / 2u);
+        return for_each_start(vm, frame, held->kind == SJS_MAP ? length / 2u : length);
     }
     /* An iterator's helper: what it yields becomes the receiver, and the
      * slot of the method, which holds nothing, holds its map until the
@@ -3616,12 +3626,14 @@ __attribute__((noinline)) static loop_step late_done(sjs_vm *vm, vm_frame *frame
 /* A map's forEach: the callback with (value, key, map) for the entry at
  * frame->index, whose result sjs_loop_step drops; undefined at the end,
  * the output it starts with. A set's: (value, value, set), as JavaScript
- * passes a member as its own key. The loop holds the map or the set, so the
- * callback cannot change it. */
+ * passes a member as its own key. An array's: (element, index, array), as
+ * the array's loops call back. The loop holds the array, the map or the
+ * set, so the callback cannot change it. */
 __attribute__((noinline)) static loop_step for_each_call(sjs_vm *vm, vm_frame *frame) {
-    /* An iterator's forEach: the value and the counter, over its list. */
-    if (frame->iterated) return call_element(vm, frame, frame->index);
+    /* An iterator's forEach: the value and the counter, over its list; an
+     * array's: the element, its index and the array. */
     sjs_value map = *slot(vm, frame, LOOP_RECEIVER);
+    if (frame->iterated || map.kind == SJS_ARRAY) return call_element(vm, frame, frame->index);
     const sjs_array *m = SJS_AS_ARRAY(map);
     uint32_t key = map.kind == SJS_SET ? frame->index : 2u * frame->index;
     uint32_t value = map.kind == SJS_SET ? key : key + 1u;
@@ -4140,9 +4152,10 @@ static sjs_result iterator_result_make(sjs_vm *vm, sjs_leaf_call *call, iterator
 
 /* next() and return(), a unit of fuel each, and a unit for an entry's new
  * [key, value] array (iterator_range). return() is an iterator helper's
- * only (take, drop, map, filter, flatMap): a map's, a set's and matchAll's
- * iterator have none in JavaScript, which throws a TypeError calling it.
- * Its argument is not read: JavaScript's helper gives undefined. */
+ * only (take, drop, map, filter, flatMap): an array's, a map's, a set's and
+ * matchAll's iterator have none in JavaScript, which throws a TypeError
+ * calling it. Its argument is not read: JavaScript's helper gives
+ * undefined. */
 __attribute__((noinline)) static sjs_result iterator_step(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     bool owned = id == SJS_METHOD_ITERATOR_ADVANCE || id == SJS_METHOD_ITERATOR_CLOSE;
     bool closes = id == SJS_METHOD_ITERATOR_RETURN || id == SJS_METHOD_ITERATOR_CLOSE;
@@ -4150,7 +4163,7 @@ __attribute__((noinline)) static sjs_result iterator_step(sjs_vm *vm, sjs_builti
     sjs_iterator *it = SJS_AS_ITERATOR(receiver);
     call->cost = 1;
     if (closes && (it->h.flags & SJS_ITERATE_HELPER) == 0) {
-        return sjs_vm_fault(vm, "a map's, a set's or matchAll's iterator has no return method: JavaScript throws a TypeError");
+        return sjs_vm_fault(vm, "an array's, a map's, a set's or matchAll's iterator has no return method: JavaScript throws a TypeError");
     }
     if (!owned && !sjs_value_unique(receiver)) {
         return sjs_vm_fault(vm, "next and return change an iterator: staticjs calls them only on a variable of the function that holds it alone, or on an iterator nothing else holds");

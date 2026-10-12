@@ -1576,3 +1576,389 @@ undefined
 new Set().forEach(5)
 --- fault callback is not a function
 
+# An array's keys(), values() and entries(): an iterator that holds the
+# array, as a set's holds its set. keys() yields the indices, 0 to
+# length - 1; values() the elements; entries() a new [index, element] array
+# for each. Read once, as any iterator. forEach calls back with (element,
+# index, array) and gives undefined.
+
+=== an array's keys, values and entries spread
+(() => { const xs = [1, "a", 2n]; return [[...xs.keys()], [...xs.values()], [...xs.entries()]]; })()
+--- value
+[[0,1,2],[1,"a",2n],[[0,1],[1,"a"],[2,2n]]]
+
+=== an empty array's iterators
+[[...[].keys()], [...[].values()], [...[].entries()], [].values().toArray(), [].entries().toArray(), [].keys().toArray()]
+--- value
+[[],[],[],[],[],[]]
+
+=== an array's iterators keep -0, and its keys start at 0
+[...[-0].values(), ...[-0, 0].entries(), ...[-0].keys()].flat().map(v => 1 / v)
+--- value
+[-Infinity,Infinity,-Infinity,1,Infinity,Infinity]
+
+=== an array's iterators yield NaN as often as the array holds it
+[[...[NaN, 1, NaN].values()], [...[NaN].entries()], [NaN, NaN].values().toArray().length, [...[NaN, NaN].keys()]]
+--- value
+[[NaN,1,NaN],[[0,NaN]],2,[0,1]]
+
+=== an array's iterators over elements of every kind
+(() => { const xs = [null, undefined, true, false, 0, "0", 1n, "😀", "é", ""]; return [[...xs.keys()], [...xs.values()], [...xs.entries()]]; })()
+--- value
+[[0,1,2,3,4,5,6,7,8,9],[null,undefined,true,false,0,"0",1n,"😀","é",""],[[0,null],[1,undefined],[2,true],[3,false],[4,0],[5,"0"],[6,1n],[7,"😀"],[8,"é"],[9,""]]]
+
+=== an array's iterators over nested arrays, objects, sets and maps
+(() => { const xs = [[1, [2]], { a: 1, b: [3] }, new Set([4]), new Map([[5, 6]]), []]; return [[...xs.values()], xs.entries().toArray(), xs.keys().toArray()]; })()
+--- value
+[[[1,[2]],{"a":1,"b":[3]},new Set([4]),new Map([[5,6]]),[]],[[0,[1,[2]]],[1,{"a":1,"b":[3]}],[2,new Set([4])],[3,new Map([[5,6]])],[4,[]]],[0,1,2,3,4]]
+
+=== an array's iterators past eight elements
+(() => { const xs = Array.from({ length: 20 }, (x, i) => i % 2 === 0 ? i : String(i)); return [[...xs.values()], xs.entries().drop(17).toArray(), xs.keys().take(3).toArray(), xs.values().toArray().length, xs.keys().drop(15).toArray()]; })()
+--- value
+[[0,"1",2,"3",4,"5",6,"7",8,"9",10,"11",12,"13",14,"15",16,"17",18,"19"],[[17,"17"],[18,18],[19,"19"]],[0,1,2],20,[15,16,17,18,19]]
+
+=== an array's iterators at large indices
+(() => { const xs = Array.from({ length: 1000 }, (x, i) => i * 2); return [xs.keys().drop(997).toArray(), xs.entries().drop(998).toArray(), xs.values().reduce((a, x) => a + x, 0), xs.keys().reduce((a, x) => a + x, 0), [...xs.keys()].length]; })()
+--- value
+[[997,998,999],[[998,1996],[999,1998]],999000,499500,1000]
+
+=== the entries of an array are new arrays
+(() => { const xs = ["a", "b"]; const [a, b] = xs.entries(); return [a, b, a.length]; })()
+--- value
+[[0,"a"],[1,"b"],2]
+
+=== the writer writes an array's iterators
+[[1, "a"].keys(), [1, "a"].values(), [1, "b"].entries(), [].entries(), [].keys(), [[1]].values()]
+--- value
+[[0,1].values(),[1,"a"].values(),[[0,1],[1,"b"]].values(),[].values(),[].values(),[[1]].values()]
+
+=== an array's iterator nested in a map, written
+new Map([["it", [7, 8].entries()]])
+--- value
+new Map([["it",[[0,7],[1,8]].values()]])
+
+=== an array's iterator is an object
+(() => { const it = [1].values(); return [typeof it, Array.isArray(it), it ? 1 : 0, it.length, it.foo, JSON.stringify(it)]; })()
+--- value
+["object",false,1,undefined,undefined,"{}"]
+
+=== Array.from, new Set and new Map of an array's iterators
+(() => { const xs = ["a", "b", "a"]; return [Array.from(xs.values()), Array.from(xs.keys(), (v, i) => v * 10 + i), new Set(xs.values()), new Map(xs.entries()), new Set(xs.keys())]; })()
+--- value
+[["a","b","a"],[0,11,22],new Set(["a","b"]),new Map([[0,"a"],[1,"b"],[2,"a"]]),new Set([0,1,2])]
+
+=== Object.fromEntries of an array's entries keys by the index
+Object.fromEntries(["x", "y"].entries())
+--- value
+{"0":"x","1":"y"}
+
+=== Object.fromEntries and new Map of an array's values that are pairs
+[Object.fromEntries([["a", 1], ["b", 2]].values()), new Map([["a", 1], [2, "b"]].values())]
+--- value
+[{"a":1,"b":2},new Map([["a",1],[2,"b"]])]
+
+=== Object.fromEntries of an array's values faults, as an element is not an entry
+Object.fromEntries(["x"].values())
+--- fault Object.fromEntries
+
+=== new Map of an array's keys faults, as an index is not an entry
+new Map([1].keys())
+--- fault an entry of new Map
+
+=== spread of an array's iterators into arguments
+[Math.max(...[3, 7, 5].values()), Math.max(...[9, 9, 9, 9].keys()), Math.min(...[4].entries().map(([i, x]) => i + x))]
+--- value
+[7,3,4]
+
+=== an array pattern over an array's iterators
+(() => { const [first, ...rest] = [1, 2, 3].values(); const [[k, v]] = ["m"].entries(); const [a, b, c] = [5, 6].keys(); return [first, rest, k, v, a, b, c]; })()
+--- value
+[1,[2,3],0,"m",0,1,undefined]
+
+=== an array's iterator in a const, read once
+(() => { const xs = [1, 2]; const it = xs.values(); return [...it]; })()
+--- value
+[1,2]
+
+=== an array's iterator read twice faults, where JavaScript gives nothing the second time
+(() => { const it = [1, 2].values(); return [[...it], [...it]]; })()
+--- fault once
+
+=== an array's entries read twice faults
+(() => { const it = [1].entries(); return [it.toArray(), it.toArray()]; })()
+--- fault once
+
+=== an array's keys a closure holds fault when read
+(() => { const it = [1].keys(); return [1].map(() => [...it]); })()
+--- fault once
+
+=== a helper of an array's iterator held elsewhere faults
+(() => { const it = [1, 2].values(); const a = it.map(v => v); return [[...a], it.toArray()]; })()
+--- fault once
+
+=== an array read again after its iterator is spread
+(() => { const xs = [1, 2]; const ys = [...xs.values()]; return [ys, xs.length, xs.includes(2), [...xs], xs.keys().toArray()]; })()
+--- value
+[[1,2],2,true,[1,2],[0,1]]
+
+=== an array's keys, values and entries read as values fault
+[1].values
+--- fault calls methods
+
+=== an array's iterators from a parameter, a property and a callback's element
+[(xs => [...xs.entries()])([4, 5]), (o => o.xs.keys().toArray())({ xs: ["p", "q"] }), [[1, 2], [3]].map(xs => xs.values().map(x => x * 2).toArray())]
+--- value
+[[[0,4],[1,5]],[0,1],[[2,4],[6]]]
+
+=== an array's iterators of arrays from other built-ins
+[[..."a,b".split(",").keys()], Object.entries({ a: 1, b: 2 }).values().toArray(), [...Object.keys({ x: 1, y: 2 }).entries()], [...JSON.parse("[1,[2]]").entries()], [...[3, 1, 2].toSorted((a, b) => a - b).entries()], [1, 2, 3].filter(x => x > 1).keys().toArray(), [..."abc".split("").values()]]
+--- value
+[[0,1],[["a",1],["b",2]],[[0,"x"],[1,"y"]],[[0,1],[1,[2]]],[[0,1],[1,2],[2,3]],[0,1],["a","b","c"]]
+
+=== an array's iterators after push, pop and splice
+(() => { const xs = [1, 2, 3]; xs.push(4); xs.shift(); xs.splice(1, 1); return [[...xs.keys()], [...xs.values()], [...xs.entries()]]; })()
+--- value
+[[0,1],[2,4],[[0,2],[1,4]]]
+
+# A match result: an array with index, input and groups. Its iterators and
+# forEach see its elements only, as JavaScript's do.
+
+=== a match result's keys, values and entries
+(() => { const m = "xab".match(/a(b)/); return [[...m.keys()], [...m.values()], [...m.entries()], m.values().toArray(), m.entries().toArray()]; })()
+--- value
+[[0,1],["ab","b"],[[0,"ab"],[1,"b"]],["ab","b"],[[0,"ab"],[1,"b"]]]
+
+=== a match result's iterators, written
+["ab".match(/a/).values(), "ab".match(/(?<x>a)(c)?/).entries(), "ab".match(/b/).keys(), /(a)/.exec("ba").values()]
+--- value
+[["a"].values(),[[0,"a"],[1,"a"],[2,undefined]].values(),[0].values(),["a","a"].values()]
+
+=== a match result's iterators with a group that did not take part
+(() => { const m = "ab".match(/(?<x>a)(c)?/); return [m.values().toArray(), m.keys().map(i => i * 2).toArray(), m.entries().filter(([i, x]) => x !== undefined).toArray()]; })()
+--- value
+[["a","a",undefined],[0,2,4],[[0,"a"],[1,"a"]]]
+
+=== a global match's iterators, and matchAll's results'
+[[..."abab".match(/a/g).entries()], [..."a1b2".matchAll(/[a-z](\d)/g)].map(m => [...m.values()])]
+--- value
+[[[0,"a"],[1,"a"]],[["a1","1"],["b2","2"]]]
+
+=== a match result's forEach gets the result third, with its index and input
+"xab".match(/a(b)/).forEach((x, i, a) => { if (a.index !== 1 || a.input !== "xab" || a[i] !== x || a.length !== 2) return null.x; })
+--- value
+undefined
+
+# The iterator helpers from an array's iterators: each runs as it does from
+# a map's or a set's, its callback getting the value and a counter.
+
+=== an array's iterator's map
+@shapes - PLUCK(k)
+[1, 2].values().map(v => ({ k: v * 2 })).map(o => o.k).toArray()
+--- value
+[2,4]
+
+=== an array's iterator's map gives an iterator
+[[1, 2].keys().map(v => v * 10), [5, 6].values().map(v => -v)]
+--- value
+[[0,10].values(),[-5,-6].values()]
+
+=== an array's iterator's map is called with the value and a counter only
+["a", "b"].values().map((v, i, rest) => [v, i, rest]).toArray()
+--- value
+[["a",0,undefined],["b",1,undefined]]
+
+=== an array's entries' map
+["a", "b"].entries().map(([k, v], i) => [v, k * 10 + i]).toArray()
+--- value
+[["a",0],["b",11]]
+
+=== an array's iterator's filter
+@shapes ELEMENT_COMPARE(GREATER, 2) ELEMENT_COMPARE(GREATER, 2)
+[[...[1, 2, 3, 4].values().filter(v => v > 2)], [...[5, 6, 7, 8].keys().filter(v => v > 2)]]
+--- value
+[[3,4],[3]]
+
+=== an array's iterator's filter is called with the value and a counter only
+[5, 6, 7].values().filter((v, i, rest) => rest === undefined && i !== 1).toArray()
+--- value
+[5,7]
+
+=== an array's iterator's filter of objects by a key
+@shapes KEY_COMPARE(k, STRICT_EQUAL, 1)
+[{ k: 1 }, { k: 2 }, {}, { k: 1 }].values().filter(o => o.k === 1).toArray()
+--- value
+[{"k":1},{"k":1}]
+
+=== an array's iterator's reduce
+@shapes SUM(false) SUM(false)
+[[1, 2, 3, 2].values().reduce((a, x) => a + x, 0), [9, 9, 9].keys().reduce((a, x) => a + x, 0)]
+--- value
+[8,3]
+
+=== an array's iterator's reduce without an initial value
+["a", "b", "c"].values().reduce((a, x) => a + x)
+--- value
+"abc"
+
+=== an array's iterator's reduce is called with the accumulator, the value and a counter only
+["a", "b"].values().reduce((acc, v, i, rest) => [...acc, [v, i, rest]], [])
+--- value
+[["a",0,undefined],["b",1,undefined]]
+
+=== an array's iterator's reduce of nothing without an initial value faults
+[].values().reduce((a, x) => a + x)
+--- fault initial value
+
+=== an array's iterators' reduce into objects and arrays
+[["a", "b", "a"].values().reduce((acc, x) => ({ ...acc, [x]: (acc[x] ?? 0) + 1 }), {}), [3, 4].entries().reduce((acc, [i, x]) => [...acc, i * x], []), [1, 2, 3].keys().reduce((acc, i) => acc.concat([i, i]), []), [[1], [2, 3]].values().reduce((a, x) => a + x.length, 0)]
+--- value
+[{"a":2,"b":1},[0,4],[0,0,1,1,2,2],3]
+
+=== an array's iterator's take and drop
+(() => { const xs = [1, 2, 3, 4]; return [xs.values().take(2).toArray(), xs.keys().drop(3).toArray(), xs.entries().take(1).toArray(), xs.values().drop(9).toArray(), xs.values().take(Infinity).toArray(), xs.keys().take(0).toArray()]; })()
+--- value
+[[1,2],[3],[[0,1]],[],[1,2,3,4],[]]
+
+=== an array's iterator's take and drop chained with other helpers
+[1, 2, 3, 4, 5, 6].values().drop(1).filter(v => v % 2 === 0).map(v => v * 3).take(2).toArray()
+--- value
+[6,12]
+
+=== an array's iterator's flatMap
+[[1, 2].values().flatMap(v => [v, v * 10]).toArray(), [1, 2].keys().flatMap((v, i) => i === 0 ? [v].values() : [v, 9].entries()).toArray()]
+--- value
+[[1,10,2,20],[0,[0,1],[1,9]]]
+
+=== an array's iterator's flatMap is called with the value and a counter only
+["a"].values().flatMap((v, i, rest) => [[v, i, rest]]).toArray()
+--- value
+[["a",0,undefined]]
+
+=== an array's iterator's some
+@shapes ELEMENT_COMPARE(STRICT_EQUAL, 2) ELEMENT_COMPARE(STRICT_EQUAL, 2) ELEMENT_COMPARE(STRICT_EQUAL, 2) ELEMENT_COMPARE(STRICT_EQUAL, 2)
+[[1, 2, 3].values().some(v => v === 2), [1, 3].values().some(v => v === 2), [].values().some(v => v === 2), [7, 7, 7].keys().some(v => v === 2)]
+--- value
+[true,false,false,true]
+
+=== an array's iterator's some stops at the first true answer
+[2, null].values().some(v => v === 2 || v.length > 0)
+--- value
+true
+
+=== an array's iterator's every
+[[2, 4].values().every(v => v % 2 === 0), [2, 3].keys().every(v => v % 2 === 0), [].values().every(v => false), [[0, 0], [1, 1]].values().every(([a, b]) => a === b)]
+--- value
+[true,false,true,true]
+
+=== an array's iterator's find
+[[1, 2, 3].values().find(v => v > 1), [1].values().find(v => v > 1), ["ab", "cd"].values().find(v => v[1] === "d"), ["a", "b"].entries().find(([k], i) => i === 1), [5, 6].keys().find(k => k > 0)]
+--- value
+[2,undefined,"cd",[1,"b"],1]
+
+=== an array's iterator's forEach gives undefined
+[1, 2].values().forEach(v => v * 2)
+--- value
+undefined
+
+=== an array's iterator's forEach is called with the value and a counter only
+["a", "b"].entries().forEach((v, i, rest) => { if (rest !== undefined || typeof i !== "number" || v[0] !== i) return null.x; })
+--- value
+undefined
+
+=== an array's iterator's forEach faults at the element its callback faults on
+["a", null].values().forEach(v => v.length)
+--- fault of null
+
+=== an array's iterator's map whose callback faults
+["a", null].values().map(v => v.length).toArray()
+--- fault of null
+
+=== an array's iterator's helper whose callback is not a function faults
+[1].keys().map(1)
+--- fault not a function
+
+=== every helper chained from an array's iterators
+(() => { const xs = Array.from({ length: 12 }, (x, i) => i); return [xs.values().map(v => v * 2).filter(v => v % 3 === 0).flatMap(v => [v, -v]).drop(1).take(5).toArray(), xs.keys().filter(v => v > 4).map(v => v + 1).reduce((a, x) => a + x, 0), xs.entries().map(([a, b]) => a + b).some(v => v === 22), xs.values().take(4).every(v => v < 4), xs.values().drop(10).find(v => v > 10)]; })()
+--- value
+[[-0,6,-6,12,-12],63,true,true,11]
+
+# An array's forEach: a loop that calls back with (element, index, array)
+# and gives undefined, as a map's and a set's forEach.
+
+=== an array's forEach gives undefined
+[1, 2].forEach(v => v * 2)
+--- value
+undefined
+
+=== an empty array's forEach
+[].forEach(v => v.x)
+--- value
+undefined
+
+=== an array's forEach with one parameter faults where its callback faults
+["a", null].forEach(v => v.length)
+--- fault of null
+
+=== an array's forEach's callback gets the element and its index
+["a", "b", NaN].forEach((v, i) => { if (typeof i !== "number" || (["a", "b", NaN][i] !== v && v === v)) return null.x; })
+--- value
+undefined
+
+=== an array's forEach's callback gets the array third
+(() => { const xs = [1, 2, 3]; return xs.forEach((x, i, a) => { if (a.length !== 3 || a[i] !== x || a.indexOf(x) !== i) return null.x; }); })()
+--- value
+undefined
+
+=== an array's forEach passes three arguments
+[[1, 2].forEach((...args) => args.length === 3 ? 0 : null.x), [1].forEach((x, i, a, rest) => rest === undefined ? 0 : null.x)]
+--- value
+[undefined,undefined]
+
+=== an array's forEach whose callback returns anything
+[[1, 2].forEach(x => x), [1].forEach(x => [x]), [1].forEach(x => ({ x })), [1].forEach(x => null), [1].forEach(Number), [1, 4].forEach(Math.sqrt), [1].forEach(x => x, 5), [1].forEach(x => 1n)]
+--- value
+[undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined]
+
+=== an array's forEach's callback must be a function
+[1].forEach()
+--- fault not a function
+
+=== an array's forEach of a number faults
+[1].forEach(1)
+--- fault not a function
+
+=== an empty array's forEach still needs a function
+[].forEach(5)
+--- fault callback is not a function
+
+=== an array's forEach of a large array runs every element
+Array.from({ length: 30 }, (x, i) => i === 29 ? null : i).forEach(v => v === null ? v.x : v)
+--- fault of null
+
+=== an array's forEach's callback walks the array
+(() => { const xs = [3, 1, 2]; return xs.forEach((x, i, a) => { if (a.map(y => y * 2)[i] !== 2 * x || a.toSorted((p, q) => p - q)[x - 1] !== x || !xs.includes(x) || xs.reduce((s, y) => s + y, 0) !== 6) return null.x; }); })()
+--- value
+undefined
+
+=== an array's forEach over nested arrays, objects and -0
+[[[1, [2]], { a: -0 }, -0].forEach((x, i, a) => { if (i === 2 && 1 / x !== -Infinity) return null.x; }), [[1, 2], [3]].forEach(([p, q], i) => i === 1 && q !== undefined ? null.x : 0)]
+--- value
+[undefined,undefined]
+
+=== an array's forEach as a statement is refused, as a map's and a set's are
+(() => { const xs = [1]; xs.forEach(v => v); return 1; })()
+--- error unsupported no effect
+
+=== a map's forEach as a statement is refused
+(() => { const m = new Map([[1, 2]]); m.forEach(v => v); return 1; })()
+--- error unsupported no effect
+
+=== a set's forEach as a statement is refused
+(() => { const s = new Set([1]); s.forEach(v => v); return 1; })()
+--- error unsupported no effect
+
+=== an array's forEach's result in a const
+(() => { const xs = ["a"]; const r = xs.forEach(v => v.length); return [r, xs]; })()
+--- value
+[undefined,["a"]]
+

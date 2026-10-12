@@ -4115,6 +4115,62 @@ new Set([1, 2]).forEach((v, k, s) => s.delete(v))
 (() => { const o = { s: new Set([1]) }; const it = o.s.values(); o.s.add(2); return [...it]; })()
 --- fault held elsewhere
 
+=== after its iterator is read, an array can change
+(() => { const xs = [1]; const ys = [...xs.values()]; xs.push(3); return [ys, xs]; })()
+--- value
+[[1],[1,3]]
+
+=== an iterator holds its array, which cannot grow while it lives
+(() => { const xs = [1, 2]; const it = xs.values(); xs.push(3); return [...it]; })()
+--- fault held elsewhere
+
+=== after the iterator's last read, its array can grow
+(() => { const xs = [1, 2]; const it = xs.values(); const ys = [...it]; xs.push(3); return [xs, ys]; })()
+--- value
+[[1,2,3],[1,2]]
+
+=== after a helper's last read of the iterator, its array can grow
+(() => { const xs = [1, 2]; const it = xs.keys(); const n = it.map(x => x * 2).toArray(); xs.push(3); return [n, xs]; })()
+--- value
+[[0,2],[1,2,3]]
+
+=== an entries iterator holds its array, which cannot lose an element while it lives
+(() => { const xs = [1, 2]; const it = xs.entries(); xs.pop(); return [...it]; })()
+--- fault held elsewhere
+
+=== a keys iterator holds its array, which cannot be reversed while it lives
+(() => { const xs = [1, 2]; const it = xs.keys(); xs.reverse(); return [...it]; })()
+--- fault held elsewhere
+
+=== an iterator holds its array, whose element cannot be assigned while it lives
+(() => { const xs = [1]; const it = xs.values(); xs[0] = 2; return [...it]; })()
+--- fault held elsewhere
+
+=== a helper's result holds the array, which cannot change while it lives
+(() => { const xs = [1, 2]; const it = xs.values().map(x => x); xs.push(3); return [...it]; })()
+--- fault held elsewhere
+
+=== an iterator holds an array on a path, which cannot change while it lives
+(() => { const o = { xs: [1] }; const it = o.xs.values(); o.xs.push(2); return [...it]; })()
+--- fault held elsewhere
+
+=== an array's iterator advanced to its end still holds the array
+(() => { const xs = [1]; const it = xs.values(); it.next(); it.next(); xs.push(2); return it.next(); })()
+--- fault held elsewhere
+
+=== an array's forEach's callback cannot change its array
+[1, 2].forEach((x, i, a) => a.push(x))
+--- fault held elsewhere
+
+=== an array's forEach's callback cannot empty its array
+(xs => xs.forEach((x, i, a) => a.pop()))([1, 2])
+--- fault held elsewhere
+
+=== after its forEach, an array can change
+(() => { const xs = [1, 2]; const r = xs.forEach(x => x); xs.push(3); return [r, xs]; })()
+--- value
+[undefined,[1,2,3]]
+
 === set on a captured map is refused
 (() => { const m = new Map(); const f = () => m.size; m.set(1, 2); return f(); })()
 --- error unsupported captured
@@ -4791,6 +4847,49 @@ new Set([1]).values().take(1).return()
 === return of a map's iterator nothing else holds faults
 new Map().keys().return()
 --- fault no return method
+
+=== next of an array's iterator
+(() => { const it = ["a", "b"].keys(); const a = it.next(); const b = it.next(); const c = it.next(); return [a, b, c, it.next()]; })()
+--- value
+[{"value":0,"done":false},{"value":1,"done":false},{"value":undefined,"done":true},{"value":undefined,"done":true}]
+
+=== next of an array's values, then a spread of the rest
+(() => { const it = [1, 2, 3].values(); const a = it.next(); return [a, [...it]]; })()
+--- value
+[{"value":1,"done":false},[2,3]]
+
+=== next of an array's entries, then a helper of the rest
+(() => { const it = [1, 2, 3].entries(); it.next(); return it.map(([i, x]) => i * x).toArray(); })()
+--- value
+[2,6]
+
+=== an advanced array's iterator written as its rest
+(() => { const it = [1, 2, 3].entries(); it.next(); const k = [4, 5].keys(); k.next(); return [it, k]; })()
+--- value
+[[[1,2],[2,3]].values(),[1].values()]
+
+=== next of an array's iterator nothing else holds
+[[1, 2].values().next(), [].keys().next(), ["x"].entries().next()]
+--- value
+[{"value":1,"done":false},{"value":undefined,"done":true},{"value":[0,"x"],"done":false}]
+
+=== next of an array's iterator, then every helper
+(() => { const a = [1, 2, 3, 4].values(); a.next(); const b = [1, 2, 3, 4].keys(); b.next(); const c = [1, 2, 3, 4].values(); c.next(); const d = [1, 2, 3, 4].values(); d.next(); const e = [1, 2, 3, 4].entries(); e.next(); return [a.filter(x => x > 2).toArray(), b.reduce((s, x) => s + x, 0), c.take(1).toArray(), d.drop(1).some(x => x === 4), e.find(([i]) => i === 2)]; })()
+--- value
+[[3,4],6,[2],true,[2,3]]
+
+=== return of an array's iterator faults
+(() => { const it = [1].values(); return it.return(); })()
+--- fault no return method
+
+=== return of an array's iterator nothing else holds faults
+[1].entries().return()
+--- fault no return method
+
+=== return of a helper of an array's iterator
+(() => { const it = [1, 2].values().map(x => x); const r = it.return(); return [r, [...it]]; })()
+--- value
+[{"value":undefined,"done":true},[]]
 
 === next of an array faults
 (() => { const xs = [1]; return xs.next(); })()
