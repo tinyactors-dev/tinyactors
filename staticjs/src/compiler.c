@@ -64,6 +64,16 @@
  * so far), a parameter's DEFAULT_LOCAL, and a write. A module's exports are
  * reads at its end, so a const it exports is never moved before then.
  *
+ * MUTATION: two more places end a read's path (docs/mutation.md, "let" and
+ * "Last reads in branches"). The store of a let's new value follows its
+ * value on every path, so the value's last read of the let moves
+ * (store_slot). A branch of an if or a conditional does not run after
+ * another: at a branch's end, the last read of each slot in it is parked
+ * (c->parked_reads), fenced from the reads of the branches that follow,
+ * until the construct ends; then a later read cancels it as any other, or
+ * the end of the slot's block or function moves it. A branch that ends in
+ * a return moves its last reads there (end_branch).
+ *
  * Shapes: unless the config says no_shapes, every event goes through the
  * matcher (matcher.c) before the compiler handles it. The matcher reports a
  * function whose body is a known shape during the ARROW_END that closes it,
@@ -142,10 +152,30 @@ typedef struct {
     uint8_t block;         /* SC_FUNCTION: its body is a block */
     uint32_t node;         /* SC_FUNCTION: its ARROW_BEGIN's node, which a shape's report names */
     uint32_t reads_base;   /* SC_FUNCTION: its slots' entries in c->last_reads */
+    uint32_t parked_base;  /* MUTATION: SC_FUNCTION: its reads in c->parked_reads */
     sjs_position at;
     name_index names;      /* its bindings, by name */
     name_index read;       /* names read in it, or in a function it holds, that it did not bind then */
 } scope;
+
+/* An entry of c->last_reads: the pc of the LOCAL that is the slot's last
+ * read so far, plus one, 0 for none; MUTATION: and how many of its reads in
+ * branches that have ended wait in c->parked_reads (restore: the pc alone,
+ * a uint32_t). */
+typedef struct {
+    uint32_t pc;
+    uint32_t parked;
+} slot_reads;
+
+/* MUTATION: a slot's last read in a branch that has ended (end_branch):
+ * its entry in c->last_reads, the LOCAL's pc plus one (0 once it has
+ * ended), and whether it is fenced from the reads of the branch that
+ * follows. */
+typedef struct {
+    uint32_t entry;
+    uint32_t pc;
+    uint8_t fenced;
+} parked_read;
 
 /* A capture a function being compiled takes from the one that creates it. */
 typedef struct {
@@ -211,6 +241,12 @@ typedef struct {
      * binding, or the global, it names. */
     uint8_t fallback;
     uint32_t target_pc;
+    /* MUTATION: K_IF, K_CONDITIONAL: where the code of the branch being
+     * compiled starts, and the counts of c->parked_reads when the construct
+     * began and when the branch began (end_branch). */
+    uint32_t branch_pc;
+    uint32_t parked_base;
+    uint32_t parked_mark;
 } construct;
 
 /* MUTATION: construct.assigns: a call of Object.assign before its first
@@ -357,8 +393,11 @@ struct sjs_compiler {
     sjs_buf names;
     sjs_buf pending_captures;
     /* For each slot of each open function, from its reads_base: the pc of
-     * the LOCAL that is its last read so far, plus one; 0 for none. */
+     * the LOCAL that is its last read so far, plus one; 0 for none
+     * (slot_reads). MUTATION: and the reads parked at the end of a branch
+     * (parked_read), from each open function's parked_base. */
     sjs_buf last_reads;
+    sjs_buf parked_reads;
     /* Constants already made: numbers by their bits, strings by their text. */
     name_index number_index;
     name_index string_index;
@@ -723,7 +762,8 @@ static sjs_result open_function_scope(sjs_compiler *c, sjs_position at) {
     s.function_scope = scope_count(c);
     s.function = SJS_BUF_COUNT(c->functions, sjs_function_info);
     s.bindings_base = SJS_BUF_COUNT(c->bindings, binding);
-    s.reads_base = SJS_BUF_COUNT(c->last_reads, uint32_t);
+    s.reads_base = SJS_BUF_COUNT(c->last_reads, slot_reads); /* MUTATION: restore uint32_t */
+    s.parked_base = SJS_BUF_COUNT(c->parked_reads, parked_read); /* MUTATION */
     s.at = at;
     s.names = index_over(&c->names);
     s.read = index_over(&c->names);
@@ -756,9 +796,9 @@ static sjs_result open_block_scope(sjs_compiler *c, sjs_position at) {
 /* Room in c->last_reads for the current function's slots below `slots`. */
 static sjs_result reserve_reads(sjs_compiler *c, uint32_t slots, sjs_position at) {
     uint32_t want = function_scope(c)->reads_base + slots;
-    uint32_t have = SJS_BUF_COUNT(c->last_reads, uint32_t);
+    uint32_t have = SJS_BUF_COUNT(c->last_reads, slot_reads); /* MUTATION: restore uint32_t */
     if (want <= have) return SJS_OK;
-    uint32_t extra = (want - have) * (uint32_t)sizeof(uint32_t);
+    uint32_t extra = (want - have) * (uint32_t)sizeof(slot_reads); /* MUTATION: restore uint32_t */
     sjs_result r = sjs_buf_reserve(alloc(c), &c->last_reads, extra);
     if (r != SJS_OK) return fail_result(c, r, at);
     sjs_zero(c->last_reads.ptr + c->last_reads.length, extra);
@@ -766,13 +806,62 @@ static sjs_result reserve_reads(sjs_compiler *c, uint32_t slots, sjs_position at
     return SJS_OK;
 }
 
+/* MUTATION: a slot's entry; restore last_read returning its uint32_t. */
+static slot_reads *slot_entry(sjs_compiler *c, uint32_t function_scope_index, uint32_t slot) {
+    return &SJS_BUF_AT(c->last_reads, slot_reads, SJS_BUF_AT(c->scopes, scope, function_scope_index).reads_base + slot);
+}
+
 static uint32_t *last_read(sjs_compiler *c, uint32_t function_scope_index, uint32_t slot) {
-    return &SJS_BUF_AT(c->last_reads, uint32_t, SJS_BUF_AT(c->scopes, scope, function_scope_index).reads_base + slot);
+    return &slot_entry(c, function_scope_index, slot)->pc; /* MUTATION: restore the entry itself */
+}
+
+/* The LOCAL at `entry` - 1 moves its value. */
+static void take_read(sjs_compiler *c, uint32_t entry) {
+    if (entry != 0 && c->code.ptr[entry - 1u] == SJS_OP_LOCAL) c->code.ptr[entry - 1u] = SJS_OP_TAKE_LOCAL;
+}
+
+/* MUTATION: reads in a branch that has ended (docs/mutation.md, "Last
+ * reads in branches"): what ends a slot's parked reads. A read, a capture
+ * or a write cancels every one that is not fenced (PARKED_CANCEL); the end
+ * of the slot's block or function moves every one (PARKED_SETTLE); a store
+ * of a let's value moves the ones in its value, from `from`, and cancels
+ * the others not fenced (PARKED_STORE); the end of a branch in a return
+ * moves the ones in it, from `from`, and keeps the others (PARKED_RETURN). */
+enum { PARKED_CANCEL = 0, PARKED_SETTLE, PARKED_STORE, PARKED_RETURN };
+
+typedef struct {
+    uint32_t function_scope;
+    uint32_t slot;
+    uint8_t how;           /* PARKED_* */
+    uint32_t from;
+} parked_end;
+
+static void end_parked(sjs_compiler *c, parked_end e) {
+    slot_reads *entry = slot_entry(c, e.function_scope, e.slot);
+    const scope *f = &SJS_BUF_AT(c->scopes, scope, e.function_scope);
+    uint32_t key = f->reads_base + e.slot;
+    for (uint32_t i = SJS_BUF_COUNT(c->parked_reads, parked_read); entry->parked != 0 && i-- > f->parked_base;) {
+        parked_read *p = &SJS_BUF_AT(c->parked_reads, parked_read, i);
+        if (p->pc == 0 || p->entry != key || (p->fenced && e.how != PARKED_SETTLE)) continue;
+        bool in = e.how == PARKED_SETTLE || ((e.how == PARKED_STORE || e.how == PARKED_RETURN) && p->pc > e.from);
+        if (!in && e.how == PARKED_RETURN) continue;
+        if (in) take_read(c, p->pc);
+        p->pc = 0;
+        entry->parked--;
+    }
+}
+
+/* MUTATION: the parked reads from `from` on are fenced from the reads that
+ * follow (`fenced`), or no longer (the construct ends). */
+static void fence_parked(sjs_compiler *c, uint32_t from, uint8_t fenced) {
+    uint32_t n = SJS_BUF_COUNT(c->parked_reads, parked_read);
+    for (uint32_t i = from; i < n; i++) SJS_BUF_AT(c->parked_reads, parked_read, i).fenced = fenced;
 }
 
 /* Read a slot of the current function: a LOCAL, the slot's last read so far. */
 static sjs_result read_slot(sjs_compiler *c, uint32_t slot, sjs_position at) {
     if (op16(c, ins(SJS_OP_LOCAL, slot, at)) != SJS_OK) return SJS_ERR_PROGRAM;
+    end_parked(c, (parked_end){ current(c)->function_scope, slot, PARKED_CANCEL, 0 }); /* MUTATION */
     *last_read(c, current(c)->function_scope, slot) = c->last_op + 1u;
     return SJS_OK;
 }
@@ -780,6 +869,7 @@ static sjs_result read_slot(sjs_compiler *c, uint32_t slot, sjs_position at) {
 /* Something else reads the slot after its last LOCAL so far (a closure
  * capturing it, a DEFAULT_LOCAL), or writes it: that LOCAL stays a copy. */
 static void forget_read(sjs_compiler *c, uint32_t function_scope_index, uint32_t slot) {
+    end_parked(c, (parked_end){ function_scope_index, slot, PARKED_CANCEL, 0 }); /* MUTATION */
     *last_read(c, function_scope_index, slot) = 0;
 }
 
@@ -794,8 +884,9 @@ typedef struct {
 static void settle_reads(sjs_compiler *c, slot_range range) {
     for (uint32_t slot = range.from; slot < range.to; slot++) {
         uint32_t *entry = last_read(c, range.function_scope, slot);
-        if (*entry != 0 && c->code.ptr[*entry - 1u] == SJS_OP_LOCAL) c->code.ptr[*entry - 1u] = SJS_OP_TAKE_LOCAL;
+        take_read(c, *entry);
         *entry = 0;
+        end_parked(c, (parked_end){ range.function_scope, slot, PARKED_SETTLE, 0 }); /* MUTATION */
     }
 }
 
@@ -803,6 +894,57 @@ static void settle_reads(sjs_compiler *c, slot_range range) {
 static sjs_result write_slot(sjs_compiler *c, instruction i) {
     forget_read(c, current(c)->function_scope, i.operand);
     return op16(c, i);
+}
+
+/* MUTATION: a let's new value is stored (variable_store), and its code
+ * starts at `from`: every last read of the slot in it is the last of the
+ * old value on every path, as the store follows it with nothing between
+ * that reads the slot, so it moves; an earlier read stays a copy, as a
+ * path that skips the store may read the slot again (docs/mutation.md,
+ * "let"). */
+static sjs_result store_slot(sjs_compiler *c, instruction i, uint32_t from) {
+    uint32_t *entry = last_read(c, current(c)->function_scope, i.operand);
+    if (*entry > from) take_read(c, *entry);
+    *entry = 0;
+    end_parked(c, (parked_end){ current(c)->function_scope, i.operand, PARKED_STORE, from });
+    return op16(c, i);
+}
+
+/* MUTATION: a branch of an if or a conditional ends here; its code starts
+ * at `from`. When it ends in a return, every last read in it is the last
+ * on every path through it, and moves. When another branch follows, which
+ * does not run after this one, its last reads wait, parked, until what
+ * follows the whole construct; they and the reads parked by the
+ * constructs in it, from `fence` on, are fenced from the next branch's. */
+typedef struct {
+    uint32_t from;
+    uint32_t fence;
+    bool returns;
+} branch_end;
+
+static sjs_result end_branch(sjs_compiler *c, branch_end b, sjs_position at) {
+    uint32_t from = b.from;
+    bool returns = b.returns;
+    uint32_t function_scope_index = current(c)->function_scope;
+    uint32_t base = function_scope(c)->reads_base;
+    uint32_t slots = SJS_BUF_COUNT(c->last_reads, slot_reads) - base;
+    for (uint32_t slot = 0; slot < slots; slot++) {
+        slot_reads *entry = slot_entry(c, function_scope_index, slot);
+        if (returns) end_parked(c, (parked_end){ function_scope_index, slot, PARKED_RETURN, from });
+        if (entry->pc <= from) continue;
+        if (returns) {
+            take_read(c, entry->pc);
+        } else {
+            parked_read p = { base + slot, entry->pc, 0 };
+            sjs_result r = buf_add(c, &c->parked_reads, bytes_of(&p, sizeof p));
+            if (r != SJS_OK) return fail_result(c, r, at);
+            entry = slot_entry(c, function_scope_index, slot);
+            entry->parked++;
+        }
+        entry->pc = 0;
+    }
+    if (!returns) fence_parked(c, b.fence, 1);
+    return SJS_OK;
 }
 
 /* The block ends: its names go, and its slots are free for what follows.
@@ -1327,7 +1469,8 @@ static sjs_result close_function_scope(sjs_compiler *c, sjs_position at) {
     uint32_t scope_index = scope_count(c) - 1;
     /* The function's code is complete: each slot's last LOCAL moves. */
     settle_reads(c, (slot_range){ scope_index, 0, s.slot_high });
-    c->last_reads.length = s.reads_base * (uint32_t)sizeof(uint32_t);
+    c->last_reads.length = s.reads_base * (uint32_t)sizeof(slot_reads); /* MUTATION: restore uint32_t */
+    c->parked_reads.length = s.parked_base * (uint32_t)sizeof(parked_read); /* MUTATION */
     sjs_function_info *info = &SJS_BUF_AT(c->functions, sjs_function_info, s.function);
     info->params = s.params;
     info->locals = s.slot_high;
@@ -2457,6 +2600,8 @@ static sjs_result compile_if(sjs_compiler *c, const sjs_event *e) {
         chain = top_construct(c);
         chain->jump = operand;
         chain->branch = KI_CONSEQUENT;
+        chain->branch_pc = here(c); /* MUTATION: end_branch */
+        chain->parked_mark = SJS_BUF_COUNT(c->parked_reads, parked_read); /* MUTATION */
         return SJS_OK;
     }
     if (!statement_level(c)) return out_of_order(c, e->at);
@@ -2465,6 +2610,9 @@ static sjs_result compile_if(sjs_compiler *c, const sjs_event *e) {
     k.branch = KI_CONSEQUENT;
     k.jumps_base = SJS_BUF_COUNT(c->jumps, uint32_t);
     if (jump(c, ins(SJS_OP_JUMP_FALSY, 0, e->at), &k.jump) != SJS_OK) return SJS_ERR_PROGRAM;
+    k.branch_pc = here(c); /* MUTATION: end_branch */
+    k.parked_base = SJS_BUF_COUNT(c->parked_reads, parked_read); /* MUTATION */
+    k.parked_mark = k.parked_base; /* MUTATION */
     return push_construct(c, k, e->at);
 }
 
@@ -2473,6 +2621,8 @@ static sjs_result compile_if(sjs_compiler *c, const sjs_event *e) {
 static sjs_result compile_else(sjs_compiler *c, const sjs_event *e) {
     construct *k = top_construct(c);
     if (k == NULL || k->kind != K_IF || k->branch != KI_CONSEQUENT) return out_of_order(c, e->at);
+    if (end_branch(c, (branch_end){ k->branch_pc, k->parked_mark, ends_in_return(c) }, e->at) != SJS_OK) return SJS_ERR_PROGRAM; /* MUTATION */
+    k = top_construct(c);
     if (!ends_in_return(c)) {
         uint32_t operand;
         if (jump(c, ins(SJS_OP_JUMP, 0, e->at), &operand) != SJS_OK) return SJS_ERR_PROGRAM;
@@ -2483,6 +2633,8 @@ static sjs_result compile_else(sjs_compiler *c, const sjs_event *e) {
     land(c, k->jump);
     k->jump = 0;
     k->branch = e->count != 0 ? KI_ELSE_IF : KI_ALTERNATIVE;
+    k->branch_pc = here(c); /* MUTATION: end_branch */
+    k->parked_mark = SJS_BUF_COUNT(c->parked_reads, parked_read); /* MUTATION */
     return SJS_OK;
 }
 
@@ -2490,7 +2642,10 @@ static sjs_result compile_else(sjs_compiler *c, const sjs_event *e) {
 static sjs_result compile_if_end(sjs_compiler *c, const sjs_event *e) {
     construct *top = top_construct(c);
     if (top == NULL || top->kind != K_IF || top->branch == KI_ELSE_IF) return out_of_order(c, e->at);
+    /* MUTATION: the last branch's reads are fenced from no other. */
+    if (ends_in_return(c) && end_branch(c, (branch_end){ top->branch_pc, top->parked_mark, true }, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
     construct k = pop_construct(c);
+    fence_parked(c, k.parked_base, 0); /* MUTATION */
     if (k.jump != 0) land(c, k.jump);
     uint32_t n = SJS_BUF_COUNT(c->jumps, uint32_t);
     for (uint32_t i = k.jumps_base; i < n; i++) land(c, SJS_BUF_AT(c->jumps, uint32_t, i));
@@ -2659,7 +2814,11 @@ static sjs_result assign_store(sjs_compiler *c, const construct *k, const sjs_ev
 static sjs_result variable_store(sjs_compiler *c, const construct *k, const sjs_event *e) {
     binding *b = &SJS_BUF_AT(c->bindings, binding, k->receiver);
     b->use &= (uint8_t)~(USE_COPIED | USE_PASSED | USE_STORED);
-    return write_slot(c, ins(SJS_OP_SET_LOCAL, b->index, e->at));
+    /* MUTATION: the value's code starts at the target's read (a compound
+     * assignment's, or where a plain one's was), or after the jump of
+     * && || ??, which skips it and the store. Restore write_slot. */
+    uint32_t from = logical_operator(k->assign) ? k->jump + 1u : k->root_pc;
+    return store_slot(c, ins(SJS_OP_SET_LOCAL, b->index, e->at), from);
 }
 
 static sjs_result target_store(sjs_compiler *c, const construct *k, const sjs_event *e) {
@@ -2996,11 +3155,14 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         construct k = { 0 };
         k.kind = K_CONDITIONAL;
         if (jump(c, ins(SJS_OP_JUMP_FALSY, 0, e->at), &k.jump) != SJS_OK) return SJS_ERR_PROGRAM;
+        k.branch_pc = here(c); /* MUTATION: end_branch */
+        k.parked_base = SJS_BUF_COUNT(c->parked_reads, parked_read); /* MUTATION */
         return push_construct(c, k, e->at);
     }
     case SJS_EV_CONDITIONAL_ELSE: {
         if (expect_construct(c, K_CONDITIONAL, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
         construct *k = top_construct(c);
+        if (end_branch(c, (branch_end){ k->branch_pc, k->parked_base, false }, e->at) != SJS_OK) return SJS_ERR_PROGRAM; /* MUTATION */
         uint32_t after;
         if (jump(c, ins(SJS_OP_JUMP, 0, e->at), &after) != SJS_OK) return SJS_ERR_PROGRAM;
         k = top_construct(c);
@@ -3008,10 +3170,13 @@ static sjs_result event(sjs_compiler *c, const sjs_event *e) {
         land(c, k->jump);
         return SJS_OK;
     }
-    case SJS_EV_CONDITIONAL_END:
+    case SJS_EV_CONDITIONAL_END: {
         if (expect_construct(c, K_CONDITIONAL, e->at) != SJS_OK) return SJS_ERR_PROGRAM;
-        land(c, pop_construct(c).jump_else);
+        construct k = pop_construct(c);
+        fence_parked(c, k.parked_base, 0); /* MUTATION: end_branch */
+        land(c, k.jump_else);
         return SJS_OK;
+    }
     case SJS_EV_ARROW_BEGIN:
         return begin_function(c, e);
     case SJS_EV_PARAMS_END:
@@ -3301,7 +3466,7 @@ void sjs_compiler_destroy(sjs_compiler *compiler) {
     sjs_buf *bufs[] = { &c->code, &c->numbers, &c->constants, &c->functions, &c->captures, &c->lines,
                         &c->scopes, &c->bindings, &c->names, &c->pending_captures, &c->last_reads, &c->string_text, &c->global_text,
                         &c->constructs, &c->jumps, &c->patterns, &c->pattern_keys, &c->pattern_slots, &c->literals, &c->literal_keys, &c->exports,
-                        &c->stars, &c->sorting, &c->paths, &c->path_steps /* MUTATION */ };
+                        &c->stars, &c->sorting, &c->paths, &c->path_steps, &c->parked_reads /* MUTATION */ };
     for (uint32_t i = 0; i < sizeof bufs / sizeof bufs[0]; i++) sjs_buf_free(a, bufs[i]);
     sjs_matcher_free(&c->matcher); /* MUTATION: always made */
     sjs_mem_free(a, c, sizeof *c);

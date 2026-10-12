@@ -364,6 +364,21 @@ statement there is: a module holds imports, `const` and exports.
   later, on any path. A plain assignment compiles no read of its target;
   a compound one reads it (`LOCAL`), then `SET_LOCAL` stores the result.
   An append's read of its `let` moves instead ("Appending to a let").
+- **The value's last read of its own `let` moves** (`store_slot`): in
+  `it = it.map(f)`, `xs = xs.concat(ys)` or `xs = f(xs, xs)`, the store
+  follows the value on every path, with nothing between that reads the
+  slot, so the last read of the old value in it moves, and a value the
+  `let` held alone stays alone: `it` is an iterator nothing else holds,
+  which a helper reads (JavaScript's would yield the values once). Only
+  the last read moves (`f(xs, xs)` copies the first, and
+  `xs = [xs, xs]; xs[0].push(1)` faults "held elsewhere", where
+  JavaScript changes the one array both elements are); a read before the
+  statement stays a copy, as a path that skips the store (an `if`
+  without it) may read the slot again; and for `&&=`, `||=` and `??=`
+  only a read in the value moves, as the operator may skip the value and
+  the store. A `let` is never captured, so nothing else reads the slot
+  meanwhile. The cases are in `mutation.spec`, "A let's reassignment from
+  its own value".
 
 The events are CONST_BEGIN's: count 1 for `let`, 2 for a declarator
 without a value, which the parser tells from the token after its name
@@ -374,6 +389,42 @@ let p = v      CONST_BEGIN(1) <v> <p> CONST_END
 let x          CONST_BEGIN(2) BIND(x) CONST_END
 x op= v;       <x> ASSIGN(op) <v> ASSIGN_END(op)
 ```
+
+## Last reads in branches
+
+The last read of a slot moves its value: a read that no read, capture or
+write of the slot follows on any path. A read in one branch of an `if`
+or of a conditional `c ? a : b` is followed by nothing in the other
+branch, which does not run after it, so the compiler takes the last read
+in each branch as the last of its path:
+
+- **At the end of a branch** another branch follows (`ELSE`, the `:` of a
+  conditional), the last read of each slot in it is parked
+  (`end_branch`, `c->parked_reads`), fenced from the reads of the
+  branches that follow: they do not cancel it.
+- **When the whole `if` or conditional ends**, the fence goes: a read
+  after it cancels the parked reads as it cancels any read before it, so
+  each stays a copy; when nothing follows, the end of the slot's block or
+  function moves each of them, as it moves any last read. One of them
+  runs.
+- **A branch that ends in a return** moves its last reads at its end:
+  nothing after the return runs on its path. Reads before the branch,
+  the test's included, are untouched.
+- **`&&`, `||`, `??` and `?.`** need nothing of this: the left operand
+  runs on every path, so a read there is followed by the right operand's,
+  and a read in the right operand is the last only when nothing follows
+  the expression, as before. A read the operator may skip is never moved
+  before a read that follows.
+
+So `cond ? it.drop(1) : it` reads an iterator nothing else holds in
+either branch, and `if (b) ys = xs; else ys = xs.concat(zs)` gives `ys`
+the array alone; a read of `xs` after the `if` keeps both copies, and a
+mutation of `ys` then faults ("held elsewhere"), where JavaScript changes
+the one array both names. A capture of the variable, after the construct
+or in another branch, cancels the parked reads, as it cancels a read. A
+module's exports are reads at its end, so a parked read of an exported
+`const` never moves. The cases are in `mutation.spec`, "Last reads in
+branches".
 
 ## Appending to a let
 
@@ -735,9 +786,10 @@ does not reallocate each time:
 - **Appending, other forms**: `s = e + s` (a prepend), `s += e` where `e`
   reads `s`, `s = s + e` of a `const` or a parameter (not assignable), a
   property (`o.s += e`, whose value its object also holds), keep the
-  copy. A move at any assignment whose value
-  reads its `let` once would be as safe (the store comes after the whole
-  value); the rules name the three forms that build strings.
+  copy. The value's last read of its `let` moves in any assignment
+  ("let"), so `s = e + s` gives `+` the old string alone, but `+` appends
+  only to its left operand; and a compound assignment's own read of its
+  target moves only in `s += e` where `e` does not read `s`.
 
 ## Rolling it back
 
@@ -790,6 +842,7 @@ Step 2, `let`:
 | `include/staticjs.h` | CONST_BEGIN's count, and its lines in the event grammar |
 | `src/parser.c` | `frame.declares_let` and `.bare`; `let_declarator`, its declaration, `begin_let` and `end_bare_let`; the `bare` line of `const_token` and its message; the next declarator's count in `terminator` (restore `send_kind`); `begin_let` in `statement_token` (restore its refusal) |
 | `src/compiler.c` | `binding.declared_let`, set in `declare`; `construct.declares_let`, set in `compile_const_begin` with the `UNDEFINED` of a declarator without a value; `refused_let_capture` in `note_capture`; `variable_target`, `variable_store` and `target_store` and their lines in `assign_target`, `assign_begin`, `assign_end` and `compile_update` |
+| `src/compiler.c`, the value's last read of its `let` and last reads in branches | the `slot_reads` entry of `c->last_reads` (restore a `uint32_t`, the pc), and the lines that say so in `reserve_reads`, `open_function_scope` and `close_function_scope`, `slot_entry` (restore `last_read` alone); `parked_read`, `scope.parked_base`, `c->parked_reads` and its free; `construct.branch_pc`, `.parked_base`, `.parked_mark`, set in `compile_if`, `compile_else` and the `CONDITIONAL` case of `event()`; `end_parked`, `fence_parked`, `store_slot` and `end_branch`, and their lines in `read_slot`, `forget_read`, `settle_reads`, `variable_store` (restore `write_slot`), `compile_else`, `compile_if_end` and the `CONDITIONAL_ELSE` and `CONDITIONAL_END` cases of `event()` |
 | `bench/bench.c` | `eval.let.counter` |
 
 Step 3, removal from the index and shrinking:
