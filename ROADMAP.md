@@ -160,16 +160,23 @@ failures, refusal during a run, threads, garbage collection, liveness.
 Done when: the whole suite passes against `ta-conform`, and core's tests
 run through it.
 
-Follow-ups for M0 (not done):
+Follow-ups for M0, done (2026-10-12):
 
 - **(a) The runner fails a run that proves nothing:** zero passes in a
   suite, or a skipped method the implementation's kind must offer. A
   required-method list per kind: `ta-conform` offers all of them; a
   binding all but the C-level ones (`value.encode`, `envelope.read`, and
-  `host.request`'s capacity).
+  `host.request`'s capacity). Done (`0bd04902`): the run task's `--kind
+  binding|reference` (default `binding`), stated by the project that runs
+  the suite rather than by the command under test, so an adapter cannot
+  lower its own bar and the protocol needs no new field
+  (`tinyactors-test/docs/driver.md`, "Kinds"); core's `mise run conform`
+  passes `--kind reference`.
 - **(b) Outcome canaries:** scenarios that must end in `fail`, `timeout`
   and `compile`, with the expected outcome stated in their `steps.txt`, so
-  a runner or adapter that reports `pass` for everything fails.
+  a runner or adapter that reports `pass` for everything fails. Done
+  (`e16237ea`): `outcome-fail`, `outcome-timeout`, `outcome-compile`, each
+  with an `expect` line.
 - **(c) `value.roundtrip` replaced by the public path:** `envelope.deliver`
   to an echo chart that sends `_event.data` back to `_event.origin`,
   comparing the data of the outgoing `PEER` envelope. A spike gave
@@ -180,24 +187,35 @@ Follow-ups for M0 (not done):
   `tinyactors-core/tests/unit/test_router.c:1402-1407` counts them. And
   `envelope.deliver` calls `ta_host_deliver` after a failed read, so every
   malformed case answers route `REFUSED` and a `malformed` error envelope,
-  as core does (`test_router.c:1279-1301`).
+  as core does (`test_router.c:1279-1301`). Done (`cc5f64fd`): the echo
+  setup's chart is written once in the `conf:` notation
+  (`suites/protocol/setups/echo.txml`) and converted per language;
+  `value.roundtrip` is gone from the driver and `ta-conform`.
 - **(d) Vectors:** lone surrogates refused (in a value and in a key); an
   encoded surrogate (`63 eda080`) malformed; Python lines for the encode
   and invalid cases where they apply; round trips outside ECMAScript for
-  tag 32 and `undefined`.
+  tag 32 and `undefined`. Done (`9ff8b2bb`); core already refused each of
+  them, in both realms.
 - **(e) An adapter lint in each binding skeleton:** the adapter imports
-  only the binding's public module.
+  only the binding's public module. Done (`cfe4b62e`): ast-grep rules
+  with tests in `tinyactors-test/lint`, run by
+  `mise run //tinyactors-test:lint -- <adapter>`; each skeleton wires it
+  in (item 4).
 - **(f) The runner picks the chart language from the datamodel name**
   `host.create` reports, so a run that asks for a native datamodel cannot
-  be served by quickjs.
+  be served by quickjs. Done (`0bd04902`): `--language` is gone. Where the
+  native datamodel is ECMAScript too (Node's), both names are
+  `"ecmascript"`, and the adapter's `host.create` puts only the datamodel
+  asked for in the host.
 
 #### M1: walking skeletons with native datamodels (both sessions)
 
 Each binding: its module and `Host` type; `ta_host_create` from the
 language's options; images, boot, spawn, send, terminate; the loop with
 every run status; `DONE`, `ERROR`, `LOG`; `request` with the language's
-error type; the CBOR conversion with the value table (`Address`,
-`UNDEFINED`, big integers, bytes); the native datamodel (`"python"`,
+error type; the CBOR conversion with the value table (big integers,
+bytes; Python's `Address` and `UNDEFINED`; Node's actor reference is a
+string, below); the native datamodel (`"python"`,
 `"ecmascript"` in Node's engine) for `<data>`, `cond`, `assign`,
 `<script>`, `_event`, `In()`, `<send>` with params, `<foreach>`; quickjs
 wired in beside it; and the suite's adapter (`conform`).
@@ -258,7 +276,29 @@ pass of 2026-10-12):
   - the timer is the global `setTimeout`, ref'd while a deadline is
     pending: Bun has no `uv_timer_*` (oven-sh/bun#18546);
   - the README says chart code is trusted: it runs in the application's
-    realm, and Node-API cannot make another.
+    realm, and Node-API cannot make another;
+  - **an actor reference is a string** (decided 2026-10-12). Asked for
+    whatever is best for performance and memory with good ergonomics,
+    the analysis (reasoned-analysis, refuted by a fresh agent) found that
+    tag 32 never reaches a Node application: core writes no tag 32
+    (`ta_cbor_write_tag` has no caller in `tinyactors-core/src`), both of
+    Node's datamodels are ECMAScript, which reads a reference as its
+    address text (`datamodel_ecmascript.c:2600-2602`, `values.txt`
+    "ECMAScript: an actor reference is its address", which the native
+    datamodel passes too), and values reach the application as that
+    datamodel's payloads, or through its `to_wire` in request replies. So
+    a reference class would carry nothing a string does not, and it costs:
+    made through Node-API (a spike, node 22.23.2 / bun 1.4.1, ns per value
+    with its string): a string 155/123, a class defined in C 393/257 and
+    64 more bytes, a class compiled in JavaScript 228/135 and 32 more
+    bytes, a type tag about 90 ns and 32 bytes more; interning 856 ns and
+    ~80 bytes per new address in plain JavaScript; a lazily formatted text
+    must copy core's borrowed bytes (288 bytes, 147 ns). A string compares
+    with `===`, is a `Map` key, prints and writes JSON as the address, and
+    is what `send` and the charts already use. `values.c` reads tag 32
+    as its text and never writes it, as quickjs does; `docs/values.md`
+    says so. Python keeps `Address`: its datamodel has a reference type,
+    and the "not ECMAScript" vectors of `values.txt` hold it to tag 32.
 - **Both READMEs:** nesting is limited to 64, which stops cycles but not
   a value that shares subtrees (`a = [a, a]` sixty times): charts are
   trusted code.
@@ -272,9 +312,19 @@ Node's native ECMAScript datamodel and on quickjs. Decide here whether Python ne
 compile-time checks of its expressions (the deleted
 `ta_datamodel_compiler`; this time the compiler would call it).
 
+**Sync sends are in M2** (decided 2026-10-12; they were in M3). The W3C
+environment runs BasicHTTP as a synchronous I/O processor
+(`tinyactors-test/docs/driver.md`, "The W3C environment"), and the 12
+tests that use it are in this gate: 201, 509, 510, 518, 519, 520, 522,
+531, 532, 534, 567, 577 (all optional; 567 is on python's skip list, so
+11 on python). So each binding's loop answers `TA_RUN_EFFECTS` (the sync
+sends are inputs, then run again now: `tinyactors-core/docs/bindings.md`,
+section 3), its API lets an I/O processor be synchronous, and its adapter
+answers the BasicHTTP `SEND` effects as the W3C environment says.
+
 #### M3: every effect
 
-I/O processors (`SEND`, sync sends), `INVOKE`/`UNINVOKE`, `REQUEST` and
+I/O processors (`SEND`; sync sends are in M2), `INVOKE`/`UNINVOKE`, `REQUEST` and
 `ta_host_resume`, `CHANGED` with `actor.subscribe`, `TRACES`, `LOGS` and
 `ta_host_metrics`, inputs during a run (an expression calling
 `host.send`), both drivers in Python (`run_until_idle`, `attach`), and
@@ -382,7 +432,7 @@ tinyactors-napi/
 │   ├── loop.c               the turn, statuses, one setTimeout (ref'd while a deadline is pending)
 │   ├── effects.c            one record per effect, built with the accessors; dispatch
 │   ├── request.c            JSON-RPC request and reply; TinyactorsError(code, reason, path)
-│   ├── values.c             CBOR tokens ↔ JavaScript values: BigInt, Uint8Array, Address
+│   ├── values.c             CBOR tokens ↔ JavaScript values: BigInt, Uint8Array; tag 32 as its text
 │   └── datamodel/           the native "ecmascript" datamodel: vtable entries only
 │       ├── datamodel.c      the vtable; scopes, _event, In()
 │       ├── handles.c        slot tables for payloads and sessions: generation, reference counts
@@ -470,7 +520,11 @@ missing, why, and the suite case or test that shows it.
   pushes 4 after the `<send>`, and the child sees 4 items; a child pushes
   onto `_event.data.a`, and the parent's array grows. Both are seen in
   both realms; without the mutation, neither is. A scenario that checks
-  it comes with the change (it fails on quickjs today).
+  it comes with the change (it fails on quickjs today). Decided
+  (2026-10-12): it stays filed here, and is not fixed now. A binding's
+  native datamodel copies what crosses between actors all the same
+  (`bindings.md` section 8, "Actors share no mutable value"); on quickjs
+  the sharing stays until the fix, and no scenario mutates sent data.
 
 ## Now
 
