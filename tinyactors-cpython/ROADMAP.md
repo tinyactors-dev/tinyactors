@@ -233,3 +233,46 @@ other. Checked by a fresh agent's refutation (reasoned-analysis), which
 confirmed (a) to (c), corrected the `id` rule from "an integer" to "an
 integer, text or null", and found no skip, milestone or raw path that
 covers them (`runner.rb:141-175`, `test/runner_test.rb:117`).
+
+### 2. A binding cannot read a host's tick rate (open, 2026-10-12)
+
+The same gap as the Node session's first request
+(`tinyactors-napi/ROADMAP.md`, "Requests to core", "A binding cannot read
+a host's tick rate"), found here independently for `SimulatedClock` and
+the real clock; one answer serves both bindings.
+
+**What is missing.** A way to read the `ticksPerSecond` a host runs on
+after `ta_host_create`: without the key in the config the system's
+default, 1e9, applies (`tinyactors-core/src/system/system.c:43`), which
+no header, doc, call or request states (`include/tinyactors/system.h:82`,
+`docs/host-config.md:79-83`, `docs/requests.md`, `ta_system_stats`,
+`ta_host_segment_info`).
+
+**Why.** The binding converts its milliseconds (the real clock's, and
+`SimulatedClock.increment(ms)`'s) into ticks before every
+`ta_host_advance_time`; a delay is parsed into nanoseconds
+(`src/core/core.c:1070,1139`) and turned into ticks with the system's rate
+(`src/system/route.c:173-177`), so a binding that guesses the unit fires
+a `<send delay="1s">` a million times late or early. Copying the default
+is a default of the binding's own (bindings.md, sections 2 and 13). Core
+itself copies it twice, because the host's own copy of the config keeps
+the 0 (`src/host/request.c:22`, `TICKS_PER_SECOND`, used at `:454-455`;
+`src/host/telemetry.c:219-221`).
+
+**What we ask, as the refutation found cheapest.** A `ticks_per_second`
+member of `ta_host_segment_info` (every segment shares the host's clock),
+filled after the system's defaults; and the default set in the host's own
+copy at create, so core drops its two copies. A lookup costs nothing per
+event; a `ticksPerSecond` in `host.stats` would also do, read once.
+
+**What shows it.** A host from `{"systemID": "h"}` (config.txt's first
+case) with a chart's `<send delay="50ms">`: no turn can compute its
+`monotonic`. The suite's configs all give 1000 (`lib/runner.rb:371`,
+`docs/driver.md`), so only the binding's own test sees it. Confirmed by a
+fresh agent's refutation.
+
+**Until then,** as the Node binding does: the binding converts with the
+`ticksPerSecond` of the config the application gave, and a host whose
+config has none refuses the clock's calls (`SimulatedClock.increment`, a
+turn that must advance real time) with `ERROR_UNSUPPORTED`. Nothing in
+M1's suite set waits on it.
