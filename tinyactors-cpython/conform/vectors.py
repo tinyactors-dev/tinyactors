@@ -11,12 +11,13 @@ import tinyactors
 from . import params as p
 from .frames import INVALID_PARAMS, STATE, Refused
 
-DATAMODELS = {"quickjs": "ecmascript"}
+DATAMODELS = {"quickjs": "ecmascript", "native": "python"}
 
 
 def datamodel_of(params):
     """The datamodel a call names (driver.md, "Datamodels"): its name, as
-    host.create answers it. "native" has none yet: ROADMAP.md, step 8."""
+    host.create answers it. Every Host holds both; a chart runs on the one
+    it names."""
     name = p.get(params, "datamodel", str, "quickjs")
     realm = p.get(params, "realm", str, "auto")
     if name not in DATAMODELS:

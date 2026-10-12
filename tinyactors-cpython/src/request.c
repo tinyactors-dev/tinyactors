@@ -53,6 +53,7 @@ PyObject *ta_python_host_request(ta_python_host *host, PyObject *args, PyObject 
     if (PyDict_Check(reply) && PyDict_GetItemStringRef(reply, "result", &result) <= 0 && !PyErr_Occurred())
         ta_python_raise_status(state, "ta_host_request", TA_ERROR_INVALID); /* a reply that is neither */
 done:
+    if (host->python && ta_python_datamodel_settle(host->python) < 0) Py_CLEAR(result); /* the drops of actor.context */
     Py_XDECREF(request);
     Py_XDECREF(id);
     Py_XDECREF(bytes);

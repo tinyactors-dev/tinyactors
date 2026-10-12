@@ -28,6 +28,7 @@ typedef struct ta_python_state {
     PyObject *host_type;      /* tinyactors.Host */
     PyObject *clock_type;     /* tinyactors.SimulatedClock */
     PyObject *time;           /* the time module: the real clock (loop.c) */
+    PyObject *event_type;     /* tinyactors.Event, the type of _event (datamodel/datamodel.c) */
 } ta_python_state;
 
 /* The state of the module `module`. */
@@ -63,6 +64,10 @@ ta_status ta_python_values_bytes(const ta_python_state *state, PyObject *value, 
 /* One CBOR item as a new Python value: ta_cbor_decode's status, or
  * TA_ERROR_INVALID for an item outside the table. */
 ta_status ta_python_values_read(const ta_python_state *state, ta_bytes cbor, PyObject **out);
+/* `value` copied through the value table, as what crosses between actors
+ * is (bindings.md, section 8): containers made again, the table's
+ * immutable values shared. TA_ERROR_INVALID: a value outside the table. */
+ta_status ta_python_values_copy(const ta_python_state *state, PyObject *value, PyObject **out);
 /* A new tinyactors.Address of `text`. */
 PyObject *ta_python_address_from(const ta_python_state *state, ta_string_view text);
 /* tinyactors.encode(value) and tinyactors.decode(data). */
@@ -70,6 +75,19 @@ PyObject *ta_python_encode(PyObject *module, PyObject *value);
 PyObject *ta_python_decode(PyObject *module, PyObject *data);
 
 /* ---- the host (host.c) ------------------------------------------------------------- */
+
+/* The "python" datamodel (datamodel/datamodel.h). */
+typedef struct ta_python_datamodel ta_python_datamodel;
+const ta_datamodel_vtable *ta_python_datamodel_vtable(void);
+ta_python_datamodel *ta_python_datamodel_new(const ta_python_state *state);
+void ta_python_datamodel_free(ta_python_datamodel *datamodel);
+int ta_python_datamodel_settle(ta_python_datamodel *datamodel);
+int ta_python_event_init_type(PyObject *module, ta_python_state *state);
+/* A payload of the datamodel holding a copy of `value` through the value
+ * table, with no CBOR in between (the hot path: bindings.md, section 2). */
+ta_status ta_python_datamodel_payload(ta_python_datamodel *datamodel, PyObject *value, ta_payload *out);
+/* A copy of a payload's value, a new reference (0: None). */
+PyObject *ta_python_datamodel_value(ta_python_datamodel *datamodel, ta_payload payload);
 
 /* An image the host runs, kept until its segment is freed
  * (TA_HOST_EFFECT_SEGMENT_FREED) or the host is (bindings.md, section 6). */
@@ -94,6 +112,7 @@ typedef struct ta_python_host {
     PyObject_HEAD
     PyObject *module; /* the module whose state it uses */
     ta_host *host;    /* NULL once closed */
+    ta_python_datamodel *python; /* datamodels[0] */
     ta_datamodel_ecmascript *ecmascript;
     ta_datamodel_binding datamodels[2];
     uint32_t datamodel_count;

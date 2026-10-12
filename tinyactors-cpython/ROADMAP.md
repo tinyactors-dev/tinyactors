@@ -164,9 +164,13 @@ Progress:
 - Step 6: `2d41a15e`. `GATE`: the M1 scenarios on quickjs (4 of 4).
   The protocol vectors on quickjs: 78 pass, 14 fail, the 14 cases of
   request 1 and no other; the envelope and echo cases wait for step 7.
-- Step 7: this commit. The protocol vectors on quickjs: 103 pass, 14
+- Step 7: `28283cc3`. The protocol vectors on quickjs: 103 pass, 14
   fail (request 1's cases, and no other). `GATE` takes the protocol suite
   when request 1 is answered.
+- Steps 8 and 9: this commit. `GATE`: the M1 scenarios on both
+  datamodels (4 of 4 each). The protocol vectors on native: 108 pass, 14
+  fail (request 1's cases, no other); the "not ECMAScript" echo cases
+  pass. The datamodel's own tests: `tests/test_datamodel.py`.
 
 ## Later milestones
 

@@ -49,9 +49,13 @@ int ta_python_host_usable(ta_python_host *host) {
 }
 
 void ta_python_host_free(ta_python_host *host) {
+    PyObject *pending = PyErr_GetRaisedException(); /* the error a failed Host() raises */
     if (host->clock) ta_python_clock_detach(host->clock, host);
     if (host->host) ta_host_free(host->host);
     host->host = NULL;
+    if (host->python && ta_python_datamodel_settle(host->python) < 0) PyErr_Clear(); /* a run's KeyboardInterrupt, after the host went */
+    ta_python_datamodel_free(host->python);
+    host->python = NULL;
     if (host->ecmascript) ta_datamodel_ecmascript_free(host->ecmascript);
     host->ecmascript = NULL;
     for (uint32_t i = 0; i < host->image_count; i++) {
@@ -63,6 +67,7 @@ void ta_python_host_free(ta_python_host *host) {
     host->images = NULL;
     host->image_count = host->image_capacity = 0;
     host->closing = 0;
+    PyErr_SetRaisedException(pending);
 }
 
 /* ---- payloads ---------------------------------------------------------------------------- */
@@ -71,6 +76,8 @@ ta_status ta_python_payload_make(ta_python_host *host, const ta_python_payload_m
     *out = 0;
     if (!making->value) return TA_OK;
     if (making->datamodel >= host->datamodel_count) return TA_ERROR_INVALID; /* a chart of no datamodel we have */
+    if (host->datamodels[making->datamodel].datamodel == host->python)
+        return ta_python_datamodel_payload(host->python, making->value, out);
     const ta_datamodel_binding *binding = &host->datamodels[making->datamodel];
     if (!binding->vtable->from_wire) return TA_ERROR_UNSUPPORTED;
     PyObject *bytes = NULL;
@@ -85,6 +92,8 @@ ta_status ta_python_payload_make(ta_python_host *host, const ta_python_payload_m
 PyObject *ta_python_payload_value(ta_python_host *host, const ta_python_payload_reading *reading) {
     const ta_python_state *state = ta_python_host_state(host);
     if (!reading->payload || reading->datamodel >= host->datamodel_count) Py_RETURN_NONE;
+    if (host->datamodels[reading->datamodel].datamodel == host->python)
+        return ta_python_datamodel_value(host->python, reading->payload);
     const ta_datamodel_binding *binding = &host->datamodels[reading->datamodel];
     char room[1024];
     ta_buffer buffer = {room, sizeof room, 0};
@@ -242,6 +251,9 @@ static PyObject *ta_python_host_new(PyTypeObject *type, PyObject *args, PyObject
     for (int i = 0; i < TA_PYTHON_HANDLERS; i++)
         host->handlers[i] = handlers[i] == Py_None ? NULL : Py_NewRef(handlers[i]);
     if (ta_python_loop_start(host) < 0) goto fail;
+    host->python = ta_python_datamodel_new(state);
+    if (!host->python) goto fail;
+    host->datamodels[host->datamodel_count++] = (ta_datamodel_binding){ta_python_datamodel_vtable(), host->python};
     host->ecmascript = ta_datamodel_ecmascript_new(NULL);
     if (!host->ecmascript) {
         PyErr_NoMemory();

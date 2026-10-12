@@ -113,7 +113,7 @@ static int ta_python_module_exec(PyObject *module) {
         if (PyModule_AddIntConstant(module, routes[i].name, routes[i].status) < 0) return -1;
     state->time = PyImport_ImportModule("time");
     if (!state->time || ta_python_values_init(module, state) < 0 || ta_python_host_init_type(module, state) < 0 ||
-        ta_python_clock_init_type(module, state) < 0)
+        ta_python_clock_init_type(module, state) < 0 || ta_python_event_init_type(module, state) < 0)
         return -1;
     return 0;
 }
@@ -128,6 +128,7 @@ static int ta_python_module_traverse(PyObject *module, visitproc visit, void *ar
     Py_VISIT(state->host_type);
     Py_VISIT(state->clock_type);
     Py_VISIT(state->time);
+    Py_VISIT(state->event_type);
     return 0;
 }
 
@@ -140,6 +141,7 @@ static int ta_python_module_clear(PyObject *module) {
     Py_CLEAR(state->host_type);
     Py_CLEAR(state->clock_type);
     Py_CLEAR(state->time);
+    Py_CLEAR(state->event_type);
     return 0;
 }
 

@@ -456,6 +456,82 @@ ta_status ta_python_values_read(const ta_python_state *state, ta_bytes cbor, PyO
     return status;
 }
 
+/* ---- copying through the table ----------------------------------------------------------- */
+
+/* The copy of `value` at `depth` (containers around it), by the same rows
+ * as writing it: what is outside the table, or nests past
+ * TA_CBOR_DEPTH_MAX, is refused. */
+typedef struct ta_python_copying {
+    const ta_python_state *state;
+    ta_status status;
+} ta_python_copying;
+
+static PyObject *ta_python_copy_value(ta_python_copying *copying, PyObject *value, uint32_t depth) {
+    const ta_python_state *state = copying->state;
+    if (depth > TA_CBOR_DEPTH_MAX) {
+        copying->status = TA_ERROR_INVALID;
+        return NULL;
+    }
+    if (value == Py_None || value == state->undefined || PyBool_Check(value))
+        return Py_NewRef(value);
+    if (PyLong_CheckExact(value) || PyFloat_CheckExact(value) || PyBytes_CheckExact(value) ||
+        PyObject_TypeCheck(value, (PyTypeObject *)state->address_type))
+        return Py_NewRef(value); /* immutable: shared */
+    if (PyUnicode_Check(value)) { /* a subclass: its base, as written */
+        PyObject *text = PyUnicode_CheckExact(value) ? Py_NewRef(value) : PyUnicode_FromObject(value);
+        if (text && !PyUnicode_AsUTF8AndSize(text, NULL)) { /* a lone surrogate */
+            PyErr_Clear();
+            Py_CLEAR(text);
+            copying->status = TA_ERROR_INVALID;
+        }
+        return text;
+    }
+    if (PyLong_Check(value)) return PyNumber_Index(value); /* a subclass: its base, as written */
+    if (PyFloat_Check(value)) return PyFloat_FromDouble(PyFloat_AsDouble(value));
+    if (PyBytes_Check(value) || PyByteArray_Check(value)) return PyBytes_FromObject(value);
+    if (PyList_Check(value) || PyTuple_Check(value)) {
+        PyObject *items = PySequence_List(value);
+        Py_ssize_t count = items ? PyList_Size(items) : 0;
+        for (Py_ssize_t i = 0; items && i < count; i++) {
+            PyObject *item = ta_python_copy_value(copying, PyList_GetItem(items, i), depth + 1);
+            if (!item) Py_CLEAR(items);
+            else PyList_SetItem(items, i, item);
+        }
+        return items;
+    }
+    if (PyDict_Check(value)) {
+        PyObject *pairs = PyDict_Items(value), *map = PyDict_New();
+        Py_ssize_t count = pairs ? PyList_Size(pairs) : 0;
+        for (Py_ssize_t i = 0; map && i < count; i++) {
+            PyObject *pair = PyList_GetItem(pairs, i), *key = PyTuple_GetItem(pair, 0);
+            if (!PyUnicode_Check(key)) {
+                copying->status = TA_ERROR_INVALID;
+                Py_CLEAR(map);
+                break;
+            }
+            PyObject *text = ta_python_copy_value(copying, key, depth + 1);
+            PyObject *item = text ? ta_python_copy_value(copying, PyTuple_GetItem(pair, 1), depth + 1) : NULL;
+            if (!item || PyDict_SetItem(map, text, item) < 0) Py_CLEAR(map);
+            Py_XDECREF(text);
+            Py_XDECREF(item);
+        }
+        Py_XDECREF(pairs);
+        return map;
+    }
+    copying->status = TA_ERROR_INVALID; /* outside the table (docs/values.md) */
+    return NULL;
+}
+
+ta_status ta_python_values_copy(const ta_python_state *state, PyObject *value, PyObject **out) {
+    ta_python_copying copying = {state, TA_OK};
+    *out = ta_python_copy_value(&copying, value, 0);
+    if (*out) return TA_OK;
+    if (copying.status == TA_OK) copying.status = PyErr_ExceptionMatches(PyExc_MemoryError) ? TA_ERROR_NO_MEMORY
+                                                                                            : TA_ERROR_INVALID;
+    PyErr_Clear();
+    return copying.status;
+}
+
 /* ---- tinyactors.encode, tinyactors.decode ------------------------------------------------ */
 
 PyObject *ta_python_encode(PyObject *module, PyObject *value) {

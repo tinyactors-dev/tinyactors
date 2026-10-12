@@ -252,6 +252,10 @@ int ta_python_loop_turn(ta_python_host *host) {
     } while (host->pending && (run.status == TA_RUN_IDLE || run.status == TA_RUN_YIELDED) && !PyErr_Occurred());
     host->looping = 0;
     host->next_deadline = run.next_deadline;
+    if (host->python && ta_python_datamodel_settle(host->python) < 0) { /* a run's BaseException comes first */
+        Py_XDECREF(host->raised);
+        host->raised = PyErr_GetRaisedException();
+    }
     if (host->closing) ta_python_host_free(host);
     if (!host->raised) return 0;
     PyErr_SetRaisedException(host->raised);

@@ -26,7 +26,7 @@ module CPython
   # the datamodels the adapter passes so far. It grows with the plan
   # (ROADMAP.md, "Plan and progress"); M1 is done when it is every suite of
   # the set on both datamodels.
-  GATE = { suites: %w[scenarios], datamodels: %w[quickjs] }.freeze
+  GATE = { suites: %w[scenarios], datamodels: %w[native quickjs] }.freeze
 
   # The extension's C (AGENTS.md, "Layout"), and the flags every file of it
   # compiles with: all of its warnings are errors, and nothing but
