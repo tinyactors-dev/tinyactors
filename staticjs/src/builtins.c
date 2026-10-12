@@ -1760,33 +1760,51 @@ static bool map_group_add(sjs_vm *vm, vm_frame *frame, sjs_value key);
 
 static bool group_add(sjs_vm *vm, vm_frame *frame, sjs_value key) {
     if (frame->builtin == SJS_BUILTIN_MAP_GROUP_BY) return map_group_add(vm, frame, key);
-    sjs_string *k;
-    sjs_result r = sjs_to_key(vm->context, key, &k);
-    if (r == SJS_ERR_PROGRAM) {
-        sjs_vm_fault(vm, "a key must be a primitive");
-        return false;
-    }
-    if (r != SJS_OK) {
-        sjs_vm_fail(vm, r);
-        return false;
+    /* A number's key is looked up by its text, written here, and becomes a
+     * string only when it is first seen: grouping by a number allocates
+     * once per group, not once per element. */
+    char text[32];
+    sjs_string *k = NULL;
+    sjs_str name;
+    if (key.kind == SJS_NUMBER) {
+        name = (sjs_str){ text, sjs_number_format(key.as.number, text) };
+    } else {
+        sjs_result r = sjs_to_key(vm->context, key, &k);
+        if (r == SJS_ERR_PROGRAM) {
+            sjs_vm_fault(vm, "a key must be a primitive");
+            return false;
+        }
+        if (r != SJS_OK) {
+            sjs_vm_fail(vm, r);
+            return false;
+        }
+        name = sjs_string_view(k);
+        if (sjs_str_equal(name, SJS_STR("__proto__"))) {
+            sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+            sjs_vm_fault(vm, "staticjs objects have no prototype");
+            return false;
+        }
     }
     sjs_value *output = slot(vm, frame, LOOP_OUTPUT);
     sjs_object *o = SJS_AS_OBJECT(*output);
     sjs_value item = receiver(vm, frame)->items[frame->index];
-    if (sjs_str_equal(sjs_string_view(k), SJS_STR("__proto__"))) {
-        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
-        sjs_vm_fault(vm, "staticjs objects have no prototype");
-        return false;
-    }
-    const sjs_entry *e = sjs_object_find(o, sjs_string_view(k));
+    const sjs_entry *e = sjs_object_find(o, name);
     if (e != NULL) {
-        sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
+        if (k != NULL) sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &k->h));
         sjs_entry *entry = (sjs_entry *)(uintptr_t)e;
         sjs_array *group = SJS_AS_ARRAY(entry->value);
         sjs_ref(item);
         if (array_add(vm, &group, item) != SJS_OK) return false;
         entry->value.as.heap = &group->h;
         return true;
+    }
+    sjs_result r;
+    if (k == NULL) {
+        r = sjs_string_make(vm->context, name, &k);
+        if (r != SJS_OK) {
+            sjs_vm_fail(vm, r);
+            return false;
+        }
     }
     sjs_array *group;
     if (new_array(vm, 4, &group) != SJS_OK) {
