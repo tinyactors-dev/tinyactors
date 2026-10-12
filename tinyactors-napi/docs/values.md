@@ -7,6 +7,15 @@ the API (config, requests and replies, event data) and for the native
 source; a row without one is not decided yet and stays under TODO until
 M1 decides it with a test.
 
+The same table is the package's public CBOR conversion, the exports
+`encode(value): Uint8Array` and `decode(bytes): unknown`
+(`docs/api-map.md`; `ta_cbor_encode`, `ta_cbor_decode`), which the
+adapter frames the driver's calls with. So the vectors go through this
+table both ways: a value mapped wrong the same way when read and when
+written still passes them, and only this binding's own tests of the
+table, from the rows below and the `ecmascript` lines of `values.txt`,
+catch it (ROADMAP.md, step 8, M1, "Known limit").
+
 Both of Node's datamodels are ECMAScript, so the native one is held to
 what quickjs's does: `tinyactors-test/suites/protocol/values.txt`, every
 case but those named "not ECMAScript: ...", and protocol.md's paragraph

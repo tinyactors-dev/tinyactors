@@ -20,7 +20,8 @@ walking skeleton:
 - `request` with `TinyactorsError` (code, reason, path);
 - values converted between CBOR and JavaScript ([docs/values.md](docs/values.md)),
   with `BigInt` for large integers and ids, `Uint8Array` for bytes, and an
-  actor reference as its address, a string;
+  actor reference as its address, a string; the same conversion is
+  exported as `encode(value)` and `decode(bytes)`;
 - the native ECMAScript datamodel, in the application's own engine:
   `<data>`, `cond`, `assign`, `<script>`, `_event`, `In()`, `<send>` with
   params, `<foreach>`; and the quickjs datamodel beside it;
