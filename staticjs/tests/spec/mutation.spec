@@ -1129,6 +1129,24 @@ export default (a => { a.push(3); return a; })(xs);
 --- value
 {"a":-1,"b":1}
 
+=== **= of a property and an element
+(() => { const o = {n: 2, h: 2, xs: [3, -0.5]}; o.n **= 10; o.h **= 0.5; o.xs[0] **= 3; o.xs[1] **= 1075; return [o.n, o.h, o.xs[0], 1 / o.xs[1] === -Infinity]; })()
+--- value
+[1024,1.4142135623730951,27,true]
+
+=== **= of a let
+(() => { let a = 2, b = 1.1, c = -8, d = 3n; a **= 10; b **= 1.5; c **= 1 / 3; d **= 40n; return [a, b, String(c), String(d)]; })()
+--- value
+[1024,1.153689732987167,"NaN","12157665459056928801"]
+
+=== **= of a BigInt by a number faults
+(() => { let a = 2n; a **= 2; return a; })()
+--- fault mixes a BigInt
+
+=== **= of a string faults
+(() => { const o = {s: "2"}; o.s **= 2; return o; })()
+--- fault arithmetic in staticjs is on numbers
+
 # Logical assignment.
 === ??= assigns a missing key
 (() => { const o = {}; o.a ??= 1; return o; })()
@@ -1593,10 +1611,6 @@ return [o, p]; })()
 === prefix ++ of a sum
 (x => { ++(x + 1); return 0; })(1)
 --- error syntax cannot be assigned to
-
-=== **=
-(() => { const o = {n: 2}; o.n **= 2; return o; })()
---- error unsupported no **= assignment
 
 === <<=
 (() => { const o = {n: 2}; o.n <<= 1; return o; })()

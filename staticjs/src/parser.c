@@ -1707,7 +1707,7 @@ static handled assignment_statement(sjs_parser *p, const queued_token *t) {
     static const struct { const char *text; uint8_t op; } operators[] = {
         { "=", 0 }, { "+=", SJS_OP_ADD }, { "-=", SJS_OP_SUBTRACT }, { "*=", SJS_OP_MULTIPLY },
         { "/=", SJS_OP_DIVIDE }, { "%=", SJS_OP_REMAINDER }, { "&&=", SJS_OP_AND }, { "||=", SJS_OP_OR },
-        { "?\?=", SJS_OP_COALESCE },
+        { "?\?=", SJS_OP_COALESCE }, { "**=", SJS_OP_EXPONENT },
     };
     sjs_str text = token_text(p, t);
     if (t->punctuator == SJS_P_ASSIGN) text = SJS_STR("=");
@@ -1716,8 +1716,7 @@ static handled assignment_statement(sjs_parser *p, const queued_token *t) {
         if (sjs_str_equal(text, sjs_cstr(operators[i].text))) op = operators[i].op;
     }
     if (op == UINT8_MAX) {
-        bool power = sjs_str_equal(text, SJS_STR("**="));
-        if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, power ? "staticjs has no **= assignment" : "staticjs has no bitwise operators" }) == H_STOP) {
+        if (refuse(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no bitwise operators" }) == H_STOP) {
             return H_STOP;
         }
         return H_AGAIN;
