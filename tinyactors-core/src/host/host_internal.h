@@ -283,7 +283,7 @@ uint32_t host_moved_get(const ta_host *h, uint64_t key);
 /* router.c */
 /* an SCXML send of segment si to another system (target not ours);
  * TA_ERROR_NO_MEMORY: nothing done, the effect stays for the next drain */
-/* The rarely called host operations, behind ta_host_request (request.c).
+/* The rarely called host operations, behind ta_host_post (request.c).
  * Trace options: what every segment traces, and new segments start with
  * (docs/adr/0007). Rules and watches name the kinds they give (rule.detail:
  * TA_TRACE_* masks with TA_TRACE_VALUES, TA_NIL to keep the trace's own);

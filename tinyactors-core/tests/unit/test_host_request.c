@@ -1,5 +1,5 @@
-/* ta_host_request (docs/requests.md; docs/adr/0009 in the repository root,
- * decision 2), beyond its protocol vectors (tinyactors-test/suites/protocol): what bytes
+/* ta_host_post (docs/requests.md; docs/adr/0011 in the repository root),
+ * beyond its protocol vectors (tinyactors-test/suites/protocol): what bytes
  * alone cannot show — spans of real traces, variables after a run,
  * hibernation, a datamodel without variables, CHANGED effects, a config
  * nothing points into afterwards. Also ta_host_metrics. */
@@ -37,6 +37,20 @@ static void *compile_pinged(size_t *length) {
     return copy;
 }
 
+/* The C library's allocator, refusing every block while `refusing` is set. */
+static int refusing;
+static void *refusing_alloc(void *context, size_t size, size_t align) {
+    (void)context;
+    if (refusing) return NULL;
+    ta_allocator heap = ta_runtime_malloc();
+    return heap.alloc(heap.context, size, align);
+}
+static void refusing_free(void *context, void *pointer, size_t size) {
+    (void)context;
+    ta_allocator heap = ta_runtime_malloc();
+    heap.free(heap.context, pointer, size);
+}
+
 typedef struct world {
     ta_datamodel_ecmascript *ecmascript;
     ta_datamodel_binding binding;
@@ -63,7 +77,7 @@ static void world_open(world *w, int encoder, const ta_datamodel_vtable *vtable)
     config.system.max_actors = 8;
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
-    config.allocator = ta_runtime_malloc();
+    config.allocator = (ta_allocator){NULL, refusing_alloc, refusing_free};
     config.max_subscriptions = 1;
     if (encoder) config.telemetry.otlp.size = sizeof config.telemetry.otlp;
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
@@ -123,10 +137,11 @@ static void test_spans_and_metrics(void) {
     request[n++] = (unsigned char)out.length;
     memcpy(request + n, out.pointer, out.length);
     n += out.length;
-    ta_bytes answer;
-    CHECK_EQUAL(ta_host_request(w.host, (ta_bytes){request, n}, &answer), TA_OK);
+    static unsigned char reply[1 << 16];
+    ta_buffer answer = {reply, sizeof reply, 0};
+    CHECK_EQUAL(host_post_copy(w.host, (ta_bytes){request, n}, &answer), TA_OK);
     static ta_cbor_token tokens[4096];
-    ta_cbor_document document = {answer, tokens, 4096, 0};
+    ta_cbor_document document = {{reply, answer.length}, tokens, 4096, 0};
     CHECK_EQUAL(ta_cbor_decode(&document), TA_OK);
     uint32_t result = ta_cbor_member(&document, 0, ta_string("result"));
     uint32_t spans = ta_cbor_member(&document, result, ta_string("spans"));
@@ -270,6 +285,113 @@ static void test_subscribe(void) {
     CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
     ping(&w, w.session);
     CHECK_EQUAL(changed(&w, w.session), 0u); /* unsubscribed while hibernated: no watch woke */
+    world_close(&w);
+}
+
+/* A message's CBOR from diagnostic-free parts: {"id": 1, "method": method}
+ * (id < 0: no "id"), in `bytes`; its length. */
+static size_t message(unsigned char *bytes, size_t capacity, const char *method, int64_t id,
+                      uint64_t session) {
+    ta_cbor_writer w;
+    ta_cbor_writer_init(&w, (ta_buffer){bytes, capacity, 0}, NULL);
+    ta_cbor_write_map(&w, TA_CBOR_COUNT_LATER);
+    if (id >= 0) {
+        ta_cbor_write_text(&w, ta_string("id"));
+        ta_cbor_write_uint(&w, (uint64_t)id);
+    }
+    ta_cbor_write_text(&w, ta_string("method"));
+    ta_cbor_write_text(&w, ta_string(method));
+    if (session) {
+        ta_cbor_write_text(&w, ta_string("params"));
+        ta_cbor_write_map(&w, 1);
+        ta_cbor_write_text(&w, ta_string("session"));
+        ta_cbor_write_uint(&w, session);
+    }
+    ta_cbor_write_end(&w);
+    ta_bytes out;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&w, &out), TA_OK);
+    return out.length;
+}
+
+/* Effect `index`'s WIRE in diagnostic notation. */
+static const char *wire_text(ta_host *host, uint32_t index) {
+    static char text[4096];
+    ta_bytes wire = ta_host_effect_bytes(host, index, TA_EFFECT_FIELD_WIRE);
+    ta_buffer out = {text, sizeof text - 1, 0};
+    text[0] = 0;
+    if (ta_cbor_diagnostic(wire, &out) == TA_OK) text[out.length] = 0;
+    return text;
+}
+
+/* ta_host_post (docs/adr/0011, decisions 1, 2, 3 and 5): the reply is the
+ * last effect the post appends, published without a run, after the
+ * method's own effects; a message without an id gets none; refusals. */
+static void test_post(void) {
+    world w;
+    world_open(&w, 1, NULL);
+    settle(&w);
+    unsigned char bytes[256];
+    const ta_host_effect *effects;
+    /* one REPLY, the batch's last, valid until the ack */
+    size_t length = message(bytes, sizeof bytes, "actor.get", 1, w.session);
+    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
+    CHECK_EQUAL(ta_host_effect_number(w.host, 0, TA_EFFECT_FIELD_KIND), TA_HOST_EFFECT_REPLY);
+    CHECK_EQUAL(effects[0].kind, TA_HOST_EFFECT_REPLY);
+    CHECK_EQUAL(ta_host_effect_number(w.host, 0, TA_EFFECT_FIELD_SESSION), 0u);
+    CHECK(reply_is(wire_text(w.host, 0), RESULT("{\"session\":1,\"segment\":0,\"chart\":\"pinged\","
+                                                "\"parent\":null,\"mailbox\":0,\"invocations\":0}")));
+    /* two posts before the ack: both replies, in call order, the first still readable */
+    length = message(bytes, sizeof bytes, "actor.unsubscribe", 2, w.session);
+    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 2u);
+    CHECK(reply_is(wire_text(w.host, 1),
+                   "{\"id\":2," ERROR_BODY("-32001", "stale", "params.session", "the session is not subscribed")));
+    CHECK(reply_is(wire_text(w.host, 0), RESULT("{\"session\":1,\"segment\":0,\"chart\":\"pinged\","
+                                                "\"parent\":null,\"mailbox\":0,\"invocations\":0}")));
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
+    /* without an id: applied, no REPLY */
+    length = message(bytes, sizeof bytes, "actor.subscribe", -1, w.session);
+    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
+    length = message(bytes, sizeof bytes, "actor.unsubscribe", 3, w.session);
+    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
+    CHECK(reply_is(wire_text(w.host, 0), "{\"id\":3,\"result\":{}}")); /* it was subscribed */
+    ta_host_effects_ack(w.host);
+    /* not a request (a batch): answered with a null id */
+    static const unsigned char batch[] = {0x81, 0xa0};
+    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){batch, sizeof batch}), TA_OK);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
+    CHECK(reply_is(wire_text(w.host, 0),
+                   "{\"id\":null," ERROR_BODY("-32600", "type", "", "a request is a map")));
+    ta_host_effects_ack(w.host);
+    /* trace.end: its TRACES before its REPLY, published without a run */
+    length = message(bytes, sizeof bytes, "trace.end", 4, 0);
+    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
+    uint32_t count = ta_host_effects(w.host, &effects), traces = 0;
+    CHECK(count >= 2);
+    for (uint32_t i = 0; i + 1 < count; i++)
+        traces += effects[i].kind == TA_HOST_EFFECT_TRACES;
+    CHECK_EQUAL(traces, 1u);
+    CHECK_EQUAL(effects[count - 1].kind, TA_HOST_EFFECT_REPLY);
+    CHECK(reply_is(wire_text(w.host, count - 1), "{\"id\":4,\"result\":{}}"));
+    ta_host_effects_ack(w.host);
+    world_close(&w);
+
+    /* refused room: nothing applied, no REPLY (the pool is not there yet) */
+    world_open(&w, 0, NULL);
+    length = message(bytes, sizeof bytes, "actor.subscribe", 5, w.session);
+    refusing = 1;
+    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_ERROR_NO_MEMORY);
+    refusing = 0;
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
+    length = message(bytes, sizeof bytes, "actor.unsubscribe", 6, w.session);
+    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
+    CHECK(reply_is(wire_text(w.host, 0),
+                   "{\"id\":6," ERROR_BODY("-32001", "stale", "params.session", "the session is not subscribed")));
     world_close(&w);
 }
 
@@ -429,6 +551,7 @@ static void test_config_effective(void) {
 }
 
 int main(void) {
+    RUN(test_post);
     RUN(test_spans_and_metrics);
     RUN(test_actor_context);
     RUN(test_subscribe);

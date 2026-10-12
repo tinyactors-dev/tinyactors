@@ -278,7 +278,7 @@ static void refused(world *w) {
         effect.kind = TA_HOST_EFFECT_PEER;
         CHECK_EQUAL(ta_host_envelope(w->host, &effect, &out), TA_ERROR_STATE);
     }
-    CHECK_EQUAL(ta_host_request(w->host, (ta_bytes){"\xa1\x62op\x65stats", 9}, &out),
+    CHECK_EQUAL(ta_host_post(w->host, (ta_bytes){"\xa1\x62op\x65stats", 9}),
                 TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_export_actor(w->host, w->listener, &out), TA_ERROR_STATE);
     uint32_t segment;

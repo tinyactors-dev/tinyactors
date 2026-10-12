@@ -1,6 +1,6 @@
-/* host_request.h — ta_host_request from tests: build a request with the CBOR
- * writer, send it, and read the reply as tokens and in diagnostic notation
- * (docs/requests.md). */
+/* host_request.h — ta_host_post from tests: build a message with the CBOR
+ * writer, post it, take its REPLY, and read the reply as tokens and in
+ * diagnostic notation (docs/requests.md). */
 #ifndef TINYACTORS_TESTS_SUPPORT_HOST_REQUEST_H
 #define TINYACTORS_TESTS_SUPPORT_HOST_REQUEST_H
 
@@ -42,20 +42,39 @@ TEST_UNUSED static ta_cbor_writer *ask_begin(host_ask *a, const char *method, ui
     return &a->writer;
 }
 
-/* Send what ask_begin started: the status of ta_host_request; on TA_OK the
+/* ta_host_post of `message`, then its REPLY, the last effect of the batch
+ * ta_host_effects publishes, copied into `reply` (length 0: the last effect
+ * is not a REPLY; post messages with an id here). The batch is acknowledged
+ * when the REPLY is all it holds; else it is left for the test (the next
+ * run releases it). The status of ta_host_post; TA_ERROR_NO_MEMORY also
+ * when the reply does not fit `reply`. */
+TEST_UNUSED static ta_status host_post_copy(ta_host *host, ta_bytes message, ta_buffer *reply) {
+    reply->length = 0;
+    ta_status status = ta_host_post(host, message);
+    if (status != TA_OK) return status;
+    const ta_host_effect *effects;
+    uint32_t count = ta_host_effects(host, &effects);
+    if (!count || effects[count - 1].kind != TA_HOST_EFFECT_REPLY) return TA_OK;
+    ta_bytes view = ta_host_effect_bytes(host, count - 1, TA_EFFECT_FIELD_WIRE);
+    if (view.length > reply->capacity) return TA_ERROR_NO_MEMORY;
+    memcpy(reply->pointer, view.pointer, view.length);
+    reply->length = view.length;
+    if (count == 1) ta_host_effects_ack(host);
+    return TA_OK;
+}
+
+/* Post what ask_begin started: the status of ta_host_post; on TA_OK the
  * reply is in a->document and a->text. */
 TEST_UNUSED static ta_status ask_send(ta_host *host, host_ask *a) {
     ta_bytes request;
     if (ta_cbor_writer_bytes(&a->writer, &request) != TA_OK) return TA_ERROR_INVALID;
     a->request_length = request.length;
-    ta_bytes view = {NULL, 0}; /* the host's, until the next call into it: copied */
     a->answer = (ta_bytes){a->reply, 0};
     a->text[0] = 0;
-    ta_status status = ta_host_request(host, (ta_bytes){a->request, a->request_length}, &view);
+    ta_buffer copy = {a->reply, sizeof a->reply, 0};
+    ta_status status = host_post_copy(host, (ta_bytes){a->request, a->request_length}, &copy);
     if (status != TA_OK) return status;
-    if (view.length > sizeof a->reply) return TA_ERROR_NO_MEMORY;
-    memcpy(a->reply, view.pointer, view.length);
-    a->answer.length = view.length;
+    a->answer.length = copy.length;
     a->document = (ta_cbor_document){{a->reply, a->answer.length}, a->reply_tokens, 4096, 0};
     if (ta_cbor_decode(&a->document) != TA_OK) return TA_ERROR_INVALID;
     a->result = ta_cbor_member(&a->document, 0, ta_string("result"));
@@ -90,7 +109,7 @@ TEST_UNUSED static uint64_t host_stat(ta_host *host, const char *field) {
 
 /* {"method": "actor.state", "params": {"session": session}}: the result's "value" in diagnostic
  * notation into text (cut to fit), or the error reply's text; the status of
- * ta_host_request. */
+ * ta_host_post. */
 TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *text,
                                        size_t capacity) {
     static host_ask a;

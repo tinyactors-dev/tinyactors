@@ -210,7 +210,7 @@ static void refused(world *w) {
     unsigned char bytes[256];
     ta_buffer room = {bytes, sizeof bytes, 0};
     ta_bytes out;
-    CHECK_EQUAL(ta_host_request(w->host, (ta_bytes){STATS, sizeof STATS - 1}, &out), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_post(w->host, (ta_bytes){STATS, sizeof STATS - 1}), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_hibernate(w->host, w->other, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_export_actor(w->host, w->other, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_snapshot(w->host, &room), TA_ERROR_STATE);
@@ -361,8 +361,7 @@ static void test_traces(void) {
 static int freeing_hooks;
 
 static void while_freeing(world *w) {
-    ta_bytes out;
-    CHECK_EQUAL(ta_host_request(w->host, (ta_bytes){STATS, sizeof STATS - 1}, &out), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_post(w->host, (ta_bytes){STATS, sizeof STATS - 1}), TA_ERROR_STATE);
     ta_spawn spawn;
     memset(&spawn, 0, sizeof spawn);
     spawn.segment = w->segment;

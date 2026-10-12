@@ -389,12 +389,20 @@
       "value": 16
     },
     {
+      "name": "TA_HOST_EFFECT_NOTIFICATION",
+      "value": 24
+    },
+    {
       "name": "TA_HOST_EFFECT_PEER",
       "value": 19
     },
     {
       "name": "TA_HOST_EFFECT_PEER_ERROR",
       "value": 20
+    },
+    {
+      "name": "TA_HOST_EFFECT_REPLY",
+      "value": 23
     },
     {
       "name": "TA_HOST_EFFECT_SEGMENT_FREED",
@@ -10126,7 +10134,7 @@
       "implemented": true
     },
     {
-      "name": "ta_host_request",
+      "name": "ta_host_post",
       "returns": "ta_status",
       "params": [
         {
@@ -10134,12 +10142,8 @@
           "type": "ta_host *"
         },
         {
-          "name": "request",
+          "name": "message",
           "type": "ta_bytes"
-        },
-        {
-          "name": "reply",
-          "type": "ta_bytes *"
         }
       ],
       "public": true,

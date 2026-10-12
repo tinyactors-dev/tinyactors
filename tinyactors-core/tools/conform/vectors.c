@@ -94,8 +94,10 @@ static void host_free(conform *state, conform_call *call, conform_result *result
     if (host_of(state, call)) conform_vectors_close(&state->vectors);
 }
 
-/* The reply is a view of the host's memory until the next call into it: kept
- * (copied) at once. With `refuse`, the host's allocator refuses every block
+/* ta_host_post, then its REPLY, the last effect of the batch ta_host_effects
+ * publishes: its bytes kept (copied) at once, and the batch acknowledged
+ * when the REPLY is all it holds. No REPLY (a message without an id): an
+ * empty reply. With `refuse`, the host's allocator refuses every block
  * during the call. */
 static void host_request(conform *state, conform_call *call, conform_result *result) {
     ta_host *host = host_of(state, call);
@@ -104,12 +106,19 @@ static void host_request(conform *state, conform_call *call, conform_result *res
     if (!host || !conform_required(call, "request") || !conform_bytes(call, "request", &request) ||
         !conform_boolean(call, "refuse", &refuse))
         return;
-    ta_bytes reply = {NULL, 0};
+    const ta_host_effect *effects;
+    uint32_t before = ta_host_effects(host, &effects);
     state->vectors.refusing = refuse;
-    ta_status status = ta_host_request(host, request, &reply);
+    ta_status status = ta_host_post(host, request);
     state->vectors.refusing = 0;
     conform_result_integer(result, "status", status);
-    if (status == TA_OK) conform_result_bytes(result, "reply", conform_keep(state, reply));
+    if (status != TA_OK) return;
+    uint32_t count = ta_host_effects(host, &effects);
+    ta_bytes reply = {NULL, 0};
+    if (count > before && effects[count - 1].kind == TA_HOST_EFFECT_REPLY)
+        reply = ta_host_effect_bytes(host, count - 1, TA_EFFECT_FIELD_WIRE);
+    conform_result_bytes(result, "reply", conform_keep(state, reply));
+    if (count == 1 && reply.length) ta_host_effects_ack(host);
 }
 
 /* ---- image.add, actor.spawn, actor.send, clock.advance, host.run ------------------ */

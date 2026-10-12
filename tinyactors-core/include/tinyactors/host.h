@@ -49,8 +49,8 @@
  * next ta_host_effects. Payloads passed in are moved on success and stay the caller's
  * on failure. No callbacks besides the datamodel vtables.
  *
- * What the host writes for its caller — a request's reply, an envelope,
- * traces, logs, metrics, a hibernation or export blob — comes out as a
+ * What the host writes for its caller — an envelope, traces, logs,
+ * metrics, a hibernation or export blob — comes out as a
  * ta_bytes view of memory the host owns, valid until the next call into the
  * host (copy it to keep it, or before anything that can call into the host).
  * The host grows that memory through its allocator, between runs, and keeps
@@ -95,7 +95,7 @@ typedef struct ta_host_environment {
 TA_API ta_status ta_host_create(ta_bytes config, const ta_host_environment *environment,
                                 ta_host **out);
 /* Spans still open are ended and dropped with the host: a caller who wants
- * them sends the trace.end request and takes the traces first. */
+ * them posts the trace.end message and takes the traces first. */
 TA_API void ta_host_free(ta_host *h);
 
 /* ---- segments and versions ----------------------------------------------- */
@@ -154,7 +154,7 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
  * returns 0; ta_host_run returns TA_RUN_FAULT with TA_ERROR_STATE).
  *
  * Outside a run, the same rules hold while the host is inside a datamodel:
- * a request (actor.context), ta_host_envelope, ta_host_deliver,
+ * a posted message (actor.context), ta_host_envelope, ta_host_deliver,
  * hibernating, waking, exporting and adopting, the telemetry takes,
  * `release` in the ack and at the start of a run, and the like. A
  * datamodel's code that calls back into the host there can add inputs but
@@ -227,7 +227,12 @@ enum {
      * it with ta_host_traces (ta_host_logs). At most one of each kind is
      * outstanding: the next comes after a take. */
     TA_HOST_EFFECT_TRACES = 21,
-    TA_HOST_EFFECT_LOGS = 22
+    TA_HOST_EFFECT_LOGS = 22,
+    /* the control plane (ta_host_post, docs/requests.md): */
+    TA_HOST_EFFECT_REPLY = 23,       /* WIRE: {"id", "result"} or {"id", "error"}; the last
+                                        effect of the ta_host_post that answered it */
+    TA_HOST_EFFECT_NOTIFICATION = 24 /* WIRE: {"method", "params"}; EVENT: the method; SESSION:
+                                        the session it is about (0: none) */
     /* TA_EFFECT_CHANGED (9, tinyactors/system.h): a session subscribed with
      * the actor.subscribe request finished a macrostep in this run; at most
      * one per session per run, and none for other sessions. Read its state
@@ -258,7 +263,8 @@ typedef struct ta_host_effect {
     ta_trace_context trace; /* as in ta_effect; PEER: the envelope's traceparent (format it
                                with ta_traceparent_format for the wire) */
     ta_bytes wire; /* PEER relaying an envelope that arrived as bytes: its value as CBOR,
-                      as it arrived (payload is 0). Copy it to ta_envelope.wire */
+                      as it arrived (payload is 0). Copy it to ta_envelope.wire.
+                      REPLY, NOTIFICATION: the message, CBOR */
 } ta_host_effect;
 TA_API uint32_t ta_host_effects(ta_host *h, const ta_host_effect **out);
 TA_API void ta_host_effects_ack(ta_host *h);
@@ -303,7 +309,8 @@ enum {
     TA_EFFECT_FIELD_TRACEPARENT = 37, /* W3C text of `trace`; empty when untraced */
     TA_EFFECT_FIELD_ORIGINTYPE = 38,
     TA_EFFECT_FIELD_DEDUPLICATION_KEY = 39,
-    TA_EFFECT_FIELD_WIRE = 64 /* bytes (ta_host_effect_bytes). PEER: the relayed value's CBOR */
+    TA_EFFECT_FIELD_WIRE = 64 /* bytes (ta_host_effect_bytes). PEER: the relayed value's CBOR;
+                                 REPLY, NOTIFICATION: the message's CBOR */
 };
 TA_API uint64_t ta_host_effect_number(const ta_host *h, uint32_t index, uint32_t field);
 TA_API ta_string_view ta_host_effect_text(ta_host *h, uint32_t index, uint32_t field);
@@ -658,24 +665,30 @@ TA_API ta_status ta_host_snapshot_unpack(ta_bytes pack, ta_host_snapshot_content
 /* Segment i's image in the blob; empty for a retired one. */
 TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
 
-/* ---- requests: the rarely called API (docs/requests.md) --------------------------
- * JSON-RPC's shape without its "jsonrpc" member, in CBOR: one map in,
- * {"method", "params", "id"}; one map out, {"id", "result"} or {"id",
- * "error": {"code", "message", "data": {"reason", "path"}}} for a request the
- * host refuses. As in JSON-RPC 2.0, "id" is an integer, text or null and is
- * echoed; it is null in the reply when the request could not be read; a
- * request without "id" is a notification: applied, with no reply (TA_OK,
- * an empty reply) and no error reported. Trace configuration, watches,
- * stats, inspection, state values and decoded spans are methods;
- * docs/requests.md lists every method, its params, defaults and errors.
- * TA_OK: `reply` is the reply (a result or an error), a view of the host's
- * memory, valid until the next call into the host (empty for a
- * notification). TA_ERROR_NO_MEMORY: the allocator refused room for the
- * reply, and nothing was applied. TA_ERROR_STATE during a run (nothing
- * written). A request is decoded into at most TA_HOST_REQUEST_TOKENS tokens,
- * on the stack. */
+/* ---- the control plane: posted messages (docs/requests.md) -----------------------
+ * A JSON-RPC 2.0 message without "jsonrpc", in CBOR (docs/requests.md),
+ * read during the call. A message with an id (or one that cannot be read)
+ * is answered: the reply is the LAST effect this call appends,
+ * TA_HOST_EFFECT_REPLY, after any effects the method itself appends
+ * (trace.end: TRACES, LOGS). Its WIRE is {"id", "result"} or {"id",
+ * "error": {"code", "message", "data": {"reason", "path"}}}; "id" is echoed,
+ * null when the message could not be read or is not a request (a batch is
+ * one: -32600). A message without "id" is applied, with no REPLY and no
+ * error reported. Trace configuration, watches, stats, inspection, state
+ * values, subscriptions and decoded spans are methods; docs/requests.md
+ * lists every method, its params, defaults and errors.
+ *
+ * ta_host_effects publishes everything appended since the last ack, with or
+ * without a run: a REPLY is read like every other effect (WIRE with
+ * ta_host_effect_bytes) and lives until ta_host_effects_ack, the next
+ * ta_host_run or ta_host_free. TA_OK: the message was read (a JSON-RPC error
+ * travels inside the REPLY). TA_ERROR_NO_MEMORY: the allocator refused room
+ * for the reply, or the published batch holds too many replaced blocks;
+ * nothing was applied and no REPLY appended. TA_ERROR_STATE during a run,
+ * or while the host is inside a datamodel (nothing appended). A message is
+ * decoded into at most TA_HOST_REQUEST_TOKENS tokens, on the stack. */
 enum { TA_HOST_REQUEST_TOKENS = 256 };
-TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+TA_API ta_status ta_host_post(ta_host *h, ta_bytes message);
 /* The host's counters now, as an ExportMetricsServiceRequest (`/v1/metrics`,
  * docs/adr/0007), in `out`: per chart, per segment and the host's own, a view
  * of the host's memory, valid until the next call into the host. There is no

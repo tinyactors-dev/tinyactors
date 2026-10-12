@@ -1,21 +1,21 @@
 id: buffers-are-ta-buffer
 snapshots:
   ? |
-    /* The reply, in the host's memory. */
-    TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+    /* The envelope, in the host's memory. */
+    TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_bytes *out);
   : labels:
-    - source: ta_bytes *reply
+    - source: ta_bytes *out
       style: primary
-      start: 102
-      end: 117
+      start: 118
+      end: 131
     - source: TA_API
       style: secondary
-      start: 39
-      end: 45
-    - source: TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+      start: 42
+      end: 48
+    - source: TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_bytes *out);
       style: secondary
-      start: 39
-      end: 119
+      start: 42
+      end: 133
   ? |
     /* Traces: a view, valid until the next call. */
     TA_API ta_status ta_host_traces(ta_host *h, ta_bytes *out);
@@ -76,20 +76,20 @@ snapshots:
       style: secondary
       start: 0
       end: 83
-  TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);:
+  TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_bytes *out);:
     labels:
-    - source: ta_bytes *reply
+    - source: ta_bytes *out
       style: primary
-      start: 63
-      end: 78
+      start: 76
+      end: 89
     - source: TA_API
       style: secondary
       start: 0
       end: 6
-    - source: TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
+    - source: TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_bytes *out);
       style: secondary
       start: 0
-      end: 80
+      end: 91
   TA_API ta_status ta_host_snapshot(ta_host *h, void *buffer, size_t capacity);:
     labels:
     - source: void *buffer

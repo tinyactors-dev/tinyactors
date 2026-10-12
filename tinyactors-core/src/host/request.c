@@ -1,12 +1,15 @@
-/* request.c — the rarely called host API as CBOR requests and replies
- * (ta_host_request, docs/requests.md; docs/adr/0009 in the repository root,
- * decision 2). A request has JSON-RPC's shape without its "jsonrpc" member:
- * {"method", "params", "id"} in, {"id", "result"} or {"id", "error"} out; a
- * request without "id" is a notification and gets no reply. It is decoded
- * into tokens on the stack, its params are checked here, and the reply is
- * written straight into the caller's buffer.
- * A request that changes the host writes its reply first and applies itself
- * only when the reply fits, so TA_ERROR_NO_MEMORY means nothing changed. */
+/* request.c — the control plane: JSON-RPC messages posted to the host
+ * (ta_host_post, docs/requests.md; docs/adr/0011 in the repository root). A
+ * message has JSON-RPC's shape without its "jsonrpc" member: {"method",
+ * "params", "id"} in; {"id", "result"} or {"id", "error"} out, as the last
+ * effect the post appends (TA_HOST_EFFECT_REPLY); a message without "id" is
+ * applied with no reply. It is decoded into tokens on the stack, its params
+ * are checked here, and the reply is written into the host's output, then
+ * copied once into the effect pool.
+ * A method that changes the host writes its reply first and applies itself
+ * only once the reply fits and the effect pool holds room for it and for
+ * the effects the method appends, so TA_ERROR_NO_MEMORY means nothing
+ * changed. */
 #include <tinyactors/cbor.h>
 #include <tinyactors/image.h>
 #include <tinyactors/otlp.h>
@@ -43,6 +46,7 @@ typedef struct request {
     int notification; /* no "id": applied, nothing written, errors not reported */
     const char *prefix; /* of a field's path: "params." (a request) or "" (a config) */
     int refused;   /* an error reply was written */
+    int no_room;   /* the allocator refused room for the reply: nothing applied */
     char path[96]; /* where the error is, for {"error": {"data": {"path"}}} */
 } request;
 
@@ -400,8 +404,21 @@ static void request_refuse_trace(request *r, ta_status status) {
 
 /* ---- operations ---------------------------------------------------------------------- */
 
-/* A notification writes nothing, so its (unwritten) reply always fits. */
-static int request_fits(const request *r) { return r->notification || r->out.length <= r->out.capacity; }
+/* Effects a post may append: the method's own (trace.end: TRACES and LOGS)
+ * and its REPLY. */
+#define POST_EFFECTS 3u
+
+/* Before a method changes the host: the reply written so far fits, and the
+ * effect pool holds room for it and for POST_EFFECTS records (by capacity:
+ * what the method and the REPLY append then cannot fail). A message without
+ * an id writes nothing, so its (unwritten) reply always fits. */
+static int request_fits(request *r) {
+    if (r->notification) return 1;
+    if (ta_output_fits(&r->out) && host_effects_reserve(r->host, POST_EFFECTS, r->out.length))
+        return 1;
+    r->no_room = 1;
+    return 0;
+}
 
 static void request_run_trace_configure(request *r, uint32_t map) {
     static const char *const fields[] = {"detail", "values", "sample", "records", "rules", NULL};
@@ -960,11 +977,25 @@ static const request_method *request_envelope(request *r, uint32_t *params) {
     return NULL;
 }
 
-ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_bytes *reply) {
-    *reply = (ta_bytes){(const void *)0, 0};
-    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
+/* The reply in the host's output as the last effect, TA_HOST_EFFECT_REPLY,
+ * its bytes in the pool (string 7, WIRE, as the router's PEER relay keeps a
+ * value). TA_ERROR_NO_MEMORY: the allocator refused room (or the held-block
+ * limit was reached), and nothing was appended. */
+static ta_status request_reply(ta_host *host) {
+    size_t length = host->output.length;
+    if (!host_effects_reserve(host, 1, length)) return TA_ERROR_NO_MEMORY;
+    ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_REPLY, TA_NIL);
+    effect_strings *strings = &host->effect_strings[host->effect_count - 1];
+    strings->offset[EFFECT_STRINGS - 1] =
+        host_pool_put(host, (ta_string_view){(const char *)host->output.bytes, (uint32_t)length});
+    effect->wire.length = strings->offset[EFFECT_STRINGS - 1] == (size_t)-1 ? 0 : length;
+    return TA_OK;
+}
+
+ta_status ta_host_post(ta_host *host, ta_bytes message) {
+    if (host->running) return TA_ERROR_STATE; /* not during a run or a datamodel call (host.h) */
     ta_cbor_token tokens[TA_HOST_REQUEST_TOKENS];
-    ta_cbor_document document = {bytes, tokens, TA_HOST_REQUEST_TOKENS, 0};
+    ta_cbor_document document = {message, tokens, TA_HOST_REQUEST_TOKENS, 0};
     request r;
     ta_memset(&r, 0, sizeof r);
     r.host = host;
@@ -994,7 +1025,10 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_bytes *reply) {
         }
     }
     host->output = r.out; /* where the reply is, the block grown or not */
-    return host_output_view(host, reply);
+    if (r.no_room || !ta_output_fits(&host->output)) return TA_ERROR_NO_MEMORY;
+    /* a method that applied reserved room for this; one that only read, or
+     * refused after trying, reserves it now (nothing applied if refused) */
+    return request_reply(host);
 }
 
 /* ---- the host's config (ta_host_create, docs/host-config.md) ------------------------- */
