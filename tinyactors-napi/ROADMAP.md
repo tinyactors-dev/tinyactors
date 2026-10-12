@@ -191,7 +191,7 @@ Progress:
   of 122, the 10 left being the request to core's. The gate holds the
   scenarios on both datamodels. Decisions: `docs/decisions.md`, "The
   native datamodel".
-- Step 7: this commit. `test/rules.test.mjs` has a test for each rule
+- Step 7: `fdc41a6e` (and the fix `e9359f30`). `test/rules.test.mjs` has a test for each rule
   (`test/load.test.mjs` the per-environment state, `test/values.test.mjs`
   the value table's). The timer's test found a crash under bun, fixed in
   the commit before this one: a Host no JavaScript referenced was
@@ -199,6 +199,29 @@ Progress:
   memory within one run: a spike without the scopes grew 192 MB (node)
   and 308 MB (bun) over 1,000,000 evaluations, against 26 and 48 MB with
   them.
+- Step 8: this commit: README (the API, time and liveness on each
+  runtime, errors, limits), `docs/api-map.md`'s core functions no item
+  uses, `docs/values.md`'s TODO answered ("The API's values").
+
+"M1 done means", checked (2026-10-12):
+
+- **Scope:** every item holds (`docs/api-map.md`, `index.d.ts`,
+  `test/`), with these notes: `TA_RUN_EFFECTS` runs again without
+  answering sync sends (no I/O processor yet: M2); `TA_RUN_EXHAUSTED` and
+  `TA_RUN_FAULT` end the turn with a `TinyactorsError`; effects other
+  than `LOG`, `DONE`, `ERROR`, `PEER`, `PEER_ERROR` and `SEGMENT_FREED`
+  are later milestones'.
+- **`SimulatedClock`:** holds (`test/host.test.mjs`; the adapter's
+  `advance` steps).
+- **Gates:** the M1 scenarios on both datamodels under node and bun are
+  in `mise run test` (4 of 4 each). The protocol vectors are not in it
+  yet: on each runtime and datamodel they pass 112 of 122 (`mise run
+  conform -- --milestone M1 --suite protocol`), values.txt's round trips
+  on the native datamodel included; the 10 that fail are those the open
+  request to core names, and the suite joins `GATE` when the runner
+  skips them. The mapping table, layer lints, prefix, no mutable globals,
+  the rules' tests and the value table's tests are in `mise run test`.
+- **Open:** the request to core below; the API review.
 
 ## Later milestones
 

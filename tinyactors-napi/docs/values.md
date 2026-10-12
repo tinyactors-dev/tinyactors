@@ -64,10 +64,27 @@ What crosses between actors is copied through this table; immutable
 values may be shared (bindings.md, section 8, "Actors share no mutable
 value").
 
-## TODO
+## The API's values
 
-### The API's values
+Every value the API takes or gives goes through this table, and nothing
+else (`docs/decisions.md`, "The Host's API"):
 
-Which calls of the API take and give these values themselves (request
-params and results, event data from the application) and which hand the
-application a datamodel's payload, and how `index.d.ts` types them.
+- **taken:** the `config` of `new Host` (written as CBOR for
+  `ta_host_create`), a request's `params`, a spawn's `params` and an
+  event's `data` (made a payload of the host's datamodel with its
+  `from_wire`), and `encode`'s value;
+- **given:** a request's `result`, and the fields of a refused request's or
+  config's error (`TinyactorsError`), a `done` record's `data` (the
+  payload through its datamodel's `to_wire`), and `decode`'s value;
+- **inside the native datamodel:** `to_wire` and `from_wire` are this
+  table, and what crosses to another actor (`capture`: `<send>` data,
+  `<donedata>`, invoke params) is copied through it (`docs/decisions.md`,
+  "The native datamodel").
+
+The application never holds a datamodel's payload: what it gives is copied
+in, and what it gets is a copy. `index.d.ts` types a value as `Value`
+(`null`, `boolean`, `number`, `bigint`, `string`, `Uint8Array`, arrays and
+objects of them), and what `encode` takes as `unknown`, since the table
+drops or refuses what is not a `Value`. Ids a reply holds are values like
+any other: a session in `actor.list`'s reply is a number when it is a safe
+integer (`docs/decisions.md`, "The Host's API", "Ids").

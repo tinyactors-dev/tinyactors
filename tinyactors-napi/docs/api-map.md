@@ -52,11 +52,82 @@ commit that adds the item removes the mark.
 
 ## Core functions no item uses
 
-Written out at M1's end (ROADMAP.md, M1, step 8). So far:
+Every function of core's API descriptions (`tinyactors-core/include/*.api.json`)
+that no row above names, grouped by why (M1, 2026-10-12).
 
-- `ta_host_effects`, `ta_host_effects_ack`, `ta_host_effect_number`,
-  `ta_host_effect_text`: used by the loop and the effect records
-  (`src/loop.c`, `src/effects.c`), not items of their own.
-- `ta_compile_system`, and `ta_compile_options`'s `TA_COMPILE_WERROR` and
-  `TA_COMPILE_STRIP_DEBUG`: not exposed in M1 (`docs/decisions.md`, "The
-  Host's API"); a system manifest's `compile` is a later milestone's.
+**Used inside the addon, not items of their own:**
+
+- the loop and the effect records: `ta_host_effects`, `ta_host_effects_ack`,
+  `ta_host_effect_number`, `ta_host_effect_text` (`src/loop.c`,
+  `src/effects.c`);
+- the value table and requests: `ta_cbor_encode`, `ta_cbor_decode`,
+  `ta_cbor_string` (`src/values.c`), and `ta_host_request` with
+  `host.config` for the host's tick rate (`src/request.c`);
+- the native datamodel: `ta_datamodel_environment_in`,
+  `ta_datamodel_environment_charge`, `ta_image_expression`,
+  `ta_image_expression_count`, `ta_image_data`, `ta_image_data_count`,
+  `ta_image_state_by_name`, `ta_image_string` (`src/datamodel/`);
+- quickjs's `ta_datamodel_ecmascript_vtable` (through its binding),
+  `ta_runtime_malloc` (the compiler's allocator).
+
+**A later milestone's (ROADMAP.md):**
+
+- M2, the W3C suite: `ta_http_encode_post`, `ta_http_parse_request`
+  (BasicHTTP), `ta_host_resume` for `TA_RUN_EFFECTS`' sync sends.
+- M3, every effect: `ta_host_resume` (`TA_EFFECT_REQUEST`),
+  `ta_host_effect_bytes`, `ta_host_traces`, `ta_host_logs`,
+  `ta_host_metrics`, `ta_host_actor_by_name`, `ta_host_locate`,
+  `ta_host_chart` beyond spawn, `ta_host_segment_count`,
+  `ta_host_segment_info_get`, `ta_traceparent_format`.
+- M4, lifecycle and peers: `ta_host_hibernate`, `ta_host_wake`,
+  `ta_host_sweep`, `ta_host_migrate`, `ta_host_job_pending`,
+  `ta_host_export_actor`, `ta_host_adopt`, `ta_blob_rebase`,
+  `ta_blob_migrate`, `ta_host_snapshot`, `ta_host_snapshot_pack`,
+  `ta_host_snapshot_unpack`, `ta_host_snapshot_image`,
+  `ta_host_snapshot_segments`, `ta_host_restore`,
+  `ta_datamodel_ecmascript_snapshot`, `ta_datamodel_ecmascript_restore`,
+  `ta_datamodel_ecmascript_last_error`, `ta_host_peer_up`,
+  `ta_host_peer_remove`, `ta_host_peer_reach`, `ta_host_peer_status`,
+  `ta_host_peer_round_trip_time`, `ta_host_peer_error`,
+  `ta_host_peer_error_read`, `ta_host_route`, `ta_host_export`.
+- Compile options: `ta_compile_system` (system manifests), and the
+  `TA_COMPILE_WERROR` and `TA_COMPILE_STRIP_DEBUG` flags.
+
+**Not exposed, and why:**
+
+- `ta_system_*`, `ta_actor_*`, `ta_core_*`: the layers below the host;
+  a binding drives `ta_host` (bindings.md, section 1), which calls them.
+- `ta_host_system`: the borrowed `ta_system` of a segment, for the C
+  layers' inspection; the API inspects through requests (bindings.md,
+  section 10).
+- `ta_host_route_begin`, `ta_host_route_step`, `ta_host_route_reason`,
+  `ta_host_error_event`, `ta_host_error_route`, `ta_host_message_init`:
+  the external storage driver, for a host whose actors live in a database
+  (PostgreSQL, after M5: root ROADMAP.md, "Decided later"); a resident
+  host routes with `ta_host_deliver`.
+- `ta_otlp_*`, `ta_trace_*`, `ta_span_id_format`, `ta_trace_id_format`,
+  `ta_step_key_span_id`, `ta_traceparent_parse`: the encoder and the
+  trace records inside the host; a binding takes the encoder's requests
+  with `ta_host_traces` and `ta_host_logs` (M3).
+- `ta_address_*`: addresses are core's (bindings.md, section 2: "no
+  twin of C"); an actor reference is its address text (`docs/values.md`).
+- `ta_cbor_write_*`, `ta_cbor_finish`, `ta_cbor_member`, `ta_cbor_next`,
+  `ta_cbor_diagnostic`: core's token writer and readers for C; the value
+  table builds its tokens itself and reads them in one walk
+  (`src/values.c`).
+- `ta_image_*` beyond the native datamodel's, `ta_datamodel_null`: core
+  binds the null datamodel itself; an image is opened by `addImage`.
+- `ta_datamodel_ecmascript_payload_eval`,
+  `ta_datamodel_ecmascript_payload_to_cbor`,
+  `ta_datamodel_ecmascript_payload_from_cbor`,
+  `ta_datamodel_ecmascript_heap_bytes`,
+  `ta_datamodel_ecmascript_set_memory_limit`,
+  `ta_datamodel_ecmascript_js_runtime`,
+  `ta_datamodel_ecmascript_wasm_set_time`: quickjs's C helpers; the API
+  reaches its payloads through the vtable's `to_wire` and `from_wire`,
+  evaluates no expression outside a chart (the driver's `value.encode` is
+  C-level), and its limits (`maxOps`, `memoryLimit`) are not options yet.
+- `ta_runtime_*` but `ta_runtime_malloc`, `ta_xml_writer_*`: the C
+  runtime's files, clock and system helpers, and an XML writer for charts
+  a binding builds; JavaScript has its own, and charts come as text.
+- `ta_wasm_alloc`, `ta_wasm_free`: the wasm module's.
