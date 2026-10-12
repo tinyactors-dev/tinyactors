@@ -224,7 +224,7 @@ static const sjs_name NAMES[] = {
     NAME("propertyIsEnumerable", SJS_NAME_EVERYWHERE, 0, 0, 0),
     NAME_MUTATION("push", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_PUSH), /* MUTATION */
     NAME_ITERATOR("reduce", SJS_NAME_ON_ARRAY | SJS_NAME_ON_ITERATOR, SJS_METHOD_ARRAY_REDUCE, SJS_METHOD_ITERATOR_REDUCE),
-    NAME("reduceRight", SJS_NAME_ON_ARRAY, 0, 0, 0),
+    NAME("reduceRight", SJS_NAME_ON_ARRAY, SJS_METHOD_ARRAY_REDUCE_RIGHT, 0, 0),
     NAME("repeat", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPEAT, 0),
     NAME("replace", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE, 0),
     NAME("replaceAll", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_REPLACE_ALL, 0),
@@ -467,6 +467,7 @@ bool sjs_builtin_loops(sjs_builtin_id id) {
     case SJS_METHOD_ARRAY_FLAT_MAP:
     case SJS_METHOD_ARRAY_MAP:
     case SJS_METHOD_ARRAY_REDUCE:
+    case SJS_METHOD_ARRAY_REDUCE_RIGHT:
     case SJS_METHOD_ARRAY_SOME:
     case SJS_METHOD_ARRAY_TO_SORTED:
     case SJS_BUILTIN_OBJECT_GROUP_BY:
@@ -1818,13 +1819,16 @@ static const sjs_entry *own_entry(vm_frame *frame, const sjs_object *o) {
     return e;
 }
 
-/* Map.groupBy, a map's forEach, and an iterator's map, filter and reduce:
- * at the end of the file. A forEach's step is sjs_loop_step's, which calls
- * for_each_call where an element would be called back. */
+/* Map.groupBy, a map's forEach, an iterator's map, filter and reduce, and
+ * reduceRight: at the end of the file. A forEach's step is sjs_loop_step's,
+ * which calls for_each_call where an element would be called back, and
+ * reduceRight's calls reduce_right_call. */
 static sjs_result late_start(sjs_vm *vm, vm_frame *frame);
 static loop_step late_done(sjs_vm *vm, vm_frame *frame);
 static loop_step for_each_call(sjs_vm *vm, vm_frame *frame);
 static bool flatten_iterated(sjs_vm *vm, vm_frame *frame, sjs_value r);
+static sjs_result reduce_right_start(sjs_vm *vm, vm_frame *frame);
+static loop_step reduce_right_call(sjs_vm *vm, vm_frame *frame);
 
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     if (frame->builtin >= SJS_REGEX_LOOP_FIRST) return sjs_regex_loop_start(vm, frame);
@@ -1882,6 +1886,8 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
         sjs_ref(a->items[0]);
         frame->index = 1;
         return set_output(vm, frame, a->items[0]);
+    case SJS_METHOD_ARRAY_REDUCE_RIGHT:
+        return reduce_right_start(vm, frame);
     case SJS_METHOD_ARRAY_TO_SORTED: {
         uint32_t n = a->length;
         if ((size_t)n * 2u > (size_t)UINT32_MAX / sizeof(sjs_value)) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
@@ -2254,6 +2260,7 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
             break;
         }
         case SJS_METHOD_ARRAY_REDUCE:
+        case SJS_METHOD_ARRAY_REDUCE_RIGHT:
             set_output(vm, frame, r);
             frame->index++;
             break;
@@ -2317,6 +2324,7 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
     /* Past the shapes' C paths, so that only a loop that calls back pays
      * for the test. */
     if (frame->builtin == SJS_METHOD_MAP_FOR_EACH) return for_each_call(vm, frame);
+    if (frame->builtin == SJS_METHOD_ARRAY_REDUCE_RIGHT) return reduce_right_call(vm, frame);
     uint32_t element = walks_from_end(frame->builtin) ? frame->length - 1u - frame->index : frame->index;
     return call_element(vm, frame, element);
 }
@@ -4003,4 +4011,44 @@ __attribute__((noinline)) static sjs_result number_method(sjs_vm *vm, sjs_builti
     uint32_t length = sjs_number_format_digits(d, text);
     call->cost = length;
     return new_string(vm, (sjs_str){ text, length }, &call->result);
+}
+
+/* ------------------------------------------------------------------------
+ * reduceRight: reduce from the last element to the first. Its accumulator
+ * moves into the callback and back, as reduce's does, so that
+ * `{...acc, k: v}` updates in place. No shape's C path runs it: SUM's
+ * sum_step adds from the first element, and floating-point addition in
+ * another order gives another sum. The loop holds the receiver, which the
+ * callback therefore cannot change.
+ */
+__attribute__((noinline)) static sjs_result reduce_right_start(sjs_vm *vm, vm_frame *frame) {
+    if (frame->argc >= 2) {
+        /* Moved, not copied: LOOP_SECOND is not read again. */
+        sjs_value *second = slot(vm, frame, LOOP_SECOND);
+        sjs_value initial = *second;
+        *second = sjs_undefined();
+        return set_output(vm, frame, initial);
+    }
+    const sjs_array *a = receiver(vm, frame);
+    if (a->length == 0) return sjs_vm_fault(vm, "reduceRight of an empty array needs an initial value");
+    sjs_value last = a->items[a->length - 1u];
+    sjs_ref(last);
+    frame->index = 1;
+    return set_output(vm, frame, last);
+}
+
+/* The callback with (accumulator, element, index, array) for the element
+ * frame->index from the end; sjs_loop_step takes its result back into
+ * LOOP_OUTPUT as reduce's. If the call cannot be pushed, the release below
+ * frees the accumulator. */
+__attribute__((noinline)) static loop_step reduce_right_call(sjs_vm *vm, vm_frame *frame) {
+    const sjs_array *a = receiver(vm, frame);
+    uint32_t i = frame->length - 1u - frame->index;
+    sjs_value *output = slot(vm, frame, LOOP_OUTPUT);
+    sjs_value acc = *output;
+    *output = sjs_undefined();
+    sjs_value args[4] = { acc, a->items[i], sjs_num((double)i), *slot(vm, frame, LOOP_RECEIVER) };
+    loop_step step = call_back(vm, frame, (sjs_values){ args, 4u });
+    sjs_vm_release(vm, acc);
+    return step;
 }

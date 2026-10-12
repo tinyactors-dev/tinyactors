@@ -123,9 +123,9 @@ struct sjs_vm {
 };
 
 /* Loop frame slots, from base; a kept callback frame's slots follow them.
- * reduce moves LOOP_OUTPUT, its accumulator, into the callback's first
- * argument while the callback runs, and the result back, so that the
- * callback holds the accumulator alone. */
+ * reduce and reduceRight move LOOP_OUTPUT, the accumulator, into the
+ * callback's first argument while the callback runs, and the result back,
+ * so that the callback holds the accumulator alone. */
 #define LOOP_RECEIVER 0u
 #define LOOP_CALLBACK 2u
 #define LOOP_SECOND 3u

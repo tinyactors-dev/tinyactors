@@ -1282,6 +1282,13 @@ run none. The callback gets (value, counter), and reduce's (accumulator,
 value, counter), as JavaScript's helpers pass them; a C path never builds
 them.
 
+An array's `reduceRight` adds no row either. SUM and SUM_KEY tag its
+callbacks as they tag reduce's, but `sum_step` adds from the first element
+and reduceRight's bytecode from the last, and floating-point addition in
+another order gives another sum (`[0.1, 0.2, 0.3]` gives 0.6 from the
+right, 0.6000000000000001 from the left), so its callbacks always run
+the bytecode.
+
 ### 7.4 Measuring
 
 - The existing cases `eval.array.toSorted.rows` (`(a, b) => a.kwh - b.kwh`),
