@@ -1,0 +1,8 @@
+{
+  "name": "staticjs-bench-engines",
+  "private": true,
+  "description": "The engines `mise run bench-engines` compares staticjs with (staticjs/bench/engines/)",
+  "dependencies": {
+    "quickjs-wasi": "3.6.2"
+  }
+}

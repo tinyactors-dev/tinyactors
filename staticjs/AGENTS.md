@@ -74,7 +74,8 @@ JavaScript does, or a fault. Never a different value.
 ## Benchmarks
 
 `mise run bench` and `mise run bench-compare <commit>` (README.md,
-"Benchmarks").
+"Benchmarks"); `mise run bench-engines` compares staticjs with Node and
+quickjs-wasi.
 
 - Before committing a change to `vm.c`, `value.c`, `builtins.c`,
   `memory.c`, or the hot paths of the parser and the compiler, run
@@ -90,3 +91,6 @@ JavaScript does, or a fault. Never a different value.
 - A timing assertion never goes into `mise run test`: it runs only
   `bench --smoke`, which checks each case's value and that it frees what it
   allocates, so a leak there fails the tests.
+- `mise run bench-engines` reads its cases from bench.c (`bench/engines/`):
+  after changing a fixture there, change `bench/engines/guest.js` to match,
+  or its verification stops the run. Commit the report a full run writes.
