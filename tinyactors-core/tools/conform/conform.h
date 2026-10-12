@@ -175,10 +175,12 @@ ta_host_environment conform_datamodel_environment(const conform_datamodel *datam
 
 /* ---- images ------------------------------------------------------------------------ */
 
-/* An image compiled from documents and kept for as long as a host runs it. */
+/* An image compiled from documents: its bytes live in the compile result
+ * until conform_image_free. The host copies them (ta_host_add_image), so
+ * the image is freed as soon as it is added. */
 typedef struct conform_image {
-    void *bytes;
-    ta_image image;
+    ta_compile_result *result;
+    ta_bytes bytes;
 } conform_image;
 /* Charts to compile into one image (the first is the default chart), and
  * the documents a src="" of theirs may name (`files`, by name, with a
@@ -187,8 +189,8 @@ typedef struct conform_documents {
     ta_source_list charts;
     ta_source_list files;
 } conform_documents;
-/* ta_compile_charts, ta_compile_image, ta_image_open; the diagnostics go to
- * standard error. Its status. */
+/* ta_compile_charts, ta_compile_image; the diagnostics go to standard
+ * error. Its status. */
 ta_status conform_image_compile(const conform_documents *documents, conform_image *out);
 void conform_image_free(conform_image *image);
 
@@ -206,8 +208,6 @@ typedef struct conform_vectors {
     ta_host *host;
     int refusing; /* the host's allocator refuses every block (host.request's `refuse`) */
     conform_datamodel datamodel;
-    conform_image images[16];
-    uint32_t image_count;
 } conform_vectors;
 
 typedef struct conform {

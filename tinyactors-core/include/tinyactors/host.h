@@ -7,11 +7,12 @@
  * k * 2^32 + 1, ... so a session id names an actor host-wide, for its whole
  * life — also after it migrated to another segment.
  *
- *   versions   ta_host_add_image() adds a segment; its charts become the
- *              current version of their chart names (<scxml name>). New actors
- *              of a name start in its current version. A segment whose charts
- *              all have newer versions and that has no actors left is freed
- *              (TA_HOST_EFFECT_SEGMENT_FREED: the host may free the image bytes).
+ *   versions   ta_host_add_image() adds a segment running a copy of an image
+ *              the host keeps; its charts become the current version of their
+ *              chart names (<scxml name>). New actors of a name start in its
+ *              current version. A segment whose charts all have newer versions
+ *              and that has no actors left is freed with its copy of the image
+ *              (TA_HOST_EFFECT_SEGMENT_FREED says it retired).
  *   routing    SCXML sends between segments (same system id) are delivered
  *              inside the host layer — no host round trip. Sends to other
  *              systems go through the router (peers, routes, relaying,
@@ -99,9 +100,14 @@ TA_API ta_status ta_host_create(ta_bytes config, const ta_host_environment *envi
 TA_API void ta_host_free(ta_host *h);
 
 /* ---- segments and versions ----------------------------------------------- */
-/* A new segment running `image` (the bytes must stay valid until
- * TA_HOST_EFFECT_SEGMENT_FREED for it, or ta_host_free). */
-TA_API ta_status ta_host_add_image(ta_host *h, const ta_image *image, uint32_t *segment);
+/* A new segment running the image `image` (.tai bytes, any alignment). The
+ * host reads `image` during the call only, before any datamodel call: it
+ * copies the bytes into a block from environment->allocator, opens them
+ * there (ta_image_open), and frees the block when the segment is freed or
+ * with ta_host_free. The caller may change or free its bytes once the call
+ * returns. TA_ERROR_INVALID: not an image; TA_ERROR_NO_MEMORY: the
+ * allocator refused (nothing added); TA_ERROR_STATE during a run. */
+TA_API ta_status ta_host_add_image(ta_host *h, ta_bytes image, uint32_t *segment);
 /* A chart in the host: the segment that runs it and its index there. */
 typedef struct ta_host_chart_ref {
     uint32_t segment;
@@ -114,7 +120,8 @@ typedef struct ta_host_segment_info {
     uint32_t live;    /* 0 once freed */
     uint32_t actors;  /* actors in it (including adopted ones) */
     uint32_t current; /* charts of it that are the current version of their name */
-    const ta_image *image;
+    const ta_image *image; /* the host's copy (borrowed: valid while the segment is live);
+                              NULL once the segment is freed */
 } ta_host_segment_info;
 TA_API uint32_t ta_host_segment_count(const ta_host *h); /* segments ever added */
 TA_API ta_status ta_host_segment_info_get(const ta_host *h, uint32_t segment,
@@ -216,7 +223,7 @@ enum {
     /* TA_EFFECT_SEND .. TA_EFFECT_WAKE (1..8) as in tinyactors/system.h, plus: */
     TA_HOST_EFFECT_MIGRATED = 16, /* session moved to (segment, chart); job */
     TA_HOST_EFFECT_JOB_DONE = 17, /* job ended: migrated, failed, pending (ta_host_job_pending) */
-    TA_HOST_EFFECT_SEGMENT_FREED = 18, /* segment retired: its image may be freed */
+    TA_HOST_EFFECT_SEGMENT_FREED = 18, /* segment retired (the host freed its image copy) */
     /* the router (docs/protocol.md): */
     TA_HOST_EFFECT_PEER = 19,      /* send an envelope to `peer`: target, event, sendid, payload,
                                   aux = origin, msgid, hops (in `flags`) */
@@ -621,7 +628,7 @@ TA_API ta_status ta_host_adopt(ta_host *h, const ta_host_adoption *adoption, uin
  * are valid again before the first ta_host_run (the JS bindings store their
  * value tables next to the snapshot; the C ECMAScript datamodel has
  * ta_datamodel_ecmascript_snapshot/_restore). Images are supplied again, one per
- * segment (NULL for retired ones); ta_host_snapshot_segments tells which.
+ * segment (empty for retired ones); ta_host_snapshot_segments tells which.
  * Snapshots are for the same build of the library (regions are raw memory). */
 TA_API ta_status ta_host_snapshot(ta_host *h, ta_buffer *out);
 /* The segments a snapshot has: returns their number; hashes[i] is segment i's
@@ -629,12 +636,13 @@ TA_API ta_status ta_host_snapshot(ta_host *h, ta_buffer *out);
  * 0 if the blob is not a host snapshot. */
 TA_API uint32_t ta_host_snapshot_segments(ta_bytes snapshot, ta_uint64_array hashes);
 /* A snapshot to restore and the image of each of its segments: images[i]
- * must be the image segment i ran (same content hash) or NULL if it was
- * retired; the image bytes must stay valid as with ta_host_add_image. */
+ * is the bytes of the image segment i ran (same content hash), or empty if
+ * it was retired; the host copies them as ta_host_add_image does, and reads
+ * nothing of `images` after the call. */
 typedef struct ta_host_snapshot_input {
     ta_bytes config; /* as for ta_host_create */
     ta_bytes snapshot;
-    const ta_image *const *images;
+    const ta_bytes *images;
     uint32_t image_count;
     uint32_t pad;
 } ta_host_snapshot_input;

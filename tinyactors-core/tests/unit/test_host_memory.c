@@ -294,7 +294,7 @@ static test_host_config workload_config(workload *w) {
 static void add_image(workload *w, int i) {
     w->memory->phase = "segment";
     uint32_t segment = 0;
-    RETRY(w->memory, TA_OK, ta_host_add_image(w->host, &w->images->image[i], &segment));
+    RETRY(w->memory, TA_OK, ta_host_add_image(w->host, ta_image_bytes(&w->images->image[i]), &segment));
     CHECK_EQUAL(segment, (uint32_t)i);
 }
 
@@ -447,10 +447,30 @@ static void workload_run(workload *w) {
     copy.binding = ta_datamodel_ecmascript_binding(copy.ecmascript);
     memset(&copy.effects, 0, sizeof copy.effects);
     test_host_config restored_config = workload_config(&copy);
-    const ta_image *restored_images[3] = {&w->images->image[0], &w->images->image[1],
-                                          &w->images->image[2]};
+    ta_bytes restored_images[3] = {ta_image_bytes(&w->images->image[0]),
+                                   ta_image_bytes(&w->images->image[1]),
+                                   ta_image_bytes(&w->images->image[2])};
     uint64_t live = m->live_blocks;
     ta_host *restored = NULL;
+    { /* the wrong image for the last live segment: refused, and the host's copies of
+         the images before it, and of the wrong one, go back to the allocator */
+        uint64_t hashes[3] = {0, 0, 0};
+        uint32_t count = ta_host_snapshot_segments((ta_bytes){hs, hl}, (ta_uint64_array){hashes, 3});
+        uint32_t last = TA_NIL;
+        for (uint32_t i = 0; i < count && i < 3; i++)
+            if (hashes[i]) last = i;
+        CHECK(last != TA_NIL);
+        if (last != TA_NIL) {
+            ta_bytes wrong[3] = {restored_images[0], restored_images[1], restored_images[2]};
+            wrong[last] = restored_images[(last + 1) % 3];
+            CHECK_EQUAL(test_host_restore(&restored_config,
+                                          &(ta_host_snapshot_input){{0, 0}, {hs, hl}, wrong, 3, 0},
+                                          &restored),
+                        TA_ERROR_INVALID);
+            CHECK(restored == NULL);
+            CHECK_EQUAL(m->live_blocks, live);
+        }
+    }
     RETRY(m, TA_OK,
           test_host_restore(&restored_config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, restored_images, 3, 0}, &restored));
     CHECK(restored != NULL && m->live_blocks > live);
@@ -627,8 +647,8 @@ static void test_fixed_arena(void) {
     config.allocator = (ta_allocator){&a, arena_alloc, arena_free};
     ta_host *host = NULL;
     CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
-    CHECK_EQUAL(ta_host_add_image(host, &im.image[0], NULL), TA_OK);
-    CHECK_EQUAL(ta_host_add_image(host, &im.image[1], NULL), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(host, ta_image_bytes(&im.image[0]), NULL), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(host, ta_image_bytes(&im.image[1]), NULL), TA_OK);
     uint64_t p = 0, q = 0, extra = 0;
     CHECK_EQUAL(ta_host_spawn(
                     host, &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}}, &p),
@@ -668,7 +688,7 @@ static void test_fixed_arena(void) {
     actor = location.actor;
     CHECK_EQUAL(ta_actor_info_get(ta_host_system(host, segment), actor, &info), TA_OK);
     /* a new version of p, and p moves to it in state b */
-    CHECK_EQUAL(ta_host_add_image(host, &im.image[2], NULL), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(host, ta_image_bytes(&im.image[2]), NULL), TA_OK);
     uint32_t job = 0;
     CHECK_EQUAL(
         ta_host_migrate(host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 0}, &job),
@@ -696,7 +716,7 @@ static void test_fixed_arena(void) {
     arena tiny = {small, sizeof small, 0, 0};
     config.allocator = (ta_allocator){&tiny, arena_alloc, arena_free};
     CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
-    CHECK_EQUAL(ta_host_add_image(host, &im.image[0], NULL), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(ta_host_add_image(host, ta_image_bytes(&im.image[0]), NULL), TA_ERROR_NO_MEMORY);
     CHECK_EQUAL(ta_host_segment_count(host), 0);
     ta_host_free(host);
     CHECK_EQUAL(tiny.live, 0);

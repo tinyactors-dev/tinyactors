@@ -1008,7 +1008,7 @@ static int host_migrate(world *w) {
     uint32_t segment;
     int k = w->segment_image[ta_host_segment_count(w->host) - 1] ^ 1;
     if (ta_host_segment_count(w->host) >= MAX_SYSTEMS ||
-        ta_host_add_image(w->host, &test_images[k], &segment) != TA_OK)
+        ta_host_add_image(w->host, ta_image_bytes(&test_images[k]), &segment) != TA_OK)
         return 0;
     w->segment_image[segment] = k;
     /* one job per root without running invocations (a session tree waits for
@@ -1072,13 +1072,14 @@ static int host_snapshot_restore(world *w) {
     written = (ta_buffer){ds, dl, 0};
     if (ta_datamodel_ecmascript_snapshot(w->ecmascript, &written) != TA_OK) return 0;
     dl = written.length;
-    const ta_image *images[MAX_SYSTEMS];
+    ta_bytes images[MAX_SYSTEMS];
     uint32_t ns = ta_host_segment_count(w->host);
     for (uint32_t i = 0; i < ns; i++) {
         ta_host_segment_info segment_info;
         segment_info.size = sizeof segment_info;
         ta_host_segment_info_get(w->host, i, &segment_info);
-        images[i] = segment_info.live ? &test_images[w->segment_image[i]] : NULL;
+        images[i] = segment_info.live ? ta_image_bytes(&test_images[w->segment_image[i]])
+                                      : (ta_bytes){NULL, 0};
     }
     ta_host_free(w->host);
     ta_datamodel_ecmascript_free(w->ecmascript);
@@ -1101,7 +1102,7 @@ static void world_init_host(world *w, const char *label) {
     test_host_config config = host_config(w);
     uint32_t segment;
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
-    CHECK_EQUAL(ta_host_add_image(w->host, &test_images[0], &segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(w->host, ta_image_bytes(&test_images[0]), &segment), TA_OK);
     w->segment_image[segment] = 0;
     ta_host_advance_time(w->host, (ta_host_time){0, 0});
 }

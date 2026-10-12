@@ -146,11 +146,6 @@ static void sb_json_str(string_builder *b, const char *s, size_t n) {
 
 /* ---- systems --------------------------------------------------------------------------- */
 
-typedef struct bench_image { /* a version's image (heap: the host holds &image), freed with it */
-    void *bytes;
-    ta_image image;
-} bench_image;
-
 /* A torture system: one ta_host (versions are its segments, sharing the
  * system's address and ECMAScript runtime). */
 typedef struct bench_system {
@@ -159,8 +154,6 @@ typedef struct bench_system {
     char base[TA_ADDRESS_SYSTEM_MAX + 16];
     ta_datamodel_ecmascript *ecmascript;
     ta_host *host;
-    bench_image **images; /* by segment (NULL once freed) */
-    uint32_t image_count, image_capacity;
     ta_io_processor_descriptor io_processors[MAX_IO];
     char io_names[MAX_IO][48];
     uint32_t io_processor_count;
@@ -348,18 +341,13 @@ static void system_free(bench_system *system) {
     if (system->host)
         ta_host_free(system->host); /* before the runtime its datamodel instances live in */
     if (system->ecmascript) ta_datamodel_ecmascript_free(system->ecmascript);
-    for (uint32_t i = 0; i < system->image_count; i++)
-        if (system->images[i]) {
-            free(system->images[i]->bytes);
-            free(system->images[i]);
-        }
-    free(system->images);
     memset(system, 0, sizeof *system);
 }
 
-/* Compile sources into image bytes (malloc'd). NULL on failure (message set). */
-static void *compile_image(const char *name, ta_source *source, uint32_t n, ta_image *image,
-                           char *message, size_t capacity) {
+/* Compile sources: the result holds the image's bytes (ta_compile_image).
+ * NULL on failure (message set). */
+static ta_compile_result *compile_image(const char *name, ta_source *source, uint32_t n,
+                                        char *message, size_t capacity) {
     ta_compile_options options;
     memset(&options, 0, sizeof options);
     options.size = sizeof options;
@@ -377,45 +365,25 @@ static void *compile_image(const char *name, ta_source *source, uint32_t n, ta_i
         ta_compile_free(result);
         return NULL;
     }
-    ta_string_view bytes = ta_compile_image(result);
-    void *b = malloc(bytes.length + 8);
-    memcpy(b, bytes.pointer, bytes.length);
-    ta_compile_free(result);
-    if (ta_image_open((ta_bytes){b, bytes.length}, image) != TA_OK) {
-        snprintf(message, capacity, "%s: invalid image", name);
-        free(b);
-        return NULL;
-    }
-    return b;
+    return result;
 }
 
 /* A new version of system s: a segment of its host running these sources.
  * Returns the segment (= version - 1) or -1 (message set). */
 static int system_add_version(bench_system *system, ta_source *source, uint32_t n, char *message,
                               size_t capacity) {
-    bench_image *image = (bench_image *)calloc(1, sizeof *image);
-    image->bytes = compile_image(system->name, source, n, &image->image, message, capacity);
+    ta_compile_result *result = compile_image(system->name, source, n, message, capacity);
     uint32_t segment = 0;
+    if (!result) return -1;
+    ta_string_view image = ta_compile_image(result);
+    /* the host copies the image: the result goes at once */
     ta_status status =
-        image->bytes ? ta_host_add_image(system->host, &image->image, &segment) : TA_ERROR_INVALID;
+        ta_host_add_image(system->host, (ta_bytes){image.pointer, image.length}, &segment);
+    ta_compile_free(result);
     if (status != TA_OK) {
-        if (image->bytes)
-            snprintf(message, capacity, "%s: cannot start the version (%d)", system->name, status);
-        free(image->bytes);
-        free(image);
+        snprintf(message, capacity, "%s: cannot start the version (%d)", system->name, status);
         return -1;
     }
-    if (segment >= system->image_capacity) {
-        uint32_t c = system->image_capacity ? system->image_capacity * 2 : 8;
-        while (c <= segment)
-            c *= 2;
-        system->images = (bench_image **)realloc(system->images, sizeof(bench_image *) * c);
-        memset(system->images + system->image_capacity, 0,
-               sizeof(bench_image *) * (c - system->image_capacity));
-        system->image_capacity = c;
-    }
-    system->images[segment] = image;
-    if (segment >= system->image_count) system->image_count = segment + 1;
     system->busy = 1;
     return (int)segment;
 }
@@ -501,7 +469,6 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     if (system_add_version(system, source, n, message, capacity) < 0) {
         ta_host_free(system->host);
         ta_datamodel_ecmascript_free(system->ecmascript);
-        free(system->images);
         memset(system, 0, sizeof *system);
         return -1;
     }
@@ -760,13 +727,14 @@ static int system_chart(bench_system *system, const char *name, size_t length,
                         ta_host_chart_ref *out) {
     if (ta_host_chart(system->host, (ta_string_view){name, (uint32_t)length}, out) == TA_OK)
         return 1;
-    for (uint32_t i = system->image_count; i-- > 0;) {
-        if (!system->images[i]) continue;
-        uint32_t c = find_chart(&system->images[i]->image, name, length);
+    for (uint32_t i = ta_host_segment_count(system->host); i-- > 0;) {
+        ta_host_segment_info info; /* the host's copy of the image, while the segment lives */
+        info.size = sizeof info;
+        if (ta_host_segment_info_get(system->host, i, &info) != TA_OK || !info.image) continue;
+        uint32_t c = find_chart(info.image, name, length);
         if (c == TA_NIL) continue;
         /* the current version of that chart's name, if it has one */
-        if (ta_host_chart(system->host, ta_image_chart_name(&system->images[i]->image, c), out) !=
-            TA_OK) {
+        if (ta_host_chart(system->host, ta_image_chart_name(info.image, c), out) != TA_OK) {
             out->segment = i;
             out->chart = c;
         }
@@ -2174,12 +2142,7 @@ static void drain_effects(int si) {
             operation->job = *effect;
             break;
         }
-        case TA_HOST_EFFECT_SEGMENT_FREED: {
-            if (effect->segment < system->image_count && system->images[effect->segment]) {
-                free(system->images[effect->segment]->bytes);
-                free(system->images[effect->segment]);
-                system->images[effect->segment] = NULL;
-            }
+        case TA_HOST_EFFECT_SEGMENT_FREED: { /* the host freed its copy of the image */
             system->retired++;
             char m[128];
             snprintf(m, sizeof m, "version %u retired (no actors left)", effect->segment + 1);

@@ -74,7 +74,7 @@ static void advance(world *w, ta_time monotonic) {
 static void scenario(world *w) {
     advance(w, 10);
     uint32_t first = 0, second = 0;
-    CHECK_EQUAL(ta_host_add_image(w->host, &w->image[0], &first), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(w->host, ta_image_bytes(&w->image[0]), &first), TA_OK);
     ta_spawn spawn;
     memset(&spawn, 0, sizeof spawn);
     spawn.segment = first;
@@ -82,7 +82,7 @@ static void scenario(world *w) {
     CHECK_EQUAL(ta_host_spawn(w->host, &spawn, &session), TA_OK);
     run_once(w);
     advance(w, 20);
-    CHECK_EQUAL(ta_host_add_image(w->host, &w->image[1], &second), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(w->host, ta_image_bytes(&w->image[1]), &second), TA_OK);
     CHECK_EQUAL(second, 1u);
     ta_event_in stop;
     memset(&stop, 0, sizeof stop);

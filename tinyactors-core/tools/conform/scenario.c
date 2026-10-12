@@ -15,12 +15,11 @@ typedef struct scenario_blob {
     ta_buffer bytes;
 } scenario_blob;
 
-/* A ta_host_snapshot_pack blob, and its images opened in it. */
+/* A ta_host_snapshot_pack blob, and its images (views into it). */
 typedef struct scenario_snapshot {
     char name[64];
     ta_buffer pack;
-    ta_image images[16];
-    const ta_image *image_pointers[16];
+    ta_bytes images[16];
 } scenario_snapshot;
 
 typedef struct scenario {
@@ -30,8 +29,6 @@ typedef struct scenario {
     ta_host *host;
     unsigned char config[256];
     size_t config_length;
-    conform_image images[16];
-    uint32_t image_count;
     conform_alias aliases[64];
     uint32_t alias_count;
     scenario_blob store[64]; /* the hibernated actors' blobs */
@@ -198,16 +195,16 @@ static int step_image(scenario *run, const scenario_step *step) {
         if (k == run->documents.count) return malformed(run, step->index, "image names a document the call does not have");
         charts[i] = run->documents.items[k];
     }
-    if (run->image_count == sizeof run->images / sizeof run->images[0]) return refused(run, "too many images");
-    conform_image *image = &run->images[run->image_count];
+    conform_image image;
     conform_documents documents = {{charts, names->count}, {run->documents.items, run->documents.count}};
-    if (conform_image_compile(&documents, image) != TA_OK) {
+    if (conform_image_compile(&documents, &image) != TA_OK) {
         run->outcome = "compile";
         return 0;
     }
-    run->image_count++;
     uint32_t segment;
-    return ta_host_add_image(run->host, &image->image, &segment) == TA_OK || refused(run, "ta_host_add_image refused an image");
+    ta_status status = ta_host_add_image(run->host, image.bytes, &segment); /* the host copies it */
+    conform_image_free(&image);
+    return status == TA_OK || refused(run, "ta_host_add_image refused an image");
 }
 
 static int step_spawn(scenario *run, const scenario_step *step) {
@@ -351,20 +348,15 @@ static int step_restore(scenario *run, const scenario_step *step) {
     contents.size = sizeof contents;
     if (ta_host_snapshot_unpack(pack, &contents) != TA_OK || contents.image_count > 16)
         return refused(run, "ta_host_snapshot_unpack refused the snapshot");
-    for (uint32_t i = 0; i < contents.image_count; i++) {
-        ta_bytes image = ta_host_snapshot_image(pack, i);
-        snapshot->image_pointers[i] = NULL;
-        if (image.length && ta_image_open(image, &snapshot->images[i]) != TA_OK)
-            return refused(run, "an image in the snapshot does not open");
-        if (image.length) snapshot->image_pointers[i] = &snapshot->images[i];
-    }
+    for (uint32_t i = 0; i < contents.image_count; i++) /* empty for a retired segment */
+        snapshot->images[i] = ta_host_snapshot_image(pack, i);
     ta_host_free(run->host);
     run->host = NULL;
     if (!conform_datamodel_reopen(&run->datamodel)) return refused(run, "the datamodel could not be made again");
     ta_host_environment environment = conform_datamodel_environment(&run->datamodel, NULL);
     ta_host_snapshot_input input = {{run->config, run->config_length},
                                     {contents.host, contents.host_length},
-                                    snapshot->image_pointers,
+                                    snapshot->images,
                                     contents.image_count,
                                     0};
     if (ta_host_restore(&environment, &input, &run->host) != TA_OK) return refused(run, "ta_host_restore refused");
@@ -423,8 +415,6 @@ static int step_run(scenario *run, uint32_t index, uint32_t at) {
 static void scenario_free(scenario *run) {
     if (run->host) ta_host_free(run->host);
     conform_datamodel_close(&run->datamodel);
-    for (uint32_t i = 0; i < run->image_count; i++)
-        conform_image_free(&run->images[i]);
     for (uint32_t i = 0; i < run->store_count; i++)
         conform_buffer_free(&run->store[i].bytes);
     for (uint32_t i = 0; i < run->snapshot_count; i++)

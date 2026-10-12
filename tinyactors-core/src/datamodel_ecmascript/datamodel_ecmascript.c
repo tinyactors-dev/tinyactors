@@ -3447,16 +3447,17 @@ ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript, 
     return status;
 }
 
+/* The attached chart `chart` of the image whose content hash is `hex`. It
+ * compares the hash stored at attach: a chart nobody has attached may keep
+ * the image of a segment the host has freed since, so it is never read
+ * here, and sessions are restored only onto attached charts. */
 static ecmascript_chart *chart_by_hash(ta_datamodel_ecmascript *ecmascript, const char *hex,
                                        uint32_t chart) {
     for (uint32_t c = 0; c < ecmascript->chart_count; c++) {
         ecmascript_chart *chart_state = ecmascript->charts[c];
-        if (chart_state->chart != chart) continue;
-        ta_image_info image_info;
-        image_info.size = sizeof image_info;
-        ta_image_get_info(chart_state->image, &image_info);
+        if (chart_state->chart != chart || !chart_state->refs) continue;
         char h[24];
-        snprintf(h, sizeof h, "%016llx", (unsigned long long)image_info.content_hash);
+        snprintf(h, sizeof h, "%016llx", (unsigned long long)chart_state->hash);
         if (!strcmp(h, hex)) return chart_state;
     }
     return NULL;

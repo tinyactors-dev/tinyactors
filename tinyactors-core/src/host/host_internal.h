@@ -61,7 +61,12 @@ ta_status host_config_read(const host_config_input *input, host_config *config);
 typedef struct host_segment {
     int live;
     int busy;
-    const ta_image *image;
+    /* the host's copy of the segment's image: one block from the host's
+     * allocator, the ta_image then its bytes (image_copy), freed after the
+     * segment's ta_system_deinit (retire, ta_host_free); NULL once freed.
+     * A block of its own, since `segments` grows by copying */
+    ta_image *image;
+    size_t image_size;
     ta_system *system;
     void *memory;
     size_t memory_size;

@@ -464,6 +464,38 @@ ta_status ta_host_create(ta_bytes cbor, const ta_host_environment *environment, 
 static void effects_release(ta_host *h);
 static size_t subscriptions_bytes(const ta_host *host);
 
+/* ---- images: the host's copies ---------------------------------------------------------- */
+
+/* Where an image's bytes start in its block: after the ta_image, 8-aligned. */
+#define IMAGE_BYTES_AT ((sizeof(ta_image) + 7u) & ~(size_t)7u)
+
+/* `bytes` (an image, any alignment) copied into a block of the host's
+ * allocator and opened there, as segment->image. It is read during the call
+ * only, before any datamodel code runs. TA_ERROR_NO_MEMORY: the allocator
+ * refused; TA_ERROR_INVALID: not an image (nothing kept either way). */
+static ta_status image_copy(ta_host *host, ta_bytes bytes, host_segment *segment) {
+    size_t size = IMAGE_BYTES_AT + bytes.length;
+    unsigned char *block = (unsigned char *)host_alloc(host, size);
+    if (!block) return TA_ERROR_NO_MEMORY;
+    if (bytes.length) ta_memcpy(block + IMAGE_BYTES_AT, bytes.pointer, bytes.length);
+    ta_image *image = (ta_image *)(void *)block;
+    if (ta_image_open((ta_bytes){block + IMAGE_BYTES_AT, bytes.length}, image) != TA_OK) {
+        host_free(host, block, size);
+        return TA_ERROR_INVALID;
+    }
+    segment->image = image;
+    segment->image_size = size;
+    return TA_OK;
+}
+
+/* The segment's image block back to the allocator, after its system's
+ * ta_system_deinit (nothing reads it then). */
+static void image_free(ta_host *host, host_segment *segment) {
+    host_free(host, segment->image, segment->image_size);
+    segment->image = NULL;
+    segment->image_size = 0;
+}
+
 static void job_free(ta_host *host, migration_job *job) {
     host_free(host, job->name, job->name_length);
     host_free(host, job->retry, sizeof(uint64_t) * job->retry_capacity);
@@ -479,11 +511,13 @@ void ta_host_free(ta_host *host) {
     host->effects_ready = host->effect_count; /* all of them */
     effects_release(host);
     ta_router_free(host);
-    for (uint32_t i = 0; i < host->segment_count; i++)
+    for (uint32_t i = 0; i < host->segment_count; i++) {
         if (host->segments[i].live) {
             ta_system_deinit(host->segments[i].system);
             host_free(host, host->segments[i].memory, host->segments[i].memory_size);
         }
+        image_free(host, &host->segments[i]); /* also one a failed restore left */
+    }
     host_free(host, host->segments, sizeof(host_segment) * host->segment_capacity);
     host_free(host, host->versions, sizeof(chart_version) * host->version_capacity);
     for (uint32_t i = 0; i < host->job_count; i++)
@@ -517,17 +551,22 @@ void ta_host_free(ta_host *host) {
 
 static void reserve_serials(ta_host *h, uint32_t index);
 
-ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segment) {
+ta_status ta_host_add_image(ta_host *host, ta_bytes bytes, uint32_t *segment) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t index = host->segment_count;
     if (index >= (1u << 20)) return TA_ERROR_NO_MEMORY; /* session ids stay exact in a double */
     if (!host_grow(host, (void **)&host->segments, &host->segment_capacity, index + 1,
-                   sizeof(host_segment)) ||
-        !versions_reserve(host, image_charts(image)))
+                   sizeof(host_segment)))
         return TA_ERROR_NO_MEMORY;
     host_segment *segment_record = &host->segments[index];
     ta_memset(segment_record, 0, sizeof *segment_record);
-    segment_record->image = image;
+    ta_status status = image_copy(host, bytes, segment_record); /* before any datamodel code */
+    if (status != TA_OK) return status;
+    const ta_image *image = segment_record->image;
+    if (!versions_reserve(host, image_charts(image))) {
+        image_free(host, segment_record);
+        return TA_ERROR_NO_MEMORY;
+    }
     segment_record->config = host->config.system; /* the effective config (host_new) */
     segment_record->config.io_processors = host->io_processors;
     segment_record->config.io_processor_count = host->io_processor_count;
@@ -536,20 +575,26 @@ ta_status ta_host_add_image(ta_host *host, const ta_image *image, uint32_t *segm
     segment_record->config.trace_seed =
         host->config.system.trace_seed + (uint64_t)index * 0x9E3779B97F4A7C15ull;
     size_t need;
-    ta_status status = ta_system_layout(image, &segment_record->config, &need);
-    if (status != TA_OK) return status;
-    segment_record->memory = host_alloc(host, need);
-    if (!segment_record->memory) return TA_ERROR_NO_MEMORY;
-    segment_record->memory_size = need;
-    ta_system_setup setup = {{segment_record->memory, need}, image,
-                             &segment_record->config,        host->datamodels,
-                             host->config.datamodel_count,   0};
-    uint32_t was = host_guard(host); /* chart_attach */
-    status = ta_system_init(&setup, &segment_record->system);
-    host_unguard(host, was);
+    status = ta_system_layout(image, &segment_record->config, &need);
+    if (status == TA_OK) {
+        segment_record->memory = host_alloc(host, need);
+        if (!segment_record->memory) status = TA_ERROR_NO_MEMORY;
+    }
+    if (status == TA_OK) {
+        segment_record->memory_size = need;
+        ta_system_setup setup = {{segment_record->memory, need}, image,
+                                 &segment_record->config,        host->datamodels,
+                                 host->config.datamodel_count,   0};
+        uint32_t was = host_guard(host); /* chart_attach */
+        status = ta_system_init(&setup, &segment_record->system);
+        host_unguard(host, was);
+        if (status != TA_OK) {
+            host_free(host, segment_record->memory, need);
+            segment_record->memory = NULL;
+        }
+    }
     if (status != TA_OK) {
-        host_free(host, segment_record->memory, need);
-        segment_record->memory = NULL;
+        image_free(host, segment_record);
         return status;
     }
     ta_system_trace_clock(segment_record->system, host->fuel_clock);
@@ -1763,6 +1808,7 @@ static int retire(ta_host *host) {
         ta_system_deinit(segment->system);
         host_unguard(host, was);
         host_free(host, segment->memory, segment->memory_size);
+        image_free(host, segment); /* its charts are no version any more: nothing reads it */
         segment->memory = NULL;
         segment->memory_size = 0;
         segment->system = NULL;
@@ -2569,7 +2615,7 @@ static ta_status restore_failed(ta_host *host, ta_status status) {
 
 ta_status ta_host_restore(const ta_host_environment *environment,
                           const ta_host_snapshot_input *input, ta_host **out) {
-    const ta_image *const *images = input->images;
+    const ta_bytes *images = input->images;
     uint32_t image_count = input->image_count;
     const void *snap = input->snapshot.pointer;
     size_t length = input->snapshot.length;
@@ -2599,12 +2645,14 @@ ta_status ta_host_restore(const ta_host_environment *environment,
         ta_memset(segment, 0, sizeof *segment);
         host->segment_count = i + 1;
         if (!ss->live) continue;
+        if (!images[i].length) return restore_failed(host, TA_ERROR_INVALID);
+        status = image_copy(host, images[i], segment); /* before chart_attach */
+        if (status != TA_OK) return restore_failed(host, status);
         ta_image_info image_info;
         image_info.size = sizeof image_info;
-        if (images[i]) ta_image_get_info(images[i], &image_info);
-        if (!images[i] || image_info.content_hash != ss->hash)
-            return restore_failed(host, TA_ERROR_INVALID); /* not the image this segment ran */
-        segment->image = images[i];
+        ta_image_get_info(segment->image, &image_info);
+        if (image_info.content_hash != ss->hash) /* not the image this segment ran: */
+            return restore_failed(host, TA_ERROR_INVALID); /* ta_host_free frees the copy */
         segment->config = ss->config;
         segment->config.io_processors = host->io_processors;
         segment->config.io_processor_count = host->io_processor_count;

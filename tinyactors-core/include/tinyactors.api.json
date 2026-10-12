@@ -8342,7 +8342,7 @@
         },
         {
           "name": "images",
-          "type": "const ta_image *const *"
+          "type": "const ta_bytes *"
         },
         {
           "name": "image_count",
@@ -9485,7 +9485,7 @@
         },
         {
           "name": "image",
-          "type": "const ta_image *"
+          "type": "ta_bytes"
         },
         {
           "name": "segment",

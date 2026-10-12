@@ -80,7 +80,7 @@ static void open_node(int i, const char *chart) {
     n->bytes = compile_chart("c.scxml", chart, NULL, &length, 0);
     CHECK(n->bytes && ta_image_open((ta_bytes){n->bytes, length}, &n->image) == TA_OK);
     uint32_t segment;
-    CHECK_EQUAL(ta_host_add_image(n->host, &n->image, &segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(n->host, ta_image_bytes(&n->image), &segment), TA_OK);
 }
 
 static void close_all(void) {
@@ -430,7 +430,7 @@ static void test_dedup(void) {
     config.datamodels = &nodes[B].binding;
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
-    const ta_image *images[1] = {&nodes[B].image};
+    ta_bytes images[1] = {ta_image_bytes(&nodes[B].image)};
     CHECK_EQUAL(test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {snap, length}, images, 1, 0}, &nodes[B].host),
                 TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(nodes[B].ecmascript, (ta_bytes){dsnap, dl}),
@@ -1083,7 +1083,7 @@ static void test_trace_two_segments(void) {
     ta_image echo_image;
     CHECK(echo_bytes && ta_image_open((ta_bytes){echo_bytes, length}, &echo_image) == TA_OK);
     uint32_t segment;
-    CHECK_EQUAL(ta_host_add_image(nodes[A].host, &echo_image, &segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(nodes[A].host, ta_image_bytes(&echo_image), &segment), TA_OK);
     CHECK_EQUAL(segment, 1);
     uint64_t p = spawn(A, "pinger", "p");
     uint64_t echo = 0;
@@ -1148,7 +1148,7 @@ static void test_trace_set(void) {
     ta_image echo_image;
     CHECK(echo_bytes && ta_image_open((ta_bytes){echo_bytes, length}, &echo_image) == TA_OK);
     uint32_t segment;
-    CHECK_EQUAL(ta_host_add_image(nodes[A].host, &echo_image, &segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(nodes[A].host, ta_image_bytes(&echo_image), &segment), TA_OK);
     uint64_t echo = 0;
     CHECK_EQUAL(ta_host_spawn(
                     nodes[A].host,
@@ -1355,14 +1355,14 @@ static void open_two_datamodels(void) {
     config.allocator = ta_runtime_malloc();
     CHECK_EQUAL(test_host_new(&config, &n->host), TA_OK);
     uint32_t segment;
-    CHECK_EQUAL(ta_host_add_image(n->host, &n->image, &segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(n->host, ta_image_bytes(&n->image), &segment), TA_OK);
     static ta_image quiet;
     static void *quiet_bytes;
     size_t length;
     free(quiet_bytes);
     quiet_bytes = compile_chart("q.scxml", QUIET, NULL, &length, 0);
     CHECK(quiet_bytes && ta_image_open((ta_bytes){quiet_bytes, length}, &quiet) == TA_OK);
-    CHECK_EQUAL(ta_host_add_image(n->host, &quiet, &segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(n->host, ta_image_bytes(&quiet), &segment), TA_OK);
 }
 
 static void decode_at_target(int bytes) {

@@ -239,7 +239,7 @@ static void w3c_run(conform *state, conform_call *call, conform_result *result) 
         outcome = "fail";
         ta_status status = config_write(NULL, &config_bytes);
         if (status == TA_OK) status = ta_host_create((ta_bytes){config, config_bytes.length}, &environment, &test.host);
-        if (status == TA_OK) status = ta_host_add_image(test.host, &image.image, &segment);
+        if (status == TA_OK) status = ta_host_add_image(test.host, image.bytes, &segment);
         if (status == TA_OK) status = ta_host_boot(test.host, segment);
         if (status == TA_OK) outcome = test_run(&test);
         else fprintf(stderr, "ta-conform: the test's host refused it: %d\n", (int)status);

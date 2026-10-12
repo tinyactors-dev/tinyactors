@@ -64,7 +64,7 @@ typedef struct world {
     ta_datamodel_binding binding;
     ta_host *host;
     void *image_bytes;
-    ta_image image;
+    size_t image_length;
     uint32_t segment;
     char log[4096];
     uint64_t caller, listener;
@@ -107,8 +107,8 @@ static void world_open(world *w, uint32_t max_events) {
     size_t length;
     w->image_bytes = compile_both(&length);
     CHECK(w->image_bytes != NULL);
-    CHECK_EQUAL(ta_image_open((ta_bytes){w->image_bytes, length}, &w->image), TA_OK);
-    CHECK_EQUAL(ta_host_add_image(w->host, &w->image, &w->segment), TA_OK);
+    w->image_length = length;
+    CHECK_EQUAL(ta_host_add_image(w->host, (ta_bytes){w->image_bytes, length}, &w->segment), TA_OK);
 }
 
 static void world_close(world *w) {
@@ -282,7 +282,8 @@ static void refused(world *w) {
                 TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_export_actor(w->host, w->listener, &out), TA_ERROR_STATE);
     uint32_t segment;
-    CHECK_EQUAL(ta_host_add_image(w->host, &w->image, &segment), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_add_image(w->host, (ta_bytes){w->image_bytes, w->image_length}, &segment),
+                TA_ERROR_STATE);
     ta_resume resume;
     memset(&resume, 0, sizeof resume);
     CHECK_EQUAL(ta_host_resume(w->host, &resume), TA_ERROR_STATE);

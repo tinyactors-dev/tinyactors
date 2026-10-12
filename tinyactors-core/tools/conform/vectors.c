@@ -15,9 +15,6 @@ void conform_vectors_close(conform_vectors *vectors) {
     if (vectors->host) ta_host_free(vectors->host);
     vectors->host = NULL;
     conform_datamodel_close(&vectors->datamodel);
-    for (uint32_t i = 0; i < vectors->image_count; i++)
-        conform_image_free(&vectors->images[i]);
-    vectors->image_count = 0;
 }
 
 /* The methods after host.create need its host (-32002 state). */
@@ -123,22 +120,19 @@ static void host_request(conform *state, conform_call *call, conform_result *res
 
 /* ---- image.add, actor.spawn, actor.send, clock.advance, host.run ------------------ */
 
+/* The host copies the image: it is freed once added. */
 static void image_add(conform *state, conform_call *call, conform_result *result) {
     conform_vectors *vectors = &state->vectors;
     conform_sources sources;
     if (!host_of(state, call) || !conform_required(call, "charts") || !conform_sources_read(call, "charts", &sources))
         return;
-    if (vectors->image_count == sizeof vectors->images / sizeof vectors->images[0]) {
-        conform_fail(call, &(conform_failure){CONFORM_INVALID_PARAMS, "range", "params.charts"}, "too many images");
-        return;
-    }
-    conform_image *image = &vectors->images[vectors->image_count];
+    conform_image image;
     uint32_t segment = 0;
     ta_status status = conform_image_compile(
-        &(conform_documents){{sources.items, sources.count}, {sources.items, sources.count}}, image);
+        &(conform_documents){{sources.items, sources.count}, {sources.items, sources.count}}, &image);
     if (status == TA_OK) {
-        vectors->image_count++;
-        status = ta_host_add_image(vectors->host, &image->image, &segment);
+        status = ta_host_add_image(vectors->host, image.bytes, &segment);
+        conform_image_free(&image);
     }
     conform_result_integer(result, "status", status);
     if (status == TA_OK) conform_result_integer(result, "segment", segment);

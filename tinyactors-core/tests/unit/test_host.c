@@ -65,7 +65,7 @@ static uint32_t world_add(host_world *e, const char *text) {
     CHECK(e->image_bytes[i] != NULL);
     CHECK_EQUAL(ta_image_open((ta_bytes){e->image_bytes[i], length}, &e->image[i]), TA_OK);
     uint32_t segment = 0;
-    CHECK_EQUAL(ta_host_add_image(e->host, &e->image[i], &segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(e->host, ta_image_bytes(&e->image[i]), &segment), TA_OK);
     return segment;
 }
 
@@ -384,6 +384,7 @@ static void test_versions_and_migration(void) {
     segment_info.size = sizeof segment_info;
     CHECK_EQUAL(ta_host_segment_info_get(e.host, 0, &segment_info), TA_OK);
     CHECK_EQUAL(segment_info.live, 0);
+    CHECK(segment_info.image == NULL); /* freed with the segment */
     /* the migrated actor gets its events at the same session id, in its new version */
     e.log[0] = 0;
     CHECK_EQUAL(send(&e, w[0], "pong", NULL), TA_OK);
@@ -431,7 +432,8 @@ static void test_versions_and_migration(void) {
     config.datamodels = &e.binding;
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
-    const ta_image *images[3] = {&e.image[0], &e.image[1], &e.image[2]};
+    ta_bytes images[3] = {ta_image_bytes(&e.image[0]), ta_image_bytes(&e.image[1]),
+                          ta_image_bytes(&e.image[2])};
     CHECK_EQUAL(
         test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, 3, 0}, &e.host),
         TA_OK);
@@ -711,11 +713,11 @@ static void test_snapshot_restore(void) {
     config.datamodels = &e.binding;
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
-    const ta_image *images[2] = {&e.image[0], &e.image[1]};
+    ta_bytes images[2] = {ta_image_bytes(&e.image[0]), ta_image_bytes(&e.image[1])};
     CHECK_EQUAL(
         test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, 1, 0}, &e.host),
         TA_ERROR_INVALID); /* too few */
-    const ta_image *swapped[2] = {&e.image[1], &e.image[0]};
+    ta_bytes swapped[2] = {ta_image_bytes(&e.image[1]), ta_image_bytes(&e.image[0])};
     CHECK_EQUAL(
         test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, swapped, 2, 0}, &e.host),
         TA_ERROR_INVALID); /* wrong ones */
@@ -963,9 +965,7 @@ static void test_snapshot_pack(void) {
     config.datamodels = &f.binding;
     config.datamodel_count = 1;
     config.allocator = ta_runtime_malloc();
-    ta_image opened;
-    CHECK_EQUAL(ta_image_open((ta_bytes){image.pointer, image.length}, &opened), TA_OK);
-    const ta_image *images[1] = {&opened};
+    ta_bytes images[1] = {image}; /* the pack's bytes: the host copies them */
     CHECK_EQUAL(test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {contents.host, contents.host_length}, images, 1, 0}, &f.host),
                 TA_OK);
     CHECK_EQUAL(ta_datamodel_ecmascript_restore(f.ecmascript, (ta_bytes){state, dl}), TA_OK);
@@ -1050,6 +1050,99 @@ static void test_hibernate_and_wake(void) {
                 "<transition event='done.invoke.ghost' target='bad'/></state>"                     \
                 "<final id='end'/><final id='bad'/>")
 
+/* ta_host_add_image copies the image (docs/adr/0011, decision 7): the
+ * caller's bytes, at any alignment, may be changed and freed once the call
+ * returns; bytes that are no image add nothing. */
+static void test_image_copied(void) {
+    host_world e;
+    world_open(&e, 0, NULL, 0);
+    size_t length;
+    void *compiled = compile_chart(
+        "c.scxml",
+        SC("p", "initial='a'><state id='a'><transition event='go' target='b'/></state>"
+                "<state id='b'><onentry><log expr=\"'at b'\"/></onentry></state>"),
+        NULL, &length, 0);
+    CHECK(compiled != NULL);
+    unsigned char *odd = (unsigned char *)malloc(length + 1);
+    memcpy(odd + 1, compiled, length);
+    uint32_t segment = 9;
+    CHECK_EQUAL(ta_host_add_image(e.host, (ta_bytes){odd + 1, length}, &segment), TA_OK);
+    CHECK_EQUAL(segment, 0u);
+    memset(odd, 0xa5, length + 1); /* the caller's bytes change, then go */
+    free(odd);
+    CHECK_EQUAL(ta_host_add_image(e.host, (ta_bytes){compiled, 16}, &segment), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_segment_count(e.host), 1u); /* nothing added */
+    free(compiled);
+    ta_host_segment_info info;
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_host_segment_info_get(e.host, 0, &info), TA_OK);
+    CHECK(info.image != NULL);
+    CHECK_EQUAL((uintptr_t)ta_image_bytes(info.image).pointer & 7u, 0u); /* opened 8-aligned */
+    CHECK_EQUAL(ta_image_bytes(info.image).length, length);
+    uint64_t p = spawn(&e, "p");
+    CHECK_EQUAL(send(&e, p, "go", NULL), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "at b;") == 0);
+    world_close(&e);
+}
+
+/* A datamodel that ran charts of a host now freed keeps them idle, with the
+ * image the host freed; restoring sessions onto another image's charts
+ * compares the hashes stored at attach and reads no freed image
+ * (ta_datamodel_ecmascript_restore, under ASan). */
+static void test_restore_after_images_freed(void) {
+    host_world old;
+    world_open(&old, 0, NULL, 0);
+    world_add(&old, SC("x", "initial='a'><state id='a'/>"));
+    spawn(&old, "x");
+    run(&old);
+    ta_host_free(old.host); /* x's image goes; its chart stays in old's datamodel, idle */
+    old.host = NULL;
+    host_world e;
+    world_open(&e, 0, NULL, 0);
+    world_add(&e, SC("y", "initial='a'><datamodel><data id='n' expr='7'/></datamodel>"
+                          "<state id='a'><transition event='show'><log expr=\"'n=' + n\"/>"
+                          "</transition></state>"));
+    uint64_t y = spawn(&e, "y");
+    run(&e);
+    ta_buffer written = {NULL, 0, 0};
+    ta_host_snapshot(e.host, &written);
+    void *hs = malloc(written.length);
+    written = (ta_buffer){hs, written.length, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_OK);
+    size_t hl = written.length;
+    written = (ta_buffer){NULL, 0, 0};
+    ta_datamodel_ecmascript_snapshot(e.ecmascript, &written);
+    void *ds = malloc(written.length);
+    written = (ta_buffer){ds, written.length, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &written), TA_OK);
+    size_t dl = written.length;
+    ta_bytes images[1] = {ta_image_bytes(&e.image[0])};
+    ta_host_free(e.host);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.datamodels = &old.binding; /* the datamodel with x's idle chart */
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    CHECK_EQUAL(
+        test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, 1, 0}, &e.host),
+        TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(old.ecmascript, (ta_bytes){ds, dl}), TA_OK);
+    ta_datamodel_ecmascript_free(e.ecmascript);
+    e.ecmascript = old.ecmascript;
+    old.ecmascript = NULL;
+    e.log[0] = 0;
+    CHECK_EQUAL(send(&e, y, "show", NULL), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "n=7;") == 0);
+    world_close(&e);
+    world_close(&old);
+    free(hs);
+    free(ds);
+}
+
 static void test_request_answered_with_an_error(void) {
     host_world e;
     world_open(&e, 8, NULL, 0);
@@ -1069,6 +1162,8 @@ static void test_request_answered_with_an_error(void) {
 }
 
 int main(void) {
+    RUN(test_image_copied);
+    RUN(test_restore_after_images_freed);
     RUN(test_snapshot_pack);
     RUN(test_hibernate_and_wake);
     RUN(test_request_answered_with_an_error);

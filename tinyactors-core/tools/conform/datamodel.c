@@ -149,19 +149,12 @@ ta_status conform_image_compile(const conform_documents *documents, conform_imag
         return status;
     }
     ta_string_view bytes = ta_compile_image(result);
-    out->bytes = malloc(bytes.length ? bytes.length : 1);
-    if (!out->bytes) {
-        ta_compile_free(result);
-        return TA_ERROR_NO_MEMORY;
-    }
-    memcpy(out->bytes, bytes.pointer, bytes.length);
-    ta_compile_free(result);
-    status = ta_image_open((ta_bytes){out->bytes, bytes.length}, &out->image);
-    if (status != TA_OK) conform_image_free(out);
-    return status;
+    out->result = result;
+    out->bytes = (ta_bytes){bytes.pointer, bytes.length};
+    return TA_OK;
 }
 
 void conform_image_free(conform_image *image) {
-    free(image->bytes);
+    ta_compile_free(image->result);
     memset(image, 0, sizeof *image);
 }

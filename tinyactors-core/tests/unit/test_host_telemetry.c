@@ -42,7 +42,6 @@ typedef struct world {
     ta_datamodel_binding binding;
     ta_host *host;
     void *image_bytes;
-    ta_image image;
     uint32_t segment;
     uint64_t session;
     ta_status during_run; /* what ta_host_traces answered from inside a run */
@@ -97,8 +96,9 @@ static void world_open(world *w, const test_host_telemetry *telemetry) {
     size_t length;
     w->image_bytes = compile_pinged(&length);
     CHECK(w->image_bytes != NULL);
-    CHECK_EQUAL(ta_image_open((ta_bytes){w->image_bytes, length}, &w->image), TA_OK);
-    CHECK_EQUAL(ta_host_add_image(w->host, &w->image, &w->segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(w->host, (ta_bytes){w->image_bytes, length}, &w->segment), TA_OK);
+    free(w->image_bytes); /* the host keeps a copy */
+    w->image_bytes = NULL;
     ta_spawn spawn;
     memset(&spawn, 0, sizeof spawn);
     spawn.segment = w->segment;
@@ -291,7 +291,10 @@ static void test_same_bytes(void) {
                 memset(&input, 0, sizeof input);
                 input.size = sizeof input;
                 input.source = b.segment;
-                input.image = &b.image;
+                ta_host_segment_info info;
+                info.size = sizeof info;
+                CHECK_EQUAL(ta_host_segment_info_get(b.host, b.segment, &info), TA_OK);
+                input.image = info.image; /* the host's copy */
                 input.datamodels = &b.binding;
                 input.datamodel_count = 1;
                 while (ta_system_trace(system, &input.view)) {
@@ -325,7 +328,10 @@ static void test_same_bytes(void) {
         memset(&input, 0, sizeof input);
         input.size = sizeof input;
         input.source = b.segment;
-        input.image = &b.image;
+        ta_host_segment_info info;
+        info.size = sizeof info;
+        CHECK_EQUAL(ta_host_segment_info_get(b.host, b.segment, &info), TA_OK);
+        input.image = info.image; /* the host's copy */
         input.datamodels = &b.binding;
         input.datamodel_count = 1;
         while (ta_system_trace(system, &input.view)) {
