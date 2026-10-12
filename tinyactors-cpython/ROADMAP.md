@@ -157,7 +157,8 @@ both datamodels, which is what the step 8 gates ask.
 Progress:
 
 - Step 1: `e96289e4`.
-- Step 2: this commit.
+- Step 2: `87eecdba`.
+- Step 3: this commit. Decisions: `docs/values.md` ("Decided for Python"), `docs/errors.md`.
 
 ## Later milestones
 

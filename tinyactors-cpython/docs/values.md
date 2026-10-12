@@ -48,22 +48,25 @@ capture with `error.execution`, and a session holding one is not
 hibernated (`serialize` answers `TA_ERROR_UNSUPPORTED`). Never pickle
 (bindings.md, section 8, "Actors share no mutable value").
 
-## TODO
+## Decided for Python (2026-10-12)
 
-### Tuples
+The rows the guide and the vectors leave open, decided with the
+reasoned-analysis skill: each proposal was given to a fresh agent to
+refute against the repository and Python's own modules, and what is here
+survived it (D1 to D5 of that check; D1, the error type, is in
+`errors.md`).
 
-Whether a `tuple` is written as an array.
+| Python | Written as | Read back as | Source |
+|---|---|---|---|
+| `tuple` | an array | `list` | `json` and `cbor2` do the same; values.txt has no tuple. The type is not kept: a tuple comes back as a list. |
+| `bytearray` | bytes | `bytes` | `bytes`' mutable twin. Taking these two only keeps out non-contiguous and many-dimensional buffers (`memoryview`, `array.array`), which have no single meaning as bytes; a buffer-protocol object is refused like any other object (below). `tinyactors.decode` reads its data from any bytes-like object. |
+| a subclass of `int`, `float`, `str`, `list` or `dict` (`IntEnum`, `OrderedDict`) | as its base type | the base type | the table's types are tested with `PyLong_Check` and its kind, not the exact type; `bool` is tested before `int`. `Address` is not a `str` subclass, so it is never written as plain text. |
+| anything else: `set`, `frozenset`, `datetime`, `Decimal`, `memoryview`, a function, an instance of a user class, a `dict` with a key that is not a `str` | refused: `TinyactorsError` with `status` `ERROR_INVALID` | | `json` refuses `set` and `datetime` too; turning a key into text, as `json` does, would borrow its semantics, and values.txt refuses a key that is not text ("malformed a key that is not text"). "Immutable values may be shared" (above) means the table's own immutable types: a `frozenset` or a `datetime` does not cross between actors either. |
+| `tinyactors.Address(text)` | tag 32 on `text` | `Address` | the text is taken as it is, unchecked: core reads tag 32 on any text, and the binding decides no policy (bindings.md, section 2). `str()` gives the text; `==` and `hash` go by the text, and only between `Address` objects (`Address('x') == 'x'` is `False`); `repr` is `Address('…')`; it is immutable. Node's actor reference is a string; Python keeps `Address` because its datamodel has a reference type (root ROADMAP.md, step 8, M1). |
+| `tinyactors.UNDEFINED` | `f7` | the same object | one object, which cannot be made again (`type(UNDEFINED)()` is a `TypeError`), and falsy, as `None` and ECMAScript's `undefined` are. |
 
-### Bytes-like objects
+## Open
 
-Whether `bytearray` and `memoryview` are written as bytes.
-
-### Other Python objects
-
-What an object outside the table gives when written by the API (a `set`,
-a `datetime`, a user class): refused, with which error.
-
-### `Address`
-
-Its constructor, comparison, hashing and `repr`; how the API takes an
-actor (an `Address` or its text).
+- How the API takes an actor: M1's `Host` takes session ids (`int`), as
+  core's calls do; whether it also takes an `Address` is for the API
+  review.
