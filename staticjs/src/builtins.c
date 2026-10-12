@@ -119,6 +119,10 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
 /* A name on the prototype of a Temporal type (temporal.c says which): a
  * Temporal value's method of the name, or its getter (sjs_temporal_field). */
 #define NAME_TEMPORAL(text, temporal, field) { { text, sizeof(text) - 1u }, 0, { 0, 0, 0, 0, 0, 0, 0, 0, temporal }, 0, field }
+/* MUTATION: a Date's setTime or UTC setter: SETTER, which faults, called as
+ * any method is, and the mutation on a variable that holds the Date alone.
+ * Restore: NAME_TEMPORAL(text, SJS_METHOD_TEMPORAL_DATE_SETTER, 0). */
+#define NAME_DATE_SETTER(text, mutation) { { text, sizeof(text) - 1u }, 0, { 0, 0, 0, 0, 0, 0, 0, 0, SJS_METHOD_TEMPORAL_DATE_SETTER }, mutation, 0 }
 /* A name of Object.prototype, which every kind of value's prototype holds. */
 #define SJS_NAME_EVERYWHERE (SJS_NAME_OBJECT | SJS_NAME_ON_ARRAY | SJS_NAME_ON_STRING | SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_ON_ITERATOR | SJS_NAME_ON_REGEXP)
 
@@ -259,22 +263,22 @@ static const sjs_name NAMES[] = {
     NAME_TEMPORAL("second", 0, SJS_FIELD_SECOND),
     NAME_TEMPORAL("seconds", 0, SJS_FIELD_SECONDS),
     NAME_MUTATION("set", SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_MAP_SET), /* MUTATION */
-    NAME_TEMPORAL("setDate", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setFullYear", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setHours", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setMilliseconds", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setMinutes", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setMonth", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setSeconds", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setTime", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setUTCDate", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setUTCFullYear", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setUTCHours", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setUTCMilliseconds", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setUTCMinutes", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setUTCMonth", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setUTCSeconds", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
-    NAME_TEMPORAL("setYear", SJS_METHOD_TEMPORAL_DATE_SETTER, 0),
+    NAME_TEMPORAL("setDate", SJS_METHOD_TEMPORAL_DATE_LOCAL, 0), /* MUTATION: local time. Restore SJS_METHOD_TEMPORAL_DATE_SETTER. */
+    NAME_TEMPORAL("setFullYear", SJS_METHOD_TEMPORAL_DATE_LOCAL, 0), /* MUTATION: local time. Restore SJS_METHOD_TEMPORAL_DATE_SETTER. */
+    NAME_TEMPORAL("setHours", SJS_METHOD_TEMPORAL_DATE_LOCAL, 0), /* MUTATION: local time. Restore SJS_METHOD_TEMPORAL_DATE_SETTER. */
+    NAME_TEMPORAL("setMilliseconds", SJS_METHOD_TEMPORAL_DATE_LOCAL, 0), /* MUTATION: local time. Restore SJS_METHOD_TEMPORAL_DATE_SETTER. */
+    NAME_TEMPORAL("setMinutes", SJS_METHOD_TEMPORAL_DATE_LOCAL, 0), /* MUTATION: local time. Restore SJS_METHOD_TEMPORAL_DATE_SETTER. */
+    NAME_TEMPORAL("setMonth", SJS_METHOD_TEMPORAL_DATE_LOCAL, 0), /* MUTATION: local time. Restore SJS_METHOD_TEMPORAL_DATE_SETTER. */
+    NAME_TEMPORAL("setSeconds", SJS_METHOD_TEMPORAL_DATE_LOCAL, 0), /* MUTATION: local time. Restore SJS_METHOD_TEMPORAL_DATE_SETTER. */
+    NAME_DATE_SETTER("setTime", SJS_METHOD_DATE_SET_TIME), /* MUTATION */
+    NAME_DATE_SETTER("setUTCDate", SJS_METHOD_DATE_SET_UTC_DATE), /* MUTATION */
+    NAME_DATE_SETTER("setUTCFullYear", SJS_METHOD_DATE_SET_UTC_FULL_YEAR), /* MUTATION */
+    NAME_DATE_SETTER("setUTCHours", SJS_METHOD_DATE_SET_UTC_HOURS), /* MUTATION */
+    NAME_DATE_SETTER("setUTCMilliseconds", SJS_METHOD_DATE_SET_UTC_MILLISECONDS), /* MUTATION */
+    NAME_DATE_SETTER("setUTCMinutes", SJS_METHOD_DATE_SET_UTC_MINUTES), /* MUTATION */
+    NAME_DATE_SETTER("setUTCMonth", SJS_METHOD_DATE_SET_UTC_MONTH), /* MUTATION */
+    NAME_DATE_SETTER("setUTCSeconds", SJS_METHOD_DATE_SET_UTC_SECONDS), /* MUTATION */
+    NAME_TEMPORAL("setYear", SJS_METHOD_TEMPORAL_DATE_LOCAL, 0), /* MUTATION: local time. Restore SJS_METHOD_TEMPORAL_DATE_SETTER. */
     NAME_MUTATION("shift", SJS_NAME_ON_ARRAY | SJS_NAME_MUTATING, SJS_METHOD_ARRAY_SHIFT), /* MUTATION */
     NAME_TEMPORAL("sign", 0, SJS_FIELD_SIGN),
     NAME_TEMPORAL("since", SJS_METHOD_TEMPORAL_SINCE, 0),
@@ -2534,14 +2538,19 @@ sjs_builtin_id sjs_mutation_named(const sjs_name *name) {
 
 /* The kind of receiver a method that changes it is a method of. */
 static uint8_t mutation_kind(sjs_builtin_id id) {
+    if (id >= SJS_METHOD_DATE_SET_TIME) return SJS_TEMPORAL; /* MUTATION: a Date's setters */
     if (id >= SJS_METHOD_ITERATOR_ADVANCE) return SJS_ITERATOR; /* MUTATION: an iterator's next and return */
     if (id >= SJS_METHOD_MAP_SET) return SJS_MAP; /* MUTATION: a map's set, delete and clear */
     return id == SJS_METHOD_SET_ADD || id == SJS_METHOD_SET_CLEAR || id == SJS_METHOD_SET_DELETE ? SJS_SET : SJS_ARRAY;
 }
 
-sjs_builtin_id sjs_mutation_of(const sjs_name *name, uint8_t kind) {
+sjs_builtin_id sjs_mutation_of(const sjs_name *name, sjs_value receiver) {
+    uint8_t kind = receiver.kind;
     sjs_builtin_id id = sjs_mutation_named(name);
     if (id == SJS_BUILTIN_NONE) return id;
+    /* MUTATION: a Date's setters are the Date type's alone, of the Temporal
+     * kind: another Temporal value has no method of the name. */
+    if (kind == SJS_TEMPORAL && sjs_temporal_type_of(receiver) != SJS_TEMPORAL_DATE) return SJS_BUILTIN_NONE;
     /* MUTATION: delete and clear name a set's method and a map's; the
      * name's column holds the set's. */
     if (kind == SJS_MAP && id == SJS_METHOD_SET_DELETE) return SJS_METHOD_MAP_DELETE;
@@ -2593,6 +2602,15 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
     case SJS_METHOD_ITERATOR_ADVANCE: /* MUTATION */
     case SJS_METHOD_ITERATOR_CLOSE:
         return iterator_step(vm, id, call);
+    case SJS_METHOD_DATE_SET_TIME: /* MUTATION: a Date's setters (date.c) */
+    case SJS_METHOD_DATE_SET_UTC_FULL_YEAR:
+    case SJS_METHOD_DATE_SET_UTC_MONTH:
+    case SJS_METHOD_DATE_SET_UTC_DATE:
+    case SJS_METHOD_DATE_SET_UTC_HOURS:
+    case SJS_METHOD_DATE_SET_UTC_MINUTES:
+    case SJS_METHOD_DATE_SET_UTC_SECONDS:
+    case SJS_METHOD_DATE_SET_UTC_MILLISECONDS:
+        return sjs_date_set(vm, id, call);
     default: { /* SET_ADD: appends, as a set keeps insertion order */
         sjs_value x = arg(call, 0);
         if (!sjs_is_primitive(x)) return sjs_vm_fault(vm, "staticjs sets hold primitives only");

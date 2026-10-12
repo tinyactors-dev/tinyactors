@@ -5301,3 +5301,144 @@ export { it };
 export const first = it.next();
 --- value
 {"first":{"value":1,"done":false},"it":[2,3].values()}
+
+
+# A Date's setTime and UTC setters (docs/date.md): mutations of a variable
+# that holds the Date alone. Their arithmetic is in date.spec.
+
+=== a setter as a statement
+(() => { const d = new Date(0); d.setUTCHours(5); return d; })()
+--- value
+new Date("1970-01-01T05:00:00.000Z")
+
+=== setters as statements, one after another
+(() => { const d = new Date(0); d.setTime(86400000); d.setUTCMonth(5, 15); d.setUTCMilliseconds(7); return d; })()
+--- value
+new Date("1970-06-15T00:00:00.007Z")
+
+=== a setter gives a number, not the Date
+(() => { const d = new Date(0); const r = d.setUTCDate(2); return [typeof r, r, d]; })()
+--- value
+["number",86400000,new Date("1970-01-02T00:00:00.000Z")]
+
+=== a setter on a let
+(() => { let d = new Date(0); d.setTime(5); d = new Date(1); d.setTime(7); return d; })()
+--- value
+new Date("1970-01-01T00:00:00.007Z")
+
+=== a setter on a parameter whose argument nothing else holds
+(() => { const f = (d) => { d.setUTCFullYear(2024); return d; }; return f(new Date(0)); })()
+--- value
+new Date("2024-01-01T00:00:00.000Z")
+
+=== a setter whose argument reads the Date
+(() => { const d = new Date(1000); d.setTime(d.getTime() * 2); d.setUTCSeconds(d.getUTCSeconds() + 1); return d; })()
+--- value
+new Date("1970-01-01T00:00:03.000Z")
+
+=== a Date copied after its last setter
+(() => { const d = new Date(0); d.setTime(5); const e = d; return [d, e]; })()
+--- value
+[new Date("1970-01-01T00:00:00.005Z"),new Date("1970-01-01T00:00:00.005Z")]
+
+=== a Date of the clock, set to its midnight
+@clock 1704112496789123456
+(() => { const d = new Date(); d.setUTCHours(0, 0, 0, 0); return d; })()
+--- value
+new Date("2024-01-01T00:00:00.000Z")
+
+=== a reduce accumulator, a Date nothing else holds
+[1, 2, 3].reduce((d, x) => { d.setUTCDate(d.getUTCDate() + x); return d; }, new Date(0))
+--- value
+new Date("1970-01-07T00:00:00.000Z")
+
+=== a chain of setters calls the next on a number
+(() => { const d = new Date(0); return d.setTime(1).setTime(2); })()
+--- fault on numbers only those that format digits
+
+=== a setter of a Date copied before it, deliberate
+(() => { const d = new Date(0); const e = d; d.setTime(5); return e; })()
+--- error unsupported was copied before
+
+=== a setter of a Date in an array, deliberate
+(() => { const d = new Date(0); const xs = [d]; d.setTime(5); return xs; })()
+--- error unsupported stored in an array or an object before
+
+=== a setter of a Date in an object, deliberate
+(() => { const d = new Date(0); const o = { d }; d.setTime(5); return o; })()
+--- error unsupported stored in an array or an object before
+
+=== a setter of a Date passed before it, deliberate
+(() => { const d = new Date(0); const f = (x) => x; const e = f(d); d.setTime(5); return e; })()
+--- error unsupported passed to a function before
+
+=== a setter of a captured Date, deliberate
+(() => { const d = new Date(0); const f = () => d.getTime(); d.setTime(5); return f(); })()
+--- error unsupported a function captured this one
+
+=== a setter of a Date captured after it, deliberate
+(() => { const d = new Date(0); d.setTime(5); const f = () => d.getTime(); return f(); })()
+--- error unsupported a function captured this one
+
+=== a setter in a callback of a Date of the function around it, deliberate
+(() => { const d = new Date(0); return [1, 2].map((x) => d.setTime(x)); })()
+--- error unsupported a function captured this one
+
+=== a setter on a parameter whose argument the caller holds, deliberate
+(() => { const f = (d) => d.setTime(5); const x = new Date(0); const r = f(x); return [r, x]; })()
+--- fault held elsewhere
+
+=== a setter whose argument is the Date itself, deliberate
+(() => { const d = new Date(0); return d.setTime(d); })()
+--- fault held elsewhere
+
+=== a reduce accumulator a variable still holds, deliberate
+(() => { const d0 = new Date(0); const d = [1, 2].reduce((a, x) => { a.setUTCDate(x); return a; }, d0); return [d0, d]; })()
+--- fault held elsewhere
+
+=== a setter on a temporary, deliberate
+new Date(0).setTime(5)
+--- fault setters change it
+
+=== a setter on a path, deliberate
+(() => { const o = { d: new Date(0) }; return o.d.setUTCDate(2); })()
+--- fault setters change it
+
+=== a setter on a path as a statement, deliberate
+(() => { const o = { d: new Date(0) }; o.d.setUTCDate(2); return o; })()
+--- error unsupported has no effect
+
+=== a setter on an element, deliberate
+(() => { const xs = [new Date(0)]; return xs[0].setTime(5); })()
+--- fault setters change it
+
+=== a setter on a global Date, deliberate
+@global d = new Date(0)
+d.setTime(5)
+--- error unsupported this is a global
+
+=== a local setter on a variable stays refused, deliberate
+(() => { const d = new Date(0); return d.setHours(1); })()
+--- fault reads local time
+
+=== a local setter as a statement is refused, deliberate
+(() => { const d = new Date(0); d.setFullYear(2024); return d; })()
+--- error unsupported has no effect
+
+=== setTime of another Temporal value
+(() => { const p = Temporal.PlainDate.from("2024-01-31"); return p.setTime(5); })()
+--- fault does not have this method
+
+=== setTime of an array
+(() => { const xs = [1]; return xs.setTime(5); })()
+--- fault does not have this method
+
+=== an object's own setTime on a variable
+(() => { const o = { setTime: (x) => x + 1 }; return o.setTime(1); })()
+--- value
+2
+
+=== an object's own setUTCDate as a statement
+(() => { const o = { setUTCDate: (x) => x }; o.setUTCDate(1); return o.setUTCDate(2); })()
+--- value
+2

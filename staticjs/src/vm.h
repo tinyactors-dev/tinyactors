@@ -292,3 +292,7 @@ sjs_result sjs_temporal_callee(sjs_vm *vm, sjs_member member, sjs_value *out);
  * Date.parse, Date.UTC) and its methods, which sjs_temporal_method hands it. */
 sjs_result sjs_date_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 sjs_result sjs_date_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+/* MUTATION: a Date's setTime and UTC setters (SJS_METHOD_DATE_SET_*), on
+ * a Date call->receiver_slot holds alone: its new time value, written in
+ * place, is the result. */
+sjs_result sjs_date_set(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);

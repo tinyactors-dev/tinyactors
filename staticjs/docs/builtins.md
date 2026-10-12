@@ -232,7 +232,7 @@ callback's own instructions.
   `Number(s)`, `parseInt` and `parseFloat` (and `String` of a primitive);
   one JavaScript does on the way to something else (`isNaN(s)`,
   `Math.abs(s)`) faults on a string, through `sjs_vm_to_number`.
-- **Mutating methods** (`push`, `sort`, `splice`, `add`, an iterator's `next`, ...) change the
+- **Mutating methods** (`push`, `sort`, `splice`, `add`, an iterator's `next`, a Date's `setTime`, ...) change the
   receiver and return something else in JavaScript, so never implement
   them as copies. One that changes a variable the function owns, or a
   container on a path from one, is a mutation (`docs/mutation.md`): called

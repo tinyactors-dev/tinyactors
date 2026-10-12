@@ -6,8 +6,10 @@
 # date and time string without Z or an offset, Date(), the local getters,
 # toString and the like), the host's locale, a string JavaScript reads by its
 # own heuristics, a conversion of an object (a coercion, ===, a set member),
-# and the setters, which mutate (not built yet). Date.now() and new Date()
-# read the host clock (@clock), as Temporal.Now does.
+# and a setter's argument that is a string or an object. The setters are
+# mutations: their forms (a Date held elsewhere, a path) are in
+# mutation.spec. Date.now() and new Date() read the host clock (@clock), as
+# Temporal.Now does.
 
 # --- new Date(number): TimeClip, truncated, -0 made +0, NaN past 8.64e15
 
@@ -554,71 +556,854 @@ new Date(0).toLocaleTimeString()
 --- fault reads local time
 
 
-# --- Setters: they change the Date (not built yet), deliberately
-
-=== setTime, deliberate
-(() => { const d = new Date(0); return d.setTime(1); })()
---- fault setters change it
-
-=== setUTCFullYear, deliberate
-(() => { const d = new Date(0); return d.setUTCFullYear(1); })()
---- fault setters change it
-
-=== setUTCMonth, deliberate
-(() => { const d = new Date(0); return d.setUTCMonth(1); })()
---- fault setters change it
-
-=== setUTCDate, deliberate
-(() => { const d = new Date(0); return d.setUTCDate(1); })()
---- fault setters change it
-
-=== setUTCHours, deliberate
-(() => { const d = new Date(0); return d.setUTCHours(1); })()
---- fault setters change it
-
-=== setUTCMinutes, deliberate
-(() => { const d = new Date(0); return d.setUTCMinutes(1); })()
---- fault setters change it
-
-=== setUTCSeconds, deliberate
-(() => { const d = new Date(0); return d.setUTCSeconds(1); })()
---- fault setters change it
-
-=== setUTCMilliseconds, deliberate
-(() => { const d = new Date(0); return d.setUTCMilliseconds(1); })()
---- fault setters change it
+# --- The local setters read and write local time: they fault, deliberately
 
 === setFullYear, deliberate
 (() => { const d = new Date(0); return d.setFullYear(1); })()
---- fault setters change it
+--- fault reads local time
 
 === setMonth, deliberate
 (() => { const d = new Date(0); return d.setMonth(1); })()
---- fault setters change it
+--- fault reads local time
 
 === setDate, deliberate
 (() => { const d = new Date(0); return d.setDate(1); })()
---- fault setters change it
+--- fault reads local time
 
 === setHours, deliberate
 (() => { const d = new Date(0); return d.setHours(1); })()
---- fault setters change it
+--- fault reads local time
 
 === setMinutes, deliberate
 (() => { const d = new Date(0); return d.setMinutes(1); })()
---- fault setters change it
+--- fault reads local time
 
 === setSeconds, deliberate
 (() => { const d = new Date(0); return d.setSeconds(1); })()
---- fault setters change it
+--- fault reads local time
 
 === setMilliseconds, deliberate
 (() => { const d = new Date(0); return d.setMilliseconds(1); })()
---- fault setters change it
+--- fault reads local time
 
 === setYear, deliberate
 (() => { const d = new Date(0); return d.setYear(1); })()
---- fault setters change it
+--- fault reads local time
+
+
+# --- The setters: setTime and the UTC setters, on a variable that holds the Date
+# alone (the forms of mutation are in mutation.spec). Each returns the new
+# time value, a number.
+
+=== setTime, a time value
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(1704067200123); return [r, d]; })()
+--- value
+[1704067200123,new Date("2024-01-01T00:00:00.123Z")]
+
+=== setTime, a fraction, truncated
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(1.9); return [r, d]; })()
+--- value
+[1,new Date("1970-01-01T00:00:00.001Z")]
+
+=== setTime, a negative fraction, toward zero
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(-1.9); return [r, d]; })()
+--- value
+[-1,new Date("1969-12-31T23:59:59.999Z")]
+
+=== setTime, true
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(true); return [r, d]; })()
+--- value
+[1,new Date("1970-01-01T00:00:00.001Z")]
+
+=== setTime, null
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(null); return [r, d]; })()
+--- value
+[0,new Date("1970-01-01T00:00:00.000Z")]
+
+=== setTime, the upper limit
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(8.64e15); return [r, d]; })()
+--- value
+[8640000000000000,new Date("+275760-09-13T00:00:00.000Z")]
+
+=== setTime, the lower limit
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(-8.64e15); return [r, d]; })()
+--- value
+[-8640000000000000,new Date("-271821-04-20T00:00:00.000Z")]
+
+=== setTime of -0 is +0
+(() => { const d = new Date(5); const r = d.setTime(-0); return [1 / r, 1 / d.getTime()]; })()
+--- value
+[Infinity,Infinity]
+
+=== setTime, NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setTime, past the upper limit, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(8.64e15 + 1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setTime, past the lower limit, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(-8.64e15 - 1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setTime, Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setTime, -Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(-Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setTime, undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setTime, no argument, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setTime of an invalid date makes it valid
+(() => { const d = new Date(NaN); const r = d.setTime(0); return [r, d]; })()
+--- value
+[0,new Date("1970-01-01T00:00:00.000Z")]
+
+=== setTime reads the first argument only
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setTime(1, 2); return [r, d]; })()
+--- value
+[1,new Date("1970-01-01T00:00:00.001Z")]
+
+=== setUTCFullYear, the year
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024); return [r, d]; })()
+--- value
+[1710498030456,new Date("2024-03-15T10:20:30.456Z")]
+
+=== setUTCFullYear, the year and the month
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 1); return [r, d]; })()
+--- value
+[1707992430456,new Date("2024-02-15T10:20:30.456Z")]
+
+=== setUTCFullYear, the year, the month and the date
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 1, 29); return [r, d]; })()
+--- value
+[1709202030456,new Date("2024-02-29T10:20:30.456Z")]
+
+=== setUTCFullYear, a February 29 in a common year moves to March
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2023, 1, 29); return [r, d]; })()
+--- value
+[1677666030456,new Date("2023-03-01T10:20:30.456Z")]
+
+=== setUTCFullYear, the month 12 carries into the year
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 12); return [r, d]; })()
+--- value
+[1736936430456,new Date("2025-01-15T10:20:30.456Z")]
+
+=== setUTCFullYear, the month -1 borrows from the year
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, -1); return [r, d]; })()
+--- value
+[1702635630456,new Date("2023-12-15T10:20:30.456Z")]
+
+=== setUTCFullYear, the date 0 is the day before
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 0, 0); return [r, d]; })()
+--- value
+[1704018030456,new Date("2023-12-31T10:20:30.456Z")]
+
+=== setUTCFullYear, the date -1
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 0, -1); return [r, d]; })()
+--- value
+[1703931630456,new Date("2023-12-30T10:20:30.456Z")]
+
+=== setUTCFullYear, the date 400
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 0, 400); return [r, d]; })()
+--- value
+[1738578030456,new Date("2025-02-03T10:20:30.456Z")]
+
+=== setUTCFullYear, fractions, truncated
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024.7, 1.9, 2.9); return [r, d]; })()
+--- value
+[1706869230456,new Date("2024-02-02T10:20:30.456Z")]
+
+=== setUTCFullYear, negative fractions, toward zero
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, -1.5, -0.5); return [r, d]; })()
+--- value
+[1701339630456,new Date("2023-11-30T10:20:30.456Z")]
+
+=== setUTCFullYear, a year 0 to 99 is that year
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(50); return [r, d]; })()
+--- value
+[-60582951569544,new Date("0050-03-15T10:20:30.456Z")]
+
+=== setUTCFullYear, the year 0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(0); return [r, d]; })()
+--- value
+[-62160788369544,new Date("0000-03-15T10:20:30.456Z")]
+
+=== setUTCFullYear, a negative year
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(-1); return [r, d]; })()
+--- value
+[-62192410769544,new Date("-000001-03-15T10:20:30.456Z")]
+
+=== setUTCFullYear, -0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(-0); return [r, d]; })()
+--- value
+[-62160788369544,new Date("0000-03-15T10:20:30.456Z")]
+
+=== setUTCFullYear, true and null
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(true, null); return [r, d]; })()
+--- value
+[-62134349969544,new Date("0001-01-15T10:20:30.456Z")]
+
+=== setUTCFullYear, a fourth argument is not read
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 1, 2, 3); return [r, d]; })()
+--- value
+[1706869230456,new Date("2024-02-02T10:20:30.456Z")]
+
+=== setUTCFullYear, NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear, undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear, no argument, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear, the month undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear, the date NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 1, NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear, Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear, a month Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, -Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear, a year past a million, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(1000001); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear, a month past ten million, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCFullYear(2024, 10000001); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear of an invalid date starts from +0
+(() => { const d = new Date(NaN); const r = d.setUTCFullYear(2024); return [r, d]; })()
+--- value
+[1704067200000,new Date("2024-01-01T00:00:00.000Z")]
+
+=== setUTCFullYear of an invalid date, with the month and the date
+(() => { const d = new Date(NaN); const r = d.setUTCFullYear(2024, 5, 6); return [r, d]; })()
+--- value
+[1717632000000,new Date("2024-06-06T00:00:00.000Z")]
+
+=== setUTCFullYear of an invalid date, the year NaN
+(() => { const d = new Date(NaN); const r = d.setUTCFullYear(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear to the upper limit
+(() => { const d = new Date("2000-09-13T00:00:00.000Z"); const r = d.setUTCFullYear(275760); return [r, d]; })()
+--- value
+[8640000000000000,new Date("+275760-09-13T00:00:00.000Z")]
+
+=== setUTCFullYear past the upper limit is NaN
+(() => { const d = new Date("2000-09-13T00:00:00.001Z"); const r = d.setUTCFullYear(275760); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCFullYear to the lower limit
+(() => { const d = new Date("2000-04-20T00:00:00.000Z"); const r = d.setUTCFullYear(-271821); return [r, d]; })()
+--- value
+[-8640000000000000,new Date("-271821-04-20T00:00:00.000Z")]
+
+=== setUTCFullYear past the lower limit is NaN
+(() => { const d = new Date("2000-04-19T23:59:59.999Z"); const r = d.setUTCFullYear(-271821); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMonth, the month
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(1); return [r, d]; })()
+--- value
+[1676456430456,new Date("2023-02-15T10:20:30.456Z")]
+
+=== setUTCMonth, the month and the date
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(1, 29); return [r, d]; })()
+--- value
+[1677666030456,new Date("2023-03-01T10:20:30.456Z")]
+
+=== setUTCMonth, 13 carries into the next year
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(13); return [r, d]; })()
+--- value
+[1707992430456,new Date("2024-02-15T10:20:30.456Z")]
+
+=== setUTCMonth, -1 borrows from the year
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(-1); return [r, d]; })()
+--- value
+[1671099630456,new Date("2022-12-15T10:20:30.456Z")]
+
+=== setUTCMonth, -13
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(-13); return [r, d]; })()
+--- value
+[1639563630456,new Date("2021-12-15T10:20:30.456Z")]
+
+=== setUTCMonth, the date 0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(0, 0); return [r, d]; })()
+--- value
+[1672482030456,new Date("2022-12-31T10:20:30.456Z")]
+
+=== setUTCMonth, the date 32
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(0, 32); return [r, d]; })()
+--- value
+[1675246830456,new Date("2023-02-01T10:20:30.456Z")]
+
+=== setUTCMonth, a fraction
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(1.9, 2.9); return [r, d]; })()
+--- value
+[1675333230456,new Date("2023-02-02T10:20:30.456Z")]
+
+=== setUTCMonth, -0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(-0); return [r, d]; })()
+--- value
+[1673778030456,new Date("2023-01-15T10:20:30.456Z")]
+
+=== setUTCMonth, null
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(null); return [r, d]; })()
+--- value
+[1673778030456,new Date("2023-01-15T10:20:30.456Z")]
+
+=== setUTCMonth, a third argument is not read
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(1, 2, 3); return [r, d]; })()
+--- value
+[1675333230456,new Date("2023-02-02T10:20:30.456Z")]
+
+=== setUTCMonth from January 31 to February moves to March
+(() => { const d = new Date("2024-01-31T12:00:00.000Z"); const r = d.setUTCMonth(1); return [r, d]; })()
+--- value
+[1709380800000,new Date("2024-03-02T12:00:00.000Z")]
+
+=== setUTCMonth from January 31 to February, a common year
+(() => { const d = new Date("2023-01-31T12:00:00.000Z"); const r = d.setUTCMonth(1); return [r, d]; })()
+--- value
+[1677844800000,new Date("2023-03-03T12:00:00.000Z")]
+
+=== setUTCMonth, NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMonth, no argument, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMonth, the date undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(1, undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMonth, Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMonth(Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMonth of an invalid date is NaN, and stays invalid
+(() => { const d = new Date(NaN); const r = d.setUTCMonth(1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCDate, the date
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(1); return [r, d]; })()
+--- value
+[1677666030456,new Date("2023-03-01T10:20:30.456Z")]
+
+=== setUTCDate, 0 is the last of the month before
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(0); return [r, d]; })()
+--- value
+[1677579630456,new Date("2023-02-28T10:20:30.456Z")]
+
+=== setUTCDate, -1
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(-1); return [r, d]; })()
+--- value
+[1677493230456,new Date("2023-02-27T10:20:30.456Z")]
+
+=== setUTCDate, 32 carries into the next month
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(32); return [r, d]; })()
+--- value
+[1680344430456,new Date("2023-04-01T10:20:30.456Z")]
+
+=== setUTCDate, 366
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(366); return [r, d]; })()
+--- value
+[1709202030456,new Date("2024-02-29T10:20:30.456Z")]
+
+=== setUTCDate, a fraction
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(1.5); return [r, d]; })()
+--- value
+[1677666030456,new Date("2023-03-01T10:20:30.456Z")]
+
+=== setUTCDate, a negative fraction, toward zero
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(-0.5); return [r, d]; })()
+--- value
+[1677579630456,new Date("2023-02-28T10:20:30.456Z")]
+
+=== setUTCDate, -0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(-0); return [r, d]; })()
+--- value
+[1677579630456,new Date("2023-02-28T10:20:30.456Z")]
+
+=== setUTCDate, true
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(true); return [r, d]; })()
+--- value
+[1677666030456,new Date("2023-03-01T10:20:30.456Z")]
+
+=== setUTCDate, a second argument is not read
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(1, 2); return [r, d]; })()
+--- value
+[1677666030456,new Date("2023-03-01T10:20:30.456Z")]
+
+=== setUTCDate, NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCDate, undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCDate, no argument, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCDate, Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCDate, -Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCDate(-Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCDate of an invalid date is NaN
+(() => { const d = new Date(NaN); const r = d.setUTCDate(1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCDate to the upper limit
+(() => { const d = new Date("+275760-09-01T00:00:00.000Z"); const r = d.setUTCDate(13); return [r, d]; })()
+--- value
+[8640000000000000,new Date("+275760-09-13T00:00:00.000Z")]
+
+=== setUTCDate past the upper limit is NaN
+(() => { const d = new Date("+275760-09-01T00:00:00.000Z"); const r = d.setUTCDate(14); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCDate before the epoch
+(() => { const d = new Date("1969-12-31T23:59:59.999Z"); const r = d.setUTCDate(1); return [r, d]; })()
+--- value
+[-2592000001,new Date("1969-12-01T23:59:59.999Z")]
+
+=== setUTCDate before year 0
+(() => { const d = new Date("-000001-06-15T06:00:00.000Z"); const r = d.setUTCDate(31); return [r, d]; })()
+--- value
+[-62183095200000,new Date("-000001-07-01T06:00:00.000Z")]
+
+=== setUTCHours, the hours
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(1); return [r, d]; })()
+--- value
+[1678843230456,new Date("2023-03-15T01:20:30.456Z")]
+
+=== setUTCHours, the hours and minutes
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(1, 2); return [r, d]; })()
+--- value
+[1678842150456,new Date("2023-03-15T01:02:30.456Z")]
+
+=== setUTCHours, the hours, minutes and seconds
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(1, 2, 3); return [r, d]; })()
+--- value
+[1678842123456,new Date("2023-03-15T01:02:03.456Z")]
+
+=== setUTCHours, all four
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(1, 2, 3, 4); return [r, d]; })()
+--- value
+[1678842123004,new Date("2023-03-15T01:02:03.004Z")]
+
+=== setUTCHours, 24 is the next day
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(24); return [r, d]; })()
+--- value
+[1678926030456,new Date("2023-03-16T00:20:30.456Z")]
+
+=== setUTCHours, -1 is the day before
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(-1); return [r, d]; })()
+--- value
+[1678836030456,new Date("2023-03-14T23:20:30.456Z")]
+
+=== setUTCHours, a fraction
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(25.9); return [r, d]; })()
+--- value
+[1678929630456,new Date("2023-03-16T01:20:30.456Z")]
+
+=== setUTCHours, negative milliseconds
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(0, 0, 0, -1); return [r, d]; })()
+--- value
+[1678838399999,new Date("2023-03-14T23:59:59.999Z")]
+
+=== setUTCHours, minutes past 60
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(0, 1500); return [r, d]; })()
+--- value
+[1678928430456,new Date("2023-03-16T01:00:30.456Z")]
+
+=== setUTCHours, -0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(-0); return [r, d]; })()
+--- value
+[1678839630456,new Date("2023-03-15T00:20:30.456Z")]
+
+=== setUTCHours, null
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(null, null, null, null); return [r, d]; })()
+--- value
+[1678838400000,new Date("2023-03-15T00:00:00.000Z")]
+
+=== setUTCHours, a fifth argument is not read
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(1, 2, 3, 4, 5); return [r, d]; })()
+--- value
+[1678842123004,new Date("2023-03-15T01:02:03.004Z")]
+
+=== setUTCHours, NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCHours, no argument, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCHours, the minutes undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(1, undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCHours, the milliseconds NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(1, 2, 3, NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCHours, Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCHours(Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCHours of an invalid date is NaN
+(() => { const d = new Date(NaN); const r = d.setUTCHours(1, 2, 3, 4); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCHours before the epoch
+(() => { const d = new Date("1969-12-31T23:59:59.999Z"); const r = d.setUTCHours(0); return [r, d]; })()
+--- value
+[-82800001,new Date("1969-12-31T00:59:59.999Z")]
+
+=== setUTCHours past the upper limit is NaN
+(() => { const d = new Date("+275760-09-13T00:00:00.000Z"); const r = d.setUTCHours(0, 0, 0, 1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCHours at the lower limit
+(() => { const d = new Date("-271821-04-20T05:00:00.000Z"); const r = d.setUTCHours(0); return [r, d]; })()
+--- value
+[-8640000000000000,new Date("-271821-04-20T00:00:00.000Z")]
+
+=== setUTCHours past the lower limit is NaN
+(() => { const d = new Date("-271821-04-20T00:00:00.000Z"); const r = d.setUTCHours(-1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMinutes, the minutes
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(1); return [r, d]; })()
+--- value
+[1678874490456,new Date("2023-03-15T10:01:30.456Z")]
+
+=== setUTCMinutes, the minutes and seconds
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(1, 2); return [r, d]; })()
+--- value
+[1678874462456,new Date("2023-03-15T10:01:02.456Z")]
+
+=== setUTCMinutes, all three
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(1, 2, 3); return [r, d]; })()
+--- value
+[1678874462003,new Date("2023-03-15T10:01:02.003Z")]
+
+=== setUTCMinutes, 60 is the next hour
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(60); return [r, d]; })()
+--- value
+[1678878030456,new Date("2023-03-15T11:00:30.456Z")]
+
+=== setUTCMinutes, -1 is the hour before
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(-1); return [r, d]; })()
+--- value
+[1678874370456,new Date("2023-03-15T09:59:30.456Z")]
+
+=== setUTCMinutes, a fraction
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(1.9, 2.9, 3.9); return [r, d]; })()
+--- value
+[1678874462003,new Date("2023-03-15T10:01:02.003Z")]
+
+=== setUTCMinutes, -0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(-0); return [r, d]; })()
+--- value
+[1678874430456,new Date("2023-03-15T10:00:30.456Z")]
+
+=== setUTCMinutes, a fourth argument is not read
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(1, 2, 3, 4); return [r, d]; })()
+--- value
+[1678874462003,new Date("2023-03-15T10:01:02.003Z")]
+
+=== setUTCMinutes, NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMinutes, no argument, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMinutes, the seconds undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(1, undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMinutes, the milliseconds -Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMinutes(1, 2, -Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMinutes of an invalid date is NaN
+(() => { const d = new Date(NaN); const r = d.setUTCMinutes(1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCSeconds, the seconds
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(1); return [r, d]; })()
+--- value
+[1678875601456,new Date("2023-03-15T10:20:01.456Z")]
+
+=== setUTCSeconds, the seconds and milliseconds
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(1, 2); return [r, d]; })()
+--- value
+[1678875601002,new Date("2023-03-15T10:20:01.002Z")]
+
+=== setUTCSeconds, 86400 is a day later
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(86400); return [r, d]; })()
+--- value
+[1678962000456,new Date("2023-03-16T10:20:00.456Z")]
+
+=== setUTCSeconds, -1
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(-1); return [r, d]; })()
+--- value
+[1678875599456,new Date("2023-03-15T10:19:59.456Z")]
+
+=== setUTCSeconds, a fraction
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(1.5, 2.5); return [r, d]; })()
+--- value
+[1678875601002,new Date("2023-03-15T10:20:01.002Z")]
+
+=== setUTCSeconds, -0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(-0); return [r, d]; })()
+--- value
+[1678875600456,new Date("2023-03-15T10:20:00.456Z")]
+
+=== setUTCSeconds, a third argument is not read
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(1, 2, 3); return [r, d]; })()
+--- value
+[1678875601002,new Date("2023-03-15T10:20:01.002Z")]
+
+=== setUTCSeconds, NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCSeconds, no argument, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCSeconds, the milliseconds undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCSeconds(1, undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCSeconds of an invalid date is NaN
+(() => { const d = new Date(NaN); const r = d.setUTCSeconds(1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMilliseconds, the milliseconds
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(1); return [r, d]; })()
+--- value
+[1678875630001,new Date("2023-03-15T10:20:30.001Z")]
+
+=== setUTCMilliseconds, 1000 is the next second
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(1000); return [r, d]; })()
+--- value
+[1678875631000,new Date("2023-03-15T10:20:31.000Z")]
+
+=== setUTCMilliseconds, -1 is the second before
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(-1); return [r, d]; })()
+--- value
+[1678875629999,new Date("2023-03-15T10:20:29.999Z")]
+
+=== setUTCMilliseconds, a fraction
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(1.9); return [r, d]; })()
+--- value
+[1678875630001,new Date("2023-03-15T10:20:30.001Z")]
+
+=== setUTCMilliseconds, a negative fraction, toward zero
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(-1.9); return [r, d]; })()
+--- value
+[1678875629999,new Date("2023-03-15T10:20:29.999Z")]
+
+=== setUTCMilliseconds, -0
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(-0); return [r, d]; })()
+--- value
+[1678875630000,new Date("2023-03-15T10:20:30.000Z")]
+
+=== setUTCMilliseconds, false
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(false); return [r, d]; })()
+--- value
+[1678875630000,new Date("2023-03-15T10:20:30.000Z")]
+
+=== setUTCMilliseconds, a second argument is not read
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(1, 2); return [r, d]; })()
+--- value
+[1678875630001,new Date("2023-03-15T10:20:30.001Z")]
+
+=== setUTCMilliseconds, NaN, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(NaN); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMilliseconds, no argument, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMilliseconds, undefined, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(undefined); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMilliseconds, Infinity, is NaN
+(() => { const d = new Date("2023-03-15T10:20:30.456Z"); const r = d.setUTCMilliseconds(Infinity); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMilliseconds of an invalid date is NaN
+(() => { const d = new Date(NaN); const r = d.setUTCMilliseconds(1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMilliseconds at the upper limit
+(() => { const d = new Date(8.64e15); const r = d.setUTCMilliseconds(0); return [r, d]; })()
+--- value
+[8640000000000000,new Date("+275760-09-13T00:00:00.000Z")]
+
+=== setUTCMilliseconds past the upper limit is NaN
+(() => { const d = new Date(8.64e15); const r = d.setUTCMilliseconds(1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMilliseconds past the lower limit is NaN
+(() => { const d = new Date(-8.64e15); const r = d.setUTCMilliseconds(-1); return [String(r), String(d.getTime())]; })()
+--- value
+["NaN","NaN"]
+
+=== setUTCMilliseconds of -0 at the epoch is +0
+(() => { const d = new Date(0); const r = d.setUTCMilliseconds(-0); return [1 / r, 1 / d.getTime()]; })()
+--- value
+[Infinity,Infinity]
+
+=== setters one after another on one variable
+(() => { const d = new Date(0); d.setUTCFullYear(2024); d.setUTCMonth(1); d.setUTCDate(29); d.setUTCHours(23, 59); d.setUTCSeconds(59, 999); return [d.getTime(), d.toISOString()]; })()
+--- value
+[1709251199999,"2024-02-29T23:59:59.999Z"]
+
+=== each setter returns the time value
+(() => { const d = new Date(0); return [d.setUTCFullYear(2000), d.setUTCMonth(11), d.setUTCDate(31), d.setUTCHours(12), d.setUTCMinutes(30), d.setUTCSeconds(15), d.setUTCMilliseconds(5), d.setTime(1)]; })()
+--- value
+[946684800000,975628800000,978220800000,978264000000,978265800000,978265815000,978265815005,1]
+
+=== a setter after an invalid date goes on from it
+(() => { const d = new Date(0); d.setTime(NaN); const a = d.setUTCDate(1); const b = d.setUTCFullYear(2024); return [String(a), b, d]; })()
+--- value
+["NaN",1704067200000,new Date("2024-01-01T00:00:00.000Z")]
+
+=== the getters read what a setter wrote
+(() => { const d = new Date(0); d.setUTCFullYear(-5, 1, 29); return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCDay(), d.toUTCString(), JSON.stringify(d)]; })()
+--- value
+[-5,2,1,3,"Wed, 01 Mar -0005 00:00:00 GMT","\"-000005-03-01T00:00:00.000Z\""]
+
+# Arguments ToNumber: a string or an object faults (builtins.md, section 7),
+# deliberately where JavaScript converts it.
+
+=== setTime of a string, deliberate
+(() => { const d = new Date(0); return d.setTime("5"); })()
+--- fault converts only numbers, booleans, null and undefined
+
+=== setTime of an array, deliberate
+(() => { const d = new Date(0); return d.setTime([5]); })()
+--- fault converts only numbers, booleans, null and undefined
+
+=== setTime of a Date, deliberate
+(() => { const d = new Date(0); return d.setTime(new Date(5)); })()
+--- fault converts only numbers, booleans, null and undefined
+
+=== setTime of a BigInt
+(() => { const d = new Date(0); return d.setTime(5n); })()
+--- fault a BigInt would become a number
+
+=== setUTCFullYear of a string, deliberate
+(() => { const d = new Date(0); return d.setUTCFullYear("2024"); })()
+--- fault converts only numbers, booleans, null and undefined
+
+=== setUTCMonth with a string date, deliberate
+(() => { const d = new Date(0); return d.setUTCMonth(1, "2"); })()
+--- fault converts only numbers, booleans, null and undefined
+
+=== setUTCHours with an object, deliberate
+(() => { const d = new Date(0); return d.setUTCHours(1, {}); })()
+--- fault converts only numbers, booleans, null and undefined
+
+=== setUTCMilliseconds of a string on an invalid date, deliberate
+(() => { const d = new Date(NaN); return d.setUTCMilliseconds("1"); })()
+--- fault converts only numbers, booleans, null and undefined
 
 
 # --- An object, compared by identity, converted by its methods: faults, deliberately
