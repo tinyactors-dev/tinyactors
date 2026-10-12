@@ -286,3 +286,9 @@ sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *c
 sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
 sjs_result sjs_temporal_property(sjs_vm *vm, sjs_member member, sjs_value *out);
 sjs_result sjs_temporal_callee(sjs_vm *vm, sjs_member member, sjs_value *out);
+
+/* Date (date.c, docs/date.md): a Temporal kind's value of type
+ * SJS_TEMPORAL_DATE. Its functions (new Date, Date called, Date.now,
+ * Date.parse, Date.UTC) and its methods, which sjs_temporal_method hands it. */
+sjs_result sjs_date_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
+sjs_result sjs_date_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);

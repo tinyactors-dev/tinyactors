@@ -586,7 +586,10 @@ typedef enum {
     SJS_TEMPORAL_PLAIN_TIME,
     SJS_TEMPORAL_PLAIN_DATE_TIME,
     SJS_TEMPORAL_INSTANT,
-    SJS_TEMPORAL_DURATION
+    SJS_TEMPORAL_DURATION,
+    /* Not Temporal's: a Date (date.c, docs/date.md), held as the same kind
+     * because it is an object JavaScript compares by identity, as they are. */
+    SJS_TEMPORAL_DATE
 } sjs_temporal_type;
 
 /* A date and a time of day in the ISO 8601 calendar: a PlainDate's date
@@ -612,7 +615,8 @@ typedef struct {
  * negative infinity) and the nanoseconds past them, which fits the range
  * (+-8.64e21 ns) where an int64 of nanoseconds would not; `duration` for a
  * Duration, its ten fields from years to nanoseconds, each an integer held
- * exactly in a double, all of one sign.
+ * exactly in a double, all of one sign; `time` for a Date. A Date is the
+ * one that may change (its setters, under owned mutation: docs/mutation.md).
  */
 typedef struct {
     sjs_heap h;   /* h.flags: sjs_temporal_type */
@@ -623,6 +627,9 @@ typedef struct {
             uint32_t nanoseconds;   /* 0 to 999,999,999 */
         } instant;
         double duration[10];
+        double time;   /* a Date's time value: whole milliseconds since the
+                        * epoch, within 8.64e15 either way, +0 not -0; NaN for
+                        * an invalid date */
     } as;
 } sjs_temporal;
 
@@ -640,6 +647,10 @@ sjs_result sjs_temporal_make(sjs_context *context, sjs_temporal_type type, sjs_t
 /* What toString() with no options gives (and toJSON(), and JSON.stringify
  * quotes), written to `out`: its length. */
 uint32_t sjs_temporal_text(const sjs_temporal *t, char *out);
+/* A Date's time value as toISOString writes it (at most 27 bytes:
+ * +275760-09-13T00:00:00.000Z), into `out`: its length; 0 for an invalid
+ * date, which toISOString refuses. */
+uint32_t sjs_date_iso_text(double time, char *out);
 /* The type's name, as in Temporal.PlainDate. */
 sjs_str sjs_temporal_type_name(sjs_temporal_type type);
 
@@ -741,6 +752,13 @@ typedef enum {
     SJS_BUILTIN_ENCODE_URI_COMPONENT,
     SJS_BUILTIN_DECODE_URI,
     SJS_BUILTIN_DECODE_URI_COMPONENT,
+    /* Date's (date.c): `new Date(...)` (under the space "new", as Temporal's
+     * constructors), Date called as a function, and its functions. */
+    SJS_BUILTIN_DATE,
+    SJS_BUILTIN_DATE_CALL,
+    SJS_BUILTIN_DATE_NOW,
+    SJS_BUILTIN_DATE_PARSE,
+    SJS_BUILTIN_DATE_UTC,
     /* Temporal's (temporal.c): from SJS_BUILTIN_TEMPORAL_FIRST to the count.
      * A constructor is in the function table under the space "new", which
      * no name a program writes reaches: only `new Temporal.X(...)`. */
@@ -864,6 +882,23 @@ typedef enum {
     SJS_METHOD_TEMPORAL_VALUE_OF,
     SJS_METHOD_TEMPORAL_WITH,
     SJS_METHOD_TEMPORAL_WITH_CALENDAR,
+    /* A Date's (date.c), with toJSON, toLocaleString, toString and valueOf
+     * above: getTime, the getUTC methods, toISOString, toUTCString (and
+     * toGMTString); every name that reads local time is LOCAL, which faults,
+     * and every setter SETTER. */
+    SJS_METHOD_TEMPORAL_DATE_GET_TIME,
+    SJS_METHOD_TEMPORAL_DATE_GET_UTC_DATE,
+    SJS_METHOD_TEMPORAL_DATE_GET_UTC_DAY,
+    SJS_METHOD_TEMPORAL_DATE_GET_UTC_FULL_YEAR,
+    SJS_METHOD_TEMPORAL_DATE_GET_UTC_HOURS,
+    SJS_METHOD_TEMPORAL_DATE_GET_UTC_MILLISECONDS,
+    SJS_METHOD_TEMPORAL_DATE_GET_UTC_MINUTES,
+    SJS_METHOD_TEMPORAL_DATE_GET_UTC_MONTH,
+    SJS_METHOD_TEMPORAL_DATE_GET_UTC_SECONDS,
+    SJS_METHOD_TEMPORAL_DATE_TO_ISO_STRING,
+    SJS_METHOD_TEMPORAL_DATE_TO_UTC_STRING,
+    SJS_METHOD_TEMPORAL_DATE_LOCAL,
+    SJS_METHOD_TEMPORAL_DATE_SETTER,
     SJS_METHOD_TEMPORAL_WITH_PLAIN_TIME,
     /* Regular expressions (regex_match.c). */
     SJS_METHOD_REGEXP_TEST,

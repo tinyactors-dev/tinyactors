@@ -27,6 +27,10 @@
 // date and time at a fixed offset, which a nanosecond moves as it moves the
 // instant).
 //
+// Date.now() and new Date() read the same clock (docs/date.md): the global
+// Date the cases see is Node's, but for those two, which give the clock's
+// milliseconds (floored) and throw in a case without @clock.
+//
 // Math.random draws from a seed, which a case fixes with `@seed <n>`
 // (spec_test sets it with sjs_vm_set_seed). V8 seeds Math.random only from
 // its --random-seed flag, the first time a context draws, so a seeded case
@@ -41,8 +45,8 @@
 // --print and regex_test --print write: what staticjs computed from an input
 // (a double formatted, a decimal read, a JSON document read and written, a
 // regular expression classified or matched, ...), each of which must be
-// what Node computes from it; temporal_test --print writes Temporal
-// expressions and what staticjs gave for each.
+// what Node computes from it; temporal_test --print writes Temporal (and
+// Date) expressions and what staticjs gave for each.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -62,6 +66,17 @@ const clockParts = () => {
   return [Number(milliseconds), clock - milliseconds * 1000000n];
 };
 vm.runInContext('Date', temporalContext).now = () => clockParts()[0];
+const NodeDate = Date;
+globalThis.Date = class Date extends NodeDate {
+  constructor(...args) {
+    if (args.length === 0) super(clockParts()[0]);
+    else super(...args);
+  }
+
+  static now() {
+    return clockParts()[0];
+  }
+};
 {
   const now = Temporal.Now;
   const later = (value) => value.add({ nanoseconds: Number(clockParts()[1]) });
@@ -87,6 +102,8 @@ function show(v) {
   if (typeof v === 'bigint') return `${v}n`;
   if (typeof v === 'string') return JSON.stringify(v);
   if (typeof v === 'function') return '<function>';
+  // A Date: new Date of its ISO string, or new Date(NaN) when it is invalid.
+  if (v instanceof NodeDate) return Number.isNaN(v.getTime()) ? 'new Date(NaN)' : `new Date(${JSON.stringify(v.toISOString())})`;
   // A Temporal value: Temporal.PlainDate.from("2024-01-31"), its type's from()
   // of what its toString() gives with no options.
   const type = temporalTypes.find((t) => v instanceof Temporal[t]);
@@ -435,7 +452,7 @@ const numberChecks = {
     if (outcome === 'exact' || outcome === 'unsupported' || outcome === 'limit') return null;
     return `/${pattern}/${flags}: an unknown outcome ${outcome}`;
   },
-  Y(rest) { // <source> <outcome> <deliberate>: a Temporal expression, its value or a fault
+  Y(rest) { // <source> <outcome> <deliberate>: a Temporal (or Date) expression, its value or a fault
     const [quoted, ours, deliberate] = rest.split('\t');
     const source = JSON.parse(quoted);
     let want;

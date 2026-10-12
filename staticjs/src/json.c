@@ -581,9 +581,11 @@ static sjs_result json_value_out(json_writer *w, sjs_value v) {
     case SJS_ARRAY:
         break;
     case SJS_TEMPORAL: {
-        /* Its toJSON gives its ISO string, which is written. */
+        /* Its toJSON gives its ISO string, which is written; a Date's gives
+         * null when it is invalid (docs/date.md). */
         char text[SJS_TEMPORAL_TEXT_MAX];
         uint32_t n = sjs_temporal_text(SJS_AS_TEMPORAL(v), text);
+        if (n == 0) return json_put(w, SJS_STR("null"));
         return json_quote(w, (sjs_str){ text, n });
     }
     default:

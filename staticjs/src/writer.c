@@ -222,11 +222,16 @@ static sjs_result next(sjs_writer *w, bool *more) {
             char text[SJS_TEMPORAL_TEXT_MAX];
             uint32_t n = sjs_temporal_text(SJS_AS_TEMPORAL(v), text);
             sjs_str type = sjs_temporal_type_name(sjs_temporal_type_of(v));
-            sjs_result r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"Temporal.", 9u });
-            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)type.ptr, type.length });
-            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)".from(\"", 7u });
+            /* A Date (docs/date.md): new Date("2024-01-31T00:00:00.000Z"), and
+             * new Date(NaN) when it is invalid. */
+            bool date = sjs_temporal_type_of(v) == SJS_TEMPORAL_DATE;
+            sjs_str open = date ? (n == 0 ? SJS_STR("new Date(NaN") : SJS_STR("new Date(\"")) : SJS_STR("Temporal.");
+            sjs_result r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)open.ptr, open.length });
+            if (r == SJS_OK && !date) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)type.ptr, type.length });
+            if (r == SJS_OK && !date) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)".from(\"", 7u });
             if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)text, n });
-            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"\")", 2u });
+            sjs_str close = date && n == 0 ? SJS_STR(")") : SJS_STR("\")");
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)close.ptr, close.length });
             if (r != SJS_OK) return r;
             w->pending = w->literal.ptr;
             w->pending_length = w->literal.length;

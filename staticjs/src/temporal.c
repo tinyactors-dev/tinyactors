@@ -634,6 +634,8 @@ uint32_t sjs_temporal_text(const sjs_temporal *t, char *out) {
         return put_iso(out, (iso_value){ (sjs_temporal_type)t->h.flags, &t->as.iso }, DIGITS_AUTO);
     case SJS_TEMPORAL_DURATION:
         return put_duration(out, t->as.duration, DIGITS_AUTO);
+    case SJS_TEMPORAL_DATE:
+        return sjs_date_iso_text(t->as.time, out);
     default:
         return put_instant_text(t, out);
     }
@@ -649,6 +651,8 @@ sjs_str sjs_temporal_type_name(sjs_temporal_type type) {
         return SJS_STR("PlainDateTime");
     case SJS_TEMPORAL_INSTANT:
         return SJS_STR("Instant");
+    case SJS_TEMPORAL_DATE:
+        return SJS_STR("Date");
     default:
         return SJS_STR("Duration");
     }
@@ -2473,6 +2477,9 @@ sjs_result sjs_temporal_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *c
 #define PLAIN_DATE_TIME TYPE_BIT(SJS_TEMPORAL_PLAIN_DATE_TIME)
 #define INSTANT TYPE_BIT(SJS_TEMPORAL_INSTANT)
 #define DURATION TYPE_BIT(SJS_TEMPORAL_DURATION)
+#define A_DATE TYPE_BIT(SJS_TEMPORAL_DATE)
+/* Temporal's five types; a Date has none of their getters, and of their
+ * methods' names only toJSON, toLocaleString, toString and valueOf. */
 #define ALL_TYPES (PLAIN_DATE | PLAIN_TIME | PLAIN_DATE_TIME | INSTANT | DURATION)
 #define DATED (PLAIN_DATE | PLAIN_DATE_TIME)
 #define TIMED (PLAIN_TIME | PLAIN_DATE_TIME)
@@ -2528,21 +2535,34 @@ static const uint8_t METHOD_TYPES[] = {
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_ROUND)] = PLAIN_TIME | PLAIN_DATE_TIME | INSTANT | DURATION,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_SINCE)] = PLAIN_DATE | PLAIN_TIME | PLAIN_DATE_TIME | INSTANT,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_SUBTRACT)] = ALL_TYPES,
-    [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_JSON)] = ALL_TYPES,
-    [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_LOCALE_STRING)] = ALL_TYPES,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_JSON)] = ALL_TYPES | A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_LOCALE_STRING)] = ALL_TYPES | A_DATE,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_PLAIN_DATE)] = PLAIN_DATE_TIME,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_PLAIN_DATE_TIME)] = PLAIN_DATE,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_PLAIN_MONTH_DAY)] = PLAIN_DATE,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_PLAIN_TIME)] = PLAIN_DATE_TIME,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_PLAIN_YEAR_MONTH)] = PLAIN_DATE,
-    [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_STRING)] = ALL_TYPES,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_STRING)] = ALL_TYPES | A_DATE,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME)] = DATED,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_TO_ZONED_DATE_TIME_ISO)] = INSTANT,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_TOTAL)] = DURATION,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_UNTIL)] = PLAIN_DATE | PLAIN_TIME | PLAIN_DATE_TIME | INSTANT,
-    [METHOD_INDEX(SJS_METHOD_TEMPORAL_VALUE_OF)] = ALL_TYPES,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_VALUE_OF)] = ALL_TYPES | A_DATE,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_WITH)] = PLAIN_DATE | PLAIN_TIME | PLAIN_DATE_TIME | DURATION,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_WITH_CALENDAR)] = DATED,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_TIME)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_UTC_DATE)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_UTC_DAY)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_UTC_FULL_YEAR)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_UTC_HOURS)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_UTC_MILLISECONDS)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_UTC_MINUTES)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_UTC_MONTH)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_GET_UTC_SECONDS)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_TO_ISO_STRING)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_TO_UTC_STRING)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_LOCAL)] = A_DATE,
+    [METHOD_INDEX(SJS_METHOD_TEMPORAL_DATE_SETTER)] = A_DATE,
     [METHOD_INDEX(SJS_METHOD_TEMPORAL_WITH_PLAIN_TIME)] = PLAIN_DATE_TIME,
 };
 _Static_assert(sizeof METHOD_TYPES == METHOD_INDEX(SJS_METHOD_TEMPORAL_WITH_PLAIN_TIME) + 1, "a Temporal method without its types");
@@ -3485,6 +3505,7 @@ sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
     if (call->receiver.kind != SJS_TEMPORAL) return sjs_vm_fault(vm, "this method is a Temporal value's");
     const sjs_temporal *t = SJS_AS_TEMPORAL(call->receiver);
     sjs_temporal_type type = (sjs_temporal_type)t->h.flags;
+    if (type == SJS_TEMPORAL_DATE) return sjs_date_method(vm, id, call);
     if (type == SJS_TEMPORAL_DURATION) return duration_method(vm, id, call);
     if (type == SJS_TEMPORAL_INSTANT) return instant_method(vm, id, call);
     switch (id) {

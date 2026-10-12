@@ -200,7 +200,8 @@ typedef enum {
     SJS_FUNCTION,
     SJS_REGEXP,     /* a regular expression literal: an object, immutable; its lastIndex is 0 */
     SJS_TEMPORAL    /* a Temporal value (a Temporal.PlainDate, ...): an object, immutable;
-                     * the writer writes it as Temporal.PlainDate.from("2024-01-31") */
+                     * the writer writes it as Temporal.PlainDate.from("2024-01-31"); or
+                     * a Date (docs/date.md), written as new Date("2024-01-31T00:00:00.000Z") */
 } sjs_kind;
 
 typedef struct sjs_heap sjs_heap;
@@ -673,7 +674,7 @@ SJS_API void sjs_vm_destroy(sjs_vm *vm);
 
 /*
  * The host clock (docs/temporal.md, "Host clock"): the one source of the
- * current time a program reads (Temporal.Now). It is a value the evaluator
+ * current time a program reads (Temporal.Now, Date.now(), new Date()). It is a value the evaluator
  * holds and the host pushes: set it, and advance it, between runs. The
  * library never reads a clock of its own, and nothing calls back for one.
  * A program sees the value set when it reads it; two reads with no call
@@ -740,7 +741,8 @@ SJS_API sjs_result sjs_vm_set_random(sjs_vm *vm, const sjs_random *state);
  * JSON where JSON can say it, and `undefined`, `NaN`, `Infinity`, `-0`, a
  * BigInt's `10n`, `new Set([...])`, `new Map([[key, value], ...])`, an
  * iterator's `[...].values()`, an iterator that yields the same values, and
- * a Temporal value's `Temporal.PlainDate.from("2024-01-31")`, where it
+ * a Temporal value's `Temporal.PlainDate.from("2024-01-31")`, a Date's
+ * `new Date("2024-01-31T00:00:00.000Z")` (or `new Date(NaN)`), where it
  * cannot. Resumes when the buffer
  * is full; a BigInt's digits are made first, through the context.
  */

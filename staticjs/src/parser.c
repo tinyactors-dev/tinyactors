@@ -3660,11 +3660,11 @@ static handled module_token(sjs_parser *p, const queued_token *t) {
     return statement_token(p, t, false);
 }
 
-/* What a `new` frame constructs (frame.is_new): Set, Map, or a Temporal
- * type, NEW_TEMPORAL plus its index in TEMPORAL_CONSTRUCTORS. The parser
- * reads every type JavaScript has; the compiler refuses one staticjs does
- * not construct. */
-enum { NEW_SET = 1, NEW_MAP, NEW_TEMPORAL };
+/* What a `new` frame constructs (frame.is_new): Set, Map, Date, or a
+ * Temporal type, NEW_TEMPORAL plus its index in TEMPORAL_CONSTRUCTORS. The
+ * parser reads every type JavaScript has; the compiler refuses one staticjs
+ * does not construct. */
+enum { NEW_SET = 1, NEW_MAP, NEW_DATE, NEW_TEMPORAL };
 
 static const char *const TEMPORAL_CONSTRUCTORS[] = {
     "Temporal.Duration", "Temporal.Instant", "Temporal.PlainDate", "Temporal.PlainDateTime",
@@ -3713,7 +3713,8 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
             }
         }
         bool map = t->kind == SJS_TOKEN_NAME && sjs_str_equal(token_text(p, t), SJS_STR("Map"));
-        if (!map && (t->kind != SJS_TOKEN_NAME || !sjs_str_equal(token_text(p, t), SJS_STR("Set")))) {
+        bool date = t->kind == SJS_TOKEN_NAME && sjs_str_equal(token_text(p, t), SJS_STR("Date"));
+        if (!map && !date && (t->kind != SJS_TOKEN_NAME || !sjs_str_equal(token_text(p, t), SJS_STR("Set")))) {
             /* What new constructs is a member expression: no unary operator,
              * and of import only import.meta. */
             bool member = starts_member(p, t);
@@ -3723,15 +3724,15 @@ static handled new_token(sjs_parser *p, const queued_token *t) {
                 member = p->goal == SJS_GOAL_MODULE && is_punctuator(next, SJS_P_DOT);
             }
             if (!member) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected what new constructs" });
-            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set and Map, and the Temporal types it has" });
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs constructs only Set and Map, Date, and the Temporal types it has" });
         }
         f->state = N_OPEN;
-        f->is_new = map ? NEW_MAP : NEW_SET;   /* which, until the ( */
+        f->is_new = map ? NEW_MAP : date ? NEW_DATE : NEW_SET;   /* which, until the ( */
         return H_TAKEN;
     }
-    if (!is_punctuator(t, SJS_P_LPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "write new Set(...), new Map(...) and new Temporal.PlainDate(...) with parentheses" });
+    if (!is_punctuator(t, SJS_P_LPAREN)) return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "write new Set(...), new Map(...), new Date(...) and new Temporal.PlainDate(...) with parentheses" });
     sjs_str constructor = f->is_new == NEW_MAP ? SJS_STR("Map") : f->is_new == NEW_SET ? SJS_STR("Set")
-                        : sjs_cstr(TEMPORAL_CONSTRUCTORS[f->is_new - NEW_TEMPORAL]);
+                        : f->is_new == NEW_DATE ? SJS_STR("Date") : sjs_cstr(TEMPORAL_CONSTRUCTORS[f->is_new - NEW_TEMPORAL]);
     f->type = F_CALL;
     f->state = 0;
     p->expect = E_OPERAND;
