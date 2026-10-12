@@ -82,6 +82,9 @@ const ta_datamodel_vtable *ta_python_datamodel_vtable(void);
 ta_python_datamodel *ta_python_datamodel_new(const ta_python_state *state);
 void ta_python_datamodel_free(ta_python_datamodel *datamodel);
 int ta_python_datamodel_settle(ta_python_datamodel *datamodel);
+/* A chart's evaluation raised a BaseException that is not an Exception:
+ * the turn stops, and settle raises it. */
+int ta_python_datamodel_interrupted(const ta_python_datamodel *datamodel);
 int ta_python_event_init_type(PyObject *module, ta_python_state *state);
 /* A payload of the datamodel holding a copy of `value` through the value
  * table, with no CBOR in between (the hot path: bindings.md, section 2). */

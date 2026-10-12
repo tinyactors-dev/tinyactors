@@ -171,6 +171,12 @@ Progress:
   datamodels (4 of 4 each). The protocol vectors on native: 108 pass, 14
   fail (request 1's cases, no other); the "not ECMAScript" echo cases
   pass. The datamodel's own tests: `tests/test_datamodel.py`.
+- Request 2 answered by core (`9bd33f03`); the binding reads
+  `host.config` (`e44845eb`).
+- Step 10: this commit. The decisions of the datamodel and of the API's
+  shape, refuted by a fresh agent and fixed where it found them wrong
+  (`docs/datamodel.md`, `docs/api.md`); the README's limits and example,
+  each with a test; the mapping table's "Core functions no item uses".
 
 ## Later milestones
 

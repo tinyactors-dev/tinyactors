@@ -288,8 +288,11 @@ README.md, CHANGELOG.md, mise.toml, pyproject.toml, sgconfig.yml
 ROADMAP.md           the work in progress: plan, progress, how it runs, requests to core
 docs/api-map.md      each API item → ta_* function, request method or effect (checked)
 docs/values.md       the Python side of the value table
+docs/errors.md       TinyactorsError: what core refused, unchanged
+docs/datamodel.md    the "python" datamodel: what a session sees, the rules it keeps
+docs/api.md          the API's shape: the decisions the guide leaves open
 src/                 extension.h, module.c, host.c, loop.c, effects.c, request.c, values.c,
-                     datamodel/{datamodel.c, handles.c, expressions.c}
+                     datamodel/{datamodel.h, datamodel.c, handles.c, expressions.c}
 conform/             the suite's adapter, python -m conform; not in the wheel
 tests/               what the suite cannot see: threads, GC, asyncio, refusals
 tools/lint/          rules/, tests/, utils/ (ast-grep)

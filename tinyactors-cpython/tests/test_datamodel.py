@@ -25,8 +25,9 @@ class Run:
 
     def __init__(self, text, params=None, **handlers):
         self.logs, self.done = [], []
-        self.host = Host(CONFIG, clock=SimulatedClock(), on_log=lambda s, label, t: self.logs.append((label, t)),
-                         on_done=lambda s, data: self.done.append(data), **handlers)
+        handlers = {"on_log": lambda s, label, t: self.logs.append((label, t)),
+                    "on_done": lambda s, data: self.done.append(data), **handlers}
+        self.host = Host(CONFIG, clock=SimulatedClock(), **handlers)
         self.host.add_image({"c.scxml": text})
         self.session = self.host.spawn("c", params)
 
@@ -68,6 +69,12 @@ class ExpressionsTest(unittest.TestCase):
             "<transition target='fail'/></state>" + OUTCOME,
             "<data id='Var1'>[1, {\"a\": null}]</data><data id='Var2'>  a\n  b </data>"))
         self.assertEqual(run.outcome(), ["pass"])
+        run.close()
+
+    def test_content_is_json_as_json_has_it_and_collapses_ascii_whitespace(self):
+        run = Run(chart("<state id='s'/>", "<data id='Var1'>NaN</data><data id='Var2'>x\u00a0\u00a0y</data>"
+                                           "<data id='Var3'>-Infinity</data><data id='Var4'>1.5</data>"))
+        self.assertEqual(run.context(), {"Var1": "NaN", "Var2": "x\u00a0\u00a0y", "Var3": "-Infinity", "Var4": 1.5})
         run.close()
 
     def test_spawn_params_override_data(self):
@@ -129,12 +136,13 @@ class ScopeRulesTest(unittest.TestCase):
         for executable in ("<script>_sessionid = 'x'</script>", "<script>_name = 1</script>",
                            "<script>_ioprocessors.clear() or globals().pop('_ioprocessors')</script>",
                            "<script>_event = 1</script>", "<script>_x = 1</script>",
-                           "<script>del _sessionid</script>"):
+                           "<script>del _sessionid</script>", "<script>In = 5</script>",
+                           "<script>__builtins__ = {}</script>"):
             with self.subTest(executable):
                 self.assertEqual(self.check(executable)[0], ["pass"])
 
     def test_assign_to_a_system_variable_or_an_undeclared_location(self):
-        for location in ("_sessionid", "_event", "nothing", "nothing.x", "Var1["):
+        for location in ("_sessionid", "_event", "nothing", "nothing.x", "Var1[", "In", "__builtins__"):
             with self.subTest(location):
                 self.assertEqual(self.check(f"<assign location='{location}' expr='5'/>")[0], ["pass"])
 
@@ -249,7 +257,45 @@ class BaseExceptionTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt) as raised:
                 run.host.send(run.session, "go")
             self.assertIs(raised.exception, interrupt)
-            self.assertEqual(run.outcome(), ["pass"])  # the chart saw error.execution
+            run.host.run()  # the next turn: the chart takes its error.execution
+            self.assertEqual(run.outcome(), ["pass"])
+            run.close()
+        finally:
+            del builtins.ta_python_test_interrupt
+
+    def test_a_keyboard_interrupt_stops_the_turn(self):
+        # a chart that would raise again forever: the turn ends at the first
+        raised = []
+
+        def interrupt():
+            raised.append(1)
+            raise KeyboardInterrupt
+
+        builtins.ta_python_test_interrupt = interrupt
+        try:
+            run = Run(chart("<state id='s'><transition event='go' target='t'/></state>"
+                            "<state id='t'><transition target='t'><script>ta_python_test_interrupt()</script>"
+                            "</transition></state>"))
+            with self.assertRaises(KeyboardInterrupt):
+                run.host.send(run.session, "go")
+            self.assertEqual(raised, [1])
+            run.host.terminate(run.session)  # the host goes on: the next input runs it again
+            run.close()
+        finally:
+            del builtins.ta_python_test_interrupt
+
+    def test_a_handlers_exception_is_the_interrupts_context(self):
+        def on_log(session, label, text):
+            raise ValueError(label)
+
+        builtins.ta_python_test_interrupt = KeyboardInterrupt("stop")
+        try:
+            run = Run(chart("<state id='s'><transition event='go'><log label='first' expr='1'/>"
+                            "<script>raise ta_python_test_interrupt</script></transition></state>"), on_log=on_log)
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                run.host.send(run.session, "go")
+            self.assertIs(raised.exception, builtins.ta_python_test_interrupt)
+            self.assertIsInstance(raised.exception.__context__, ValueError)
             run.close()
         finally:
             del builtins.ta_python_test_interrupt

@@ -15,8 +15,16 @@
  * restore"). */
 #include "datamodel/datamodel.h"
 
-static const char *const ta_python_system_names[TA_PYTHON_SYSTEM_VARIABLES] = {"_event", "_sessionid", "_name",
-                                                                             "_ioprocessors", "_x"};
+/* The system variables (SCXML 5.10), and the datamodel's own In and
+ * __builtins__: no assignment may name them, and an evaluation that
+ * changes one is undone. */
+static const char *const ta_python_system_names[TA_PYTHON_SYSTEM_VARIABLES] = {
+    "_event", "_sessionid", "_name", "_ioprocessors", "_x", "In", "__builtins__"};
+
+/* Fuel an interrupted evaluation charges: more than a turn's budget
+ * (loop.c, TA_PYTHON_BUDGET), small enough that core's counts do not
+ * overflow. */
+#define TA_PYTHON_INTERRUPT_FUEL (1u << 24)
 
 /* The name assignments go through, then leave the globals again. */
 #define TA_PYTHON_VALUE_NAME "__ta_value__"
@@ -189,7 +197,15 @@ static PyObject *ta_python_run(const ta_python_evaluation *evaluation, PyObject 
     PyObject *result = PyEval_EvalCode(code, evaluation->session->globals, evaluation->session->globals);
     datamodel->environment = outer;
     datamodel->current = current;
+    int interrupted = datamodel->kept != NULL;
     *status = result ? TA_OK : ta_python_raised(datamodel);
+    /* A KeyboardInterrupt or SystemExit stops the run: the evaluation that
+     * raised it charges more fuel than a turn's budget, so the run ends
+     * when its microstep does (core.c, burn; schedule.c, run_actor), and
+     * the turn raises it (loop.c). The chart sees error.execution and goes
+     * on at the next turn. */
+    if (!interrupted && datamodel->kept && evaluation->environment)
+        ta_datamodel_environment_charge(evaluation->environment, TA_PYTHON_INTERRUPT_FUEL);
     ta_status guarded = ta_python_guard(evaluation);
     if (guarded != TA_OK) {
         *status = guarded;
@@ -199,17 +215,35 @@ static PyObject *ta_python_run(const ta_python_evaluation *evaluation, PyObject 
     return result;
 }
 
-/* <content>: JSON if it parses, else the text, its whitespace runs one
- * space and trimmed. */
+/* <content>: JSON if it parses (JSON's: NaN and Infinity are not), else
+ * the text, its runs of space, tab, CR and LF one space, and trimmed: the
+ * ECMAScript datamodel's content_value (datamodel_ecmascript.c:340), but
+ * for its XML DOM. */
 static PyObject *ta_python_content(ta_python_datamodel *datamodel, PyObject *source) {
-    PyObject *value = PyObject_CallFunctionObjArgs(datamodel->json_loads, source, NULL);
+    PyObject *arguments = PyTuple_Pack(1, source);
+    PyObject *keywords = Py_BuildValue("{sO}", "parse_constant", datamodel->refuse_constant);
+    PyObject *value = arguments && keywords ? PyObject_Call(datamodel->json_loads, arguments, keywords) : NULL;
+    Py_XDECREF(arguments);
+    Py_XDECREF(keywords);
     if (value) return value;
     PyErr_Clear();
-    PyObject *words = PyObject_CallMethod(source, "split", NULL);
-    PyObject *space = PyUnicode_FromString(" ");
-    value = words && space ? PyUnicode_Join(space, words) : NULL;
-    Py_XDECREF(words);
-    Py_XDECREF(space);
+    Py_ssize_t length = 0;
+    const char *text = PyUnicode_AsUTF8AndSize(source, &length);
+    char *buffer = text ? PyMem_Malloc((size_t)length + 1) : NULL;
+    if (!buffer) return text ? PyErr_NoMemory() : NULL;
+    Py_ssize_t written = 0;
+    for (Py_ssize_t i = 0; i < length; i++) {
+        char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            if (written && buffer[written - 1] != ' ') buffer[written++] = ' ';
+        } else {
+            buffer[written++] = c;
+        }
+    }
+    while (written && buffer[written - 1] == ' ')
+        written--;
+    value = PyUnicode_DecodeUTF8(buffer, written, "strict");
+    PyMem_Free(buffer);
     return value;
 }
 

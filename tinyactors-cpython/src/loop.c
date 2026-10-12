@@ -194,8 +194,10 @@ static void ta_python_loop_keep(ta_python_host *host) {
  * where it stopped; TA_RUN_FAULT is reported with its detail, a status
  * when the run was called during a run (host.c: TA_ERROR_STATE). */
 static void ta_python_loop_stopped(ta_python_host *host, const ta_run *run) {
-    if (run->status == TA_RUN_EXHAUSTED) {
-        PyErr_SetString(PyExc_MemoryError, "ta_host_run: TA_RUN_EXHAUSTED");
+    if (run->status == TA_RUN_EXHAUSTED) { /* with the pool core names, TA_POOL_* */
+        PyObject *arguments = Py_BuildValue("(sI)", "ta_host_run: TA_RUN_EXHAUSTED", run->detail);
+        if (arguments) PyErr_SetObject(PyExc_MemoryError, arguments);
+        Py_XDECREF(arguments);
     } else {
         int32_t detail = (int32_t)run->detail;
         ta_python_raise_status(ta_python_host_state(host), "ta_host_run: TA_RUN_FAULT",
@@ -213,6 +215,8 @@ static ta_run ta_python_loop_runs(ta_python_host *host) {
         uint32_t count = ta_host_effects(host->host, &effects);
         ta_python_effects_dispatch(host, &(ta_python_batch){effects, count});
         ta_host_effects_ack(host->host); /* whatever a handler raised */
+        if (host->python && ta_python_datamodel_interrupted(host->python))
+            return run; /* a chart's evaluation raised KeyboardInterrupt or SystemExit: the turn stops */
         switch (run.status) {
         case TA_RUN_IDLE: return run;
         case TA_RUN_EXHAUSTED:
@@ -246,12 +250,19 @@ int ta_python_loop_turn(ta_python_host *host) {
         }
         ta_host_advance_time(host->host, now);
         run = ta_python_loop_runs(host);
-    } while (host->pending && (run.status == TA_RUN_IDLE || run.status == TA_RUN_YIELDED) && !PyErr_Occurred());
+    } while (host->pending && (run.status == TA_RUN_IDLE || run.status == TA_RUN_YIELDED) &&
+             !(host->python && ta_python_datamodel_interrupted(host->python)));
     host->looping = 0;
     host->next_deadline = run.next_deadline;
-    if (host->python && ta_python_datamodel_settle(host->python) < 0) { /* a run's BaseException comes first */
-        Py_XDECREF(host->raised);
-        host->raised = PyErr_GetRaisedException();
+    if (host->python && ta_python_datamodel_settle(host->python) < 0) {
+        /* a run's BaseException comes first; a handler's exception becomes
+         * its __context__ when it has none */
+        PyObject *kept = PyErr_GetRaisedException();
+        PyObject *context = kept ? PyException_GetContext(kept) : NULL;
+        if (host->raised && kept && !context) PyException_SetContext(kept, host->raised); /* steals it */
+        else Py_XDECREF(host->raised);
+        Py_XDECREF(context);
+        host->raised = kept;
     }
     if (host->closing) ta_python_host_free(host);
     if (!host->raised) return 0;

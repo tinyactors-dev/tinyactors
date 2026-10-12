@@ -72,7 +72,9 @@ enum {
     TA_PYTHON_NAME = 2,
     TA_PYTHON_IOPROCESSORS = 3,
     TA_PYTHON_X = 4,
-    TA_PYTHON_SYSTEM_VARIABLES = 5
+    TA_PYTHON_IN = 5,       /* the datamodel's own names, kept as the system variables are */
+    TA_PYTHON_BUILTINS = 6,
+    TA_PYTHON_SYSTEM_VARIABLES = 7
 };
 
 typedef struct ta_python_session {
@@ -89,6 +91,7 @@ typedef struct ta_python_datamodel {
     ta_python_handles loops;    /* items: PyObject * (a list), one per <foreach> in progress */
     PyObject *builtins;         /* the builtins module's dict, each session's __builtins__ */
     PyObject *json_loads;       /* json.loads, for <content> */
+    PyObject *refuse_constant;  /* json.loads's parse_constant, int: NaN and Infinity are not JSON */
     PyObject *in;               /* In(state), bound to this datamodel */
     PyObject *deferred;         /* a list: objects whose last reference waits for the outer call to return */
     PyObject *ended;            /* a list: the globals of ended sessions, cleared at settle (they make cycles) */
@@ -107,6 +110,8 @@ void ta_python_datamodel_free(ta_python_datamodel *datamodel);
 /* After an outer call into core returned: the deferred drops happen, and
  * a kept BaseException is set as the Python error (-1). */
 int ta_python_datamodel_settle(ta_python_datamodel *datamodel);
+/* A BaseException is kept: the run in progress is to stop. */
+int ta_python_datamodel_interrupted(const ta_python_datamodel *datamodel);
 /* Drops `object` later: at settle, outside core (NULL: nothing). */
 void ta_python_datamodel_defer(ta_python_datamodel *datamodel, PyObject *object);
 

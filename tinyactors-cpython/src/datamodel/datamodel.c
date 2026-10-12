@@ -49,6 +49,10 @@ void ta_python_datamodel_defer(ta_python_datamodel *datamodel, PyObject *object)
     Py_DECREF(object);
 }
 
+int ta_python_datamodel_interrupted(const ta_python_datamodel *datamodel) {
+    return datamodel->kept != NULL;
+}
+
 int ta_python_datamodel_settle(ta_python_datamodel *datamodel) {
     /* An ended session's globals are in a cycle with the functions and
      * classes defined in them (their __globals__): cleared here, outside
@@ -107,10 +111,11 @@ int ta_python_event_init_type(PyObject *module, ta_python_state *state) {
     return PyModule_AddObjectRef(module, "Event", state->event_type);
 }
 
-/* A str of a view, or None when it is empty. */
+/* A str of a view, or None when it is empty; text is valid UTF-8, never
+ * replaced (bindings.md, section 9): NULL when it is not. */
 static PyObject *ta_python_text_or_none(ta_string_view text) {
     if (!text.length) Py_RETURN_NONE;
-    return PyUnicode_DecodeUTF8(text.pointer, (Py_ssize_t)text.length, "replace");
+    return PyUnicode_DecodeUTF8(text.pointer, (Py_ssize_t)text.length, "strict");
 }
 
 /* ---- charts and sessions --------------------------------------------------------------------- */
@@ -165,9 +170,9 @@ static PyObject *ta_python_ioprocessors(const ta_datamodel_system_variables *var
     PyObject *processors = PyDict_New();
     for (uint32_t i = 0; processors && i < variables->io_processor_count; i++) {
         const ta_io_processor_entry *entry = &variables->io_processors[i];
-        PyObject *type = PyUnicode_DecodeUTF8(entry->type.pointer, (Py_ssize_t)entry->type.length, "replace");
+        PyObject *type = PyUnicode_DecodeUTF8(entry->type.pointer, (Py_ssize_t)entry->type.length, "strict");
         PyObject *location =
-            PyUnicode_DecodeUTF8(entry->location.pointer, (Py_ssize_t)entry->location.length, "replace");
+            PyUnicode_DecodeUTF8(entry->location.pointer, (Py_ssize_t)entry->location.length, "strict");
         PyObject *record = location ? Py_BuildValue("{sO}", "location", location) : NULL;
         if (!type || !record || PyDict_SetItem(processors, type, record) < 0) Py_CLEAR(processors);
         Py_XDECREF(type);
@@ -180,8 +185,9 @@ static PyObject *ta_python_ioprocessors(const ta_datamodel_system_variables *var
 static int ta_python_session_fill(ta_python_datamodel *datamodel, ta_python_session *session,
                                   const ta_datamodel_start *start) {
     const ta_datamodel_system_variables *variables = start->system_variables;
-    if (PyDict_SetItemString(session->globals, "__builtins__", datamodel->builtins) < 0 ||
-        PyDict_SetItemString(session->globals, "In", datamodel->in) < 0 ||
+    if (ta_python_bind_system(session, &(ta_python_binding){TA_PYTHON_BUILTINS, "__builtins__"},
+                              Py_NewRef(datamodel->builtins)) < 0 ||
+        ta_python_bind_system(session, &(ta_python_binding){TA_PYTHON_IN, "In"}, Py_NewRef(datamodel->in)) < 0 ||
         ta_python_bind_system(session, &(ta_python_binding){TA_PYTHON_SESSIONID, "_sessionid"},
                               ta_python_text_or_none(variables->sessionid)) < 0 ||
         ta_python_bind_system(session, &(ta_python_binding){TA_PYTHON_NAME, "_name"},
@@ -269,7 +275,7 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
     }
     PyObject *data = view->data ? ta_python_payload_object(datamodel, view->data) : NULL;
     PyObject *fields[8] = {
-        PyUnicode_DecodeUTF8(view->name.pointer, (Py_ssize_t)view->name.length, "replace"),
+        PyUnicode_DecodeUTF8(view->name.pointer, (Py_ssize_t)view->name.length, "strict"),
         PyUnicode_FromString(types[view->type % 3]),
         ta_python_text_or_none(view->sendid),
         ta_python_text_or_none(view->origin),
@@ -283,10 +289,11 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
         if (!fields[i]) complete = 0;
         PyStructSequence_SetItem(event, i, fields[i] ? fields[i] : Py_NewRef(Py_None));
     }
+    int memory = PyErr_ExceptionMatches(PyExc_MemoryError);
     PyErr_Clear();
     if (!complete) {
         ta_python_datamodel_defer(datamodel, event);
-        return TA_ERROR_NO_MEMORY;
+        return memory ? TA_ERROR_NO_MEMORY : TA_ERROR_INVALID;
     }
     PyObject *previous = session->system[TA_PYTHON_EVENT];
     if (PyDict_SetItemString(session->globals, "_event", event) < 0) {
@@ -352,7 +359,7 @@ static ta_status ta_python_assign(const ta_datamodel_call *call, ta_expression l
 static ta_status ta_python_assign_string(const ta_datamodel_call *call, ta_expression location, ta_string_view value) {
     ta_python_session *session = ta_python_session_of_call(call);
     if (!session) return TA_ERROR_EXECUTION;
-    PyObject *text = PyUnicode_DecodeUTF8(value.pointer, (Py_ssize_t)value.length, "replace");
+    PyObject *text = PyUnicode_DecodeUTF8(value.pointer, (Py_ssize_t)value.length, "strict");
     if (!text) {
         PyErr_Clear();
         return TA_ERROR_EXECUTION;
@@ -569,13 +576,15 @@ ta_python_datamodel *ta_python_datamodel_new(const ta_python_state *state) {
     PyObject *capsule = PyCapsule_New(datamodel, NULL, NULL);
     datamodel->builtins = builtins ? Py_XNewRef(PyModule_GetDict(builtins)) : NULL;
     datamodel->json_loads = json ? PyObject_GetAttrString(json, "loads") : NULL;
+    /* int('NaN') raises, so json.loads refuses the constants JSON has not */
+    datamodel->refuse_constant = builtins ? PyObject_GetAttrString(builtins, "int") : NULL;
     datamodel->in = capsule ? PyCFunction_New(&ta_python_in_method, capsule) : NULL;
     datamodel->deferred = PyList_New(0);
     datamodel->ended = PyList_New(0);
     Py_XDECREF(builtins);
     Py_XDECREF(json);
     Py_XDECREF(capsule);
-    if (!datamodel->builtins || !datamodel->json_loads || !datamodel->in || !datamodel->deferred || !datamodel->ended) {
+    if (!datamodel->builtins || !datamodel->json_loads || !datamodel->refuse_constant || !datamodel->in || !datamodel->deferred || !datamodel->ended) {
         ta_python_datamodel_free(datamodel);
         return NULL;
     }
@@ -603,6 +612,7 @@ void ta_python_datamodel_free(ta_python_datamodel *datamodel) {
     Py_CLEAR(datamodel->deferred);
     Py_CLEAR(datamodel->builtins);
     Py_CLEAR(datamodel->json_loads);
+    Py_CLEAR(datamodel->refuse_constant);
     Py_CLEAR(datamodel->in);
     PyMem_RawFree(datamodel);
 }
