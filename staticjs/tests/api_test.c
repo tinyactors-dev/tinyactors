@@ -964,6 +964,21 @@ static void test_to_spliced_fuel(sjs_context *context) {
     CHECK(copied == 31);
 }
 
+/* toSorted without a compare function charges a unit per element made a
+ * string and per comparison, each a step of the loop, and one step to
+ * finish; undefined is placed without either: [3, 1, 2] is three strings
+ * and three comparisons, [3, undefined, 1] two and one. It grows as
+ * n log n. */
+static void test_text_sort_fuel(sjs_context *context) {
+    uint64_t none = fuel_of(context, "[3, 1, 2].length");
+    CHECK(none == 9);
+    CHECK(fuel_of(context, "[3, 1, 2].toSorted()") == none + 1 + 3 + 3 + 1);
+    CHECK(fuel_of(context, "[3, undefined, 1].toSorted()") == none + 1 + 2 + 1 + 1);
+    uint64_t small = fuel_of(context, "'x'.repeat(1000).split('').toSorted().length");
+    uint64_t large = fuel_of(context, "'x'.repeat(2000).split('').toSorted().length");
+    CHECK(small == 7126 && large == 15241);
+}
+
 /* A regular expression's match charges for the instructions it visits and
  * the slots it copies (docs/regex.md, 9.1), pinned here; it grows linearly
  * with the input, a pattern that backtracks exponentially included; and an
@@ -1101,6 +1116,7 @@ static void test_fuel_and_reset(void) {
     test_fuel_pinned(context);
     test_regex_fuel(context);
     test_to_spliced_fuel(context);
+    test_text_sort_fuel(context);
     test_set_fuel_linear(context);
     test_iterator_flat_map_fuel(context);
     test_array_iterator_fuel(context);

@@ -39,6 +39,10 @@ typedef struct {
      * becomes an iterator when the loop ends. In the padding before
      * `program`. */
     bool iterated;
+    /* toSorted's loop, and so sort's, without a compare function: it
+     * compares the elements' strings, which the second half of the scratch
+     * holds (text_sort_step in builtins.c). Also in that padding. */
+    bool sorts_text;
     sjs_program *program;
     union {
         sjs_closure *closure;        /* code frames: NULL for a program's main function */
@@ -59,8 +63,8 @@ typedef struct {
     uint8_t shape_op;
     uint32_t shape_guess;  /* loop frames with a shape: where the last object had the key */
     union {
-        /* toSorted: a bottom-up merge sort over two scratch arrays, of
-         * scratch_count values while scratch is set. */
+        /* toSorted: a bottom-up merge sort over two scratch arrays (four
+         * with sorts_text), of scratch_count values while scratch is set. */
         struct {
             uint32_t width;
             uint32_t left;

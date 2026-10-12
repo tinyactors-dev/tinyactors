@@ -177,9 +177,65 @@
 --- value
 ["a","b","c"]
 
-=== sort without a compare function
-(() => { const xs = [3, 1, 2]; return xs.sort(); })()
---- fault compare function
+=== sort without a compare function sorts as strings
+(() => { const xs = [3, 20, 100, 1]; xs.sort(); return xs; })()
+--- value
+[1,100,20,3]
+
+=== sort without a compare function returns the array
+(() => { const xs = ["b", undefined, "a", "c"]; return xs.sort(); })()
+--- value
+["a","b","c",undefined]
+
+=== sort with undefined as the compare function
+(() => { const xs = [10, 9, 1, -1, -0, 0, NaN, Infinity, 1e21, 1e-7, 0.5]; xs.sort(undefined); return xs; })()
+--- value
+[-1,-0,0,0.5,1,10,1e+21,1e-7,9,Infinity,NaN]
+
+=== sort with null as the compare function
+(() => { const xs = [3, 1, 2]; return xs.sort(null); })()
+--- fault not a function
+
+=== sort without a compare function is stable
+(() => { const xs = ["1", 1, true, 10n, "10", "true", null, 10]; xs.sort(); return xs; })()
+--- value
+["1",1,10n,"10",10,null,true,"true"]
+
+=== sort without a compare function of an empty array and of one element
+(() => { const xs = []; const ys = [{a: 1}]; xs.sort(); ys.sort(); return [xs, ys]; })()
+--- value
+[[],[{"a":1}]]
+
+=== sort without a compare function then reverse
+(() => { const xs = ["é", "e", "😀", "\u{FFFD}"]; return xs.sort().reverse(); })()
+--- value
+["�","😀","é","e"]
+
+=== sort without a compare function of objects faults
+(() => { const xs = [{a: 2}, {a: 1}]; xs.sort(); return xs; })()
+--- fault only primitives
+
+=== sort without a compare function of a value held elsewhere
+(() => { const xs = [2, 1]; const f = ys => { ys.sort(); return ys; }; return [f(xs), xs]; })()
+--- fault held elsewhere
+
+=== sort without a compare function of a frozen array
+(() => { const xs = Object.freeze(["b", "a"]); xs.sort(); return xs; })()
+--- fault frozen
+
+=== sort without a compare function of a sealed array keeps it sealed
+(() => { const xs = Object.seal([3, 20, 100]); xs.sort(); return [xs, Object.isSealed(xs)]; })()
+--- value
+[[100,20,3],true]
+
+=== sort without a compare function of a match result
+(() => { const m = /(b)(a)/.exec("ba"); m.sort(); return m; })()
+--- fault besides its elements
+
+=== sort without a compare function in reduce
+["b", "c", "a"].reduce((acc, x) => { acc.push(x); acc.sort(); return acc; }, [])
+--- value
+["a","b","c"]
 
 === sort with something that is not a function
 (() => { const xs = [3, 1, 2]; return xs.sort(1); })()
@@ -3581,8 +3637,22 @@ export const f = () => { state.xs.push(3); return state; };
 --- error unsupported no effect
 
 === a sort through a path without a compare function
-(() => { const o = {xs: [2, 1]}; o.xs.sort(); return o; })()
---- fault compare
+(() => { const o = {xs: [2, 10, 1]}; o.xs.sort(); return o; })()
+--- value
+{"xs":[1,10,2]}
+
+=== a sort through a path without a compare function returns the array
+(() => { const o = {a: {b: ["b", undefined, "a"]}}; const r = o.a.b.sort().reverse(); return [r, o]; })()
+--- value
+[[undefined,"b","a"],{"a":{"b":[undefined,"b","a"]}}]
+
+=== a sort through a path without a compare function of objects faults
+(() => { const o = {xs: [[2], [1]]}; o.xs.sort(); return o; })()
+--- fault only primitives
+
+=== a sort through a path of a frozen array without a compare function
+(() => { const o = { items: Object.freeze([2, 1]) }; o.items.sort(); return o; })()
+--- fault frozen
 
 === a path call on an object's own function
 (() => { const o = {h: {push: x => x * 2}}; return o.h.push(21); })()

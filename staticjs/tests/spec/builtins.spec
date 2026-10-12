@@ -107,9 +107,10 @@
 --- value
 ["apple","fig","pear"]
 
-=== toSorted needs a comparator in staticjs
-[2, 1].toSorted()
---- fault compare function
+=== toSorted without a comparator sorts as strings
+[2, 10, 1].toSorted()
+--- value
+[1,10,2]
 
 === toReversed, slice, at, with, concat
 [[1, 2, 3].toReversed(), [1, 2, 3, 4].slice(1, -1), [1, 2, 3].slice(-2), [1, 2, 3].at(-1), [1, 2, 3].with(0, 9), [1].concat([2, 3], 4)]

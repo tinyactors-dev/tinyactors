@@ -84,19 +84,25 @@ static uint32_t first_unit(uint32_t point) {
 }
 
 int32_t sjs_utf16_compare(sjs_str a, sjs_str b) {
-    uint32_t i = 0;
-    uint32_t j = 0;
-    while (i < a.length && j < b.length) {
-        uint32_t pa = (uint32_t)sjs_utf8_next(a, &i);
-        uint32_t pb = (uint32_t)sjs_utf8_next(b, &j);
-        if (pa == pb) continue;
-        uint32_t ua = first_unit(pa);
-        uint32_t ub = first_unit(pb);
-        if (ua != ub) return ua < ub ? -1 : 1;
-        /* Two supplementary code points with the same high surrogate. */
-        return pa < pb ? -1 : 1;
-    }
-    if (i < a.length) return 1;
-    if (j < b.length) return -1;
-    return 0;
+    /* Equal bytes are equal code points: skip the bytes the two share, back
+     * to the start of the code point where they part (valid UTF-8 parts
+     * inside one in both or in neither), and compare that one. ASCII, or
+     * any text, costs a byte comparison per shared byte. */
+    uint32_t n = a.length < b.length ? a.length : b.length;
+    uint32_t p = 0;
+    while (p < n && a.ptr[p] == b.ptr[p]) p++;
+    if (p == n) return a.length == b.length ? 0 : a.length < b.length ? -1 : 1;
+    uint8_t x = (uint8_t)a.ptr[p];
+    uint8_t y = (uint8_t)b.ptr[p];
+    if (x < 0x80u && y < 0x80u) return x < y ? -1 : 1;
+    while (p > 0 && ((uint8_t)a.ptr[p] & 0xC0u) == 0x80u) p--;
+    uint32_t i = p;
+    uint32_t j = p;
+    uint32_t pa = (uint32_t)sjs_utf8_next(a, &i);
+    uint32_t pb = (uint32_t)sjs_utf8_next(b, &j);
+    uint32_t ua = first_unit(pa);
+    uint32_t ub = first_unit(pb);
+    if (ua != ub) return ua < ub ? -1 : 1;
+    /* Two supplementary code points with the same high surrogate. */
+    return pa < pb ? -1 : 1;
 }

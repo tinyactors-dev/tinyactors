@@ -49,7 +49,7 @@ values", below).
 | array | `pop()` | the last element, or `undefined` |
 | array | `shift()` | the first element, or `undefined` |
 | array | `unshift(...items)` | the new length |
-| array | `sort(compare)` | the array |
+| array | `sort(compare)`, `sort()` | the array |
 | array | `reverse()` | the array |
 | array | `fill(value, start, end)` | the array |
 | array | `splice(start, deleteCount, ...items)` | the elements removed, a new array |
@@ -63,11 +63,14 @@ values", below).
 | iterator helper's result | `return()` | a new `{ value: undefined, done: true }` |
 | Date | `setTime(t)`, `setUTCFullYear(y, m, d)`, `setUTCMonth(m, d)`, `setUTCDate(d)`, `setUTCHours(h, mi, s, ms)`, `setUTCMinutes(mi, s, ms)`, `setUTCSeconds(s, ms)`, `setUTCMilliseconds(ms)` | the new time value, a number |
 
-Each has JavaScript's semantics and return value. `sort` takes a compare
-function and sorts as `toSorted` does, with the same merge sort, fuel and
-faults, and the same C path for a comparator of a known shape
-(`(a, b) => a - b`, `(a, b) => a.key - b.key`, docs/matcher.md); without one it faults, as `toSorted()` does, since JavaScript
-would compare the elements as strings. `splice` takes its arguments as
+Each has JavaScript's semantics and return value. `sort` sorts as
+`toSorted` does, with the same merge sort, fuel and faults, and the same
+C path for a comparator of a known shape (`(a, b) => a - b`,
+`(a, b) => a.key - b.key`, docs/matcher.md); without one (or with
+`undefined`) it compares the elements' strings, as `toSorted()` does
+(`text_sort_start` in `src/builtins.c`), and faults before it changes
+anything when two elements or more are not `undefined` and one is not a
+primitive, whose `toString` JavaScript would call. `splice` takes its arguments as
 `toSpliced` does, with the same code (`splice_arguments`): `start` and
 `deleteCount` relative and clamped, everything from `start` removed when
 `deleteCount` is left out, nothing when both are; it removes and inserts
@@ -897,7 +900,6 @@ sealed value (`SJS_ERR_INVALID`).
 - **A method that changes the root inside a path call's keys or
   arguments** (`o.a.push(o.b.pop())`): refused, even where the two paths
   part, as telling them apart needs the keys' values.
-- **`sort()` without a compare function**: faults, as `toSorted()` does.
 - **`Object.isFrozen(x)` and `Object.isSealed(x)` before a mutation of
   `x`**: they pass `x`, as any argument does, so the mutation is refused
   when compiled ("passed"); ask after it, or freeze a value of its own.

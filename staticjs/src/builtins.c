@@ -1987,6 +1987,8 @@ static loop_step for_each_call(sjs_vm *vm, vm_frame *frame);
 static bool flatten_iterated(sjs_vm *vm, vm_frame *frame, sjs_value r);
 static sjs_result reduce_right_start(sjs_vm *vm, vm_frame *frame);
 static loop_step reduce_right_call(sjs_vm *vm, vm_frame *frame);
+static sjs_result text_sort_start(sjs_vm *vm, vm_frame *frame);
+static bool text_sort_step(sjs_vm *vm, vm_frame *frame);
 
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     if (frame->builtin >= SJS_REGEX_LOOP_FIRST) return sjs_regex_loop_start(vm, frame);
@@ -2009,9 +2011,7 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     frame->length = a->length;
     frame->phase = 0;
     if (!is_callable(callback)) {
-        if (frame->builtin == SJS_METHOD_ARRAY_TO_SORTED && callback.kind == SJS_UNDEFINED) {
-            return sjs_vm_fault(vm, "staticjs sorts with a compare function");
-        }
+        if (frame->builtin == SJS_METHOD_ARRAY_TO_SORTED && callback.kind == SJS_UNDEFINED) return text_sort_start(vm, frame);
         return sjs_vm_fault(vm, "the callback is not a function");
     }
     frame->entered = false;
@@ -2068,6 +2068,12 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
 
 void sjs_loop_free(sjs_vm *vm, vm_frame *frame) {
     if (frame->scratch != NULL) {
+        if (frame->sorts_text) {
+            /* The strings of the half that holds every element (text_sort_start). */
+            uint32_t n = frame->length;
+            const sjs_value *keys = frame->scratch + 2u * (size_t)n + (frame->index ? n : 0);
+            for (uint32_t i = 0; i < n; i++) sjs_unref(vm->context, keys[i]);
+        }
         sjs_mem_free(&vm->context->counting, frame->scratch, (size_t)frame->scratch_count * sizeof(sjs_value));
         frame->scratch = NULL;
         frame->scratch_count = 0;
@@ -2381,7 +2387,11 @@ static loop_step sort_step(sjs_vm *vm, vm_frame *frame) {
 
 loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
     const sjs_array *a = receiver(vm, frame);
-    if (frame->builtin == SJS_METHOD_ARRAY_TO_SORTED) return sort_step(vm, frame);
+    if (frame->builtin == SJS_METHOD_ARRAY_TO_SORTED) {
+        /* Without a compare function, sort_step only finishes. */
+        if (frame->sorts_text && text_sort_step(vm, frame)) return LOOP_AGAIN;
+        return sort_step(vm, frame);
+    }
     if (frame->phase == 1) {
         sjs_value r = sjs_vm_pop(vm);
         frame->phase = 0;
@@ -4509,4 +4519,121 @@ __attribute__((noinline)) static sjs_result object_integrity(sjs_vm *vm, sjs_bui
     sjs_ref(v);
     call->result = v;
     return SJS_OK;
+}
+
+/* toSorted and sort without a compare function (or with undefined): the
+ * elements in the order of their strings, by UTF-16 code units, each
+ * undefined last, uncompared, and equal strings in their order, as
+ * JavaScript's SortCompare without a comparator gives. Each element's
+ * string is made once, here, into the scratch's second half: 4n values,
+ * the elements' two halves and their strings', which move together. A
+ * number's string is String(x)'s, a boolean's, null's and a BigInt's
+ * theirs, a string is its own. An object, an array, a function, a regular
+ * expression, a set, a map or a Temporal value would have its toString or
+ * Symbol.toPrimitive called, so it faults, before anything is sorted; but
+ * only where JavaScript would compare it: when two elements or more are not
+ * undefined. One unit of fuel per element turned into a string, and its
+ * length / 64 (a BigInt's digits as String gives them). */
+__attribute__((noinline)) static sjs_result text_sort_start(sjs_vm *vm, vm_frame *frame) {
+    const sjs_array *a = receiver(vm, frame);
+    uint32_t n = a->length;
+    if ((size_t)n * 4u > (size_t)UINT32_MAX / sizeof(sjs_value)) return sjs_vm_fail(vm, SJS_ERR_LIMIT);
+    frame->scratch_count = n * 4u;
+    frame->scratch = sjs_mem_alloc(&vm->context->counting, (size_t)frame->scratch_count * sizeof(sjs_value));
+    if (frame->scratch == NULL) {
+        frame->scratch_count = 0;
+        return sjs_vm_fail(vm, SJS_ERR_NOMEM);
+    }
+    frame->sorts_text = true;
+    frame->shape = SJS_SHAPE_NONE;
+    frame->entered = false;
+    frame->width = 1;
+    frame->left = 0;
+    frame->index = 0; /* which half of the scratch holds the source */
+    sjs_value *keys = frame->scratch + 2u * (size_t)n;
+    uint32_t compared = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        frame->scratch[i] = a->items[i];
+        keys[i] = sjs_undefined();
+        keys[n + i] = sjs_undefined();
+        if (a->items[i].kind != SJS_UNDEFINED) compared++;
+    }
+    if (compared < 2u) return SJS_OK;
+    for (uint32_t i = 0; i < n; i++) {
+        sjs_value x = a->items[i];
+        if (x.kind == SJS_UNDEFINED) continue;
+        if (!sjs_is_primitive(x)) {
+            return sjs_vm_fault(vm, "staticjs sorts only primitives without a compare function, as JavaScript calls an object's toString");
+        }
+        sjs_string *text;
+        sjs_result r = sjs_to_string(vm->context, x, &text);
+        if (r != SJS_OK) return sjs_vm_fail(vm, r);
+        keys[i] = sjs_heap_value(SJS_STRING, &text->h);
+        vm->fuel_used += 1u + text->length / 64u;
+        if (x.kind == SJS_BIGINT) vm->fuel_used += sjs_bigint_text_cost(SJS_AS_BIGINT(x)->length, 10u);
+    }
+    return SJS_OK;
+}
+
+/* One step of text_sort_start's merge sort: merges until it has compared
+ * two strings, and gives true, or until every pass is done, and gives
+ * false, so that sort_step finishes as it does for a comparator. A
+ * comparison is a step's unit of fuel, and the shorter string's length /
+ * 64. Undefined is placed without one, as sort_step places it. */
+__attribute__((noinline)) static bool text_sort_step(sjs_vm *vm, vm_frame *frame) {
+    uint32_t n = frame->length;
+    size_t keys = 2u * (size_t)n;
+    for (;;) {
+        sjs_value *src = frame->scratch + (frame->index ? n : 0);
+        sjs_value *dst = frame->scratch + (frame->index ? 0 : n);
+        if (frame->phase == 2) {
+            uint32_t from;
+            bool compared = false;
+            if (frame->i < frame->mid && frame->j < frame->right) {
+                sjs_value x = src[frame->i];
+                sjs_value y = src[frame->j];
+                bool right;
+                if (x.kind == SJS_UNDEFINED) {
+                    right = y.kind != SJS_UNDEFINED;
+                } else if (y.kind == SJS_UNDEFINED) {
+                    right = false;
+                } else {
+                    sjs_str kx = sjs_string_view(SJS_AS_STRING(src[keys + frame->i]));
+                    sjs_str ky = sjs_string_view(SJS_AS_STRING(src[keys + frame->j]));
+                    right = sjs_utf16_compare(kx, ky) > 0;
+                    vm->fuel_used += (kx.length < ky.length ? kx.length : ky.length) / 64u;
+                    compared = true;
+                }
+                from = right ? frame->j++ : frame->i++;
+            } else if (frame->i < frame->mid) {
+                from = frame->i++;
+            } else if (frame->j < frame->right) {
+                from = frame->j++;
+            } else {
+                frame->left += frame->width * 2u;
+                frame->phase = 0;
+                continue;
+            }
+            dst[frame->k] = src[from];
+            dst[keys + frame->k] = src[keys + from];
+            frame->k++;
+            if (compared) return true;
+            continue;
+        }
+        /* Choose the next pair of runs, as sort_step does. */
+        if (frame->width >= n) return false;
+        if (frame->left >= n) {
+            frame->index ^= 1u;
+            frame->width = frame->width > UINT32_MAX / 2u ? UINT32_MAX : frame->width * 2u;
+            frame->left = 0;
+            continue;
+        }
+        uint32_t left = frame->left;
+        frame->mid = left + frame->width < n && left + frame->width > left ? left + frame->width : n;
+        frame->right = frame->mid + frame->width < n && frame->mid + frame->width > frame->mid ? frame->mid + frame->width : n;
+        frame->i = left;
+        frame->j = frame->mid;
+        frame->k = left;
+        frame->phase = 2;
+    }
 }

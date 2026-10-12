@@ -601,8 +601,7 @@ compare identities, or find something on a prototype.
 - A method that changes its receiver on a value something else holds
   (a caller's argument, a global, a module's export, an element of an
   array, an argument that is the receiver), or on a receiver that is not a
-  variable (`[1].push(2)`, `xs?.push(1)`). `sort()` without a compare
-  function, as `toSorted()`.
+  variable (`[1].push(2)`, `xs?.push(1)`).
 - An assignment through a container something else holds, or one that
   would make a cycle (`o.self = o`); to an array's element past its end
   (JavaScript leaves holes), to its `length` or to a key that is not an
@@ -610,7 +609,12 @@ compare identities, or find something on a prototype.
   (JavaScript ignores it, adds it or throws); to `__proto__` or a name
   `Object.prototype` has, as reading it faults; `++` of anything but a
   number, which JavaScript converts.
-- `toSorted()` without a compare function; `toLowerCase()` of a string
+- `sort()` and `toSorted()` without a compare function (or with
+  `undefined`) of two elements or more that are not `undefined`, one of
+  them an object, an array, a function, a regular expression, a set, a
+  map, an iterator or a Temporal value, whose `toString` JavaScript calls
+  to compare it; of primitives they sort as JavaScript does, by the
+  elements' strings in UTF-16 code units, `undefined` last. `toLowerCase()` of a string
   that is not ASCII; cutting a string through the middle of a surrogate
   pair (`slice`, `substring`, `substr`), padding one (`padStart`,
   `padEnd`) with a pad string cut there,
