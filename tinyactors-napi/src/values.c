@@ -1,12 +1,14 @@
-/* values.c — CBOR tokens and JavaScript values, by the value table of
+/* values.c — CBOR and JavaScript values, by the value table of
  * docs/values.md: one conversion for the API (config, requests, replies,
  * event data), the native datamodel's to_wire and from_wire, and the
- * package's `encode` and `decode` exports.
+ * package's `encode` and `decode` exports (ADR 0010, decision 4).
  *
- * Read (decode): one ta_cbor_decode into a token list, then the values.
- * Written (encode): the value's tokens, then one ta_cbor_encode. The rules
- * are those of core's ECMAScript datamodel, so both of Node's datamodels
- * read and write the same values
+ * Written: item by item with core's streaming writer (ta_cbor_writer),
+ * into a room of the call's own. Read: item by item with core's reader
+ * (ta_cbor_reader), straight into JavaScript values. Copied: a payload
+ * between the API and the native datamodel goes by the same table without
+ * CBOR (ta_napi_values_copy). The rules are those of core's ECMAScript
+ * datamodel, so both of Node's datamodels read and write the same values
  * (tinyactors-core/src/datamodel_ecmascript/datamodel_ecmascript.c,
  * wire_write and wire_read): what JSON.stringify keeps, with integers,
  * BigInts and bytes exact; an actor reference (tag 32) read as its
@@ -19,196 +21,137 @@
 #define TA_NAPI_SAFE_INTEGER 9007199254740991.0
 #define TA_NAPI_SAFE_UINT ((uint64_t)9007199254740991)
 
-/* ---- written: a value's tokens ------------------------------------------------ */
+/* ---- rooms -------------------------------------------------------------------------- */
 
-/* A value being written: its tokens (scratch->tokens) and the text and
- * bytes they point into (scratch->strings), both reused by every encode on
- * the scratch. */
-typedef struct ta_napi_writer {
-    napi_env env;
-    ta_napi_scratch *scratch;
-    uint32_t count;
-    size_t length;
-    ta_status status;
-} ta_napi_writer;
+void ta_napi_room_init(ta_napi_room *room, napi_env env, ta_buffer stack) {
+    room->env = env;
+    room->allocator = ta_napi_allocator(env);
+    room->pointer = room->stack = (char *)stack.pointer;
+    room->capacity = stack.pointer ? stack.capacity : 0;
+    room->length = 0;
+}
 
-/* Append a token; its index, or TA_NIL (and the status set). */
-static uint32_t ta_napi_writer_token(ta_napi_writer *writer, const ta_cbor_token *token) {
-    if (writer->status != TA_OK) return TA_NIL;
-    ta_napi_buffer *tokens = &writer->scratch->tokens;
-    if (!ta_napi_buffer_reserve(tokens, ((size_t)writer->count + 1) * sizeof(ta_cbor_token))) {
-        writer->status = TA_ERROR_NO_MEMORY;
-        return TA_NIL;
+int ta_napi_room_reserve(ta_napi_room *room, size_t more) {
+    if (more <= room->capacity - room->length) return 1;
+    if (more > SIZE_MAX / 4 - room->length) return 0;
+    size_t need = room->length + more, capacity = room->capacity ? room->capacity : 256;
+    while (capacity < need)
+        capacity *= 2;
+    char *pointer = (char *)room->allocator.alloc(room->allocator.context, capacity, 1);
+    if (!pointer) return 0;
+    if (room->length) memcpy(pointer, room->pointer, room->length);
+    if (room->pointer != room->stack) room->allocator.free(room->allocator.context, room->pointer, room->capacity);
+    room->pointer = pointer;
+    room->capacity = capacity;
+    return 1;
+}
+
+void ta_napi_room_free(ta_napi_room *room) {
+    if (room->pointer && room->pointer != room->stack)
+        room->allocator.free(room->allocator.context, room->pointer, room->capacity);
+    room->pointer = room->stack = NULL;
+    room->capacity = room->length = 0;
+}
+
+/* ---- strings ------------------------------------------------------------------------ */
+
+/* Whether a string Node-API wrote U+FFFD into has a lone surrogate: its
+ * UTF-16 read past the room's length, for the check only (Node-API writes
+ * U+FFFD for one silently; bindings.md, section 9). */
+static ta_status ta_napi_text_check(ta_napi_room *room, napi_value value) {
+    size_t units = 0, read = 0;
+    if (napi_get_value_string_utf16(room->env, value, NULL, 0, &units) != napi_ok) return TA_ERROR_INVALID;
+    if (!ta_napi_room_reserve(room, (units + 1) * sizeof(char16_t) + 1)) return TA_ERROR_NO_MEMORY;
+    size_t at = room->length + ((uintptr_t)(room->pointer + room->length) & 1); /* aligned for char16_t */
+    char16_t *utf16 = (char16_t *)(void *)(room->pointer + at);
+    if (napi_get_value_string_utf16(room->env, value, utf16, units + 1, &read) != napi_ok) return TA_ERROR_INVALID;
+    for (size_t i = 0; i < read; i++) {
+        uint32_t c = utf16[i];
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < read && utf16[i + 1] >= 0xDC00 && utf16[i + 1] <= 0xDFFF) i++;
+        else if (c >= 0xD800 && c <= 0xDFFF) return TA_ERROR_INVALID; /* a lone surrogate */
     }
-    ((ta_cbor_token *)tokens->pointer)[writer->count] = *token;
-    return writer->count++;
-}
-
-/* Room for `more` bytes of text or bytes; a pointer to it, or NULL. */
-static char *ta_napi_writer_room(ta_napi_writer *writer, size_t more) {
-    if (writer->status != TA_OK) return NULL;
-    if (more > UINT32_MAX) {
-        writer->status = TA_ERROR_INVALID;
-        return NULL;
-    }
-    ta_napi_buffer *strings = &writer->scratch->strings;
-    if (!ta_napi_buffer_reserve(strings, writer->length + more + 1)) {
-        writer->status = TA_ERROR_NO_MEMORY;
-        return NULL;
-    }
-    return strings->pointer + writer->length;
-}
-
-/* A text or byte token over the `length` bytes just written at the end of
- * the strings. */
-typedef struct ta_napi_written {
-    uint32_t kind;
-    size_t length;
-} ta_napi_written;
-
-static void ta_napi_writer_string(ta_napi_writer *writer, const ta_napi_written *written) {
-    ta_cbor_token token = {written->kind, (uint32_t)written->length, writer->length};
-    if (ta_napi_writer_token(writer, &token) == TA_NIL) return;
-    writer->length += written->length;
-}
-
-static void ta_napi_writer_bytes(ta_napi_writer *writer, ta_bytes bytes) {
-    char *room = ta_napi_writer_room(writer, bytes.length);
-    if (!room) return;
-    if (bytes.length) memcpy(room, bytes.pointer, bytes.length);
-    ta_napi_written written = {TA_CBOR_BYTES, bytes.length};
-    ta_napi_writer_string(writer, &written);
-}
-
-static void ta_napi_writer_simple(ta_napi_writer *writer, uint32_t simple) {
-    ta_cbor_token token = {TA_CBOR_SIMPLE, 0, simple};
-    ta_napi_writer_token(writer, &token);
-}
-
-/* A napi call that failed: an exception is pending (a getter threw), or
- * the value is not one Node-API reads. Either way the value is refused. */
-static int ta_napi_writer_check(ta_napi_writer *writer, napi_status status) {
-    if (status == napi_ok) return 1;
-    if (writer->status == TA_OK) writer->status = TA_ERROR_INVALID;
-    return 0;
-}
-
-/* A string's UTF-16 code units, read into scratch->utf16; how many. A
- * lone surrogate is refused later, by ta_napi_utf8: Node-API's UTF-8
- * conversion would write U+FFFD for it silently (bindings.md, section 9),
- * so the addon reads UTF-16 and encodes UTF-8 itself. */
-static ta_status ta_napi_utf16(ta_napi_scratch *scratch, napi_value value, size_t *units) {
-    size_t length = 0, read = 0;
-    if (napi_get_value_string_utf16(scratch->env, value, NULL, 0, &length) != napi_ok) return TA_ERROR_INVALID;
-    if (!ta_napi_buffer_reserve(&scratch->utf16, (length + 1) * sizeof(uint16_t))) return TA_ERROR_NO_MEMORY;
-    if (napi_get_value_string_utf16(scratch->env, value, (char16_t *)scratch->utf16.pointer, length + 1, &read) !=
-        napi_ok)
-        return TA_ERROR_INVALID;
-    *units = read;
     return TA_OK;
 }
 
-/* `count` UTF-16 units as UTF-8 at `out` (room for 3 bytes a unit). */
-typedef struct ta_napi_utf8_out {
-    const uint16_t *units;
-    size_t count;
-    char *out;
-} ta_napi_utf8_out;
+/* Whether `text` holds U+FFFD (EF BF BD). */
+static int ta_napi_has_replacement(ta_bytes text) {
+    const unsigned char *bytes = (const unsigned char *)text.pointer;
+    for (size_t i = 0; i + 2 < text.length; i++)
+        if (bytes[i] == 0xEF && bytes[i + 1] == 0xBF && bytes[i + 2] == 0xBD) return 1;
+    return 0;
+}
 
-/* Its length, or TA_NIL for a lone surrogate. */
-static size_t ta_napi_utf8(const ta_napi_utf8_out *conversion) {
-    const uint16_t *utf16 = conversion->units;
-    char *out = conversion->out;
-    size_t length = 0, read = conversion->count;
-    for (size_t i = 0; i < read; i++) {
-        uint32_t c = utf16[i];
-        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < read && utf16[i + 1] >= 0xDC00 && utf16[i + 1] <= 0xDFFF) {
-            c = 0x10000 + ((c - 0xD800) << 10) + (utf16[i + 1] - 0xDC00u);
-            i++;
-        } else if (c >= 0xD800 && c <= 0xDFFF) {
-            return TA_NIL; /* a lone surrogate */
-        }
-        if (c < 0x80) {
-            out[length++] = (char)c;
-        } else if (c < 0x800) {
-            out[length++] = (char)(0xC0 | (c >> 6));
-            out[length++] = (char)(0x80 | (c & 0x3F));
-        } else if (c < 0x10000) {
-            out[length++] = (char)(0xE0 | (c >> 12));
-            out[length++] = (char)(0x80 | ((c >> 6) & 0x3F));
-            out[length++] = (char)(0x80 | (c & 0x3F));
-        } else {
-            out[length++] = (char)(0xF0 | (c >> 18));
-            out[length++] = (char)(0x80 | ((c >> 12) & 0x3F));
-            out[length++] = (char)(0x80 | ((c >> 6) & 0x3F));
-            out[length++] = (char)(0x80 | (c & 0x3F));
+/* A string as UTF-8, appended to `room` (its length grows by `*length`):
+ * the one copy Node-API forces. Written into the room's space; when less
+ * than 4 bytes (the longest character) were left over, it may have
+ * stopped short, so it is measured and written again. TA_ERROR_INVALID: a
+ * lone surrogate, or not a string. */
+static ta_status ta_napi_text_append(ta_napi_room *room, napi_value value, size_t *length) {
+    size_t at = room->length, written = 0;
+    if (!ta_napi_room_reserve(room, 64)) return TA_ERROR_NO_MEMORY;
+    size_t space = room->capacity - at;
+    if (napi_get_value_string_utf8(room->env, value, room->pointer + at, space, &written) != napi_ok)
+        return TA_ERROR_INVALID;
+    if (space - 1 - written < 4) {
+        size_t need = 0;
+        if (napi_get_value_string_utf8(room->env, value, NULL, 0, &need) != napi_ok) return TA_ERROR_INVALID;
+        if (need > written) {
+            if (!ta_napi_room_reserve(room, need + 1)) return TA_ERROR_NO_MEMORY;
+            if (napi_get_value_string_utf8(room->env, value, room->pointer + at, need + 1, &written) != napi_ok)
+                return TA_ERROR_INVALID;
         }
     }
-    return length;
+    room->length = at + written;
+    *length = written;
+    if (ta_napi_has_replacement((ta_bytes){room->pointer + at, written})) return ta_napi_text_check(room, value);
+    return TA_OK;
 }
 
-/* A string as UTF-8 text; a lone surrogate is refused, never replaced. */
-static void ta_napi_writer_text(ta_napi_writer *writer, napi_value value) {
-    size_t units = 0;
-    if (writer->status != TA_OK) return;
-    ta_status status = ta_napi_utf16(writer->scratch, value, &units);
-    if (status != TA_OK) {
-        writer->status = status;
-        return;
+ta_status ta_napi_values_texts(ta_napi_room *room, const ta_napi_texts *texts) {
+    size_t start = room->length;
+    for (uint32_t i = 0; i < texts->count; i++) {
+        napi_valuetype type = napi_undefined;
+        size_t length = 0;
+        texts->out[i].pointer = NULL;
+        texts->out[i].length = 0;
+        if (napi_typeof(room->env, texts->values[i], &type) != napi_ok) return TA_ERROR_INVALID;
+        if (type == napi_undefined) continue;
+        if (type != napi_string) return TA_ERROR_INVALID;
+        ta_status status = ta_napi_text_append(room, texts->values[i], &length);
+        if (status != TA_OK) return status;
+        if (length > UINT32_MAX) return TA_ERROR_INVALID;
+        texts->out[i].length = (uint32_t)length;
     }
-    char *out = ta_napi_writer_room(writer, units * 3);
-    if (!out) return;
-    ta_napi_utf8_out conversion = {(const uint16_t *)writer->scratch->utf16.pointer, units, out};
-    size_t length = ta_napi_utf8(&conversion);
-    if (length == TA_NIL) {
-        writer->status = TA_ERROR_INVALID;
-        return;
+    /* the views, once the room no longer moves: the texts lie end to end */
+    for (uint32_t i = 0; i < texts->count; i++) {
+        if (!texts->out[i].length) continue;
+        texts->out[i].pointer = room->pointer + start;
+        start += texts->out[i].length;
     }
-    ta_napi_written written = {TA_CBOR_TEXT, length};
-    ta_napi_writer_string(writer, &written);
+    return TA_OK;
 }
 
-/* A number: an integer within ±(2^53-1) is an integer, any other number
- * (-0, NaN, ±Infinity, a fraction, a larger integer) a float. Never
- * napi_get_value_int64, which saturates silently. */
-static void ta_napi_writer_number(ta_napi_writer *writer, double number) {
-    uint64_t bits;
-    memcpy(&bits, &number, sizeof bits);
-    ta_cbor_token token = {TA_CBOR_FLOAT, 0, bits};
-    if (number >= -TA_NAPI_SAFE_INTEGER && number <= TA_NAPI_SAFE_INTEGER && number == (double)(int64_t)number &&
-        bits != (uint64_t)1 << 63) {
-        int64_t integer = (int64_t)number;
-        token.kind = integer >= 0 ? TA_CBOR_UINT : TA_CBOR_NEGINT;
-        token.value = integer >= 0 ? (uint64_t)integer : (uint64_t)(-(integer + 1));
-    }
-    ta_napi_writer_token(writer, &token);
+ta_status ta_napi_values_hold_text(napi_env env, napi_value value, ta_napi_held_text *out) {
+    napi_valuetype type = napi_undefined;
+    size_t length = 0, written = 0;
+    void *data = NULL;
+    if (napi_typeof(env, value, &type) != napi_ok || type != napi_string ||
+        napi_get_value_string_utf8(env, value, NULL, 0, &length) != napi_ok || length > UINT32_MAX)
+        return TA_ERROR_INVALID;
+    if (napi_create_arraybuffer(env, length + 1, &data, &out->holder) != napi_ok) return TA_ERROR_NO_MEMORY;
+    if (napi_get_value_string_utf8(env, value, (char *)data, length + 1, &written) != napi_ok) return TA_ERROR_INVALID;
+    out->text.pointer = (const char *)data;
+    out->text.length = (uint32_t)written;
+    if (!ta_napi_has_replacement((ta_bytes){data, written})) return TA_OK;
+    char stack[256];
+    ta_napi_room room;
+    ta_napi_room_init(&room, env, (ta_buffer){stack, sizeof stack, 0});
+    ta_status status = ta_napi_text_check(&room, value);
+    ta_napi_room_free(&room);
+    return status;
 }
 
-/* A BigInt within -2^64 … 2^64-1 is an integer; past it, not a value. */
-static void ta_napi_writer_bigint(ta_napi_writer *writer, napi_value value) {
-    int sign = 0;
-    uint64_t words[3] = {0, 0, 0};
-    size_t count = 3; /* in: room in `words`; out: the words it has */
-    if (!ta_napi_writer_check(writer, napi_get_value_bigint_words(writer->env, value, &sign, &count, words))) return;
-    if (count > 3) {
-        writer->status = TA_ERROR_INVALID;
-        return;
-    }
-    while (count > 1 && !words[count - 1])
-        count--;
-    ta_cbor_token token = {sign ? TA_CBOR_NEGINT : TA_CBOR_UINT, 0, 0};
-    if (count <= 1 && !sign) {
-        token.value = words[0];
-    } else if (count <= 1 && sign && words[0]) {
-        token.value = words[0] - 1;
-    } else if (count == 2 && sign && !words[0] && words[1] == 1) {
-        token.value = UINT64_MAX; /* -2^64 */
-    } else {
-        writer->status = TA_ERROR_INVALID;
-        return;
-    }
-    ta_napi_writer_token(writer, &token);
-}
+/* ---- what both directions share ------------------------------------------------------- */
 
 int ta_napi_values_bytes(napi_env env, napi_value value, ta_bytes *out) {
     bool is = false;
@@ -238,219 +181,337 @@ int ta_napi_values_bytes(napi_env env, napi_value value, ta_bytes *out) {
     return 1;
 }
 
-/* The bytes of an ArrayBuffer, a typed array (its own bytes) or a
- * DataView, written; 0 when the value is none of them. */
-static int ta_napi_writer_buffer(ta_napi_writer *writer, napi_value value) {
-    ta_bytes bytes;
-    if (!ta_napi_values_bytes(writer->env, value, &bytes)) return 0;
-    ta_napi_writer_bytes(writer, bytes);
-    return 1;
+/* `value` with its toJSON applied, as JSON.stringify applies it (again on
+ * what it returns), each call a level of nesting; NULL when it threw or
+ * nests past TA_CBOR_DEPTH_MAX (a cycle). */
+static napi_value ta_napi_resolve(napi_env env, napi_value value, uint32_t *depth) {
+    for (;;) {
+        napi_valuetype type = napi_undefined, to_json_type = napi_undefined;
+        ta_bytes bytes;
+        napi_value to_json, result;
+        if (*depth > TA_CBOR_DEPTH_MAX || napi_typeof(env, value, &type) != napi_ok) return NULL;
+        if (type != napi_object || ta_napi_values_bytes(env, value, &bytes)) return value;
+        if (napi_get_named_property(env, value, "toJSON", &to_json) != napi_ok ||
+            napi_typeof(env, to_json, &to_json_type) != napi_ok)
+            return NULL;
+        if (to_json_type != napi_function) return value;
+        if (napi_call_function(env, value, to_json, 0, NULL, &result) != napi_ok) return NULL;
+        value = result;
+        (*depth)++;
+    }
 }
 
-static int ta_napi_writer_value(ta_napi_writer *writer, napi_value value, uint32_t depth);
+/* What JSON.stringify leaves out: undefined, a function, a symbol. */
+static int ta_napi_dropped(napi_env env, napi_value value) {
+    napi_valuetype type = napi_undefined;
+    napi_typeof(env, value, &type);
+    return type == napi_undefined || type == napi_function || type == napi_symbol;
+}
 
-static void ta_napi_writer_array(ta_napi_writer *writer, napi_value value, uint32_t depth) {
-    napi_env env = writer->env;
+/* An integer as CBOR has it: `n`, or -1 - n when `negative`. */
+typedef struct ta_napi_integer {
+    int negative;
+    uint64_t n;
+} ta_napi_integer;
+
+/* A BigInt within -2^64 … 2^64-1; past it, TA_ERROR_INVALID. */
+static ta_status ta_napi_bigint_read(napi_env env, napi_value value, ta_napi_integer *out) {
+    int sign = 0;
+    uint64_t words[3] = {0, 0, 0};
+    size_t count = 3; /* in: room in `words`; out: the words it has */
+    if (napi_get_value_bigint_words(env, value, &sign, &count, words) != napi_ok || count > 3) return TA_ERROR_INVALID;
+    while (count > 1 && !words[count - 1])
+        count--;
+    out->negative = sign != 0;
+    if (count <= 1 && !sign) out->n = words[0];
+    else if (count <= 1 && sign && words[0]) out->n = words[0] - 1;
+    else if (count == 2 && sign && !words[0] && words[1] == 1) out->n = UINT64_MAX; /* -2^64 */
+    else return TA_ERROR_INVALID;
+    return TA_OK;
+}
+
+/* A container's own depth may not reach TA_CBOR_DEPTH_MAX: the writer
+ * refuses a 65th open container and the reader reads none. */
+#define TA_NAPI_OPEN_MAX TA_CBOR_DEPTH_MAX
+
+/* ---- written: the encoder ----------------------------------------------------------- */
+
+void ta_napi_encoder_init(ta_napi_encoder *encoder, napi_env env, const ta_napi_room *kept) {
+    ta_napi_room_init(&encoder->text, env, (ta_buffer){encoder->text_stack, sizeof encoder->text_stack, 0});
+    ta_buffer room = {encoder->stack, sizeof encoder->stack, 0};
+    if (kept && kept->capacity > room.capacity) room = (ta_buffer){kept->pointer, kept->capacity, 0};
+    ta_cbor_writer_init(&encoder->writer, room, &encoder->text.allocator);
+    encoder->status = TA_OK;
+}
+
+void ta_napi_encoder_free(ta_napi_encoder *encoder) {
+    ta_cbor_writer_free(&encoder->writer);
+    ta_napi_room_free(&encoder->text);
+}
+
+static void ta_napi_fail(ta_napi_encoder *encoder, ta_status status) {
+    if (encoder->status == TA_OK) encoder->status = status;
+}
+
+static int ta_napi_failed(const ta_napi_encoder *encoder) {
+    return encoder->status != TA_OK || encoder->writer.status != TA_OK;
+}
+
+/* A napi call that failed: an exception is pending (a getter threw), or
+ * the value is not one Node-API reads. Either way the value is refused. */
+static int ta_napi_ok(ta_napi_encoder *encoder, napi_status status) {
+    if (status == napi_ok) return 1;
+    ta_napi_fail(encoder, TA_ERROR_INVALID);
+    return 0;
+}
+
+/* A string as text: through the text room, then into the writer. */
+static void ta_napi_write_text(ta_napi_encoder *encoder, napi_value value) {
+    size_t length = 0;
+    encoder->text.length = 0;
+    ta_status status = ta_napi_text_append(&encoder->text, value, &length);
+    if (status == TA_OK && length > UINT32_MAX) status = TA_ERROR_INVALID;
+    if (status != TA_OK) {
+        ta_napi_fail(encoder, status);
+        return;
+    }
+    ta_cbor_write_text(&encoder->writer, (ta_string_view){encoder->text.pointer, (uint32_t)length});
+}
+
+/* A number: an integer within ±(2^53-1) is an integer, any other number
+ * (-0, NaN, ±Infinity, a fraction, a larger integer) a float. Never
+ * napi_get_value_int64, which saturates silently. */
+static void ta_napi_write_number(ta_napi_encoder *encoder, double number) {
+    uint64_t bits;
+    memcpy(&bits, &number, sizeof bits);
+    if (number >= -TA_NAPI_SAFE_INTEGER && number <= TA_NAPI_SAFE_INTEGER && number == (double)(int64_t)number &&
+        bits != (uint64_t)1 << 63)
+        ta_cbor_write_int(&encoder->writer, (int64_t)number);
+    else
+        ta_cbor_write_float(&encoder->writer, number);
+}
+
+static int ta_napi_write(ta_napi_encoder *encoder, napi_value given, uint32_t depth);
+static void ta_napi_write_kept(ta_napi_encoder *encoder, napi_value value, uint32_t depth);
+
+static void ta_napi_write_array(ta_napi_encoder *encoder, napi_value value, uint32_t depth) {
+    napi_env env = encoder->text.env;
     uint32_t length = 0;
-    if (!ta_napi_writer_check(writer, napi_get_array_length(env, value, &length))) return;
-    ta_cbor_token token = {TA_CBOR_ARRAY, length, 0};
-    ta_napi_writer_token(writer, &token);
-    for (uint32_t i = 0; i < length && writer->status == TA_OK; i++) {
+    if (!ta_napi_ok(encoder, napi_get_array_length(env, value, &length))) return;
+    ta_cbor_write_array(&encoder->writer, length);
+    for (uint32_t i = 0; i < length && !ta_napi_failed(encoder); i++) {
         napi_value item;
-        if (!ta_napi_writer_check(writer, napi_get_element(env, value, i, &item))) return;
-        if (!ta_napi_writer_value(writer, item, depth + 1)) ta_napi_writer_simple(writer, TA_CBOR_NULL);
+        if (!ta_napi_ok(encoder, napi_get_element(env, value, i, &item))) return;
+        if (!ta_napi_write(encoder, item, depth + 1)) /* dropped: null in an array */
+            ta_cbor_write_simple(&encoder->writer, TA_CBOR_NULL);
     }
 }
 
 /* An object's own enumerable string keys, in the order Object.keys gives;
- * a property that is dropped (undefined, a function, a symbol) drops its
- * key too. */
-static void ta_napi_writer_object(ta_napi_writer *writer, napi_value value, uint32_t depth) {
-    napi_env env = writer->env;
+ * a key only for a value that is kept: the map's count is fixed when it
+ * closes (TA_CBOR_COUNT_LATER). */
+static void ta_napi_write_members(ta_napi_encoder *encoder, napi_value value, uint32_t depth) {
+    napi_env env = encoder->text.env;
     napi_value keys;
     uint32_t count = 0;
-    if (!ta_napi_writer_check(writer, napi_get_all_property_names(env, value, napi_key_own_only,
-                                                                  napi_key_enumerable | napi_key_skip_symbols,
-                                                                  napi_key_numbers_to_strings, &keys)) ||
-        !ta_napi_writer_check(writer, napi_get_array_length(env, keys, &count)))
+    if (!ta_napi_ok(encoder, napi_get_all_property_names(env, value, napi_key_own_only,
+                                                         napi_key_enumerable | napi_key_skip_symbols,
+                                                         napi_key_numbers_to_strings, &keys)) ||
+        !ta_napi_ok(encoder, napi_get_array_length(env, keys, &count)))
         return;
-    ta_cbor_token token = {TA_CBOR_MAP, 0, 0};
-    uint32_t map = ta_napi_writer_token(writer, &token);
-    for (uint32_t i = 0; i < count && writer->status == TA_OK; i++) {
-        napi_value key, item;
-        if (!ta_napi_writer_check(writer, napi_get_element(env, keys, i, &key)) ||
-            !ta_napi_writer_check(writer, napi_get_property(env, value, key, &item)))
+    ta_cbor_write_map(&encoder->writer, TA_CBOR_COUNT_LATER);
+    for (uint32_t i = 0; i < count && !ta_napi_failed(encoder); i++) {
+        napi_value key, item, resolved;
+        uint32_t item_depth = depth + 1;
+        if (!ta_napi_ok(encoder, napi_get_element(env, keys, i, &key)) ||
+            !ta_napi_ok(encoder, napi_get_property(env, value, key, &item)))
             return;
-        uint32_t mark = writer->count;
-        size_t strings = writer->length;
-        ta_napi_writer_text(writer, key);
-        int written = ta_napi_writer_value(writer, item, depth + 1);
-        if (written == 0) {
-            writer->count = mark;
-            writer->length = strings;
-        } else if (writer->status == TA_OK) {
-            ((ta_cbor_token *)writer->scratch->tokens.pointer)[map].count++;
+        if (!(resolved = ta_napi_resolve(env, item, &item_depth))) {
+            ta_napi_fail(encoder, TA_ERROR_INVALID);
+            return;
         }
+        if (ta_napi_dropped(env, resolved)) continue; /* dropped: so is its key */
+        ta_napi_write_text(encoder, key);
+        ta_napi_write_kept(encoder, resolved, item_depth);
     }
+    ta_cbor_write_end(&encoder->writer);
 }
 
-/* Write `value`: 1 when written, 0 when it is dropped (undefined, a
- * function, a symbol), -1 when it is refused (writer->status). */
-static int ta_napi_writer_value(ta_napi_writer *writer, napi_value value, uint32_t depth) {
-    napi_env env = writer->env;
-    if (writer->status != TA_OK) return -1;
-    if (depth > TA_CBOR_DEPTH_MAX) { /* a cycle, or nested too deep for a neutral value */
-        writer->status = TA_ERROR_INVALID;
-        return -1;
-    }
-    napi_valuetype type;
-    if (!ta_napi_writer_check(writer, napi_typeof(env, value, &type))) return -1;
+/* Write `value`, whose toJSON was applied and which is kept. */
+static void ta_napi_write_kept(ta_napi_encoder *encoder, napi_value value, uint32_t depth) {
+    napi_env env = encoder->text.env;
+    napi_valuetype type = napi_undefined;
+    if (!ta_napi_ok(encoder, napi_typeof(env, value, &type))) return;
     switch (type) {
-    case napi_undefined:
-    case napi_symbol:
-    case napi_function: return 0;
-    case napi_null: ta_napi_writer_simple(writer, TA_CBOR_NULL); break;
+    case napi_null: ta_cbor_write_simple(&encoder->writer, TA_CBOR_NULL); break;
     case napi_boolean: {
         bool b = false;
-        if (ta_napi_writer_check(writer, napi_get_value_bool(env, value, &b)))
-            ta_napi_writer_simple(writer, b ? TA_CBOR_TRUE : TA_CBOR_FALSE);
+        if (ta_napi_ok(encoder, napi_get_value_bool(env, value, &b)))
+            ta_cbor_write_simple(&encoder->writer, b ? TA_CBOR_TRUE : TA_CBOR_FALSE);
         break;
     }
     case napi_number: {
         double number = 0;
-        if (ta_napi_writer_check(writer, napi_get_value_double(env, value, &number)))
-            ta_napi_writer_number(writer, number);
+        if (ta_napi_ok(encoder, napi_get_value_double(env, value, &number))) ta_napi_write_number(encoder, number);
         break;
     }
-    case napi_bigint: ta_napi_writer_bigint(writer, value); break;
-    case napi_string: ta_napi_writer_text(writer, value); break;
+    case napi_bigint: {
+        ta_napi_integer integer;
+        ta_status status = ta_napi_bigint_read(env, value, &integer);
+        if (status != TA_OK) ta_napi_fail(encoder, status);
+        else if (integer.negative) ta_cbor_write_negative(&encoder->writer, integer.n);
+        else ta_cbor_write_uint(&encoder->writer, integer.n);
+        break;
+    }
+    case napi_string: ta_napi_write_text(encoder, value); break;
     case napi_object:
     case napi_external: {
-        if (ta_napi_writer_buffer(writer, value)) break;
-        napi_value to_json;
-        napi_valuetype to_json_type = napi_undefined;
-        if (type == napi_object) {
-            if (!ta_napi_writer_check(writer, napi_get_named_property(env, value, "toJSON", &to_json)) ||
-                !ta_napi_writer_check(writer, napi_typeof(env, to_json, &to_json_type)))
-                return -1;
-        }
-        if (to_json_type == napi_function) {
-            napi_value result;
-            if (!ta_napi_writer_check(writer, napi_call_function(env, value, to_json, 0, NULL, &result))) return -1;
-            return ta_napi_writer_value(writer, result, depth + 1);
-        }
+        ta_bytes bytes;
         bool array = false;
-        if (!ta_napi_writer_check(writer, napi_is_array(env, value, &array))) return -1;
-        if (array) ta_napi_writer_array(writer, value, depth);
-        else ta_napi_writer_object(writer, value, depth);
+        if (ta_napi_values_bytes(env, value, &bytes)) ta_cbor_write_bytes(&encoder->writer, bytes);
+        else if (!ta_napi_ok(encoder, napi_is_array(env, value, &array))) return;
+        else if (array) ta_napi_write_array(encoder, value, depth);
+        else ta_napi_write_members(encoder, value, depth);
         break;
     }
-    default: writer->status = TA_ERROR_INVALID; break;
+    default: ta_napi_fail(encoder, TA_ERROR_INVALID); break;
     }
-    return writer->status == TA_OK ? 1 : -1;
 }
 
-ta_status ta_napi_values_encode(ta_napi_scratch *scratch, napi_value value, ta_bytes *out) {
+/* Write `given`: 1 when written, 0 when it is dropped (undefined, a
+ * function, a symbol), -1 when it is refused (the status). */
+static int ta_napi_write(ta_napi_encoder *encoder, napi_value given, uint32_t depth) {
+    if (ta_napi_failed(encoder)) return -1;
+    napi_value value = ta_napi_resolve(encoder->text.env, given, &depth);
+    if (!value) {
+        ta_napi_fail(encoder, TA_ERROR_INVALID);
+        return -1;
+    }
+    if (ta_napi_dropped(encoder->text.env, value)) return 0;
+    ta_napi_write_kept(encoder, value, depth);
+    return ta_napi_failed(encoder) ? -1 : 1;
+}
+
+void ta_napi_encoder_value(ta_napi_encoder *encoder, napi_value value) {
+    if (!ta_napi_write(encoder, value, 0)) ta_cbor_write_simple(&encoder->writer, TA_CBOR_NULL);
+}
+
+void ta_napi_encoder_member(ta_napi_encoder *encoder, const char *key, napi_value value) {
+    uint32_t depth = 1;
+    napi_value resolved = ta_napi_resolve(encoder->text.env, value, &depth);
+    if (!resolved) {
+        ta_napi_fail(encoder, TA_ERROR_INVALID);
+        return;
+    }
+    if (ta_napi_dropped(encoder->text.env, resolved)) return;
+    ta_cbor_write_text(&encoder->writer, (ta_string_view){key, (uint32_t)strlen(key)});
+    ta_napi_write_kept(encoder, resolved, depth);
+}
+
+ta_status ta_napi_encoder_bytes(const ta_napi_encoder *encoder, ta_bytes *out) {
     out->pointer = NULL;
     out->length = 0;
-    if (scratch->writing) return TA_ERROR_STATE;
-    ta_napi_writer writer = {scratch->env, scratch, 0, 0, TA_OK};
-    scratch->writing = 1;
-    if (!ta_napi_writer_value(&writer, value, 0)) ta_napi_writer_simple(&writer, TA_CBOR_NULL);
-    scratch->writing = 0;
-    ta_status status = writer.status;
-    if (status != TA_OK) return status;
-    ta_cbor_document document = {{scratch->strings.pointer, writer.length},
-                                 (ta_cbor_token *)scratch->tokens.pointer,
-                                 writer.count,
-                                 writer.count};
-    ta_buffer buffer = {scratch->out.pointer, scratch->out.capacity, 0};
-    status = ta_cbor_encode(&document, &buffer);
-    if (status == TA_ERROR_NO_MEMORY && ta_napi_buffer_reserve(&scratch->out, buffer.length)) {
-        buffer = (ta_buffer){scratch->out.pointer, scratch->out.capacity, 0};
-        status = ta_cbor_encode(&document, &buffer);
-    }
-    if (status == TA_OK) *out = (ta_bytes){scratch->out.pointer, buffer.length};
-    return status;
+    if (encoder->status != TA_OK) return encoder->status;
+    return ta_cbor_writer_bytes(&encoder->writer, out);
 }
 
-/* ---- read: a message's values ------------------------------------------------- */
+ta_status ta_napi_encoder_keep(const ta_napi_encoder *encoder, ta_napi_room *kept, ta_bytes *out) {
+    ta_status status = ta_napi_encoder_bytes(encoder, out);
+    if (status != TA_OK || out->pointer == kept->pointer) return status; /* written in place */
+    kept->length = 0;
+    if (!ta_napi_room_reserve(kept, out->length)) return TA_ERROR_NO_MEMORY;
+    if (out->length) memcpy(kept->pointer, out->pointer, out->length);
+    out->pointer = kept->pointer;
+    return TA_OK;
+}
 
-typedef struct ta_napi_reader {
+/* ---- read: a message's values, item by item ------------------------------------------- */
+
+typedef struct ta_napi_decoding {
     napi_env env;
-    const ta_cbor_document *document;
-    uint32_t at;
-} ta_napi_reader;
+    ta_cbor_reader reader;
+} ta_napi_decoding;
+
+static ta_status ta_napi_read(ta_napi_decoding *decoding, napi_value *out);
+
+/* The next item, which must be there. */
+static ta_status ta_napi_read_next(ta_napi_decoding *decoding, ta_cbor_item *item) {
+    int32_t read = ta_cbor_read(&decoding->reader, item);
+    return read == 1 ? TA_OK : read < 0 ? (ta_status)read : TA_ERROR_INVALID;
+}
 
 /* -1 - n for n past what a number holds: a BigInt (n + 1 may be 2^64). */
-static napi_status ta_napi_reader_negative(napi_env env, uint64_t n, napi_value *out) {
+static napi_status ta_napi_negative(napi_env env, uint64_t n, napi_value *out) {
     uint64_t words[2] = {n + 1, n == UINT64_MAX ? 1 : 0};
     return napi_create_bigint_words(env, 1, n == UINT64_MAX ? 2 : 1, words, out);
 }
 
-/* The value at the reader's token, moving past it; TA_ERROR_INVALID when it
- * is not a neutral value. */
-static ta_status ta_napi_reader_value(ta_napi_reader *reader, napi_value *out) {
-    napi_env env = reader->env;
-    const ta_cbor_document *document = reader->document;
-    uint32_t at = reader->at++;
-    const ta_cbor_token *token = &document->tokens[at];
+static napi_status ta_napi_text_value(napi_env env, ta_bytes text, napi_value *out) {
+    return napi_create_string_utf8(env, text.pointer ? (const char *)text.pointer : "", text.length, out);
+}
+
+/* A container's items, read into a new array or object. */
+static ta_status ta_napi_read_container(ta_napi_decoding *decoding, const ta_cbor_item *item, napi_value *out) {
+    napi_env env = decoding->env;
+    if (item->kind == TA_CBOR_ARRAY) {
+        if (napi_create_array_with_length(env, item->count, out) != napi_ok) return TA_ERROR_NO_MEMORY;
+        for (uint32_t i = 0; i < item->count; i++) {
+            napi_value value;
+            ta_status status = ta_napi_read(decoding, &value);
+            if (status != TA_OK) return status;
+            if (napi_set_element(env, *out, i, value) != napi_ok) return TA_ERROR_NO_MEMORY;
+        }
+        return TA_OK;
+    }
+    if (napi_create_object(env, out) != napi_ok) return TA_ERROR_NO_MEMORY;
+    for (uint32_t i = 0; i < item->count; i++) {
+        ta_cbor_item key;
+        napi_property_descriptor property;
+        memset(&property, 0, sizeof property);
+        ta_status status = ta_napi_read_next(decoding, &key);
+        if (status == TA_OK && key.kind != TA_CBOR_TEXT) status = TA_ERROR_INVALID; /* keys are text */
+        if (status == TA_OK && ta_napi_text_value(env, key.bytes, &property.name) != napi_ok)
+            status = TA_ERROR_NO_MEMORY;
+        if (status == TA_OK) status = ta_napi_read(decoding, &property.value);
+        if (status != TA_OK) return status;
+        /* defined, not set: a key "__proto__" is an ordinary key */
+        property.attributes = napi_default_jsproperty;
+        if (napi_define_properties(env, *out, 1, &property) != napi_ok) return TA_ERROR_NO_MEMORY;
+    }
+    return TA_OK;
+}
+
+/* The next item's value; TA_ERROR_INVALID when it is not a neutral value. */
+static ta_status ta_napi_read(ta_napi_decoding *decoding, napi_value *out) {
+    napi_env env = decoding->env;
+    ta_cbor_item item;
+    ta_status read = ta_napi_read_next(decoding, &item);
+    if (read != TA_OK) return read;
     napi_status status = napi_ok;
-    switch (token->kind) {
+    switch (item.kind) {
     case TA_CBOR_UINT:
-        status = token->value <= TA_NAPI_SAFE_UINT ? napi_create_double(env, (double)token->value, out)
-                                                   : napi_create_bigint_uint64(env, token->value, out);
+        status = item.value <= TA_NAPI_SAFE_UINT ? napi_create_double(env, (double)item.value, out)
+                                                 : napi_create_bigint_uint64(env, item.value, out);
         break;
     case TA_CBOR_NEGINT:
-        status = token->value < TA_NAPI_SAFE_UINT ? napi_create_double(env, -1.0 - (double)token->value, out)
-                                                  : ta_napi_reader_negative(env, token->value, out);
+        status = item.value < TA_NAPI_SAFE_UINT ? napi_create_double(env, -1.0 - (double)item.value, out)
+                                                : ta_napi_negative(env, item.value, out);
         break;
-    case TA_CBOR_BYTES: {
-        ta_string_view bytes = ta_cbor_string(document, at);
-        void *data = NULL;
-        napi_value buffer;
-        status = napi_create_arraybuffer(env, bytes.length, &data, &buffer);
-        if (status == napi_ok && bytes.length) memcpy(data, bytes.pointer, bytes.length);
-        if (status == napi_ok) status = napi_create_typedarray(env, napi_uint8_array, bytes.length, buffer, 0, out);
-        break;
-    }
-    case TA_CBOR_TEXT: {
-        ta_string_view text = ta_cbor_string(document, at); /* UTF-8, checked by ta_cbor_decode */
-        status = napi_create_string_utf8(env, text.pointer ? text.pointer : "", text.length, out);
-        break;
-    }
-    case TA_CBOR_ARRAY: {
-        status = napi_create_array_with_length(env, token->count, out);
-        for (uint32_t i = 0; i < token->count && status == napi_ok; i++) {
-            napi_value item;
-            ta_status read = ta_napi_reader_value(reader, &item);
-            if (read != TA_OK) return read;
-            status = napi_set_element(env, *out, i, item);
-        }
+    case TA_CBOR_BYTES: status = ta_napi_values_uint8array(env, item.bytes, out); break;
+    case TA_CBOR_TEXT: status = ta_napi_text_value(env, item.bytes, out); break; /* UTF-8, checked by the reader */
+    case TA_CBOR_ARRAY:
+    case TA_CBOR_MAP: return ta_napi_read_container(decoding, &item, out);
+    case TA_CBOR_TAG: { /* an actor reference: its address */
+        ta_cbor_item address;
+        if (item.value != TA_CBOR_TAG_URI) return TA_ERROR_INVALID;
+        read = ta_napi_read_next(decoding, &address);
+        if (read != TA_OK) return read;
+        if (address.kind != TA_CBOR_TEXT) return TA_ERROR_INVALID;
+        status = ta_napi_text_value(env, address.bytes, out);
         break;
     }
-    case TA_CBOR_MAP: {
-        status = napi_create_object(env, out);
-        for (uint32_t i = 0; i < token->count && status == napi_ok; i++) {
-            if (document->tokens[reader->at].kind != TA_CBOR_TEXT) return TA_ERROR_INVALID; /* keys are text */
-            napi_property_descriptor property;
-            memset(&property, 0, sizeof property);
-            ta_string_view key = ta_cbor_string(document, reader->at++);
-            status = napi_create_string_utf8(env, key.pointer ? key.pointer : "", key.length, &property.name);
-            ta_status read = status == napi_ok ? ta_napi_reader_value(reader, &property.value) : TA_OK;
-            if (read != TA_OK) return read;
-            /* defined, not set: a key "__proto__" is an ordinary key */
-            property.attributes = napi_default_jsproperty;
-            if (status == napi_ok) status = napi_define_properties(env, *out, 1, &property);
-        }
-        break;
-    }
-    case TA_CBOR_TAG: /* an actor reference: its address */
-        if (token->value != TA_CBOR_TAG_URI || document->tokens[reader->at].kind != TA_CBOR_TEXT)
-            return TA_ERROR_INVALID;
-        return ta_napi_reader_value(reader, out);
     case TA_CBOR_SIMPLE:
-        switch (token->value) {
+        switch (item.value) {
         case TA_CBOR_FALSE: status = napi_get_boolean(env, false, out); break;
         case TA_CBOR_TRUE: status = napi_get_boolean(env, true, out); break;
         case TA_CBOR_NULL: status = napi_get_null(env, out); break;
@@ -460,7 +521,7 @@ static ta_status ta_napi_reader_value(ta_napi_reader *reader, napi_value *out) {
         break;
     case TA_CBOR_FLOAT: {
         double number;
-        memcpy(&number, &token->value, sizeof number);
+        memcpy(&number, &item.value, sizeof number);
         status = napi_create_double(env, number, out);
         break;
     }
@@ -469,45 +530,188 @@ static ta_status ta_napi_reader_value(ta_napi_reader *reader, napi_value *out) {
     return status == napi_ok ? TA_OK : TA_ERROR_NO_MEMORY;
 }
 
-ta_status ta_napi_values_decode(ta_napi_scratch *scratch, ta_bytes cbor, napi_value *out) {
-    ta_cbor_token small[64];
-    ta_cbor_document document = {cbor, small, sizeof small / sizeof small[0], 0};
-    ta_status status = ta_cbor_decode(&document);
-    if (status == TA_ERROR_NO_MEMORY) {
-        if (!ta_napi_buffer_reserve(&scratch->read_tokens, (size_t)document.count * sizeof(ta_cbor_token)))
-            return TA_ERROR_NO_MEMORY;
-        document.tokens = (ta_cbor_token *)scratch->read_tokens.pointer;
-        document.capacity = document.count;
-        status = ta_cbor_decode(&document);
-    }
-    if (status == TA_OK) {
-        ta_napi_reader reader = {scratch->env, &document, 0};
-        status = ta_napi_reader_value(&reader, out);
+ta_status ta_napi_values_decode(napi_env env, ta_bytes cbor, napi_value *out) {
+    ta_napi_decoding decoding;
+    decoding.env = env;
+    ta_cbor_reader_init(&decoding.reader, cbor);
+    ta_status status = ta_napi_read(&decoding, out);
+    if (status == TA_OK) { /* the item, whole, and nothing after it */
+        ta_cbor_item rest;
+        int32_t read = ta_cbor_read(&decoding.reader, &rest);
+        if (read) status = read < 0 ? (ta_status)read : TA_ERROR_INVALID;
     }
     return status;
 }
 
+/* ---- copied: the value table without CBOR ------------------------------------------------ */
+
+/* A copy in progress: a room for the strings' check, the containers open,
+ * the first failure. */
+typedef struct ta_napi_copying {
+    ta_napi_room room;
+    uint32_t open;
+    ta_status status;
+} ta_napi_copying;
+
+/* A value to copy, and the levels around it. */
+typedef struct ta_napi_copied {
+    napi_value value;
+    uint32_t depth;
+} ta_napi_copied;
+
+static int ta_napi_copy(ta_napi_copying *copying, const ta_napi_copied *given, napi_value *out);
+
+static napi_value ta_napi_copy_failed(ta_napi_copying *copying, ta_status status) {
+    if (copying->status == TA_OK) copying->status = status;
+    return NULL;
+}
+
+/* A string is shared (strings do not change), once checked as encode
+ * checks it: no lone surrogate. */
+static napi_value ta_napi_copy_text(ta_napi_copying *copying, napi_value value) {
+    size_t length = 0;
+    copying->room.length = 0;
+    ta_status status = ta_napi_text_append(&copying->room, value, &length);
+    return status == TA_OK ? value : ta_napi_copy_failed(copying, status);
+}
+
+/* A BigInt as decode gives it back: a number within ±(2^53-1), else the
+ * BigInt itself. */
+static napi_value ta_napi_copy_bigint(ta_napi_copying *copying, napi_value value) {
+    napi_env env = copying->room.env;
+    ta_napi_integer integer;
+    napi_value number = NULL;
+    ta_status status = ta_napi_bigint_read(env, value, &integer);
+    if (status != TA_OK) return ta_napi_copy_failed(copying, status);
+    if (!integer.negative && integer.n <= TA_NAPI_SAFE_UINT) napi_create_double(env, (double)integer.n, &number);
+    else if (integer.negative && integer.n < TA_NAPI_SAFE_UINT) napi_create_double(env, -1.0 - (double)integer.n, &number);
+    else return value;
+    return number ? number : ta_napi_copy_failed(copying, TA_ERROR_NO_MEMORY);
+}
+
+static napi_value ta_napi_copy_array(ta_napi_copying *copying, const ta_napi_copied *array) {
+    napi_env env = copying->room.env;
+    uint32_t length = 0;
+    napi_value copy, null;
+    napi_get_null(env, &null);
+    if (napi_get_array_length(env, array->value, &length) != napi_ok ||
+        napi_create_array_with_length(env, length, &copy) != napi_ok)
+        return ta_napi_copy_failed(copying, TA_ERROR_INVALID);
+    for (uint32_t i = 0; i < length; i++) {
+        ta_napi_copied item = {NULL, array->depth + 1};
+        napi_value value = null;
+        if (napi_get_element(env, array->value, i, &item.value) != napi_ok ||
+            ta_napi_copy(copying, &item, &value) < 0 || napi_set_element(env, copy, i, value) != napi_ok)
+            return ta_napi_copy_failed(copying, TA_ERROR_INVALID); /* dropped: null in an array */
+    }
+    return copy;
+}
+
+static napi_value ta_napi_copy_members(ta_napi_copying *copying, const ta_napi_copied *object) {
+    napi_env env = copying->room.env;
+    napi_value keys, copy;
+    uint32_t count = 0;
+    if (napi_get_all_property_names(env, object->value, napi_key_own_only, napi_key_enumerable | napi_key_skip_symbols,
+                                    napi_key_numbers_to_strings, &keys) != napi_ok ||
+        napi_get_array_length(env, keys, &count) != napi_ok || napi_create_object(env, &copy) != napi_ok)
+        return ta_napi_copy_failed(copying, TA_ERROR_INVALID);
+    for (uint32_t i = 0; i < count; i++) {
+        napi_property_descriptor property;
+        memset(&property, 0, sizeof property);
+        ta_napi_copied item = {NULL, object->depth + 1};
+        if (napi_get_element(env, keys, i, &property.name) != napi_ok ||
+            napi_get_property(env, object->value, property.name, &item.value) != napi_ok)
+            return ta_napi_copy_failed(copying, TA_ERROR_INVALID);
+        int copied = ta_napi_copy(copying, &item, &property.value);
+        if (copied < 0) return NULL;
+        if (!copied) continue; /* dropped: so is its key */
+        if (!ta_napi_copy_text(copying, property.name)) return NULL;
+        /* defined, not set, as decode does: "__proto__" is an ordinary key */
+        property.attributes = napi_default_jsproperty;
+        if (napi_define_properties(env, copy, 1, &property) != napi_ok)
+            return ta_napi_copy_failed(copying, TA_ERROR_NO_MEMORY);
+    }
+    return copy;
+}
+
+/* A copy of a value whose toJSON was applied and which is kept. */
+static napi_value ta_napi_copy_kept(ta_napi_copying *copying, const ta_napi_copied *kept) {
+    napi_env env = copying->room.env;
+    napi_valuetype type = napi_undefined;
+    ta_bytes bytes;
+    bool array = false;
+    if (napi_typeof(env, kept->value, &type) != napi_ok) return ta_napi_copy_failed(copying, TA_ERROR_INVALID);
+    switch (type) {
+    case napi_null:
+    case napi_boolean:
+    case napi_number: return kept->value; /* a number is what decode gives back */
+    case napi_bigint: return ta_napi_copy_bigint(copying, kept->value);
+    case napi_string: return ta_napi_copy_text(copying, kept->value);
+    case napi_object:
+    case napi_external: break;
+    default: return ta_napi_copy_failed(copying, TA_ERROR_INVALID);
+    }
+    if (ta_napi_values_bytes(env, kept->value, &bytes)) {
+        napi_value copy;
+        if (ta_napi_values_uint8array(env, bytes, &copy) != napi_ok) return ta_napi_copy_failed(copying, TA_ERROR_NO_MEMORY);
+        return copy;
+    }
+    if (napi_is_array(env, kept->value, &array) != napi_ok) return ta_napi_copy_failed(copying, TA_ERROR_INVALID);
+    if (copying->open == TA_NAPI_OPEN_MAX) return ta_napi_copy_failed(copying, TA_ERROR_INVALID);
+    copying->open++;
+    napi_value copy = array ? ta_napi_copy_array(copying, kept) : ta_napi_copy_members(copying, kept);
+    copying->open--;
+    return copy;
+}
+
+/* 1 with the copy in *out, 0 when it is dropped, -1 when it is refused. */
+static int ta_napi_copy(ta_napi_copying *copying, const ta_napi_copied *given, napi_value *out) {
+    ta_napi_copied kept = *given;
+    if (!(kept.value = ta_napi_resolve(copying->room.env, given->value, &kept.depth))) {
+        ta_napi_copy_failed(copying, TA_ERROR_INVALID);
+        return -1;
+    }
+    if (ta_napi_dropped(copying->room.env, kept.value)) return 0;
+    napi_value copy = ta_napi_copy_kept(copying, &kept);
+    if (!copy) return -1;
+    *out = copy;
+    return 1;
+}
+
+ta_status ta_napi_values_copy(napi_env env, napi_value value, napi_value *out) {
+    char stack[256];
+    ta_napi_copying copying;
+    ta_napi_room_init(&copying.room, env, (ta_buffer){stack, sizeof stack, 0});
+    copying.open = 0;
+    copying.status = TA_OK;
+    ta_napi_copied given = {value, 0};
+    int copied = ta_napi_copy(&copying, &given, out);
+    ta_napi_room_free(&copying.room);
+    if (copied < 0) return copying.status != TA_OK ? copying.status : TA_ERROR_INVALID;
+    if (!copied) napi_get_null(env, out); /* dropped at the top: null */
+    return TA_OK;
+}
+
 /* ---- the exports ------------------------------------------------------------- */
 
-/* encode(value) -> Uint8Array: ta_cbor_encode of the value's tokens, on
- * the environment's scratch. */
+/* encode(value) -> Uint8Array: the value written, then copied out. */
 napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value argv[1], result = NULL;
     napi_get_undefined(env, &argv[0]);
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) return NULL;
+    ta_napi_encoder encoder;
+    ta_napi_encoder_init(&encoder, env, NULL);
+    ta_napi_encoder_value(&encoder, argv[0]);
     ta_bytes cbor;
-    ta_status status = ta_napi_values_encode(&ta_napi_module_of(env)->scratch, argv[0], &cbor);
-    if (status != TA_OK) {
-        ta_napi_throw_status(env, "encode", status);
-        return NULL;
-    }
-    if (ta_napi_values_uint8array(env, cbor, &result) != napi_ok) return NULL;
+    ta_status status = ta_napi_encoder_bytes(&encoder, &cbor);
+    if (status != TA_OK) ta_napi_throw_status(env, "encode", status);
+    else if (ta_napi_values_uint8array(env, cbor, &result) != napi_ok) result = NULL;
+    ta_napi_encoder_free(&encoder);
     return result;
 }
 
-/* decode(bytes) -> value: one ta_cbor_decode of the bytes, borrowed, then
- * the values. */
+/* decode(bytes) -> value: the bytes, borrowed, read item by item. */
 napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value argv[1], result = NULL;
@@ -518,7 +722,7 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
         ta_napi_throw_status(env, "decode", TA_ERROR_INVALID);
         return NULL;
     }
-    ta_status status = ta_napi_values_decode(&ta_napi_module_of(env)->scratch, cbor, &result);
+    ta_status status = ta_napi_values_decode(env, cbor, &result);
     if (status != TA_OK) {
         ta_napi_throw_status(env, "decode", status);
         return NULL;
@@ -528,56 +732,6 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
 
 /* ---- for the API ----------------------------------------------------------------- */
 
-ta_status ta_napi_values_texts(ta_napi_scratch *scratch, const ta_napi_texts *texts) {
-    napi_env env = scratch->env;
-    size_t total = 0;
-    for (uint32_t i = 0; i < texts->count; i++) {
-        napi_valuetype type = napi_undefined;
-        size_t units = 0;
-        texts->out[i].pointer = NULL;
-        texts->out[i].length = 0;
-        if (napi_typeof(env, texts->values[i], &type) != napi_ok) return TA_ERROR_INVALID;
-        if (type == napi_undefined) continue;
-        if (type != napi_string || napi_get_value_string_utf16(env, texts->values[i], NULL, 0, &units) != napi_ok)
-            return TA_ERROR_INVALID;
-        total += units * 3;
-    }
-    /* reserved at once: the views stay put while the next is written */
-    if (!ta_napi_buffer_reserve(&scratch->text, total + 1)) return TA_ERROR_NO_MEMORY;
-    size_t at = 0;
-    for (uint32_t i = 0; i < texts->count; i++) {
-        napi_valuetype type = napi_undefined;
-        size_t units = 0;
-        napi_typeof(env, texts->values[i], &type);
-        if (type == napi_undefined) continue;
-        ta_status status = ta_napi_utf16(scratch, texts->values[i], &units);
-        if (status != TA_OK) return status;
-        ta_napi_utf8_out conversion = {(const uint16_t *)scratch->utf16.pointer, units, scratch->text.pointer + at};
-        size_t length = ta_napi_utf8(&conversion);
-        if (length == TA_NIL) return TA_ERROR_INVALID;
-        texts->out[i].pointer = scratch->text.pointer + at;
-        texts->out[i].length = (uint32_t)length;
-        at += length;
-    }
-    return TA_OK;
-}
-
-ta_status ta_napi_values_hold_text(ta_napi_scratch *scratch, napi_value value, ta_napi_held_text *out) {
-    napi_valuetype type = napi_undefined;
-    size_t units = 0;
-    void *data = NULL;
-    if (napi_typeof(scratch->env, value, &type) != napi_ok || type != napi_string) return TA_ERROR_INVALID;
-    ta_status status = ta_napi_utf16(scratch, value, &units);
-    if (status != TA_OK) return status;
-    if (napi_create_arraybuffer(scratch->env, units * 3 + 1, &data, &out->holder) != napi_ok) return TA_ERROR_NO_MEMORY;
-    ta_napi_utf8_out conversion = {(const uint16_t *)scratch->utf16.pointer, units, (char *)data};
-    size_t length = ta_napi_utf8(&conversion);
-    if (length == TA_NIL) return TA_ERROR_INVALID;
-    out->text.pointer = (const char *)data;
-    out->text.length = (uint32_t)length;
-    return TA_OK;
-}
-
 napi_status ta_napi_values_uint8array(napi_env env, ta_bytes bytes, napi_value *out) {
     void *data = NULL;
     napi_value buffer;
@@ -586,50 +740,28 @@ napi_status ta_napi_values_uint8array(napi_env env, ta_bytes bytes, napi_value *
     return status == napi_ok ? napi_create_typedarray(env, napi_uint8_array, bytes.length, buffer, 0, out) : status;
 }
 
-/* Through the datamodel's from_wire: the value as CBOR, read by the
- * datamodel the host runs. */
+/* The native datamodel: a copy; quickjs: CBOR through its from_wire. */
 ta_status ta_napi_values_payload(ta_napi_host *host, napi_value value, ta_payload *out) {
     napi_valuetype type = napi_undefined;
     *out = 0;
     if (napi_typeof(host->env, value, &type) != napi_ok || type == napi_undefined) return TA_OK;
+    if (!host->quickjs) return ta_napi_datamodel_payload(&host->native, value, out);
+    ta_napi_encoder encoder;
+    ta_napi_encoder_init(&encoder, host->env, NULL);
+    ta_napi_encoder_value(&encoder, value);
     ta_bytes cbor;
-    ta_status status = ta_napi_values_encode(&host->scratch, value, &cbor);
-    if (status != TA_OK) return status;
-    return host->binding.vtable->from_wire(host->binding.datamodel, cbor, out);
-}
-
-ta_status ta_napi_wire(ta_napi_scratch *scratch, const ta_napi_writing *writing, ta_bytes *out) {
-    if (!scratch->wire.capacity && !ta_napi_buffer_reserve(&scratch->wire, 1024)) return TA_ERROR_NO_MEMORY;
-    ta_buffer buffer = {scratch->wire.pointer, scratch->wire.capacity, 0};
-    ta_status status = writing->write(writing->context, &buffer);
-    if (status == TA_ERROR_NO_MEMORY && buffer.length > buffer.capacity &&
-        ta_napi_buffer_reserve(&scratch->wire, buffer.length)) {
-        buffer = (ta_buffer){scratch->wire.pointer, scratch->wire.capacity, 0};
-        status = writing->write(writing->context, &buffer);
-    }
-    out->pointer = scratch->wire.pointer;
-    out->length = status == TA_OK ? buffer.length : 0;
+    ta_status status = ta_napi_encoder_bytes(&encoder, &cbor);
+    if (status == TA_OK) status = host->binding.vtable->from_wire(host->binding.datamodel, cbor, out);
+    ta_napi_encoder_free(&encoder);
     return status;
 }
 
-/* A payload's to_wire into the host's wire buffer. */
-typedef struct ta_napi_to_wire_call {
-    const ta_napi_host *host;
-    ta_payload payload;
-} ta_napi_to_wire_call;
-
-static ta_status ta_napi_to_wire_write(void *context, ta_buffer *out) {
-    const ta_napi_to_wire_call *call = (const ta_napi_to_wire_call *)context;
-    return call->host->binding.vtable->to_wire(call->host->binding.datamodel, call->payload, out);
-}
-
-/* Through the datamodel's to_wire, then the value table. */
+/* The native datamodel: a copy; quickjs: its to_wire's view, read. */
 ta_status ta_napi_values_of_payload(ta_napi_host *host, const ta_napi_payload_read *read, napi_value *out) {
     if (!read->payload || read->datamodel != 0)
         return napi_get_undefined(host->env, out) == napi_ok ? TA_OK : TA_ERROR_NO_MEMORY;
-    ta_napi_to_wire_call call = {host, read->payload};
-    ta_napi_writing writing = {ta_napi_to_wire_write, &call};
+    if (!host->quickjs) return ta_napi_datamodel_value(&host->native, read->payload, out);
     ta_bytes cbor;
-    ta_status status = ta_napi_wire(&host->scratch, &writing, &cbor);
-    return status == TA_OK ? ta_napi_values_decode(&host->scratch, cbor, out) : status;
+    ta_status status = host->binding.vtable->to_wire(host->binding.datamodel, read->payload, &cbor);
+    return status == TA_OK ? ta_napi_values_decode(host->env, cbor, out) : status;
 }

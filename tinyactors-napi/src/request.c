@@ -7,25 +7,6 @@
 
 #include <string.h>
 
-/* The reply to `request` (CBOR), in the host's wire buffer, grown until
- * it fits: TA_ERROR_NO_MEMORY means nothing was applied (host.h), so
- * asking again is safe. */
-typedef struct ta_napi_request_call {
-    ta_host *host;
-    ta_bytes request;
-} ta_napi_request_call;
-
-static ta_status ta_napi_request_write(void *context, ta_buffer *out) {
-    const ta_napi_request_call *call = (const ta_napi_request_call *)context;
-    return ta_host_request(call->host, call->request, out);
-}
-
-static ta_status ta_napi_ask(ta_napi_host *host, ta_bytes request, ta_bytes *reply) {
-    ta_napi_request_call call = {host->host, request};
-    ta_napi_writing writing = {ta_napi_request_write, &call};
-    return ta_napi_wire(&host->scratch, &writing, reply);
-}
-
 /* A member of a reply map, or NULL. */
 static napi_value ta_napi_reply_member(napi_env env, napi_value reply, const char *name) {
     bool has = false;
@@ -36,33 +17,31 @@ static napi_value ta_napi_reply_member(napi_env env, napi_value reply, const cha
     return value;
 }
 
-/* request(method, params): {"method", "params", "id"} through the value
- * table, then the result, or the error thrown. */
+/* request(method, params): {"method", "params", "id"} written by the value
+ * table with a writer of this call's, sent with ta_host_request, its reply
+ * (a view of the host's memory until the next call into it) read into
+ * values before anything else runs; then the result, or the error thrown. */
 napi_value ta_napi_request(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     ta_napi_host *host = ta_napi_host_of(env, info, &call);
     if (!host) return NULL;
     /* the caller's values go as they are: core checks them and refuses
      * (bindings.md, section 2: "It decides no policy") */
-    napi_valuetype type = napi_undefined;
-    napi_value message, id;
-    napi_create_object(env, &message);
-    napi_set_named_property(env, message, "method", call.argv[0]);
-    if (napi_typeof(env, call.argv[1], &type) == napi_ok && type != napi_undefined)
-        napi_set_named_property(env, message, "params", call.argv[1]);
-    napi_create_uint32(env, 1, &id);
-    napi_set_named_property(env, message, "id", id);
-    ta_bytes request;
-    ta_status status = ta_napi_values_encode(&host->scratch, message, &request);
-    if (status != TA_OK) {
-        ta_napi_throw_status(env, "ta_host_request", status);
-        return NULL;
-    }
-    ta_bytes reply;
-    status = ta_napi_ask(host, request, &reply);
-    if (!host->running) ta_napi_datamodel_drain(&host->native); /* a request can release payloads */
+    ta_napi_encoder encoder;
+    ta_napi_encoder_init(&encoder, env, NULL);
+    ta_cbor_write_map(&encoder.writer, TA_CBOR_COUNT_LATER);
+    ta_napi_encoder_member(&encoder, "method", call.argv[0]);
+    ta_napi_encoder_member(&encoder, "params", call.argv[1]);
+    ta_cbor_write_text(&encoder.writer, (ta_string_view){"id", 2});
+    ta_cbor_write_uint(&encoder.writer, 1);
+    ta_cbor_write_end(&encoder.writer);
+    ta_bytes request, reply;
     napi_value value = NULL;
-    if (status == TA_OK) status = ta_napi_values_decode(&host->scratch, reply, &value);
+    ta_status status = ta_napi_encoder_bytes(&encoder, &request);
+    if (status == TA_OK) status = ta_host_request(host->host, request, &reply);
+    if (status == TA_OK) status = ta_napi_values_decode(env, reply, &value);
+    ta_napi_encoder_free(&encoder);
+    if (!host->running) ta_napi_datamodel_drain(&host->native); /* a request can release payloads */
     if (status != TA_OK) {
         ta_napi_throw_status(env, "ta_host_request", status);
         return NULL;
@@ -85,9 +64,9 @@ ta_status ta_napi_host_read_ticks(ta_napi_host *host) {
     static const unsigned char request[] = {0xa2, 0x62, 'i', 'd', 0x01, 0x66, 'm', 'e', 't', 'h', 'o', 'd',
                                             0x6b, 'h',  'o', 's', 't', '.',  'c', 'o', 'n', 'f', 'i', 'g'};
     ta_bytes reply;
-    ta_status status = ta_napi_ask(host, (ta_bytes){request, sizeof request}, &reply);
+    ta_status status = ta_host_request(host->host, (ta_bytes){request, sizeof request}, &reply);
     napi_value value = NULL, result, system, ticks;
-    if (status == TA_OK) status = ta_napi_values_decode(&host->scratch, reply, &value);
+    if (status == TA_OK) status = ta_napi_values_decode(env, reply, &value);
     double rate = 0;
     if (status != TA_OK || !(result = ta_napi_reply_member(env, value, "result")) ||
         !(system = ta_napi_reply_member(env, result, "system")) ||
@@ -100,7 +79,7 @@ ta_status ta_napi_host_read_ticks(ta_napi_host *host) {
 
 void ta_napi_throw_config(napi_env env, ta_bytes bytes) {
     napi_value refusal, error;
-    if (ta_napi_values_decode(&ta_napi_module_of(env)->scratch, bytes, &refusal) != TA_OK ||
+    if (ta_napi_values_decode(env, bytes, &refusal) != TA_OK ||
         !(error = ta_napi_reply_member(env, refusal, "error"))) {
         ta_napi_throw_status(env, "ta_host_create", TA_ERROR_INVALID);
         return;

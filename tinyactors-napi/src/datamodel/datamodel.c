@@ -7,12 +7,15 @@
  * Each entry opens a handle scope of its own (a run is one native call,
  * so handles would pile up until it returns), clears what an expression
  * threw and answers TA_ERROR_EXECUTION, so core raises error.execution.
- * What crosses to another actor is copied through the value table
- * (bindings.md, section 8, "Actors share no mutable value").
+ * What crosses to another actor is copied by the value table
+ * (ta_napi_values_copy; bindings.md, section 8, "Actors share no mutable
+ * value").
  *
  * Sessions, charts, payloads and iterations are rows of the datamodel's
- * tables (handles.c); text goes through the datamodel's scratch. Nothing
- * here allocates (AGENTS.md, "The binding's memory"). */
+ * tables (handles.c). Text an entry puts together is in a room of that
+ * entry's own; what core reads back (to_wire's bytes, eval_string's and
+ * log's strings) is the datamodel's last output, kept until its next call.
+ * Nothing here calls an allocator (AGENTS.md, "The binding's memory"). */
 #include "datamodel.h"
 
 #include <string.h>
@@ -104,17 +107,19 @@ static napi_status ta_napi_realm(napi_env env, const ta_napi_realm_call *call, n
 
 /* <content> text (SCXML B.2): JSON if it parses, else its text with each
  * run of whitespace one space, trimmed (quickjs's content_value; its
- * small XML DOM is the W3C suite's, M2), put together in the datamodel's
- * text buffer. */
+ * small XML DOM is the W3C suite's, M2), put together in a room of the
+ * call's. */
 static ta_status ta_napi_content(ta_napi_entry *entry, ta_string_view source, napi_value *out) {
     napi_env env = entry->datamodel->env;
     ta_napi_realm_call parse = {"JSON", "parse", ta_napi_text(env, source)};
     if (parse.argument && ta_napi_realm(env, &parse, out) == napi_ok) return TA_OK;
     napi_value thrown;
     napi_get_and_clear_last_exception(env, &thrown);
-    ta_napi_buffer *buffer = &entry->datamodel->scratch.text;
-    if (!ta_napi_buffer_reserve(buffer, source.length + 1)) return TA_ERROR_NO_MEMORY;
-    char *normal = buffer->pointer;
+    char stack[256];
+    ta_napi_room room;
+    ta_napi_room_init(&room, env, (ta_buffer){stack, sizeof stack, 0});
+    if (!ta_napi_room_reserve(&room, (size_t)source.length + 1)) return TA_ERROR_NO_MEMORY;
+    char *normal = room.pointer;
     size_t length = 0;
     for (uint32_t i = 0; i < source.length; i++) {
         char c = source.pointer[i];
@@ -126,7 +131,9 @@ static ta_status ta_napi_content(ta_napi_entry *entry, ta_string_view source, na
     }
     while (length && normal[length - 1] == ' ')
         length--;
-    return ta_napi_executed(napi_create_string_utf8(env, normal, length, out));
+    ta_status status = ta_napi_executed(napi_create_string_utf8(env, normal, length, out));
+    ta_napi_room_free(&room);
+    return status;
 }
 
 /* The function of expression `expression` in `functions` (the chart's
@@ -202,12 +209,13 @@ static ta_status ta_napi_assign_to(ta_napi_entry *entry, ta_expression location,
     return ta_napi_executed(napi_call_function(env, undefined, function, 2, argv, &result));
 }
 
-/* A string core reads back: a view into the datamodel's text buffer, valid
+/* A string core reads back: a view of the datamodel's last output, valid
  * until the datamodel's next call (datamodel.h: "valid until the next call
  * on the same datamodel instance"). */
 static ta_status ta_napi_string_out(ta_napi_entry *entry, napi_value value, ta_string_view *out) {
     ta_napi_texts texts = {&value, 1, out};
-    return ta_napi_values_texts(&entry->datamodel->scratch, &texts) == TA_OK ? TA_OK : TA_ERROR_EXECUTION;
+    entry->datamodel->output.length = 0;
+    return ta_napi_values_texts(&entry->datamodel->output, &texts) == TA_OK ? TA_OK : TA_ERROR_EXECUTION;
 }
 
 /* ---- In() ---------------------------------------------------------------------------- */
@@ -223,10 +231,14 @@ static napi_value ta_napi_in(napi_env env, napi_callback_info info) {
     int in = 0;
     ta_string_view id;
     ta_napi_texts texts = {argv, 1, &id};
-    if (argc >= 1 && datamodel->environment && chart && ta_napi_values_texts(&datamodel->scratch, &texts) == TA_OK) {
+    char stack[128];
+    ta_napi_room room;
+    ta_napi_room_init(&room, env, (ta_buffer){stack, sizeof stack, 0});
+    if (argc >= 1 && datamodel->environment && chart && ta_napi_values_texts(&room, &texts) == TA_OK) {
         uint32_t state = ta_image_state_by_name(chart->image, chart->chart, id);
         in = state != TA_NIL && ta_datamodel_environment_in(datamodel->environment, state);
     }
+    ta_napi_room_free(&room);
     napi_get_boolean(env, in, &result);
     return result;
 }
@@ -610,14 +622,12 @@ static void ta_napi_foreach_end(const ta_datamodel_call *call, const ta_datamode
     ta_napi_table_remove(&datamodel->iterations, loop->iter);
 }
 
-/* A payload holding a copy of `value` through the value table: what
- * crosses to another actor shares nothing with the sender (bindings.md,
- * section 8). A value outside the table fails it. */
+/* A payload holding a copy of `value` by the value table, without CBOR:
+ * what crosses to another actor shares nothing with the sender
+ * (bindings.md, section 8). A value outside the table fails it. */
 static ta_status ta_napi_payload_copy(ta_napi_datamodel *datamodel, napi_value value, ta_payload *out) {
-    ta_bytes cbor;
     napi_value copy;
-    ta_status status = ta_napi_values_encode(&datamodel->scratch, value, &cbor);
-    if (status == TA_OK) status = ta_napi_values_decode(&datamodel->scratch, cbor, &copy);
+    ta_status status = ta_napi_values_copy(datamodel->env, value, &copy);
     if (status != TA_OK) return status;
     *out = ta_napi_payload_add(datamodel, copy);
     return *out ? TA_OK : TA_ERROR_NO_MEMORY;
@@ -654,7 +664,7 @@ static ta_status ta_napi_capture(const ta_datamodel_call *call, const ta_datamod
     }
     if (status == TA_OK) {
         status = ta_napi_payload_copy(entry.datamodel, value, out);
-        if (status == TA_ERROR_INVALID || status == TA_ERROR_STATE) status = TA_ERROR_EXECUTION;
+        if (status == TA_ERROR_INVALID) status = TA_ERROR_EXECUTION;
     }
     return ta_napi_leave(&entry, status);
 }
@@ -668,24 +678,29 @@ static void ta_napi_release(void *data, ta_payload payload) {
     ta_napi_payload_drop((ta_napi_datamodel *)data, payload);
 }
 
-static ta_status ta_napi_to_wire(void *data, ta_payload payload, ta_buffer *out) {
+/* The payload as CBOR, written once into the datamodel's last output (a
+ * value that outgrew it is copied into it, which grows to the largest):
+ * a view until the datamodel's next call (datamodel.h). Core calls it
+ * outside a run with the run's rules, so a toJSON that calls the Host
+ * back cannot reach this datamodel meanwhile (ADR 0010, decision 3). */
+static ta_status ta_napi_to_wire(void *data, ta_payload payload, ta_bytes *out) {
     ta_napi_datamodel *datamodel = (ta_napi_datamodel *)data;
     napi_handle_scope handles;
+    *out = (ta_bytes){NULL, 0};
     if (napi_open_handle_scope(datamodel->env, &handles) != napi_ok) return TA_ERROR_NO_MEMORY;
     napi_value value;
-    ta_bytes cbor = {NULL, 0};
-    ta_status status = ta_napi_payload_value(datamodel, payload, &value)
-                           ? ta_napi_values_encode(&datamodel->scratch, value, &cbor)
-                           : TA_ERROR_INVALID;
+    ta_status status = TA_ERROR_INVALID;
+    if (ta_napi_payload_value(datamodel, payload, &value)) {
+        ta_napi_encoder encoder;
+        ta_napi_encoder_init(&encoder, datamodel->env, &datamodel->output);
+        ta_napi_encoder_value(&encoder, value);
+        status = ta_napi_encoder_keep(&encoder, &datamodel->output, out);
+        ta_napi_encoder_free(&encoder);
+    }
     napi_value thrown;
     if (ta_napi_exception_pending(datamodel->env)) napi_get_and_clear_last_exception(datamodel->env, &thrown);
     napi_close_handle_scope(datamodel->env, handles);
-    if (status == TA_OK) {
-        out->length = cbor.length;
-        if (cbor.length > out->capacity) status = TA_ERROR_NO_MEMORY;
-        else if (cbor.length) memcpy(out->pointer, cbor.pointer, cbor.length);
-    }
-    return status == TA_ERROR_STATE ? TA_ERROR_INVALID : status;
+    return status;
 }
 
 static ta_status ta_napi_from_wire(void *data, ta_bytes cbor, ta_payload *out) {
@@ -693,7 +708,7 @@ static ta_status ta_napi_from_wire(void *data, ta_bytes cbor, ta_payload *out) {
     napi_handle_scope handles;
     if (napi_open_handle_scope(datamodel->env, &handles) != napi_ok) return TA_ERROR_NO_MEMORY;
     napi_value value;
-    ta_status status = ta_napi_values_decode(&datamodel->scratch, cbor, &value);
+    ta_status status = ta_napi_values_decode(datamodel->env, cbor, &value);
     if (status == TA_OK) {
         *out = ta_napi_payload_add(datamodel, value);
         if (!*out) status = TA_ERROR_NO_MEMORY;
@@ -759,7 +774,7 @@ int ta_napi_datamodel_init(ta_napi_datamodel *datamodel, napi_env env) {
     memset(datamodel, 0, sizeof *datamodel);
     datamodel->env = env;
     datamodel->drops.env = env;
-    datamodel->scratch.env = env;
+    ta_napi_room_init(&datamodel->output, env, (ta_buffer){NULL, 0, 0});
     datamodel->payloads.row_size = sizeof(ta_napi_payload_row);
     datamodel->sessions.row_size = sizeof(ta_napi_session_row);
     datamodel->charts.row_size = sizeof(ta_napi_chart_row);
@@ -813,11 +828,21 @@ void ta_napi_datamodel_release(ta_napi_datamodel *datamodel) {
     if (datamodel->in) ta_napi_defer_drop(&datamodel->drops, datamodel->in);
     datamodel->helpers = datamodel->in = NULL;
     ta_napi_drops_free(&datamodel->drops);
-    ta_napi_scratch_free(&datamodel->scratch);
+    ta_napi_room_free(&datamodel->output);
 }
 
 uint32_t ta_napi_datamodel_drain(ta_napi_datamodel *datamodel) {
     return datamodel->live ? ta_napi_drops_drain(&datamodel->drops) : 0;
+}
+
+ta_status ta_napi_datamodel_payload(ta_napi_datamodel *datamodel, napi_value value, ta_payload *out) {
+    return ta_napi_payload_copy(datamodel, value, out);
+}
+
+ta_status ta_napi_datamodel_value(ta_napi_datamodel *datamodel, ta_payload payload, napi_value *out) {
+    napi_value value;
+    if (!ta_napi_payload_value(datamodel, payload, &value)) return napi_get_undefined(datamodel->env, out) == napi_ok ? TA_OK : TA_ERROR_NO_MEMORY;
+    return ta_napi_values_copy(datamodel->env, value, out);
 }
 
 ta_datamodel_binding ta_napi_datamodel_binding(ta_napi_datamodel *datamodel) {

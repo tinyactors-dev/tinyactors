@@ -12,7 +12,7 @@
 
 /* `pre` + source + `post`, run as a script: the function it gives, or
  * undefined when it did not compile (the exception is cleared). The text
- * is put together in the datamodel's text buffer. */
+ * is put together in a room of the call's. */
 typedef struct ta_napi_wrapping {
     const char *pre;
     ta_string_view source;
@@ -24,13 +24,16 @@ static napi_value ta_napi_compile_wrapped(ta_napi_datamodel *datamodel, const ta
     size_t pre = strlen(wrapping->pre), post = strlen(wrapping->post), length = pre + wrapping->source.length + post;
     napi_value script, function = NULL, undefined;
     napi_get_undefined(env, &undefined);
-    ta_napi_buffer *text = &datamodel->scratch.text;
-    if (!ta_napi_buffer_reserve(text, length)) return undefined;
-    memcpy(text->pointer, wrapping->pre, pre);
-    if (wrapping->source.length) memcpy(text->pointer + pre, wrapping->source.pointer, wrapping->source.length);
-    memcpy(text->pointer + pre + wrapping->source.length, wrapping->post, post);
-    if (napi_create_string_utf8(env, text->pointer, length, &script) != napi_ok ||
-        napi_run_script(env, script, &function) != napi_ok) {
+    char stack[512];
+    ta_napi_room text;
+    ta_napi_room_init(&text, env, (ta_buffer){stack, sizeof stack, 0});
+    if (!ta_napi_room_reserve(&text, length)) return undefined;
+    memcpy(text.pointer, wrapping->pre, pre);
+    if (wrapping->source.length) memcpy(text.pointer + pre, wrapping->source.pointer, wrapping->source.length);
+    memcpy(text.pointer + pre + wrapping->source.length, wrapping->post, post);
+    napi_status status = napi_create_string_utf8(env, text.pointer, length, &script);
+    ta_napi_room_free(&text);
+    if (status != napi_ok || napi_run_script(env, script, &function) != napi_ok) {
         napi_value thrown;
         napi_get_and_clear_last_exception(env, &thrown);
         return undefined;

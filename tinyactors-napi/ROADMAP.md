@@ -240,6 +240,27 @@ bindings.md section 6, "The binding allocates almost nothing"; AGENTS.md,
   on both datamodels: protocol 104 pass, 65 skipped (C-level and
   reference-only cases), scenarios 4 of 4.
 
+ADR 0010 (outputs are views, values stream), at the coordinator's
+request, after core implemented it (`2eef3d25..ad11e7ea`):
+
+- Nested calls share nothing: this commit. The scratch sets (per
+  environment, host and native datamodel) and their refusals (an encode
+  while one ran, sendMany while batching, compile while compiling) are
+  gone: a getter of `send()`'s data that sent, or a `toJSON` that encoded
+  on the same owner, was refused with `TA_ERROR_STATE`, and a nested
+  request could overwrite the outer one's reply. Each call has its own
+  `ta_cbor_writer` and text room, starting on the C stack and grown
+  through the addon's allocator (`ta_napi_allocator`), freed before it
+  returns; values stream (`ta_cbor_writer`, `ta_cbor_reader`; the token
+  lists and `ta_napi_wire`'s retries are gone); the host's outputs
+  (`ta_host_request`'s reply, `ta_host_envelope`) are views read into
+  values at once; payloads between the API and the native datamodel are
+  copied by the value table (`ta_napi_values_copy`), CBOR only toward
+  quickjs and in envelopes; the native datamodel's last output (to_wire,
+  eval_string, log) is the one buffer it keeps; `sendMany` goes in
+  batches of 64 from the stack. `test/memory.test.mjs` holds the nested
+  calls.
+
 ## Later milestones
 
 From the root ROADMAP.md, step 8: the whole W3C suite (M2), every effect,

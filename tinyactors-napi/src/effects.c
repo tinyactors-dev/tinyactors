@@ -55,27 +55,16 @@ static void ta_napi_record_data(const ta_napi_record *record, const char *name) 
     napi_set_named_property(host->env, record->object, name, value);
 }
 
-/* A PEER or PEER_ERROR effect as envelope bytes, written into the host's
- * wire buffer (ta_host_envelope), then into a Uint8Array. */
-typedef struct ta_napi_envelope_call {
-    ta_host *host;
-    const ta_host_effect *effect;
-} ta_napi_envelope_call;
-
-static ta_status ta_napi_envelope_write(void *context, ta_buffer *out) {
-    const ta_napi_envelope_call *call = (const ta_napi_envelope_call *)context;
-    return ta_host_envelope(call->host, call->effect, out);
-}
-
+/* A PEER or PEER_ERROR effect as envelope bytes (ta_host_envelope: a view
+ * of the host's memory until the next call into it), copied into a
+ * Uint8Array at once. */
 static void ta_napi_record_envelope(const ta_napi_record *record) {
     ta_napi_host *host = record->host;
     napi_env env = host->env;
     const ta_host_effect *effects = NULL;
     ta_host_effects(host->host, &effects);
-    ta_napi_envelope_call call = {host->host, &effects[record->index]};
-    ta_napi_writing writing = {ta_napi_envelope_write, &call};
     ta_bytes envelope;
-    ta_status status = ta_napi_wire(&host->scratch, &writing, &envelope);
+    ta_status status = ta_host_envelope(host->host, &effects[record->index], &envelope);
     napi_value value;
     if (status == TA_OK && ta_napi_values_uint8array(env, envelope, &value) == napi_ok)
         napi_set_named_property(env, record->object, "envelope", value);
@@ -87,15 +76,7 @@ static void ta_napi_record_envelope(const ta_napi_record *record) {
 
 /* A retired segment: its image is let go (bindings.md, section 4). */
 static void ta_napi_segment_freed(ta_napi_host *host, uint32_t index) {
-    uint32_t segment = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT);
-    for (uint32_t i = 0; i < host->images.count; i++) {
-        ta_napi_image *image = (ta_napi_image *)ta_napi_table_row(&host->images, i);
-        if (!image || image->segment != segment) continue;
-        napi_delete_reference(host->env, image->bytes);
-        napi_delete_reference(host->env, image->view);
-        ta_napi_table_remove(&host->images, (uint64_t)image->row.generation << 32 | (uint64_t)(i + 1));
-        return;
-    }
+    ta_napi_image_free(host, (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT));
 }
 
 /* The handler on[name], called with the record; nothing when there is none. */

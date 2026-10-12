@@ -17,17 +17,17 @@ const napi_type_tag ta_napi_clock_tag = {0x7461636c6f636b4eu, 0x41504963636c6f63
  * (docs/decisions.md, "The run budget"). */
 #define TA_NAPI_RUN_BUDGET 100000u
 
-/* A simulated clock and the hosts it drives. */
+/* A simulated clock and the hosts it drives, rows of a table (handles.c). */
 struct ta_napi_clock {
     double milliseconds;
-    ta_napi_buffer hosts; /* ta_napi_host *, `count` of them */
-    uint32_t count;
-    ta_napi_buffer self;  /* this struct's memory */
+    ta_napi_table hosts;    /* ta_napi_driven rows */
+    ta_allocator allocator; /* this struct's */
 };
 
-static ta_napi_host **ta_napi_clock_hosts(const ta_napi_clock *clock) {
-    return (ta_napi_host **)clock->hosts.pointer;
-}
+typedef struct ta_napi_driven {
+    ta_napi_row row;
+    ta_napi_host *host;
+} ta_napi_driven;
 
 /* ---- the runtime's globals ------------------------------------------------------------ */
 
@@ -272,17 +272,18 @@ void ta_napi_loop_advance(ta_napi_host *host) {
 /* ---- SimulatedClock ------------------------------------------------------------------------- */
 
 ta_status ta_napi_clock_add(ta_napi_clock *clock, ta_napi_host *host) {
-    if (!ta_napi_buffer_reserve(&clock->hosts, ((size_t)clock->count + 1) * sizeof(ta_napi_host *)))
-        return TA_ERROR_NO_MEMORY;
-    ta_napi_clock_hosts(clock)[clock->count++] = host;
+    uint64_t handle = ta_napi_table_add(&clock->hosts);
+    ta_napi_driven *driven = (ta_napi_driven *)ta_napi_table_get(&clock->hosts, handle);
+    if (!driven) return TA_ERROR_NO_MEMORY;
+    driven->host = host;
     return TA_OK;
 }
 
 void ta_napi_clock_forget(ta_napi_clock *clock, ta_napi_host *host) {
-    ta_napi_host **hosts = ta_napi_clock_hosts(clock);
-    for (uint32_t i = 0; i < clock->count; i++) {
-        if (hosts[i] != host) continue;
-        hosts[i] = hosts[--clock->count];
+    for (uint32_t i = 0; i < clock->hosts.count; i++) {
+        ta_napi_driven *driven = (ta_napi_driven *)ta_napi_table_row(&clock->hosts, i);
+        if (!driven || driven->host != host) continue;
+        ta_napi_table_remove(&clock->hosts, ta_napi_table_handle(&clock->hosts, i));
         return;
     }
 }
@@ -291,26 +292,29 @@ static void ta_napi_clock_finalize(node_api_basic_env env, void *data, void *hin
     (void)env;
     (void)hint;
     ta_napi_clock *clock = (ta_napi_clock *)data;
-    for (uint32_t i = 0; i < clock->count; i++)
-        ta_napi_clock_hosts(clock)[i]->clock = NULL;
-    ta_napi_buffer_free(&clock->hosts);
-    ta_napi_buffer self = clock->self;
-    ta_napi_buffer_free(&self);
+    for (uint32_t i = 0; i < clock->hosts.count; i++) {
+        ta_napi_driven *driven = (ta_napi_driven *)ta_napi_table_row(&clock->hosts, i);
+        if (driven) driven->host->clock = NULL;
+    }
+    ta_napi_table_free(&clock->hosts);
+    ta_allocator allocator = clock->allocator;
+    allocator.free(allocator.context, clock, sizeof *clock);
 }
 
 static napi_value ta_napi_clock_new(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     if (!ta_napi_call_read(env, info, &call)) return NULL;
-    ta_napi_buffer memory = {NULL, 0};
-    if (!ta_napi_buffer_reserve(&memory, sizeof(ta_napi_clock))) {
+    ta_allocator allocator = ta_napi_allocator(env);
+    ta_napi_clock *clock = (ta_napi_clock *)allocator.alloc(allocator.context, sizeof(ta_napi_clock), 8);
+    if (!clock) {
         ta_napi_throw_status(env, "SimulatedClock", TA_ERROR_NO_MEMORY);
         return NULL;
     }
-    ta_napi_clock *clock = (ta_napi_clock *)memory.pointer;
     memset(clock, 0, sizeof *clock);
-    clock->self = memory;
+    clock->allocator = allocator;
+    clock->hosts.row_size = sizeof(ta_napi_driven);
     if (napi_wrap(env, call.self, clock, ta_napi_clock_finalize, NULL, NULL) != napi_ok) {
-        ta_napi_buffer_free(&memory);
+        allocator.free(allocator.context, clock, sizeof *clock);
         return NULL;
     }
     napi_type_tag_object(env, call.self, &ta_napi_clock_tag);
@@ -341,8 +345,12 @@ static napi_value ta_napi_clock_increment(napi_env env, napi_callback_info info)
         return NULL;
     }
     clock->milliseconds += milliseconds;
-    for (uint32_t i = 0; i < clock->count && !ta_napi_exception_pending(env); i++)
-        ta_napi_loop_turn(ta_napi_clock_hosts(clock)[i]);
+    /* by index, the row read again each time: a turn may close a host or
+     * make one on this clock (the table may grow) */
+    for (uint32_t i = 0; i < clock->hosts.count && !ta_napi_exception_pending(env); i++) {
+        ta_napi_driven *driven = (ta_napi_driven *)ta_napi_table_row(&clock->hosts, i);
+        if (driven) ta_napi_loop_turn(driven->host);
+    }
     return NULL;
 }
 

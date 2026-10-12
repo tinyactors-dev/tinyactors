@@ -1,5 +1,15 @@
 id: allocation-in-tables-and-host
 snapshots:
+  ? int ta_napi_buffer_reserve(ta_napi_buffer *buffer, size_t need) { char *pointer = (char *)realloc(buffer->pointer, need); return pointer != NULL; }
+  : labels:
+    - source: realloc(buffer->pointer, need)
+      style: primary
+      start: 90
+      end: 120
+    - source: realloc
+      style: secondary
+      start: 90
+      end: 97
   static char *ta_napi_grow(char *text, size_t length) { return (char *)realloc(text, length); }:
     labels:
     - source: realloc(text, length)
@@ -30,3 +40,13 @@ snapshots:
       style: secondary
       start: 60
       end: 66
+  void ta_napi_room_free(ta_napi_room *room) { free(room->pointer); }:
+    labels:
+    - source: free(room->pointer)
+      style: primary
+      start: 45
+      end: 64
+    - source: free
+      style: secondary
+      start: 45
+      end: 49

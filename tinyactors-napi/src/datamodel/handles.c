@@ -75,6 +75,10 @@ void *ta_napi_table_row(const ta_napi_table *table, uint32_t index) {
     return row->references ? row : NULL;
 }
 
+uint64_t ta_napi_table_handle(const ta_napi_table *table, uint32_t index) {
+    return index < table->count ? ta_napi_handle(index, ta_napi_slot(table, index)->generation) : 0;
+}
+
 void ta_napi_table_free(ta_napi_table *table) {
     free(table->rows.pointer);
     table->rows.pointer = NULL;

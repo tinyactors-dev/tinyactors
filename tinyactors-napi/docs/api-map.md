@@ -27,8 +27,8 @@ commit that adds the item removes the mark.
 
 | API item | Core | Notes |
 |---|---|---|
-| `encode(value): Uint8Array` | `ta_cbor_encode` | The value table (`docs/values.md`) as tokens built by `src/values.c`, written in one call; the same conversion as requests and event data. The adapter writes the driver's frames with it. |
-| `decode(bytes): unknown` | `ta_cbor_decode` | One call into tokens, then JavaScript values by the same table; what it cannot read is refused, never made into a value. The adapter reads the driver's frames with it. |
+| `encode(value): Uint8Array` | `ta_cbor_writer_init`, `ta_cbor_writer_bytes`, `ta_cbor_writer_free` | The value table (`docs/values.md`) written item by item by `src/values.c` with core's streaming writer, into a room of the call's; the same conversion as requests and event data. The adapter writes the driver's frames with it. |
+| `decode(bytes): unknown` | `ta_cbor_reader_init`, `ta_cbor_read` | Item by item with core's reader, straight into JavaScript values by the same table; what it cannot read is refused, never made into a value. The adapter reads the driver's frames with it. |
 | `TinyactorsError` (`code`, `reason`, `path`, `status`) | `ta_host_request`, `ta_host_create`, `TA_ERROR_INVALID` | What core refused: a request's or a config's error reply, unchanged (`code`, `reason`, `path`, the message), or a call's status (`status`; the message names the call and the status, as the Python binding's). `docs/decisions.md`, "Errors". |
 | `OK`, `ERROR_EXECUTION` … `ERROR_ABORTED` | `TA_OK`, `TA_ERROR_EXECUTION`, `TA_ERROR_COMMUNICATION`, `TA_ERROR_INVALID`, `TA_ERROR_NO_MEMORY`, `TA_ERROR_STALE`, `TA_ERROR_STATE`, `TA_ERROR_UNSUPPORTED`, `TA_ERROR_FATAL`, `TA_ERROR_ABORTED` | Core's statuses by name, to match a `TinyactorsError`'s `status` on; the Python binding's module constants. |
 | `compile(charts, {resolve}): Uint8Array` | `ta_compile_charts`, `ta_compile_image`, `ta_compile_diagnostics`, `ta_compile_free` | The charts (`{name, text}`) into one image's bytes; `resolve({base, source})` answers a static `src` (`ta_compile_options.resolve`). Refused: `TinyactorsError` with core's `diagnostics`. |
@@ -37,7 +37,7 @@ commit that adds the item removes the mark.
 | `host.boot(segment)` | `ta_host_boot` | The actors a system image declares; then the turn. |
 | `host.spawn(chart, {name, params, traceparent}): bigint` | `ta_host_chart`, `ta_host_spawn`, `ta_host_advance_time` | The current version of the chart named; `params` made a payload of the host's datamodel; the clocks advanced first (bindings.md, section 7); the session; then the turn. |
 | `host.send(session, event, data)` | `ta_host_send` | `data` made a payload of the host's datamodel; then the turn. |
-| `host.sendMany([{session, event, data}]): number` | `ta_host_send_many` | One batch; the length of the accepted prefix (the rest are released). |
+| `host.sendMany([{session, event, data}]): number` | `ta_host_send_many` | In batches of 64 from the stack; the length of the accepted prefix (the rest are released). Each item's session and event are checked first; a payload refused in a later batch throws after the earlier batches' turn. |
 | `host.terminate(session)` | `ta_host_terminate` | Then the turn. |
 | `host.request(method, params): unknown` | `ta_host_request` | `{"method", "params", "id"}` by the value table; the `result`, or the `error` thrown as `TinyactorsError`; a reply that does not fit is asked again in the length it needs. |
 | `host.addPeer({id, trusted}): bigint` | `ta_host_peer_add`, `TA_PEER_TRUSTED` | The peer. |
@@ -60,9 +60,12 @@ that no row above names, grouped by why (M1, 2026-10-12).
 - the loop and the effect records: `ta_host_effects`, `ta_host_effects_ack`,
   `ta_host_effect_number`, `ta_host_effect_text` (`src/loop.c`,
   `src/effects.c`);
-- the value table and requests: `ta_cbor_encode`, `ta_cbor_decode`,
-  `ta_cbor_string` (`src/values.c`), and `ta_host_request` with
-  `host.config` for the host's tick rate (`src/request.c`);
+- the value table and requests: `ta_cbor_write_map`, `ta_cbor_write_array`,
+  `ta_cbor_write_end`, `ta_cbor_write_text`, `ta_cbor_write_bytes`,
+  `ta_cbor_write_uint`, `ta_cbor_write_int`, `ta_cbor_write_negative`,
+  `ta_cbor_write_float`, `ta_cbor_write_simple` (`src/values.c`,
+  `src/request.c`), and `ta_host_request` with `host.config` for the
+  host's tick rate (`src/request.c`);
 - the native datamodel: `ta_datamodel_environment_in`,
   `ta_datamodel_environment_charge`, `ta_image_expression`,
   `ta_image_expression_count`, `ta_image_data`, `ta_image_data_count`,
@@ -111,10 +114,11 @@ that no row above names, grouped by why (M1, 2026-10-12).
   with `ta_host_traces` and `ta_host_logs` (M3).
 - `ta_address_*`: addresses are core's (bindings.md, section 2: "no
   twin of C"); an actor reference is its address text (`docs/values.md`).
-- `ta_cbor_write_*`, `ta_cbor_finish`, `ta_cbor_member`, `ta_cbor_next`,
-  `ta_cbor_diagnostic`: core's token writer and readers for C; the value
-  table builds its tokens itself and reads them in one walk
-  (`src/values.c`).
+- `ta_cbor_decode`, `ta_cbor_string`, `ta_cbor_member`, `ta_cbor_next`,
+  `ta_cbor_diagnostic`, `ta_cbor_write_tag`: core's token index and
+  diagnostic notation for C, and a tag the value table never writes (an
+  actor reference is read as its address text); the value table streams
+  with the writer and the reader (`src/values.c`).
 - `ta_image_*` beyond the native datamodel's, `ta_datamodel_null`: core
   binds the null datamodel itself; an image is opened by `addImage`.
 - `ta_datamodel_ecmascript_payload_eval`,

@@ -39,7 +39,7 @@ Node-API class cannot extend `Error`), exported by the package:
   `reason` and `path`, unchanged (bindings.md, section 10: "An `error`
   becomes the language's exception, with its `code`, `reason`, `path` and
   `message` unchanged");
-- a call that returned a status (`ta_host_spawn`, `ta_cbor_decode`, the
+- a call that returned a status (`ta_host_spawn`, `ta_cbor_read`, the
   value table refusing a value): `status`, the `ta_status` of `types.h`
   (-3 for `TA_ERROR_INVALID`), and as its message the status's name in
   `types.h` (`TA_ERROR_INVALID`), since core gives such a call no message
@@ -48,12 +48,12 @@ Node-API class cannot extend `Error`), exported by the package:
 
 `decode` and `encode` refuse with it too: `status` -3
 (`TA_ERROR_INVALID`) for bytes that are not one neutral value
-(`ta_cbor_decode`'s refusal, or the value table's: another tag, another
+(`ta_cbor_read`'s refusal, or the value table's: another tag, another
 simple value, a key that is not text) and for a value that is not one
 (a cycle, nesting past 64, a BigInt past 64 bits, a lone surrogate);
 -7 (`TA_ERROR_UNSUPPORTED`) for an indefinite length, as
-`ta_cbor_decode` answers (`include/tinyactors/cbor.h`, "TA_ERROR_UNSUPPORTED:
-indefinite lengths"). An exception the value itself throws (a getter, a
+`ta_cbor_read` answers (`include/tinyactors/cbor.h`, as `ta_cbor_decode`:
+"TA_ERROR_UNSUPPORTED: indefinite lengths"). An exception the value itself throws (a getter, a
 `toJSON`) propagates unchanged.
 
 **Scenario.** An application decodes bytes that arrived on a socket and

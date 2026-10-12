@@ -165,7 +165,7 @@ export class SimulatedClock {
   now(): number;
 }
 
-/** The value as CBOR (`ta_cbor_encode`), by the value table. */
+/** The value as CBOR (core's streaming writer, `ta_cbor_writer`), by the value table. */
 export function encode(value: unknown): Uint8Array;
-/** The value of one CBOR item (`ta_cbor_decode`), by the value table. */
+/** The value of one CBOR item (core's reader, `ta_cbor_read`), by the value table. */
 export function decode(bytes: ArrayBuffer | ArrayBufferView): Value | undefined;

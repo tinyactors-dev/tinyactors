@@ -9,7 +9,7 @@ a test decides it.
 
 The same table is the package's public CBOR conversion, the exports
 `encode(value): Uint8Array` and `decode(bytes): unknown`
-(`docs/api-map.md`; `ta_cbor_encode`, `ta_cbor_decode`), which the
+(`docs/api-map.md`; core's streaming writer and reader), which the
 adapter frames the driver's calls with. So the vectors go through this
 table both ways: a value mapped wrong the same way when read and when
 written still passes them, and only this binding's own tests of the
@@ -47,7 +47,7 @@ on the ECMAScript datamodel (the same rules as
 
 **Refused** means: `encode` and `decode` throw `TinyactorsError` with
 `status` -3 (`TA_ERROR_INVALID`), or -7 (`TA_ERROR_UNSUPPORTED`) for an
-indefinite length (`ta_cbor_decode`), and the status's name as the
+indefinite length (`ta_cbor_read`), and the status's name as the
 message; an exception the value throws itself (a getter, `toJSON`)
 propagates as it is (`docs/decisions.md`, "Errors"). The native
 datamodel's `to_wire` and `from_wire` answer the status instead.

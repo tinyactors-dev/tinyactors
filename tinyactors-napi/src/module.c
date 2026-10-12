@@ -18,9 +18,8 @@ static void ta_napi_module_free(node_api_basic_env env, void *data, void *hint) 
     (void)env;
     (void)hint;
     ta_napi_module *module = (ta_napi_module *)data;
-    ta_napi_scratch_free(&module->scratch);
-    ta_napi_buffer self = module->self;
-    ta_napi_buffer_free(&self);
+    ta_allocator allocator = module->allocator;
+    allocator.free(allocator.context, module, sizeof *module);
 }
 
 /* ---- TinyactorsError ------------------------------------------------------------ */
@@ -131,17 +130,16 @@ void ta_napi_throw_reply(napi_env env, napi_value reply_error) {
 /* ---- init ------------------------------------------------------------------------- */
 
 NAPI_MODULE_INIT() {
-    ta_napi_buffer memory = {NULL, 0};
-    if (!ta_napi_buffer_reserve(&memory, sizeof(ta_napi_module))) {
+    ta_allocator allocator = ta_napi_allocator(env);
+    ta_napi_module *module = (ta_napi_module *)allocator.alloc(allocator.context, sizeof(ta_napi_module), 8);
+    if (!module) {
         napi_throw_error(env, NULL, "TA_ERROR_NO_MEMORY");
         return NULL;
     }
-    ta_napi_module *module = (ta_napi_module *)memory.pointer;
     memset(module, 0, sizeof *module);
-    module->self = memory;
-    module->scratch.env = env;
+    module->allocator = allocator;
     if (napi_set_instance_data(env, module, ta_napi_module_free, NULL) != napi_ok) {
-        ta_napi_buffer_free(&memory);
+        allocator.free(allocator.context, module, sizeof *module);
         return NULL;
     }
     napi_value source, error_class;
