@@ -116,8 +116,10 @@ effect anyway); and a chain through a path, `o.d.add(a).add(b)`, faults
 when it runs, as a path call's chain needs the container back: write
 `const e = o.d.add(a); e.add(b)`.
 
-A method ID is a byte (`sjs_name.methods`); `internal.h` asserts that the
-last fits. `SJS_METHOD_FIRST` is 96, so functions have IDs below it.
+A method ID is a `uint16_t` (`sjs_name.methods`, `.mutation`); `internal.h`
+asserts that the last fits. `SJS_METHOD_FIRST` is 128, so functions have IDs
+below it, and an assert fails the build when `SJS_BUILTIN_FUNCTION_COUNT`
+passes it.
 
 ## Functions, constructors and namespaces
 

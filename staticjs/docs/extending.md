@@ -248,8 +248,8 @@ The examples are BigInt, `Map` and iterators.
      inputs: in a million inputs per function, about 6,500 for `sin`,
      5,000 for `tan`, 3,400 for `asin`, 2,700 for `cos`, 1,900 for `log2`,
      1,100 each for `expm1` and `acos`, 100 to 500 for `atan`, `log1p`,
-     `pow`, `exp`, `atan2` and the hyperbolic functions, 2 for `log` and
-     none for `log10` and `cbrt`. diff-node therefore compares the fixed
+     `pow`, `exp` and `atan2`, 30 to 130 for the hyperbolic functions, 2
+     for `log` and none for `log10` and `cbrt`. diff-node therefore compares the fixed
      Math lists of `number_test --print` (tags U, V and W) only where
      `process.arch` is x64, and says on any other host that it skipped
      them; every other check, and every Math case in `tests/spec`, runs

@@ -110,7 +110,8 @@ compare method names as strings at run time: the old `strlen` and `strcmp`
 lookup cost 17% of a guard.
 
 **A function** (`Math.x`, `Object.x`, `Number.x`, `String.x`, `BigInt.x`, `JSON.x`, `Date.x`, `Temporal.PlainDate.x`, or a bare global name):
-add an ID before `SJS_BUILTIN_FUNCTION_COUNT`, an entry in
+add an ID before `SJS_BUILTIN_FUNCTION_COUNT` (below `SJS_METHOD_FIRST`,
+128: an assert fails the build when they meet), an entry in
 `FUNCTION_TABLE`, and an immortal value in `FUNCTIONS`. The compiler
 resolves the name when it compiles (`sjs_builtin_lookup`), so the linear
 table costs nothing at run time. A namespace is a row of `spaces` in
