@@ -2,7 +2,7 @@
 
 **Status:** Current (2026-10-11), after [ADR 0009](../../docs/adr/0009-one-host-two-queues.md) steps 2 to 6. Drafted in the proposal [One host, two queues](../../docs/proposals/one-host-two-queues/README.md).
 
-Everything a binding author needs, in one place: the rules, the run-loop lessons of the past restructures, and the interface a binding drives. Write a binding from this guide and the headers, not from an older binding.
+Why the boundary is shaped as it is, with every alternative considered and rejected, is in [boundary.md](boundary.md). Everything a binding author needs, in one place: the rules, the run-loop lessons of the past restructures, and the interface a binding drives. Write a binding from this guide and the headers, not from an older binding.
 
 ## 1 · What a binding is
 

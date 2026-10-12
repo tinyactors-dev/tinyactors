@@ -12,6 +12,9 @@ withdrawn. Each turn cost the binding sessions work. The facts below are
 what those turns established; start from them, and change one only with
 evidence.
 
+The reference for the current boundary, with every rejected alternative
+and its reason, is `tinyactors-core/docs/boundary.md`; keep it current.
+
 ## The facts of the boundary
 
 Check each against the code before relying on it; cite the line.
