@@ -1,5 +1,7 @@
 # Writing a binding
 
+Moved to [tinyactors-core/docs/bindings.md](../../../tinyactors-core/docs/bindings.md); this copy is history.
+
 **Status:** Proposed (2026-10-11). The draft of `tinyactors-core/docs/bindings.md`, part of [One host, two queues](README.md).
 
 Everything a binding author needs, in one place: the rules from today’s `bindings/README.md`, the run-loop lessons of the last two restructures, and the interface this proposal adds. It replaces `bindings/README.md` and is written before any binding is regenerated, so the regenerated bindings follow it rather than the code they replace. Items marked *(proposed)* exist only once this proposal lands.

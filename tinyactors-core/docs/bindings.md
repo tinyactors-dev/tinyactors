@@ -1,150 +1,177 @@
 # Writing a binding
 
-**Status:** Proposed (2026-10-11). The draft of `tinyactors-core/docs/bindings.md`, part of [One host, two queues](../../docs/proposals/one-host-two-queues/README.md).
+**Status:** Current (2026-10-11), after [ADR 0009](../../docs/adr/0009-one-host-two-queues.md) steps 2 to 6. Drafted in the proposal [One host, two queues](../../docs/proposals/one-host-two-queues/README.md).
 
-Everything a binding author needs, in one place: the rules from today’s `bindings/README.md`, the run-loop lessons of the last two restructures, and the interface this proposal adds. It replaces `bindings/README.md` and is written before any binding is regenerated, so the regenerated bindings follow it rather than the code they replace. Items marked *(proposed)* exist only once this proposal lands.
+Everything a binding author needs, in one place: the rules, the run-loop lessons of the past restructures, and the interface a binding drives. Write a binding from this guide and the headers, not from an older binding.
 
 ## 1 · What a binding is
 
 A binding lets one language drive `ta_host`, in every runtime that language has. It has three parts and an API, and under them one addon per runtime that exposes the host’s calls (Node-API, wasm exports, ctypes, JNI or the FFM API, a Swift C target). JavaScript has one package for Node, Bun and browsers; only the addon differs.
 
 - **The queue loop:** feed inputs, run the host, read its effects, do the I/O they ask for, acknowledge them, arm one timer.
-- **A datamodel, or none:** the language’s own values and expressions behind the datamodel vtable, or the quickjs datamodel, which needs nothing from the binding.
-- **A CBOR module** *(proposed)*: one generic conversion between a CBOR token list and the language’s values, used for event data, requests and replies.
+- **A datamodel, or none:** the language’s own values and expressions behind the datamodel vtable, or the ECMAScript datamodel (quickjs-ng), which needs nothing from the binding.
+- **A CBOR module:** one generic conversion between a CBOR token list (`tinyactors/cbor.h`) and the language’s values. It carries the host’s config, requests and replies, and the bytes that cross a process boundary: envelopes and event data.
 - **The API:** what the language’s developers call. It is thin: each item is a host input, a request, or the handling of an effect.
 
 ## 2 · What a binding never does
 
-- **It exposes the core, nothing else.** Before designing the API, inventory the public headers it drives and write the mapping table: each API item next to the core functions, effects and flags behind it. An item with no core function behind it does not belong. A core function with no item is used internally (say where) or not exposed (say why).
+- **It exposes the core, nothing else.** Before designing the API, inventory the public headers it drives and write the mapping table: each API item next to the core functions, effects, methods and flags behind it. An item with no core function behind it does not belong. A core function with no item is used internally (say where) or not exposed (say why).
 - **It borrows shape, never semantics.** Another library (xstate for JavaScript) may suggest names and call shapes: `createActor`, `send`, `getSnapshot`, `subscribe`. What a call does is what the core does. Never emulate another library’s behaviour, rename the core’s events, or lower its concepts onto SCXML.
-- **It invents nothing:** no event names, flags, fields, defaults or mechanisms of its own. A real gap is a core proposal, not part of a binding.
+- **It invents nothing:** no event names, flags, fields, methods, defaults or mechanisms of its own. A real gap is a core proposal, not part of a binding.
 - **It keeps no twin of C.** SCXML semantics, queues, routing, timers, the invoke lifecycle, addresses, trace policy, encodings: if C does it, bind the C.
 - **It reads the core before claiming a gap.** `src/core` and `src/system` implement all of SCXML, including I/O processors, external invokes, sends to `#_<invokeid>` and error events. Cite the lines of `docs/SCXML.md` and the core before saying “the core cannot”.
 - **It decides no policy.** Defaults, limits, validation and their error messages live in core and come back in replies. Retry and backoff for the binding’s own I/O (an HTTP post, a reconnect) are the exception: that is I/O.
+- **It puts no serialization on the hot path.** The calls made per event take and give C structs; CBOR is for rarely called calls and for bytes that leave the process (the repository’s `AGENTS.md`, “No serialization on the hot path”).
 
-## 3 · The queue loop
+## 3 · Creating a host, and the queue loop
+
+```
+config  = cbor_encode({ systemID: "app", system: {...}, telemetry: {...} })
+error   = ta_buffer of your own
+env     = { allocator, datamodels[], datamodel_count, trace_policy, error: &error }
+ta_host_create(config, &env, &host)      # TA_ERROR_INVALID: error holds the reply
+ta_host_add_image(host, image, &segment); ta_host_boot(host, segment)
+```
+
+- **The config is CBOR** ([host-config.md](host-config.md)): the system id, each segment’s capacities, the host’s I/O processors, the OTLP encoder and the host’s limits. Build it with the CBOR module from the language’s data. Core fills the defaults and validates it; a refused config answers in `environment->error` with the same `{"error": {"code", "message", "data": {"reason", "path"}}}` as a refused request. Raise it as the language’s exception, unchanged.
+- **The environment** holds what cannot be data: the allocator, the datamodels (at most 8), the trace policy and the error buffer.
 
 ```
 on wake (timer fired, input arrived, I/O completed):
-    ta_host_advance_time(host, { monotonic_ms, wall_ns })   # proposed: both clocks
+    ta_host_advance_time(host, { monotonic, wall_ns })
     repeat:
         run = ta_host_run(host, budget)
-        for each effect in ta_host_effects(host):
+        for i, effect in ta_host_effects(host):
             handle(effect)                  # copy what you keep: views end at ack
         ta_host_effects_ack(host)
         TA_RUN_EFFECTS_FULL → the effect list was full: run again now
         TA_RUN_EFFECTS      → answer the sync sends (they are inputs), run again now
         TA_RUN_YIELDED      → give the event loop a turn, wake again at once
-        TA_RUN_EXHAUSTED    → a pool could not grow (run.detail names it): report it
-        TA_RUN_FAULT        → a segment could not run (out of memory, or a call
-                              into it during a run): report it
+        TA_RUN_EXHAUSTED    → the allocator refused (run.detail names the pool):
+                              run again once it has memory
+        TA_RUN_FAULT        → a segment could not run, or ta_host_run was called
+                              during a run: report it
         TA_RUN_IDLE         → arm one timer at run.next_deadline (UINT64_MAX: none)
     whatever a handler raised: ack anyway, finish the turn, then raise the first error
 ```
 
-- **One timer,** re-armed after every loop; never one per actor or per deadline.
+- **One timer,** re-armed after every loop; never one per actor or per deadline. `next_deadline` already holds every deadline the host has: timers and delayed sends, a migration job’s timeout, the TTL of envelopes queued for a peer that is down, the end of a trace watch, and the encoder’s flush interval.
+- **Both clocks in one call.** `monotonic` (`ta_time`, the config’s `ticksPerSecond`, 1000 for milliseconds) drives timers, deadlines and TTLs; `wall_ns` (nanoseconds since the Unix epoch) stamps the trace records written since the last call. Call it before every run.
 - **Bound each turn.** The budget caps work per run; across many runs, yield to the runtime’s event loop (a macrotask in a browser, a callback in Node, a Looper message on Android) so a busy system never blocks it.
 - **A caller’s own clock** (simulation, tests) replaces the timer: time moves only when the caller advances it and runs the loop.
 - **Not every program has an event loop.** Offer the same turn under two drivers where the language has both: a synchronous one (run until idle, sleeping to the next deadline or following the caller’s clock) and the language’s event loop (asyncio, a Looper, a dispatch queue).
 
 ## 4 · Effects: what to do with each
 
-| Effect                 | The binding                                                                                                                                                                                   | Answers with                                                                                                             |
-|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `CHANGED`              | *(proposed)* A subscribed session finished a macrostep: tell its subscribers. Only sessions the binding subscribed with a request produce it.                                                 | Nothing.                                                                                                                 |
-| `SEND`                 | Hand it to the I/O processor named by `io_processor`. A `TA_IO_PROCESSOR_SYNC` processor answers before the next run.                                                                         | An event, if the processor replies; on failure an event with `TA_EVENT_IN_ERROR_COMMUNICATION` and the send’s `sendid`.  |
-| `INVOKE`               | Start the service of that type, keyed by `(segment, token)`. Every send to an invoked service carries its token *(proposed)* (the host resolves `#_<invokeid>`): keep no table of invoke ids. | Its events with `TA_EVENT_IN_FROM_INVOKE` and the token; at its end `TA_EVENT_IN_INVOKE_DONE`, or a communication error. |
-| `UNINVOKE`             | Stop that service; forget the key.                                                                                                                                                            | Nothing.                                                                                                                 |
-| `DONE`, `ERROR`, `LOG` | Tell the application: the actor’s output or error code, a `<log>` line.                                                                                                                       | Nothing.                                                                                                                 |
-| `WAKE`                 | Load the actor’s blob from the store. If the binding still holds that blob (its `put` has not settled yet), wake from the held copy and delete the store’s copy when the put settles.         | `ta_host_wake` with the blob.                                                                                            |
-| `REQUEST`              | *(proposed)* Answered by the host itself (it has the images); today the binding looks up the chart and resumes.                                                                               | —                                                                                                                        |
-| `JOB_DONE`             | Settle the migration the application started (its promise, future or callback) with migrated, failed and the pending sessions.                                                                | Nothing.                                                                                                                 |
-| `SEGMENT_FREED`        | Release the image the binding kept for that segment.                                                                                                                                          | Nothing.                                                                                                                 |
-| `PEER`, `PEER_ERROR`   | An envelope for another system, as CBOR *(proposed)*. Carrying it is the application’s; the binding hands it over.                                                                            | `ta_host_deliver` for envelopes that arrive.                                                                             |
-| traces ready           | *(proposed)* Call `ta_host_traces` with a buffer of your own, then post it (`application/x-protobuf` to `/v1/traces`) or give it to a sink. Retries and a cap on what waits are yours.        | Nothing.                                                                                                                 |
+Read an effect’s fields with `ta_host_effect_number` and `ta_host_effect_text` (`TA_EFFECT_FIELD_*`, in `host.h`), by its index in the list `ta_host_effects` returned.
+
+| Effect                  | The binding                                                                                                                                                                                                                       | Answers with                                                                                                                         |
+|-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `TA_EFFECT_SEND`        | Hand it to the I/O processor at index `io_processor` of the config’s `ioProcessors`. A `sync` processor answers before the next run. With `io_processor` `TA_NIL` it is a send to an invoked service: route it by `token`.          | An event, if the processor replies; on failure an event with `TA_EVENT_IN_ERROR_COMMUNICATION` and the send’s `sendid`.              |
+| `TA_EFFECT_INVOKE`      | Start the service of type `event` with `target` (its src), `sendid` (its invokeid) and `payload` (its params), keyed by `(segment, token)`. Sends to it carry the same token: keep no table of invoke ids.                         | Its events with `TA_EVENT_IN_FROM_INVOKE` and the token; at its end `TA_EVENT_IN_INVOKE_DONE`, or a communication error.            |
+| `TA_EFFECT_UNINVOKE`    | Stop that service; forget the key.                                                                                                                                                                                                | Nothing.                                                                                                                             |
+| `TA_EFFECT_REQUEST`     | An `<invoke>` whose `src` (`auxiliary`) names no chart in the image. Resolving it may be I/O (fetching a chart).                                                                                                                  | `ta_host_resume` with the token and the chart index + 1, or an error status.                                                         |
+| `TA_EFFECT_DONE`, `TA_EFFECT_ERROR`, `TA_EFFECT_LOG` | Tell the application: the actor’s output or error code, a `<log>` line.                                                                                                                              | Nothing.                                                                                                                             |
+| `TA_EFFECT_WAKE`        | Load the actor’s blob from the store. If the binding still holds that blob (its `put` has not settled yet), wake from the held copy and delete the store’s copy when the put settles.                                             | `ta_host_wake` with the blob.                                                                                                        |
+| `TA_EFFECT_CHANGED`     | A session subscribed with the `actor.subscribe` method finished a macrostep: tell its subscribers. At most one per session per run, and none for sessions nobody subscribed. Read its `state` or `actor.context` after the run.    | Nothing.                                                                                                                             |
+| `TA_HOST_EFFECT_MIGRATED`, `TA_HOST_EFFECT_JOB_DONE` | A session moved to a new chart version; a migration job ended. Settle what the application started (its promise, future or callback) with `migrated`, `failed` and the pending sessions (`ta_host_job_pending`). | Nothing.                                                                                                                             |
+| `TA_HOST_EFFECT_SEGMENT_FREED` | Release the image the binding kept for that segment.                                                                                                                                                                       | Nothing.                                                                                                                             |
+| `TA_HOST_EFFECT_PEER`, `TA_HOST_EFFECT_PEER_ERROR` | An envelope, or an error envelope, for the system behind `peer`. Carrying it is the application’s (section 9).                                                                                          | `ta_host_deliver` or `ta_host_peer_error` for what arrives.                                                                          |
+| `TA_HOST_EFFECT_TRACES`, `TA_HOST_EFFECT_LOGS` | The encoder has a request ready. Call `ta_host_traces` (`ta_host_logs`) with a buffer of your own, then post it (`application/x-protobuf` to `/v1/traces`, `/v1/logs`) or give it to a sink. Retries and a cap on what waits are yours. At most one of each is outstanding: the next comes after a take. | Nothing.                                                                                                                             |
+
+- **A host without telemetry** has a null encoder: it never gives `TRACES` or `LOGS`, and `ta_host_traces`, `ta_host_logs` and `ta_host_metrics` answer `TA_ERROR_STATE`.
+- **Metrics are pulled.** `ta_host_metrics` writes the counters, as an OTLP metrics request, into your buffer whenever you call it. There is no metrics timer or effect: read them when the application asks, on `stop()`, or on a cadence the application chooses.
 
 ## 5 · Inputs and reentrancy
 
-- **Between runs, any call is fine,** including from an effect handler before the ack: effects already taken stay where they are, and effects the call makes come with the next `ta_host_effects`. This is today’s contract.
-- **During a run** (a datamodel entry evaluating an expression), today every call returns `TA_ERROR_STATE`. *(proposed)* `ta_host_send`, `ta_host_send_many`, `ta_host_spawn` and `ta_host_terminate` become legal there: an event is appended to its target’s mailbox and an actor takes a slot from the pool, exactly as an internal `<send>` or `<invoke>` does mid-run. No queue of their own and no copy. Nothing grows during a run, so a full pool answers `TA_ERROR_NO_MEMORY` and the payload stays the caller’s.
-- **Calls that change the host’s structure** (adding images, hibernating, waking, adopting, migrating, snapshots, freeing) and **every request**, inspection included, stay refused during a run (`TA_ERROR_STATE`): an expression cannot read another actor’s snapshot. Say so in the API.
+- **Between runs, any call is fine,** including from an effect handler before the ack: effects already taken stay where they are, and effects the call makes come with the next `ta_host_effects`.
+- **During a run** (a datamodel entry evaluating an expression), `ta_host_send`, `ta_host_send_many`, `ta_host_spawn` and `ta_host_terminate` take the paths of an internal `<send>`, `<invoke>` and cancel: no queue of their own, no copy, and nothing grows, so a full pool answers `TA_ERROR_NO_MEMORY` and the payload stays the caller’s. When they take effect:
+  - an event for the actor whose expression sent it: at the end of the macrostep it is in, never inside it;
+  - an event for another actor, or a spawned actor: at the back of its segment’s run queue, later in this run if the budget allows, else in the next;
+  - a terminated actor exits at its next microstep boundary; the actor whose expression terminated itself does not run the rest of its macrostep.
+- **Lookups answer during a run** (`ta_host_chart`, `ta_host_locate`, `ta_host_actor_by_name`, `ta_host_segment_count`). **Everything else is refused:** calls that change the host’s structure (adding images, hibernating, waking, adopting, migrating, snapshots), every request, the envelope and telemetry calls (`TA_ERROR_STATE`); `ta_host_effects` returns 0, `ta_host_effects_ack` and `ta_host_advance_time` do nothing, and `ta_host_run` returns `TA_RUN_FAULT`. An expression cannot read another actor’s state. Say so in the API.
 - **One thread.** Parallelism is shared-nothing: several hosts, one per thread, exchanging envelopes. Do not reach for shared memory in a binding (in the browser it would require cross-origin isolation); a multi-threaded host would be a core decision first. A host is single-threaded: every call from the thread that made it. A threaded runtime confines it (one host per worker, an executor, a serial queue), and the binding checks it: record the creating thread and refuse calls from others. A global lock (Python’s GIL) is not a substitute: free-threaded builds have none. Keep the binding’s state per interpreter or isolate, never in C globals.
 - **Freeing the host from an effect handler** is safe only after the loop returns: mark it, finish the loop, then free.
 - **The datamodel vtable is the only call out of core.**
 
 ## 6 · Memory: who owns what, for how long
 
-| What                                                                                                               | Owner                                        | Valid until                                                                                                                                                                                              |
-|--------------------------------------------------------------------------------------------------------------------|----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Every block of the host and its segments                                                                           | the host, from `config.allocator`            | `ta_host_free`, which returns all of them. A refused block leaves the host as it was: the call returns `TA_ERROR_NO_MEMORY`, a run returns `TA_RUN_EXHAUSTED` and the next run goes on where it stopped. |
-| Effect records, their strings and payload views                                                                    | the host (borrowed)                          | `ta_host_effects_ack`, the next `ta_host_run` or `ta_host_free`. Copy what you keep.                                                                                                                     |
-| Views passed in (names, traceparents, envelope fields)                                                             | the caller                                   | the call; the host copies what it keeps.                                                                                                                                                                 |
-| Payloads passed in                                                                                                 | moved to the host on success                 | the caller’s again on failure: release it. A payload from `from_wire` carries one reference.                                                                                                             |
-| Image bytes                                                                                                        | the caller                                   | its segment is freed (`SEGMENT_FREED`) or the host goes.                                                                                                                                                 |
-| A segment’s `ta_system` (inspection)                                                                               | the host (borrowed)                          | the next call that can grow or free it.                                                                                                                                                                  |
-| Names in stats; a job’s pending sessions                                                                           | the host (borrowed)                          | the next mutating call; the next `ta_host_run`.                                                                                                                                                          |
-| What the host writes for you: blobs, snapshots, state values; requests’ replies, envelopes and traces *(proposed)* | the caller’s `ta_buffer`                     | yours. On `TA_ERROR_NO_MEMORY`, `length` is what it needs and nothing changed: grow and call again.                                                                                                      |
-| Hibernation blobs in flight                                                                                        | the binding, until the store’s `put` settles | the put settling. A wake can arrive first: wake from the held copy (section 4).                                                                                                                          |
+| What                                                                                       | Owner                                        | Valid until                                                                                                                                                                                              |
+|--------------------------------------------------------------------------------------------|----------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Every block of the host and its segments                                                   | the host, from `environment->allocator`      | `ta_host_free`, which returns all of them. A refused block leaves the host as it was: the call returns `TA_ERROR_NO_MEMORY`, a run returns `TA_RUN_EXHAUSTED` and the next run goes on where it stopped. Nothing grows during a run. |
+| Effect records, their strings and payload views                                            | the host (borrowed)                          | `ta_host_effects_ack`, the next `ta_host_run` or `ta_host_free`. Copy what you keep.                                                                                                                     |
+| The config bytes                                                                           | the caller                                   | the call to `ta_host_create`; nothing points into them afterwards.                                                                                                                                       |
+| Views passed in (names, traceparents, envelope fields, an envelope’s `wire`)               | the caller                                   | the call; the host copies what it keeps.                                                                                                                                                                 |
+| Payloads passed in                                                                         | moved to the host on success                 | the caller’s again on failure: release it. A payload from `from_wire` carries one reference.                                                                                                             |
+| Image bytes                                                                                | the caller                                   | its segment is freed (`TA_HOST_EFFECT_SEGMENT_FREED`) or the host goes.                                                                                                                                  |
+| A segment’s `ta_system` (`ta_host_system`)                                                 | the host (borrowed)                          | the next call that can grow or free it.                                                                                                                                                                  |
+| A job’s pending sessions                                                                   | your `ta_uint64_array`                       | yours.                                                                                                                                                                                                   |
+| What the host writes for you: blobs, snapshots, replies, envelopes, traces, logs, metrics  | the caller’s `ta_buffer`                     | yours. On `TA_ERROR_NO_MEMORY`, `length` is what it needs and nothing changed: grow and call again.                                                                                                      |
+| Hibernation blobs in flight                                                                | the binding, until the store’s `put` settles | the put settling. A wake can arrive first: wake from the held copy (section 4).                                                                                                                          |
 
-- **One convention for written output** *(proposed)*: today it is `buffer, capacity, *length` (`ta_host_hibernate`, `ta_host_export_actor`, `ta_host_snapshot`, `ta_host_snapshot_pack`) or a returned length (`ta_host_state_value`). All of them take a `ta_buffer`, which groups those three fields with the same meaning.
-- **base … system never allocate after init;** the host allocates only through its allocator; the CBOR functions allocate nothing.
+- **One convention for bytes.** Bytes go in as `ta_bytes` and come out through a `ta_buffer *` (`tinyactors/types.h`); no public function takes a pointer and a length (the lint rule `buffers-are-ta-buffer`). A reply, blob or request that does not fit is not applied.
+- **Core never allocates after init below the host;** the host allocates only through its allocator, and only between runs; the CBOR functions allocate nothing.
 - **Assemble records where crossing is costly.** Where each call into C is expensive (CPython, JNI), the extension reads an effect’s fields with the accessors and hands the language one record per effect.
-- **Only C touches host structs.** Read effects with `ta_host_effect_number` and `ta_host_effect_text` *(proposed)* (by `TA_EFFECT_FIELD_*`), and let the addon, which is C in every runtime (Node-API, the same C compiled into a wasm module, cffi), fill input structs. Never copy a struct layout into another language.
+- **Only C touches host structs.** Read effects with the accessors, and let the addon, which is C in every runtime (Node-API, the same C compiled into a wasm module, cffi), fill input structs. Never copy a struct layout into another language.
 - **Garbage collection.** Free the host deterministically when the application stops it, and drop every language reference the binding holds (handlers, scopes, payloads, functions) then; offer the language’s scoped form (a context manager, `using`, `defer`). A finalizer is only a fallback: handlers often close over the host. Where the language has a cycle collector, let it see those references (Python’s `tp_traverse`/`tp_clear`).
-
 - **Snapshots are not durability.** Hibernation and snapshots take actors out of memory for a while, and a snapshot lets a host be inspected; export moves actors to another host. A snapshot is raw region memory, valid only for the same build of the library: never offer one as a backup, a save file or crash recovery, and never write it somewhere it outlives the build. Durability is the application’s (a database). The hibernation store is where idle actors wait while out of memory, not a record of them: a store that outlives the host (IndexedDB, a file) keys blobs per host and clears them when a host is created and when it stops, since no other host can wake them.
 
 ## 7 · Time
 
-- One monotonic clock in milliseconds (`ticks_per_second = 1000`), advanced before every run and every input that depends on it (spawn, deliver, adopt).
+- One monotonic clock in the config’s `ticksPerSecond` (1000: milliseconds), advanced with the wall clock before every run and every input that depends on it (spawn, deliver, adopt).
 - A host restored from a snapshot (same build, while its actors were out of memory) resumes at the snapshot’s time: start the clock there.
 - A blob that leaves for another host is rebased to time 0 on export and to the receiver’s clock on adopt (`ta_blob_rebase`).
-- Trace times are wall-clock nanoseconds, given with the monotonic time in the same call *(proposed)*.
+- Span times are wall-clock nanoseconds, interpolated between the `wall_ns` of two calls to `ta_host_advance_time`; 0 means unknown.
 
 ## 8 · Choosing a datamodel
 
-- **A datamodel is chosen by name.** Core matches the registered vtable’s `name` against the chart’s `datamodel` attribute. A binding may define a datamodel of its own language under its own name (`"python"`), with no core change: charts that ask for it evaluate that language. A host runs one datamodel; mixing datamodels in one host is not supported, so a binding that offers both its own and quickjs lets the application pick one per host.
-- **quickjs:** nothing to implement and no calls into the language; values cross as CBOR. The default for a new binding.
-- **Native:** expressions run in the language. Implement the datamodel vtable: compile a chart’s expressions once at `chart_attach` (by kind: condition, value, location, script), keep one scope per session, and a payload table of handles with reference counts (a slot and a generation, never a pointer). `to_wire`/`from_wire` and `payload_serialize`/`_deserialize` write CBOR *(proposed)*: they carry envelopes and blobs. Register an expression checker with the compiler under the same name, so a broken chart fails at compile time. An expression that throws returns `TA_ERROR_EXECUTION`, so core raises `error.execution` as SCXML requires; pass the exception to the logger and invent no effect for it.
+- **A datamodel is chosen by name.** Core matches each registered vtable’s `name` against the chart’s `datamodel` attribute. A binding may define a datamodel of its own language under its own name (`"python"`), with no core change: charts that ask for it evaluate that language. A host takes up to eight datamodels (`environment->datamodels`), and each chart uses the one it names. Core never translates a value between datamodels: a payload goes only to the datamodel it came from, and event data that arrives from another system is read by the datamodel of the chart it is delivered to.
+- **ECMAScript** (`ta_datamodel_ecmascript_vtable()`, name `"ecmascript"`, on quickjs-ng): nothing to implement and no calls into the language; values cross as CBOR. The default for a new binding.
+- **Native:** expressions run in the language. Implement the datamodel vtable (`tinyactors/datamodel.h`): compile a chart’s expressions once at `chart_attach` (by kind: condition, value, location, script), keep one scope per session, and a payload table of handles with reference counts (a slot and a generation, never a pointer). `to_wire` and `from_wire` convert a payload to and from a neutral value (section 9). `serialize`/`deserialize` and `payload_serialize`/`payload_deserialize` write the datamodel’s own blob format for hibernation and export. `variable` answers the `actor.context` method. Register a `ta_datamodel_compiler` with the same name and a `check` function, so a broken chart fails at compile time. An expression that throws returns `TA_ERROR_EXECUTION`, so core raises `error.execution` as SCXML requires; pass the exception to the logger and invent no effect for it.
 - **Actors share no mutable value.** Inside a session a variable may hold any of the language’s objects. What crosses to another actor (captured `<send>` data, `<donedata>`, data sent from outside) is copied through the value table; immutable values may be shared. A mutable object outside the table fails the capture with `error.execution`; a session holding one is not hibernated (`serialize` answers `TA_ERROR_UNSUPPORTED`). Never serialize with a format that runs code when read (pickle, Java serialization).
-- **Say what the language cannot bound.** A runtime that cannot be preempted mid-expression or limited in memory (CPython, unlike quickjs with `max_ops` and its allocator) makes its charts trusted code, and its values lie outside `config.allocator`. Charge fuel once per evaluation, and write both limits in the binding’s README.
-- **Conformance:** translate the W3C suite’s expressions into the language (the charts unchanged) and run it on a host with the native datamodel as well as on one with quickjs.
+- **Say what the language cannot bound.** A runtime that cannot be preempted mid-expression or limited in memory (CPython, unlike quickjs with `max_ops` and its allocator) makes its charts trusted code, and its values lie outside the host’s allocator. Charge fuel once per evaluation, and write both limits in the binding’s README.
+- **Conformance:** translate the W3C suite’s expressions into the language (the charts unchanged) and run it on a host with the native datamodel as well as on one with ECMAScript.
 
-## 9 · Values: the CBOR module
+## 9 · Values and envelopes: the CBOR module
 
-- Decode with one call into a token list in memory you own, then build the language’s values from it; encode the other way. One FFI call per message, never one per item. Build them where it is cheapest: in the language (JavaScript), or in the extension’s C where the language’s objects are reachable from C (CPython’s C API).
-- Write down the language’s value table: integers, floats, bytes, text, arrays, maps, tag 32 (actor reference), `null` and `undefined`. Where the language has no second empty value (Python’s only `None`), add a singleton for `undefined`.
-- Integers are exact to 64 bits: use the language’s big integers where its numbers are doubles. Byte strings are bytes, not base64. Tag 32 is an actor reference: make it the language’s reference object. `null` and `undefined` stay distinct.
-- Map keys in requests and replies are text.
+- Decode with one call (`ta_cbor_decode`) into a token list in memory you own, then build the language’s values from it; encode the other way (`ta_cbor_encode`). One FFI call per message, never one per item. Build them where it is cheapest: in the language (JavaScript), or in the extension’s C where the language’s objects are reachable from C (CPython’s C API).
+- **The value table** is [protocol.md, Values](protocol.md#values): integers, floats, text, bytes, arrays, maps with text keys, `false`, `true`, `null`, `undefined`, and tag 32 for an actor reference. Write down the language’s side of it. Where the language has no second empty value (Python’s only `None`), add a singleton for `undefined`.
+- Integers are exact to 64 bits: use the language’s big integers where its numbers are doubles. Byte strings are bytes, not base64. Tag 32 is an actor reference: make it the language’s reference object. `null` and `undefined` stay distinct. Writers use the shortest form of every integer, length and float; map keys stay in the order written.
+- **Envelopes between processes** ([protocol.md, Envelope](protocol.md#envelope)):
+  - out: `ta_host_envelope(host, effect, &buffer)` writes a `PEER` or `PEER_ERROR` effect as CBOR;
+  - in: `ta_host_envelope_read(host, bytes, &envelope)` then `ta_host_deliver(host, peer, &envelope)`, which returns a `TA_ROUTE_*` outcome or a negative error; an error envelope: `ta_host_peer_error_read(bytes, &error)` (set its `peer`), then `ta_host_peer_error`;
+  - the event data stays CBOR (`ta_envelope.wire`) until the host delivers it: the target chart’s datamodel reads it, and a relay forwards the bytes without reading them. Bytes that are not an envelope are `TA_ERROR_INVALID`; data the target cannot read is refused and answered with an error envelope to its origin.
+- **Envelopes within one process** (two hosts in one process, one per worker) never touch CBOR: fill a `ta_envelope` from the `PEER` effect’s fields (copying `wire` when it is set) and call `ta_host_deliver`.
+- How envelopes travel between processes (a socket, a queue, a database) is the application’s. Core speaks no transport protocol.
 
 ## 10 · Requests
 
-- Everything rarely called (trace configuration, watches, stats, metrics, inspection, state values, snapshot contents, decoded spans) is `ta_host_request` *(proposed)*: a CBOR map with `"op"` in, a CBOR map out.
-- Every operation, its fields, defaults, replies and error paths are in `tinyactors-core/docs/requests.md` *(proposed)*, next to the vectors that test them. An API item whose operation is not there does not exist.
-- **Metrics are pulled.** Core keeps the counters; `ta_host_metrics` *(proposed)* writes them, as an OTLP metrics request, into your buffer whenever you call it. There is no metrics timer or effect: read them when the application asks, on `stop()`, or on a cadence the application chooses.
-- An API method is one line: build the map from the caller’s arguments with the CBOR module, send it, return the reply. An `"error"` reply becomes the language’s exception, with its `path` and `message` unchanged.
+- **Everything rarely called is a method of `ta_host_request`:** trace configuration, watches, stats, inspection, state values, a session’s variables, subscriptions and decoded spans. The catalogue is [requests.md](requests.md): every method, its params, defaults, replies and errors. An API item whose method is not there does not exist; what is not a method is listed there too.
+- **The shape is JSON-RPC 2.0’s, without its `"jsonrpc"` member, in CBOR:** `{"method", "params", "id"}` in; `{"id", "result"}` or `{"id", "error": {"code", "message", "data": {"reason", "path"}}}` out. A request without `"id"` is a notification: applied, with no reply and no error reported. Pass an id whenever the caller wants the answer.
+- An API method is one line: build the map from the caller’s arguments with the CBOR module, send it, return the `result`. An `error` becomes the language’s exception, with its `code`, `reason`, `path` and `message` unchanged. Match on `code` and `reason`, never on `message`.
+- `TA_ERROR_NO_MEMORY` means nothing was applied: grow the reply buffer and send the same request again.
 
 ## 11 · Project and build
 
-- A project per runtime at the repository root, named for it (`tinyactors-napi`, `tinyactors-browser`, `tinyactors-cpython`), with its own `mise.toml` pinning the toolchain, so nobody else downloads it. Where several runtimes share a language, the shared package is a project of its own (`tinyactors-js`) and each runtime’s project holds only its addon.
+- A project per runtime at the repository root, named for it (`tinyactors-napi`, `tinyactors-browser`, `tinyactors-cpython`), with its own `mise.toml` pinning the toolchain, so nobody else downloads it. Where several runtimes share a language, the shared package is a project of its own (`tinyactors-js`) and each runtime’s project holds only its addon. Confirm this layout with the first binding regenerated.
 - **Each runtime’s addon is its own C, with one function list.** The Node-API addon and the wasm addon cannot share a file (one is written against `napi_value`, the other against wasm numbers and pointers), but they export the same functions, and the shared package runs one test suite against each.
 - Liveness and timer accuracy are the runtime’s: whether a pending timer keeps the process alive, and how late a throttled timer fires (a hidden browser tab), are I/O behaviour, documented per runtime (Node: alive while a deadline is pending), not a policy. A late timer only makes delayed sends late; the next turn runs everything due, in order.
 - Link the release’s libraries (the amalgamation, or the release sources compiled into a wasm module for browsers). The binding has no C of its own beyond its addon.
-- **Wasm:** memory growth detaches every view, so the loader refreshes its views after any call that can allocate, and nothing else keeps one. Memory never shrinks: hibernation makes room for other actors, not a smaller footprint, so size for the peak. The page’s Content Security Policy can forbid `new Function`: offer the quickjs datamodel in a separate module for a strict policy, so pages that do not need it do not download it.
+- **Wasm:** memory growth detaches every view, so the loader refreshes its views after any call that can allocate, and nothing else keeps one. Memory never shrinks: hibernation makes room for other actors, not a smaller footprint, so size for the peak. The page’s Content Security Policy can forbid `new Function`: offer the ECMAScript datamodel in a separate module for a strict policy, so pages that do not need it do not download it.
 - Tasks as Ruby file tasks under `mise/tasks/`; its `test` task lists core’s sources in `#MISE sources` so a core change reruns it.
-- Repository rules apply: acronyms in capitals or lowercase, at most three parameters per C function, a `CHANGELOG.md` per released component, commits scoped by component.
+- Repository rules apply: acronyms in capitals or lowercase, at most three parameters per C function, no serialization on the hot path, a `CHANGELOG.md` per released component, commits scoped by component.
 
 ## 12 · Testing
 
-- **Request and reply vectors** *(proposed)* in `tests/conformance`: the binding must reproduce every pair.
-- **The conformance scenarios and the W3C suite** run through the binding, with each datamodel it offers; all 191 W3C tests must pass.
+- **The protocol vectors** ([tests/protocol](../tests/protocol/README.md)): `requests.txt`, `config.txt`, `envelopes.txt` and `values.txt`. They are byte-exact: the binding builds each case’s input with its own CBOR module from the `diag` line (or takes the hex), sends it through its own calls into core, decodes the answer into the language’s values and encodes it again, and compares it with the expected bytes, where tag 39999 is a wildcard for one item of the named type. A datamodel of its own passes the `roundtrip` and `malformed` cases of `values.txt`, except those named “ECMAScript: …”.
+- **The W3C suite** runs through the binding, with each datamodel it offers; all 191 tests must pass. The C conformance scenarios (`tests/conformance`) stay in core.
 - Tests run in parallel: listen on port 0, write to temporary directories, depend on no other test.
 - A test that compares timings runs alone.
 
 ## 13 · Done means
 
-- The mapping table exists, and every API item has a core function behind it.
+- The mapping table exists, and every API item has a core function or method behind it.
 - The queue loop handles every run status and every effect in section 4.
-- The vectors, the conformance scenarios and W3C pass.
-- No defaults, limits or messages of the binding’s own.
+- The protocol vectors and W3C pass.
+- No defaults, limits, methods or messages of the binding’s own.
 - Nothing C does is done again in the language.

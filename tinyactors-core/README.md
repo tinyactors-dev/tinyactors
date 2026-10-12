@@ -14,6 +14,8 @@ drain tagged effects.
 - [docs/layout.md](docs/layout.md) — file tree, tooling, tasks
 - [docs/distribution.md](docs/distribution.md) — what is released (the C libraries), the
   release targets and tasks
+- [docs/bindings.md](docs/bindings.md) — writing a binding: the queue loop, effects,
+  requests, values and envelopes, what a binding owns and what it must not do
 
 The release version is `TA_VERSION_MAJOR`, `_MINOR` and `_PATCH` in
 `include/tinyactors/types.h` (currently 0.2.0). The build and its tasks

@@ -58,6 +58,8 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 - Bytes that cross the API (requests, configs, envelopes, values) are
   fixed by the protocol vectors in `tests/protocol/` (its README.md): a
   change to them changes a vector, and every binding follows it.
+- A change a binding must follow (a call, an effect, a method, the config)
+  updates the binding guide, `docs/bindings.md`, in the same commit.
 - Names are whole words (docs/layout.md, "Naming"): the product is
   `tinyactors` (`<tinyactors/system.h>`, `libtinyactors_<layer>.a`), `ta_` /
   `TA_` is the only short prefix, files carry no prefix, internal includes are
