@@ -142,7 +142,15 @@ failures, refusal during a run, threads, garbage collection, liveness.
    (`mise run //tinyactors-test:lint -- conform.mjs`, `-- conform`), so
    its adapter imports only the public module (`@tinyactors/node`,
    `tinyactors`), and its conform task runs the suite with
-   `--kind binding`.
+   `--kind binding`. Done (`798a0191` … `82db7e4d`): each builds core's
+   amalgamation into its `build/core` (core's `amalgamate --out`), lints
+   all of its C with core's parameter and buffer patterns (utility rules
+   in `tinyactors-core/tools/lint/utils`, the typedef exemption by
+   parameter types) and with the layer, timer and prefix rules, and checks
+   its `docs/api-map.md` (`mise/lib/api_map.rb`); its `mise run test`
+   passes with no code and skips the suite until the adapter exists; the
+   root's `mise run test` runs both. zig stays pinned once, in the root
+   `mise.toml`, which every release build uses.
 
 5. **The W3C suite in git, and `confPython.xsl`.** The IRP suite is
    vendored in `tinyactors-test/suites/w3c/irp`, unmodified, with its
