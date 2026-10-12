@@ -65,7 +65,7 @@ the host injects in the same way. UTC is the default everywhere.
 | Name | Status | Note |
 |---|---|---|
 | `isInteger`, `isSafeInteger`, `isFinite`, `isNaN`, `parseInt`, `parseFloat`, `Number()` | built | |
-| `toString(radix)` on a number | named, not built | The name is registered for BigInts only: `(255).toString(16)` faults (`numbers.spec`, "toString of a number, which staticjs does not have"). |
+| `toString(radix)` on a number | built | `String(x)` with no radix or radix 10; any other radix 2 to 36 writes the digits V8 writes (its DoubleToRadixCString, V8 12.4, without libm: `sjs_number_format_radix`), swept against Node on a fixed list of doubles in every radix (`number_test --print`, tag Q). A radix outside 2 to 36 faults where JavaScript throws a RangeError; a string or object radix faults. |
 | constants (`EPSILON`, `MAX_SAFE_INTEGER`, …) | built | As listed in the README. |
 | `toFixed`, `toPrecision`, `toExponential` | built | The exact decimal value of the double, rounded half up, without libm (`sjs_number_format_digits`); swept against Node on a fixed list of doubles and digit counts (`number_test --print`, tag P). Out of range faults where JavaScript throws a RangeError; a string or object argument faults. |
 | `toLocaleString` | refused | Locale data. |
