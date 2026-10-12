@@ -183,9 +183,10 @@ review behind it).
 - **Dropping a payload's last reference can run Python code** (a
   finalizer, a weakref callback), and core calls `release` outside a run
   too: at the start of `ta_host_run`, in the ack, in `ta_host_free`, in
-  requests and in deliver, where reentry is not refused. Defer the last
+  requests and in deliver, where core now holds the run's rules (a call back into the host
+  is refused with `TA_ERROR_STATE`; ADR 0010, decision 3). Defer the last
   drop to a list emptied after the outer call into core returns
-  (bindings.md, section 8, line 133).
+  (bindings.md, section 8).
 - **Handles are slots in two tables** (`src/datamodel/handles.c`), one for
   payloads (with reference counts) and one for sessions, each a slot and a
   generation, never a pointer (bindings.md, section 8, line 131).
