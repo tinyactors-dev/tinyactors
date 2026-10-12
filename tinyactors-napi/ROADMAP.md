@@ -174,12 +174,17 @@ Progress:
 - Step 2: `7a0c46d9`.
 - Step 3: `8d6b4e29`. The decode error is `TinyactorsError` with core's
   status (`docs/decisions.md`, "Errors").
-- Step 4 (a, b and c in one commit): this commit. The API's shape is
+- Step 4 (a, b and c in one commit): `cba8ea36`. The API's shape is
   `docs/decisions.md`, "The Host's API", after a fresh agent's refutation;
   the request and config vectors it cannot send are a request to core,
   so the gate (`GATE` in `mise/napi.rb`) will hold the protocol suite
   when the runner skips them. The run budget is `docs/decisions.md`, "The
   run budget".
+- Step 5: this commit. The gate holds the M1 scenarios on quickjs under
+  node and bun (4 of 4 each). The protocol suite on quickjs passes 107
+  cases and fails 10, all of them cases the request to core names (9 of
+  requests.txt, config.txt "not CBOR"); it joins the gate when the runner
+  skips them.
 
 ## Later milestones
 

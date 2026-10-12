@@ -245,7 +245,6 @@ void ta_napi_loop_advance(ta_napi_host *host) {
 /* ---- SimulatedClock ------------------------------------------------------------------------- */
 
 ta_status ta_napi_clock_add(ta_napi_clock *clock, ta_napi_host *host) {
-    if (!host->ticks_per_second) return TA_ERROR_UNSUPPORTED; /* ROADMAP.md, "Requests to core" */
     if (clock->count == clock->capacity) {
         uint32_t capacity = clock->capacity ? clock->capacity * 2 : 4;
         ta_napi_host **hosts = (ta_napi_host **)realloc(clock->hosts, capacity * sizeof *hosts);
@@ -312,6 +311,13 @@ static napi_value ta_napi_clock_increment(napi_env env, napi_callback_info info)
     if (!clock) return NULL;
     if (napi_get_value_double(env, call.argv[0], &milliseconds) != napi_ok || !(milliseconds >= 0)) {
         ta_napi_throw_status(env, "SimulatedClock.increment", TA_ERROR_INVALID);
+        return NULL;
+    }
+    /* without the host's tick rate a time but 0 cannot be given in ticks
+     * (ROADMAP.md, "Requests to core") */
+    for (uint32_t i = 0; i < clock->count && milliseconds > 0; i++) {
+        if (clock->hosts[i]->ticks_per_second) continue;
+        ta_napi_throw_status(env, "SimulatedClock.increment: no ticksPerSecond in the config", TA_ERROR_UNSUPPORTED);
         return NULL;
     }
     clock->milliseconds += milliseconds;

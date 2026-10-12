@@ -42,11 +42,9 @@ napi_value ta_napi_request(napi_env env, napi_callback_info info) {
     ta_napi_call call;
     ta_napi_host *host = ta_napi_host_of(env, info, &call);
     if (!host) return NULL;
+    /* the caller's values go as they are: core checks them and refuses
+     * (bindings.md, section 2: "It decides no policy") */
     napi_valuetype type = napi_undefined;
-    if (napi_typeof(env, call.argv[0], &type) != napi_ok || type != napi_string) {
-        ta_napi_throw_status(env, "Host.request", TA_ERROR_INVALID);
-        return NULL;
-    }
     napi_value message, id;
     napi_create_object(env, &message);
     napi_set_named_property(env, message, "method", call.argv[0]);

@@ -33,7 +33,7 @@ module NodeAPI
   # suite of the set on both datamodels, native and quickjs, and both
   # pass. The protocol suite waits for a request to core (ROADMAP.md,
   # "Requests to core").
-  GATE = { suites: %w[], datamodels: %w[] }.freeze
+  GATE = { suites: %w[scenarios], datamodels: %w[quickjs] }.freeze
   # The datamodels `mise run conform` runs the suite on: both, unless
   # TA_NAPI_DATAMODELS names some (the test task's gate does).
   DATAMODELS = %w[native quickjs].freeze
