@@ -1,0 +1,9 @@
+{
+  "arch": "x86_64",
+  "compiler": "clang version 22.1.8 (https://github.com/conda-forge/clangdev-feedstock 4376d67fb227e616ccc5717854d9d41ab142e4fa)",
+  "cores": 4,
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+  "flags": "-O2 -fno-stack-protector -fvisibility=hidden",
+  "os": "Ubuntu 24.04.5 LTS (kernel 6.18.44-fc-v114)",
+  "ramBytes": 16874930176
+}
