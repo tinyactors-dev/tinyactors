@@ -82,8 +82,7 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
     { "Temporal.Now", "plainDateISO", SJS_BUILTIN_TEMPORAL_NOW_PLAIN_DATE_ISO },
     { "Temporal.Now", "plainDateTimeISO", SJS_BUILTIN_TEMPORAL_NOW_PLAIN_DATE_TIME_ISO },
     { "Temporal.Now", "plainTimeISO", SJS_BUILTIN_TEMPORAL_NOW_PLAIN_TIME_ISO },
-    /* The time zone's ID, its last two letters escaped as the calendar's getter is. */
-    { "Temporal.Now", "timeZone\x49\x64", SJS_BUILTIN_TEMPORAL_NOW_TIME_ZONE_ID },
+    { "Temporal.Now", "timeZoneId", SJS_BUILTIN_TEMPORAL_NOW_TIME_ZONE_ID },
     { "Temporal.Now", "zonedDateTimeISO", SJS_BUILTIN_TEMPORAL_NOW_ZONED_DATE_TIME_ISO }
 };
 
@@ -133,10 +132,7 @@ static const sjs_name NAMES[] = {
     NAME_TEMPORAL("blank", 0, SJS_FIELD_BLANK),
     NAME("blink", SJS_NAME_ON_STRING, 0, 0, 0),
     NAME("bold", SJS_NAME_ON_STRING, 0, 0, 0),
-    /* Temporal's getter of the calendar's ID, its last two letters escaped:
-     * check-acronyms reads the name as a mixed-case ID, and the name is
-     * JavaScript's, not ours to change. */
-    NAME_TEMPORAL("calendar\x49\x64", 0, SJS_FIELD_CALENDAR_ID),
+    NAME_TEMPORAL("calendarId", 0, SJS_FIELD_CALENDAR_ID),
     NAME("charAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_AT, 0),
     NAME("charCodeAt", SJS_NAME_ON_STRING, 0, SJS_METHOD_STRING_CHAR_CODE_AT, 0),
     NAME_MUTATION("clear", SJS_NAME_ON_SET | SJS_NAME_ON_MAP | SJS_NAME_MUTATING, SJS_METHOD_SET_CLEAR), /* MUTATION */

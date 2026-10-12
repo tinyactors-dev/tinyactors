@@ -151,8 +151,7 @@ To add a type's functions: IDs before `SJS_BUILTIN_FUNCTION_COUNT`, rows in
 `FUNCTION_TABLE` (`{ "new", "Temporal.PlainTime", ... }` for the
 constructor), `FUNCTION_VALUE`s, and cases in `function_call`.
 `Temporal.Now.instant()` is `{ "Temporal.Now", "instant", ... }`
-(`now_function`; timeZoneId's last two letters are escaped in the table,
-as calendarId's are, for `check-acronyms`).
+(`now_function`).
 
 ## Conversions, options, faults
 
@@ -506,7 +505,7 @@ and time at the time zone, read as an Instant's `toString` reads its
 `"UTC"` in any case, or a fixed offset `+HH`, `+HHMM`, `+HH:MM`; a time
 zone's name and an ISO string (both polyfills read its time zone) fault
 on purpose, and anything but a string is a TypeError there. The time
-zone is read before the clock, as both polyfills do. timeZoneId() is
+zone is read before the clock, as both polyfills do. `timeZoneId()` is
 `"UTC"`, and reads no clock. `zonedDateTimeISO` faults (no
 ZonedDateTime). Other arguments are ignored, as in JavaScript.
 
@@ -541,7 +540,7 @@ evaluator holds, so that pausing and resuming changes no value.
 - Temporal.Now: built on the host clock ("Host clock"). `instant()` is
   `new_instant` of the clock's epoch nanoseconds; the ISO functions are
   its date and time at the time zone (`put_instant`'s arithmetic:
-  `wide_floor` by a day, `date_at`, `set_time_of_day`), and timeZoneId()
-  is `"UTC"`. `zonedDateTimeISO` faults. `Date.now()` and `new Date()`,
+  `wide_floor` by a day, `date_at`, `set_time_of_day`), and
+  `timeZoneId()` is `"UTC"`. `zonedDateTimeISO` faults. `Date.now()` and `new Date()`,
   when built, read the same clock (`vm->clock`), floored to
   milliseconds.
