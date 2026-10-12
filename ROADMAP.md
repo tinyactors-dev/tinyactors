@@ -95,7 +95,7 @@ Every gate is mechanical and runs in the owning project's `mise run test`.
 |---|---|---|
 | **Protocol vectors**: byte-exact requests, config, envelopes and values, through the binding's own CBOR conversion | `tinyactors-test/suites/protocol` | drift in what crosses as CBOR |
 | **Scenarios**: charts in the W3C notation that check what happened themselves and end in `pass` or `fail`, with the host operations between runs (`steps.txt`), run by the implementation's real loop and effect handlers; no effect is compared | `tinyactors-test/suites/scenarios` | the loop, effect handling, ordering, time, hibernation, migration, snapshots |
-| **Differential runs**: every scenario, and every W3C test with expressions in both languages, on the native datamodel and on quickjs; the outcomes must be equal | the runner | a native datamodel that disagrees with the oracle |
+| **Differential runs**: the same scenarios and W3C suite on the native datamodel and on quickjs; both must pass, and no outcome is compared beyond that | the runner | a native datamodel, or quickjs, that fails the suite |
 | **W3C IRP**: 191 of 191 automatic tests per datamodel | `tinyactors-test/suites/w3c` | SCXML semantics end to end |
 | **Mapping table**: `docs/api-map.md`, each API item next to the `ta_*` function, request method or effect behind it, checked against `tinyactors.api.json` and `requests.md` | each binding | API items with nothing in core behind them |
 | **Layer lints** (ast-grep): the extension calls only `ta_*` and its runtime's API; `src/datamodel/` calls only `ta_datamodel_environment_*` and the language's API; one timer, in `loop.c` | each binding | reinvented layers |
@@ -140,8 +140,52 @@ failures, refusal during a run, threads, garbage collection, liveness.
    `napi_adjust_external_memory`), and the pitfalls M1 lists for its
    binding.
 
+5. **The W3C suite in git, and `confPython.xsl`.** The IRP suite is
+   vendored in `tinyactors-test/suites/w3c/irp`, unmodified, with its
+   `SOURCE` and `LICENSE` (W3C's 3-clause BSD license), and the fetch is
+   gone. A language is a stylesheet in `suites/w3c` named by the datamodel
+   it writes, with a skip list and a compile check
+   (`tinyactors-test/README.md`, "Languages"): `confPython.xsl` translates
+   the `conf:` notation for the python datamodel, `skip-python.txt` lists
+   the 19 tests of the ECMAScript data model and 567, and
+   `mise run check-languages` (in tinyactors-test's `mise run test`)
+   compiles every expression, location and script of the rest with
+   Python's `compile()`. Done (`c3f3328f`, `56b08120`, `08ff787b`,
+   `b3c6a047`).
+
 Done when: the whole suite passes against `ta-conform`, and core's tests
 run through it.
+
+Follow-ups for M0 (not done):
+
+- **(a) The runner fails a run that proves nothing:** zero passes in a
+  suite, or a skipped method the implementation's kind must offer. A
+  required-method list per kind: `ta-conform` offers all of them; a
+  binding all but the C-level ones (`value.encode`, `envelope.read`, and
+  `host.request`'s capacity).
+- **(b) Outcome canaries:** scenarios that must end in `fail`, `timeout`
+  and `compile`, with the expected outcome stated in their `steps.txt`, so
+  a runner or adapter that reports `pass` for everything fails.
+- **(c) `value.roundtrip` replaced by the public path:** `envelope.deliver`
+  to an echo chart that sends `_event.data` back to `_event.origin`,
+  comparing the data of the outgoing `PEER` envelope. A spike gave
+  identical bytes for all 11 roundtrip cases of `values.txt` in both
+  quickjs realms: one `from_wire` at the target
+  (`tinyactors-core/src/host/router.c:546-580`) and one `to_wire` in
+  `ta_host_envelope` (`router.c:1229-1267`), as
+  `tinyactors-core/tests/unit/test_router.c:1402-1407` counts them. And
+  `envelope.deliver` calls `ta_host_deliver` after a failed read, so every
+  malformed case answers route `REFUSED` and a `malformed` error envelope,
+  as core does (`test_router.c:1279-1301`).
+- **(d) Vectors:** lone surrogates refused (in a value and in a key); an
+  encoded surrogate (`63 eda080`) malformed; Python lines for the encode
+  and invalid cases where they apply; round trips outside ECMAScript for
+  tag 32 and `undefined`.
+- **(e) An adapter lint in each binding skeleton:** the adapter imports
+  only the binding's public module.
+- **(f) The runner picks the chart language from the datamodel name**
+  `host.create` reports, so a run that asks for a native datamodel cannot
+  be served by quickjs.
 
 #### M1: walking skeletons with native datamodels (both sessions)
 
@@ -153,6 +197,16 @@ error type; the CBOR conversion with the value table (`Address`,
 `"ecmascript"` in Node's engine) for `<data>`, `cond`, `assign`,
 `<script>`, `_event`, `In()`, `<send>` with params, `<foreach>`; quickjs
 wired in beside it; and the suite's adapter (`conform`).
+
+Both bindings: **a simulated clock** in the public API, its shape
+borrowed from xstate (`SimulatedClock`, `increment(ms)`) and its meaning
+ours. A host created with it arms no timer; `increment(ms)` calls
+`ta_host_advance_time` (the wall clock is the simulated time) and runs the
+loop until idle; inputs run the turn at the current time. It is the
+binding's form of "a caller's own clock" (`tinyactors-core/docs/bindings.md`,
+section 3). It serves application developers testing their charts first;
+the adapter uses it for the scenarios' `advance` steps. Each
+`docs/api-map.md` lists it against `ta_host_advance_time` and the turn.
 
 Gates: protocol vectors; the basics scenario on both datamodels;
 `values.txt` round trips on the native datamodel; mapping table; layer
@@ -207,8 +261,8 @@ pass of 2026-10-12):
 
 #### M2: W3C in each language
 
-`confPython.xsl` beside the W3C stylesheets (ours, checked in), the suite
-generated per datamodel, 191 of 191 on python, on Node's native
+`confPython.xsl` beside the W3C stylesheets (ours, checked in: M0 item
+5), the suite generated per datamodel, 191 of 191 on python, on Node's native
 ECMAScript datamodel and on quickjs. Decide here whether Python needs
 compile-time checks of its expressions (the deleted
 `ta_datamodel_compiler`; this time the compiler would call it).
@@ -265,8 +319,11 @@ tinyactors-test/
 │   ├── scenarios/           <name>/<document>.txml (conf: notation) and steps.txt
 │   │                        (host operations); the charts judge: pass or fail
 │   └── w3c/
-│       ├── confPython.xsl   ours (M2); confEcma.xsl and confXPath.xsl are fetched
-│       ├── skip.txt
+│       ├── irp/             the W3C IRP suite, vendored: manifest.xml, <id>/*.txml,
+│       │                    confEcma.xsl, confXPath.xsl, SOURCE, LICENSE
+│       ├── confPython.xsl   ours: the conf: notation in Python
+│       ├── skip.txt, skip-python.txt
+│       ├── check.py         check-languages: well-formed, no conf: left, compiles
 │       └── convert.py       the XSLT 2.0 step (SaxonC), for W3C and --scenarios
 ├── lib/                     the runner (Ruby): driver.rb (process, frames),
 │                            runner.rb (suites, compare, wildcards, report),
@@ -274,10 +331,11 @@ tinyactors-test/
 ├── mise/tasks/
 │   ├── run                  run -- <command…> [--suite protocol|scenarios|w3c] [--datamodel …]
 │   ├── encode               the vectors' hex from their diag lines (was protocol:encode)
-│   ├── w3c                  fetch and convert the W3C suite
-│   └── test                 encode --check, and the runner's tests (test/)
+│   ├── w3c                  convert the W3C suite for a language
+│   ├── check-languages      each stylesheet's translation, checked
+│   └── test                 encode --check, check-languages, the runner's tests (test/)
 ├── test/                    the runner's tests against fake_implementation.rb
-└── build/                   the fetched W3C suite, converted W3C and scenarios (gitignored)
+└── build/                   the converted W3C suite and scenarios (gitignored)
 ```
 
 #### tinyactors-core: what M0 adds
@@ -389,7 +447,22 @@ stable ABI of free-threaded builds (abi3t, 3.15).
 Gaps a binding session found, for the coordinator. Each names what is
 missing, why, and the suite case or test that shows it.
 
-(none yet)
+- **quickjs shares mutable values between actors.** What:
+  `ecmascript_capture_`
+  (`tinyactors-core/src/datamodel_ecmascript/datamodel_ecmascript.c:1557-1600`)
+  puts the values of `<param>`, the namelist and `<content>` into the
+  payload as references (`value_of`, then `JS_SetPropertyStr`), not
+  copies. So a sender that mutates an array after its `<send>`, or a
+  receiver that mutates `_event.data`, is seen by the other actor. Why:
+  actors share nothing (`tinyactors-core/docs/architecture.md:25`, C2;
+  `bindings.md` section 8, "Actors share no mutable value"), and
+  hibernation, which writes a blob, copies. Which test: a spike
+  (2026-10-12), two scenarios against `ta-conform` in the auto and the
+  isolated realm: a parent sends `[1,2,3]` to the child it invoked and
+  pushes 4 after the `<send>`, and the child sees 4 items; a child pushes
+  onto `_event.data.a`, and the parent's array grows. Both are seen in
+  both realms; without the mutation, neither is. A scenario that checks
+  it comes with the change (it fails on quickjs today).
 
 ## Now
 
