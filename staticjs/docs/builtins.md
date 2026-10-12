@@ -22,7 +22,7 @@ A built-in is one of two kinds, and the choice decides most of its cost.
   borrowed in a `sjs_leaf_call` and returns an owned `result` and a `cost`.
   `call()` charges the cost, cuts the stack and pushes the result.
 - **A loop** calls a callback: `map`, `filter`, `reduce`, `reduceRight`, `some`, `every`,
-  `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted`, `Object.groupBy`, `Array.from` (with a mapper), `Map.groupBy`, an array's, a map's
+  `find`, `findIndex`, `findLast`, `findLastIndex`, `flatMap`, `toSorted` (a loop without a compare function too, which calls nothing back and compares the elements' strings: `text_sort_step`, so that `sort()` runs as `sort(f)` does), `Object.groupBy`, `Array.from` (with a mapper), `Map.groupBy`, an array's, a map's
   or a set's `forEach`, an iterator's `map`, `filter`, `reduce`, `some`, `every`,
   `find` and `flatMap` (which run as the array's loops of their names over
   what the iterator yields: `late_start`; `flatMap` with its own step,
@@ -237,6 +237,9 @@ callback's own instructions.
   `Number(s)`, `parseInt` and `parseFloat` (and `String` of a primitive);
   one JavaScript does on the way to something else (`isNaN(s)`,
   `Math.abs(s)`) faults on a string, through `sjs_vm_to_number`.
+  `sort()` and `toSorted()` without a compare function turn primitives
+  into strings as `String` does, and fault on an object they would
+  compare.
 - **Mutating methods** (`push`, `sort`, `splice`, `add`, an iterator's `next`, a Date's `setTime`, ...) change the
   receiver and return something else in JavaScript, so never implement
   them as copies. One that changes a variable the function owns, or a

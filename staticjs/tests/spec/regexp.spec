@@ -1269,9 +1269,10 @@ Array.from(/(a)(b)/.exec("ab"))
 --- value
 ["ab","a","b"]
 
-=== toSorted of a match result without a compare function faults, as on any array
+=== toSorted of a match result without a compare function is a plain array
 /(b)(a)/.exec("ba").toSorted()
---- fault compare function
+--- value
+["a","b","ba"]
 
 === toSorted with a compare function of a match result is a plain array
 /(b)(a)/.exec("ba").toSorted((x, y) => x < y ? -1 : 1)
