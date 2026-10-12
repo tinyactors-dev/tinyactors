@@ -45,7 +45,7 @@ guide and the headers. Three decisions replace theirs:
 3. **Native datamodels come first.** Python programmers write chart logic
    in Python; a binding without its language's datamodel is not the
    product. The datamodel is in the first milestone of each binding,
-   checked against quickjs, which serves as the oracle.
+   held to the same suite as quickjs: both must pass it.
 
 ### Rules for the work
 
@@ -96,7 +96,7 @@ Every gate is mechanical and runs in the owning project's `mise run test`.
 | **Protocol vectors**: byte-exact requests, config, envelopes and values, through the binding's own CBOR conversion | `tinyactors-test/suites/protocol` | drift in what crosses as CBOR |
 | **Scenarios**: charts in the W3C notation that check what happened themselves and end in `pass` or `fail`, with the host operations between runs (`steps.txt`), run by the implementation's real loop and effect handlers; no effect is compared | `tinyactors-test/suites/scenarios` | the loop, effect handling, ordering, time, hibernation, migration, snapshots |
 | **Differential runs**: the same scenarios and W3C suite on the native datamodel and on quickjs; both must pass, and no outcome is compared beyond that | the runner | a native datamodel, or quickjs, that fails the suite |
-| **W3C IRP**: 191 of 191 automatic tests per datamodel | `tinyactors-test/suites/w3c` | SCXML semantics end to end |
+| **W3C IRP**: every automatic test per datamodel, except its language's skip list (`skip-<language>.txt`, each with a reason) | `tinyactors-test/suites/w3c` | SCXML semantics end to end |
 | **Mapping table**: `docs/api-map.md`, each API item next to the `ta_*` function, request method or effect behind it, checked against `tinyactors.api.json` and `requests.md` | each binding | API items with nothing in core behind them |
 | **Layer lints** (ast-grep): the extension calls only `ta_*` and its runtime's API; `src/datamodel/` calls only `ta_datamodel_environment_*` and the language's API; one timer, in `loop.c` | each binding | reinvented layers |
 | **Size tripwire**: a line budget per file, set at M1 | each binding | slow growth; exceeding it needs a sentence in the commit |
@@ -262,8 +262,9 @@ pass of 2026-10-12):
 #### M2: W3C in each language
 
 `confPython.xsl` beside the W3C stylesheets (ours, checked in: M0 item
-5), the suite generated per datamodel, 191 of 191 on python, on Node's native
-ECMAScript datamodel and on quickjs. Decide here whether Python needs
+5), the suite generated per datamodel: on python every test but the 20 in
+`skip-python.txt` (ECMAScript data model tests, and 567), 191 of 191 on
+Node's native ECMAScript datamodel and on quickjs. Decide here whether Python needs
 compile-time checks of its expressions (the deleted
 `ta_datamodel_compiler`; this time the compiler would call it).
 
