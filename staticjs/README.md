@@ -242,7 +242,7 @@ Built-ins:
 |---|---|
 | arrays | `at` `concat` `entries` `every` `filter` `find` `findIndex` `findLast` `findLastIndex` `flat` `flatMap` `forEach` `includes` `indexOf` `join` `keys` `lastIndexOf` `map` `reduce` `reduceRight` `slice` `some` `toReversed` `toSorted` `toSpliced` `values` `with`, `length` |
 | strings | `at` `charAt` `charCodeAt` `codePointAt` `concat` `endsWith` `includes` `indexOf` `isWellFormed` `padEnd` `padStart` `repeat` `replace` `replaceAll` `slice` `split` `startsWith` `substr` `substring` `toLowerCase` `toUpperCase` `toWellFormed` `trim` `trimEnd` `trimLeft` `trimRight` `trimStart`, `length`, indexing |
-| regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `search` (with a regular expression only), `replace` `replaceAll` `split` (with one or a string; `split` takes a limit, a number, with a regular expression only). A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop; where no thread is alive, a pattern that begins with an ASCII character, or with `^` past the start, skips the bytes that cannot begin a match, charging the fuel following them would. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, a primitive written as `String` writes it, or a function called once per match. A regular expression is written as `/source/flags`, `typeof` gives `"object"`, `JSON.stringify` `{}`, and a property it does not have `undefined` |
+| regular expressions | literals (docs/regex.md); `test` `exec`, `source` `flags` `global` `ignoreCase` `multiline` `dotAll` `unicode` `unicodeSets` `sticky` `hasIndices`, `lastIndex` (always 0); with a string: `match` `matchAll` `search` (with a regular expression only), `replace` `replaceAll` `split` (with one or a string, and a limit that is a number, a boolean, `null` or `undefined`). A match runs in time linear in its input, on a Pike automaton paused on fuel like any loop; where no thread is alive, a pattern that begins with an ASCII character, or with `^` past the start, skips the bytes that cannot begin a match, charging the fuel following them would. A match result is an array with `index`, `input`, `groups` and, with `d`, `indices`; a replacement is a string with `$&` `` $` `` `$'` `$$` `$n` `$<name>`, a primitive written as `String` writes it, or a function called once per match. A regular expression is written as `/source/flags`, `typeof` gives `"object"`, `JSON.stringify` `{}`, and a property it does not have `undefined` |
 | sets | `has` `keys` `values` `entries` `forEach` `union` `intersection` `difference` `symmetricDifference` `isSubsetOf` `isSupersetOf` `isDisjointFrom`, `size` |
 | maps | `get` `has` `keys` `values` `entries` `forEach`, `size` |
 | iterators | `toArray` `map` `filter` `reduce` `some` `every` `find` `forEach` `flatMap` `take` `drop` |
@@ -644,8 +644,8 @@ compare identities, or find something on a prototype.
   halves of a surrogate pair, which JavaScript makes into a lone
   surrogate; a replacement that is an object or a BigInt, or a
   replacement function that returns one (an array included); a
-  non-string argument (`re.test(1)`) or a limit that is not a number
-  (`s.split(re, "2")`) that JavaScript converts; `Object.keys`,
+  non-string argument (`re.test(1)`) or a `split` limit that is a string,
+  an object or a BigInt (`s.split(re, "2")`) that JavaScript converts; `Object.keys`,
   `Object.values`, `Object.entries`, an object spread or rest, or `sort`
   of a match result, as JavaScript would show or keep `index`, `input` and
   `groups` among its keys. A regular expression is an object: `===` on

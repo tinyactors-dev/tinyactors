@@ -262,6 +262,19 @@ sjs_result sjs_property_get(sjs_vm *vm, sjs_member member, sjs_value *out);
 /* ToNumber, for the values it does not need to parse. */
 sjs_result sjs_vm_to_number(sjs_vm *vm, sjs_value v, double *out);
 
+/* split's limit, with a string or a regular expression: ToUint32, and
+ * 2^32 - 1 for undefined; false for a string, an object or a BigInt, which
+ * JavaScript converts (or throws on), and the caller faults. */
+static inline bool sjs_split_limit(sjs_value v, uint32_t *out) {
+    switch (v.kind) {
+    case SJS_UNDEFINED: *out = UINT32_MAX; return true;
+    case SJS_NULL: *out = 0; return true;
+    case SJS_BOOLEAN: *out = v.boolean ? 1u : 0u; return true;
+    case SJS_NUMBER: *out = sjs_number_to_uint32(v.as.number); return true;
+    default: return false;
+    }
+}
+
 /* A property of a regular expression (regex_match.c): its source, its flags
  * and their getters, and lastIndex, which is 0; undefined for a name
  * RegExp.prototype lacks; a fault for one of its methods read as a value. */
