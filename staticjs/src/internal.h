@@ -863,8 +863,9 @@ typedef enum {
     SJS_BUILTIN_TEMPORAL_NOW_TIME_ZONE_ID,
     SJS_BUILTIN_TEMPORAL_NOW_ZONED_DATE_TIME_ISO,
     SJS_BUILTIN_FUNCTION_COUNT,
-    /* Methods, called on a receiver. */
-    SJS_METHOD_FIRST = 102,
+    /* Methods, called on a receiver: from 128, which leaves the functions
+     * room to grow without moving it. */
+    SJS_METHOD_FIRST = 128,
     /* Arrays. */
     SJS_METHOD_ARRAY_AT = SJS_METHOD_FIRST,
     SJS_METHOD_ARRAY_CONCAT,
@@ -1048,9 +1049,10 @@ typedef enum {
     SJS_REGEX_LOOP_FIRST
 } sjs_builtin_id;
 
-/* A method's ID is a byte in NAMES (sjs_name.methods, .mutation). */
-_Static_assert(SJS_METHOD_MUTATION_FIRST <= UINT8_MAX && SJS_REGEX_LOOP_FIRST <= UINT8_MAX,
-               "a method's ID must fit a byte of NAMES");
+/* A method's ID is a uint16_t in NAMES (sjs_name.methods, .mutation), and a
+ * regular expression loop's in sjs_frame.builtin. */
+_Static_assert(SJS_METHOD_MUTATION_FIRST <= UINT16_MAX && SJS_REGEX_LOOP_FIRST <= UINT16_MAX,
+               "a method's ID must fit a uint16_t of NAMES");
 _Static_assert(SJS_BUILTIN_FUNCTION_COUNT <= SJS_METHOD_FIRST, "the functions' IDs run into the methods'");
 
 /* The built-in function `Namespace.name` or bare `name`; NONE if unknown. */
@@ -1084,12 +1086,12 @@ const sjs_function_entry *sjs_functions(uint32_t *count);
 
 typedef struct {
     sjs_str name;
-    uint8_t flags;      /* SJS_NAME_* */
-    uint8_t methods[9]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
-                         * iterator, a regular expression, a number, a Temporal value; 0 if none */
-    uint8_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
-                         * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
-    uint8_t field;      /* the getter of a Temporal value (sjs_temporal_field); 0 if none */
+    uint8_t flags;       /* SJS_NAME_* */
+    uint16_t methods[9]; /* the staticjs method on an array, a string, a set, a BigInt, a map, an
+                          * iterator, a regular expression, a number, a Temporal value; 0 if none */
+    uint16_t mutation;   /* MUTATION: the method that changes its receiver, of the one kind
+                          * that has it (SJS_METHOD_MUTATION_FIRST on); 0 if none */
+    uint8_t field;       /* the getter of a Temporal value (sjs_temporal_field); 0 if none */
 } sjs_name;
 
 /* The entry of `text` plus one, or 0 when it has none. */
