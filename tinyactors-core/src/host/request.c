@@ -660,7 +660,7 @@ static void request_run_actor_state(request *r, uint32_t map) {
     }
 }
 
-/* actor.subscribe: CHANGED effects for the session from the next run on. */
+/* actor.subscribe: actor.changed notifications for the session from the next run on. */
 static void request_run_actor_subscribe(request *r, uint32_t map) {
     static const char *const fields[] = {"session", NULL};
     uint64_t session;

@@ -462,6 +462,7 @@ ta_status ta_host_create(ta_bytes cbor, const ta_host_environment *environment, 
 }
 
 static void effects_release(ta_host *h);
+static size_t subscriptions_bytes(const ta_host *host);
 
 static void job_free(ta_host *host, migration_job *job) {
     host_free(host, job->name, job->name_length);
@@ -497,8 +498,7 @@ void ta_host_free(ta_host *host) {
     ta_output_free(&host->blob);
     host_free(host, host->blob2, host->blob2_capacity);
     host_free(host, host->errors, sizeof(pending_error) * host->error_capacity);
-    if (host->subscriptions)
-        host_free(host, host->subscriptions, sizeof(uint64_t) * host->config.max_subscriptions);
+    if (host->subscriptions) host_free(host, host->subscriptions, subscriptions_bytes(host));
     if (host->io_processor_text) host_free(host, host->io_processor_text, host->io_processor_text_length);
     for (uint32_t i = 0; i < host->retired_chart_count; i++)
         host_free(host, host->retired_charts[i].name,
@@ -626,7 +626,12 @@ ta_status host_locate(const ta_host *host, uint64_t session, uint32_t *segment, 
     return TA_OK;
 }
 
-/* ---- subscriptions (actor.subscribe) --------------------------------------------------- */
+/* ---- subscriptions (actor.subscribe, actor.changed) ----------------------------------- */
+
+/* The table's block: the sessions, then a mark for each (1 byte). */
+static size_t subscriptions_bytes(const ta_host *host) {
+    return (sizeof(uint64_t) + 1) * host->config.max_subscriptions;
+}
 
 static uint32_t subscription_find(const ta_host *host, uint64_t session) {
     for (uint32_t i = 0; i < host->subscription_count; i++)
@@ -634,15 +639,23 @@ static uint32_t subscription_find(const ta_host *host, uint64_t session) {
     return TA_NIL;
 }
 
+/* Subscription i leaves: the last one takes its place, with its mark. */
+static void subscription_remove(ta_host *host, uint32_t i) {
+    uint32_t last = --host->subscription_count;
+    host->subscriptions[i] = host->subscriptions[last];
+    host->subscription_marks[i] = host->subscription_marks[last];
+}
+
 ta_status host_subscribe(ta_host *host, uint64_t session) {
     if (host_locate(host, session, NULL, NULL) != TA_OK) return TA_ERROR_STALE;
     if (subscription_find(host, session) != TA_NIL) return TA_OK;
     if (host->subscription_count == host->config.max_subscriptions) return TA_ERROR_STATE;
     if (!host->subscriptions) { /* the whole table, once, with the first (never during a run) */
-        host->subscriptions =
-            (uint64_t *)host_alloc(host, sizeof(uint64_t) * host->config.max_subscriptions);
+        host->subscriptions = (uint64_t *)host_alloc(host, subscriptions_bytes(host));
         if (!host->subscriptions) return TA_ERROR_NO_MEMORY;
+        host->subscription_marks = (uint8_t *)(host->subscriptions + host->config.max_subscriptions);
     }
+    host->subscription_marks[host->subscription_count] = 0;
     host->subscriptions[host->subscription_count++] = session;
     return TA_OK;
 }
@@ -650,25 +663,92 @@ ta_status host_subscribe(ta_host *host, uint64_t session) {
 ta_status host_unsubscribe(ta_host *host, uint64_t session) {
     uint32_t i = subscription_find(host, session), segment, actor;
     if (i == TA_NIL) return TA_ERROR_STALE;
-    host->subscriptions[i] = host->subscriptions[--host->subscription_count];
+    subscription_remove(host, i);
     if (host_locate(host, session, &segment, &actor) == TA_OK)
         ta_actor_watch(segment_of(host, segment)->system, actor, 0);
     return TA_OK;
 }
 
 /* Before a run: watch every subscribed session again (its watch ends with
- * the CHANGED of the last run, or the actor was woken or moved since);
- * sessions that ended leave the list. */
+ * the system's CHANGED of the last run, or the actor was woken or moved
+ * since). A session that ended stays until its actor.changed (value null)
+ * is appended at the end of the run. */
 static void subscriptions_arm(ta_host *host) {
-    for (uint32_t i = 0; i < host->subscription_count;) {
+    for (uint32_t i = 0; i < host->subscription_count; i++) {
         uint32_t segment, actor;
-        if (host_locate(host, host->subscriptions[i], &segment, &actor) != TA_OK) {
-            host->subscriptions[i] = host->subscriptions[--host->subscription_count];
+        if (host_locate(host, host->subscriptions[i], &segment, &actor) == TA_OK)
+            ta_actor_watch(segment_of(host, segment)->system, actor, 1); /* hibernated: next time */
+    }
+}
+
+/* The system's CHANGED for `session` (drain): its actor.changed is due at
+ * the end of the run. A session nobody subscribes to any more is dropped. */
+static void subscription_mark(ta_host *host, uint64_t session) {
+    uint32_t i = subscription_find(host, session);
+    if (i != TA_NIL) host->subscription_marks[i] = 1;
+}
+
+/* An actor.changed notification for subscription i (docs/requests.md):
+ * {"method": "actor.changed", "params": {"session", "value"}}, the state
+ * value as actor.state answers it now, null when the session ended. */
+static ta_status subscription_notify(ta_host *host, uint32_t i, int ended) {
+    static const ta_string_view method = {"actor.changed", 13};
+    uint64_t session = host->subscriptions[i];
+    ta_output *out = host_output(host);
+    cbor_output_head(out, CBOR_MAJOR_MAP, 2);
+    cbor_output_text(out, (ta_string_view){"method", 6});
+    cbor_output_text(out, method);
+    cbor_output_text(out, (ta_string_view){"params", 6});
+    size_t params = out->length;
+    cbor_output_head(out, CBOR_MAJOR_MAP, 2);
+    cbor_output_text(out, (ta_string_view){"session", 7});
+    cbor_output_uint(out, session);
+    size_t value = out->length;
+    cbor_output_text(out, (ta_string_view){"value", 5});
+    if (ended) {
+        cbor_output_simple(out, 22); /* null */
+    } else if (host_state_value(host, session, out) != TA_OK) {
+        /* more states than a state value holds: no "value" (actor.state answers "limit") */
+        out->length = value;
+        ta_output_patch(out, params, (ta_bytes){"\xa1", 1});
+    }
+    if (!ta_output_fits(out) || !host_effects_reserve(host, 1, method.length + out->length))
+        return TA_ERROR_NO_MEMORY;
+    ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_NOTIFICATION, TA_NIL);
+    effect->session = session;
+    ta_string_view none = {"", 0};
+    host_effect_strings_set(host, none, method, none, none);
+    effect_strings *strings = &host->effect_strings[host->effect_count - 1];
+    strings->offset[EFFECT_STRINGS - 1] =
+        host_pool_put(host, (ta_string_view){(const char *)out->bytes, (uint32_t)out->length});
+    effect->wire.length = out->length;
+    return TA_OK;
+}
+
+/* At the end of a run: an actor.changed for each subscribed session that
+ * finished a macrostep in it (marked), or ended (its subscription goes with
+ * it). 0 when the allocator refused room for one: it keeps its mark and is
+ * appended at the end of the next run. */
+static int subscriptions_notify(ta_host *host) {
+    int all = 1;
+    for (uint32_t i = 0; i < host->subscription_count;) {
+        int ended = host_locate(host, host->subscriptions[i], NULL, NULL) != TA_OK;
+        if (!ended && !host->subscription_marks[i]) {
+            i++;
             continue;
         }
-        ta_actor_watch(segment_of(host, segment)->system, actor, 1); /* hibernated: next time */
-        i++;
+        if (subscription_notify(host, i, ended) != TA_OK) {
+            host->subscription_marks[i] = 1;
+            all = 0;
+            i++;
+        } else if (ended) {
+            subscription_remove(host, i);
+        } else {
+            host->subscription_marks[i] = 0;
+            i++;
+        }
     }
+    return all;
 }
 
 /* ---- state values ---------------------------------------------------------------------- */
@@ -1210,10 +1290,10 @@ static ta_status drain(ta_host *host, uint32_t si) {
     host->draining = si;
     for (; done < n; done++) {
         const ta_effect *effect_view = &effect[done];
-        if (effect_view->kind == TA_EFFECT_CHANGED &&
-            subscription_find(host, effect_view->session) == TA_NIL)
-            status = TA_OK; /* unsubscribed since it was watched */
-        else if (effect_view->kind == TA_EFFECT_SEND && effect_view->io_processor == 0)
+        if (effect_view->kind == TA_EFFECT_CHANGED) { /* actor.changed, at the end of the run */
+            subscription_mark(host, effect_view->session);
+            status = TA_OK;
+        } else if (effect_view->kind == TA_EFFECT_SEND && effect_view->io_processor == 0)
             status = ta_router_outbound(host, si, effect_view);
         else if (effect_view->kind == TA_EFFECT_SEND)
             status = effect_copy(
@@ -1792,6 +1872,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     }
     host->job_count = kj;
     if (!retire(host)) exhausted = 1;
+    if (host->subscription_count && !subscriptions_notify(host)) exhausted = 1;
     clocks_sync(host);
     /* yielded: segments have work, or a job has actors left to look at. A job
      * that only waits (busy or sleeping actors) moves on when they change —

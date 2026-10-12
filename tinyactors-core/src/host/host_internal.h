@@ -153,7 +153,10 @@ struct ta_host {
     void *resource_block; /* config.telemetry.resource and its strings (host_new) */
     size_t resource_bytes;
     uint64_t *subscriptions; /* actor.subscribe: config.max_subscriptions sessions, allocated
-                                with the first subscription (never during a run) */
+                                with the first subscription (never during a run), then
+                                subscription_marks in the same block */
+    uint8_t *subscription_marks; /* 1: the session finished a macrostep (or ended) and its
+                                    actor.changed is not appended yet (subscriptions_notify) */
     uint32_t subscription_count;
     char base[TA_ADDRESS_SYSTEM_MAX + 16]; /* tinyactors://<system_id>/ */
     uint32_t base_length;
