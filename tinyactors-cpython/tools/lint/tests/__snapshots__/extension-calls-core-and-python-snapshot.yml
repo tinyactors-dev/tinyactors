@@ -20,6 +20,26 @@ snapshots:
       style: secondary
       start: 54
       end: 60
+  static void *ta_python_grow(void *pointer, size_t size) { return realloc(pointer, size); }:
+    labels:
+    - source: realloc(pointer, size)
+      style: primary
+      start: 65
+      end: 87
+    - source: realloc
+      style: secondary
+      start: 65
+      end: 72
+  static void *ta_python_zeroed(size_t size) { return calloc(1, size); }:
+    labels:
+    - source: calloc(1, size)
+      style: primary
+      start: 52
+      end: 67
+    - source: calloc
+      style: secondary
+      start: 52
+      end: 58
   static void ta_python_eval(JSContext *context) { JS_Eval(context, "1", 1, "x", 0); }:
     labels:
     - source: JS_Eval(context, "1", 1, "x", 0)
@@ -40,6 +60,16 @@ snapshots:
       style: secondary
       start: 46
       end: 52
+  static void ta_python_release(void *pointer) { free(pointer); }:
+    labels:
+    - source: free(pointer)
+      style: primary
+      start: 47
+      end: 60
+    - source: free
+      style: secondary
+      start: 47
+      end: 51
   static void ta_python_track(PyObject *object) { _PyObject_GC_TRACK(object); }:
     labels:
     - source: _PyObject_GC_TRACK(object)

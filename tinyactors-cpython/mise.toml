@@ -7,9 +7,13 @@
 # zig here could drift from the one every other release uses.
 
 [tools]
-# The wheel is abi3 from 3.11 (Py_LIMITED_API 0x030B0000): the extension
-# is built and tested on the oldest interpreter it claims.
-python = "3.11"
+# The wheel is abi3 from 3.13 (Py_LIMITED_API 0x030D0000): the extension
+# is built and tested on the oldest interpreter it claims. 3.13 is the
+# first whose limited API has the raw allocator the host is given
+# (PyMem_RawMalloc, Include/pymem.h, 3.13: line 90) and PyDict_GetItemRef,
+# PyList_GetItemRef, PyType_GetModuleByDef and Py_mod_gil, so the
+# free-threaded test build needs no compatibility macros (AGENTS.md).
+python = "3.13"
 # Installs the free-threaded interpreter below, and runs Python tools.
 uv = "0.12.22"
 

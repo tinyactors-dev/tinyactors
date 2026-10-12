@@ -5,11 +5,10 @@
 #
 #   - PyCMethod, a METH_METHOD | METH_FASTCALL | METH_KEYWORDS method:
 #     (PyObject *, PyTypeObject *, PyObject *const *, size_t, PyObject *)
-#     (CPython's Include/methodobject.h, 3.11: line 26);
-#   - PyCFunctionFastWithKeywords (`_PyCFunctionFastWithKeywords` before
-#     3.13), a METH_FASTCALL | METH_KEYWORDS function:
-#     (PyObject *, PyObject *const *, Py_ssize_t, PyObject *)
-#     (Include/methodobject.h, 3.11: line 23);
+#     (CPython's Include/methodobject.h, 3.13: line 26);
+#   - PyCFunctionFastWithKeywords, a METH_FASTCALL | METH_KEYWORDS
+#     function: (PyObject *, PyObject *const *, Py_ssize_t, PyObject *)
+#     (Include/methodobject.h, 3.13: line 23);
 #   - ta_allocator's alloc and free, which the host's allocator fills
 #     (tinyactors-core/tools/lint/utils/allocator-signature.yml).
 #

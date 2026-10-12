@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Build the wheel: one abi3 wheel (3.11+) per platform, no .py files in it. Not yet: packaging is M5"
+#MISE description="Build the wheel: one abi3 wheel (3.13+) per platform, no .py files in it. Not yet: packaging is M5"
 # vim:ft=ruby
 
 # ROADMAP.md, step 8, M5 ("examples and release": release tasks and

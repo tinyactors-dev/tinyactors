@@ -8,7 +8,7 @@
 # (four-or-more-parameters, bytes-as-pointer-and-length, allocator-signature),
 # so the patterns are core's and are written once. The others are this
 # binding's gates (ROADMAP.md, step 8, "Gates"): the layers, one timer,
-# and the ta_python_ prefix.
+# the ta_python_ prefix, and no mutable globals.
 ruleDirs:
   - tools/lint/rules
 utilDirs:

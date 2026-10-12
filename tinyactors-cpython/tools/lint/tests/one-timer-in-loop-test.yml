@@ -1,8 +1,7 @@
 id: one-timer-in-loop
 valid:
   - "static PyObject *ta_python_name(PyObject *module) { return PyObject_GetAttrString(module, \"Host\"); }"
-  - "static const char *ta_python_message = \"call_at failed\";"
-  - "static PyObject *ta_python_sleeper = NULL;"
+  - "static const char ta_python_message[] = \"call_at failed\";"
 invalid:
   - "static PyObject *ta_python_arm(PyObject *loop, PyObject *when, PyObject *callback) { return PyObject_CallMethod(loop, \"call_at\", \"OO\", when, callback); }"
   - "static PyObject *ta_python_later(PyObject *loop) { return PyObject_GetAttrString(loop, \"call_later\"); }"

@@ -5,8 +5,10 @@
 # function (_Py*, outside the limited API the wheel is built with).
 #
 # Of the C library it calls only the memory and string functions below,
-# which value conversion needs; memory comes from PyMem_RawMalloc (the
-# host's allocator, AGENTS.md). A C library function the binding needs is
+# which value conversion needs. Memory comes from CPython's raw domain,
+# PyMem_RawMalloc and PyMem_RawFree (the host's allocator, AGENTS.md; in
+# the limited API from 3.13, Include/pymem.h: line 90), never from malloc,
+# calloc, realloc or free. A C library function the binding needs is
 # added to this list with its reason, in the commit that first calls it.
 # Calls through a pointer (a vtable entry) are not checked.
 id: extension-calls-core-and-python
