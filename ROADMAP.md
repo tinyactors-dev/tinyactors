@@ -303,9 +303,10 @@ In progress beside M0, in core:
 
 - **Open spans are ended, not lost.** A host stopped with spans open ends
   them, so the binding's last take of traces includes them, and
-  `ta_host_free` drops nothing a caller could still have taken.
+  `ta_host_free` drops nothing a caller could still have taken. Done
+  (`32d63292`: the `trace.end` request; `docs/requests.md`).
 - **The torture bench's `traceBytesTotal` is removed:** it reads 0 since
-  the host drains the journals (5c).
+  the host drains the journals (5c). Done (`1c8c4fa6`).
 - **Definition logs:** a log record when a chart version is linked,
   retired and freed (0.1's `tinyactors.definition.*`). Done (`dbe8435d`;
   `tinyactors-core/docs/architecture.md`, 16.3).
