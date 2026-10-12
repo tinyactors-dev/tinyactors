@@ -131,9 +131,25 @@ class Runner
       next if @only && !@only.protocol.include?(kind)
 
       Vectors.read(path).each do |vector|
-        run_case('protocol', vector.to_s) { send("#{kind}_case", vector) }
+        run_case('protocol', vector.to_s) do
+          reference_only!(vector)
+          send("#{kind}_case", vector)
+        end
       end
     end
+  end
+
+  # A case marked "only reference" is envelope-level: its bytes are no
+  # request or config a binding's API makes (request(method, params)
+  # writes the map and its id; the config is encoded from a language value),
+  # so only the reference runs it (suites/protocol/README.md,
+  # "Envelope-level cases").
+  def reference_only!(vector)
+    only = vector.get('only')
+    return unless only
+
+    raise Failed, "only #{only}: a case can be limited to the reference alone" unless only == 'reference'
+    raise Skipped, 'envelope-level: reference only' unless @kind == 'reference'
   end
 
   # Every send with the reply after it, in order, on one host; a capacity

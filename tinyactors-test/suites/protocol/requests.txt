@@ -9,34 +9,41 @@
 #                     with the length it needs, then that length: the reply
 #                     (and what the refused one did not apply)
 #   diag <text>       the hex line before it, in diagnostic notation
+#   only reference    an envelope-level case: run by the reference (ta-conform)
+#                     alone; a binding skips it (README.md, "Envelope-level cases")
 # A case's sends go in order to one host. In a reply, 39999("<type>") is a
 # wildcard (README.md); an error's message always is one.
 
 request not CBOR
+only reference
 send ff
 diag (not CBOR)
 reply a2626964f6656572726f72a364636f6465397fbb676d657373616765d99c3f64746578746464617461a266726561736f6e696d616c666f726d6564647061746860
 diag {"id":null,"error":{"code":-32700,"message":39999("text"),"data":{"reason":"malformed","path":""}}}
 
 request not a map
+only reference
 send 01
 diag 1
 reply a2626964f6656572726f72a364636f6465397f57676d657373616765d99c3f64746578746464617461a266726561736f6e6474797065647061746860
 diag {"id":null,"error":{"code":-32600,"message":39999("text"),"data":{"reason":"type","path":""}}}
 
 request a batch is not supported yet
+only reference
 send 81a262696401666d6574686f646a6163746f722e6c697374
 diag [{"id":1,"method":"actor.list"}]
 reply a2626964f6656572726f72a364636f6465397f57676d657373616765d99c3f64746578746464617461a266726561736f6e6474797065647061746860
 diag {"id":null,"error":{"code":-32600,"message":39999("text"),"data":{"reason":"type","path":""}}}
 
 request no method, no id
+only reference
 send a0
 diag {}
 reply a2626964f6656572726f72a364636f6465397f57676d657373616765d99c3f64746578746464617461a266726561736f6e676d697373696e676470617468666d6574686f64
 diag {"id":null,"error":{"code":-32600,"message":39999("text"),"data":{"reason":"missing","path":"method"}}}
 
 request no method
+only reference
 send a162696401
 diag {"id":1}
 reply a262696401656572726f72a364636f6465397f57676d657373616765d99c3f64746578746464617461a266726561736f6e676d697373696e676470617468666d6574686f64
@@ -49,6 +56,7 @@ reply a262696401656572726f72a364636f6465397f57676d657373616765d99c3f647465787464
 diag {"id":1,"error":{"code":-32600,"message":39999("text"),"data":{"reason":"type","path":"method"}}}
 
 request a member a request does not have
+only reference
 send a362696401666d6574686f646a6163746f722e6c697374617801
 diag {"id":1,"method":"actor.list","x":1}
 reply a262696401656572726f72a364636f6465397f57676d657373616765d99c3f64746578746464617461a266726561736f6e67756e6b6e6f776e64706174686178
@@ -61,36 +69,42 @@ reply a262696401656572726f72a364636f6465397f57676d657373616765d99c3f647465787464
 diag {"id":1,"error":{"code":-32600,"message":39999("text"),"data":{"reason":"type","path":"params"}}}
 
 request id is not an integer, text or null
+only reference
 send a262696480666d6574686f646a6163746f722e6c697374
 diag {"id":[],"method":"actor.list"}
 reply a2626964f6656572726f72a364636f6465397f57676d657373616765d99c3f64746578746464617461a266726561736f6e64747970656470617468626964
 diag {"id":null,"error":{"code":-32600,"message":39999("text"),"data":{"reason":"type","path":"id"}}}
 
 request id is not a float
+only reference
 send a2626964f93e00666d6574686f646a6163746f722e6c697374
 diag {"id":1.5,"method":"actor.list"}
 reply a2626964f6656572726f72a364636f6465397f57676d657373616765d99c3f64746578746464617461a266726561736f6e64747970656470617468626964
 diag {"id":null,"error":{"code":-32600,"message":39999("text"),"data":{"reason":"type","path":"id"}}}
 
 request id: an unsigned integer
+only reference
 send a262696407666d6574686f646a6163746f722e6c697374
 diag {"id":7,"method":"actor.list"}
 reply a26269640766726573756c74a26873657373696f6e738066637572736f72f6
 diag {"id":7,"result":{"sessions":[],"cursor":null}}
 
 request id: a negative integer
+only reference
 send a262696424666d6574686f646a6163746f722e6c697374
 diag {"id":-5,"method":"actor.list"}
 reply a26269642466726573756c74a26873657373696f6e738066637572736f72f6
 diag {"id":-5,"result":{"sessions":[],"cursor":null}}
 
 request id: text
+only reference
 send a26269646161666d6574686f646a6163746f722e6c697374
 diag {"id":"a","method":"actor.list"}
 reply a2626964616166726573756c74a26873657373696f6e738066637572736f72f6
 diag {"id":"a","result":{"sessions":[],"cursor":null}}
 
 request id: null
+only reference
 send a2626964f6666d6574686f646a6163746f722e6c697374
 diag {"id":null,"method":"actor.list"}
 reply a2626964f666726573756c74a26873657373696f6e738066637572736f72f6
@@ -109,17 +123,20 @@ reply a262696401656572726f72a364636f6465397f59676d657373616765d99c3f647465787464
 diag {"id":1,"error":{"code":-32602,"message":39999("text"),"data":{"reason":"unknown","path":"params.x"}}}
 
 request more items than a request holds
+only reference
 send a2666d6574686f646a6163746f722e6c69737466706172616d73a1617899012c010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101
 diag {"method":"actor.list","params":{"x":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}}
 reply a2626964f6656572726f72a364636f6465397d02676d657373616765d99c3f64746578746464617461a266726561736f6e656c696d6974647061746860
 diag {"id":null,"error":{"code":-32003,"message":39999("text"),"data":{"reason":"limit","path":""}}}
 
 request notification: no reply
+only reference
 send a1666d6574686f646a6163746f722e6c697374
 diag {"method":"actor.list"}
 reply none
 
 request notification: no error either
+only reference
 send a1666d6574686f64646e6f7065
 diag {"method":"nope"}
 reply none
@@ -128,6 +145,7 @@ diag {"method":"actor.list","params":{"limit":0}}
 reply none
 
 request notification: applied
+only reference
 send a2666d6574686f646b74726163652e776174636866706172616d73a16572756c657381a0
 diag {"method":"trace.watch","params":{"rules":[{}]}}
 reply none
@@ -137,6 +155,7 @@ reply a26269640166726573756c74a162696402
 diag {"id":1,"result":{"id":2}}
 
 request notification: a request that is not one is answered
+only reference
 send a1666d6574686f6401
 diag {"method":1}
 reply a2626964f6656572726f72a364636f6465397f57676d657373616765d99c3f64746578746464617461a266726561736f6e64747970656470617468666d6574686f64

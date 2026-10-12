@@ -8,6 +8,8 @@
 #   send <hex>        a request, and
 #   reply <hex>       its reply
 #   diag <text>       the hex line before it, in diagnostic notation
+#   only reference    bytes a binding cannot send: run by the reference
+#                     (ta-conform) alone (README.md, "Envelope-level cases")
 # A config's error has no "id": it answers no request.
 
 config the least: a system id
@@ -47,6 +49,7 @@ reply a26269640166726573756c74a66873797374656d494461686673797374656daf696d617841
 diag {"id":1,"result":{"systemID":"h","system":{"maxActors":16,"maxEvents":64,"maxTimers":8,"workspaces":1,"maxRequests":8,"outbox":16,"quantum":100,"instanceBytes":4096,"stringBytes":4096,"ticksPerSecond":1000,"traceBytes":65536,"traceContexts":64,"traceRules":8,"traceSeed":1,"tracing":true},"ioProcessors":[{"type":"http","location":"http://localhost/","sync":false}],"migrateQuantum":10,"maxSubscriptions":4,"telemetry":{"stagingBytes":65536,"logBytes":16384,"openSpans":1024,"chunks":8192,"scopes":64,"valueLimit":256,"renderBytes":16384,"resourceBytes":4096,"metricBytes":65536,"spanMetricCharts":64,"flushInterval":100,"linkParents":false,"values":true,"logs":false,"resource":{"service.name":"t"}}}}
 
 config not CBOR
+only reference
 cbor ff
 diag (not CBOR)
 error a1656572726f72a364636f6465397fbb676d657373616765d99c3f64746578746464617461a266726561736f6e696d616c666f726d6564647061746860

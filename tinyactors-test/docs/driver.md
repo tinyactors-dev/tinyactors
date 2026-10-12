@@ -98,6 +98,17 @@ by the command under test, so an adapter cannot lower its own bar.
 | `reference` | every method above | `ta-conform` (`tinyactors-core`'s `mise run conform`) |
 | `binding` (the default) | every method but the C-level ones: `envelope.read` and `value.encode`; `host.request` without `capacity`, which the runner does not send it | each binding's adapter |
 
+The reference runs every case. A binding's run skips, besides the
+C-level methods' cases and those with `capacity`, the envelope-level
+cases of `requests.txt` and `config.txt`, each marked with the line `only
+reference` ("envelope-level: reference only";
+[suites/protocol/README.md](../suites/protocol/README.md), "Envelope-level
+cases"): bytes that are not CBOR or not one request map, a member or an id
+the binding's `request(method, params)` never writes, and notifications.
+Since the binding writes the map and its id itself, its adapter answers
+`host.request` with a reply it builds from what the call returned or
+raised, with the request's `id`.
+
 The C-level methods reach core below the API a binding exposes: a
 binding's API reads an envelope only to deliver it (`envelope.deliver`),
 evaluates no expression outside a chart (`value.encode`), and answers a

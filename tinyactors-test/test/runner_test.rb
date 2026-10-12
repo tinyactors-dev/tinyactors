@@ -123,6 +123,31 @@ class RunnerTest < Minitest::Test
     assert_includes @out.string, "host.request's capacity is C-level"
   end
 
+  def test_an_envelope_level_case_is_the_references
+    vectors('requests.txt', [['request id: text', 'only reference', 'send {"id":"a","method":"echo","params":[]}',
+                              'reply {"id":"a","result":[]}'],
+                             ['request echo', 'send {"id":1,"method":"echo","params":[]}', 'reply {"id":1,"result":[]}']])
+    vectors('config.txt', [['config marked', 'only reference', 'cbor {"systemID":"h"}', 'ok']])
+    ok, results = run_suites('protocol')
+    assert ok, @out.string
+    assert_equal({ 'requests.txt "id: text"' => :skip, 'requests.txt "echo"' => :pass, 'config.txt "marked"' => :skip },
+                 verdicts(results))
+    assert_includes @out.string, 'skip protocol requests.txt "id: text": envelope-level: reference only'
+
+    @out = StringIO.new
+    _ok, results = run_suites('protocol', kind: 'reference')
+    assert_equal({ 'requests.txt "id: text"' => :pass, 'requests.txt "echo"' => :pass, 'config.txt "marked"' => :pass },
+                 verdicts(results))
+  end
+
+  def test_only_names_the_reference
+    vectors('requests.txt', [['request odd', 'only binding', 'send {"id":1,"method":"echo","params":[]}',
+                              'reply {"id":1,"result":[]}']])
+    _ok, results = run_suites('protocol')
+    assert_equal({ 'requests.txt "odd"' => :fail }, verdicts(results))
+    assert_includes @out.string, 'only binding: a case can be limited to the reference alone'
+  end
+
   def test_a_method_a_binding_must_offer
     scenario('a', 'pass')
     w3c = File.join(@directory, 'w3c')

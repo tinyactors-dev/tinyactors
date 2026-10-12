@@ -661,6 +661,17 @@ up, and answers here.
   after creating the host and converts with it, never with a default of
   its own (`bindings.md` sections 3 and 7). `docs/host-config.md` states
   every default.
+- **A binding cannot send the envelope-level request and config vectors**
+  (2026-10-12; `tinyactors-cpython/ROADMAP.md`, "Requests to core", item
+  1, commit `7bcce98c`). What: cases of `requests.txt` and `config.txt`
+  send bytes no binding's API makes (not CBOR, not one request map, a
+  member or id `request(method, params)` never writes, notifications), so
+  no binding could pass M1's protocol gate. Done: each such case carries
+  the line `only reference`; `--kind binding` skips it ("envelope-level:
+  reference only"), `ta-conform` runs every case. Decided from the data,
+  not detected from the bytes; the method-level cases stay a binding's
+  (`tinyactors-test/suites/protocol/README.md`, "Envelope-level cases";
+  `tinyactors-test/docs/driver.md`, "Kinds").
 
 ## Now
 

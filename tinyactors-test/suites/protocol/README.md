@@ -38,7 +38,42 @@ line `<kind> <name>` and the lines after it, up to a blank line. A line is
 a key and a value: `send`, `reply`, `cbor`, `error`, `envelope` and `back`
 hold CBOR in hex, and each is followed by `diag`, the same bytes in
 diagnostic notation (`ta_cbor_diagnostic`), which the runner checks too, so
-the hex and what a person reads cannot drift apart.
+the hex and what a person reads cannot drift apart. A line `only
+reference` limits a case to the reference (below).
+
+## Envelope-level cases
+
+Some cases of `requests.txt` and `config.txt` send bytes that no binding's
+API makes. A binding's `request(method, params)` writes the request map
+itself, from the caller's method and params, with an id of its own, and
+returns the result or raises the error; its host is created from a config
+the binding encodes from a language value
+(`tinyactors-core/docs/bindings.md`, sections 3 and 10). These cases test
+how core reads the envelope around a request, not a method, so each has
+the line `only reference`: the reference (`ta-conform`, `--kind
+reference`) runs it, and a binding's run (`--kind binding`) skips it with
+"envelope-level: reference only", as it skips `capacity`. The runner does
+not guess this from the bytes; the line says it. (The line is `only`, not
+`kind`: a case's first word is already its kind.)
+
+| Case | Why a binding cannot send it |
+|---|---|
+| `requests.txt` "not CBOR", `config.txt` "not CBOR" | bytes that are no CBOR item; a binding encodes a value |
+| "not a map", "a batch is not supported yet" | a request is always one map |
+| "no method, no id", "no method" | the binding always writes `method` (a missing one would be `null`, answered `type`) |
+| "a member a request does not have" | the binding writes only `id`, `method` and `params` |
+| "id is not an integer, text or null", "id is not a float" | the id is the binding's own |
+| "id: an unsigned integer", "id: a negative integer", "id: text", "id: null" | the id is the binding's own: the adapter writes it back, so the case would test the adapter, not core |
+| "more items than a request holds" | no id, answered `"id": null`; the binding sends an id |
+| "notification: no reply", "notification: no error either", "notification: applied", "notification: a request that is not one is answered" | notifications: the binding's request always has an id and wants the reply |
+
+A binding passes the caller's values through unchecked, so the cases of
+the method level stay a binding's: a method that is not text (`"method":
+1`), params that are not a map, an unknown method, a param a method does
+not take (`params.x`), a param of the wrong type or out of range, the
+limits on params (`actor.list`'s 512, "more than 32 rules"), every
+method's results, `host.config`, and every config but "not CBOR" (a config
+that is not a map is the language's `1`).
 
 ## Writing a case
 
