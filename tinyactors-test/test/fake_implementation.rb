@@ -8,8 +8,8 @@
 #   quickjs, "python" for native, and the name asked for otherwise;
 #   host.free: {}.
 # - host.request: "echo" replies its params as the result, "wrong" replies
-#   {"n": 2}, "big" replies 300 bytes (with capacity: TA_ERROR_NO_MEMORY
-#   below that), anything else -32601 with a message to match by wildcard.
+#   {"n": 2}, "big" replies 300 bytes (with refuse: TA_ERROR_NO_MEMORY),
+#   anything else -32601 with a message to match by wildcard.
 # - scenario.run: the outcome written in the first document as
 #   "outcome: <word>"; "crash" exits with status 3, "hang" never answers.
 # - image.add, actor.spawn (session 1), peer.add (peer 1), clock.advance:
@@ -34,7 +34,7 @@ def error(code, reason, message = 'no such method', path = '')
   { 'code' => code, 'message' => message, 'data' => { 'reason' => reason, 'path' => path } }
 end
 
-def reply_to(request, capacity)
+def reply_to(request, refuse)
   call = CBOR.load(request)
   id = call['id']
   reply = case call['method']
@@ -44,9 +44,9 @@ def reply_to(request, capacity)
           else { 'id' => id, 'error' => error(-32_601, 'unknown', "no method #{call['method']}") }
           end
   bytes = CBOR.encode(reply)
-  return { 'status' => -4, 'length' => bytes.bytesize } if capacity && capacity < bytes.bytesize
+  return { 'status' => -4 } if refuse
 
-  { 'status' => 0, 'length' => bytes.bytesize, 'reply' => CBOR::Bytes.new(bytes) }
+  { 'status' => 0, 'reply' => CBOR::Bytes.new(bytes) }
 end
 
 $sent = []
@@ -80,7 +80,7 @@ def answer(method, params)
         'error' => CBOR::Bytes.new(CBOR.encode({ 'error' => error(-32_602, 'missing', 'systemID is missing', 'systemID') })) }
     end
   when 'host.free' then {}
-  when 'host.request' then reply_to(params['request'].data, params['capacity'])
+  when 'host.request' then reply_to(params['request'].data, params['refuse'])
   when 'echo.frame' then params
   when 'image.add', 'clock.advance' then { 'status' => 0 }
   when 'actor.spawn' then { 'status' => 0, 'session' => 1 }

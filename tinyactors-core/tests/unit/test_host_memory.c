@@ -22,6 +22,7 @@
 #include <tinyactors/host.h>
 #include "../support/host_request.h"
 #include "../support/host_config.h"
+#include "../support/host_output.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -407,15 +408,14 @@ static void workload_run(workload *w) {
     m->phase = "hibernation";
     static unsigned char blob[1 << 16];
     size_t length = 0;
-    ta_buffer written = {blob, sizeof blob, 0};
+    ta_bytes written; /* the host's, until the next call into it */
     RETRY(m, TA_OK, ta_host_hibernate(w->host, workers[1], &written));
-    length = written.length;
+    length = output_copy(written, blob, sizeof blob);
     RETRY(m, TA_OK, ta_host_wake(w->host, workers[1], (ta_bytes){blob, length}));
     run_idle(w, w->host);
     m->phase = "adoption";
-    written = (ta_buffer){blob, sizeof blob, 0};
     RETRY(m, TA_OK, ta_host_export_actor(w->host, workers[2], &written));
-    length = written.length;
+    length = output_copy(written, blob, sizeof blob);
     uint64_t adopted = 0;
     RETRY(m, TA_OK, ta_host_adopt(w->host, &(ta_host_adoption){2, 0, {blob, length}}, &adopted));
     CHECK_EQUAL(adopted, workers[2]);
@@ -428,20 +428,20 @@ static void workload_run(workload *w) {
     /* restore: a second host from a snapshot of this one */
     m->phase = "restore";
     size_t hl = 0, dl = 0;
-    written = (ta_buffer){NULL, 0, 0};
-    CHECK_EQUAL(ta_host_snapshot(w->host, &written), TA_ERROR_NO_MEMORY);
-    hl = written.length;
+    ta_buffer room = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(w->host, &room), TA_ERROR_NO_MEMORY);
+    hl = room.length;
     void *hs = malloc(hl);
-    written = (ta_buffer){hs, hl, 0};
-    CHECK_EQUAL(ta_host_snapshot(w->host, &written), TA_OK);
-    hl = written.length;
-    written = (ta_buffer){NULL, 0, 0};
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &written), TA_ERROR_NO_MEMORY);
-    dl = written.length;
+    room = (ta_buffer){hs, hl, 0};
+    CHECK_EQUAL(ta_host_snapshot(w->host, &room), TA_OK);
+    hl = room.length;
+    room = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &room), TA_ERROR_NO_MEMORY);
+    dl = room.length;
     void *ds = malloc(dl);
-    written = (ta_buffer){ds, dl, 0};
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &written), TA_OK);
-    dl = written.length;
+    room = (ta_buffer){ds, dl, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &room), TA_OK);
+    dl = room.length;
     workload copy = *w;
     copy.ecmascript = ta_datamodel_ecmascript_new(NULL);
     copy.binding = ta_datamodel_ecmascript_binding(copy.ecmascript);

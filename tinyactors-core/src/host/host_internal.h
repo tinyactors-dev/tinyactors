@@ -11,6 +11,8 @@
 #include <tinyactors/address.h>
 #include <tinyactors/host.h>
 
+#include "base/output.h"
+
 #define SERIALS_SHIFT 32
 /* blocks the published effects still point into: each doubling of the
  * effect array or the pool while a batch is borrowed holds one */
@@ -184,9 +186,17 @@ struct ta_host {
     uint32_t job_count, job_capacity, job_sequence;
     /* sweep cursor */
     uint32_t sweep_segment, sweep_cursor;
-    /* scratch for blobs */
-    unsigned char *blob, *blob2;
-    size_t blob_capacity, blob2_capacity;
+    /* What the host writes for its caller (docs/adr/0010 in the repository
+     * root, decision 2): a request's reply, an envelope, traces, logs,
+     * metrics, a hibernation or export blob, each a view of this block until
+     * the next call into the host. It grows through the host's allocator
+     * (host_output) and keeps its largest size until ta_host_free. */
+    ta_output output;
+    /* scratch for blobs: an export moving between segments (it grows like
+     * the output), and its translation */
+    ta_output blob;
+    unsigned char *blob2;
+    size_t blob2_capacity;
     pending_error *errors;
     uint32_t error_count, error_capacity;
     uint64_t routed, migrated, retired;
@@ -231,6 +241,11 @@ void *host_alloc(ta_host *h, size_t size);
  * datamodel without them). */
 void host_retain(ta_host *h, const ta_datamodel_binding *binding, ta_payload payload);
 void host_release(ta_host *h, const ta_datamodel_binding *binding, ta_payload payload);
+/* The host's output, emptied for the next one (its block kept). */
+ta_output *host_output(ta_host *h);
+/* What was written there, as the caller's view; TA_ERROR_NO_MEMORY (and an
+ * empty view) when the allocator refused room for it. */
+ta_status host_output_view(ta_host *h, ta_bytes *out);
 void host_free(ta_host *h, void *pointer, size_t size);
 /* Room for `need` elements of `element` bytes in *array (capacity in
  * *capacity, new ones zeroed); 0 if the allocator refused (*array unchanged). */
@@ -314,8 +329,8 @@ typedef struct host_encoder {
     void (*effects)(ta_host *h);                /* a ready request becomes an effect */
     void (*note)(ta_host *h);                   /* after a run: records left count as staged */
     ta_time (*deadline)(const ta_host *h);      /* the flush interval's end (UINT64_MAX: none) */
-    ta_status (*take)(ta_host *h, uint32_t kind, ta_buffer *out); /* ta_host_traces, _logs */
-    ta_status (*metrics)(ta_host *h, ta_buffer *out);             /* ta_host_metrics */
+    ta_status (*take)(ta_host *h, uint32_t kind, ta_bytes *out); /* ta_host_traces, _logs */
+    ta_status (*metrics)(ta_host *h, ta_bytes *out);             /* ta_host_metrics */
     ta_status (*end)(ta_host *h); /* trace.end: end every open span, staged for a take */
     void (*definitions)(ta_host *h, uint32_t kind, uint32_t segment); /* definitions.c */
 } host_encoder;

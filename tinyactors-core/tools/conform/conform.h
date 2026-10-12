@@ -194,6 +194,7 @@ const char *conform_outcome(const ta_host_effect *effect);
 /* What lives between calls: the host of the vector methods. */
 typedef struct conform_vectors {
     ta_host *host;
+    int refusing; /* the host's allocator refuses every block (host.request's `refuse`) */
     conform_datamodel datamodel;
     conform_image images[16];
     uint32_t image_count;

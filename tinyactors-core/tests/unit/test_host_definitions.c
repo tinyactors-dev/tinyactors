@@ -229,11 +229,10 @@ static void test_linked_retired_freed(void) {
     world w;
     world_open(&w, 1);
     scenario(&w);
-    static unsigned char bytes[1 << 16];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out; /* the host's, until the next call into it */
     CHECK_EQUAL(ta_host_logs(w.host, &out), TA_OK);
     record r[8];
-    uint32_t n = definition_records(bytes, out.length, r, 8);
+    uint32_t n = definition_records(out.pointer, out.length, r, 8);
     CHECK_EQUAL(n, 4u);
     char one[17], two[17];
     hash_of(&w.image[0], one);
@@ -275,8 +274,7 @@ static void test_without_telemetry(void) {
     world w;
     world_open(&w, 0);
     scenario(&w);
-    unsigned char bytes[64];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_logs(w.host, &out), TA_ERROR_STATE);
     CHECK_EQUAL(out.length, 0u);
     world_close(&w);
@@ -287,11 +285,10 @@ static void test_logs_disabled(void) {
     world w;
     world_open(&w, 2);
     scenario(&w);
-    static unsigned char bytes[1 << 16];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_logs(w.host, &out), TA_OK);
     record r[8];
-    CHECK_EQUAL(definition_records(bytes, out.length, r, 8), 0u);
+    CHECK_EQUAL(definition_records(out.pointer, out.length, r, 8), 0u);
     world_close(&w);
 }
 

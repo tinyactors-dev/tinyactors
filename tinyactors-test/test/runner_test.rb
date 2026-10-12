@@ -53,8 +53,8 @@ class RunnerTest < Minitest::Test
     assert_includes @out.string, 'differs at {"error"}{"message"}'
   end
 
-  def test_a_capacity_line_measures_first
-    vectors('requests.txt', [['request big', 'capacity 10', 'send {"id":1,"method":"big"}', 'reply 39999("any")']])
+  def test_a_refused_line_is_refused_first
+    vectors('requests.txt', [['request big', 'refused', 'send {"id":1,"method":"big"}', 'reply 39999("any")']])
     ok, = run_suites('protocol', kind: 'reference')
     assert ok, @out.string
   end
@@ -114,13 +114,13 @@ class RunnerTest < Minitest::Test
     assert_includes @out.string, 'FAIL not offered, but a reference must offer: envelope.read'
   end
 
-  def test_a_binding_is_sent_no_capacity
-    vectors('requests.txt', [['request big', 'capacity 10', 'send {"id":1,"method":"big"}', 'reply 39999("any")'],
+  def test_a_binding_is_sent_no_refuse
+    vectors('requests.txt', [['request big', 'refused', 'send {"id":1,"method":"big"}', 'reply 39999("any")'],
                              ['request echo', 'send {"id":1,"method":"echo","params":[]}', 'reply {"id":1,"result":[]}']])
     ok, results = run_suites('protocol')
     assert ok, @out.string
     assert_equal({ 'requests.txt "big"' => :skip, 'requests.txt "echo"' => :pass }, verdicts(results))
-    assert_includes @out.string, "host.request's capacity is C-level"
+    assert_includes @out.string, "host.request's refuse is C-level"
   end
 
   def test_an_envelope_level_case_is_the_references

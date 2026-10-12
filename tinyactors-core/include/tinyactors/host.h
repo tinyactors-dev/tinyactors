@@ -48,6 +48,15 @@
  * records and their strings where they are; the new effects come with the
  * next ta_host_effects. Payloads passed in are moved on success and stay the caller's
  * on failure. No callbacks besides the datamodel vtables.
+ *
+ * What the host writes for its caller — a request's reply, an envelope,
+ * traces, logs, metrics, a hibernation or export blob — comes out as a
+ * ta_bytes view of memory the host owns, valid until the next call into the
+ * host (copy it to keep it, or before anything that can call into the host).
+ * The host grows that memory through its allocator, between runs, and keeps
+ * its largest size until ta_host_free; TA_ERROR_NO_MEMORY from one of these
+ * calls means the allocator refused room (docs/adr/0010 in the repository
+ * root, decision 2). Snapshots are written into the caller's ta_buffer.
  */
 #ifndef TINYACTORS_HOST_H
 #define TINYACTORS_HOST_H
@@ -302,15 +311,16 @@ TA_API ta_bytes ta_host_effect_bytes(const ta_host *h, uint32_t index, uint32_t 
 
 /* ---- telemetry ------------------------------------------------------------------ */
 /* The ExportTraceServiceRequest (`/v1/traces`, application/x-protobuf) of
- * the spans staged so far, written into `out` (length 0 when there are
- * none); the trace records written since the last run are read first. The
- * spans leave the staging only on TA_OK: TA_ERROR_NO_MEMORY means nothing
- * changed and out->length is what the request needs. Posting it, retrying
- * and capping what waits are the caller's. TA_ERROR_STATE during a run or
- * without an encoder (the config's "telemetry"). ta_host_logs: the same for the
- * ExportLogsServiceRequest (`/v1/logs`). */
-TA_API ta_status ta_host_traces(ta_host *h, ta_buffer *out);
-TA_API ta_status ta_host_logs(ta_host *h, ta_buffer *out);
+ * the spans staged so far, in `out`: a view of the host's memory, valid until
+ * the next call into the host (length 0 when there are none); the trace
+ * records written since the last run are read first. The spans leave the
+ * staging only on TA_OK: TA_ERROR_NO_MEMORY means the allocator refused room
+ * and nothing changed. Posting it, retrying and capping what waits are the
+ * caller's. TA_ERROR_STATE during a run or without an encoder (the config's
+ * "telemetry"). ta_host_logs: the same for the ExportLogsServiceRequest
+ * (`/v1/logs`), a view valid until the next call into the host. */
+TA_API ta_status ta_host_traces(ta_host *h, ta_bytes *out);
+TA_API ta_status ta_host_logs(ta_host *h, ta_bytes *out);
 
 /* ---- the router: other systems (docs/protocol.md, Routing) -------------------------
  * A peer is another system as seen through one transport connection (a
@@ -498,13 +508,14 @@ TA_API ta_status ta_host_peer_error(ta_host *h, const ta_peer_error *error);
  * ta_host_deliver, and an error envelope with ta_host_peer_error_read (it
  * sets `peer`) and passes it to ta_host_peer_error.
  *
- * ta_host_envelope: the effect's envelope (its data written by the
+ * ta_host_envelope: the effect's envelope (its data written once by the
  * datamodel's to_wire, or a relayed `wire` copied as it is) or error envelope,
- * into `out`. The effect keeps its
- * payload, borrowed until the ack. TA_ERROR_NO_MEMORY: out->length is what
- * it needs (the bytes in `out` are not an envelope); TA_ERROR_INVALID: another effect kind,
- * or data that is not a neutral value; TA_ERROR_STATE during a run. */
-TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_buffer *out);
+ * in `out`: a view of the host's memory, valid until the next call into the
+ * host. The effect keeps its payload, borrowed until the ack.
+ * TA_ERROR_NO_MEMORY: the allocator refused room; TA_ERROR_INVALID: another
+ * effect kind, or data that is not a neutral value; TA_ERROR_STATE during a
+ * run. */
+TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_bytes *out);
 /* An envelope from bytes: views into `cbor` (keep the bytes until the
  * ta_host_deliver). Its data, if any, is not decoded: out->wire points at the
  * value's CBOR, checked to be one well-formed item, and out->data stays 0.
@@ -556,7 +567,11 @@ TA_API uint32_t ta_host_job_pending(const ta_host *h, uint32_t job, ta_uint64_ar
  * out.capacity sessions that did not run since the previous sweep and could
  * be hibernated now. */
 TA_API uint32_t ta_host_sweep(ta_host *h, uint32_t max_scan, ta_uint64_array out);
-TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, ta_buffer *out);
+/* ta_actor_hibernate of `session`: the blob in `out`, a view of the host's
+ * memory, valid until the next call into the host (store or copy it before
+ * anything else); written in one pass, the datamodel's serialize called
+ * once. TA_ERROR_NO_MEMORY: the allocator refused room, and the actor stays. */
+TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, ta_bytes *out);
 TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);
 
 /* ---- moving actors between hosts (another process, a restart) --------------------
@@ -570,8 +585,12 @@ TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);
  * TA_ERROR_STATE (nothing adopted) if any of its sessions exists in the host.
  * *session: the root's id.
  * Delayed sends keep their due times: for hosts with separate clocks, ta_blob_rebase
- * the blob first. */
-TA_API ta_status ta_host_export_actor(ta_host *h, uint64_t session, ta_buffer *out);
+ * the blob first.
+ * The export blob is in `out`, a view of the host's memory, valid until the
+ * next call into the host; it is written in one pass (serialize once per
+ * session, payload_serialize once per delayed send). TA_ERROR_NO_MEMORY: the
+ * allocator refused room, and the actor stays. */
+TA_API ta_status ta_host_export_actor(ta_host *h, uint64_t session, ta_bytes *out);
 typedef struct ta_host_adoption {
     uint32_t segment;
     uint32_t pad;
@@ -646,21 +665,24 @@ TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
  * host refuses. As in JSON-RPC 2.0, "id" is an integer, text or null and is
  * echoed; it is null in the reply when the request could not be read; a
  * request without "id" is a notification: applied, with no reply (TA_OK,
- * reply->length 0) and no error reported. Trace configuration, watches,
+ * an empty reply) and no error reported. Trace configuration, watches,
  * stats, inspection, state values and decoded spans are methods;
  * docs/requests.md lists every method, its params, defaults and errors.
- * TA_OK: `reply` holds the reply (a result or an error). TA_ERROR_NO_MEMORY:
- * nothing was applied and reply->length is what the reply needs; grow and
- * ask again. TA_ERROR_STATE during a run (nothing written). A request is
- * decoded into at most TA_HOST_REQUEST_TOKENS tokens, on the stack. */
+ * TA_OK: `reply` is the reply (a result or an error), a view of the host's
+ * memory, valid until the next call into the host (empty for a
+ * notification). TA_ERROR_NO_MEMORY: the allocator refused room for the
+ * reply, and nothing was applied. TA_ERROR_STATE during a run (nothing
+ * written). A request is decoded into at most TA_HOST_REQUEST_TOKENS tokens,
+ * on the stack. */
 enum { TA_HOST_REQUEST_TOKENS = 256 };
-TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_buffer *reply);
+TA_API ta_status ta_host_request(ta_host *h, ta_bytes request, ta_bytes *reply);
 /* The host's counters now, as an ExportMetricsServiceRequest (`/v1/metrics`,
- * docs/adr/0007), written into `out`: per chart, per segment and the host's
- * own. There is no metrics timer or effect: call it when the application
- * wants them. TA_ERROR_NO_MEMORY: out->length is what it needs. TA_ERROR_STATE
- * during a run or without an encoder (the config's "telemetry"). */
-TA_API ta_status ta_host_metrics(ta_host *h, ta_buffer *out);
+ * docs/adr/0007), in `out`: per chart, per segment and the host's own, a view
+ * of the host's memory, valid until the next call into the host. There is no
+ * metrics timer or effect: call it when the application wants them.
+ * TA_ERROR_NO_MEMORY: the allocator refused room. TA_ERROR_STATE during a run
+ * or without an encoder (the config's "telemetry"). */
+TA_API ta_status ta_host_metrics(ta_host *h, ta_bytes *out);
 
 #ifdef __cplusplus
 }

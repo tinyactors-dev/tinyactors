@@ -1042,16 +1042,13 @@ static int host_hibernate_some(world *w) {
     while ((n = host_actors_page(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
         for (uint32_t k = 0; k < n; k++) {
             if (rnd() % 3 == 0) continue;
-            size_t length = 0;
-            ta_buffer written = {NULL, 0, 0};
+            ta_bytes written; /* the host's, until the next call into it */
             ta_status status = ta_host_hibernate(w->host, sessions[k], &written);
-            length = written.length;
             if (status == TA_ERROR_STATE) continue;
-            if (status != TA_ERROR_NO_MEMORY) return 0;
-            void *p = malloc(length);
-            written = (ta_buffer){p, length, 0};
-            if (ta_host_hibernate(w->host, sessions[k], &written) != TA_OK ||
-                hib_put(w, sessions[k], p, written.length) != TA_OK) {
+            if (status != TA_OK) return 0;
+            void *p = malloc(written.length ? written.length : 1);
+            memcpy(p, written.pointer, written.length);
+            if (hib_put(w, sessions[k], p, written.length) != TA_OK) {
                 free(p);
                 return 0;
             }

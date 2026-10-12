@@ -10,6 +10,7 @@
 #include <tinyactors/runtime.h>
 #include "../support/host_request.h"
 #include "../support/host_config.h"
+#include "../support/host_output.h"
 
 #define CHART                                                                                      \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='pinged' "         \
@@ -109,8 +110,7 @@ static void test_spans_and_metrics(void) {
     world w;
     world_open(&w, 1, NULL);
     settle(&w);
-    static unsigned char traces[1 << 16];
-    ta_buffer out = {traces, sizeof traces, 0};
+    ta_bytes out; /* the host's, until the next call into it: copied into the request */
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     CHECK(out.length > 0);
     /* the request, built by hand: {"method": "trace.spans.decode", "params": {"traces": bytes}} */
@@ -121,13 +121,12 @@ static void test_spans_and_metrics(void) {
     n++;
     request[n++] = (unsigned char)(out.length >> 8);
     request[n++] = (unsigned char)out.length;
-    memcpy(request + n, traces, out.length);
+    memcpy(request + n, out.pointer, out.length);
     n += out.length;
-    static unsigned char reply[1 << 16];
-    ta_buffer answer = {reply, sizeof reply, 0};
+    ta_bytes answer;
     CHECK_EQUAL(ta_host_request(w.host, (ta_bytes){request, n}, &answer), TA_OK);
     static ta_cbor_token tokens[4096];
-    ta_cbor_document document = {{reply, answer.length}, tokens, 4096, 0};
+    ta_cbor_document document = {answer, tokens, 4096, 0};
     CHECK_EQUAL(ta_cbor_decode(&document), TA_OK);
     uint32_t result = ta_cbor_member(&document, 0, ta_string("result"));
     uint32_t spans = ta_cbor_member(&document, result, ta_string("spans"));
@@ -136,20 +135,14 @@ static void test_spans_and_metrics(void) {
     CHECK(name != TA_NIL && tokens[name].kind == TA_CBOR_TEXT);
     uint32_t trace = ta_cbor_member(&document, spans + 1, ta_string("trace"));
     CHECK(trace != TA_NIL && tokens[trace].count == 32);
-    /* metrics on demand: measured, then written; the second call puts the same */
-    ta_buffer metrics = {NULL, 0, 0};
-    CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_ERROR_NO_MEMORY);
-    size_t needed = metrics.length;
-    CHECK(needed > 0);
-    static unsigned char metric_bytes[1 << 16];
-    metrics = (ta_buffer){metric_bytes, sizeof metric_bytes, 0};
+    /* metrics on demand; the second call counts anew */
+    ta_bytes metrics;
     CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_OK);
-    CHECK_EQUAL(metrics.length, needed);
-    CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_OK); /* again: counted anew */
+    CHECK(metrics.length > 0);
+    CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_OK);
     CHECK(metrics.length > 0);
     world_close(&w);
     world_open(&w, 0, NULL);
-    metrics = (ta_buffer){metric_bytes, sizeof metric_bytes, 0};
     CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_ERROR_STATE); /* no encoder */
     world_close(&w);
 }
@@ -175,14 +168,15 @@ static void test_actor_context(void) {
     CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":null}}")));
     /* hibernated: wake it first */
     static unsigned char blob[1 << 16];
-    ta_buffer hibernated = {blob, sizeof blob, 0};
+    ta_bytes hibernated; /* the host's, until the next call into it */
     CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
+    size_t length = output_copy(hibernated, blob, sizeof blob);
     writer = ask_begin(&a, "actor.context", 1);
     ta_cbor_write_text(writer, ta_string("session"));
     ta_cbor_write_uint(writer, w.session);
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
     CHECK(reply_is(a.text, ERROR("-32002", "state", "params.session", "the actor is hibernated: wake it first")));
-    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, hibernated.length}), TA_OK);
+    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
     CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":null}}")));
     world_close(&w);
@@ -261,18 +255,19 @@ static void test_subscribe(void) {
 
     /* across hibernation: the subscription is the host's, the watch the actor's */
     static unsigned char blob[1 << 16];
-    ta_buffer hibernated = {blob, sizeof blob, 0};
+    ta_bytes hibernated; /* the host's, until the next call into it */
     CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}")));
     CHECK_EQUAL(changed(&w, w.session), 0u); /* armed, nothing ran */
     CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
-    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, hibernated.length}), TA_OK);
+    size_t length = output_copy(hibernated, blob, sizeof blob);
+    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
     ping(&w, w.session);
     CHECK_EQUAL(changed(&w, w.session), 1u); /* still subscribed: watched again */
-    hibernated = (ta_buffer){blob, sizeof blob, 0};
     CHECK_EQUAL(changed(&w, w.session), 0u); /* armed again */
     CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
+    length = output_copy(hibernated, blob, sizeof blob);
     CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session), RESULT("{}")));
-    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, hibernated.length}), TA_OK);
+    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
     ping(&w, w.session);
     CHECK_EQUAL(changed(&w, w.session), 0u); /* unsubscribed while hibernated: no watch woke */
     world_close(&w);
@@ -352,8 +347,9 @@ static void test_create(void) {
     ask_begin(&a, "host.stats", 0);
     CHECK_EQUAL(ask_send(host, &a), TA_OK);
     CHECK_EQUAL(ask_uint(&a, ask_field(&a, 0, "host"), "segments"), 0u);
-    ta_buffer traces = {NULL, 0, 0};
+    ta_bytes traces;
     CHECK_EQUAL(ta_host_traces(host, &traces), TA_OK); /* an encoder: nothing staged */
+    CHECK_EQUAL(traces.length, 0u);
     ta_host_free(host);
     /* without an error buffer: refused all the same */
     ta_host_environment environment;

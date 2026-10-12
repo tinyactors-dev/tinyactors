@@ -31,6 +31,25 @@ void host_free(ta_host *host, void *pointer, size_t size) {
     if (pointer) host->config.allocator.free(host->config.allocator.context, pointer, size);
 }
 
+ta_output *host_output(ta_host *host) {
+    host->output.length = 0;
+    host->output.allocator = &host->config.allocator;
+    return &host->output;
+}
+
+ta_status host_output_view(ta_host *host, ta_bytes *out) {
+    int fits = ta_output_fits(&host->output);
+    *out = (ta_bytes){host->output.bytes, fits ? host->output.length : 0};
+    return fits ? TA_OK : TA_ERROR_NO_MEMORY;
+}
+
+/* The scratch block for blobs, emptied, growing through the host's allocator. */
+static ta_output *blob_scratch(ta_host *host) {
+    host->blob.length = 0;
+    host->blob.allocator = &host->config.allocator;
+    return &host->blob;
+}
+
 void host_retain(ta_host *host, const ta_datamodel_binding *binding, ta_payload payload) {
     if (!payload || !binding->vtable->retain) return;
     uint32_t was = host_guard(host);
@@ -463,7 +482,8 @@ void ta_host_free(ta_host *host) {
     host_free(host, host->effects, sizeof(ta_host_effect) * host->effect_capacity);
     host_free(host, host->effect_strings, sizeof(effect_strings) * host->effect_capacity);
     host_free(host, host->pool, host->pool_capacity);
-    host_free(host, host->blob, host->blob_capacity);
+    ta_output_free(&host->output);
+    ta_output_free(&host->blob);
     host_free(host, host->blob2, host->blob2_capacity);
     host_free(host, host->errors, sizeof(pending_error) * host->error_capacity);
     if (host->subscriptions)
@@ -1344,26 +1364,17 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint
     uint32_t chart = version->chart, tseg = version->segment;
     ta_string_view key = chart_key(to->image, chart);
     /* everything the move needs once the actor has left its segment */
-    if (!host_effects_reserve(host, 1, key.length) || !moved_reserve(host, 1) ||
-        !buffer_at(host, &host->blob, &host->blob_capacity, 4096))
+    if (!host_effects_reserve(host, 1, key.length) || !moved_reserve(host, 1))
         return MIGRATE_NO_MEMORY;
-    ta_buffer exported = {host->blob, host->blob_capacity, 0};
     uint32_t was = host_guard(host); /* serialize, payload_serialize, destroy */
-    ta_status status = ta_actor_export(from->system, actor, &exported);
+    ta_status status = ta_actor_write_export(from->system, actor, blob_scratch(host));
     host_unguard(host, was);
-    if (status == TA_ERROR_NO_MEMORY) {
-        if (!buffer_at(host, &host->blob, &host->blob_capacity, exported.length))
-            return MIGRATE_NO_MEMORY;
-        exported = (ta_buffer){host->blob, host->blob_capacity, 0};
-        was = host_guard(host);
-        status = ta_actor_export(from->system, actor, &exported);
-        host_unguard(host, was);
-    }
+    if (status == TA_ERROR_NO_MEMORY) return MIGRATE_NO_MEMORY; /* it stays where it was */
     if (status == TA_ERROR_STATE) return MIGRATE_LATER;
     if (status != TA_OK) return MIGRATE_FAILED;
-    size_t length = exported.length;
+    size_t length = host->blob.length;
     int moved = 0, refused = 0;
-    ta_blob_migration migration = {from->image, to->image, chart, 0, {host->blob, length}};
+    ta_blob_migration migration = {from->image, to->image, chart, 0, {host->blob.bytes, length}};
     ta_buffer migrated = {(void *)0, 0, 0};
     ta_status ms = ta_blob_migrate(&migration, &migrated);
     if (ms == TA_ERROR_NO_MEMORY &&
@@ -1386,7 +1397,7 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session, uint
         }
     }
     if (!moved) { /* back home, unchanged */
-        adopt_home(host, from, host->blob, length);
+        adopt_home(host, from, host->blob.bytes, length);
         if (refused) return MIGRATE_NO_MEMORY;
         /* running invocations (a session tree): migrated once they finished */
         return ms == TA_ERROR_UNSUPPORTED ? MIGRATE_LATER : MIGRATE_FAILED;
@@ -1857,15 +1868,16 @@ uint32_t ta_host_sweep(ta_host *host, uint32_t max_scan, ta_uint64_array session
     return n;
 }
 
-ta_status ta_host_hibernate(ta_host *host, uint64_t session, ta_buffer *out) {
+ta_status ta_host_hibernate(ta_host *host, uint64_t session, ta_bytes *out) {
+    *out = (ta_bytes){(const void *)0, 0};
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
     uint32_t was = host_guard(host); /* serialize, destroy */
-    status = ta_actor_hibernate(host->segments[si].system, actor, out);
+    status = ta_actor_write_hibernation(host->segments[si].system, actor, host_output(host));
     host_unguard(host, was);
-    return status;
+    return status == TA_OK ? host_output_view(host, out) : status;
 }
 
 ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
@@ -1886,14 +1898,16 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
 
 /* ---- moving actors between hosts ------------------------------------------------------- */
 
-ta_status ta_host_export_actor(ta_host *host, uint64_t session, ta_buffer *out) {
+ta_status ta_host_export_actor(ta_host *host, uint64_t session, ta_bytes *out) {
+    *out = (ta_bytes){(const void *)0, 0};
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     uint32_t si, actor;
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
     uint32_t was = host_guard(host); /* serialize, payload_serialize, destroy */
-    status = ta_actor_export(host->segments[si].system, actor, out);
+    status = ta_actor_write_export(host->segments[si].system, actor, host_output(host));
     host_unguard(host, was);
+    if (status == TA_OK) status = host_output_view(host, out);
     if (status == TA_OK) {
         if (host_moved_get(host, session) != TA_NIL) moved_put(host, session, TA_NIL);
         host->segments[si].busy = 1;
@@ -1964,7 +1978,7 @@ ta_status ta_host_adopt(ta_host *host, const ta_host_adoption *adoption, uint64_
     if (session) *session = 0;
     if (!segment_record) return TA_ERROR_INVALID;
     /* room to export it again if it cannot stay: a tree exports to the blob it came from */
-    if (!buffer_at(host, &host->blob, &host->blob_capacity, length)) return TA_ERROR_NO_MEMORY;
+    if (!ta_output_reserve(blob_scratch(host), length)) return TA_ERROR_NO_MEMORY;
     uint32_t root = 0;
     ta_status status;
     for (;;) {
@@ -1982,17 +1996,9 @@ ta_status ta_host_adopt(ta_host *host, const ta_host_adoption *adoption, uint64_
     if (elsewhere || !moved_reserve(host, count)) {
         /* one of its sessions lives in another segment, or no room to route
          * to them: out again, nothing changed */
-        ta_buffer out = {host->blob, host->blob_capacity, 0};
         uint32_t was = host_guard(host);
-        status = ta_actor_export(segment_record->system, root, &out);
+        ta_actor_write_export(segment_record->system, root, blob_scratch(host));
         host_unguard(host, was);
-        if (status == TA_ERROR_NO_MEMORY &&
-            buffer_at(host, &host->blob, &host->blob_capacity, out.length)) {
-            out = (ta_buffer){host->blob, host->blob_capacity, 0};
-            was = host_guard(host);
-            ta_actor_export(segment_record->system, root, &out);
-            host_unguard(host, was);
-        }
         return elsewhere ? TA_ERROR_STATE : TA_ERROR_NO_MEMORY;
     }
     segment_record->busy = 1;

@@ -5,9 +5,9 @@
 #   setup <name>      the host it runs on (README.md, "Setups"; default empty)
 #   send <hex>        a request, as CBOR
 #   reply <hex>       the reply it gets; "reply none": no reply (a notification)
-#   capacity <n>      the next send is first given n bytes: TA_ERROR_NO_MEMORY
-#                     with the length it needs, then that length: the reply
-#                     (and what the refused one did not apply)
+#   refused           the next send is first refused memory (the host's
+#                     allocator refuses every block): TA_ERROR_NO_MEMORY, and
+#                     nothing applied; then sent again: the reply
 #   diag <text>       the hex line before it, in diagnostic notation
 #   only reference    an envelope-level case: run by the reference (ta-conform)
 #                     alone; a binding skips it (README.md, "Envelope-level cases")
@@ -305,9 +305,9 @@ diag {"id":1,"method":"trace.watch","params":{"rules":[{"chart":"pinged","sample
 reply a26269640166726573756c74a162696402
 diag {"id":1,"result":{"id":2}}
 
-request trace.watch: a reply that does not fit is not applied
+request trace.watch: a reply the host has no room for is not applied
 setup pinged
-capacity 4
+refused
 send a362696401666d6574686f646b74726163652e776174636866706172616d73a16572756c657381a36563686172746670696e6765646673616d706c656673616d706c656664657461696c6466756c6c
 diag {"id":1,"method":"trace.watch","params":{"rules":[{"chart":"pinged","sample":"sample","detail":"full"}]}}
 reply a26269640166726573756c74a162696401

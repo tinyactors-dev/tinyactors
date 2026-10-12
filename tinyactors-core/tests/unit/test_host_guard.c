@@ -194,11 +194,12 @@ static int alive(world *w, uint64_t session) {
 /* Everything a run refuses, refused here too; the inputs are taken. */
 static void refused(world *w) {
     unsigned char bytes[256];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_buffer room = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_request(w->host, (ta_bytes){STATS, sizeof STATS - 1}, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_hibernate(w->host, w->other, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_export_actor(w->host, w->other, &out), TA_ERROR_STATE);
-    CHECK_EQUAL(ta_host_snapshot(w->host, &out), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_snapshot(w->host, &room), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_traces(w->host, &out), TA_ERROR_STATE);
     ta_run nested = ta_host_run(w->host, 10);
     CHECK_EQUAL(nested.status, TA_RUN_FAULT);
@@ -262,8 +263,7 @@ static void test_envelope_and_ack(void) {
     CHECK(peer < n);
     if (peer < n) {
         w.hook = refused;
-        static unsigned char bytes[4096];
-        ta_buffer out = {bytes, sizeof bytes, 0};
+        ta_bytes out;
         CHECK_EQUAL(ta_host_envelope(w.host, &effects[peer], &out), TA_OK);
         CHECK_EQUAL(w.hooks, 1);
         CHECK(out.length > 0);
@@ -313,8 +313,10 @@ static void test_hibernate(void) {
     world_open(&w, 0);
     w.hook = inputs;
     static unsigned char blob[1 << 16];
-    ta_buffer out = {blob, sizeof blob, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &out), TA_OK);
+    CHECK(out.length <= sizeof blob);
+    memcpy(blob, out.pointer, out.length); /* the host's view, until the next call into it */
     CHECK_EQUAL(w.hooks, 1);
     /* terminated while it was written: it exits once woken */
     CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, out.length}), TA_OK);
@@ -334,8 +336,7 @@ static void test_traces(void) {
     ta_host_run(w.host, 100000); /* its records are read by the next take */
     ta_host_effects_ack(w.host);
     w.hook = refused;
-    static unsigned char bytes[1 << 16];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     CHECK_EQUAL(w.hooks, 1);
     world_close(&w);
@@ -346,8 +347,7 @@ static void test_traces(void) {
 static int freeing_hooks;
 
 static void while_freeing(world *w) {
-    unsigned char bytes[256];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_request(w->host, (ta_bytes){STATS, sizeof STATS - 1}, &out), TA_ERROR_STATE);
     ta_spawn spawn;
     memset(&spawn, 0, sizeof spawn);
@@ -388,15 +388,13 @@ static void test_each_output_once(void) {
     to_wire_calls = 0;
     for (uint32_t i = 0; i < n; i++)
         if (effects[i].kind == TA_HOST_EFFECT_PEER) {
-            static unsigned char bytes[4096];
-            ta_buffer out = {bytes, sizeof bytes, 0};
+            ta_bytes out;
             CHECK_EQUAL(ta_host_envelope(w.host, &effects[i], &out), TA_OK);
         }
     CHECK_EQUAL(to_wire_calls, 1); /* the envelope's value, once */
     ta_host_effects_ack(w.host);
     serialize_calls = payload_serialize_calls = 0;
-    static unsigned char blob[1 << 16];
-    ta_buffer out = {blob, sizeof blob, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_export_actor(w.host, w.session, &out), TA_OK);
     CHECK_EQUAL(serialize_calls, 1);         /* the session's state */
     CHECK_EQUAL(payload_serialize_calls, 1); /* the delayed send's value */

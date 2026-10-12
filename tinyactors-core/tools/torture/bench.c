@@ -198,8 +198,6 @@ typedef struct bench_system {
     /* tracing (docs/adr/0006 in the repository root): what the bench does with
      * the records after every slice */
     int trace_mode; /* TRACE_DISABLED, TRACE_RECORDS (read them), TRACE_OTLP (the host encodes them) */
-    unsigned char *otlp_out;
-    uint32_t otlp_out_capacity;
     uint64_t trace_records, otlp_bytes, previous_trace_records, previous_otlp_bytes;
     double trace_ms, previous_trace_ms;
 } bench_system;
@@ -347,7 +345,6 @@ static void system_free(bench_system *system) {
     for (uint32_t i = 0; i < system->job_count; i++)
         JS_FreeValue(B.context, system->jobs[i].callbacks);
     free(system->jobs);
-    free(system->otlp_out);
     if (system->host)
         ta_host_free(system->host); /* before the runtime its datamodel instances live in */
     if (system->ecmascript) ta_datamodel_ecmascript_free(system->ecmascript);
@@ -2017,23 +2014,16 @@ static uint32_t hib_sweep(bench_system *system, uint32_t max, uint32_t scan) {
     for (;;) {
         uint32_t n = ta_host_sweep(system->host, scan, (ta_uint64_array){cold, 4096});
         for (uint32_t k = 0; k < n && done < max; k++) {
-            size_t length = 0;
-            if (!hibernation_buffer) {
-                hibernation_buffer_capacity = 1 << 16;
-                hibernation_buffer = (unsigned char *)malloc(hibernation_buffer_capacity);
-            }
-            ta_buffer written = {hibernation_buffer, hibernation_buffer_capacity, 0};
+            ta_bytes written = {NULL, 0}; /* the host's, until the next call into it */
             ta_status status = ta_host_hibernate(system->host, cold[k], &written);
-            length = written.length;
-            if (status == TA_ERROR_NO_MEMORY && length > hibernation_buffer_capacity) {
+            if (status != TA_OK) continue; /* e.g. functions in its data: stays resident */
+            size_t length = written.length;
+            if (length > hibernation_buffer_capacity) { /* a copy, to wake from if the write fails */
                 hibernation_buffer_capacity = length * 2;
                 hibernation_buffer =
                     (unsigned char *)realloc(hibernation_buffer, hibernation_buffer_capacity);
-                written = (ta_buffer){hibernation_buffer, hibernation_buffer_capacity, 0};
-                status = ta_host_hibernate(system->host, cold[k], &written);
-                length = written.length;
             }
-            if (status != TA_OK) continue; /* e.g. functions in its data: stays resident */
+            memcpy(hibernation_buffer, written.pointer, length);
             bench_hibernate *hibernation = hib_find(system, cold[k], 1);
             uint64_t t = ta_runtime_now_ns();
             ssize_t w = hibernation ? pwrite(system->hibernation_fd, hibernation_buffer, length,
@@ -2222,17 +2212,10 @@ static void drain_effects(int si) {
 /* The host's OTLP requests, taken and let go (a binding would post them). */
 static int trace_flush(bench_system *system) {
     for (int i = 0; i < 2; i++) {
-        ta_buffer out = {system->otlp_out, system->otlp_out_capacity, 0};
+        ta_bytes out = {NULL, 0}; /* the host's, until the next call into it */
         ta_status status =
             i ? ta_host_logs(system->host, &out) : ta_host_traces(system->host, &out);
-        if (status == TA_ERROR_NO_MEMORY) { /* the request needs more room than we have */
-            unsigned char *grown = (unsigned char *)realloc(system->otlp_out, out.length);
-            if (!grown) return 0;
-            system->otlp_out = grown;
-            system->otlp_out_capacity = (uint32_t)out.length;
-            out = (ta_buffer){grown, out.length, 0};
-            status = i ? ta_host_logs(system->host, &out) : ta_host_traces(system->host, &out);
-        }
+        if (status == TA_ERROR_NO_MEMORY) return 0;
         if (status == TA_OK) system->otlp_bytes += out.length;
     }
     return 1;

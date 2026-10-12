@@ -146,10 +146,8 @@ static int pump(void) { /* run every node once; move envelopes; returns 1 if any
                 continue;
             }
             if (over_bytes) { /* ta_host_envelope, then the read on the other side */
-                unsigned char bytes[2048];
-                ta_buffer written = {bytes, sizeof bytes, 0};
-                CHECK_EQUAL(ta_host_envelope(nodes[i].host, effect, &written), TA_OK);
-                ta_bytes wire = {bytes, written.length};
+                ta_bytes wire; /* node i's memory: node j reads it */
+                CHECK_EQUAL(ta_host_envelope(nodes[i].host, effect, &wire), TA_OK);
                 if (effect->kind == TA_HOST_EFFECT_PEER_ERROR) {
                     ta_peer_error error;
                     CHECK_EQUAL(ta_host_peer_error_read(wire, &error), TA_OK);
@@ -1231,23 +1229,14 @@ static void test_envelope_bytes(void) {
     effect.payload = ta_datamodel_ecmascript_payload_eval(nodes[A].ecmascript, 0,
                                                           (ta_string_view){"({n: 1})", 8});
     effect.datamodel = 0;
-    unsigned char bytes[512];
-    ta_buffer written = {NULL, 0, 0};
-    CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_ERROR_NO_MEMORY);
-    size_t needed = written.length;
-    written = (ta_buffer){bytes, needed - 1, 0};
-    CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(written.length, needed);
-    written = (ta_buffer){bytes, sizeof bytes, 0};
+    ta_bytes written; /* a's memory, until the next call into a */
     CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_OK);
-    CHECK_EQUAL(written.length, needed);
-    diagnostic_is((ta_bytes){bytes, written.length},
+    diagnostic_is(written,
                   "{\"target\":\"tinyactors://b/@echo\",\"name\":\"ping\",\"data\":24(h'a1616e01'),"
                   "\"sendid\":\"p1\",\"origin\":\"tinyactors://a/#_scxml_1\",\"msgid\":\"m1\","
                   "\"hops\":1}");
     ta_envelope envelope;
-    CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, (ta_bytes){bytes, written.length}, &envelope),
-                TA_OK);
+    CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, written, &envelope), TA_OK);
     CHECK_EQUAL(envelope.hops, 1u);
     CHECK(envelope.msgid.length == 2 && !memcmp(envelope.msgid.pointer, "m1", 2));
     /* the value is not decoded: the target's datamodel reads it */
@@ -1257,18 +1246,16 @@ static void test_envelope_bytes(void) {
 
     effect.kind = TA_HOST_EFFECT_PEER_ERROR;
     effect.token = TA_ROUTE_ERROR_UNKNOWN_TARGET;
-    written = (ta_buffer){bytes, sizeof bytes, 0};
     CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_OK);
-    diagnostic_is((ta_bytes){bytes, written.length},
+    diagnostic_is(written,
                   "{\"error\":\"unknown-target\",\"sendid\":\"p1\","
                   "\"origin\":\"tinyactors://a/#_scxml_1\",\"msgid\":\"m1\"}");
     ta_peer_error error;
-    CHECK_EQUAL(ta_host_peer_error_read((ta_bytes){bytes, written.length}, &error), TA_OK);
+    CHECK_EQUAL(ta_host_peer_error_read(written, &error), TA_OK);
     CHECK_EQUAL(error.reason, (uint32_t)TA_ROUTE_ERROR_UNKNOWN_TARGET);
     CHECK(error.origin.length == 24 && error.sendid.length == 2 && error.msgid.length == 2);
     /* an error envelope is not an envelope, and the reverse */
-    CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, (ta_bytes){bytes, written.length}, &envelope),
-                TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_envelope_read(nodes[B].host, written, &envelope), TA_ERROR_INVALID);
     CHECK_EQUAL(envelope.size, 0u);
     effect.kind = TA_EFFECT_LOG;
     CHECK_EQUAL(ta_host_envelope(nodes[A].host, &effect, &written), TA_ERROR_INVALID);

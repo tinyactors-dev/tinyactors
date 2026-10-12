@@ -960,8 +960,8 @@ static const request_method *request_envelope(request *r, uint32_t *params) {
     return NULL;
 }
 
-ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
-    reply->length = 0;
+ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_bytes *reply) {
+    *reply = (ta_bytes){(const void *)0, 0};
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     ta_cbor_token tokens[TA_HOST_REQUEST_TOKENS];
     ta_cbor_document document = {bytes, tokens, TA_HOST_REQUEST_TOKENS, 0};
@@ -972,7 +972,7 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
     r.id = TA_NIL;
     r.replies = 1;
     r.prefix = "params.";
-    r.out = ta_output_over(*reply, NULL);
+    r.out = *host_output(host); /* the host's, grown as the reply needs */
     ta_status status = ta_cbor_decode(&document);
     if (status == TA_ERROR_NO_MEMORY) {
         request_refuse_with(&r, REQUEST_LIMIT, "limit", "a request has at most 256 items");
@@ -993,8 +993,8 @@ ta_status ta_host_request(ta_host *host, ta_bytes bytes, ta_buffer *reply) {
             method->run(&r, params);
         }
     }
-    reply->length = r.out.length;
-    return request_fits(&r) ? TA_OK : TA_ERROR_NO_MEMORY;
+    host->output = r.out; /* where the reply is, the block grown or not */
+    return host_output_view(host, reply);
 }
 
 /* ---- the host's config (ta_host_create, docs/host-config.md) ------------------------- */

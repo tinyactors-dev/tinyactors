@@ -56,7 +56,7 @@ Every method names the core calls behind it; header references are to
 | `w3c.run` | `documents`: the test's start document first, then its dependencies: charts (`.scxml`) and the files a `src` reads (`.txt`); `datamodel`, `realm` | `outcome`, as `scenario.run` | one W3C IRP test in the W3C environment (below) |
 | `host.create` | `config` (bytes); `datamodel`, `realm` | `status`; `datamodel`: the vtable's `name` (`datamodel.h`); `error` (bytes) when refused | `ta_host_create` (`host.h`) with `environment->error` set; quickjs: `ta_datamodel_ecmascript_new` with `realm` (`datamodel_ecmascript.h`); native: the implementation's own vtable, or -32602 `range` when it has none |
 | `host.free` | — | `{}` | `ta_host_free` |
-| `host.request` | `request` (bytes); `capacity` | `status`; `length`; `reply` (bytes) when `status` is 0 | `ta_host_request` into a `ta_buffer` of `capacity` bytes (default: enough); on `TA_ERROR_NO_MEMORY` `length` is what it needs |
+| `host.request` | `request` (bytes); `refuse` (bool) | `status`; `reply` (bytes) when `status` is 0 | `ta_host_request`; the reply is a view of the host's memory, copied at once. With `refuse`, the host's allocator refuses every block during the call: `TA_ERROR_NO_MEMORY`, and nothing applied |
 | `image.add` | `charts`: array of `{"name", "text"}` | `status`; `segment` | `ta_compile_charts`, `ta_compile_image` (`compile.h`), `ta_image_open` (`image.h`), `ta_host_add_image` |
 | `actor.spawn` | `chart` (its name); `params` (value) | `status`; `session` | `ta_host_chart`, `ta_host_spawn` |
 | `actor.send` | `session`, `event`; `data` (value) | `status` | `ta_host_send` |
@@ -96,10 +96,10 @@ by the command under test, so an adapter cannot lower its own bar.
 | Kind | Must offer | Used by |
 |---|---|---|
 | `reference` | every method above | `ta-conform` (`tinyactors-core`'s `mise run conform`) |
-| `binding` (the default) | every method but the C-level ones: `envelope.read` and `value.encode`; `host.request` without `capacity`, which the runner does not send it | each binding's adapter |
+| `binding` (the default) | every method but the C-level ones: `envelope.read` and `value.encode`; `host.request` without `refuse`, which the runner does not send it | each binding's adapter |
 
 The reference runs every case. A binding's run skips, besides the
-C-level methods' cases and those with `capacity`, the envelope-level
+C-level methods' cases and those with `refused`, the envelope-level
 cases of `requests.txt` and `config.txt`, each marked with the line `only
 reference` ("envelope-level: reference only";
 [suites/protocol/README.md](../suites/protocol/README.md), "Envelope-level

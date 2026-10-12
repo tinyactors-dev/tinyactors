@@ -165,7 +165,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 - **Everything rarely called is a method of `ta_host_request`:** trace configuration, watches, stats, the effective config, inspection, state values, a session’s variables, subscriptions and decoded spans. The catalogue is [requests.md](requests.md): every method, its params, defaults, replies and errors. An API item whose method is not there does not exist; what is not a method is listed there too.
 - **The shape is JSON-RPC 2.0’s, without its `"jsonrpc"` member, in CBOR:** `{"method", "params", "id"}` in; `{"id", "result"}` or `{"id", "error": {"code", "message", "data": {"reason", "path"}}}` out. A request without `"id"` is a notification: applied, with no reply and no error reported. Pass an id whenever the caller wants the answer.
 - An API method is one line: build the map from the caller’s arguments with the CBOR module, send it, return the `result`. An `error` becomes the language’s exception, with its `code`, `reason`, `path` and `message` unchanged. Match on `code` and `reason`, never on `message`.
-- `TA_ERROR_NO_MEMORY` means nothing was applied: grow the reply buffer and send the same request again.
+- The reply is a view of the host's memory until the next call into the host: decode it before anything else calls in. `TA_ERROR_NO_MEMORY` means the host's allocator refused room for the reply, and nothing was applied.
 
 ## 11 · Project and build
 

@@ -52,7 +52,7 @@ the binding encodes from a language value
 how core reads the envelope around a request, not a method, so each has
 the line `only reference`: the reference (`ta-conform`, `--kind
 reference`) runs it, and a binding's run (`--kind binding`) skips it with
-"envelope-level: reference only", as it skips `capacity`. The runner does
+"envelope-level: reference only", as it skips `refused`. The runner does
 not guess this from the bytes; the line says it. (The line is `only`, not
 `kind`: a case's first word is already its kind.)
 

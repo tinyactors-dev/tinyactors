@@ -52,12 +52,22 @@ typedef struct world {
 
 static world *current;
 
+/* The C library's allocator, refusing every block while `refusing` is set. */
+static int refusing;
+static void *refusable_alloc(void *context, size_t size, size_t align) {
+    ta_allocator heap = ta_runtime_malloc();
+    return refusing ? NULL : heap.alloc(context, size, align);
+}
+static void refusable_free(void *context, void *pointer, size_t size) {
+    ta_allocator heap = ta_runtime_malloc();
+    heap.free(context, pointer, size);
+}
+
 static ta_status assign(const ta_datamodel_call *call, ta_expression location,
                         ta_expression value) {
     if (current->probe) {
         current->probe = 0;
-        unsigned char bytes[64];
-        ta_buffer out = {bytes, sizeof bytes, 0};
+        ta_bytes out;
         current->during_run = ta_host_traces(current->host, &out);
     }
     return ta_datamodel_ecmascript_vtable()->assign(call, location, value);
@@ -81,7 +91,7 @@ static void world_open(world *w, const test_host_telemetry *telemetry) {
     config.system.max_actors = 8;
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
-    config.allocator = ta_runtime_malloc();
+    config.allocator = (ta_allocator){NULL, refusable_alloc, refusable_free};
     if (telemetry) config.telemetry = *telemetry;
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
@@ -159,21 +169,19 @@ static void test_drain_and_take(void) {
     advance(&w, 20);
     run_once(&w); /* reads the pings' records */
     CHECK_EQUAL(w.traces, 0u); /* no interval, staging not full */
-    static unsigned char bytes[1 << 16];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out; /* the host's, until the next call into it */
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
-    CHECK(span_count(bytes, out.length) >= 3);
-    out = (ta_buffer){bytes, sizeof bytes, 0};
+    CHECK(span_count(out.pointer, out.length) >= 3);
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     CHECK_EQUAL(out.length, 0u); /* taken */
-    out = (ta_buffer){bytes, sizeof bytes, 0};
     CHECK_EQUAL(ta_host_logs(w.host, &out), TA_OK);
     CHECK(out.length > 0); /* the <log>s */
     world_close(&w);
 }
 
-/* TA_ERROR_NO_MEMORY says what the request needs and leaves the spans. */
-static void test_take_sizing(void) {
+/* TA_ERROR_NO_MEMORY: the allocator refused room for the request, and the
+ * spans stay for the next take. */
+static void test_take_refused(void) {
     test_host_telemetry telemetry = encoder(0);
     world w;
     world_open(&w, &telemetry);
@@ -181,20 +189,13 @@ static void test_take_sizing(void) {
     ping(&w, 2);
     run_once(&w);
     advance(&w, 20);
-    unsigned char small[8];
-    ta_buffer out = {small, sizeof small, 0};
+    ta_bytes out;
+    refusing = 1;
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_ERROR_NO_MEMORY);
-    size_t need = out.length;
-    CHECK(need > sizeof small);
-    out = (ta_buffer){NULL, 0, 0};
-    CHECK_EQUAL(ta_host_traces(w.host, &out), TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, need); /* nothing changed */
-    unsigned char *bytes = malloc(need);
-    out = (ta_buffer){bytes, need, 0};
+    CHECK_EQUAL(out.length, 0u);
+    refusing = 0;
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
-    CHECK_EQUAL(out.length, need);
-    CHECK(span_count(bytes, out.length) >= 2);
-    free(bytes);
+    CHECK(span_count(out.pointer, out.length) >= 2);
     world_close(&w);
 }
 
@@ -221,11 +222,9 @@ static void test_flush_deadline(void) {
     advance(&w, 300);
     run_once(&w);
     CHECK_EQUAL(w.traces, 1u); /* one outstanding until taken */
-    static unsigned char bytes[1 << 16];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     CHECK(out.length > 0);
-    out = (ta_buffer){bytes, sizeof bytes, 0};
     CHECK_EQUAL(ta_host_logs(w.host, &out), TA_OK);
     result = run_once(&w);
     CHECK_EQUAL(result.next_deadline, UINT64_MAX); /* nothing staged */
@@ -256,8 +255,7 @@ static void test_staging_full(void) {
     }
     CHECK_EQUAL(w.traces, 1u);
     CHECK_EQUAL(w.logs, 0u);
-    static unsigned char bytes[TA_OTLP_STAGING_BYTES_MIN * 2];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     CHECK(out.length > TA_OTLP_STAGING_BYTES_MIN / 2);
     world_close(&w);
@@ -310,7 +308,11 @@ static void test_same_bytes(void) {
     advance(&a, 50);
     static unsigned char ours[1 << 16], theirs[1 << 16];
     ta_buffer x = {ours, sizeof ours, 0}, y = {theirs, sizeof theirs, 0};
-    CHECK_EQUAL(ta_host_traces(a.host, &x), TA_OK);
+    ta_bytes taken; /* a's, until the next call into a: copied */
+    CHECK_EQUAL(ta_host_traces(a.host, &taken), TA_OK);
+    CHECK(taken.length <= sizeof ours);
+    memcpy(ours, taken.pointer, taken.length);
+    x.length = taken.length;
     current = &b;
     advance(&b, 50);
     {
@@ -385,11 +387,10 @@ static void test_end_open_spans(void) {
         traces += effects[i].kind == TA_HOST_EFFECT_TRACES;
     ta_host_effects_ack(w.host);
     CHECK_EQUAL(traces, 1u); /* due at once */
-    static unsigned char bytes[1 << 16];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     uint64_t end = 0;
-    CHECK(incomplete_spans(bytes, out.length, &end) >= 1);
+    CHECK(incomplete_spans(out.pointer, out.length, &end) >= 1);
     CHECK_EQUAL(end, 1700000000000000030ull);
     world_close(&w);
 
@@ -427,8 +428,7 @@ static void test_refusals(void) {
     world_close(&w);
 
     world_open(&w, NULL);
-    unsigned char bytes[64];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_logs(w.host, &out), TA_ERROR_STATE);
     ping(&w, 1);
@@ -441,7 +441,7 @@ static void test_refusals(void) {
 
 int main(void) {
     RUN(test_drain_and_take);
-    RUN(test_take_sizing);
+    RUN(test_take_refused);
     RUN(test_flush_deadline);
     RUN(test_staging_full);
     RUN(test_same_bytes);

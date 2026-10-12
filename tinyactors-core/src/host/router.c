@@ -1205,20 +1205,20 @@ ta_status ta_host_peer_error_read(ta_bytes cbor, ta_peer_error *out) {
     return TA_OK;
 }
 
-ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffer *out) {
+ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_bytes *out) {
+    if (out) *out = (ta_bytes){(const void *)0, 0};
     if (!host || !effect || !out ||
         (effect->kind != TA_HOST_EFFECT_PEER && effect->kind != TA_HOST_EFFECT_PEER_ERROR))
         return TA_ERROR_INVALID;
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
-    size_t capacity = out->pointer ? out->capacity : 0;
-    ta_output o = ta_output_over((ta_buffer){out->pointer, capacity, 0}, NULL);
+    ta_output *o = host_output(host);
     if (effect->kind == TA_HOST_EFFECT_PEER_ERROR) {
-        cbor_output_head(&o, CBOR_MAJOR_MAP, 1u + !!effect->sendid.length +
+        cbor_output_head(o, CBOR_MAJOR_MAP, 1u + !!effect->sendid.length +
                                                  !!effect->auxiliary.length + !!effect->msgid.length);
-        envelope_put_text(&o, ENVELOPE_KEY_ERROR, ta_host_route_reason(effect->token));
-        envelope_put_text(&o, ENVELOPE_KEY_SENDID, effect->sendid);
-        envelope_put_text(&o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);
-        envelope_put_text(&o, ENVELOPE_KEY_MSGID, effect->msgid);
+        envelope_put_text(o, ENVELOPE_KEY_ERROR, ta_host_route_reason(effect->token));
+        envelope_put_text(o, ENVELOPE_KEY_SENDID, effect->sendid);
+        envelope_put_text(o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);
+        envelope_put_text(o, ENVELOPE_KEY_MSGID, effect->msgid);
     } else {
         /* the value first: its length is the byte string's head. A relayed
          * value is the bytes it arrived as; otherwise the datamodel writes it */
@@ -1248,28 +1248,27 @@ ta_status ta_host_envelope(ta_host *host, const ta_host_effect *effect, ta_buffe
         uint32_t pairs = 2u + !!has_data + !!effect->sendid.length + !!effect->auxiliary.length +
                          !!origintype.length + !!effect->msgid.length + !!effect->flags +
                          !!effect->deduplication_key.length + !!trace.length;
-        cbor_output_head(&o, CBOR_MAJOR_MAP, pairs);
-        envelope_put_text(&o, ENVELOPE_KEY_TARGET, effect->target);
-        envelope_put_text(&o, ENVELOPE_KEY_NAME, effect->event);
+        cbor_output_head(o, CBOR_MAJOR_MAP, pairs);
+        envelope_put_text(o, ENVELOPE_KEY_TARGET, effect->target);
+        envelope_put_text(o, ENVELOPE_KEY_NAME, effect->event);
         if (has_data) {
-            cbor_output_text(&o, ENVELOPE_KEYS[ENVELOPE_KEY_DATA]);
-            cbor_output_head(&o, CBOR_MAJOR_TAG, ENVELOPE_CBOR_TAG_ENCODED);
-            cbor_output_head(&o, CBOR_MAJOR_BYTES, value.length);
-            ta_output_write(&o, value.pointer, value.length);
+            cbor_output_text(o, ENVELOPE_KEYS[ENVELOPE_KEY_DATA]);
+            cbor_output_head(o, CBOR_MAJOR_TAG, ENVELOPE_CBOR_TAG_ENCODED);
+            cbor_output_head(o, CBOR_MAJOR_BYTES, value.length);
+            ta_output_write(o, value.pointer, value.length);
         }
-        envelope_put_text(&o, ENVELOPE_KEY_SENDID, effect->sendid);
-        envelope_put_text(&o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);
-        envelope_put_text(&o, ENVELOPE_KEY_ORIGINTYPE, origintype);
-        envelope_put_text(&o, ENVELOPE_KEY_MSGID, effect->msgid);
+        envelope_put_text(o, ENVELOPE_KEY_SENDID, effect->sendid);
+        envelope_put_text(o, ENVELOPE_KEY_ORIGIN, effect->auxiliary);
+        envelope_put_text(o, ENVELOPE_KEY_ORIGINTYPE, origintype);
+        envelope_put_text(o, ENVELOPE_KEY_MSGID, effect->msgid);
         if (effect->flags) {
-            cbor_output_text(&o, ENVELOPE_KEYS[ENVELOPE_KEY_HOPS]);
-            cbor_output_uint(&o, effect->flags);
+            cbor_output_text(o, ENVELOPE_KEYS[ENVELOPE_KEY_HOPS]);
+            cbor_output_uint(o, effect->flags);
         }
-        envelope_put_text(&o, ENVELOPE_KEY_DEDUP, effect->deduplication_key);
-        envelope_put_text(&o, ENVELOPE_KEY_TRACEPARENT, trace);
+        envelope_put_text(o, ENVELOPE_KEY_DEDUP, effect->deduplication_key);
+        envelope_put_text(o, ENVELOPE_KEY_TRACEPARENT, trace);
     }
-    out->length = o.length;
-    return o.length <= capacity ? TA_OK : TA_ERROR_NO_MEMORY;
+    return host_output_view(host, out);
 }
 
 void ta_host_peer_round_trip_time(ta_host *host, uint32_t handle, uint32_t ms) {

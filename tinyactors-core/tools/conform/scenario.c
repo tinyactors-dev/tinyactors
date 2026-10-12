@@ -291,16 +291,6 @@ static int step_advance(scenario *run, const scenario_step *step) {
     return 1;
 }
 
-typedef struct hibernation {
-    ta_host *host;
-    uint64_t session;
-} hibernation;
-
-static ta_status hibernate_write(void *context, ta_buffer *out) {
-    const hibernation *writing = (const hibernation *)context;
-    return ta_host_hibernate(writing->host, writing->session, out);
-}
-
 static int step_hibernate(scenario *run, const scenario_step *step) {
     ta_string_view name;
     if (!conform_token_text(run->call, step->value, &name)) return malformed(run, step->index, "hibernate names an alias");
@@ -309,11 +299,11 @@ static int step_hibernate(scenario *run, const scenario_step *step) {
     if (run->store_count == sizeof run->store / sizeof run->store[0]) return refused(run, "the store is full");
     scenario_blob *blob = &run->store[run->store_count];
     *blob = (scenario_blob){alias->session, {NULL, 0, 0}};
-    hibernation writing = {run->host, alias->session};
-    if (conform_write_growing(&(conform_writing){hibernate_write, &writing}, &blob->bytes) != TA_OK) {
-        conform_buffer_free(&blob->bytes);
-        return refused(run, "ta_host_hibernate refused");
-    }
+    ta_bytes written = {NULL, 0}; /* the host's, until the next call into it: stored */
+    if (ta_host_hibernate(run->host, alias->session, &written) != TA_OK) return refused(run, "ta_host_hibernate refused");
+    if (!conform_buffer_reserve(&blob->bytes, written.length)) return refused(run, "no memory for the blob");
+    memcpy(blob->bytes.pointer, written.pointer, written.length);
+    blob->bytes.length = written.length;
     run->store_count++;
     return 1;
 }

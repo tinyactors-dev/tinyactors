@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <tinyactors/runtime.h>
 #include <tinyactors/trace.h>
 
 void conform_vectors_close(conform_vectors *vectors) {
@@ -48,6 +49,20 @@ static payload_reading payload_read(conform *state, conform_call *call, const ch
 
 /* ---- host.create, host.free, host.request ---------------------------------------- */
 
+/* The C library's allocator, refusing every block while `refusing` is set. */
+static void *vectors_alloc(void *context, size_t size, size_t align) {
+    const conform_vectors *vectors = (const conform_vectors *)context;
+    if (vectors->refusing) return NULL;
+    ta_allocator heap = ta_runtime_malloc();
+    return heap.alloc(heap.context, size, align);
+}
+
+static void vectors_free(void *context, void *pointer, size_t size) {
+    (void)context;
+    ta_allocator heap = ta_runtime_malloc();
+    heap.free(heap.context, pointer, size);
+}
+
 static void host_create(conform *state, conform_call *call, conform_result *result) {
     conform_vectors *vectors = &state->vectors;
     ta_bytes config = {NULL, 0};
@@ -61,6 +76,8 @@ static void host_create(conform *state, conform_call *call, conform_result *resu
     static unsigned char error[8192];
     ta_buffer refusal = {error, sizeof error, 0};
     ta_host_environment environment = conform_datamodel_environment(&vectors->datamodel, &refusal);
+    environment.allocator = (ta_allocator){vectors, vectors_alloc, vectors_free};
+    vectors->refusing = 0;
     ta_status status = ta_host_create(config, &environment, &vectors->host);
     conform_result_integer(result, "status", status);
     if (status == TA_OK) {
@@ -77,38 +94,22 @@ static void host_free(conform *state, conform_call *call, conform_result *result
     if (host_of(state, call)) conform_vectors_close(&state->vectors);
 }
 
-typedef struct request_writing {
-    ta_host *host;
-    ta_bytes request;
-} request_writing;
-
-static ta_status request_write(void *context, ta_buffer *out) {
-    request_writing *writing = (request_writing *)context;
-    return ta_host_request(writing->host, writing->request, out);
-}
-
-/* Into a buffer of `capacity` bytes when the call gives one, else into one
- * grown until the reply fits. */
+/* The reply is a view of the host's memory until the next call into it: kept
+ * (copied) at once. With `refuse`, the host's allocator refuses every block
+ * during the call. */
 static void host_request(conform *state, conform_call *call, conform_result *result) {
     ta_host *host = host_of(state, call);
-    request_writing writing = {host, {NULL, 0}};
-    int64_t capacity = -1;
-    if (!host || !conform_required(call, "request") || !conform_bytes(call, "request", &writing.request) ||
-        !conform_integer(call, "capacity", &capacity))
+    ta_bytes request = {NULL, 0};
+    int refuse = 0;
+    if (!host || !conform_required(call, "request") || !conform_bytes(call, "request", &request) ||
+        !conform_boolean(call, "refuse", &refuse))
         return;
-    ta_buffer reply = {NULL, 0, 0};
-    ta_status status;
-    if (capacity >= 0) {
-        status = conform_buffer_reserve(&reply, (size_t)capacity) ? TA_OK : TA_ERROR_NO_MEMORY;
-        reply.capacity = (size_t)capacity;
-        if (status == TA_OK) status = ta_host_request(host, writing.request, &reply);
-    } else {
-        status = conform_write_growing(&(conform_writing){request_write, &writing}, &reply);
-    }
+    ta_bytes reply = {NULL, 0};
+    state->vectors.refusing = refuse;
+    ta_status status = ta_host_request(host, request, &reply);
+    state->vectors.refusing = 0;
     conform_result_integer(result, "status", status);
-    conform_result_integer(result, "length", (int64_t)reply.length);
-    if (status == TA_OK) conform_result_bytes(result, "reply", conform_keep(state, (ta_bytes){reply.pointer, reply.length}));
-    conform_buffer_free(&reply);
+    if (status == TA_OK) conform_result_bytes(result, "reply", conform_keep(state, reply));
 }
 
 /* ---- image.add, actor.spawn, actor.send, clock.advance, host.run ------------------ */
@@ -201,12 +202,11 @@ static void host_run(conform *state, conform_call *call, conform_result *result)
         uint32_t effect_count = ta_host_effects(host, &effects);
         for (uint32_t i = 0; i < effect_count; i++) {
             if (effects[i].kind != TA_HOST_EFFECT_PEER && effects[i].kind != TA_HOST_EFFECT_PEER_ERROR) continue;
-            static unsigned char bytes[1 << 16];
-            ta_buffer out = {bytes, sizeof bytes, 0};
+            ta_bytes out = {NULL, 0}; /* the host's, until the next call into it: kept */
             ta_status status = ta_host_envelope(host, &effects[i], &out);
             if (status != TA_OK) fprintf(stderr, "ta-conform: ta_host_envelope refused an effect: %d\n", (int)status);
             else if (count < sizeof envelopes / sizeof envelopes[0])
-                envelopes[count++] = conform_keep(state, (ta_bytes){bytes, out.length});
+                envelopes[count++] = conform_keep(state, out);
         }
         ta_host_effects_ack(host);
     } while ((run.status == TA_RUN_YIELDED || run.status == TA_RUN_EFFECTS_FULL) && ++rounds < 1000);
@@ -240,8 +240,7 @@ typedef struct envelope_writing {
     const ta_peer_error *error;
 } envelope_writing;
 
-static ta_status envelope_write(void *context, ta_buffer *out) {
-    const envelope_writing *writing = (const envelope_writing *)context;
+static ta_status envelope_write(const envelope_writing *writing, ta_bytes *out) {
     ta_host_effect effect;
     memset(&effect, 0, sizeof effect);
     effect.size = sizeof effect;
@@ -280,12 +279,11 @@ static void envelope_read(conform *state, conform_call *call, conform_result *re
     ta_envelope envelope;
     ta_peer_error error;
     ta_status status = is_error ? ta_host_peer_error_read(cbor, &error) : ta_host_envelope_read(host, cbor, &envelope);
-    ta_buffer back = {NULL, 0, 0};
+    ta_bytes back = {NULL, 0}; /* the host's, until the next call into it: kept */
     envelope_writing writing = {host, is_error ? NULL : &envelope, is_error ? &error : NULL};
-    if (status == TA_OK) status = conform_write_growing(&(conform_writing){envelope_write, &writing}, &back);
+    if (status == TA_OK) status = envelope_write(&writing, &back);
     conform_result_integer(result, "status", status);
-    if (status == TA_OK) conform_result_bytes(result, "back", conform_keep(state, (ta_bytes){back.pointer, back.length}));
-    conform_buffer_free(&back);
+    if (status == TA_OK) conform_result_bytes(result, "back", conform_keep(state, back));
 }
 
 static void envelope_deliver(conform *state, conform_call *call, conform_result *result) {
@@ -331,7 +329,7 @@ static void value_encode(conform *state, conform_call *call, conform_result *res
 
 static const char *const create_params[] = {"config", "datamodel", "realm", NULL};
 static const char *const no_params[] = {NULL};
-static const char *const request_params[] = {"request", "capacity", NULL};
+static const char *const request_params[] = {"request", "refuse", NULL};
 static const char *const image_params[] = {"charts", NULL};
 static const char *const spawn_params[] = {"chart", "params", NULL};
 static const char *const send_params[] = {"session", "event", "data", NULL};

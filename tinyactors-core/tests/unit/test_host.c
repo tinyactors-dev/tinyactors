@@ -9,6 +9,7 @@
 #include "../support/host_request.h"
 #include "../support/host_config.h"
 #include "../support/payload_text.h"
+#include "../support/host_output.h"
 
 #define BASE "tinyactors://h/"
 #define SC(name, body)                                                                             \
@@ -453,11 +454,9 @@ static void test_migration_wake_and_timeout(void) {
     world_add(&e, W1);
     uint64_t a = spawn(&e, "w"), b = spawn(&e, "w");
     run(&e);
-    size_t length = 0;
-    ta_buffer written = {e.blob, sizeof e.blob, 0};
+    ta_bytes written; /* the host's, until the next call into it */
     CHECK_EQUAL(ta_host_hibernate(e.host, a, &written), TA_OK);
-    length = written.length;
-    e.blob_length = length;
+    e.blob_length = output_copy(written, e.blob, sizeof e.blob);
     world_add(&e, W2);
     /* without wake, with a timeout: b moves, a is left behind and reported */
     ta_host_advance_time(e.host, (ta_host_time){1000, 0});
@@ -772,15 +771,11 @@ static void test_export_adopt_between_hosts(void) {
     run(&a); /* its delayed send is due at 100 */
     ta_host_advance_time(a.host, (ta_host_time){30, 0});
     run(&a);
-    size_t length = 0;
-    ta_buffer written = {NULL, 0, 0};
-    CHECK_EQUAL(ta_host_export_actor(a.host, s, &written), TA_ERROR_NO_MEMORY);
-    length = written.length;
-    size_t capacity = 2 * length + 4096;
-    unsigned char *blob = (unsigned char *)malloc(capacity);
-    written = (ta_buffer){blob, capacity, 0};
+    ta_bytes written; /* the host's, until the next call into it */
     CHECK_EQUAL(ta_host_export_actor(a.host, s, &written), TA_OK);
-    length = written.length;
+    size_t capacity = 2 * written.length + 4096;
+    unsigned char *blob = (unsigned char *)malloc(capacity);
+    size_t length = output_copy(written, blob, capacity);
     CHECK_EQUAL(ta_host_locate(a.host, s, &(ta_host_location){0, 0}), TA_ERROR_STALE); /* it left */
     CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, 7}}, NULL),
                 TA_ERROR_INVALID);
@@ -812,9 +807,8 @@ static void test_export_adopt_between_hosts(void) {
     uint64_t fresh = spawn(&b, "echo");
     CHECK(fresh > s && (fresh >> 32) == 1);
     /* back to a, into its home segment, from a blob that is overdue there */
-    written = (ta_buffer){blob, capacity, 0};
     CHECK_EQUAL(ta_host_export_actor(b.host, s, &written), TA_OK);
-    length = written.length;
+    length = output_copy(written, blob, capacity);
     CHECK_EQUAL(ta_host_adopt(a.host, &(ta_host_adoption){1, 0, {blob, length}}, &got), TA_OK);
     CHECK_EQUAL(ta_host_locate(a.host, s, &location), TA_OK);
     segment = location.segment;
@@ -845,16 +839,14 @@ static void test_adopt_tree_collision(void) {
     CHECK_EQUAL(root, 1u);
     CHECK_EQUAL(kid, 2u);
     size_t capacity = 65536, length = 0;
-    unsigned char *blob = (unsigned char *)malloc(capacity),
-                  *temporary = (unsigned char *)malloc(capacity);
-    ta_buffer written = {blob, capacity, 0};
+    unsigned char *blob = (unsigned char *)malloc(capacity);
+    ta_bytes written; /* the host's, until the next call into it */
     CHECK_EQUAL(ta_host_export_actor(a.host, root, &written), TA_OK);
-    length = written.length;
+    length = output_copy(written, blob, capacity);
     /* b: session 2 lives in segment 0, session 1 does not */
     CHECK_EQUAL(spawn(&b, "echo"), 1u);
     CHECK_EQUAL(spawn(&b, "echo"), 2u);
     run(&b);
-    written = (ta_buffer){temporary, capacity, 0};
     CHECK_EQUAL(ta_host_export_actor(b.host, 1, &written), TA_OK);
     uint64_t got = 9;
     CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){1, 0, {blob, length}}, &got),
@@ -871,7 +863,6 @@ static void test_adopt_tree_collision(void) {
     host_stats_fill(b.host, &stats);
     CHECK_EQUAL(stats.actors, 1u);
     /* once session 2 has left b, the tree moves in */
-    written = (ta_buffer){temporary, capacity, 0};
     CHECK_EQUAL(ta_host_export_actor(b.host, kid, &written), TA_OK);
     CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){1, 0, {blob, length}}, &got), TA_OK);
     CHECK_EQUAL(got, root);
@@ -879,13 +870,12 @@ static void test_adopt_tree_collision(void) {
     segment = location.segment;
     CHECK_EQUAL(segment, 1);
     free(blob);
-    free(temporary);
     world_close(&a);
     world_close(&b);
 }
 
 /* configurations as nested state values: atomic, compound, parallel regions
- * (an atomic region is {}), a missing session, a short buffer */
+ * (an atomic region is {}), a missing session */
 static void test_state_value(void) {
     host_world e;
     world_open(&e, 16, NULL, 0);
@@ -901,23 +891,6 @@ static void test_state_value(void) {
     char value[256];
     CHECK_EQUAL(ask_state(e.host, session, value, sizeof value), TA_OK);
     CHECK(strcmp(value, "{\"top\":{\"p\":{\"r1\":\"x\",\"r2\":{},\"r3\":{\"k\":\"k1\"}}}}") == 0);
-    /* a reply that does not fit: measured, nothing written past the room */
-    static host_ask a;
-    ta_cbor_writer *w = ask_begin(&a, "actor.state", 1);
-    ta_cbor_write_text(w, ta_string("session"));
-    ta_cbor_write_uint(w, session);
-    CHECK_EQUAL(ask_send(e.host, &a), TA_OK);
-    size_t n = a.answer.length;
-    ta_buffer request = {a.request, sizeof a.request, 0};
-    CHECK_EQUAL(ta_cbor_finish(&a.writer, &request), TA_OK);
-    ta_buffer out = {value, 4, 0};
-    CHECK_EQUAL(ta_host_request(e.host, (ta_bytes){a.request, request.length}, &out),
-                TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, n);
-    out = (ta_buffer){NULL, 0, 0};
-    CHECK_EQUAL(ta_host_request(e.host, (ta_bytes){a.request, request.length}, &out),
-                TA_ERROR_NO_MEMORY);
-    CHECK_EQUAL(out.length, n);
     CHECK_EQUAL(send(&e, session, "go", NULL), TA_OK);
     run(&e);
     CHECK_EQUAL(ask_state(e.host, session, value, sizeof value), TA_OK);
@@ -1035,9 +1008,9 @@ static void test_hibernate_and_wake(void) {
     CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
     run(&e);
     CHECK(strcmp(e.log, "touched 1;") == 0);
-    ta_buffer written = {e.blob, sizeof e.blob, 0};
+    ta_bytes written; /* the host's, until the next call into it */
     CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
-    e.blob_length = written.length;
+    e.blob_length = output_copy(written, e.blob, sizeof e.blob);
     CHECK_EQUAL(hibernated(&e, s), 1);
     CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
     run(&e);
@@ -1052,9 +1025,8 @@ static void test_hibernate_and_wake(void) {
     CHECK_EQUAL(ask_state(e.host, s, value, sizeof value), TA_OK);
     CHECK(strcmp(value, "\"idle\"") == 0);
     /* again, and the alarm it set before both hibernations wakes it */
-    written = (ta_buffer){e.blob, sizeof e.blob, 0};
     CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
-    e.blob_length = written.length;
+    e.blob_length = output_copy(written, e.blob, sizeof e.blob);
     CHECK_EQUAL(hibernated(&e, s), 1);
     ta_host_advance_time(e.host, (ta_host_time){250, 0});
     run(&e);

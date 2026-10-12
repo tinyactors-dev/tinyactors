@@ -19,8 +19,8 @@ typedef struct host_ask {
     ta_cbor_writer writer;
     unsigned char request[4096];
     size_t request_length;
-    unsigned char reply[1 << 16];
-    ta_buffer answer; /* the reply's bytes (answer.length) */
+    unsigned char reply[1 << 16]; /* the reply, copied from the host's view */
+    ta_bytes answer;              /* the reply's bytes, in `reply` (answer.length) */
     ta_cbor_token reply_tokens[4096];
     ta_cbor_document document; /* the reply, decoded */
     uint32_t result;           /* the reply's "result" token; TA_NIL for an error reply */
@@ -53,10 +53,14 @@ TEST_UNUSED static ta_status ask_send(ta_host *host, host_ask *a) {
     ta_buffer request = {a->request, sizeof a->request, 0};
     if (ta_cbor_finish(&a->writer, &request) != TA_OK) return TA_ERROR_INVALID;
     a->request_length = request.length;
-    a->answer = (ta_buffer){a->reply, sizeof a->reply, 0};
+    ta_bytes view = {NULL, 0}; /* the host's, until the next call into it: copied */
+    a->answer = (ta_bytes){a->reply, 0};
     a->text[0] = 0;
-    ta_status status = ta_host_request(host, (ta_bytes){a->request, a->request_length}, &a->answer);
+    ta_status status = ta_host_request(host, (ta_bytes){a->request, a->request_length}, &view);
     if (status != TA_OK) return status;
+    if (view.length > sizeof a->reply) return TA_ERROR_NO_MEMORY;
+    memcpy(a->reply, view.pointer, view.length);
+    a->answer.length = view.length;
     a->document = (ta_cbor_document){{a->reply, a->answer.length}, a->reply_tokens, 4096, 0};
     if (ta_cbor_decode(&a->document) != TA_OK) return TA_ERROR_INVALID;
     a->result = ta_cbor_member(&a->document, 0, ta_string("result"));

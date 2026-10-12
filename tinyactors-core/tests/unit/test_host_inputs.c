@@ -263,9 +263,10 @@ static void test_terminate_another_actor(void) {
 
 static void refused(world *w) {
     unsigned char bytes[64];
-    ta_buffer out = {bytes, sizeof bytes, 0};
+    ta_buffer room = {bytes, sizeof bytes, 0};
+    ta_bytes out;
     CHECK_EQUAL(ta_host_hibernate(w->host, w->listener, &out), TA_ERROR_STATE);
-    CHECK_EQUAL(ta_host_snapshot(w->host, &out), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_snapshot(w->host, &room), TA_ERROR_STATE);
     { /* envelopes across a process boundary */
         static const unsigned char envelope[] = {0xa2, 0x66, 't', 'a', 'r', 'g', 'e', 't', 0x61, 'x',
                                                  0x64, 'n',  'a', 'm', 'e', 0x61, 'e'};

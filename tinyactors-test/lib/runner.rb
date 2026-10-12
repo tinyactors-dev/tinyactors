@@ -39,7 +39,7 @@ class Runner
   # The methods of docs/driver.md, and those each kind of implementation
   # must offer (docs/driver.md, "Kinds"): the reference all of them, a
   # binding all but the C-level ones, which call core below the API a
-  # binding exposes (it sends a binding no `capacity` either).
+  # binding exposes (it sends a binding no `refuse` either).
   METHODS = %w[scenario.run w3c.run host.create host.free host.request image.add actor.spawn actor.send
                clock.advance host.run peer.add envelope.read envelope.deliver value.encode].freeze
   C_LEVEL = %w[envelope.read value.encode].freeze
@@ -152,22 +152,23 @@ class Runner
     raise Skipped, 'envelope-level: reference only' unless @kind == 'reference'
   end
 
-  # Every send with the reply after it, in order, on one host; a capacity
+  # Every send with the reply after it, in order, on one host; a refused
   # line applies to the send after it.
   def requests_case(vector)
     setup(vector.get('setup') || 'empty')
-    capacity = nil
+    refused = false
     request = nil
     asked = 0
     vector.lines.each do |key, value|
       case key
-      when 'capacity' then capacity = Integer(value)
+      when 'refused' then refused = true
       when 'send' then request = value
       when 'reply'
         raise Failed, 'a reply line without a send' unless request
 
-        ask(request, value, capacity)
-        request = capacity = nil
+        ask(request, value, refused)
+        request = nil
+        refused = false
         asked += 1
       end
     end
@@ -456,28 +457,22 @@ class Runner
 
   # ---- checks --------------------------------------------------------------------
 
-  # One request and its expected reply ("none": a notification's). With a
-  # capacity: first refused in that many bytes and measured; the retry in
-  # the length it asked for is the reply.
-  def ask(request, want, capacity)
+  # One request and its expected reply ("none": a notification's). Refused:
+  # first sent while the host's allocator refuses, which is TA_ERROR_NO_MEMORY
+  # with nothing applied; the send after it is the reply.
+  def ask(request, want, refused)
     params = { 'request' => bytes(request) }
-    raise Skipped, "host.request's capacity is C-level, and the command is a binding" if capacity && @kind == 'binding'
+    raise Skipped, "host.request's refuse is C-level, and the command is a binding" if refused && @kind == 'binding'
 
-    if capacity
-      refused = call('host.request', params.merge('capacity' => capacity))
-      unless refused['status'] == NO_MEMORY && refused['length'].to_i > capacity
-        raise Failed, "a reply larger than #{capacity} bytes is not TA_ERROR_NO_MEMORY with its length " \
-                      "(status #{refused['status']}, length #{refused['length'].inspect})"
+    if refused
+      answer = call('host.request', params.merge('refuse' => true))
+      unless answer['status'] == NO_MEMORY
+        raise Failed, "a request the host has no room for is not TA_ERROR_NO_MEMORY (status #{answer['status']})"
       end
-      capacity = refused['length']
-      params['capacity'] = capacity
     end
     answered = call('host.request', params)
     status!(answered, OK, 'ta_host_request')
     reply = data(answered['reply'])
-    if capacity && reply.bytesize != capacity
-      raise Failed, "the retry's reply is #{reply.bytesize} bytes, not the #{capacity} TA_ERROR_NO_MEMORY asked for"
-    end
     return same!('the reply', want, answered['reply']) unless want == 'none'
     return if reply.empty?
 

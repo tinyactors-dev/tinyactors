@@ -164,10 +164,30 @@ static void otlp_end_open(ta_host *host) {
     host->ending = stats.open != 0;
 }
 
-static ta_status otlp_take(ta_host *host, uint32_t kind, ta_buffer *out) {
+/* A request written into the host's output: put once, and again into a
+ * block grown to the size it answered (the encoder keeps what it staged
+ * until a put succeeds, and calls no datamodel then). */
+static ta_status otlp_put(ta_host *host, uint32_t kind, ta_bytes *out) {
+    ta_output *output = host_output(host);
+    ta_status status = TA_ERROR_NO_MEMORY;
+    for (int attempt = 0; attempt < 2 && status == TA_ERROR_NO_MEMORY; attempt++) {
+        ta_buffer room = {output->bytes, output->capacity, 0};
+        status = kind == TA_HOST_EFFECT_TRACES ? ta_otlp_put_traces(host->otlp, &room)
+                 : kind == TA_HOST_EFFECT_LOGS ? ta_otlp_put_logs(host->otlp, &room)
+                                               : ta_otlp_put_metrics(host->otlp, &room);
+        output->length = room.length;
+        if (status == TA_ERROR_NO_MEMORY) {
+            output->length = 0;
+            if (!ta_output_reserve(output, room.length)) break;
+        }
+    }
+    if (status != TA_OK) return status;
+    return host_output_view(host, out);
+}
+
+static ta_status otlp_take(ta_host *host, uint32_t kind, ta_bytes *out) {
     otlp_drain(host);
-    ta_status status = kind == TA_HOST_EFFECT_TRACES ? ta_otlp_put_traces(host->otlp, out)
-                                                     : ta_otlp_put_logs(host->otlp, out);
+    ta_status status = otlp_put(host, kind, out);
     if (status != TA_OK) return status;
     if (kind == TA_HOST_EFFECT_TRACES)
         host->traces_pending = 0;
@@ -183,7 +203,7 @@ static ta_status otlp_take(ta_host *host, uint32_t kind, ta_buffer *out) {
 /* The counters now as metrics (docs/adr/0007): per chart, per segment and
  * the host's own. Metrics staged by a call whose request did not fit are put
  * again as they are, not added twice. */
-static ta_status otlp_metrics(ta_host *host, ta_buffer *out) {
+static ta_status otlp_metrics(ta_host *host, ta_bytes *out) {
     ta_otlp_stats encoder;
     encoder.size = sizeof encoder;
     ta_otlp_stats_get(host->otlp, &encoder);
@@ -214,12 +234,9 @@ static ta_status otlp_metrics(ta_host *host, ta_buffer *out) {
                                      host->wall_ns};
         ta_status status = ta_otlp_add_stats(host->otlp, &input);
         if (bytes) host_free(host, block, bytes);
-        if (status != TA_OK) {
-            out->length = 0;
-            return status;
-        }
+        if (status != TA_OK) return status;
     }
-    return ta_otlp_put_metrics(host->otlp, out);
+    return otlp_put(host, 0, out);
 }
 
 /* trace.end: the journals' records first, then every open span ends; they
@@ -246,14 +263,14 @@ static ta_time null_deadline(const ta_host *host) {
     (void)host;
     return UINT64_MAX;
 }
-static ta_status null_take(ta_host *host, uint32_t kind, ta_buffer *out) {
+static ta_status null_take(ta_host *host, uint32_t kind, ta_bytes *out) {
     (void)host, (void)kind;
-    out->length = 0;
+    *out = (ta_bytes){(const void *)0, 0};
     return TA_ERROR_STATE;
 }
-static ta_status null_metrics(ta_host *host, ta_buffer *out) {
+static ta_status null_metrics(ta_host *host, ta_bytes *out) {
     (void)host;
-    out->length = 0;
+    *out = (ta_bytes){(const void *)0, 0};
     return TA_ERROR_STATE;
 }
 static ta_status null_end(ta_host *host) {
@@ -267,17 +284,20 @@ static const host_encoder encoder_null = {null_mark, null_run,      null_run,  n
                                           null_deadline, null_take, null_metrics, null_end,
                                           null_definitions};
 
-ta_status ta_host_traces(ta_host *host, ta_buffer *out) {
+ta_status ta_host_traces(ta_host *host, ta_bytes *out) {
+    *out = (ta_bytes){(const void *)0, 0};
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     return host->encoder->take(host, TA_HOST_EFFECT_TRACES, out);
 }
 
-ta_status ta_host_metrics(ta_host *host, ta_buffer *out) {
+ta_status ta_host_metrics(ta_host *host, ta_bytes *out) {
+    *out = (ta_bytes){(const void *)0, 0};
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     return host->encoder->metrics(host, out);
 }
 
-ta_status ta_host_logs(ta_host *host, ta_buffer *out) {
+ta_status ta_host_logs(ta_host *host, ta_bytes *out) {
+    *out = (ta_bytes){(const void *)0, 0};
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     return host->encoder->take(host, TA_HOST_EFFECT_LOGS, out);
 }
