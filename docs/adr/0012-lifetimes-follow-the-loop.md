@@ -1,6 +1,7 @@
 # ADR 0012: Lifetimes follow the loop
 
-**Status:** Accepted (2026-10-13). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
+**Status:** Accepted (2026-10-13); amended 2026-10-13 (decision 4, see
+"Amended (2026-10-13)" at the end). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
 decision 2 (the host's outputs) and [ADR 0011](0011-the-control-plane-is-posted-messages.md)
 decisions 3 (publication), 4 (`actor.changed`) and 6 (the drain and the
 synchronous `request`).
@@ -25,8 +26,8 @@ Following [docs/roles.md](../roles.md):
   [embedding.md](../../tinyactors-core/docs/embedding.md) is take, handle,
   ack, run, with nothing to copy while handling.
 - **Then: the application developer.** No synchronous call into the
-  control plane runs inside an effect handler; a subscriber always gets
-  a state value; actor output arrives through the channel SCXML has for
+  control plane runs inside an effect handler; a subscriber gets what
+  each macrostep changed (decision 4, amended); actor output arrives through the channel SCXML has for
   it (an I/O processor).
 - **Out of scope:**
   - the API shape of `PEER` versus `PEER_ERROR` in a binding (deferred
@@ -42,8 +43,8 @@ Following [docs/roles.md](../roles.md):
   |---|---|
   | per event | nothing. `TRACEPARENT`'s text is written on first ask, not per effect |
   | per batch | the host's outputs taken while handling it are held until the ack, not replaced by the next call: a batch of 64 `PEER` effects of 1 KB holds 64 KB of envelopes until the ack instead of 1 KB (arithmetic, not measured) |
-  | per subscribed session with a configuration over 1024 states | scratch for the state value from the host's allocator at the end of the run (6 bytes per active state, `host.c:807-808`); nothing for other charts |
-  | API | `ta_host_run` refuses while a batch is open; `ta_host_effects` returns the open batch instead of widening it; `actor.state` loses its `limit` error; new in base: `ta_table` (7 functions, ~83 lines in the spike) and `ta_status_name` |
+  | per subscribed session | one `actor.changed` per macrostep it finishes, with what it entered and exited (decision 4, amended); where the lists live during a run and what bounds them is open (same section). Other sessions: nothing |
+  | API | `ta_host_run` refuses while a batch is open; `ta_host_effects` returns the open batch instead of widening it; `actor.changed`'s params change (decision 4, amended); `actor.state` stays as it is, `limit` included; new in base: `ta_table` (7 functions, ~83 lines in the spike) and `ta_status_name` |
   | callers in this repository | the tests and `ta-conform` that run without acking migrate in the same change (`git grep ta_host_run`) |
   | every binding | less: no drain re-read, no consumed marks, no request facade, no copy before each call, no handle table and no status table of its own |
 
@@ -163,26 +164,91 @@ language API until a JSON-RPC transport exists. The binding's own C may
 post and drain at creation (reading `host.config`), since no batch is
 open then; that is the loop, not a synchronous API.
 
-### 4. `actor.changed` always carries `value`
+### 4. `actor.changed` carries what a macrostep changed (amended)
 
-`{"method": "actor.changed", "params": {"session": uint, "value":
-<state value | null>}}`. `value` is always present: the session's state
-value after the run, whole, or `null` when the session ended or left the
-host (its subscription with it).
+*As first accepted, this decision made `actor.changed` carry the whole
+state value after the run and removed the 1024-state limit of
+`host_state_value`. The amendment of 2026-10-13 (below) replaces both;
+this is the decision as amended.*
 
-**The state-value limit goes.** `host_state_value` writes any
-configuration: when it holds more states than the 1024 the stack has
-room for (`host.c:807-816`, `HOST_STATE_VALUE_STATES`), it takes its
-scratch from the host's allocator, sized from the chart's state count
-(`ta_image_state_count`, `image.h:45`). The notification is written at
-the end of a run, outside the system's run, where the host already grows
-its output and its effect pool (`host.c:742`, `:760`; `host_output`
-asserts `!host->running`, `host.c:43`). When the allocator refuses, the
-path that exists today holds: the session keeps its mark, the run
-answers `TA_RUN_EXHAUSTED`, and the notification comes at the end of the
-next run (`host.c:785-790`; requests.md, `actor.changed`). `actor.state`
-loses its `limit` error (`request.c:657-660`) and answers `memory`
-(-32004) when the allocator refuses.
+`{"method": "actor.changed", "params": {"session": uint, "entered":
+[state id, ...], "exited": [state id, ...]}}`: **one notification per
+macrostep** a subscribed session finishes, in the order it finished
+them. `entered` and `exited` are the ids of the states that macrostep
+entered and exited. No `value` member, in this or any other form of the
+notification.
+
+When the session ends or leaves the host (`ta_host_export_actor`), the
+last notification is `{"session": uint, "ended": true}`, without
+`entered` or `exited`, and the subscription ends with it. Not the lists
+of an exit, because a session that leaves the host by export exits no
+state: it goes on in the host that adopts it (`ta_host_export_actor`,
+`host.h:619`), so "everything exited" would be false for it, and a
+subscriber needs one signal for both. Not `"exited": [all]`, for the
+same reason. Not a `null` member, because `null` is a value, and the
+notification carries none.
+
+**No new state-value machinery.** `actor.state` stays as it is today:
+the state value written in the stack's room for 1024 states
+(`host_state_value`, `src/host/host.c:806-816`;
+`HOST_STATE_VALUE_STATES`, `src/host/host_internal.h:334`), refused with
+`limit` past it (`src/host/request.c:657-660`). A subscriber that wants
+the starting point posts `actor.state` after `actor.subscribe`; both are
+answered in the order posted (each post's `REPLY` is the last effect it
+appends, ADR 0011), and notifications start at the next run, so the
+state value is the configuration the first notification's changes apply
+to.
+
+**Open, to be devised** (written here, not solved; the implementation
+waits for a design the maintainer decides):
+
+1. **Capturing `entered` and `exited` during a run without allocation.**
+   What is known: core computes each microstep's exit set and entry set
+   as bitsets of the chart's state count in the workspace
+   (`exit`, `entry`, `state_words = (state_count + 31) / 32` words each,
+   `src/core/core_internal.h:247-259`; the exit set at
+   `src/core/core.c:1524-1540`, the entry set in `compute_entry`,
+   `core.c:772`), and the workspace is held only inside a microstep
+   (`core_internal.h:219`), so a macrostep's sets are gone when it
+   ends. The configuration is a bitset that lives in the instance
+   (`core_internal.h:196-199`), so a macrostep's net change is the
+   configuration before it against the one after: one copy of
+   `state_words` words per watched macrostep in flight, bounded by the
+   chart's state count. The trace already writes a microstep's exited
+   and entered states as lists into fixed journal memory during a run
+   (`trace_microstep`, `core.c:286-320`). The region is fixed at
+   `ta_system_init` (`tinyactors-core/AGENTS.md`), and the host writes
+   CBOR only outside a run (`host_output` asserts `!host->running`,
+   `host.c:43`). Not decided: where the lists live between the
+   macrostep and the end of the run, and whether a state entered and
+   exited within one macrostep (an eventless chain) is listed (the
+   union of the microsteps' sets) or not (the net change).
+2. **The outbox and the effect pool.** Today the system's
+   `TA_EFFECT_CHANGED` is pushed once per watch, "one effect per watch
+   however many macrosteps it runs" (`ta_actor_watch`,
+   `include/tinyactors/system.h:304-311`;
+   `src/system/schedule.c:170-173`) into the system's bounded outbox
+   (`ta_system_effect_push`, `src/system/effects.c:11-13`; `outbox` in
+   `ta_system_config`, `system.h:76`), and the host marks one byte per
+   subscription (`subscription_mark`, `host.c:731`) and writes at most
+   one notification per session per run (`subscriptions_notify`,
+   `host.c:777-797`). One per macrostep needs a record per macrostep:
+   which capacity holds them, and what a full outbox does to the run,
+   is not decided.
+3. **A flood from a busy actor.** A subscribed session that finishes
+   many macrosteps in one run gives as many notifications, each an
+   effect until the ack. Whether they are bounded, coalesced or refused,
+   and how a subscriber learns that it missed some, is not decided.
+4. **The macrostep that ends the session.** A session that reaches a
+   top-level final never becomes stable after it (`TA_STEP_DONE`,
+   `schedule.c:195-201`), and today's notification for an ended session
+   is written from the subscription table, not from a macrostep
+   (`host.c:777-797`). Whether that last macrostep's changes come
+   before `"ended": true` is not decided.
+5. **A refused notification.** Today a notification the allocator
+   refuses keeps its session's mark and comes at the end of the next run
+   (`host.c:785-790`); with changes, what was captured must survive
+   until then, or the gap be reported.
 
 ### 5. `ta_table` and `ta_status_name` are public, in base
 
@@ -236,8 +302,8 @@ TA_API const char *ta_status_name(ta_status status);
 - **`TA_EFFECT_DONE` and `TA_EFFECT_ERROR` are internal to the
   binding's C.** They are lifecycle: the binding releases the rows it
   keeps for the session and settles what waits on it (its
-  subscriptions end; `actor.changed` with `null` says the same to a
-  subscriber). They are not application callbacks. The done data's
+  subscriptions end; `actor.changed` with `"ended": true` says the same
+  to a subscriber). They are not application callbacks. The done data's
   payload is retained by core when the effect is copied and released at the ack (`host.c:1187-1191`, `:1044-1048`); a fault
   is counted in `host.stats` (`faults`, requests.md).
 - **Actor output to the application goes through I/O processors:** a
@@ -278,6 +344,14 @@ TA_API const char *ta_status_name(ta_status status);
   because that costs a format and 55 bytes per traced effect whether
   anyone asks or not (`TA_TRACEPARENT_LENGTH`, `trace.h:61`), a cost
   per event.
+- **Not the whole state value in `actor.changed`** (decision 4 as first
+  accepted; amended 2026-10-13), because past the stack's room for 1024
+  states it needed new state-value machinery, a walk of the
+  configuration in place or scratch from the host's allocator
+  (`host.c:806-816`), both dropped by the maintainer; a subscriber gets
+  the starting point from `actor.state` and the changes from each
+  notification. The three alternatives below were weighed against that
+  first decision.
 - **Not a truncated state value with `"limit": true`**, because a
   truncated configuration of a parallel state lists fewer regions than
   its chart has, a value `actor.state` never answers, and every
@@ -311,9 +385,10 @@ Step 2 of [ROADMAP.md](../../ROADMAP.md), step 8, after these documents:
    calls on it, `TRACEPARENT` on first ask; a test that takes two
    envelopes and a metrics view in one batch and reads all three after
    the second call (ASan).
-4. `actor.changed` with `value` always: the state value without the
-   1024 limit, `actor.state` without `limit`, a unit test with a
-   configuration of more than 1024 states, the vectors.
+4. `actor.changed` per macrostep (decision 4, amended): its open
+   problems devised first, written into this ADR and decided by the
+   maintainer; then the notification, the vectors and a unit test.
+   `actor.state` does not change.
 5. `host.h`'s comments, `requests.md` and the guide follow in the same
    commits (`tinyactors-core/AGENTS.md`).
 
@@ -329,3 +404,29 @@ Python binding) of the root roadmap.
   takes; acking often bounds it.
 - Language APIs have no synchronous control-plane call; their typed
   methods settle at a later drain.
+
+## Amended (2026-10-13)
+
+The maintainer amended decision 4 on the day it was accepted:
+
+- **`actor.changed` is per macrostep and carries changes, not a
+  value:** `{"session", "entered", "exited"}` per macrostep, in order;
+  `{"session", "ended": true}` when the session ends or leaves. No
+  `value` member anywhere. The capture, the capacity and the flood are
+  open (decision 4, "Open, to be devised").
+- **No new state-value machinery.** The two versions considered for the
+  whole value (walking the configuration in place, and scratch from the
+  host's allocator past the stack's room) are both dropped, and so is
+  the removal of the 1024-state limit. `actor.state` stays as it is,
+  `limit` included; a subscriber posts it after `actor.subscribe` for
+  its starting point.
+- **Snapshots stay** (system, host and datamodel snapshots); nothing in
+  this ADR changes them.
+- **`ta_host_run` refusing while a batch is open** (`TA_RUN_FAULT`,
+  `detail` `TA_ERROR_STATE`; decision 2) is accepted as decided.
+
+What this replaces in the text above: the cost rows and decision 4 are
+rewritten; the context's "value divergence" and the rejected
+alternatives about a truncated value, `null` past the limit and a left
+out `value` stay as the record of the first decision, since the shape
+they argued over is gone.

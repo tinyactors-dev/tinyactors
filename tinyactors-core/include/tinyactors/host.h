@@ -249,11 +249,13 @@ enum {
                                         effect of the ta_host_post that answered it */
     TA_HOST_EFFECT_NOTIFICATION = 24 /* WIRE: {"method", "params"}; EVENT: the method; SESSION:
                                         the session it is about (0: none) */
-    /* The notifications: actor.changed {"session", "value"} for a session
-     * subscribed with actor.subscribe that finished a macrostep in a run (or
-     * ended: value null, and its subscription with it), appended at the end
-     * of that run, at most one per session per run; value is its state value
-     * then, as actor.state answers it. The system's TA_EFFECT_CHANGED
+    /* The notifications: actor.changed for a session subscribed with
+     * actor.subscribe. ADR 0012 (decision 4, amended) decides
+     * {"session", "entered", "exited"} per macrostep and {"session",
+     * "ended": true} at the end; until it lands, the code appends
+     * {"session", "value"} at the end of a run, at most one per session per
+     * run, value its state value then (as actor.state answers it) or null
+     * when it ended, its subscription with it. The system's TA_EFFECT_CHANGED
      * (ta_actor_watch, tinyactors/system.h) is how the host learns of it and
      * is not one of the host's effects. */
 };

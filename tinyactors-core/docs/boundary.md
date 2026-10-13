@@ -148,14 +148,15 @@ keeps first (ADR 0010 decision 1).
 | the caller's `ta_buffer` (snapshots, `environment->error`) | callers: the size is known up front, or no host exists | kept |
 | structural borrows (a segment's image, `ta_host_system`, a peer's id, a job's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
 | `REPLY` or `NOTIFICATION` | callers: an answer or news | kept |
-| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed**: `value` always (a state value or `null`) |
+| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **replaced** (0012, decision 4 as amended): no `value`; `{"session", "entered", "exited"}` per macrostep, `{"session", "ended": true}` at the end |
 
 ### What no test checks yet
 
 From the table: the run refused in D; `ta_host_effects` not widening;
 outputs (two envelopes and a metrics request) and two `TRACEPARENT`s read
-after later calls in one batch; `actor.changed` and `actor.state` with a
-configuration of more than 1024 states (all ADR 0012, its order of work);
+after later calls in one batch (all ADR 0012, its order of work);
+`actor.changed` per macrostep, once its open problems are devised
+(section 6);
 `ta_host_free` from a datamodel's code; `ta_host_boot` outside
 `ta-conform`; a full pool on `ta_host_spawn` in R/G; the calls that
 answer in R/G though `host.h` lists only four lookups
@@ -304,14 +305,53 @@ its own edge.
 
 Core's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects (WIRE
 `{"method", "params"}`, EVENT the method, SESSION the session). The first
-is `actor.changed` `{"session", "value"}`, `value` always present: the
-state value after the run, whole, or `null` when the session ended
-(ADR 0012, decision 4). The system's CHANGED marks the subscription (one
-byte each) during the drain, and the end of the run appends one
-notification per marked or ended session with the state value written
-then (`subscriptions_notify`, `src/host/host.c:777-797`); a refused one
-keeps its mark for the next run. The system's CHANGED and
-`ta_actor_watch` stay below the host.
+is `actor.changed` (ADR 0012, decision 4 as amended): `{"session",
+"entered", "exited"}`, one per macrostep a subscribed session finishes,
+in order, with the ids of the states it entered and exited; and
+`{"session", "ended": true}` when the session ends or leaves the host,
+its subscription with it. No `value` member anywhere. `actor.state` is
+unchanged (its stack room for 1024 states and its `limit` refusal,
+`host.c:806-816`, `request.c:657-660`); a subscriber posts it after
+`actor.subscribe` for its starting point, both answered in order. The
+system's CHANGED and `ta_actor_watch` stay below the host.
+
+Today (0012): the system's CHANGED marks the subscription (one byte
+each) during the drain, once per watch (`system.h:304-311`), and the end
+of the run appends one notification per marked or ended session,
+`{"session", "value"}` with the state value written then
+(`subscriptions_notify`, `src/host/host.c:777-797`); a refused one keeps
+its mark for the next run.
+
+**Open, to be devised** (ADR 0012, decision 4): what is known and what
+is not, not a design.
+
+- **Capturing `entered` and `exited` during a run without allocation.**
+  Core computes each microstep's exit and entry sets as bitsets of the
+  chart's state count (`state_words = (state_count + 31) / 32` words
+  each) in the workspace (`src/core/core_internal.h:247-259`; exit at
+  `src/core/core.c:1524-1540`, entry in `compute_entry`, `core.c:772`),
+  which is held only inside a microstep (`core_internal.h:219`). The
+  configuration bitset lives in the instance (`core_internal.h:196-199`),
+  so a macrostep's net change is before against after, one copy of
+  `state_words` words per macrostep in flight. The trace writes a
+  microstep's exited and entered lists into fixed journal memory during
+  a run (`trace_microstep`, `core.c:286-320`). Region memory is fixed at
+  `ta_system_init`, and the host writes CBOR only outside a run
+  (`host.c:43`). Undecided: where the lists live until the end of the
+  run, and whether a state entered and exited within one macrostep is
+  listed.
+- **The outbox and effect capacity.** CHANGED is one record per watch in
+  the system's bounded outbox (`schedule.c:170-173`,
+  `effects.c:11-13`); the host keeps one mark byte per subscription. A
+  record per macrostep needs a capacity that is not decided.
+- **A flood from a busy actor:** as many notifications as macrosteps,
+  each an effect until the ack; bound, coalesce or refuse, and how a
+  subscriber learns of a gap, undecided.
+- **The last macrostep** of a session that reaches a top-level final
+  (`TA_STEP_DONE` without a stable point after it, `schedule.c:195-201`):
+  listed before `"ended": true` or not.
+- **A refused notification** keeps its mark for the next run today
+  (`host.c:785-790`); the captured lists would have to survive with it.
 
 **A language API has no synchronous request and no raw post** (ADR 0012,
 decision 3): typed methods over post, each settled when its REPLY is
@@ -324,7 +364,8 @@ socket, in the order the takes give them.
 | the posted message | caller | before the call | parsed into tokens on the C stack during `ta_host_post` | the call returns |
 | the reply's first writing | the host's output | during the call | copied into the effect pool at the end of the call | the call returns (0012: post's scratch, not a handed-out view) |
 | a REPLY or NOTIFICATION's WIRE | the effect pool | the post (REPLY), the end of a run (NOTIFICATION) | `ta_host_effect_bytes` in D | `ta_host_effects_ack` or `ta_host_free` |
-| a subscription's mark | the subscription table's block (1 byte each) | the drain of a system CHANGED | the end of the run | cleared when its notification is appended |
+| a subscription's mark | the subscription table's block (1 byte each) | the drain of a system CHANGED | the end of the run | cleared when its notification is appended (today; per macrostep: open, above) |
+| a macrostep's `entered` and `exited` | open (above) | the macrostep's end | the end of the run, where the notification is written | open |
 
 **Rejected.** Keeping `ta_host_request` beside `ta_host_post` (two ways;
 a view that ends at the next call). A queue of posted messages (answering
@@ -333,14 +374,18 @@ deferred read of section 1). Binary records for the control plane (the
 catalogue grows; JSON-RPC faces outward). "Valid until released" for
 replies as a separate rule (with replies as effects, the ack is that
 release). The REPLY before the method's own effects (the reservation is
-by capacity before applying; the reply is written last). The state value
-written when the macrostep ends (it can be older than the state at the
-end of the run, which goes on). Context in notifications (user code,
-unbounded size). Batches in core. A synchronous `request` facade (it
-needs a widened batch and runs inside dispatch; ADR 0012). Past the
-state-value limit: a truncated value with `"limit": true` (a value
-`actor.state` never answers), `null` (means ended), or no `value` (a
-third shape) (ADR 0012, decision 4).
+by capacity before applying; the reply is written last). Context in
+notifications (user code, unbounded size). Batches in core. A
+synchronous `request` facade (it needs a widened batch and runs inside
+dispatch; ADR 0012). The whole state value in `actor.changed` (ADR 0012
+decision 4 as first accepted): past the stack's room for 1024 states it
+needed new state-value machinery, a walk in place or scratch from the
+host's allocator, both dropped by the maintainer's amendment; and,
+before it, a truncated value with `"limit": true`, `null` past the limit,
+or no `value` (three shapes for one reader). For the end of a session:
+a list of every state as `exited` (a session exported to another host
+exits none) and a `null` member (a value, where the notification
+carries none).
 
 ## 7. Host outputs
 
@@ -424,7 +469,8 @@ collector-switch hazards (one owning thread).
 
 **Design (ADR 0012, decision 6).** Output: `<send>` to an I/O processor
 the application configured (`TA_EFFECT_SEND`). State: `actor.subscribe`
-and `actor.changed`. Inspection: typed methods over post. `<log>`: the
+and `actor.changed` (changes per macrostep), with `actor.state` for the
+starting point. Inspection: typed methods over post. `<log>`: the
 language's logging. `DONE` and `ERROR`: the binding's own lifecycle
 (release its rows, end its subscriptions), not callbacks. `PEER` versus
 `PEER_ERROR` in an API: deferred.

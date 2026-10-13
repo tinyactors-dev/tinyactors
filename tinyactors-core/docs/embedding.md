@@ -133,10 +133,13 @@ request by its `id`; it comes with the next take (in the same batch as
 anything the method appended itself, before the reply).
 
 The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects: the
-first is `actor.changed` `{"session", "value"}` for a session you
-subscribed to with `actor.subscribe`, at the end of a run in which it
-finished a macrostep; `value` is its state value, or `null` when it ended
-(always present: 0012; today it is left out past 1024 active states).
+first is `actor.changed` for a session you subscribed to with
+`actor.subscribe`: `{"session", "entered", "exited"}`, one per macrostep
+it finishes, in order, with the ids of the states it entered and exited,
+and `{"session", "ended": true}` when it ends or leaves the host (ADR
+0012, decision 4 as amended; today, 0012: one per run, `{"session",
+"value"}`). It carries changes, not the configuration: post
+`actor.state` after `actor.subscribe` for the starting point.
 [requests.md](requests.md) lists every method and notification.
 
 There is no synchronous request: post, then read the reply in a later

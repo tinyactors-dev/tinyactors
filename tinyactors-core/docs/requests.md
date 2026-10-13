@@ -297,13 +297,20 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 
 ### `actor.subscribe`, `actor.unsubscribe`
 
-`actor.subscribe` asks for the notification `actor.changed` (below) at the
-end of each run in which the session finished a macrostep: at most one per
-session per run. Other sessions cost nothing. Subscribing twice is one
-subscription; a session that ends gets one last notification, with
-`value` null, and leaves the list. `actor.unsubscribe` stops it. Param:
-`session` (uint, required). Result: `{}`. The first notification comes
-after the reply: the host watches the session from the next run's start.
+`actor.subscribe` asks for the notification `actor.changed` (below): one
+per macrostep the session finishes, in order, with the states it entered
+and exited (ADR 0012, decision 4, amended; today: at most one per
+session per run, with its state value). Other sessions cost nothing.
+Subscribing twice is one subscription; a session that ends or leaves the
+host gets one last notification, `"ended": true`, and leaves the list.
+`actor.unsubscribe` stops it. Param: `session` (uint, required). Result:
+`{}`. The first notification comes after the reply: the host watches the
+session from the next run's start.
+
+The notifications carry changes, not the configuration. For the starting
+point, post `actor.state` after `actor.subscribe`, between the same two
+runs: both are answered in the order posted, and the first notification's
+changes apply to the state value that reply holds.
 
 Hibernation does not end a subscription. The subscription is the host's;
 what marks the session is a watch on the actor, which the host sets again
@@ -331,12 +338,10 @@ A session's configuration as a nested state value, in the shape of xstate's
   an atomic region is `{}`;
 - no active state is `{}`.
 
-Param: `session` (uint, required). Result: `{"value": <state value>}`,
-the whole configuration, however many states it has (ADR 0012, decision
-4). Errors: `missing`, `type`, `stale`, `memory` (-32004: the host's
-allocator refused room for a configuration of more than 1024 states).
-(0012: today a configuration of more than 1024 active states is refused
-with `limit`.)
+Param: `session` (uint, required). Result: `{"value": <state value>}`.
+Errors: `missing`, `type`, `stale`, `limit` (-32003: the configuration
+has more than 1024 active states, the room the host writes it in;
+`HOST_STATE_VALUE_STATES`, `src/host/host_internal.h:334`).
 
 ```
 {"id": 1, "method": "actor.state", "params": {"session": 1}}
@@ -383,28 +388,48 @@ effects of their own).
 
 ### `actor.changed`
 
-A subscribed session (`actor.subscribe`) finished a macrostep in the run,
-or ended. Appended at the end of that run, after the run's other effects:
-at most one per session per run.
+A subscribed session (`actor.subscribe`) finished a macrostep, or ended
+(ADR 0012, decision 4, amended):
 
-Params: `session` (uint); `value`, always present: the session's state
-value after the run, whole, as `actor.state` answers it (the watch fires
-at the first macrostep, but a run goes on, so the value is written when
-the run ends), or `null` when the session ended or left the host
-(`ta_host_export_actor`), and its subscription with it (ADR 0012,
-decision 4; 0012: today `value` is left out past 1024 active states). The
-context is not in it: reading variables runs the datamodel's code, and
-its size has no bound; post `actor.context` for it.
+- **A macrostep:** `{"session": uint, "entered": [state id, ...],
+  "exited": [state id, ...]}`, one notification per macrostep the
+  session finishes, in the order it finished them: the ids of the states
+  that macrostep entered and exited.
+- **The end:** `{"session": uint, "ended": true}`, without `entered` or
+  `exited`, when the session ended or left the host
+  (`ta_host_export_actor`), and its subscription with it. A session that
+  leaves by export exits no state (it goes on in the host that adopts
+  it), so the end is one member, not a list of exits.
 
-When the host's allocator refuses room for a notification (or for the
-state value's scratch past 1024 states) at the end of a run, the session
-keeps its mark, the run answers `TA_RUN_EXHAUSTED`, and the notification
-is appended at the end of the next run.
+There is no `value` member. The state value is `actor.state`'s: post it
+after `actor.subscribe` for the starting point (above). The context is
+not in it either: reading variables runs the datamodel's code, and its
+size has no bound; post `actor.context` for it.
 
 ```
-{"method": "actor.changed", "params": {"session": 1, "value": "t"}}
-{"method": "actor.changed", "params": {"session": 1, "value": null}}
+{"method": "actor.changed", "params": {"session": 1, "entered": ["t"], "exited": ["s"]}}
+{"method": "actor.changed", "params": {"session": 1, "ended": true}}
 ```
+
+**Open, to be devised** (ADR 0012, decision 4): where `entered` and
+`exited` are kept during a run without allocation (core computes each
+microstep's exit and entry sets as bitsets of the chart's state count in
+a workspace held only inside the microstep,
+`src/core/core_internal.h:219-259`); which capacity holds a notification
+per macrostep (the system's outbox, the host's effect pool); what a busy
+actor's flood of notifications does; whether the macrostep that ends a
+session is listed before `"ended": true`; and what a refused
+notification keeps until the next run. Whether a state entered and
+exited within one macrostep is listed is part of the first.
+
+**Today** (until ADR 0012's step lands): the notification is
+`{"session", "value"}`, appended at the end of a run after its other
+effects, at most one per session per run; `value` is the state value
+after the run as `actor.state` answers it, left out past 1024 active
+states, or `null` when the session ended or left the host. When the
+host's allocator refuses room for one, the session keeps its mark, the
+run answers `TA_RUN_EXHAUSTED`, and it is appended at the end of the next
+run.
 
 ## Not methods
 
