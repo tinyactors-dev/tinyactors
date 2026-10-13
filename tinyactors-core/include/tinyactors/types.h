@@ -112,6 +112,12 @@ enum {
     TA_ERROR_ABORTED = -9 /* the host's abort flag stopped the call (e.g. a compile) */
 };
 
+/* Use in diagnostics when reporting a ta_status: the exact constant name
+ * above, or NULL for an unknown value. The library owns the immutable,
+ * NUL-terminated text for its lifetime; no allocation or formatting occurs.
+ * This names statuses, not run statuses or application-defined errors. */
+TA_API const char *ta_status_name(ta_status status);
+
 /* Host-defined monotonic time unit (config.ticks_per_second). */
 typedef uint64_t ta_time;
 

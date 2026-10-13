@@ -11419,6 +11419,19 @@
       "implemented": true
     },
     {
+      "name": "ta_status_name",
+      "returns": "const char *",
+      "params": [
+        {
+          "name": "status",
+          "type": "ta_status"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_step_key_span_id",
       "returns": "ta_span_id",
       "params": [
