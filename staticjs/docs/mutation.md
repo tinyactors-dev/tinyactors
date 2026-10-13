@@ -1104,6 +1104,8 @@ section 13):
 |---|---|
 | `src/shapes.rules` | `PUSH_KEY`, `PUSH`, `push_of` and their rules (`mise run shapes` rewrites `src/shapes.h` and `src/shapes_table.h`) |
 | `tests/matcher_test.c` | their reports in `test_reports` |
+| `src/builtins.c` | `PUSH_STACK`; the two rows of `shape_runners`; the two cases of `shape_start`; `push_step`, and its line in `sjs_loop_step` (restore `sum_step` alone) |
+| `tests/api_test.c` | `test_mutation_push_paths` |
 
 Not mutation, and kept on a rollback: rules on a call, which take its
 callee as their first child (`matcher_open`, the generator's check, the

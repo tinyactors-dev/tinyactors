@@ -2167,6 +2167,86 @@ static void test_shape_paths(void) {
  * MUTATION: owned mutation (docs/mutation.md).
  */
 
+/* MUTATION: reduce with a PUSH_KEY or a PUSH callback (docs/matcher.md,
+ * 13.2), as test_shape_paths runs the other shapes: the same value or
+ * fault both ways, for less fuel. */
+static void test_mutation_push_paths(void) {
+    /* Fuel, pinned. Four elements: 10 units each in bytecode (the step,
+     * RECEIVER, METHOD_MUTATE, TAKE_LOCAL, GET_MEMBER, MUTATE and push's
+     * unit, POP, TAKE_LOCAL, RETURN), 3 in C (the step, the lookup and
+     * push's unit), which is one pause. An empty literal has room for
+     * four: every element is pushed in C. */
+    const char *key = "[{k: 1}, {k: 2}, {k: 3}, {k: 4}].reduce((a, x) => { a.push(x.k); return a; }, [])";
+    shaped_run on = run_shaped((shaped_source){ key, false, SJS_LIMITS_DEFAULT });
+    shaped_run off = run_shaped((shaped_source){ key, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "[1,2,3,4]") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 60 && on.fuel == 32 && off.fuel - on.fuel == 4 * (10 - 3));
+    CHECK(off.pauses == 55 && on.pauses == 55 - 4 * 8);
+    /* The element: 9 units each in bytecode (no GET_MEMBER), 2 in C. */
+    const char *element = "[1, 2, 3, 4].reduce((a, x) => { a.push(x); return a; }, [])";
+    on = run_shaped((shaped_source){ element, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ element, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "[1,2,3,4]") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 52 && on.fuel == 24 && off.fuel - on.fuel == 4 * (9 - 2));
+    CHECK(off.pauses == 47 && on.pauses == 47 - 4 * 7);
+    /* An array without room: the bytecode pushes the element that grows
+     * it (here the first, into [0], which holds one), C the rest. */
+    const char *grows = "[1, 2, 3, 4, 5, 6].reduce((a, x) => { a.push(x); return a; }, [0])";
+    on = run_shaped((shaped_source){ grows, false, SJS_LIMITS_DEFAULT });
+    off = run_shaped((shaped_source){ grows, true, SJS_LIMITS_DEFAULT });
+    CHECK(strcmp(on.out, "[0,1,2,3,4,5,6]") == 0 && strcmp(off.out, on.out) == 0);
+    CHECK(off.fuel == 76 && on.fuel == 41 && off.fuel - on.fuel == 5 * (9 - 2));
+    /* Faults after C steps: where the bytecode faults, for less fuel. */
+    expect_same_both_ways("[{k: 1},\n {k: 2}, null].reduce((a, x) =>\n { a.push(x.k); return a; }, [])", SJS_LIMITS_DEFAULT,
+                          "fault 3:13 cannot read a property of null");
+    expect_same_both_ways("[{toString: 1}, {toString: 2},\n {}].reduce((a, x) =>\n { a.push(x.toString); return a; }, [])",
+                          SJS_LIMITS_DEFAULT, "fault 3:13 staticjs objects have no prototype");
+    expect_same_both_ways("(xs => { const z = []; Object.freeze(z); return xs.reduce((a, x) => { a.push(x); return a; }, z); })([1, 2])",
+                          SJS_LIMITS_DEFAULT,
+                          "fault 1:77 staticjs changes no key or element of a frozen object or array, where JavaScript throws a TypeError");
+    expect_same_both_ways("(z => [1, 2, z].reduce((a, x) => { a.push(x); return a; }, z))([])", SJS_LIMITS_DEFAULT,
+                          "fault 1:42 staticjs changes a value only while one variable holds it, and this one is held elsewhere too");
+    /* max_stack: the callback's frame has two slots above the loop's five;
+     * a push's bytecode pushes the reference to the accumulator's slot,
+     * the method and the argument: the eighth, ninth and tenth values.
+     * With 5 and 6 the frame cannot be entered, with 7, 8 and 9 one of the
+     * three does not fit, and each faults there on both paths. */
+    static const struct {
+        const char *source;
+        const char *outcomes[6];
+    } push_stack[] = {
+        { "[1, 2].reduce((a, x) => { a.push(x); return a; }, [7])",
+          { "fault 1:14 the evaluation needs more than max_stack values",
+            "fault 1:14 the evaluation needs more than max_stack values",
+            "fault 1:27 the evaluation needs more than max_stack values",
+            "fault 1:29 the evaluation needs more than max_stack values",
+            "fault 1:34 the evaluation needs more than max_stack values", "[7,1,2]" } },
+        { "[{k: 2}, {k: 1}].reduce((a, x) => { a.push(x.k); return a; }, [])",
+          { "fault 1:24 the evaluation needs more than max_stack values",
+            "fault 1:24 the evaluation needs more than max_stack values",
+            "fault 1:37 the evaluation needs more than max_stack values",
+            "fault 1:39 the evaluation needs more than max_stack values",
+            "fault 1:44 the evaluation needs more than max_stack values", "[2,1]" } },
+    };
+    sjs_limits limits = SJS_LIMITS_DEFAULT;
+    for (uint32_t i = 0; i < sizeof push_stack / sizeof push_stack[0]; i++) {
+        for (uint32_t max_stack = 5; max_stack <= 10; max_stack++) {
+            limits.max_stack = max_stack;
+            expect_same_both_ways(push_stack[i].source, limits, push_stack[i].outcomes[max_stack - 5]);
+        }
+    }
+    /* max_frames: the program, the loop, and the callback the C path
+     * enters as the bytecode's first call would. */
+    limits = SJS_LIMITS_DEFAULT;
+    for (uint32_t max_frames = 2; max_frames <= 3; max_frames++) {
+        limits.max_frames = max_frames;
+        expect_same_both_ways(push_stack[0].source, limits,
+                              max_frames < 3 ? "fault 1:14 the evaluation needs more than max_frames frames" : "[7,1,2]");
+        expect_same_both_ways(push_stack[1].source, limits,
+                              max_frames < 3 ? "fault 1:24 the evaluation needs more than max_frames frames" : "[2,1]");
+    }
+}
+
 /* A statement that is a call is sent, with EXPRESSION_STATEMENT after the
  * call's events: a node of its own that starts where the statement does. */
 static void test_mutation_events(void) {
@@ -3251,6 +3331,7 @@ int main(int argc, char **argv) {
     test_shape_paths();
     /* MUTATION */
     test_mutation_events();
+    test_mutation_push_paths();
     test_mutation_natives();
     test_mutation_fuel();
     test_mutation_out_of_memory();

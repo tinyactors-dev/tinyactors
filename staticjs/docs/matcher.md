@@ -2875,3 +2875,53 @@ arrow's body) pushes a marker where it used to doom the region, and the
 marker dies at once unless its callee is `name.push`; in a dead region
 nothing changes.
 
+### 13.2 The C step
+
+`push_step` in `src/builtins.c` (MUTATION), called from REDUCE's branch of
+`sjs_loop_step` when `sum_step` declines, after the callback is entered (on
+the first step that would call it, so that a full frame stack or no room
+for its slots faults where the bytecode does). A push's callback returns
+its accumulator, so the accumulator keeps the initial value's kind:
+`push_start` drops the shape when the loop starts unless it is an array,
+and `sum_step`, unchanged, never sees a push loop's number, so a sum pays
+nothing for pushes (its instructions per element are the same as before,
+callgrind). With `acc` in LOOP_OUTPUT and
+`x` the element at `frame->index`, it pushes in C when all of these hold:
+
+1. `acc` is an array that LOOP_OUTPUT holds alone (`sjs_value_unique`).
+   The bytecode moves the accumulator into the callback's slot and
+   releases the loop's copy, so `MUTATE` sees the same count: one holder
+   unless a variable, an element, the array reduced or anything else
+   holds it too, and then the bytecode faults ("held elsewhere").
+2. The stack has room for `PUSH_STACK` (3): the bytecode's reference to
+   the slot, the method and the argument.
+3. `acc` is neither frozen nor sealed (`SJS_INTEGRITY`), where push faults.
+4. `acc` has room for one more element (`length < capacity`). So C never
+   allocates: the element that grows the array, one in every doubling,
+   runs in bytecode, which grows it or fails as it does today.
+5. PUSH_KEY: `x` is an object with an own property `key`
+   (`own_entry`, as the other shapes find a key). A missing key falls
+   back, whether the bytecode then pushes `undefined` or faults on a name
+   of Object.prototype; so does any other kind of element (an array's or
+   a string's `length`, a set's `size`, null's fault).
+
+Then the value is referenced and appended, as `array_insert` appends it,
+`frame->index++`, and the step charges 1 unit for PUSH, 2 for PUSH_KEY
+(the lookup, and push's unit for the element added) beyond the step's.
+The accumulator stays in LOOP_OUTPUT, where `return a` would have put it.
+Anything else runs the bytecode for this element only: an object's own
+`push` (called as any method), a Set, a number or a string (faults), and
+every fault above, at the callback's position.
+
+- **Value.** The same array, with the same elements in the same order:
+  the bytecode's `MUTATE` appends the same value to the same array.
+- **Fuel** (`api_test`, `test_mutation_push_paths`): 10 units per element
+  in bytecode for PUSH_KEY (the step, RECEIVER, METHOD_MUTATE, TAKE_LOCAL,
+  GET_MEMBER, MUTATE with push's unit, POP, TAKE_LOCAL, RETURN), 9 for
+  PUSH; 3 and 2 in C, one pause. `max_stack` from 5 to 10 and
+  `max_frames` 2 and 3 fault at the same places both ways.
+- **Profile** (callgrind, `bench --only=eval.array.push-reduce
+  --size=10000`, the evaluation and the release of its result): 1,173
+  instructions per element before, 220 after, mostly the loop's step and
+  its dispatch, the key's lookup and the evaluator's loop.
+
