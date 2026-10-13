@@ -42,7 +42,8 @@ In this order, each step a commit (or a few) that passes this project's
    through `src` with the rewrite at resolve time; `add_image(image) ->
    int`, `chart(name)`, `spawn(ref, ...)`, `send`, `send_many` (these
    three with their `traceparent`), `terminate`; `TA_EFFECT_REQUEST`
-   answered in C from the segment's image. No convenience layer (no
+   answered in C with `TA_ERROR_INVALID` until run-time fetching is
+   built. No convenience layer (no
    `DirectoryResolver`).
 4. **Effects as thin views:** I/O processors with `answer` and `fail`
    (both keeping `send.traceparent`), `send.traceparent` formatted on
@@ -110,12 +111,15 @@ In this order, each step a commit (or a few) that passes this project's
   send failed (`send.fail()`, `error.communication` for the sender), and
   the exception is raised from the driver after the turn.
 - **The resolver lives only at compile time** (ADR 0012, decision 7 as
-  amended a fourth time): the `Host` has no resolver; a
-  `TA_EFFECT_REQUEST` is answered in C with `ta_image_chart_by_name` on
-  the requesting segment's image and `ta_host_resume` (chart + 1, or
-  `TA_ERROR_INVALID`: `error.execution` in the parent), as `ta-conform`
-  does (`tinyactors-core/tools/conform/scenario.c:99-125`). The prefixes
-  `file://`, `file:` and `./` are stripped by core [8.2].
+  amended a fourth time): the `Host` has no resolver. A
+  `TA_EFFECT_REQUEST` (a fetch at run time, which stays: ADR 0012 as
+  amended a fifth time) is answered in C with `ta_host_resume` and
+  `TA_ERROR_INVALID` (`error.execution` in the parent): core has already
+  normalized the name and looked in the requesting segment's image
+  (`tinyactors-core/src/system/route.c:439-497`). A runtime resolver
+  configured on the `Host` will answer it once run-time fetching is
+  built (root `ROADMAP.md`, "Decided later"); not now, and it is not the
+  control plane.
 - **`Compiled.close()` while a `memoryview` of `image` is held** raises
   `BufferError`, as `bytearray` does.
 - **`DirectoryResolver`** is the convenience layer's, pure Python,
@@ -140,12 +144,6 @@ In this order, each step a commit (or a few) that passes this project's
   whether any other exception (an `OSError` from reading a file, a bug in
   the resolver) is a diagnostic too, or is raised from `compile_charts`
   after the result is freed, is not decided.
-- **The REQUEST lookup finds nothing as core stands.** Core makes the
-  same normalized lookup in the same image before it gives a REQUEST
-  (`tinyactors-core/src/system/route.c:440-497`), so the binding's
-  lookup, like `ta-conform`'s, answers `TA_ERROR_INVALID` every time
-  today. The binding implements it as decided; whether the lookup is
-  needed at all is the maintainer's (root `ROADMAP.md` 8.2).
 
 ## How the work runs
 

@@ -59,14 +59,18 @@ API"). Node's names and shapes are decided in step 8.5:
   only at compile time:** the `Host` has none (ADR 0012, decision 7 as
   amended a fourth time). A resolver that reads a directory belongs to
   the convenience layer, in JavaScript, confined to its root.
-- **`TA_EFFECT_REQUEST` is answered in the addon's C:** the name
-  (`AUXILIARY`) looked up with `ta_image_chart_by_name` in the
-  requesting segment's image (`ta_host_segment_info_get`), then
-  `ta_host_resume` with the chart index + 1, or `TA_ERROR_INVALID` (the
-  parent gets `error.execution`), as `ta-conform` does
-  (`tinyactors-core/tools/conform/scenario.c:99-125`). No JavaScript
-  runs; the prefixes `file://`, `file:` and `./` are core's to strip
-  [8.2].
+- **`TA_EFFECT_REQUEST` is a fetch at run time** (an `<invoke srcexpr>`
+  whose chart is not in the image, later `<data srcexpr>`), and it stays
+  (decided 2026-10-13; ADR 0012, decision 7 as amended a fifth time;
+  `tinyactors-core/docs/boundary.md` section 12). Core has already
+  normalized the name and looked in the requesting segment's image
+  (`tinyactors-core/src/system/route.c:439-497`), so until run-time
+  fetching is built the addon answers it in C with `ta_host_resume` and
+  `TA_ERROR_INVALID` (the parent gets `error.execution`); no JavaScript
+  runs and the addon looks nothing up. A future runtime resolver
+  configured on the `Host` will answer it (root `ROADMAP.md`, "Decided
+  later"); not now. It is not the control plane (`ta_host_post`,
+  `REPLY`, `NOTIFICATION`).
 - **A traceparent crosses as W3C text.** In: the string's UTF-8 for the
   call (`ta_spawn.traceparent`, `ta_event_in.traceparent`,
   `tinyactors-core/include/tinyactors/system.h:125-132`, `:171-173`),

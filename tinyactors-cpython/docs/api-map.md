@@ -63,9 +63,10 @@ commit that adds the item removes the mark.
 
 Used internally, with no item:
 
-- `ta_host_segment_info_get`, `ta_image_chart_by_name`, `ta_host_resume`:
-  the extension answers `TA_EFFECT_REQUEST` in C, with the chart of the
-  requesting segment's image the request names (chart + 1), or
-  `TA_ERROR_INVALID` (the parent gets `error.execution`). No Python code
-  runs and the `Host` has no resolver (ADR 0012, decision 7 as amended a
-  fourth time).
+- `ta_host_resume`: the extension answers `TA_EFFECT_REQUEST` (a fetch
+  at run time) in C with `TA_ERROR_INVALID` (the parent gets
+  `error.execution`) until run-time fetching is built: core has already
+  looked in the requesting segment's image. No Python code runs; a
+  runtime resolver on the `Host` will answer it then, not now (ADR 0012,
+  decision 7 as amended a fifth time; root `ROADMAP.md`, "Decided
+  later").

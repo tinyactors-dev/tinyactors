@@ -145,17 +145,19 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   the compiler reports it as a diagnostic of the resolved file, at that
   line and column [8.2] (root `ROADMAP.md` 8.2). What any other
   exception a resolver raises becomes is open (ROADMAP.md, "Open").
-- **`TA_EFFECT_REQUEST` is answered in C, never by Python.** Core gives
-  it for a dynamic `srcexpr` (or a `src` the compiler did not match)
-  when its own lookup in the segment's image found no chart
-  (`tinyactors-core/src/system/route.c:440-497`). The extension looks the
-  name (`AUXILIARY`) up with `ta_image_chart_by_name` in the requesting
-  segment's image (`ta_host_segment_info_get`) and calls `ta_host_resume`
-  with the chart index + 1, or `TA_ERROR_INVALID` for a name the image
-  does not have: the parent gets `error.execution` (`route.c:544-550`).
-  It strips no prefix itself (`file://`, `file:`, `./`):
-  `ta_image_chart_by_name` does [8.2]. `ta-conform` answers the same way
-  (`tools/conform/scenario.c:99-125`).
+- **`TA_EFFECT_REQUEST` is a fetch at run time, answered in C, never by
+  Python.** It is how a chart fetches what is not in its image (an
+  `<invoke srcexpr>`, or a `src` the compiler did not match; later
+  `<data srcexpr>`), and it stays (decided 2026-10-13; ADR 0012, decision
+  7 as amended a fifth time; boundary.md section 12). Core has already
+  normalized the name and looked in the requesting segment's image
+  (`tinyactors-core/src/system/route.c:439-497`), so until run-time
+  fetching is built the extension answers every REQUEST with
+  `ta_host_resume` and `TA_ERROR_INVALID`: the parent gets
+  `error.execution` (`route.c:544-550`). It looks nothing up. A future
+  runtime resolver configured on the `Host` will answer it (root
+  `ROADMAP.md`, "Decided later"); not now. It is not the control plane
+  (`ta_host_post`, `REPLY`, `NOTIFICATION`).
 - **`.py` sources through `src`.** A chart writes `<script
   src="reader.py"/>`: a Python file, free of XML's whitespace and
   escaping, whose top-level `def`s become the chart's methods. The
@@ -671,9 +673,9 @@ Registered beside quickjs, first; matched by the chart's
   the line and column it names; `compiled.image` read after `close()`
   raises `TA_ERROR_STALE`, and `close()` while a `memoryview` of it is
   held raises `BufferError`.
-- **`TA_EFFECT_REQUEST` is answered in C:** a chart of the segment's
-  image by its name, and `TA_ERROR_INVALID` (the parent's
-  `error.execution`) for a name not in it; no Python code runs.
+- **`TA_EFFECT_REQUEST` is answered in C with `TA_ERROR_INVALID`** (the
+  parent's `error.execution`) until run-time fetching is built; no Python
+  code runs.
 - **Traces cross:** a `traceparent` passed to `send` or `spawn` is the
   trace of the step it starts, `send.traceparent` is the sending step's,
   `send.answer()` keeps it and `send.answer(..., traceparent=None)` does
@@ -697,8 +699,10 @@ Registered beside quickjs, first; matched by the chart's
   `ta_host_add_image` copies).
 - No global configuration: handlers, logging and the clock are per host.
 - No resolver on the `Host` and no Python callback for
-  `TA_EFFECT_REQUEST`: the resolver lives only at compile time, and a
-  REQUEST is an image lookup in C.
+  `TA_EFFECT_REQUEST` now: the compile call's resolver lives only at
+  compile time, and a REQUEST is answered in C with `TA_ERROR_INVALID`
+  until run-time fetching is built (a runtime resolver on the `Host`
+  then, root `ROADMAP.md`, "Decided later").
 - No `DirectoryResolver` in the extension: it is the convenience layer's,
   in Python.
 - No application callback for `DONE` or `ERROR`; no subscription.
