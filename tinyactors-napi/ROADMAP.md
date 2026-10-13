@@ -22,9 +22,10 @@ before changing this copy.
   send, terminate; the loop, one drain at a time, on the event loop with
   one `setTimeout`, and `SimulatedClock.increment(ms)`; I/O processors as
   the application's output channel, asynchronous and synchronous;
-  `subscribe` with `actor.changed`; typed methods over post returning
-  promises settled at a later drain; `LOG` to a logger; `DONE` and `ERROR`
-  internal; rows in `ta_table`; `encode` and `decode`; the native
+  typed methods over post with response handlers called at a later
+  drain; `LOG` to a log handler per host; `DONE` and `ERROR` internal;
+  rows in `ta_table`; one `ta_growable_arena` per host with a mark per
+  call; thin views of effects (AGENTS.md, "Lifetimes and thin views"); `encode` and `decode`; the native
   `"ecmascript"` datamodel for `<data>`, `cond`, `assign`, `<script>`,
   `_event`, `In()`, `<send>` with params, `<foreach>`, with quickjs
   beside it; the suite's adapter (`conform.mjs`), framing the driver's

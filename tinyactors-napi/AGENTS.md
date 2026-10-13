@@ -48,7 +48,10 @@ names follow the root's acronym rule (`sessionID`, `toOTLP`).
 
 ## The loop
 
-The addon runs embedding.md's loop (sections 2 and 4), in C:
+The addon runs embedding.md's loop (sections 2 and 4), in C, as the
+guide's `drain` and `turn` (bindings.md section 3) with our prefix: the
+ack count that makes thin views stale is bumped in `drain`, right after
+the ack.
 
 - **One drain at a time:** take (`ta_host_effects`), handle every effect
   of the batch, ack (`ta_host_effects_ack`), and take again until a take
@@ -67,31 +70,58 @@ The addon runs embedding.md's loop (sections 2 and 4), in C:
 - **Whatever a handler threw:** ack anyway, finish the turn, then throw
   the first error.
 
-## Lifetimes
+## Lifetimes and thin views
 
 ADR 0012: **everything the host hands out about a batch lives until the
 ack.** Effect fields (`TRACEPARENT` included), envelopes, traces, logs,
 metrics, hibernation and export blobs read while handling stay valid
-across any later call into the host, until the ack. Convert them into
-JavaScript values when a handler builds its value; copy only what is kept
-past the ack. A datamodel's outputs live until its next call. Snapshots
-and the refused config's error fill a `ta_buffer` the addon lends.
+across any later call into the host, until the ack. A datamodel's outputs
+live until its next call. Snapshots and the refused config's error fill a
+`ta_buffer` the addon lends.
+
+The rules the Python binding follows hold here too (bindings.md, sections
+3 and 6; `tinyactors-cpython/AGENTS.md`, "Lifetimes and thin views");
+Node's API shape is decided in step 8.5, not here:
+
+- **Thin views, not eager conversion.** Wherever a C value is exposed to
+  JavaScript, the addon hands out a view that holds the host, the ack
+  count and the effect's index and converts a field when it is read: an
+  I/O processor's send, a `<log>` line. As with the native datamodel's
+  `_event.data`, a view's data from the native datamodel is the payload
+  row's value itself, not a copy.
+- **A view is stale after its ack.** The addon counts its acks (bumped
+  right after `ta_host_effects_ack` in its drain; core keeps no batch
+  counter); a read with another count throws with
+  `ta_status_name(TA_ERROR_STALE)`.
+- **Materialize what outlives the ack, before the ack:** a handler that
+  runs later (an async function's continuation, a promise callback) gets
+  a record of the language's values made before it is scheduled.
+- **A reply's `result` is converted once**, at its dispatch, for its
+  response handler.
 
 ## What reaches the application
 
 | JavaScript sees | Through | Core |
 |---|---|---|
-| an actor's output | an I/O processor the application configures, a function (sync or async) | `TA_EFFECT_SEND` |
+| an actor's output | an I/O processor's handler the application configures per host, given the send as a thin view; it may answer or fail it | `TA_EFFECT_SEND`; `ta_host_send` (with `TA_EVENT_IN_ERROR_COMMUNICATION` for a failure) |
 | services the charts invoke | a service registered by type | `TA_EFFECT_INVOKE`, `UNINVOKE`, sends with `IO_PROCESSOR` `TA_NIL` |
-| an actor's state as it changes | `subscribe(sessionID)`, an async iterator or callback | `actor.subscribe`, `actor.changed` |
-| inspection and trace control | typed methods (`stats()`, `state(sessionID)`, ...), each returning a promise settled at a later drain | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
-| `<log>` | a logger (the console by default) | `TA_EFFECT_LOG` |
+| an actor's state | the typed method over `actor.state` (subscriptions are removed, ADR 0012 decision 4 as amended again) | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
+| inspection and trace control | typed methods, each taking a response handler the drain calls when its `REPLY` is dispatched | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
+| `<log>` | a log handler configured per host, given each line as a thin view; none: discarded; no console default | `TA_EFFECT_LOG` |
 | telemetry | an exporter the application configures | `TRACES`, `LOGS`, `ta_host_metrics` |
 
+- **Everything is per host:** handlers, the log handler and the clock are
+  given to the `Host`; no global configuration.
 - **`DONE` and `ERROR` are internal:** the addon releases its rows for the
-  session and ends its subscriptions; no application callback.
-- **No synchronous request and no raw `post`** (ADR 0012, decision 3):
-  one typed method per method of `tinyactors-core/docs/requests.md`.
+  session; no application callback.
+- **No synchronous request and no raw `post`** (ADR 0012, decision 3 as
+  amended again): one typed method per method of
+  `tinyactors-core/docs/requests.md`, with a response handler. The
+  message id is the handle of a row in a pending `ta_table` holding the
+  handlers; the drain finds it in O(1), the generation refusing a stale
+  id, and pending handlers are dropped, never called, at `ta_host_free`.
+- **No notification is defined;** the addon drops a
+  `TA_HOST_EFFECT_NOTIFICATION` whose method it does not know.
 - **`PEER` versus `PEER_ERROR` in the API is deferred**: carrying
   envelopes is the application's, and its API shape waits for a decision.
 
@@ -125,8 +155,9 @@ least 8 on each. So the addon's `alloc` need not align by hand (an
 The addon allocates almost nothing (bindings.md, section 6):
 
 - **Rows in core's `ta_table`** (`tinyactors/table.h`, ADR 0012 decision
-  5): a session (its scope), a chart (its compiled functions), a payload
-  (its `napi_ref` and reference count), a `<foreach>`. The tables grow
+  5; [8.2]): a session (its scope), a chart (its compiled functions), a
+  payload (its `napi_ref` and reference count), a `<foreach>`, a pending
+  typed method (its handlers). The tables grow
   through the host's allocator and are freed once with the host. Keep
   handles, never row pointers across a `ta_table_add`. The addon writes no
   table of its own.
@@ -134,15 +165,19 @@ The addon allocates almost nothing (bindings.md, section 6):
   so a caller's `ArrayBuffer` (transferable, resizable, shared) is read
   once and never held; free a compile result at once. No image rows, no
   `SEGMENT_FREED` bookkeeping.
-- **One writer per call.** A config, a typed method's params, a payload
-  for quickjs and `encode` are written with a `ta_cbor_writer` of that
-  call, starting in a room on the C stack and growing through the host's
-  allocator, freed before the call returns. JavaScript running during a
-  call (a getter, `toJSON`) may call the `Host` again: nothing is shared.
+- **One `ta_growable_arena` per host, a mark per call** (ADR 0012
+  decision 5 as amended again; [8.2]). Made with the host, freed with it,
+  its chunks kept. Each call takes a mark at entry and releases to it at
+  exit, on every path. It holds the call's CBOR (a config, a typed
+  method's params, a payload for quickjs, `encode`: a `ta_cbor_writer`
+  over the arena's `ta_allocator` view), the call's text (the copy
+  Node-API forces, below) and input structs. JavaScript running during a
+  call (a getter, `toJSON`) may call the `Host` again: the nested call
+  allocates above the outer one and releases to its own mark.
 - **Views of what core and JavaScript hold.** Bytes come from a typed
   array's data (`napi_get_typedarray_info`, `napi_get_arraybuffer_info`),
   for the call. Text is the one copy Node-API forces: it is written as
-  UTF-8 into the call's room (`napi_get_value_string_utf8`), and read again
+  UTF-8 into the call's arena (`napi_get_value_string_utf8`), and read again
   as UTF-16 only when `EF BF BD` appears, to refuse a lone surrogate. What
   the host hands out is a view until the ack (above). Core's values are
   read with `ta_cbor_reader` as they stream.
@@ -156,8 +191,9 @@ The addon allocates almost nothing (bindings.md, section 6):
 - **Statuses are named by core:** a bare status in a message is
   `ta_status_name(status)` (`"TA_ERROR_STATE"`), never a table of ours.
 - **Where the allocator is called:** in the host's create, free and
-  allocator (with `napi_adjust_external_memory`), in a call's writer, and
-  through core (`ta_table`, the compiler's options); nowhere else, nothing
+  allocator (with `napi_adjust_external_memory`), and through core
+  (`ta_table`, `ta_growable_arena` while it grows, the compiler's
+  options); nowhere else, nothing
   per event or per evaluation. The lint rule `allocation-in-tables-and-host`
   checks it; it names files of the removed addon
   (`src/datamodel/handles.c`) and changes with the first commit of the
@@ -257,21 +293,28 @@ The addon allocates almost nothing (bindings.md, section 6):
 - **`napi_type_tag_object` on every wrapped object,** so a method called
   on the wrong object is refused rather than misread.
 - **One drain at a time and an ack before every run:** a test that a
-  handler's post is answered in the next take, and that outputs read in a
-  handler stay valid after later calls in the same batch.
+  handler's typed method is answered in the next take, and that outputs
+  read in a handler stay valid after later calls in the same batch.
+- **A thin view read after its ack throws** `TA_ERROR_STALE`; marks nest
+  (a nested call leaves the outer call's arena memory intact); pending
+  handlers are dropped at `ta_host_free`.
 - **The README says** chart code is trusted (it runs in the application's
   realm, and Node-API cannot make another), and whether a pending timer
   keeps the process alive (bindings.md, section 11).
 
 ## What not to build
 
-- No synchronous request, no raw `post`, no request facade.
+- No synchronous request, no raw `post`, no request facade: typed methods
+  take response handlers.
+- No eager conversion of an effect: a thin view, and a record only where
+  a value must outlive the ack. No global configuration.
 - No re-reading `ta_host_effects` until stable, no consumed marks, no
   nested drain, no ack inside a handler.
 - No copy of a host output before the next call (it lives until the ack).
-- No handle table, status table or image rows of our own (`ta_table`,
-  `ta_status_name`, `ta_host_add_image` copies).
-- No application callback for `DONE`, `ERROR` or `LOG`.
+- No handle table, status table, arena or image rows of our own
+  (`ta_table`, `ta_status_name`, `ta_growable_arena`, `ta_host_add_image`
+  copies).
+- No application callback for `DONE` or `ERROR`; no subscription.
 - No defaults, limits, methods, events or messages of our own; nothing C
   does done again in JavaScript (bindings.md section 2); no JavaScript
   above the addon.
