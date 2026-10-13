@@ -319,21 +319,52 @@ row; the example of embedding.md compiles and runs. Gates:
 
 ##### 8.2: core implements ADR 0012 (coordinator)
 
-In ADR 0012's order of work: `ta_status_name` and `ta_table` in base;
-one drain at a time (`ta_host_effects` returns the open batch,
-`ta_host_run` refuses while one is open); the host's outputs and
-`TRACEPARENT` until the ack; `actor.changed` per macrostep with
-`entered` and `exited` (decision 4 as amended 2026-10-13), after its open
-problems (the capture without allocation, the outbox and effect
-capacity, a busy actor's flood) are devised, written into ADR 0012 and
-decided by the maintainer; `actor.state` does not change. Every caller in core, its tests and
-`ta-conform` migrates in the same commits; the "(0012)" marks leave
-`boundary.md`, `embedding.md`, `bindings.md` and `requests.md` as each
-lands.
+In ADR 0012's order of work, with its second amendment (2026-10-13):
+
+- **Base:** `ta_status_name` (NULL for a status `types.h` does not
+  define), `ta_table` (64-bit handles, 31-bit generation, rows grown by
+  doubling through a `ta_allocator`, a row pointer valid until the next
+  add) and **`ta_growable_arena`**, a port of tinyxml's `txml_arena`
+  (`tinyxml/src/arena.c`): linked chunks from a `ta_allocator`
+  (allocations never move; a request larger than the chunk size gets its
+  own chunk), marks (take a mark, release to it), a release that **keeps
+  its chunks** (no allocator call after warm-up; chunks freed only by its
+  free call), and a `ta_allocator` view so `ta_cbor_writer` grows into
+  it. The internal `ta_arena` (`src/base/arena.h`) keeps its name and
+  job. Unit tests and `tinyactors.api.json` entries for all three.
+- **One drain at a time:** `ta_host_effects` returns the open batch;
+  `ta_host_run` refuses while one is open (`TA_RUN_FAULT`, detail
+  `TA_ERROR_STATE`).
+- **Outputs until the ack:** the host's outputs and `TRACEPARENT`.
+- **`actor.subscribe`, `actor.unsubscribe` and `actor.changed`
+  removed** (ADR 0012, decision 4 as amended again): the host's
+  subscription table, the methods, the config key `maxSubscriptions`,
+  the subscribe exchange in `requests.txt`, `host.h`'s comment, and the
+  self-test that reads their heading (`mise/tasks/api-map-test:17`), in
+  one commit; `requests.md` then drops the heading it keeps until then.
+  `TA_HOST_EFFECT_NOTIFICATION` stays. `actor.state` does not change.
+- **The findings of boundary.md, "What no test checks yet"**, each
+  decided and tested: `ta_host_free` from a datamodel's code; lookups
+  that answer during a run beyond `host.h`'s list; `ta_host_envelope`
+  taking the effect's address instead of its index; a test calling
+  `ta_system_*` from datamodel code (`test_host_inputs.c`'s `flood`
+  hook); the width of ids in `types.h` (`types.h:7` says 32 bits;
+  sessions, payloads and table handles are 64).
+- **The contract table's missing tests** (boundary.md, every "needed").
+- **`detach_event`:** verify that core calls it when SCXML can no longer
+  process the event (a terminate's exit handlers after a stable point,
+  `serialize` writing "the bound `_event`"), and make the call or
+  `datamodel.h`'s comment ("materializes `_event`") match: the
+  `"python"` datamodel drops its `_event` there (boundary.md, finding 6).
+
+Every caller in core, its tests and `ta-conform` migrates in the same
+commits; the "(0012)" and "[8.2]" marks leave `boundary.md`,
+`embedding.md`, `bindings.md`, `requests.md` and the bindings' documents
+as each lands.
 
 Done means: every "needed" test of boundary.md's "What no test checks
-yet" that ADR 0012 names exists and passes; `host.h` states the new
-lifetimes; no "(0012)" mark is left. Gates: core's `mise run test`, and
+yet" exists and passes; `host.h` states the new lifetimes; no "(0012)"
+or "[8.2]" mark is left. Gates: core's `mise run test`, and
 `mise run test:full` (the change touches the host's memory and the run,
 `AGENTS.md`, "Tests: what to run"), with the commit saying it passed.
 
@@ -366,9 +397,7 @@ only:
 - **telemetry:** `TRACES` and `LOGS` taken in their handlers, metrics
   pulled, `trace.end` at stop with the last take after it;
 - **the control plane:** every method of `requests.md` posted and its
-  `REPLY` read, `actor.subscribe` with `actor.state` for the starting
-  point and `actor.changed` notifications to `"ended": true` at the
-  session's end;
+  `REPLY` read, matched to its message by id;
 - **lifecycle:** `DONE` and `ERROR` releasing what the program keeps for
   a session; `LOG` to its log;
 - **the loop's rules:** one drain at a time, an ack before every run,
@@ -382,70 +411,81 @@ headers. Gates: core's `mise run test` and `mise run conform`.
 
 ##### 8.4: a minimal Python binding (Python session)
 
-**This is the design task of step 8.** Define a Python API with the
-native `"python"` datamodel without giving up the memory efficiency
-that is the point of tinyactors: in the maintainer's words, "that's the
-whole point and where we failed before". Native datamodel first
-(decision 3 above) stays: the binding is not the product without it.
+**The design is decided** (the maintainer, 2026-10-13), and written in
+[`tinyactors-cpython/AGENTS.md`](tinyactors-cpython/AGENTS.md) (the
+rulebook), the guide (sections 3, 6, 8 and 10) and ADR 0012's second
+amendment. 8.4 implements it, then measures it. There is no separate
+design document. Native datamodel first (decision 3 above) stays, and
+so does the reason for the step: a Python API with the native
+`"python"` datamodel that keeps the memory efficiency that is "the whole
+point and where we failed before" (the maintainer).
 
-**8.4 starts with a written design, before any code**: a proposal in
-`docs/proposals/` or an ADR, reviewed by the maintainer, that states:
+The design, in short (the rulebook has each rule with its evidence):
 
-- **The Python API shape:** `Host`, its options and loop drivers, how a
-  program spawns, sends, subscribes (`actor.changed` per macrostep,
-  `actor.state` for the starting point) and inspects (typed methods over
-  post), and how a chart's Python code reads (`<data>`, `cond`,
-  `assign`, `<script>`, `_event`, `In()`); every item a core function, a
-  method of `requests.md` or an effect (`docs/api-map.md`).
-- **The native datamodel's memory model:** what a Python session costs
-  per actor, item by item: its globals dict (one per session and no
-  locals, `tinyactors-cpython/AGENTS.md`, "Rules the suite cannot see";
-  the earlier sketch put the application's globals in each session's
-  dict, `docs/proposals/one-host-two-queues/cpython.md:109`, and left
-  "a memory limit for its values" out of scope, `:140`), `_event`, the
-  rows in `ta_table`, and compiled code, which belongs to the chart and
-  is shared by its sessions, not compiled per session.
-- **A per-actor memory budget** measured against the quickjs
-  datamodel's shared realm: a session there is a scope object of about
-  0.5 KB in one shared context of ~54 KB, and the `fit` session actor
-  went from 60.7 KB to 2.9 KB with it
-  (`tinyactors-core/docs/architecture.md:844`; a resident ECMAScript
-  actor ~2.9 KB, a hibernated one ~150 B, `architecture.md:879`). The
-  design says what a Python actor's number is, why, and how it stays
-  within the budget (what is shared per chart or per host, what a
-  session holds, what hibernation frees).
-- **Spikes that measure it** before the design is decided: bytes per
-  actor at a population (10,000 actors of one chart, resident and
-  idle), from the process's memory and from Python's allocator
-  (`tracemalloc`) and the host's (`host.stats`' `regionBytes`), on the
-  native datamodel and on quickjs side by side, on one machine named by
-  its signature (root `AGENTS.md`, "Benchmarks"); every number in the
-  design is from a spike or marked unverified.
+- **API:** `tinyactors.Host(config, io_processors={type: handler},
+  log=handler, clock=None)`, everything per host (no global
+  configuration); `with` and `async with` on the same `Host`;
+  `add_image(charts)`; `spawn(chart, name=None, params=None) -> int`,
+  `send(session, event, data=None)`, `terminate(session)`, applied at
+  the call. An I/O processor's handler is `handler(host, send)`, with
+  `send.answer(event, data=None)` and `send.fail()`; an `async def`
+  handler is scheduled as a task. `log=handler(host, entry)` gets the
+  host's `<log>` lines. Typed methods over post (`actor_state`,
+  `actor_context`, `actor_list`, `actor_get`, `host_stats`, `trace_*`)
+  take `(..., handler, on_error=None)` and return `None`; no synchronous
+  request, no raw post, no reply object. `DONE` and `ERROR` internal;
+  `PEER` and `PEER_ERROR` deferred.
+- **Drivers:** synchronous `run_until_idle()`, `run()` and
+  `SimulatedClock.increment(ms)`; asyncio `await host.idle()`; every
+  run status handled as the rulebook's table says.
+- **C memory:** one `ta_growable_arena` per host with a mark per call;
+  tables (`ta_table`) for charts, sessions, payloads and pending typed
+  methods; thin views of effects, stale after the ack; materialized
+  records only where a value must outlive the ack.
+- **The `"python"` datamodel:** one class per chart (`__slots__` for the
+  `<data>` ids and `_event`, read-only system variables), expressions
+  compiled once per chart by a restrictive rewrite into functions of the
+  session, one instance per session, `_event.data` the payload row's
+  value, hibernation keeping the row's handle. Estimated per session,
+  unmeasured: the instance 32 B + 8 B per slot, the system variables
+  ~100–250 B, a row ~16 B.
 
-Then the code, from embedding.md, the guide, its `AGENTS.md` and the
-design: the `tinyactors` module and `Host`; `ta_host_create` from Python
-options (the binding reads `host.config` itself); images, boot, spawn,
-send, terminate; the loop, one drain at a time, with the synchronous
-driver and `SimulatedClock`; I/O processors as the application's output
-channel (asynchronous and synchronous); `subscribe` with
-`actor.changed`; typed methods over post, settled at a later drain;
-`LOG` to `logging`; `DONE` and `ERROR` internal; handle tables as
-`ta_table`; the CBOR conversion as `tinyactors.encode` and
+It needs step 8.2's `ta_table`, `ta_status_name`,
+`ta_growable_arena`, the one-batch drain and `detach_event`'s check.
+
+Then the code: the `tinyactors` module and `Host`; `ta_host_create`
+from Python options (the binding reads `host.config` itself); images,
+boot, spawn, send, terminate; the loop with both drivers and
+`SimulatedClock`; I/O processors with answer and fail; the log handler;
+typed methods with response handlers; `tinyactors.encode` and
 `tinyactors.decode`; the `"python"` datamodel for `<data>`, `cond`,
 `assign`, `<script>`, `_event`, `In()`, `<send>` with params,
 `<foreach>`, with quickjs beside it; and the suite's adapter
 (`conform/`).
 
-Done means: the design, decided by the maintainer before the code; the
-**measured bytes per actor at a population of 10,000** on the
-`"python"` datamodel, within the design's budget, beside quickjs's on
-the same machine, by a task in the binding that reruns the measurement;
-the suite's M1 set (`--milestone M1`) on both datamodels; the value
-table's own tests; the mapping table (`docs/api-map.md`), every item a
-core function, a method or an effect; the pitfalls below, each with a
-test; then the **API review** by the maintainer: how a Python program
-and a Python chart read. Gates: the binding's `mise run test` (lint,
-build, both interpreters, the suite's set).
+**Then the measurement**, once the binding runs: bytes per actor at a
+population of 10,000 actors of one chart, resident and idle, from the
+process's memory, Python's allocator (`tracemalloc`) and the host's
+(`host.stats`' `regionBytes`), on the `"python"` datamodel and on
+quickjs side by side, on one machine named by its signature (root
+`AGENTS.md`, "Benchmarks"), by a task of the binding that reruns it.
+quickjs's reference: a session scope of about 0.5 KB in one shared
+context of ~54 KB, the `fit` session actor 2.9 KB instead of 60.7 KB
+(`tinyactors-core/docs/architecture.md:844`; a resident ECMAScript actor
+~2.9 KB, a hibernated one ~150 B, `architecture.md:879`). The numbers
+replace the estimates above in the rulebook, and a gap between them is
+explained there.
+
+Done means: the design implemented as written (a change to it is the
+maintainer's, recorded in the rulebook first); the **measured bytes per
+actor at a population of 10,000** on the `"python"` datamodel beside
+quickjs's on the same machine, by the binding's task; the suite's M1 set
+(`--milestone M1`) on both datamodels; the value table's own tests; the
+mapping table (`docs/api-map.md`), every item a core function, a method
+or an effect; the pitfalls below, each with a test; then the **API
+review** by the maintainer: how a Python program and a Python chart
+read. Gates: the binding's `mise run test` (lint, build, both
+interpreters, the suite's set).
 
 ##### 8.5: Node, then the rest (both sessions)
 
@@ -478,13 +518,14 @@ reasoned-analysis pass of 2026-10-12). They hold for the rewrite:
   (`TA_ERROR_INVALID`); Node-API replaces it with U+FFFD silently, so the
   addon checks (`String.prototype.isWellFormed`).
 - **Python:**
-  - one globals dict per session and no locals: with separate locals,
-    generator expressions and lambdas do not see session variables;
-  - system variables (`_event`, `_sessionid`, `_name`, `_ioprocessors`,
-    `_x`) stay as they were: after each evaluation, a changed one is
-    restored and the evaluation is `error.execution`; `assign` checks that
-    its location is declared; `variable` and `serialize` skip
-    `__builtins__`;
+  - a session is an instance of its chart's class, not a globals dict
+    (decided 2026-10-13): `__slots__` for the `<data>` ids and `_event`,
+    read-only properties for the system variables, so assigning to an
+    undeclared name or a system variable raises and is
+    `error.execution`; expressions are rewritten into functions of the
+    session (`tries < 3` → `s.tries < 3`), so generator expressions and
+    lambdas see session variables through `s` (the first pass's reason
+    for one globals dict and no locals);
   - `bool` before `int` when converting values;
   - a `BaseException` that is not an `Exception` (`KeyboardInterrupt`,
     `SystemExit`) still gives `error.execution` to the chart, and the
@@ -649,16 +690,16 @@ tinyactors-cpython/
 │   ├── extension.h          the extension's declarations
 │   ├── module.c             PyInit_tinyactors, per-interpreter state (PEP 489), the types
 │   ├── host.c               Host: one function per method → ta_* or a request
-│   ├── loop.c               the turn; run_until_idle and attach(loop), one TimerHandle
-│   ├── effects.c            one Effect record per effect, built with the accessors; dispatch
-│   ├── methods.c            typed methods over ta_host_post, settled at a later drain;
-│   │                        TinyactorsError(code, reason, path)
+│   ├── loop.c               the turn; run_until_idle, run, idle(), one TimerHandle
+│   ├── effects.c            dispatch; thin views of sends and log lines, records for async
+│   ├── methods.c            typed methods over ta_host_post, response handlers in the
+│   │                        pending table; TinyactorsError(code, reason, path)
 │   ├── values.c             CBOR tokens ↔ Python objects; Address, UNDEFINED; deep copy;
 │   │                        tinyactors.encode and tinyactors.decode
 │   └── datamodel/           the "python" datamodel: vtable entries only
-│       ├── datamodel.c      the vtable; per-session globals, _event, In()
-│       ├── rows.c           payload and session rows in ta_table: reference counts
-│       └── expressions.c    code objects compiled once per chart, by kind
+│       ├── datamodel.c      the vtable; a class per chart, an instance per session, _event, In()
+│       ├── rows.c           chart, session and payload rows in ta_table: reference counts
+│       └── expressions.c    the rewrite: functions of the session, compiled once per chart
 ├── conform/                 the suite's adapter (python -m conform), not in the wheel
 ├── tests/                   what the suite cannot see: threads, GC, asyncio, refusals
 ├── build/                   core's amalgamation and the extension (gitignored)

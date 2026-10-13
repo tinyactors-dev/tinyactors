@@ -1,7 +1,9 @@
 # ADR 0012: Lifetimes follow the loop
 
 **Status:** Accepted (2026-10-13); amended 2026-10-13 (decision 4, see
-"Amended (2026-10-13)" at the end). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
+"Amended (2026-10-13)" at the end); amended again 2026-10-13 (decision 4:
+`actor.subscribe` and `actor.changed` are removed; decision 5:
+`ta_growable_arena`; see "Amended again (2026-10-13)"). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
 decision 2 (the host's outputs) and [ADR 0011](0011-the-control-plane-is-posted-messages.md)
 decisions 3 (publication), 4 (`actor.changed`) and 6 (the drain and the
 synchronous `request`).
@@ -26,9 +28,8 @@ Following [docs/roles.md](../roles.md):
   [embedding.md](../../tinyactors-core/docs/embedding.md) is take, handle,
   ack, run, with nothing to copy while handling.
 - **Then: the application developer.** No synchronous call into the
-  control plane runs inside an effect handler; a subscriber gets what
-  each macrostep changed (decision 4, amended); actor output arrives through the channel SCXML has for
-  it (an I/O processor).
+  control plane runs inside an effect handler; actor output arrives
+  through the channel SCXML has for it (an I/O processor).
 - **Out of scope:**
   - the API shape of `PEER` versus `PEER_ERROR` in a binding (deferred
     by the maintainer);
@@ -43,8 +44,9 @@ Following [docs/roles.md](../roles.md):
   |---|---|
   | per event | nothing. `TRACEPARENT`'s text is written on first ask, not per effect |
   | per batch | the host's outputs taken while handling it are held until the ack, not replaced by the next call: a batch of 64 `PEER` effects of 1 KB holds 64 KB of envelopes until the ack instead of 1 KB (arithmetic, not measured) |
-  | per subscribed session | one `actor.changed` per macrostep it finishes, with what it entered and exited (decision 4, amended); where the lists live during a run and what bounds them is open (same section). Other sessions: nothing |
-  | API | `ta_host_run` refuses while a batch is open; `ta_host_effects` returns the open batch instead of widening it; `actor.changed`'s params change (decision 4, amended); `actor.state` stays as it is, `limit` included; new in base: `ta_table` (7 functions, ~83 lines in the spike) and `ta_status_name` |
+  | per session | nothing: `actor.subscribe` and `actor.changed` are removed (decision 4, amended again), and with them the subscription table's mark byte per subscription (`host.c:731`) |
+  | API | `ta_host_run` refuses while a batch is open; `ta_host_effects` returns the open batch instead of widening it; `actor.subscribe`, `actor.unsubscribe` and `actor.changed` removed, `actor.state` as it is, `limit` included (decision 4, amended again); new in base: `ta_table` (7 functions, ~83 lines in the spike), `ta_status_name` and `ta_growable_arena` (decision 5; a port of tinyxml's `txml_arena`, `tinyxml/src/arena.c`, 218 lines) |
+  | per binding call | nothing from the allocator once the binding's arena has reached its high-water mark: a call takes a mark and releases to it, and released chunks are kept (decision 5) |
   | callers in this repository | the tests and `ta-conform` that run without acking migrate in the same change (`git grep ta_host_run`) |
   | every binding | less: no drain re-read, no consumed marks, no request facade, no copy before each call, no handle table and no status table of its own |
 
@@ -156,106 +158,60 @@ and then, at most, a run.
 
 The control plane is `ta_host_post` with `REPLY` and `NOTIFICATION`
 effects (ADR 0011, done). A binding exposes **typed methods over post**
-(`host.stats()`, `actor.state(session)`, `actor.subscribe(session)`, ...,
-one per method of `requests.md`), each of which posts with a fresh id
-and returns the language's pending result (a promise, a future), settled
-when its `REPLY` is handled in a later drain. **No raw `post`** in a
+(`host.stats()`, `actor.state(session)`, ..., one per method of
+`requests.md`), each of which posts with a fresh id and is settled when
+its `REPLY` is handled in a later drain, by calling the response handler
+the caller passed (amended again below; bindings.md section 10). **No raw `post`** in a
 language API until a JSON-RPC transport exists. The binding's own C may
 post and drain at creation (reading `host.config`), since no batch is
 open then; that is the loop, not a synchronous API.
 
-### 4. `actor.changed` carries what a macrostep changed (amended)
+### 4. `actor.subscribe` and `actor.changed` are removed (amended twice)
 
 *As first accepted, this decision made `actor.changed` carry the whole
-state value after the run and removed the 1024-state limit of
-`host_state_value`. The amendment of 2026-10-13 (below) replaces both;
-this is the decision as amended.*
+state value after the run; the first amendment (2026-10-13) made it one
+notification per macrostep with the states entered and exited, and left
+five problems open (the capture without allocation, the outbox, a busy
+actor's flood, the last macrostep, a refused notification). The second
+amendment (2026-10-13, at the end) replaces both: this is the decision as
+amended again.*
 
-`{"method": "actor.changed", "params": {"session": uint, "entered":
-[state id, ...], "exited": [state id, ...]}}`: **one notification per
-macrostep** a subscribed session finishes, in the order it finished
-them. `entered` and `exited` are the ids of the states that macrostep
-entered and exited. No `value` member, in this or any other form of the
-notification.
+**`actor.subscribe`, `actor.unsubscribe` and `actor.changed` are
+removed** from core, the vectors and the documents [8.2]. They were a
+stress test of the protocol, and served it: they showed that a posted
+message can start a stream of effects, and what such a stream costs in a
+run. **Notifications stay possible:** `TA_HOST_EFFECT_NOTIFICATION`
+(WIRE `{"method", "params"}`, EVENT the method, SESSION the session,
+`host.h:250-251`) keeps its place in the effect list and in requests.md's
+"Notifications" section, with no notification defined today. A binding
+handles the kind (it reads the method and drops one it does not know)
+and offers no API for it until a notification exists.
 
-When the session ends or leaves the host (`ta_host_export_actor`), the
-last notification is `{"session": uint, "ended": true}`, without
-`entered` or `exited`, and the subscription ends with it. Not the lists
-of an exit, because a session that leaves the host by export exits no
-state: it goes on in the host that adopts it (`ta_host_export_actor`,
-`host.h:619`), so "everything exited" would be false for it, and a
-subscriber needs one signal for both. Not `"exited": [all]`, for the
-same reason. Not a `null` member, because `null` is a value, and the
-notification carries none.
-
-**No new state-value machinery.** `actor.state` stays as it is today:
-the state value written in the stack's room for 1024 states
-(`host_state_value`, `src/host/host.c:806-816`;
+`actor.state` stays as it is: the state value written in the stack's
+room for 1024 states (`host_state_value`, `src/host/host.c:806-816`;
 `HOST_STATE_VALUE_STATES`, `src/host/host_internal.h:334`), refused with
-`limit` past it (`src/host/request.c:657-660`). A subscriber that wants
-the starting point posts `actor.state` after `actor.subscribe`; both are
-answered in the order posted (each post's `REPLY` is the last effect it
-appends, ADR 0011), and notifications start at the next run, so the
-state value is the configuration the first notification's changes apply
-to.
+`limit` past it (`src/host/request.c:657-660`).
 
-**Open, to be devised** (written here, not solved; the implementation
-waits for a design the maintainer decides):
+What the removal takes out of core [8.2]: the subscription table and its
+mark byte per subscription (`subscription_mark`, `host.c:731`;
+`subscriptions_notify`, `host.c:777-797`), the host's use of
+`ta_actor_watch` for it (`system.h:304-311`; the system's
+`TA_EFFECT_CHANGED` and `ta_actor_watch` stay below the host, as
+`ta_system`'s own API), the methods in `src/host/request.c`, the config
+key `maxSubscriptions` (`docs/host-config.md:61`), the subscribe exchange
+in `tinyactors-test/suites/protocol/requests.txt`, and the self-test's
+check of a heading with two methods, which names `actor.unsubscribe`
+(`mise/tasks/api-map-test:17`).
 
-1. **Capturing `entered` and `exited` during a run without allocation.**
-   What is known: core computes each microstep's exit set and entry set
-   as bitsets of the chart's state count in the workspace
-   (`exit`, `entry`, `state_words = (state_count + 31) / 32` words each,
-   `src/core/core_internal.h:247-259`; the exit set at
-   `src/core/core.c:1524-1540`, the entry set in `compute_entry`,
-   `core.c:772`), and the workspace is held only inside a microstep
-   (`core_internal.h:219`), so a macrostep's sets are gone when it
-   ends. The configuration is a bitset that lives in the instance
-   (`core_internal.h:196-199`), so a macrostep's net change is the
-   configuration before it against the one after: one copy of
-   `state_words` words per watched macrostep in flight, bounded by the
-   chart's state count. The trace already writes a microstep's exited
-   and entered states as lists into fixed journal memory during a run
-   (`trace_microstep`, `core.c:286-320`). The region is fixed at
-   `ta_system_init` (`tinyactors-core/AGENTS.md`), and the host writes
-   CBOR only outside a run (`host_output` asserts `!host->running`,
-   `host.c:43`). Not decided: where the lists live between the
-   macrostep and the end of the run, and whether a state entered and
-   exited within one macrostep (an eventless chain) is listed (the
-   union of the microsteps' sets) or not (the net change).
-2. **The outbox and the effect pool.** Today the system's
-   `TA_EFFECT_CHANGED` is pushed once per watch, "one effect per watch
-   however many macrosteps it runs" (`ta_actor_watch`,
-   `include/tinyactors/system.h:304-311`;
-   `src/system/schedule.c:170-173`) into the system's bounded outbox
-   (`ta_system_effect_push`, `src/system/effects.c:11-13`; `outbox` in
-   `ta_system_config`, `system.h:76`), and the host marks one byte per
-   subscription (`subscription_mark`, `host.c:731`) and writes at most
-   one notification per session per run (`subscriptions_notify`,
-   `host.c:777-797`). One per macrostep needs a record per macrostep:
-   which capacity holds them, and what a full outbox does to the run,
-   is not decided.
-3. **A flood from a busy actor.** A subscribed session that finishes
-   many macrosteps in one run gives as many notifications, each an
-   effect until the ack. Whether they are bounded, coalesced or refused,
-   and how a subscriber learns that it missed some, is not decided.
-4. **The macrostep that ends the session.** A session that reaches a
-   top-level final never becomes stable after it (`TA_STEP_DONE`,
-   `schedule.c:195-201`), and today's notification for an ended session
-   is written from the subscription table, not from a macrostep
-   (`host.c:777-797`). Whether that last macrostep's changes come
-   before `"ended": true` is not decided.
-5. **A refused notification.** Today a notification the allocator
-   refuses keeps its session's mark and comes at the end of the next run
-   (`host.c:785-790`); with changes, what was captured must survive
-   until then, or the gap be reported.
-
-### 5. `ta_table` and `ta_status_name` are public, in base
+### 5. `ta_table`, `ta_status_name` and `ta_growable_arena` are public, in base
 
 Every binding keeps handle tables for what core stores as integers
-(sessions, payloads, charts, loops) and names statuses in its errors.
-Both are free of any language's API, so they belong in a C layer
-(`AGENTS.md`, "Layers").
+(sessions, payloads, charts, loops), names statuses in its errors, and
+needs memory for what one call into it converts (a config, a request's
+params, a payload for another datamodel, text and input structs). All
+three are free of any language's API, so they belong in a C layer
+(`AGENTS.md`, "Layers"). `ta_growable_arena` was added by the second
+amendment (below).
 
 `include/tinyactors/table.h`, implemented in `src/base/table.c`
 (freestanding; it allocates only through the caller's allocator, as
@@ -297,13 +253,79 @@ TA_API void ta_table_free(ta_table *table);
 TA_API const char *ta_status_name(ta_status status);
 ```
 
+`include/tinyactors/arena.h`, implemented in `src/base/growable_arena.c`
+(freestanding; it allocates only through the caller's allocator) [8.2]:
+a port of tinyxml's `txml_arena` (`tinyxml/include/txml.h:209-252`,
+`tinyxml/src/arena.c`) with one difference, **release keeps its
+chunks**. The names below are a sketch; 8.2 settles them, the rules
+are decided.
+
+```c
+/* A bump allocator over linked chunks from `allocator`. An allocation
+ * never moves: growing links a new chunk, nothing is copied. A request
+ * larger than the chunk size gets a chunk of its own, so one allocation
+ * is always contiguous. A mark is a position; releasing to it ends every
+ * allocation made after it and KEEPS the chunks for the next ones, so an
+ * arena that has reached its high-water mark calls the allocator no more.
+ * Only ta_growable_arena_free gives chunks back. Alignment is at most 8. */
+typedef struct ta_growable_arena_chunk ta_growable_arena_chunk;
+typedef struct ta_growable_arena_config {
+    uint32_t size;      /* sizeof(ta_growable_arena_config) */
+    uint32_t pad;
+    size_t chunk_size;  /* the first chunk's payload; 0: a default */
+    const ta_allocator *allocator;
+} ta_growable_arena_config;
+typedef struct ta_growable_arena {
+    const ta_allocator *allocator;
+    ta_growable_arena_chunk *head;  /* the chunk bumped now */
+    ta_growable_arena_chunk *kept;  /* chunks released and kept, for reuse */
+    size_t chunk_size, used, reserved;
+} ta_growable_arena;
+typedef struct ta_growable_arena_mark {
+    ta_growable_arena_chunk *chunk;
+    size_t offset;
+} ta_growable_arena_mark;
+TA_API void ta_growable_arena_init(ta_growable_arena *arena, const ta_growable_arena_config *config);
+TA_API void *ta_growable_arena_alloc(ta_growable_arena *arena, size_t size, size_t align); /* NULL: refused */
+TA_API ta_growable_arena_mark ta_growable_arena_position(const ta_growable_arena *arena);
+TA_API void ta_growable_arena_release(ta_growable_arena *arena, ta_growable_arena_mark mark);
+/* A ta_allocator over the arena, so a ta_cbor_writer grows into it: alloc
+ * bumps; free gives nothing back (the space returns at the next release
+ * to a mark taken before it). Valid while the arena lives. */
+TA_API ta_allocator ta_growable_arena_allocator(ta_growable_arena *arena);
+TA_API void ta_growable_arena_free(ta_growable_arena *arena);
+```
+
+The rules:
+
+- **Allocations never move**, so a pointer into the arena is valid until
+  a release to a mark taken before it, whatever is allocated meanwhile.
+- **Marks nest.** A caller takes a mark at the entry of a call and
+  releases to it at the exit, on every path. A call made while another is
+  in progress on the same thread (Python code a conversion runs, which
+  calls the binding again) allocates above the outer call's last
+  allocation and releases back to its own mark, which is above it: the
+  outer call's memory is untouched. Releasing to a mark older than one
+  still in use is the caller's error.
+- **Release keeps its chunks** (txml's keeps one spare and frees the
+  rest, `arena.c:169-202`): the arena holds its high-water mark until
+  `ta_growable_arena_free`, and after warm-up no call reaches the
+  allocator. An oversized chunk is kept too.
+- **A writer's growth costs up to twice its final size** until the
+  release: `ta_cbor_writer` grows by allocating a block twice as big and
+  freeing the old one (`cbor.h:124-131`), and the arena's `free` gives
+  nothing back. Size the writer's first room from the arena when the
+  size is known.
+- **The internal `ta_arena`** (`src/base/arena.h`: carving a caller's
+  region, offsets, measure mode, used by `ta_system_layout` and
+  `ta_system_init`) keeps its name and its job; it never allocates.
+
 ### 6. DONE, ERROR and LOG are the binding's; output goes through I/O processors
 
 - **`TA_EFFECT_DONE` and `TA_EFFECT_ERROR` are internal to the
   binding's C.** They are lifecycle: the binding releases the rows it
-  keeps for the session and settles what waits on it (its
-  subscriptions end; `actor.changed` with `"ended": true` says the same
-  to a subscriber). They are not application callbacks. The done data's
+  keeps for the session and settles what waits on it. They are not
+  application callbacks. The done data's
   payload is retained by core when the effect is copied and released at the ack (`host.c:1187-1191`, `:1044-1048`); a fault
   is counted in `host.stats` (`faults`, requests.md).
 - **Actor output to the application goes through I/O processors:** a
@@ -311,12 +333,13 @@ TA_API const char *ta_status_name(ta_status status);
   processor the application configured (`TA_EFFECT_SEND`, synchronous
   or not). That is SCXML's channel for output, and the one that carries
   a target, a name and data.
-- **`TA_EFFECT_LOG` goes to the language's logging** (Python's
-  `logging`, the console or a logger in Node), not to an application
-  callback.
-- **State reaches the application by subscription** (`actor.subscribe`,
-  `actor.changed`), and inspection by typed methods over post
-  (decision 3).
+- **`TA_EFFECT_LOG` goes to a log handler configured per host** (the
+  second amendment: Python's `Host(..., log=handler)`, no global
+  configuration such as `logging.basicConfig`; without one, the lines
+  are discarded), not to a callback per actor.
+- **Inspection is by typed methods over post** (decision 3), state
+  included (`actor.state`); there is no subscription (decision 4,
+  amended again).
 - **`PEER` versus `PEER_ERROR` in a language API is deferred.**
 
 ## Rejected alternatives
@@ -360,6 +383,26 @@ TA_API const char *ta_status_name(ta_status status);
   it (`host.c:789-790`). **Not leaving `value` out** (today's code),
   because ADR 0011, the guide and requests.md disagreed on it, and a
   reader had three shapes.
+- **Not `actor.changed` per macrostep** (the first amendment), because
+  its five open problems (capture without allocation, the outbox, a
+  busy actor's flood, the last macrostep, a refused notification) bought
+  nothing the application needs: an actor's output reaches it through an
+  I/O processor, and its state through `actor.state` (the second
+  amendment).
+- **Not txml's release, which frees chunks past one spare**
+  (`tinyxml/src/arena.c:169-202`), because a binding takes and releases
+  a mark on every call: freeing at release calls the allocator per call,
+  where keeping the chunks calls it only while the high-water mark grows.
+- **Not one writer per call on the C stack, grown through the host's
+  allocator and freed at the call's end** (bindings.md section 6 before
+  the second amendment), because a call that converts several values (a
+  `send_many` of event structs, text and payloads) needs several blocks,
+  each a pair of allocator calls per call; the arena serves them all from
+  kept chunks.
+- **Not the internal `ta_arena` made public**, because it carves one
+  region given up front, by offset, with a measure mode
+  (`src/base/arena.h:1-13`): it cannot grow, and its job (the system's
+  layout) stays.
 - **Not a handle table in each binding**, because the same ~80 lines
   were written twice (`src/datamodel/handles.c` in both bindings, before
   their removal in `6426816a` and `70434bee`), and the audit compared
@@ -374,10 +417,14 @@ TA_API const char *ta_status_name(ta_status status);
 
 Step 2 of [ROADMAP.md](../../ROADMAP.md), step 8, after these documents:
 
-1. `ta_status_name` and `ta_table` in base, with unit tests
-   (`tests/unit/test_table.c`: add, get, remove, a stale handle after
-   reuse, growth through a refusing allocator, free), and their entries
-   in `tinyactors.api.json`.
+1. `ta_status_name`, `ta_table` and `ta_growable_arena` in base, with
+   unit tests (`tests/unit/test_table.c`: add, get, remove, a stale
+   handle after reuse, growth through a refusing allocator, free;
+   `tests/unit/test_growable_arena.c`: an allocation that never moves,
+   an oversized request, nested marks, a release that keeps its chunks
+   and calls the allocator no more on the next round, a writer growing
+   through its `ta_allocator`, a refusing allocator, free), and their
+   entries in `tinyactors.api.json`.
 2. One drain at a time: `ta_host_effects` returns the open batch;
    `ta_host_run` refuses while one is open; tests and `ta-conform`
    migrate (each takes, handles, acks before a run).
@@ -385,9 +432,9 @@ Step 2 of [ROADMAP.md](../../ROADMAP.md), step 8, after these documents:
    calls on it, `TRACEPARENT` on first ask; a test that takes two
    envelopes and a metrics view in one batch and reads all three after
    the second call (ASan).
-4. `actor.changed` per macrostep (decision 4, amended): its open
-   problems devised first, written into this ADR and decided by the
-   maintainer; then the notification, the vectors and a unit test.
+4. `actor.subscribe`, `actor.unsubscribe` and `actor.changed` removed
+   (decision 4, amended again): the code, the vectors, the config key
+   `maxSubscriptions` and the self-test that names them, in one commit.
    `actor.state` does not change.
 5. `host.h`'s comments, `requests.md` and the guide follow in the same
    commits (`tinyactors-core/AGENTS.md`).
@@ -409,17 +456,13 @@ Python binding) of the root roadmap.
 
 The maintainer amended decision 4 on the day it was accepted:
 
-- **`actor.changed` is per macrostep and carries changes, not a
-  value:** `{"session", "entered", "exited"}` per macrostep, in order;
-  `{"session", "ended": true}` when the session ends or leaves. No
-  `value` member anywhere. The capture, the capacity and the flood are
-  open (decision 4, "Open, to be devised").
+- **`actor.changed` carried changes, not a value** (superseded by the
+  second amendment, below: removed).
 - **No new state-value machinery.** The two versions considered for the
   whole value (walking the configuration in place, and scratch from the
   host's allocator past the stack's room) are both dropped, and so is
   the removal of the 1024-state limit. `actor.state` stays as it is,
-  `limit` included; a subscriber posts it after `actor.subscribe` for
-  its starting point.
+  `limit` included.
 - **Snapshots stay** (system, host and datamodel snapshots); nothing in
   this ADR changes them.
 - **`ta_host_run` refusing while a batch is open** (`TA_RUN_FAULT`,
@@ -430,3 +473,29 @@ rewritten; the context's "value divergence" and the rejected
 alternatives about a truncated value, `null` past the limit and a left
 out `value` stay as the record of the first decision, since the shape
 they argued over is gone.
+
+## Amended again (2026-10-13)
+
+The maintainer amended decisions 4 and 5 a second time, the same day:
+
+- **`actor.subscribe` and `actor.changed` are removed; notifications
+  stay possible** (decision 4, rewritten). They were a stress test of
+  the protocol. `actor.unsubscribe` goes with them. Core, the vectors and
+  the documents lose them in step 8.2 [8.2]; until then the code answers
+  them as before.
+- **`ta_growable_arena` is public, in base** (decision 5): linked chunks
+  from a `ta_allocator`, allocations that never move, marks, a release
+  that keeps its chunks, and a `ta_allocator` view for `ta_cbor_writer`.
+  A binding keeps one per host and brackets each call with a mark
+  (bindings.md section 6).
+- **Typed methods take response handlers** (decision 3): in Python
+  `method(..., handler, on_error=None)` returns `None`, and the drain
+  that handles the `REPLY` calls the handler (bindings.md section 10).
+  The rule holds for every binding; Node's shape of it is decided in
+  step 8.5.
+- **`<log>` lines go to a log handler per host** (decision 6).
+
+What this replaces in the text above: decision 4, the cost rows for
+subscriptions, decision 6's subscription bullets, and item 4 of the order
+of work. The first amendment's text about the per-macrostep shape is
+reduced to one line; its record is in git (this file at `30fd4ad3`).
