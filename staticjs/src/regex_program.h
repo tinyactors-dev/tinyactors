@@ -79,8 +79,10 @@ typedef struct {
 /*
  * The value (SJS_HEAP_REGEXP): one block, immutable, holding no
  * references. After the header: the instructions, the classes, their
- * ranges (low, high pairs), each group's name record, then the source and
- * the names' text.
+ * ranges (low, high pairs), each group's name record, the source and the
+ * names' text, then, for a program the cache of a test takes
+ * (regex_match.c, "The cache"), the class of each ASCII character
+ * (rx_dfa_map).
  */
 typedef struct {
     sjs_heap h;
@@ -98,6 +100,7 @@ typedef struct {
     bool named;              /* a group has a name */
     uint8_t lead;            /* RX_LEAD_* */
     uint8_t lead_char;
+    uint8_t dfa_classes;     /* the cache's classes (sjs_regex_dfa_classes), 0 when it refuses the program */
     uint32_t lead_saves;
     const rx_ins *code;
     const rx_class *classes;
@@ -107,3 +110,16 @@ typedef struct {
 } sjs_regexp;
 
 #define SJS_AS_REGEXP(v) ((const sjs_regexp *)(const void *)(v).as.heap)
+
+/* The class of each ASCII character, for a program with dfa_classes. */
+static inline const uint8_t *rx_dfa_map(const sjs_regexp *re) {
+    return (const uint8_t *)(const void *)(re->text + re->text_length);
+}
+
+/* The bytes of rx_dfa_map. */
+#define RX_DFA_MAP 128u
+
+/* Sort the ASCII characters into the classes of the cache of a test
+ * (regex_match.c) for the program `re`, whose code, classes, ranges and
+ * lead are set: their number, or 0 when the cache refuses the program. */
+uint32_t sjs_regex_dfa_classes(const sjs_regexp *re, uint8_t *classes);
