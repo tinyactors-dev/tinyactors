@@ -1850,6 +1850,9 @@ static sjs_result set_output(sjs_vm *vm, vm_frame *frame, sjs_value v) {
 #define COMPARE_STACK 2u
 #define PREDICATE_STACK 2u
 #define SUM_STACK 2u
+/* MUTATION: a push's bytecode pushes the reference to the accumulator's
+ * slot, the method, and the argument (`x`, then `x.k` in its place). */
+#define PUSH_STACK 3u
 
 /* The shapes each loop built-in runs in C (docs/matcher.md, 7 and 11.5). */
 static const struct {
@@ -1878,6 +1881,8 @@ static const struct {
     { SJS_METHOD_ARRAY_EVERY, SJS_SHAPE_ELEMENT_COMPARE },
     { SJS_METHOD_ARRAY_REDUCE, SJS_SHAPE_SUM },
     { SJS_METHOD_ARRAY_REDUCE, SJS_SHAPE_SUM_KEY },
+    { SJS_METHOD_ARRAY_REDUCE, SJS_SHAPE_PUSH_KEY }, /* MUTATION */
+    { SJS_METHOD_ARRAY_REDUCE, SJS_SHAPE_PUSH },     /* MUTATION */
 };
 
 /* A key the C path reads as an object's own property: one an object lacks
@@ -1950,6 +1955,11 @@ static void shape_start(vm_frame *frame, sjs_value callback) {
         frame->shape_key = SJS_AS_STRING(closure->program->constants[fn->shape_args[0]]);
         frame->shape_flag = fn->shape_args[1] != 0;
         break;
+    case SJS_SHAPE_PUSH_KEY: /* MUTATION */
+        frame->shape_key = SJS_AS_STRING(closure->program->constants[fn->shape_args[0]]);
+        break;
+    case SJS_SHAPE_PUSH: /* MUTATION */
+        break;
     default: /* SJS_SHAPE_COMPARE_NUMERIC, SJS_SHAPE_SUM */
         frame->shape_flag = fn->shape_args[0] != 0;
         break;
@@ -1995,6 +2005,14 @@ static sjs_result reduce_right_start(sjs_vm *vm, vm_frame *frame);
 static loop_step reduce_right_call(sjs_vm *vm, vm_frame *frame);
 static sjs_result text_sort_start(sjs_vm *vm, vm_frame *frame);
 static bool text_sort_step(sjs_vm *vm, vm_frame *frame);
+
+/* MUTATION: a push's accumulator is the value the callback returns, so its
+ * kind stays the initial value's: a push loop whose accumulator is not an
+ * array runs its bytecode, which calls an object's own push or faults. So
+ * sum_step, which runs first, never sees a push loop's number. */
+static void push_start(vm_frame *frame, sjs_value acc) {
+    if ((frame->shape == SJS_SHAPE_PUSH_KEY || frame->shape == SJS_SHAPE_PUSH) && acc.kind != SJS_ARRAY) frame->shape = SJS_SHAPE_NONE;
+}
 
 sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
     if (frame->builtin >= SJS_REGEX_LOOP_FIRST) return sjs_regex_loop_start(vm, frame);
@@ -2044,11 +2062,13 @@ sjs_result sjs_loop_start(sjs_vm *vm, vm_frame *frame) {
             sjs_value *second = slot(vm, frame, LOOP_SECOND);
             sjs_value initial = *second;
             *second = sjs_undefined();
+            push_start(frame, initial); /* MUTATION */
             return set_output(vm, frame, initial);
         }
         if (a->length == 0) return sjs_vm_fault(vm, "reduce of an empty array needs an initial value");
         sjs_ref(a->items[0]);
         frame->index = 1;
+        push_start(frame, a->items[0]); /* MUTATION */
         return set_output(vm, frame, a->items[0]);
     case SJS_METHOD_ARRAY_REDUCE_RIGHT:
         return reduce_right_start(vm, frame);
@@ -2225,6 +2245,42 @@ static loop_step predicate_step(sjs_vm *vm, vm_frame *frame) {
     if (answer == SJS_VM_UNDECIDED) return call_element(vm, frame, element);
     vm->fuel_used += lookups;
     return predicate_answer(vm, frame, answer != 0);
+}
+
+/* MUTATION: reduce's step for a PUSH_KEY callback, `(a, x) => { a.push(x.key);
+ * return a; }`, or a PUSH, `a.push(x)`, in C (docs/matcher.md, 13.2): when
+ * the accumulator is an array that LOOP_OUTPUT holds alone (as the
+ * callback's slot would: the bytecode moves it there), neither frozen nor
+ * sealed, with room for one more element, and, for PUSH_KEY, the element
+ * is an object with an own property `key`, the value goes at its end, as
+ * array_insert puts it, and the accumulator stays in LOOP_OUTPUT, where
+ * `return a` would put it back. One unit for the lookup and one for the
+ * element added, as push charges, where the bytecode costs eight more.
+ * False otherwise: the bytecode pushes this element, growing the array, or
+ * calls an object's own push, or faults. */
+static bool push_step(sjs_vm *vm, vm_frame *frame) {
+    if (frame->shape != SJS_SHAPE_PUSH_KEY && frame->shape != SJS_SHAPE_PUSH) return false;
+    sjs_value *output = slot(vm, frame, LOOP_OUTPUT);
+    if (output->kind != SJS_ARRAY || !sjs_value_unique(*output)) return false;
+    if (vm->stack_capacity - vm->sp < PUSH_STACK) return false;
+    sjs_array *acc = SJS_AS_ARRAY(*output);
+    if ((acc->h.flags & SJS_INTEGRITY) != 0 || acc->length >= acc->capacity) return false;
+    sjs_value v = receiver(vm, frame)->items[frame->index];
+    uint64_t lookups = 0;
+    if (frame->shape == SJS_SHAPE_PUSH_KEY) {
+        /* A missing key falls back, whether or not it is on
+         * Object.prototype: the bytecode pushes undefined, or faults. */
+        if (v.kind != SJS_OBJECT) return false;
+        const sjs_entry *e = own_entry(frame, SJS_AS_OBJECT(v));
+        if (e == NULL) return false;
+        v = e->value;
+        lookups = 1;
+    }
+    sjs_ref(v);
+    acc->items[acc->length++] = v;
+    frame->index++;
+    vm->fuel_used += lookups + 1u;
+    return true;
 }
 
 /* reduce's step for a SUM callback, `(a, x) => a + x` or `x + a`, or a
@@ -2483,7 +2539,9 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
             /* Entered where the bytecode's first call would enter it; one
              * element per step, so fuel still pauses. */
             if (!frame->entered && !sjs_vm_enter_callback(vm, frame)) return LOOP_FAULT;
-            if (sum_step(vm, frame)) return LOOP_AGAIN;
+            /* MUTATION: a push, which sum_step leaves, as its accumulator is
+             * never a number (push_start). Restore: sum_step alone. */
+            if (sum_step(vm, frame) || push_step(vm, frame)) return LOOP_AGAIN;
         }
         /* The accumulator moves into the call, so that the callback can hold
          * it alone; its result comes back into LOOP_OUTPUT. If the call

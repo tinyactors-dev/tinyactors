@@ -280,9 +280,10 @@ does with PLUCK (so do `Object.groupBy`, `Array.from` and `Map.groupBy`, and an 
 `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `some` and `every` with
 KEY_COMPARE and ELEMENT_COMPARE (and an iterator's `filter`, `find`,
 `some` and `every`, which run as those), and `reduce` with SUM and SUM_KEY (an iterator's too, but not `reduceRight`,
-which adds from the last element: another order, another floating-point sum)
-(`pluck_step`, `sort_by_key`, `sort_numbers`, `predicate_step` and
-`sum_step` in `src/builtins.c`). The tag only
+which adds from the last element: another order, another floating-point sum),
+and with PUSH_KEY and PUSH (an iterator's too)
+(`pluck_step`, `sort_by_key`, `sort_numbers`, `predicate_step`,
+`sum_step` and `push_step` in `src/builtins.c`). The tag only
 says what the bytecode computes; the bytecode is still there, and the C
 path must give exactly what it gives. A rule may look at a call, whose
 callee is the node before its CALL_BEGIN (`docs/matcher.md`, section 13);
