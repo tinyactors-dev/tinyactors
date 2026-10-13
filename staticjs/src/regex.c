@@ -614,11 +614,6 @@ static uint32_t rx_decimal(rx_parser *p) {
  * Classes
  */
 
-typedef struct {
-    uint32_t start;   /* its first range in p->ranges */
-    uint32_t count;
-} rx_class_record;
-
 static bool rx_add_range(rx_parser *p, uint32_t low, uint32_t high) {
     uint32_t pair[2] = { low, high };
     return rx_add(p, &p->work, pair, sizeof pair);
@@ -751,7 +746,7 @@ static uint32_t rx_keep_class(rx_parser *p, bool negated) {
         r[2u * merged + 1u] = r[2u * k + 1u];
         merged++;
     }
-    rx_class_record record = { p->ranges.length / 8u, 0 };
+    rx_class record = { p->ranges.length / 8u, 0 };
     if (negated) {
         uint32_t from = 0;
         for (uint32_t k = 0; k < merged; k++) {
@@ -771,7 +766,7 @@ static uint32_t rx_keep_class(rx_parser *p, bool negated) {
         if (!rx_add(p, &p->ranges, r, merged * 8u)) return NONE;
         record.count = merged;
     }
-    uint32_t index = SJS_BUF_COUNT(p->classes, rx_class_record);
+    uint32_t index = SJS_BUF_COUNT(p->classes, rx_class);
     if (!rx_add(p, &p->classes, &record, sizeof record)) return NONE;
     return index;
 }
@@ -1896,22 +1891,42 @@ static void rx_emit_step(rx_emitter *e) {
     if (done) e->frames.length -= (uint32_t)sizeof(rx_emitting);
 }
 
-/* The value: one block, laid out as sjs_regexp says. */
+/* The value: one block, laid out as sjs_regexp says. The header is made
+ * first over the emitter's buffers, for sjs_regex_dfa_classes to read, then
+ * pointed at the block's own copies. */
 static sjs_result rx_build_value(sjs_context *context, const rx_emitter *e, sjs_value *out) {
     const rx_parser *p = e->p;
     sjs_regex_literal literal = p->literal;
     uint32_t count = SJS_BUF_COUNT(e->code, rx_ins);
-    uint32_t class_count = SJS_BUF_COUNT(p->classes, rx_class_record);
+    uint32_t class_count = SJS_BUF_COUNT(p->classes, rx_class);
     uint32_t range_count = p->ranges.length / 8u;
+    const rx_ins *code = (const rx_ins *)(const void *)e->code.ptr;
+    sjs_regexp view;
+    sjs_zero(&view, sizeof view);
+    view.count = count;
+    view.code = code;
+    view.classes = (const rx_class *)(const void *)p->classes.ptr;
+    view.ranges = (const uint32_t *)(const void *)p->ranges.ptr;
+    uint32_t saves = 0;
+    while (saves < count && code[saves].op == RX_SAVE) saves++;
+    const rx_ins *lead = &code[saves < count ? saves : 0];
+    view.lead_saves = saves;
+    if (saves < count && lead->op == RX_CHAR && lead->x < 0x80u) view.lead = RX_LEAD_CHAR;
+    else if (saves < count && lead->op == RX_CHAR_FOLD && lead->x < 0x80u) view.lead = RX_LEAD_FOLD;
+    else if (saves < count && lead->op == RX_ASSERT && lead->x == RX_ASSERT_START) view.lead = RX_LEAD_START;
+    view.lead_char = view.lead == RX_LEAD_CHAR || view.lead == RX_LEAD_FOLD ? (uint8_t)lead->x : 0;
+    uint8_t map[RX_DFA_MAP];
+    view.dfa_classes = (uint8_t)sjs_regex_dfa_classes(&view, map);
     uint32_t names_length = 0;
     for (uint32_t g = 0; g < p->groups; g++) names_length += SJS_BUF_AT(p->names, rx_name, g).length;
     uint64_t text_length = (uint64_t)literal.body.length + names_length;
     uint64_t size = sizeof(sjs_regexp) + (uint64_t)count * sizeof(rx_ins) + (uint64_t)class_count * sizeof(rx_class) +
-                    (uint64_t)range_count * 8u + (uint64_t)p->groups * sizeof(rx_group_name) + text_length;
+                    (uint64_t)range_count * 8u + (uint64_t)p->groups * sizeof(rx_group_name) + text_length +
+                    (view.dfa_classes != 0 ? RX_DFA_MAP : 0u);
     if (size > UINT32_MAX) return SJS_ERR_LIMIT;
     sjs_regexp *re = sjs_mem_alloc(&context->counting, (size_t)size);
     if (re == NULL) return SJS_ERR_NOMEM;
-    sjs_zero(re, sizeof *re);
+    *re = view;
     re->h.refs = 1;
     re->h.type = SJS_HEAP_REGEXP;
     re->h.size = (uint32_t)size;
@@ -1921,34 +1936,19 @@ static sjs_result rx_build_value(sjs_context *context, const rx_emitter *e, sjs_
     re->registers = root->registers;
     re->slots = 2u * (p->groups + 1u) + root->registers;
     re->threads = count << root->registers;
-    re->count = count;
     re->class_count = class_count;
     re->range_count = range_count;
     re->clear_slots = 0;
     re->named = p->named;
     uint8_t *at = (uint8_t *)(re + 1);
-    rx_ins *code = (rx_ins *)(void *)at;
-    sjs_copy(code, e->code.ptr, (size_t)count * sizeof(rx_ins));
+    sjs_copy(at, code, (size_t)count * sizeof(rx_ins));
+    re->code = (const rx_ins *)(const void *)at;
     for (uint32_t i = 0; i < count; i++) {
         if (code[i].op == RX_CLEAR) re->clear_slots += code[i].y - code[i].x + 1u;
     }
-    uint32_t saves = 0;
-    while (saves < count && code[saves].op == RX_SAVE) saves++;
-    const rx_ins *lead = &code[saves < count ? saves : 0];
-    re->lead_saves = saves;
-    if (saves < count && lead->op == RX_CHAR && lead->x < 0x80u) re->lead = RX_LEAD_CHAR;
-    else if (saves < count && lead->op == RX_CHAR_FOLD && lead->x < 0x80u) re->lead = RX_LEAD_FOLD;
-    else if (saves < count && lead->op == RX_ASSERT && lead->x == RX_ASSERT_START) re->lead = RX_LEAD_START;
-    re->lead_char = re->lead == RX_LEAD_CHAR || re->lead == RX_LEAD_FOLD ? (uint8_t)lead->x : 0;
-    re->code = code;
     at += (size_t)count * sizeof(rx_ins);
-    rx_class *classes = (rx_class *)(void *)at;
-    for (uint32_t k = 0; k < class_count; k++) {
-        const rx_class_record *record = &SJS_BUF_AT(p->classes, rx_class_record, k);
-        classes[k].start = record->start;
-        classes[k].count = record->count;
-    }
-    re->classes = classes;
+    sjs_copy(at, p->classes.ptr, (size_t)class_count * sizeof(rx_class));
+    re->classes = (const rx_class *)(const void *)at;
     at += (size_t)class_count * sizeof(rx_class);
     sjs_copy(at, p->ranges.ptr, (size_t)range_count * 8u);
     re->ranges = (const uint32_t *)(const void *)at;
@@ -1968,6 +1968,7 @@ static sjs_result rx_build_value(sjs_context *context, const rx_emitter *e, sjs_
     }
     re->text = text;
     re->text_length = used;
+    if (re->dfa_classes != 0) sjs_copy(text + used, map, RX_DFA_MAP);
     *out = sjs_heap_value(SJS_REGEXP, &re->h);
     return SJS_OK;
 }

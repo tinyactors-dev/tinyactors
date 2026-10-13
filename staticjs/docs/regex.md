@@ -163,7 +163,10 @@ that the set of out-of-line helpers does not change, and keep the new step
   evaluators, which is why `GET_MEMBER`'s guesses live in the VM and not in
   the program (`vm.h`, the comment on `member_guess`). The lazy DFA
   (section 12.3) keeps its cache in the match's own state for the same
-  reason (section 15).
+  reason (section 15). What the value holds besides the program is
+  derived from it once, when it compiles, and never changes: the lead
+  character, and for a program the lazy DFA takes, the class of each
+  ASCII character (section 15).
 
 ---
 
@@ -1159,9 +1162,16 @@ Each departure below was made because Node or the code said otherwise.
 - **A lazy DFA for `test` only (12.3), whose fuel is the automaton's.**
   `eval.regex.test` asked for it: the Pike VM spent about 550 instructions
   a character there. A `test` over an ASCII input that runs as a loop
-  (not sticky, a program of at most 256 instructions) keeps a cache of
-  8 KiB after its job, in the loop's block (`rx_dfa_of` in
-  `src/regex_match.c`), set up the first time the search runs from it.
+  (not sticky, a program of at most 256 instructions and at most 16
+  classes) keeps a cache of 8 KiB after its job, in the loop's block
+  (`rx_dfa_of` in `src/regex_match.c`), set up the first time the search
+  runs from it. The classes are sorted once, when the pattern compiles
+  (`sjs_regex_dfa_classes`, which splits sets of 128 bits by each
+  predicate's set), and the value keeps the class of each ASCII
+  character, 128 bytes after its text (`rx_dfa_map`), or nothing when
+  the program has more classes, whose tests then make no cache. Before,
+  every test that ran as a loop allocated the cache and sorted the
+  classes again, asking up to 259 predicates of each of 128 characters.
   Its result needs no slots, and a slot bears on what a thread does only
   through `CHECK` and the registers' mask, which compare a register with
   the position: a register equals the position only within the
