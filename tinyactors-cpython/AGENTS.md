@@ -44,7 +44,14 @@ layers"):
   an `add_image` from a name→text mapping (compile, add, close in one
   call; the earlier `add_image(charts)` belongs here), spawning by chart
   name, a chart builder so people need not write XML (over
-  `ta_xml_writer`, `compile.h:84-110`, once the direct layer exposes it).
+  `ta_xml_writer`, `compile.h:84-110`, once the direct layer exposes it),
+  and **`DirectoryResolver(root)`** (decided 2026-10-13): a resolver
+  written in Python that reads `source` as a file under `root`, relative
+  to `base`, and refuses a path that leaves `root`. It does not bind
+  core's file resolver: `ta_runtime_resolve`
+  (`tinyactors-core/src/runtime/runtime_hosted.c:78`) accepts absolute
+  paths and does not confine reads to a root. The direct layer has only
+  the resolver protocol ("The resolver").
   Nothing in 8.4 depends on it.
 
 ## Names
@@ -82,10 +89,11 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   and **`close()`** call `ta_compile_free`; the collector calls it as a
   fallback.
 - **`tinyactors.Host(config, io_processors={type: handler}, log=handler,
-  clock=None, resolver=None)`.** Everything is per host: the config (a
+  clock=None)`.** Everything is per host: the config (a
   `dict`, written as CBOR into the call's arena for `ta_host_create`),
-  the I/O processors' handlers, the log handler, the clock and the
-  resolver. No global configuration (no `logging.basicConfig`, no
+  the I/O processors' handlers, the log handler and the clock. A host
+  has no resolver ("The resolver"). No global configuration (no
+  `logging.basicConfig`, no
   module-level handler, no default logger). The extension reads
   `host.config` once at creation for `system.ticksPerSecond` (bindings.md
   section 3).
@@ -101,25 +109,53 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   version of chart `name` (`host.h:121-126`); the reference holds the
   segment and the chart index.
 - **`host.spawn(ref, name=None, params=None, traceparent=None) -> int`**
-  (`ta_host_spawn`, `ta_spawn`), **`host.send(session, event,
-  data=None)`** (`ta_host_send`), **`host.terminate(session)`**
+  (`ta_host_spawn`, `ta_spawn`), **`host.send(session, event, data=None,
+  *, traceparent=None)`** (`ta_host_send`), **`host.send_many(items) ->
+  int`** (`ta_host_send_many`: each item carries the arguments of `send`,
+  `traceparent` included; it returns the length of the accepted prefix,
+  `host.h:192-195`), **`host.terminate(session)`**
   (`ta_host_terminate`): applied at the call, read during it; a payload
   moves to core on success and is released on refusal. Under asyncio an
   input made outside a turn schedules one turn.
+- **`traceparent` in: W3C text, parsed by core.** `ta_spawn.traceparent`
+  and `ta_event_in.traceparent` are `ta_string_view`s of W3C text
+  (`tinyactors-core/include/tinyactors/system.h:125-132`, `:171-173`),
+  which core parses itself (`ta_traceparent_parse`, `trace.h:79`): the
+  extension passes the `str`'s own UTF-8 for the call ("The binding's
+  memory"), no conversion. Text that does not parse starts a new trace,
+  as `None` does (`tinyactors-core/src/system/tracing.c:13-22`). An HTTP handler
+  continues its caller's trace:
+
+  ```python
+  def on_request(request):
+      host.send(session, "http.request", request.json(),
+                traceparent=request.headers.get("traceparent"))
+  ```
 - **The resolver** is an object of its own with one method,
-  **`resolve(base, source) -> str`**, configured on the `Host`
-  (`Host(..., resolver=)`) and given to `compile_charts`: the same object
-  serves both. In `compile_charts` it is the compile-time callback
-  (`ta_compile_options.resolve`) for every static `src`; it refuses by
-  raising, and the extension answers the compiler with the error's line,
-  column and message, which comes back as a diagnostic of the resolved
-  file [8.2] (root `ROADMAP.md` 8.2; boundary.md section 12). On the
-  `Host` it answers `TA_EFFECT_REQUEST` (an `<invoke src>` that no chart
-  of the image names), followed by `ta_host_resume`; as core stands, a
-  resume names only a chart of the requesting segment (`route.c:544`),
-  so what it does with the returned text is open (ROADMAP.md, "Open").
-  The binding ships **`tinyactors.DirectoryResolver(root)`**, which reads
-  `source` as a file under `root`, relative to `base`.
+  **`resolve(base, source) -> str`**, given to `compile_charts` only:
+  **it lives only at compile time** (ADR 0012, decision 7 as amended a
+  fourth time; boundary.md section 12). It is the compile-time callback
+  (`ta_compile_options.resolve`) for every static `src`, and an invoked
+  chart it fetches is compiled into the same image. **A resolver refuses
+  by raising `tinyactors.ResolveError(message, line=None,
+  column=None)`**; a `SyntaxError` it raises, or the rewrite's own
+  refusal of a `.py` file, is converted with its `lineno` and `offset`.
+  The extension fills `ta_resolve_error` from it, the message's UTF-8
+  copied into the compilation's scratch arena (`request->scratch`), and
+  the compiler reports it as a diagnostic of the resolved file, at that
+  line and column [8.2] (root `ROADMAP.md` 8.2). What any other
+  exception a resolver raises becomes is open (ROADMAP.md, "Open").
+- **`TA_EFFECT_REQUEST` is answered in C, never by Python.** Core gives
+  it for a dynamic `srcexpr` (or a `src` the compiler did not match)
+  when its own lookup in the segment's image found no chart
+  (`tinyactors-core/src/system/route.c:440-497`). The extension looks the
+  name (`AUXILIARY`) up with `ta_image_chart_by_name` in the requesting
+  segment's image (`ta_host_segment_info_get`) and calls `ta_host_resume`
+  with the chart index + 1, or `TA_ERROR_INVALID` for a name the image
+  does not have: the parent gets `error.execution` (`route.c:544-550`).
+  It strips no prefix itself (`file://`, `file:`, `./`):
+  `ta_image_chart_by_name` does [8.2]. `ta-conform` answers the same way
+  (`tools/conform/scenario.c:99-125`).
 - **`.py` sources through `src`.** A chart writes `<script
   src="reader.py"/>`: a Python file, free of XML's whitespace and
   escaping, whose top-level `def`s become the chart's methods. The
@@ -131,13 +167,35 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   `TA_EFFECT_SEND` whose `IO_PROCESSOR` is that type's index in the
   config's `ioProcessors`. Actor output to the application goes through
   them, and nothing else (ADR 0012, decision 6).
-  - `send.answer(event, data=None)`: `ta_host_send` to the sending
-    session (`SESSION`) with the send's `sendid` and `origintype` the
-    processor's type.
-  - `send.fail()`: `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION`
-    and the `sendid` (`tinyactors-core/include/tinyactors/system.h:155-157`:
-    core places `error.communication` in the sender's queue); the event
-    name is not repeated.
+  - `send.traceparent`: the sending step's trace as W3C text, or `None`
+    when the send is untraced. The effect holds the binary
+    `ta_trace_context` (`tinyactors-core/include/tinyactors/trace.h:39-44`,
+    `host.h:284`); `TA_EFFECT_FIELD_TRACEPARENT` formats it as text
+    (`host.h:330`, empty when untraced), so the view formats it on first
+    read, like every other field.
+  - `send.answer(event, data=None, *, traceparent=send.traceparent)`:
+    `ta_host_send` to the sending session (`SESSION`) with the send's
+    `sendid`, `origintype` the processor's type, and the send's trace
+    (decided 2026-10-13: an answer keeps the trace); passing
+    `traceparent=None` starts a new trace.
+  - `send.fail()`: `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION`,
+    the `sendid` and `send.traceparent`
+    (`tinyactors-core/include/tinyactors/system.h:155-157`: core places
+    `error.communication` in the sender's queue); the event name is not
+    repeated.
+  - An I/O processor that makes a request of its own carries the trace
+    on:
+
+    ```python
+    def http_processor(host, send):
+        headers = {"traceparent": send.traceparent} if send.traceparent else {}
+        response = client.post(send.target, json=send.data, headers=headers)
+        send.answer("http.response", response.json())   # keeps send.traceparent
+    ```
+
+    Not a proposal, a note: `answer()` formats the context as text and
+    core parses it back. A binary context field on `ta_event_in` would
+    avoid the round trip; nothing needs it now.
   - A plain function gets a **thin view** (below, "Thin views"); an
     **`async def`** handler is scheduled as a task and gets a
     **materialized record**, made before it is scheduled. A processor
@@ -278,8 +336,8 @@ pays nothing for a field it does not read.
   the ack (the task starts when the loop next runs it, after the drain
   returns), so before scheduling it the extension builds a record:
   `session` (`int`), `sendid` (`str`), the processor's type (the `str`
-  the extension holds from the config), `event`, `target`, `data`. Its
-  `answer()` and `fail()` work any time while the host lives
+  the extension holds from the config), `event`, `target`, `data`,
+  `traceparent` (`str` or `None`). Its `answer()` and `fail()` work any time while the host lives
   (`ta_host_send`'s refusal, a session that ended, raises). Not chosen:
   materializing every live view at the ack (a list of views per batch,
   and conversions of fields nobody may read); copying `session` and
@@ -297,7 +355,7 @@ pays nothing for a field it does not read.
 | Object Python sees | Owner | Created | Converts | Valid until | Thread |
 |---|---|---|---|---|---|
 | `Host` | the application | `Host(...)` | the config, into the arena, for `ta_host_create` | `with` exit, `close`, or the collector (a fallback) | the creating one; others refused |
-| `send` (thin view) | the handler, borrowed | dispatch of a `TA_EFFECT_SEND` to a plain function | `session`, `sendid`, `event`, `target`, `data` on first read | the ack; then stale | the host's |
+| `send` (thin view) | the handler, borrowed | dispatch of a `TA_EFFECT_SEND` to a plain function | `session`, `sendid`, `event`, `target`, `data`, `traceparent` on first read | the ack; then stale | the host's |
 | send record | the task | dispatch, before scheduling an `async def` processor | every field, at once | the collector | the host's |
 | log `entry` (thin view) | the handler, borrowed | dispatch of a `TA_EFFECT_LOG` | `session`, `label` (`AUXILIARY`), `text` (`EVENT`) on first read | the ack; then stale | the host's |
 | `Compiled` | the application | `compile_charts` | — | `with` exit, `close()` (`ta_compile_free`), or the collector (a fallback) | the creating one |
@@ -358,7 +416,8 @@ APIs [8.2]:
 - **Strings go to core as the `str`'s own UTF-8**, a view for the call
   (`PyUnicode_AsUTF8AndSize`; CPython keeps the UTF-8 in the `str` object
   once made, so a non-ASCII `str` pays that once), bytes through the
-  buffer protocol.
+  buffer protocol. A `traceparent` is such a view too: core parses the
+  W3C text itself ("The API").
 - **The value table accepts exact built-in types** (`PyDict_CheckExact`,
   `PyList_CheckExact`, ...), so a conversion runs no user code: a `dict`
   or `list` subclass is refused (decided 2026-10-13).
@@ -398,12 +457,15 @@ APIs [8.2]:
   (`request->scratch`, from the start of `ta_compile_charts` to its
   return), so the extension keeps nothing per `src` past the call.
 - **A `Compiled` holds a compile result** until its `close()`;
-  `compiled.image` is a buffer over it. Open: what `close()` does while
-  a buffer exported from `image` is still held (`mv =
-  memoryview(compiled.image); compiled.close(); bytes(mv)` would read
-  freed memory): refuse with `BufferError`, as CPython's `bytearray`
-  does when resized with exports, or free at the last release
-  ([ROADMAP.md](ROADMAP.md), "Open").
+  `compiled.image` is a buffer over it. **`close()` while a buffer
+  exported from `image` is held raises `BufferError`** (decided
+  2026-10-13), as CPython's `bytearray` does when resized with exports:
+  `mv = memoryview(compiled.image); compiled.close()` raises, and the
+  result stays alive until `mv.release()`; without it `bytes(mv)` would
+  read freed memory. The `Compiled` counts its exports in the buffer
+  slots (CPython's `Py_bf_getbuffer` and `Py_bf_releasebuffer`, filled
+  with our functions; in the limited API from 3.11 by CPython's
+  documentation, not yet in the abi3 spike below: unverified).
 
 ## The "python" datamodel
 
@@ -605,8 +667,17 @@ Registered beside quickjs, first; matched by the chart's
   (the sender gets `error.communication`) and the exception raised after
   the turn, for a plain function and an `async def` task alike.
 - **`compile_charts` raises `CompileError` with every diagnostic**, a
-  `.py` file's refused construct at its own line; `compiled.image` read
-  after `close()` raises `TA_ERROR_STALE`.
+  `.py` file's refused construct at its own line, a `ResolveError` at
+  the line and column it names; `compiled.image` read after `close()`
+  raises `TA_ERROR_STALE`, and `close()` while a `memoryview` of it is
+  held raises `BufferError`.
+- **`TA_EFFECT_REQUEST` is answered in C:** a chart of the segment's
+  image by its name, and `TA_ERROR_INVALID` (the parent's
+  `error.execution`) for a name not in it; no Python code runs.
+- **Traces cross:** a `traceparent` passed to `send` or `spawn` is the
+  trace of the step it starts, `send.traceparent` is the sending step's,
+  `send.answer()` keeps it and `send.answer(..., traceparent=None)` does
+  not.
 - **The README says** that charts are trusted code and the rewrite is
   not a sandbox, and that Python values lie outside the host's allocator
   (bindings.md, section 8).
@@ -625,6 +696,11 @@ Registered beside quickjs, first; matched by the chart's
   (`ta_table`, `ta_status_name`, `ta_growable_arena`,
   `ta_host_add_image` copies).
 - No global configuration: handlers, logging and the clock are per host.
+- No resolver on the `Host` and no Python callback for
+  `TA_EFFECT_REQUEST`: the resolver lives only at compile time, and a
+  REQUEST is an image lookup in C.
+- No `DirectoryResolver` in the extension: it is the convenience layer's,
+  in Python.
 - No application callback for `DONE` or `ERROR`; no subscription.
 - No defaults, limits, methods, events or messages of our own; nothing C
   does done again in Python (bindings.md section 2).
@@ -699,7 +775,7 @@ docs/values.md       the Python side of the value table
 src/                 extension.h, module.c, host.c (Host, inputs, the arena's marks),
                      loop.c (drain, turn, both drivers), effects.c (dispatch, thin views,
                      records), methods.c (typed methods, the pending table), values.c,
-                     compile.c (compile_charts, Compiled, the resolver, DirectoryResolver),
+                     compile.c (compile_charts, Compiled, the resolver protocol, ResolveError),
                      datamodel/{datamodel.h, datamodel.c, rows.c, expressions.c}
 conform/             the suite's adapter, python -m conform; not in the wheel
 tests/               what the suite cannot see: threads, GC, asyncio, refusals, stale views

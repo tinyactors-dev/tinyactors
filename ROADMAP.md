@@ -459,12 +459,21 @@ The design, in short (the rulebook has each rule with its evidence):
   resolver=None) -> Compiled` (a context manager; `CompileError` with
   every diagnostic), `host.add_image(compiled.image) -> int`,
   `host.chart(name)`, `spawn(ref, name=None, params=None,
-  traceparent=None) -> int`, `send(session, event, data=None)`,
-  `terminate(session)`, applied at the call; a resolver object
-  (`tinyactors.DirectoryResolver(root)`) given to `compile_charts` and
-  the `Host`. A convenience layer in Python above it is later work. An I/O processor's handler is `handler(host, send)`, with
-  `send.answer(event, data=None)` and `send.fail()`; an `async def`
-  handler is scheduled as a task. `log=handler(host, entry)` gets the
+  traceparent=None) -> int`, `send(session, event, data=None, *,
+  traceparent=None)`, `send_many(items)` (items may carry a
+  `traceparent`), `terminate(session)`, applied at the call; a
+  `traceparent` is W3C text, passed as the `str`'s UTF-8 and parsed by
+  core. A resolver object (`resolve(base, source)`, refusing with
+  `tinyactors.ResolveError`) is given to `compile_charts` only: the
+  resolver lives only at compile time, the `Host` has none, and a
+  `TA_EFFECT_REQUEST` is answered in C from the requesting segment's
+  image (ADR 0012, decision 7 as amended a fourth time). A convenience
+  layer in Python above it is later work (`DirectoryResolver` among
+  it). An I/O processor's handler is `handler(host, send)`, with
+  `send.traceparent` (formatted on first read, `None` when untraced),
+  `send.answer(event, data=None, *, traceparent=send.traceparent)` and
+  `send.fail()`, both keeping the send's trace; an `async def` handler
+  is scheduled as a task. `log=handler(host, entry)` gets the
   host's `<log>` lines. Typed methods over post (`actor_state`,
   `actor_context`, `actor_list`, `actor_get`, `host_stats`, `trace_*`)
   take `(..., handler, on_error=None)` and return `None`; no synchronous
