@@ -206,8 +206,40 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 - **One convention for bytes.** Bytes go in as `ta_bytes`. They come out as a `ta_bytes` view whose owner and lifetime the call states (the host’s outputs, a datamodel’s outputs), or, where the caller provides the memory (snapshots, the config error, the freestanding layers), through a `ta_buffer *`. No public function takes a pointer and a length (the lint rule `buffers-are-ta-buffer`).
 - **Core never allocates after init below the host;** the host allocates only through its allocator, and only between runs; the CBOR functions allocate only through the allocator a caller gives a writer.
 - **The binding allocates almost nothing.** Allocations and frees must pair, so keep them few and in one place. What a binding keeps:
-  - **Its handle tables.** Language objects (a session's scope, a chart's compiled expressions, payload values, a typed method's response handler, references to the runtime) cannot be in core's memory (no pointers, moved by `memcpy`, hibernated) and must be visible to the garbage collector. A chart, session, payload, `<foreach>` or pending typed method is a row of its table, not an allocation of its own. The table is core's `ta_table` (`tinyactors/table.h`, ADR 0012 decision 5; 0012): rows of the binding's size, 64-bit handles with a generation so a stale one is refused, grown by doubling through the environment's allocator, slots reused, freed once with the host. A row pointer is valid until the next `ta_table_add`; keep handles, not pointers. The binding writes no table of its own. Images need no table: pass the bytes (core's `ta_compile_image` view, a caller's buffer, at any alignment) to `ta_host_add_image`, which copies them; the compile result can be freed as soon as the call returns (the direct layer's compile object frees it at its close, section 1).
-  - **One arena per host, a mark per call.** A `ta_growable_arena` (`tinyactors/arena.h`, ADR 0012 decision 5; [8.2]) made with the host from the environment's allocator and freed with it. Every API call takes a mark at its entry (`ta_growable_arena_position`) and releases to it at its exit (`ta_growable_arena_release`), on every path, exceptions included. It holds what that call converts: the CBOR of a config, a typed method's params and a payload for another datamodel (a `ta_cbor_writer` whose allocator is the arena's `ta_allocator` view), text where the runtime gives no view of it (Node-API), and input structs (the `ta_event_in` array of a `send_many`). Application code that runs during a call (a getter, `toJSON`, `__iter__`, a finalizer) may call the binding again: the nested call allocates above the outer call's memory and releases to its own mark, and nothing moves. Released chunks are kept, so the arena holds the largest call's need, and after warm-up no call reaches the allocator. Nothing else is shared between calls.
+  - **Its handle tables.** Language objects (a session's scope, a chart's
+    compiled expressions, payload values, a typed method's response
+    handler, references to the runtime) cannot be in core's memory (no
+    pointers, moved by `memcpy`, hibernated) and must be visible to the
+    garbage collector. A chart, session, payload, `<foreach>` or pending
+    typed method is a row of its table, not an allocation of its own.
+    The table is core's `ta_table` (`tinyactors/table.h`, ADR 0012 decision
+    5): rows of the binding's size, 64-bit handles with a generation so
+    a stale one is refused, grown by doubling through the environment's
+    allocator, slots reused, freed once with the host. A row pointer is
+    valid until remove, free or the next successful `ta_table_add`; keep
+    handles, not pointers. Release row-owned references before removing or
+    freeing their storage. The binding writes no table of its own. Images
+    need no table: pass the bytes (core's `ta_compile_image` view, a
+    caller's buffer, at any alignment) to `ta_host_add_image`, which copies
+    them; the compile result can be freed as soon as the call returns (the
+    direct layer's compile object frees it at its close, section 1).
+  - **One arena per host, a mark per call.** A `ta_growable_arena`
+    (`tinyactors/arena.h`, ADR 0012 decision 5) made with the host from the
+    environment's allocator and freed with it. Every API call takes a mark
+    at its entry (`ta_growable_arena_position`) and releases to it at its
+    exit (`ta_growable_arena_release`), on every path, exceptions included.
+    It holds what that call converts: the CBOR of a config, a typed
+    method's params and a payload for another datamodel (a `ta_cbor_writer`
+    whose allocator is the arena's `ta_allocator` view), text where the
+    runtime gives no view of it (Node-API), and input structs (the
+    `ta_event_in` array of a `send_many`). Application code that runs during
+    a call (a getter, `toJSON`, `__iter__`, a finalizer) may call the binding
+    again: the nested call allocates above the outer call's memory and
+    releases to its own mark, and nothing moves. Released chunks are kept;
+    repeating an identical warmed allocation sequence reaches no backing
+    allocator. Store the by-value allocator view for the lifetime of the
+    consumers borrowing its address, and finish those consumers before
+    releasing their mark. Nothing else is shared between calls.
   - **A datamodel's last output.** A native datamodel writes `to_wire`, `serialize` and `payload_serialize` with a writer it keeps between calls, and hands strings back to core (`eval_string`, `log`) from a language object it holds or, where the runtime gives no view of text (Node-API), from that same memory; each is overwritten by its next call.
   - **Views, never copies, of what the language holds:** a string or bytes passed into a call is a view for the call's duration (CPython's `PyUnicode_AsUTF8AndSize`, the buffer protocol, a typed array's data). Read what core supplies (system variables, a chart's states through `ta_image_*`) when it supplies it.
   - **Values cross by copy inside the process, and are shared when immutable.** A value the application passes in (an event's data, a spawn's params) becomes a payload row through the value table: a mutable container is copied, an immutable value shared. CBOR only where the other side reads it (another datamodel, an envelope).
@@ -227,7 +259,9 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 | `_event` (native datamodel) | name, type, sendid, origin, origintype, invokeid, raw; `data` | the strings at `bind_event`; `data` is the payload row's value, with a reference on the row | the next `bind_event`, `detach_event` or `destroy` | the row's reference is dropped |
 | system variables (native datamodel) | `_sessionid`, `_name`, `_ioprocessors`, immutable | at `create`, once | the session's end | — |
 
-- **Statuses are named by core.** A bare status in an error message is `ta_status_name(status)` (`"TA_ERROR_STATE"`; `NULL` for one core does not define; ADR 0012 decision 5; 0012), never a table of the binding's.
+- **Statuses are named by core.** A bare status in an error message is
+  `ta_status_name(status)` (`"TA_ERROR_STATE"`; `NULL` for one core does
+  not define; ADR 0012 decision 5), never a table of the binding's.
 - **Only C touches host structs.** Read effects with the accessors, and let the addon, which is C in every runtime (Node-API, the same C compiled into a wasm module, cffi), fill input structs. Never copy a struct layout into another language.
 - **Garbage collection.** Free the host deterministically when the application stops it, and drop every language reference the binding holds (handlers, scopes, payloads, functions) then; offer the language’s scoped form (a context manager, `using`, `defer`). A finalizer is only a fallback: handlers often close over the host. Where the language has a cycle collector, let it see those references (the CPython slots `Py_tp_traverse` and `Py_tp_clear`).
 - **Snapshots are not durability.** Hibernation and snapshots take actors out of memory for a while, and a snapshot lets a host be inspected; export moves actors to another host. A snapshot is raw region memory, valid only for the same build of the library: never offer one as a backup, a save file or crash recovery, and never write it somewhere it outlives the build. Durability is the application’s (a database). The hibernation store is where idle actors wait while out of memory, not a record of them: a store that outlives the host (IndexedDB, a file) keys blobs per host and clears them when a host is created and when it stops, since no other host can wake them.

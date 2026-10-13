@@ -4,6 +4,8 @@
 
 #include <tinyactors/types.h>
 #include <tinyactors/allocator.h>
+#include <tinyactors/table.h>
+#include <tinyactors/arena.h>
 #include <tinyactors/address.h>
 #include <tinyactors/cbor.h>
 #include <tinyactors/trace.h>

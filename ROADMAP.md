@@ -322,6 +322,21 @@ row; the example of embedding.md compiles and runs. Gates:
 
 ##### 8.2: core implements ADR 0012 (coordinator)
 
+**Base APIs implemented (2026-10-14):** `ta_status_name`, `ta_table` and
+`ta_growable_arena` have public headers, freestanding implementations,
+unit tests and API descriptions. The table retires exhausted generations;
+the arena retains regular and oversized chunks, supports nested marks,
+and supplies an allocator view. The remaining 8.2 items below still need
+implementation; the compiler migration and host loop have not changed.
+Contracts and usage are in
+[`tinyactors-core/docs/base-storage.md`](tinyactors-core/docs/base-storage.md).
+Validation: core's full gate passes (sanitizers, conformance, wasm,
+every torture scenario and all native cross-builds). The full run exposed
+an existing allocation-refusal sweep defect, reproduced at the preceding
+commit and repaired without changing host behavior or weakening checks.
+Root `mise run test:full` still stops at the deliberately red Python M1
+`host.create` gate; both Python builds pass their 20 codec tests.
+
 In ADR 0012's order of work:
 
 - **Base:** `ta_status_name` (NULL for a status `types.h` does not

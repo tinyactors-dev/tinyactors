@@ -1,6 +1,8 @@
 /* Every public header must be self-contained and C89-ABI friendly; this TU
  * includes each one first in its own block (compiled as C and as C++). */
 #include <tinyactors/types.h>
+#include <tinyactors/table.h>
+#include <tinyactors/arena.h>
 #include <tinyactors/cbor.h>
 #include <tinyactors/stats.h>
 #include <tinyactors/allocator.h>

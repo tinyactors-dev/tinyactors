@@ -1380,6 +1380,282 @@
         }
       }
     },
+    "ta_table_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "row_size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "row_size": 4,
+            "allocator": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "row_size": 4,
+            "allocator": 8
+          }
+        },
+        "wasm32": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "row_size": 4,
+            "allocator": 8
+          }
+        }
+      }
+    },
+    "ta_table": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "rows",
+          "type": "unsigned char *"
+        },
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        },
+        {
+          "name": "row_size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "free",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "rows": 0,
+            "allocator": 8,
+            "row_size": 16,
+            "count": 20,
+            "capacity": 24,
+            "free": 28
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "rows": 0,
+            "allocator": 8,
+            "row_size": 16,
+            "count": 20,
+            "capacity": 24,
+            "free": 28
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "rows": 0,
+            "allocator": 4,
+            "row_size": 8,
+            "count": 12,
+            "capacity": 16,
+            "free": 20
+          }
+        }
+      }
+    },
+    "ta_growable_arena_chunk": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "ta_growable_arena_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "size",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "chunk_size",
+          "type": "size_t"
+        },
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "chunk_size": 8,
+            "allocator": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "chunk_size": 8,
+            "allocator": 16
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "size": 0,
+            "pad": 4,
+            "chunk_size": 8,
+            "allocator": 12
+          }
+        }
+      }
+    },
+    "ta_growable_arena": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "allocator",
+          "type": "const ta_allocator *"
+        },
+        {
+          "name": "head",
+          "type": "ta_growable_arena_chunk *"
+        },
+        {
+          "name": "kept",
+          "type": "ta_growable_arena_chunk *"
+        },
+        {
+          "name": "chunk_size",
+          "type": "size_t"
+        },
+        {
+          "name": "used",
+          "type": "size_t"
+        },
+        {
+          "name": "reserved",
+          "type": "size_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "head": 8,
+            "kept": 16,
+            "chunk_size": 24,
+            "used": 32,
+            "reserved": 40
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "head": 8,
+            "kept": 16,
+            "chunk_size": 24,
+            "used": 32,
+            "reserved": 40
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "allocator": 0,
+            "head": 4,
+            "kept": 8,
+            "chunk_size": 12,
+            "used": 16,
+            "reserved": 20
+          }
+        }
+      }
+    },
+    "ta_growable_arena_mark": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "chunk",
+          "type": "ta_growable_arena_chunk *"
+        },
+        {
+          "name": "offset",
+          "type": "size_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "chunk": 0,
+            "offset": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "chunk": 0,
+            "offset": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "chunk": 0,
+            "offset": 4
+          }
+        }
+      }
+    },
     "ta_address": {
       "kind": "struct",
       "fields": [
@@ -9459,6 +9735,100 @@
       "implemented": true
     },
     {
+      "name": "ta_growable_arena_alloc",
+      "returns": "void *",
+      "params": [
+        {
+          "name": "arena",
+          "type": "ta_growable_arena *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "align",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_growable_arena_allocator",
+      "returns": "ta_allocator",
+      "params": [
+        {
+          "name": "arena",
+          "type": "ta_growable_arena *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_growable_arena_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "arena",
+          "type": "ta_growable_arena *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_growable_arena_init",
+      "returns": "void",
+      "params": [
+        {
+          "name": "arena",
+          "type": "ta_growable_arena *"
+        },
+        {
+          "name": "config",
+          "type": "const ta_growable_arena_config *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_growable_arena_position",
+      "returns": "ta_growable_arena_mark",
+      "params": [
+        {
+          "name": "arena",
+          "type": "const ta_growable_arena *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_growable_arena_release",
+      "returns": "void",
+      "params": [
+        {
+          "name": "arena",
+          "type": "ta_growable_arena *"
+        },
+        {
+          "name": "mark",
+          "type": "ta_growable_arena_mark"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_host_actor_by_name",
       "returns": "uint64_t",
       "params": [
@@ -11955,6 +12325,121 @@
         {
           "name": "policy",
           "type": "const ta_trace_policy *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_table_add",
+      "returns": "void *",
+      "params": [
+        {
+          "name": "table",
+          "type": "ta_table *"
+        },
+        {
+          "name": "handle",
+          "type": "uint64_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_table_at",
+      "returns": "void *",
+      "params": [
+        {
+          "name": "table",
+          "type": "const ta_table *"
+        },
+        {
+          "name": "slot",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_table_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "table",
+          "type": "ta_table *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_table_get",
+      "returns": "void *",
+      "params": [
+        {
+          "name": "table",
+          "type": "const ta_table *"
+        },
+        {
+          "name": "handle",
+          "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_table_handle",
+      "returns": "uint64_t",
+      "params": [
+        {
+          "name": "table",
+          "type": "const ta_table *"
+        },
+        {
+          "name": "slot",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_table_init",
+      "returns": "void",
+      "params": [
+        {
+          "name": "table",
+          "type": "ta_table *"
+        },
+        {
+          "name": "config",
+          "type": "const ta_table_config *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_table_remove",
+      "returns": "void",
+      "params": [
+        {
+          "name": "table",
+          "type": "ta_table *"
+        },
+        {
+          "name": "handle",
+          "type": "uint64_t"
         }
       ],
       "public": true,

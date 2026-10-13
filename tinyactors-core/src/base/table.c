@@ -1,0 +1,111 @@
+#include <tinyactors/table.h>
+#include "base/memory.h"
+
+typedef struct ta_table_slot {
+    uint32_t generation;
+    uint32_t next; /* slot + 1 in the free list */
+} ta_table_slot;
+
+/* Rows and slot records share one allocation. row_size is rounded to 8,
+ * so the metadata is aligned too on 32- and 64-bit targets. */
+static ta_table_slot *table_slots(const ta_table *table) {
+    return (ta_table_slot *)(void *)(table->rows + (size_t)table->row_size * table->capacity);
+}
+
+void ta_table_init(ta_table *table, const ta_table_config *config) {
+    ta_memset(table, 0, sizeof *table);
+    if (!config || config->size < sizeof *config || !config->row_size ||
+        config->row_size > UINT32_MAX - 7u || !config->allocator ||
+        !config->allocator->alloc || !config->allocator->free) return;
+    table->row_size = (config->row_size + 7u) & ~7u;
+    table->allocator = config->allocator;
+}
+
+/* Build a replacement completely before publishing it. Refusal preserves
+ * the old allocation, free list, rows and handle generations. */
+static int table_grow(ta_table *table) {
+    if (table->capacity > UINT32_MAX / 2u) return 0;
+    uint32_t capacity = table->capacity ? table->capacity * 2u : 16u;
+    size_t stride = (size_t)table->row_size + sizeof(ta_table_slot);
+    if (stride < table->row_size || capacity > SIZE_MAX / stride) return 0;
+    size_t bytes = stride * capacity;
+    unsigned char *rows = table->allocator->alloc(table->allocator->context, bytes, 8);
+    if (!rows) return 0;
+    ta_memset(rows, 0, bytes);
+    ta_table_slot *slots = (ta_table_slot *)(void *)(rows + (size_t)table->row_size * capacity);
+    if (table->capacity) {
+        ta_memcpy(rows, table->rows, (size_t)table->row_size * table->capacity);
+        ta_memcpy(slots, table_slots(table), sizeof *slots * table->capacity);
+    }
+    uint32_t first = table->free;
+    for (uint32_t slot = capacity; slot > table->capacity;) {
+        --slot;
+        slots[slot].next = first;
+        first = slot + 1u;
+    }
+    if (table->rows)
+        table->allocator->free(table->allocator->context, table->rows, stride * table->capacity);
+    table->rows = rows;
+    table->capacity = capacity;
+    table->free = first;
+    return 1;
+}
+
+void *ta_table_add(ta_table *table, uint64_t *handle) {
+    if (!handle) return NULL;
+    *handle = 0;
+    if (!table->allocator || !table->row_size) return NULL;
+    if (!table->free && !table_grow(table)) return NULL;
+    uint32_t slot = table->free - 1u;
+    ta_table_slot *record = &table_slots(table)[slot];
+    table->free = record->next;
+    ++record->generation; /* even -> odd; retired slots never enter this list */
+    record->next = 0;
+    ++table->count;
+    *handle = (uint64_t)record->generation << 32 | (uint64_t)(slot + 1u);
+    void *row = table->rows + (size_t)slot * table->row_size;
+    ta_memset(row, 0, table->row_size);
+    return row;
+}
+
+uint64_t ta_table_handle(const ta_table *table, uint32_t slot) {
+    if (slot >= table->capacity) return 0;
+    uint32_t generation = table_slots(table)[slot].generation;
+    return generation & 1u ? (uint64_t)generation << 32 | (uint64_t)(slot + 1u) : 0;
+}
+
+void *ta_table_at(const ta_table *table, uint32_t slot) {
+    return ta_table_handle(table, slot) ? table->rows + (size_t)slot * table->row_size : NULL;
+}
+
+void *ta_table_get(const ta_table *table, uint64_t handle) {
+    uint32_t encoded = (uint32_t)handle;
+    if (!encoded || !(handle >> 32 & 1u)) return NULL;
+    uint32_t slot = encoded - 1u;
+    return ta_table_handle(table, slot) == handle ? ta_table_at(table, slot) : NULL;
+}
+
+void ta_table_remove(ta_table *table, uint64_t handle) {
+    void *row = ta_table_get(table, handle);
+    if (!row) return;
+    uint32_t slot = (uint32_t)handle - 1u;
+    ta_table_slot *record = &table_slots(table)[slot];
+    ta_memset(row, 0, table->row_size);
+    --table->count;
+    if (record->generation == UINT32_MAX) {
+        record->generation = 0; /* exhausted: retire, never wrap to a live handle */
+        record->next = 0;
+        return;
+    }
+    ++record->generation;
+    record->next = table->free;
+    table->free = slot + 1u;
+}
+
+void ta_table_free(ta_table *table) {
+    if (table->rows) {
+        size_t bytes = ((size_t)table->row_size + sizeof(ta_table_slot)) * table->capacity;
+        table->allocator->free(table->allocator->context, table->rows, bytes);
+    }
+    ta_table_init(table, NULL);
+}

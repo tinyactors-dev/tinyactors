@@ -33,7 +33,7 @@ module Core
 
   LAYERS = [
     Layer.new(name: 'base', uses: [], freestanding: true,
-              sources: %w[address cbor output format arena pool heap slab journal status].map { |s| "src/base/#{s}.c" }),
+              sources: %w[address cbor output format arena pool heap slab journal status table growable_arena].map { |s| "src/base/#{s}.c" }),
     Layer.new(name: 'image', uses: %w[base], freestanding: true,
               sources: %w[src/image/image.c src/image/event_names.c]),
     # Trace values and the record schema (docs/adr/0006 in the repository root).
@@ -119,7 +119,7 @@ module Core
   LIBRARIES = [
     Library.new(name: 'tinyactors', layers: %w[base image trace core system host basic_http otlp], uses: [],
                 libc: false,
-                headers: %w[types.h allocator.h address.h cbor.h trace.h stats.h image.h datamodel.h system.h core.h host.h
+                headers: %w[types.h allocator.h table.h arena.h address.h cbor.h trace.h stats.h image.h datamodel.h system.h core.h host.h
                             basic_http.h otlp.h wasm.h]),
     Library.new(name: 'tinyactors_runtime', layers: %w[compile runtime], uses: %w[tinyactors], libc: true,
                 headers: %w[compile.h runtime.h]),
@@ -173,6 +173,8 @@ module Core
   PROGRAMS = [
     unit('test_base', 'base'),
     unit('test_status', 'base'),
+    unit('test_table', 'base'),
+    unit('test_growable_arena', 'base'),
     unit('test_headers', 'base'),
     Program.new(name: 'test_headers_cxx', sources: %w[tests/unit/test_headers.cpp], uses: %w[base], cxx: true),
     unit('test_image', 'compile'),

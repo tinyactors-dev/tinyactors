@@ -192,7 +192,7 @@ actors a system image declares.
 - **A datamodel's outputs** (`to_wire`, `serialize`, `payload_serialize`,
   `eval_string`, `log`) are views it owns until its next call; core copies
   what it keeps.
-- **Base APIs you may use** (ADR 0012, decision 5; [8.2]), freestanding
+- **Base APIs you may use** (ADR 0012, decision 5), freestanding
   and allocating only through the allocator you give them
   ([boundary.md, section 11](boundary.md#11-base-apis-for-embedders-and-bindings)):
   - `ta_table` (`table.h`) for your own tables of what core names by
@@ -207,6 +207,9 @@ actors a system image declares.
     `ta_allocator` view, so a `ta_cbor_writer` grows into it.
   - `ta_status_name` names a status for your messages (NULL for one
     `types.h` does not define).
+  Their per-call contracts and a writer example are in
+  [Base storage](base-storage.md). The headers state when row pointers,
+  allocation pointers, marks and borrowed allocator objects expire.
 
 ## 9 · Threads
 
@@ -247,8 +250,8 @@ Must not:
 
 A chart that greets: `hello` makes it `<send>` `greeted` to the
 application's I/O processor and `<log>` a line. Everything below is the
-current API except `ta_status_name` and the refusal of a run with a
-batch open, marked (0012). Error handling is cut to keep it short.
+current API except the refusal of a run with a batch open, marked (0012).
+Error handling is cut to keep it short.
 
 ```c
 #include <stdio.h>
@@ -367,7 +370,7 @@ int main(void) {
         drain(host);
         if (run.status == TA_RUN_IDLE) break;
         if (run.status == TA_RUN_FAULT) {
-            const char *name = ta_status_name((ta_status)run.detail); /* (0012) */
+            const char *name = ta_status_name((ta_status)run.detail);
             fprintf(stderr, "fault: %s\n", name ? name : "unknown");
             break;
         }

@@ -159,7 +159,6 @@ keeps first (ADR 0010 decision 1).
 From the table: the run refused in D; `ta_host_effects` not widening;
 outputs (two envelopes and a metrics request) and two `TRACEPARENT`s read
 after later calls in one batch (all ADR 0012, its order of work);
-`ta_table` and `ta_growable_arena` (section 11) [8.2];
 `ta_host_free` from a datamodel's code; `ta_host_boot` outside
 `ta-conform`; a full pool on `ta_host_spawn` in R/G; the calls that
 answer in R/G though `host.h` lists only four lookups
@@ -454,7 +453,7 @@ the host's create, free and allocator (each binding's lint rule):
 - **Its handle tables** (`ta_table`): charts, sessions, payloads, loops,
   and the pending typed methods; a handle is a row's, with a generation,
   so a stale one is refused.
-- **One `ta_growable_arena` per host** [8.2], made with the host and
+- **One `ta_growable_arena` per host**, made with the host and
   freed with it. Each API call takes a mark at its entry and releases to
   it at its exit, on every path. It holds what the call converts: the
   config's and a request's CBOR (a `ta_cbor_writer` growing through the
@@ -514,9 +513,9 @@ binding's own lifecycle (release its rows), not callbacks. `PEER` versus
 
 ## 11. Base APIs for embedders and bindings
 
-**Design (ADR 0012, decision 5).** Three things every binding needs and
+**Implemented (ADR 0012, decision 5).** Three things every binding needs and
 no language's API is part of, in `src/base`, freestanding, allocating
-only through the caller's `ta_allocator` [8.2]:
+only through the caller's `ta_allocator`:
 
 | API | What | Lifetimes |
 |---|---|---|
@@ -532,8 +531,8 @@ keeps its name and its job; it never allocates.
 same code twice, compared file by file in the audit). Making `ta_arena`
 public (it cannot grow). txml's release, which frees chunks past one
 spare (an allocator pair per call; ADR 0012, rejected alternatives).
-Two chunked arenas in core, the compiler's `ta_chunk_arena` beside
-`ta_growable_arena` (the same job twice; ADR 0012, decision 5).
+The compiler's private `ta_chunk_arena` still awaits migration to
+`ta_growable_arena` in the next part of step 8.2 (ADR 0012, decision 5).
 
 ## 12. Compiling, and the resolver
 
