@@ -147,8 +147,7 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   exception a resolver raises becomes is open (ROADMAP.md, "Open").
 - **`TA_EFFECT_REQUEST` is a fetch at run time, answered in C, never by
   Python.** It is how a chart fetches what is not in its image (an
-  `<invoke srcexpr>`, or a `src` the compiler did not match; later
-  `<data srcexpr>`), and it stays (decided 2026-10-13; ADR 0012, decision
+  `<invoke srcexpr>`, or a `src` the compiler did not match), and it stays (decided 2026-10-13; ADR 0012, decision
   7 as amended a fifth time; boundary.md section 12). Core has already
   normalized the name and looked in the requesting segment's image
   (`tinyactors-core/src/system/route.c:439-497`), so until run-time

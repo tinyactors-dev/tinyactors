@@ -775,7 +775,7 @@ free-threaded builds (abi3t, 3.15).
   measurements (download size, call cost) after step 8.5's every-effect work; either way it passes
   the suite.
 - **PostgreSQL**, and other languages, after step 8.5.
-- **Run-time fetching (`<invoke srcexpr>`, `<data srcexpr>`) through
+- **Run-time fetching (`<invoke srcexpr>`) through
   `TA_EFFECT_REQUEST`** (decided 2026-10-13: the REQUEST stays; ADR 0012,
   amended a fifth time). Today core normalizes the name and looks it up
   in the requesting segment's image (`route.c:439-489`), gives a REQUEST
@@ -784,9 +784,6 @@ free-threaded builds (abi3t, 3.15).
   - a resume with a chart of another segment, after the binding has added
     the fetched document's image (`ta_host_add_image`); today a resume
     names only a chart of the requesting segment's image (`:544-553`);
-  - a value answer for `<data srcexpr>`, which the compiler does not read
-    yet (`src/compile/scxml.c:964-965`; no `srcexpr` in `ta_data_record`,
-    `src/image/records.h:163-167`), so it gives no REQUEST today;
   - how the binding is told to fetch: a runtime resolver object
     configured on the `Host`, not the compile call's resolver.
 

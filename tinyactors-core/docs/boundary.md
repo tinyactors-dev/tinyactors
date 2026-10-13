@@ -580,8 +580,7 @@ resolver.
 **`TA_EFFECT_REQUEST` stays (2026-10-13; ADR 0012, amended a fifth
 time).** It is how a chart fetches at run time: an `<invoke srcexpr>`
 (or a `src` the compiler did not match, one with a `typeexpr`,
-`scxml.c:895`) whose chart is not in the image, and `<data srcexpr>`
-(not read by the compiler yet, `scxml.c:964-965`). Core normalizes the
+`scxml.c:895`) whose chart is not in the image. Core normalizes the
 name itself (`file://`, `file:`, `./`, an inline document) and looks it
 up in the requesting segment's image (`route.c:439-489`); it gives the
 REQUEST, the name in `AUXILIARY`, only when that lookup fails

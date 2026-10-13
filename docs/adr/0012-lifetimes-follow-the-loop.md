@@ -430,7 +430,7 @@ thing, `TA_EFFECT_REQUEST`, and it stays (fifth amendment):
 
 **`TA_EFFECT_REQUEST` stays (2026-10-13).** It is how a chart fetches at
 run time: an `<invoke srcexpr>` (or a `src` the compiler did not match)
-whose chart is not in the image, and `<data srcexpr>`. Core normalizes
+whose chart is not in the image. Core normalizes
 the name itself (`file://`, `file:`, `./`, an inline document) and looks
 it up in the requesting segment's image (`route.c:439-489`); it gives the
 REQUEST only when that lookup fails (`:491-497`). The fetching is built
@@ -650,16 +650,16 @@ parameter and a callback into the language.
 
 The maintainer decided, the same day: **`TA_EFFECT_REQUEST` stays**, as
 the mechanism for fetching at run time (an `<invoke srcexpr>` whose
-chart is not in the image, and `<data srcexpr>`), which must stay
+chart is not in the image), which must stay
 supported though the fetching is built out later. Decision 7's
 statement "`TA_EFFECT_REQUEST` stays (2026-10-13)" replaces what the
 fourth amendment said about a REQUEST. The `[8.2]` item
 "`ta_image_chart_by_name` normalizes a `src` name" is withdrawn: the
 normalization is core's, before its own lookup (`route.c:439-489`), and
-nobody after it repeats it. `<data srcexpr>` gives no REQUEST today: the
-compiler reads only `src` and `expr` on a `<data>` (`scxml.c:964-965`),
-and `ta_data_record` has no `srcexpr` (`src/image/records.h:163-167`); it
-is part of the build-out.
+nobody after it repeats it. Only what `docs/SCXML.md` mandates is
+supported: SCXML 1.0 defines no `srcexpr` on `<data>` (only `src`,
+`expr` or children, `docs/SCXML.md:1317`), so a `<data srcexpr>` is not
+part of this design (decided 2026-10-13).
 
 Whom it serves first: the application developer, whose chart may name a
 document at run time. Who pays: nothing now; a binding answers a REQUEST

@@ -60,7 +60,7 @@ API"). Node's names and shapes are decided in step 8.5:
   amended a fourth time). A resolver that reads a directory belongs to
   the convenience layer, in JavaScript, confined to its root.
 - **`TA_EFFECT_REQUEST` is a fetch at run time** (an `<invoke srcexpr>`
-  whose chart is not in the image, later `<data srcexpr>`), and it stays
+  whose chart is not in the image), and it stays
   (decided 2026-10-13; ADR 0012, decision 7 as amended a fifth time;
   `tinyactors-core/docs/boundary.md` section 12). Core has already
   normalized the name and looked in the requesting segment's image
