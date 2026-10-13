@@ -126,6 +126,14 @@ The binding allocates almost nothing (bindings.md, section 6):
   host's allocator and are freed once with the host. Keep handles, never
   row pointers across a `ta_table_add`. The binding writes no table of
   its own.
+- **Python objects per actor are budgeted.** What a session holds on
+  the Python heap (its globals dict, `_event`, its values) is outside the
+  host's allocator, and it is the cost that decides whether the binding
+  is worth having. Compiled code belongs to the chart, never to a
+  session. The per-actor budget, measured against the quickjs
+  datamodel's shared realm at a population of 10,000 actors, is set by
+  step 8.4's design ([ROADMAP.md](ROADMAP.md)), and a change that adds
+  to it says by how much.
 - **Images are bytes:** `ta_host_add_image` copies them; free a compile
   result at once. No image rows, no `SEGMENT_FREED` bookkeeping.
 - **One writer per call.** A config, a typed method's params, a payload

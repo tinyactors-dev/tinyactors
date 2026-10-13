@@ -3,8 +3,9 @@
 **Being rewritten from scratch.** The first binding (M1 of the earlier
 plan, 2026-10-12) was removed (`6426816a`: `src/`, the adapter and the
 binding's docs; the tooling stays). **Next: step 8.4 of the root
-[ROADMAP.md](../ROADMAP.md), a minimal Python binding that validates the
-API shape.** It starts when the root roadmap marks steps 8.2 (core
+[ROADMAP.md](../ROADMAP.md), the design task of step 8: a Python API with
+the native `"python"` datamodel that keeps tinyactors' memory
+efficiency, written and measured before any code.** It starts when the root roadmap marks steps 8.2 (core
 implements [ADR 0012](../docs/adr/0012-lifetimes-follow-the-loop.md)) and
 8.3 (the full loop end to end in C) done. The binding's rules, true at
 every step, are in [AGENTS.md](AGENTS.md); the plan of both bindings is the
@@ -14,6 +15,31 @@ root roadmap's step 8, which decides.
 
 From the root ROADMAP.md, step 8, "8.4"; read it there before changing
 this copy.
+
+### First: the design, before any code
+
+The maintainer: the memory efficiency is "the whole point and where we
+failed before". Native datamodel first stays. The step starts with a
+proposal in `docs/proposals/` or an ADR, decided by the maintainer before the binding's code, that
+states:
+
+- **the Python API shape**: `Host`, its drivers, spawn, send,
+  `subscribe` (`actor.changed` per macrostep, `state(session)` for the
+  starting point), the typed methods, and how a chart's Python code
+  reads; each item a core function, a method or an effect;
+- **the `"python"` datamodel's memory model**: what one session costs:
+  its globals dict (one per session, no locals; [AGENTS.md](AGENTS.md),
+  "Rules the suite cannot see"), `_event`, its `ta_table` rows, and the
+  compiled code, per chart and shared by its sessions, never per
+  session;
+- **a per-actor budget against quickjs's shared realm**: a session scope
+  ~0.5 KB in one shared context, the `fit` actor 2.9 KB instead of
+  60.7 KB (`tinyactors-core/docs/architecture.md:844`), and how a Python
+  actor stays within its budget;
+- **spikes that measure it**: bytes per actor at 10,000 actors of one
+  chart, resident and idle, on both datamodels side by side on one
+  machine (root `AGENTS.md`, "Benchmarks"); every number from a spike or
+  marked unverified.
 
 ### Done means
 
@@ -30,6 +56,10 @@ this copy.
   adapter (`conform/`, `python -m conform`), framing the driver's calls
   with `tinyactors.encode` and `tinyactors.decode` and importing nothing
   but `tinyactors` and the standard library.
+- **The design** above, decided by the maintainer before the code, and
+  **the measured bytes per actor at 10,000 actors** on the `"python"`
+  datamodel, within its budget, beside quickjs's on the same machine, by
+  a task of this project that reruns the measurement.
 - **Gates**, each in `mise run test`:
   - the suite's M1 set (`--milestone M1`: every protocol vector file, the
     `basics` scenario and the outcome canaries) on the native datamodel
@@ -49,7 +79,8 @@ this copy.
 ### Plan and progress
 
 The session writes its plan here as a list of steps, each with the commit
-that finished it, when 8.4 starts. `GATE` in `mise/cpython.rb` names what
+that finished it, when 8.4 starts; the design and its spikes are the
+first steps. `GATE` in `mise/cpython.rb` names what
 of the M1 set `mise run test` runs so far, and grows with the work; 8.4 is
 done only when it is the whole set on both datamodels.
 

@@ -322,8 +322,11 @@ row; the example of embedding.md compiles and runs. Gates:
 In ADR 0012's order of work: `ta_status_name` and `ta_table` in base;
 one drain at a time (`ta_host_effects` returns the open batch,
 `ta_host_run` refuses while one is open); the host's outputs and
-`TRACEPARENT` until the ack; `actor.changed` with `value` always and
-`actor.state` without its limit. Every caller in core, its tests and
+`TRACEPARENT` until the ack; `actor.changed` per macrostep with
+`entered` and `exited` (decision 4 as amended 2026-10-13), after its open
+problems (the capture without allocation, the outbox and effect
+capacity, a busy actor's flood) are devised, written into ADR 0012 and
+decided by the maintainer; `actor.state` does not change. Every caller in core, its tests and
 `ta-conform` migrates in the same commits; the "(0012)" marks leave
 `boundary.md`, `embedding.md`, `bindings.md` and `requests.md` as each
 lands.
@@ -363,8 +366,9 @@ only:
 - **telemetry:** `TRACES` and `LOGS` taken in their handlers, metrics
   pulled, `trace.end` at stop with the last take after it;
 - **the control plane:** every method of `requests.md` posted and its
-  `REPLY` read, `actor.subscribe` with `actor.changed` notifications to
-  the `null` at the session's end;
+  `REPLY` read, `actor.subscribe` with `actor.state` for the starting
+  point and `actor.changed` notifications to `"ended": true` at the
+  session's end;
 - **lifecycle:** `DONE` and `ERROR` releasing what the program keeps for
   a session; `LOG` to its log;
 - **the loop's rules:** one drain at a time, an ack before every run,
@@ -378,26 +382,70 @@ headers. Gates: core's `mise run test` and `mise run conform`.
 
 ##### 8.4: a minimal Python binding (Python session)
 
-A binding that validates the API shape before the rest is built, written
-from embedding.md, the guide and its `AGENTS.md`: the `tinyactors` module
-and `Host`; `ta_host_create` from Python options (the binding reads
-`host.config` itself); images, boot, spawn, send, terminate; the loop,
-one drain at a time, with the synchronous driver and `SimulatedClock`;
-I/O processors as the application's output channel (asynchronous and
-synchronous); `subscribe` with `actor.changed`; typed methods over post,
-settled at a later drain; `LOG` to `logging`; `DONE` and `ERROR`
-internal; handle tables as `ta_table`; the CBOR conversion as
-`tinyactors.encode` and `tinyactors.decode`; the `"python"` datamodel
-(decision 3 above) for `<data>`, `cond`, `assign`, `<script>`, `_event`,
-`In()`, `<send>` with params, `<foreach>`, with quickjs beside it; and
-the suite's adapter (`conform/`).
+**This is the design task of step 8.** Define a Python API with the
+native `"python"` datamodel without giving up the memory efficiency
+that is the point of tinyactors: in the maintainer's words, "that's the
+whole point and where we failed before". Native datamodel first
+(decision 3 above) stays: the binding is not the product without it.
 
-Done means: the suite's M1 set (`--milestone M1`) on both datamodels;
-the value table's own tests; the mapping table (`docs/api-map.md`), every
-item a core function, a method or an effect; the pitfalls below, each
-with a test; then the **API review** by the maintainer: how a Python
-program and a Python chart read. Gates: the binding's `mise run test`
-(lint, build, both interpreters, the suite's set).
+**8.4 starts with a written design, before any code**: a proposal in
+`docs/proposals/` or an ADR, reviewed by the maintainer, that states:
+
+- **The Python API shape:** `Host`, its options and loop drivers, how a
+  program spawns, sends, subscribes (`actor.changed` per macrostep,
+  `actor.state` for the starting point) and inspects (typed methods over
+  post), and how a chart's Python code reads (`<data>`, `cond`,
+  `assign`, `<script>`, `_event`, `In()`); every item a core function, a
+  method of `requests.md` or an effect (`docs/api-map.md`).
+- **The native datamodel's memory model:** what a Python session costs
+  per actor, item by item: its globals dict (one per session and no
+  locals, `tinyactors-cpython/AGENTS.md`, "Rules the suite cannot see";
+  the earlier sketch put the application's globals in each session's
+  dict, `docs/proposals/one-host-two-queues/cpython.md:109`, and left
+  "a memory limit for its values" out of scope, `:140`), `_event`, the
+  rows in `ta_table`, and compiled code, which belongs to the chart and
+  is shared by its sessions, not compiled per session.
+- **A per-actor memory budget** measured against the quickjs
+  datamodel's shared realm: a session there is a scope object of about
+  0.5 KB in one shared context of ~54 KB, and the `fit` session actor
+  went from 60.7 KB to 2.9 KB with it
+  (`tinyactors-core/docs/architecture.md:844`; a resident ECMAScript
+  actor ~2.9 KB, a hibernated one ~150 B, `architecture.md:879`). The
+  design says what a Python actor's number is, why, and how it stays
+  within the budget (what is shared per chart or per host, what a
+  session holds, what hibernation frees).
+- **Spikes that measure it** before the design is decided: bytes per
+  actor at a population (10,000 actors of one chart, resident and
+  idle), from the process's memory and from Python's allocator
+  (`tracemalloc`) and the host's (`host.stats`' `regionBytes`), on the
+  native datamodel and on quickjs side by side, on one machine named by
+  its signature (root `AGENTS.md`, "Benchmarks"); every number in the
+  design is from a spike or marked unverified.
+
+Then the code, from embedding.md, the guide, its `AGENTS.md` and the
+design: the `tinyactors` module and `Host`; `ta_host_create` from Python
+options (the binding reads `host.config` itself); images, boot, spawn,
+send, terminate; the loop, one drain at a time, with the synchronous
+driver and `SimulatedClock`; I/O processors as the application's output
+channel (asynchronous and synchronous); `subscribe` with
+`actor.changed`; typed methods over post, settled at a later drain;
+`LOG` to `logging`; `DONE` and `ERROR` internal; handle tables as
+`ta_table`; the CBOR conversion as `tinyactors.encode` and
+`tinyactors.decode`; the `"python"` datamodel for `<data>`, `cond`,
+`assign`, `<script>`, `_event`, `In()`, `<send>` with params,
+`<foreach>`, with quickjs beside it; and the suite's adapter
+(`conform/`).
+
+Done means: the design, decided by the maintainer before the code; the
+**measured bytes per actor at a population of 10,000** on the
+`"python"` datamodel, within the design's budget, beside quickjs's on
+the same machine, by a task in the binding that reruns the measurement;
+the suite's M1 set (`--milestone M1`) on both datamodels; the value
+table's own tests; the mapping table (`docs/api-map.md`), every item a
+core function, a method or an effect; the pitfalls below, each with a
+test; then the **API review** by the maintainer: how a Python program
+and a Python chart read. Gates: the binding's `mise run test` (lint,
+build, both interpreters, the suite's set).
 
 ##### 8.5: Node, then the rest (both sessions)
 
