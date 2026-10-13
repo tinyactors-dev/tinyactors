@@ -1,15 +1,19 @@
 # The core ↔ binding boundary
 
 **Status:** Current (2026-10-13). Records [ADR 0009](../../docs/adr/0009-one-host-two-queues.md),
-[ADR 0010](../../docs/adr/0010-outputs-are-views-values-stream.md) and
-[ADR 0011](../../docs/adr/0011-the-control-plane-is-posted-messages.md).
+[ADR 0010](../../docs/adr/0010-outputs-are-views-values-stream.md),
+[ADR 0011](../../docs/adr/0011-the-control-plane-is-posted-messages.md) and
+[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md). Where the code
+does not do what ADR 0012 decides yet, the row says "(0012)": that is step 2
+of `ROADMAP.md`, step 8.
 
 How a binding and core talk: what crosses, who owns it, for how long,
 and every alternative that was considered and rejected, with the reason
-and what showed it. [bindings.md](bindings.md) is the guide for writing
-a binding; this page is the reference for changing the boundary. Change it
-only with the skills `reasoned-analysis` and `boundary-design`
-(`.agents/skills/`), and record the change here.
+and what showed it. [embedding.md](embedding.md) is how to use the core;
+[bindings.md](bindings.md) is the guide for writing a binding; this page is
+the reference for changing the boundary. Change it only with the skills
+`reasoned-analysis` and `boundary-design` (`.agents/skills/`), and record
+the change here.
 
 ## The frame
 
@@ -26,6 +30,139 @@ them to be false has to show it is.
 - **The datamodel vtable is the only call out of core.**
 - **Core is the only queue.** Mailboxes, the run queue and timers are
   core's (ADR 0004).
+- **Lifetimes follow the loop** (ADR 0012): take, handle, ack, run.
+  Everything the host hands out about a batch lives until
+  `ta_host_effects_ack`.
+
+## The contract, per call
+
+### Phases
+
+A call's answer depends on where the caller is in the loop:
+
+| Phase | When | What may be called |
+|---|---|---|
+| **I**, idle | between runs, no batch open | everything |
+| **D**, dispatch | between runs, a batch open: after a `ta_host_effects` that returned effects or an output call that handed out a view, until `ta_host_effects_ack` | everything but `ta_host_run` and snapshots (0012) |
+| **R**, run | inside `ta_host_run`, from a datamodel entry | the inputs on their in-run paths and the lookups; everything else refused (`host.h:151-170`) |
+| **G**, guard | inside a datamodel entry core calls outside a run (a post, an envelope, deliver, hibernate, wake, export, adopt, the telemetry takes, `release` in the ack, `ta_host_free`) | as R (`host.h:172-179`; ADR 0010 decision 3; `host_guard`, `src/host/host_internal.h:242-247`) |
+
+R and G hold one rule: the guard sets the flag a run sets
+(`host_internal.h:242-246`), so the checks below read "R/G".
+
+### Host calls
+
+"Ends" is when what the call produced stops being valid. "Pending" means
+appended to the host's effects and handed out by the next take that opens
+a batch. Test names are in `tinyactors-core/tests/unit/` unless a path is
+given; `*.txt` vectors are in `tinyactors-test/suites/protocol/`; "needed"
+marks a behaviour no test checks.
+
+| Call (`host.h`) | When | Produces; owner; ends | Refused | Reentry | Test |
+|---|---|---|---|---|---|
+| `ta_host_create` (:105) | no host yet | the host, the caller's until `ta_host_free`; config read during the call | `TA_ERROR_INVALID` with the reply in `environment->error`, the caller's `ta_buffer`; `TA_ERROR_NO_MEMORY` (`host.c:454-461`) | none (no host) | `test_host_request.c` `test_create`, `test_config_effective`; `config.txt` |
+| `ta_host_free` (:109) | I, D | releases the open batch and its outputs, every block (`host.c:506-512`) | R/G: not checked; freeing inside a datamodel entry frees what the run is using | calls back from its own `destroy`/`release` refused (`closing`) | `test_host_guard.c` `test_free`; R/G: needed (refuse, or say it is forbidden) |
+| `ta_host_add_image` (:119) | I, D | a segment index; the host's copy of the bytes until the segment is freed | R/G `TA_ERROR_STATE` (`host.c:555`); `TA_ERROR_INVALID`; `TA_ERROR_NO_MEMORY`, nothing added | `chart_attach` runs in G (`host.c:588`) | `test_host.c` `test_image_copied` |
+| `ta_host_chart` (:126) | all | a struct in the caller's memory | `TA_ERROR_INVALID`: no such name | a lookup: answers in R/G | `test_host.c` |
+| `ta_host_segment_count` (:135) | all | a number | none | answers in R/G | `test_host.c` |
+| `ta_host_segment_info_get` (:136) | all (not checked, `host.c:632-650`) | the caller's struct; `.image` borrowed while the segment is live | `TA_ERROR_INVALID` | answers in R/G, though `host.h:166-170` says only the four lookups do | `test_host.c` `test_image_copied`; R/G: needed (or list it as a lookup) |
+| `ta_host_system` (:140) | all (not checked, `host.c:652-655`) | a `ta_system *`, borrowed until a call that can grow or free the segment | none | answers in R/G, as above; a datamodel must not call `ta_system_*` (`datamodel.h:7-8`), yet `test_host_inputs.c`'s `flood` hook does (`:315-323`) | `test_host.c`; R: `test_host_inputs.c` `test_a_full_pool_is_no_memory` |
+| `ta_host_boot` (:145) | I, D | the image's boot actors | R/G `TA_ERROR_STATE` (`host.c:2392`); `TA_ERROR_INVALID`: no such segment (`host.c:2394`); `TA_ERROR_NO_MEMORY` before any is spawned | `create` in G (`host.c:2405`) | `tools/conform/w3c.c` only; unit test needed |
+| `ta_host_actor_by_name` (:148) | all | a session id | 0: none | a lookup | `test_host_inputs.c` |
+| `ta_host_spawn` (:183) | all | a session id; `spawn`'s views read during the call; its payload moves on success | `TA_ERROR_INVALID`: no such segment (`host.c:876`); R/G: no growth, a full pool `TA_ERROR_NO_MEMORY` with nothing changed; inside free `TA_ERROR_STATE` (`host.c:874`) | `create` in G (`host.c:880`); in R the in-run path of `<invoke>`: at the back of the run queue | `test_host_inputs.c` `test_spawn`; a full pool in R/G: needed |
+| `ta_host_locate` (:189) | all | the caller's struct | `TA_ERROR_STALE` (`host.c:663-671`) | a lookup | `test_host.c` |
+| `ta_host_send` (:191) | all | nothing kept of the caller's: views copied, payload moved on success | as spawn; the payload stays the caller's on refusal | in R the in-run path of `<send>`: to itself at the end of its macrostep, to another actor at the back of the queue (`host.h:156-161`); outside a run `release` in G for an `error.communication` (`host.c:900`) | `test_host_inputs.c` `test_send_to_self_waits_for_the_macrostep`, `test_send_and_send_many_to_another_actor` |
+| `ta_host_send_many` (:195) | all | the accepted prefix's length | stops at the first failure; that event's payload stays the caller's | as send (`release` in G at `host.c:935`) | as send |
+| `ta_host_terminate` (:196) | all | nothing | as spawn | exits at its next microstep boundary (`host.h:162-165`) | `test_host_inputs.c` `test_terminate_self_ends_after_the_microstep`, `test_terminate_another_actor` |
+| `ta_host_resume` (:198) | I, D | nothing | R/G `TA_ERROR_STATE` (`host.c:958`); `TA_ERROR_INVALID`: no such segment (`host.c:960`) | `release` in G (`host.c:962`) | `test_host_inputs.c` `test_other_calls_are_refused` (R) |
+| `ta_host_advance_time` (:214) | I, D | nothing; envelope expiries pending | R/G: nothing done (`host.c:1671`) | `release` in G for expired envelopes' payloads (`ta_router_time`, `host.c:1676`; `router.c:433-458`) | `test_host_telemetry.c`; `test_host.c` |
+| `ta_host_run` (:229) | I | a `ta_run` by value; its effects pending, then its notifications | D: `TA_RUN_FAULT`, detail `TA_ERROR_STATE`, nothing runs (0012; today it releases the batch, `host.c:1834`); R/G: the same (`host.c:1828-1833`) | the datamodel vtable, in R | R: `test_host_inputs.c` `test_other_calls_are_refused`; D: needed (0012) |
+| `ta_host_effects` (:288) | I, D | I: opens a batch of everything pending; D: the open batch again, never widened (0012; today it widens, `host.c:1200-1201`). Records, their strings, `WIRE` bytes and payloads are the host's until the ack | R/G: 0 (`host.c:1196-1199`) | none | `test_host_memory.c` `test_published_effects_stay_valid`, `test_pool_is_reclaimed_with_effects_pending`; no widening: needed (0012) |
+| `ta_host_effects_ack` (:289) | I, D | closes the batch: its effects, their payloads (`release` in G, `host.c:1044-1048`) and the batch's outputs end | R/G: nothing (`host.c:1275`) | `release` may run language code: a binding defers the last drop (bindings.md section 8) | `test_host_guard.c` `test_envelope_and_ack`; `test_host_memory.c` |
+| `ta_host_effect_number`, `_text`, `_bytes` (:334-336) | D | a field of the open batch, valid until the ack; `TRACEPARENT`'s text written on first ask, valid until the ack (0012; today until the next `_text`, `host.c:1265-1268`) | an index past the batch, a field the kind does not set, or the wrong accessor: 0 or empty; not checked for R/G (`host.c:1218-1271`): in the ack's `release` they still answer for the batch being released (`host.c:1043-1056`) | none | `test_host_effects.c` `test_fields_match_the_struct` (number, text); `_bytes`: `test_host_request.c`, `test_router.c`; two `TRACEPARENT`s read together: needed (0012) |
+| `ta_host_traces`, `ta_host_logs` (:348-349) | I, D | an OTLP request, a view of host memory until the ack (0012; today until the next call); length 0: none staged | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:289`, `:301`); `TA_ERROR_NO_MEMORY`: the spans stay staged | `to_wire` for traced values in G (`telemetry.c:90`) | `test_host_telemetry.c` `test_drain_and_take`, `test_take_refused`; `test_host_guard.c` `test_traces`; the view after a later call: needed (0012) |
+| `ta_host_route_begin` (:446) | I, D | the caller's `ta_route_request`; its views borrow the envelope and the host until the request finishes | R/G `TA_ERROR_STATE` (`router.c:644`) | none | `test_router.c` `test_external_storage` |
+| `ta_host_route_step` (:449) | no host | the caller's request | `TA_ERROR_INVALID`; `TA_ERROR_STATE`: a request in the wrong action (`router.c:705-719`) | none | `test_router.c` `test_external_storage` |
+| `ta_host_route_reason` (:450) | no host | static text | none | none | `test_router.c` |
+| `ta_host_error_event` (:452) | no host | the caller's `ta_event_in` | none | none | `test_router.c` `test_durable_message` |
+| `ta_host_error_route` (:455) | I, D | the caller's request | R/G `TA_ERROR_STATE` (`router.c:623`) | none | `test_router.c` |
+| `ta_host_message_init` (:475) | I, D | the caller's `ta_host_message` (identity strings in its `storage`); target and name borrow the system `ta_effect` it is given | R/G `TA_ERROR_STATE` (`router.c:723`) | none | `test_router.c` `test_durable_message` |
+| `ta_host_peer_add` (:480) | I, D | a peer handle (slot and generation) | R/G `TA_ERROR_STATE` (`router.c:839`); `TA_ERROR_INVALID`; `TA_ERROR_NO_MEMORY` | none | `test_router.c` |
+| `ta_host_peer_up` (:485) | I, D | up: queued envelopes as `PEER` effects, pending; down without `TA_PEER_QUEUE`: the queue fails (`router.c:898`) | R/G `TA_ERROR_STATE` (`router.c:892`); `TA_ERROR_STALE`; `TA_ERROR_NO_MEMORY`: the rest stay queued | down: `release` in G for failed envelopes (`fail_queue`, `router.c:333-364`) | `test_router.c` `test_route_status_queue` |
+| `ta_host_peer_remove` (:488) | I, D | queued envelopes fail (`PEER_ERROR`s or `error.communication`), pending | R/G `TA_ERROR_STATE` (`router.c:903`); `TA_ERROR_STALE`; `TA_ERROR_NO_MEMORY`: the peer stays | `release` in G for failed envelopes (`fail_queue`) | `test_router.c` `test_stale_handle` |
+| `ta_host_peer_reach`, `ta_host_route`, `ta_host_export` (:490-502) | I, D | routing tables | R/G `TA_ERROR_STATE` (`router.c:828`, `:934`, `:963`); `TA_ERROR_STALE`, `INVALID`, `NO_MEMORY` | none | `test_router.c` `test_origin_validation` (reach), `test_relay_routes` (route), `test_policy` (export) |
+| `ta_host_deliver` (:518) | I, D | a `TA_ROUTE_*` outcome; views read during the call; `data` moves on success; a refusal's `PEER_ERROR` or a relay's `PEER` pending | R/G `TA_ERROR_STATE` (`router.c:989`); `TA_ERROR_NO_MEMORY`: nothing done or remembered | `from_wire` of the target's datamodel in G (`router.c:552`) | `test_router.c` `test_decode_at_target`, `test_dedup`; `test_host_guard.c` `test_deliver` |
+| `ta_host_peer_error` (:526) | I, D | `error.communication` for the origin, or a relayed error pending | R/G `TA_ERROR_STATE` (`router.c:1064`); `TA_ERROR_STALE`; `TA_ERROR_INVALID`, `TA_ERROR_NO_MEMORY` (`router.c:1074`, `local_error`) | `release` in G for the error event (`router.c:1070`, `host.c:900`) | `test_router.c` `test_errors_back` |
+| `ta_host_envelope` (:544) | D | a `PEER` or `PEER_ERROR` effect of the open batch as CBOR, a view of host memory until the ack (0012; today until the next call). Takes the effect's address, not its index | R/G `TA_ERROR_STATE` (`router.c:1213`); `TA_ERROR_INVALID`: another kind or no neutral value; `TA_ERROR_NO_MEMORY` | `to_wire` once in G (`router.c:1234`) | `test_router.c` `test_envelope_bytes`; `test_host_guard.c` `test_each_output_once`; two envelopes read after both calls: needed (0012) |
+| `ta_host_envelope_read` (:557) | I, D | the caller's `ta_envelope`, views into the caller's bytes (keep them until the deliver) | R/G `TA_ERROR_STATE` (`router.c:1150`); `TA_ERROR_INVALID` (size 0: drop; size set: deliver it to answer the sender) | none | `test_router.c` `test_envelope_bytes`; `envelopes.txt` |
+| `ta_host_peer_error_read` (:560) | no host | the caller's `ta_peer_error`, views into the bytes | `TA_ERROR_INVALID` | none | `envelopes.txt` |
+| `ta_host_peer_round_trip_time` (:562) | all (not checked, `router.c:1274-1277`) | sets a counter: an input, not a read | stale: nothing | accepted in R/G, though `host.h` refuses every other call there | `test_router.c` `test_route_status` |
+| `ta_host_peer_status` (:575) | all (not checked, `router.c:1279`) | the caller's struct; `id` until the peer is removed | `TA_ERROR_STALE` | answers in R/G | `test_router.c` `test_route_status` |
+| `ta_host_migrate` (:587) | I, D | a job id; `MIGRATED`, `JOB_DONE` pending in later runs | R/G `TA_ERROR_STATE` (`host.c:1403`); `TA_ERROR_NO_MEMORY` | none | `test_host.c` `test_versions_and_migration` |
+| `ta_host_job_pending` (:589) | all (not checked) | the caller's array; a finished job's list is readable until the next run (`host.c:1906-1919`), which comes after the ack | none | answers in R/G | `test_host.c` `test_migration_wake_and_timeout` |
+| `ta_host_sweep` (:595) | I, D | sessions in the caller's array | R/G: 0 (`host.c:1962`) | none | `test_host.c`, `test_host_memory.c` |
+| `ta_host_hibernate` (:600) | I, D | the blob, a view of host memory until the ack (0012; today until the next call) | R/G `TA_ERROR_STATE` (`host.c:2014`); `TA_ERROR_NO_MEMORY`: the actor stays | `serialize`, `destroy` in G (`host.c:2022`) | `test_host.c` `test_hibernate_and_wake`; `test_host_guard.c` `test_hibernate`; blob after a later call: needed (0012) |
+| `ta_host_wake` (:601) | I, D | the actor back; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2029`) | `deserialize` in G (`host.c:2035`) | `test_host.c` `test_hibernate_and_wake` |
+| `ta_host_export_actor` (:619) | I, D | the blob, a view until the ack (0012; today until the next call); the actor leaves | R/G `TA_ERROR_STATE` (`host.c:2048`); `TA_ERROR_NO_MEMORY`: it stays | `serialize`, `payload_serialize`, `destroy` in G (`host.c:2055`) | `test_host.c` `test_export_adopt_between_hosts`; `test_host_guard.c` `test_each_output_once` |
+| `ta_host_adopt` (:625) | I, D | a session id; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2122`); `TA_ERROR_INVALID`, `TA_ERROR_STATE` (ids taken), `TA_ERROR_NO_MEMORY` | `deserialize`, `payload_deserialize`, `migrate` in G (`host.c:2133`); `serialize` when it exports the tree back (`host.c:2148`) | `test_host.c` `test_export_adopt_between_hosts`, `test_adopt_tree_collision` |
+| `ta_host_snapshot` (:642) | I with nothing pending | into the caller's `ta_buffer` | effects published or pending (`host.c:2470`), or a job active: `TA_ERROR_STATE`; a batch opened only by an output view: (0012); R/G too (`host.c:2469`); `TA_ERROR_NO_MEMORY`: `length` is what it needs | none | `test_host.c` `test_snapshot_restore` |
+| `ta_host_snapshot_segments` (:646) | no host | hashes in the caller's array | 0: not a snapshot | none | `test_host.c` |
+| `ta_host_restore` (:660) | no host | a new host; images copied as by `add_image` | `TA_ERROR_INVALID`, `NO_MEMORY` | `chart_attach` in G (`host.c:2669`) | `test_host.c` `test_snapshot_restore`, `test_restore_after_images_freed` |
+| `ta_host_snapshot_pack` (:671) | I with nothing pending | into the caller's `ta_buffer` | as `ta_host_snapshot` (it calls it, `host.c:2764`) | none | `test_host.c` `test_snapshot_pack` |
+| `ta_host_snapshot_unpack`, `_image` (:684-686) | no host | views into the pack | `TA_ERROR_INVALID`; empty | none | `test_host.c` `test_snapshot_pack` |
+| `ta_host_post` (:711) | I, D | applies the method; its effects, then its `REPLY` (with an id), pending: in D they come after the ack (0012) | R/G `TA_ERROR_STATE` (`request.c:996`); `TA_ERROR_NO_MEMORY`: nothing applied, no `REPLY` | `actor.context`: `variable`, `to_wire`, `release` in G (`request.c:701`, `:738`, `:747`) | `test_host_request.c` `test_post`, `test_subscribe`, `test_subscribe_refused`; `test_host_guard.c` `test_request`; `requests.txt` |
+| `ta_host_metrics` (:718) | I, D | an OTLP metrics request, a view until the ack (0012; today until the next call) | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:295`); `TA_ERROR_NO_MEMORY` | none | `test_host_request.c` `test_spans_and_metrics` |
+
+### The vtable, as core calls it
+
+Every entry runs in R or G, so a datamodel's code that calls back into the
+host gets the R/G column above. Its outputs are views it owns until the
+next call on the same datamodel (`datamodel.h:9-13`); core copies what it
+keeps first (ADR 0010 decision 1).
+
+| Entries (`datamodel.h`) | Called in | From | Test |
+|---|---|---|---|
+| `init_data`, `bind_event`, `detach_event`, `eval_condition`, `eval_string`, `assign`, `assign_string`, `script`, `log`, `foreach_*`, `capture`, `custom` | R | the system's run | the W3C suite through `ta-conform` |
+| `create` | R; G | `<invoke>` in a run; `ta_host_spawn` (`host.c:880`), `ta_host_boot` (`:2405`) | `test_host_inputs.c` |
+| `chart_attach` | G | `ta_host_add_image` (`host.c:588`), `ta_host_restore` (`:2669`) | `test_host.c` `test_image_copied` |
+| `destroy`, `chart_detach` | R; G | an actor exits in a run; retirement (`host.c:1807`), hibernate, export, migration (`host.c:1508`), `ta_host_free` | `test_host_guard.c` `test_free`, `test_outputs_grow_between_runs` |
+| `retain`, `release` | R; G | effect copies (`host.c:1190`), the ack (`:1047`), the drain (`:1359`), resume (`:962`), sends that fail outside a run (`:900`, `:935`), the router's sends in a run's drain (`router.c:526`, `:530`), failed envelope queues (`router.c:333-364`, `:433-458`: `ta_host_advance_time`, `ta_host_peer_up`, `ta_host_peer_remove`), peer errors (`router.c:1070`), deliver, post (`request.c:747`), free | `test_host_guard.c` `test_envelope_and_ack` |
+| `serialize`, `deserialize` | G | hibernate (`host.c:2022`), wake (`:2035`), export (`:2055`), adopt (`:2133`), migration (`:1470`, `:1508`, `:1529`) | `test_host_guard.c` `test_hibernate`, `test_each_output_once` |
+| `payload_serialize`, `payload_deserialize`, `migrate` | G | export, adopt, migration (as above) | `test_durable.c`; `test_host_guard.c` `test_each_output_once` |
+| `to_wire` | G | `ta_host_envelope` (`router.c:1234`), `actor.context` (`request.c:701`), traced values when records are read (`telemetry.c:90`, at a run's start and at a take) | `test_host_guard.c` `test_each_output_once`, `test_traces` |
+| `from_wire` | G | `ta_host_deliver` at the target (`router.c:552`) | `test_router.c` `test_decode_at_target` |
+| `variable` | G | `actor.context` (`request.c:738`) | `test_host_request.c` `test_actor_context` |
+
+### Which distinctions callers need
+
+| Distinction | Callers need it, or bookkeeping | After ADR 0012 |
+|---|---|---|
+| run (R) or between runs | callers: it decides what a datamodel's code may call | kept |
+| guard (G) or run (R) | bookkeeping: one rule since ADR 0010 decision 3 | kept as one rule, "R/G" |
+| idle (I) or dispatch (D) | callers: a run and a snapshot wait for the ack | made explicit: the run refuses in D |
+| effect appended, published, consumed, published again by a widened take | bookkeeping: the drain re-read and the facade's marks | **removed**: pending or in the open batch, nothing else |
+| effects end at the ack, the next run or `ta_host_free` | bookkeeping: the run's release lost effects | **removed**: the ack (or `ta_host_free`) |
+| `TRACEPARENT`'s text until the next `ta_host_effect_text` | bookkeeping: one buffer | **removed**: until the ack |
+| a host output until the next call into the host | bookkeeping: one block reused | **removed**: until the ack |
+| a datamodel's output until its next call | callers (datamodel authors): core consumes it inside its own call | kept |
+| the caller's `ta_buffer` (snapshots, `environment->error`) | callers: the size is known up front, or no host exists | kept |
+| structural borrows (a segment's image, `ta_host_system`, a peer's id, a job's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
+| `REPLY` or `NOTIFICATION` | callers: an answer or news | kept |
+| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed**: `value` always (a state value or `null`) |
+
+### What no test checks yet
+
+From the table: the run refused in D; `ta_host_effects` not widening;
+outputs (two envelopes and a metrics request) and two `TRACEPARENT`s read
+after later calls in one batch; `actor.changed` and `actor.state` with a
+configuration of more than 1024 states (all ADR 0012, its order of work);
+`ta_host_free` from a datamodel's code; `ta_host_boot` outside
+`ta-conform`; a full pool on `ta_host_spawn` in R/G; the calls that
+answer in R/G though `host.h` lists only four lookups
+(`ta_host_segment_info_get`, `ta_host_peer_status`, `ta_host_job_pending`,
+the effect accessors, and `ta_host_system`, which a test calls in R): document
+them as lookups, or refuse them; and `ta_host_peer_round_trip_time`, a
+setter that R/G accepts: refuse it there, or say it is allowed.
 
 ## 1. Inputs
 
@@ -71,46 +208,62 @@ run, not the reads: several calls, then one `ta_host_run`.
 
 ## 2. Running and time
 
-**Design.** The loop of bindings.md section 3: `ta_host_advance_time`,
-`ta_host_run(budget)`, effects, ack, one timer at `next_deadline`. The
-tick rate comes from the effective config (`host.config`). Each binding
-offers `SimulatedClock.increment(ms)`. Node's timer is the global
-`setTimeout`.
+**Design.** The loop of embedding.md: drain (take, handle, ack until a
+take is empty), `ta_host_advance_time`, `ta_host_run(budget)`, drain, one
+timer at `next_deadline`. A run refuses while a batch is open (ADR 0012,
+decision 2). The tick rate comes from the effective config
+(`host.config`). Each binding offers `SimulatedClock.increment(ms)`.
+Node's timer is the global `setTimeout`.
 
 **Rejected.** A default tick rate in a binding (a default of its own; the
 system's 1e9 is stated in host-config.md). libuv timers (Bun panics on
 `uv_timer_init`, oven-sh/bun#18546). A fatal status for signals (a signal
 is an event on the loop and a run is bounded: shutdown is between turns).
+A run that releases an unacknowledged batch (effects lost in silence;
+ADR 0012).
 
 ## 3. Effects
 
-**Design.** Host-owned records (`ta_host_effect`), read through
-accessors by field id (`ta_host_effect_number`, `_text`, `_bytes`),
-published by `ta_host_effects` (everything appended since the last ack,
-run or not) and valid until `ta_host_effects_ack`, the next run or
-`ta_host_free`. A binding's drain re-reads until the count is stable and
-acks only at its outermost level (ADR 0011, decision 6).
+**Design.** Host-owned records (`ta_host_effect`), read through accessors
+by field id (`ta_host_effect_number`, `_text`, `_bytes`). A take
+(`ta_host_effects`) with no batch open opens one with everything pending;
+while it is open, a take returns the same batch and effects appended
+meanwhile wait for the next take (ADR 0012, decision 2). Every field,
+`TRACEPARENT`'s text included, is valid until `ta_host_effects_ack` or
+`ta_host_free`.
+
+| Object | Owner | Created | Read | Ends |
+|---|---|---|---|---|
+| an effect record and its strings | the host's effect array and pool | appended by a run or a call | through the accessors, in D | the ack |
+| `TRACEPARENT`'s text | the batch's memory | first ask for that effect | in D | the ack (0012) |
+| an effect's payload | the datamodel's row, retained by core (`host.c:1187-1191`) | the effect's copy | `ta_host_effect_number(PAYLOAD)` | released by core at the ack (`host.c:1044-1048`) |
+| a replaced effect array or pool block | the host (held) | growth while a batch is open (`host.c:972-981`) | through the open batch's pointers | the ack |
 
 **Rejected.** Struct layouts read from Python or JavaScript (`memoryview`,
 typed arrays): "Only C touches host structs" (ADR 0009), the ABI coupling
-it was written against.
+it was written against. A take that widens the open batch, with a drain
+that re-reads until the count is stable and acks at its outermost level
+(ADR 0011 decision 6): it existed for the synchronous request, and a
+facade that acked inside a handler lost effects (ADR 0012).
 
 ## 4. The datamodel
 
 **Design.** A native datamodel keeps handle tables (sessions, charts,
 payloads, loops), since language objects cannot live in memory moved by
-`memcpy` and the collector must see them. Its outputs (`to_wire`,
-`serialize`, `payload_serialize`, `eval_string`, `log`) are views it owns
-until its next call; core asks for each value once (ADR 0010, decision 1).
-While core is inside a datamodel outside a run, calls back into the host
-follow the run's rules (decision 3).
+`memcpy` and the collector must see them; `ta_table` (base,
+`tinyactors/table.h`, ADR 0012 decision 5) is that table. Its outputs
+(`to_wire`, `serialize`, `payload_serialize`, `eval_string`, `log`) are
+views it owns until its next call; core asks for each value once
+(ADR 0010, decision 1). While core is inside a datamodel outside a run,
+calls back into the host follow the run's rules (decision 3).
 
 **Rejected.** Caller-sized outputs with retries: core ran datamodel code
 two or three times per output (`router.c`, `hibernate.c`), and a 1 KB
 envelope walked its value six times. Strings handed back into a buffer
 core provides: user expressions cannot run twice. No guard: a `toJSON`
 that terminated its actor left core calling a destroyed instance (an ASan
-crash, `tests/unit/test_host_guard.c`).
+crash, `tests/unit/test_host_guard.c`). A handle table in each binding
+(the same code twice; ADR 0012).
 
 ## 5. Values and CBOR
 
@@ -127,21 +280,22 @@ tokens for 64 KB). `ta_cbor_encode` (deleted). A codec in the language.
 
 ## 6. The control plane
 
-**Design (ADR 0011, decisions 1 to 6).** `ta_host_post(h, message)`: a
-JSON-RPC 2.0 message without `"jsonrpc"`, in CBOR, read during the call
-and answered at it (`src/host/request.c`). Its reply is the last effect
-the call appends, `TA_HOST_EFFECT_REPLY` (WIRE `{"id", "result"}` or
-`{"id", "error"}`), after the effects the method appends itself
-(`trace.end`'s TRACES and LOGS). The reply is written into the host's
-output, then copied once into the effect pool (string slot 7, WIRE, as the
-router's PEER relay keeps a value). A method that changes the host
-reserves room by capacity for the reply and three records before it
-applies (`request_fits`), so `TA_ERROR_NO_MEMORY` means nothing was
-applied and no REPLY appended; a method that only reads, and a refusal
-after a method tried, reserve after writing. A message without an id is
-applied with no REPLY; one that is not a request is answered with `"id":
-null`; batches are refused (-32600). `TA_ERROR_STATE` during a run or
-inside the datamodel guard.
+**Design (ADR 0011, decisions 1, 2 and 5; ADR 0012, decisions 2 to 4).**
+`ta_host_post(h, message)`: a JSON-RPC 2.0 message without `"jsonrpc"`,
+in CBOR, read during the call and answered at it (`src/host/request.c`).
+Its reply is the last effect the call appends, `TA_HOST_EFFECT_REPLY`
+(WIRE `{"id", "result"}` or `{"id", "error"}`), after the effects the
+method appends itself (`trace.end`'s TRACES and LOGS); all of them are
+pending, so a post made while a batch is open is answered in the next
+take. The reply is written into the host's output, then copied once into
+the effect pool (string slot 7, WIRE, as the router's PEER relay keeps a
+value). A method that changes the host reserves room by capacity for the
+reply and three records before it applies (`request_fits`), so
+`TA_ERROR_NO_MEMORY` means nothing was applied and no REPLY appended; a
+method that only reads, and a refusal after a method tried, reserve after
+writing. A message without an id is applied with no REPLY; one that is
+not a request is answered with `"id": null`; batches are refused
+(-32600). `TA_ERROR_STATE` in R/G.
 
 Every byte is CBOR; JSON-RPC names only the shape of the maps, so no
 shape is invented. Core never reads or writes JSON: a binding deals with
@@ -150,24 +304,26 @@ its own edge.
 
 Core's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects (WIRE
 `{"method", "params"}`, EVENT the method, SESSION the session). The first
-is `actor.changed` `{"session", "value"}`: the system's CHANGED marks the
-subscription (one byte each) during the drain, and the end of the run
-appends one notification per marked or ended session with the state value
-written then (`subscriptions_notify`, `src/host/host.c`); a refused one
-keeps its mark for the next run. It replaces the host-level CHANGED; the
-system's CHANGED and `ta_actor_watch` stay below the host.
+is `actor.changed` `{"session", "value"}`, `value` always present: the
+state value after the run, whole, or `null` when the session ended
+(ADR 0012, decision 4). The system's CHANGED marks the subscription (one
+byte each) during the drain, and the end of the run appends one
+notification per marked or ended session with the state value written
+then (`subscriptions_notify`, `src/host/host.c:777-797`); a refused one
+keeps its mark for the next run. The system's CHANGED and
+`ta_actor_watch` stay below the host.
 
-`ta_host_effects` publishes everything appended since the last ack, run or
-not. A binding's drain re-reads it until the count is stable and acks at
-its outermost level; its synchronous `request` is a facade: post, take its
-REPLY at the last index, drain the rest. A JSON-RPC transport is a pipe:
-frames to `ta_host_post`, REPLY and NOTIFICATION bytes to the socket.
+**A language API has no synchronous request and no raw post** (ADR 0012,
+decision 3): typed methods over post, each settled when its REPLY is
+handled in a later drain. A JSON-RPC transport, when one exists, is a
+pipe: frames to `ta_host_post`, REPLY and NOTIFICATION bytes to the
+socket, in the order the takes give them.
 
 | Object | Owner | Created | Read | Ends |
 |---|---|---|---|---|
 | the posted message | caller | before the call | parsed into tokens on the C stack during `ta_host_post` | the call returns |
-| the reply's first writing | the host's output | during the call | copied into the effect pool at the end of the call | the next call that writes the host's output |
-| a REPLY or NOTIFICATION's WIRE | the effect pool | the post (REPLY), the end of a run (NOTIFICATION) | `ta_host_effect_bytes` after `ta_host_effects` | `ta_host_effects_ack`, the next `ta_host_run`, `ta_host_free` |
+| the reply's first writing | the host's output | during the call | copied into the effect pool at the end of the call | the call returns (0012: post's scratch, not a handed-out view) |
+| a REPLY or NOTIFICATION's WIRE | the effect pool | the post (REPLY), the end of a run (NOTIFICATION) | `ta_host_effect_bytes` in D | `ta_host_effects_ack` or `ta_host_free` |
 | a subscription's mark | the subscription table's block (1 byte each) | the drain of a system CHANGED | the end of the run | cleared when its notification is appended |
 
 **Rejected.** Keeping `ta_host_request` beside `ta_host_post` (two ways;
@@ -180,21 +336,41 @@ release). The REPLY before the method's own effects (the reservation is
 by capacity before applying; the reply is written last). The state value
 written when the macrostep ends (it can be older than the state at the
 end of the run, which goes on). Context in notifications (user code,
-unbounded size). Batches in core.
+unbounded size). Batches in core. A synchronous `request` facade (it
+needs a widened batch and runs inside dispatch; ADR 0012). Past the
+state-value limit: a truncated value with `"limit": true` (a value
+`actor.state` never answers), `null` (means ended), or no `value` (a
+third shape) (ADR 0012, decision 4).
 
 ## 7. Host outputs
 
 **Design.** `ta_host_envelope`, `ta_host_traces`, `ta_host_logs`,
 `ta_host_metrics`, `ta_host_hibernate`, `ta_host_export_actor`: views of
-host memory valid until the next call into the host (ADR 0010, decision
-2). `ta_host_snapshot`, `ta_host_snapshot_pack` and `environment->error`
-keep `ta_buffer` (size known up front; no host yet). Hibernate and export
-are written in one pass through the host's allocator, between runs only
+host memory valid until `ta_host_effects_ack` (ADR 0012, decision 1). An
+output taken with no batch open opens one. The host keeps a batch's
+outputs in memory it frees or reuses at the ack, and growing it never
+moves an output already handed out. `ta_host_snapshot`,
+`ta_host_snapshot_pack` and `environment->error` keep `ta_buffer` (size
+known up front; no host yet). Hibernate and export are written in one
+pass through the host's allocator, between runs only
 (tinyactors-core/AGENTS.md, "Region memory is fixed at ta_system_init").
+
+| Object | Owner | Created | Read | Ends |
+|---|---|---|---|---|
+| an output view | the batch's memory (the host's allocator) | the output call, in I or D | by the caller, across any later calls | the ack |
+
+**Rejected.** A view until the next call into the host (ADR 0010
+decision 2): a handler that posts, delivers or writes a second envelope
+ends the view it is reading, and both bindings copied every output
+before any call (ADR 0012).
 
 **Not yet decided.** Handing over ownership of large outputs (an OTLP
 batch as a block the language wraps without a copy): unmeasured; it pays
 only for large outputs.
+
+**Open.** `ta_host_envelope` takes `const ta_host_effect *` (the record's
+address), the one call that needs a binding to index the effect array
+instead of passing an index as the accessors do.
 
 ## 8. Images
 
@@ -228,11 +404,13 @@ lifetime the binding's). A borrow mode (zero-copy embedders use
 
 ## 9. A binding's memory
 
-**Design.** Its handle tables, one CBOR writer per call (a C stack room
-grown through the allocator, freed before the call returns), a
+**Design.** Its handle tables (`ta_table`), one CBOR writer per call (a C
+stack room grown through the allocator, freed before the call returns), a
 datamodel's last output, and views. The allocator is called only there
 and in the host's create, free and allocator, enforced by each binding's
-lint rule `allocation-in-tables-and-host`.
+lint rule. Nothing it reads from the host needs copying to survive its
+own calls while it handles a batch (ADR 0012); it copies what it keeps
+past the ack.
 
 **Rejected.** Paired `malloc`/`free` at every call site (Node had 104,
 with allocations per call and per evaluation). One arena for the host's
@@ -241,6 +419,15 @@ between calls (not reentrant: a nested request corrupted the outer one,
 napi `8d600f4c`). Rooms with length hints and retries (workarounds for
 caller-sized outputs, gone with ADR 0010). Cross-thread free and
 collector-switch hazards (one owning thread).
+
+## 10. What reaches the application
+
+**Design (ADR 0012, decision 6).** Output: `<send>` to an I/O processor
+the application configured (`TA_EFFECT_SEND`). State: `actor.subscribe`
+and `actor.changed`. Inspection: typed methods over post. `<log>`: the
+language's logging. `DONE` and `ERROR`: the binding's own lifecycle
+(release its rows, end its subscriptions), not callbacks. `PEER` versus
+`PEER_ERROR` in an API: deferred.
 
 ## Changing this page
 
