@@ -143,6 +143,11 @@ applied with no REPLY; one that is not a request is answered with `"id":
 null`; batches are refused (-32600). `TA_ERROR_STATE` during a run or
 inside the datamodel guard.
 
+Every byte is CBOR; JSON-RPC names only the shape of the maps, so no
+shape is invented. Core never reads or writes JSON: a binding deals with
+the effect records and CBOR, and a transport that speaks JSON converts at
+its own edge.
+
 Core's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects (WIRE
 `{"method", "params"}`, EVENT the method, SESSION the session). The first
 is `actor.changed` `{"session", "value"}`: the system's CHANGED marks the

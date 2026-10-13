@@ -102,7 +102,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   │                         sweep, growth, boot, whole-host snapshot/restore, actor.changed
 │   │   ├── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
 │   │   ├── telemetry.c        ✅ the host's OTLP encoder, or the null one (traces, logs, metrics)
-│   │   └── request.c          ✅ ta_host_post: the control plane, JSON-RPC messages as CBOR answered by REPLY effects (docs/requests.md); the host's CBOR config (docs/host-config.md)
+│   │   └── request.c          ✅ ta_host_post: the control plane, CBOR messages in JSON-RPC's shape answered by REPLY effects (docs/requests.md); the host's CBOR config (docs/host-config.md)
 │   │
 │   ├── otlp/                  the OTLP codec (freestanding, one block, relocatable; uses trace + image)
 │   │   ├── otlp_internal.h    ✅ the encoder's block, protobuf primitives

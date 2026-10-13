@@ -46,6 +46,10 @@ Check each against the code before relying on it; cite the line.
 - **All binding code is C.** Nothing sits above the extension (ROADMAP
   step 8, decision 2); every consumer of a header is C, so layouts are
   hand-written public headers held by the ABI rules, never generated.
+- **Two systems cross, never three:** fixed records read through
+  accessors, and CBOR. JSON-RPC names the shape of control messages,
+  replies and notifications; their bytes are CBOR. Nothing core gives or
+  takes is JSON.
 - **No serialization on the hot path** (`AGENTS.md`). CBOR is for the
   control plane, the config, and bytes that leave the process.
 - **A binding's memory** is its handle tables, one CBOR writer per call,

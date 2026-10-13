@@ -12,6 +12,13 @@ pipe: frames to `ta_host_post`, the bytes of `TA_HOST_EFFECT_REPLY` and
 method and notification. If one is not listed here, it does not exist.
 Examples are in CBOR diagnostic notation.
 
+**Every byte is CBOR; JSON-RPC names only the shape.** Core never reads
+or writes JSON: a message, a reply and a notification are CBOR items whose
+maps have JSON-RPC 2.0's members, so that no shape is invented and a
+transport that speaks JSON on its wire converts at its edge (CBOR's value
+world covers JSON's). A binding and its consumers deal with two systems,
+the effect records read through accessors and CBOR, never a third.
+
 ## The envelope
 
 - **A request** is a map with these members and no others:
