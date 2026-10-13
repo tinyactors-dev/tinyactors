@@ -31,7 +31,32 @@ method over a posted message, or the handling of an effect
 The addon is the binding: it defines the classes, runs the loop,
 dispatches effects, converts values and implements the native datamodel
 in C. `index.mjs` loads the platform's `.node` file and re-exports it,
-nothing else: there is no JavaScript above the addon.
+nothing else: there is no JavaScript above the addon in the first
+milestone.
+
+## Layers and the resolver
+
+Shared with the Python binding (decided 2026-10-13; bindings.md section
+1, "Two layers"; `tinyactors-cpython/AGENTS.md`, "Layers" and "The
+API"). Node's names and shapes are decided in step 8.5:
+
+- **The addon is the direct layer, and mirrors the C API** more or less
+  one to one: a compile call over `ta_compile_charts` that throws with
+  every diagnostic and returns an object whose image is a view until its
+  close (`ta_compile_free`); `addImage(image)` returning the segment
+  (`ta_host_add_image` copies the bytes); `chart(name)` over
+  `ta_host_chart`; `spawn(ref, ...)` over `ta_host_spawn`, taking that
+  reference.
+- **A convenience layer in JavaScript above it is later work,** not
+  built now: it calls only the addon's API and adds shapes, not
+  behaviour (images from a name→text mapping, spawning by chart name, a
+  chart builder).
+- **A resolver is an object** with `resolve(base, source)` returning the
+  text, given to the compile call (a static `src`, at compile time; a
+  refusal reported as a diagnostic at its line and column [8.2],
+  `tinyactors-core/docs/boundary.md` section 12) and to the `Host`,
+  where it answers `TA_EFFECT_REQUEST` before `ta_host_resume`. The
+  binding ships one that reads a directory.
 
 ## Names
 
@@ -114,6 +139,13 @@ Node's API shape is decided in step 8.5, not here:
   given to the `Host`; no global configuration.
 - **`DONE` and `ERROR` are internal:** the addon releases its rows for the
   session; no application callback.
+- **An I/O processor's handler that throws before answering** (a plain
+  function, or an async one whose promise rejects) has its send failed,
+  as ADR 0009 has a runtime that cannot do what an effect asks answer
+  with a failed completion (`error.communication` for the sender), and
+  the error is thrown after the turn (the Python binding's rule, decided
+  2026-10-13; Node's shape is settled in step 8.5).
+- **A log entry is `(session, label, text)`**, no chart.
 - **No synchronous request and no raw `post`** (ADR 0012, decision 3 as
   amended again): one typed method per method of
   `tinyactors-core/docs/requests.md`, with a response handler. The
@@ -317,7 +349,8 @@ The addon allocates almost nothing (bindings.md, section 6):
 - No application callback for `DONE` or `ERROR`; no subscription.
 - No defaults, limits, methods, events or messages of our own; nothing C
   does done again in JavaScript (bindings.md section 2); no JavaScript
-  above the addon.
+  above the addon until the convenience layer is taken up ("Layers and
+  the resolver").
 - No serialization on the hot path, no struct layout read from
   JavaScript, no libuv, no V8.
 
