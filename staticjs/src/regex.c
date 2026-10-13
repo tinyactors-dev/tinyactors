@@ -1915,14 +1915,14 @@ static sjs_result rx_build_value(sjs_context *context, const rx_emitter *e, sjs_
     else if (saves < count && lead->op == RX_CHAR_FOLD && lead->x < 0x80u) view.lead = RX_LEAD_FOLD;
     else if (saves < count && lead->op == RX_ASSERT && lead->x == RX_ASSERT_START) view.lead = RX_LEAD_START;
     view.lead_char = view.lead == RX_LEAD_CHAR || view.lead == RX_LEAD_FOLD ? (uint8_t)lead->x : 0;
-    uint8_t map[RX_DFA_MAP];
-    view.dfa_classes = (uint8_t)sjs_regex_dfa_classes(&view, map);
+    uint16_t map[RX_DFA_ASCII];
+    sjs_regex_dfa_classes(&view, map);
     uint32_t names_length = 0;
     for (uint32_t g = 0; g < p->groups; g++) names_length += SJS_BUF_AT(p->names, rx_name, g).length;
     uint64_t text_length = (uint64_t)literal.body.length + names_length;
     uint64_t size = sizeof(sjs_regexp) + (uint64_t)count * sizeof(rx_ins) + (uint64_t)class_count * sizeof(rx_class) +
                     (uint64_t)range_count * 8u + (uint64_t)p->groups * sizeof(rx_group_name) + text_length +
-                    (view.dfa_classes != 0 ? RX_DFA_MAP : 0u);
+                    (view.dfa_classes != 0 ? sizeof map : 0u);
     if (size > UINT32_MAX) return SJS_ERR_LIMIT;
     sjs_regexp *re = sjs_mem_alloc(&context->counting, (size_t)size);
     if (re == NULL) return SJS_ERR_NOMEM;
@@ -1956,6 +1956,13 @@ static sjs_result rx_build_value(sjs_context *context, const rx_emitter *e, sjs_
     rx_group_name *names = (rx_group_name *)(void *)at;
     re->names = names;
     at += (size_t)p->groups * sizeof(rx_group_name);
+    /* On a boundary of 4 bytes, as every part before it is a multiple of 4. */
+    re->dfa_map = NULL;
+    if (re->dfa_classes != 0) {
+        sjs_copy(at, map, sizeof map);
+        re->dfa_map = (const uint16_t *)(const void *)at;
+        at += sizeof map;
+    }
     char *text = (char *)at;
     sjs_copy(text, literal.body.ptr, literal.body.length);
     re->source_length = literal.body.length;
@@ -1968,7 +1975,6 @@ static sjs_result rx_build_value(sjs_context *context, const rx_emitter *e, sjs_
     }
     re->text = text;
     re->text_length = used;
-    if (re->dfa_classes != 0) sjs_copy(text + used, map, RX_DFA_MAP);
     *out = sjs_heap_value(SJS_REGEXP, &re->h);
     return SJS_OK;
 }

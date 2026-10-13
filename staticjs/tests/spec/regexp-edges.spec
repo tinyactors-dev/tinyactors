@@ -367,10 +367,25 @@ new Map([[1,Object.assign(["a","a"],{"index":0,"input":"a","groups":{"x":"a"}})]
 # spec_test runs each as loops paused after every unit, with the cache and
 # without, for the same values, fuel and pauses. Values from Node 22.
 
-=== a long test: thirteen letters and the rest make 16 classes, fourteen more than the cache takes
+=== a long test: thirteen letters and the rest make 16 classes, fourteen 17
 [/abcdefghijklm/.test("abcdefghijkl ".repeat(300) + "abcdefghijklm"), /abcdefghijklmn/.test("abcdefghijklm ".repeat(300) + "abcdefghijklmn"), /abcdefghijklm/.test("abcdefghijkl ".repeat(300)), /abcdefghijklmn/.test("abcdefghijklm ".repeat(300))]
 --- value
 [true,true,false,false]
+
+=== a long test: 29 letters and the rest make 32 classes, the most the cache takes, and 30 make 33
+[/abcdefghijklmnopqrstuvwxyzABC/.test("abcdefghijklmnopqrstuvwxyzAB ".repeat(60) + "abcdefghijklmnopqrstuvwxyzABC"), /abcdefghijklmnopqrstuvwxyzABCD/.test("abcdefghijklmnopqrstuvwxyzABC ".repeat(60) + "abcdefghijklmnopqrstuvwxyzABCD"), /abcdefghijklmnopqrstuvwxyzABC/.test("abcdefghijklmnopqrstuvwxyzAB ".repeat(60)), /abcdefghijklmnopqrstuvwxyzABCD/.test("abcdefghijklmnopqrstuvwxyzABC ".repeat(60))]
+--- value
+[true,true,false,false]
+
+=== a long test: more than 16 classes, the character after an edge's in fewer (word, line terminator, the skip's)
+[/,r(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|0)\d{4}5,/.test("r000124,".repeat(40)), /,r(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|0)\d{4}5,/.test("r000124,r000124,rq12345," + "r000124,".repeat(40)), /,r(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|0)\d{4}5,/.test("r000124,r000125," + "r000124,".repeat(40)), /,r(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|0)\d{4}5,/.test("r000125.r000125," + "r000124,".repeat(40)), /,r(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|0)\d{4}5,/.test(",r12345,".repeat(40))]
+--- value
+[false,true,true,false,false]
+
+=== a long test: more than 16 classes, with \b, \B and $ with m
+[/\b(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)x\b/.test("ax_ bxa qx1 ".repeat(100)), /\b(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)x\b/.test("ax_ -gx-" + "ax_ bxa qx1 ".repeat(100)), /(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)z$/m.test("az1\n".repeat(300)), /(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)z$/m.test("az1\nqz\r\n" + "az1\n".repeat(300)), /\B(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)\B/.test(" a b- c_ ".repeat(200)), /\B(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q)\B/.test(" a b- c_ 1q2" + " a b- c_ ".repeat(200))]
+--- value
+[false,true,false,true,false,true]
 
 === a long test: case-insensitive classes
 [/[a-f]+x/i.test("AbCdEf-".repeat(400) + "FX"), /K/i.test("j".repeat(2000) + "k"), /[^a-z]q/i.test("Aq".repeat(800)), /[^a-z]q/i.test("Aq".repeat(800) + "1Q")]

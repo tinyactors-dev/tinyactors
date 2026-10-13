@@ -79,10 +79,9 @@ typedef struct {
 /*
  * The value (SJS_HEAP_REGEXP): one block, immutable, holding no
  * references. After the header: the instructions, the classes, their
- * ranges (low, high pairs), each group's name record, the source and the
- * names' text, then, for a program the cache of a test takes
- * (regex_match.c, "The cache"), the class of each ASCII character
- * (rx_dfa_map).
+ * ranges (low, high pairs), each group's name record, for a program the
+ * cache of a test takes (regex_match.c, "The cache") the classes of each
+ * ASCII character (rx_dfa_map), then the source and the names' text.
  */
 typedef struct {
     sjs_heap h;
@@ -101,25 +100,33 @@ typedef struct {
     uint8_t lead;            /* RX_LEAD_* */
     uint8_t lead_char;
     uint8_t dfa_classes;     /* the cache's classes (sjs_regex_dfa_classes), 0 when it refuses the program */
+    uint8_t dfa_next;        /* its coarser classes, of the character after an edge's */
     uint32_t lead_saves;
     const rx_ins *code;
     const rx_class *classes;
     const uint32_t *ranges;
     const rx_group_name *names;
+    const uint16_t *dfa_map; /* rx_dfa_map, for a program with dfa_classes */
     const char *text;        /* the source, then the names */
 } sjs_regexp;
 
 #define SJS_AS_REGEXP(v) ((const sjs_regexp *)(const void *)(v).as.heap)
 
-/* The class of each ASCII character, for a program with dfa_classes. */
-static inline const uint8_t *rx_dfa_map(const sjs_regexp *re) {
-    return (const uint8_t *)(const void *)(re->text + re->text_length);
+/* The classes of each ASCII character, for a program with dfa_classes, as
+ * the cache's rows read them: its class times the width of a row
+ * (dfa_next + 1), shifted left by RX_DFA_NEXT_BITS, and its coarser class
+ * (dfa_next) in those bits. */
+static inline const uint16_t *rx_dfa_map(const sjs_regexp *re) {
+    return re->dfa_map;
 }
 
-/* The bytes of rx_dfa_map. */
-#define RX_DFA_MAP 128u
+#define RX_DFA_NEXT_BITS 4u
+/* The entries of rx_dfa_map. */
+#define RX_DFA_ASCII 128u
 
 /* Sort the ASCII characters into the classes of the cache of a test
  * (regex_match.c) for the program `re`, whose code, classes, ranges and
- * lead are set: their number, or 0 when the cache refuses the program. */
-uint32_t sjs_regex_dfa_classes(const sjs_regexp *re, uint8_t *classes);
+ * lead are set: its dfa_classes, 0 when the cache refuses the program, and
+ * dfa_next, with each character's classes in `map` (RX_DFA_ASCII entries,
+ * as rx_dfa_map holds them). */
+void sjs_regex_dfa_classes(sjs_regexp *re, uint16_t *map);
