@@ -10,7 +10,8 @@ it.** The design (2026-10-13) is in [AGENTS.md](AGENTS.md) ("The API",
 step starts when the root roadmap marks steps 8.2 (core implements
 [ADR 0012](../docs/adr/0012-lifetimes-follow-the-loop.md) with its second
 amendment: `ta_table`, `ta_status_name`, `ta_growable_arena`, one batch
-at a time, `detach_event` checked) and 8.3 (the full loop end to end in
+at a time, `detach_event` checked; with its third: the resolver's errors
+and scratch arena) and 8.3 (the full loop end to end in
 C) done. The plan of both bindings is the root roadmap's step 8, which
 decides.
 
@@ -33,14 +34,22 @@ In this order, each step a commit (or a few) that passes this project's
    writes them, the synchronous driver (`run_until_idle`, `run`,
    `SimulatedClock.increment`) and asyncio (`await host.idle()`), every
    status of the table.
-3. **Inputs and images:** `add_image`, `spawn`, `send`, `terminate`.
+3. **The compiler, images and inputs** (the direct layer, AGENTS.md
+   "Layers"): `compile_charts`, `Compiled` (`image`, `diagnostics`,
+   `close`, `with`), `CompileError`; the resolver object on
+   `compile_charts` and the `Host`, `DirectoryResolver`, and `.py`
+   sources through `src` with the rewrite at resolve time; `add_image(image)
+   -> int`, `chart(name)`, `spawn(ref, ...)`, `send`, `terminate`. No
+   convenience layer.
 4. **Effects as thin views:** I/O processors with `answer` and `fail`, a
-   record for `async def` processors, the log handler; the ack count and
+   record for `async def` processors (refused under `with`), a failed
+   send for a processor that raises, the log handler; the ack count and
    the stale check.
 5. **Typed methods** with response handlers and the pending table.
 6. **Values:** `tinyactors.encode` and `tinyactors.decode`, the value
    table's tests against `values.txt`'s `python` lines.
-7. **The `"python"` datamodel:** the class per chart, the rewrite, the
+7. **The `"python"` datamodel:** the class per chart, the rewrite (its
+   allow-list as AGENTS.md writes it), the
    instance per session, `_event` and `detach_event`, capture,
    hibernation by handle, quickjs beside it.
 8. **The adapter** (`conform/`) and the suite's M1 set on both
@@ -77,34 +86,47 @@ In this order, each step a commit (or a few) that passes this project's
   Python chart read. After it, the Node session starts (8.5) and this
   binding goes on with 8.5's work for both.
 
+### Decided (2026-10-13), no longer open
+
+- **`dict` and `list` subclasses** are refused by the value table (exact
+  types only; a conversion runs no user code).
+- **The rewrite's allow-list** is AGENTS.md's ("The "python"
+  datamodel"); the README says it is not a sandbox.
+- **`add_image(charts)`** left the direct layer: `compile_charts`,
+  `Compiled`, `add_image(image) -> int`, `chart(name)` and `spawn(ref,
+  ...)` replace it; a mapping form belongs to the convenience layer,
+  later.
+- **The log entry** is `(session, label, text)`, no chart.
+- **Export of a `"python"` actor:** nothing is done; unsupported, with
+  the known limitation that an exported actor's row stays hibernated
+  until `ta_host_free` (AGENTS.md).
+- **An `async def` processor under the synchronous driver** raises
+  `TypeError` naming it when the `Host` is entered with `with`.
+- **A processor that raises before answering** (sync or async) has its
+  send failed (`send.fail()`, `error.communication` for the sender), and
+  the exception is raised from the driver after the turn.
+
 ### Open, for the API review or the maintainer
 
-- **`dict` and `list` subclasses** in the value table: refused (a
-  conversion runs no user code) or converted.
-- **The rewrite's allowed constructs and names** (which builtins, which
-  AST nodes), listed in `src/datamodel/expressions.c` and the README.
-- **`add_image(charts)`:** the form of `charts` and what it returns.
-- **The log entry's `chart`:** a `TA_EFFECT_LOG` carries `SEGMENT`,
-  `ACTOR` and `SESSION`, not the chart (`host.h:262-289`); reading it
-  through the actor (`ta_host_locate`, `ta_host_system`,
-  `ta_actor_info_get`, `ta_image_chart_name`) answers `TA_ERROR_STALE`
-  for an actor that ended in the same run (actor handles carry a 7-bit
-  generation, `tinyactors-core/src/base/pool.h:75-81`). Read it from the session row (the `"python"`
-  datamodel's sessions only), or ask core for the chart on `LOG`
-  effects (a request below, if a test shows the need).
-- **Export of a `"python"` actor:** `serialize` cannot tell export from
-  hibernation: both reach the same call, `serialize` with no reason
-  (`tinyactors-core/src/system/hibernate.c:329`), then the same `unload`
-  and `destroy` (`hibernate.c:502-503`, from `:525` and `:563`), so an
-  exported actor's row stays hibernated until `ta_host_free`; and a bare
-  handle can be live in another host's table by coincidence (two hosts
-  in one process both start at slot 0, generation 1). The blob needs the
-  writing datamodel's identity beside the handle (a random 16 bytes per
-  `Host`), and export a refusal; how is open.
-- **An `async def` processor under the synchronous driver**, which runs
-  no event loop: refused, or run to completion by the driver.
-- **Where an `async def` processor's exception goes:** the task's, or
-  raised by the driver after the turn as a plain handler's.
+- **The `Host`'s resolver and `TA_EFFECT_REQUEST`.** `ta_host_resume`
+  names a chart of the requesting segment's own image
+  (`tinyactors-core/src/system/route.c:544`, `:553`), so a text the
+  resolver returns for a REQUEST cannot become the invoked child as core
+  stands; the binding can answer with a chart already in that segment or
+  with an error status (`error.execution` in the parent). Whether core
+  should accept a chart of another segment is a question for the
+  maintainer (boundary.md section 12).
+- **`Compiled.close()` while a buffer exported from `image` is held**
+  (a `memoryview`): refuse with `BufferError`, as `bytearray` does when
+  resized with exports, or free at the last release.
+- **`DirectoryResolver`:** whether it binds core's file resolver
+  (`ta_runtime_resolve`, `tinyactors-core/include/tinyactors/runtime.h:32-37`:
+  relative to the referring file, absolute paths accepted, its texts
+  owned by a `ta_runtime_files` set) or reads with Python's I/O, and
+  whether a `source` that leaves `root` is refused.
+- **How a Python resolver refuses:** which exception, and where the
+  extension reads the line and column for `ta_resolve_error` (a
+  `SyntaxError`'s `lineno` and `offset`, for the rewrite's own errors).
 
 ## How the work runs
 

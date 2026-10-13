@@ -24,8 +24,28 @@ First the **application developer writing Python**: chart logic in Python
 asyncio, values that are Python objects. Then the **binding author**, held
 to the guide by the conformance suite, and the **maintainers**, who run one
 suite against every implementation. Every API item is a host input, a
-typed method over a posted message, or the handling of an effect
-(`docs/api-map.md`); what core does not have is not in the API.
+typed method over a posted message, the handling of an effect, or a call
+of the compiler (`docs/api-map.md`); what core does not have is not in
+the API.
+
+## Layers
+
+Decided by the maintainer (2026-10-13; bindings.md section 1, "Two
+layers"):
+
+- **The direct layer is the C extension `tinyactors`.** It mirrors the C
+  API more or less one to one: `compile_charts` is `ta_compile_charts`,
+  `Host.chart` is `ta_host_chart`, `Host.spawn` is `ta_host_spawn` and
+  takes the chart reference `chart` returns, `Host.add_image` is
+  `ta_host_add_image` and returns the segment. Everything below ("The
+  API") is this layer, and it is what step 8.4 builds.
+- **A convenience layer, pure Python on top, is later work and not built
+  now.** It calls only the direct layer and adds shapes, not behaviour:
+  an `add_image` from a name→text mapping (compile, add, close in one
+  call; the earlier `add_image(charts)` belongs here), spawning by chart
+  name, a chart builder so people need not write XML (over
+  `ta_xml_writer`, `compile.h:84-110`, once the direct layer exposes it).
+  Nothing in 8.4 depends on it.
 
 ## Names
 
@@ -45,27 +65,68 @@ Decided by the maintainer (2026-10-13); every item is in
 [`docs/api-map.md`](docs/api-map.md) with the core behind it. What core
 does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
 
+- **`tinyactors.compile_charts(sources: list[Source], resolver=None) ->
+  Compiled`**: `ta_compile_charts`, with `resolver` as
+  `ta_compile_options.resolve` (below, "The resolver"). A `Source` is a
+  name and a text (`ta_source`, `compile.h:27-30`); the first is the
+  default boot chart. A compilation with an error raises
+  **`CompileError`**, a subclass of `TinyactorsError`, carrying every
+  diagnostic (`ta_compile_diagnostics`: `file`, `line`, `column`,
+  `message`, and the severity) and freeing the result before it raises.
+- **`Compiled`** holds the compile result: **`compiled.image`** is a thin
+  view of `ta_compile_image`'s bytes (a read-only buffer, valid until
+  `close`; a read after it raises `TinyactorsError` with
+  `TA_ERROR_STALE`), **`compiled.diagnostics`** the warnings and notes
+  of a compilation that succeeded, converted once. It is a context
+  manager, `with tinyactors.compile_charts(...) as compiled:`, whose exit
+  and **`close()`** call `ta_compile_free`; the collector calls it as a
+  fallback.
 - **`tinyactors.Host(config, io_processors={type: handler}, log=handler,
-  clock=None)`.** Everything is per host: the config (a `dict`, written
-  as CBOR into the call's arena for `ta_host_create`), the I/O
-  processors' handlers, the log handler and the clock. No global
-  configuration (no `logging.basicConfig`, no module-level handler, no
-  default logger). The extension reads `host.config` once at creation for
-  `system.ticksPerSecond` (bindings.md section 3).
+  clock=None, resolver=None)`.** Everything is per host: the config (a
+  `dict`, written as CBOR into the call's arena for `ta_host_create`),
+  the I/O processors' handlers, the log handler, the clock and the
+  resolver. No global configuration (no `logging.basicConfig`, no
+  module-level handler, no default logger). The extension reads
+  `host.config` once at creation for `system.ticksPerSecond` (bindings.md
+  section 3).
 - **`with Host(...) as host`** (the synchronous driver) and **`async with
   Host(...) as host`** (asyncio) on the same class. Leaving either frees
   the host (`trace.end`, the last take of traces, `ta_host_free`); pending
   response handlers are dropped, never called.
-- **`host.add_image(charts)`**: compiles the charts (`ta_compile_charts`),
-  passes the image's bytes to `ta_host_add_image`, which copies them, and
-  frees the compile result at once (`ta_compile_free`). The form of
-  `charts` and the return value are settled at the API review.
-- **`host.spawn(chart, name=None, params=None) -> int`**,
-  **`host.send(session, event, data=None)`**,
-  **`host.terminate(session)`**: applied at the call (`ta_host_chart` and
-  `ta_host_spawn`, `ta_host_send`, `ta_host_terminate`), read during it;
-  a payload moves to core on success and is released on refusal. Under
-  asyncio an input made outside a turn schedules one turn.
+- **`host.add_image(image) -> int`**: `ta_host_add_image`, which copies
+  the bytes during the call (any buffer: `compiled.image`, `bytes` read
+  from a `.tai` file); returns the segment, as C does. The compile
+  result can be closed as soon as it returns.
+- **`host.chart(name) -> ChartRef`**: `ta_host_chart`, the current
+  version of chart `name` (`host.h:121-126`); the reference holds the
+  segment and the chart index.
+- **`host.spawn(ref, name=None, params=None, traceparent=None) -> int`**
+  (`ta_host_spawn`, `ta_spawn`), **`host.send(session, event,
+  data=None)`** (`ta_host_send`), **`host.terminate(session)`**
+  (`ta_host_terminate`): applied at the call, read during it; a payload
+  moves to core on success and is released on refusal. Under asyncio an
+  input made outside a turn schedules one turn.
+- **The resolver** is an object of its own with one method,
+  **`resolve(base, source) -> str`**, configured on the `Host`
+  (`Host(..., resolver=)`) and given to `compile_charts`: the same object
+  serves both. In `compile_charts` it is the compile-time callback
+  (`ta_compile_options.resolve`) for every static `src`; it refuses by
+  raising, and the extension answers the compiler with the error's line,
+  column and message, which comes back as a diagnostic of the resolved
+  file [8.2] (root `ROADMAP.md` 8.2; boundary.md section 12). On the
+  `Host` it answers `TA_EFFECT_REQUEST` (an `<invoke src>` that no chart
+  of the image names), followed by `ta_host_resume`; as core stands, a
+  resume names only a chart of the requesting segment (`route.c:544`),
+  so what it does with the returned text is open (ROADMAP.md, "Open").
+  The binding ships **`tinyactors.DirectoryResolver(root)`**, which reads
+  `source` as a file under `root`, relative to `base`.
+- **`.py` sources through `src`.** A chart writes `<script
+  src="reader.py"/>`: a Python file, free of XML's whitespace and
+  escaping, whose top-level `def`s become the chart's methods. The
+  resolver runs the same restrictive rewrite on a `.py` file as it
+  resolves it ("The "python" datamodel"), so a refused construct or an
+  unknown name is a `CompileError` at its line in `reader.py`, at compile
+  time.
 - **I/O processors: `handler(host, send)`**, called once per
   `TA_EFFECT_SEND` whose `IO_PROCESSOR` is that type's index in the
   config's `ioProcessors`. Actor output to the application goes through
@@ -83,9 +144,19 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
     configured `sync` stops the run until its send is answered: its
     sender waits until then (`host.h:215-228`), so an `async def`
     handler may answer it later.
+  - **An `async def` handler under the synchronous driver**, which runs
+    no event loop: entering the `Host` with `with` raises `TypeError`
+    naming the handler. The check is made at registration
+    (`inspect.iscoroutinefunction`), and `async with` accepts it.
+  - **A handler that raises before answering** (a plain function, or an
+    `async def` task): the binding calls `send.fail()` for it, as ADR
+    0009 has a runtime that cannot do what an effect asks answer with a
+    failed completion, so the sender gets `error.communication`
+    (`system.h:155-157`); the exception is raised from the driver after
+    the turn, as any handler's is ("The loop").
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
-  (`TA_EFFECT_LOG`) as thin views with `chart`, `session`, `label` and
-  `text`. Without one, the lines are discarded.
+  (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
+  (decided 2026-10-13). Without a handler, the lines are discarded.
 - **Typed methods over post**: `actor_state`, `actor_context`,
   `actor_list`, `actor_get`, `host_stats` and `trace_*` (one per method of
   `tinyactors-core/docs/requests.md`), each `(…, handler, on_error=None)`,
@@ -228,7 +299,10 @@ pays nothing for a field it does not read.
 | `Host` | the application | `Host(...)` | the config, into the arena, for `ta_host_create` | `with` exit, `close`, or the collector (a fallback) | the creating one; others refused |
 | `send` (thin view) | the handler, borrowed | dispatch of a `TA_EFFECT_SEND` to a plain function | `session`, `sendid`, `event`, `target`, `data` on first read | the ack; then stale | the host's |
 | send record | the task | dispatch, before scheduling an `async def` processor | every field, at once | the collector | the host's |
-| log `entry` (thin view) | the handler, borrowed | dispatch of a `TA_EFFECT_LOG` | `session`, `label` (`AUXILIARY`), `text` (`EVENT`), `chart` on first read | the ack; then stale | the host's |
+| log `entry` (thin view) | the handler, borrowed | dispatch of a `TA_EFFECT_LOG` | `session`, `label` (`AUXILIARY`), `text` (`EVENT`) on first read | the ack; then stale | the host's |
+| `Compiled` | the application | `compile_charts` | — | `with` exit, `close()` (`ta_compile_free`), or the collector (a fallback) | the creating one |
+| `compiled.image` (thin view) | the `Compiled` | first read | none: a read-only buffer over `ta_compile_image`'s bytes | `close()`; then stale | the creating one |
+| `compiled.diagnostics`, a `CompileError`'s diagnostics | the application | `compile_charts` | every diagnostic, once (their strings live in the result's arena until `ta_compile_free`) | the collector | — |
 | a reply's `result` | the handler | dispatch of a `TA_HOST_EFFECT_REPLY` | the whole result, once | the collector | the host's |
 | `TinyactorsError` from a reply | `on_error`, or the driver | the same dispatch | `code`, `reason`, `path`, `message` | the collector | the host's |
 | a session id | the application | `spawn` | — (`int`, 64 bits) | — | — |
@@ -286,9 +360,8 @@ APIs [8.2]:
   once made, so a non-ASCII `str` pays that once), bytes through the
   buffer protocol.
 - **The value table accepts exact built-in types** (`PyDict_CheckExact`,
-  `PyList_CheckExact`, ...), so a conversion runs no user code. Open:
-  whether a `dict` or `list` subclass is refused or converted (refusing
-  keeps conversion free of user code; listed in [ROADMAP.md](ROADMAP.md)).
+  `PyList_CheckExact`, ...), so a conversion runs no user code: a `dict`
+  or `list` subclass is refused (decided 2026-10-13).
 - **Tables** (`ta_table`, `tinyactors/table.h`), grown through the host's
   allocator, freed with the host; keep handles, never row pointers
   across a `ta_table_add`:
@@ -316,8 +389,21 @@ APIs [8.2]:
   evaluation. The lint rule `allocation-in-tables-and-host` checks it; it
   names files of the removed binding (`src/datamodel/handles.c`) and
   changes with the first commit of the rewrite.
-- **Images are bytes:** `ta_host_add_image` copies them; free a compile
-  result at once. No image rows, no `SEGMENT_FREED` bookkeeping.
+- **Images are bytes:** `ta_host_add_image` copies them, so a `Compiled`
+  can be closed once `add_image` returns. No image rows, no
+  `SEGMENT_FREED` bookkeeping. The compiler allocates through
+  `ta_compile_options.alloc`, which the extension sets to
+  `PyMem_RawMalloc` and `PyMem_RawFree` as for the host; a resolver's
+  text and messages go into the compilation's scratch arena [8.2]
+  (`request->scratch`, from the start of `ta_compile_charts` to its
+  return), so the extension keeps nothing per `src` past the call.
+- **A `Compiled` holds a compile result** until its `close()`;
+  `compiled.image` is a buffer over it. Open: what `close()` does while
+  a buffer exported from `image` is still held (`mv =
+  memoryview(compiled.image); compiled.close(); bytes(mv)` would read
+  freed memory): refuse with `BufferError`, as CPython's `bytearray`
+  does when resized with exports, or free at the last release
+  ([ROADMAP.md](ROADMAP.md), "Open").
 
 ## The "python" datamodel
 
@@ -335,7 +421,31 @@ Registered beside quickjs, first; matched by the chart's
   expression is evaluated as `error.execution`, as SCXML requires
   (W3C test 312: an illegal expression in `<assign>` raises
   `error.execution`). `In(state)` calls `ta_datamodel_environment_in`
-  with the evaluation's environment.
+  with the evaluation's environment. A `.py` file a chart names through
+  `src` gets the same rewrite in the resolver, so its errors are
+  reported at compile time instead ("The API", "`.py` sources").
+- **The rewrite's allow-list** (decided 2026-10-13), held in
+  `src/datamodel/expressions.c` and the README:
+  - *expressions:* literals, arithmetic, comparisons, boolean operations,
+    conditional expressions, indexing and slicing, comprehensions and
+    generator expressions, f-strings, calls to the chart's methods and
+    to the allowed builtins, attribute access except dunder names;
+  - *statements*, in `<script>` and `.py`: assignment, plain or
+    augmented, to a `<data>` id or to its items or attributes; `if`,
+    `for`, `while`, `pass` and expression statements; `def` only at the
+    top level of a chart-level script;
+  - *refused:* `import`, `global`, `nonlocal`, `lambda`, `await`,
+    `yield`, the walrus (`:=`), `del`, `try` and `raise`, `with`,
+    `class`;
+  - *builtins:* `len`, `min`, `max`, `sum`, `abs`, `round`, `sorted`,
+    `reversed`, `enumerate`, `zip`, `range`, `any`, `all`,
+    `isinstance`, `str`, `int`, `float`, `bool`, `list`, `dict`,
+    `tuple`, `set`, `frozenset`, `map`, `filter`; and not `open`,
+    `eval`, `exec`, `getattr`, `setattr`, `vars`, `globals`,
+    `__import__`.
+  - **It is not a sandbox.** It keeps a chart inside SCXML's scope rules;
+    charts in Python are trusted code (bindings.md section 8), and the
+    README says so.
 - **Per session, one instance.** The system variables are made into
   Python objects once, at `create` (core's views are valid only during
   that call, `datamodel.h:62-63`), immutable, and shared by reference.
@@ -358,8 +468,13 @@ Registered beside quickjs, first; matched by the chart's
   handle; core calls `destroy` right after it (`datamodel.h:173-174`),
   which keeps the row, marked hibernated; `deserialize` makes it live
   again. Hibernation frees the session's share of the region; its
-  instance stays on the Python heap. Export of a Python actor is not
-  supported: another host's datamodel refuses the handle. Migration
+  instance stays on the Python heap. **Export of a Python actor is not
+  supported** (decided 2026-10-13: nothing is done for it). A known
+  limitation: `serialize` cannot tell export from hibernation, both reach
+  it with no reason (`tinyactors-core/src/system/hibernate.c:329`) and
+  then the same `unload` and `destroy` (`hibernate.c:502-503`, from
+  `:525` and `:563`), so an exported actor's row stays hibernated until
+  `ta_host_free`. Migration
   within the host: `deserialize` with the new chart makes an instance of
   the new class and copies the slots both declare; `migrate` returns the
   old bindings as a payload.
@@ -485,8 +600,16 @@ Registered beside quickjs, first; matched by the chart's
   handler's typed method is answered in the next take, and that a view's
   fields read in a handler stay valid after later calls in the same batch.
 - **Pending handlers are dropped at `ta_host_free`**, never called.
-- **The README says** that charts are trusted code, and that Python
-  values lie outside the host's allocator (bindings.md, section 8).
+- **An `async def` I/O processor under `with`** raises `TypeError` naming
+  it; **a processor that raises before answering** has its send failed
+  (the sender gets `error.communication`) and the exception raised after
+  the turn, for a plain function and an `async def` task alike.
+- **`compile_charts` raises `CompileError` with every diagnostic**, a
+  `.py` file's refused construct at its own line; `compiled.image` read
+  after `close()` raises `TA_ERROR_STALE`.
+- **The README says** that charts are trusted code and the rewrite is
+  not a sandbox, and that Python values lie outside the host's allocator
+  (bindings.md, section 8).
 
 ## What not to build
 
@@ -505,6 +628,8 @@ Registered beside quickjs, first; matched by the chart's
 - No application callback for `DONE` or `ERROR`; no subscription.
 - No defaults, limits, methods, events or messages of our own; nothing C
   does done again in Python (bindings.md section 2).
+- No convenience layer yet ("Layers"): no `add_image` from a mapping, no
+  spawn by chart name, no chart builder in 8.4.
 - No serialization on the hot path, no struct layout read from Python.
 
 ## Tasks
@@ -574,6 +699,7 @@ docs/values.md       the Python side of the value table
 src/                 extension.h, module.c, host.c (Host, inputs, the arena's marks),
                      loop.c (drain, turn, both drivers), effects.c (dispatch, thin views,
                      records), methods.c (typed methods, the pending table), values.c,
+                     compile.c (compile_charts, Compiled, the resolver, DirectoryResolver),
                      datamodel/{datamodel.h, datamodel.c, rows.c, expressions.c}
 conform/             the suite's adapter, python -m conform; not in the wheel
 tests/               what the suite cannot see: threads, GC, asyncio, refusals, stale views

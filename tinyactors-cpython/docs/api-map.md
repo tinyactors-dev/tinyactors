@@ -27,20 +27,26 @@ commit that adds the item removes the mark.
 
 | API item | Core | Notes |
 |---|---|---|
-| *planned* `tinyactors.Host(config, io_processors, log, clock)` | `ta_host_create`, `host.config`, `ta_host_add_image` | the config as CBOR in the call's arena (`ta_growable_arena` [8.2]); the extension posts `host.config` once for `ticksPerSecond`; the environment registers the `"python"` datamodel and quickjs |
+| *planned* `tinyactors.compile_charts(sources, resolver=None) -> Compiled` | `ta_compile_charts`, `ta_compile_diagnostics`, `TA_DIAGNOSTIC_ERROR` | the compiler's call; `resolver` as the compile-time resolver; an error raises `CompileError` with every diagnostic and frees the result |
+| *planned* `Compiled.image`, `Compiled.diagnostics` | `ta_compile_image`, `ta_compile_diagnostics` | `image` a thin buffer view, valid until `close`; `diagnostics` converted once |
+| *planned* `with compile_charts(...) as compiled`, `Compiled.close()` | `ta_compile_free` | the collector as a fallback |
+| *planned* `CompileError` | `ta_compile_diagnostics`, `TA_DIAGNOSTIC_ERROR` | a `TinyactorsError` with every diagnostic: `file`, `line`, `column`, `message` |
+| *planned* `resolver.resolve(base, source) -> str`, `tinyactors.DirectoryResolver(root)` | `ta_compile_charts`, `TA_EFFECT_REQUEST`, `ta_host_resume` | the resolver object, given to `compile_charts` (static `src` at compile time; a refusal a diagnostic at its line [8.2]) and to the `Host` (a `REQUEST` before `ta_host_resume`) |
+| *planned* `tinyactors.Host(config, io_processors, log, clock, resolver)` | `ta_host_create`, `host.config` | the config as CBOR in the call's arena (`ta_growable_arena` [8.2]); the extension posts `host.config` once for `ticksPerSecond`; the environment registers the `"python"` datamodel and quickjs |
 | *planned* `with Host(...)`, `async with Host(...)`, `Host.close()` | `trace.end`, `ta_host_traces`, `ta_host_effects_ack`, `ta_host_free` | the stop of bindings.md section 4; pending response handlers dropped, never called |
-| *planned* `Host.add_image(charts)` | `ta_compile_charts`, `ta_compile_image`, `ta_host_add_image`, `ta_compile_free` | the host copies the bytes; the compile result is freed at once |
-| *planned* `Host.spawn(chart, name=None, params=None) -> int` | `ta_host_chart`, `ta_host_spawn` | an input, applied at the call; `params` a payload row moved on success |
+| *planned* `Host.add_image(image) -> int` | `ta_host_add_image` | the host copies the bytes during the call; returns the segment |
+| *planned* `Host.chart(name)` | `ta_host_chart` | the current version of the chart: segment and chart index |
+| *planned* `Host.spawn(ref, name=None, params=None, traceparent=None) -> int` | `ta_host_spawn` | an input, applied at the call; `ref` from `Host.chart`; `params` a payload row moved on success |
 | *planned* `Host.send(session, event, data=None)` | `ta_host_send` | an input, applied at the call; `data` a payload of the target session's datamodel |
 | *planned* `Host.terminate(session)` | `ta_host_terminate` | an input, applied at the call |
 | *planned* `Host.run_until_idle()`, `Host.run()` | `ta_host_effects`, `ta_host_effects_ack`, `ta_host_advance_time`, `ta_host_run`, `TA_RUN_IDLE`, `TA_RUN_YIELDED`, `TA_RUN_EFFECTS`, `TA_RUN_EFFECTS_FULL`, `TA_RUN_EXHAUSTED`, `TA_RUN_FAULT` | the synchronous driver: turns until idle; `run` sleeps to `next_deadline` |
 | *planned* `await Host.idle()` | `ta_host_effects`, `ta_host_effects_ack`, `ta_host_advance_time`, `ta_host_run`, `TA_RUN_IDLE`, `TA_RUN_YIELDED` | asyncio: `call_soon` on a yield, one `call_at` timer when idle |
 | *planned* `SimulatedClock.increment(ms)` | `ta_host_advance_time`, `ta_host_run` | the turn at the simulated time; no timer |
-| *planned* `io_processors={type: handler}`, `handler(host, send)` | `TA_EFFECT_SEND` | the handling of an effect; `send` a thin view until the ack, a record for an `async def` handler |
+| *planned* `io_processors={type: handler}`, `handler(host, send)` | `TA_EFFECT_SEND` | the handling of an effect; `send` a thin view until the ack, a record for an `async def` handler (refused with `TypeError` under `with`); a handler that raises before answering has its send failed (`TA_EVENT_IN_ERROR_COMMUNICATION`) |
 | *planned* `send.session`, `send.event`, `send.target`, `send.sendid`, `send.data` | `ta_host_effect_number`, `ta_host_effect_text`, `ta_datamodel_ecmascript_payload_to_cbor` | fields read on first access; `data` the `"python"` row's value, or quickjs's payload decoded |
 | *planned* `send.answer(event, data=None)` | `ta_host_send` | to `SESSION`, with the send's `sendid` and `origintype` the processor's type |
 | *planned* `send.fail()` | `ta_host_send`, `TA_EVENT_IN_ERROR_COMMUNICATION` | with the send's `sendid`; core raises `error.communication` in the sender |
-| *planned* `log=handler(host, entry)`, `entry.chart`, `entry.session`, `entry.label`, `entry.text` | `TA_EFFECT_LOG`, `ta_host_effect_text`, `ta_host_effect_number` | the handling of an effect; `entry` a thin view until the ack |
+| *planned* `log=handler(host, entry)`, `entry.session`, `entry.label`, `entry.text` | `TA_EFFECT_LOG`, `ta_host_effect_text`, `ta_host_effect_number` | the handling of an effect; `entry` a thin view until the ack |
 | *planned* `Host.actor_state(session, handler, on_error=None)` | `actor.state`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method; the handler at the `REPLY`'s dispatch; the id is a pending row's handle (`ta_table` [8.2]) |
 | *planned* `Host.actor_context(session, handler, on_error=None)` | `actor.context`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | *planned* `Host.actor_list(handler, on_error=None, ...)` | `actor.list`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method; params as requests.md |
