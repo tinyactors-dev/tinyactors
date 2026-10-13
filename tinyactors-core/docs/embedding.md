@@ -106,7 +106,7 @@ handle, string, `WIRE` byte and `TRACEPARENT` text is valid until
 |---|---|---|
 | `TA_EFFECT_SEND` | an I/O processor's send: index `IO_PROCESSOR` in the config's `ioProcessors`; `TA_NIL` is a send to a service you run, keyed by (`SEGMENT`, `TOKEN`) | its reply events (`ta_host_send`), or `TA_EVENT_IN_ERROR_COMMUNICATION` with the `sendid`; a sync processor's before the next run |
 | `TA_EFFECT_INVOKE`, `TA_EFFECT_UNINVOKE` | start or stop the service of type `EVENT` with src `TARGET`, keyed by (`SEGMENT`, `TOKEN`) | events with `TA_EVENT_IN_FROM_INVOKE` and the token; `TA_EVENT_IN_INVOKE_DONE` at its end |
-| `TA_EFFECT_REQUEST` | an `<invoke>` whose dynamic src (`AUXILIARY`) core found no chart for in the segment's image: look it up there (`ta_host_segment_info_get`, `ta_image_chart_by_name`; boundary.md section 12) | `ta_host_resume` with the chart index + 1, or `TA_ERROR_INVALID` (the parent gets `error.execution`) |
+| `TA_EFFECT_REQUEST` | a fetch at run time (it stays, 2026-10-13): an `<invoke srcexpr>` whose name (`AUXILIARY`) core normalized and found no chart for in the requesting segment's image; later also `<data srcexpr>`. The fetching is built out later (boundary.md section 12; `ROADMAP.md`, "Decided later"). Not the control plane | `ta_host_resume` with `TA_ERROR_INVALID` until then (the parent gets `error.execution`): a resume names only a chart of that image, where core has already looked |
 | `TA_EFFECT_WAKE` | load the session's hibernation blob | `ta_host_wake` |
 | `TA_EFFECT_LOG` | a `<log>`: label `AUXILIARY`, text `EVENT`; to your logging | nothing |
 | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` | a root actor finished or faulted: release what you keep for the session | nothing |

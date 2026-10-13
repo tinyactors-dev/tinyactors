@@ -577,36 +577,32 @@ while compiling, and the invoked chart is compiled into the same image
 (`scxml.c:893-896`, `resolve_chart` at `:855-870`). A host has no
 resolver.
 
-**A `TA_EFFECT_REQUEST` is answered from the requesting segment's
-image.** Core gives it for a dynamic `srcexpr`, or a `src` the compiler
-did not match (one with a `typeexpr`, `scxml.c:895`), when its own
-lookup in the segment's image found no chart (`route.c:440-489`; the
-REQUEST at `:491-497`, the name in `AUXILIARY`). The caller, in C,
-looks the name up with `ta_image_chart_by_name` in that segment's image
-(`ta_host_segment_info_get`) and calls `ta_host_resume` with the chart
-index + 1, or with `TA_ERROR_INVALID` for a name the image does not
-have, which raises `error.execution` in the parent (`route.c:544-550`).
-A resume names only a chart of that image (`:544`, `:553`), and nothing
-needs another: the W3C IRP passes with each test's documents compiled
-together, answered as `ta-conform` does (`tools/conform/scenario.c:99-125`).
-As core stands, that lookup repeats the one core made before the
-REQUEST, so it finds nothing and the answer is `TA_ERROR_INVALID`.
-
-**[8.2] `ta_image_chart_by_name` normalizes a `src` name**: it strips
-`file://`, `file:` and `./`, which core strips before its own lookup
-today (`route.c:442-453`) and `ta-conform` strips again
-(`scenario.c:106-114`), so a caller binds that one function and repeats
-nothing (bindings.md section 2: if C does it, bind the C).
+**`TA_EFFECT_REQUEST` stays (2026-10-13; ADR 0012, amended a fifth
+time).** It is how a chart fetches at run time: an `<invoke srcexpr>`
+(or a `src` the compiler did not match, one with a `typeexpr`,
+`scxml.c:895`) whose chart is not in the image, and `<data srcexpr>`
+(not read by the compiler yet, `scxml.c:964-965`). Core normalizes the
+name itself (`file://`, `file:`, `./`, an inline document) and looks it
+up in the requesting segment's image (`route.c:439-489`); it gives the
+REQUEST, the name in `AUXILIARY`, only when that lookup fails
+(`:491-497`). The fetching is built out later. Until then a binding
+answers every REQUEST with `ta_host_resume` and `TA_ERROR_INVALID`, and
+the parent gets `error.execution` (`route.c:544-550`): a resume names
+only a chart of the requesting segment's image (`:544-553`), and core
+has already looked there. What the build-out needs from core is in
+`ROADMAP.md`, "Decided later". A REQUEST is not the control plane:
+`ta_host_post`, `REPLY` and `NOTIFICATION` (section 6;
+ADR 0011) are a different mechanism.
 
 **Rejected.** A fourth parameter for the error (the rule of three
 parameters; root `AGENTS.md`). A resolver keeping every text alive until
 the compilation ends by itself (`ta_runtime_files` owns its texts,
 `runtime.h:32-37`): the compiler already has an arena with exactly that
-lifetime. A resolver on the host answering a REQUEST with a text (the
-design before the fourth amendment): a resume names a chart of the
-segment's image (`route.c:544`, `:553`), a static `src` is already in
-that image, and a dynamic one is answered by a lookup; nothing needs a
-chart compiled at run time.
+lifetime. The compile call's resolver kept on the host to answer a
+REQUEST with a text (the design before the fourth amendment): a resume
+names only a chart of the segment's image (`route.c:544-553`), so the
+text had nowhere to go. How run-time fetching is answered (a runtime
+resolver configured on the host, among others) is decided later.
 
 ## Changing this page
 

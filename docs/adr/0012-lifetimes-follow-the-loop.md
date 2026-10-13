@@ -8,9 +8,10 @@ time 2026-10-13 (decision 5: `ta_growable_arena` built in base, and the
 compiler's `ta_chunk_arena` moved onto it; decision 7, new: the
 resolver's errors and its scratch arena; see "Amended a third time
 (2026-10-13)"); amended a fourth time 2026-10-13 (decision 7: the
-resolver lives only at compile time, a `TA_EFFECT_REQUEST` is answered
-from the requesting segment's image; see "Amended a fourth time
-(2026-10-13)"). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
+resolver lives only at compile time; see "Amended a fourth time
+(2026-10-13)"); amended a fifth time 2026-10-13 (decision 7:
+`TA_EFFECT_REQUEST` stays for run-time fetching; see "Amended a fifth
+time (2026-10-13)"). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
 decision 2 (the host's outputs) and [ADR 0011](0011-the-control-plane-is-posted-messages.md)
 decisions 3 (publication), 4 (`actor.changed`) and 6 (the drain and the
 synchronous `request`).
@@ -424,24 +425,23 @@ typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request
 **The resolver lives only at compile time** (fourth amendment). A
 static `<invoke src>` is fetched through it while compiling, and the
 invoked chart is compiled into the same image (`scxml.c:893-896`,
-`resolve_chart` at `:855-870`). A `TA_EFFECT_REQUEST` is not a
-compilation: core gives it for a dynamic `srcexpr`, or a `src` the
-compiler did not match (one with a `typeexpr`, `scxml.c:895`), when its
-own lookup in the segment's image found no chart (`route.c:440-489`;
-the REQUEST at `:491-497`). It is answered from that image: the name
-looked up with `ta_image_chart_by_name` in the image of the requesting
-segment, then `ta_host_resume` with the chart index + 1, or
-`TA_ERROR_INVALID` for a name the image does not have, which raises
-`error.execution` in the parent (`route.c:544-550`); a resume names
-only a chart of that image (`:544`, `:553`). `ta-conform` answers so
-(`tools/conform/scenario.c:99-125`), and the W3C IRP passes with each
-test's documents compiled together. Nothing turns a resolver's text
-into a chart at run time, and nothing needs to: a host has no resolver,
-and a binding answers a REQUEST in C. [8.2]: the `file://`, `file:` and
-`./` prefixes, which core strips before its own lookup
-(`route.c:442-453`) and `ta-conform` strips again
-(`scenario.c:106-114`), are stripped by `ta_image_chart_by_name` itself
-(`src/image/image.c:401-415`), so a caller binds that one function.
+`resolve_chart` at `:855-870`). Run-time fetching is a different
+thing, `TA_EFFECT_REQUEST`, and it stays (fifth amendment):
+
+**`TA_EFFECT_REQUEST` stays (2026-10-13).** It is how a chart fetches at
+run time: an `<invoke srcexpr>` (or a `src` the compiler did not match)
+whose chart is not in the image, and `<data srcexpr>`. Core normalizes
+the name itself (`file://`, `file:`, `./`, an inline document) and looks
+it up in the requesting segment's image (`route.c:439-489`); it gives the
+REQUEST only when that lookup fails (`:491-497`). The fetching is built
+out later. Until then a binding answers every REQUEST with
+`ta_host_resume` and `TA_ERROR_INVALID`, and the parent gets
+`error.execution` (`route.c:544-550`): a resume names only a chart of the
+requesting segment's image (`:544-553`), and core has already looked
+there. What the build-out needs from core is in `ROADMAP.md`, "Decided
+later". A REQUEST is not the control plane: `ta_host_post`, `REPLY` and
+`NOTIFICATION` ([ADR 0011](0011-the-control-plane-is-posted-messages.md))
+are a different mechanism.
 
 ## Rejected alternatives
 
@@ -635,21 +635,32 @@ The maintainer corrected decision 7, the same day:
 
 - **The resolver lives only at compile time** (decision 7, the
   paragraph after its table). The guide, `boundary.md` section 12 and
-  the bindings' documents had a resolver on the host answering
-  `TA_EFFECT_REQUEST`, and called it open that its text could not become
-  the invoked child. That was wrong: a static `src` is compiled into the
-  same image by the compiler's resolver, and a REQUEST (a dynamic
-  `srcexpr`, or a `src` the compiler did not match) is answered by
-  looking its name up in the requesting segment's own image, as
-  `ta-conform` does (`scenario.c:99-125`). A binding has no resolver on
-  its host and answers a REQUEST in C; a name the image does not have
-  is `TA_ERROR_INVALID`, and the parent gets `error.execution`.
-- **[8.2]: `ta_image_chart_by_name` normalizes a `src` name** (the
-  prefixes `file://`, `file:` and `./`), so neither core's own lookup
-  (`route.c:442-453`) nor `ta-conform` nor a binding repeats it.
+  the bindings' documents had the compiler's resolver on the host. A
+  static `src` is compiled into the same image by the compiler's
+  resolver, and the `Host` has none. (This amendment also said a
+  REQUEST is answered by an image lookup in C and gave `[8.2]` a
+  normalization item; the fifth amendment replaces both.)
 
 Whom it serves first: the binding author, who has one resolver (the
-compile call's) and one answer to a REQUEST (an image lookup in C).
-Who pays: nothing per event or per actor; the lookup moves into one
-function; every binding loses a host parameter and a callback into the
-language.
+compile call's).
+Who pays: nothing per event or per actor; every binding loses a host
+parameter and a callback into the language.
+
+## Amended a fifth time (2026-10-13)
+
+The maintainer decided, the same day: **`TA_EFFECT_REQUEST` stays**, as
+the mechanism for fetching at run time (an `<invoke srcexpr>` whose
+chart is not in the image, and `<data srcexpr>`), which must stay
+supported though the fetching is built out later. Decision 7's
+statement "`TA_EFFECT_REQUEST` stays (2026-10-13)" replaces what the
+fourth amendment said about a REQUEST. The `[8.2]` item
+"`ta_image_chart_by_name` normalizes a `src` name" is withdrawn: the
+normalization is core's, before its own lookup (`route.c:439-489`), and
+nobody after it repeats it. `<data srcexpr>` gives no REQUEST today: the
+compiler reads only `src` and `expr` on a `<data>` (`scxml.c:964-965`),
+and `ta_data_record` has no `srcexpr` (`src/image/records.h:163-167`); it
+is part of the build-out.
+
+Whom it serves first: the application developer, whose chart may name a
+document at run time. Who pays: nothing now; a binding answers a REQUEST
+with one `ta_host_resume` call.

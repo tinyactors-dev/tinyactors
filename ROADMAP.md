@@ -354,14 +354,6 @@ In ADR 0012's order of work, with its second amendment (2026-10-13):
   `document_resolve`, the tests' `test_resolve` and `abort_resolve`, and
   the lint rule's test. A test of a refusal's diagnostic and of a text
   left in scratch.
-- **`ta_image_chart_by_name` normalizes a `src` name** (ADR 0012,
-  decision 7 as amended a fourth time): it strips `file://`, `file:` and
-  `./` (`src/image/image.c:401-415`), so core's own lookup before a
-  `TA_EFFECT_REQUEST` (`route.c:442-453`) and `ta-conform`'s answer to
-  one (`tools/conform/scenario.c:106-114`) drop their copies, and a
-  binding answers a REQUEST with that one function and `ta_host_resume`
-  (the resolver lives only at compile time; boundary.md section 12). A
-  test of each prefix.
 - **One drain at a time:** `ta_host_effects` returns the open batch;
   `ta_host_run` refuses while one is open (`TA_RUN_FAULT`, detail
   `TA_ERROR_STATE`).
@@ -465,9 +457,10 @@ The design, in short (the rulebook has each rule with its evidence):
   `traceparent` is W3C text, passed as the `str`'s UTF-8 and parsed by
   core. A resolver object (`resolve(base, source)`, refusing with
   `tinyactors.ResolveError`) is given to `compile_charts` only: the
-  resolver lives only at compile time, the `Host` has none, and a
-  `TA_EFFECT_REQUEST` is answered in C from the requesting segment's
-  image (ADR 0012, decision 7 as amended a fourth time). A convenience
+  resolver lives only at compile time and the `Host` has none. The
+  extension answers a `TA_EFFECT_REQUEST` (a fetch at run time) in C with
+  `TA_ERROR_INVALID` until run-time fetching is built ("Decided later";
+  ADR 0012, decision 7 as amended a fifth time). A convenience
   layer in Python above it is later work (`DirectoryResolver` among
   it). An I/O processor's handler is `handler(host, send)`, with
   `send.traceparent` (formatted on first read, `None` when untraced),
@@ -782,6 +775,22 @@ free-threaded builds (abi3t, 3.15).
   measurements (download size, call cost) after step 8.5's every-effect work; either way it passes
   the suite.
 - **PostgreSQL**, and other languages, after step 8.5.
+- **Run-time fetching (`<invoke srcexpr>`, `<data srcexpr>`) through
+  `TA_EFFECT_REQUEST`** (decided 2026-10-13: the REQUEST stays; ADR 0012,
+  amended a fifth time). Today core normalizes the name and looks it up
+  in the requesting segment's image (`route.c:439-489`), gives a REQUEST
+  only when that fails (`:491-497`), and a binding answers it with
+  `TA_ERROR_INVALID`. The build-out needs from core:
+  - a resume with a chart of another segment, after the binding has added
+    the fetched document's image (`ta_host_add_image`); today a resume
+    names only a chart of the requesting segment's image (`:544-553`);
+  - a value answer for `<data srcexpr>`, which the compiler does not read
+    yet (`src/compile/scxml.c:964-965`; no `srcexpr` in `ta_data_record`,
+    `src/image/records.h:163-167`), so it gives no REQUEST today;
+  - how the binding is told to fetch: a runtime resolver object
+    configured on the `Host`, not the compile call's resolver.
+
+  It is not the control plane (`ta_host_post`, `REPLY`, `NOTIFICATION`).
 
 ## Requests to core
 
