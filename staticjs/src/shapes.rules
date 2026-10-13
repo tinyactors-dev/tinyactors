@@ -106,6 +106,8 @@ shape KEY_COMPARE(key: text, op: operator, value: operand);   # x => x.key OP c,
 shape ELEMENT_COMPARE(op: operator, value: operand);          # x => x OP c, or c OP x
 shape SUM(element_first: flag);                      # (a, x) => a + x, or x + a
 shape SUM_KEY(key: text, element_first: flag);       # (a, x) => a + x.key, or x.key + a
+shape PUSH_KEY(key: text);                           # MUTATION: (a, x) => { a.push(x.key); return a; }
+shape PUSH();                                        # MUTATION: (a, x) => { a.push(x); return a; }
 
 nonterminal key_of(object: read, key: text);         # object.key, the object a name
 nonterminal fixed(value: operand);       # a value fixed before the callback runs: here, a literal
@@ -217,6 +219,21 @@ SUM_KEY(k, false) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARA
                                             BLOCK_BEGIN, RETURN(BINARY{op: ADD}(NAME{name: a}, key_of(x, k))), BLOCK_END);
 SUM_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
                                            BLOCK_BEGIN, RETURN(BINARY{op: ADD}(key_of(x, k), NAME{name: a})), BLOCK_END);
+
+# MUTATION: (a, x) => { a.push(x.k); return a; }, and a.push(x): reduce's accumulator
+# a, parameter 0, gets the element x, parameter 1, or its property. The
+# call takes its callee, the node before it, as its first child
+# (docs/matcher.md, 11.9.2); one argument, and no other statement.
+nonterminal push_of(receiver: read);                 # a.push, a a name
+
+push_of(a) <- MEMBER{key: "push"}(NAME{name: a});
+
+PUSH_KEY(k) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                      BLOCK_BEGIN, EXPRESSION_STATEMENT(CALL_BEGIN(push_of(a), key_of(x, k), ARGUMENT)),
+                                      RETURN(NAME{name: a}), BLOCK_END);
+PUSH() <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                 BLOCK_BEGIN, EXPRESSION_STATEMENT(CALL_BEGIN(push_of(a), NAME{name: x}, ARGUMENT)),
+                                 RETURN(NAME{name: a}), BLOCK_END);
 
 # ---------------------------------------------------------------------------
 # MUTATION: rewrites (docs/matcher.md, section 12). Where a rewrite's rules

@@ -6019,3 +6019,161 @@ true
 === a sealed array passed to a function that pushes
 (() => { const f = (xs) => { xs.push(1); return xs; }; return f(Object.seal([])); })()
 --- fault staticjs adds and removes no key or element of a sealed
+
+# Pushes into reduce's accumulator, tagged PUSH_KEY and PUSH
+# (docs/matcher.md, section 13): every value and every fault the bytecode
+# gives, each of which runs with shapes on and off (spec_test).
+
+# pushes: values
+
+=== pushes: a key, with and without elements in the initial value
+@shapes PUSH_KEY(kwh) PUSH_KEY(kwh)
+[[{kwh: 1}, {kwh: 2.5}].reduce((acc, r) => { acc.push(r.kwh); return acc; }, []), [{kwh: 3}].reduce((acc, r) => { acc.push(r.kwh); return acc; }, [1, 2])]
+--- value
+[[1,2.5],[1,2,3]]
+
+=== pushes: the element, of every kind
+@shapes - PUSH()
+[1, "a", null, undefined, true, [2], {k: 3}, x => x].reduce((a, x) => { a.push(x); return a; }, []).slice(0, 7)
+--- value
+[1,"a",null,undefined,true,[2],{"k":3}]
+
+=== pushes: past the room of the array, which grows
+@shapes - PUSH() - PUSH_KEY(k)
+(xs => [xs.reduce((a, x) => { a.push(x); return a; }, []), xs.map(n => ({k: n})).reduce((a, x) => { a.push(x.k); return a; }, [0])])([3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3, 2, 3, 8, 4, 6, 2, 6, 4, 3])
+--- value
+[[3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3,2,3,8,4,6,2,6,4,3],[0,3,1,4,1,5,9,2,6,5,3,5,8,9,7,9,3,2,3,8,4,6,2,6,4,3]]
+
+=== pushes: an empty array gives the initial value
+@shapes PUSH_KEY(k) PUSH()
+[[].reduce((a, x) => { a.push(x.k); return a; }, []), [].reduce((a, x) => { a.push(x); return a; }, [7])]
+--- value
+[[],[7]]
+
+=== pushes: a key's values, objects and arrays among them, and the key at different places
+@shapes PUSH_KEY(k)
+[{k: 1}, {j: 0, k: {a: [2]}}, {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, k: [4]}, {k: "s", j: 0}].reduce((a, x) => { a.push(x.k); return a; }, [])
+--- value
+[1,{"a":[2]},[4],"s"]
+
+=== pushes: a missing key pushes undefined
+@shapes PUSH_KEY(k)
+[{k: 1}, {j: 2}, {k: 3}].reduce((a, x) => { a.push(x.k); return a; }, [])
+--- value
+[1,undefined,3]
+
+=== pushes: an own key named toString or push
+@shapes PUSH_KEY(toString) PUSH_KEY(push)
+[[{toString: 2}, {toString: 3}].reduce((a, x) => { a.push(x.toString); return a; }, []), [{push: 4}].reduce((a, x) => { a.push(x.push); return a; }, [])]
+--- value
+[[2,3],[4]]
+
+=== pushes: arrays and strings by length, sets by size, in bytecode
+@shapes PUSH_KEY(length) PUSH_KEY(size)
+[[[1, 2], "abc", {length: 4}].reduce((a, x) => { a.push(x.length); return a; }, []), [new Set([1]), {size: 2}].reduce((a, x) => { a.push(x.size); return a; }, [])]
+--- value
+[[2,3,4],[1,2]]
+
+=== pushes: the same object twice, and the accumulator's elements pushed again
+@shapes - PUSH() PUSH_KEY(k)
+(o => [[o, o].reduce((a, x) => { a.push(x); return a; }, []), [{k: o}, {k: o}].reduce((a, x) => { a.push(x.k); return a; }, [])])({n: 1})
+--- value
+[[{"n":1},{"n":1}],[{"n":1},{"n":1}]]
+
+=== pushes: an iterator's reduce
+@shapes PUSH() PUSH_KEY(k)
+[new Set([1, 2, 3]).values().reduce((a, x) => { a.push(x); return a; }, []), [{k: 4}, {k: 5}].values().reduce((a, x) => { a.push(x.k); return a; }, [])]
+--- value
+[[1,2,3],[4,5]]
+
+=== pushes: reduceRight runs its bytecode
+@shapes PUSH_KEY(k)
+[{k: 1}, {k: 2}].reduceRight((a, x) => { a.push(x.k); return a; }, [])
+--- value
+[2,1]
+
+=== pushes: a tagged push called directly
+@shapes PUSH_KEY(k)
+((a, x) => { a.push(x.k); return a; })([1], {k: 2})
+--- value
+[1,2]
+
+=== pushes: an object of its own push is called as any method, and given back
+@shapes PUSH_KEY(k) -
+[{k: 1}, {k: 2}].reduce((a, x) => { a.push(x.k); return a; }, {n: 0, push: v => v}).n
+--- value
+0
+
+=== pushes: the accumulator made inside the reduce
+@shapes PUSH_KEY(k) PUSH()
+[[{k: 1}, {k: 2}].reduce((a, x) => { a.push(x.k); return a; }, [].concat([0])), [1, 2].reduce((a, x) => { a.push(x); return a; }, [5, 6].slice(1))]
+--- value
+[[0,1,2],[6,1,2]]
+
+=== pushes: a match result as the accumulator keeps its properties
+@shapes - PUSH()
+(m => [m, m.index])([1, 2].reduce((a, x) => { a.push(x); return a; }, "xab".match(/a/)))
+--- value
+[Object.assign(["a",1,2],{"index":1,"input":"xab","groups":undefined}),1]
+
+# pushes: faults, each the bytecode's own
+
+=== pushes: an accumulator that is not an array faults
+@shapes PUSH()
+[1].reduce((a, x) => { a.push(x); return a; }, new Set())
+--- fault this method changes its receiver
+
+=== pushes: a number or a string accumulator faults
+@shapes PUSH_KEY(k) PUSH()
+[[{k: 1}].reduce((a, x) => { a.push(x.k); return a; }, 0), [1].reduce((a, x) => { a.push(x); return a; }, "")]
+--- fault staticjs has methods on arrays, strings, sets, maps, iterators and BigInts only
+
+=== pushes: a frozen accumulator faults
+@shapes - PUSH_KEY(k)
+(xs => { const z = []; Object.freeze(z); return xs.reduce((a, x) => { a.push(x.k); return a; }, z); })([{k: 1}])
+--- fault frozen
+
+=== pushes: a sealed accumulator faults
+@shapes - PUSH()
+(xs => { const z = [0]; Object.seal(z); return xs.reduce((a, x) => { a.push(x); return a; }, z); })([1])
+--- fault sealed
+
+=== pushes: an accumulator a variable still holds faults
+@shapes - PUSH()
+(xs => { const z = []; const r = xs.reduce((a, x) => { a.push(x); return a; }, z); return [r, z]; })([1])
+--- fault held elsewhere
+
+=== pushes: without an initial value, the first element is the array's too and faults
+@shapes PUSH_KEY(k)
+[[0], {k: 1}].reduce((a, x) => { a.push(x.k); return a; })
+--- fault held elsewhere
+
+=== pushes: an accumulator that an element holds faults
+@shapes - PUSH_KEY(k)
+(z => [{k: 1}, {k: z}].reduce((a, x) => { a.push(x.k); return a; }, z))([])
+--- fault held elsewhere
+
+=== pushes: the accumulator pushed into itself faults
+@shapes - PUSH()
+(z => [1, z].reduce((a, x) => { a.push(x); return a; }, z))([])
+--- fault held elsewhere
+
+=== pushes: a key found only on Object.prototype faults
+@shapes PUSH_KEY(toString)
+[{toString: 1}, {}].reduce((a, x) => { a.push(x.toString); return a; }, [])
+--- fault staticjs objects have no prototype
+
+=== pushes: a null element faults for a key
+@shapes PUSH_KEY(k)
+[{k: 1}, null].reduce((a, x) => { a.push(x.k); return a; }, [])
+--- fault cannot read a property of null
+
+=== pushes: a number element faults for a key
+@shapes PUSH_KEY(k)
+[{k: 1}, 2].reduce((a, x) => { a.push(x.k); return a; }, [])
+--- fault staticjs reads properties of objects, arrays, strings, sets, maps and iterators
+
+=== pushes: a tagged push in map runs its bytecode, which faults: the element is the array's
+@shapes PUSH()
+[[1], [2]].map((a, x) => { a.push(x); return a; })
+--- fault held elsewhere

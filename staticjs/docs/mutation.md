@@ -1097,6 +1097,21 @@ Frozen and sealed values:
 | `src/vm.h` | nothing: the section's functions stay (below) |
 | `src/builtins.c` | `sjs_integrity_allows` in `array_insert`, `array_remove`, `array_fill`, `array_splice` and `reverse`; `sort`'s callee in `toSorted`'s takeover (restore its test without the bits) |
 
+Pushes into reduce's accumulator, tagged PUSH_KEY and PUSH (docs/matcher.md,
+section 13):
+
+| File | What is tagged |
+|---|---|
+| `src/shapes.rules` | `PUSH_KEY`, `PUSH`, `push_of` and their rules (`mise run shapes` rewrites `src/shapes.h` and `src/shapes_table.h`) |
+| `tests/matcher_test.c` | their reports in `test_reports` |
+
+Not mutation, and kept on a rollback: rules on a call, which take its
+callee as their first child (`matcher_open`, the generator's check, the
+`SELF` shape of `mise/shapes-test/small.rules`), and shapes with no
+arguments. `matcher_test`'s deepest pushes and its push in
+`test_out_of_memory` test the first with PUSH's rules: without them,
+give those checks a rule on another call.
+
 Not mutation, and kept on a rollback: `Object.freeze`, `Object.isFrozen`,
 `Object.seal` and `Object.isSealed` themselves (`object_integrity`,
 `sjs_integrity_set` at the end of `src/builtins.c`), the bits
