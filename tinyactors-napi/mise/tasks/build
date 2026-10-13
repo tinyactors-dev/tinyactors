@@ -16,5 +16,9 @@
 require_relative '../napi'
 
 NodeAPI.run('mise', 'run', '//tinyactors-core:amalgamate', '--', '--out', NodeAPI::CORE_BUILD.to_s)
-NodeAPI.build_addon
-puts "build: #{NodeAPI::ADDON.relative_path_from(NodeAPI::ROOT)}"
+if NodeAPI.sources.empty?
+  puts 'build: no addon yet (src/): core\'s amalgamation only'
+else
+  NodeAPI.build_addon
+  puts "build: #{NodeAPI::ADDON.relative_path_from(NodeAPI::ROOT)}"
+end
