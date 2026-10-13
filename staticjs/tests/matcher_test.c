@@ -232,6 +232,26 @@ static void test_reports(void) {
     expect_reports("(t, n) => { return n + t; }", SJS_GOAL_EXPRESSION, "APPEND_SUM#6@19 SUM#1@0(true)");
     expect_reports("(a, r) => a + r.kwh", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@10 SUM_KEY#1@0(kwh, false)");
     expect_reports("(a, r) => { return r.kwh + a; }", SJS_GOAL_EXPRESSION, "SUM_KEY#1@0(kwh, true)");
+    /* MUTATION: pushes into reduce's accumulator: a call takes its callee,
+     * the node before it, as its first child (docs/matcher.md, 11.9.2). */
+    expect_reports("(acc, r) => { acc.push(r.kwh); return acc; }", SJS_GOAL_EXPRESSION, "PUSH_KEY#1@0(kwh)");
+    expect_reports("(a, x) => { a.push(x); return a; }", SJS_GOAL_EXPRESSION, "PUSH#1@0()");
+    expect_reports("[].reduce((a, x) => { a.push(x.k); return a; }, [])", SJS_GOAL_EXPRESSION, "PUSH_KEY#4@10(k)");
+    expect_reports("(a, x) => { a.push(x.k.j); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.push(x, x); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.push(...x); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.push(a); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { x.push(a); return x; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.push(x); return x; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.unshift(x); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.push(x); a.push(x); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x, i) => { a.push(x); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.b.push(x); return a; }", SJS_GOAL_EXPRESSION, "MUTATE_PATH#8@12");
+    expect_reports("(a, x) => { a.pop(); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.push(Math.abs(x)); return a; }", SJS_GOAL_EXPRESSION, "");
+    expect_reports("(a, x) => { a.push(x.map(y => y.k)); return a; }", SJS_GOAL_EXPRESSION, "PLUCK#11@25(k)");
+    expect_reports("(a, x) => { a.push(x.reduce((b, y) => { b.push(y); return b; }, [])); return a; }", SJS_GOAL_EXPRESSION,
+                   "PUSH#11@28()");
     /* An arrow's node and start in a call: the call is node 3, the arrow 4. */
     expect_reports("[].map(x => x.k)", SJS_GOAL_EXPRESSION, "PLUCK#4@7(k)");
     expect_reports("[].map(xs => xs.map(x => x.k))", SJS_GOAL_EXPRESSION, "PLUCK#9@20(k)");
@@ -454,6 +474,9 @@ static void test_deepest(void) {
         /* MUTATION: methods called on paths, in their arguments and keys. */
         { "methods on paths", "", "o.a.push(", "1", ")", "", SJS_GOAL_EXPRESSION },
         { "keys of paths", "", "o[p[", "k", "].b].c.pop()", "", SJS_GOAL_EXPRESSION },
+        /* Calls whose callee a rule takes as the first child (11.9.2), each
+         * an argument of the one around it, in a callback that can match. */
+        { "pushes in a callback", "(a, x) => { a.push(", "a.push(", "x", ")", "); return a; }", SJS_GOAL_EXPRESSION },
     };
     counting c = { 0 };
     sjs_allocator allocator = { &c, &test_vtable };
@@ -656,6 +679,11 @@ static void test_out_of_memory(void) {
     const char *operand = "x => x === \"a string literal of sixty-four bytes: with its kind, 65 bytes!!!\"";
     CHECK(sweep_out_of_memory(operand, 1) == 3);
     CHECK(sweep_out_of_memory("x => x === \"short\"", 1) == 2);
+    /* A call's callee, its text kept as the marker's (11.9.2): the records,
+     * their growth twice (three are open at the argument), and the text. */
+    const char *push = "(the_accumulator_of_the_rows, each_row_of_the_whole_table) => { the_accumulator_of_the_rows.push("
+                       "each_row_of_the_whole_table.a_rather_long_name_for_a_key); return the_accumulator_of_the_rows; }";
+    CHECK(sweep_out_of_memory(push, 1) == 4);
     /* MUTATION: the anchored lane past its own cells: ten names open. */
     CHECK(sweep_out_of_memory("a + (b + (c + (d + (e + (f + (g + (h + (i + j))))))))", 0) == 1);
     printf("matcher_test: the matcher's allocations each failed in turn\n");

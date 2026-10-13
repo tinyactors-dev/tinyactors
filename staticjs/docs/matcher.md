@@ -11,7 +11,9 @@ numeric sorts, predicates against a literal and sums (implemented), and
 designs set membership through a captured name. Section 12 adds rewrites:
 rules whose match changes the code the compiler emits, matched by an
 anchored lane in every region and with shapes off (implemented, with one
-rewrite: a mutating method called on a path).
+rewrite: a mutating method called on a path). Section 13 lets a bracket
+rule take the node before it, a call its callee (11.9.2's [brackets]), and
+adds pushes into reduce's accumulator (implemented).
 
 The compiler keeps reinventing small pattern matchers over the events it
 receives: OBJECT_LITERAL gathers static keys until a property breaks the
@@ -308,7 +310,7 @@ action       = "leaf" | "postfix" ( INT | "count" ) | "open" INT KIND
              | "inner" | "close" ;
 field        = lower ":" type ;            (* a name for a member of the event *)
 type         = "count" | "operator" | "number" | "text" | "name" | "read" ;
-shape        = "shape" UPPER "(" param { "," param } ")" ";" ;
+shape        = "shape" UPPER "(" [ param { "," param } ] ")" ";" ;
 param        = lower ":" ( "text" | "flag" | "count" | "number" ) ;
 nonterminal  = "nonterminal" lower "(" [ attribute { "," attribute } ] ")" ";" ;
 attribute    = lower ":" type ;
@@ -583,12 +585,13 @@ comment.
 - A pattern has the right number of children for its event's action.
   `inner` events appear only inside a bracket's child list, `close` events
   never appear in patterns, and a shape is never a child.
-- **No rule on an `open N` event with N > 0** (a call, a logical or
-  conditional operator, an if). The matcher keeps nothing of a bracket that
-  no rule can match any more (5.3), so the cells before such an open, its
-  first children, are not kept for it. Rules there need the matcher to keep
-  cells in dead regions, which costs every compile; they wait for a rule
-  set that needs them (section 10).
+- **No rule on an `open N` event with N > 1**, and a rule on one with
+  N = 1 (a call, a logical or conditional operator, an if) has a node, not
+  a separator, as its first child: the node before the open, its callee or
+  left operand, which the matcher folds into the marker when the bracket
+  opens (11.9.2, section 13). It keeps that node's cell only where a rule
+  can still match; in a dead region the bracket is part of the region, as
+  before. (Until section 13, every N > 0 was refused.)
 - Tests name declared fields. Constants have the field's type (an operator
   name for `operator`). Every variable in a head is bound, and a variable's
   occurrences agree in type (`name` and `read` agree with each other). A
@@ -857,12 +860,13 @@ step(e):
 
 open(e):
     if m is alive and fewer than arity(e) cells are above it: return UNREADABLE
-    no rule on e.kind, or arity(e) > 0:       # it will derive nothing
+    no rule on e.kind, or arity(e) > 0 and m is dead:   # it will derive nothing
         if m is alive: doom(m)
         return OK                             # in a dead region: part of it
     the bracket rules of e.kind whose open tests pass are alive
-    none: if m is alive: doom(m); return OK
-    push a marker for e
+    arity(e) is 1: fold the top cell into them as child 0   # section 13
+    none alive: if m is alive: doom(m); return OK
+    push a marker for e, in the top cell's place when arity(e) is 1
 
 finish(m):                                    # m's bracket closes
     if m is alive: fold the cells above it into it
@@ -2253,6 +2257,11 @@ third build on the first. So item 4 is three commits ([brackets],
 
 #### 11.9.2 [brackets]: rules on `open N` events
 
+Status: implemented with section 13's pushes, as designed here, but for
+the marker: it is built aside, the cell folded into it, and written in the
+cell's place only if a rule is still alive, so that a call no rule wants
+dooms the bracket around it at once, as before.
+
 - **Generator.** Drop the refusal of 4.3. Keep `N <= 1` as a check (every
   `open N` kind has N = 1 today), so the matcher moves at most one record.
   In a pattern, the N first children of the bracket are its first N
@@ -2819,3 +2828,50 @@ and the pc of its last `+`. At ASSIGN_END of `s = ...` it takes the spine
 when that `+` is the value's last instruction and its root is the value's
 first, a read of `s`. Each report costs the compiler a look through its
 open paths (a few), at the innermost `+` of a spine only.
+
+## 13. Calls in a callback: pushes into reduce's accumulator
+
+`rows.reduce((acc, r) => { acc.push(r.kwh); return acc; }, [])` builds an
+array with owned mutation (docs/mutation.md): the accumulator moves into
+the callback, which holds it alone, `push` changes it in place, and
+`return acc` moves it back. That costs a call per element: in bytecode
+`RECEIVER`, `METHOD_MUTATE`, the argument (`TAKE_LOCAL`, `GET_MEMBER`),
+`MUTATE`, `POP`, `TAKE_LOCAL` and `RETURN`, and the loop's step, 10 units
+of fuel and about 1,170 instructions per element (callgrind, 4380a1b),
+of which the callback's frame, the mutation's checks and the method
+lookup take most.
+
+### 13.1 Rules
+
+The callback's body is a call, so its rule is on CALL_BEGIN, an `open 1`
+event: the callee is the node before it. That is 11.9.2's [brackets]:
+the generator accepts a rule on an `open 1` event whose first child is a
+node; `matcher_open` folds the top cell (the callee) into the new marker
+as child 0, in the cell's place, with the cell's text; a dead region
+passes such a bracket over, as its callee was never kept. A record
+replaces a record, so 5.6's bound holds (`matcher_test`: 255 records at
+252 nested pushes in a callback, the deepest the parser takes).
+
+```
+shape PUSH_KEY(key: text);    # (a, x) => { a.push(x.key); return a; }
+shape PUSH();                 # (a, x) => { a.push(x); return a; }
+
+nonterminal push_of(receiver: read);
+push_of(a) <- MEMBER{key: "push"}(NAME{name: a});
+PUSH_KEY(k) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}, BIND{name: x}, PARAMS_END,
+                                      BLOCK_BEGIN, EXPRESSION_STATEMENT(CALL_BEGIN(push_of(a), key_of(x, k), ARGUMENT)),
+                                      RETURN(NAME{name: a}), BLOCK_END);
+PUSH() <- ... the same with NAME{name: x} as the argument
+```
+
+Exactly two parameters, one statement that pushes one argument (a spread
+is SPREAD_ARGUMENT, not ARGUMENT), and `return` of the accumulator. A
+shape may now have no arguments (`PUSH()`, 3.1). The tables grow to 35
+nonterminals and 72 slots: a record is 680 bytes on x86_64, so the first
+1 KiB still holds one.
+
+What it costs a compile: a call in a region a rule can still match (an
+arrow's body) pushes a marker where it used to doom the region, and the
+marker dies at once unless its callee is `name.push`; in a dead region
+nothing changes.
+

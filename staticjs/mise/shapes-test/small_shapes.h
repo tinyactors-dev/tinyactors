@@ -12,6 +12,7 @@ typedef enum {
     SJS_SHAPE_GET,   /* key: text */
     SJS_SHAPE_TWICE, /* key: text, wide: flag */
     SJS_SHAPE_BOUND, /* key: text, op: operator, limit: operand */
+    SJS_SHAPE_SELF,  /* no arguments */
     SJS_SHAPE_COUNT
 } sjs_shape;
 
@@ -51,6 +52,7 @@ static inline const char *sjs_shape_name(uint32_t shape) {
     case SJS_SHAPE_GET: return "GET";
     case SJS_SHAPE_TWICE: return "TWICE";
     case SJS_SHAPE_BOUND: return "BOUND";
+    case SJS_SHAPE_SELF: return "SELF";
     default: return "NONE";
     }
 }

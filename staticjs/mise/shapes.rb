@@ -258,7 +258,7 @@ module StaticJS
         line = take.line
         name = word(:upper, "a shape's name").value
         expect('(')
-        params = typed_list(PARAM_TYPES, 'a parameter')
+        params = peek.value == ')' ? [] : typed_list(PARAM_TYPES, 'a parameter')
         expect(')')
         expect(';')
         ShapeDecl.new(name: name, params: params, line: line)
@@ -651,11 +651,17 @@ module StaticJS
         fail(p.line, "a rewrite (#{p.kind}) cannot be a child") if @rewrites.key?(p.kind) # MUTATION
         e = @events[p.kind] or fail(p.line, "#{p.kind} is not an event kind")
         fail(p.line, "#{p.kind} closes a bracket and is never in a pattern") if e.action == :close
-        if e.action == :open && e.arity.positive?
-          # The matcher keeps nothing of a bracket no rule can match any more
-          # (docs/matcher.md, 5.3), so the cells before such an open, its
-          # first children, are not kept for it.
-          fail(p.line, "#{p.kind} takes the #{e.arity} node(s) before it as its first children, which the matcher does not keep")
+        if e.action == :open && e.arity > 1
+          # The matcher folds the one cell before such an open into its
+          # marker as its first child (docs/matcher.md, 11.9.2); more it
+          # would have to move.
+          fail(p.line, "#{p.kind} takes the #{e.arity} nodes before it as its first children; the matcher takes one")
+        end
+        if e.action == :open && e.arity == 1 && p.children
+          first = p.children.first
+          if first.nil? || (first.is_a?(EventPattern) && @events[first.kind]&.action == :inner)
+            fail(p.line, "#{p.kind}'s first child is the node before it: a pattern of a node, not a separator")
+          end
         end
         if e.action == :inner && where != :sequence
           fail(p.line, "#{p.kind} is a separator: it is only in a bracket's child list")
@@ -955,7 +961,7 @@ module StaticJS
               SJS_SHAPE_NONE = 0,
         C
         shapes.each do |s|
-          params = s.params.map { |name, type, _| "#{name}: #{type}" }.join(', ')
+          params = s.params.empty? ? 'no arguments' : s.params.map { |name, type, _| "#{name}: #{type}" }.join(', ')
           out << format("    %-#{width}s /* %s */\n", "SJS_SHAPE_#{s.name},", params)
         end
         out << <<~C
@@ -978,6 +984,8 @@ module StaticJS
               switch (shape) {
         C
         shapes.each do |s|
+          next if s.params.empty? # the default: no arguments
+
           kinds = s.params.map { |_, type, _| ARG_KINDS.fetch(type) }
           out << "    case SJS_SHAPE_#{s.name}: {\n"
           out << "        static const uint8_t kinds[] = { #{kinds.join(', ')} };\n"

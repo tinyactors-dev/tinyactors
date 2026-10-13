@@ -644,46 +644,58 @@ static sjs_result matcher_node(matcher_step *s) {
 
 /* An open event. A bracket that rules look at, and that one of them can
  * still match, gets a marker. Any other will derive nothing: in a bracket
- * that can still match, that bracket can match no more (a bracket that
- * takes the cells before it as its first children is one such: the
- * generator refuses rules on it); in a dead region it is part of the
- * region. */
+ * that can still match, that bracket can match no more; in a dead region it
+ * is part of the region. A bracket that takes the node before it as its
+ * first child (a call its callee: the generator allows one such node) takes
+ * the cell on top: the marker replaces it, keeps its text, and folds it as
+ * child 0. In a dead region that cell was never kept, so such a bracket is
+ * part of the region (docs/matcher.md, 11.9.2). */
 static sjs_result matcher_open(matcher_step *s) {
     sjs_matcher *m = s->m;
     const shape_event *ev = &shape_events[s->e->kind];
     if (!m->top_dead && matcher_count(m) - (m->top + 1u) < ev->arity) return MATCHER_UNREADABLE;
-    if (ev->rule_count == 0 || ev->arity > 0) {
+    if (ev->rule_count == 0 || (ev->arity > 0 && m->top_dead)) {
         if (!m->top_dead) matcher_doom(m);
         return SJS_OK;
     }
-    sjs_result r = matcher_reserve(m);
-    if (r != SJS_OK) return r;
-    uint32_t at = matcher_count(m);
-    shape_record *marker = matcher_record(m, at);
-    marker->alive = 0;
+    if (ev->arity == 0) {
+        sjs_result r = matcher_reserve(m);
+        if (r != SJS_OK) return r;
+    }
+    uint32_t at = matcher_count(m) - ev->arity;
+    shape_record made;
+    made.alive = 0;
     for (uint32_t j = 0; j < ev->rule_count; j++) {
         const shape_rule *rule = &shape_rules[ev->first_rule + j];
-        s->vars = &marker->slots[rule->first_slot];
+        s->vars = &made.slots[rule->first_slot];
         for (uint32_t v = 0; v < rule->variable_count; v++) s->vars[v].text.offset = SHAPE_TEXT_NONE;
         if (!matcher_tests(s, rule->first_test, rule->test_count)) continue;
-        marker->alive |= 1u << j;
-        marker->cost[j] = 0;
+        made.alive |= 1u << j;
+        made.cost[j] = 0;
     }
-    if (marker->alive == 0) {
+    made.node = s->e->node;
+    made.kind = (uint8_t)s->e->kind;
+    made.marker = 1;
+    made.dead = 0;
+    made.outer = m->top;
+    made.children = 0;
+    made.text_base = m->text.length;
+    if (ev->arity > 0 && made.alive != 0) {
+        /* The cell on top is the first child: its text stays where it is,
+         * now the marker's. */
+        const shape_record *first = matcher_record(m, at);
+        made.text_base = first->text_base;
+        matcher_fold(s, &made, first);
+    }
+    if (made.alive == 0) {
         if (!m->top_dead) matcher_doom(m);
         return SJS_OK;
     }
-    marker->node = s->e->node;
-    marker->kind = (uint8_t)s->e->kind;
-    marker->marker = 1;
-    marker->dead = 0;
-    marker->outer = m->top;
-    marker->children = 0;
-    marker->text_base = m->text.length;
-    m->records.length += (uint32_t)sizeof(shape_record);
+    *matcher_record(m, at) = made;
+    m->records.length = (at + 1u) * (uint32_t)sizeof(shape_record);
     matcher_set_top(m, at);
     matcher_grew(m);
-    return matcher_settle(s, marker, m->text.length);
+    return matcher_settle(s, matcher_record(m, at), m->text.length);
 }
 
 /* The bracket of the innermost marker closes, or the dead region a marker

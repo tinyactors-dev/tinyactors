@@ -16,6 +16,8 @@ typedef enum {
     SJS_SHAPE_ELEMENT_COMPARE, /* op: operator, value: operand */
     SJS_SHAPE_SUM,             /* element_first: flag */
     SJS_SHAPE_SUM_KEY,         /* key: text, element_first: flag */
+    SJS_SHAPE_PUSH_KEY,        /* key: text */
+    SJS_SHAPE_PUSH,            /* no arguments */
     SJS_SHAPE_COUNT
 } sjs_shape;
 
@@ -61,6 +63,10 @@ static inline uint8_t sjs_shape_arg_kind(uint32_t shape, uint32_t i) {
         static const uint8_t kinds[] = { SJS_SHAPE_ARG_TEXT, SJS_SHAPE_ARG_FLAG };
         return i < 2u ? kinds[i] : (uint8_t)SJS_SHAPE_ARG_NONE;
     }
+    case SJS_SHAPE_PUSH_KEY: {
+        static const uint8_t kinds[] = { SJS_SHAPE_ARG_TEXT };
+        return i < 1u ? kinds[i] : (uint8_t)SJS_SHAPE_ARG_NONE;
+    }
     default: return SJS_SHAPE_ARG_NONE;
     }
 }
@@ -75,6 +81,8 @@ static inline const char *sjs_shape_name(uint32_t shape) {
     case SJS_SHAPE_ELEMENT_COMPARE: return "ELEMENT_COMPARE";
     case SJS_SHAPE_SUM: return "SUM";
     case SJS_SHAPE_SUM_KEY: return "SUM_KEY";
+    case SJS_SHAPE_PUSH_KEY: return "PUSH_KEY";
+    case SJS_SHAPE_PUSH: return "PUSH";
     default: return "NONE";
     }
 }

@@ -2,8 +2,9 @@
 # bracket, chain), nested patterns made nonterminals and merged when equal,
 # two chain rules written before the order they run in, costs, a number and
 # a text constant, an operand field read beside a number field of the same
-# event, and an operator and an operand as a shape's parameters; and a
-# rewrite, whose anchored rules take every form they can (a leaf, a postfix
+# event, an operator and an operand as a shape's parameters, a shape with
+# none, and a bracket rule on a call, which takes its callee, the node
+# before it, as its first child; and a rewrite, whose anchored rules take every form they can (a leaf, a postfix
 # event over its first operand, a bracket over the node before it, a chain
 # rule). Its tables are small_shapes.h and small_table.txt.
 
@@ -25,10 +26,12 @@ event END close;
 shape GET(key: text);
 shape TWICE(key: text, wide: flag);
 shape BOUND(key: text, op: operator, limit: operand);
+shape SELF();
 nonterminal key_of(object: read, key: text);
 nonterminal value(object: read, key: text);
 nonterminal operand(object: read, key: text);
 nonterminal length_of(object: read);
+nonterminal call_of(object: read);
 
 operand(o, k) <- value(o, k);
 value(o, k) <- key_of(o, k) cost 1;
@@ -43,6 +46,8 @@ TWICE(k, false) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS
                                            BINARY{op: SUBTRACT}(key_of(x, k), length_of(x)));
 BOUND(k, o, c) <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END,
                                          BINARY{op: o}(key_of(x, k), NUMBER{operand: c}));
+call_of(x) <- CALL_BEGIN(key_of(x, k), NAME{name: x}, ARGUMENT);
+SELF() <- ARROW_BEGIN{params: 1}(PARAM{index: 0}, BIND{name: x}, PARAMS_END, call_of(x));
 
 rewrite POP_PATH;
 nonterminal place();

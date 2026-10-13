@@ -274,7 +274,8 @@ The compiler tags a function whose body has a known shape
 COMPARE_BY_KEY, `(a, b) => a - b` is COMPARE_NUMERIC, `x => x.key OP c` is
 KEY_COMPARE, `x => x OP c` is ELEMENT_COMPARE (OP a strict equality or
 an order, `c` a literal), `(a, x) => a + x` is SUM and `(a, x) => a +
-x.key` is SUM_KEY. A loop built-in may run such a callback in C, as `map`
+x.key` is SUM_KEY, and `(a, x) => { a.push(x.key); return a; }` is
+PUSH_KEY (`a.push(x)`: PUSH). A loop built-in may run such a callback in C, as `map`
 does with PLUCK (so do `Object.groupBy`, `Array.from` and `Map.groupBy`, and an iterator's `map`, which runs as map), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC (and so `sort`, which is its loop: docs/mutation.md),
 `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `some` and `every` with
 KEY_COMPARE and ELEMENT_COMPARE (and an iterator's `filter`, `find`,
@@ -283,11 +284,10 @@ which adds from the last element: another order, another floating-point sum)
 (`pluck_step`, `sort_by_key`, `sort_numbers`, `predicate_step` and
 `sum_step` in `src/builtins.c`). The tag only
 says what the bytecode computes; the bytecode is still there, and the C
-path must give exactly what it gives. A callback that is a call, such as
-`x => re.test(x)` or `x => s.has(x.k)`, has no shape yet: its rule would be
-on a CALL_BEGIN bracket that takes its callee from before it, which the
-generator refuses for shapes (`docs/matcher.md` 4.3; 11.9 designs the
-change).
+path must give exactly what it gives. A rule may look at a call, whose
+callee is the node before its CALL_BEGIN (`docs/matcher.md`, section 13);
+a callback that calls a captured name, such as `x => re.test(x)` or
+`x => s.has(x.k)`, has no shape yet (11.9.3).
 
 - **Set it up once per loop.** `shape_start` (from `sjs_loop_start`) notes
   the shape, its key and its flag in the loop frame when the callback is a
