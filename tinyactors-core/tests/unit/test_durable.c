@@ -972,7 +972,7 @@ static int host_run(world *w) {
         }
         ta_host_stats stats;
         stats.size = sizeof stats;
-        host_stats_fill(w->host, &stats);
+        CHECK_EQUAL(host_stats_fill(w->host, &stats), TA_OK);
         if (!n && result.status == TA_RUN_IDLE && !stats.jobs) return 1;
     }
     fprintf(stderr, "  %s: does not settle\n", w->label);
@@ -1565,7 +1565,7 @@ static int run_seed(int seed, int steps) {
     {
         ta_host_stats host_stats;
         host_stats.size = sizeof host_stats;
-        host_stats_fill(hst->host, &host_stats);
+        CHECK_EQUAL(host_stats_fill(hst->host, &host_stats), TA_OK);
         ran.host_migrated += host_stats.migrated;
     }
     ran.hibernated += (unsigned long)per->hibernation_count;

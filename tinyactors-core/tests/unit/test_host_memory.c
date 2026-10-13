@@ -463,10 +463,12 @@ static void workload_run(workload *w) {
         if (last != TA_NIL) {
             ta_bytes wrong[3] = {restored_images[0], restored_images[1], restored_images[2]};
             wrong[last] = restored_images[(last + 1) % 3];
-            CHECK_EQUAL(test_host_restore(&restored_config,
-                                          &(ta_host_snapshot_input){{0, 0}, {hs, hl}, wrong, 3, 0},
-                                          &restored),
-                        TA_ERROR_INVALID);
+            /* Allocation can be refused before image validation. The
+             * existing retry checks that refusal, then still requires the
+             * wrong-image error and the same leak-free cleanup below. */
+            RETRY(m, TA_ERROR_INVALID,
+                  test_host_restore(&restored_config,
+                                    &(ta_host_snapshot_input){{0, 0}, {hs, hl}, wrong, 3, 0}, &restored));
             CHECK(restored == NULL);
             CHECK_EQUAL(m->live_blocks, live);
         }
@@ -478,8 +480,8 @@ static void workload_run(workload *w) {
         CHECK_EQUAL(ta_datamodel_ecmascript_restore(copy.ecmascript, (ta_bytes){ds, dl}), TA_OK);
         ta_host_stats a, b;
         a.size = b.size = sizeof a;
-        host_stats_fill(w->host, &a);
-        host_stats_fill(restored, &b);
+        RETRY(m, TA_OK, host_stats_fill(w->host, &a));
+        RETRY(m, TA_OK, host_stats_fill(restored, &b));
         CHECK(a.actors == b.actors && a.segments == b.segments);
         run_idle(&copy, restored);
         ta_host_free(restored);
@@ -677,7 +679,7 @@ static void test_fixed_arena(void) {
         ta_host_effects_ack(host);
     ta_host_stats host_stats;
     host_stats.size = sizeof host_stats;
-    host_stats_fill(host, &host_stats);
+    CHECK_EQUAL(host_stats_fill(host, &host_stats), TA_OK);
     CHECK_EQUAL(host_stats.routed, 2); /* ping and pong, between the segments */
     ta_actor_info info;
     info.size = sizeof info;

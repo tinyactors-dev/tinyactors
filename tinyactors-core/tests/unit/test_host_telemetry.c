@@ -284,7 +284,7 @@ static void test_same_bytes(void) {
             if (k == 1) {
                 ta_host_stats stats;
                 stats.size = sizeof stats;
-                host_stats_fill(b.host, &stats);
+                CHECK_EQUAL(host_stats_fill(b.host, &stats), TA_OK);
                 ta_otlp_mark(otlp, stats.fuel_clock, 1700000000000000000ull + t);
                 ta_system *system = ta_host_system(b.host, b.segment);
                 ta_otlp_input input;
@@ -321,7 +321,7 @@ static void test_same_bytes(void) {
     {
         ta_host_stats stats;
         stats.size = sizeof stats;
-        host_stats_fill(b.host, &stats);
+        CHECK_EQUAL(host_stats_fill(b.host, &stats), TA_OK);
         ta_otlp_mark(otlp, stats.fuel_clock, 1700000000000000000ull + 50);
         ta_system *system = ta_host_system(b.host, b.segment);
         ta_otlp_input input;

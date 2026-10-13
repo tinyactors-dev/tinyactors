@@ -1122,7 +1122,7 @@ static void test_trace_two_segments(void) {
     }
     ta_host_stats stats;
     stats.size = sizeof stats;
-    host_stats_fill(nodes[A].host, &stats);
+    CHECK_EQUAL(host_stats_fill(nodes[A].host, &stats), TA_OK);
     CHECK(pong && stats.fuel_clock >= pong->fuel);
     close_all();
     free(echo_bytes);

@@ -134,13 +134,25 @@ TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *te
     return TA_OK;
 }
 
-/* {"method": "host.stats"}'s "host" map as a ta_host_stats (out->size: set by this). */
-TEST_UNUSED static void host_stats_fill(ta_host *host, ta_host_stats *out) {
+/* Read the public host.stats reply into out (sets out->size). Return the
+ * post/decode status, or TA_ERROR_NO_MEMORY for the method's -32004 memory
+ * error reply (requests.md), so refusal cannot masquerade as statistics.
+ * Other error replies are TA_ERROR_INVALID. On refusal out is cleared;
+ * callers must check or retry the status before comparing statistics. */
+TEST_UNUSED static ta_status host_stats_fill(ta_host *host, ta_host_stats *out) {
     static host_ask a;
     memset(out, 0, sizeof *out);
     out->size = sizeof *out;
     ask_begin(&a, "host.stats", 0);
-    if (ask_send(host, &a) != TA_OK) return;
+    ta_status status = ask_send(host, &a);
+    if (status != TA_OK) return status;
+    if (a.result == TA_NIL) {
+        uint32_t error = ta_cbor_member(&a.document, 0, ta_string("error"));
+        uint32_t code = ta_cbor_member(&a.document, error, ta_string("code"));
+        if (code != TA_NIL && a.document.tokens[code].kind == TA_CBOR_NEGINT &&
+            a.document.tokens[code].value == 32003u) return TA_ERROR_NO_MEMORY; /* -32004 */
+        return TA_ERROR_INVALID;
+    }
     uint32_t m = ask_field(&a, 0, "host");
     out->segments = (uint32_t)ask_uint(&a, m, "segments");
     out->actors = (uint32_t)ask_uint(&a, m, "actors");
@@ -153,6 +165,7 @@ TEST_UNUSED static void host_stats_fill(ta_host *host, ta_host_stats *out) {
     out->migrated = ask_uint(&a, m, "migrated");
     out->retired = ask_uint(&a, m, "retired");
     out->fuel_clock = ask_uint(&a, m, "fuelClock");
+    return TA_OK;
 }
 
 /* {"method": "host.stats"}'s "charts" into out (up to capacity); returns how many

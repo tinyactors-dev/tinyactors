@@ -297,7 +297,7 @@ static void test_routing_between_segments(void) {
     CHECK_EQUAL(e.routed_out_count, 0);
     ta_host_stats stats;
     stats.size = sizeof stats;
-    host_stats_fill(e.host, &stats);
+    CHECK_EQUAL(host_stats_fill(e.host, &stats), TA_OK);
     CHECK(stats.routed == 2 && stats.segments == 2 && stats.actors == 2);
 
     /* nobody has that session: error.communication; another system without a
@@ -332,7 +332,7 @@ static void test_routing_between_segments(void) {
     }
     CHECK_EQUAL(ta_host_send_many(e.host, events, 40), 40);
     run(&e);
-    host_stats_fill(e.host, &stats);
+    CHECK_EQUAL(host_stats_fill(e.host, &stats), TA_OK);
     CHECK_EQUAL(stats.actors, 42);
     /* enumeration, in chunks */
     uint64_t cursor = 0, out[16];
@@ -740,7 +740,7 @@ static void test_snapshot_restore(void) {
     CHECK(strcmp(e.done_data, "{\"n\":5}") == 0);
     ta_host_stats stats;
     stats.size = sizeof stats;
-    host_stats_fill(e.host, &stats);
+    CHECK_EQUAL(host_stats_fill(e.host, &stats), TA_OK);
     CHECK(stats.routed >= 2 && stats.segments == 2);
     free(hs);
     free(ds);
@@ -862,7 +862,7 @@ static void test_adopt_tree_collision(void) {
     CHECK_EQUAL(ta_host_locate(b.host, root, &(ta_host_location){0, 0}), TA_ERROR_STALE);
     ta_host_stats stats;
     stats.size = sizeof stats;
-    host_stats_fill(b.host, &stats);
+    CHECK_EQUAL(host_stats_fill(b.host, &stats), TA_OK);
     CHECK_EQUAL(stats.actors, 1u);
     /* once session 2 has left b, the tree moves in */
     CHECK_EQUAL(ta_host_export_actor(b.host, kid, &written), TA_OK);
