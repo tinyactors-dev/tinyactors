@@ -159,7 +159,7 @@ typedef struct {
     uint32_t generation;
     uint32_t ccount;
     uint32_t ncount;
-    uint32_t pending;         /* an edge of the cache whose step is taken and whose start is not, plus one */
+    uint32_t pending;         /* an edge of the cache whose step is taken and whose start is not, or 0 (edge 0 is none) */
     uint32_t *cpc;
     uint32_t *npc;
     uint32_t *cslots;
@@ -557,7 +557,10 @@ static bool rx_skips(const rx_search *s) {
  * depends on the state, the character's class and the next character's
  * (or the end): every instruction that consumes, every assertion and the
  * skip treat the characters of a class alike (sjs_regex_dfa_classes,
- * sorted once when the pattern compiles: rx_dfa_map). An edge is learned
+ * sorted once when the pattern compiles: rx_dfa_map). Of the next
+ * character only the assertions and the skip ask, so its class is a
+ * coarser one, of those predicates alone (dfa_next): a row of edges is
+ * the classes by the coarser ones and the end. An edge is learned
  * by running the automaton itself once, and keeps what it visited
  * and copied in the step and in the start, so a search that takes it counts
  * the same work, and fuel, as the automaton (docs/regex.md, 9.1), and stops
@@ -572,7 +575,7 @@ static bool rx_skips(const rx_search *s) {
  */
 
 #define RX_DFA_BYTES 8192u
-#define RX_DFA_CLASSES 16u
+#define RX_DFA_CLASSES 32u
 #define RX_DFA_BUCKETS 256u
 /* The most instructions a pattern has for the cache, and distinct ones
  * among them that consume: sorting the characters into classes reads each
@@ -603,7 +606,8 @@ typedef struct {
 } rx_dfa_edge;
 
 typedef struct {
-    uint32_t k;               /* classes (rx_dfa_map); the next character's have one more, the end; 0 before set up */
+    uint32_t k;               /* classes (rx_dfa_map); 0 before set up */
+    uint32_t next;            /* the coarser classes of the character after (dfa_next); the end is one more */
     uint32_t states;
     uint32_t state_cap;
     uint32_t edges;
@@ -613,7 +617,7 @@ typedef struct {
     uint16_t buckets[RX_DFA_BUCKETS];  /* states by hash, plus one */
     rx_dfa_state *state;
     uint32_t *pc;
-    uint16_t *row;            /* an edge plus one, or 0 for one not learned */
+    uint16_t *row;            /* an edge, or 0 for one not learned (edge 0 is none) */
     rx_dfa_edge *edge;
 } rx_dfa;
 
@@ -694,69 +698,98 @@ static void rx_dfa_holds(const sjs_regexp *re, uint32_t which, uint64_t *set) {
     }
 }
 
-/* Sort the ASCII characters into classes that every predicate treats
- * alike, for the program `re` (whose code, classes, ranges and lead are
- * set), once when it compiles: the number of classes, with each
- * character's in `classes`, numbered in the order of their first
- * characters; or 0 when the program has more than RX_DFA_CODE
- * instructions, more distinct instructions that consume than
- * RX_DFA_CONSUMERS, or more classes than RX_DFA_CLASSES. An instruction
- * like one before it splits nothing more, so each distinct one is read
- * once. Each class is a set of 128 bits, which each predicate splits in
- * two where it holds for some of the class and not for the rest. */
-uint32_t sjs_regex_dfa_classes(const sjs_regexp *re, uint8_t *classes) {
-    if (re->count > RX_DFA_CODE) return 0;
-    uint32_t seen[2u * RX_DFA_CONSUMERS];
-    uint32_t seen_count = 0;
-    uint64_t set[2u * RX_DFA_CLASSES];
-    set[0] = UINT64_MAX;
-    set[1] = UINT64_MAX;
-    uint32_t k = 1;
-    for (uint32_t which = 0; which < re->count + 3u; which++) {
-        if (which < re->count) {
-            const rx_ins *ins = &re->code[which];
-            if (ins->op > RX_CLASS) continue;
-            uint32_t i = 0;
-            while (i < seen_count && (seen[2u * i] != ins->op || seen[2u * i + 1u] != ins->x)) i++;
-            if (i < seen_count) continue;
-            if (seen_count == RX_DFA_CONSUMERS) return 0;
-            seen[2u * seen_count] = ins->op;
-            seen[2u * seen_count + 1u] = ins->x;
-            seen_count++;
-        }
-        uint64_t holds[2];
-        rx_dfa_holds(re, which, holds);
-        uint32_t before = k;
-        for (uint32_t i = 0; i < before; i++) {
-            uint64_t in[2] = { set[2u * i] & holds[0], set[2u * i + 1u] & holds[1] };
-            uint64_t out[2] = { set[2u * i] & ~holds[0], set[2u * i + 1u] & ~holds[1] };
-            if ((in[0] | in[1]) == 0 || (out[0] | out[1]) == 0) continue;
-            if (k == RX_DFA_CLASSES) return 0;
-            set[2u * i] = in[0];
-            set[2u * i + 1u] = in[1];
-            set[2u * k] = out[0];
-            set[2u * k + 1u] = out[1];
-            k++;
-        }
+/* Split each of the `*k` classes in `sets` (128 bits each) in two where
+ * `holds` holds for some of its characters and not for the rest: false
+ * when that would make more than RX_DFA_CLASSES. */
+static bool rx_dfa_split(uint64_t *sets, uint32_t *k, const uint64_t *holds) {
+    uint32_t before = *k;
+    for (uint32_t i = 0; i < before; i++) {
+        uint64_t in[2] = { sets[2u * i] & holds[0], sets[2u * i + 1u] & holds[1] };
+        uint64_t out[2] = { sets[2u * i] & ~holds[0], sets[2u * i + 1u] & ~holds[1] };
+        if ((in[0] | in[1]) == 0 || (out[0] | out[1]) == 0) continue;
+        if (*k == RX_DFA_CLASSES) return false;
+        sets[2u * i] = in[0];
+        sets[2u * i + 1u] = in[1];
+        sets[2u * *k] = out[0];
+        sets[2u * *k + 1u] = out[1];
+        (*k)++;
     }
-    /* Each class numbered by the order of its first character: the
-     * classes whose first characters come before it. */
+    return true;
+}
+
+/* Number the `k` classes in `sets` by the order of their first characters
+ * (the classes whose first characters come before it), each character's
+ * in `classes`. */
+static void rx_dfa_number(const uint64_t *sets, uint32_t k, uint8_t *classes) {
     uint32_t first[RX_DFA_CLASSES];
     for (uint32_t i = 0; i < k; i++) {
-        first[i] = set[2u * i] != 0 ? (uint32_t)__builtin_ctzll(set[2u * i]) : 64u + (uint32_t)__builtin_ctzll(set[2u * i + 1u]);
+        first[i] = sets[2u * i] != 0 ? (uint32_t)__builtin_ctzll(sets[2u * i]) : 64u + (uint32_t)__builtin_ctzll(sets[2u * i + 1u]);
     }
     for (uint32_t i = 0; i < k; i++) {
         uint8_t rank = 0;
         for (uint32_t m = 0; m < k; m++) rank = (uint8_t)(rank + (first[m] < first[i] ? 1u : 0u));
         for (uint32_t half = 0; half < 2u; half++) {
-            uint64_t bits = set[2u * i + half];
+            uint64_t bits = sets[2u * i + half];
             while (bits != 0) {
                 classes[64u * half + (uint32_t)__builtin_ctzll(bits)] = rank;
                 bits &= bits - 1u;
             }
         }
     }
-    return k;
+}
+
+/* Sort the ASCII characters into classes that every predicate treats
+ * alike, for the program `re` (whose code, classes, ranges and lead are
+ * set), once when it compiles, into its dfa_classes, with each
+ * character's class in `map`; and into the coarser classes that the
+ * predicates past the program alone treat alike (word characters, line
+ * terminators, the skip's), which are all that bear on the character after
+ * an edge's (rx_dfa_run), into its dfa_next, with each character's in
+ * `map` + 128. Classes are numbered in the order of their first
+ * characters. dfa_classes is 0 when the program has more than RX_DFA_CODE
+ * instructions, more distinct instructions that consume than
+ * RX_DFA_CONSUMERS, or more classes than RX_DFA_CLASSES. An instruction
+ * like one before it splits nothing more, so each distinct one is read
+ * once. Each class is a set of 128 bits, which each predicate splits in
+ * two where it holds for some of the class and not for the rest; the
+ * classes after all the predicates do not depend on their order, so the
+ * coarser ones come first. */
+void sjs_regex_dfa_classes(sjs_regexp *re, uint16_t *map) {
+    re->dfa_classes = 0;
+    re->dfa_next = 0;
+    if (re->count > RX_DFA_CODE) return;
+    uint64_t sets[2u * RX_DFA_CLASSES];
+    sets[0] = UINT64_MAX;
+    sets[1] = UINT64_MAX;
+    uint32_t k = 1;
+    uint64_t holds[2];
+    for (uint32_t which = re->count; which < re->count + 3u; which++) {
+        rx_dfa_holds(re, which, holds);
+        if (!rx_dfa_split(sets, &k, holds)) return;
+    }
+    uint32_t next = k;
+    uint8_t coarse[RX_DFA_ASCII];
+    rx_dfa_number(sets, k, coarse);
+    uint32_t seen[2u * RX_DFA_CONSUMERS];
+    uint32_t seen_count = 0;
+    for (uint32_t which = 0; which < re->count; which++) {
+        const rx_ins *ins = &re->code[which];
+        if (ins->op > RX_CLASS) continue;
+        uint32_t i = 0;
+        while (i < seen_count && (seen[2u * i] != ins->op || seen[2u * i + 1u] != ins->x)) i++;
+        if (i < seen_count) continue;
+        if (seen_count == RX_DFA_CONSUMERS) return;
+        seen[2u * seen_count] = ins->op;
+        seen[2u * seen_count + 1u] = ins->x;
+        seen_count++;
+        rx_dfa_holds(re, which, holds);
+        if (!rx_dfa_split(sets, &k, holds)) return;
+    }
+    uint8_t fine[RX_DFA_ASCII];
+    rx_dfa_number(sets, k, fine);
+    for (uint32_t c = 0; c < RX_DFA_ASCII; c++) map[c] = (uint16_t)((fine[c] * (next + 1u)) << RX_DFA_NEXT_BITS | coarse[c]);
+    re->dfa_classes = (uint8_t)k;
+    re->dfa_next = (uint8_t)next;
 }
 
 /* Set the cache up when the search first runs from it: its arrays over
@@ -767,18 +800,19 @@ static void rx_dfa_setup(rx_search *s) {
     uint8_t *at = (uint8_t *)(void *)d + ((sizeof(rx_dfa) + 15u) & ~(size_t)15u);
     uint8_t *end = (uint8_t *)(void *)d + RX_DFA_BYTES;
     d->k = k;
+    d->next = s->re->dfa_next;
     d->states = 1;
-    d->edges = 0;
+    d->edges = 1;
     d->pcs = 0;
     for (uint32_t i = 0; i < RX_DFA_BUCKETS; i++) d->buckets[i] = 0;
     d->edge = (rx_dfa_edge *)(void *)at;
-    d->edge_cap = RX_DFA_EDGES;
-    at += RX_DFA_EDGES * sizeof(rx_dfa_edge);
+    d->edge_cap = RX_DFA_EDGES + 1u;
+    at += (RX_DFA_EDGES + 1u) * sizeof(rx_dfa_edge);
     d->pc = (uint32_t *)(void *)at;
     d->pc_cap = RX_DFA_PCS;
     at += RX_DFA_PCS * sizeof(uint32_t);
-    /* Each state, and its row of edges: k classes by k + 1. */
-    size_t row = (size_t)k * (k + 1u) * sizeof(uint16_t);
+    /* Each state, and its row of edges: k classes by the next + 1. */
+    size_t row = (size_t)k * (d->next + 1u) * sizeof(uint16_t);
     size_t each = sizeof(rx_dfa_state) + row;
     uint32_t cap = (uint32_t)((size_t)(end - at) / each);
     d->state_cap = cap < 0xFFFFu ? cap : 0xFFFEu;
@@ -816,7 +850,7 @@ static bool rx_dfa_intern(rx_search *s, uint32_t *out) {
         b = (b + 1u) & (RX_DFA_BUCKETS - 1u);
     }
     if (d->buckets[b] != 0 || d->states == d->state_cap || count > d->pc_cap - d->pcs) return false;
-    uint32_t row = d->k * (d->k + 1u);
+    uint32_t row = d->k * (d->next + 1u);
     rx_dfa_state *st = &d->state[d->states];
     st->pcs = d->pcs;
     st->count = count;
@@ -886,7 +920,7 @@ static uint8_t rx_dfa_learn(rx_search *s, rx_dfa_at *at, uint64_t until) {
     const rx_dfa_state *to = &d->state[target];
     d->edge[d->edges] = (rx_dfa_edge){ target, to->stops ? RX_DFA_STOPS : to->row, (uint32_t)step_visits, (uint32_t)step_copies,
                                        (uint32_t)all_visits, (uint32_t)all_copies };
-    d->row[d->state[at->id].row + at->entry] = (uint16_t)++d->edges;
+    d->row[d->state[at->id].row + at->entry] = (uint16_t)d->edges++;
     at->id = target;
     return skips ? RX_DFA_TOP : RX_DFA_LISTED;
 }
@@ -902,7 +936,7 @@ __attribute__((noinline)) static uint8_t rx_dfa_run(rx_search *s, uint64_t until
     bool holds = s->pending == 0;
     if (!holds) {
         /* The start the step left, then on from the edge's target. */
-        const rx_dfa_edge *edge = &rx_dfa_of(s)->edge[s->pending - 1u];
+        const rx_dfa_edge *edge = &rx_dfa_of(s)->edge[s->pending];
         s->pending = 0;
         s->visits += edge->visits - edge->step_visits;
         s->copies += edge->copies - edge->step_copies;
@@ -922,17 +956,17 @@ __attribute__((noinline)) static uint8_t rx_dfa_run(rx_search *s, uint64_t until
         }
     }
     const rx_dfa *d = rx_dfa_of(s);
-    const uint8_t *classes = rx_dfa_map(s->re);
+    const uint16_t *classes = rx_dfa_map(s->re);
+    const uint32_t mask = (1u << RX_DFA_NEXT_BITS) - 1u;
     const uint8_t *text = s->in.text;
     uint32_t length = s->in.length;
-    uint32_t width = d->k + 1u;
     uint32_t byte = s->pos >> 1;
     uint32_t from = byte;
     uint64_t visits = s->visits;
     uint64_t copies = s->copies;
     uint32_t pending = 0;
     /* The class of the character at `byte`, times the width of a row. */
-    uint32_t here = byte < length ? classes[text[byte]] * width : 0;
+    uint32_t here = byte < length ? (uint32_t)classes[text[byte]] >> RX_DFA_NEXT_BITS : 0;
     for (;;) {
         const rx_dfa_state *st = &d->state[id];
         if (st->stops || byte >= length) break;
@@ -940,23 +974,26 @@ __attribute__((noinline)) static uint8_t rx_dfa_run(rx_search *s, uint64_t until
          * budget lasts and no state stops; what is left, below. */
         uint32_t row = st->row;
         while (byte + 1u < length) {
-            uint32_t next = classes[text[byte + 1u]];
-            uint32_t e = d->row[row + here + next];
+            uint32_t c = classes[text[byte + 1u]];
+            uint32_t e = d->row[row + here + (c & mask)];
             if (e == 0) break;
-            const rx_dfa_edge *edge = &d->edge[e - 1u];
+            const rx_dfa_edge *edge = &d->edge[e];
             if (visits + edge->step_visits >= until) break;
             visits += edge->visits;
             copies += edge->copies;
             byte++;
             holds = false;
-            here = next * width;
+            here = c >> RX_DFA_NEXT_BITS;
             id = edge->target;
             row = edge->row;
             if (row == RX_DFA_STOPS) break;
         }
         st = &d->state[id];
         if (st->stops || byte >= length) break;
-        uint32_t after = byte + 1u < length ? classes[text[byte + 1u]] : d->k;
+        uint32_t c = byte + 1u < length ? classes[text[byte + 1u]] : 0;
+        uint32_t after = byte + 1u < length ? (c & mask) : d->next;
+        /* The class of the character after, times the width of a row. */
+        uint32_t there = c >> RX_DFA_NEXT_BITS;
         uint32_t e = d->row[st->row + here + after];
         if (e == 0) {
             if (!holds) rx_dfa_load(s, id, byte);
@@ -971,11 +1008,11 @@ __attribute__((noinline)) static uint8_t rx_dfa_run(rx_search *s, uint64_t until
             from = byte;
             visits = s->visits;
             copies = s->copies;
-            here = after * width;
+            here = there;
             holds = true;
             continue;
         }
-        const rx_dfa_edge *edge = &d->edge[e - 1u];
+        const rx_dfa_edge *edge = &d->edge[e];
         byte++;
         holds = false;
         if (visits + edge->step_visits >= until) {
@@ -988,7 +1025,7 @@ __attribute__((noinline)) static uint8_t rx_dfa_run(rx_search *s, uint64_t until
         }
         visits += edge->visits;
         copies += edge->copies;
-        here = after * width;
+        here = there;
         id = edge->target;
     }
     s->generation += 2u * (byte - from);

@@ -72,7 +72,7 @@
  * rows) and .literal (/;r\d+/ and /Qr\d/i on text, whose first character
  * never occurs there: [false,false]) and .test.many (every row's id and a
  * comma, 32 times, tested by /^(?:r\d{5}[05],)+$/, which the cache of a
- * test takes, and by a pattern of more than 16 classes, which it refuses:
+ * test takes, and by a pattern of 25 classes, which it took only from 32:
  * the ids ending in 0 or 5, and those ending in 5 below r100000, each count
  * times 5 or 10 less n: [0,0]) (L);
  * eval.object.spread-reduce (C);
@@ -573,9 +573,9 @@ static const bench_case cases[] = {
       .source = "/(a+)+$/.test(\"a\".repeat(xs.length) + \"b\")",
       .globals = { { "xs", FIX_XS, NULL } }, .expect = "false", .check = CHECK_SAME },
     /* Many tests over medium strings (each row's id and a comma, 32 times:
-     * long enough to run as loops), by one pattern the cache takes and one
-     * it refuses (more than 16 classes): what each call pays besides the
-     * search. */
+     * long enough to run as loops), by one pattern of 7 classes and one of
+     * 25, which the cache took only from 32: what each call pays besides
+     * the search. */
     { .name = "eval.regex.test.many", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "(ls => [ls.filter(s => /^(?:r\\d{5}[05],)+$/.test(s)).length * 5 - ls.length,"
                 " ls.filter(s => /,r(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|0)\\d{4}5,/.test(s)).length * 10 - ls.length])"

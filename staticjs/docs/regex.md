@@ -1162,13 +1162,14 @@ Each departure below was made because Node or the code said otherwise.
 - **A lazy DFA for `test` only (12.3), whose fuel is the automaton's.**
   `eval.regex.test` asked for it: the Pike VM spent about 550 instructions
   a character there. A `test` over an ASCII input that runs as a loop
-  (not sticky, a program of at most 256 instructions and at most 16
+  (not sticky, a program of at most 256 instructions and at most 32
   classes) keeps a cache of 8 KiB after its job, in the loop's block
   (`rx_dfa_of` in `src/regex_match.c`), set up the first time the search
   runs from it. The classes are sorted once, when the pattern compiles
   (`sjs_regex_dfa_classes`, which splits sets of 128 bits by each
   predicate's set), and the value keeps the class of each ASCII
-  character, 128 bytes after its text (`rx_dfa_map`), or nothing when
+  character, and its coarser class (below), packed in 16 bits as the
+  rows read them, 256 bytes before its text (`rx_dfa_map`), or nothing when
   the program has more classes, whose tests then make no cache. Before,
   every test that ran as a loop allocated the cache and sorted the
   classes again, asking up to 259 predicates of each of 128 characters.
@@ -1178,10 +1179,14 @@ Each departure below was made because Node or the code said otherwise.
   position's closure. So a list of threads after its position's start
   thread, as program counters, and whether a match is found, is a state;
   the step over a character with the next position's start thread is an
-  edge, the same for every pair of character classes (each instruction
-  that consumes, `\w`, the line terminators and the skip's leading
-  character treat the characters of a class alike; at most 16 classes,
-  the end of the input one more for the next character). An edge is
+  edge, the same for every character class and class of the character
+  after (each instruction that consumes, `\w`, the line terminators and
+  the skip's leading character treat the characters of a class alike; at
+  most 32 classes). Of the character after, only `\w`, the line
+  terminators and the skip ask, so its class is a coarser one, of those
+  predicates alone (`dfa_next`, at most 8, the end of the input one more):
+  a state's row of edges is the classes by the coarser ones, which lets a
+  pattern with more classes fit in the cache. An edge is
   learned by running the automaton itself once, and keeps what it visited
   and copied in the step and in the start, so fuel is the automaton's to
   the unit, whichever runs, and a step of the loop ends at the same
@@ -1194,4 +1199,7 @@ Each departure below was made because Node or the code said otherwise.
   and without (`sjs_vm_config`'s `no_regex_dfa`), and requires the same
   outcome, fuel and pauses; `regex_test` does so on its random patterns,
   and `api_test` on long inputs. On `eval.regex.test` it takes about 12
-  times fewer instructions.
+  times fewer instructions. Raising the classes from 16 to 32 with the
+  coarser row took `eval.regex.test.many`'s second pattern
+  (`a|b|...|q|0`: 25 classes, 4 coarser ones) from the automaton into the
+  cache: about 5 times fewer instructions on the row.
