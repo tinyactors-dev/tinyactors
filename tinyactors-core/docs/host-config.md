@@ -107,6 +107,25 @@ and `tracing` (bool, default `true`: the trace records are written, so a
 binding can turn on export or a watch later without making the host
 again).
 
+**Every capacity is a segment's initial size, not a cap.** When a pool or
+slab of a segment fills, a run answers `TA_RUN_EXHAUSTED` and the host
+grows that segment, between runs, into a block twice as large
+(`segment_grow` in `src/host/host.c`): `maxActors`, `maxEvents`,
+`maxTimers`, `maxRequests`, `workspaces`, `stringBytes`, `traceContexts`
+and `traceBytes` double, each clamped to its limit, and `instanceBytes`
+is derived again. A value given here doubles like a default: `traceBytes`
+included, so an explicit `traceBytes` is the journal's starting size, not
+a bound on trace memory (accepted 2026-10-13; until then only a defaulted
+journal grew, through `maxEvents`). Why the defaults are small:
+
+- **`stringBytes`: 16384 + 16 × `maxActors`** (17408 at 64 actors), the
+  system's default for every segment. Until 2026-10-13 the host gave each
+  new segment its own default of 32768 instead; with one default in one
+  place (`ta_system_config_normalize`), a segment starts with about half
+  the string memory, and a workload with many or long strings grows the
+  segment earlier (accepted 2026-10-13: memory per segment over fewer
+  relocations).
+
 `telemetry` (present: the host has an encoder and gives
 `TA_HOST_EFFECT_TRACES` and `TA_HOST_EFFECT_LOGS`):
 - uints, 0 or absent for the encoder's default (`ta_otlp_config` in
