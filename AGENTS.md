@@ -27,7 +27,7 @@ in system memory, no allocation after init).
 
 ## Releases and changelogs
 
-Each component (core, napi, otlp, scxml, tinyxml) has a `CHANGELOG.md` in
+Each component (core, napi, otlp, scxml, staticjs, tinyxml) has a `CHANGELOG.md` in
 its directory, and a release of it needs a section there that passes
 `mise run changelog:check <component>`
 ([ADR 0002](docs/adr/0002-changelogs.md)). To prepare a release, use the

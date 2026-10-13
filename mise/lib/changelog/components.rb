@@ -48,6 +48,8 @@ module Changelog
                   api_files: %w[include/tinyactors_otlp.h], api_ignore: VERSION_MACROS),
     Component.new(name: 'scxml', dir: 'tinyactors-scxml', scopes: %w[scxml],
                   api_json: 'include/ta_scxml.api.json', api_ignore: VERSION_MACROS),
+    Component.new(name: 'staticjs', dir: 'staticjs', scopes: %w[staticjs],
+                  api_json: 'include/staticjs.api.json', api_ignore: VERSION_MACROS),
     Component.new(name: 'tinyxml', dir: 'tinyxml', scopes: %w[tinyxml txml],
                   api_json: 'include/txml.api.json', api_ignore: VERSION_MACROS)
   ].freeze

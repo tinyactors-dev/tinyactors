@@ -1,0 +1,40 @@
+#!/usr/bin/env ruby
+#MISE description="Describe the public API as include/staticjs.api.json, or verify the checked-in description"
+#MISE depends=["amalgamate"]
+#USAGE flag "--check" help="Fail when the checked-in description is out of date, instead of writing it"
+# vim:ft=ruby
+
+# Reads include/staticjs.h with the pinned clang (mise/lib/c_api.rb, as
+# core's api does): the functions declared with SJS_API, the sjs_ types with
+# their layouts on x86_64, aarch64 and wasm32, and the SJS_ constants; which
+# functions the amalgamations implement (include/staticjs.c, and
+# include/staticjs_wasm.c for wasm); and which only wasm has. The release
+# exports exactly the implemented functions (CRelease.api_functions), the
+# wasm test reads its struct layouts from it, and the changelog compares it
+# between releases.
+
+require_relative '../staticjs'
+require 'c_api'
+require 'c_release'
+
+project = CRelease::Project.new(name: 'staticjs', prefix: 'sjs')
+check = ENV['usage_check'] == 'true' || ARGV.include?('--check')
+abort 'usage: mise run api [--check]' unless (ARGV - ['--check']).empty?
+
+sources = { nil => [project.amalgamation, Toolchain::Target.host, []] }
+wasm = project.platform_amalgamation('wasm')
+sources['wasm'] = [wasm, Toolchain::Target.release('wasm32-freestanding'), []] if wasm.file?
+begin
+  description = CAPI.describe(header: project.header, macro: project.api_macro, prefix: "#{project.prefix}_",
+                              sources: sources, version: CRelease.header_version(project))
+rescue CAPI::Error, Toolchain::Error => e
+  abort "api: include/staticjs.h cannot be described:\n#{e.message}"
+end
+text = CAPI.render(description)
+path = project.api
+current = path.file? && path.read == text
+relative = path.relative_path_from(StaticJS::ROOT)
+abort "api: #{relative} is out of date; run mise run api" if check && !current
+path.write(text) unless check || current
+puts "api: #{check || current ? 'current' : 'wrote'}: #{relative} (#{description['functions'].size} functions, " \
+     "#{description['types'].size} types, #{description['constants'].size} constants)"

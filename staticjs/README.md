@@ -778,6 +778,50 @@ The first stage of the proposal: the language. Not done yet, in the
 proposal's order: the data model (`tinyactors-staticjs`); a hash index for
 large objects and sets; a static cost estimate.
 
+## Using a release
+
+staticjs is released on its own, tagged `staticjs/v<version>`, its version
+`SJS_VERSION_MAJOR`, `_MINOR` and `_PATCH` in `include/staticjs.h`
+(root [ADR 0001](../docs/adr/0001-packaging-and-releases.md)). A release's
+assets:
+
+| Asset | Contents |
+|---|---|
+| `staticjs-<version>-src.tar.gz` | `staticjs.h`; `staticjs.c`, the amalgamation, every source as one file whose functions outside the API are static; `staticjs_wasm.c`, the wasm module's allocator; and `staticjs.api.json`, the API description |
+| `staticjs-<version>-<target>.tar.gz`, for `aarch64-macos`, `x86_64-macos`, `x86_64-linux`, `aarch64-linux` | `include/staticjs.h`, `lib/libstaticjs.a` and the shared library (`libstaticjs.so.<major>.<minor>` with a `libstaticjs.so` link, or `libstaticjs.<major>.<minor>.dylib`) |
+| `staticjs-<version>-wasm32.tar.gz` | `staticjs.wasm`, which imports nothing, and `include/staticjs.h` |
+| `staticjs-<version>.json` | the manifest: commit, zig, flags, and every file's hash |
+
+plus `SHA256SUMS`. Every tarball carries the repository's `LICENSE` and the
+notices of the code `src/math.c` and `src/number.c` port: `LICENSE.fdlibm`
+(fdlibm's, which FreeBSD's cbrt shares) and `LICENSE.v8`.
+
+The libraries call no C library and export the `sjs_*` API alone; they leave
+nothing undefined, so one Linux library serves glibc and musl. Link one, or
+compile the amalgamation into a program:
+
+```sh
+cc -Iinclude app.c lib/libstaticjs.a                     # static
+cc -Iinclude app.c -Llib -lstaticjs -Wl,-rpath,"$PWD/lib"  # shared
+cc -I. app.c staticjs.c                                  # from the source tarball
+```
+
+A program gives a context its allocator (`sjs_context_config`), compiles a
+source, and runs it on the fuel it pushes; `tests/release/staticjs_smoke.c`
+is a whole program that does so, and the release runs it against the
+libraries of the machine it runs on and, in containers, of each Linux
+target.
+
+`staticjs.wasm` is for browsers: load it with
+`WebAssembly.instantiate(bytes, {})`. It has its own allocator: pass
+`sjs_wasm_allocator()` as a context's allocator, place what a call reads (a
+config, a source) with `sjs_wasm_alloc`, and give it back with
+`sjs_wasm_free` and the size and alignment it asked for. The C ABI for
+wasm32 passes a struct by value as a pointer to a copy and returns one
+through a pointer given first; a `uint64_t` (fuel) is a BigInt. The struct
+layouts are in `staticjs.api.json`, under `layout.wasm32`.
+`tests/wasm/release_test.mjs` evaluates a program through the module so.
+
 ## Tasks
 
 ```sh
@@ -791,6 +835,12 @@ mise run check-recursion    # no cycle in the call graph
 mise run check-freestanding # builds for every release target, wasm32 included, with no C library
 mise run asan               # the tests under AddressSanitizer and UBSan
 mise run diff-node          # the spec against JavaScript
+mise run amalgamate [--check] # include/staticjs.c and staticjs_wasm.c, the single-file library, or check them
+mise run api [--check]      # include/staticjs.api.json, the API description, or check it
+mise run wasm-test          # staticjs.wasm, built as the release builds it, run in Node
+mise run dist [debug]       # dist/: the header, amalgamation, API description and libstaticjs.a for this machine
+mise run release -- <version> --build-only  # build, verify and pack every target: a look at a release
+mise run release -- <version> [--skip-containers] [--skip-tests] [--publish]  # a dry run, or with --publish the release
 mise run bench [filter] [--quick]                  # the benchmarks, optimized: throughput and memory
 mise run bench-compare <commit> [--runs=3] [--store] # this tree against another commit, side by side
 ```

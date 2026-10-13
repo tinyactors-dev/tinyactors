@@ -1,0 +1,3180 @@
+{
+  "format": "c-api/1",
+  "header": "staticjs.h",
+  "version": "0.9.0",
+  "targets": [
+    "x86_64",
+    "aarch64",
+    "wasm32"
+  ],
+  "constants": [
+    {
+      "name": "SJS_ARRAY",
+      "value": 6
+    },
+    {
+      "name": "SJS_BIGINT",
+      "value": 5
+    },
+    {
+      "name": "SJS_BOOLEAN",
+      "value": 2
+    },
+    {
+      "name": "SJS_ERROR_FAULT",
+      "value": 6
+    },
+    {
+      "name": "SJS_ERROR_LIMIT",
+      "value": 4
+    },
+    {
+      "name": "SJS_ERROR_MEMORY",
+      "value": 5
+    },
+    {
+      "name": "SJS_ERROR_NAME",
+      "value": 3
+    },
+    {
+      "name": "SJS_ERROR_NONE",
+      "value": 0
+    },
+    {
+      "name": "SJS_ERROR_SYNTAX",
+      "value": 1
+    },
+    {
+      "name": "SJS_ERROR_UNSUPPORTED",
+      "value": 2
+    },
+    {
+      "name": "SJS_ERR_INVALID",
+      "value": -1
+    },
+    {
+      "name": "SJS_ERR_LIMIT",
+      "value": -3
+    },
+    {
+      "name": "SJS_ERR_NOMEM",
+      "value": -2
+    },
+    {
+      "name": "SJS_ERR_NOT_FOUND",
+      "value": -4
+    },
+    {
+      "name": "SJS_ERR_PROGRAM",
+      "value": -5
+    },
+    {
+      "name": "SJS_EV_ARGUMENT",
+      "value": 24
+    },
+    {
+      "name": "SJS_EV_ARRAY_BEGIN",
+      "value": 9
+    },
+    {
+      "name": "SJS_EV_ARRAY_END",
+      "value": 12
+    },
+    {
+      "name": "SJS_EV_ARRAY_PATTERN_BEGIN",
+      "value": 55
+    },
+    {
+      "name": "SJS_EV_ARRAY_PATTERN_END",
+      "value": 57
+    },
+    {
+      "name": "SJS_EV_ARROW_BEGIN",
+      "value": 36
+    },
+    {
+      "name": "SJS_EV_ARROW_END",
+      "value": 40
+    },
+    {
+      "name": "SJS_EV_ASSIGN",
+      "value": 50
+    },
+    {
+      "name": "SJS_EV_ASSIGN_END",
+      "value": 51
+    },
+    {
+      "name": "SJS_EV_BIGINT",
+      "value": 72
+    },
+    {
+      "name": "SJS_EV_BINARY",
+      "value": 30
+    },
+    {
+      "name": "SJS_EV_BIND",
+      "value": 54
+    },
+    {
+      "name": "SJS_EV_BLOCK_BEGIN",
+      "value": 41
+    },
+    {
+      "name": "SJS_EV_BLOCK_END",
+      "value": 43
+    },
+    {
+      "name": "SJS_EV_BLOCK_STATEMENT_BEGIN",
+      "value": 44
+    },
+    {
+      "name": "SJS_EV_BLOCK_STATEMENT_END",
+      "value": 45
+    },
+    {
+      "name": "SJS_EV_CALL_BEGIN",
+      "value": 23
+    },
+    {
+      "name": "SJS_EV_CALL_END",
+      "value": 26
+    },
+    {
+      "name": "SJS_EV_CHAIN_END",
+      "value": 22
+    },
+    {
+      "name": "SJS_EV_COMPUTED_KEY",
+      "value": 15
+    },
+    {
+      "name": "SJS_EV_CONDITIONAL",
+      "value": 33
+    },
+    {
+      "name": "SJS_EV_CONDITIONAL_ELSE",
+      "value": 34
+    },
+    {
+      "name": "SJS_EV_CONDITIONAL_END",
+      "value": 35
+    },
+    {
+      "name": "SJS_EV_CONST_BEGIN",
+      "value": 65
+    },
+    {
+      "name": "SJS_EV_CONST_END",
+      "value": 66
+    },
+    {
+      "name": "SJS_EV_DEFAULT",
+      "value": 63
+    },
+    {
+      "name": "SJS_EV_DEFAULT_END",
+      "value": 64
+    },
+    {
+      "name": "SJS_EV_DELETE",
+      "value": 53
+    },
+    {
+      "name": "SJS_EV_ELEMENT",
+      "value": 10
+    },
+    {
+      "name": "SJS_EV_ELSE",
+      "value": 47
+    },
+    {
+      "name": "SJS_EV_END",
+      "value": 74
+    },
+    {
+      "name": "SJS_EV_EXPORT",
+      "value": 67
+    },
+    {
+      "name": "SJS_EV_EXPORT_DEFAULT",
+      "value": 69
+    },
+    {
+      "name": "SJS_EV_EXPORT_FROM",
+      "value": 71
+    },
+    {
+      "name": "SJS_EV_EXPORT_NAME",
+      "value": 70
+    },
+    {
+      "name": "SJS_EV_EXPRESSION_STATEMENT",
+      "value": 49
+    },
+    {
+      "name": "SJS_EV_FALSE",
+      "value": 4
+    },
+    {
+      "name": "SJS_EV_IF",
+      "value": 46
+    },
+    {
+      "name": "SJS_EV_IF_END",
+      "value": 48
+    },
+    {
+      "name": "SJS_EV_IMPORT",
+      "value": 68
+    },
+    {
+      "name": "SJS_EV_INDEX",
+      "value": 20
+    },
+    {
+      "name": "SJS_EV_KEY",
+      "value": 14
+    },
+    {
+      "name": "SJS_EV_LOGICAL",
+      "value": 31
+    },
+    {
+      "name": "SJS_EV_LOGICAL_END",
+      "value": 32
+    },
+    {
+      "name": "SJS_EV_MEMBER",
+      "value": 19
+    },
+    {
+      "name": "SJS_EV_NAME",
+      "value": 6
+    },
+    {
+      "name": "SJS_EV_NEW_BEGIN",
+      "value": 27
+    },
+    {
+      "name": "SJS_EV_NEW_END",
+      "value": 28
+    },
+    {
+      "name": "SJS_EV_NULL",
+      "value": 5
+    },
+    {
+      "name": "SJS_EV_NUMBER",
+      "value": 1
+    },
+    {
+      "name": "SJS_EV_OBJECT_BEGIN",
+      "value": 13
+    },
+    {
+      "name": "SJS_EV_OBJECT_END",
+      "value": 18
+    },
+    {
+      "name": "SJS_EV_OBJECT_PATTERN_BEGIN",
+      "value": 58
+    },
+    {
+      "name": "SJS_EV_OBJECT_PATTERN_END",
+      "value": 62
+    },
+    {
+      "name": "SJS_EV_OPTIONAL",
+      "value": 21
+    },
+    {
+      "name": "SJS_EV_PARAM",
+      "value": 37
+    },
+    {
+      "name": "SJS_EV_PARAMS_END",
+      "value": 39
+    },
+    {
+      "name": "SJS_EV_PATTERN_COMPUTED_KEY",
+      "value": 60
+    },
+    {
+      "name": "SJS_EV_PATTERN_INDEX",
+      "value": 56
+    },
+    {
+      "name": "SJS_EV_PATTERN_KEY",
+      "value": 59
+    },
+    {
+      "name": "SJS_EV_PATTERN_REST",
+      "value": 61
+    },
+    {
+      "name": "SJS_EV_PROPERTY",
+      "value": 16
+    },
+    {
+      "name": "SJS_EV_REGEXP",
+      "value": 73
+    },
+    {
+      "name": "SJS_EV_REST_PARAM",
+      "value": 38
+    },
+    {
+      "name": "SJS_EV_RETURN",
+      "value": 42
+    },
+    {
+      "name": "SJS_EV_SPREAD_ARGUMENT",
+      "value": 25
+    },
+    {
+      "name": "SJS_EV_SPREAD_ELEMENT",
+      "value": 11
+    },
+    {
+      "name": "SJS_EV_SPREAD_PROPERTY",
+      "value": 17
+    },
+    {
+      "name": "SJS_EV_STRING",
+      "value": 2
+    },
+    {
+      "name": "SJS_EV_TEMPLATE_BEGIN",
+      "value": 7
+    },
+    {
+      "name": "SJS_EV_TEMPLATE_END",
+      "value": 8
+    },
+    {
+      "name": "SJS_EV_TRUE",
+      "value": 3
+    },
+    {
+      "name": "SJS_EV_UNARY",
+      "value": 29
+    },
+    {
+      "name": "SJS_EV_UPDATE",
+      "value": 52
+    },
+    {
+      "name": "SJS_FUNCTION",
+      "value": 11
+    },
+    {
+      "name": "SJS_GOAL_EXPRESSION",
+      "value": 0
+    },
+    {
+      "name": "SJS_GOAL_MODULE",
+      "value": 1
+    },
+    {
+      "name": "SJS_IMPORT_MODULE",
+      "value": 3
+    },
+    {
+      "name": "SJS_IMPORT_NAME",
+      "value": 0
+    },
+    {
+      "name": "SJS_IMPORT_NAMESPACE",
+      "value": 1
+    },
+    {
+      "name": "SJS_IMPORT_STAR",
+      "value": 2
+    },
+    {
+      "name": "SJS_ITERATOR",
+      "value": 10
+    },
+    {
+      "name": "SJS_MAP",
+      "value": 9
+    },
+    {
+      "name": "SJS_NEED_SPACE",
+      "value": 1
+    },
+    {
+      "name": "SJS_NULL",
+      "value": 1
+    },
+    {
+      "name": "SJS_NUMBER",
+      "value": 3
+    },
+    {
+      "name": "SJS_OBJECT",
+      "value": 7
+    },
+    {
+      "name": "SJS_OK",
+      "value": 0
+    },
+    {
+      "name": "SJS_OP_ADD",
+      "value": 1
+    },
+    {
+      "name": "SJS_OP_AND",
+      "value": 13
+    },
+    {
+      "name": "SJS_OP_COALESCE",
+      "value": 15
+    },
+    {
+      "name": "SJS_OP_DIVIDE",
+      "value": 4
+    },
+    {
+      "name": "SJS_OP_EXPONENT",
+      "value": 20
+    },
+    {
+      "name": "SJS_OP_GREATER",
+      "value": 8
+    },
+    {
+      "name": "SJS_OP_GREATER_EQUAL",
+      "value": 9
+    },
+    {
+      "name": "SJS_OP_IN",
+      "value": 12
+    },
+    {
+      "name": "SJS_OP_LESS",
+      "value": 6
+    },
+    {
+      "name": "SJS_OP_LESS_EQUAL",
+      "value": 7
+    },
+    {
+      "name": "SJS_OP_MULTIPLY",
+      "value": 3
+    },
+    {
+      "name": "SJS_OP_NEGATE",
+      "value": 17
+    },
+    {
+      "name": "SJS_OP_NOT",
+      "value": 16
+    },
+    {
+      "name": "SJS_OP_OR",
+      "value": 14
+    },
+    {
+      "name": "SJS_OP_PLUS",
+      "value": 18
+    },
+    {
+      "name": "SJS_OP_REMAINDER",
+      "value": 5
+    },
+    {
+      "name": "SJS_OP_STRICT_EQUAL",
+      "value": 10
+    },
+    {
+      "name": "SJS_OP_STRICT_NOT_EQUAL",
+      "value": 11
+    },
+    {
+      "name": "SJS_OP_SUBTRACT",
+      "value": 2
+    },
+    {
+      "name": "SJS_OP_TYPEOF",
+      "value": 19
+    },
+    {
+      "name": "SJS_REGEXP",
+      "value": 12
+    },
+    {
+      "name": "SJS_RUN_DONE",
+      "value": 0
+    },
+    {
+      "name": "SJS_RUN_FAULT",
+      "value": 2
+    },
+    {
+      "name": "SJS_RUN_PAUSED",
+      "value": 1
+    },
+    {
+      "name": "SJS_SET",
+      "value": 8
+    },
+    {
+      "name": "SJS_STRING",
+      "value": 4
+    },
+    {
+      "name": "SJS_TEMPORAL",
+      "value": 13
+    },
+    {
+      "name": "SJS_UNDEFINED",
+      "value": 0
+    },
+    {
+      "name": "SJS_VERSION",
+      "value": 2304
+    },
+    {
+      "name": "SJS_VERSION_MAJOR",
+      "value": 0
+    },
+    {
+      "name": "SJS_VERSION_MINOR",
+      "value": 9
+    },
+    {
+      "name": "SJS_VERSION_PATCH",
+      "value": 0
+    }
+  ],
+  "types": {
+    "sjs_result": {
+      "kind": "alias",
+      "type": "int32_t"
+    },
+    "sjs_str": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": "const char *"
+        },
+        {
+          "name": "length",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "length": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "length": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "length": 4
+          }
+        }
+      }
+    },
+    "sjs_bytes": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": "const uint8_t *"
+        },
+        {
+          "name": "length",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "length": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "length": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "length": 4
+          }
+        }
+      }
+    },
+    "sjs_position": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "offset",
+          "type": "uint32_t"
+        },
+        {
+          "name": "line",
+          "type": "uint32_t"
+        },
+        {
+          "name": "column",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "offset": 0,
+            "line": 4,
+            "column": 8
+          }
+        },
+        "aarch64": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "offset": 0,
+            "line": 4,
+            "column": 8
+          }
+        },
+        "wasm32": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "offset": 0,
+            "line": 4,
+            "column": 8
+          }
+        }
+      }
+    },
+    "sjs_error_code": {
+      "kind": "enum",
+      "constants": [
+        "SJS_ERROR_NONE",
+        "SJS_ERROR_SYNTAX",
+        "SJS_ERROR_UNSUPPORTED",
+        "SJS_ERROR_NAME",
+        "SJS_ERROR_LIMIT",
+        "SJS_ERROR_MEMORY",
+        "SJS_ERROR_FAULT"
+      ]
+    },
+    "sjs_error": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "code",
+          "type": "sjs_error_code"
+        },
+        {
+          "name": "at",
+          "type": "sjs_position"
+        },
+        {
+          "name": "message",
+          "type": "sjs_str"
+        },
+        {
+          "name": "subject",
+          "type": "sjs_str"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "code": 0,
+            "at": 4,
+            "message": 16,
+            "subject": 32
+          }
+        },
+        "aarch64": {
+          "size": 48,
+          "align": 8,
+          "offsets": {
+            "code": 0,
+            "at": 4,
+            "message": 16,
+            "subject": 32
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "code": 0,
+            "at": 4,
+            "message": 16,
+            "subject": 24
+          }
+        }
+      }
+    },
+    "sjs_allocator_free_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": "void *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "alignment",
+          "type": "size_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "size": 8,
+            "alignment": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "size": 8,
+            "alignment": 16
+          }
+        },
+        "wasm32": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "size": 4,
+            "alignment": 8
+          }
+        }
+      }
+    },
+    "sjs_allocator_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "alloc",
+          "type": "void *(*)(void *, size_t, size_t)"
+        },
+        {
+          "name": "free",
+          "type": "void (*)(void *, const sjs_allocator_free_params *)"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "alloc": 0,
+            "free": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "alloc": 0,
+            "free": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "alloc": 0,
+            "free": 4
+          }
+        }
+      }
+    },
+    "sjs_allocator": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": "void *"
+        },
+        {
+          "name": "v",
+          "type": "const sjs_allocator_vtable *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "sjs_limits": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "max_source_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_token_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_nesting",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_lookahead",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_held_events",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_stack",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_frames",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_value_items",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_string_bytes",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_bigint_bits",
+          "type": "uint32_t"
+        },
+        {
+          "name": "max_regex_states",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 44,
+          "align": 4,
+          "offsets": {
+            "max_source_bytes": 0,
+            "max_token_bytes": 4,
+            "max_nesting": 8,
+            "max_lookahead": 12,
+            "max_held_events": 16,
+            "max_stack": 20,
+            "max_frames": 24,
+            "max_value_items": 28,
+            "max_string_bytes": 32,
+            "max_bigint_bits": 36,
+            "max_regex_states": 40
+          }
+        },
+        "aarch64": {
+          "size": 44,
+          "align": 4,
+          "offsets": {
+            "max_source_bytes": 0,
+            "max_token_bytes": 4,
+            "max_nesting": 8,
+            "max_lookahead": 12,
+            "max_held_events": 16,
+            "max_stack": 20,
+            "max_frames": 24,
+            "max_value_items": 28,
+            "max_string_bytes": 32,
+            "max_bigint_bits": 36,
+            "max_regex_states": 40
+          }
+        },
+        "wasm32": {
+          "size": 44,
+          "align": 4,
+          "offsets": {
+            "max_source_bytes": 0,
+            "max_token_bytes": 4,
+            "max_nesting": 8,
+            "max_lookahead": 12,
+            "max_held_events": 16,
+            "max_stack": 20,
+            "max_frames": 24,
+            "max_value_items": 28,
+            "max_string_bytes": 32,
+            "max_bigint_bits": 36,
+            "max_regex_states": 40
+          }
+        }
+      }
+    },
+    "sjs_context": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "sjs_context_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "allocator",
+          "type": "sjs_allocator"
+        },
+        {
+          "name": "limits",
+          "type": "sjs_limits"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "limits": 16
+          }
+        },
+        "aarch64": {
+          "size": 64,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "limits": 16
+          }
+        },
+        "wasm32": {
+          "size": 52,
+          "align": 4,
+          "offsets": {
+            "allocator": 0,
+            "limits": 8
+          }
+        }
+      }
+    },
+    "sjs_kind": {
+      "kind": "enum",
+      "constants": [
+        "SJS_UNDEFINED",
+        "SJS_NULL",
+        "SJS_BOOLEAN",
+        "SJS_NUMBER",
+        "SJS_STRING",
+        "SJS_BIGINT",
+        "SJS_ARRAY",
+        "SJS_OBJECT",
+        "SJS_SET",
+        "SJS_MAP",
+        "SJS_ITERATOR",
+        "SJS_FUNCTION",
+        "SJS_REGEXP",
+        "SJS_TEMPORAL"
+      ]
+    },
+    "sjs_heap": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "sjs_value": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "uint8_t"
+        },
+        {
+          "name": "internal",
+          "type": "uint8_t"
+        },
+        {
+          "name": "reserved",
+          "type": "uint16_t"
+        },
+        {
+          "name": "boolean",
+          "type": "uint32_t"
+        },
+        {
+          "name": "as",
+          "type": "union (unnamed at /home/user/tinyactors/staticjs/include/staticjs.h:233:5)"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "internal": 1,
+            "reserved": 2,
+            "boolean": 4,
+            "as": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "internal": 1,
+            "reserved": 2,
+            "boolean": 4,
+            "as": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "internal": 1,
+            "reserved": 2,
+            "boolean": 4,
+            "as": 8
+          }
+        }
+      }
+    },
+    "sjs_property": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "key",
+          "type": "sjs_str"
+        },
+        {
+          "name": "value",
+          "type": "sjs_value"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 8
+          }
+        }
+      }
+    },
+    "sjs_map_entry": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "key",
+          "type": "sjs_value"
+        },
+        {
+          "name": "value",
+          "type": "sjs_value"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "key": 0,
+            "value": 16
+          }
+        }
+      }
+    },
+    "sjs_native_call": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "arguments",
+          "type": "const sjs_value *"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "result",
+          "type": "sjs_value"
+        },
+        {
+          "name": "fault",
+          "type": "sjs_str"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "arguments": 8,
+            "count": 16,
+            "result": 24,
+            "fault": 40
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "arguments": 8,
+            "count": 16,
+            "result": 24,
+            "fault": 40
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "arguments": 4,
+            "count": 8,
+            "result": 16,
+            "fault": 32
+          }
+        }
+      }
+    },
+    "sjs_native_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "call",
+          "type": "sjs_result (*)(void *, sjs_native_call *)"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "call": 0
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "call": 0
+          }
+        },
+        "wasm32": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "call": 0
+          }
+        }
+      }
+    },
+    "sjs_native": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": "void *"
+        },
+        {
+          "name": "v",
+          "type": "const sjs_native_vtable *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "sjs_event_kind": {
+      "kind": "enum",
+      "constants": [
+        "SJS_EV_NUMBER",
+        "SJS_EV_STRING",
+        "SJS_EV_TRUE",
+        "SJS_EV_FALSE",
+        "SJS_EV_NULL",
+        "SJS_EV_NAME",
+        "SJS_EV_TEMPLATE_BEGIN",
+        "SJS_EV_TEMPLATE_END",
+        "SJS_EV_ARRAY_BEGIN",
+        "SJS_EV_ELEMENT",
+        "SJS_EV_SPREAD_ELEMENT",
+        "SJS_EV_ARRAY_END",
+        "SJS_EV_OBJECT_BEGIN",
+        "SJS_EV_KEY",
+        "SJS_EV_COMPUTED_KEY",
+        "SJS_EV_PROPERTY",
+        "SJS_EV_SPREAD_PROPERTY",
+        "SJS_EV_OBJECT_END",
+        "SJS_EV_MEMBER",
+        "SJS_EV_INDEX",
+        "SJS_EV_OPTIONAL",
+        "SJS_EV_CHAIN_END",
+        "SJS_EV_CALL_BEGIN",
+        "SJS_EV_ARGUMENT",
+        "SJS_EV_SPREAD_ARGUMENT",
+        "SJS_EV_CALL_END",
+        "SJS_EV_NEW_BEGIN",
+        "SJS_EV_NEW_END",
+        "SJS_EV_UNARY",
+        "SJS_EV_BINARY",
+        "SJS_EV_LOGICAL",
+        "SJS_EV_LOGICAL_END",
+        "SJS_EV_CONDITIONAL",
+        "SJS_EV_CONDITIONAL_ELSE",
+        "SJS_EV_CONDITIONAL_END",
+        "SJS_EV_ARROW_BEGIN",
+        "SJS_EV_PARAM",
+        "SJS_EV_REST_PARAM",
+        "SJS_EV_PARAMS_END",
+        "SJS_EV_ARROW_END",
+        "SJS_EV_BLOCK_BEGIN",
+        "SJS_EV_RETURN",
+        "SJS_EV_BLOCK_END",
+        "SJS_EV_BLOCK_STATEMENT_BEGIN",
+        "SJS_EV_BLOCK_STATEMENT_END",
+        "SJS_EV_IF",
+        "SJS_EV_ELSE",
+        "SJS_EV_IF_END",
+        "SJS_EV_EXPRESSION_STATEMENT",
+        "SJS_EV_ASSIGN",
+        "SJS_EV_ASSIGN_END",
+        "SJS_EV_UPDATE",
+        "SJS_EV_DELETE",
+        "SJS_EV_BIND",
+        "SJS_EV_ARRAY_PATTERN_BEGIN",
+        "SJS_EV_PATTERN_INDEX",
+        "SJS_EV_ARRAY_PATTERN_END",
+        "SJS_EV_OBJECT_PATTERN_BEGIN",
+        "SJS_EV_PATTERN_KEY",
+        "SJS_EV_PATTERN_COMPUTED_KEY",
+        "SJS_EV_PATTERN_REST",
+        "SJS_EV_OBJECT_PATTERN_END",
+        "SJS_EV_DEFAULT",
+        "SJS_EV_DEFAULT_END",
+        "SJS_EV_CONST_BEGIN",
+        "SJS_EV_CONST_END",
+        "SJS_EV_EXPORT",
+        "SJS_EV_IMPORT",
+        "SJS_EV_EXPORT_DEFAULT",
+        "SJS_EV_EXPORT_NAME",
+        "SJS_EV_EXPORT_FROM",
+        "SJS_EV_BIGINT",
+        "SJS_EV_REGEXP",
+        "SJS_EV_END"
+      ]
+    },
+    "sjs_import_kind": {
+      "kind": "enum",
+      "constants": [
+        "SJS_IMPORT_NAME",
+        "SJS_IMPORT_NAMESPACE",
+        "SJS_IMPORT_STAR",
+        "SJS_IMPORT_MODULE"
+      ]
+    },
+    "sjs_operator": {
+      "kind": "enum",
+      "constants": [
+        "SJS_OP_ADD",
+        "SJS_OP_SUBTRACT",
+        "SJS_OP_MULTIPLY",
+        "SJS_OP_DIVIDE",
+        "SJS_OP_REMAINDER",
+        "SJS_OP_LESS",
+        "SJS_OP_LESS_EQUAL",
+        "SJS_OP_GREATER",
+        "SJS_OP_GREATER_EQUAL",
+        "SJS_OP_STRICT_EQUAL",
+        "SJS_OP_STRICT_NOT_EQUAL",
+        "SJS_OP_IN",
+        "SJS_OP_AND",
+        "SJS_OP_OR",
+        "SJS_OP_COALESCE",
+        "SJS_OP_NOT",
+        "SJS_OP_NEGATE",
+        "SJS_OP_PLUS",
+        "SJS_OP_TYPEOF",
+        "SJS_OP_EXPONENT"
+      ]
+    },
+    "sjs_event": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "sjs_event_kind"
+        },
+        {
+          "name": "count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "number",
+          "type": "double"
+        },
+        {
+          "name": "text",
+          "type": "sjs_str"
+        },
+        {
+          "name": "alias",
+          "type": "sjs_str"
+        },
+        {
+          "name": "name",
+          "type": "sjs_str"
+        },
+        {
+          "name": "at",
+          "type": "sjs_position"
+        },
+        {
+          "name": "node",
+          "type": "uint32_t"
+        },
+        {
+          "name": "start",
+          "type": "sjs_position"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "number": 8,
+            "text": 16,
+            "alias": 32,
+            "name": 48,
+            "at": 64,
+            "node": 76,
+            "start": 80
+          }
+        },
+        "aarch64": {
+          "size": 96,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "number": 8,
+            "text": 16,
+            "alias": 32,
+            "name": 48,
+            "at": 64,
+            "node": 76,
+            "start": 80
+          }
+        },
+        "wasm32": {
+          "size": 72,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "count": 4,
+            "number": 8,
+            "text": 16,
+            "alias": 24,
+            "name": 32,
+            "at": 40,
+            "node": 52,
+            "start": 56
+          }
+        }
+      }
+    },
+    "sjs_sink_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "event",
+          "type": "sjs_result (*)(void *, const sjs_event *)"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "event": 0
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "event": 0
+          }
+        },
+        "wasm32": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "event": 0
+          }
+        }
+      }
+    },
+    "sjs_sink": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": "void *"
+        },
+        {
+          "name": "v",
+          "type": "const sjs_sink_vtable *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "sjs_goal": {
+      "kind": "enum",
+      "constants": [
+        "SJS_GOAL_EXPRESSION",
+        "SJS_GOAL_MODULE"
+      ]
+    },
+    "sjs_parser": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "sjs_parser_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "allocator",
+          "type": "sjs_allocator"
+        },
+        {
+          "name": "limits",
+          "type": "sjs_limits"
+        },
+        {
+          "name": "goal",
+          "type": "sjs_goal"
+        },
+        {
+          "name": "sink",
+          "type": "sjs_sink"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "limits": 16,
+            "goal": 60,
+            "sink": 64
+          }
+        },
+        "aarch64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "allocator": 0,
+            "limits": 16,
+            "goal": 60,
+            "sink": 64
+          }
+        },
+        "wasm32": {
+          "size": 64,
+          "align": 4,
+          "offsets": {
+            "allocator": 0,
+            "limits": 8,
+            "goal": 52,
+            "sink": 56
+          }
+        }
+      }
+    },
+    "sjs_compiler": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "sjs_program": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "sjs_modules_vtable": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "find",
+          "type": "sjs_result (*)(void *, sjs_str, sjs_value *)"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "find": 0
+          }
+        },
+        "aarch64": {
+          "size": 8,
+          "align": 8,
+          "offsets": {
+            "find": 0
+          }
+        },
+        "wasm32": {
+          "size": 4,
+          "align": 4,
+          "offsets": {
+            "find": 0
+          }
+        }
+      }
+    },
+    "sjs_modules": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "self",
+          "type": "void *"
+        },
+        {
+          "name": "v",
+          "type": "const sjs_modules_vtable *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "self": 0,
+            "v": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "self": 0,
+            "v": 4
+          }
+        }
+      }
+    },
+    "sjs_compiler_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "goal",
+          "type": "sjs_goal"
+        },
+        {
+          "name": "globals",
+          "type": "const sjs_str *"
+        },
+        {
+          "name": "global_count",
+          "type": "uint32_t"
+        },
+        {
+          "name": "modules",
+          "type": "sjs_modules"
+        },
+        {
+          "name": "no_shapes",
+          "type": "_Bool"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "goal": 8,
+            "globals": 16,
+            "global_count": 24,
+            "modules": 32,
+            "no_shapes": 48
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "goal": 8,
+            "globals": 16,
+            "global_count": 24,
+            "modules": 32,
+            "no_shapes": 48
+          }
+        },
+        "wasm32": {
+          "size": 28,
+          "align": 4,
+          "offsets": {
+            "context": 0,
+            "goal": 4,
+            "globals": 8,
+            "global_count": 12,
+            "modules": 16,
+            "no_shapes": 24
+          }
+        }
+      }
+    },
+    "sjs_compile_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "compiler",
+          "type": "sjs_compiler_config"
+        },
+        {
+          "name": "source",
+          "type": "sjs_str"
+        },
+        {
+          "name": "error",
+          "type": "sjs_error *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "compiler": 0,
+            "source": 56,
+            "error": 72
+          }
+        },
+        "aarch64": {
+          "size": 80,
+          "align": 8,
+          "offsets": {
+            "compiler": 0,
+            "source": 56,
+            "error": 72
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 4,
+          "offsets": {
+            "compiler": 0,
+            "source": 28,
+            "error": 36
+          }
+        }
+      }
+    },
+    "sjs_vm": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "sjs_vm_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "no_regex_leaf",
+          "type": "_Bool"
+        },
+        {
+          "name": "no_regex_dfa",
+          "type": "_Bool"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "no_regex_leaf": 8,
+            "no_regex_dfa": 9
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "no_regex_leaf": 8,
+            "no_regex_dfa": 9
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "context": 0,
+            "no_regex_leaf": 4,
+            "no_regex_dfa": 5
+          }
+        }
+      }
+    },
+    "sjs_run_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "program",
+          "type": "sjs_program *"
+        },
+        {
+          "name": "globals",
+          "type": "const sjs_value *"
+        },
+        {
+          "name": "global_count",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "program": 0,
+            "globals": 8,
+            "global_count": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "program": 0,
+            "globals": 8,
+            "global_count": 16
+          }
+        },
+        "wasm32": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "program": 0,
+            "globals": 4,
+            "global_count": 8
+          }
+        }
+      }
+    },
+    "sjs_run": {
+      "kind": "enum",
+      "constants": [
+        "SJS_RUN_DONE",
+        "SJS_RUN_PAUSED",
+        "SJS_RUN_FAULT"
+      ]
+    },
+    "sjs_epoch": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "seconds",
+          "type": "int64_t"
+        },
+        {
+          "name": "nanoseconds",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "seconds": 0,
+            "nanoseconds": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "seconds": 0,
+            "nanoseconds": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "seconds": 0,
+            "nanoseconds": 8
+          }
+        }
+      }
+    },
+    "sjs_random": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "state",
+          "type": "uint64_t[2]"
+        },
+        {
+          "name": "left",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "state": 0,
+            "left": 16
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "state": 0,
+            "left": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "state": 0,
+            "left": 16
+          }
+        }
+      }
+    },
+    "sjs_writer": {
+      "kind": "opaque",
+      "fields": []
+    },
+    "sjs_writer_config": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "value",
+          "type": "sjs_value"
+        },
+        {
+          "name": "function_text",
+          "type": "sjs_str"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "value": 8,
+            "function_text": 24
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "value": 8,
+            "function_text": 24
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "value": 8,
+            "function_text": 24
+          }
+        }
+      }
+    },
+    "sjs_buffer": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": "uint8_t *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "length",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "capacity": 8,
+            "length": 12
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "capacity": 8,
+            "length": 12
+          }
+        },
+        "wasm32": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "capacity": 4,
+            "length": 8
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "sjs_array_append",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "array",
+          "type": "sjs_value *"
+        },
+        {
+          "name": "element",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_array_at",
+      "returns": "sjs_value",
+      "params": [
+        {
+          "name": "array",
+          "type": "sjs_value"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_array_new",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_bigint_new",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "text",
+          "type": "sjs_str"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_bigint_text",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "bigint",
+          "type": "sjs_value"
+        },
+        {
+          "name": "buffer",
+          "type": "sjs_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_bigint_text_bound",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "bigint",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_boolean",
+      "returns": "sjs_value",
+      "params": [
+        {
+          "name": "value",
+          "type": "_Bool"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_compile",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "params",
+          "type": "const sjs_compile_params *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_program **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_compiler_destroy",
+      "returns": "void",
+      "params": [
+        {
+          "name": "compiler",
+          "type": "sjs_compiler *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_compiler_error",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "compiler",
+          "type": "const sjs_compiler *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_error *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_compiler_finish",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "compiler",
+          "type": "sjs_compiler *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_program **"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_compiler_init",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "out",
+          "type": "sjs_compiler **"
+        },
+        {
+          "name": "config",
+          "type": "const sjs_compiler_config *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_compiler_sink",
+      "returns": "sjs_sink",
+      "params": [
+        {
+          "name": "compiler",
+          "type": "sjs_compiler *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_context_destroy",
+      "returns": "void",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_context_init",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "out",
+          "type": "sjs_context **"
+        },
+        {
+          "name": "config",
+          "type": "const sjs_context_config *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_context_live_bytes",
+      "returns": "size_t",
+      "params": [
+        {
+          "name": "context",
+          "type": "const sjs_context *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_function_native",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "native",
+          "type": "sjs_native"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_length",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "value",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_map_at",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "map",
+          "type": "sjs_value"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_map_entry *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_map_get",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "map",
+          "type": "sjs_value"
+        },
+        {
+          "name": "key",
+          "type": "sjs_value"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_map_new",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_map_set",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "map",
+          "type": "sjs_value *"
+        },
+        {
+          "name": "entry",
+          "type": "const sjs_map_entry *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_map_size",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "map",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_null",
+      "returns": "sjs_value",
+      "params": [],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_number",
+      "returns": "sjs_value",
+      "params": [
+        {
+          "name": "value",
+          "type": "double"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_object_at",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "object",
+          "type": "sjs_value"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_property *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_object_get",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "object",
+          "type": "sjs_value"
+        },
+        {
+          "name": "key",
+          "type": "sjs_str"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_object_new",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_object_put",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "object",
+          "type": "sjs_value *"
+        },
+        {
+          "name": "property",
+          "type": "const sjs_property *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_parser_destroy",
+      "returns": "void",
+      "params": [
+        {
+          "name": "parser",
+          "type": "sjs_parser *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_parser_error",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "parser",
+          "type": "const sjs_parser *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_error *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_parser_finish",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "parser",
+          "type": "sjs_parser *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_parser_init",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "out",
+          "type": "sjs_parser **"
+        },
+        {
+          "name": "config",
+          "type": "const sjs_parser_config *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_parser_push",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "parser",
+          "type": "sjs_parser *"
+        },
+        {
+          "name": "chunk",
+          "type": "sjs_bytes"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_program_release",
+      "returns": "void",
+      "params": [
+        {
+          "name": "program",
+          "type": "sjs_program *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_program_retain",
+      "returns": "void",
+      "params": [
+        {
+          "name": "program",
+          "type": "sjs_program *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_release",
+      "returns": "void",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "value",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_retain",
+      "returns": "void",
+      "params": [
+        {
+          "name": "value",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_set_add",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "set",
+          "type": "sjs_value *"
+        },
+        {
+          "name": "element",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_set_at",
+      "returns": "sjs_value",
+      "params": [
+        {
+          "name": "set",
+          "type": "sjs_value"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_set_new",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_string_new",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "text",
+          "type": "sjs_str"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_string_text",
+      "returns": "sjs_str",
+      "params": [
+        {
+          "name": "string",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_undefined",
+      "returns": "sjs_value",
+      "params": [],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_version",
+      "returns": "uint32_t",
+      "params": [],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_advance_clock",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        },
+        {
+          "name": "nanoseconds",
+          "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_clock",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "const sjs_vm *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_epoch *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_destroy",
+      "returns": "void",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_error",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "const sjs_vm *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_error *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_fuel_used",
+      "returns": "uint64_t",
+      "params": [
+        {
+          "name": "vm",
+          "type": "const sjs_vm *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_init",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "out",
+          "type": "sjs_vm **"
+        },
+        {
+          "name": "config",
+          "type": "const sjs_vm_config *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_random",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "const sjs_vm *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_random *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_reset",
+      "returns": "void",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_run",
+      "returns": "sjs_run",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        },
+        {
+          "name": "fuel",
+          "type": "uint64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_set_clock",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        },
+        {
+          "name": "now",
+          "type": "const sjs_epoch *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_set_random",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        },
+        {
+          "name": "state",
+          "type": "const sjs_random *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_set_seed",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        },
+        {
+          "name": "seed",
+          "type": "int64_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_start",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        },
+        {
+          "name": "params",
+          "type": "const sjs_run_params *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_take_result",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "sjs_vm *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_wasm_alloc",
+      "returns": "void *",
+      "params": [
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "alignment",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "platform": "wasm",
+      "implemented": true
+    },
+    {
+      "name": "sjs_wasm_allocator",
+      "returns": "sjs_allocator",
+      "params": [],
+      "public": true,
+      "static_inline": false,
+      "platform": "wasm",
+      "implemented": true
+    },
+    {
+      "name": "sjs_wasm_free",
+      "returns": "void",
+      "params": [
+        {
+          "name": "ptr",
+          "type": "void *"
+        },
+        {
+          "name": "size",
+          "type": "size_t"
+        },
+        {
+          "name": "alignment",
+          "type": "size_t"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "platform": "wasm",
+      "implemented": true
+    },
+    {
+      "name": "sjs_writer_destroy",
+      "returns": "void",
+      "params": [
+        {
+          "name": "writer",
+          "type": "sjs_writer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_writer_init",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "out",
+          "type": "sjs_writer **"
+        },
+        {
+          "name": "config",
+          "type": "const sjs_writer_config *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_writer_write",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "writer",
+          "type": "sjs_writer *"
+        },
+        {
+          "name": "buffer",
+          "type": "sjs_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    }
+  ]
+}

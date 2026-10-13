@@ -161,6 +161,21 @@ typedef struct {
         .max_bigint_bits = 256u * 1024u,       \
         .max_regex_states = 1024u * 1024u })
 
+#if defined(__wasm__)
+/*
+ * The WebAssembly module's own allocator (src/allocator_wasm.c, linked into
+ * staticjs.wasm only): blocks from the module's linear memory, so a host that
+ * loads the module, which imports nothing, supplies no memory management of
+ * its own. A host passes sjs_wasm_allocator() as a context's allocator, places
+ * the bytes it hands the library (a source, a config) with sjs_wasm_alloc(),
+ * and gives a block back with sjs_wasm_free() and the size and alignment it
+ * asked for. Alignments above 65536 are refused (NULL).
+ */
+SJS_API sjs_allocator sjs_wasm_allocator(void);
+SJS_API void *sjs_wasm_alloc(size_t size, size_t alignment);
+SJS_API void sjs_wasm_free(void *ptr, size_t size, size_t alignment);
+#endif
+
 /* The library's version, SJS_VERSION of the header it was built from. */
 SJS_API uint32_t sjs_version(void);
 
