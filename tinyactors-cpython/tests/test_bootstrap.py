@@ -67,7 +67,7 @@ class CodecTests(unittest.TestCase):
     def test_invalid_and_unsupported_wire_values(self):
         """Reject incomplete, trailing and currently unmapped wire values."""
         for wire in ["", "1818ff", "81", "a16161", "63eda080", "9fff",
-                     "f7", "d8206161", "a10101"]:
+                     "d820d8206161", "a10101"]:
             with self.subTest(wire=wire):
                 with self.assertRaises(ValueError):
                     tinyactors.decode(bytes.fromhex(wire))
@@ -82,7 +82,8 @@ class CodecTests(unittest.TestCase):
         """Exercise call-local state; this does not test shared input mutation."""
         def roundtrip(index):
             """Convert one worker-owned value and compare its decoded result."""
-            value = {"id": index, "payload": [b"data" * 1000, True, None]}
+            value = {"id": index, "payload": [b"data" * 1000, True, None,
+                                               tinyactors.UNDEFINED, tinyactors.Address("peer")]}
             return tinyactors.decode(tinyactors.encode(value)) == value
 
         with ThreadPoolExecutor(max_workers=4) as executor:

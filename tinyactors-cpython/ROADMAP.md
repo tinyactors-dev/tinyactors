@@ -41,9 +41,9 @@ scenario language probe fails. A separate
 the same diagnostic. Neither selection crashes or produces malformed
 driver frames.
 
-**Next binding-local increment:** finish the existing value codec with
+**Codec completion — done (2026-10-13):** finish the existing value codec with
 `UNDEFINED` and `Address` (CBOR tag 32), as AGENTS.md's value table already
-requires. Replace hand-picked coverage with tests driven by the shared
+requires. Add tests driven by the shared
 `values.txt`: its `python` expression lines and applicable roundtrip and
 malformed cases, including the non-ECMAScript cases that preserve
 references and undefined. Done means those codec cases pass on both
@@ -53,6 +53,16 @@ the already decided codec surface and work during conversion. Host and
 actor execution, their per-event work, and core changes are outside this
 increment. M1 still reports missing `host.create`; the overall roadmap's
 next steps remain core 8.2 and the C loop 8.3 before Host implementation.
+
+Implemented: immutable `Address(text)` with read-only `.text`, text-based
+equality/hash among the same exact type and tag 32 encoding; a module-local
+`UNDEFINED` singleton, preserved at every value position; and the shared
+Python-expression, applicable roundtrip and malformed vector cases. Module
+state owns the heap types and singleton, with GC traversal/clear and
+refusal of calls before module execution. Public help, docs/values.md and
+the mapping table describe the API, errors and lifetimes. Twenty tests
+pass on both Python builds. The expected M1 failure is still missing
+`host.create`; the gate stays enabled for this authorized bootstrap commit.
 
 In this order, each step a commit (or a few) that passes this project's
 `mise run test`:
