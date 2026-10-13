@@ -770,10 +770,10 @@ route is resolved **at fire time** (target may have terminated ⇒
    `ta_host_run` returns `TA_RUN_EXHAUSTED`; the next run resumes where it
    stopped, so a bounded allocator (a fixed arena, a database's memory
    context) is backpressure, not failure. What the host writes for its
-   caller (a reply, an envelope, telemetry, a hibernation or export blob)
-   goes into one block it grows the same way and keeps at its largest; the
-   caller gets a view of it, valid until its next call into the host
-   (ADR 0010).
+   caller (an envelope, telemetry, a hibernation or export blob) goes into
+   memory it grows the same way; the caller gets a view of it, valid until
+   the next `ta_host_effects_ack` (ADR 0012; until that change lands, until
+   its next call into the host, ADR 0010). Replies are effects (ADR 0011).
 
 Sizing example — 100 000 actors of a 64-state chart, 4 workspaces,
 16 384 events, 4 096 timers:

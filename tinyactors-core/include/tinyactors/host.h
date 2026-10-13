@@ -2,6 +2,15 @@
  * would otherwise rebuild, in one place. All its memory, the segments' blocks
  * included, comes from the ta_allocator of its environment (docs/adr/0005).
  *
+ * How to use it — the loop (take, handle, ack, run), inputs, effects, the
+ * control plane, images, values, memory, threads, and a complete loop in C —
+ * is docs/embedding.md; the contract of every call below (when it applies,
+ * what it produces, who owns it, how long it lives, what refuses it) is
+ * docs/boundary.md. ADR 0012 (docs/adr/0012 in the repository root) makes
+ * everything the host hands out live until ta_host_effects_ack and refuses
+ * ta_host_run while a batch is open; the comments below describe the code
+ * as it is until that change lands.
+ *
  * A ta_host owns *segments*: one ta_system per image. All segments share one
  * base URI and one set of datamodel bindings; segment k creates sessions
  * k * 2^32 + 1, ... so a session id names an actor host-wide, for its whole

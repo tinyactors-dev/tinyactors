@@ -45,15 +45,18 @@ the effect records read through accessors and CBOR, never a third.
     names the member or param: `"method"`, `"params.sample"`,
     `"params.rules[1].from"`, or `""` for the request as a whole.
   - `message` is for people. Do not match on it.
-- **Publication:** `ta_host_effects` publishes everything appended since
-  the last ack, with or without a run. A batch holds, in order: the
-  effects appended between runs in call order (earlier replies, a
-  deliver's `PEER_ERROR`, `trace.end`'s `TRACES`), then a run's effects in
-  drain order, then the run's notifications at its end. A reply and its
-  bytes live until `ta_host_effects_ack`, the next `ta_host_run` or
-  `ta_host_free`. A caller's synchronous `request(method, params)` posts
-  with a fresh id, calls `ta_host_effects`, and finds its reply at the last
-  index of that call's array (bindings.md, section 5, for how it drains).
+- **Publication** ([ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md)):
+  a reply is pending until a take (`ta_host_effects`) with no batch open
+  hands it out, with or without a run; a post made while a batch is open
+  is answered in the take after the ack (0012; today a second take widens
+  the open batch). A batch holds, in order: the effects appended between
+  runs in call order (earlier replies, a deliver's `PEER_ERROR`,
+  `trace.end`'s `TRACES`), then a run's effects in drain order, then the
+  run's notifications at its end. A reply and its bytes live until
+  `ta_host_effects_ack` or `ta_host_free`. There is no synchronous
+  request: a caller matches a reply to its message by `id`, in a later
+  drain (embedding.md, section 5; a binding's typed methods, bindings.md
+  section 10).
 - **Batches** (a CBOR array of requests) are not supported: one is
   refused with -32600, as anything but a map is. A transport splits a
   JSON-RPC batch into messages and assembles the array from the replies.
@@ -328,8 +331,12 @@ A session's configuration as a nested state value, in the shape of xstate's
   an atomic region is `{}`;
 - no active state is `{}`.
 
-Param: `session` (uint, required). Result: `{"value": <state value>}`.
-Errors: `missing`, `type`, `stale`, `limit` (more than 1024 active states).
+Param: `session` (uint, required). Result: `{"value": <state value>}`,
+the whole configuration, however many states it has (ADR 0012, decision
+4). Errors: `missing`, `type`, `stale`, `memory` (-32004: the host's
+allocator refused room for a configuration of more than 1024 states).
+(0012: today a configuration of more than 1024 active states is refused
+with `limit`.)
 
 ```
 {"id": 1, "method": "actor.state", "params": {"session": 1}}
@@ -370,7 +377,7 @@ Errors: `missing`, `type`, `malformed` (-32006: not OTLP).
 The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects: their
 `WIRE` is a JSON-RPC notification, `{"method", "params"}`, their `EVENT`
 the method's name, and their `SESSION` the session it is about (0: none).
-They live until the ack, like every effect. A notification never stands
+They live until the ack, like every effect, and come with the next take after the run that appended them. A notification never stands
 for an effect a binding must act on (`WAKE`, `PEER`, `TRACES`, ... stay
 effects of their own).
 
@@ -380,19 +387,19 @@ A subscribed session (`actor.subscribe`) finished a macrostep in the run,
 or ended. Appended at the end of that run, after the run's other effects:
 at most one per session per run.
 
-Params: `session` (uint); `value`: the session's state value after the
-run, as `actor.state` answers it (the watch fires at the first macrostep,
-but a run goes on, so the value is written when the run ends), or `null`
-when the session ended or left the host (`ta_host_export_actor`), and its
-subscription with it. `value` is left
-out when the configuration has more states than a state value holds
-(`actor.state` answers `limit`). The context is not in it: reading
-variables runs the datamodel's code, and its size has no bound; post
-`actor.context` for it.
+Params: `session` (uint); `value`, always present: the session's state
+value after the run, whole, as `actor.state` answers it (the watch fires
+at the first macrostep, but a run goes on, so the value is written when
+the run ends), or `null` when the session ended or left the host
+(`ta_host_export_actor`), and its subscription with it (ADR 0012,
+decision 4; 0012: today `value` is left out past 1024 active states). The
+context is not in it: reading variables runs the datamodel's code, and
+its size has no bound; post `actor.context` for it.
 
-When the host's allocator refuses room for a notification at the end of a
-run, the session keeps its mark, the run answers `TA_RUN_EXHAUSTED`, and
-the notification is appended at the end of the next run.
+When the host's allocator refuses room for a notification (or for the
+state value's scratch past 1024 states) at the end of a run, the session
+keeps its mark, the run answers `TA_RUN_EXHAUSTED`, and the notification
+is appended at the end of the next run.
 
 ```
 {"method": "actor.changed", "params": {"session": 1, "value": "t"}}
