@@ -66,7 +66,7 @@ Used internally, with no item:
 - `ta_host_resume`: the extension answers `TA_EFFECT_REQUEST` (a fetch
   at run time) in C with `TA_ERROR_INVALID` (the parent gets
   `error.execution`) until run-time fetching is built: core has already
-  looked in the requesting segment's image. No Python code runs; a
-  runtime resolver on the `Host` will answer it then, not now (ADR 0012,
+  looked in the requesting segment's image. No Python code runs; how
+  it is answered once fetching is built is decided then (ADR 0012,
   decision 8; root `ROADMAP.md`, "Decided
   later").

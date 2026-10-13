@@ -114,9 +114,9 @@ In this order, each step a commit (or a few) that passes this project's
   decision 8) is answered in C with `ta_host_resume` and
   `TA_ERROR_INVALID` (`error.execution` in the parent): core has already
   normalized the name and looked in the requesting segment's image
-  (`tinyactors-core/src/system/route.c:439-497`). A runtime resolver
-  configured on the `Host` will answer it once run-time fetching is
-  built (root `ROADMAP.md`, "Decided later"); not now, and it is not the
+  (`tinyactors-core/src/system/route.c:439-497`). How it will be
+  answered is decided with the build-out of run-time fetching (root
+  `ROADMAP.md`, "Decided later"); not now, and it is not the
   control plane.
 - **`Compiled.close()` while a `memoryview` of `image` is held** raises
   `BufferError`, as `bytearray` does.

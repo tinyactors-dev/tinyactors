@@ -66,9 +66,9 @@ API"). Node's names and shapes are decided in step 8.5:
   (`tinyactors-core/src/system/route.c:439-497`), so until run-time
   fetching is built the addon answers it in C with `ta_host_resume` and
   `TA_ERROR_INVALID` (the parent gets `error.execution`); no JavaScript
-  runs and the addon looks nothing up. A future runtime resolver
-  configured on the `Host` will answer it (root `ROADMAP.md`, "Decided
-  later"); not now. It is not the control plane (`ta_host_post`,
+  runs and the addon looks nothing up. How a binding will fetch
+  is decided with the build-out (root `ROADMAP.md`, "Decided later");
+  not now. It is not the control plane (`ta_host_post`,
   `REPLY`, `NOTIFICATION`).
 - **A traceparent crosses as W3C text.** In: the string's UTF-8 for the
   call (`ta_spawn.traceparent`, `ta_event_in.traceparent`,

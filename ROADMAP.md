@@ -783,8 +783,9 @@ free-threaded builds (abi3t, 3.15).
   - a resume with a chart of another segment, after the binding has added
     the fetched document's image (`ta_host_add_image`); today a resume
     names only a chart of the requesting segment's image (`:544-553`);
-  - how the binding is told to fetch: a runtime resolver object
-    configured on the `Host`, not the compile call's resolver.
+  - how the binding is told to fetch (one candidate: a resolver object
+    for run time configured on the `Host`, not the compile call's);
+    undecided.
 
   It is not the control plane (`ta_host_post`, `REPLY`, `NOTIFICATION`).
 

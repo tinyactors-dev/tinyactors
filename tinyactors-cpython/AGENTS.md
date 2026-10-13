@@ -153,9 +153,9 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   (`tinyactors-core/src/system/route.c:439-497`), so until run-time
   fetching is built the extension answers every REQUEST with
   `ta_host_resume` and `TA_ERROR_INVALID`: the parent gets
-  `error.execution` (`route.c:544-550`). It looks nothing up. A future
-  runtime resolver configured on the `Host` will answer it (root
-  `ROADMAP.md`, "Decided later"); not now. It is not the control plane
+  `error.execution` (`route.c:544-550`). It looks nothing up. How a binding
+  will fetch is decided with the build-out (root `ROADMAP.md`, "Decided
+  later"); not now. It is not the control plane
   (`ta_host_post`, `REPLY`, `NOTIFICATION`).
 - **`.py` sources through `src`.** A chart writes `<script
   src="reader.py"/>`: a Python file, free of XML's whitespace and
@@ -700,8 +700,8 @@ Registered beside quickjs, first; matched by the chart's
 - No resolver on the `Host` and no Python callback for
   `TA_EFFECT_REQUEST` now: the compile call's resolver lives only at
   compile time, and a REQUEST is answered in C with `TA_ERROR_INVALID`
-  until run-time fetching is built (a runtime resolver on the `Host`
-  then, root `ROADMAP.md`, "Decided later").
+  until run-time fetching is built (root `ROADMAP.md`, "Decided
+  later").
 - No `DirectoryResolver` in the extension: it is the convenience layer's,
   in Python.
 - No application callback for `DONE` or `ERROR`; no subscription.
