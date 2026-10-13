@@ -68,5 +68,5 @@ Used internally, with no item:
   `error.execution`) until run-time fetching is built: core has already
   looked in the requesting segment's image. No Python code runs; a
   runtime resolver on the `Host` will answer it then, not now (ADR 0012,
-  decision 7 as amended a fifth time; root `ROADMAP.md`, "Decided
+  decision 8; root `ROADMAP.md`, "Decided
   later").

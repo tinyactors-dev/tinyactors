@@ -1,8 +1,7 @@
 # Embedding the core
 
 **Status:** Current (2026-10-13), the design after
-[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md) and its
-second amendment. What core does not do yet is marked **(0012)** or
+[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md). What core does not do yet is marked **(0012)** or
 **[8.2]**: step 8.2 of `ROADMAP.md`.
 
 How to use the core from C: the loop, the inputs, the effects and the
@@ -135,7 +134,7 @@ anything the method appended itself, before the reply).
 
 The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects
 (`{"method", "params"}`); none is defined. `actor.subscribe` and
-`actor.changed` are removed (ADR 0012, decision 4 as amended again; the
+`actor.changed` are removed (ADR 0012, decision 4; the
 code still answers them until [8.2]); post `actor.state` for a
 session's state. Drop a notification whose method you do not know.
 [requests.md](requests.md) lists every method and notification.

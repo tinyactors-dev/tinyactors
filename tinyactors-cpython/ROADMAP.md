@@ -8,10 +8,9 @@ it.** The design (2026-10-13) is in [AGENTS.md](AGENTS.md) ("The API",
 "The loop", "Lifetimes and thin views", "The binding's memory", "The
 "python" datamodel"); there is no design document to write first. The
 step starts when the root roadmap marks steps 8.2 (core implements
-[ADR 0012](../docs/adr/0012-lifetimes-follow-the-loop.md) with its second
-amendment: `ta_table`, `ta_status_name`, `ta_growable_arena`, one batch
-at a time, `detach_event` checked; with its third: the resolver's errors
-and scratch arena) and 8.3 (the full loop end to end in
+[ADR 0012](../docs/adr/0012-lifetimes-follow-the-loop.md): `ta_table`,
+`ta_status_name`, `ta_growable_arena`, one batch at a time, the
+resolver's errors and scratch arena; and `detach_event` checked) and 8.3 (the full loop end to end in
 C) done. The plan of both bindings is the root roadmap's step 8, which
 decides.
 
@@ -110,10 +109,9 @@ In this order, each step a commit (or a few) that passes this project's
 - **A processor that raises before answering** (sync or async) has its
   send failed (`send.fail()`, `error.communication` for the sender), and
   the exception is raised from the driver after the turn.
-- **The resolver lives only at compile time** (ADR 0012, decision 7 as
-  amended a fourth time): the `Host` has no resolver. A
-  `TA_EFFECT_REQUEST` (a fetch at run time, which stays: ADR 0012 as
-  amended a fifth time) is answered in C with `ta_host_resume` and
+- **The resolver lives only at compile time** (ADR 0012, decision 7): the `Host` has no resolver. A
+  `TA_EFFECT_REQUEST` (a fetch at run time, which stays: ADR 0012,
+  decision 8) is answered in C with `ta_host_resume` and
   `TA_ERROR_INVALID` (`error.execution` in the parent): core has already
   normalized the name and looked in the requesting segment's image
   (`tinyactors-core/src/system/route.c:439-497`). A runtime resolver

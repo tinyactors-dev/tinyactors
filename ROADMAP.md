@@ -322,7 +322,7 @@ row; the example of embedding.md compiles and runs. Gates:
 
 ##### 8.2: core implements ADR 0012 (coordinator)
 
-In ADR 0012's order of work, with its second amendment (2026-10-13):
+In ADR 0012's order of work:
 
 - **Base:** `ta_status_name` (NULL for a status `types.h` does not
   define), `ta_table` (64-bit handles, 31-bit generation, rows grown by
@@ -335,8 +335,7 @@ In ADR 0012's order of work, with its second amendment (2026-10-13):
   free call), and a `ta_allocator` view so `ta_cbor_writer` grows into
   it. The internal `ta_arena` (`src/base/arena.h`) keeps its name and
   job. Unit tests and `tinyactors.api.json` entries for all three.
-- **One chunked arena in core** (ADR 0012, decision 5 as amended a
-  third time): the compiler's private `ta_chunk_arena`
+- **One chunked arena in core** (ADR 0012, decision 5): the compiler's private `ta_chunk_arena`
   (`src/compile/compile_support.h:14-26`; the per-compilation arena,
   `compile.c:37`, and the result's, `compile.c:13`) moves onto
   `ta_growable_arena`, and `ta_chunk_arena` is deleted.
@@ -359,7 +358,7 @@ In ADR 0012's order of work, with its second amendment (2026-10-13):
   `TA_ERROR_STATE`).
 - **Outputs until the ack:** the host's outputs and `TRACEPARENT`.
 - **`actor.subscribe`, `actor.unsubscribe` and `actor.changed`
-  removed** (ADR 0012, decision 4 as amended again): the host's
+  removed** (ADR 0012, decision 4): the host's
   subscription table, the methods, the config key `maxSubscriptions`,
   the subscribe exchange in `requests.txt`, `host.h`'s comment, and the
   self-test that reads their heading (`mise/tasks/api-map-test:17`), in
@@ -435,8 +434,8 @@ headers. Gates: core's `mise run test` and `mise run conform`.
 
 **The design is decided** (the maintainer, 2026-10-13), and written in
 [`tinyactors-cpython/AGENTS.md`](tinyactors-cpython/AGENTS.md) (the
-rulebook), the guide (sections 3, 6, 8 and 10) and ADR 0012's second
-amendment. 8.4 implements it, then measures it. There is no separate
+rulebook), the guide (sections 3, 6, 8 and 10) and ADR 0012 (decisions 3 to
+6). 8.4 implements it, then measures it. There is no separate
 design document. Native datamodel first (decision 3 above) stays, and
 so does the reason for the step: a Python API with the native
 `"python"` datamodel that keeps the memory efficiency that is "the whole
@@ -460,7 +459,7 @@ The design, in short (the rulebook has each rule with its evidence):
   resolver lives only at compile time and the `Host` has none. The
   extension answers a `TA_EFFECT_REQUEST` (a fetch at run time) in C with
   `TA_ERROR_INVALID` until run-time fetching is built ("Decided later";
-  ADR 0012, decision 7 as amended a fifth time). A convenience
+  ADR 0012, decision 8). A convenience
   layer in Python above it is later work (`DirectoryResolver` among
   it). An I/O processor's handler is `handler(host, send)`, with
   `send.traceparent` (formatted on first read, `None` when untraced),
@@ -777,7 +776,7 @@ free-threaded builds (abi3t, 3.15).
 - **PostgreSQL**, and other languages, after step 8.5.
 - **Run-time fetching (`<invoke srcexpr>`) through
   `TA_EFFECT_REQUEST`** (decided 2026-10-13: the REQUEST stays; ADR 0012,
-  amended a fifth time). Today core normalizes the name and looks it up
+  decision 8). Today core normalizes the name and looks it up
   in the requesting segment's image (`route.c:439-489`), gives a REQUEST
   only when that fails (`:491-497`), and a binding answers it with
   `TA_ERROR_INVALID`. The build-out needs from core:

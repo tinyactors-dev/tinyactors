@@ -298,7 +298,7 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 ### `actor.subscribe`, `actor.unsubscribe`
 
 **Removed** ([ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md),
-decision 4, amended again 2026-10-13). They were a stress test of the
+decision 4). They were a stress test of the
 protocol; a binding offers no item for them. The code still answers them
 until step 8.2 deletes them with their vectors, the config key
 `maxSubscriptions` and this heading [8.2] (the heading stays until then
@@ -365,7 +365,7 @@ for an effect a binding must act on (`WAKE`, `PEER`, `TRACES`, ... stay
 effects of their own).
 
 No notification is defined. `actor.changed` was removed with
-`actor.subscribe` (ADR 0012, decision 4, amended again 2026-10-13; the
+`actor.subscribe` (ADR 0012, decision 4; the
 code still appends it for a subscribed session until step 8.2 [8.2]).
 The kind stays: a notification added later is a method name in this
 section, appended as an effect where the host learns of it, and a binding

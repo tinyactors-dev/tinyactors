@@ -56,12 +56,11 @@ API"). Node's names and shapes are decided in step 8.5:
   a refusal reported as a diagnostic at its line and column, the message
   in the compilation's scratch arena [8.2],
   `tinyactors-core/docs/boundary.md` section 12). **The resolver lives
-  only at compile time:** the `Host` has none (ADR 0012, decision 7 as
-  amended a fourth time). A resolver that reads a directory belongs to
+  only at compile time:** the `Host` has none (ADR 0012, decision 7). A resolver that reads a directory belongs to
   the convenience layer, in JavaScript, confined to its root.
 - **`TA_EFFECT_REQUEST` is a fetch at run time** (an `<invoke srcexpr>`
   whose chart is not in the image), and it stays
-  (decided 2026-10-13; ADR 0012, decision 7 as amended a fifth time;
+  (decided 2026-10-13; ADR 0012, decision 8;
   `tinyactors-core/docs/boundary.md` section 12). Core has already
   normalized the name and looked in the requesting segment's image
   (`tinyactors-core/src/system/route.c:439-497`), so until run-time
@@ -152,7 +151,7 @@ Node's API shape is decided in step 8.5, not here:
 |---|---|---|
 | an actor's output | an I/O processor's handler the application configures per host, given the send as a thin view; it may answer or fail it | `TA_EFFECT_SEND`; `ta_host_send` (with `TA_EVENT_IN_ERROR_COMMUNICATION` for a failure) |
 | services the charts invoke | a service registered by type | `TA_EFFECT_INVOKE`, `UNINVOKE`, sends with `IO_PROCESSOR` `TA_NIL` |
-| an actor's state | the typed method over `actor.state` (subscriptions are removed, ADR 0012 decision 4 as amended again) | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
+| an actor's state | the typed method over `actor.state` (subscriptions are removed, ADR 0012 decision 4) | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
 | inspection and trace control | typed methods, each taking a response handler the drain calls when its `REPLY` is dispatched | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
 | `<log>` | a log handler configured per host, given each line as a thin view; none: discarded; no console default | `TA_EFFECT_LOG` |
 | telemetry | an exporter the application configures | `TRACES`, `LOGS`, `ta_host_metrics` |
@@ -168,8 +167,7 @@ Node's API shape is decided in step 8.5, not here:
   the error is thrown after the turn (the Python binding's rule, decided
   2026-10-13; Node's shape is settled in step 8.5).
 - **A log entry is `(session, label, text)`**, no chart.
-- **No synchronous request and no raw `post`** (ADR 0012, decision 3 as
-  amended again): one typed method per method of
+- **No synchronous request and no raw `post`** (ADR 0012, decision 3): one typed method per method of
   `tinyactors-core/docs/requests.md`, with a response handler. The
   message id is the handle of a row in a pending `ta_table` holding the
   handlers; the drain finds it in O(1), the generation refusing a stale
@@ -220,7 +218,7 @@ The addon allocates almost nothing (bindings.md, section 6):
   once and never held; free a compile result at once. No image rows, no
   `SEGMENT_FREED` bookkeeping.
 - **One `ta_growable_arena` per host, a mark per call** (ADR 0012
-  decision 5 as amended again; [8.2]). Made with the host, freed with it,
+  decision 5; [8.2]). Made with the host, freed with it,
   its chunks kept. Each call takes a mark at entry and releases to it at
   exit, on every path. It holds the call's CBOR (a config, a typed
   method's params, a payload for quickjs, `encode`: a `ta_cbor_writer`

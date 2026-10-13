@@ -5,7 +5,7 @@
 [ADR 0011](../../docs/adr/0011-the-control-plane-is-posted-messages.md) and
 [ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md). Where the code
 does not do what ADR 0012 decides yet, the row says "(0012)"; what else
-step 8.2 adds or removes (the second amendment of ADR 0012, the findings
+step 8.2 adds or removes (ADR 0012, decisions 4, 5 and 7; the findings
 below) is marked "[8.2]". Both are step 8.2 of `ROADMAP.md`.
 
 How a binding and core talk: what crosses, who owns it, for how long,
@@ -152,7 +152,7 @@ keeps first (ADR 0010 decision 1).
 | the caller's `ta_buffer` (snapshots, `environment->error`) | callers: the size is known up front, or no host exists | kept |
 | structural borrows (a segment's image, `ta_host_system`, a peer's id, a job's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
 | `REPLY` or `NOTIFICATION` | callers: an answer or news | kept |
-| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed** with `actor.subscribe` (0012, decision 4 as amended again) [8.2]; notifications stay possible |
+| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed** with `actor.subscribe` (0012, decision 4) [8.2]; notifications stay possible |
 
 ### What no test checks yet
 
@@ -341,7 +341,7 @@ its own edge.
 Core's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects (WIRE
 `{"method", "params"}`, EVENT the method, SESSION the session). None is
 defined: `actor.subscribe`, `actor.unsubscribe` and `actor.changed` are
-removed (ADR 0012, decision 4 as amended again), with the host's
+removed (ADR 0012, decision 4), with the host's
 subscription table and its mark byte per subscription
 (`subscription_mark`, `src/host/host.c:731`; `subscriptions_notify`,
 `host.c:777-797`) and the config key `maxSubscriptions` [8.2]; until
@@ -374,13 +374,12 @@ by capacity before applying; the reply is written last). Context in
 notifications (user code, unbounded size). Batches in core. A
 synchronous `request` facade (it needs a widened batch and runs inside
 dispatch; ADR 0012). Subscriptions (`actor.subscribe`, `actor.changed`):
-a stress test of the protocol, removed by ADR 0012's second amendment,
+a stress test of the protocol, removed by ADR 0012 (decision 4),
 since an actor's output reaches the application through an I/O processor
 and its state through `actor.state`; the shapes weighed before that
-follow. The whole state value in `actor.changed` (ADR 0012
-decision 4 as first accepted): past the stack's room for 1024 states it
+(ADR 0012, "History") follow. The whole state value in `actor.changed`: past the stack's room for 1024 states it
 needed new state-value machinery, a walk in place or scratch from the
-host's allocator, both dropped by the maintainer's amendment; and,
+host's allocator, both dropped by the maintainer; and,
 before it, a truncated value with `"limit": true`, `null` past the limit,
 or no `value` (three shapes for one reader). For the end of a session:
 a list of every state as `exited` (a session exported to another host
@@ -496,7 +495,7 @@ one, napi `8d600f4c`; with marks a nested call allocates above the outer
 one and gives back only its own). One writer per call on the C stack,
 grown through the allocator and freed at the call's end (a call with
 several conversions pays an allocator pair for each, every call; ADR
-0012, second amendment). Converting every field of an effect into the
+0012, rejected alternatives). Converting every field of an effect into the
 language when it is dispatched (a handler pays for fields it never
 reads). A batch generation in core (only the binding acks, so it can
 count). Rooms with length hints and retries (workarounds for
@@ -505,7 +504,7 @@ collector-switch hazards (one owning thread).
 
 ## 10. What reaches the application
 
-**Design (ADR 0012, decision 6, as amended again).** Output: `<send>` to
+**Design (ADR 0012, decision 6).** Output: `<send>` to
 an I/O processor the application configured (`TA_EFFECT_SEND`), whose
 handler may answer it. State: `actor.state`, a typed method. Inspection:
 typed methods over post with response handlers. `<log>`: a log handler
@@ -522,7 +521,7 @@ only through the caller's `ta_allocator` [8.2]:
 | API | What | Lifetimes |
 |---|---|---|
 | `ta_table` (`table.h`) | rows of a caller's size, named by 64-bit handles `generation << 32 \| (slot + 1)`, 31 bits of generation (odd while live); grows by doubling | a handle until `ta_table_remove` (stale for good after); a row pointer until the next `ta_table_add`; the rows until `ta_table_free` |
-| `ta_growable_arena` (`arena.h`) | built in base from tinyxml's `txml_arena` (`tinyxml/src/arena.c`): linked chunks, a request larger than the chunk size in a chunk of its own, marks, a release that keeps its chunks, a `ta_allocator` view. The compiler's private `ta_chunk_arena` (`src/compile/compile_support.h:14-26`) moves onto it: one chunked arena in core (ADR 0012, third amendment) | an allocation until a release to a mark taken before it (it never moves); chunks until `ta_growable_arena_free`; the `ta_allocator` view while the arena lives |
+| `ta_growable_arena` (`arena.h`) | built in base from tinyxml's `txml_arena` (`tinyxml/src/arena.c`): linked chunks, a request larger than the chunk size in a chunk of its own, marks, a release that keeps its chunks, a `ta_allocator` view. The compiler's private `ta_chunk_arena` (`src/compile/compile_support.h:14-26`) moves onto it: one chunked arena in core (ADR 0012, decision 5) | an allocation until a release to a mark taken before it (it never moves); chunks until `ta_growable_arena_free`; the `ta_allocator` view while the arena lives |
 | `ta_status_name` (`types.h`) | `"TA_ERROR_STATE"` for `TA_ERROR_STATE`; NULL for a status `types.h` does not define | static text |
 
 The internal `ta_arena` (`src/base/arena.h`: a caller's region carved by
@@ -534,11 +533,11 @@ same code twice, compared file by file in the audit). Making `ta_arena`
 public (it cannot grow). txml's release, which frees chunks past one
 spare (an allocator pair per call; ADR 0012, rejected alternatives).
 Two chunked arenas in core, the compiler's `ta_chunk_arena` beside
-`ta_growable_arena` (the same job twice; ADR 0012, third amendment).
+`ta_growable_arena` (the same job twice; ADR 0012, decision 5).
 
 ## 12. Compiling, and the resolver
 
-**Design (ADR 0012, decision 7, third amendment; [8.2]).** A binding
+**Design (ADR 0012, decision 7; [8.2]).** A binding
 compiles with `ta_compile_charts` (`compile.h:74-75`), reads the image
 with `ta_compile_image` and the diagnostics with
 `ta_compile_diagnostics`, and frees the result with `ta_compile_free`; the
@@ -571,14 +570,13 @@ copies what it keeps (`link.c:40`, `scxml.c:116`).
 | a diagnostic (`file`, `message`) | the compile result's arena | when the compiler reports it | by the caller | `ta_compile_free` |
 | the image (`ta_compile_image`) | the compile result | at the compilation's end | by the caller; `ta_host_add_image` copies it | `ta_compile_free` |
 
-**The resolver lives only at compile time** (ADR 0012, decision 7 as
-amended a fourth time). A static `<invoke src>` is fetched through it
+**The resolver lives only at compile time** (ADR 0012, decision 7). A static `<invoke src>` is fetched through it
 while compiling, and the invoked chart is compiled into the same image
 (`scxml.c:893-896`, `resolve_chart` at `:855-870`). A host has no
 resolver.
 
-**`TA_EFFECT_REQUEST` stays (2026-10-13; ADR 0012, amended a fifth
-time).** It is how a chart fetches at run time: an `<invoke srcexpr>`
+**`TA_EFFECT_REQUEST` stays (2026-10-13; ADR 0012,
+decision 8).** It is how a chart fetches at run time: an `<invoke srcexpr>`
 (or a `src` the compiler did not match, one with a `typeexpr`,
 `scxml.c:895`) whose chart is not in the image. Core normalizes the
 name itself (`file://`, `file:`, `./`, an inline document) and looks it
@@ -598,7 +596,7 @@ parameters; root `AGENTS.md`). A resolver keeping every text alive until
 the compilation ends by itself (`ta_runtime_files` owns its texts,
 `runtime.h:32-37`): the compiler already has an arena with exactly that
 lifetime. The compile call's resolver kept on the host to answer a
-REQUEST with a text (the design before the fourth amendment): a resume
+REQUEST with a text (an earlier design, ADR 0012, "History"): a resume
 names only a chart of the segment's image (`route.c:544-553`), so the
 text had nowhere to go. How run-time fetching is answered (a runtime
 resolver configured on the host, among others) is decided later.

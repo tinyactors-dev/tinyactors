@@ -133,8 +133,8 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   ```
 - **The resolver** is an object of its own with one method,
   **`resolve(base, source) -> str`**, given to `compile_charts` only:
-  **it lives only at compile time** (ADR 0012, decision 7 as amended a
-  fourth time; boundary.md section 12). It is the compile-time callback
+  **it lives only at compile time** (ADR 0012, decision 7;
+  boundary.md section 12). It is the compile-time callback
   (`ta_compile_options.resolve`) for every static `src`, and an invoked
   chart it fetches is compiled into the same image. **A resolver refuses
   by raising `tinyactors.ResolveError(message, line=None,
@@ -148,7 +148,7 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
 - **`TA_EFFECT_REQUEST` is a fetch at run time, answered in C, never by
   Python.** It is how a chart fetches what is not in its image (an
   `<invoke srcexpr>`, or a `src` the compiler did not match), and it stays (decided 2026-10-13; ADR 0012, decision
-  7 as amended a fifth time; boundary.md section 12). Core has already
+  8; boundary.md section 12). Core has already
   normalized the name and looked in the requesting segment's image
   (`tinyactors-core/src/system/route.c:439-497`), so until run-time
   fetching is built the extension answers every REQUEST with
@@ -234,7 +234,7 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
 - **`DONE` and `ERROR` are internal** (the rows of the session are
   released); **`PEER` and `PEER_ERROR` are deferred**; no notification is
   defined (`actor.subscribe` and `actor.changed` are removed, ADR 0012
-  decision 4 as amended again), and the extension drops a
+  decision 4), and the extension drops a
   `TA_HOST_EFFECT_NOTIFICATION` whose method it does not know.
 
 ## The loop
@@ -403,7 +403,7 @@ what it allocates comes from the host's allocator through core's base
 APIs [8.2]:
 
 - **One `ta_growable_arena` per host** (`tinyactors/arena.h`, ADR 0012
-  decision 5 as amended again), created with the `Host` and freed with
+  decision 5), created with the `Host` and freed with
   it; its chunks are kept. Each API call takes a mark at entry
   (`ta_growable_arena_position`) and releases to it at exit
   (`ta_growable_arena_release`), on every path, exceptions included. A
