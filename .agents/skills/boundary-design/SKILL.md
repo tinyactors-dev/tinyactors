@@ -47,9 +47,11 @@ Check each against the code before relying on it; cite the line.
   `ta_host_post`, settled at a later drain.
 - **The datamodel vtable is the only call out of core**, guarded outside
   runs by the run's rules (ADR 0010, decision 3).
-- **All binding code is C.** Nothing sits above the extension (ROADMAP
-  step 8, decision 2); every consumer of a header is C, so layouts are
-  hand-written public headers held by the ABI rules, never generated.
+- **The binding's direct layer is C** and mirrors the C API; a
+  convenience layer in the language may sit above it, using only the
+  direct layer's public API (ROADMAP step 8, decision 2, amended). Every
+  consumer of a header is C, so layouts are hand-written public headers
+  held by the ABI rules, never generated.
 - **Two systems cross, never three:** fixed records read through
   accessors, and CBOR. JSON-RPC names the shape of control messages,
   replies and notifications; their bytes are CBOR. Nothing core gives or

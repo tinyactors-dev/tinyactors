@@ -47,8 +47,11 @@ guide and the headers. Three decisions replace theirs:
    JavaScript classes, runs the loop, dispatches effects, converts values
    and implements the native ECMAScript datamodel in C, as the CPython
    extension does for Python. There is no shared JavaScript package
-   (`tinyactors-js` is dropped) and no JavaScript above the addon beyond
-   loading it.
+   (`tinyactors-js` is dropped). The extension is the binding's **direct
+   layer**, mirroring the C API; a **convenience layer** in the language
+   (chart builders, spawning by name) may sit above it later, built only
+   on the direct layer's public API, never reaching core another way
+   (amended 2026-10-13).
 3. **Native datamodels come first.** Python programmers write chart logic
    in Python; a binding without its language's datamodel is not the
    product. The datamodel is in the first milestone of each binding,
