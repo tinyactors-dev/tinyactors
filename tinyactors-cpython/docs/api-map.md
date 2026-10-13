@@ -58,7 +58,7 @@ commit that adds the item removes the mark.
 | *planned* `Host.trace_watch(rules, seconds, handler, on_error=None)`, `Host.trace_unwatch(...)` | `trace.watch`, `trace.unwatch`, `ta_host_post` | typed methods |
 | *planned* `Host.trace_spans_decode(traces, handler, on_error=None)` | `trace.spans.decode`, `ta_host_post` | a typed method |
 | *planned* `TinyactorsError` | `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a reply's error (`code`, `reason`, `path`, `message`), a refusal at a call, a fault, a stale view; the status named by `ta_status_name` [8.2] |
-| *planned* `tinyactors.encode(value)`, `tinyactors.decode(data)` | `ta_cbor_writer_init`, `ta_cbor_reader_init` | the value table, streaming |
+| `tinyactors.encode(value)`, `tinyactors.decode(data)` | `ta_cbor_writer_init`, `ta_cbor_reader_init`, `ta_cbor_read`, `ta_cbor_writer_bytes`, `ta_cbor_writer_free` | initial streaming codec for driver-frame values; supported types and remaining value-table work in docs/values.md |
 | *planned* the `"python"` datamodel | `TA_DATAMODEL_EVENT_DETACHABLE`, `ta_datamodel_environment_in`, `ta_image_chart_datamodel` | the vtable of `datamodel.h`: a class per chart at `chart_attach`, an instance per session, `_event` until `detach_event` |
 
 Used internally, with no item:

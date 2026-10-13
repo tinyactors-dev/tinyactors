@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Build core's amalgamation into build/core (tinyactors-core's amalgamate task with --out), then the extension against it: abi3 for python 3.13 in build/abi3, and the free-threaded tests' build in build/free-threaded"
+#MISE depends=["amalgamate"]
 # vim:ft=ruby
 
 # Core is built from its amalgamation in this project's own build/, never
@@ -13,8 +14,12 @@
 # compiler from PATH or $CC.
 
 require_relative '../cpython'
+require 'task_stamp'
 
-CPython.run('mise', 'run', '//tinyactors-core:amalgamate', '--', '--out', CPython::CORE_BUILD.to_s)
+# mise checks source freshness but can skip a task with a deleted output.
+# Use the workspace's recovery rule after the dependency's normal check.
+force = TaskStamp.force(CPython::ROOT, 'amalgamate')
+CPython.run('mise', 'run', *force, 'amalgamate') unless force.empty?
 
 target = Toolchain::Target.host
 core = CPython.core_objects(target)

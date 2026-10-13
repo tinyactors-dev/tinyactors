@@ -21,6 +21,39 @@ this copy.
 
 ### Plan
 
+**Bootstrap (authorized 2026-10-13):** write a new extension and adapter
+from scratch before the actor binding. The codec and driver framing
+start items 6 and 8 below early; steps 8.2 and 8.3 still precede the host
+and actor implementation. The first slice supports driver-frame values
+(docs/values.md), and the adapter reports unimplemented methods with
+-32601. M1 must fail explicitly until the real host methods exist.
+The existing conformance gate stays enabled. The maintainer explicitly
+requested committing this deliberately red bootstrap (2026-10-13), as
+an exception to the passing-before-commit rule. Record the expected M1
+failure in the commit; no suite or gate is weakened to land it.
+
+Bootstrap verification (2026-10-13): lint passes; both the abi3 build on
+Python 3.13.16 and the free-threaded build on Python 3.14.8 pass nine
+codec and adapter tests. `mise run test` then reaches M1 and fails for
+missing `host.create`: protocol has 170 skips and no passes, and the
+scenario language probe fails. A separate
+`TA_PYTHON_DATAMODELS=quickjs mise run conform -- --milestone M1` gives
+the same diagnostic. Neither selection crashes or produces malformed
+driver frames.
+
+**Next binding-local increment:** finish the existing value codec with
+`UNDEFINED` and `Address` (CBOR tag 32), as AGENTS.md's value table already
+requires. Replace hand-picked coverage with tests driven by the shared
+`values.txt`: its `python` expression lines and applicable roundtrip and
+malformed cases, including the non-ECMAScript cases that preserve
+references and undefined. Done means those codec cases pass on both
+interpreters and the public documentation and mapping table cover the
+added types. This serves the binding author and maintainer; it adds only
+the already decided codec surface and work during conversion. Host and
+actor execution, their per-event work, and core changes are outside this
+increment. M1 still reports missing `host.create`; the overall roadmap's
+next steps remain core 8.2 and the C loop 8.3 before Host implementation.
+
 In this order, each step a commit (or a few) that passes this project's
 `mise run test`:
 
