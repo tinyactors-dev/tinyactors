@@ -36,11 +36,15 @@ Check each against the code before relying on it; cite the line.
   `ta_payload` (a row in the binding's table for its own datamodel);
   names, sendids, origins and traceparents are `ta_string_view`s read at
   the call.
-- **Effects are host-owned records**, read through accessors by field id,
-  valid until `ta_host_effects_ack`. Only C reads them.
-- **Outputs are views** (ADR 0010): a datamodel's until its next call,
-  the host's until the next call into the host. Core asks for each value
-  once.
+- **Lifetimes follow the loop** (ADR 0012): effects, their fields and
+  the host's outputs (envelopes, traces, logs, metrics, blobs) live until
+  `ta_host_effects_ack`, which means "handled everything up to now".
+  `ta_host_effects` never widens an open batch: one drain at a time.
+  Only C reads effects.
+- **A datamodel's outputs** are views until its next call; core asks for
+  each value once (ADR 0010).
+- **No synchronous request** in any language API: typed methods over
+  `ta_host_post`, settled at a later drain.
 - **The datamodel vtable is the only call out of core**, guarded outside
   runs by the run's rules (ADR 0010, decision 3).
 - **All binding code is C.** Nothing sits above the extension (ROADMAP

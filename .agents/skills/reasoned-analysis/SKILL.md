@@ -105,8 +105,9 @@ boundary (2026-10-12) that went back and forth for hours:
    every object the claim involves, one row: the object, its owner, when
    it is created, who reads it and when, when it ends, on which thread.
    Use the real calls of this API (`ta_host_send` reads its views during
-   the call; effects live until `ta_host_effects_ack`; a host output until
-   the next call into the host). Make the claim only if a row shows it;
+   the call; effects and the host's outputs live until
+   `ta_host_effects_ack`, ADR 0012; a datamodel's output until its next
+   call). Make the claim only if a row shows it;
    otherwise say "untraced". A difference ("almost the same") is stated as
    the row that differs.
 
