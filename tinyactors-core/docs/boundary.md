@@ -571,21 +571,42 @@ copies what it keeps (`link.c:40`, `scxml.c:116`).
 | a diagnostic (`file`, `message`) | the compile result's arena | when the compiler reports it | by the caller | `ta_compile_free` |
 | the image (`ta_compile_image`) | the compile result | at the compilation's end | by the caller; `ta_host_add_image` copies it | `ta_compile_free` |
 
-**A `TA_EFFECT_REQUEST` is not a compilation.** It comes for an
-`<invoke>` whose src names no chart in the image (`route.c:483-492`), and
-`ta_host_resume` answers it with a chart index + 1 of the requesting
-segment's own image (`route.c:544`, `:553`); no other path spawns the
-child from another segment. A resolver's text therefore cannot become
-that child as core stands: a binding that resolves a REQUEST can answer
-only with a chart already in that segment, or with an error status
-(`error.execution` in the parent, `route.c:544-550`). Open for the
-maintainer.
+**The resolver lives only at compile time** (ADR 0012, decision 7 as
+amended a fourth time). A static `<invoke src>` is fetched through it
+while compiling, and the invoked chart is compiled into the same image
+(`scxml.c:893-896`, `resolve_chart` at `:855-870`). A host has no
+resolver.
+
+**A `TA_EFFECT_REQUEST` is answered from the requesting segment's
+image.** Core gives it for a dynamic `srcexpr`, or a `src` the compiler
+did not match (one with a `typeexpr`, `scxml.c:895`), when its own
+lookup in the segment's image found no chart (`route.c:440-489`; the
+REQUEST at `:491-497`, the name in `AUXILIARY`). The caller, in C,
+looks the name up with `ta_image_chart_by_name` in that segment's image
+(`ta_host_segment_info_get`) and calls `ta_host_resume` with the chart
+index + 1, or with `TA_ERROR_INVALID` for a name the image does not
+have, which raises `error.execution` in the parent (`route.c:544-550`).
+A resume names only a chart of that image (`:544`, `:553`), and nothing
+needs another: the W3C IRP passes with each test's documents compiled
+together, answered as `ta-conform` does (`tools/conform/scenario.c:99-125`).
+As core stands, that lookup repeats the one core made before the
+REQUEST, so it finds nothing and the answer is `TA_ERROR_INVALID`.
+
+**[8.2] `ta_image_chart_by_name` normalizes a `src` name**: it strips
+`file://`, `file:` and `./`, which core strips before its own lookup
+today (`route.c:442-453`) and `ta-conform` strips again
+(`scenario.c:106-114`), so a caller binds that one function and repeats
+nothing (bindings.md section 2: if C does it, bind the C).
 
 **Rejected.** A fourth parameter for the error (the rule of three
 parameters; root `AGENTS.md`). A resolver keeping every text alive until
 the compilation ends by itself (`ta_runtime_files` owns its texts,
 `runtime.h:32-37`): the compiler already has an arena with exactly that
-lifetime.
+lifetime. A resolver on the host answering a REQUEST with a text (the
+design before the fourth amendment): a resume names a chart of the
+segment's image (`route.c:544`, `:553`), a static `src` is already in
+that image, and a dynamic one is answered by a lookup; nothing needs a
+chart compiled at run time.
 
 ## Changing this page
 

@@ -354,6 +354,14 @@ In ADR 0012's order of work, with its second amendment (2026-10-13):
   `document_resolve`, the tests' `test_resolve` and `abort_resolve`, and
   the lint rule's test. A test of a refusal's diagnostic and of a text
   left in scratch.
+- **`ta_image_chart_by_name` normalizes a `src` name** (ADR 0012,
+  decision 7 as amended a fourth time): it strips `file://`, `file:` and
+  `./` (`src/image/image.c:401-415`), so core's own lookup before a
+  `TA_EFFECT_REQUEST` (`route.c:442-453`) and `ta-conform`'s answer to
+  one (`tools/conform/scenario.c:106-114`) drop their copies, and a
+  binding answers a REQUEST with that one function and `ta_host_resume`
+  (the resolver lives only at compile time; boundary.md section 12). A
+  test of each prefix.
 - **One drain at a time:** `ta_host_effects` returns the open batch;
   `ta_host_run` refuses while one is open (`TA_RUN_FAULT`, detail
   `TA_ERROR_STATE`).

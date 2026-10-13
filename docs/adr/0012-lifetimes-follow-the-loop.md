@@ -7,6 +7,9 @@
 time 2026-10-13 (decision 5: `ta_growable_arena` built in base, and the
 compiler's `ta_chunk_arena` moved onto it; decision 7, new: the
 resolver's errors and its scratch arena; see "Amended a third time
+(2026-10-13)"); amended a fourth time 2026-10-13 (decision 7: the
+resolver lives only at compile time, a `TA_EFFECT_REQUEST` is answered
+from the requesting segment's image; see "Amended a fourth time
 (2026-10-13)"). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
 decision 2 (the host's outputs) and [ADR 0011](0011-the-control-plane-is-posted-messages.md)
 decisions 3 (publication), 4 (`actor.changed`) and 6 (the drain and the
@@ -418,6 +421,28 @@ typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request
 | a diagnostic (`file`, `message`) | the compile result's arena | when the compiler reports it | by the caller (`ta_compile_diagnostics`) | `ta_compile_free` |
 | the image | the compile result | at the compilation's end | by the caller; `ta_host_add_image` copies it | `ta_compile_free` |
 
+**The resolver lives only at compile time** (fourth amendment). A
+static `<invoke src>` is fetched through it while compiling, and the
+invoked chart is compiled into the same image (`scxml.c:893-896`,
+`resolve_chart` at `:855-870`). A `TA_EFFECT_REQUEST` is not a
+compilation: core gives it for a dynamic `srcexpr`, or a `src` the
+compiler did not match (one with a `typeexpr`, `scxml.c:895`), when its
+own lookup in the segment's image found no chart (`route.c:440-489`;
+the REQUEST at `:491-497`). It is answered from that image: the name
+looked up with `ta_image_chart_by_name` in the image of the requesting
+segment, then `ta_host_resume` with the chart index + 1, or
+`TA_ERROR_INVALID` for a name the image does not have, which raises
+`error.execution` in the parent (`route.c:544-550`); a resume names
+only a chart of that image (`:544`, `:553`). `ta-conform` answers so
+(`tools/conform/scenario.c:99-125`), and the W3C IRP passes with each
+test's documents compiled together. Nothing turns a resolver's text
+into a chart at run time, and nothing needs to: a host has no resolver,
+and a binding answers a REQUEST in C. [8.2]: the `file://`, `file:` and
+`./` prefixes, which core strips before its own lookup
+(`route.c:442-453`) and `ta-conform` strips again
+(`scenario.c:106-114`), are stripped by `ta_image_chart_by_name` itself
+(`src/image/image.c:401-415`), so a caller binds that one function.
+
 ## Rejected alternatives
 
 - **Not "until the next call into the host" for outputs**, because a
@@ -603,3 +628,28 @@ it is resolved: a refused construct is reported at compile time, at its
 line). Who pays: nothing per event or per actor; one pointer in the
 request; the compiler's code moves to one arena; every resolver in core
 and its tests changes signature (decision 7's list).
+
+## Amended a fourth time (2026-10-13)
+
+The maintainer corrected decision 7, the same day:
+
+- **The resolver lives only at compile time** (decision 7, the
+  paragraph after its table). The guide, `boundary.md` section 12 and
+  the bindings' documents had a resolver on the host answering
+  `TA_EFFECT_REQUEST`, and called it open that its text could not become
+  the invoked child. That was wrong: a static `src` is compiled into the
+  same image by the compiler's resolver, and a REQUEST (a dynamic
+  `srcexpr`, or a `src` the compiler did not match) is answered by
+  looking its name up in the requesting segment's own image, as
+  `ta-conform` does (`scenario.c:99-125`). A binding has no resolver on
+  its host and answers a REQUEST in C; a name the image does not have
+  is `TA_ERROR_INVALID`, and the parent gets `error.execution`.
+- **[8.2]: `ta_image_chart_by_name` normalizes a `src` name** (the
+  prefixes `file://`, `file:` and `./`), so neither core's own lookup
+  (`route.c:442-453`) nor `ta-conform` nor a binding repeats it.
+
+Whom it serves first: the binding author, who has one resolver (the
+compile call's) and one answer to a REQUEST (an image lookup in C).
+Who pays: nothing per event or per actor; the lookup moves into one
+function; every binding loses a host parameter and a callback into the
+language.
