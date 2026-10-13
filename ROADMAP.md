@@ -332,6 +332,25 @@ In ADR 0012's order of work, with its second amendment (2026-10-13):
   free call), and a `ta_allocator` view so `ta_cbor_writer` grows into
   it. The internal `ta_arena` (`src/base/arena.h`) keeps its name and
   job. Unit tests and `tinyactors.api.json` entries for all three.
+- **One chunked arena in core** (ADR 0012, decision 5 as amended a
+  third time): the compiler's private `ta_chunk_arena`
+  (`src/compile/compile_support.h:14-26`; the per-compilation arena,
+  `compile.c:37`, and the result's, `compile.c:13`) moves onto
+  `ta_growable_arena`, and `ta_chunk_arena` is deleted.
+- **The resolver reports its errors and gets a scratch arena** (ADR 0012,
+  decision 7): `ta_resolve_request` gains `ta_growable_arena *scratch`
+  (the compiler's per-compilation arena, from the start of
+  `ta_compile_charts` to its return), the out parameter becomes
+  `ta_resolve_result` (`ta_source source; ta_resolve_error error`, the
+  error `{line, column, message}`), still three parameters; a refusal
+  becomes a diagnostic with the resolver's file, line, column and message
+  (copied into the result's arena, valid until `ta_compile_free`)
+  instead of `cannot resolve src` (`scxml.c:212`). Every caller and
+  implementer migrates: `fetch_source`, `ta_compile_system`
+  (`compile.c:191`), `ta_runtime_resolve`, `ta-conform`'s
+  `document_resolve`, the tests' `test_resolve` and `abort_resolve`, and
+  the lint rule's test. A test of a refusal's diagnostic and of a text
+  left in scratch.
 - **One drain at a time:** `ta_host_effects` returns the open batch;
   `ta_host_run` refuses while one is open (`TA_RUN_FAULT`, detail
   `TA_ERROR_STATE`).
@@ -424,10 +443,15 @@ The design, in short (the rulebook has each rule with its evidence):
 
 - **API:** `tinyactors.Host(config, io_processors={type: handler},
   log=handler, clock=None)`, everything per host (no global
-  configuration); `with` and `async with` on the same `Host`;
-  `add_image(charts)`; `spawn(chart, name=None, params=None) -> int`,
-  `send(session, event, data=None)`, `terminate(session)`, applied at
-  the call. An I/O processor's handler is `handler(host, send)`, with
+  configuration); `with` and `async with` on the same `Host`. The direct
+  layer mirrors the C API: `tinyactors.compile_charts(sources,
+  resolver=None) -> Compiled` (a context manager; `CompileError` with
+  every diagnostic), `host.add_image(compiled.image) -> int`,
+  `host.chart(name)`, `spawn(ref, name=None, params=None,
+  traceparent=None) -> int`, `send(session, event, data=None)`,
+  `terminate(session)`, applied at the call; a resolver object
+  (`tinyactors.DirectoryResolver(root)`) given to `compile_charts` and
+  the `Host`. A convenience layer in Python above it is later work. An I/O processor's handler is `handler(host, send)`, with
   `send.answer(event, data=None)` and `send.fail()`; an `async def`
   handler is scheduled as a task. `log=handler(host, entry)` gets the
   host's `<log>` lines. Typed methods over post (`actor_state`,

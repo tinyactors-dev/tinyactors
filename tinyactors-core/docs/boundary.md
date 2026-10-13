@@ -24,10 +24,13 @@ them to be false has to show it is.
 - **One host, one owning thread.** Every call comes from the thread that
   made the host (bindings.md section 5). Reentrancy happens only on that
   thread: a getter, `toJSON`, `__del__`, a finalizer, an expression.
-- **Each binding is its extension's C**, with nothing above it in the
-  language (ROADMAP.md step 8, decision 2). Every consumer of a header is
-  C: the CPython extension, the Node-API addon, the same addon compiled to
-  wasm with emnapi, `ta-conform`.
+- **Each binding is its extension's C** (ROADMAP.md step 8, decision 2):
+  the direct layer, which mirrors the C API more or less one to one.
+  A convenience layer in the language above it (decided 2026-10-13, later
+  work, not built now) calls only the direct layer, never core
+  (bindings.md section 1). Every consumer of a header is C: the CPython
+  extension, the Node-API addon, the same addon compiled to wasm with
+  emnapi, `ta-conform`.
 - **The datamodel vtable is the only call out of core.**
 - **Core is the only queue.** Mailboxes, the run queue and timers are
   core's (ADR 0004).
@@ -519,7 +522,7 @@ only through the caller's `ta_allocator` [8.2]:
 | API | What | Lifetimes |
 |---|---|---|
 | `ta_table` (`table.h`) | rows of a caller's size, named by 64-bit handles `generation << 32 \| (slot + 1)`, 31 bits of generation (odd while live); grows by doubling | a handle until `ta_table_remove` (stale for good after); a row pointer until the next `ta_table_add`; the rows until `ta_table_free` |
-| `ta_growable_arena` (`arena.h`) | a port of tinyxml's `txml_arena` (`tinyxml/src/arena.c`): linked chunks, a request larger than the chunk size in a chunk of its own, marks, a release that keeps its chunks, a `ta_allocator` view | an allocation until a release to a mark taken before it (it never moves); chunks until `ta_growable_arena_free`; the `ta_allocator` view while the arena lives |
+| `ta_growable_arena` (`arena.h`) | built in base from tinyxml's `txml_arena` (`tinyxml/src/arena.c`): linked chunks, a request larger than the chunk size in a chunk of its own, marks, a release that keeps its chunks, a `ta_allocator` view. The compiler's private `ta_chunk_arena` (`src/compile/compile_support.h:14-26`) moves onto it: one chunked arena in core (ADR 0012, third amendment) | an allocation until a release to a mark taken before it (it never moves); chunks until `ta_growable_arena_free`; the `ta_allocator` view while the arena lives |
 | `ta_status_name` (`types.h`) | `"TA_ERROR_STATE"` for `TA_ERROR_STATE`; NULL for a status `types.h` does not define | static text |
 
 The internal `ta_arena` (`src/base/arena.h`: a caller's region carved by
@@ -530,6 +533,59 @@ keeps its name and its job; it never allocates.
 same code twice, compared file by file in the audit). Making `ta_arena`
 public (it cannot grow). txml's release, which frees chunks past one
 spare (an allocator pair per call; ADR 0012, rejected alternatives).
+Two chunked arenas in core, the compiler's `ta_chunk_arena` beside
+`ta_growable_arena` (the same job twice; ADR 0012, third amendment).
+
+## 12. Compiling, and the resolver
+
+**Design (ADR 0012, decision 7, third amendment; [8.2]).** A binding
+compiles with `ta_compile_charts` (`compile.h:74-75`), reads the image
+with `ta_compile_image` and the diagnostics with
+`ta_compile_diagnostics`, and frees the result with `ta_compile_free`; the
+host copies the image's bytes (section 8). A static `src` (`<script>`,
+`<data>`, `<invoke>`) is resolved during the call through
+`ta_compile_options.resolve` (`scxml.c:201-216`). The callback keeps its
+three parameters; [8.2] changes its request and its out parameter in
+place:
+
+```c
+typedef struct ta_resolve_request { ta_string_view base; ta_string_view source; ta_growable_arena *scratch; } ta_resolve_request;
+typedef struct ta_resolve_error { uint32_t line, column; ta_string_view message; } ta_resolve_error;
+typedef struct ta_resolve_result { ta_source source; ta_resolve_error error; } ta_resolve_result;
+typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request *request, ta_resolve_result *out);
+```
+
+On `TA_OK`, `out->source` is the text. On a refusal the compiler turns
+`out->error` into an error diagnostic: file the resolved src, its line,
+column and message, copied into the result's arena, instead of today's
+bare `cannot resolve src="..."` at the referring element (`scxml.c:212`).
+`scratch` is the compiler's per-compilation arena (today a
+`ta_chunk_arena`, `compile.c:37`, freed at `:87` before the call
+returns); the text and the message may live there, and the compiler
+copies what it keeps (`link.c:40`, `scxml.c:116`).
+
+| Object | Owner | Created | Read | Ends |
+|---|---|---|---|---|
+| the scratch arena | the compiler (chunks from `ta_compile_options.alloc`) | at the start of `ta_compile_charts` | by the resolver (writes) and the compiler | when `ta_compile_charts` returns |
+| a resolved text, an error's message | the scratch, or the resolver's own memory | in the resolver's call | by the compiler, which copies what it keeps | when `ta_compile_charts` returns, at the latest |
+| a diagnostic (`file`, `message`) | the compile result's arena | when the compiler reports it | by the caller | `ta_compile_free` |
+| the image (`ta_compile_image`) | the compile result | at the compilation's end | by the caller; `ta_host_add_image` copies it | `ta_compile_free` |
+
+**A `TA_EFFECT_REQUEST` is not a compilation.** It comes for an
+`<invoke>` whose src names no chart in the image (`route.c:483-492`), and
+`ta_host_resume` answers it with a chart index + 1 of the requesting
+segment's own image (`route.c:544`, `:553`); no other path spawns the
+child from another segment. A resolver's text therefore cannot become
+that child as core stands: a binding that resolves a REQUEST can answer
+only with a chart already in that segment, or with an error status
+(`error.execution` in the parent, `route.c:544-550`). Open for the
+maintainer.
+
+**Rejected.** A fourth parameter for the error (the rule of three
+parameters; root `AGENTS.md`). A resolver keeping every text alive until
+the compilation ends by itself (`ta_runtime_files` owns its texts,
+`runtime.h:32-37`): the compiler already has an arena with exactly that
+lifetime.
 
 ## Changing this page
 

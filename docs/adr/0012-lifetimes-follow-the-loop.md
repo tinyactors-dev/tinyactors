@@ -3,7 +3,11 @@
 **Status:** Accepted (2026-10-13); amended 2026-10-13 (decision 4, see
 "Amended (2026-10-13)" at the end); amended again 2026-10-13 (decision 4:
 `actor.subscribe` and `actor.changed` are removed; decision 5:
-`ta_growable_arena`; see "Amended again (2026-10-13)"). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
+`ta_growable_arena`; see "Amended again (2026-10-13)"); amended a third
+time 2026-10-13 (decision 5: `ta_growable_arena` built in base, and the
+compiler's `ta_chunk_arena` moved onto it; decision 7, new: the
+resolver's errors and its scratch arena; see "Amended a third time
+(2026-10-13)"). Amends [ADR 0010](0010-outputs-are-views-values-stream.md)
 decision 2 (the host's outputs) and [ADR 0011](0011-the-control-plane-is-posted-messages.md)
 decisions 3 (publication), 4 (`actor.changed`) and 6 (the drain and the
 synchronous `request`).
@@ -260,6 +264,21 @@ a port of tinyxml's `txml_arena` (`tinyxml/include/txml.h:209-252`,
 chunks**. The names below are a sketch; 8.2 settles them, the rules
 are decided.
 
+*Amended a third time (2026-10-13):* `ta_growable_arena` is built in
+base, taking from `txml_arena` its linked chunks and marks
+(`txml_arena_position`, `txml_arena_release`, `txml.h:221-249`), with the
+two things this decision adds to it, a release that keeps the chunks
+and the `ta_allocator` view; and **the compiler's private chunked arena,
+`ta_chunk_arena`, moves onto it** in 8.2: one chunked arena in core, not
+two. `ta_chunk_arena` (`src/compile/compile_support.h:14-26`, 28 call
+sites of `_alloc` and `_strdup` in `src/compile/`) is the compiler's
+per-compilation arena (`compile.c:37`, freed at `:87`: source texts,
+`compile_internal.h:11-16`, `link.c:39-40`; the XML parser's nodes,
+`xml.c:267`) and the compile result's (`compile.c:13`, `:24`, freed by
+`ta_compile_free` at `:275`: the diagnostics' file and message strings,
+`compile_support.c:226-228`). Both become `ta_growable_arena`s, and the
+per-compilation one is the resolver's scratch (decision 7).
+
 ```c
 /* A bump allocator over linked chunks from `allocator`. An allocation
  * never moves: growing links a new chunk, nothing is copied. A request
@@ -341,6 +360,63 @@ The rules:
   included (`actor.state`); there is no subscription (decision 4,
   amended again).
 - **`PEER` versus `PEER_ERROR` in a language API is deferred.**
+
+### 7. The resolver reports errors, and lends a scratch arena (added by the third amendment)
+
+A static `src` (`<script>`, `<data>`, `<invoke>`) is resolved during
+compilation through `ta_compile_options.resolve`
+(`src/compile/scxml.c:201-216`, called at `:599`, `:860`, `:968`; a
+manifest's `<chart src>` at `compile.c:191-194`). Today a refusal is one
+bare diagnostic at the referring element, `cannot resolve src="..."`
+(`scxml.c:212`), so a resolver that knows why (a Python `.py` file whose
+rewrite refuses a construct at line 7) cannot say so; and the resolver
+must keep the text it returns alive by itself until the compilation
+ends (`ta_runtime_files` owns its texts, `runtime.h:32-37`). [8.2]
+changes the callback in place, keeping its three parameters:
+
+```c
+typedef struct ta_resolve_request {
+    ta_string_view base;           /* the referring document */
+    ta_string_view source;         /* src as written */
+    ta_growable_arena *scratch;    /* lives for this compilation */
+} ta_resolve_request;
+typedef struct ta_resolve_error {
+    uint32_t line, column;         /* in the resolved src */
+    ta_string_view message;
+} ta_resolve_error;
+typedef struct ta_resolve_result {
+    ta_source source;              /* on TA_OK: the text (and the canonical name, if any) */
+    ta_resolve_error error;        /* on a refusal: why */
+} ta_resolve_result;
+typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request *request,
+                                         ta_resolve_result *out);
+```
+
+- **A refusal becomes a diagnostic with the resolver's words:** file the
+  resolved src, line and column `out->error`'s, message
+  `out->error.message`, copied into the result's arena (as every
+  diagnostic is, `compile_support.c:226-228`; a message is cut at 511
+  bytes, `:208`), instead of the bare `cannot resolve src`.
+- **The scratch arena is the compiler's per-compilation arena**
+  (decision 5, third amendment), lent to the resolver: the resolved text
+  and the message may live there, and the compiler copies what it keeps
+  (a queued document's text, `link.c:40`; an expression's source,
+  `scxml.c:116`).
+- **The callers migrate in the same commits:** `fetch_source` and
+  `ta_compile_system`; the implementers `ta_runtime_resolve`
+  (`runtime_hosted.c:78`), `ta-conform`'s `document_resolve`
+  (`tools/conform/datamodel.c:113`), the tests' `test_resolve`
+  (`tests/support/compile_util.h:20`) and `abort_resolve`
+  (`tests/unit/test_compile.c:432`), and the lint rule's test
+  (`tools/lint/tests/at-most-three-parameters-test.yml:6`).
+
+| Object | Owner | Created | Read | Ends |
+|---|---|---|---|---|
+| `request->scratch` | the compiler (chunks from `ta_compile_options.alloc`) | at `ta_compile_charts`' (`_system`'s) start | written by the resolver; read by the compiler | when `ta_compile_charts` returns |
+| `out->source.text` | the scratch, or the resolver's own memory | in the resolver's call | by the compiler, which copies what it keeps | when `ta_compile_charts` returns, at the latest |
+| `out->error.message` | the scratch, or the resolver's own memory | in the resolver's call | by the compiler, which copies it into a diagnostic | when `ta_compile_charts` returns, at the latest |
+| a diagnostic (`file`, `message`) | the compile result's arena | when the compiler reports it | by the caller (`ta_compile_diagnostics`) | `ta_compile_free` |
+| the image | the compile result | at the compilation's end | by the caller; `ta_host_add_image` copies it | `ta_compile_free` |
 
 ## Rejected alternatives
 
@@ -424,7 +500,11 @@ Step 2 of [ROADMAP.md](../../ROADMAP.md), step 8, after these documents:
    an oversized request, nested marks, a release that keeps its chunks
    and calls the allocator no more on the next round, a writer growing
    through its `ta_allocator`, a refusing allocator, free), and their
-   entries in `tinyactors.api.json`.
+   entries in `tinyactors.api.json`. Then the compiler moves from
+   `ta_chunk_arena` onto `ta_growable_arena`, and the resolver takes its
+   scratch and reports its errors (decision 7, third amendment), with a
+   test of a refusal's diagnostic (file, line, column, message) and of a
+   text left in scratch.
 2. One drain at a time: `ta_host_effects` returns the open batch;
    `ta_host_run` refuses while one is open; tests and `ta-conform`
    migrate (each takes, handles, acks before a run).
@@ -499,3 +579,27 @@ What this replaces in the text above: decision 4, the cost rows for
 subscriptions, decision 6's subscription bullets, and item 4 of the order
 of work. The first amendment's text about the per-macrostep shape is
 reduced to one line; its record is in git (this file at `30fd4ad3`).
+
+## Amended a third time (2026-10-13)
+
+The maintainer amended decision 5 and added decision 7, the same day:
+
+- **`ta_growable_arena` is built in base, and `ta_chunk_arena` moves
+  onto it** (decision 5): `txml_arena`'s linked chunks and marks, a
+  release that keeps its chunks, and the `ta_allocator` view; the
+  compiler's private `ta_chunk_arena` (`src/compile/compile_support.h:14-26`)
+  is replaced by it in 8.2, so core has one chunked arena, not two.
+- **The resolver reports why it refused, and gets a scratch arena**
+  (decision 7, new): `ta_resolve_request` gains `scratch`, the out
+  parameter becomes `ta_resolve_result` (`ta_source` and
+  `ta_resolve_error`), the callback keeps three parameters, and a
+  refusal becomes a diagnostic with the resolver's file, line, column and
+  message. Scratch lives from the start of `ta_compile_charts` to its
+  return; diagnostics until `ta_compile_free`.
+
+Whom it serves first: the application developer whose chart names a
+`src` the binding's resolver checks (a Python `.py` script, rewritten as
+it is resolved: a refused construct is reported at compile time, at its
+line). Who pays: nothing per event or per actor; one pointer in the
+request; the compiler's code moves to one arena; every resolver in core
+and its tests changes signature (decision 7's list).
