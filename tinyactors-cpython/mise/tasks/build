@@ -18,6 +18,10 @@ CPython.run('mise', 'run', '//tinyactors-core:amalgamate', '--', '--out', CPytho
 
 target = Toolchain::Target.host
 core = CPython.core_objects(target)
+unless CPython.extension?
+  puts 'build: no extension yet (src/): core\'s amalgamation only'
+  exit
+end
 CPython.builds.each do |build|
   extension = CPython.build_extension(target, build, core)
   puts "build: #{extension.relative_path_from(CPython::ROOT)}"

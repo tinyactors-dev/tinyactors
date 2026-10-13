@@ -55,6 +55,14 @@ module CPython
 
   module_function
 
+  # Whether there is an extension to build: src/ has C files. Without
+  # them the build stops at core's amalgamation and the tests have no
+  # module to import (README.md: being rewritten).
+  def extension? = !Dir[ROOT.join(SOURCES).to_s].empty?
+
+  # Whether tests/ holds tests of the extension.
+  def tests? = !Dir[ROOT.join('tests/**/test_*.py').to_s].empty?
+
   # Runs a command in the project's directory; a failure ends the task with
   # its status.
   def run(*command, env: {})

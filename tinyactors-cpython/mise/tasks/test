@@ -22,13 +22,19 @@ require_relative '../cpython'
 CPython.run('mise', 'run', 'lint')
 CPython.run('mise', 'run', 'build')
 
-CPython.builds.each do |build|
-  version = IO.popen([build.python, '-c', 'import sys, sysconfig; print(sys.version.split()[0], ' \
-                                          '"free-threaded" if sysconfig.get_config_var("Py_GIL_DISABLED") else "with the GIL")'],
-                     &:read).strip
-  puts "test: python #{version}, the #{build.name} build: tests/"
-  CPython.run(build.python, '-m', 'unittest', 'discover', '--start-directory', 'tests',
-              env: { 'PYTHONPATH' => build.directory.to_s })
+if !CPython.extension?
+  puts 'test: tests skipped: no extension yet (src/)'
+elsif !CPython.tests?
+  puts 'test: tests skipped: no tests yet (tests/)'
+else
+  CPython.builds.each do |build|
+    version = IO.popen([build.python, '-c', 'import sys, sysconfig; print(sys.version.split()[0], ' \
+                                            '"free-threaded" if sysconfig.get_config_var("Py_GIL_DISABLED") else "with the GIL")'],
+                       &:read).strip
+    puts "test: python #{version}, the #{build.name} build: tests/"
+    CPython.run(build.python, '-m', 'unittest', 'discover', '--start-directory', 'tests',
+                env: { 'PYTHONPATH' => build.directory.to_s })
+  end
 end
 
 gate = CPython::GATE
