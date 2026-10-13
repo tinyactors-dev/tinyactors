@@ -21,8 +21,15 @@ ADR 0009's steps 1 to 7 are done (2026-10-11):
 | 6 | Protocol vectors (`tinyactors-core/tests/protocol`), `protocol:encode` | `cc0f193c`, `b539dae9`, `4881cbd1` |
 | 7 | The binding guide, [`tinyactors-core/docs/bindings.md`](tinyactors-core/docs/bindings.md); its cleanup (`area.verb` methods, the vtable on the buffer convention) | `082f95a1` … `72823569` |
 
-The repository has no binding now. Step 8 builds them, and this roadmap is
-its plan.
+Step 8 builds the bindings, and this roadmap is its plan. A first pass
+(M1 of the earlier plan, 2026-10-12) built both bindings far enough to
+show where the boundary was hard to use: four states of an effect, five
+lifetime classes, a synchronous request facade. Both bindings were gutted
+for a rewrite from scratch (`6426816a` cpython, `70434bee` napi: their
+`src/`, adapters and binding docs deleted, their tooling kept), and the
+maintainer set a new order on 2026-10-13 (below, "Order of work"): the
+documents first, then core, then the whole loop in C, then a minimal
+Python binding, then Node.
 
 ## Step 8: the bindings
 
@@ -54,11 +61,13 @@ guide and the headers. Three decisions replace theirs:
   and the maintainers (one suite for every implementation).
 - **Sessions.** One coordinating session owns `tinyactors-core` and
   `tinyactors-test`. A Python session owns `tinyactors-cpython/`; a Node
-  session owns `tinyactors-napi/`. They run in parallel after M0.
+  session owns `tinyactors-napi/`. The Python session starts at step 8.4,
+  after steps 8.2 and 8.3; the Node session starts at step 8.5, after
+  the Python binding's API review.
 - **Each binding keeps its own roadmap**, `tinyactors-cpython/ROADMAP.md`
   and `tinyactors-napi/ROADMAP.md`: the session's plan and progress for
-  its milestone (M1's scope and gates copied from here, with a link back,
-  and "M1 done means"), how the work runs for that session (these rules
+  its step (the step's scope and gates copied from here, with a link
+  back, and its "done means"), how the work runs for that session (these rules
   as they apply to it), and its "Requests to core". The binding's
   `AGENTS.md` holds only the binding's own rules, true whatever the
   milestone. A binding session never edits this file; the coordinator
@@ -82,7 +91,8 @@ guide and the headers. Three decisions replace theirs:
   `tinyactors-test/suites/milestones.txt` lists what each milestone runs,
   cumulative: M1 every protocol vector file, the basics scenario and the
   outcome canaries; M2 the W3C suite; M3 invoke; M4 hibernate, migrate
-  and snapshot; M5 nothing more. Without `--milestone` the whole suite
+  and snapshot; M5 nothing more (the suite's names for its sets; step
+  8.4's gate is M1, and the sets grow with step 8.5). Without `--milestone` the whole suite
   runs, as `ta-conform`'s does.
 - **Each session runs its own project's `mise run test`** and the suite
   against its command. The root `mise run test` and core's `--full` run in
@@ -124,7 +134,7 @@ Every gate is mechanical and runs in the owning project's `mise run test`.
 What a black box cannot show stays as each project's own tests: memory
 failures, refusal during a run, threads, garbage collection, liveness.
 
-**The size tripwire, designed (2026-10-12; built when M1 is done):**
+**The size tripwire, designed (2026-10-12; built at step 8.4's audit):**
 
 - **Where it lives.** `tinyactors-<binding>/size-budget.txt`, one line per
   file it budgets: `<path> <baseline> [<raised> <reason…>]`. It covers
@@ -133,7 +143,7 @@ failures, refusal during a run, threads, garbage collection, liveness.
   so the number is never in dispute. One checker for both bindings,
   `mise/lib/size_budget.rb` at the root (with its test, run by the root's
   `test` like `api-map-test`), called by each binding's `mise run lint`.
-- **How the budget is set at M1.** At the M1 audit the coordinator runs
+- **How the budget is set.** At step 8.4's audit (8.5's for Node) the coordinator runs
   the checker's `--baseline` mode in each binding: every file's count at
   that commit, rounded up to the next multiple of 50 (room for fixes, not
   for features), written as its baseline, and committed with the audit.
@@ -146,7 +156,7 @@ failures, refusal during a run, threads, garbage collection, liveness.
   `<raised>` number at least its new count and a reason of at least a few
   words; the checker refuses a raised number without a reason, a raised
   number not above the baseline, and a file with no line. The baseline
-  never moves after M1, so `git log -p size-budget.txt` lists every
+  never moves after it is set, so `git log -p size-budget.txt` lists every
   raise with its reason, and the audit after each milestone reads that
   list.
 
@@ -288,65 +298,134 @@ reasoned-analysis review of both and the maintainer's decisions:
   bindings' and core's runs can convert at once.
 - **The size tripwire is designed** ("Gates").
 
-#### M1: walking skeletons with native datamodels (both sessions)
+#### Order of work (decided 2026-10-13)
 
-Each binding: its module and `Host` type; `ta_host_create` from the
-language's options; images, boot, spawn, send, terminate; the loop with
-every run status; `DONE`, `ERROR`, `LOG`; `request` with the language's
-error type; the CBOR conversion with the value table (big integers,
-bytes; Python's `Address` and `UNDEFINED`; Node's actor reference is a
-string, below); the native datamodel (`"python"`,
-`"ecmascript"` in Node's engine) for `<data>`, `cond`, `assign`,
-`<script>`, `_event`, `In()`, `<send>` with params, `<foreach>`; quickjs
-wired in beside it; and the suite's adapter (`conform`).
+The maintainer's order after the first pass. Each step is done when its
+"done means" holds and its gates pass; the next starts after that.
 
-Both bindings: **the CBOR conversion is public** (decided 2026-10-12):
-the module's own `encode` and `decode`, top-level and named after the
-platform's conventions, Python's `tinyactors.encode(value) -> bytes` and
-`tinyactors.decode(data) -> object` (the shape of `json` and `cbor2`),
-Node's `encode` and `decode` exports. They are core's token lists
-(`ta_cbor_encode`, `ta_cbor_decode`; `tinyactors/cbor.h`) and the
-binding's value table (`values.c`), the same conversion the API uses, and
-each has its row in `docs/api-map.md` (bindings.md, section 9). The
-adapter reads and writes the driver's frames with them, and its lint
-(`tinyactors-test/lint`) refuses every import but the binding's public
-module and the language's standard library, so no third-party codec
-stands between the suite and the binding. **Known limit:** the vectors
-then go through the binding's codec both ways (the runner encodes the
-expected bytes, the adapter decodes the call and encodes the answer), so
-a value that maps wrong the same way in `decode` and `encode` passes them.
-The binding's own value tests catch that: `docs/values.md`, row by row,
-and the language's lines of `values.txt` (`python`, `ecmascript`).
+##### 8.1: the documents (coordinator) — done
 
-Both bindings: **a simulated clock** in the public API, its shape
-borrowed from xstate (`SimulatedClock`, `increment(ms)`) and its meaning
-ours. A host created with it arms no timer; `increment(ms)` calls
-`ta_host_advance_time` (the wall clock is the simulated time) and runs the
-loop until idle; inputs run the turn at the current time. It is the
-binding's form of "a caller's own clock" (`tinyactors-core/docs/bindings.md`,
-section 3). It serves application developers testing their charts first;
-the adapter uses it for the scenarios' `advance` steps. Each
-`docs/api-map.md` lists it against `ta_host_advance_time` and the turn.
+[ADR 0012](docs/adr/0012-lifetimes-follow-the-loop.md) (lifetimes follow
+the loop), the contract of every host call in
+[`tinyactors-core/docs/boundary.md`](tinyactors-core/docs/boundary.md),
+[`tinyactors-core/docs/embedding.md`](tinyactors-core/docs/embedding.md)
+(how to use the core, with a complete loop in C), the guide and
+`requests.md` updated, the `AGENTS.md` files, and each binding's
+`AGENTS.md` and `ROADMAP.md` rewritten for the rewrite.
 
-Gates: the suite's M1 set (`--milestone M1`: every protocol vector file,
-the basics scenario and the outcome canaries) on both datamodels, which
-holds `values.txt` round trips on the native datamodel; the value
-table's own tests; mapping table; layer lints and no mutable globals.
-**Then the API review**, both bindings side by side: how a Python chart
-reads, how a Node program reads. Each binding's own `ROADMAP.md` has
-"M1 done means", the plan and progress.
+Done means: no document contradicts ADR 0012; every host call has its
+row; the example of embedding.md compiles and runs. Gates:
+`mise run check-acronyms`; core's `mise run lint` (host.h's comment).
 
-Pitfalls each binding handles in M1, with a test of its own for each (the
-suite cannot see them; spikes and their review: the reasoned-analysis
-pass of 2026-10-12):
+##### 8.2: core implements ADR 0012 (coordinator)
+
+In ADR 0012's order of work: `ta_status_name` and `ta_table` in base;
+one drain at a time (`ta_host_effects` returns the open batch,
+`ta_host_run` refuses while one is open); the host's outputs and
+`TRACEPARENT` until the ack; `actor.changed` with `value` always and
+`actor.state` without its limit. Every caller in core, its tests and
+`ta-conform` migrates in the same commits; the "(0012)" marks leave
+`boundary.md`, `embedding.md`, `bindings.md` and `requests.md` as each
+lands.
+
+Done means: every "needed" test of boundary.md's "What no test checks
+yet" that ADR 0012 names exists and passes; `host.h` states the new
+lifetimes; no "(0012)" mark is left. Gates: core's `mise run test`, and
+`mise run test:full` (the change touches the host's memory and the run,
+`AGENTS.md`, "Tests: what to run"), with the commit saying it passed.
+
+##### 8.3: the full loop, end to end in C (coordinator)
+
+One C program in `tinyactors-core/tests/` (`test_loop.c`), written as
+embedding.md's loop and run by core's `mise run test` under ASan and
+UBSan, drives hosts through every effect with a C handler for each. It
+is the reference a binding's loop is checked against, and embedding.md's
+example is compiled and run with it so the page cannot rot. End to end
+means each of these happens and is answered through the public calls
+only:
+
+- **I/O processors:** an asynchronous one (`TA_EFFECT_SEND`, answered by
+  an event later) and a synchronous one (`TA_RUN_EFFECTS`, answered
+  before the next run; a failure answered with
+  `TA_EVENT_IN_ERROR_COMMUNICATION`);
+- **invoked services:** `INVOKE` starts a C service keyed by (segment,
+  token), a `<send>` to `#_<invokeid>` reaches it (`IO_PROCESSOR`
+  `TA_NIL`), it answers with `TA_EVENT_IN_FROM_INVOKE` and ends with
+  `TA_EVENT_IN_INVOKE_DONE`; `UNINVOKE` stops another; `REQUEST` answered
+  with `ta_host_resume`;
+- **hibernation:** `ta_host_sweep`, `ta_host_hibernate` into a store the
+  program keeps, a `WAKE` answered with `ta_host_wake`; a migration job
+  (`MIGRATED`, `JOB_DONE`) and a retired version (`SEGMENT_FREED`);
+- **peers:** two hosts in one process exchanging envelopes as bytes
+  (`ta_host_envelope`, `ta_host_envelope_read`, `ta_host_deliver`), a
+  refused one coming back as `PEER_ERROR` (`ta_host_peer_error_read`,
+  `ta_host_peer_error`) and becoming `error.communication`;
+- **telemetry:** `TRACES` and `LOGS` taken in their handlers, metrics
+  pulled, `trace.end` at stop with the last take after it;
+- **the control plane:** every method of `requests.md` posted and its
+  `REPLY` read, `actor.subscribe` with `actor.changed` notifications to
+  the `null` at the session's end;
+- **lifecycle:** `DONE` and `ERROR` releasing what the program keeps for
+  a session; `LOG` to its log;
+- **the loop's rules:** one drain at a time, an ack before every run,
+  outputs read after later calls in the same batch, every run status
+  handled.
+
+Done means: every effect kind of `host.h` and every method of
+`requests.md` appears in the program at least once and is answered; it
+passes under ASan and UBSan; nothing in it reaches past the public
+headers. Gates: core's `mise run test` and `mise run conform`.
+
+##### 8.4: a minimal Python binding (Python session)
+
+A binding that validates the API shape before the rest is built, written
+from embedding.md, the guide and its `AGENTS.md`: the `tinyactors` module
+and `Host`; `ta_host_create` from Python options (the binding reads
+`host.config` itself); images, boot, spawn, send, terminate; the loop,
+one drain at a time, with the synchronous driver and `SimulatedClock`;
+I/O processors as the application's output channel (asynchronous and
+synchronous); `subscribe` with `actor.changed`; typed methods over post,
+settled at a later drain; `LOG` to `logging`; `DONE` and `ERROR`
+internal; handle tables as `ta_table`; the CBOR conversion as
+`tinyactors.encode` and `tinyactors.decode`; the `"python"` datamodel
+(decision 3 above) for `<data>`, `cond`, `assign`, `<script>`, `_event`,
+`In()`, `<send>` with params, `<foreach>`, with quickjs beside it; and
+the suite's adapter (`conform/`).
+
+Done means: the suite's M1 set (`--milestone M1`) on both datamodels;
+the value table's own tests; the mapping table (`docs/api-map.md`), every
+item a core function, a method or an effect; the pitfalls below, each
+with a test; then the **API review** by the maintainer: how a Python
+program and a Python chart read. Gates: the binding's `mise run test`
+(lint, build, both interpreters, the suite's set).
+
+##### 8.5: Node, then the rest (both sessions)
+
+The Node binding to the same "done means" as 8.4, on its native
+ECMAScript datamodel and quickjs. Then, for both bindings, what the
+earlier plan's M2 to M5 held: the W3C suite per datamodel (`skip-python.txt`;
+191 of 191 on ECMAScript), with sync sends in that gate; every effect
+(the 8.3 list) through the language's API, both drivers in Python and
+Node's liveness, graceful shutdown (`trace.end`, the last take, free);
+hibernation with a store, export and adopt, migration, snapshots,
+envelopes between hosts and across processes, a Python host and an
+ECMAScript host exchanging envelopes; the examples, release tasks and
+changelogs. The browser (below, "Decided later") after that.
+
+#### Pitfalls each binding handles
+
+Found in the first pass (2026-10-12), each with a test of its own in the
+binding (the suite cannot see them; spikes and their review: the
+reasoned-analysis pass of 2026-10-12). They hold for the rewrite:
 
 - **Both: dropping a payload's last reference can run the language's
   code.** Core calls `release` outside a run as well (the start of
-  `ta_host_run`, ack, `ta_host_free`, requests, deliver), where the host
-  does not refuse reentry. Defer the last drop to a list emptied after the
+  `ta_host_run`, ack, `ta_host_free`, posts, deliver), where the host
+  holds the run's rules (ADR 0010, decision 3). Defer the last drop to a list emptied after the
   outer call into core returns.
-- **Both: two slot tables** (`handles.c`), for payloads and for sessions,
-  each with a generation (guide section 8).
+- **Both: handle tables are core's `ta_table`** (ADR 0012, decision 5),
+  for payloads and for sessions, each handle with a generation (guide
+  section 6); no `handles.c` of the binding's own.
 - **Both: text is valid UTF-8.** A lone surrogate is refused
   (`TA_ERROR_INVALID`); Node-API replaces it with U+FFFD silently, so the
   addon checks (`String.prototype.isWellFormed`).
@@ -403,55 +482,6 @@ pass of 2026-10-12):
 - **Both READMEs:** nesting is limited to 64, which stops cycles but not
   a value that shares subtrees (`a = [a, a]` sixty times): charts are
   trusted code.
-
-#### M2: W3C in each language
-
-`confPython.xsl` beside the W3C stylesheets (ours, checked in: M0 item
-5), the suite generated per datamodel: on python every test but the 20 in
-`skip-python.txt` (ECMAScript data model tests, and 567), 191 of 191 on
-Node's native ECMAScript datamodel and on quickjs. Decide here whether Python needs
-compile-time checks of its expressions (the deleted
-`ta_datamodel_compiler`; this time the compiler would call it).
-
-**Sync sends are in M2** (decided 2026-10-12; they were in M3). The W3C
-environment runs BasicHTTP as a synchronous I/O processor
-(`tinyactors-test/docs/driver.md`, "The W3C environment"), and the 12
-tests that use it are in this gate: 201, 509, 510, 518, 519, 520, 522,
-531, 532, 534, 567, 577 (all optional; 567 is on python's skip list, so
-11 on python). So each binding's loop answers `TA_RUN_EFFECTS` (the sync
-sends are inputs, then run again now: `tinyactors-core/docs/bindings.md`,
-section 3), its API lets an I/O processor be synchronous, and its adapter
-answers the BasicHTTP `SEND` effects as the W3C environment says.
-
-#### M3: every effect
-
-I/O processors (`SEND`; sync sends are in M2), `INVOKE`/`UNINVOKE`, `REQUEST` and
-`ta_host_resume`, `CHANGED` with `actor.subscribe`, `TRACES`, `LOGS` and
-`ta_host_metrics`, inputs during a run (an expression calling
-`host.send`), both drivers in Python (`run_until_idle`, `attach`), and
-Node's liveness. Graceful shutdown: a signal is an event on the loop, so
-`stop()` runs between turns, drains until a deadline the application
-gives, ends the open spans (`trace.end`), takes the traces and frees the
-host; a server with several hosts stops each on its own loop. Gates: the
-invoke scenario on both datamodels, and a shutdown test in each binding
-(spans marked `scxml.incomplete`, nothing after the stop): a chart cannot
-see spans, so it is not a scenario.
-
-#### M4: lifecycle and peers
-
-Hibernation with a store (and a wake before the put settled), export and
-adopt, migration jobs, snapshots, envelopes between two hosts in one
-process and across processes, and a Python host exchanging envelopes with
-an ECMAScript host. Gates: the hibernate, migrate and snapshot scenarios;
-the envelope vectors (in every binding's set from M1 on:
-`suites/milestones.txt`).
-
-#### M5: examples and release
-
-The examples (chess, ui-elements, access-reconciler) against
-`tinyactors-napi`; release tasks and changelogs for both packages; core's
-`mise run test --full` (owed since step 5b changed scheduling) and every
-full pass.
 
 ### File trees
 
@@ -537,12 +567,13 @@ tinyactors-napi/
 │   ├── host.c               Host: one function per method → ta_* or a request
 │   ├── loop.c               the turn, statuses, one setTimeout (ref'd while a deadline is pending)
 │   ├── effects.c            one record per effect, built with the accessors; dispatch
-│   ├── request.c            JSON-RPC request and reply; TinyactorsError(code, reason, path)
+│   ├── methods.c            typed methods over ta_host_post, settled at a later drain;
+│   │                        TinyactorsError(code, reason, path)
 │   ├── values.c             CBOR tokens ↔ JavaScript values: BigInt, Uint8Array; tag 32 as its text;
 │   │                        the encode and decode exports
 │   └── datamodel/           the native "ecmascript" datamodel: vtable entries only
 │       ├── datamodel.c      the vtable; scopes, _event, In()
-│       ├── handles.c        slot tables for payloads and sessions: generation, reference counts
+│       ├── rows.c           payload and session rows in ta_table: reference counts
 │       └── expressions.c    strict functions compiled once per chart, by kind
 ├── conform.mjs              the suite's adapter, over the public API only
 ├── test/                    what the suite cannot see: liveness, workers, GC, refusals
@@ -572,12 +603,13 @@ tinyactors-cpython/
 │   ├── host.c               Host: one function per method → ta_* or a request
 │   ├── loop.c               the turn; run_until_idle and attach(loop), one TimerHandle
 │   ├── effects.c            one Effect record per effect, built with the accessors; dispatch
-│   ├── request.c            JSON-RPC request and reply; TinyactorsError(code, reason, path)
+│   ├── methods.c            typed methods over ta_host_post, settled at a later drain;
+│   │                        TinyactorsError(code, reason, path)
 │   ├── values.c             CBOR tokens ↔ Python objects; Address, UNDEFINED; deep copy;
 │   │                        tinyactors.encode and tinyactors.decode
 │   └── datamodel/           the "python" datamodel: vtable entries only
 │       ├── datamodel.c      the vtable; per-session globals, _event, In()
-│       ├── handles.c        slot tables for payloads and sessions: generation, reference counts
+│       ├── rows.c           payload and session rows in ta_table: reference counts
 │       └── expressions.c    code objects compiled once per chart, by kind
 ├── conform/                 the suite's adapter (python -m conform), not in the wheel
 ├── tests/                   what the suite cannot see: threads, GC, asyncio, refusals
@@ -614,9 +646,9 @@ free-threaded builds (abi3t, 3.15).
   `effects.c` do (a twin, which ADR 0008's web binding was) or the
   Node-API addon compiled to wasm over an emulated Node-API (emnapi, which
   ADR 0008 did not choose when the logic sat above the addon). Decide with
-  measurements (download size, call cost) after M3; either way it passes
+  measurements (download size, call cost) after step 8.5's every-effect work; either way it passes
   the suite.
-- **PostgreSQL**, and other languages, after M5.
+- **PostgreSQL**, and other languages, after step 8.5.
 
 ## Requests to core
 
@@ -696,10 +728,8 @@ In progress beside M0, in core:
   `host.request` takes `refuse` instead of `capacity` (`633f79a1`); the
   streaming `ta_cbor_writer` and `ta_cbor_reader`, `ta_cbor_encode` gone
   (`4b5a4234`); `to_wire` at the token encoder's cost again (`ef1fbd24`:
-  a 1 KB envelope's `ta_host_envelope` 9.3 µs against 17.6). Next: both
-  bindings migrate to the new calls (their call sites are listed in the
-  coordinator's report), then delete their rooms, hints and retries
-  (`bindings.md` sections 6 and 9).
+  a 1 KB envelope's `ta_host_envelope` 9.3 µs against 17.6). The
+  bindings were removed for their rewrite instead of migrating (8.4, 8.5).
 - **ADR 0011: the control plane is posted messages; images are bytes the
   host keeps.** Implemented in core (2026-10-13), in the ADR's order:
   `ta_host_post` answers a message with a `TA_HOST_EFFECT_REPLY` effect,
@@ -710,11 +740,10 @@ In progress beside M0, in core:
   ECMAScript datamodel's restore reads no freed image (`71f6547c`); the
   driver's `host.post` and `host.run`'s notifications, with a subscribe
   exchange in `requests.txt` (`770d94d6`); the guide, `requests.md` and
-  `boundary.md`. Next: both bindings migrate, each from one message
-  (their call sites are listed in the coordinator's report): the request
-  facade and the drain rule (`bindings.md` sections 5 and 10), the
-  NOTIFICATION effect instead of CHANGED, the image rows and their
-  `SEGMENT_FREED` handling gone, and their adapters' `host.post`.
+  `boundary.md`. The bindings were removed for their rewrite instead of
+  migrating (`6426816a`, `70434bee`; 8.4, 8.5).
+- **ADR 0012: lifetimes follow the loop.** The documents are step 8.1
+  (done); core's change is step 8.2.
 
 ## Deferred
 

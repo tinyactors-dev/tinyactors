@@ -1,35 +1,72 @@
 # Roadmap: tinyactors-napi
 
-The Node binding's plan and progress, milestone by milestone, how the
-work on it runs now, and its requests to core. The plan of both bindings
-is the root [ROADMAP.md](../ROADMAP.md), step 8: its milestones, gates and
-rules decide; this file says how this binding gets there and how far it
-is. The binding's own rules, true whatever the milestone, are in
-[AGENTS.md](AGENTS.md).
+**Being rewritten from scratch.** The first addon (M1 of the earlier
+plan, 2026-10-12) was removed (`70434bee`: `src/`, the adapter and the
+binding's docs; the tooling stays). **Next for this binding: step 8.5 of
+the root [ROADMAP.md](../ROADMAP.md), later.** It starts after the Python
+binding's step 8.4 and its API review, so that the API shape is settled
+once, in Python, before the second binding is written. Until then this
+session does nothing here. The binding's rules, true at every step, are
+in [AGENTS.md](AGENTS.md); the plan of both bindings is the root
+roadmap's step 8, which decides.
 
-**The milestone now: M1** (`MILESTONE` in `mise/napi.rb`; `mise run test`
-runs the suite's set for it, `--milestone M1`).
+## Step 8.5: Node, to the same "done means" as Python's 8.4
 
-## How the work runs now
+From the root ROADMAP.md, step 8, "8.5"; read it there, and 8.4 with it,
+before changing this copy.
+
+### Done means
+
+- **Scope:** the package's `Host`; `ta_host_create` from JavaScript
+  options (the addon reads `host.config` itself); images, boot, spawn,
+  send, terminate; the loop, one drain at a time, on the event loop with
+  one `setTimeout`, and `SimulatedClock.increment(ms)`; I/O processors as
+  the application's output channel, asynchronous and synchronous;
+  `subscribe` with `actor.changed`; typed methods over post returning
+  promises settled at a later drain; `LOG` to a logger; `DONE` and `ERROR`
+  internal; rows in `ta_table`; `encode` and `decode`; the native
+  `"ecmascript"` datamodel for `<data>`, `cond`, `assign`, `<script>`,
+  `_event`, `In()`, `<send>` with params, `<foreach>`, with quickjs
+  beside it; the suite's adapter (`conform.mjs`), framing the driver's
+  calls with `encode` and `decode` and importing nothing but
+  `@tinyactors/node` and `node:` built-ins.
+- **Gates**, each in `mise run test`:
+  - the suite's M1 set (`--milestone M1`) under node and under bun, on the
+    native datamodel and on quickjs;
+  - the value table's own tests, against `values.txt`'s `ecmascript`
+    lines;
+  - the mapping table (`docs/api-map.md`);
+  - the layer lints, the prefix, no mutable globals;
+  - each rule of AGENTS.md's "Rules the suite cannot see" with a test of
+    its own.
+- **Then the API review**, side by side with the Python binding. The rest
+  of 8.5 (W3C per datamodel, every effect, lifecycle and peers, examples
+  and release) follows for both bindings, as the root roadmap lists it.
+
+### Plan and progress
+
+The session writes its plan here as a list of steps, each with the commit
+that finished it, when 8.5 starts. `GATE` in `mise/napi.rb` names what of
+the set `mise run test` runs so far, and grows with the work.
+
+## How the work runs
 
 The root ROADMAP.md, step 8, "Rules for the work", sets these for every
 session; here they are as they apply to this one.
 
 - **The Node session owns `tinyactors-napi/` and nothing else.** A Python
-  session owns `tinyactors-cpython/` at the same time, in the same
-  checkout; a coordinating session owns `tinyactors-core` and
-  `tinyactors-test`.
-- **This file is the session's.** The Node session keeps it up to date as
-  it works and commits it with its own paths. It never edits the root
-  `ROADMAP.md`: the coordinator reads this file, moves each request below
-  into the root's "Requests to core" when it takes it up, and marks a
-  milestone done there after its audit and review. Then the session moves
-  `MILESTONE` in `mise/napi.rb` on to the next milestone.
+  session owns `tinyactors-cpython/`, in the same checkout; a
+  coordinating session owns `tinyactors-core`, `tinyactors-test` and the
+  root documents.
+- **This file is the session's.** The session keeps it current and
+  commits it with its own paths. It never edits the root `ROADMAP.md`:
+  the coordinator reads this file, moves each request below into the
+  root's "Requests to core", and marks the step done there after its
+  audit and review.
 - **Core and the suite are frozen.** A gap in either (AGENTS.md, "Gaps in
-  core", says what a report holds) is written under "Requests to core"
-  below and committed alone (`docs(napi): request to core: ...`). The
-  coordinator makes the change, with C tests and suite cases, and says
-  when to go on (rebase onto it).
+  core") is written under "Requests to core" below and committed alone
+  (`docs(napi): request to core: ...`). The coordinator makes the change,
+  with C tests and suite cases, and says when to go on.
 - **One checkout, on `main`, commits of this project's paths only:**
   `git commit -- tinyactors-napi/` (`git add` a new file by its path
   first). Never `git add -A`, `git add .` at the root, `git commit -a`,
@@ -38,333 +75,23 @@ session; here they are as they apply to this one.
   --rebase` when `main` moved.
 - **`.git/index.lock` belongs to another session's git command.** When
   git says the index is locked, wait a few seconds and run the same
-  command again, as often as it takes. Never delete the lock: the other
-  command is still writing the index, and removing it can lose that
-  session's staged work.
+  command again. Never delete the lock.
 - **Tests: this project's only.** Run this project's `mise run test`
   before every commit, and the suite against the adapter (`mise run
-  conform`). Never the root `mise run test` (it runs every project for 20
-  minutes) and never `tinyactors-core`'s build or tests: the coordinator
-  runs those. `mise run build` here runs core's `amalgamate` task, and
-  that is the only core task this session runs.
-- **An audit after each milestone**, by the coordinator: both bindings
-  against the guide's "never" list, against each other file by file, and
-  against their mapping tables. What it finds is fixed here.
-
-## M1: walking skeleton with the native datamodel
-
-From the root [ROADMAP.md](../ROADMAP.md), step 8, "M1: walking skeletons
-with native datamodels"; read it there, with the gates table and the
-pitfalls, before changing this copy.
-
-### M1 done means
-
-- **Scope:** the package and its `Host` class; `ta_host_create` from
-  JavaScript options; images, boot, spawn, send, terminate; the loop on
-  the runtime's event loop with every run status; `DONE`, `ERROR`, `LOG`;
-  `request` with `TinyactorsError` (code, reason, path); the CBOR
-  conversion with the value table (big integers as `BigInt`, bytes as
-  `Uint8Array`, an actor reference as its address string), exported as
-  `encode(value) -> Uint8Array` and `decode(bytes) -> value`; the native
-  `"ecmascript"` datamodel in the application's engine for `<data>`,
-  `cond`, `assign`, `<script>`, `_event`, `In()`, `<send>` with params,
-  `<foreach>`; quickjs wired in beside it; `SimulatedClock` with
-  `increment(ms)`; `index.mjs` and `index.d.ts`; the suite's adapter
-  (`conform.mjs`), which frames the driver's calls with `encode` and
-  `decode` and imports nothing but `@tinyactors/node` and `node:`
-  built-ins; and each rule of AGENTS.md's "Rules the suite cannot see"
-  with a test of its own.
-- **`SimulatedClock`**, `increment(ms)` (xstate's shape, our meaning): a
-  host created with it arms no timer; `increment(ms)` calls
-  `ta_host_advance_time` and runs the loop until idle; inputs run the
-  turn at the current time. It has its row in `docs/api-map.md`
-  (`ta_host_advance_time`, `ta_host_run`), and the adapter uses it for
-  the scenarios' `advance` steps.
-- **Gates**, each in `mise run test`:
-  - the suite's M1 set (`tinyactors-test/suites/milestones.txt`): every
-    protocol vector file (`requests`, `config`, `envelopes`, `values`),
-    the `basics` scenario and the outcome canaries (`outcome-compile`,
-    `outcome-fail`, `outcome-timeout`), under node and under bun, each on
-    the native datamodel and on quickjs;
-  - `values.txt` round trips on the native datamodel (in the set above);
-  - the mapping table (`docs/api-map.md`);
-  - the layer lints, the prefix, no mutable globals;
-  - the rules of AGENTS.md's "Rules the suite cannot see", each with a
-    test of its own in `test/`;
-  - the value table's own tests, against `values.txt`'s `ecmascript`
-    lines: the vectors go through this binding's codec both ways, so they
-    cannot catch a value mapped wrong the same way in both directions
-    (the root ROADMAP.md's "Known limit").
-- **Then the API review**, by the coordinator, both bindings side by
-  side: how a Python chart reads, how a Node program reads. M2 starts
-  after it, when the coordinator marks M1 done in the root `ROADMAP.md`
-  and this session moves `MILESTONE` on.
-
-### Plan and progress
-
-The session writes its plan here as a list of steps, each with the commit
-that finished it, and keeps it current.
-
-Each step is one or more commits that build and pass `mise run test`
-here. The order gets the suite's gate live early: an adapter answering
-the protocol vectors on quickjs under node and bun (step 5) comes before
-the native datamodel (step 6). Until step 6, the conform task runs the
-datamodels the addon has (`DATAMODELS` in `mise/napi.rb`, quickjs only);
-step 6 adds `native` there, and from then on both must pass. Every API
-item gets its `docs/api-map.md` row in the commit that adds it.
-
-1. **The plan** (this list). Decided before it, by a spike
-   (2026-10-12, node 22.23.2 and bun 1.4.1, an addon built with the
-   pinned clang): `napi_set_instance_data`, `napi_get_instance_data` and
-   `napi_type_tag_object` work in both runtimes, and each worker thread
-   gets instance data of its own, so per-environment state needs no
-   global. Recorded with its evidence in `docs/decisions.md` in step 2.
-2. **The addon builds and loads.** `mise run build` compiles core's
-   amalgamation (`tinyactors.c`, `tinyactors_runtime.c` with its hosted
-   file, `tinyactors_datamodel_ecmascript.c`) and `src/` into
-   `build/tinyactors.node` with `Toolchain::Target.host` and `#plugin`;
-   `module.c` keeps its state in the environment's instance data;
-   `index.mjs` loads the addon and re-exports it. A test loads it under
-   node and bun, in the main thread and a worker.
-3. **`encode` and `decode`** (`src/values.c`): the value table of
-   `docs/values.md`, both ways, with the UTF-8, integer and depth checks;
-   the decode error type decided (reasoned analysis) and written in
-   `docs/values.md`. Tests: every row of `docs/values.md`, and
-   `values.txt`'s `ecmascript` lines through `encode` (the known limit:
-   the vectors alone cannot catch a row mapped wrong both ways).
-4. **`Host` on quickjs**, in small commits:
-   - (a) `new Host(options)`: the config from a JavaScript value
-     (`ta_host_create`), refused with `TinyactorsError` (code, reason,
-     path); `request(method, params)` (`ta_host_request`);
-     `close()` (`ta_host_free`); type tags on the wrapped object;
-   - (b) charts: `compile` (`ta_compile_charts`, `ta_compile_image`),
-     `addImage`, `boot`, `spawn`, `send`, `sendMany`, `terminate`; the
-     loop on the runtime's event loop (one `setTimeout`, ref'd while a
-     deadline is pending) with every run status; `LOG`, `DONE`, `ERROR`
-     to the application's handlers; `SimulatedClock` with
-     `increment(ms)`;
-   - (c) peers: `addPeer` (`ta_host_peer_add`), `deliver`
-     (`ta_host_envelope_read`, `ta_host_deliver`), and `PEER` and
-     `PEER_ERROR` effects as envelope bytes (`ta_host_envelope`).
-   The API's open shapes (options, handlers, errors, ids as `BigInt`)
-   are decided by reasoned analysis and recorded in `docs/decisions.md`.
-5. **The adapter** (`conform.mjs`): every method a binding must offer,
-   over the public API, framed with `encode` and `decode`; the M1 set on
-   quickjs under node and bun in `mise run test`. A vector the public
-   API cannot express goes to "Requests to core" below, committed alone.
-6. **The native `"ecmascript"` datamodel** (`src/datamodel/`): the two
-   slot tables with generations (`handles.c`), expressions compiled once
-   per chart as strict functions inside `with (scope)` (`expressions.c`),
-   and the vtable (`datamodel.c`): `<data>`, `cond`, `assign` with
-   quickjs's location check, `<script>`, `_event`, `In()`, `<send>` with
-   params (captures copied through the value table), `<foreach>`,
-   `to_wire`/`from_wire`, `variable`; one handle scope per entry; the
-   last drop of a payload deferred until the outer call into core
-   returns. `native` joins `DATAMODELS`: the M1 set passes on both.
-7. **The rules the suite cannot see** (AGENTS.md), each with a test of
-   its own in `test/`, where steps 2 to 6 did not already add it.
-8. **M1 done**: README (trusted chart code, nesting 64, liveness on
-   each runtime), `index.d.ts` complete, `docs/api-map.md`'s core
-   functions no item uses, `docs/values.md`'s TODO answered; "M1 done
-   means" checked item by item, then the report.
-
-Progress:
-
-- Step 1: `75e99ae2`.
-- Step 2: `7a0c46d9`.
-- Step 3: `8d6b4e29`. The decode error is `TinyactorsError` with core's
-  status (`docs/decisions.md`, "Errors").
-- Step 4 (a, b and c in one commit): `cba8ea36`. The API's shape is
-  `docs/decisions.md`, "The Host's API", after a fresh agent's refutation;
-  the request and config vectors it cannot send are a request to core,
-  so the gate (`GATE` in `mise/napi.rb`) will hold the protocol suite
-  when the runner skips them. The run budget is `docs/decisions.md`, "The
-  run budget".
-- Step 5: `f3236c51`. The gate holds the M1 scenarios on quickjs under
-  node and bun (4 of 4 each). The protocol suite on quickjs passes 107
-  cases and fails 10, all of them cases the request to core names (9 of
-  requests.txt, config.txt "not CBOR"); it joins the gate when the runner
-  skips them.
-- Step 6: `e298a2d3`; the tick rate from `host.config` (the request to
-  core answered): `b47b22f2`. The native datamodel passes what quickjs passes,
-  under node and bun: the scenarios 4 of 4 and the protocol vectors 112
-  of 122, the 10 left being the request to core's. The gate holds the
-  scenarios on both datamodels. Decisions: `docs/decisions.md`, "The
-  native datamodel".
-- Step 7: `fdc41a6e` (and the fix `e9359f30`). `test/rules.test.mjs` has a test for each rule
-  (`test/load.test.mjs` the per-environment state, `test/values.test.mjs`
-  the value table's). The timer's test found a crash under bun, fixed in
-  the commit before this one: a Host no JavaScript referenced was
-  collected under a pending `setTimeout`. The handle-scope test measures
-  memory within one run: a spike without the scopes grew 192 MB (node)
-  and 308 MB (bun) over 1,000,000 evaluations, against 26 and 48 MB with
-  them.
-- Step 8: this commit: README (the API, time and liveness on each
-  runtime, errors, limits), `docs/api-map.md`'s core functions no item
-  uses, `docs/values.md`'s TODO answered ("The API's values").
-
-"M1 done means", checked (2026-10-12):
-
-- **Scope:** every item holds (`docs/api-map.md`, `index.d.ts`,
-  `test/`), with these notes: `TA_RUN_EFFECTS` runs again without
-  answering sync sends (no I/O processor yet: M2); `TA_RUN_EXHAUSTED` and
-  `TA_RUN_FAULT` end the turn with a `TinyactorsError`; effects other
-  than `LOG`, `DONE`, `ERROR`, `PEER`, `PEER_ERROR` and `SEGMENT_FREED`
-  are later milestones'.
-- **`SimulatedClock`:** holds (`test/host.test.mjs`; the adapter's
-  `advance` steps).
-- **Gates:** the whole M1 set on both datamodels under node and bun is
-  in `mise run test` (since the runner-skip request was answered, below),
-  values.txt's round trips on the native datamodel included. The mapping table, layer lints, prefix, no mutable globals,
-  the rules' tests and the value table's tests are in `mise run test`.
-- **Open:** the API review.
-
-After M1's check, at the coordinator's request (core `3efac6c1`:
-bindings.md section 6, "The binding allocates almost nothing"; AGENTS.md,
-"The binding's memory"):
-
-- The addon's memory, restructured: this commit. Allocator calls in
-  `src/` went from 104 in 9 files to 11 in 2 (`src/datamodel/handles.c`
-  4, `src/host.c` 7): one scratch of reused buffers per environment
-  (`encode`, `decode`, `compile`), per host (its calls, requests,
-  effects) and per native datamodel (its entries), grown by doubling
-  through `ta_napi_buffer_reserve`; bytes borrowed for the call
-  (`ta_napi_values_bytes`); an image's bytes and its `ta_image` held in
-  JavaScript objects until `TA_HOST_EFFECT_SEGMENT_FREED`; sessions,
-  charts (their functions in two JavaScript arrays), payloads,
-  iterations and images as rows of tables; the module, a clock and the
-  datamodel's state without allocations of their own. The lint rule
-  `allocation-in-tables-and-host` keeps it so (`bcfa7b4d`).
-- The runner-skip request answered (`34c09cfa`): this commit puts the
-  protocol suite in the gate. The whole M1 set passes under node and bun
-  on both datamodels: protocol 104 pass, 65 skipped (C-level and
-  reference-only cases), scenarios 4 of 4.
-
-ADR 0010 (outputs are views, values stream), at the coordinator's
-request, after core implemented it (`2eef3d25..ad11e7ea`):
-
-- Nested calls share nothing: this commit. The scratch sets (per
-  environment, host and native datamodel) and their refusals (an encode
-  while one ran, sendMany while batching, compile while compiling) are
-  gone: a getter of `send()`'s data that sent, or a `toJSON` that encoded
-  on the same owner, was refused with `TA_ERROR_STATE`, and a nested
-  request could overwrite the outer one's reply. Each call has its own
-  `ta_cbor_writer` and text room, starting on the C stack and grown
-  through the addon's allocator (`ta_napi_allocator`), freed before it
-  returns; values stream (`ta_cbor_writer`, `ta_cbor_reader`; the token
-  lists and `ta_napi_wire`'s retries are gone); the host's outputs
-  (`ta_host_request`'s reply, `ta_host_envelope`) are views read into
-  values at once; payloads between the API and the native datamodel are
-  copied by the value table (`ta_napi_values_copy`), CBOR only toward
-  quickjs and in envelopes; the native datamodel's last output (to_wire,
-  eval_string, log) is the one buffer it keeps; `sendMany` goes in
-  batches of 64 from the stack. `test/memory.test.mjs` holds the nested
-  calls.
-- An image is the addon's copy: this commit. `addImage` held the
-  caller's bytes and gave core a pointer into them: a `transfer()` and a
-  collection made the next spawn read freed memory, `resize(0)` on a
-  resizable buffer crashed with a bus error, a `SharedArrayBuffer` let
-  another worker change the bytes under the segment, and a failed row
-  left a segment running on bytes nobody held. Now the bytes are copied
-  once into a block of the addon's allocator, after the `ta_image` core
-  reads (8-aligned, `runtime.h`); the row is added before the segment and
-  holds the block, which never moves; `TA_HOST_EFFECT_SEGMENT_FREED` or
-  the host's free path frees it. `test/memory.test.mjs` changes the bytes
-  each of those ways after `addImage`, on both datamodels.
-- **For the API review: images.** `compile()` returns the image's bytes
-  and `addImage` copies them, so an image is in memory twice while the
-  caller keeps its `Uint8Array`, and once more for each host it is added
-  to. AGENTS.md ("The binding's memory") would rather hold core's
-  `ta_compile_result` in the images row until the segment is freed, with
-  nothing copied. Two shapes would do it; the review decides, and until
-  then the copy stays:
-  - *an opaque compiled object:* `compile(charts, {resolve})` returns a
-    `Compiled` wrapping the `ta_compile_result` (its `bytes` a view for
-    saving to disk, its `diagnostics`), and `addImage(compiled)` holds it
-    by reference, freed when the last host's segment is freed and the
-    object collected; `addImage(bytes)` still copies, for an image read
-    from disk.
-  - *compile inside the host:* `addImage(charts, {resolve})`, as the
-    Python binding's `add_image(charts, files)`
-    (`tinyactors-cpython/src/host.c:473`): the addon compiles, holds the
-    result in the images row, and frees it with the segment; `compile()` stays for an image's
-    bytes (to save, or to add to another host by copy).
-
-## Later milestones
-
-From the root ROADMAP.md, step 8: the whole W3C suite (M2), every effect,
-liveness and shutdown (M3), hibernation, migration and peers (M4), and
-the release: one prebuilt addon per platform as optional dependencies
-(M5).
+  conform`). Never the root `mise run test` and never `tinyactors-core`'s
+  build or tests: the coordinator runs those. `mise run build` here runs
+  core's `amalgamate` task, the only core task this session runs.
+- **An audit after the step**, by the coordinator: both bindings side by
+  side, against the guide's "never" list, each `AGENTS.md`'s "What not to
+  build", and their mapping tables. What it finds is fixed here.
 
 ## Requests to core
 
-Gaps in core or in the suite this session found. Each says what is
-missing, why, and which suite case or test shows it; the coordinator
-moves it into the root ROADMAP.md's "Requests to core" and answers there.
+Gaps in core or in the suite this session finds. Each says what is
+missing, why, and which suite case or test shows it; the coordinator moves
+it into the root ROADMAP.md's "Requests to core" and answers there.
 
-- **The runner skips, for a binding, the request and config vectors its
-  API cannot send** (2026-10-12). *Answered* (`34c09cfa`): the
-  envelope-level cases are the reference's (`only reference`), and the
-  protocol suite joined the gate. The same gap as the Python session's
-  first request (`tinyactors-cpython/ROADMAP.md`, "Requests to core",
-  1), found here independently by a fresh agent's refutation of
-  `docs/decisions.md` ("The Host's API"); one answer serves both
-  bindings.
-  - *What is missing:* `tinyactors-test/lib/runner.rb` sends every case of
-    `requests.txt` and `config.txt` to a binding's adapter. The cases
-    that send bytes no `request(method, params)` can make (bindings.md,
-    section 10: "build the map from the caller's arguments") and no
-    config value can encode: config.txt "not CBOR" (`ff`), and
-    requests.txt's "not CBOR", "not a map", "a batch", "no method, no
-    id", "no method", "a member a request does not have", "id is not an
-    integer, text or null", "id is not a float", the notifications ("no
-    reply", "no error either", "applied", "a request that is not one is
-    answered") and "more items than a request holds" (no `id`). The
-    adapter may use only the public API (`tinyactors-test/lint`), so it
-    could pass them only by writing core's replies itself, a twin of
-    core's request parsing (bindings.md, section 2).
-  - *What we ask:* as the Python session asks: for `--kind binding`, the
-    runner skips, with a reason, a request case unless each send is a map
-    of `method`, an `id` (integer, text or null) and optionally `params`,
-    and a config case whose bytes are not one CBOR item; and
-    `docs/driver.md` says a binding's adapter writes each reply from what
-    its API returned or raised, with the call's `id`.
-  - *Which test shows it:* `mise run conform -- --suite protocol` here
-    once the adapter offers the vector methods (ROADMAP.md, M1, step 5):
-    these cases fail, and the protocol suite stays out of `mise run
-    test`'s gate (`GATE` in `mise/napi.rb`) until the runner skips them.
-- **A binding cannot read a host's tick rate** (2026-10-12). *Answered*
-  (`9bd33f03`, `99068179`): the request `host.config` answers the
-  effective config; the binding reads `system.ticksPerSecond` from it
-  once after `ta_host_create` (`src/request.c`), and the stopgap below is
-  gone.
-  - *What is missing:* a way to read the `ticksPerSecond` a host runs on
-    after `ta_host_create` filled the config's defaults: a member of a
-    reply (`host.stats`, or a request that answers the effective config)
-    or a field the create call writes.
-  - *Why:* the binding drives the host's monotonic clock from the
-    runtime's (`performance.now()`, milliseconds) and from
-    `SimulatedClock.increment(ms)` (ROADMAP.md, M1), so it converts
-    milliseconds to ticks before every `ta_host_advance_time`. Without
-    `ticksPerSecond` in the config, the system's default applies:
-    `1000000000` (`tinyactors-core/src/system/system.c:43`), which no
-    header or doc states (`include/tinyactors/system.h:82` has the field
-    without a default; `docs/host-config.md:79-83` says "0 or absent: the
-    system's default, `ta_system_config` in `tinyactors/system.h`"), and
-    a binding may not copy it ("No defaults ... of the binding's own",
-    `docs/bindings.md` section 13). `bindings.md` sections 3 and 7 say
-    "the config's `ticksPerSecond`, 1000 for milliseconds", which a
-    config without the key does not have.
-  - *Which test shows it:* a host created with `{"systemID": "h"}` (the
-    first case of `tinyactors-test/suites/protocol/config.txt`) and a
-    `<send delay="50ms">`: the binding cannot compute the `monotonic` of
-    the turn 50 ms later. The suite's configs all give
-    `ticksPerSecond` 1000, so the suite does not fail; the binding's own
-    test of a real-clock delayed send on a config without it will.
-  - *Until then:* the binding converts with the `ticksPerSecond` of the
-    config the application gave (its own value, not a default). A host
-    whose config has none cannot take a `SimulatedClock`
-    (`TA_ERROR_UNSUPPORTED`), and on the runtime's clock its monotonic
-    time stays 0 and it arms no timer, so its delayed sends wait;
-    nothing else waits on this.
+None open. The first addon's two requests were answered on 2026-10-12
+(the runner skips envelope-level vectors for a binding, `34c09cfa`; the
+tick rate through `host.config`, `9bd33f03`); their text is in this file's
+history before `70434bee`.
