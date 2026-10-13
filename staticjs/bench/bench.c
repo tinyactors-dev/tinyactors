@@ -70,7 +70,11 @@
  * group read from the match result: n strings) and .filter (the rows whose
  * id a literal pattern tests true, r => /^r\d{5}[05]$/.test(r.id): n / 5
  * rows) and .literal (/;r\d+/ and /Qr\d/i on text, whose first character
- * never occurs there: [false,false]) (L);
+ * never occurs there: [false,false]) and .test.many (every row's id and a
+ * comma, 32 times, tested by /^(?:r\d{5}[05],)+$/, which the cache of a
+ * test takes, and by a pattern of more than 16 classes, which it refuses:
+ * the ids ending in 0 or 5, and those ending in 5 below r100000, each count
+ * times 5 or 10 less n: [0,0]) (L);
  * eval.object.spread-reduce (C);
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
@@ -568,6 +572,15 @@ static const bench_case cases[] = {
     { .name = "eval.regex.redos", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "/(a+)+$/.test(\"a\".repeat(xs.length) + \"b\")",
       .globals = { { "xs", FIX_XS, NULL } }, .expect = "false", .check = CHECK_SAME },
+    /* Many tests over medium strings (each row's id and a comma, 32 times:
+     * long enough to run as loops), by one pattern the cache takes and one
+     * it refuses (more than 16 classes): what each call pays besides the
+     * search. */
+    { .name = "eval.regex.test.many", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
+      .source = "(ls => [ls.filter(s => /^(?:r\\d{5}[05],)+$/.test(s)).length * 5 - ls.length,"
+                " ls.filter(s => /,r(?:a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|0)\\d{4}5,/.test(s)).length * 10 - ls.length])"
+                "(rows.map(r => (r.id + \",\").repeat(32)))",
+      .globals = { { "rows", FIX_ROWS, NULL } }, .expect = "[0,0]", .check = CHECK_SAME },
     /* Strings read as numbers: 15 digits (Clinger's fast path), 17 (the bignum's). */
     { .name = "eval.number.parse", .unit = UNIT_ELEMENT, .op = OP_EVAL, .sizes = SIZES_L, .smoke = 10,
       .source = "texts.map(Number)", .globals = { { "texts", FIX_NUMBER_TEXTS, NULL } },
