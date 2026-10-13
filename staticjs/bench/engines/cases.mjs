@@ -32,6 +32,7 @@ export const CASES = [
   ['eval.string.padStart', 10000],
   ['eval.string.encodeURIComponent', 10000],
   ['eval.regex.test', 10000],
+  ['eval.regex.test.many', 1000],
   ['eval.regex.replace', 10000],
   ['eval.regex.split', 10000],
   ['eval.set.has', 10000],
