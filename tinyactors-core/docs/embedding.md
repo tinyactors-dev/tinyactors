@@ -1,8 +1,9 @@
 # Embedding the core
 
 **Status:** Current (2026-10-13), the design after
-[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md). What core
-does not do yet is marked **(0012)**: step 2 of `ROADMAP.md`, step 8.
+[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md) and its
+second amendment. What core does not do yet is marked **(0012)** or
+**[8.2]**: step 8.2 of `ROADMAP.md`.
 
 How to use the core from C: the loop, the inputs, the effects and the
 ack, the control plane, images, values, memory, threads, and what an
@@ -123,7 +124,7 @@ waits for the next take.
 ## 5 · The control plane
 
 Everything rarely called (stats, the effective config, inspection, state
-values, subscriptions, trace configuration and watches, decoding spans)
+values, trace configuration and watches, decoding spans)
 is a method posted with `ta_host_post(host, message)`: a JSON-RPC 2.0
 message without `"jsonrpc"`, in CBOR, `{"method", "params", "id"}`, read
 during the call. The answer is an effect, `TA_HOST_EFFECT_REPLY`, the last
@@ -132,14 +133,11 @@ one the post appends, with `WIRE` `{"id", "result"}` or `{"id", "error":
 request by its `id`; it comes with the next take (in the same batch as
 anything the method appended itself, before the reply).
 
-The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects: the
-first is `actor.changed` for a session you subscribed to with
-`actor.subscribe`: `{"session", "entered", "exited"}`, one per macrostep
-it finishes, in order, with the ids of the states it entered and exited,
-and `{"session", "ended": true}` when it ends or leaves the host (ADR
-0012, decision 4 as amended; today, 0012: one per run, `{"session",
-"value"}`). It carries changes, not the configuration: post
-`actor.state` after `actor.subscribe` for the starting point.
+The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects
+(`{"method", "params"}`); none is defined. `actor.subscribe` and
+`actor.changed` are removed (ADR 0012, decision 4 as amended again; the
+code still answers them until [8.2]); post `actor.state` for a
+session's state. Drop a notification whose method you do not know.
 [requests.md](requests.md) lists every method and notification.
 
 There is no synchronous request: post, then read the reply in a later
@@ -170,7 +168,8 @@ actors a system image declares.
   offers both without the vtable (`ta_datamodel_ecmascript_payload_to_cbor`,
   `_from_cbor`).
 - **CBOR in C:** write with `ta_cbor_writer` (a room on your stack that
-  grows through an allocator you pass), read with `ta_cbor_reader` (a
+  grows through an allocator you pass, such as a `ta_growable_arena`'s
+  view, section 8), read with `ta_cbor_reader` (a
   cursor), or index with `ta_cbor_decode` (`cbor.h`). Configs, posted
   messages, replies, notifications and envelopes are CBOR; the calls made
   per event take C structs.
@@ -194,11 +193,21 @@ actors a system image declares.
 - **A datamodel's outputs** (`to_wire`, `serialize`, `payload_serialize`,
   `eval_string`, `log`) are views it owns until its next call; core copies
   what it keeps.
-- **Your own tables** of what core names by integer (sessions, payloads
-  of your datamodel) can be `ta_table` (`table.h`: rows of your size,
-  64-bit handles with a generation, grown through your allocator; a row
-  pointer is valid until the next `ta_table_add`) (0012). `ta_status_name`
-  names a status for your messages (0012).
+- **Base APIs you may use** (ADR 0012, decision 5; [8.2]), freestanding
+  and allocating only through the allocator you give them
+  ([boundary.md, section 11](boundary.md#11-base-apis-for-embedders-and-bindings)):
+  - `ta_table` (`table.h`) for your own tables of what core names by
+    integer (sessions, payloads of your datamodel): rows of your size,
+    64-bit handles with a 31-bit generation, so a stale handle is
+    refused; grown by doubling, so a row pointer is valid until the next
+    `ta_table_add`: keep handles, not pointers.
+  - `ta_growable_arena` (`arena.h`) for what a call of yours converts:
+    linked chunks, so an allocation never moves; a mark at your call's
+    entry and a release to it at its exit, which nests; released chunks
+    are kept, so after warm-up nothing reaches your allocator; and a
+    `ta_allocator` view, so a `ta_cbor_writer` grows into it.
+  - `ta_status_name` names a status for your messages (NULL for one
+    `types.h` does not define).
 
 ## 9 · Threads
 

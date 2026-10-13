@@ -297,36 +297,14 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 
 ### `actor.subscribe`, `actor.unsubscribe`
 
-`actor.subscribe` asks for the notification `actor.changed` (below): one
-per macrostep the session finishes, in order, with the states it entered
-and exited (ADR 0012, decision 4, amended; today: at most one per
-session per run, with its state value). Other sessions cost nothing.
-Subscribing twice is one subscription; a session that ends or leaves the
-host gets one last notification, `"ended": true`, and leaves the list.
-`actor.unsubscribe` stops it. Param: `session` (uint, required). Result:
-`{}`. The first notification comes after the reply: the host watches the
-session from the next run's start.
-
-The notifications carry changes, not the configuration. For the starting
-point, post `actor.state` after `actor.subscribe`, between the same two
-runs: both are answered in the order posted, and the first notification's
-changes apply to the state value that reply holds.
-
-Hibernation does not end a subscription. The subscription is the host's;
-what marks the session is a watch on the actor, which the host sets again
-before every run and which ends when the actor hibernates. So a hibernated
-session can be subscribed and unsubscribed; once woken, it gets
-notifications from its next run on if it is still subscribed then, and
-none if it is not.
-
-Errors: `missing`, `type`, `stale` (subscribe: no such session;
-unsubscribe: not subscribed), `limit` (-32003: the host holds
-`maxSubscriptions`, 64 by default).
-
-```
-{"id": 1, "method": "actor.subscribe", "params": {"session": 1}}
-→ {"id": 1, "result": {}}
-```
+**Removed** ([ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md),
+decision 4, amended again 2026-10-13). They were a stress test of the
+protocol; a binding offers no item for them. The code still answers them
+until step 8.2 deletes them with their vectors, the config key
+`maxSubscriptions` and this heading [8.2] (the heading stays until then
+because `mise/tasks/api-map-test:17` reads it as the one heading with two
+methods). An application reads a session's state with `actor.state`, and
+an actor's output reaches it through an I/O processor.
 
 ### `actor.state`
 
@@ -386,50 +364,12 @@ They live until the ack, like every effect, and come with the next take after th
 for an effect a binding must act on (`WAKE`, `PEER`, `TRACES`, ... stay
 effects of their own).
 
-### `actor.changed`
-
-A subscribed session (`actor.subscribe`) finished a macrostep, or ended
-(ADR 0012, decision 4, amended):
-
-- **A macrostep:** `{"session": uint, "entered": [state id, ...],
-  "exited": [state id, ...]}`, one notification per macrostep the
-  session finishes, in the order it finished them: the ids of the states
-  that macrostep entered and exited.
-- **The end:** `{"session": uint, "ended": true}`, without `entered` or
-  `exited`, when the session ended or left the host
-  (`ta_host_export_actor`), and its subscription with it. A session that
-  leaves by export exits no state (it goes on in the host that adopts
-  it), so the end is one member, not a list of exits.
-
-There is no `value` member. The state value is `actor.state`'s: post it
-after `actor.subscribe` for the starting point (above). The context is
-not in it either: reading variables runs the datamodel's code, and its
-size has no bound; post `actor.context` for it.
-
-```
-{"method": "actor.changed", "params": {"session": 1, "entered": ["t"], "exited": ["s"]}}
-{"method": "actor.changed", "params": {"session": 1, "ended": true}}
-```
-
-**Open, to be devised** (ADR 0012, decision 4): where `entered` and
-`exited` are kept during a run without allocation (core computes each
-microstep's exit and entry sets as bitsets of the chart's state count in
-a workspace held only inside the microstep,
-`src/core/core_internal.h:219-259`); which capacity holds a notification
-per macrostep (the system's outbox, the host's effect pool); what a busy
-actor's flood of notifications does; whether the macrostep that ends a
-session is listed before `"ended": true`; and what a refused
-notification keeps until the next run. Whether a state entered and
-exited within one macrostep is listed is part of the first.
-
-**Today** (until ADR 0012's step lands): the notification is
-`{"session", "value"}`, appended at the end of a run after its other
-effects, at most one per session per run; `value` is the state value
-after the run as `actor.state` answers it, left out past 1024 active
-states, or `null` when the session ended or left the host. When the
-host's allocator refuses room for one, the session keeps its mark, the
-run answers `TA_RUN_EXHAUSTED`, and it is appended at the end of the next
-run.
+No notification is defined. `actor.changed` was removed with
+`actor.subscribe` (ADR 0012, decision 4, amended again 2026-10-13; the
+code still appends it for a subscribed session until step 8.2 [8.2]).
+The kind stays: a notification added later is a method name in this
+section, appended as an effect where the host learns of it, and a binding
+that reads a method it does not know drops the effect.
 
 ## Not methods
 
