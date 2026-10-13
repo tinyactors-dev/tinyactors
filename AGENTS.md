@@ -10,11 +10,11 @@ and core does not handle bytes it has no use for. `tinyactors-core/AGENTS.md`
 has the rules of the C layers themselves (freestanding layers, no pointers
 in system memory, no allocation after init).
 
-**Bindings expose the core, nothing else.** The bindings are built in
-[ADR 0009](docs/adr/0009-one-host-two-queues.md)'s step 8 from
-`tinyactors-core/docs/bindings.md`, in `tinyactors-napi` and
-`tinyactors-cpython`, each with an `AGENTS.md` of its own
-([ROADMAP.md](ROADMAP.md), step 8). Before
+**Bindings expose the core, nothing else.** The bindings are being
+rewritten from scratch ([ROADMAP.md](ROADMAP.md), step 8: Python first,
+then Node), in `tinyactors-cpython` and `tinyactors-napi`, each with an
+`AGENTS.md` of its own, from `tinyactors-core/docs/embedding.md` (how to
+use the core) and `tinyactors-core/docs/bindings.md` (the guide). Before
 designing a binding's API: inventory the public headers, write the table
 mapping each API item to the core functions behind it, borrow names and
 call shapes from other libraries (xstate) but never their semantics, and
@@ -180,7 +180,9 @@ calls do
 a fourth, change it in place to take a struct. Bytes cross the public API,
 callbacks included, as `ta_bytes` (input), and come out as a `ta_bytes *`
 view whose owner and lifetime the declaration states (the host's outputs,
-a datamodel's outputs; [ADR 0010](docs/adr/0010-outputs-are-views-values-stream.md))
+until the ack; a datamodel's outputs, until its next call;
+[ADR 0010](docs/adr/0010-outputs-are-views-values-stream.md),
+[ADR 0012](docs/adr/0012-lifetimes-follow-the-loop.md))
 or through a `ta_buffer *` the caller fills, never as a pointer and a
 length.
 
@@ -215,6 +217,26 @@ Before changing a call's input or output to bytes, find its callers inside
 core (`git grep`, ast-grep). If core calls it per event, as the router calls
 `ta_host_deliver` for every routed send, it stays a struct. A brief for
 such a change states the cost per event, which must be nothing.
+
+## Lifetimes follow the loop
+
+The loop is take (`ta_host_effects`), handle, ack
+(`ta_host_effects_ack`), run ([ADR 0012](docs/adr/0012-lifetimes-follow-the-loop.md)).
+
+- **Everything the host hands out lives until the ack:** effect records
+  and their fields, `TRACEPARENT`'s text, and the outputs taken while
+  handling (envelopes, traces, logs, metrics, hibernation and export
+  blobs). Snapshots and `environment->error` fill the caller's
+  `ta_buffer`; a datamodel's outputs live until its next call.
+- **One drain at a time:** a take never widens the open batch, and a run
+  refuses while one is open.
+- **The control plane is `ta_host_post`** with `REPLY` and `NOTIFICATION`
+  effects. No language API has a synchronous request or a raw post: a
+  binding offers typed methods over post that settle at a later drain.
+- A new call states its row in `tinyactors-core/docs/boundary.md` ("The
+  contract, per call"): when it applies, what it produces, who owns it,
+  what ends it, what refuses it. How to use the core is
+  `tinyactors-core/docs/embedding.md`.
 
 ## Acronyms
 

@@ -2,7 +2,8 @@
 
 Portable, embeddable SCXML interpreter + cooperative actor-system VM in C.
 Read `docs/architecture.md` before changing runtime code; `docs/layout.md`
-lists where things go.
+lists where things go. How an embedder uses the core is
+`docs/embedding.md`; the contract of each host call is `docs/boundary.md`.
 
 ## Commands (all via mise)
 
@@ -88,12 +89,26 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   default again elsewhere, and never test a field for 0 to apply one.
 - A rarely called host operation is a method answered through `ta_host_post` (ADR 0011): follow
   "Adding a method" in `docs/requests.md` for what belongs there and how.
+  Its reply and every notification are effects, handed out by a take.
+- **What the host hands out lives until `ta_host_effects_ack`** (ADR 0012):
+  effects and their fields (`TRACEPARENT` included) and every output a
+  caller takes while handling a batch. An output never moves or ends
+  before the ack, however many calls come between; a take never widens
+  an open batch; `ta_host_run` refuses while one is open. Snapshots and
+  `environment->error` fill the caller's `ta_buffer`; a datamodel's
+  outputs live until its next call. A change to a call's phase, product,
+  owner, end or refusal updates its row in `docs/boundary.md` ("The
+  contract, per call") and `docs/embedding.md` in the same commit.
+- Code free of any language's API that every binding needs (a handle
+  table, a status's name) is in base and public (`ta_table`,
+  `ta_status_name`; ADR 0012), never written again in a binding.
 - Bytes that cross the API (requests, configs, envelopes, values) are
   fixed by the protocol vectors in `../tinyactors-test/suites/protocol/`
   (its README.md): a
   change to them changes a vector, and every binding follows it.
 - A change a binding must follow (a call, an effect, a method, the config)
-  updates the binding guide, `docs/bindings.md`, in the same commit.
+  updates `docs/embedding.md` (how every embedder uses the core) and the
+  binding guide, `docs/bindings.md`, in the same commit.
 - Names are whole words (docs/layout.md, "Naming"): the product is
   `tinyactors` (`<tinyactors/system.h>`, `libtinyactors_<layer>.a`), `ta_` /
   `TA_` is the only short prefix, files carry no prefix, internal includes are
