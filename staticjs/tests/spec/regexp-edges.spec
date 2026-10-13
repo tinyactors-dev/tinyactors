@@ -359,3 +359,85 @@ new Map([[1,Object.assign(["a","a"],{"index":0,"input":"a","groups":{"x":"a"}})]
 [/(?<x>a)(b)?(?<y>c)?/d.exec("zab").filter((x) => x), /(?<x>a)(b)?(?<y>c)?/d.exec("zab").reduce((a, x) => a + x, "")]
 --- value
 [["ab","a","b"],"ababundefined"]
+
+# ---------------------------------------------------------------------------
+# A long test() runs from the cache of its automaton's steps (docs/regex.md,
+# 15): classes of characters that could be split wrongly, more classes,
+# states or instructions than the cache takes, and inputs made by methods.
+# spec_test runs each as loops paused after every unit, with the cache and
+# without, for the same values, fuel and pauses. Values from Node 22.
+
+=== a long test: thirteen letters and the rest make 16 classes, fourteen more than the cache takes
+[/abcdefghijklm/.test("abcdefghijkl ".repeat(300) + "abcdefghijklm"), /abcdefghijklmn/.test("abcdefghijklm ".repeat(300) + "abcdefghijklmn"), /abcdefghijklm/.test("abcdefghijkl ".repeat(300)), /abcdefghijklmn/.test("abcdefghijklm ".repeat(300))]
+--- value
+[true,true,false,false]
+
+=== a long test: case-insensitive classes
+[/[a-f]+x/i.test("AbCdEf-".repeat(400) + "FX"), /K/i.test("j".repeat(2000) + "k"), /[^a-z]q/i.test("Aq".repeat(800)), /[^a-z]q/i.test("Aq".repeat(800) + "1Q")]
+--- value
+[true,true,false,true]
+
+=== a long test: \s, \d and \w against their neighbours
+[/\s\s\s/.test("a\t\va\f\r".repeat(400)), /\s\s\s/.test("a\t\va\f\r".repeat(400) + "\n \v"), /\d+\.\d/.test("12.a".repeat(500)), /\d+\.\d/.test("12.a".repeat(500) + "3.4"), /\w\W\w/.test("ab".repeat(900) + "_-9")]
+--- value
+[false,true,false,true,true]
+
+=== a long test: \b and \B where a class ends
+[/\bfoo\b/.test("foox foo_ xfoo ".repeat(200)), /\bfoo\b/.test("foox foo_ xfoo ".repeat(200) + "foo"), /\Bo\B/.test("o o oa ao ".repeat(200)), /\Bo\B/.test("o o oa ao ".repeat(200) + "aoa"), /x\b-/.test("x_-".repeat(600))]
+--- value
+[false,true,false,true,false]
+
+=== a long test: ^ and $ with m, and \r\n
+[/^b$/m.test("a\r\n".repeat(500) + "b\r\nc"), /^b$/m.test("ab\r\n".repeat(500) + "bc"), /^$/m.test("a\r".repeat(700)), /^$/m.test("a\r".repeat(700) + "\r"), /a$/m.test("ab\n".repeat(600)), /a$/.test("a\n".repeat(600)), /^b/.test("\nb".repeat(600))]
+--- value
+[true,false,true,true,false,false,false]
+
+=== a long test: . with and without s
+[/x.y/.test("x\ny".repeat(500)), /x.y/s.test("x\ny".repeat(500)), /x.y/.test("x\ry x\u2028y".repeat(300)), /a.*b/.test("a\n".repeat(600) + "b")]
+--- value
+[false,true,false,false]
+
+=== a long test: loops that can match empty
+[/(?:a*)*c/.test("a".repeat(1500) + "c"), /(?:|a)+b/.test("a".repeat(1500) + "b"), /(?:\b)*a/.test(" ".repeat(1500) + "a"), /(?:x*)*y/.test("x".repeat(1500) + "y"), /(?:a*|b)*c/.test("ab".repeat(700) + "c")]
+--- value
+[true,true,true,true,true]
+
+=== a long test: alternatives whose threads meet
+[/(?:a|ab)(?:c|bcd)d/.test("abc".repeat(500) + "abcdd"), /(?:a|ab)(?:c|bcd)d/.test("abc".repeat(500) + "abd"), /(?:a|b|ab)+c/.test("ab".repeat(800) + "c"), /(?:aa|a)+b$/.test("a".repeat(1500) + "b")]
+--- value
+[true,false,true,true]
+
+=== a long test whose automaton has more states than the cache holds, 4 after the a
+[/(a|b)*a(a|b){4}c/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join("")), /(a|b)*a(a|b){4}c/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join("") + "c"), /(?:a|b)*a(?:a|b){4}$/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join(""))]
+--- value
+[false,true,true]
+
+=== a long test whose automaton has more states than the cache holds, 8 after the a
+[/(a|b)*a(a|b){8}c/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join("")), /(a|b)*a(a|b){8}c/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join("") + "c"), /(?:a|b)*a(?:a|b){8}$/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join(""))]
+--- value
+[false,false,false]
+
+=== a long test whose automaton has more states than the cache holds, 12 after the a
+[/(a|b)*a(a|b){12}c/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join("")), /(a|b)*a(a|b){12}c/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join("") + "c"), /(?:a|b)*a(?:a|b){12}$/.test(Array.from({ length: 1200 }, (_, i) => (i * i * 7 + i * 3) % 11 < 5 ? "a" : "b").join(""))]
+--- value
+[false,true,true]
+
+=== a long test: x{252}y is 256 instructions, the most the cache takes, and x{254}y is 258
+[/x{248}y/.test("x".repeat(247) + "y" + "x".repeat(248) + "y"), /x{250}y/.test("x".repeat(249) + "y" + "x".repeat(250) + "y"), /x{252}y/.test("x".repeat(251) + "y" + "x".repeat(252) + "y"), /x{254}y/.test("x".repeat(253) + "y" + "x".repeat(254) + "y"), /x{256}y/.test("x".repeat(255) + "y" + "x".repeat(256) + "y"), /x{258}y/.test("x".repeat(257) + "y" + "x".repeat(258) + "y"), /x{260}y/.test("x".repeat(259) + "y" + "x".repeat(260) + "y")]
+--- value
+[true,true,true,true,true,true,true]
+
+=== a long test on strings made by methods, ASCII or not
+[/b+c$/.test("é".slice(1) + "ab".repeat(400) + "c"), /[^a-b]c/.test("ab".repeat(400) + "é".slice(0, 0) + "c"), /\W/.test(decodeURIComponent("%C3%A9" + "ab".repeat(300))), /.c/.test("ab".repeat(300).padEnd(1000, "éc")), /\w*c/.test("ab".repeat(300) + "\u{1F600}" + "c"), /^.*c$/.test(["é", "ab".repeat(400), "c"].join("").slice(1))]
+--- value
+[true,false,true,true,true,true]
+
+=== a long test with u and i: the characters that fold to k and s are not ASCII
+[/k/iu.test("j".repeat(1500) + "\u212A"), /\bk/iu.test("_".repeat(1500) + "K"), /[^k]/iu.test("kK".repeat(800)), /s/iu.test("S".repeat(5) + "x".repeat(1500))]
+--- value
+[true,false,false,true]
+
+=== a regular expression tested on many long inputs
+(() => { const p = /(a|b)*a(a|b){3}c/; const xs = ["ab".repeat(300) + "aabac", "ba".repeat(300), "c" + "a".repeat(500), "aaaac"]; return [xs.map((s) => p.test(s)), xs.filter((s) => p.test(s)).length, p.test(xs[0]), p.test(xs[1])]; })()
+--- value
+[[true,false,false,true],2,true,false]

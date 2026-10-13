@@ -6177,3 +6177,260 @@ true
 @shapes PUSH()
 [[1], [2]].map((a, x) => { a.push(x); return a; })
 --- fault held elsewhere
+
+# pushes: near misses the rules leave untagged, and more tagged pushes
+# that run in C or fall back; values from Node 22.
+
+=== pushes: the accumulator and the element under other names
+@shapes PUSH()
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((x, a) => { x.push(a); return x; }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: comments in the callback
+@shapes PUSH()
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { /* c */ a.push(x); /* d */ return a; }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: the argument and the return in parentheses
+@shapes PUSH()
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push((x)); return (a); }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: a trailing comma after the argument
+@shapes PUSH()
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(x,); return a; }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: a key in brackets is not tagged
+@shapes -
+[{k: 1}, {k: "s"}, {k: null}, {k: [1]}, {k: {z: 1}}, {k: 2.5}].reduce((a, x) => { a.push(x["k"]); return a; }, [])
+--- value
+[1,"s",null,[1],{"z":1},2.5]
+
+=== pushes: a key named as the accumulator
+@shapes PUSH_KEY(a)
+[{a: 1}, {a: 2}].reduce((a, x) => { a.push(x.a); return a; }, [])
+--- value
+[1,2]
+
+=== pushes: a key named push
+@shapes PUSH_KEY(push)
+[{push: 1}, {push: 2}].reduce((a, x) => { a.push(x.push); return a; }, [])
+--- value
+[1,2]
+
+=== pushes: a numeric key is not tagged
+@shapes -
+[{0: "a"}, {0: "b"}].reduce((a, x) => { a.push(x[0]); return a; }, [])
+--- value
+["a","b"]
+
+=== pushes: two arguments are not tagged
+@shapes -
+[{k: 1}, {k: "s"}, {k: null}, {k: [1]}, {k: {z: 1}}, {k: 2.5}].reduce((a, x) => { a.push(x.k, x); return a; }, []).length
+--- value
+12
+
+=== pushes: a spread argument is not tagged
+@shapes -
+[[1, 2], [3]].reduce((a, x) => { a.push(...x); return a; }, [])
+--- value
+[1,2,3]
+
+=== pushes: returning the length is not tagged, and faults
+@shapes -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(x); return a.length; }, [])
+--- fault staticjs has methods on arrays, strings, sets, maps, iterators and BigInts only
+
+=== pushes: a push into the element is not tagged, and faults
+@shapes -
+[[1], [2]].reduce((a, x) => { x.push(a); return x; }, [])
+--- fault staticjs changes a value only while one variable holds it, and this one is held elsewhere too
+
+=== pushes: the accumulator read in the argument is not tagged
+@shapes -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(a.length); return a; }, [])
+--- value
+[0,1,2,3,4,5,6,7,8]
+
+=== pushes: a call in the argument is not tagged
+@shapes -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(String(x)); return a; }, [])
+--- value
+["1","2","3","4","5","6","7","8","9"]
+
+=== pushes: a push in an inner block is not tagged
+@shapes -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { { a.push(x); } return a; }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: a statement before the push is not tagged
+@shapes -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { const y = x; a.push(y); return a; }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: a push under an if is not tagged
+@shapes -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { if (x > 3) a.push(x); return a; }, [])
+--- value
+[4,5,6,7,8,9]
+
+=== pushes: three parameters are not tagged
+@shapes -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x, i) => { a.push(x); return a; }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: a path of two keys is not tagged
+@shapes -
+[{k: {j: 1}}, {k: {j: 2}}].reduce((a, x) => { a.push(x.k.j); return a; }, [])
+--- value
+[1,2]
+
+=== pushes: a push of an inner reduce tags the inner callback only
+@shapes - PUSH()
+[[1, 2], [3]].reduce((a, x) => { a.push(x.reduce((b, y) => { b.push(y); return b; }, [])); return a; }, [])
+--- value
+[[1,2],[3]]
+
+=== pushes: a default parameter is not tagged
+@shapes -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x = 0) => { a.push(x); return a; }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: a destructured parameter is not tagged
+@shapes -
+[{k: 1}, {k: 2}].reduce((a, { k }) => { a.push(k); return a; }, [])
+--- value
+[1,2]
+
+=== pushes: an arrow in the argument that shadows the accumulator is not tagged
+@shapes - -
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(((a) => a)(x)); return a; }, [])
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: an initial value a variable held until the call
+@shapes - PUSH()
+(() => { const init = []; return [1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(x); return a; }, init); })()
+--- value
+[1,2,3,4,5,6,7,8,9]
+
+=== pushes: an initial value a variable still holds after the call faults
+@shapes - PUSH()
+(() => { const init = []; const r = [1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(x); return a; }, init); return [r, init]; })()
+--- fault staticjs changes a value only while one variable holds it, and this one is held elsewhere too
+
+=== pushes: an initial literal of a function called again is a new array
+@shapes - - PUSH()
+(() => { const f = (xs) => xs.reduce((a, x) => { a.push(x); return a; }, [0]); return [f([1]), f([2, 3]), f([])]; })()
+--- value
+[[0,1],[0,2,3],[0]]
+
+=== pushes: an initial literal with elements of a function called again is a new array
+@shapes - - PUSH_KEY(k)
+(() => { const f = (xs) => xs.reduce((a, x) => { a.push(x.k); return a; }, [0, 1, 2]); return [f([{k: 1}]), f([{k: 2}, {k: 3}]), f([{k: 4}])]; })()
+--- value
+[[0,1,2,1],[0,1,2,2,3],[0,1,2,4]]
+
+=== pushes: an own key named constructor
+@shapes PUSH_KEY(constructor)
+[{constructor: 1}, {constructor: "c"}].reduce((a, x) => { a.push(x.constructor); return a; }, [])
+--- value
+[1,"c"]
+
+=== pushes: maps by size, in bytecode
+@shapes PUSH_KEY(size)
+[new Map([[1, 2]]), new Map()].reduce((a, x) => { a.push(x.size); return a; }, [])
+--- value
+[1,0]
+
+=== pushes: an accumulator made by split
+@shapes PUSH()
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(x); return a; }, "abcdefgh".split(""))
+--- value
+["a","b","c","d","e","f","g","h",1,2,3,4,5,6,7,8,9]
+
+=== pushes: an accumulator made by slice
+@shapes PUSH()
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(x); return a; }, [1, 2, 3, 4, 5, 6, 7].slice(1))
+--- value
+[2,3,4,5,6,7,1,2,3,4,5,6,7,8,9]
+
+=== pushes: an accumulator made by Object.keys
+@shapes PUSH()
+[1, 2, 3, 4, 5, 6, 7, 8, 9].reduce((a, x) => { a.push(x); return a; }, Object.keys({a: 1, b: 2, c: 3}))
+--- value
+["a","b","c",1,2,3,4,5,6,7,8,9]
+
+=== pushes: five keys, past the room of an empty array
+@shapes - PUSH_KEY(k)
+Array.from({ length: 5 }, (_, i) => ({ k: i * 2 })).reduce((a, x) => { a.push(x.k); return a; }, []).join(",")
+--- value
+"0,2,4,6,8"
+
+=== pushes: seventeen keys
+@shapes - PUSH_KEY(k)
+Array.from({ length: 17 }, (_, i) => ({ k: i * 2 })).reduce((a, x) => { a.push(x.k); return a; }, []).join(",")
+--- value
+"0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32"
+
+=== pushes: 257 keys
+@shapes - PUSH_KEY(k)
+Array.from({ length: 257 }, (_, i) => ({ k: i * 2 })).reduce((a, x) => { a.push(x.k); return a; }, []).join(",")
+--- value
+"0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62,64,66,68,70,72,74,76,78,80,82,84,86,88,90,92,94,96,98,100,102,104,106,108,110,112,114,116,118,120,122,124,126,128,130,132,134,136,138,140,142,144,146,148,150,152,154,156,158,160,162,164,166,168,170,172,174,176,178,180,182,184,186,188,190,192,194,196,198,200,202,204,206,208,210,212,214,216,218,220,222,224,226,228,230,232,234,236,238,240,242,244,246,248,250,252,254,256,258,260,262,264,266,268,270,272,274,276,278,280,282,284,286,288,290,292,294,296,298,300,302,304,306,308,310,312,314,316,318,320,322,324,326,328,330,332,334,336,338,340,342,344,346,348,350,352,354,356,358,360,362,364,366,368,370,372,374,376,378,380,382,384,386,388,390,392,394,396,398,400,402,404,406,408,410,412,414,416,418,420,422,424,426,428,430,432,434,436,438,440,442,444,446,448,450,452,454,456,458,460,462,464,466,468,470,472,474,476,478,480,482,484,486,488,490,492,494,496,498,500,502,504,506,508,510,512"
+
+=== pushes: a set's values
+@shapes PUSH()
+new Set([1, 2, 3]).values().reduce((a, x) => { a.push(x); return a; }, [])
+--- value
+[1,2,3]
+
+=== pushes: a map's entries
+@shapes PUSH()
+new Map([[1, 2], [3, 4]]).entries().reduce((a, x) => { a.push(x); return a; }, [])
+--- value
+[[1,2],[3,4]]
+
+=== pushes: a key of a map's entries
+@shapes PUSH_KEY(k)
+new Map([[1, 2], [3, 4]]).entries().reduce((a, x) => { a.push(x.k); return a; }, [])
+--- value
+[undefined,undefined]
+
+=== pushes: the values an iterator takes
+@shapes PUSH()
+[1, 2, 3].values().take(2).reduce((a, x) => { a.push(x); return a; }, [])
+--- value
+[1,2]
+
+=== pushes: an iterator's flatMap
+@shapes - PUSH()
+[[1], [2, 3]].values().flatMap((v) => v).reduce((a, x) => { a.push(x); return a; }, [])
+--- value
+[1,2,3]
+
+=== pushes: one tagged callback in two loops
+@shapes - PUSH()
+(() => { const f = (a, x) => { a.push(x); return a; }; return [[1, 2].reduce(f, []), [3].reduce(f, [0])]; })()
+--- value
+[[1,2],[0,3]]
+
+=== pushes: the result of one reduce pushed into by another
+@shapes - PUSH() PUSH()
+(() => { const r = [1, 2].reduce((a, x) => { a.push(x); return a; }, []); return [3, 4].reduce((a, x) => { a.push(x); return a; }, r); })()
+--- value
+[1,2,3,4]
+
+=== pushes: the result of one reduce, still held, faults in another
+@shapes - PUSH() PUSH()
+(() => { const r = [1, 2].reduce((a, x) => { a.push(x); return a; }, []); const s = [3].reduce((a, x) => { a.push(x); return a; }, r); return [r, s]; })()
+--- fault staticjs changes a value only while one variable holds it, and this one is held elsewhere too

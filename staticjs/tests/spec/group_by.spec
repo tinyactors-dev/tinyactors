@@ -95,3 +95,62 @@ Object.groupBy([{k: 4294967295}, {k: -0}, {k: 1.5}, {k: 4294967296}, {k: NaN}, {
 Object.keys(Object.groupBy([{k: 3}, {k: "3"}, {k: "b"}, {k: 3}, {k: 2}, {k: "2"}, {k: true}, {k: "true"}, {k: null}, {k: undefined}], x => x.k))
 --- value
 ["2","3","b","true","null","undefined"]
+
+=== number keys from a key callback in C: integer keys first, in order, then the rest as first seen
+@shapes PLUCK(k)
+Object.keys(Object.groupBy([{k: 10}, {k: 2}, {k: "b"}, {k: -0}, {k: "10"}, {k: 1}, {k: "a"}, {k: 0}, {k: 4294967294}, {k: 4294967295}, {k: "01"}, {k: 2.5}, {k: -2}, {k: 1e21}, {k: 123e-20}, {k: 2**31}, {k: 4294967296}], x => x.k))
+--- value
+["0","1","2","10","2147483648","4294967294","b","a","4294967295","01","2.5","-2","1e+21","1.23e-18","4294967296"]
+
+=== number keys from a key callback in bytecode: the same order
+Object.keys(Object.groupBy([{k: 10}, {k: 2}, {k: "b"}, {k: -0}, {k: "10"}, {k: 1}, {k: "a"}, {k: 0}, {k: 4294967294}, {k: 4294967295}, {k: "01"}, {k: 2.5}, {k: -2}, {k: 1e21}, {k: 123e-20}, {k: 2**31}, {k: 4294967296}], x => String(x.k) === "a" ? 7 : x.k))
+--- value
+["0","1","2","7","10","2147483648","4294967294","b","4294967295","01","2.5","-2","1e+21","1.23e-18","4294967296"]
+
+=== computed number keys, -0 among them
+Object.keys(Object.groupBy([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], x => -(x % 3)))
+--- value
+["0","-1","-2"]
+
+=== computed fractional number keys
+Object.entries(Object.groupBy([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], x => x / 4)).map(([k, v]) => k + "=" + v.join("|"))
+--- value
+["0=0","1=4","2=8","0.25=1","0.5=2","0.75=3","1.25=5","1.5=6","1.75=7","2.25=9","2.5=10","2.75=11"]
+
+=== number keys of 1e21 and more
+Object.keys(Object.groupBy([1, 2, 3, 4], x => x * 1e21))
+--- value
+["1e+21","2e+21","3e+21","4e+21"]
+
+=== number keys below 1e-6
+Object.keys(Object.groupBy([1, 2, 3, 4], x => x * 1e-7))
+--- value
+["1e-7","2e-7","3e-7","4e-7"]
+
+=== number keys of a hundred and one groups
+Object.keys(Object.groupBy(Array.from({ length: 300 }, (_, i) => i), x => (x * 7) % 101)).join(",")
+--- value
+"0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100"
+
+=== number keys from a key callback in C, thirty-seven groups
+@shapes - PLUCK(k) PLUCK(length)
+Object.values(Object.groupBy(Array.from({ length: 300 }, (_, i) => ({ k: (i * 13) % 37 })), x => x.k)).map((g) => g.length).join(",")
+--- value
+"9,8,9,8,8,8,8,8,8,8,8,8,8,9,8,8,8,8,8,8,8,8,8,8,8,8,9,8,8,8,8,8,8,8,8,8,8"
+
+=== number and string keys that write alike share a group, others do not
+@shapes PLUCK(k) - -
+Object.entries(Object.groupBy([{k: 1}, {k: "1"}, {k: 1.0}, {k: "1.0"}, {k: -0}, {k: "-0"}, {k: "0"}], x => x.k)).map(([k, v]) => k + ":" + v.map((e) => typeof e.k === "number" ? String(1 / e.k) : e.k).join("|"))
+--- value
+["0:-Infinity|0","1:1|1|1","1.0:1.0","-0:-0"]
+
+=== Map.groupBy keeps number keys apart from strings, and -0 with 0
+@shapes PLUCK(k) -
+[...Map.groupBy([{k: 0}, {k: -0}, {k: NaN}, {k: NaN}, {k: 1}, {k: "1"}, {k: 4294967296}], x => x.k).keys()].map((k) => typeof k + String(k))
+--- value
+["number0","numberNaN","number1","string1","number4294967296"]
+
+=== number keys about 2^32, which only below 2^32 - 1 are indices
+Object.keys(Object.groupBy([4294967295, 4294967294, 4294967293, 5, 4294967296], x => x))
+--- value
+["5","4294967293","4294967294","4294967295","4294967296"]
