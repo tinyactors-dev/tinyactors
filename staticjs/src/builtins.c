@@ -2293,6 +2293,13 @@ static bool push_step(sjs_vm *vm, vm_frame *frame) {
  * concatenates or faults. */
 static bool sum_step(sjs_vm *vm, vm_frame *frame) {
     sjs_value *output = slot(vm, frame, LOOP_OUTPUT);
+    /* Its precondition: the shape is SUM or SUM_KEY. reduce calls it for
+     * every shape it pairs (shape_runners) without testing which, as that
+     * test cost the sums 13 to 19% (measured); a PUSH loop never gets past
+     * the line below, as push_start keeps its shape only for an array
+     * accumulator, and its callback returns that array. A new reduce shape
+     * must either keep its accumulator from being a number in the same way,
+     * or be tested for here. */
     if (output->kind != SJS_NUMBER) return false;
     if (vm->stack_capacity - vm->sp < SUM_STACK) return false;
     sjs_value v = receiver(vm, frame)->items[frame->index];
