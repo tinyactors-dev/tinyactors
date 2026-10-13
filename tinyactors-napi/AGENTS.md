@@ -52,11 +52,29 @@ API"). Node's names and shapes are decided in step 8.5:
   behaviour (images from a name→text mapping, spawning by chart name, a
   chart builder).
 - **A resolver is an object** with `resolve(base, source)` returning the
-  text, given to the compile call (a static `src`, at compile time; a
-  refusal reported as a diagnostic at its line and column [8.2],
-  `tinyactors-core/docs/boundary.md` section 12) and to the `Host`,
-  where it answers `TA_EFFECT_REQUEST` before `ta_host_resume`. The
-  binding ships one that reads a directory.
+  text, given to the compile call only (a static `src`, at compile time;
+  a refusal reported as a diagnostic at its line and column, the message
+  in the compilation's scratch arena [8.2],
+  `tinyactors-core/docs/boundary.md` section 12). **The resolver lives
+  only at compile time:** the `Host` has none (ADR 0012, decision 7 as
+  amended a fourth time). A resolver that reads a directory belongs to
+  the convenience layer, in JavaScript, confined to its root.
+- **`TA_EFFECT_REQUEST` is answered in the addon's C:** the name
+  (`AUXILIARY`) looked up with `ta_image_chart_by_name` in the
+  requesting segment's image (`ta_host_segment_info_get`), then
+  `ta_host_resume` with the chart index + 1, or `TA_ERROR_INVALID` (the
+  parent gets `error.execution`), as `ta-conform` does
+  (`tinyactors-core/tools/conform/scenario.c:99-125`). No JavaScript
+  runs; the prefixes `file://`, `file:` and `./` are core's to strip
+  [8.2].
+- **A traceparent crosses as W3C text.** In: the string's UTF-8 for the
+  call (`ta_spawn.traceparent`, `ta_event_in.traceparent`,
+  `tinyactors-core/include/tinyactors/system.h:125-132`, `:171-173`),
+  parsed by core (`ta_traceparent_parse`). Out: a send's traceparent is
+  read through `TA_EFFECT_FIELD_TRACEPARENT` on first access (the effect
+  holds the binary `ta_trace_context`), absent when untraced; an answer
+  and a failure keep the send's trace unless the caller passes none.
+  Node's names for these are decided in step 8.5.
 
 ## Names
 
