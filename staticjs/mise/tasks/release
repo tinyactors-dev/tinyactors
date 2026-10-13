@@ -1,0 +1,62 @@
+#!/usr/bin/env ruby
+#MISE description="Release libstaticjs: check, version, build every target with zig cc, verify, pack; with --publish, also tag and create the GitHub release"
+#USAGE arg "<version>" help="The version to release, MAJOR.MINOR.PATCH"
+#USAGE flag "--publish" help="Commit the version, tag staticjs/v<version>, push, and create the GitHub release"
+#USAGE flag "--skip-containers" help="Leave out the Linux container smoke tests (no Docker)"
+#USAGE flag "--skip-tests" help="Leave staticjs's test task out of the checks, for a commit whose tests passed already; every build, symbol check, packed test, smoke test and wasm test still runs"
+#USAGE flag "--build-only" help="Only build, verify and pack (no checks, no version set, nothing committed): a look at the packaging before a release"
+# vim:ft=ruby
+
+# mise run release -- 0.9.0                    check, build, verify, pack; publishes nothing
+# mise run release -- 0.9.0 --publish          the same, then tag staticjs/v0.9.0 and release
+# mise run release -- 0.9.0 --skip-containers  no Linux container smoke tests (no Docker)
+# mise run release -- 0.9.0 --build-only       only build, verify and pack: no checks, nothing versioned
+# mise run release -- 0.9.0 --skip-tests       the release without staticjs's test task, which passed already
+#
+# libstaticjs ships its header, its amalgamation (with the wasm platform
+# amalgamation) and API description in a source tarball, a static and a
+# shared library for each native release target, and staticjs.wasm, a
+# module for browsers that imports nothing and has its own allocator (root
+# ADR 0001, decisions 4, 6 and 9). It calls no C library, so its libraries
+# leave nothing undefined. Every tarball carries the notices of the code
+# src/math.c and src/number.c port: fdlibm's (LICENSE.fdlibm) and V8's
+# (LICENSE.v8). The stages are in mise/lib/c_release/build.rb; this file
+# only describes the library. The assets land in build/release/<version>/assets/.
+
+require_relative '../staticjs'
+require 'c_release'
+
+argv = [ENV['usage_version'], *ARGV].compact
+argv << '--publish' if ENV['usage_publish'] == 'true'
+argv << '--skip-containers' if ENV['usage_skip_containers'] == 'true'
+argv << '--build-only' if ENV['usage_build_only'] == 'true'
+argv = argv.reject(&:empty?).uniq
+skip_tests = !argv.delete('--skip-tests').nil? | (ENV['usage_skip_tests'] == 'true')
+puts "release: --skip-tests: staticjs's test task does not run" if skip_tests
+
+root = StaticJS::ROOT
+project = CRelease::Project.new(name: 'staticjs', prefix: 'sjs')
+smoke = root.join('tests/release/staticjs_smoke.c')
+
+CRelease.release(
+  libraries: [
+    CRelease::Library.new(
+      project: project,
+      # The smoke program, against the packed static and shared library of
+      # this machine's target, beside its runs in the Linux containers.
+      tests: [['staticjs_smoke', ['-I', project.header.dirname, smoke], []]],
+      smoke: smoke,
+      sources: [project.header, project.amalgamation, project.platform_amalgamation('wasm'), project.api],
+      wasm_test: ->(wasm) { ['node', root.join('tests/wasm/release_test.mjs'), wasm, project.api, project.header] },
+      notices: { 'LICENSE.fdlibm' => root.join('LICENSE.fdlibm'), 'LICENSE.v8' => root.join('LICENSE.v8') }
+    )
+  ],
+  directory: 'staticjs',
+  title: "staticjs #{argv.reject { |arg| arg.start_with?('--') }.first}",
+  argv: argv,
+  # The amalgamations current, and the whole test task once (api --check
+  # and wasm-test among it), unless --skip-tests.
+  checks: [%w[mise run amalgamate --check], *(skip_tests ? [] : [%w[mise run --force test]])],
+  regenerate: [%w[mise run api]],
+  readme: root.join('README.md')
+)

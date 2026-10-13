@@ -47,7 +47,7 @@ what is out of scope. A proposal or ADR states this near its start.
 
 ## Releases and changelogs
 
-Each component (core, napi, cpython, tinyxml) has a `CHANGELOG.md` in
+Each component (core, napi, cpython, staticjs, tinyxml) has a `CHANGELOG.md` in
 its directory (`tinyactors-napi`, `tinyactors-cpython` for the bindings), and a release of it needs a section there that passes
 `mise run changelog:check <component>`
 ([ADR 0002](docs/adr/0002-changelogs.md)). To prepare a release, use the

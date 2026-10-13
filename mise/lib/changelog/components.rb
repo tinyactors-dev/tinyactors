@@ -44,6 +44,8 @@ module Changelog
     # named here in `api_files`.
     Component.new(name: 'cpython', dir: 'tinyactors-cpython', scopes: %w[cpython python],
                   api_files: [], api_ignore: nil),
+    Component.new(name: 'staticjs', dir: 'staticjs', scopes: %w[staticjs],
+                  api_json: 'include/staticjs.api.json', api_ignore: VERSION_MACROS),
     Component.new(name: 'tinyxml', dir: 'tinyxml', scopes: %w[tinyxml txml],
                   api_json: 'include/txml.api.json', api_ignore: VERSION_MACROS)
   ].freeze

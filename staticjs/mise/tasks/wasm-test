@@ -1,0 +1,22 @@
+#!/usr/bin/env ruby
+#MISE description="Build staticjs.wasm (the release's WebAssembly module) and run it in Node: a program evaluated through the module's own allocator, many times, with no imports"
+# vim:ft=ruby
+
+# The module is built exactly as the release builds it
+# (mise/lib/c_release/build.rb, CRelease.build_wasm) into build/wasm/, from
+# the checked-in amalgamations (`mise run amalgamate --check` runs before it
+# in the test task); its interface is checked (no imports; the API, the wasm
+# functions and memory exported), and tests/wasm/release_test.mjs is run
+# against it. The release's verify stage runs the same test on the module it
+# packs.
+
+require_relative '../staticjs'
+require 'c_release'
+
+project = CRelease::Project.new(name: 'staticjs', prefix: 'sjs')
+test = ->(wasm) { ['node', StaticJS::ROOT.join('tests/wasm/release_test.mjs'), wasm, project.api, project.header] }
+begin
+  CRelease.verify_wasm!(CRelease.build_wasm(project, StaticJS::BUILD.join('wasm')), test: test)
+rescue Toolchain::Error => e
+  abort "wasm-test: #{e.message}"
+end

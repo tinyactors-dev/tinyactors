@@ -1,6 +1,6 @@
 ---
 name: release-changelog
-description: Write the changelog section for a release of tinyactors-core, tinyactors-napi, tinyactors-cpython or tinyxml, and stop for the maintainer's review before the release. Use when asked to cut or prepare a release, write or update a CHANGELOG.md, summarize what changed since the last release, or when a release task fails on "is not fit to release". Releases only; do not use it to draft a changelog between releases.
+description: Write the changelog section for a release of tinyactors-core, tinyactors-napi, tinyactors-cpython, staticjs or tinyxml, and stop for the maintainer's review before the release. Use when asked to cut or prepare a release, write or update a CHANGELOG.md, summarize what changed since the last release, or when a release task fails on "is not fit to release". Releases only; do not use it to draft a changelog between releases.
 ---
 
 # Release changelog
@@ -18,7 +18,7 @@ releases.
 ## Steps
 
 Work in the order below. Components: `core`, `napi`, `cpython`,
-`tinyxml` (`mise/lib/changelog/components.rb`).
+`staticjs`, `tinyxml` (`mise/lib/changelog/components.rb`).
 
 1. **Scope.** Ask which component and, if not said, whether the maintainer
    has a version in mind. The working tree of the repository must be on
@@ -130,7 +130,7 @@ Work in the order below. Components: `core`, `napi`, `cpython`,
    commit does not make the section stale. Then the release task, which runs
    `changelog:check` first and puts the section in the GitHub release:
 
-   - core, tinyxml: `mise run //<directory>:release -- <version>`
+   - core, staticjs, tinyxml: `mise run //<directory>:release -- <version>`
    - napi, cpython: no release task yet (`ROADMAP.md`, step 8, M5 adds
      them; `pack` and `wheel` fail until then)
 

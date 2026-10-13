@@ -1,0 +1,16 @@
+#!/usr/bin/env ruby
+#MISE description="Publish the staticjs build artifact: dist/include, dist/lib/<profile>/libstaticjs.a, dist/staticjs.json"
+#MISE depends=["api"]
+#USAGE arg "[profile]" help="release (the default) or debug"
+# vim:ft=ruby
+#
+# Publishes the host build for consumers inside the repository: the header,
+# the amalgamation, the API description, libstaticjs.a per profile, and a
+# manifest. The build, its flags and its reproducibility rules are
+# mise/lib/c_release.rb's, shared with the release (ADR 0001).
+#
+#   mise run dist [release|debug]
+
+require 'c_release'
+
+CRelease.dist(CRelease::Project.new(name: 'staticjs', prefix: 'sjs'), [ENV['usage_profile'], *ARGV].compact.reject(&:empty?).uniq)

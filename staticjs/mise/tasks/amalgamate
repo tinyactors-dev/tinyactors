@@ -1,0 +1,204 @@
+#!/usr/bin/env ruby
+#MISE description="Generate or verify the single-file library, include/staticjs.c, and its wasm platform file, include/staticjs_wasm.c"
+#USAGE flag "--check" help="Fail when a checked-in file is out of date, instead of writing it"
+# vim:ft=ruby
+
+# include/staticjs.h is the public API. The amalgamation is it, then every
+# portable src/*.c in name order, each with the private headers it includes
+# inlined the first time a source reaches them. Definitions of public
+# functions (those include/staticjs.h declares with SJS_API) are left as
+# they are; every other function gets internal linkage through SJS_PRIVATE
+# (static by default), as tinyxml's amalgamate does, so the amalgamation's
+# object exports exactly the API.
+#
+# The platform files (src/*_wasm.c, PlatformFiles) form a second translation
+# unit each platform builds beside the amalgamation: include/staticjs_wasm.c,
+# the wasm module's allocator. A platform file includes the public header
+# alone.
+#
+# A file-scope name means one thing across src/ (AGENTS.md): check-recursion
+# compiles the sources as one unit already. This task proves the result:
+# it compiles the amalgamation, freestanding and under the build's warnings,
+# and fails unless its object exports exactly the API.
+#
+#   mise run amalgamate           write include/staticjs.c and staticjs_wasm.c
+#   mise run amalgamate --check   fail if a checked-in file is out of date
+
+require_relative '../staticjs'
+require_relative '../../../tinyxml/mise/lib/c_scan'
+require 'cache'
+require 'platform_files'
+require 'tmpdir'
+
+ROOT = StaticJS::ROOT
+INCLUDE = ROOT.join('include')
+HEADER = INCLUDE.join('staticjs.h')
+SOURCE_DIR = ROOT.join('src')
+OUTPUT = INCLUDE.join('staticjs.c')
+PLATFORM_OUTPUTS = PlatformFiles::SUFFIXES.select { |suffix| !Dir[SOURCE_DIR.join("*_#{suffix}.c").to_s].empty? }
+                                          .to_h { |suffix| [suffix, INCLUDE.join("staticjs_#{suffix}.c")] }
+
+check = ENV['usage_check'] == 'true' || ARGV.include?('--check')
+abort 'usage: mise run amalgamate [--check]' unless (ARGV - ['--check']).empty?
+
+# Fresh when the inputs and the checked-in outputs still hash to what the
+# last successful run recorded (mise/lib/cache.rb); an output edited by hand
+# is not.
+Cache.gate(check ? 'amalgamate-check' : 'amalgamate',
+           inputs: Cache.files('src/*.c', 'src/*.h', 'include/staticjs.h', 'mise/tasks/amalgamate', 'mise/staticjs.rb',
+                               '../tinyxml/mise/lib/c_scan.rb', '../mise/lib/platform_files.rb'),
+           outputs: [OUTPUT, *PLATFORM_OUTPUTS.values],
+           extra: [Toolchain::Tool[:clang].identity])
+
+errors = []
+public_text = HEADER.read
+PUBLIC = CScan.functions(public_text).select { |function| public_text[function.start...function.name_at].include?('SJS_API') }
+                                     .map(&:name).freeze
+CScan.functions(public_text).each do |function|
+  errors << "include/staticjs.h: #{function.name} is declared without SJS_API" unless PUBLIC.include?(function.name)
+end
+
+INCLUDE_LINE = /\A\s*#\s*include\s+"([^"]+)"\s*\z/
+
+# `path` with each private header it includes inlined, once across the
+# whole unit (`seen`), and the public header left out: the unit includes it
+# first. `#pragma once` goes, as the unit is one file.
+def expand(path, seen, errors)
+  out = +"/* ---- #{path.relative_path_from(ROOT)} ---- */\n"
+  path.each_line do |line|
+    next if line.match?(/\A\s*#\s*pragma\s+once\s*\z/)
+
+    included = line.chomp[INCLUDE_LINE, 1]
+    if included.nil?
+      out << line
+    elsif included == 'staticjs.h'
+      next
+    elsif (header = SOURCE_DIR.join(included)).file?
+      next if seen.include?(header)
+
+      seen << header
+      out << expand(header, seen, errors)
+    else
+      errors << "#{path.relative_path_from(ROOT)}: includes #{included}, which is not in src/"
+    end
+  end
+  out
+end
+
+# Function heads in `text`: a public definition stays as it is, every other
+# function (definition or prototype) that is not already static gets
+# SJS_PRIVATE, and a header's static inline function SJS_KEEP, since a
+# compiler warns of an unused one in the main file and not in a header.
+def rewrite(text, errors)
+  edits = []
+  CScan.functions(text).each do |function|
+    head = text[function.start...function.name_at]
+    if PUBLIC.include?(function.name)
+      errors << "#{function.name} is public; declare it only in include/staticjs.h" unless function.definition?
+    elsif head.match?(/\bstatic\b/)
+      edits << [function.start, 'SJS_KEEP '] if head.match?(/\binline\b/)
+    else
+      edits << [function.start, 'SJS_PRIVATE ']
+    end
+  end
+  edits.sort_by(&:first).reverse_each.reduce(text.dup) { |result, (offset, macro)| result.insert(offset, macro) }
+end
+
+PRIVATE = <<~C
+  /*
+   * Functions not declared in staticjs.h are private to this file. A private
+   * helper may be unused in a given build, so it does not warn.
+   */
+  #if defined(__GNUC__) || defined(__clang__)
+  #define SJS_KEEP __attribute__((unused))
+  #else
+  #define SJS_KEEP
+  #endif
+  #ifndef SJS_PRIVATE
+  #define SJS_PRIVATE static SJS_KEEP
+  #endif
+C
+
+seen = []
+body = StaticJS.sources.map { |source| expand(source, seen, errors) }.join("\n")
+outputs = {
+  OUTPUT => <<~C + rewrite(body, errors)
+    /*
+     * GENERATED FILE. Do not edit; run `mise run amalgamate` in staticjs.
+     * staticjs as one translation unit: the public API is include/staticjs.h;
+     * every portable source in src/ follows, in name order, with the private
+     * headers it includes inlined the first time. `cc -c staticjs.c` with
+     * staticjs.h beside it needs nothing else.
+     */
+    #include "staticjs.h"
+
+    #{PRIVATE}
+  C
+}
+PLATFORM_OUTPUTS.each do |suffix, path|
+  files = Dir[SOURCE_DIR.join("*_#{suffix}.c").to_s].sort.select { |file| PlatformFiles.platform(file) == suffix }
+  pieces = files.map do |file|
+    file = Pathname.new(file)
+    text = file.read
+    text.scan(/^\s*#\s*include\s+"([^"]+)"/).flatten.reject { |name| name == 'staticjs.h' }.each do |name|
+      errors << "#{file.relative_path_from(ROOT)}: a platform file includes only staticjs.h, not #{name}"
+    end
+    "/* ---- #{file.relative_path_from(ROOT)} ---- */\n#{rewrite(text.gsub(/^\s*#\s*include\s+"staticjs\.h"\n/, ''), errors)}"
+  end
+  outputs[path] = <<~C + pieces.join("\n")
+    /*
+     * GENERATED FILE. Do not edit; run `mise run amalgamate` in staticjs.
+     * The #{suffix} platform files, those in src/ named with a _#{suffix}.c
+     * suffix: a second translation unit, compiled next to staticjs.c only
+     * when building for #{suffix}. They use the public API alone.
+     */
+    #include "staticjs.h"
+
+    #{PRIVATE}
+  C
+end
+
+unless errors.empty?
+  errors.uniq.each { |error| warn "amalgamate: #{error}" }
+  exit 1
+end
+
+stale = INCLUDE.glob('staticjs_*.c').reject { |path| outputs.key?(path) }
+if check
+  outputs.each do |path, text|
+    abort "amalgamate: #{path.relative_path_from(ROOT)} is out of date; run mise run amalgamate" unless path.file? && path.read == text
+  end
+  abort "amalgamate: #{stale.map { |path| path.relative_path_from(ROOT) }.join(', ')}: no platform files left; run mise run amalgamate" unless stale.empty?
+else
+  outputs.each do |path, text|
+    changed = !(path.file? && path.read == text)
+    path.write(text) if changed
+    puts changed ? "amalgamate: generated #{path.relative_path_from(ROOT)}" : "amalgamate: #{path.relative_path_from(ROOT)} unchanged"
+  end
+  stale.each do |path|
+    path.delete
+    puts "amalgamate: removed #{path.relative_path_from(ROOT)}"
+  end
+end
+
+# The proof: the amalgamation compiles on its own, freestanding and under
+# the build's warnings, and its object exports exactly the API but the
+# functions the header declares for wasm alone (`#if defined(__wasm__)`),
+# which the wasm platform file defines; each platform file compiles for its
+# platform.
+wasm_block = public_text.scan(/^#if defined\(__wasm__\)\n(.*?)^#endif/m).join
+PORTABLE = (PUBLIC - CScan.functions(wasm_block).map(&:name)).sort.freeze
+Dir.mktmpdir('staticjs-amalgamate') do |dir|
+  object = Toolchain::Target.check.compile(OUTPUT.to_s, into: File.join(dir, 'staticjs.o'), includes: [INCLUDE],
+                                                         flags: [*StaticJS::WARNINGS, *StaticJS::FREESTANDING, '-O1'])
+  object.must_export_exactly!(PORTABLE)
+  PLATFORM_OUTPUTS.each do |suffix, path|
+    target = Toolchain::Target.releases.find { |candidate| PlatformFiles.suffixes_for(candidate).include?(suffix) }
+    target.compile(path.to_s, into: File.join(dir, "staticjs_#{suffix}.o"), includes: [INCLUDE],
+                              flags: [*StaticJS::WARNINGS, *StaticJS::FREESTANDING])
+  end
+  puts "amalgamate: #{outputs.keys.map { |path| path.relative_path_from(ROOT) }.join(', ')} " \
+       "#{check ? 'current' : 'written'}; staticjs.c exports exactly the #{PORTABLE.size} portable functions of the API"
+rescue Toolchain::Error => e
+  abort "amalgamate: #{e.message}"
+end
