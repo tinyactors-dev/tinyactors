@@ -339,6 +339,12 @@ Root `mise run test:full` still stops at the deliberately red Python M1
 
 In ADR 0012's order of work:
 
+Boot unit coverage (2026-10-14): `test_host.c`'s `test_boot_manifest`
+exercises `ta_host_boot` through public calls: an invalid segment leaves
+no actors, a manifest's three named actors fit after growth from capacity
+one, and entry actions run only when the host loop runs. Allocation refusal
+and calls during a run or datamodel guard remain to be covered.
+
 - **Base:** `ta_status_name` (NULL for a status `types.h` does not
   define), `ta_table` (64-bit handles, 31-bit generation, rows grown by
   doubling through a `ta_allocator`, a row pointer valid until the next

@@ -1143,6 +1143,65 @@ static void test_restore_after_images_freed(void) {
     free(ds);
 }
 
+/* Boot is the public path from a compiled system manifest to live actors.
+ * Start with room for only one actor: boot must grow before spawning the
+ * three declared actors, and leave their entry actions for the host loop. */
+static void test_boot_manifest(void) {
+    static const test_file files[] = {
+        {"worker.scxml", SC("worker", "initial='ready'><state id='ready'>"
+                                     "<onentry><log expr=\"'boot'\"/></onentry></state>")},
+        {NULL, NULL}};
+    const char *manifest = "<system><chart name='worker' src='worker.scxml'/>"
+                           "<actor name='first' chart='worker'/>"
+                           "<actor name='second' chart='worker'/>"
+                           "<actor name='third' chart='worker'/></system>";
+    ta_compile_options options = {0};
+    options.size = sizeof options;
+    options.resolve = test_resolve;
+    options.resolve_context = (void *)files;
+    ta_source source = {{"system.xml", 10}, {manifest, (uint32_t)strlen(manifest)}};
+    ta_compile_result *compiled = NULL;
+    CHECK_EQUAL(ta_compile_system(&options, &source, &compiled), TA_OK);
+
+    host_world e;
+    world_open(&e, 1, NULL, 0);
+    ta_string_view image = ta_compile_image(compiled);
+    uint32_t segment = 0;
+    CHECK_EQUAL(ta_host_add_image(e.host, (ta_bytes){image.pointer, image.length}, &segment), TA_OK);
+    ta_compile_free(compiled);
+
+    ta_host_segment_info info = {0};
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_host_segment_info_get(e.host, segment, &info), TA_OK);
+    CHECK_EQUAL(info.actors, 0);
+    ta_system_stats stats = {0};
+    stats.size = sizeof stats;
+    ta_system_stats_get(ta_host_system(e.host, segment), &stats);
+    CHECK_EQUAL(stats.actors_capacity, 1);
+    CHECK_EQUAL(ta_host_actor_by_name(e.host, (ta_string_view){"first", 5}), 0);
+    CHECK_EQUAL(ta_host_boot(e.host, segment + 1), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_segment_info_get(e.host, segment, &info), TA_OK);
+    CHECK_EQUAL(info.actors, 0);
+
+    CHECK_EQUAL(ta_host_boot(e.host, segment), TA_OK);
+    CHECK_EQUAL(ta_host_segment_info_get(e.host, segment, &info), TA_OK);
+    CHECK_EQUAL(info.actors, 3);
+    ta_system_stats_get(ta_host_system(e.host, segment), &stats);
+    CHECK(stats.actors_capacity >= 3);
+    uint64_t first = ta_host_actor_by_name(e.host, (ta_string_view){"first", 5});
+    uint64_t second = ta_host_actor_by_name(e.host, (ta_string_view){"second", 6});
+    uint64_t third = ta_host_actor_by_name(e.host, (ta_string_view){"third", 5});
+    CHECK(first && second && third);
+    CHECK(first != second && first != third && second != third);
+    drain(&e); /* detect entry logs emitted eagerly by boot, and ack before run */
+    CHECK_EQUAL(e.log[0], 0);
+    CHECK_EQUAL(run(&e), TA_RUN_IDLE);
+    CHECK(strcmp(e.log, "boot;boot;boot;") == 0);
+    CHECK_EQUAL(ta_host_segment_info_get(e.host, segment, &info), TA_OK);
+    CHECK_EQUAL(info.actors, 3);
+    world_close(&e);
+}
+
 static void test_request_answered_with_an_error(void) {
     host_world e;
     world_open(&e, 8, NULL, 0);
@@ -1162,6 +1221,7 @@ static void test_request_answered_with_an_error(void) {
 }
 
 int main(void) {
+    RUN(test_boot_manifest);
     RUN(test_image_copied);
     RUN(test_restore_after_images_freed);
     RUN(test_snapshot_pack);
