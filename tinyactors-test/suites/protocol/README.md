@@ -115,8 +115,8 @@ Everything else is pinned: system ids, the trace seed, the clock.
 ## Setups
 
 A case names the host it runs on (`setup`); each case gets a new one. All of
-them have `ticksPerSecond` 1000, `maxActors` 8, `traceSeed` 1,
-`maxSubscriptions` 1 and no telemetry encoder. The charts are in
+them have `ticksPerSecond` 1000, `maxActors` 8, `traceSeed` 1
+and no telemetry encoder. The charts are in
 `setups/`; after spawning, a setup runs the host until it is idle with the
 wall clock at 1700000000000000000 ns. The runner builds them with the
 driver's methods (`lib/runner.rb`, `setup` and `echo`).
@@ -143,7 +143,6 @@ language like the scenarios (`build/setups/<language>/`, checked by
 What bytes cannot show stays in `tinyactors-core/tests/unit`: a call during a run
 (`test_host_inputs.c`), an allocator that refuses (`test_host_memory.c`),
 `actor.context` of a hibernated actor or of a datamodel without variables,
-a post's REPLY after its method's own effects, `actor.changed` for a
-session that ended or that the allocator refused (`test_host_request.c`),
+a post's REPLY after its method's own effects (`test_host_request.c`),
 and moving envelopes between hosts
 (`test_router.c`).

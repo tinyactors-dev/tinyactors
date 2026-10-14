@@ -660,40 +660,6 @@ static void request_run_actor_state(request *r, uint32_t map) {
     }
 }
 
-/* actor.subscribe: actor.changed notifications for the session from the next run on. */
-static void request_run_actor_subscribe(request *r, uint32_t map) {
-    static const char *const fields[] = {"session", NULL};
-    uint64_t session;
-    uint32_t segment, actor;
-    if (!request_keys_known(r, map, NULL, 0, fields)) return;
-    if (!request_read_session(r, map, &session, &segment, &actor)) return;
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 0);
-    if (!request_fits(r)) return;
-    request_path_set(r, NULL, 0, "");
-    ta_status status = host_subscribe(r->host, session);
-    if (status == TA_ERROR_STATE)
-        request_refuse(r, "limit", "the host watches as many sessions as it holds (maxSubscriptions)");
-    else if (status != TA_OK)
-        request_refuse(r, "memory", "the host's allocator refused room for subscriptions");
-}
-
-static void request_run_actor_unsubscribe(request *r, uint32_t map) {
-    static const char *const fields[] = {"session", NULL};
-    uint64_t session;
-    if (!request_keys_known(r, map, NULL, 0, fields)) return;
-    uint32_t at = request_member(r, map, "session");
-    request_path_set(r, NULL, 0, "session");
-    if (at == TA_NIL) {
-        request_refuse(r, "missing", "session is the actor's session id");
-        return;
-    }
-    if (!request_read_uint(r, at, 0, &session)) return;
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 0);
-    if (!request_fits(r)) return;
-    if (host_unsubscribe(r->host, session) != TA_OK)
-        request_refuse(r, "stale", "the session is not subscribed");
-}
-
 /* A payload's neutral value (to_wire) straight into the reply; null when the
  * datamodel cannot write it. */
 static void request_put_payload(request *r, const ta_datamodel_binding *binding, ta_payload payload) {
@@ -917,8 +883,6 @@ static const request_method REQUEST_METHODS[] = {
     {"actor.list", request_run_actor_list},
     {"actor.get", request_run_actor_get},
     {"actor.context", request_run_actor_context},
-    {"actor.subscribe", request_run_actor_subscribe},
-    {"actor.unsubscribe", request_run_actor_unsubscribe},
     {"actor.state", request_run_actor_state},
 };
 
@@ -1119,7 +1083,7 @@ static void request_run_host_config(request *r, uint32_t map) {
     const ta_host *host = r->host;
     const host_config *config = &host->config;
     int telemetry = config->telemetry.otlp.size != 0;
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, telemetry ? 6u : 5u);
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, telemetry ? 5u : 4u);
     request_put_key(r, "systemID");
     cbor_output_text(&r->out, config->system_id);
     request_put_key(r, "system");
@@ -1141,8 +1105,6 @@ static void request_run_host_config(request *r, uint32_t map) {
     }
     request_put_key(r, "migrateQuantum");
     cbor_output_uint(&r->out, config->migrate_quantum);
-    request_put_key(r, "maxSubscriptions");
-    cbor_output_uint(&r->out, config->max_subscriptions);
     if (telemetry) {
         request_put_key(r, "telemetry");
         config_put_telemetry(r, &config->telemetry);
@@ -1292,8 +1254,8 @@ static int config_read_telemetry(request *r, uint32_t map, ta_otlp_attribute *re
 }
 
 static int config_read(request *r, const host_config_input *input, host_config *config) {
-    static const char *const fields[] = {"systemID",       "system",           "ioProcessors",
-                                         "migrateQuantum", "maxSubscriptions", "telemetry", NULL};
+    static const char *const fields[] = {"systemID",       "system",    "ioProcessors",
+                                         "migrateQuantum", "telemetry", NULL};
     if (!request_keys_known(r, 0, NULL, 0, fields)) return 0;
     uint32_t id = request_member(r, 0, "systemID");
     request_path_set(r, NULL, 0, "systemID");
@@ -1321,13 +1283,6 @@ static int config_read(request *r, const host_config_input *input, host_config *
         return 0;
     }
     config->migrate_quantum = (uint32_t)number;
-    request_path_set(r, NULL, 0, "maxSubscriptions");
-    if (!request_read_uint(r, request_member(r, 0, "maxSubscriptions"), 0, &number)) return 0;
-    if (number > (1u << 20)) {
-        request_refuse(r, "range", "maxSubscriptions is at most 1048576");
-        return 0;
-    }
-    config->max_subscriptions = (uint32_t)number;
     return config_read_telemetry(r, telemetry, input->resource, &config->telemetry);
 }
 

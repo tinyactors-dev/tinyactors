@@ -253,16 +253,9 @@ enum {
     TA_HOST_EFFECT_REPLY = 23,       /* WIRE: {"id", "result"} or {"id", "error"}; the last
                                         effect of the ta_host_post that answered it */
     TA_HOST_EFFECT_NOTIFICATION = 24 /* WIRE: {"method", "params"}; EVENT: the method; SESSION:
-                                        the session it is about (0: none) */
-    /* The notifications: actor.changed for a session subscribed with
-     * actor.subscribe. ADR 0012 (decision 4, amended) decides
-     * {"session", "entered", "exited"} per macrostep and {"session",
-     * "ended": true} at the end; until it lands, the code appends
-     * {"session", "value"} at the end of a run, at most one per session per
-     * run, value its state value then (as actor.state answers it) or null
-     * when it ended, its subscription with it. The system's TA_EFFECT_CHANGED
-     * (ta_actor_watch, tinyactors/system.h) is how the host learns of it and
-     * is not one of the host's effects. */
+                                        the session it is about (0: none). No notification is
+                                        defined yet (docs/requests.md, "Notifications"): drop a
+                                        method you do not know. */
 };
 typedef struct ta_host_effect {
     uint32_t size;
@@ -711,7 +704,7 @@ TA_API ta_bytes ta_host_snapshot_image(ta_bytes pack, uint32_t i);
  * null when the message could not be read or is not a request (a batch is
  * one: -32600). A message without "id" is applied, with no REPLY and no
  * error reported. Trace configuration, watches, stats, inspection, state
- * values, subscriptions and decoded spans are methods; docs/requests.md
+ * values and decoded spans are methods; docs/requests.md
  * lists every method, its params, defaults and errors.
  *
  * ta_host_effects publishes everything appended since the last ack, with or

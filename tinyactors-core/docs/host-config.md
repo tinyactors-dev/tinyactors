@@ -58,7 +58,6 @@ diagnostic notation.
 | `system` | map | `{}` | the capacities of each new segment, below |
 | `ioProcessors` | list of maps, at most 16 | `[]` | the host's I/O processors: `type` (text, required), `location` (text), `sync` (bool: the run stops after a send to it, `TA_IO_PROCESSOR_SYNC`) |
 | `migrateQuantum` | uint | `256` | actors a migration job looks at per run |
-| `maxSubscriptions` | uint, at most 2^20 | `64` | sessions `actor.subscribe` watches at once |
 | `telemetry` | map | absent: no encoder | the OTLP encoder, below |
 
 Why these defaults:
@@ -74,10 +73,6 @@ Why these defaults:
 - **`migrateQuantum`: 256.** A migration job works between runs. 256 actors
   per run keep a run short while a large segment still moves in a few
   thousand runs.
-- **`maxSubscriptions`: 64.** Subscriptions are for things a person
-  watches: a UI or a debugger, not every actor. The table is allocated once,
-  with the first subscription, so the limit bounds the memory: 8 bytes per
-  slot.
 - **`telemetry`: absent.** An encoder takes memory for its staging and
   needs a binding that takes its effects and posts the bytes. A host that
   does not export pays nothing (a null encoder).

@@ -1,7 +1,7 @@
 /* ta_host_post (docs/requests.md; docs/adr/0011 in the repository root),
  * beyond its protocol vectors (tinyactors-test/suites/protocol): what bytes
  * alone cannot show — spans of real traces, variables after a run,
- * hibernation, a datamodel without variables, actor.changed notifications, a config
+ * hibernation, a datamodel without variables, a config
  * nothing points into afterwards. Also ta_host_metrics. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
@@ -78,7 +78,6 @@ static void world_open(world *w, int encoder, const ta_datamodel_vtable *vtable)
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
     config.allocator = (ta_allocator){NULL, refusing_alloc, refusing_free};
-    config.max_subscriptions = 1;
     if (encoder) config.telemetry.otlp.size = sizeof config.telemetry.otlp;
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
@@ -214,148 +213,44 @@ static void test_actor_context(void) {
     world_close(&w);
 }
 
-/* Run until idle; the actor.changed notifications for `session` it made,
- * the last one's WIRE in diagnostic notation in `last` ("" for none). Every
- * NOTIFICATION comes after the run's other effects; a system CHANGED never
- * reaches the host's effects. */
-static char last[4096];
-static uint32_t changed(world *w, uint64_t session) {
-    uint32_t count = 0;
-    ta_run result;
-    last[0] = 0;
-    do {
-        result = ta_host_run(w->host, 1000000);
-        const ta_host_effect *effects;
-        uint32_t n = ta_host_effects(w->host, &effects), first = n;
-        for (uint32_t i = 0; i < n; i++) {
-            CHECK(effects[i].kind != TA_EFFECT_CHANGED);
-            if (effects[i].kind != TA_HOST_EFFECT_NOTIFICATION) {
-                CHECK(first == n); /* nothing after the notifications */
-                continue;
-            }
-            if (first == n) first = i;
-            ta_string_view method = ta_host_effect_text(w->host, i, TA_EFFECT_FIELD_EVENT);
-            CHECK(method.length == 13 && memcmp(method.pointer, "actor.changed", 13) == 0);
-            if (effects[i].session != session) continue;
-            count++;
-            ta_bytes wire = ta_host_effect_bytes(w->host, i, TA_EFFECT_FIELD_WIRE);
-            ta_buffer text = {last, sizeof last - 1, 0};
-            CHECK_EQUAL(ta_cbor_diagnostic(wire, &text), TA_OK);
-            last[text.length] = 0;
-        }
-        ta_host_effects_ack(w->host);
-    } while (result.status != TA_RUN_IDLE && result.status != TA_RUN_EXHAUSTED);
-    return count;
+/* {"id": id, "method": "trace.watch", "params": {"rules": [{}]}} (id < 0:
+ * no "id"), a watch matching everything, in `bytes`; its length. */
+static size_t watch_message(unsigned char *bytes, size_t capacity, int64_t id) {
+    ta_cbor_writer w;
+    ta_cbor_writer_init(&w, (ta_buffer){bytes, capacity, 0}, NULL);
+    ta_cbor_write_map(&w, id >= 0 ? 3 : 2);
+    if (id >= 0) {
+        ta_cbor_write_text(&w, ta_string("id"));
+        ta_cbor_write_uint(&w, (uint64_t)id);
+    }
+    ta_cbor_write_text(&w, ta_string("method"));
+    ta_cbor_write_text(&w, ta_string("trace.watch"));
+    ta_cbor_write_text(&w, ta_string("params"));
+    ta_cbor_write_map(&w, 1);
+    ta_cbor_write_text(&w, ta_string("rules"));
+    ta_cbor_write_array(&w, 1);
+    ta_cbor_write_map(&w, 0);
+    ta_bytes out;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&w, &out), TA_OK);
+    return out.length;
 }
 
-static void ping(world *w, uint64_t session) {
-    ta_event_in event;
-    memset(&event, 0, sizeof event);
-    event.size = sizeof event;
-    event.name = (ta_string_view){"ping", 4};
-    event.session = session;
-    CHECK_EQUAL(ta_host_send(w->host, &event), TA_OK);
-}
-
-static const char *subscription(world *w, const char *method, uint64_t session) {
-    static host_ask a;
-    ta_cbor_writer *writer = ask_begin(&a, method, 1);
-    ta_cbor_write_text(writer, ta_string("session"));
-    ta_cbor_write_uint(writer, session);
-    return ask_send(w->host, &a) == TA_OK ? a.text : "(status)";
-}
-
-#define CHANGED(session, value)                                                                    \
-    "{\"method\":\"actor.changed\",\"params\":{\"session\":" session ",\"value\":" value "}}"
-
-/* actor.changed (docs/adr/0011, decision 4) */
-static void test_subscribe(void) {
-    world w;
-    world_open(&w, 0, NULL);
-    settle(&w);
-    ta_spawn spawn;
-    memset(&spawn, 0, sizeof spawn);
-    spawn.segment = w.segment;
-    uint64_t other;
-    CHECK_EQUAL(ta_host_spawn(w.host, &spawn, &other), TA_OK);
-    settle(&w);
-    /* nothing without subscriptions */
-    ping(&w, other);
-    CHECK_EQUAL(changed(&w, other), 0u);
-    CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}")));
-    CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}"))); /* again: one */
-    CHECK_EQUAL(changed(&w, w.session), 0u); /* nothing ran */
-    /* two macrosteps, one run: one notification, with the state after the
-     * run (u), not the one the first macrostep ended in (t) */
-    ping(&w, w.session);
-    ping(&w, w.session);
-    ping(&w, other); /* not subscribed: none */
-    CHECK_EQUAL(changed(&w, w.session), 1u);
-    CHECK(reply_is(last, CHANGED("1", "\"u\"")));
-    ping(&w, other);
-    CHECK_EQUAL(changed(&w, other), 0u);
-    ping(&w, w.session);
-    CHECK_EQUAL(changed(&w, w.session), 1u); /* the next run watches it again */
-    CHECK(reply_is(last, CHANGED("1", "\"u\"")));
-    CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session), RESULT("{}")));
-    ping(&w, w.session);
-    CHECK_EQUAL(changed(&w, w.session), 0u);
-
-    /* across hibernation: the subscription is the host's, the watch the actor's */
-    static unsigned char blob[1 << 16];
-    ta_bytes hibernated; /* the host's, until the ack */
-    CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}")));
-    CHECK_EQUAL(changed(&w, w.session), 0u); /* armed, nothing ran */
-    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
-    size_t length = output_copy(hibernated, blob, sizeof blob);
-    ta_host_effects_ack(w.host); /* the output is copied: its batch ends */
-    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
-    ping(&w, w.session);
-    CHECK_EQUAL(changed(&w, w.session), 1u); /* still subscribed: watched again */
-    CHECK_EQUAL(changed(&w, w.session), 0u); /* armed again */
-    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
-    length = output_copy(hibernated, blob, sizeof blob);
-    ta_host_effects_ack(w.host); /* the output is copied: its batch ends */
-    CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session), RESULT("{}")));
-    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
-    ping(&w, w.session);
-    CHECK_EQUAL(changed(&w, w.session), 0u); /* unsubscribed while hibernated: no watch woke */
-
-    /* the session ends: value null, and the subscription goes with it */
-    CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}")));
-    CHECK_EQUAL(ta_host_terminate(w.host, w.session), TA_OK);
-    CHECK_EQUAL(changed(&w, w.session), 1u);
-    CHECK(reply_is(last, CHANGED("1", "null")));
-    CHECK_EQUAL(changed(&w, w.session), 0u);
-    CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session),
-                   ERROR("-32001", "stale", "params.session", "the session is not subscribed")));
-    world_close(&w);
-}
-
-static size_t message(unsigned char *bytes, size_t capacity, const char *method, int64_t id,
-                      uint64_t session);
-
-/* A notification the allocator refuses at the end of a run keeps its mark:
- * the run is TA_RUN_EXHAUSTED, and the next run appends it. */
-static void test_subscribe_refused(void) {
-    world w;
-    world_open(&w, 0, NULL);
-    settle(&w);
-    /* subscribed without an id: no REPLY, so the host has no effect pool yet */
-    unsigned char bytes[256];
-    size_t length = message(bytes, sizeof bytes, "actor.subscribe", -1, w.session);
-    CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
-    ping(&w, w.session);
-    refusing = 1;
-    ta_run run = ta_host_run(w.host, 1000000);
-    refusing = 0;
-    CHECK_EQUAL(run.status, TA_RUN_EXHAUSTED);
-    const ta_host_effect *effects;
-    CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
-    CHECK_EQUAL(changed(&w, w.session), 1u); /* no macrostep in this run: the kept mark */
-    CHECK(reply_is(last, CHANGED("1", "\"t\"")));
-    CHECK_EQUAL(changed(&w, w.session), 0u);
-    world_close(&w);
+/* {"id": id, "method": "trace.unwatch", "params": {"id": watch}}; its length. */
+static size_t unwatch_message(unsigned char *bytes, size_t capacity, int64_t id, uint64_t watch) {
+    ta_cbor_writer w;
+    ta_cbor_writer_init(&w, (ta_buffer){bytes, capacity, 0}, NULL);
+    ta_cbor_write_map(&w, 3);
+    ta_cbor_write_text(&w, ta_string("id"));
+    ta_cbor_write_uint(&w, (uint64_t)id);
+    ta_cbor_write_text(&w, ta_string("method"));
+    ta_cbor_write_text(&w, ta_string("trace.unwatch"));
+    ta_cbor_write_text(&w, ta_string("params"));
+    ta_cbor_write_map(&w, 1);
+    ta_cbor_write_text(&w, ta_string("id"));
+    ta_cbor_write_uint(&w, watch);
+    ta_bytes out;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&w, &out), TA_OK);
+    return out.length;
 }
 
 /* A message's CBOR from diagnostic-free parts: {"id": 1, "method": method}
@@ -412,7 +307,7 @@ static void test_post(void) {
     CHECK(reply_is(wire_text(w.host, 0), RESULT("{\"session\":1,\"segment\":0,\"chart\":\"pinged\","
                                                 "\"parent\":null,\"mailbox\":0,\"invocations\":0}")));
     /* A post during dispatch leaves its reply for the next batch. */
-    length = message(bytes, sizeof bytes, "actor.unsubscribe", 2, w.session);
+    length = unwatch_message(bytes, sizeof bytes, 2, 1);
     CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
     CHECK_EQUAL(ta_host_effect_bytes(w.host, 1, TA_EFFECT_FIELD_WIRE).length, 0);
@@ -421,17 +316,17 @@ static void test_post(void) {
     ta_host_effects_ack(w.host);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
     CHECK(reply_is(wire_text(w.host, 0),
-                   "{\"id\":2," ERROR_BODY("-32001", "stale", "params.session", "the session is not subscribed")));
+                   "{\"id\":2," ERROR_BODY("-32001", "stale", "params.id", "no such watch: it ended or never was")));
     ta_host_effects_ack(w.host);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
     /* without an id: applied, no REPLY */
-    length = message(bytes, sizeof bytes, "actor.subscribe", -1, w.session);
+    length = watch_message(bytes, sizeof bytes, -1);
     CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
-    length = message(bytes, sizeof bytes, "actor.unsubscribe", 3, w.session);
+    length = unwatch_message(bytes, sizeof bytes, 3, 1);
     CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
-    CHECK(reply_is(wire_text(w.host, 0), "{\"id\":3,\"result\":{}}")); /* it was subscribed */
+    CHECK(reply_is(wire_text(w.host, 0), "{\"id\":3,\"result\":{}}")); /* the watch was there */
     ta_host_effects_ack(w.host);
     /* not a request (a batch): answered with a null id */
     static const unsigned char batch[] = {0x81, 0xa0};
@@ -454,17 +349,17 @@ static void test_post(void) {
     world_close(&w);
 
     /* refused room: nothing applied, no REPLY (the pool is not there yet) */
-    world_open(&w, 0, NULL);
-    length = message(bytes, sizeof bytes, "actor.subscribe", 5, w.session);
+    world_open(&w, 1, NULL);
+    length = watch_message(bytes, sizeof bytes, 5);
     refusing = 1;
     CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_ERROR_NO_MEMORY);
     refusing = 0;
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
-    length = message(bytes, sizeof bytes, "actor.unsubscribe", 6, w.session);
+    length = unwatch_message(bytes, sizeof bytes, 6, 1);
     CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
     CHECK(reply_is(wire_text(w.host, 0),
-                   "{\"id\":6," ERROR_BODY("-32001", "stale", "params.session", "the session is not subscribed")));
+                   "{\"id\":6," ERROR_BODY("-32001", "stale", "params.id", "no such watch: it ended or never was")));
     world_close(&w);
 }
 
@@ -494,7 +389,7 @@ static void test_create(void) {
     static unsigned char bytes[1024];
     ta_cbor_writer w;
     ta_cbor_writer_init(&w, (ta_buffer){bytes, sizeof bytes, 0}, NULL);
-    ta_cbor_write_map(&w, 6);
+    ta_cbor_write_map(&w, 5);
     ta_cbor_write_text(&w, ta_string("systemID"));
     ta_cbor_write_text(&w, ta_string("orders"));
     ta_cbor_write_text(&w, ta_string("system"));
@@ -516,8 +411,6 @@ static void test_create(void) {
     ta_cbor_write_simple(&w, TA_CBOR_TRUE);
     ta_cbor_write_text(&w, ta_string("migrateQuantum"));
     ta_cbor_write_uint(&w, 16);
-    ta_cbor_write_text(&w, ta_string("maxSubscriptions"));
-    ta_cbor_write_uint(&w, 4);
     ta_cbor_write_text(&w, ta_string("telemetry"));
     ta_cbor_write_map(&w, 3);
     ta_cbor_write_text(&w, ta_string("stagingBytes"));
@@ -587,8 +480,7 @@ static void test_config_effective(void) {
                                   "\"quantum\":1000,\"instanceBytes\":0,\"stringBytes\":17408,"
                                   "\"ticksPerSecond\":1000000000,\"traceBytes\":131072,"
                                   "\"traceContexts\":256,\"traceRules\":16,\"traceSeed\":0,"
-                                  "\"tracing\":true},\"ioProcessors\":[],\"migrateQuantum\":256,"
-                                  "\"maxSubscriptions\":64}")));
+                                  "\"tracing\":true},\"ioProcessors\":[],\"migrateQuantum\":256}")));
     CHECK_EQUAL(watch_end(host, 2), 2000000000u);
     /* the reply is a config: a host made from it answers the same */
     ta_host *again = NULL;
@@ -627,8 +519,6 @@ int main(void) {
     RUN(test_post);
     RUN(test_spans_and_metrics);
     RUN(test_actor_context);
-    RUN(test_subscribe);
-    RUN(test_subscribe_refused);
     RUN(test_create);
     RUN(test_config_effective);
     TEST_MAIN_END();

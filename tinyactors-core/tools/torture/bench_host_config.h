@@ -34,7 +34,6 @@ typedef struct bench_host_config {
     uint32_t migrate_quantum;
     ta_allocator allocator;
     bench_host_telemetry telemetry;
-    uint32_t max_subscriptions;
 } bench_host_config;
 
 typedef struct bench_host_cbor {
@@ -101,7 +100,6 @@ BENCH_UNUSED static int bench_host_config_cbor(const bench_host_config *c, bench
         }
     }
     bench_host_number(w, "migrateQuantum", c->migrate_quantum);
-    bench_host_number(w, "maxSubscriptions", c->max_subscriptions);
     if (c->telemetry.otlp.size) {
         const ta_otlp_config *o = &c->telemetry.otlp;
         ta_cbor_write_text(w, ta_string("telemetry"));

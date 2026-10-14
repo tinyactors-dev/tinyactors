@@ -99,7 +99,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── host_internal.h    ✅ host state shared by host.c and router.c
 │   │   ├── host.c             ✅ segments + session ranges, image copies, cross-segment routing,
 │   │   │                         versions and retirement, quantum-bounded migration jobs, CLOCK
-│   │   │                         sweep, growth, boot, whole-host snapshot/restore, actor.changed
+│   │   │                         sweep, growth, boot, whole-host snapshot/restore
 │   │   ├── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
 │   │   ├── telemetry.c        ✅ the host's OTLP encoder, or the null one (traces, logs, metrics)
 │   │   └── request.c          ✅ ta_host_post: the control plane, CBOR messages in JSON-RPC's shape answered by REPLY effects (docs/requests.md); the host's CBOR config (docs/host-config.md)

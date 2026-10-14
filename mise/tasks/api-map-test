@@ -14,7 +14,8 @@ check.call('a core function is known', known.include?('ta_host_send'), true)
 check.call('an effect is known', known.include?('TA_EFFECT_LOG'), true)
 check.call('a host effect is known', known.include?('TA_HOST_EFFECT_PEER'), true)
 check.call('a request method is known', known.include?('actor.context'), true)
-check.call('both methods of a heading are known', known.include?('actor.unsubscribe'), true)
+check.call('both methods of a heading are known',
+           APIMap.methods("## Methods\n\n### `a.on`, `a.off`\n\n## Notifications\n"), %w[a.on a.off])
 check.call('a heading outside "Methods" is no method', known.include?('What belongs here'), false)
 
 table = lambda do |*rows|

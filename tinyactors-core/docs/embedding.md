@@ -140,9 +140,7 @@ request by its `id`; it comes with the next take (in the same batch as
 anything the method appended itself, before the reply).
 
 The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects
-(`{"method", "params"}`); none is defined. `actor.subscribe` and
-`actor.changed` are removed (ADR 0012, decision 4; the
-code still answers them until [8.2]); post `actor.state` for a
+(`{"method", "params"}`); none is defined. Post `actor.state` for a
 session's state. Drop a notification whose method you do not know.
 [requests.md](requests.md) lists every method and notification.
 

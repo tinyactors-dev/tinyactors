@@ -33,7 +33,6 @@ typedef struct test_host_config {
     uint32_t migrate_quantum;
     ta_allocator allocator;
     test_host_telemetry telemetry;
-    uint32_t max_subscriptions;
 } test_host_config;
 
 typedef struct test_host_cbor {
@@ -100,7 +99,6 @@ TEST_UNUSED static int test_host_config_cbor(const test_host_config *c, test_hos
         }
     }
     test_host_number(w, "migrateQuantum", c->migrate_quantum);
-    test_host_number(w, "maxSubscriptions", c->max_subscriptions);
     if (c->telemetry.otlp.size) {
         const ta_otlp_config *o = &c->telemetry.otlp;
         ta_cbor_write_text(w, ta_string("telemetry"));

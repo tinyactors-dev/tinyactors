@@ -153,8 +153,8 @@ static void test_roundtrip_and_single_wake(void) {
 }
 
 /* A watch ends when the actor hibernates: waking it does not bring back a
- * watch its host may have dropped meanwhile (docs/requests.md,
- * actor.subscribe); the host watches it again before its next run. */
+ * watch its embedder may have dropped meanwhile; the embedder watches it
+ * again before its next run if it still wants to. */
 static void test_watch_ends_with_hibernation(void) {
     test_system t;
     CHECK(tsys_init(&t,

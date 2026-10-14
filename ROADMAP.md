@@ -428,7 +428,7 @@ Python M1's missing `host.create`; both Python builds pass 20 codec tests.
   section 7). Left: the blob scratch of migration (`blob`, `blob2`) is
   internal and keeps its own lifetime.
 - **`actor.subscribe`, `actor.unsubscribe` and `actor.changed`
-  removed** (ADR 0012, decision 4): the host's
+  removed — done (2026-10-14)** (ADR 0012, decision 4): the host's
   subscription table, the methods, the config key `maxSubscriptions`,
   the subscribe exchange in `requests.txt`, `host.h`'s comment, and the
   self-test that reads their heading (`mise/tasks/api-map-test:17`), in

@@ -114,7 +114,7 @@ marks a behaviour no test checks.
 | `ta_host_restore` (:660) | no host | a new host; images copied as by `add_image` | `TA_ERROR_INVALID`, `NO_MEMORY` | `chart_attach` in G (`host.c:2669`) | `test_host.c` `test_snapshot_restore`, `test_restore_after_images_freed` |
 | `ta_host_snapshot_pack` (:671) | I with nothing pending | into the caller's `ta_buffer` | as `ta_host_snapshot` (it calls it, `host.c:2764`) | none | `test_host.c` `test_snapshot_pack` |
 | `ta_host_snapshot_unpack`, `_image` (:684-686) | no host | views into the pack | `TA_ERROR_INVALID`; empty | none | `test_host.c` `test_snapshot_pack` |
-| `ta_host_post` (:711) | I, D | applies the method; its effects, then its `REPLY` (with an id), pending: in D they come after the ack | R/G `TA_ERROR_STATE` (`request.c:996`); `TA_ERROR_NO_MEMORY`: nothing applied, no `REPLY` | `actor.context`: `variable`, `to_wire`, `release` in G (`request.c:701`, `:738`, `:747`) | `test_host_request.c` `test_post` (`test_subscribe`, `test_subscribe_refused` go with the methods [8.2]); `test_host_guard.c` `test_request`; `requests.txt` |
+| `ta_host_post` (:711) | I, D | applies the method; its effects, then its `REPLY` (with an id), pending: in D they come after the ack | R/G `TA_ERROR_STATE` (`request.c:996`); `TA_ERROR_NO_MEMORY`: nothing applied, no `REPLY` | `actor.context`: `variable`, `to_wire`, `release` in G (`request.c:701`, `:738`, `:747`) | `test_host_request.c` `test_post`; `test_host_guard.c` `test_request`; `requests.txt` |
 | `ta_host_metrics` (:718) | I, D | an OTLP metrics request, a view until the ack; with no batch open it opens one of its own | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:295`); `TA_ERROR_NO_MEMORY` | none | `test_host_request.c` `test_spans_and_metrics`; `test_host_guard.c` `test_outputs_last_until_the_ack` |
 
 ### The vtable, as core calls it
@@ -152,7 +152,7 @@ keeps first (ADR 0010 decision 1).
 | the caller's `ta_buffer` (snapshots, `environment->error`) | callers: the size is known up front, or no host exists | kept |
 | structural borrows (a segment's image, `ta_host_system`, a peer's id, a job's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
 | `REPLY` or `NOTIFICATION` | callers: an answer or news | kept |
-| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed** with `actor.subscribe` (0012, decision 4) [8.2]; notifications stay possible |
+| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed** with `actor.subscribe` (0012, decision 4); notifications stay possible |
 
 ### What no test checks yet
 
@@ -343,15 +343,12 @@ its own edge.
 
 Core's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects (WIRE
 `{"method", "params"}`, EVENT the method, SESSION the session). None is
-defined: `actor.subscribe`, `actor.unsubscribe` and `actor.changed` are
-removed (ADR 0012, decision 4), with the host's
-subscription table and its mark byte per subscription
-(`subscription_mark`, `src/host/host.c:731`; `subscriptions_notify`,
-`host.c:777-797`) and the config key `maxSubscriptions` [8.2]; until
-then the code answers them. `actor.state` is unchanged (its stack room
-for 1024 states and its `limit` refusal, `host.c:806-816`,
-`request.c:657-660`). The system's CHANGED and `ta_actor_watch` stay
-below the host. A binding drops a notification whose method it does not
+defined (ADR 0012, decision 4 removed `actor.subscribe`,
+`actor.unsubscribe` and `actor.changed`, the host's subscription table
+and the config key `maxSubscriptions`). `actor.state` answers a
+session's state, refusing with `limit` past 1024 active states. The
+system's CHANGED and `ta_actor_watch` stay below the host, as
+`ta_system`'s API; the host sets no watch. A binding drops a notification whose method it does not
 know.
 
 **A language API has no synchronous request and no raw post** (ADR 0012,

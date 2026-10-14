@@ -220,7 +220,7 @@ Result: a map, its keys in this order:
   `traceSeed` (unsigned integers), then `tracing` (bool).
   `instanceBytes` 0 means derived from each segment's image;
 - `ioProcessors`: a list of `{"type", "location", "sync"}`, as given;
-- `migrateQuantum`, `maxSubscriptions`;
+- `migrateQuantum`;
 - `telemetry`, only when the host has an encoder: `stagingBytes`,
   `logBytes`, `openSpans`, `chunks`, `scopes`, `valueLimit`, `renderBytes`,
   `resourceBytes`, `metricBytes`, `spanMetricCharts`, `flushInterval`
@@ -239,7 +239,7 @@ that grew since has more.
    "instanceBytes": 0, "stringBytes": 17408, "ticksPerSecond": 1000000000,
    "traceBytes": 131072, "traceContexts": 256, "traceRules": 16, "traceSeed": 0,
    "tracing": true},
-   "ioProcessors": [], "migrateQuantum": 256, "maxSubscriptions": 64}}
+   "ioProcessors": [], "migrateQuantum": 256}}
 ```
 
 ### `actor.list`
@@ -294,17 +294,6 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 {"id": 1, "method": "actor.context", "params": {"session": 1}}
 → {"id": 1, "result": {"variables": {"n": 2, "who": "bob", "nothing": null}}}
 ```
-
-### `actor.subscribe`, `actor.unsubscribe`
-
-**Removed** ([ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md),
-decision 4). They were a stress test of the
-protocol; a binding offers no item for them. The code still answers them
-until step 8.2 deletes them with their vectors, the config key
-`maxSubscriptions` and this heading [8.2] (the heading stays until then
-because `mise/tasks/api-map-test:17` reads it as the one heading with two
-methods). An application reads a session's state with `actor.state`, and
-an actor's output reaches it through an I/O processor.
 
 ### `actor.state`
 
@@ -364,10 +353,9 @@ They live until the ack, like every effect, and come with the next take after th
 for an effect a binding must act on (`WAKE`, `PEER`, `TRACES`, ... stay
 effects of their own).
 
-No notification is defined. `actor.changed` was removed with
-`actor.subscribe` (ADR 0012, decision 4; the
-code still appends it for a subscribed session until step 8.2 [8.2]).
-The kind stays: a notification added later is a method name in this
+No notification is defined. An application reads a session's state with
+`actor.state`, and an actor's output reaches it through an I/O
+processor. The kind stays: a notification added later is a method name in this
 section, appended as an effect where the host learns of it, and a binding
 that reads a method it does not know drops the effect.
 

@@ -399,8 +399,7 @@ class Runner
 
   def config(system)
     CBOR.encode({ 'systemID' => system,
-                  'system' => { 'maxActors' => 8, 'ticksPerSecond' => 1000, 'traceSeed' => 1 },
-                  'maxSubscriptions' => 1 })
+                  'system' => { 'maxActors' => 8, 'ticksPerSecond' => 1000, 'traceSeed' => 1 } })
   end
 
   def create(config, datamodel)
