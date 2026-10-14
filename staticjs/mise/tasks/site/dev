@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+#MISE description="Run the documentation site's dev server (VitePress), markdown routes and llms.txt included"
+#MISE depends=["site:wasm"]
+# vim:ft=ruby
+
+require_relative '../../staticjs'
+
+site = StaticJS::ROOT.join('site')
+StaticJS.run('npm', 'ci', '--no-audit', '--no-fund', chdir: site) unless site.join('node_modules/.package-lock.json').file?
+exec('npx', 'vitepress', 'dev', '--host', chdir: site.to_s)

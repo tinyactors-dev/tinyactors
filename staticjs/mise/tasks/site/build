@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+#MISE description="Build the documentation site (site/): its wasm module, then VitePress, into site/.vitepress/dist with every page also as markdown and llms.txt"
+#MISE depends=["site:wasm"]
+# vim:ft=ruby
+
+# The site's dependencies are installed from site/package-lock.json the
+# first time (npm ci, which needs the network once). VitePress computes every
+# live sample's result while it builds, through the module site:wasm made,
+# and fails if a sample's outcome is not the one its fence states.
+
+require_relative '../../staticjs'
+
+site = StaticJS::ROOT.join('site')
+StaticJS.run('npm', 'ci', '--no-audit', '--no-fund', chdir: site) unless site.join('node_modules/.package-lock.json').file?
+StaticJS.run('npx', 'vitepress', 'build', chdir: site)

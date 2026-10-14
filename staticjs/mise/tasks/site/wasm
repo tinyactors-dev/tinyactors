@@ -1,0 +1,41 @@
+#!/usr/bin/env ruby
+#MISE description="Build the documentation site's wasm module: the amalgamation and site/wasm/site.c, into site/public/staticjs-site.wasm"
+#MISE sources=["include/staticjs.c", "include/staticjs_wasm.c", "include/staticjs.h", "include/staticjs.api.json", "site/wasm/site.c"]
+#MISE outputs=["site/public/staticjs-site.wasm", "site/.vitepress/theme/staticjs/constants.json"]
+# vim:ft=ruby
+
+# The site's live samples and pipeline explorer run staticjs in the browser
+# through this module. It is built as the release builds staticjs.wasm
+# (Toolchain::Target.release, the amalgamation, -g0), with the site's own C
+# layer (site/wasm/site.c), whose sjs_site_* functions it exports beside
+# the library's API. It imports nothing.
+
+require_relative '../../staticjs'
+require 'fileutils'
+require 'json'
+
+target = Toolchain::Target.release('wasm32-freestanding')
+work = StaticJS::BUILD.join('site-wasm')
+include_dir = StaticJS::ROOT.join('include')
+sources = [include_dir.join('staticjs.c'), include_dir.join('staticjs_wasm.c'), StaticJS::ROOT.join('site/wasm/site.c')]
+objects = sources.map do |source|
+  target.compile(source.to_s, into: work.join("#{source.basename('.c')}.o").to_s, includes: [include_dir.to_s],
+                              defines: ['SJS_API=__attribute__((visibility("default")))'], flags: ['-g0']).path
+end
+header = include_dir.join('staticjs.h').read
+site = StaticJS::ROOT.join('site/wasm/site.c').read
+exports = (header.scan(/SJS_API\s[^;{]*?\b(sjs_\w+)\s*\(/).flatten + site.scan(/^SJS_SITE\s[^{]*?\b(sjs_site_\w+)\s*\(/).flatten).uniq.sort
+out = StaticJS::ROOT.join('site/public/staticjs-site.wasm')
+FileUtils.mkdir_p(out.dirname)
+target.wasm_module(objects, into: out.to_s, exports: exports)
+puts "site:wasm: #{out.relative_path_from(StaticJS::ROOT)} (#{out.size} bytes, #{exports.size} exports)"
+
+# The constants the page's JavaScript reads, by name, from the API
+# description: event kinds, error codes, run statuses, value kinds, results.
+api = JSON.parse(StaticJS::ROOT.join('include/staticjs.api.json').read)
+wanted = /\ASJS_(EV_|OP_|ERROR_|RUN_|ERR_|OK\z|NEED_SPACE\z|UNDEFINED\z|NULL\z|BOOLEAN\z|NUMBER\z|STRING\z|BIGINT\z|ARRAY\z|OBJECT\z|SET\z|MAP\z|ITERATOR\z|FUNCTION\z|REGEXP\z|TEMPORAL\z|FRAME_)/
+constants = api.fetch('constants').select { |c| c['name'].match?(wanted) }.to_h { |c| [c['name'], c['value']] }
+file = StaticJS::ROOT.join('site/.vitepress/theme/staticjs/constants.json')
+FileUtils.mkdir_p(file.dirname)
+file.write("#{JSON.pretty_generate(constants)}\n")
+puts "site:wasm: #{file.relative_path_from(StaticJS::ROOT)} (#{constants.size} constants)"

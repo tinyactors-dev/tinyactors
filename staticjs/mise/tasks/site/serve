@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+#MISE description="Serve the built documentation site as production would: HTML, markdown by .md or Accept, llms.txt"
+#MISE depends=["site:build"]
+#USAGE flag "--port <port>" default="4173" help="The port to listen on"
+# vim:ft=ruby
+
+require_relative '../../staticjs'
+
+port = ENV['usage_port'] || '4173'
+exec('node', 'server.mjs', '--port', port, chdir: StaticJS::ROOT.join('site').to_s)

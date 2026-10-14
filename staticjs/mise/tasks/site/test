@@ -1,0 +1,11 @@
+#!/usr/bin/env ruby
+#MISE description="Build the documentation site and test its routes: HTML, markdown by .md and by Accept, llms.txt"
+#MISE depends=["site:build"]
+# vim:ft=ruby
+
+# The build itself checks every live sample against staticjs; this checks
+# what the server answers (site/test/routes.test.mjs).
+
+require_relative '../../staticjs'
+
+StaticJS.run('node', '--test', 'test/routes.test.mjs', chdir: StaticJS::ROOT.join('site'))
