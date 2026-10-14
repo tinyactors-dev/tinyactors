@@ -104,6 +104,10 @@ struct sjs_vm {
     sjs_program *program;
     const sjs_value *globals;
     uint32_t global_count;
+    /* The globals as an array the closures this evaluation makes hold,
+     * filled by the first of them (empty until then); undefined until an
+     * evaluation first needs one, or after a closure kept the last. */
+    sjs_value held_globals;
     uint64_t fuel_used;
     uint8_t status;
     uint32_t op_pc;       /* where the instruction running started */

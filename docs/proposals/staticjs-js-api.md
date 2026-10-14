@@ -58,9 +58,9 @@ number of items the caller sets, because neither fuel nor staticjs's
 limits bound it.
 
 The package needs seven small additions to staticjs's C API. Each one also
-serves C embedders. Calling a function value (R1) also needs a staticjs
-bug fixed first: a closure reads the globals of whatever run calls it, not
-of the run that made it (F19).
+serves C embedders. Calling a function value (R1) needed a staticjs bug
+fixed first, and now is: a closure read the globals of whatever run called
+it, not of the run that made it (F19).
 
 ## Whom it serves, and who pays
 
@@ -135,7 +135,7 @@ The facts the design rests on, each checked:
 | F16 | staticjs's library can be changed: the maintainer invited debugging and observability additions to it, and every caller of it is in this repository | the maintainer, 2026-10-14; root `AGENTS.md`, "The libraries are private" |
 | F17 | A `FinalizationRegistry` callback may never run, and when it runs, it runs as a job between synchronous calls: never inside a call (a native included), but possibly between two steps of a paused run | ECMA-262, `HostEnqueueFinalizationRegistryCleanupJob`; MDN, [FinalizationRegistry](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry), "Avoid where possible" (a conforming implementation is not required to call cleanup callbacks) |
 | F18 | A wasm module's C cannot make JavaScript objects; something in JavaScript, or an emulated Node-API, must | `ROADMAP.md:840-845` |
-| F19 | A closure reads a global through `SJS_OP_GLOBAL`, which indexes the globals of the run executing now, unchecked. A closure made in one run and called in another reads the other run's globals, or past their end. This is a staticjs bug, being fixed separately: a closure will read the globals of the run that made it | `src/compiler.c:1321-1323`; `src/vm.c:1180-1185`; spike `p.mjs`: `(x) => x + limit` made with `limit` 100 and called in a later run with `limit` 5 gives 6, where JavaScript gives 101; spike `g.mjs`: called from a program with one global, it reads index 1 past the array and faults by chance ("staticjs adds two numbers, or a string and a primitive") |
+| F19 | A closure reads a global through `SJS_OP_GLOBAL`, which indexes the globals of the run executing now, unchecked. A closure made in one run and called in another reads the other run's globals, or past their end. This was a staticjs bug, now fixed: a closure holds the globals of the run that made it (as an array, made by the run's first closure) and reads those; `tests/api_test.c` `test_closure_globals` covers both spikes | `src/compiler.c:1321-1323`; `src/vm.c:1180-1185`; spike `p.mjs`: `(x) => x + limit` made with `limit` 100 and called in a later run with `limit` 5 gives 6, where JavaScript gives 101; spike `g.mjs`: called from a program with one global, it reads index 1 past the array and faults by chance ("staticjs adds two numbers, or a string and a primitive") |
 | F20 | Fuel bounds the instructions of a run, not the size of its result. Values share parts by reference, so a run can return a DAG whose tree is exponentially larger, or a value nested to any depth | spike `s.mjs`: `Array.from({ length: 16 }).reduce((a) => [a, a], 0)` uses 140 fuel, and the writer turns it into 262,141 bytes; spike `d.mjs`: a run returns an array nested 200,000 deep, and a recursive conversion of that depth throws "RangeError: Maximum call stack size exceeded" |
 
 ## What exists, and why it is not enough
@@ -336,9 +336,8 @@ Refused with a `TypeError`, never turned into something else:
 - an object of another class, a symbol key, an own `__proto__` key;
 - a `Set` member or `Map` key that is not a primitive;
 - a `Value` of another context, or one already disposed;
-- while R1 waits on F19's fix: a function out. Its `Value` can be kept and
-  passed back in, but `start` throws, because a call could read another
-  run's globals or read past them (F19).
+- while R1 is not in staticjs: a function out. Its `Value` can be kept and
+  passed back in, but `start` throws, as there is no call to make it with.
 
 **Every conversion is bounded and iterative.** Both directions walk the
 value with an explicit stack in JavaScript, not by recursion, so depth
@@ -387,8 +386,7 @@ call the fuel of the run that returned the function, which was a default
 of the package's own. A function out keeps its program alive after
 `Program.dispose` (spike `callf.mjs`: a closure called after its defining
 program was released gives 43; it reads a captured variable, no global).
-Until F19 is fixed, `start` on a function throws a `TypeError`, since the
-package cannot tell whether a function reads a global.
+Until R1 lands, `start` on a function throws a `TypeError`.
 
 **Native functions.** For each JavaScript function in the globals of
 `start`, or in `context.value({ f })`, the C layer makes one `sjs_native`
@@ -537,7 +535,7 @@ Sketch:
 | `sjs_context`, its `sjs_vm`, the context's tables (Values, Programs, Runs) | `Context` | `createContext` | its calls | `dispose`: it resets a paused run, releases every row of every table, clears its natives' slots, then calls `sjs_vm_destroy` and `sjs_context_destroy`, which needs everything gone first (`staticjs.h:198`). The context's row gets a new generation, so each wrapper's next call throws a `TypeError`. Refused while the context is running |
 | `sjs_program` | `Program`, a row of its context | `compile` | `start`; retained by a run (`src/vm.c:1628`) and by functions it made (`callf.mjs`) | `dispose`, or its context's `dispose` |
 | a `Run` and its hold on the evaluator | the `Run`, a row of its context | `Program.start`, `Value.start` | each `step`, `frames`, `result` | done (after `result` or `resultValue`), a fault, `cancel`, a later `start` on the context (decision 3), its finalizer after a generation check, or the context's `dispose` |
-| globals or arguments converted for `start` | the `Run`: an array it owns, allocated from the context's allocator | `start` | each `step` (borrowed, `staticjs.h:672-678`) | when the `Run` ends. After F19's fix a closure reads the globals of the run that made it; whether that fix retains them past the run, and so whether this row changes, is untraced until the fix lands |
+| globals or arguments converted for `start` | the `Run`: an array it owns, allocated from the context's allocator | `start` | each `step` (borrowed, `staticjs.h:672-678`) | when the `Run` ends. A closure the run makes holds what it needs of these past the run: they are retained in an array the closure holds, so the `Run` may free its own array when it ends |
 | a `Value` given as a global | its `Value`; the run also retains it in C and references it in JavaScript | `value()`, `resultValue()`, a function out | during the run | `Value.dispose` drops the `Value`'s reference; the run's lasts until the run ends |
 | a native, for a function in the globals or in `value()` | staticjs (the function value); the function in the package's slot array; nothing in C beyond the value | the conversion in | by the program, inside `sjs_vm_run` (`src/vm.c:847-863`) | its slot: when staticjs frees the value (R5); without R5, when its `Run` ends or its `Value` is disposed. The function value itself: when staticjs frees it |
 | slots of a conversion out, and of a native's arguments | the C layer's stack | `_at`, `_entry`, `_iterator_at`; the native's call | during that conversion or call | `_release_to(mark)` at its end |

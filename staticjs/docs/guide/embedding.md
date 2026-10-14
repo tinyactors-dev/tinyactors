@@ -281,7 +281,12 @@ sjs_vm_start(vm, &(sjs_run_params){ program, values, 2 });
 ```
 
 A global is a value like any other. A program cannot change it: a method
-that would change it faults, as the host holds it too. A name the program
+that would change it faults, as the host holds it too. A function a
+program makes keeps the globals of the evaluation that made it, as a
+JavaScript closure keeps its bindings: a function returned as the result
+and passed to a later evaluation, with other values for those names or
+none, still reads the values it was made with. Such a function holds those
+globals, and their values stay alive while it does. A name the program
 reads that is neither a global, nor declared, nor a built-in is refused
 when compiled, never at run time.
 

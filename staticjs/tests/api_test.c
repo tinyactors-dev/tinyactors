@@ -288,6 +288,135 @@ static void test_natives_and_globals(void) {
     sjs_context_destroy(context);
 }
 
+/* Compile and run with globals; the result, which the caller owns. */
+static sjs_value run_value(const env *e, const char *source) {
+    sjs_program *program;
+    sjs_compile_params params = { { e->context, e->goal, e->globals, e->count, e->modules, false },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { e->context, false, false };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params run = { program, e->values, e->count };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+    sjs_value v = sjs_undefined();
+    CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
+    sjs_vm_destroy(vm);
+    sjs_program_release(program);
+    return v;
+}
+
+/* A function reads the globals of the evaluation that made it, as a
+ * JavaScript closure reads the bindings of its realm, wherever it is called
+ * later: from a program with other values for the same names, with fewer
+ * globals, or none, and from a loop. It keeps them after the evaluation
+ * that made it ends. */
+static void test_closure_globals(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    sjs_value prefix;
+    CHECK(sjs_string_new(context, SJS_STR("n="), &prefix) == SJS_OK);
+    sjs_str made_names[2] = { SJS_STR("limit"), SJS_STR("prefix") };
+    sjs_value made_values[2] = { sjs_number(100), prefix };
+    env made = { context, made_names, made_values, 2, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    sjs_value add = run_value(&made, "(x) => x + limit");
+    sjs_value curry = run_value(&made, "(x) => (y) => prefix + (x + y + limit)");
+    sjs_release(context, prefix);
+
+    char out[4096];
+    sjs_str names[3] = { SJS_STR("f"), SJS_STR("g"), SJS_STR("limit") };
+    sjs_value values[3] = { add, curry, sjs_number(5) };
+    env other = { context, names, values, 3, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&other, "[f(1), g(1)(2), [1, 2].map(f), [3].map(g(0))]", out) == SJS_OK);
+    CHECK(strcmp(out, "[101,\"n=103\",[101,102],[\"n=103\"]]") == 0);
+    /* With fewer globals than the program that made it: one, then none
+     * beyond the function itself. */
+    env fewer = { context, names, values, 1, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&fewer, "f(1) + f(2)", out) == SJS_OK);
+    CHECK(strcmp(out, "203") == 0);
+    sjs_str g_name[1] = { SJS_STR("g") };
+    env only_g = { context, g_name, &values[1], 1, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&only_g, "g(1)(1)", out) == SJS_OK);
+    CHECK(strcmp(out, "\"n=102\"") == 0);
+    /* A function made by a function made in another evaluation reads the
+     * first evaluation's globals too. */
+    sjs_value inner = run_value(&only_g, "g(10)");
+    sjs_value inner_values[1] = { inner };
+    sjs_str h_name[1] = { SJS_STR("h") };
+    env later = { context, h_name, inner_values, 1, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    CHECK(evaluate(&later, "h(0)", out) == SJS_OK);
+    CHECK(strcmp(out, "\"n=110\"") == 0);
+    sjs_release(context, inner);
+    sjs_release(context, add);
+    sjs_release(context, curry);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    /* One evaluator, run again and again: the array of globals it holds is
+     * filled again only when no closure kept it. */
+    context = new_context(&c, SJS_LIMITS_DEFAULT);
+    {
+        sjs_program *program;
+        sjs_str limit_name[1] = { SJS_STR("limit") };
+        sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, limit_name, 1, { NULL, NULL }, false },
+                                      SJS_STR("[[1].map((x) => x + limit), (x) => x + limit]"), NULL };
+        CHECK(sjs_compile(&params, &program) == SJS_OK);
+        sjs_vm *vm;
+        sjs_vm_config config = { context, false, false };
+        CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+        sjs_value kept[3];
+        for (uint32_t i = 0; i < 3; i++) {
+            sjs_value limit[1] = { sjs_number(100 * (i + 1)) };
+            sjs_run_params run = { program, limit, 1 };
+            CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+            CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
+            CHECK(sjs_vm_take_result(vm, &kept[i]) == SJS_OK);
+            /* The second result is dropped: no closure keeps its globals. */
+            if (i == 1) sjs_release(context, kept[i]);
+        }
+        sjs_vm_destroy(vm);
+        sjs_program_release(program);
+        sjs_str fs[2] = { SJS_STR("first"), SJS_STR("third") };
+        sjs_value both[2] = { kept[0], kept[2] };
+        env e = { context, fs, both, 2, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+        CHECK(evaluate(&e, "((f, g) => [first[0][0], f(1), third[0][0], g(1)])(first[1], third[1])", out) == SJS_OK);
+        CHECK(strcmp(out, "[101,101,301,301]") == 0);
+        sjs_release(context, kept[0]);
+        sjs_release(context, kept[2]);
+    }
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+
+    /* Every allocation fails in turn, the globals the closures hold among
+     * them: each run frees what it made. */
+    for (long fail_at = 1;; fail_at++) {
+        counting failing = { 0 };
+        context = new_context(&failing, SJS_LIMITS_DEFAULT);
+        if (context == NULL) continue;
+        sjs_value text;
+        if (sjs_string_new(context, SJS_STR("n="), &text) != SJS_OK) {
+            sjs_context_destroy(context);
+            continue;
+        }
+        sjs_value held[1] = { text };
+        env e = { context, made_names + 1, held, 1, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+        failing.fail_at = fail_at;
+        sjs_result r = evaluate(&e, "[1, 2].map((x) => prefix + x).map((s) => s + prefix)", out);
+        failing.fail_at = 0;
+        CHECK(r == SJS_OK || strncmp(out, "error 5", 7) == 0 || strncmp(out, "fault 5", 7) == 0 || strcmp(out, "nomem") == 0 ||
+              strncmp(out, "vm -2", 5) == 0);
+        /* The helper writes nothing when the writer runs out of memory. */
+        bool whole = r == SJS_OK && strcmp(out, "[\"n=1n=\",\"n=2n=\"]") == 0;
+        CHECK(whole || r != SJS_OK || out[0] == '\0');
+        sjs_release(context, text);
+        CHECK(sjs_context_live_bytes(context) == 0);
+        sjs_context_destroy(context);
+        CHECK(failing.live == 0);
+        if (whole) break;
+    }
+}
+
 /* A name bound nowhere is refused even where it never runs: in a branch not
  * taken, or after a return. JavaScript throws only if it runs, so the spec,
  * which Node checks, cannot hold these. */
@@ -3409,6 +3538,7 @@ int main(int argc, char **argv) {
     test_values();
     test_interned_keys();
     test_natives_and_globals();
+    test_closure_globals();
     test_unbound_where_it_never_runs();
     test_modules();
     test_frozen_values();

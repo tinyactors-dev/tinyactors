@@ -105,6 +105,7 @@ static void drain(sjs_context *context, sjs_heap *work) {
         case SJS_HEAP_CLOSURE: {
             sjs_closure *c = (sjs_closure *)(void *)h;
             for (uint32_t i = 0; i < c->count; i++) drop(context, &work, c->captures[i]);
+            drop(context, &work, c->globals);
             drop_program(context, &work, c->program);
             break;
         }
@@ -678,6 +679,7 @@ sjs_result sjs_closure_make(sjs_context *context, uint32_t count, sjs_closure **
     sjs_closure *c = heap_alloc(context, sizeof(sjs_closure) + (size_t)count * sizeof(sjs_value), SJS_HEAP_CLOSURE);
     if (c == NULL) return SJS_ERR_NOMEM;
     c->program = NULL;
+    c->globals = sjs_undefined();
     c->function = 0;
     c->count = 0;
     *out = c;

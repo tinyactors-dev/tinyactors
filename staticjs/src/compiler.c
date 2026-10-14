@@ -1320,7 +1320,10 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
     }
     uint32_t global;
     if (index_find(&c->global_index, e->text, &global)) {
-        if (op16(c, ins(SJS_OP_GLOBAL, global, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
+        /* Inside a function, a global is read from the globals its closure
+         * holds: those of the evaluation that made it. */
+        sjs_opcode reads = function_scope(c)->function == 0 ? SJS_OP_GLOBAL : SJS_OP_CLOSURE_GLOBAL;
+        if (op16(c, ins(reads, global, e->at)) != SJS_OK) return SJS_ERR_PROGRAM;
         /* MUTATION */
         read.kind = NR_GLOBAL;
         read.which = global;
@@ -1523,7 +1526,7 @@ static sjs_result end_function(sjs_compiler *c, sjs_position at) {
     if (close_function_scope(c, at) != SJS_OK) return SJS_ERR_PROGRAM;
     construct k = pop_construct(c);
     land(c, k.jump);
-    return op32(c, ins(SJS_OP_CLOSURE, function, at));
+    return op32(c, ins(c->global_count != 0 ? SJS_OP_CLOSURE_HOLDING : SJS_OP_CLOSURE, function, at));
 }
 
 /* ------------------------------------------------------------------------

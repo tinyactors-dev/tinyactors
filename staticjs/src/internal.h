@@ -331,6 +331,10 @@ typedef struct {
 typedef struct {
     sjs_heap h;
     sjs_program *program;
+    /* The globals of the evaluation that made it, as an array it holds, or
+     * undefined when its program has none: a closure called in a later
+     * evaluation reads these, as a JavaScript closure reads its realm's. */
+    sjs_value globals;
     uint32_t function;
     uint32_t count;
     sjs_value captures[];
@@ -1213,6 +1217,11 @@ typedef enum {
      * mutation's instructions, so that the evaluator's loop compiles as it
      * did. */
     SJS_OP_NEW_MAP,        /* u16 argc, u8 flags (SPREAD), as NEW_SET */
+    /* In a program with globals, which a closure holds and reads, as
+     * execute()'s default case reaches them: CLOSURE, holding the globals
+     * of the evaluation that makes it, and GLOBAL, inside a function. */
+    SJS_OP_CLOSURE_HOLDING, /* u32 function */
+    SJS_OP_CLOSURE_GLOBAL,  /* u16 global */
 } sjs_opcode;
 
 /* SJS_OP_CALL flags. */

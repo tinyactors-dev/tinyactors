@@ -1115,6 +1115,32 @@ static void jump_to(vm_frame *f, const uint8_t *code, uint32_t pc) {
  * that by itself only while the function stays under its size threshold,
  * and a call per instruction costs 5 to 10% of every evaluation
  * (eval.array.*, vm.fuel.*) when one more case tips it over. */
+/* The evaluation's globals, held as an array for the closures it makes,
+ * from its first closure on: a closure may outlive the evaluation, and the
+ * host lends its globals only until the evaluation ends. The array of an
+ * earlier evaluation that no closure kept is filled again, so an evaluation
+ * allocates for it only when one did. */
+static sjs_result hold_globals(sjs_vm *vm) {
+    sjs_array *a = vm->held_globals.kind == SJS_ARRAY ? SJS_AS_ARRAY(vm->held_globals) : NULL;
+    if (a != NULL && a->length != 0) return SJS_OK;
+    if (a != NULL && a->capacity < vm->global_count) {
+        sjs_vm_release(vm, vm->held_globals);
+        vm->held_globals = sjs_undefined();
+        a = NULL;
+    }
+    if (a == NULL) {
+        sjs_result r = sjs_array_make(vm->context, vm->global_count, &a);
+        if (r != SJS_OK) return r;
+    }
+    for (uint32_t i = 0; i < vm->global_count; i++) {
+        sjs_ref(vm->globals[i]);
+        a->items[i] = vm->globals[i];
+    }
+    a->length = vm->global_count;
+    vm->held_globals = sjs_heap_value(SJS_ARRAY, &a->h);
+    return SJS_OK;
+}
+
 __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *f) {
     const uint8_t *code = f->program->code;
     uint32_t pc = f->pc;
@@ -1597,6 +1623,20 @@ sjs_result sjs_vm_init(sjs_vm **out, const sjs_vm_config *config) {
     return SJS_OK;
 }
 
+/* At the end of an evaluation: the held globals go back to the host, and
+ * the array stays for the next evaluation unless a closure keeps it. */
+static void release_held_globals(sjs_vm *vm) {
+    if (vm->held_globals.kind != SJS_ARRAY) return;
+    sjs_array *a = SJS_AS_ARRAY(vm->held_globals);
+    if (a->h.refs != 1) {
+        sjs_vm_release(vm, vm->held_globals);
+        vm->held_globals = sjs_undefined();
+        return;
+    }
+    for (uint32_t i = 0; i < a->length; i++) sjs_vm_release(vm, a->items[i]);
+    a->length = 0;
+}
+
 void sjs_vm_reset(sjs_vm *vm) {
     if (vm == NULL) return;
     for (uint32_t i = 0; i < vm->frame_count; i++) {
@@ -1610,6 +1650,7 @@ void sjs_vm_reset(sjs_vm *vm) {
     vm->program = NULL;
     vm->globals = NULL;
     vm->global_count = 0;
+    release_held_globals(vm);
     vm->status = VM_IDLE;
     vm->error.error.code = SJS_ERROR_NONE;
 }
@@ -1742,6 +1783,7 @@ void sjs_vm_destroy(sjs_vm *vm) {
     if (vm == NULL) return;
     const sjs_allocator *a = &vm->context->counting;
     if (vm->stack != NULL && vm->frames != NULL) sjs_vm_reset(vm);
+    sjs_vm_release(vm, vm->held_globals);
     sjs_mem_free(a, vm->stack, (size_t)vm->stack_capacity * sizeof(sjs_value));
     sjs_mem_free(a, vm->frames, (size_t)vm->frame_capacity * sizeof(vm_frame));
     sjs_mem_free(a, vm, sizeof *vm);
@@ -1922,6 +1964,43 @@ static sjs_result new_map(sjs_vm *vm, sjs_values args, sjs_value *out);
 /* The instructions of mutation, reached from the default case of
  * execute()'s switch, which they share with the fault for an opcode there
  * is none of, so that the evaluator's loop compiles as it did. */
+/* CLOSURE_HOLDING: CLOSURE in a program with globals. The closure holds
+ * the globals of the evaluation that made it, as a JavaScript closure holds
+ * its realm's: those of the closure running in `f`, or the evaluation's own,
+ * held as an array from its first closure on. */
+__attribute__((noinline)) static void make_closure_holding(sjs_vm *vm, const vm_frame *f, uint32_t index) {
+    sjs_value globals;
+    if (f->closure != NULL) {
+        globals = f->closure->globals;
+    } else {
+        sjs_result held = hold_globals(vm);
+        if (held != SJS_OK) {
+            sjs_vm_fail(vm, held);
+            return;
+        }
+        globals = vm->held_globals;
+    }
+    const sjs_function_info *fn = &f->program->functions[index];
+    sjs_closure *c;
+    sjs_result r = sjs_closure_make(vm->context, fn->capture_count, &c);
+    if (r != SJS_OK) {
+        sjs_vm_fail(vm, r);
+        return;
+    }
+    sjs_ref(globals);
+    c->globals = globals;
+    c->program = f->program;
+    sjs_program_retain(f->program);
+    c->function = index;
+    for (uint32_t i = 0; i < fn->capture_count; i++) {
+        const sjs_capture_info *ci = &f->program->captures[fn->captures + i];
+        sjs_value v = ci->from_capture ? f->closure->captures[ci->index] : vm->stack[f->base + ci->index];
+        sjs_ref(v);
+        c->captures[c->count++] = v;
+    }
+    sjs_vm_push(vm, sjs_heap_value(SJS_FUNCTION, &c->h));
+}
+
 __attribute__((noinline)) static void execute_other(sjs_vm *vm, vm_frame *f) {
     const uint8_t *code = f->program->code;
     uint32_t pc = f->pc;
@@ -1981,6 +2060,18 @@ __attribute__((noinline)) static void execute_other(sjs_vm *vm, vm_frame *f) {
         f->pc = pc + 3;
         path_sorted(vm, sjs_read16(code + pc), code[pc + 2]);
         return;
+    case SJS_OP_CLOSURE_HOLDING:
+        f->pc = pc + 4;
+        make_closure_holding(vm, f, sjs_read32(code + pc));
+        return;
+    case SJS_OP_CLOSURE_GLOBAL: {
+        /* A closure reads the globals of the evaluation that made it. */
+        f->pc = pc + 2;
+        sjs_value v = SJS_AS_ARRAY(f->closure->globals)->items[sjs_read16(code + pc)];
+        sjs_ref(v);
+        sjs_vm_push(vm, v);
+        return;
+    }
     case SJS_OP_NEW_MAP: {
         /* Not mutation: maps are values, as sets are. Rolling mutation
          * back keeps this case, and this function for it. */
