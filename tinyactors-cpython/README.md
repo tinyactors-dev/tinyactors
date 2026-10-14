@@ -48,14 +48,16 @@ with tinyactors.Host(config, {"urn:example:app": app},
   an error raises `CompileError` with every diagnostic. `Compiled.image`
   is a read-only buffer, valid until `close()` (a context manager).
 - `Host(config, io_processors=None, *, log=None, clock=None, peer=None,
-  telemetry=None)`:
+  telemetry=None, wake=None)`:
   `config` is the host's config as a dict
   ([host-config.md](../tinyactors-core/docs/host-config.md));
   `io_processors` maps an I/O processor's type to `handler(host, send)`;
   `log` gets each `<log>` line as `handler(host, entry)`; `clock` is a
   `SimulatedClock` or `None` for the real clocks; `peer` gets each
   envelope for another system as `handler(host, envelope)`; `telemetry`
-  gets each OTLP request as `handler(host, signal, data)` (below).
+  gets each OTLP request as `handler(host, signal, data)`, and `wake`
+  each hibernated actor an event came for as `handler(host, session)`
+  (both below).
 - Inputs, applied at the call: `add_image(image) -> segment`,
   `chart(name) -> ChartRef`, `spawn(ref, name=None, params=None,
   traceparent=None) -> session`, `send(session, event, data=None, *,
@@ -164,6 +166,70 @@ host.trace_watch(lambda host, result: print("watch", result["id"]),
                  seconds=60)                             # every checkout, for a minute
 ```
 
+## Hibernation
+
+A host keeps millions of actors when only some are in memory: the rest
+are blobs in the application's store. The host does no I/O; the binding
+hands each blob over as `bytes`, and asks for it back.
+
+- `host.sweep(max_scan, limit) -> [session, ...]`: the CLOCK sweep, at
+  most `limit` actors that did not run since the previous sweep and can
+  be hibernated now.
+- `host.hibernate(session) -> bytes`: the actor leaves memory, and its
+  blob is yours to store. An actor that is not at rest (events waiting,
+  in a macrostep, an invoked child) raises `TinyactorsError`, and so does
+  a `"python"` actor holding a value outside the value table (a `set`, a
+  `tuple`, an object): it stays resident. A pending delayed send goes
+  into the blob.
+- `wake=handler(host, session)`: an event (or a due delayed send) came
+  for a hibernated actor; it waits in the mailbox while your handler
+  loads the blob and calls `host.wake(session, blob)`, now or later (an
+  `async def` handler runs as a task, under `async with`). One call per
+  hibernation, however many events come.
+
+```python
+import sqlite3
+
+db = sqlite3.connect("actors.db", isolation_level=None)
+db.execute("CREATE TABLE IF NOT EXISTS blobs (session INTEGER PRIMARY KEY, blob BLOB)")
+
+def wake(host, session):
+    (blob,) = db.execute("SELECT blob FROM blobs WHERE session = ?", (session,)).fetchone()
+    host.wake(session, blob)
+
+def evict(host):                          # after a turn: the cold actors leave
+    for session in host.sweep(1 << 20, 1024):
+        db.execute("INSERT OR REPLACE INTO blobs VALUES (?, ?)", (session, host.hibernate(session)))
+```
+
+**Plan the capacity up front.** A hibernated actor keeps its slot and its
+session's record in the host (about 60 B), so `system.maxActors` counts
+every actor; instance and string memory are needed for the resident ones
+only. Left to grow, a segment doubles all its pools together and sizes
+instance memory from `maxActors`, about 31 KB per actor at two million.
+For `R` actors resident out of `N`:
+
+```python
+config = {"systemID": "big", "system": {
+    "maxActors": N + room, "maxEvents": 4096,
+    "instanceBytes": 2048 * (R + room), "stringBytes": 16384 + 64 * (R + room)}}
+```
+
+`mise run stress` is the pattern at scale (`tools/stress.py`): two
+million actors of a counter chart, at most 1000 resident, the rest in
+SQLite; 200,000 events to actors drawn at random, so nearly every event
+wakes one from the store and the sweep sends another back. Measured on
+x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, one run:
+
+| datamodel | populate (spawn and hibernate 2,000,000) | 200,000 events (woken, swept back) | peak resident | core's region | SQLite file |
+|---|---|---|---|---|---|
+| `"python"` | 10.0 s (200,000 a second) | 10.9 s (18,300 a second; 199,869 wakes) | 170 MB (85 B per actor) | 121 MB (60 B per actor) | 355 MB |
+| quickjs | 14.3 s (140,000 a second) | 12.1 s (16,500 a second; 199,869 wakes) | 172 MB (86 B per actor) | 121 MB (60 B per actor) | 409 MB |
+
+The region is core's (about 60 B per actor, hibernated or not); the
+store is SQLite's file. Every actor's count matched the events it was
+sent, and after every eviction at most 1000 actors were resident.
+
 ## Charts in Python
 
 A `datamodel="python"` chart's session is an instance of a class made for
@@ -208,10 +274,11 @@ actors share no mutable value.
 - **Nesting is limited to 64,** which stops cycles but not a value that
   shares subtrees (`a = [a, a]` sixty times): another reason charts are
   trusted code.
-- Export and snapshots of a `"python"` actor are not supported; a
-  `<foreach>`'s `item` and `index` must be declared `<data>`.
-- Not in the API yet: hibernation with a store, migration, invoked
-  services of the application.
+- A `"python"` actor hibernates only while its variables hold values of
+  the value table; a `<foreach>`'s `item` and `index` must be declared
+  `<data>`.
+- Not in the API yet: export and snapshots, migration, invoked services
+  of the application.
 
 ## Memory
 

@@ -336,10 +336,6 @@ static void ta_python_destroy(const ta_datamodel_call *call) {
     ta_python_datamodel *datamodel = call->datamodel;
     ta_python_session_row *row = ta_table_get(&datamodel->sessions, call->instance);
     if (!row) return;
-    if (row->flags & TA_PYTHON_SESSION_SERIALIZED) { /* just hibernated: the row stays, the handle is its blob */
-        row->flags = TA_PYTHON_SESSION_HIBERNATED;
-        return;
-    }
     ta_python_session_row kept = *row;
     ta_table_remove(&datamodel->sessions, call->instance);
     ta_python_drop(datamodel, kept.instance);
@@ -615,72 +611,127 @@ static ta_status ta_python_custom(const ta_datamodel_call *call, uint32_t defini
     return TA_ERROR_UNSUPPORTED;
 }
 
-/* Hibernation keeps the handle: the blob is the session row's handle; the
- * instance stays on the Python heap (AGENTS.md). */
-static ta_status ta_python_serialize(const ta_datamodel_call *call, ta_bytes *out) {
-    ta_python_datamodel *datamodel = call->datamodel;
-    ta_python_session_row *row = ta_table_get(&datamodel->sessions, call->instance);
-    if (!row || !row->instance) return TA_ERROR_INVALID;
-    row->flags |= TA_PYTHON_SESSION_SERIALIZED; /* destroy comes next and keeps the row */
-    datamodel->serialized = call->instance;
-    *out = (ta_bytes){&datamodel->serialized, sizeof datamodel->serialized};
+/* A value as CBOR, in a block of the host's allocator kept between calls:
+ * a view until the datamodel's next call (to_wire, serialize,
+ * payload_serialize). A value outside the table: TA_ERROR_INVALID. */
+static ta_status ta_python_wire(ta_python_datamodel *datamodel, PyObject *value, ta_bytes *out) {
+    ta_cbor_writer writer;
+    ta_python_cbor_init(&writer, &(ta_python_room){{datamodel->wire.pointer, datamodel->wire.capacity, 0}, &datamodel->host->allocator});
+    int written = ta_python_value_write(datamodel->state, &writer, value);
+    ta_status status = written < 0 ? TA_ERROR_INVALID : ta_cbor_writer_bytes(&writer, out);
+    if (written < 0) PyErr_Clear();
+    if (status != TA_OK) {
+        ta_cbor_writer_free(&writer); /* a block it grew, never our room */
+        return status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID;
+    }
+    if (writer.bytes != (unsigned char *)datamodel->wire.pointer) { /* it grew: the block is the room now */
+        const ta_allocator *allocator = &datamodel->host->allocator;
+        if (datamodel->wire.pointer) allocator->free(allocator->context, datamodel->wire.pointer, datamodel->wire.capacity);
+        datamodel->wire = (ta_buffer){writer.bytes, writer.capacity, 0};
+    }
     return TA_OK;
 }
 
-/* The bindings of the old version that the new chart does not declare,
- * and the instance of the new class with the slots both declare. */
-static int ta_python_migrate_instance(ta_python_datamodel *datamodel, uint64_t handle, const ta_datamodel_start *start) {
-    /* Python code runs below (a finalizer may spawn, which adds rows): the
-     * rows are read by handle again before they are written */
-    ta_python_session_row copied = *(ta_python_session_row *)ta_table_get(&datamodel->sessions, handle);
-    ta_python_session_row *row = &copied;
-    PyObject *old_instance = Py_NewRef(row->instance);
-    ta_python_chart_row *chart = ta_table_get(&datamodel->charts, (uint64_t)(uintptr_t)start->chart_context);
-    ta_python_chart_row *old = ta_table_get(&datamodel->charts, row->chart);
-    PyObject *new_data = chart ? Py_NewRef(chart->data) : NULL, *old_data = old ? Py_NewRef(old->data) : NULL;
-    PyObject *instance = chart ? ta_python_instance(datamodel, chart, start->system_variables) : NULL;
-    PyObject *bindings = instance ? PyDict_New() : NULL;
-    int status = bindings ? 0 : -1;
-    for (Py_ssize_t i = 0; status == 0 && old_data && i < PyTuple_Size(old_data); i++) {
-        PyObject *id = PyTuple_GetItem(old_data, i), *value = PyObject_GetAttr(old_instance, id);
-        int shared = value ? PySequence_Contains(new_data, id) : -1;
-        if (shared < 0 || PyDict_SetItem(bindings, id, value) < 0) status = -1;
-        else if (shared == 1) status = PyObject_SetAttr(instance, id, value);
+static const char *const ta_python_event_fields[] = {"name", "type", "sendid", "origin", "origintype", "invokeid", "data", "raw"};
+
+/* Hibernation and export write the session's state into the blob: its
+ * <data> values and its _event, as one CBOR map {"vars": {id: value},
+ * "event": [name, type, sendid, origin, origintype, invokeid, data, raw]
+ * or null}, through the value table (no format that runs code when read:
+ * bindings.md section 8). Then destroy frees the instance: a hibernated
+ * session costs nothing on the Python heap. A value outside the table
+ * keeps the session resident (TA_ERROR_UNSUPPORTED). */
+static ta_status ta_python_serialize(const ta_datamodel_call *call, ta_bytes *out) {
+    ta_python_datamodel *datamodel = call->datamodel;
+    ta_python_session_row *row = ta_table_get(&datamodel->sessions, call->instance);
+    ta_python_chart_row *chart = row && row->instance ? ta_table_get(&datamodel->charts, row->chart) : NULL;
+    if (!chart) return TA_ERROR_INVALID;
+    PyObject *instance = Py_NewRef(row->instance), *data = Py_NewRef(chart->data);
+    PyObject *vars = PyDict_New(), *state = NULL, *event = NULL, *fields = NULL;
+    int status = vars ? 0 : -1;
+    for (Py_ssize_t i = 0; status == 0 && i < PyTuple_Size(data); i++) {
+        PyObject *id = PyTuple_GetItem(data, i), *value = PyObject_GetAttr(instance, id);
+        if (!value || PyDict_SetItem(vars, id, value) < 0) status = -1;
         Py_XDECREF(value);
     }
-    PyObject *event = status == 0 ? PyObject_GetAttrString(old_instance, "_event") : NULL;
-    if (!event || PyObject_SetAttrString(instance, "_event", event) < 0) status = -1;
+    if (status == 0) event = PyObject_GetAttr(instance, datamodel->state->event_key);
+    if (event && event != Py_None) {
+        fields = PyList_New(8);
+        for (int i = 0; fields && i < 8; i++) {
+            PyObject *field = PyObject_GetAttrString(event, ta_python_event_fields[i]);
+            if (!field) Py_CLEAR(fields);
+            else PyList_SetItem(fields, i, field);
+        }
+    } else if (event) fields = Py_NewRef(Py_None);
+    if (fields) state = Py_BuildValue("{s:O,s:O}", "vars", vars, "event", fields);
+    ta_status result = state ? ta_python_wire(datamodel, state, out) : TA_ERROR_INVALID;
+    if (!state) PyErr_Clear();
+    if (result == TA_ERROR_INVALID) result = TA_ERROR_UNSUPPORTED; /* a value outside the table: stays resident */
+    Py_XDECREF(state);
+    Py_XDECREF(fields);
     Py_XDECREF(event);
-    Py_XDECREF(new_data);
-    Py_XDECREF(old_data);
-    Py_DECREF(old_instance);
-    row = ta_table_get(&datamodel->sessions, handle);
-    if (status < 0 || !row) {
-        Py_XDECREF(instance);
-        Py_XDECREF(bindings);
-        return -1;
-    }
-    ta_python_drop(datamodel, row->instance);
-    ta_python_drop(datamodel, row->extra);
-    row->instance = instance;
-    row->chart = (uint64_t)(uintptr_t)start->chart_context;
-    row->extra = bindings;
-    return 0;
+    Py_XDECREF(vars);
+    Py_DECREF(data);
+    Py_DECREF(instance);
+    return result;
 }
 
+/* An Event again, from the eight fields serialize wrote. */
+static PyObject *ta_python_event_from(ta_python_datamodel *datamodel, PyObject *fields) {
+    if (fields == Py_None) return Py_NewRef(Py_None);
+    if (!PyList_Check(fields) || PyList_Size(fields) != 8) {
+        PyErr_SetString(PyExc_ValueError, "not an event of a hibernation blob");
+        return NULL;
+    }
+    ta_python_event *event = (ta_python_event *)PyType_GenericAlloc((PyTypeObject *)datamodel->state->event_type, 0);
+    if (!event) return NULL;
+    PyObject **slots[8] = {&event->name, &event->type, &event->sendid, &event->origin,
+                           &event->origintype, &event->invokeid, &event->data, &event->raw};
+    for (int i = 0; i < 8; i++) *slots[i] = Py_NewRef(PyList_GetItem(fields, i));
+    return (PyObject *)event;
+}
+
+/* A session from a blob serialize wrote, for its chart now: an instance
+ * of the chart's class with the values the chart declares. Every value of
+ * the blob is kept until the first event (or migrate takes it): when the
+ * blob is of an older version of the chart, migrate answers them as the
+ * old bindings. */
 static ta_status ta_python_deserialize(void *self, const ta_datamodel_start *start, uint64_t *out) {
     ta_python_datamodel *datamodel = self;
-    uint64_t handle = 0;
-    if (start->state.length != sizeof handle) return TA_ERROR_INVALID;
-    memcpy(&handle, start->state.pointer, sizeof handle);
-    ta_python_session_row *row = ta_table_get(&datamodel->sessions, handle);
-    if (!row || !(row->flags & TA_PYTHON_SESSION_HIBERNATED)) return TA_ERROR_INVALID;
-    if (row->chart != (uint64_t)(uintptr_t)start->chart_context && ta_python_migrate_instance(datamodel, handle, start) < 0) {
-        ta_python_failed(datamodel);
-        return TA_ERROR_INVALID;
+    ta_python_chart_row *chart = ta_table_get(&datamodel->charts, (uint64_t)(uintptr_t)start->chart_context);
+    PyObject *state = chart ? ta_python_value_read(datamodel->state, start->state) : NULL;
+    PyObject *vars = NULL, *fields = NULL, *event = NULL, *instance = NULL;
+    if (state && PyDict_Check(state)) {
+        PyDict_GetItemStringRef(state, "vars", &vars);
+        PyDict_GetItemStringRef(state, "event", &fields);
     }
-    row = ta_table_get(&datamodel->sessions, handle);
-    row->flags = 0;
+    int status = vars && PyDict_Check(vars) && fields ? 0 : -1;
+    if (status == 0) instance = ta_python_instance(datamodel, chart, start->system_variables);
+    if (status == 0 && instance) event = ta_python_event_from(datamodel, fields);
+    if (!instance || !event || PyObject_SetAttr(instance, datamodel->state->event_key, event) < 0) status = -1;
+    PyObject *data = chart ? Py_NewRef(chart->data) : NULL;
+    for (Py_ssize_t i = 0; status == 0 && i < PyTuple_Size(data); i++) {
+        PyObject *id = PyTuple_GetItem(data, i), *value = NULL;
+        if (PyDict_GetItemRef(vars, id, &value) < 0) status = -1;
+        else if (value) status = PyObject_SetAttr(instance, id, value);
+        Py_XDECREF(value);
+    }
+    Py_XDECREF(data);
+    Py_XDECREF(event);
+    Py_XDECREF(fields);
+    Py_XDECREF(state);
+    ta_python_session_row *row = NULL;
+    uint64_t handle = 0;
+    if (status == 0 && !(row = ta_table_add(&datamodel->sessions, &handle))) status = -2;
+    if (status < 0) {
+        if (status == -1) ta_python_failed(datamodel);
+        ta_python_drop(datamodel, instance);
+        ta_python_drop(datamodel, vars);
+        return status == -2 ? TA_ERROR_NO_MEMORY : TA_ERROR_INVALID;
+    }
+    row->instance = instance;
+    row->chart = (uint64_t)(uintptr_t)start->chart_context;
+    row->extra = vars; /* the old bindings, for migrate, until the first event */
     *out = handle;
     return TA_OK;
 }
@@ -695,29 +746,14 @@ static ta_status ta_python_migrate(const ta_datamodel_call *call, ta_payload *bi
     return ta_python_payload_add(datamodel, taken, bindings) < 0 ? (PyErr_Clear(), TA_ERROR_NO_MEMORY) : TA_OK;
 }
 
-/* A payload as CBOR, in a block of the host's allocator kept between
- * calls: a view until the datamodel's next call. */
 static ta_status ta_python_to_wire(void *self, ta_payload payload, ta_bytes *out) {
     ta_python_datamodel *datamodel = self;
     PyObject *value = ta_python_payload_value(datamodel, payload);
     if (!value) return TA_ERROR_INVALID;
-    ta_cbor_writer writer;
-    ta_python_cbor_init(&writer, &(ta_python_room){{datamodel->wire.pointer, datamodel->wire.capacity, 0}, &datamodel->host->allocator});
     Py_INCREF(value);
-    int written = ta_python_value_write(datamodel->state, &writer, value);
+    ta_status status = ta_python_wire(datamodel, value, out);
     Py_DECREF(value);
-    ta_status status = written < 0 ? TA_ERROR_INVALID : ta_cbor_writer_bytes(&writer, out);
-    if (written < 0) PyErr_Clear();
-    if (status != TA_OK) {
-        ta_cbor_writer_free(&writer); /* a block it grew, never our room */
-        return status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID;
-    }
-    if (writer.bytes != (unsigned char *)datamodel->wire.pointer) { /* it grew: the block is the room now */
-        const ta_allocator *allocator = &datamodel->host->allocator;
-        if (datamodel->wire.pointer) allocator->free(allocator->context, datamodel->wire.pointer, datamodel->wire.capacity);
-        datamodel->wire = (ta_buffer){writer.bytes, writer.capacity, 0};
-    }
-    return TA_OK;
+    return status;
 }
 
 static ta_status ta_python_from_wire(void *self, ta_bytes cbor, ta_payload *out) {
@@ -784,8 +820,8 @@ static const ta_datamodel_vtable ta_python_vtable = {
     .migrate = ta_python_migrate,
     .to_wire = ta_python_to_wire,
     .from_wire = ta_python_from_wire,
-    .payload_serialize = NULL, /* export of a "python" actor is not supported (AGENTS.md) */
-    .payload_deserialize = NULL,
+    .payload_serialize = ta_python_to_wire, /* a delayed send's payload in an export blob: its CBOR */
+    .payload_deserialize = ta_python_from_wire,
     .variable = ta_python_variable,
 };
 

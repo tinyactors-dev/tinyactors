@@ -88,9 +88,9 @@ Decided by the maintainer (2026-10-13); every item is in
   and **`close()`** call `ta_compile_free`; the collector calls it as a
   fallback.
 - **`tinyactors.Host(config, io_processors={type: handler}, log=handler,
-  clock=None)`.** Everything is per host: the config (a
-  `dict`, written as CBOR into the call's arena for `ta_host_create`),
-  the I/O processors' handlers, the log handler and the clock. A host
+  clock=None, peer=None, telemetry=None, wake=None)`.** Everything is
+  per host: the config (a `dict`, written as CBOR into the call's arena
+  for `ta_host_create`), the handlers and the clock. A host
   has no resolver ("The resolver"). No global configuration (no
   `logging.basicConfig`, no
   module-level handler, no default logger). The extension reads
@@ -233,6 +233,20 @@ Decided by the maintainer (2026-10-13); every item is in
   awaits the tasks of an `async def` handler's last take. A take the
   allocator refuses is reported and retried at the next turn: core gives
   no second effect until a take.
+- **Hibernation with the application's store** (bindings.md section 4,
+  2026-10-14): **`host.sweep(max_scan, limit) -> list[int]`** is
+  `ta_host_sweep` (the CLOCK sweep: sessions that did not run since the
+  previous sweep and can be hibernated now); **`host.hibernate(session)
+  -> bytes`** is `ta_host_hibernate`, its blob copied once (outside a
+  drain the batch of that output is acknowledged at once, from a handler
+  it joins the open one, as `metrics()`), refused with `TA_ERROR_STATE`
+  when the actor is not at a stable point; **`wake=handler(host,
+  session)`** gets each `TA_EFFECT_WAKE` (an event or a due delayed send
+  for a hibernated session, one effect per hibernation), and the handler
+  calls **`host.wake(session, blob)`** (`ta_host_wake`), now or later (an
+  `async def` handler runs as a task; refused under `with`). Where the
+  blobs live, when to sweep and how many stay resident are the
+  application's; `tools/stress.py` is the pattern, with SQLite.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
@@ -460,7 +474,7 @@ APIs:
   | Table | Row | Added | Removed |
   |---|---|---|---|
   | charts | the chart's class, its compiled functions, its slot names | `chart_attach` | `chart_detach` |
-  | sessions | the instance; live or hibernated | `create`, `deserialize` | `destroy`, unless the session was just serialized (it stays, hibernated) |
+  | sessions | `{instance, chart, extra}`: the instance, its chart's row, the params until the first event or the old bindings after a `deserialize` | `create`, `deserialize` | `destroy` (after `serialize` too: a hibernated session is its blob) |
   | payloads | `{value, refcount}` | `capture`, `from_wire`, an input (`send`, `spawn`'s params, `answer`'s data), `migrate`'s bindings | refcount 0: the last reference is dropped after the outer call into core returns (deferred: dropping it can run Python code) |
   | pending | `{handler, on_error}` of a typed method | the method's call | its `REPLY`'s dispatch; `ta_host_free` (dropped, not called) |
 
@@ -563,20 +577,26 @@ Registered beside quickjs, first; matched by the chart's
 - **Capture** (`<send>` data, `<donedata>`, invoke params) copies mutable
   values crossing to another actor and shares immutable ones; actors
   share no mutable value.
-- **Hibernation keeps the handle.** `serialize` gives the session row's
-  handle; core calls `destroy` right after it (`datamodel.h:173-174`),
-  which keeps the row, marked hibernated; `deserialize` makes it live
-  again. Hibernation frees the session's share of the region; its
-  instance stays on the Python heap. **Export of a Python actor is not
-  supported** (decided 2026-10-13: nothing is done for it). A known
-  limitation: `serialize` cannot tell export from hibernation, both reach
-  it with no reason (`tinyactors-core/src/system/hibernate.c:329`) and
-  then the same `unload` and `destroy` (`hibernate.c:502-503`, from
-  `:525` and `:563`), so an exported actor's row stays hibernated until
-  `ta_host_free`. Migration
-  within the host: `deserialize` with the new chart makes an instance of
-  the new class and copies the slots both declare; `migrate` returns the
-  old bindings as a payload.
+- **Hibernation writes the session out.** `serialize` writes the
+  session's declared variables and its `_event` as CBOR through the value
+  table (`{"vars": {id: value}, "event": [its eight fields] | null}`),
+  with the writer the datamodel keeps until its next call; core puts the
+  bytes in the blob and calls `destroy`, which removes the row: a
+  hibernated `"python"` session holds no Python object, only the blob
+  the application stores. `deserialize` reads it back into a new instance
+  of the chart's class (a new row, so a new handle), and keeps the old
+  bindings in the row for `migrate`. A variable holding a value outside
+  the table (a `set`, a `tuple`, an object) makes `serialize` refuse with
+  `TA_ERROR_UNSUPPORTED`: `Host.hibernate` raises and the session stays
+  resident. Decided 2026-10-14, replacing "hibernation keeps the handle"
+  (2026-10-13): with the handle, a hibernated session kept its instance
+  on the Python heap, so hibernation freed the region but not the
+  memory a population of millions needs to leave. The same `serialize`
+  serves export, which reaches it with no reason
+  (`tinyactors-core/src/system/hibernate.c:329`); the binding exposes no
+  export call yet. Migration within the host: `deserialize` with the new
+  chart makes an instance of the new class and sets the variables both
+  declare; `migrate` returns the old bindings as a payload.
 - **Measured cost per session** (`mise run measure`, 2026-10-14: x86_64
   Linux, 4 CPUs, CPython 3.13.16 with the GIL; 10,000 actors of a chart
   with three `<data>`, one of them a list, resident and idle): **433 B

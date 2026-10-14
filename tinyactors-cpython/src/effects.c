@@ -370,8 +370,8 @@ static PyObject *ta_python_telemetry_done(PyObject *host, PyObject *task);
 static PyMethodDef ta_python_telemetry_done_def = {"done", ta_python_telemetry_done, METH_O,
                                                    "An async telemetry handler's task ended."};
 
-/* An async telemetry handler's task ended: its exception is kept for the
- * driver, as a plain handler's is. */
+/* An async handler's task ended (telemetry, wake): its exception is kept
+ * for the driver, as a plain handler's is. */
 static PyObject *ta_python_telemetry_done(PyObject *self, PyObject *task) {
     ta_python_host *host = (ta_python_host *)self;
     PyObject *cancelled = PyObject_CallMethod(task, "cancelled", NULL);
@@ -387,6 +387,36 @@ static PyObject *ta_python_telemetry_done(PyObject *self, PyObject *task) {
     Py_RETURN_NONE;
 }
 
+PyObject *ta_python_host_task(ta_python_host *host, PyObject *coroutine) {
+    PyObject *task = host->loop != Py_None ? PyObject_CallMethod(host->loop, "create_task", "O", coroutine) : NULL;
+    PyObject *done = task ? PyCFunction_New(&ta_python_telemetry_done_def, (PyObject *)host) : NULL;
+    PyObject *added = done ? PyObject_CallMethod(task, "add_done_callback", "O", done) : NULL;
+    if (!task && !PyErr_Occurred()) {
+        PyObject *closed = PyObject_CallMethod(coroutine, "close", NULL); /* no "never awaited" warning */
+        Py_XDECREF(closed);
+        PyErr_SetString(PyExc_RuntimeError, "an async def handler needs async with");
+    }
+    Py_XDECREF(done);
+    Py_DECREF(coroutine);
+    if (!added) Py_CLEAR(task);
+    Py_XDECREF(added);
+    return task;
+}
+
+/* A WAKE: an event came for a hibernated session (one effect per
+ * hibernation, however many come). The application's handler loads the
+ * session's blob and calls host.wake(session, blob), now or later (an
+ * async def handler runs as a task); the events wait in its mailbox. */
+static void ta_python_dispatch_wake(ta_python_host *host, uint32_t index) {
+    if (host->wake == Py_None) return;
+    PyObject *session = PyLong_FromUnsignedLongLong(ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SESSION));
+    PyObject *result = session ? PyObject_CallFunctionObjArgs(host->wake, (PyObject *)host, session, NULL) : NULL;
+    if (result && host->wake_async) result = ta_python_host_task(host, result);
+    if (!result) ta_python_host_keep_error(host);
+    Py_XDECREF(result);
+    Py_XDECREF(session);
+}
+
 /* The application's exporter gets the request as bytes it keeps (one copy,
  * boundary.md section 7); posting it, retrying and capping what waits are
  * the application's. Without a handler the request is dropped. */
@@ -396,19 +426,9 @@ void ta_python_telemetry(ta_python_host *host, const ta_python_export *export) {
     PyObject *data = signal ? PyBytes_FromStringAndSize(export->data.pointer, (Py_ssize_t)export->data.length) : NULL;
     PyObject *result = data ? PyObject_CallFunctionObjArgs(host->telemetry, (PyObject *)host, signal, data, NULL) : NULL;
     if (result && host->telemetry_async) { /* a coroutine: a task on the host's loop */
-        PyObject *task = host->loop != Py_None ? PyObject_CallMethod(host->loop, "create_task", "O", result) : NULL;
-        PyObject *done = task ? PyCFunction_New(&ta_python_telemetry_done_def, (PyObject *)host) : NULL;
-        PyObject *added = done ? PyObject_CallMethod(task, "add_done_callback", "O", done) : NULL;
-        if (!task && !PyErr_Occurred()) {
-            PyObject *closed = PyObject_CallMethod(result, "close", NULL); /* no "never awaited" warning */
-            Py_XDECREF(closed);
-            PyErr_SetString(PyExc_RuntimeError, "an async telemetry handler needs async with");
-        }
-        if (added && host->ending && host->ending_tasks) PyList_Append(host->ending_tasks, task); /* __aexit__ awaits */
-        Py_XDECREF(task);
-        Py_XDECREF(done);
-        Py_DECREF(result);
-        result = added;
+        PyObject *task = ta_python_host_task(host, result);
+        if (task && host->ending && host->ending_tasks) PyList_Append(host->ending_tasks, task); /* __aexit__ awaits */
+        result = task;
     }
     if (!result) ta_python_host_keep_error(host);
     Py_XDECREF(result);
@@ -506,6 +526,7 @@ void ta_python_dispatch(ta_python_host *host, uint32_t index) {
         break;
     }
     case TA_HOST_EFFECT_REPLY: ta_python_reply(host, index); break;
+    case TA_EFFECT_WAKE: ta_python_dispatch_wake(host, index); break;
     case TA_HOST_EFFECT_TRACES: /* a request is ready: taken (the next comes only after a take) */
     case TA_HOST_EFFECT_LOGS: {
         ta_python_take(host, ta_host_effect_number(core, index, TA_EFFECT_FIELD_KIND) == TA_HOST_EFFECT_TRACES);

@@ -112,7 +112,8 @@ The plan, each step a commit (or a few) that passes this project's
 7. **The `"python"` datamodel:** the class per chart, the rewrite (its
    allow-list as AGENTS.md writes it), the
    instance per session, `_event` and `detach_event`, capture,
-   hibernation by handle, quickjs beside it.
+   hibernation (by handle at first; written out as CBOR since
+   2026-10-14, below), quickjs beside it.
 8. **The adapter** (`conform/`) and the suite's M1 set on both
    datamodels.
 9. **The measurement:** a task that spawns 10,000 actors of one chart,
@@ -160,7 +161,9 @@ The plan, each step a commit (or a few) that passes this project's
 - **The log entry** is `(session, label, text)`, no chart.
 - **Export of a `"python"` actor:** nothing is done; unsupported, with
   the known limitation that an exported actor's row stays hibernated
-  until `ta_host_free` (AGENTS.md).
+  until `ta_host_free` (AGENTS.md). Superseded 2026-10-14 ("Hibernation",
+  below): `serialize` writes the session out, so the limitation is gone;
+  the binding has no export call yet.
 - **An `async def` processor under the synchronous driver** raises
   `TypeError` naming it when the `Host` is entered with `with`.
 - **A processor that raises before answering** (sync or async) has its
@@ -256,8 +259,8 @@ Left for core (capacity planning, not the binding): a segment's region
 grows by doubling under a burst of events and is kept (12.4 KB per actor
 on quickjs after one event each at 10,000 actors).
 - **Not in the API yet** (8.5): invoked services of the application
-  (`INVOKE`, `UNINVOKE` are dropped), hibernation with a store (`WAKE`),
-  migration's progress, snapshots and export of `"python"` actors, a
+  (`INVOKE`, `UNINVOKE` are dropped), migration's progress, snapshots
+  and export, a
   `<foreach>` item that is not a declared `<data>`.
 
 ### Telemetry (8.5's first item, 2026-10-14) — done
@@ -307,6 +310,55 @@ run's span records stretched over the handlers after the run: core
 stamps them between two `ta_host_advance_time` calls, and the binding
 advanced only before a run. With an encoder it advances after each run
 too (one clock read per run; nothing without telemetry).
+
+### Hibernation (8.5's second item, 2026-10-14) — done
+
+`host.sweep(max_scan, limit)` (`ta_host_sweep`), `host.hibernate(session)
+-> bytes` (`ta_host_hibernate`, the blob copied once) and
+`host.wake(session, blob)` (`ta_host_wake`), with `wake=handler(host,
+session)` for `TA_EFFECT_WAKE`. Whom it serves: the application
+developer with more actors than memory, and the capacity planner, who
+now has a measured cost per hibernated actor. Cost: nothing per event
+for a resident actor; per hibernation one `bytes` (the blob) and, on the
+`"python"` datamodel, one CBOR encoding of the session's variables (the
+blob leaves the process, so this is the process boundary); per wake one
+Python call and the decoding. API surface: three methods and a keyword.
+
+**Decision changed:** "hibernation keeps the handle" (2026-10-13) left
+each hibernated `"python"` session's instance on the Python heap, which
+defeats a population of millions with a thousand resident. `serialize`
+now writes the declared variables and `_event` as CBOR through the
+value table and `destroy` removes the row; `deserialize` builds a new
+instance. A variable outside the value table refuses the hibernation
+(`TA_ERROR_UNSUPPORTED`); the session stays resident. AGENTS.md has the
+rule.
+
+**The gate:** `tools/stress.py` (`mise run stress`; `mise run test`
+runs 20,000 actors with 100 resident on both datamodels, `--full` the
+two million): two million actors of a counter chart, at most 1000
+resident, the rest in SQLite, 200,000 events to actors drawn at random,
+then a sample of 10,000 reports its count. Both datamodels pass: every
+count right, at most 1000 resident after each eviction (`host_stats`),
+85 B and 86 B of peak resident memory per actor, 60 B of core's region
+per actor (numbers in the README). Getting there found two things:
+
+- left to grow, a segment doubles every pool together and derives its
+  instance memory from `maxActors`: 31 KB of region per actor at two
+  million. The fix is configuration (`maxActors` for every actor,
+  instance and string memory for the resident ones), which the README's
+  capacity note gives; not a binding change;
+- the CLOCK sweep skips an actor that ran since the last sweep, so with
+  every event waking a different actor it could not get back to 1000
+  resident (1354 at the peak). The application falls back to its own
+  least recently used order (`tools/stress.py`, `evict`).
+
+Tests in `tests/test_hibernation.py`: both datamodels wake with their
+variables and their `_event` (read by an `<onexit>` at terminate),
+events wait for the wake (one WAKE however many), a due delayed send
+wakes its actor, the sweep's second pass, refusals (events waiting,
+already hibernated, a `set` in a variable, a bad blob), a hibernated
+`"python"` session holds no instance, a wake handler that raises, an
+`async def` wake handler (and its `TypeError` under `with`).
 
 ## How the work runs
 

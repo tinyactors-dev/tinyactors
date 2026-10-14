@@ -20,16 +20,14 @@ typedef struct ta_python_chart_row {
     uint32_t pad;
 } ta_python_chart_row;
 
-/* A session: its instance, live or hibernated. `extra` is the spawn's or
- * invoke's params until the first event, or the bindings of a migration
- * until migrate takes them. */
-enum { TA_PYTHON_SESSION_SERIALIZED = 1u, TA_PYTHON_SESSION_HIBERNATED = 2u };
+/* A resident session: its instance (a hibernated one has no row: its
+ * state is in the blob). `extra` is the spawn's or invoke's params until
+ * the first event, or the blob's values until migrate takes them or an
+ * event comes. */
 typedef struct ta_python_session_row {
     PyObject *instance;
     uint64_t chart; /* the chart's row */
     PyObject *extra;
-    uint32_t flags; /* TA_PYTHON_SESSION_* */
-    uint32_t pad;
 } ta_python_session_row;
 
 /* A payload: a value and its references (core's retain and release). */

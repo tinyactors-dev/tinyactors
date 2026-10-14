@@ -356,10 +356,11 @@ static int ta_python_host_processors(ta_python_host *host, PyObject *config, PyO
 }
 
 static PyObject *ta_python_host_create(PyTypeObject *type, PyObject *arguments, PyObject *keywords) {
-    static char *const names[] = {"config", "io_processors", "log", "clock", "peer", "telemetry", NULL};
+    static char *const names[] = {"config", "io_processors", "log", "clock", "peer", "telemetry", "wake", NULL};
     PyObject *config, *handlers = Py_None, *log = Py_None, *clock = Py_None, *peer = Py_None, *telemetry = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "O|O$OOOO:Host", names, &config, &handlers, &log, &clock,
-                                     &peer, &telemetry))
+    PyObject *wake = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "O|O$OOOOO:Host", names, &config, &handlers, &log, &clock,
+                                     &peer, &telemetry, &wake))
         return NULL;
     ta_python_module_state *state = ta_python_state_of_type(type);
     if (!state) return NULL;
@@ -380,6 +381,14 @@ static PyObject *ta_python_host_create(PyTypeObject *type, PyObject *arguments, 
     host->log = Py_NewRef(log);
     host->peer = Py_NewRef(peer);
     host->telemetry = Py_NewRef(telemetry);
+    host->wake = Py_NewRef(wake);
+    if (wake != Py_None) {
+        PyObject *answer = PyObject_CallFunctionObjArgs(state->coroutine_function, wake, NULL);
+        host->wake_async = answer ? PyObject_IsTrue(answer) : -1;
+        Py_XDECREF(answer);
+        if (host->wake_async < 0) goto fail;
+        if (host->wake_async) host->has_async = 1;
+    }
     if (telemetry != Py_None) {
         PyObject *answer = PyObject_CallFunctionObjArgs(state->coroutine_function, telemetry, NULL);
         host->telemetry_async = answer ? PyObject_IsTrue(answer) : -1;
@@ -546,6 +555,7 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     Py_VISIT(host->log);
     Py_VISIT(host->peer);
     Py_VISIT(host->telemetry);
+    Py_VISIT(host->wake);
     Py_VISIT(host->clock);
     Py_VISIT(host->loop);
     Py_VISIT(host->timer);
@@ -572,6 +582,7 @@ static int ta_python_host_clear(PyObject *self) {
     Py_CLEAR(host->log);
     Py_CLEAR(host->peer);
     Py_CLEAR(host->telemetry);
+    Py_CLEAR(host->wake);
     Py_CLEAR(host->clock);
     Py_CLEAR(host->loop);
     Py_CLEAR(host->timer);
@@ -865,6 +876,8 @@ static PyObject *ta_python_host_deliver(PyObject *self, PyObject *arguments) {
  * (ta_host_metrics), pulled when the application wants them: the host's
  * view copied once. Taken outside a drain it opened a batch of its own,
  * acknowledged here; from a handler it joins the open batch. */
+static PyObject *ta_python_host_output(ta_python_host *host, ta_bytes taken);
+
 static PyObject *ta_python_host_metrics(PyObject *self, PyObject *unused) {
     (void)unused;
     ta_python_host *host = (ta_python_host *)self;
@@ -872,13 +885,87 @@ static PyObject *ta_python_host_metrics(PyObject *self, PyObject *unused) {
     if (ta_python_enter(host, &call) < 0) return NULL;
     ta_bytes taken;
     ta_status status = ta_host_metrics(host->host, &taken);
-    PyObject *result = status == TA_OK ? PyBytes_FromStringAndSize(taken.pointer, (Py_ssize_t)taken.length) : NULL;
+    PyObject *result = status == TA_OK ? ta_python_host_output(host, taken) : NULL;
     if (status != TA_OK) ta_python_raise_status(host->state, status); /* TA_ERROR_STATE: no telemetry in the config */
-    else if (!host->turning && host->depth == 1) { /* not in a drain: the batch of this output alone ends */
+    ta_python_leave(&call);
+    return result;
+}
+
+/* ---- hibernation: the application keeps the blobs ---------------------------------- */
+
+/* sweep(max_scan, limit) -> [session, ...]: the CLOCK sweep (ta_host_sweep),
+ * at most `limit` sessions that did not run since the previous sweep and
+ * can be hibernated now, scanning at most `max_scan` slots. */
+static PyObject *ta_python_host_sweep(PyObject *self, PyObject *arguments) {
+    ta_python_host *host = (ta_python_host *)self;
+    unsigned int scan, limit;
+    if (!PyArg_ParseTuple(arguments, "II:sweep", &scan, &limit)) return NULL;
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    uint64_t *sessions = limit ? ta_growable_arena_alloc(&host->arena, sizeof(uint64_t) * limit, 8) : NULL;
+    PyObject *result = NULL;
+    if (limit && !sessions) PyErr_NoMemory();
+    else {
+        uint32_t found = ta_host_sweep(host->host, scan, (ta_uint64_array){sessions, limit});
+        result = PyList_New(found);
+        for (uint32_t i = 0; result && i < found; i++) {
+            PyObject *session = PyLong_FromUnsignedLongLong(sessions[i]);
+            if (!session) Py_CLEAR(result);
+            else PyList_SetItem(result, i, session);
+        }
+    }
+    ta_python_leave(&call);
+    return result;
+}
+
+/* An output taken now (a hibernation blob, metrics): copied once into
+ * bytes; outside a drain its batch of this output alone is acknowledged
+ * at once, from a handler it joins the open batch. */
+static PyObject *ta_python_host_output(ta_python_host *host, ta_bytes taken) {
+    PyObject *result = PyBytes_FromStringAndSize(taken.pointer, (Py_ssize_t)taken.length);
+    if (!host->turning && host->depth == 1) {
         ta_host_effects_ack(host->host);
         host->acks++;
     }
+    return result;
+}
+
+/* hibernate(session) -> bytes: ta_host_hibernate; the blob is the
+ * application's to store until it gives it to wake. */
+static PyObject *ta_python_host_hibernate(PyObject *self, PyObject *value) {
+    ta_python_host *host = (ta_python_host *)self;
+    uint64_t session = PyLong_Check(value) ? PyLong_AsUnsignedLongLong(value) : 0;
+    if (PyErr_Occurred() || !PyLong_Check(value)) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "a session is an int");
+        return NULL;
+    }
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    ta_bytes taken;
+    ta_status status = ta_host_hibernate(host->host, session, &taken);
+    PyObject *result = status == TA_OK ? ta_python_host_output(host, taken) : NULL;
+    if (status != TA_OK) ta_python_raise_status(host->state, status); /* TA_ERROR_STATE: not at a stable point */
     ta_python_leave(&call);
+    return result;
+}
+
+/* wake(session, blob): ta_host_wake, with the blob hibernate gave. */
+static PyObject *ta_python_host_wake(PyObject *self, PyObject *arguments) {
+    ta_python_host *host = (ta_python_host *)self;
+    unsigned long long session;
+    Py_buffer view;
+    if (!PyArg_ParseTuple(arguments, "Ky*:wake", &session, &view)) return NULL;
+    ta_python_call call;
+    PyObject *result = NULL;
+    if (ta_python_enter(host, &call) == 0) {
+        ta_status status = ta_host_wake(host->host, session, (ta_bytes){view.buf, (size_t)view.len});
+        if (status == TA_OK) {
+            ta_python_loop_schedule(host); /* its mailbox runs at the next turn */
+            result = Py_NewRef(Py_None);
+        } else ta_python_raise_status(host->state, status);
+        ta_python_leave(&call);
+    }
+    PyBuffer_Release(&view);
     return result;
 }
 
@@ -897,6 +984,11 @@ static PyObject *ta_python_host_enter_with(PyObject *self, PyObject *unused) {
                              PyTuple_GetItem(row, 0));
                 return NULL;
             }
+        }
+        if (host->wake_async || host->telemetry_async) {
+            PyErr_Format(PyExc_TypeError, "the %s handler is an async def: use async with, the synchronous driver runs no "
+                         "event loop", host->wake_async ? "wake" : "telemetry");
+            return NULL;
         }
     }
     return Py_NewRef(self);
@@ -1025,6 +1117,14 @@ static PyMethodDef ta_python_host_methods[] = {
     {"metrics", ta_python_host_metrics, METH_NOARGS,
      "metrics()\n--\n\nThe host's counters as an OTLP ExportMetricsServiceRequest (protobuf bytes, for "
      "/v1/metrics); TinyactorsError TA_ERROR_STATE without telemetry in the config."},
+    {"sweep", ta_python_host_sweep, METH_VARARGS,
+     "sweep(max_scan, limit, /)\n--\n\nAt most `limit` sessions that did not run since the previous sweep and can be "
+     "hibernated now (the CLOCK sweep), scanning at most `max_scan` slots."},
+    {"hibernate", ta_python_host_hibernate, METH_O,
+     "hibernate(session, /)\n--\n\nTake an idle actor out of memory: its blob, as bytes, to store until wake. "
+     "TA_ERROR_STATE when it is not at a stable point."},
+    {"wake", ta_python_host_wake, METH_VARARGS,
+     "wake(session, blob, /)\n--\n\nBring a hibernated actor back from its blob; its waiting events run next turn."},
     {"run_until_idle", ta_python_host_run_until_idle, METH_NOARGS,
      "run_until_idle()\n--\n\nTurn until the host is idle at the current time."},
     {"run", ta_python_host_run_forever, METH_NOARGS,
@@ -1059,7 +1159,7 @@ static PyMemberDef ta_python_host_members[] = {
 
 static PyType_Slot ta_python_host_slots[] = {
     {Py_tp_members, ta_python_host_members},
-    {Py_tp_doc, "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None)\n--\n\n"
+    {Py_tp_doc, "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None)\n--\n\n"
                 "A host (ta_host): many actor systems as one, with the \"python\" datamodel and quickjs."},
     {Py_tp_new, ta_python_host_create},
     {Py_tp_dealloc, ta_python_host_dealloc},
