@@ -286,6 +286,18 @@ binding now advances both clocks at creation and before spawn, deliver
 and every typed method (bindings.md section 7: "before every run and
 every input that depends on it").
 
+A fresh agent reviewed telemetry; fixed (with tests): a handler's
+`close()` during the last take crashed (a second free inside the first),
+inputs from a handler there made close loop forever (now bounded and
+counted as a call on the stack), `metrics()` there acknowledged the
+close's batch, `async with` did not await an `async def` handler's last
+take or raise its exception, a take the allocator refused stopped that
+signal silently (now reported and retried next turn), and a close a
+handler asked for kept its last take's exception until a later
+`close()` (now raised by the driver). The README says the handler runs
+in the turn, that only a turn's first exception is raised, and that a
+collected `Host` skips the last take.
+
 ## How the work runs
 
 The root ROADMAP.md, step 8, "Rules for the work", sets these for every

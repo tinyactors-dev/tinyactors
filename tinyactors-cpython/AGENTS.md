@@ -225,7 +225,14 @@ Decided by the maintainer (2026-10-13); every item is in
   `ta_host_metrics` the same way: outside a drain its batch of one output
   is acknowledged at once, from a handler it joins the open batch. At the
   stop, `trace.end` and the last takes go to the handler; an exception
-  there is raised by `close()` once the host is freed (2026-10-14).
+  there is raised by `close()` once the host is freed, or by the driver
+  whose call ran a close a handler asked for (2026-10-14). The last take
+  counts as a call on the stack (a handler's `close()` is deferred, its
+  `metrics()` joins the batch) and is bounded (64 batches of at most 64
+  takes per signal), since a handler may make inputs there; `async with`
+  awaits the tasks of an `async def` handler's last take. A take the
+  allocator refuses is reported and retried at the next turn: core gives
+  no second effect until a take.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
