@@ -103,7 +103,7 @@ module CAPI
   # A type as clang spells it, without the machine's paths: an unnamed
   # record is named by its header's file name and position, so the
   # description is the same on every host.
-  def self.portable(type) = type&.gsub(%r{\(unnamed at [^()]*/([^/()]+:\d+:\d+)\)}, '(unnamed at \\1)')
+  def self.portable(type) = type&.gsub(%r{\((unnamed|anonymous)((?: \w+)?) at .*?([^\\/]+:\d+:\d+)\)}, '(\\1\\2 at \\3)')
 
   # The header's AST, read for one target: its prefixed declarations.
   class AST
@@ -125,7 +125,7 @@ module CAPI
                            .map do |node|
         params = node.fetch('inner', []).select { |inner| inner['kind'] == 'ParmVarDecl' }
                      .map { |param| { 'name' => param['name'].to_s, 'type' => CAPI.portable(param.dig('type', 'qualType')) } }
-        { 'name' => node['name'], 'returns' => node.dig('type', 'qualType').sub(/\s*\(.*\z/m, ''),
+        { 'name' => node['name'], 'returns' => CAPI.portable(node.dig('type', 'qualType')).sub(/\s*\(.*\z/m, ''),
           'params' => params, 'public' => true, 'static_inline' => false }
       end
     end

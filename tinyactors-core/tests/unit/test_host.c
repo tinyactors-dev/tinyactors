@@ -887,6 +887,62 @@ static void test_snapshot_restore(void) {
     world_close(&e);
 }
 
+/* Two segments running the same image: the ECMAScript datamodel's snapshot
+ * names a session's chart by its segment too, so after a restore each
+ * session runs its own segment's attachment, and the first segment retiring
+ * leaves the second's sessions working. */
+static void test_snapshot_of_one_image_in_two_segments(void) {
+    host_world e;
+    world_open(&e, 16, NULL, 0);
+#define TWICE SC("t", "initial='a'><datamodel><data id='n' expr='0'/></datamodel><state id='a'>"                \
+                     "<transition event='inc'><assign location='n' expr='n + 1'/>"                            \
+                     "<log expr=\"'n=' + n\"/></transition><transition event='stop' target='f'/></state>"   \
+                     "<final id='f'/>")
+    world_add(&e, TWICE);
+    uint64_t first = spawn(&e, "t");
+    world_add(&e, TWICE); /* the same content: another segment, the current version */
+    uint64_t second = spawn(&e, "t");
+    run(&e);
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_ERROR_NO_MEMORY);
+    size_t hl = written.length;
+    void *hs = malloc(hl);
+    written = (ta_buffer){hs, hl, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &written), TA_OK);
+    written = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &written), TA_ERROR_NO_MEMORY);
+    size_t dl = written.length;
+    void *ds = malloc(dl);
+    written = (ta_buffer){ds, dl, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &written), TA_OK);
+    ta_host_free(e.host);
+    ta_datamodel_ecmascript_free(e.ecmascript);
+    e.ecmascript = ta_datamodel_ecmascript_new(NULL);
+    e.binding = ta_datamodel_ecmascript_binding(e.ecmascript);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.datamodels = &e.binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    ta_bytes images[2] = {ta_image_bytes(&e.image[0]), ta_image_bytes(&e.image[1])};
+    CHECK_EQUAL(test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, 2, 0}, &e.host), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}), TA_OK);
+    CHECK_EQUAL(send(&e, first, "stop", "null"), TA_OK);
+    run(&e);
+    run(&e); /* the first segment has no actors left, and its chart a newer version: it retires */
+    CHECK(e.freed_count >= 1);
+    e.log[0] = 0;
+    CHECK_EQUAL(send(&e, second, "inc", "null"), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "n=1;") == 0);
+    free(hs);
+    free(ds);
+    world_close(&e);
+#undef TWICE
+}
+
 /* An actor moves to another host with its own datamodel (another process): its
  * delayed send's payload travels as a value, the blob is rebased to the new
  * host's clock, the session keeps its id and is routed to in whatever segment
@@ -1407,6 +1463,7 @@ int main(void) {
     RUN(test_export_adopt_between_hosts);
     RUN(test_adopt_tree_collision);
     RUN(test_snapshot_restore);
+    RUN(test_snapshot_of_one_image_in_two_segments);
     RUN(test_bad_targets);
     RUN(test_sync_io_processor);
     RUN(test_fair_segments);

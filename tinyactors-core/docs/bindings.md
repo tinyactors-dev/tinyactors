@@ -223,7 +223,10 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
     (generations and free list, not the rows) and `ta_table_restore` puts
     it back into an empty table: the binding saves that and each row's
     values beside the snapshot, and refills the rows at their handles
-    after `ta_host_restore`, before the first run. Images
+    after `ta_host_restore`, before the first run. A session names its
+    chart by `ta_datamodel_chart.segment` and `chart`, never by the
+    image's hash alone: two segments may run one image, and the restore
+    attaches the charts again under new contexts. Images
     need no table: pass the bytes (core's `ta_compile_image` view, a
     caller's buffer, at any alignment) to `ta_host_add_image`, which copies
     them; the compile result can be freed as soon as the call returns (the

@@ -240,7 +240,8 @@ static ta_status attach_charts(ta_system *system, const ta_image *image) {
         const ta_datamodel_binding *binding = &system->datamodels[cdm[c]];
         context[c] = (void *)0;
         if (binding->vtable->chart_attach) {
-            ta_datamodel_chart chart = {sizeof chart, c, image, view->charts[c].binding, 0};
+            ta_datamodel_chart chart = {sizeof chart, c, image, view->charts[c].binding,
+                                        (uint32_t)(system->config.first_serial >> 32)};
             ta_status status =
                 binding->vtable->chart_attach(binding->datamodel, &chart, &context[c]);
             if (status != TA_OK) return status;

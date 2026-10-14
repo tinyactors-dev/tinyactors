@@ -4291,7 +4291,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "segment",
           "type": "uint32_t"
         }
       ],
@@ -4304,7 +4304,7 @@
             "chart": 4,
             "image": 8,
             "binding": 16,
-            "pad": 20
+            "segment": 20
           }
         },
         "aarch64": {
@@ -4315,7 +4315,7 @@
             "chart": 4,
             "image": 8,
             "binding": 16,
-            "pad": 20
+            "segment": 20
           }
         },
         "wasm32": {
@@ -4326,7 +4326,7 @@
             "chart": 4,
             "image": 8,
             "binding": 12,
-            "pad": 16
+            "segment": 16
           }
         }
       }

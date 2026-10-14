@@ -48,6 +48,7 @@ typedef struct ecmascript_chart {
     const ta_image *image;
     uint64_t hash; /* the image's content hash */
     uint32_t chart, binding, expression_count;
+    uint32_t segment; /* the host's segment of its attachment: a snapshot names it with chart */
     int shared;
     JSValue *getter, *setter; /* shared charts: compiled once, in the shared context */
     uint32_t refs;            /* systems attached (attach/detach) */
@@ -1122,6 +1123,7 @@ static ta_status ecmascript_attach(void *datamodel, const ta_datamodel_chart *ch
         int idle = !c->refs && !c->instance_count;
         if (!idle && c->image != chart->image) continue;
         c->image = chart->image;
+        c->segment = chart->segment;
         chart_use(ecmascript, c, 0);
         *context = c;
         return TA_OK;
@@ -1140,6 +1142,7 @@ static ta_status ecmascript_attach(void *datamodel, const ta_datamodel_chart *ch
     chart_state->hash = image_info.content_hash;
     chart_state->refs = 1;
     chart_state->chart = chart->chart;
+    chart_state->segment = chart->segment;
     chart_state->binding = chart->binding;
     chart_state->expression_count = ta_image_expression_count(chart->image, chart->chart);
     int declares = 0;
@@ -3396,6 +3399,7 @@ ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript, 
         JS_SetPropertyUint32(context, e, 2, JS_NewUint32(context, instance->chart_context->chart));
         JS_SetPropertyUint32(context, e, 3, scope);
         JS_SetPropertyUint32(context, e, 4, init);
+        JS_SetPropertyUint32(context, e, 5, JS_NewUint32(context, instance->chart_context->segment));
         JS_SetPropertyUint32(context, instances, k++, e);
     }
     k = 0;
@@ -3451,11 +3455,19 @@ ta_status ta_datamodel_ecmascript_snapshot(ta_datamodel_ecmascript *ecmascript, 
  * compares the hash stored at attach: a chart nobody has attached may keep
  * the image of a segment the host has freed since, so it is never read
  * here, and sessions are restored only onto attached charts. */
-static ecmascript_chart *chart_by_hash(ta_datamodel_ecmascript *ecmascript, const char *hex,
-                                       uint32_t chart) {
+/* The attachment a snapshot's session names: its image's hash, the chart,
+ * and the segment (two segments may run the same image; a restore keeps the
+ * segments' indices). */
+typedef struct chart_name {
+    const char *hex;
+    uint32_t chart, segment;
+} chart_name;
+
+static ecmascript_chart *chart_by_hash(ta_datamodel_ecmascript *ecmascript, chart_name name) {
+    const char *hex = name.hex;
     for (uint32_t c = 0; c < ecmascript->chart_count; c++) {
         ecmascript_chart *chart_state = ecmascript->charts[c];
-        if (chart_state->chart != chart || !chart_state->refs) continue;
+        if (chart_state->chart != name.chart || chart_state->segment != name.segment || !chart_state->refs) continue;
         char h[24];
         snprintf(h, sizeof h, "%016llx", (unsigned long long)chart_state->hash);
         if (!strcmp(h, hex)) return chart_state;
@@ -3488,9 +3500,9 @@ ta_status ta_datamodel_ecmascript_restore(ta_datamodel_ecmascript *ecmascript, t
     for (uint32_t k = 0; k < (uint32_t)n && status == TA_OK; k++) {
         JSValue e = JS_GetPropertyUint32(context, instances, k),
                 hv = JS_GetPropertyUint32(context, e, 1);
-        uint32_t handle = u32_at(context, e, 0), chart = u32_at(context, e, 2);
+        uint32_t handle = u32_at(context, e, 0), chart = u32_at(context, e, 2), segment = u32_at(context, e, 5);
         const char *hex = JS_ToCString(context, hv);
-        ecmascript_chart *chart_state = hex ? chart_by_hash(ecmascript, hex, chart) : NULL;
+        ecmascript_chart *chart_state = hex ? chart_by_hash(ecmascript, (chart_name){hex, chart, segment}) : NULL;
         if (hex) JS_FreeCString(context, hex);
         JS_FreeValue(context, hv);
         if (!chart_state || !handle ||

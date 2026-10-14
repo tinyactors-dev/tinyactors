@@ -90,7 +90,11 @@ typedef struct ta_datamodel_chart {
     uint32_t chart;
     const ta_image *image;
     uint32_t binding; /* TA_BINDING_EARLY / TA_BINDING_LATE */
-    uint32_t pad;
+    /* the host's segment whose system attaches it (the high half of its
+     * first_serial; 0 for a system of its own): with `chart`, what names the
+     * attachment in a datamodel's snapshot, since two segments may run the
+     * same image, and a restore keeps the segments' indices */
+    uint32_t segment;
 } ta_datamodel_chart;
 enum { TA_BINDING_EARLY = 0, TA_BINDING_LATE = 1 };
 

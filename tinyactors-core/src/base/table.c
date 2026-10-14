@@ -126,7 +126,9 @@ ta_status ta_table_restore(ta_table *table, ta_bytes snapshot) {
     if (snapshot.length < sizeof header) return TA_ERROR_INVALID;
     ta_memcpy(header, snapshot.pointer, sizeof header);
     uint32_t capacity = header[2], free = header[3];
+    size_t stride = (size_t)table->row_size + sizeof(ta_table_slot);
     if (header[0] != TABLE_SNAPSHOT_MAGIC || header[1] != table->row_size || free > capacity ||
+        capacity > SIZE_MAX / stride || /* no wrap below on a 32-bit size_t */
         snapshot.length != sizeof header + sizeof(ta_table_slot) * (size_t)capacity)
         return TA_ERROR_INVALID;
     const unsigned char *records = (const unsigned char *)snapshot.pointer + sizeof header;
@@ -146,8 +148,6 @@ ta_status ta_table_restore(ta_table *table, ta_bytes snapshot) {
         at = record.next;
     }
     if (!capacity) return TA_OK;
-    size_t stride = (size_t)table->row_size + sizeof(ta_table_slot);
-    if (capacity > SIZE_MAX / stride) return TA_ERROR_INVALID;
     unsigned char *rows = table->allocator->alloc(table->allocator->context, stride * capacity, 8);
     if (!rows) return TA_ERROR_NO_MEMORY;
     ta_memset(rows, 0, (size_t)table->row_size * capacity);
