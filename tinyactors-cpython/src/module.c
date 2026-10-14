@@ -1,7 +1,8 @@
-/* Public Python entry points for the first slice of the direct binding.
- * The test adapter uses this module as an application would; no test-only
- * codec or private core access is exposed. Host execution is still absent. */
+/* The module tinyactors (PEP 489): its state per interpreter, its types
+ * and functions. Everything a Host does is host.c and the files beside it. */
 #include "extension.h"
+
+int ta_python_event_init_type(PyObject *module, ta_python_module_state *state);
 
 static const char ta_python_encode_doc[] =
     "encode($module, value, /)\n--\n\n"
@@ -12,90 +13,108 @@ static const char ta_python_encode_doc[] =
     "Supported: exact built-in int (-2**64 through 2**64-1), float, str,\n"
     "bytes, list, dict with str keys, plus bool, None, Address and UNDEFINED.\n"
     "Address preserves tag 32; UNDEFINED preserves undefined, including\n"
-    "inside containers. Container order\n"
-    "is preserved. Each container is snapshotted separately; do not mutate\n"
-    "a nested value during conversion if you need a consistent whole value.\n"
-    "Subclasses and tuples are not supported.\n\n"
+    "inside containers. Container order is preserved. Subclasses and tuples\n"
+    "are not supported.\n\n"
     "Raises TypeError for unsupported types or non-str map keys, OverflowError\n"
     "for integers or text outside core's length range, UnicodeError for lone\n"
     "surrogates, ValueError for excessive nesting (including cycles), and\n"
-    "MemoryError on allocation failure. Calling before module execution raises\n"
-    "RuntimeError. See docs/values.md for the complete mapping.";
+    "MemoryError on allocation failure. See docs/values.md.";
 
 static const char ta_python_decode_doc[] =
     "decode($module, data, /)\n--\n\n"
     "Decode exactly one supported CBOR item from exact built-in bytes.\n\n"
-    "Use after obtaining a complete message; remove any transport framing\n"
-    "first. Returned values own their text and bytes and outlive data.\n"
     "Arrays become lists, maps become dicts with str keys, and repeated\n"
-    "map keys keep the last value. Wire nesting checks are core's checks.\n"
-    "Tag 32 on text becomes Address; undefined becomes this module's\n"
-    "UNDEFINED singleton. Other tags and simple values are refused.\n\n"
+    "map keys keep the last value. Tag 32 on text becomes Address; undefined\n"
+    "becomes this module's UNDEFINED singleton. Other tags and simple values\n"
+    "are refused.\n\n"
     "Raises TypeError for input other than bytes, ValueError for malformed,\n"
     "truncated, trailing, or unsupported CBOR, and MemoryError on allocation\n"
-    "failure. Calling before module execution raises RuntimeError.\n"
-    "This is a value codec, not a host or driver-message validator.";
+    "failure.";
+
+static const char ta_python_compile_doc[] =
+    "compile_charts(sources, resolver=None)\n--\n\n"
+    "Compile SCXML documents into one image (ta_compile_charts). `sources` is\n"
+    "a list of (name, text) pairs, the first the default boot chart.\n"
+    "`resolver`, an object with resolve(base, source) -> str, reads a static\n"
+    "src= at compile time; it refuses by raising ResolveError. Returns a\n"
+    "Compiled; a compilation with an error raises CompileError with every\n"
+    "diagnostic.";
 
 static PyMethodDef ta_python_methods[] = {
     {"encode", ta_python_encode, METH_O, ta_python_encode_doc},
     {"decode", ta_python_decode, METH_O, ta_python_decode_doc},
+    {"compile_charts", (PyCFunction)(void (*)(void))ta_python_compile_charts, METH_FASTCALL | METH_KEYWORDS,
+     ta_python_compile_doc},
     {NULL, NULL, 0, NULL}
 };
 
-/* Module methods can be called before an import loader executes Py_mod_exec.
- * Check both allocation and identities; a partial initialization must not
- * allow a codec call to read or publish an incomplete value table. */
+/* Module methods can be called before an import loader executes Py_mod_exec. */
 ta_python_module_state *ta_python_codec_state(PyObject *module) {
     ta_python_module_state *state = PyModule_GetState(module);
-    if (state == NULL || state->address_type == NULL ||
-        state->undefined_type == NULL || state->undefined == NULL) {
-        if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "tinyactors codec is not initialized");
+    if (state == NULL || state->address_type == NULL || state->undefined == NULL || state->support == NULL) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "tinyactors is not initialized");
         return NULL;
     }
     return state;
 }
 
-/* Module state owns the interpreter's identities; CPython needs to see all
- * its references when collecting cycles with module-associated heap types. */
+struct PyModuleDef ta_python_module;
+
+ta_python_module_state *ta_python_state_of_type(PyTypeObject *type) {
+    PyObject *module = PyType_GetModuleByDef(type, &ta_python_module);
+    return module ? ta_python_codec_state(module) : NULL;
+}
+
+#define TA_PYTHON_STATE_FIELDS(apply)                                                                           \
+    apply(address_type) apply(undefined_type) apply(undefined) apply(host_type) apply(clock_type)                \
+    apply(compiled_type) apply(chart_type) apply(send_type) apply(entry_type) apply(envelope_type)               \
+    apply(event_type) apply(support) apply(error) apply(compile_error) apply(resolve_error) apply(diagnostic)    \
+    apply(builtins) apply(attach) apply(check_file) apply(event_kinds) apply(time_ns) apply(coroutine_function)
+
 static int ta_python_module_traverse(PyObject *module, visitproc visit, void *arg) {
     ta_python_module_state *state = PyModule_GetState(module);
     if (state == NULL) return 0;
-    Py_VISIT(state->address_type);
-    Py_VISIT(state->undefined_type);
-    Py_VISIT(state->undefined);
+#define TA_PYTHON_VISIT(field) Py_VISIT(state->field);
+    TA_PYTHON_STATE_FIELDS(TA_PYTHON_VISIT)
+#undef TA_PYTHON_VISIT
     return 0;
 }
 
-/* Clear partial initialization as well as normal module teardown. Exported
- * names have separate dictionary references; clear only the state's owned
- * references. */
 static int ta_python_module_clear(PyObject *module) {
     ta_python_module_state *state = PyModule_GetState(module);
     if (state == NULL) return 0;
-    Py_CLEAR(state->undefined);
-    Py_CLEAR(state->undefined_type);
-    Py_CLEAR(state->address_type);
+#define TA_PYTHON_CLEAR(field) Py_CLEAR(state->field);
+    TA_PYTHON_STATE_FIELDS(TA_PYTHON_CLEAR)
+#undef TA_PYTHON_CLEAR
     return 0;
 }
 
-/* CPython's m_free can run without an earlier clear (including init errors). */
 static void ta_python_module_free(void *module) {
     ta_python_module_clear((PyObject *)module);
 }
 
-/* Registration tables contain no runtime identities. Exec publishes the
- * per-module types once; conversions then only borrow module state. */
+/* The types and objects, once per module instance. */
+static int ta_python_module_exec(PyObject *module) {
+    ta_python_module_state *state = PyModule_GetState(module);
+    if (ta_python_value_types_init(module) < 0 || ta_python_support_init(module, state) < 0 ||
+        ta_python_host_init_type(module, state) < 0 || ta_python_clock_init_type(module, state) < 0 ||
+        ta_python_compile_init_type(module, state) < 0 || ta_python_effects_init_types(module, state) < 0 ||
+        ta_python_event_init_type(module, state) < 0)
+        return -1;
+    return 0;
+}
+
 static PyModuleDef_Slot ta_python_slots[] = {
-    {Py_mod_exec, ta_python_value_types_init},
+    {Py_mod_exec, ta_python_module_exec},
     {Py_mod_multiple_interpreters, Py_MOD_MULTIPLE_INTERPRETERS_SUPPORTED},
     {Py_mod_gil, Py_MOD_GIL_NOT_USED},
     {0, NULL}
 };
 
-static struct PyModuleDef ta_python_module = {
+struct PyModuleDef ta_python_module = {
     PyModuleDef_HEAD_INIT,
     .m_name = "tinyactors",
-    .m_doc = "Tinyactors direct binding: neutral-value codec and driver bootstrap.",
+    .m_doc = "tinyactors: SCXML actors in a host, with charts in Python (the \"python\" datamodel) or ECMAScript.",
     .m_size = sizeof(ta_python_module_state),
     .m_methods = ta_python_methods,
     .m_slots = ta_python_slots,
@@ -104,9 +123,7 @@ static struct PyModuleDef ta_python_module = {
     .m_free = ta_python_module_free
 };
 
-/* CPython's required import symbol. Return its multi-phase initialization
- * descriptor; no writer, host or interpreter-specific object is created
- * in static storage when the module is imported. */
+/* CPython's import finds the module by this name (PEP 489). */
 PyMODINIT_FUNC PyInit_tinyactors(void) {
     return PyModuleDef_Init(&ta_python_module);
 }

@@ -1,74 +1,275 @@
-/* Private declarations shared by the extension's C files. Python callers
- * use tinyactors.encode/decode; the conformance adapter imports those same
- * public methods. This is not an additional public C API.
+/* The extension's declarations, shared by its C files (AGENTS.md,
+ * "Layout"). Nothing here is a C API of its own: Python calls the module.
  *
- * Each entry point runs with an attached CPython thread state. Python
- * arguments are borrowed for the duration of the call; a returned object
- * is a new reference, or NULL with a Python exception set. */
+ * Every entry point runs with an attached CPython thread state. Python
+ * arguments are borrowed for the call; a returned object is a new
+ * reference, or NULL with a Python exception set. */
 #ifndef TA_PYTHON_EXTENSION_H
 #define TA_PYTHON_EXTENSION_H
 
 #include <Python.h>
 #include "tinyactors.h"
+#include "tinyactors_datamodel_ecmascript.h"
+#include "tinyactors_runtime.h"
 
-/* One module instance's codec identities, isolated between interpreters.
- * The module owns these references;
- * its traverse/clear slots release cycles formed by heap types retaining
- * their defining module. Conversion calls borrow this state while their
- * module argument keeps it alive. Never store these identities globally. */
+/* Py_SETREF of the full API: put `value` (stolen) in *slot, then drop
+ * what was there. */
+static inline void ta_python_replace(PyObject **slot, PyObject *value) {
+    PyObject *old = *slot;
+    *slot = value;
+    Py_XDECREF(old);
+}
+
+/* ---- the module ----------------------------------------------------------- */
+
+/* One module instance's types and objects, isolated between interpreters
+ * (PEP 489): the module owns these references, its traverse and clear
+ * slots visit and release them. Never kept in a global. */
 typedef struct ta_python_module_state {
     PyObject *address_type;
     PyObject *undefined_type;
     PyObject *undefined;
+    PyObject *host_type;
+    PyObject *clock_type;
+    PyObject *compiled_type;
+    PyObject *chart_type;     /* ChartRef */
+    PyObject *send_type;      /* a send to an I/O processor: a thin view or a record */
+    PyObject *entry_type;     /* a <log> line: a thin view */
+    PyObject *envelope_type;  /* a PEER or PEER_ERROR effect: a thin view */
+    PyObject *event_type;     /* _event in a "python" chart */
+    PyObject *support;        /* the namespace of src/datamodel/support.py */
+    PyObject *error;          /* TinyactorsError, CompileError, ResolveError, Diagnostic */
+    PyObject *compile_error;
+    PyObject *resolve_error;
+    PyObject *diagnostic;
+    PyObject *builtins;       /* what a "python" chart's code may call */
+    PyObject *attach;         /* support.attach: a chart's class and functions */
+    PyObject *check_file;     /* support.check_file: a .py file a resolver read */
+    PyObject *event_kinds;    /* ("platform", "internal", "external") */
+    PyObject *time_ns;        /* time.time_ns: the wall clock */
+    PyObject *coroutine_function; /* inspect.iscoroutinefunction */
 } ta_python_module_state;
 
-/* An immutable actor-reference value. text is an owned, exact Unicode
- * object; .text and str(value) give that same text, without URI parsing.
- * GC also visits the heap type, which retains its defining module. */
+/* The state of the module that defined `type` (a method's defining class,
+ * METH_METHOD), or of `module` itself; NULL with an exception before the
+ * module was executed. */
+ta_python_module_state *ta_python_state_of_type(PyTypeObject *type);
+ta_python_module_state *ta_python_codec_state(PyObject *module);
+
+/* ---- errors ---------------------------------------------------------------- */
+
+/* A TinyactorsError for a bare status: `status` named by ta_status_name. */
+void ta_python_raise_status(ta_python_module_state *state, ta_status status);
+/* A TinyactorsError for a reply's error map ({"code", "message", "data":
+ * {"reason", "path"}}): a new reference. */
+PyObject *ta_python_error_from_reply(ta_python_module_state *state, PyObject *error);
+
+/* ---- values (values.c) ----------------------------------------------------- */
+
+/* Start a writer in `room` that grows through `allocator`, or through the
+ * host's raw allocator when it is NULL (the only place a writer starts,
+ * tools/lint/rules/allocation-in-tables-and-host.yml). */
+typedef struct ta_python_room {
+    ta_buffer room;
+    const ta_allocator *allocator;
+} ta_python_room;
+void ta_python_cbor_init(ta_cbor_writer *writer, const ta_python_room *room);
+
+/* Write one Python value of the value table (docs/values.md) into a
+ * started writer: 0, or -1 with an exception. */
+int ta_python_value_write(ta_python_module_state *state, ta_cbor_writer *writer, PyObject *value);
+/* One whole CBOR item as a Python value: a new reference or NULL. */
+PyObject *ta_python_value_read(ta_python_module_state *state, ta_bytes cbor);
+/* A copy of a value for another actor: mutable containers (list, dict)
+ * copied, immutable values shared, anything outside the table refused
+ * (TypeError) and nesting past 64 refused (ValueError). */
+PyObject *ta_python_value_copy(ta_python_module_state *state, PyObject *value);
+
+PyObject *ta_python_encode(PyObject *module, PyObject *value);
+PyObject *ta_python_decode(PyObject *module, PyObject *value);
+
+/* An immutable actor reference (tag 32). */
 typedef struct ta_python_address {
     PyObject_HEAD
     PyObject *text;
 } ta_python_address;
-
-/* Install this module's Address type and UNDEFINED singleton during
- * Py_mod_exec. Return 0 or -1 with an exception; module teardown releases
- * any state installed before a failure. No Host or core image is involved. */
 int ta_python_value_types_init(PyObject *module);
-
-/* Borrow initialized codec identities for an entry point. A module created
- * with module_from_spec may expose its methods before Py_mod_exec: refuse
- * that state with RuntimeError instead of dereferencing absent identities.
- * Return NULL with an exception, or state kept alive by the module argument. */
-ta_python_module_state *ta_python_codec_state(PyObject *module);
-
-/* Build a new Address from already validated exact Unicode text. Used by
- * the decoder after core accepts tag 32 followed by text. Borrow state and
- * text, return a new reference or NULL. The new object owns a text reference;
- * it never borrows bytes from the reader's input. */
 PyObject *ta_python_address_from_text(ta_python_module_state *state, PyObject *text);
 
-/* Start an empty, call-local writer before converting a Python value.
- * The writer grows through CPython's raw allocator. Read its finished
- * bytes with ta_cbor_writer_bytes, consume or copy that view before
- * ta_cbor_writer_free, and free the writer on every exit, including errors.
- * This bootstrap has no Host arena yet; never share this writer between
- * calls or retain it on a host. Implemented in host.c with the allocator. */
-void ta_python_cbor_init(ta_cbor_writer *writer);
+/* ---- the "python" datamodel (src/datamodel/) -------------------------------- */
 
-/* CPython METH_O entry for tinyactors.encode(value): convert one supported
- * Python value to independent bytes. The module argument selects the
- * codec state supplying this module's Address/UNDEFINED identities.
- * See docs/values.md for the supported values and errors.
- * This codec is for CBOR boundaries: config, posted control messages and
- * values entering/leaving the process. In-process actor inputs use structs
- * and payload handles; do not encode every event on the hot path. */
-PyObject *ta_python_encode(PyObject *module, PyObject *value);
+typedef struct ta_python_host ta_python_host;
 
-/* CPython METH_O entry for tinyactors.decode(data): require exact built-in
- * bytes containing one complete supported CBOR item. Returned strings and
- * byte strings own their contents, so they outlive data. Refuse trailing
- * data and unsupported wire types; never use this to parse a frame stream
- * directly (the adapter must first remove its length prefix). */
-PyObject *ta_python_decode(PyObject *module, PyObject *value);
+/* The datamodel of one host: its tables and its last outputs. It lives in
+ * the Host object, and core holds a pointer to it (the binding's
+ * `datamodel`) for as long as the host lives. */
+typedef struct ta_python_datamodel {
+    ta_python_host *host;       /* the Host it is part of */
+    ta_python_module_state *state;
+    ta_table charts;            /* ta_python_chart_row */
+    ta_table sessions;          /* ta_python_session_row */
+    ta_table payloads;          /* ta_python_payload_row */
+    ta_table loops;             /* ta_python_loop_row: a <foreach> in progress */
+    ta_datamodel_environment *environment; /* the evaluation's, while one runs */
+    PyObject *namespace;        /* the globals of the chart code: builtins and In() */
+    PyObject *drops;            /* values whose last reference was dropped (a list) */
+    PyObject *raised;           /* a BaseException an evaluation raised, raised after it */
+    PyObject *output;           /* the str eval_string and log answered */
+    ta_buffer wire;             /* what to_wire wrote, from the host's allocator */
+    uint64_t serialized;        /* what serialize wrote: a session row's handle */
+} ta_python_datamodel;
+
+const ta_datamodel_vtable *ta_python_datamodel_vtable(void);
+/* Tables and namespace of a new host's datamodel: 0, or -1 with an
+ * exception. Freed after ta_host_free (the host calls into it until then). */
+int ta_python_datamodel_init(ta_python_datamodel *datamodel, ta_python_host *host);
+void ta_python_datamodel_free(ta_python_datamodel *datamodel);
+int ta_python_datamodel_traverse(ta_python_datamodel *datamodel, visitproc visit, void *arg);
+/* Drop the values whose last reference went (bindings.md, section 8):
+ * called after the outer call into core returns, never inside it. */
+void ta_python_datamodel_flush(ta_python_datamodel *datamodel);
+
+/* A payload of the datamodel from a Python value the application gives
+ * (copied through the value table): 0 and *out, or -1 with an exception. */
+int ta_python_payload_new(ta_python_datamodel *datamodel, PyObject *value, ta_payload *out);
+/* The value of a payload: a borrowed reference, NULL if there is none. */
+PyObject *ta_python_payload_value(ta_python_datamodel *datamodel, ta_payload payload);
+void ta_python_payload_release(ta_python_datamodel *datamodel, ta_payload payload);
+/* The datamodel's `.py` check of a resolved file (support.check_file). */
+int ta_python_check_file(ta_python_module_state *state, PyObject *file, PyObject *source);
+
+/* ---- the host (host.c) ------------------------------------------------------ */
+
+/* The datamodels of every host: the native one first, quickjs beside it
+ * (AGENTS.md, "The "python" datamodel"). */
+enum { TA_PYTHON_DATAMODEL_PYTHON = 0, TA_PYTHON_DATAMODEL_ECMASCRIPT = 1, TA_PYTHON_DATAMODELS = 2 };
+
+/* A typed method's handlers: a row of the pending table, whose handle is
+ * the message's id. */
+typedef struct ta_python_pending_row {
+    PyObject *handler;
+    PyObject *on_error;
+} ta_python_pending_row;
+
+struct ta_python_host {
+    PyObject_HEAD
+    ta_python_module_state *state;
+    ta_host *host;                     /* NULL once freed */
+    ta_allocator allocator;            /* PyMem_RawMalloc and PyMem_RawFree */
+    ta_growable_arena arena;           /* a call's scratch, a mark per call */
+    ta_allocator arena_allocator;      /* the arena's view, for a call's writer */
+    ta_python_datamodel python;
+    ta_datamodel_ecmascript *ecmascript;
+    ta_datamodel_binding datamodels[TA_PYTHON_DATAMODELS];
+    ta_table pending;                  /* ta_python_pending_row */
+    uint64_t acks;                     /* batches acknowledged: a view's batch */
+    uint64_t ticks_per_second;         /* host.config's system.ticksPerSecond */
+    unsigned long thread;              /* the creating thread */
+    ta_time deadline;                  /* the last idle run's next_deadline */
+    uint32_t pool;                     /* the last exhausted run's TA_POOL_* */
+    ta_status fault;                   /* the last faulted run's status */
+    uint32_t depth;                    /* API calls in progress on the stack */
+    int turning;                       /* a turn is running: no second one */
+    int closing;                       /* close() asked during a turn */
+    int has_async;                     /* an async def I/O processor */
+    PyObject *processors;              /* per ioProcessors index: (type, handler, async) */
+    PyObject *log;                     /* log handler or None */
+    PyObject *peer;                    /* peer handler or None */
+    PyObject *clock;                   /* a SimulatedClock or None */
+    PyObject *loop;                    /* the asyncio loop of async with, or None */
+    PyObject *timer;                   /* the one TimerHandle, or None */
+    PyObject *scheduled;               /* the call_soon handle of the next turn, or None */
+    PyObject *waiters;                 /* futures of idle() (a list) */
+    PyObject *error;                   /* the first exception of the turn, raised after it */
+};
+
+/* A call into the host: refuses another thread and a freed host, takes
+ * the arena's mark; leave releases it and, when the outermost call ends,
+ * drops what the datamodel deferred. */
+typedef struct ta_python_call {
+    ta_python_host *host;
+    ta_growable_arena_mark mark;
+} ta_python_call;
+int ta_python_enter(ta_python_host *host, ta_python_call *call);
+void ta_python_leave(ta_python_call *call);
+
+/* A payload for session `session` of its datamodel, or for a new actor
+ * of `chart` (session 0): "python", a copy of `value` in a row; quickjs,
+ * its CBOR in the call's arena, read by quickjs. None: payload 0. Fills
+ * `payload` and `datamodel` (its index, to release it on refusal). */
+typedef struct ta_python_payload_for {
+    uint64_t session;
+    ta_host_chart_ref chart;
+    PyObject *value;
+    ta_payload payload;   /* out */
+    uint32_t datamodel;   /* out */
+} ta_python_payload_for;
+int ta_python_host_payload(ta_python_host *host, ta_python_payload_for *payload);
+/* Give back a payload a call refused: it stayed ours. */
+void ta_python_host_payload_release(ta_python_host *host, ta_payload payload, uint32_t datamodel);
+/* The datamodel index of a payload a session gets (TA_NIL: none known). */
+uint32_t ta_python_host_session_datamodel(ta_python_host *host, uint64_t session);
+/* A Python value of a payload of datamodel `datamodel` (an effect's):
+ * the "python" row's value itself, or quickjs's decoded. New reference. */
+typedef struct ta_python_payload_of {
+    ta_payload payload;
+    uint32_t datamodel;
+} ta_python_payload_of;
+PyObject *ta_python_host_payload_value(ta_python_host *host, const ta_python_payload_of *payload);
+/* A view of a str's UTF-8 for a call (None: empty): 0, or -1. */
+int ta_python_text(PyObject *text, ta_string_view *out);
+/* Record the first exception of a turn (the one set now), clearing it. */
+void ta_python_host_keep_error(ta_python_host *host);
+/* Free the host (ta_host_free) and drop every Python reference it holds;
+ * `quiet`: no trace.end and no handler runs (the collector's path). */
+void ta_python_host_close(ta_python_host *host, int quiet);
+int ta_python_host_init_type(PyObject *module, ta_python_module_state *state);
+
+/* ---- the loop (loop.c) ------------------------------------------------------ */
+
+typedef enum ta_python_next {
+    TA_PYTHON_NEXT_YIELD,
+    TA_PYTHON_NEXT_IDLE,
+    TA_PYTHON_NEXT_EXHAUSTED,
+    TA_PYTHON_NEXT_FAULT
+} ta_python_next;
+void ta_python_drain(ta_python_host *host);
+/* After a driver's turns: raise what the turn kept or what the next step
+ * says (MemoryError naming the pool, TinyactorsError for a fault): 0 or -1. */
+int ta_python_turn_raise(ta_python_host *host, ta_python_next next);
+PyObject *ta_python_host_run_until_idle(PyObject *self, PyObject *unused);
+PyObject *ta_python_host_run_forever(PyObject *self, PyObject *unused);
+PyObject *ta_python_host_idle(PyObject *self, PyObject *unused);
+/* An input made outside a turn under asyncio: schedule one turn. */
+void ta_python_loop_schedule(ta_python_host *host);
+/* Stop the loop's timer and pending turn (the host is closing). */
+void ta_python_loop_stop(ta_python_host *host);
+int ta_python_clock_init_type(PyObject *module, ta_python_module_state *state);
+/* The SimulatedClock's time in milliseconds. */
+uint64_t ta_python_clock_now(PyObject *clock);
+void ta_python_clock_forget(PyObject *clock, PyObject *host);
+int ta_python_clock_register(PyObject *clock, PyObject *host);
+
+/* ---- effects (effects.c) ---------------------------------------------------- */
+
+void ta_python_dispatch(ta_python_host *host, uint32_t index);
+int ta_python_effects_init_types(PyObject *module, ta_python_module_state *state);
+/* Answer a send's async task that ended in an exception. */
+PyObject *ta_python_send_task_done(PyObject *send, PyObject *task);
+
+/* ---- typed methods (methods.c) --------------------------------------------- */
+
+void ta_python_reply(ta_python_host *host, uint32_t index);
+/* Drop every pending row: their handlers are never called. */
+void ta_python_pending_drop(ta_python_host *host);
+
+/* ---- the compiler (compile.c) ---------------------------------------------- */
+
+PyObject *ta_python_compile_charts(PyObject *module, PyObject *const *args, Py_ssize_t count, PyObject *names);
+int ta_python_compile_init_type(PyObject *module, ta_python_module_state *state);
+
+/* ---- the support namespace (src/datamodel/expressions.c) ------------------- */
+
+int ta_python_support_init(PyObject *module, ta_python_module_state *state);
 
 #endif
