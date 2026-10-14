@@ -225,7 +225,36 @@ needed; the maintainer confirms or changes them at the API review.
   code reads them (the rewrite records which).
 - **`run()`** returns when the host is idle with no deadline left.
 - **An input during a turn** (an answer, a typed method, a resume) makes
-  the turn run again before it reports idle.
+  the turn yield and turn again, rather than report idle; a turn is
+  bounded at 64 runs and a drain at 64 batches, so a handler that answers
+  every send (a ping-pong) never holds the event loop.
+
+### The memory and throughput review (2026-10-14)
+
+A fresh agent reviewed the binding against the memory and throughput
+rules; what it found is fixed:
+
+- a turn had no bound across runs (an answer per send kept asyncio from
+  running other tasks): bounded, as above, with a test;
+- every Host was in a cycle with itself through In() (freed only by the
+  collector), and a host with a SimulatedClock through the clock: In()
+  reaches the datamodel through a capsule cleared at free, the clock
+  holds its hosts weakly; a test frees a dropped host with the collector
+  off;
+- deserialize's migration held a session row pointer across Python code:
+  it reads the row by its handle again before writing;
+- one large send_many kept an arena chunk of its size for the host's
+  life: it converts in slices of 256;
+- each event made a name `str` per session and a key per bind: names are
+  the chart's shared `str`, the key is interned; the measurement reports
+  the cost after one event too;
+- a thin view whose fields were read could still answer after its ack:
+  answer and fail check the batch first;
+- a driver could start inside another call (a finalizer): refused.
+
+Left for core (capacity planning, not the binding): a segment's region
+grows by doubling under a burst of events and is kept (12.4 KB per actor
+on quickjs after one event each at 10,000 actors).
 - **Not in the API yet** (8.5): invoked services of the application
   (`INVOKE`, `UNINVOKE` are dropped), hibernation with a store (`WAKE`),
   migration's progress, telemetry exporters (`TRACES` and `LOGS` are taken

@@ -14,6 +14,8 @@ typedef struct ta_python_chart_row {
     PyObject *chart;     /* the class: an instance per session */
     PyObject *functions; /* tuple: per expression, a function, (getter, setter), or a SyntaxError */
     PyObject *data;      /* tuple of the <data> ids, as str */
+    PyObject *names;     /* list by the image's event-name node: the name's str, made at its first
+                            event and shared by every session (None until then) */
     uint32_t reads;      /* TA_PYTHON_READS_* */
     uint32_t pad;
 } ta_python_chart_row;

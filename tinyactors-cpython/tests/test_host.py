@@ -104,6 +104,52 @@ class Views(unittest.TestCase):
         host.close()
 
 
+class Bounds(unittest.TestCase):
+    def test_a_stale_view_never_answers_whatever_was_read(self):
+        kept = []
+
+        def processor(host, send):
+            (send.session, send.sendid, send.type, send.traceparent)  # every field answer() needs
+            kept.append(send)
+
+        host = host_with([("echo.scxml", ECHO)], {APP: processor})
+        host.send(spawn(host), "go")
+        host.run_until_idle()
+        with self.assertRaises(tinyactors.TinyactorsError) as raised:
+            kept[0].answer("ack")
+        self.assertEqual(raised.exception.status, "TA_ERROR_STALE")
+        host.close()
+
+    def test_a_dropped_host_is_freed_without_the_collector(self):
+        marker = type("Marker", (), {})()
+        reference = weakref.ref(marker)
+        gc.disable()
+        try:
+            host = host_with([("echo.scxml", ECHO)], log=lambda h, e, marker=marker: marker)
+            spawn(host)
+            host.run_until_idle()
+            del marker, host
+            self.assertIsNone(reference())
+        finally:
+            gc.enable()
+
+    def test_send_many_in_slices(self):
+        counter = chart("<state id='s'><transition event='inc'><assign location='n' expr='n + 1'/></transition>"
+                        "<transition event='show'><log label='n' expr='str(n)'/></transition></state>",
+                        name="counter", data="<data id='n' expr='0'/>")
+        logs = Logs()
+        host = tinyactors.Host({"systemID": "t", "system": {"maxEvents": 4096}}, log=logs)
+        with tinyactors.compile_charts([("counter.scxml", counter)]) as compiled:
+            host.add_image(compiled.image)
+        session = host.spawn(host.chart("counter"))
+        self.assertEqual(host.send_many([(session, "inc")] * 1000 + [(session, "show")]), 1001)
+        host.run_until_idle()
+        self.assertEqual(logs.labelled("n"), ["1000"])
+        with self.assertRaises(TypeError):
+            host.send_many([(session, "inc")] * 300 + [("bad",)])
+        host.close()
+
+
 class Processors(unittest.TestCase):
     def test_a_processor_that_raises_fails_its_send(self):
         def processor(host, send):

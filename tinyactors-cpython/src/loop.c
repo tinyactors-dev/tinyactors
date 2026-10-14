@@ -9,15 +9,24 @@
 /* Fuel per ta_host_run: a turn is bounded, and the drivers let the rest
  * of the program run between turns. */
 #define TA_PYTHON_BUDGET 10000u
+/* Batches a drain takes, and runs a turn makes, before it yields: a
+ * handler that answers every effect with an input (a ping-pong with an
+ * actor, a typed method that posts again) never holds the turn, so the
+ * event loop and the signals get theirs (bindings.md, section 3: "Bound
+ * each turn"). */
+#define TA_PYTHON_BATCHES 64u
+#define TA_PYTHON_RUNS 64u
 
 static const uint64_t ta_python_billion = 1000000000u;
 
 /* ---- one drain at a time ------------------------------------------------------- */
 
-void ta_python_drain(ta_python_host *host) {
+/* 1 when it stopped with effects still pending (the turn yields). */
+int ta_python_drain(ta_python_host *host) {
     const ta_host_effect *effects;
-    uint32_t count;
+    uint32_t count, batches = 0;
     while ((count = ta_host_effects(host->host, &effects)) > 0) {
+        if (batches++ == TA_PYTHON_BATCHES) return 1; /* nothing is open: the take published nothing new */
         for (uint32_t i = 0; i < count; i++) ta_python_dispatch(host, i); /* handlers may call the host:
                                                                              inputs apply now, effects
                                                                              come with the next take */
@@ -25,6 +34,7 @@ void ta_python_drain(ta_python_host *host) {
         host->acks++;                     /* its thin views are stale from here: core keeps no batch counter */
         if (host->depth <= 1) ta_python_datamodel_flush(&host->python); /* outside core, not nested */
     }
+    return 0;
 }
 
 /* ---- the clocks ---------------------------------------------------------------- */
@@ -68,18 +78,21 @@ static double ta_python_delay(ta_python_host *host) {
 /* ---- one turn ------------------------------------------------------------------- */
 
 static ta_python_next ta_python_turn(ta_python_host *host) {
-    ta_python_drain(host);                               /* what inputs and posts appended:
-                                                            a pending reply needs no run */
+    if (ta_python_drain(host)) return TA_PYTHON_NEXT_YIELD; /* what inputs and posts appended:
+                                                               a pending reply needs no run */
     ta_host_advance_time(host->host, ta_python_now(host)); /* ticks at host.config's rate, wall ns */
-    for (;;) {
+    for (uint32_t runs = 0;; runs++) {
         host->inputs = 0;
         ta_run run = ta_host_run(host->host, TA_PYTHON_BUDGET); /* bounded: fuel per call */
-        ta_python_drain(host);
+        int bounded = ta_python_drain(host) || runs + 1 == TA_PYTHON_RUNS;
+        if (bounded && run.status != TA_RUN_EXHAUSTED && run.status != TA_RUN_FAULT)
+            return TA_PYTHON_NEXT_YIELD; /* the turn's bound: let the program run, then turn again */
         switch (run.status) {
         case TA_RUN_EFFECTS:      /* a sync I/O processor's send: answered in the drain, or its sender waits */
         case TA_RUN_EFFECTS_FULL: continue; /* run again now */
         case TA_RUN_YIELDED:      return TA_PYTHON_NEXT_YIELD; /* budget spent, actors still runnable */
-        case TA_RUN_IDLE:         if (host->inputs) continue; /* handlers fed inputs in the drain: run them */
+        case TA_RUN_IDLE:         if (host->inputs) return TA_PYTHON_NEXT_YIELD; /* handlers fed inputs in the
+                                                                                    drain: turn again for them */
                                   host->deadline = run.next_deadline; /* UINT64_MAX: none */
                                   return TA_PYTHON_NEXT_IDLE;
         case TA_RUN_EXHAUSTED:    host->pool = run.detail; /* a TA_POOL_* */
@@ -118,7 +131,7 @@ int ta_python_turn_raise(ta_python_host *host, ta_python_next next) {
  * without an event loop. */
 static int ta_python_driver_enter(ta_python_host *host, ta_python_call *call) {
     if (ta_python_enter(host, call) < 0) return -1;
-    if (host->turning) {
+    if (host->turning || host->depth > 1) { /* inside another call: its turn or leave runs the loop */
         ta_python_leave(call);
         PyErr_SetString(host->state->error, "the host is already turning: a handler or chart code cannot run the loop");
         return -1;
@@ -330,7 +343,7 @@ void ta_python_loop_stop(ta_python_host *host) {
 typedef struct ta_python_clock {
     PyObject_HEAD
     uint64_t milliseconds;
-    PyObject *hosts; /* the hosts made with it (a list) */
+    PyObject *hosts; /* weak references to the hosts made with it (a list): no cycle through a host */
 } ta_python_clock;
 
 uint64_t ta_python_clock_now(PyObject *clock) {
@@ -338,14 +351,21 @@ uint64_t ta_python_clock_now(PyObject *clock) {
 }
 
 int ta_python_clock_register(PyObject *clock, PyObject *host) {
-    return PyList_Append(((ta_python_clock *)clock)->hosts, host);
+    PyObject *reference = PyWeakref_NewRef(host, NULL);
+    int status = reference ? PyList_Append(((ta_python_clock *)clock)->hosts, reference) : -1;
+    Py_XDECREF(reference);
+    return status;
 }
 
 void ta_python_clock_forget(PyObject *clock, PyObject *host) {
     PyObject *hosts = ((ta_python_clock *)clock)->hosts;
     if (!hosts) return;
-    for (Py_ssize_t i = PyList_Size(hosts) - 1; i >= 0; i--)
-        if (PyList_GetItem(hosts, i) == host) PyList_SetSlice(hosts, i, i + 1, NULL);
+    for (Py_ssize_t i = PyList_Size(hosts) - 1; i >= 0; i--) {
+        PyObject *referent = NULL;
+        if (PyWeakref_GetRef(PyList_GetItem(hosts, i), &referent) < 0) PyErr_Clear();
+        if (!referent || referent == host) PyList_SetSlice(hosts, i, i + 1, NULL);
+        Py_XDECREF(referent);
+    }
 }
 
 static PyObject *ta_python_clock_new(PyTypeObject *type, PyObject *arguments, PyObject *keywords) {
@@ -369,9 +389,14 @@ static PyObject *ta_python_clock_increment(PyObject *self, PyObject *amount) {
     PyObject *hosts = PyList_GetSlice(clock->hosts, 0, PyList_Size(clock->hosts));
     if (!hosts) return NULL;
     for (Py_ssize_t i = 0; i < PyList_Size(hosts); i++) {
-        ta_python_host *host = (ta_python_host *)PyList_GetItem(hosts, i);
-        if (!host->host) continue;
-        PyObject *done = ta_python_drive(host, 0);
+        PyObject *referent = NULL;
+        if (PyWeakref_GetRef(PyList_GetItem(hosts, i), &referent) < 0) {
+            Py_DECREF(hosts);
+            return NULL;
+        }
+        ta_python_host *host = (ta_python_host *)referent;
+        PyObject *done = host && host->host ? ta_python_drive(host, 0) : Py_NewRef(Py_None);
+        Py_XDECREF(referent);
         if (!done) {
             Py_DECREF(hosts);
             return NULL;

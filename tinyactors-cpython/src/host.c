@@ -551,6 +551,7 @@ static void ta_python_host_dealloc(PyObject *self) {
     PyTypeObject *type = Py_TYPE(self);
     ta_python_host *host = (ta_python_host *)self;
     PyObject_GC_UnTrack(self);
+    PyObject_ClearWeakRefs(self);
     host->depth = 0;
     host->turning = 0;
     if (host->host) ta_python_host_close(host, 1);
@@ -694,22 +695,28 @@ static PyObject *ta_python_host_send(PyObject *self, PyObject *arguments, PyObje
     return result;
 }
 
-/* send_many(items): each item (session, event[, data[, traceparent]]);
- * the ta_event_in array lives in the call's arena. Returns the length of
- * the accepted prefix; the payloads after it are released (ours). */
-static PyObject *ta_python_host_send_many(PyObject *self, PyObject *items) {
-    ta_python_host *host = (ta_python_host *)self;
-    ta_python_call call;
-    if (ta_python_enter(host, &call) < 0) return NULL;
-    PyObject *list = PySequence_List(items), *result = NULL;
-    Py_ssize_t count = list ? PyList_Size(list) : 0, made = 0;
-    ta_event_in *events = count ? ta_growable_arena_alloc(&host->arena, sizeof(ta_event_in) * (size_t)count, 8) : NULL;
-    uint32_t *datamodels = count ? ta_growable_arena_alloc(&host->arena, sizeof(uint32_t) * (size_t)count, 4) : NULL;
-    if (list && count && (!events || !datamodels)) PyErr_NoMemory();
-    else if (list && count > (Py_ssize_t)UINT32_MAX) PyErr_SetString(PyExc_OverflowError, "too many events");
-    else if (list) {
-        for (; made < count; made++) {
-            PyObject *entry = PyList_GetItem(list, made);
+/* Events a send_many converts and hands core at once: the arena holds a
+ * slice, not the whole list, so one large call leaves no large chunk
+ * kept for the host's life. */
+#define TA_PYTHON_SLICE 256
+
+/* One slice of send_many, events [first, first + count) of `list`: the
+ * accepted prefix of the slice, or -1 with an exception (nothing of the
+ * slice taken). */
+typedef struct ta_python_slice {
+    PyObject *list;
+    Py_ssize_t first, count;
+} ta_python_slice;
+
+static Py_ssize_t ta_python_send_slice(ta_python_host *host, const ta_python_slice *slice) {
+    ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
+    ta_event_in *events = ta_growable_arena_alloc(&host->arena, sizeof(ta_event_in) * TA_PYTHON_SLICE, 8);
+    uint32_t *datamodels = ta_growable_arena_alloc(&host->arena, sizeof(uint32_t) * TA_PYTHON_SLICE, 4);
+    Py_ssize_t made = 0, taken = -1;
+    if (!events || !datamodels) PyErr_NoMemory();
+    else {
+        for (; made < slice->count; made++) {
+            PyObject *entry = PyList_GetItem(slice->list, slice->first + made);
             Py_ssize_t size = PyTuple_Check(entry) ? PyTuple_Size(entry) : 0;
             if (size < 2 || size > 4) {
                 PyErr_SetString(PyExc_TypeError, "a send_many item is (session, event[, data[, traceparent]])");
@@ -721,14 +728,36 @@ static PyObject *ta_python_host_send_many(PyObject *self, PyObject *items) {
             if (ta_python_event(host, &item, &events[made]) < 0) break;
             datamodels[made] = item.datamodel;
         }
-        uint32_t taken = made == count ? ta_host_send_many(host->host, events, (uint32_t)count) : 0;
-        for (Py_ssize_t i = taken; i < made; i++) ta_python_host_payload_release(host, events[i].data, datamodels[i]);
-        if (made == count) {
-            result = PyLong_FromUnsignedLong(taken);
-            if (taken) ta_python_loop_schedule(host);
-        }
+        if (made == slice->count) taken = ta_host_send_many(host->host, events, (uint32_t)made);
+        for (Py_ssize_t i = taken < 0 ? 0 : taken; i < made; i++)
+            ta_python_host_payload_release(host, events[i].data, datamodels[i]); /* still ours */
     }
-    Py_XDECREF(list); /* after the call: the views pointed into its items */
+    ta_growable_arena_release(&host->arena, mark);
+    return taken;
+}
+
+/* send_many(items): each item (session, event[, data[, traceparent]]),
+ * handed to core in slices (ta_host_send_many). Returns the length of the
+ * accepted prefix; the payloads after it are released (ours). An item
+ * that cannot be converted raises, and the slices before its own were
+ * sent. */
+static PyObject *ta_python_host_send_many(PyObject *self, PyObject *items) {
+    ta_python_host *host = (ta_python_host *)self;
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    PyObject *list = PySequence_List(items), *result = NULL;
+    Py_ssize_t count = list ? PyList_Size(list) : 0, accepted = 0;
+    int failed = list ? 0 : 1;
+    for (Py_ssize_t first = 0; !failed && first < count; first += TA_PYTHON_SLICE) {
+        ta_python_slice slice = {list, first, count - first < TA_PYTHON_SLICE ? count - first : TA_PYTHON_SLICE};
+        Py_ssize_t taken = ta_python_send_slice(host, &slice);
+        if (taken < 0) failed = 1;
+        else accepted += taken;
+        if (taken != slice.count) break; /* refused at an event: the rest is not sent */
+    }
+    if (accepted) ta_python_loop_schedule(host);
+    if (!failed) result = PyLong_FromSsize_t(accepted);
+    Py_XDECREF(list); /* after the calls: the views pointed into its items */
     ta_python_leave(&call);
     return result;
 }
@@ -939,7 +968,15 @@ static PyMethodDef ta_python_host_methods[] = {
     {NULL, NULL, 0, NULL}
 };
 
+/* Weak references to a Host (the limited API's way: a member naming the
+ * slot): a SimulatedClock holds its hosts weakly. */
+static PyMemberDef ta_python_host_members[] = {
+    {"__weaklistoffset__", Py_T_PYSSIZET, offsetof(ta_python_host, weakreferences), Py_READONLY, NULL},
+    {NULL, 0, 0, 0, NULL}
+};
+
 static PyType_Slot ta_python_host_slots[] = {
+    {Py_tp_members, ta_python_host_members},
     {Py_tp_doc, "Host(config, io_processors=None, *, log=None, clock=None, peer=None)\n--\n\n"
                 "A host (ta_host): many actor systems as one, with the \"python\" datamodel and quickjs."},
     {Py_tp_new, ta_python_host_create},

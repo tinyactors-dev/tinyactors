@@ -46,6 +46,7 @@ typedef struct ta_python_module_state {
     PyObject *attach;         /* support.attach: a chart's class and functions */
     PyObject *check_file;     /* support.check_file: a .py file a resolver read */
     PyObject *event_kinds;    /* ("platform", "internal", "external") */
+    PyObject *event_key;      /* "_event", interned: bind_event makes no key per event */
     PyObject *time_ns;        /* time.time_ns: the wall clock */
     PyObject *coroutine_function; /* inspect.iscoroutinefunction */
 } ta_python_module_state;
@@ -112,6 +113,7 @@ typedef struct ta_python_datamodel {
     ta_table loops;             /* ta_python_loop_row: a <foreach> in progress */
     ta_datamodel_environment *environment; /* the evaluation's, while one runs */
     PyObject *namespace;        /* the globals of the chart code: builtins and In() */
+    PyObject *capsule;          /* In()'s self: this datamodel, by pointer, no reference to the Host */
     PyObject *drops;            /* values whose last reference was dropped (a list) */
     PyObject *raised;           /* a BaseException an evaluation raised, raised after it */
     PyObject *output;           /* the str eval_string and log answered */
@@ -182,6 +184,7 @@ struct ta_python_host {
     PyObject *scheduled;               /* the call_soon handle of the next turn, or None */
     PyObject *waiters;                 /* futures of idle() (a list) */
     PyObject *error;                   /* the first exception of the turn, raised after it */
+    PyObject *weakreferences;          /* CPython's list of weak references to the Host */
 };
 
 /* A call into the host: refuses another thread and a freed host, takes
@@ -234,7 +237,7 @@ typedef enum ta_python_next {
     TA_PYTHON_NEXT_EXHAUSTED,
     TA_PYTHON_NEXT_FAULT
 } ta_python_next;
-void ta_python_drain(ta_python_host *host);
+int ta_python_drain(ta_python_host *host);
 /* After a driver's turns: raise what the turn kept or what the next step
  * says (MemoryError naming the pool, TinyactorsError for a fault): 0 or -1. */
 int ta_python_turn_raise(ta_python_host *host, ta_python_next next);

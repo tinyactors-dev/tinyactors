@@ -14,6 +14,10 @@ until idle, and reports per actor:
   before. tracemalloc traces every domain, so it holds the Python objects
   and the host's own blocks (PyMem_RawMalloc): the region, the tables, the
   arena; it does not hold quickjs's heap (its own malloc);
+- after one event to each actor, which then keeps its _event (SCXML 5.10:
+  until the next event): resident again, the region, and "kept", traced
+  less the region's growth (the region's blocks are PyMem_RawMalloc's,
+  which tracemalloc sees), what Python's heap keeps per actor;
 - region: host.stats' regionBytes after, divided by N: the host's blocks
   for the segment, sized for the population up front (maxActors), so the
   share of an actor of what the region holds whatever the datamodel.
@@ -23,6 +27,7 @@ numbers (root AGENTS.md, "Benchmarks").
 """
 
 import argparse
+import array
 import json
 import os
 import platform
@@ -80,15 +85,24 @@ def measure(datamodel, actors):
         host.run_until_idle()
         tracemalloc.start()
         before = (resident(), tracemalloc.get_traced_memory()[0], region(host))
-        for _ in range(actors):
-            host.spawn(chart)
+        sessions = array.array("Q", (host.spawn(chart) for _ in range(actors)))  # 8 B an actor, in traced
         host.run_until_idle()
         after = (resident(), tracemalloc.get_traced_memory()[0], region(host))
+        for first in range(0, actors, 256):  # one event each: each keeps its _event
+            host.send_many([(session, "inc") for session in sessions[first:first + 256]])
+            host.run_until_idle()
+        evented = (resident(), tracemalloc.get_traced_memory()[0], region(host))
         tracemalloc.stop()
     return {"datamodel": datamodel, "actors": actors,
             "resident": (after[0] - before[0]) / actors,
             "traced": (after[1] - before[1]) / actors,
-            "region": after[2] / actors}
+            "region": after[2] / actors,
+            "resident_evented": (evented[0] - before[0]) / actors,
+            "traced_evented": (evented[1] - before[1]) / actors,
+            "region_evented": evented[2] / actors,
+            # traced less the region's growth: what the datamodel keeps (the
+            # region's blocks come from PyMem_RawMalloc, which tracemalloc sees)
+            "kept_evented": ((evented[1] - before[1]) - (evented[2] - after[2])) / actors}
 
 
 def signature():
@@ -114,9 +128,12 @@ def main():
     machine = signature()
     print("machine: %s" % ", ".join("%s %s" % (key, value) for key, value in machine.items()))
     print("bytes per actor at %d actors of one chart, resident and idle:" % options.actors)
-    print("%-12s %10s %10s %10s" % ("datamodel", "resident", "traced", "region"))
+    print("%-12s %10s %10s %10s | after one event each: %9s %8s %8s" % (
+        "datamodel", "resident", "traced", "region", "resident", "region", "kept"))
     for result in results:
-        print("%-12s %10.0f %10.0f %10.0f" % (result["datamodel"], result["resident"], result["traced"], result["region"]))
+        print("%-12s %10.0f %10.0f %10.0f | %30.0f %8.0f %8.0f" % (
+            result["datamodel"], result["resident"], result["traced"], result["region"],
+            result["resident_evented"], result["region_evented"], result["kept_evented"]))
     if options.json:
         with open(options.json, "w") as out:
             json.dump({"machine": machine, "results": results}, out, indent=2)

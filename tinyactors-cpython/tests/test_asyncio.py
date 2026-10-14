@@ -77,6 +77,35 @@ class Asyncio(unittest.TestCase):
         asyncio.run(main())
         self.assertEqual(logs.labelled("tick"), ["yes"])
 
+    def test_a_busy_host_lets_other_tasks_run(self):
+        """A turn is bounded: a ping-pong between a handler and its actor
+        (each answer makes the next send) yields to the loop."""
+        pong = chart("<state id='s'>"
+                     "<transition event='go'><send type='%s' target='app' event='ping'/></transition>"
+                     "<transition event='ack' cond='n &lt; 20000'><assign location='n' expr='n + 1'/>"
+                     "<send type='%s' target='app' event='ping'/></transition></state>" % (APP, APP),
+                     name="pong", data="<data id='n' expr='0'/>")
+        ticks = []
+
+        async def ticker():
+            while True:
+                ticks.append(1)
+                await asyncio.sleep(0)
+
+        async def main():
+            async with tinyactors.Host(CONFIG, {APP: lambda host, send: send.answer("ack")}) as host:
+                with tinyactors.compile_charts([("pong.scxml", pong)]) as compiled:
+                    host.add_image(compiled.image)
+                task = asyncio.ensure_future(ticker())
+                await asyncio.sleep(0)
+                before = len(ticks)
+                host.send(host.spawn(host.chart("pong")), "go")
+                await host.idle()
+                task.cancel()
+                return len(ticks) - before
+
+        self.assertGreater(asyncio.run(main()), 10)
+
     def test_typed_methods_under_asyncio(self):
         got = []
 
