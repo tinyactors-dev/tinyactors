@@ -94,10 +94,14 @@ typedef struct ta_datamodel_chart {
 } ta_datamodel_chart;
 enum { TA_BINDING_EARLY = 0, TA_BINDING_LATE = 1 };
 
-enum {
-    TA_DATAMODEL_EVENT_DETACHABLE = 1u
-    << 0 /* detach_event() materializes _event; core may free it */
-};
+/* TA_DATAMODEL_EVENT_DETACHABLE: at each stable point core calls
+ * detach_event and frees its own copy of the event, so an actor at rest pins
+ * no event in core. The datamodel keeps _event (what bind_event gave it,
+ * converted into its own values) until the next bind_event or destroy:
+ * SCXML keeps _event bound to the last event until another is processed
+ * (5.10), so the <onexit> handlers of an actor terminated at rest read it,
+ * and serialize writes it. */
+enum { TA_DATAMODEL_EVENT_DETACHABLE = 1u << 0 };
 
 /* One call into a datamodel for one instance: what every per-instance entry
  * of the vtable takes first. `environment` is NULL for the entries that run
@@ -143,6 +147,9 @@ typedef struct ta_datamodel_vtable {
 
     ta_status (*init_data)(const ta_datamodel_call *call, uint32_t data_declaration);
     ta_status (*bind_event)(const ta_datamodel_call *call, const ta_event_view *event);
+    /* With TA_DATAMODEL_EVENT_DETACHABLE: core frees its event after this;
+     * the datamodel drops whatever still points into core's event and keeps
+     * its own _event (above). */
     void (*detach_event)(const ta_datamodel_call *call);
 
     ta_status (*eval_condition)(const ta_datamodel_call *call, ta_expression e, int *out);

@@ -442,11 +442,12 @@ Python M1's missing `host.create`; both Python builds pass 20 codec tests.
   hook); the width of ids in `types.h` (`types.h:7` says 32 bits;
   sessions, payloads and table handles are 64).
 - **The contract table's missing tests** (boundary.md, every "needed").
-- **`detach_event`:** verify that core calls it when SCXML can no longer
-  process the event (a terminate's exit handlers after a stable point,
-  `serialize` writing "the bound `_event`"), and make the call or
-  `datamodel.h`'s comment ("materializes `_event`") match: the
-  `"python"` datamodel drops its `_event` there (boundary.md, finding 6).
+- **`detach_event` — done (2026-10-14):** SCXML keeps `_event` bound
+  until another event is processed (5.10), and a cancel runs the exit
+  handlers without rebinding it, so a detachable datamodel keeps its
+  `_event` after `detach_event` and core frees only its own copy;
+  `datamodel.h`, the guide and the `"python"` plan say so (boundary.md,
+  finding 6).
 
 Every caller in core, its tests and `ta-conform` migrates in the same
 commits; the "(0012)" and "[8.2]" marks leave `boundary.md`,

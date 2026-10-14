@@ -2315,7 +2315,7 @@ ta_status ta_host_boot(ta_host *host, uint32_t segment) {
     ta_image_info image_info;
     image_info.size = sizeof image_info;
     ta_image_get_info(segment_record->image, &image_info);
-    for (;;) { /* room for every boot actor first: a partial boot cannot be retried */
+    for (;;) { /* room for every boot actor first; a later spawn can still fail (host.h) */
         ta_system_stats stats;
         stats.size = sizeof stats;
         ta_system_stats_get(segment_record->system, &stats);

@@ -145,7 +145,14 @@ TA_API ta_system *ta_host_system(ta_host *h, uint32_t segment);
 
 /* ---- system images ------------------------------------------------------------ */
 /* Spawn the actors a system image declares (<system><actor name chart/>) in
- * `segment` (grown first so all of them fit). */
+ * `segment`, in declaration order. The actor pool is grown first so all of
+ * them fit: TA_ERROR_NO_MEMORY from that growth spawns none, and boot may be
+ * called again. A spawn can still fail after that (the instance or name
+ * space, or the datamodel's create refusing): boot then returns its status
+ * and the actors declared before it stay live. Booting again spawns every
+ * boot actor again, those included, as does a second boot after success;
+ * after such a failure, terminate the ones that live (ta_host_actor_by_name)
+ * or free the host. TA_ERROR_STATE during a run. */
 TA_API ta_status ta_host_boot(ta_host *h, uint32_t segment);
 /* The session of a live actor spawned with `name` (boot actors carry their
  * manifest name), newest segment first; 0 if none. */

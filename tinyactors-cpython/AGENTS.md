@@ -519,10 +519,12 @@ Registered beside quickjs, first; matched by the chart's
   reference on its data's payload row; `_event.data` is that row's
   value. The datamodel sets `TA_DATAMODEL_EVENT_DETACHABLE`, so core calls
   `detach_event` at the stable point after the event's macrostep
-  (`src/core/core.c:468-478`, `:1870`); it drops the Event and the row's
-  reference there, so a stable actor holds no event. That nothing reads
-  `_event` after it is verified in step 8.2 [8.2] (the exit handlers of a
-  terminated actor, `core.c:1875-1878`; `serialize`).
+  (`src/core/core.c:468-478`, `:1870`) and frees its own copy of the
+  event. The datamodel keeps the Event and the row's reference until the
+  next `bind_event` or `destroy`: SCXML keeps `_event` bound to the last
+  event until another is processed (5.10), so the `<onexit>` handlers of
+  an actor terminated at rest read it (`core.c:1876-1878`) and
+  `serialize` writes it. `detach_event` has nothing to drop.
 - **Capture** (`<send>` data, `<donedata>`, invoke params) copies mutable
   values crossing to another actor and shares immutable ones; actors
   share no mutable value.

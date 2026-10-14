@@ -302,6 +302,7 @@ static void refused(world *w) {
     ta_resume resume;
     memset(&resume, 0, sizeof resume);
     CHECK_EQUAL(ta_host_resume(w->host, &resume), TA_ERROR_STATE);
+    CHECK_EQUAL(ta_host_boot(w->host, w->segment), TA_ERROR_STATE);
     ta_run nested = ta_host_run(w->host, 10);
     CHECK_EQUAL(nested.status, TA_RUN_FAULT);
     CHECK_EQUAL(nested.detail, (uint32_t)TA_ERROR_STATE);

@@ -37,6 +37,20 @@ typedef struct host_world {
     size_t blob_length;
 } host_world;
 
+/* The host's allocator: the C library's, refusing while `refusing` is set. */
+static int refusing;
+static void *refusable_alloc(void *context, size_t size, size_t align) {
+    (void)context;
+    if (refusing) return NULL;
+    ta_allocator c = ta_runtime_malloc();
+    return c.alloc(c.context, size, align);
+}
+static void refusable_free(void *context, void *pointer, size_t size) {
+    (void)context;
+    ta_allocator c = ta_runtime_malloc();
+    c.free(c.context, pointer, size);
+}
+
 static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor_descriptor *io,
                        uint32_t io_count) {
     memset(e, 0, sizeof *e);
@@ -54,7 +68,7 @@ static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor
     config.migrate_quantum = 3; /* small steps: jobs span several runs */
     config.io_processors = io;
     config.io_processor_count = io_count;
-    config.allocator = ta_runtime_malloc();
+    config.allocator = (ta_allocator){NULL, refusable_alloc, refusable_free};
     CHECK_EQUAL(test_host_new(&config, &e->host), TA_OK);
 }
 
@@ -1150,10 +1164,9 @@ static void test_restore_after_images_freed(void) {
     free(ds);
 }
 
-/* Boot is the public path from a compiled system manifest to live actors.
- * Start with room for only one actor: boot must grow before spawning the
- * three declared actors, and leave their entry actions for the host loop. */
-static void test_boot_manifest(void) {
+/* A system manifest declaring three boot actors of a chart that logs on
+ * entry, compiled and added to `e`'s host; its segment. */
+static uint32_t add_boot_system(host_world *e) {
     static const test_file files[] = {
         {"worker.scxml", SC("worker", "initial='ready'><state id='ready'>"
                                      "<onentry><log expr=\"'boot'\"/></onentry></state>")},
@@ -1169,13 +1182,20 @@ static void test_boot_manifest(void) {
     ta_source source = {{"system.xml", 10}, {manifest, (uint32_t)strlen(manifest)}};
     ta_compile_result *compiled = NULL;
     CHECK_EQUAL(ta_compile_system(&options, &source, &compiled), TA_OK);
-
-    host_world e;
-    world_open(&e, 1, NULL, 0);
     ta_string_view image = ta_compile_image(compiled);
     uint32_t segment = 0;
-    CHECK_EQUAL(ta_host_add_image(e.host, (ta_bytes){image.pointer, image.length}, &segment), TA_OK);
+    CHECK_EQUAL(ta_host_add_image(e->host, (ta_bytes){image.pointer, image.length}, &segment), TA_OK);
     ta_compile_free(compiled);
+    return segment;
+}
+
+/* Boot is the public path from a compiled system manifest to live actors.
+ * Start with room for only one actor: boot must grow before spawning the
+ * three declared actors, and leave their entry actions for the host loop. */
+static void test_boot_manifest(void) {
+    host_world e;
+    world_open(&e, 1, NULL, 0);
+    uint32_t segment = add_boot_system(&e);
 
     ta_host_segment_info info = {0};
     info.size = sizeof info;
@@ -1209,6 +1229,29 @@ static void test_boot_manifest(void) {
     world_close(&e);
 }
 
+/* The allocator refuses the growth boot needs: TA_ERROR_NO_MEMORY before any
+ * boot actor is spawned, and a boot once it gives room spawns each once. */
+static void test_boot_refused(void) {
+    host_world e;
+    world_open(&e, 1, NULL, 0);
+    uint32_t segment = add_boot_system(&e);
+    ta_host_segment_info info = {0};
+    info.size = sizeof info;
+    refusing = 1;
+    CHECK_EQUAL(ta_host_boot(e.host, segment), TA_ERROR_NO_MEMORY);
+    refusing = 0;
+    CHECK_EQUAL(ta_host_segment_info_get(e.host, segment, &info), TA_OK);
+    CHECK_EQUAL(info.actors, 0); /* none of the three */
+    CHECK_EQUAL(ta_host_actor_by_name(e.host, (ta_string_view){"first", 5}), 0);
+    CHECK_EQUAL(ta_host_boot(e.host, segment), TA_OK);
+    CHECK_EQUAL(ta_host_segment_info_get(e.host, segment, &info), TA_OK);
+    CHECK_EQUAL(info.actors, 3);
+    drain(&e);
+    CHECK_EQUAL(run(&e), TA_RUN_IDLE);
+    CHECK(strcmp(e.log, "boot;boot;boot;") == 0); /* each once */
+    world_close(&e);
+}
+
 static void test_request_answered_with_an_error(void) {
     host_world e;
     world_open(&e, 8, NULL, 0);
@@ -1229,6 +1272,7 @@ static void test_request_answered_with_an_error(void) {
 
 int main(void) {
     RUN(test_boot_manifest);
+    RUN(test_boot_refused);
     RUN(test_image_copied);
     RUN(test_restore_after_images_freed);
     RUN(test_snapshot_pack);

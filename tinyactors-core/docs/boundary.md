@@ -71,7 +71,7 @@ marks a behaviour no test checks.
 | `ta_host_segment_count` (:135) | all | a number | none | answers in R/G | `test_host.c` |
 | `ta_host_segment_info_get` (:136) | all (not checked, `host.c:632-650`) | the caller's struct; `.image` borrowed while the segment is live | `TA_ERROR_INVALID` | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_image_copied`; R/G: `test_host_inputs.c` `test_lookups_answer_and_free_does_nothing` |
 | `ta_host_system` (:140) | all (not checked, `host.c:652-655`) | a `ta_system *`, borrowed until a call that can grow or free the segment | none | answers in R/G, a lookup in `host.h`'s list; a datamodel must not call `ta_system_*` on it (`datamodel.h:7-8`) | `test_host.c`; R: `test_host_inputs.c` `test_a_full_pool_is_no_memory` |
-| `ta_host_boot` (:145) | I, D | the image's boot actors | R/G `TA_ERROR_STATE` (`host.c:2392`); `TA_ERROR_INVALID`: no such segment (`host.c:2394`); `TA_ERROR_NO_MEMORY` before any is spawned | `create` in G (`host.c:2405`) | `test_host.c` `test_boot_manifest`: invalid segment, growth, named actors, entry actions after run; allocation refusal and R/G: needed |
+| `ta_host_boot` (:145) | I, D | the image's boot actors | R/G `TA_ERROR_STATE` (`host.c:2392`); `TA_ERROR_INVALID`: no such segment (`host.c:2394`); `TA_ERROR_NO_MEMORY` from the pool's growth: none spawned; a spawn failing after it (instance or name space, a datamodel's `create`): the earlier boot actors stay, and boot again spawns them again (`host.h`) | `create` in G (`host.c:2405`) | `test_host.c` `test_boot_manifest`: invalid segment, growth, named actors, entry actions after run; `test_boot_refused` (the growth refused); R/G: `test_host_inputs.c` `test_other_calls_are_refused` |
 | `ta_host_actor_by_name` (:148) | all | a session id | 0: none | a lookup | `test_host_inputs.c` |
 | `ta_host_spawn` (:183) | all | a session id; `spawn`'s views read during the call; its payload moves on success | `TA_ERROR_INVALID`: no such segment (`host.c:876`); R/G: no growth, a full pool `TA_ERROR_NO_MEMORY` with nothing changed; inside free `TA_ERROR_STATE` (`host.c:874`) | `create` in G (`host.c:880`); in R the in-run path of `<invoke>`: at the back of the run queue | `test_host_inputs.c` `test_spawn`; a full pool in R: `test_host_inputs.c` `test_spawn_into_a_full_pool_is_no_memory` |
 | `ta_host_locate` (:189) | all | the caller's struct | `TA_ERROR_STALE` (`host.c:663-671`) | a lookup | `test_host.c` |
@@ -156,8 +156,9 @@ keeps first (ADR 0010 decision 1).
 
 ### What no test checks yet
 
-From the table: `ta_host_boot` outside `ta-conform` (its allocation
-refusal and R/G).
+From the table: a boot that fails after some boot actors spawned (a
+spawn refused past the pool's growth), documented in `host.h` but not
+tested.
 
 The findings step 8.2 settles [8.2], each a decision and a test:
 
@@ -180,18 +181,14 @@ The findings step 8.2 settles [8.2], each a decision and a test:
    token's carry a generation, `ta_pool_handle`, `src/base/pool.h:70`);
    sessions, payloads and `ta_table` handles are `uint64_t` with 0 for
    none.
-6. **`detach_event` when SCXML can no longer process the event.** Core
-   calls it at a stable point, only for a datamodel with
-   `TA_DATAMODEL_EVENT_DETACHABLE`, and releases the event then
-   (`maybe_detach`, `src/core/core.c:468-478`, called at `:1870`); the
-   flag's comment says the datamodel "materializes `_event`"
-   (`datamodel.h:98-99`). A binding that drops its `_event` there
-   (bindings.md section 8) needs it to hold that nothing reads `_event`
-   afterwards: verify the paths that run code after a stable point
-   without a new event (a terminate's exit handlers, `PHASE_STABLE` with
-   `INSTANCE_FLAG_CANCEL`, `core.c:1876-1878`; `serialize`, which writes
-   "the bound `_event`", `datamodel.h:169`), and change the call or the
-   comment to match.
+6. **`detach_event`** — settled: the datamodel keeps `_event` after it,
+   until the next `bind_event` or `destroy`; core frees only its own copy.
+   SCXML keeps `_event` bound to the last event until another is
+   processed (`docs/SCXML.md`, 5.10), and a cancel runs `exitInterpreter`
+   without rebinding it (Appendix D): the `<onexit>` handlers of an actor
+   terminated at rest (`PHASE_STABLE` with `INSTANCE_FLAG_CANCEL`,
+   `core.c:1876-1878`) read it, and `serialize` writes it
+   (`datamodel.h`).
 
 ## 1. Inputs
 
@@ -289,8 +286,9 @@ payloads, loops), since language objects cannot live in memory moved by
 views it owns until its next call; core asks for each value once
 (ADR 0010, decision 1). While core is inside a datamodel outside a run,
 calls back into the host follow the run's rules (decision 3).
-`detach_event` is when a datamodel may drop its `_event` (finding 6
-above, [8.2]).
+At `detach_event` core frees its own copy of the event; the datamodel
+keeps its `_event` until the next `bind_event` or `destroy` (finding 6
+above).
 
 **Rejected.** Caller-sized outputs with retries: core ran datamodel code
 two or three times per output (`router.c`, `hibernate.c`), and a 1 KB

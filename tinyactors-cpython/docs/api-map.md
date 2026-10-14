@@ -61,7 +61,7 @@ commit that adds the item removes the mark.
 | `tinyactors.encode(value)`, `tinyactors.decode(data)` | `ta_cbor_writer_init`, `ta_cbor_reader_init`, `ta_cbor_read`, `ta_cbor_writer_bytes`, `ta_cbor_writer_free` | streaming conversion of the neutral-value table; Python types, ownership and exceptions in docs/values.md |
 | `tinyactors.Address(text)`, `Address.text`, `str(Address)`, reference equality and hashing | `TA_CBOR_TAG_URI`, `ta_cbor_write_tag` | immutable Python representation of tag 32 on text; no routing, URI validation or host handle |
 | `tinyactors.UNDEFINED` | `TA_CBOR_UNDEFINED`, `ta_cbor_write_simple` | per-module singleton for undefined, preserved at the top level and inside containers; distinct from None |
-| *planned* the `"python"` datamodel | `TA_DATAMODEL_EVENT_DETACHABLE`, `ta_datamodel_environment_in`, `ta_image_chart_datamodel` | the vtable of `datamodel.h`: a class per chart at `chart_attach`, an instance per session, `_event` until `detach_event` |
+| *planned* the `"python"` datamodel | `TA_DATAMODEL_EVENT_DETACHABLE`, `ta_datamodel_environment_in`, `ta_image_chart_datamodel` | the vtable of `datamodel.h`: a class per chart at `chart_attach`, an instance per session, `_event` until the next `bind_event` or `destroy` (kept across `detach_event`) |
 
 Used internally, with no item:
 
