@@ -495,12 +495,14 @@ static void ta_python_host_end_traces(ta_python_host *host) {
         /* until a take writes nothing (bindings.md section 4), bounded: a
          * handler that makes inputs here (a spawn) makes more records */
         for (uint32_t batches = 0; batches < TA_PYTHON_END_TAKES && ta_host_effects(host->host, &effects) > 0; batches++) {
+            host->batch = 1;
             ta_bytes taken;
             for (uint32_t takes = 0; takes < TA_PYTHON_END_TAKES && ta_host_traces(host->host, &taken) == TA_OK && taken.length; takes++)
                 ta_python_telemetry(host, &(ta_python_export){"traces", taken});
             for (uint32_t takes = 0; takes < TA_PYTHON_END_TAKES && ta_host_logs(host->host, &taken) == TA_OK && taken.length; takes++)
                 ta_python_telemetry(host, &(ta_python_export){"logs", taken});
             ta_host_effects_ack(host->host);
+            host->batch = 0;
             host->acks++;
         }
     }
@@ -898,15 +900,22 @@ static PyObject *ta_python_host_metrics(PyObject *self, PyObject *unused) {
  * can be hibernated now, scanning at most `max_scan` slots. */
 static PyObject *ta_python_host_sweep(PyObject *self, PyObject *arguments) {
     ta_python_host *host = (ta_python_host *)self;
-    unsigned int scan, limit;
-    if (!PyArg_ParseTuple(arguments, "II:sweep", &scan, &limit)) return NULL;
+    PyObject *scan_object, *limit_object;
+    if (!PyArg_ParseTuple(arguments, "O!O!:sweep", &PyLong_Type, &scan_object, &PyLong_Type, &limit_object)) return NULL;
+    unsigned long scan = PyLong_AsUnsignedLong(scan_object), limit = scan == (unsigned long)-1 && PyErr_Occurred()
+                                                                         ? 0 : PyLong_AsUnsignedLong(limit_object);
+    if (PyErr_Occurred()) return NULL; /* negative: OverflowError */
+    if (scan > UINT32_MAX || limit > UINT32_MAX) {
+        PyErr_SetString(PyExc_OverflowError, "sweep's max_scan and limit are 32-bit counts");
+        return NULL;
+    }
     ta_python_call call;
     if (ta_python_enter(host, &call) < 0) return NULL;
     uint64_t *sessions = limit ? ta_growable_arena_alloc(&host->arena, sizeof(uint64_t) * limit, 8) : NULL;
     PyObject *result = NULL;
     if (limit && !sessions) PyErr_NoMemory();
     else {
-        uint32_t found = ta_host_sweep(host->host, scan, (ta_uint64_array){sessions, limit});
+        uint32_t found = ta_host_sweep(host->host, (uint32_t)scan, (ta_uint64_array){sessions, (uint32_t)limit});
         result = PyList_New(found);
         for (uint32_t i = 0; result && i < found; i++) {
             PyObject *session = PyLong_FromUnsignedLongLong(sessions[i]);
@@ -918,15 +927,19 @@ static PyObject *ta_python_host_sweep(PyObject *self, PyObject *arguments) {
     return result;
 }
 
-/* An output taken now (a hibernation blob, metrics): copied once into
- * bytes; outside a drain its batch of this output alone is acknowledged
- * at once, from a handler it joins the open batch. */
+/* An output was taken (a hibernation blob, metrics): with no batch open it
+ * opened a batch of this output alone, acknowledged here; with one open
+ * (a handler's call) it joined that batch, which the drain acks. */
+static void ta_python_host_output_done(ta_python_host *host) {
+    if (host->batch) return;
+    ta_host_effects_ack(host->host);
+    host->acks++;
+}
+
+/* The output copied once into bytes, then done. */
 static PyObject *ta_python_host_output(ta_python_host *host, ta_bytes taken) {
     PyObject *result = PyBytes_FromStringAndSize(taken.pointer, (Py_ssize_t)taken.length);
-    if (!host->turning && host->depth == 1) {
-        ta_host_effects_ack(host->host);
-        host->acks++;
-    }
+    ta_python_host_output_done(host);
     return result;
 }
 
@@ -943,8 +956,13 @@ static PyObject *ta_python_host_hibernate(PyObject *self, PyObject *value) {
     if (ta_python_enter(host, &call) < 0) return NULL;
     ta_bytes taken;
     ta_status status = ta_host_hibernate(host->host, session, &taken);
-    PyObject *result = status == TA_OK ? ta_python_host_output(host, taken) : NULL;
-    if (status != TA_OK) ta_python_raise_status(host->state, status); /* TA_ERROR_STATE: not at a stable point */
+    PyObject *result = NULL;
+    if (status == TA_OK) {
+        result = PyBytes_FromStringAndSize(taken.pointer, (Py_ssize_t)taken.length);
+        if (!result) ta_host_wake(host->host, session, taken); /* the copy failed: back from the view, still
+                                                                  valid, or the actor would have no blob */
+        ta_python_host_output_done(host);
+    } else ta_python_raise_status(host->state, status); /* TA_ERROR_STATE: not at a stable point */
     ta_python_leave(&call);
     return result;
 }
@@ -952,9 +970,14 @@ static PyObject *ta_python_host_hibernate(PyObject *self, PyObject *value) {
 /* wake(session, blob): ta_host_wake, with the blob hibernate gave. */
 static PyObject *ta_python_host_wake(PyObject *self, PyObject *arguments) {
     ta_python_host *host = (ta_python_host *)self;
-    unsigned long long session;
+    PyObject *session_object;
     Py_buffer view;
-    if (!PyArg_ParseTuple(arguments, "Ky*:wake", &session, &view)) return NULL;
+    if (!PyArg_ParseTuple(arguments, "O!y*:wake", &PyLong_Type, &session_object, &view)) return NULL;
+    uint64_t session = PyLong_AsUnsignedLongLong(session_object);
+    if (PyErr_Occurred()) { /* negative or wider than 64 bits: OverflowError */
+        PyBuffer_Release(&view);
+        return NULL;
+    }
     ta_python_call call;
     PyObject *result = NULL;
     if (ta_python_enter(host, &call) == 0) {

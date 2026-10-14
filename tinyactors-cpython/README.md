@@ -179,13 +179,15 @@ hands each blob over as `bytes`, and asks for it back.
   blob is yours to store. An actor that is not at rest (events waiting,
   in a macrostep, an invoked child) raises `TinyactorsError`, and so does
   a `"python"` actor holding a value outside the value table (a `set`, a
-  `tuple`, an object): it stays resident. A pending delayed send goes
-  into the blob.
+  `tuple`, an object): it stays resident. A pending delayed send stays
+  in the host, and when it falls due it wakes the actor.
 - `wake=handler(host, session)`: an event (or a due delayed send) came
   for a hibernated actor; it waits in the mailbox while your handler
   loads the blob and calls `host.wake(session, blob)`, now or later (an
   `async def` handler runs as a task, under `async with`). One call per
-  hibernation, however many events come.
+  hibernation, however many events come. Without a `wake` handler the
+  call is dropped: the actor stays hibernated, and its events wait, until
+  you call `host.wake`.
 
 ```python
 import sqlite3
@@ -199,7 +201,11 @@ def wake(host, session):
 
 def evict(host):                          # after a turn: the cold actors leave
     for session in host.sweep(1 << 20, 1024):
-        db.execute("INSERT OR REPLACE INTO blobs VALUES (?, ?)", (session, host.hibernate(session)))
+        try:
+            blob = host.hibernate(session)
+        except tinyactors.TinyactorsError:    # not at rest, or a value outside the table
+            continue
+        db.execute("INSERT OR REPLACE INTO blobs VALUES (?, ?)", (session, blob))
 ```
 
 **Plan the capacity up front.** A hibernated actor keeps its slot and its
@@ -223,8 +229,8 @@ x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, one run:
 
 | datamodel | populate (spawn and hibernate 2,000,000) | 200,000 events (woken, swept back) | peak resident | core's region | SQLite file |
 |---|---|---|---|---|---|
-| `"python"` | 10.0 s (200,000 a second) | 10.9 s (18,300 a second; 199,869 wakes) | 170 MB (85 B per actor) | 121 MB (60 B per actor) | 355 MB |
-| quickjs | 14.3 s (140,000 a second) | 12.1 s (16,500 a second; 199,869 wakes) | 172 MB (86 B per actor) | 121 MB (60 B per actor) | 409 MB |
+| `"python"` | 8.1 s (246,000 a second) | 9.3 s (21,400 a second; 199,869 wakes) | 170 MB (85 B per actor) | 121 MB (60 B per actor) | 355 MB |
+| quickjs | 14.2 s (141,000 a second) | 11.9 s (16,800 a second; 199,869 wakes) | 172 MB (86 B per actor) | 121 MB (60 B per actor) | 409 MB |
 
 The region is core's (about 60 B per actor, hibernated or not); the
 store is SQLite's file. Every actor's count matched the events it was
@@ -274,8 +280,9 @@ actors share no mutable value.
 - **Nesting is limited to 64,** which stops cycles but not a value that
   shares subtrees (`a = [a, a]` sixty times): another reason charts are
   trusted code.
-- A `"python"` actor hibernates only while its variables hold values of
-  the value table; a `<foreach>`'s `item` and `index` must be declared
+- A `"python"` actor hibernates (and exports, and migrates, once those
+  are in the API) only while its variables, and the data of its pending
+  delayed sends, are values of the value table; a `<foreach>`'s `item` and `index` must be declared
   `<data>`.
 - Not in the API yet: export and snapshots, migration, invoked services
   of the application.

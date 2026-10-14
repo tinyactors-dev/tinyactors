@@ -21,20 +21,25 @@ static const uint64_t ta_python_billion = 1000000000u;
 
 /* ---- one drain at a time ------------------------------------------------------- */
 
-/* 1 when it stopped with effects still pending (the turn yields). */
+/* 1 when it stopped at its bound (the turn yields; effects may be pending).
+ * It checks the bound before a take: a take opens a batch, and one left
+ * open between turns would take in an output the application pulls then
+ * (hibernate, metrics), whose ack would end effects nobody dispatched. */
 int ta_python_drain(ta_python_host *host) {
     const ta_host_effect *effects;
-    uint32_t count, batches = 0;
-    while ((count = ta_host_effects(host->host, &effects)) > 0) {
-        if (batches++ == TA_PYTHON_BATCHES) return 1; /* nothing is open: the take published nothing new */
+    uint32_t count;
+    for (uint32_t batches = 0;; batches++) {
+        if (batches == TA_PYTHON_BATCHES) return 1;
+        if ((count = ta_host_effects(host->host, &effects)) == 0) return 0;
+        host->batch = 1;
         for (uint32_t i = 0; i < count; i++) ta_python_dispatch(host, i); /* handlers may call the host:
                                                                              inputs apply now, effects
                                                                              come with the next take */
         ta_host_effects_ack(host->host);  /* everything handed out for the batch ends */
+        host->batch = 0;
         host->acks++;                     /* its thin views are stale from here: core keeps no batch counter */
         if (host->depth <= 1) ta_python_datamodel_flush(&host->python); /* outside core, not nested */
     }
-    return 0;
 }
 
 /* ---- the clocks ---------------------------------------------------------------- */
@@ -89,9 +94,11 @@ static ta_python_next ta_python_turn(ta_python_host *host) {
     if (ta_python_drain(host)) return TA_PYTHON_NEXT_YIELD; /* what inputs and posts appended:
                                                                a pending reply needs no run */
     if (host->retake) { /* a take the allocator refused: again, in a batch of its own */
+        host->batch = 1;
         if (host->retake & 1u) ta_python_take(host, 1);
         if (host->retake & 2u) ta_python_take(host, 0);
         ta_host_effects_ack(host->host);
+        host->batch = 0;
         host->acks++;
     }
     ta_host_advance_time(host->host, ta_python_now(host)); /* ticks at host.config's rate, wall ns */

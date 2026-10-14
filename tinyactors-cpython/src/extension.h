@@ -171,6 +171,8 @@ struct ta_python_host {
     ta_status fault;                   /* the last faulted run's status */
     uint32_t depth;                    /* API calls in progress on the stack */
     int turning;                       /* a turn is running: no second one */
+    int batch;                         /* a batch of effects is taken and not yet acked: an output taken
+                                          now joins it; else it opens a batch of its own, acked at once */
     int closing;                       /* close() asked during a turn */
     int has_async;                     /* an async def I/O processor */
     int inputs;                        /* an input was made since the last run */

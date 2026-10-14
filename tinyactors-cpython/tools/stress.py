@@ -14,8 +14,8 @@ The application's side of hibernation (bindings.md section 4; README,
    cold actors, then the least recently used, and they are hibernated
    again until R are resident;
 3. verify: a sample of actors (all of them when N is small) reports its
-   count, which must be the events it was sent, and after every eviction
-   at most R actors are resident (host_stats, every 64 batches).
+   count, which must be the events it was sent; after every eviction at
+   most R actors are resident (host_stats).
 
 Exits with status 1 when a check fails. Prints the times, the rates, the
 store's size, the process's peak memory and the host's region per actor.
@@ -114,7 +114,9 @@ def main():
     def hibernate(host, session):
         try:
             store.put(session, host.hibernate(session))
-        except tinyactors.TinyactorsError:
+        except tinyactors.TinyactorsError as error:
+            if error.status != "TA_ERROR_STATE":
+                raise  # a value outside the table, a bug: the run fails
             return False  # not at a stable point now: it stays resident
         resident.pop(session, None)
         return True
@@ -126,10 +128,10 @@ def main():
         hibernated = 0
         while len(resident) > options.resident:
             cold = host.sweep(1 << 20, len(resident) - options.resident)
-            for session in cold:
-                hibernated += hibernate(host, session)
-            if not cold:
-                break
+            went = sum(hibernate(host, session) for session in cold)
+            hibernated += went
+            if not went:
+                break  # nothing cold, or nothing at rest: the LRU order below
         for session in list(resident)[:max(0, len(resident) - options.resident)]:
             hibernated += hibernate(host, session)
         return hibernated
@@ -171,6 +173,7 @@ def main():
             host.run_until_idle()
             for old in list(resident)[:BATCH]:
                 hibernate(host, old)
+            check_resident(host, 0)
         if i and i % 500_000 == 0:
             print("  populate: %d actors, %.1f s" % (i, time.perf_counter() - started), flush=True)
     host.run_until_idle()
@@ -198,8 +201,7 @@ def main():
             failures.append("send_many refused events")
         host.run_until_idle()  # WAKE: read from the store, woken, the events run
         swept += evict(host)
-        if first // BATCH % 64 == 0:
-            check_resident(host, 0)
+        check_resident(host, 0)
     store.flush()
     traffic = time.perf_counter() - started
     check_resident(host, 0)
@@ -214,6 +216,7 @@ def main():
         host.send_many([(sessions[index], "report") for index in indices])
         host.run_until_idle()
         evict(host)
+        check_resident(host, 0)
     wrong = [index for index in sample if counts.get(sessions[index]) != sent[index]]
     if wrong:
         failures.append("%d of %d actors counted wrong, e.g. actor %d: %r, sent %d" % (
@@ -229,7 +232,7 @@ def main():
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
     print("verify: %d actors' counts in %.1f s, %d wrong" % (len(sample), verified, len(wrong)))
     print("store: %d puts, %d gets, %.1f MB (%.0f B an actor)" % (store.puts, store.gets, size / 1e6, size / options.actors))
-    print("memory: peak resident %.0f MB (%.0f B an actor); region %.1f MB (%.0f B an actor); at most %d actors resident" % (
+    print("memory: peak resident %.0f MB (%.0f B an actor); region %.1f MB (%.0f B an actor); at most %d actors resident after an eviction" % (
         peak_rss / 1e6, peak_rss / options.actors, region[0] / 1e6, region[0] / options.actors, peak[0]))
     for failure in failures:
         print("FAIL " + failure)
