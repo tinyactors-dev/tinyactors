@@ -219,7 +219,8 @@ Decided by the maintainer (2026-10-13); every item is in
   (`ta_host_traces`, `ta_host_logs`), copies the view once into `bytes`
   (boundary.md section 7) and calls the handler with `"traces"` or
   `"logs"`; without a handler the request is taken and dropped, so the
-  encoder goes on. An `async def` handler runs as a task; a handler's
+  encoder goes on. An `async def` handler runs as a task (and, like an
+  `async def` processor's, is refused under `with`); a handler's
   exception is raised after the turn and its request is lost (retrying is
   the application's I/O). **`host.metrics() -> bytes`** pulls
   `ta_host_metrics` the same way: outside a drain its batch of one output
@@ -244,7 +245,15 @@ Decided by the maintainer (2026-10-13); every item is in
   session)`** gets each `TA_EFFECT_WAKE` (an event or a due delayed send
   for a hibernated session, one effect per hibernation), and the handler
   calls **`host.wake(session, blob)`** (`ta_host_wake`), now or later (an
-  `async def` handler runs as a task; refused under `with`). Where the
+  `async def` handler runs as a task; refused under `with`). Without a
+  `wake` handler the effect is dropped: the session stays hibernated and
+  its events wait until the application calls `wake`. An output taken
+  with no batch open opens a batch of its own, which the binding
+  acknowledges at once; with one open (a handler's call) it joins it.
+  The binding tracks this with a flag set from a take to its ack, never
+  by guessing from the call depth; and a drain stops at its bound before
+  a take, so no batch stays open between turns. A blob the copy into
+  `bytes` fails on is woken back from the view before the ack. Where the
   blobs live, when to sweep and how many stay resident are the
   application's; `tools/stress.py` is the pattern, with SQLite.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
@@ -582,8 +591,11 @@ Registered beside quickjs, first; matched by the chart's
   table (`{"vars": {id: value}, "event": [its eight fields] | null}`),
   with the writer the datamodel keeps until its next call; core puts the
   bytes in the blob and calls `destroy`, which removes the row: a
-  hibernated `"python"` session holds no Python object, only the blob
-  the application stores. `deserialize` reads it back into a new instance
+  hibernated `"python"` session's instance, variables and `_event` are
+  gone, and the blob the application stores holds them. The payloads of
+  its pending delayed sends and of the events waiting in its mailbox stay
+  in the payload table: those stay in the host, and the blob does not
+  carry them. `deserialize` reads it back into a new instance
   of the chart's class (a new row, so a new handle), and keeps the old
   bindings in the row for `migrate`. A variable holding a value outside
   the table (a `set`, a `tuple`, an object) makes `serialize` refuse with
@@ -592,9 +604,13 @@ Registered beside quickjs, first; matched by the chart's
   (2026-10-13): with the handle, a hibernated session kept its instance
   on the Python heap, so hibernation freed the region but not the
   memory a population of millions needs to leave. The same `serialize`
-  serves export, which reaches it with no reason
-  (`tinyactors-core/src/system/hibernate.c:329`); the binding exposes no
-  export call yet. Migration within the host: `deserialize` with the new
+  serves export and a migration's export (`ta_host_migrate`), which reach
+  it with no reason (`tinyactors-core/src/system/hibernate.c:329`), with
+  `payload_serialize` for the payloads of pending delayed sends: an actor
+  that holds a value outside the table, or has such a payload pending,
+  refuses those too (its migration fails and it stays on the old
+  version). The binding exposes neither export nor migration yet, so
+  `deserialize` with a new chart is untested. Migration within the host: `deserialize` with the new
   chart makes an instance of the new class and sets the variables both
   declare; `migrate` returns the old bindings as a payload.
 - **Measured cost per session** (`mise run measure`, 2026-10-14: x86_64
@@ -611,8 +627,8 @@ Registered beside quickjs, first; matched by the chart's
   ~16 B, the system variables ~100–250 B) was close for the instance (80
   B with five slots, plus its GC header); the system variables cost
   nothing here, because they are made only for a chart whose code reads
-  them, and the row is 32 B (instance, chart, the params until the first
-  event, flags). Compiled code belongs to the chart, never to a session.
+  them, and the row was 32 B then (instance, chart, the params until the
+  first event, flags; 24 B since flags left it, 2026-10-14). Compiled code belongs to the chart, never to a session.
 
 ## C rules
 

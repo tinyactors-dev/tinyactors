@@ -111,8 +111,9 @@ class Hibernation(unittest.TestCase):
             self.assertEqual(len(host.sweep(1024, 2)), 2)
 
     def test_a_delayed_send_wakes_the_actor_it_was_sent_to(self):
-        """A pending delayed send goes into the blob; when it falls due the
-        host asks for the actor (a WAKE) and delivers it."""
+        """A pending delayed send stays in the host while its actor is
+        hibernated; when it falls due the host asks for the actor (a WAKE)
+        and delivers it."""
         logs, store = Logs(), Store()
         clock = tinyactors.SimulatedClock()
         document = COUNTER["python"].replace("</state>", "<transition event='later'><log label='later' expr='str(n)'/></transition></state>")
@@ -193,6 +194,58 @@ class Hibernation(unittest.TestCase):
             host.send(session, "inc", 1)
             with self.assertRaises(ValueError):
                 host.run_until_idle()
+
+    def test_hibernate_from_a_nested_call_outside_a_turn_leaves_no_batch_open(self):
+        """A send_many iterator is a call inside a call, outside any turn:
+        the blob's batch is acknowledged there, and the next run is not
+        refused."""
+        logs, store = Logs(), Store()
+        with host_with([("counter.scxml", COUNTER["python"])], log=logs, wake=store) as host:
+            a, b = host.spawn(host.chart("counter")), host.spawn(host.chart("counter"))
+            host.run_until_idle()
+
+            def items():
+                store.blobs[a] = host.hibernate(a)
+                yield (b, "inc", 1)
+
+            self.assertEqual(host.send_many(items()), 1)
+            host.run_until_idle()
+            host.send(a, "report")
+            host.run_until_idle()
+        self.assertEqual(logs.labelled("n"), ["0 [] report"])
+
+    def test_hibernate_between_turns_ends_no_effect_undispatched(self):
+        """A turn that stops at its bound of batches leaves none taken: a
+        blob pulled before the next turn does not acknowledge effects that
+        were never dispatched."""
+        replies = [0]
+
+        def again(host, result):
+            replies[0] += 1
+            if replies[0] < 200:
+                host.host_stats(again)
+
+        def boom(host, result):
+            raise RuntimeError("stop the driver")
+
+        with host_with([("counter.scxml", COUNTER["python"])]) as host:
+            session = host.spawn(host.chart("counter"))
+            host.run_until_idle()
+            host.host_stats(boom)
+            host.host_stats(again)
+            with self.assertRaises(RuntimeError):
+                host.run_until_idle()
+            host.hibernate(session)
+            host.run_until_idle()
+        self.assertEqual(replies[0], 200)
+
+    def test_sweep_and_wake_refuse_numbers_out_of_range(self):
+        with host_with([("counter.scxml", COUNTER["python"])]) as host:
+            for scan, limit in ((10, -1), (10, 2 ** 32 + 3), (-1, 1)):
+                with self.assertRaises(OverflowError):
+                    host.sweep(scan, limit)
+            with self.assertRaises(OverflowError):
+                host.wake(-1, b"")
 
     def test_an_async_wake_handler_under_with_raises_type_error(self):
         async def wake(host, session):

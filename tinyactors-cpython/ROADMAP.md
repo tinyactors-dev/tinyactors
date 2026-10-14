@@ -360,6 +360,37 @@ already hibernated, a `set` in a variable, a bad blob), a hibernated
 `"python"` session holds no instance, a wake handler that raises, an
 `async def` wake handler (and its `TypeError` under `with`).
 
+A fresh agent reviewed hibernation; fixed (with tests):
+
+- the binding guessed from the call depth whether an output it took
+  (`hibernate`, `metrics`) had opened a batch of its own, wrong both
+  ways: from a call inside a call outside a turn (a `send_many`
+  iterator) it left that batch open and every later run was refused
+  (`TA_ERROR_STATE`); between turns it acknowledged the batch a drain had
+  taken at its bound and not dispatched, so its effects were lost. A
+  flag now holds from a take to its ack, and the drain checks its bound
+  before a take;
+- a blob whose copy into `bytes` failed was acknowledged anyway: the
+  actor had no blob anywhere. It is woken back from the view first;
+- `sweep` and `wake` wrapped numbers out of range (`sweep(10, -1)` asked
+  for 34 GB); they raise `OverflowError`, as `hibernate` did;
+- `payload_serialize` answers `TA_ERROR_UNSUPPORTED` for a value outside
+  the table, as `datamodel.h` asks (`to_wire` keeps `TA_ERROR_INVALID`),
+  and a `KeyboardInterrupt` while writing a session is kept for the
+  driver, not cleared;
+- `tools/stress.py` checks the resident bound after every eviction (it
+  sampled every 64 batches), treats only `TA_ERROR_STATE` as "not at rest
+  now", and cannot loop when the sweep's cold actors refuse;
+- the docs said a delayed send goes into the blob and a hibernated
+  session holds no Python object: the payloads of its pending delayed
+  sends and waiting events stay in the host. They also say that without
+  a `wake` handler the actor stays hibernated, and that export and
+  migration refuse what hibernation refuses.
+
+Not changed: `deserialize` sets each variable twice (to `None`, then its
+value), a small cost per wake; a `KeyboardInterrupt` during `wake`'s
+`deserialize` is raised at the next turn rather than by `wake()`.
+
 ## How the work runs
 
 The root ROADMAP.md, step 8, "Rules for the work", sets these for every

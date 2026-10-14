@@ -613,16 +613,16 @@ static ta_status ta_python_custom(const ta_datamodel_call *call, uint32_t defini
 
 /* A value as CBOR, in a block of the host's allocator kept between calls:
  * a view until the datamodel's next call (to_wire, serialize,
- * payload_serialize). A value outside the table: TA_ERROR_INVALID. */
+ * payload_serialize). A value outside the table: TA_ERROR_UNSUPPORTED. */
 static ta_status ta_python_wire(ta_python_datamodel *datamodel, PyObject *value, ta_bytes *out) {
     ta_cbor_writer writer;
     ta_python_cbor_init(&writer, &(ta_python_room){{datamodel->wire.pointer, datamodel->wire.capacity, 0}, &datamodel->host->allocator});
     int written = ta_python_value_write(datamodel->state, &writer, value);
-    ta_status status = written < 0 ? TA_ERROR_INVALID : ta_cbor_writer_bytes(&writer, out);
-    if (written < 0) PyErr_Clear();
+    ta_status status = written < 0 ? TA_ERROR_UNSUPPORTED : ta_cbor_writer_bytes(&writer, out);
+    if (written < 0) (void)ta_python_failed(datamodel); /* kept if it is a KeyboardInterrupt */
     if (status != TA_OK) {
         ta_cbor_writer_free(&writer); /* a block it grew, never our room */
-        return status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID;
+        return status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_UNSUPPORTED;
     }
     if (writer.bytes != (unsigned char *)datamodel->wire.pointer) { /* it grew: the block is the room now */
         const ta_allocator *allocator = &datamodel->host->allocator;
@@ -664,9 +664,8 @@ static ta_status ta_python_serialize(const ta_datamodel_call *call, ta_bytes *ou
         }
     } else if (event) fields = Py_NewRef(Py_None);
     if (fields) state = Py_BuildValue("{s:O,s:O}", "vars", vars, "event", fields);
-    ta_status result = state ? ta_python_wire(datamodel, state, out) : TA_ERROR_INVALID;
-    if (!state) PyErr_Clear();
-    if (result == TA_ERROR_INVALID) result = TA_ERROR_UNSUPPORTED; /* a value outside the table: stays resident */
+    ta_status result = state ? ta_python_wire(datamodel, state, out) : TA_ERROR_UNSUPPORTED; /* stays resident */
+    if (!state) (void)ta_python_failed(datamodel); /* kept if it is a KeyboardInterrupt */
     Py_XDECREF(state);
     Py_XDECREF(fields);
     Py_XDECREF(event);
@@ -746,7 +745,9 @@ static ta_status ta_python_migrate(const ta_datamodel_call *call, ta_payload *bi
     return ta_python_payload_add(datamodel, taken, bindings) < 0 ? (PyErr_Clear(), TA_ERROR_NO_MEMORY) : TA_OK;
 }
 
-static ta_status ta_python_to_wire(void *self, ta_payload payload, ta_bytes *out) {
+/* A payload's value as CBOR (payload_serialize): TA_ERROR_UNSUPPORTED when
+ * it is outside the table. */
+static ta_status ta_python_payload_serialize(void *self, ta_payload payload, ta_bytes *out) {
     ta_python_datamodel *datamodel = self;
     PyObject *value = ta_python_payload_value(datamodel, payload);
     if (!value) return TA_ERROR_INVALID;
@@ -754,6 +755,12 @@ static ta_status ta_python_to_wire(void *self, ta_payload payload, ta_bytes *out
     ta_status status = ta_python_wire(datamodel, value, out);
     Py_DECREF(value);
     return status;
+}
+
+/* The same as a neutral value (to_wire): TA_ERROR_INVALID when it cannot be one. */
+static ta_status ta_python_to_wire(void *self, ta_payload payload, ta_bytes *out) {
+    ta_status status = ta_python_payload_serialize(self, payload, out);
+    return status == TA_ERROR_UNSUPPORTED ? TA_ERROR_INVALID : status;
 }
 
 static ta_status ta_python_from_wire(void *self, ta_bytes cbor, ta_payload *out) {
@@ -820,7 +827,7 @@ static const ta_datamodel_vtable ta_python_vtable = {
     .migrate = ta_python_migrate,
     .to_wire = ta_python_to_wire,
     .from_wire = ta_python_from_wire,
-    .payload_serialize = ta_python_to_wire, /* a delayed send's payload in an export blob: its CBOR */
+    .payload_serialize = ta_python_payload_serialize, /* a delayed send's payload in an export blob: its CBOR */
     .payload_deserialize = ta_python_from_wire,
     .variable = ta_python_variable,
 };
