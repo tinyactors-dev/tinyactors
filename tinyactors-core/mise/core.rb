@@ -47,7 +47,7 @@ module Core
     # Many systems as one (versions, routing, migration jobs, hibernation
     # policy). Freestanding: it allocates only through the ta_allocator its
     # configuration gives it (docs/adr/0005).
-    Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/router.c src/host/telemetry.c src/host/request.c src/host/definitions.c]),
+    Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/router.c src/host/telemetry.c src/host/request.c src/host/definitions.c src/host/session_map.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -174,6 +174,7 @@ module Core
     unit('test_base', 'base'),
     unit('test_status', 'base'),
     unit('test_table', 'base'),
+    unit('test_session_map', 'host'),
     unit('test_growable_arena', 'base'),
     unit('test_headers', 'base'),
     Program.new(name: 'test_headers_cxx', sources: %w[tests/unit/test_headers.cpp], uses: %w[base], cxx: true),

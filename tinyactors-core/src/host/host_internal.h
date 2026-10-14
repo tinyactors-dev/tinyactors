@@ -13,6 +13,7 @@
 #include <tinyactors/host.h>
 
 #include "base/output.h"
+#include "host/session_map.h"
 
 #define SERIALS_SHIFT 32
 /* blocks the published effects still point into: each doubling of the
@@ -98,9 +99,9 @@ typedef struct migration_job {
     ta_time deadline;
     int walking;
     uint32_t walk_segment, cursor;
-    uint64_t *retry; /* retry and woken: retry_capacity entries each */
-    uint8_t *woken;
-    uint32_t retry_count, retry_capacity;
+    session_map members; /* the sessions it waits for: JOB_ASLEEP or JOB_RETRY (host.c) */
+    uint64_t *retry;     /* the JOB_RETRY members, tried round robin from retry_next */
+    uint32_t retry_count, retry_capacity, retry_next;
     uint32_t migrated, failed;
     uint64_t *left; /* after it ended: stragglers (until the next run) */
     uint32_t left_count, left_capacity;
@@ -167,10 +168,8 @@ struct ta_host {
     uint32_t segment_count, segment_capacity, round_robin;
     chart_version *versions;
     uint32_t version_count, version_capacity;
-    /* session -> segment, for sessions living outside their own range (open
-     * addressing; a removed entry keeps its key with value TA_NIL) */
-    uint64_t *moved_keys;
-    uint32_t *moved_values, moved_capacity, moved_count, moved_used;
+    /* session -> segment, for sessions living outside their own range */
+    session_map moved;
     ta_time now;
     /* effects of the current batch; effects and effect_strings have effect_capacity entries */
     ta_host_effect *effects;
