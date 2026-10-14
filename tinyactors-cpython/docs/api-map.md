@@ -28,9 +28,9 @@ A core function no item uses is listed below the table: used internally
 | `with compile_charts(...) as compiled`, `Compiled.close()` | `ta_compile_free` | the collector as a fallback; `close()` while a buffer of `image` is held raises `BufferError` |
 | `CompileError`, `Diagnostic` | `ta_compile_diagnostics`, `TA_DIAGNOSTIC_ERROR` | a `TinyactorsError` with every diagnostic: `severity`, `code`, `file`, `line`, `column`, `message` |
 | `resolver.resolve(base, source) -> str`, `tinyactors.ResolveError(message, line=None, column=None)` | `ta_compile_charts`, `ta_compile_diagnostics` | the resolver protocol, given to `compile_charts` only (static `src` at compile time); a `ResolveError`, a `SyntaxError` or the rewrite's refusal of a `.py` file becomes a diagnostic at its line and column, the message in the compilation's scratch arena; another exception is raised from `compile_charts` after the result is freed |
-| `tinyactors.Host(config, io_processors=None, *, log=None, clock=None, peer=None)` | `ta_host_create`, `host.config` | the config as CBOR in the call's arena (`ta_growable_arena`); a refused config raises `TinyactorsError` with core's error; the extension posts `host.config` once for `ticksPerSecond` and the I/O processors' indices; the environment registers the `"python"` datamodel and quickjs |
+| `tinyactors.Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None)` | `ta_host_create`, `host.config` | the config as CBOR in the call's arena (`ta_growable_arena`); a refused config raises `TinyactorsError` with core's error; the extension posts `host.config` once for `ticksPerSecond` and the I/O processors' indices; the environment registers the `"python"` datamodel and quickjs |
 | `Host.ticks_per_second`, `Host.closed` | `host.config`, `ta_host_free` | read once at creation; whether the host was freed |
-| `with Host(...)`, `async with Host(...)`, `Host.close()` | `trace.end`, `ta_host_traces`, `ta_host_effects_ack`, `ta_host_free` | the stop of bindings.md section 4; pending response handlers dropped, never called; from a handler, after the loop returns |
+| `with Host(...)`, `async with Host(...)`, `Host.close()` | `trace.end`, `ta_host_traces`, `ta_host_logs`, `ta_host_effects_ack`, `ta_host_free` | the stop of bindings.md section 4: with a telemetry handler, `trace.end` ends the open spans and the last take goes to it, its exception raised once the host is freed; pending response handlers dropped, never called; from a handler, after the loop returns |
 | `Host.add_image(image) -> int` | `ta_host_add_image` | the host copies the bytes during the call; returns the segment |
 | `Host.chart(name) -> ChartRef`, `ChartRef.segment`, `ChartRef.chart` | `ta_host_chart` | the current version of the chart: segment and chart index |
 | `Host.spawn(ref, name=None, params=None, traceparent=None) -> int` | `ta_host_spawn` | an input, applied at the call; `ref` from `Host.chart`; `params` a payload of the chart's datamodel, moved on success, released on refusal; `traceparent` the `str`'s UTF-8, parsed by core |
@@ -40,6 +40,8 @@ A core function no item uses is listed below the table: used internally
 | `Host.peer_add(id, *, trusted=False) -> int` | `ta_host_peer_add`, `TA_PEER_TRUSTED` | another system through one connection; added so the envelope vectors of M1 run through the API (ROADMAP.md, "Decided in 8.4, for the API review") |
 | `Host.deliver(peer, envelope) -> int` | `ta_host_envelope_read`, `ta_host_deliver`, `TA_ROUTE_DELIVERED`, `TA_ROUTE_REFUSED` | an envelope's bytes from a peer; data that is not one item is delivered too, and answered as malformed |
 | `peer=handler(host, envelope)`, `envelope.peer`, `envelope.error`, `envelope.cbor` | `TA_HOST_EFFECT_PEER`, `TA_HOST_EFFECT_PEER_ERROR`, `ta_host_envelope` | the handling of an effect; `envelope` a thin view until the ack; `cbor` written once and copied into a `bytes` |
+| `telemetry=handler(host, signal, data)` | `TA_HOST_EFFECT_TRACES`, `TA_HOST_EFFECT_LOGS`, `ta_host_traces`, `ta_host_logs` | the handling of an effect: the request taken when its effect comes (the next comes only after a take) and copied once into `bytes`, `signal` `"traces"` or `"logs"`; an `async def` handler runs as a task; without a handler the request is dropped |
+| `Host.metrics() -> bytes` | `ta_host_metrics` | pulled when the application wants them, copied once; outside a drain its batch is acknowledged at once, from a handler it joins the open one; `TA_ERROR_STATE` without `telemetry` in the config |
 | `Host.run_until_idle()`, `Host.run()` | `ta_host_effects`, `ta_host_effects_ack`, `ta_host_advance_time`, `ta_host_run`, `TA_RUN_IDLE`, `TA_RUN_YIELDED`, `TA_RUN_EFFECTS`, `TA_RUN_EFFECTS_FULL`, `TA_RUN_EXHAUSTED`, `TA_RUN_FAULT` | the synchronous driver: turns until idle; `run` sleeps to `next_deadline` while there is one |
 | `await Host.idle()` | `ta_host_effects`, `ta_host_effects_ack`, `ta_host_advance_time`, `ta_host_run`, `TA_RUN_IDLE`, `TA_RUN_YIELDED` | asyncio: `call_soon` on a yield, one `call_later` timer when idle; an input outside a turn schedules one |
 | `SimulatedClock()`, `SimulatedClock.increment(ms)`, `SimulatedClock.now` | `ta_host_advance_time`, `ta_host_run` | the turn at the simulated time, for every host made with the clock; no timer |
@@ -74,9 +76,6 @@ Used internally, with no item:
   it is answered once fetching is built is decided then (ADR 0012,
   decision 8; root `ROADMAP.md`, "Decided
   later").
-- `ta_host_traces`, `ta_host_logs`: taken when their effect comes, so the
-  encoder goes on, and dropped: the API has no exporter yet (root
-  `ROADMAP.md`, step 8.5).
 - `ta_host_locate`, `ta_host_system`, `ta_actor_info_get`,
   `ta_host_segment_info_get`: an input's data becomes a payload of the
   target session's datamodel (`host.c`, `ta_python_host_payload`).

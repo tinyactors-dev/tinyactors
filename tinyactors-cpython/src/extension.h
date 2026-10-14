@@ -178,6 +178,8 @@ struct ta_python_host {
     PyObject *processors;              /* per ioProcessors index: (type, handler, async) */
     PyObject *log;                     /* log handler or None */
     PyObject *peer;                    /* peer handler or None */
+    PyObject *telemetry;               /* telemetry handler(host, signal, data) or None */
+    int telemetry_async;               /* it is an async def */
     PyObject *clock;                   /* a SimulatedClock or None */
     PyObject *loop;                    /* the asyncio loop of async with, or None */
     PyObject *timer;                   /* the one TimerHandle, or None */
@@ -258,6 +260,13 @@ int ta_python_clock_register(PyObject *clock, PyObject *host);
 
 void ta_python_dispatch(ta_python_host *host, uint32_t index);
 int ta_python_effects_init_types(PyObject *module, ta_python_module_state *state);
+/* Hand an OTLP request the host wrote to the telemetry handler: the
+ * view copied once into bytes. `signal` is "traces", "logs" or "metrics". */
+typedef struct ta_python_export {
+    const char *signal;
+    ta_bytes data;
+} ta_python_export;
+void ta_python_telemetry(ta_python_host *host, const ta_python_export *export);
 /* Answer a send's async task that ended in an exception. */
 PyObject *ta_python_send_task_done(PyObject *send, PyObject *task);
 

@@ -213,6 +213,19 @@ Decided by the maintainer (2026-10-13); every item is in
     failed completion, so the sender gets `error.communication`
     (`system.h:155-157`); the exception is raised from the driver after
     the turn, as any handler's is ("The loop").
+- **`telemetry=handler(host, signal, data)`** is the application's
+  exporter (bindings.md section 4, "What reaches the application"): at a
+  `TA_HOST_EFFECT_TRACES` or `_LOGS` the extension takes the request
+  (`ta_host_traces`, `ta_host_logs`), copies the view once into `bytes`
+  (boundary.md section 7) and calls the handler with `"traces"` or
+  `"logs"`; without a handler the request is taken and dropped, so the
+  encoder goes on. An `async def` handler runs as a task; a handler's
+  exception is raised after the turn and its request is lost (retrying is
+  the application's I/O). **`host.metrics() -> bytes`** pulls
+  `ta_host_metrics` the same way: outside a drain its batch of one output
+  is acknowledged at once, from a handler it joins the open batch. At the
+  stop, `trace.end` and the last takes go to the handler; an exception
+  there is raised by `close()` once the host is freed (2026-10-14).
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.

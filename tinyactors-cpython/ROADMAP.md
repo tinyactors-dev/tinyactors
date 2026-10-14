@@ -257,9 +257,24 @@ grows by doubling under a burst of events and is kept (12.4 KB per actor
 on quickjs after one event each at 10,000 actors).
 - **Not in the API yet** (8.5): invoked services of the application
   (`INVOKE`, `UNINVOKE` are dropped), hibernation with a store (`WAKE`),
-  migration's progress, telemetry exporters (`TRACES` and `LOGS` are taken
-  and dropped), snapshots and export of `"python"` actors, a `<foreach>`
-  item that is not a declared `<data>`.
+  migration's progress, snapshots and export of `"python"` actors, a
+  `<foreach>` item that is not a declared `<data>`.
+
+### Telemetry (8.5's first item, 2026-10-14) — done
+
+`Host(..., telemetry=handler(host, signal, data))` gets each OTLP request
+the encoder writes (`TRACES`, `LOGS`) as `bytes`, copied once;
+`host.metrics()` pulls `ta_host_metrics`; the stop posts `trace.end` and
+hands over the last take. Whom it serves: the operator and the
+observability backend, through the application's exporter; the binding
+does no I/O (bindings.md section 2: retries are the application's). Cost:
+nothing without `telemetry` in the config (core's null encoder); with
+it, one `bytes` per request (not per event) and one Python call. Tests in
+`tests/test_telemetry.py` (spans decoded back with `trace_spans_decode`,
+the last take at close, metrics in and outside a drain, a handler that
+raises, an `async def` handler); checked by hand against otel-tui 0.7.5's
+OTLP/HTTP receiver (spans, logs and metrics accepted and shown, with the
+resource and the scope's chart attributes).
 
 ## How the work runs
 

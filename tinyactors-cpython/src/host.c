@@ -356,10 +356,10 @@ static int ta_python_host_processors(ta_python_host *host, PyObject *config, PyO
 }
 
 static PyObject *ta_python_host_create(PyTypeObject *type, PyObject *arguments, PyObject *keywords) {
-    static char *const names[] = {"config", "io_processors", "log", "clock", "peer", NULL};
-    PyObject *config, *handlers = Py_None, *log = Py_None, *clock = Py_None, *peer = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "O|O$OOO:Host", names, &config, &handlers, &log, &clock,
-                                     &peer))
+    static char *const names[] = {"config", "io_processors", "log", "clock", "peer", "telemetry", NULL};
+    PyObject *config, *handlers = Py_None, *log = Py_None, *clock = Py_None, *peer = Py_None, *telemetry = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "O|O$OOOO:Host", names, &config, &handlers, &log, &clock,
+                                     &peer, &telemetry))
         return NULL;
     ta_python_module_state *state = ta_python_state_of_type(type);
     if (!state) return NULL;
@@ -379,6 +379,14 @@ static PyObject *ta_python_host_create(PyTypeObject *type, PyObject *arguments, 
     host->deadline = UINT64_MAX;
     host->log = Py_NewRef(log);
     host->peer = Py_NewRef(peer);
+    host->telemetry = Py_NewRef(telemetry);
+    if (telemetry != Py_None) {
+        PyObject *answer = PyObject_CallFunctionObjArgs(state->coroutine_function, telemetry, NULL);
+        host->telemetry_async = answer ? PyObject_IsTrue(answer) : -1;
+        Py_XDECREF(answer);
+        if (host->telemetry_async < 0) goto fail;
+        if (host->telemetry_async) host->has_async = 1;
+    }
     host->clock = Py_NewRef(clock);
     host->loop = Py_NewRef(Py_None);
     host->timer = Py_NewRef(Py_None);
@@ -451,8 +459,8 @@ fail:
 /* ---- close ----------------------------------------------------------------------- */
 
 /* trace.end, then the last take of traces and logs, before ta_host_free
- * (bindings.md, section 4). There is no exporter in the API yet: what is
- * taken is dropped. */
+ * (bindings.md, section 4): the spans still open are ended and go to the
+ * telemetry handler with the rest (a handler's exception is kept). */
 static void ta_python_host_end_traces(ta_python_host *host) {
     unsigned char room[64];
     ta_cbor_writer writer;
@@ -465,9 +473,12 @@ static void ta_python_host_end_traces(ta_python_host *host) {
         const ta_host_effect *effects;
         while (ta_host_effects(host->host, &effects) > 0) {
             ta_bytes taken;
-            while (ta_host_traces(host->host, &taken) == TA_OK && taken.length) {}
-            while (ta_host_logs(host->host, &taken) == TA_OK && taken.length) {}
+            while (ta_host_traces(host->host, &taken) == TA_OK && taken.length)
+                ta_python_telemetry(host, &(ta_python_export){"traces", taken});
+            while (ta_host_logs(host->host, &taken) == TA_OK && taken.length)
+                ta_python_telemetry(host, &(ta_python_export){"logs", taken});
             ta_host_effects_ack(host->host);
+            host->acks++;
         }
     }
     ta_cbor_writer_free(&writer);
@@ -492,10 +503,12 @@ void ta_python_host_close(ta_python_host *host, int quiet) {
     }
     host->closing = 0;
     ta_python_loop_stop(host);
-    if (!quiet) ta_python_host_end_traces(host);
+    if (!quiet && host->telemetry != Py_None) ta_python_host_end_traces(host);
     ta_python_host_free(host);
     if (host->clock && host->clock != Py_None) ta_python_clock_forget(host->clock, (PyObject *)host);
 }
+
+static int ta_python_host_closed_error(ta_python_host *host);
 
 static PyObject *ta_python_host_close_method(PyObject *self, PyObject *unused) {
     (void)unused;
@@ -505,6 +518,7 @@ static PyObject *ta_python_host_close_method(PyObject *self, PyObject *unused) {
         return NULL;
     }
     ta_python_host_close(host, 0);
+    if (ta_python_host_closed_error(host) < 0) return NULL; /* a telemetry handler raised in the last take */
     Py_RETURN_NONE;
 }
 
@@ -514,6 +528,7 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     Py_VISIT(host->processors);
     Py_VISIT(host->log);
     Py_VISIT(host->peer);
+    Py_VISIT(host->telemetry);
     Py_VISIT(host->clock);
     Py_VISIT(host->loop);
     Py_VISIT(host->timer);
@@ -538,6 +553,7 @@ static int ta_python_host_clear(PyObject *self) {
     Py_CLEAR(host->processors);
     Py_CLEAR(host->log);
     Py_CLEAR(host->peer);
+    Py_CLEAR(host->telemetry);
     Py_CLEAR(host->clock);
     Py_CLEAR(host->loop);
     Py_CLEAR(host->timer);
@@ -824,6 +840,27 @@ static PyObject *ta_python_host_deliver(PyObject *self, PyObject *arguments) {
     return result;
 }
 
+/* metrics() -> bytes: the host's counters as an OTLP metrics request
+ * (ta_host_metrics), pulled when the application wants them: the host's
+ * view copied once. Taken outside a drain it opened a batch of its own,
+ * acknowledged here; from a handler it joins the open batch. */
+static PyObject *ta_python_host_metrics(PyObject *self, PyObject *unused) {
+    (void)unused;
+    ta_python_host *host = (ta_python_host *)self;
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    ta_bytes taken;
+    ta_status status = ta_host_metrics(host->host, &taken);
+    PyObject *result = status == TA_OK ? PyBytes_FromStringAndSize(taken.pointer, (Py_ssize_t)taken.length) : NULL;
+    if (status != TA_OK) ta_python_raise_status(host->state, status); /* TA_ERROR_STATE: no telemetry in the config */
+    else if (!host->turning && host->depth == 1) { /* not in a drain: the batch of this output alone ends */
+        ta_host_effects_ack(host->host);
+        host->acks++;
+    }
+    ta_python_leave(&call);
+    return result;
+}
+
 /* ---- context managers ---------------------------------------------------------------- */
 
 static PyObject *ta_python_host_enter_with(PyObject *self, PyObject *unused) {
@@ -844,9 +881,18 @@ static PyObject *ta_python_host_enter_with(PyObject *self, PyObject *unused) {
     return Py_NewRef(self);
 }
 
+/* A telemetry handler's exception in the last take, once the host is freed. */
+static int ta_python_host_closed_error(ta_python_host *host) {
+    if (!host->error || host->host) return 0;
+    PyErr_SetRaisedException(host->error);
+    host->error = NULL;
+    return -1;
+}
+
 static PyObject *ta_python_host_exit_with(PyObject *self, PyObject *arguments) {
     (void)arguments;
     ta_python_host_close((ta_python_host *)self, 0);
+    if (ta_python_host_closed_error((ta_python_host *)self) < 0) return NULL;
     Py_RETURN_FALSE;
 }
 
@@ -885,7 +931,7 @@ static PyObject *ta_python_host_exit_async(PyObject *self, PyObject *arguments) 
     ta_python_host *host = (ta_python_host *)self;
     PyObject *loop = Py_NewRef(host->loop);
     ta_python_host_close(host, 0);
-    PyObject *result = loop != Py_None ? ta_python_done_future(loop, Py_False) : NULL;
+    PyObject *result = ta_python_host_closed_error(host) == 0 && loop != Py_None ? ta_python_done_future(loop, Py_False) : NULL;
     Py_DECREF(loop);
     if (!result && !PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "async with outside an event loop");
     return result;
@@ -943,6 +989,9 @@ static PyMethodDef ta_python_host_methods[] = {
     {"deliver", ta_python_host_deliver, METH_VARARGS,
      "deliver(peer, envelope, /)\n--\n\nAn envelope's bytes from `peer` (0: this host's code); returns the route "
      "outcome (0 delivered, 1 relayed, 2 duplicate, 3 refused)."},
+    {"metrics", ta_python_host_metrics, METH_NOARGS,
+     "metrics()\n--\n\nThe host's counters as an OTLP ExportMetricsServiceRequest (protobuf bytes, for "
+     "/v1/metrics); TinyactorsError TA_ERROR_STATE without telemetry in the config."},
     {"run_until_idle", ta_python_host_run_until_idle, METH_NOARGS,
      "run_until_idle()\n--\n\nTurn until the host is idle at the current time."},
     {"run", ta_python_host_run_forever, METH_NOARGS,
@@ -977,7 +1026,7 @@ static PyMemberDef ta_python_host_members[] = {
 
 static PyType_Slot ta_python_host_slots[] = {
     {Py_tp_members, ta_python_host_members},
-    {Py_tp_doc, "Host(config, io_processors=None, *, log=None, clock=None, peer=None)\n--\n\n"
+    {Py_tp_doc, "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None)\n--\n\n"
                 "A host (ta_host): many actor systems as one, with the \"python\" datamodel and quickjs."},
     {Py_tp_new, ta_python_host_create},
     {Py_tp_dealloc, ta_python_host_dealloc},
