@@ -1,10 +1,10 @@
 # Roadmap: tinyactors-cpython
 
-**Being rewritten from scratch.** The first binding (M1 of the earlier
-plan, 2026-10-12) was removed (`6426816a`: `src/`, the adapter and the
-binding's docs; the tooling stays). **Next: step 8.4 of the root
-[ROADMAP.md](../ROADMAP.md): implement the decided design, then measure
-it.** The design (2026-10-13) is in [AGENTS.md](AGENTS.md) ("The API",
+**Step 8.4 is implemented and measured (2026-10-14); next: the API
+review by the maintainer, then step 8.5.** The first binding (M1 of the
+earlier plan, 2026-10-12) was removed (`6426816a`); the rewrite follows
+the design of [AGENTS.md](AGENTS.md), with the changes below ("Decided in
+8.4, for the API review"). The design (2026-10-13) is in [AGENTS.md](AGENTS.md) ("The API",
 "The loop", "Lifetimes and thin views", "The binding's memory", "The
 "python" datamodel"); there is no design document to write first. The
 step starts when the root roadmap marks steps 8.2 (core implements
@@ -64,7 +64,21 @@ the mapping table describe the API, errors and lifetimes. Twenty tests
 pass on both Python builds. The expected M1 failure is still missing
 `host.create`; the gate stays enabled for this authorized bootstrap commit.
 
-In this order, each step a commit (or a few) that passes this project's
+**Steps 1 to 9 — done (2026-10-14).** `mise run test` passes: lint,
+both builds, 68 tests on each interpreter (`tests/`: every rule of
+AGENTS.md's "Rules the suite cannot see"), and the suite's M1 set on the
+native datamodel and on quickjs (94 protocol vectors and 4 scenarios
+each; the 68 others skipped as the reference's or C-level). The
+measurement (`mise run measure`, x86_64 Linux, 4 CPUs, CPython 3.13.16):
+**423 B resident per actor on `"python"` against 1093 B on quickjs** at
+10,000 actors, Python's heap 193 B and core's region 204 B of it
+(AGENTS.md, "Measured cost per session"). One change outside this
+project, for the maintainer to confirm: three method-level vectors of
+`requests.txt` ("method is not text", "no such method", "params is not a
+map") are marked `only reference`, since typed methods cannot send them
+(below).
+
+The plan, each step a commit (or a few) that passes this project's
 `mise run test`:
 
 1. **The `Host` and its memory:** `Host(config, io_processors, log,
@@ -178,13 +192,45 @@ In this order, each step a commit (or a few) that passes this project's
   untraced); `send.answer(..., traceparent=send.traceparent)` keeps the
   trace by default, `None` starts a new one; `send.fail()` carries it.
 
-### Open, for the API review or the maintainer
+### Decided in 8.4, for the API review
 
-- **What a resolver's other exceptions become.** A `ResolveError`, a
-  `SyntaxError` and the rewrite's refusal are diagnostics at their line;
-  whether any other exception (an `OSError` from reading a file, a bug in
-  the resolver) is a diagnostic too, or is raised from `compile_charts`
-  after the result is freed, is not decided.
+Made while implementing, each the least the gates or the platform
+needed; the maintainer confirms or changes them at the API review.
+
+- **Typed methods take their params as keywords:** `method(handler,
+  on_error=None, /, **params)`, passed to core as given. The method-level
+  vectors (a param a method does not take, of the wrong type, missing)
+  then reach core through the API; `actor_state(session, handler)` could
+  not leave `session` out or pass `"x"`.
+- **Three request vectors are the reference's:** "method is not text",
+  "no such method" and "params is not a map" assumed the request facade
+  ADR 0012 removed; no typed method can send them. They carry `only
+  reference` in `tinyactors-test/suites/protocol/requests.txt` (a change
+  to the suite, made in this step, `e738095`); ta-conform still runs them.
+- **Peers:** `Host(..., peer=handler)`, `peer_add(id, *, trusted=False)`
+  and `deliver(peer, envelope)`, the least that runs M1's envelope and
+  value vectors (which deliver to the echo setup and read the envelope it
+  sends) through the API. AGENTS.md had `PEER` and `PEER_ERROR` deferred.
+- **A resolver's other exceptions** (an `OSError`, a bug) are raised from
+  `compile_charts` after the result is freed; the compiler's diagnostic
+  for that `src` is not reported.
+- **The rewrite is Python** (`src/datamodel/support.py`, embedded by the
+  build into the extension, run once per interpreter): the AST is not in
+  the limited C API. A `.py` file's constructs are checked as the
+  resolver reads it; its names when its chart is attached (the resolver
+  does not know the chart's `<data>`).
+- **`_event` holds its data's value**, not a reference on the payload row.
+- **Any script's top-level `def`s** are the chart's methods.
+- **The system variables** are made at `create` only for a chart whose
+  code reads them (the rewrite records which).
+- **`run()`** returns when the host is idle with no deadline left.
+- **An input during a turn** (an answer, a typed method, a resume) makes
+  the turn run again before it reports idle.
+- **Not in the API yet** (8.5): invoked services of the application
+  (`INVOKE`, `UNINVOKE` are dropped), hibernation with a store (`WAKE`),
+  migration's progress, telemetry exporters (`TRACES` and `LOGS` are taken
+  and dropped), snapshots and export of `"python"` actors, a `<foreach>`
+  item that is not a declared `<data>`.
 
 ## How the work runs
 

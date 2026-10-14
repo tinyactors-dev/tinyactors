@@ -172,6 +172,7 @@ struct ta_python_host {
     int turning;                       /* a turn is running: no second one */
     int closing;                       /* close() asked during a turn */
     int has_async;                     /* an async def I/O processor */
+    int inputs;                        /* an input was made since the last run */
     PyObject *processors;              /* per ioProcessors index: (type, handler, async) */
     PyObject *log;                     /* log handler or None */
     PyObject *peer;                    /* peer handler or None */

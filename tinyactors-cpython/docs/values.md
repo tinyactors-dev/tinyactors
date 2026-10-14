@@ -85,5 +85,18 @@ Use the normally imported module. If a custom import loader exposes its
 methods before executing the module, `encode` and `decode` raise
 `RuntimeError` until codec initialization is complete.
 
-No host or actor execution exists yet. The `conform` adapter uses this
-codec for driver frames and reports every method as unimplemented.
+## Values between the application and actors
+
+The same table holds for what crosses between the application and a
+host, without CBOR inside the process. Data given to `Host.send`,
+`Host.spawn`'s params and `send.answer` becomes a payload of the target
+session's datamodel: for a `"python"` chart, a copy (lists and dicts
+copied, the immutable values shared, anything else refused with
+`TypeError`); for an ECMAScript chart, its CBOR, read by quickjs. What a
+chart sends the application (`send.data`) is the `"python"` payload's
+value itself, or quickjs's payload decoded on first read. A `"python"`
+chart's `<send>` data, `<donedata>` and invoke params are copied the same
+way when they are captured, so actors share no mutable value; a value
+outside the table (a tuple, a set, an object) fails the capture with
+`error.execution`. Envelopes for other systems carry the value as CBOR
+(this codec's mapping).

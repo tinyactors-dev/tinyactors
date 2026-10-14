@@ -142,8 +142,9 @@ Decided by the maintainer (2026-10-13); every item is in
   The extension fills `ta_resolve_error` from it, the message's UTF-8
   copied into the compilation's scratch arena (`request->scratch`), and
   the compiler reports it as a diagnostic of the resolved file, at that
-  line and column. What any other
-  exception a resolver raises becomes is open (ROADMAP.md, "Open").
+  line and column. Any other exception a resolver raises (an `OSError`, a
+  bug) is raised from `compile_charts` after the result is freed (8.4;
+  ROADMAP.md, "Decided in 8.4").
 - **`TA_EFFECT_REQUEST` is a fetch at run time, answered in C, never by
   Python.** It is how a chart fetches what is not in its image (an
   `<invoke srcexpr>`, or a `src` the compiler did not match), and it stays (decided 2026-10-13; ADR 0012, decision
@@ -216,9 +217,11 @@ Decided by the maintainer (2026-10-13); every item is in
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
 - **Typed methods over post**: `actor_state`, `actor_context`,
-  `actor_list`, `actor_get`, `host_stats` and `trace_*` (one per method of
-  `tinyactors-core/docs/requests.md`), each `(…, handler, on_error=None)`,
-  returning `None`. The handler `(host, result)` runs when the method's
+  `actor_list`, `actor_get`, `host_stats`, `host_config` and `trace_*`
+  (one per method of `tinyactors-core/docs/requests.md`), each
+  `(handler, on_error=None, /, **params)`, returning `None`: the method's
+  params are keywords, passed to core as given, so core checks them and
+  answers in the reply (8.4; ROADMAP.md, "Decided in 8.4"). The handler `(host, result)` runs when the method's
   `REPLY` is dispatched, in a later drain; `on_error(host, error)` gets a
   `TinyactorsError(code, reason, path, message)`; an error with no
   `on_error` is raised by the driver after the turn. A refusal at the
@@ -231,7 +234,12 @@ Decided by the maintainer (2026-10-13); every item is in
   `ta_host_free` the remaining rows are dropped and their handlers never
   called.
 - **`DONE` and `ERROR` are internal** (the rows of the session are
-  released); **`PEER` and `PEER_ERROR` are deferred**; no notification is
+  released); **`PEER` and `PEER_ERROR` go to `peer=handler(host,
+  envelope)`**, a thin view (`peer`, `error`, `cbor`: `ta_host_envelope`'s
+  bytes copied once), with `host.peer_add(id, *, trusted=False)` and
+  `host.deliver(peer, envelope)` beside it, the least that runs the M1
+  envelope and value vectors through the API (8.4; ROADMAP.md, "Decided
+  in 8.4"); no notification is
   defined (`actor.subscribe` and `actor.changed` are removed, ADR 0012
   decision 4), and the extension drops a
   `TA_HOST_EFFECT_NOTIFICATION` whose method it does not know.
@@ -444,9 +452,7 @@ APIs:
 - **Where the allocator is called:** in the host's create, free and
   allocator, and through core (`ta_table`, `ta_growable_arena` while it
   grows, the compiler's options); nowhere else, nothing per event or per
-  evaluation. The lint rule `allocation-in-tables-and-host` checks it; it
-  names files of the removed binding (`src/datamodel/handles.c`) and
-  changes with the first commit of the rewrite.
+  evaluation. The lint rule `allocation-in-tables-and-host` checks it.
 - **Images are bytes:** `ta_host_add_image` copies them, so a `Compiled`
   can be closed once `add_image` returns. No image rows, no
   `SEGMENT_FREED` bookkeeping. The compiler allocates through
@@ -486,7 +492,9 @@ Registered beside quickjs, first; matched by the chart's
   `src` gets the same rewrite in the resolver, so its errors are
   reported at compile time instead ("The API", "`.py` sources").
 - **The rewrite's allow-list** (decided 2026-10-13), held in
-  `src/datamodel/expressions.c` and the README:
+  `src/datamodel/support.py` (Python, embedded by the build: the AST is
+  not in the limited C API, so the rewrite walks it with Python's `ast`,
+  once per chart; `expressions.c` is its C side) and the README:
   - *expressions:* literals, arithmetic, comparisons, boolean operations,
     conditional expressions, indexing and slicing, comprehensions and
     generator expressions, f-strings, calls to the chart's methods and
@@ -494,7 +502,8 @@ Registered beside quickjs, first; matched by the chart's
   - *statements*, in `<script>` and `.py`: assignment, plain or
     augmented, to a `<data>` id or to its items or attributes; `if`,
     `for`, `while`, `pass` and expression statements; `def` only at the
-    top level of a chart-level script;
+    top level of a script (any script's top-level defs are the chart's
+    methods);
   - *refused:* `import`, `global`, `nonlocal`, `lambda`, `await`,
     `yield`, the walrus (`:=`), `del`, `try` and `raise`, `with`,
     `class`;
@@ -514,12 +523,14 @@ Registered beside quickjs, first; matched by the chart's
   (`__slots__`, read-only properties), and the evaluation is
   `error.execution`.
 - **`_event`:** one immutable Event per event, built at `bind_event`
-  (its strings converted during the call, `datamodel.h:35-37`), taking a
-  reference on its data's payload row; `_event.data` is that row's
+  (its strings converted during the call, `datamodel.h:35-37`), holding
+  its data's payload value (the row's value itself, a reference on the
+  Python object rather than on the row, so core's release of the row
+  frees the row and the Event keeps the value); `_event.data` is that
   value. The datamodel sets `TA_DATAMODEL_EVENT_DETACHABLE`, so core calls
   `detach_event` at the stable point after the event's macrostep
   (`src/core/core.c:468-478`, `:1870`) and frees its own copy of the
-  event. The datamodel keeps the Event and the row's reference until the
+  event. The datamodel keeps the Event and its value until the
   next `bind_event` or `destroy`: SCXML keeps `_event` bound to the last
   event until another is processed (5.10), so the `<onexit>` handlers of
   an actor terminated at rest read it (`core.c:1876-1878`) and
@@ -541,10 +552,18 @@ Registered beside quickjs, first; matched by the chart's
   within the host: `deserialize` with the new chart makes an instance of
   the new class and copies the slots both declare; `migrate` returns the
   old bindings as a payload.
-- **Estimated cost per session** (unmeasured until step 8.4's
-  measurement): the instance 32 B + 8 B per slot; the system variables
-  ~100–250 B; a row in the sessions table ~16 B. Compiled code belongs to
-  the chart, never to a session.
+- **Measured cost per session** (`mise run measure`, 2026-10-14: x86_64
+  Linux, 4 CPUs, CPython 3.13.16 with the GIL; 10,000 actors of a chart
+  with three `<data>`, one of them a list, resident and idle): **423 B
+  resident per actor** on the `"python"` datamodel against **1093 B** on
+  quickjs, of which 193 B are Python's heap (tracemalloc: the instance,
+  its list, the session row) and 204 B core's region (both datamodels).
+  The estimate it replaces (the instance 32 B + 8 B per slot, a row
+  ~16 B, the system variables ~100–250 B) was close for the instance (80
+  B with five slots, plus its GC header); the system variables cost
+  nothing here, because they are made only for a chart whose code reads
+  them, and the row is 32 B (instance, chart, the params until the first
+  event, flags). Compiled code belongs to the chart, never to a session.
 
 ## C rules
 
@@ -779,7 +798,8 @@ src/                 extension.h, module.c, host.c (Host, inputs, the arena's ma
                      loop.c (drain, turn, both drivers), effects.c (dispatch, thin views,
                      records), methods.c (typed methods, the pending table), values.c,
                      compile.c (compile_charts, Compiled, the resolver protocol, ResolveError),
-                     datamodel/{datamodel.h, datamodel.c, rows.c, expressions.c}
+                     datamodel/{datamodel.h, datamodel.c, rows.c, expressions.c,
+                     support.py (the rewrite, the exceptions; embedded, not shipped)}
 conform/             the suite's adapter, python -m conform; not in the wheel
 tests/               what the suite cannot see: threads, GC, asyncio, refusals, stale views
 tools/lint/          rules/, tests/, utils/ (ast-grep)
