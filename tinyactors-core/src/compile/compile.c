@@ -5,6 +5,29 @@
 
 #include <string.h>
 
+ta_status ta_compiler_resolve(ta_compiler *compiler, const ta_resolve_request *request,
+                              ta_source *source) {
+    ta_resolve_result resolved = {0};
+    const ta_compile_options *options = compiler->options;
+    ta_status status = options->resolve(options->resolve_context, request, &resolved);
+    if (status == TA_OK) {
+        *source = resolved.source;
+        return status;
+    }
+    ta_string_view name = resolved.source.name.length && resolved.source.name.pointer
+                             ? resolved.source.name : request->source;
+    char *file = ta_compile_copy(&compiler->arena, name, &compiler->out_of_memory);
+    ta_string_view message = resolved.error.message;
+    if (!message.pointer || !message.length)
+        message = (ta_string_view){"cannot resolve src", 18};
+    /* Diagnostics have a 511-byte bound, independent of resolver storage. */
+    uint32_t length = message.length > 511 ? 511 : message.length;
+    ta_diagnostics_add(&compiler->diagnostics, &(ta_diagnostic_input){
+        TA_DIAGNOSTIC_ERROR, file, resolved.error.line, resolved.error.column, "%.*s"},
+        (int)length, message.pointer);
+    return status;
+}
+
 struct ta_compile_result {
     ta_allocator allocator;
     void *image;
@@ -182,12 +205,13 @@ ta_status ta_compile_system(const ta_compile_options *options, const ta_source *
             const char *name = ta_xml_attribute_value(node, "name");
             ta_source s;
             ta_resolve_request request = {{file, (uint32_t)strlen(file)},
-                                          {source, source ? (uint32_t)strlen(source) : 0}};
-            if (!source || !options || !options->resolve ||
-                options->resolve(options->resolve_context, &request, &s) != TA_OK) {
+                                          {source, source ? (uint32_t)strlen(source) : 0},
+                                          &compiler.arena};
+            if (!source || !options || !options->resolve) {
                 ta_diagnostics_add(&compiler.diagnostics, &(ta_diagnostic_input){TA_DIAGNOSTIC_ERROR, file, node->line, node->column, "cannot resolve chart src"});
                 break;
             }
+            if (ta_compiler_resolve(&compiler, &request, &s) != TA_OK) break;
             char *canon =
                 s.name.pointer && s.name.length
                     ? ta_compile_copy(&compiler.arena, (ta_string_view){s.name.pointer, (uint32_t)(s.name.length)}, &compiler.out_of_memory)

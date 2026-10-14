@@ -110,7 +110,7 @@ ta_host_environment conform_datamodel_environment(const conform_datamodel *datam
 /* ---- images ------------------------------------------------------------------------ */
 
 /* A src="" of a chart: the document of that name (ta_resolve_function). */
-static ta_status document_resolve(void *context, const ta_resolve_request *request, ta_source *out) {
+static ta_status document_resolve(void *context, const ta_resolve_request *request, ta_resolve_result *out) {
     const ta_source_list *files = (const ta_source_list *)context;
     ta_string_view name = request->source;
     static const char *const prefixes[] = {"file://", "file:", "./"};
@@ -123,7 +123,7 @@ static ta_status document_resolve(void *context, const ta_resolve_request *reque
     }
     for (uint32_t i = 0; i < files->count; i++)
         if (files->pointer[i].name.length == name.length && !memcmp(files->pointer[i].name.pointer, name.pointer, name.length)) {
-            *out = files->pointer[i];
+            out->source = files->pointer[i];
             return TA_OK;
         }
     return TA_ERROR_INVALID;

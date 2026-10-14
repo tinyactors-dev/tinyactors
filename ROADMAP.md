@@ -353,7 +353,7 @@ the backing allocator and are freed when parsing ends. This serves the
 binding author: the next resolver increment can lend the shared scratch
 arena to Python. It adds no work per actor or event and no Python API;
 compilation keeps 32 KiB payload chunks with the shared arena's headers.
-The resolver's scratch and structured errors are the next increment.
+The resolver's scratch and structured errors follow this increment.
 Validation: core's full gate passes (sanitizers, conformance, wasm, every
 torture scenario and cross-builds). Root `mise run test:full` reaches
 Python's existing red M1 gate and stops because `host.create` is absent;
@@ -374,7 +374,23 @@ both Python builds still pass their 20 codec tests.
   (`src/compile/compile_support.h:14-26`; the per-compilation arena,
   `compile.c:37`, and the result's, `compile.c:13`) moves onto
   `ta_growable_arena`, and `ta_chunk_arena` is deleted.
-- **The resolver reports its errors and gets a scratch arena** (ADR 0012,
+
+Resolver implementation (2026-10-14): requests lend the compiler arena;
+callbacks fill `ta_resolve_result`, with source views or structured errors.
+Both compile entry points copy a refusal's resolved filename, location and
+message into result diagnostics. The file resolver preserves its attempted
+path on failure. Caller migrations used ast-grep. Focused tests cover
+scratch-backed data, scripts and invoked charts, non-NUL diagnostic views,
+canonical filenames, status-only refusals and both compile entry points.
+This serves binding authors reporting source errors to application
+developers. The cost is one scratch pointer per resolver request and a
+result struct per callback; no work per actor or event is added.
+Validation: core's full gate passes, including conformance, wasm, all
+torture scenarios and cross-builds. The focused compiler and runtime
+programs pass 727 and 43 checks. Root `mise run test:full` still stops at
+Python M1's missing `host.create`; both Python builds pass 20 codec tests.
+
+- **The resolver reports its errors and gets a scratch arena — done** (ADR 0012,
   decision 7): `ta_resolve_request` gains `ta_growable_arena *scratch`
   (the compiler's per-compilation arena, from the start of
   `ta_compile_charts` to its return), the out parameter becomes

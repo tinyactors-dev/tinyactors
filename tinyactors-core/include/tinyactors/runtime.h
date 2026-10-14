@@ -30,11 +30,15 @@ TA_API void ta_runtime_free_file(ta_bytes bytes);
 TA_API ta_time ta_runtime_now_ns(void);
 
 /* File-system resolver for ta_compile: src="" is read relative to the
- * directory of the referring file. Loaded texts are owned by the set. */
+ * directory of the referring file. Loaded texts are owned by the set.
+ * On refusal, error.message describes the failure and source.name names
+ * the attempted path, copied into request->scratch when supplied. Without
+ * scratch, source.name is the requested src view. */
 typedef struct ta_runtime_files ta_runtime_files;
 TA_API ta_runtime_files *ta_runtime_files_new(void);
 TA_API void ta_runtime_files_free(ta_runtime_files *files);
-TA_API ta_status ta_runtime_resolve(void *files, const ta_resolve_request *request, ta_source *out);
+TA_API ta_status ta_runtime_resolve(void *files, const ta_resolve_request *request,
+                                   ta_resolve_result *out);
 
 /* Compile an .scxml file (or a <system> manifest if `manifest` != 0). */
 TA_API ta_status ta_runtime_compile_file(const char *path, int manifest, ta_compile_result **out);

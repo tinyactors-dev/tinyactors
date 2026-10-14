@@ -54,9 +54,9 @@ API"). Node's names and shapes are decided in step 8.5:
 - **A resolver is an object** with `resolve(base, source)` returning the
   text, given to the compile call only (a static `src`, at compile time;
   a refusal reported as a diagnostic at its line and column, the message
-  in the compilation's scratch arena [8.2],
+  in the compilation's scratch arena,
   `tinyactors-core/docs/boundary.md` section 12). **The resolver lives
-  only at compile time:** the `Host` has none (ADR 0012, decision 7). A resolver that reads a directory belongs to
+  only at compile time:** the `Host` has none. A resolver that reads a directory belongs to
   the convenience layer, in JavaScript, confined to its root.
 - **`TA_EFFECT_REQUEST` is a fetch at run time** (an `<invoke srcexpr>`
   whose chart is not in the image), and it stays

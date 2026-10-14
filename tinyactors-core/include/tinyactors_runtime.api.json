@@ -150,31 +150,123 @@
         {
           "name": "source",
           "type": "ta_string_view"
+        },
+        {
+          "name": "scratch",
+          "type": "ta_growable_arena *"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 32,
+          "size": 40,
           "align": 8,
           "offsets": {
             "base": 0,
-            "source": 16
+            "source": 16,
+            "scratch": 32
           }
         },
         "aarch64": {
-          "size": 32,
+          "size": 40,
           "align": 8,
           "offsets": {
             "base": 0,
-            "source": 16
+            "source": 16,
+            "scratch": 32
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "base": 0,
+            "source": 8,
+            "scratch": 16
+          }
+        }
+      }
+    },
+    "ta_resolve_error": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "line",
+          "type": "uint32_t"
+        },
+        {
+          "name": "column",
+          "type": "uint32_t"
+        },
+        {
+          "name": "message",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "line": 0,
+            "column": 4,
+            "message": 8
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "line": 0,
+            "column": 4,
+            "message": 8
           }
         },
         "wasm32": {
           "size": 16,
           "align": 4,
           "offsets": {
-            "base": 0,
-            "source": 8
+            "line": 0,
+            "column": 4,
+            "message": 8
+          }
+        }
+      }
+    },
+    "ta_resolve_result": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "source",
+          "type": "ta_source"
+        },
+        {
+          "name": "error",
+          "type": "ta_resolve_error"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "source": 0,
+            "error": 32
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "source": 0,
+            "error": 32
+          }
+        },
+        "wasm32": {
+          "size": 32,
+          "align": 4,
+          "offsets": {
+            "source": 0,
+            "error": 16
           }
         }
       }
@@ -189,6 +281,10 @@
         {
           "name": "source",
           "type": "ta_string_view"
+        },
+        {
+          "name": "scratch",
+          "type": "ta_growable_arena *"
         }
       ],
       "layout": {
@@ -197,7 +293,8 @@
           "align": 8,
           "offsets": {
             "base": null,
-            "source": null
+            "source": null,
+            "scratch": null
           }
         },
         "aarch64": {
@@ -205,7 +302,8 @@
           "align": 8,
           "offsets": {
             "base": null,
-            "source": null
+            "source": null,
+            "scratch": null
           }
         },
         "wasm32": {
@@ -213,7 +311,8 @@
           "align": 4,
           "offsets": {
             "base": null,
-            "source": null
+            "source": null,
+            "scratch": null
           }
         }
       }
@@ -531,7 +630,7 @@
         },
         {
           "name": "out",
-          "type": "ta_source *"
+          "type": "ta_resolve_result *"
         }
       ],
       "public": true,

@@ -133,8 +133,8 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   ```
 - **The resolver** is an object of its own with one method,
   **`resolve(base, source) -> str`**, given to `compile_charts` only:
-  **it lives only at compile time** (ADR 0012, decision 7;
-  boundary.md section 12). It is the compile-time callback
+  **it lives only at compile time** (boundary.md section 12).
+  It is the compile-time callback
   (`ta_compile_options.resolve`) for every static `src`, and an invoked
   chart it fetches is compiled into the same image. **A resolver refuses
   by raising `tinyactors.ResolveError(message, line=None,
@@ -143,7 +143,7 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   The extension fills `ta_resolve_error` from it, the message's UTF-8
   copied into the compilation's scratch arena (`request->scratch`), and
   the compiler reports it as a diagnostic of the resolved file, at that
-  line and column [8.2] (root `ROADMAP.md` 8.2). What any other
+  line and column. What any other
   exception a resolver raises becomes is open (ROADMAP.md, "Open").
 - **`TA_EFFECT_REQUEST` is a fetch at run time, answered in C, never by
   Python.** It is how a chart fetches what is not in its image (an
@@ -454,7 +454,7 @@ APIs [8.2]:
   `SEGMENT_FREED` bookkeeping. The compiler allocates through
   `ta_compile_options.alloc`, which the extension sets to
   `PyMem_RawMalloc` and `PyMem_RawFree` as for the host; a resolver's
-  text and messages go into the compilation's scratch arena [8.2]
+  text and messages go into the compilation's scratch arena
   (`request->scratch`, from the start of `ta_compile_charts` to its
   return), so the extension keeps nothing per `src` past the call.
 - **A `Compiled` holds a compile result** until its `close()`;

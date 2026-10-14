@@ -18,15 +18,15 @@ typedef struct test_file {
 
 /* In-memory resolver over a NULL-terminated test_file array. */
 TEST_UNUSED static ta_status test_resolve(void *context, const ta_resolve_request *request,
-                                          ta_source *out) {
+                                          ta_resolve_result *out) {
     ta_string_view source = request->source;
     for (const test_file *f = (const test_file *)context; f && f->name; f++)
         if (strlen(f->name) == source.length &&
             memcmp(f->name, source.pointer, source.length) == 0) {
-            out->name.pointer = f->name;
-            out->name.length = (uint32_t)strlen(f->name);
-            out->text.pointer = f->text;
-            out->text.length = (uint32_t)strlen(f->text);
+            out->source.name.pointer = f->name;
+            out->source.name.length = (uint32_t)strlen(f->name);
+            out->source.text.pointer = f->text;
+            out->source.text.length = (uint32_t)strlen(f->text);
             return TA_OK;
         }
     return TA_ERROR_INVALID;

@@ -28,6 +28,15 @@ the headers (`include/tinyactors/host.h`, `datamodel.h`, `cbor.h`,
 - **Your loop:** inputs in, effects out. The host does no I/O, has no
   clock and starts no thread.
 
+Static `src` references are resolved during compilation through
+`ta_compile_options.resolve`. Its request lends the compiler's scratch
+arena until the compile call returns. A resolver fills `ta_resolve_result`:
+`source` on success; `error` with line, column and a message on refusal.
+It may also supply `source.name` for the diagnostic's canonical filename.
+The compiler copies diagnostics into the result, so they remain readable
+until `ta_compile_free`. See [the resolver contract](boundary.md#12-compiling-and-the-resolver)
+for view lifetimes and defaults. A host has no compile-time resolver.
+
 ## 2 · The loop
 
 Lifetimes follow the loop: **take, handle, ack, run**. The ack means "I

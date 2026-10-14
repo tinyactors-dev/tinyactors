@@ -30,7 +30,8 @@ first, what already answers their questions, who pays for it (per event,
 per actor, in memory, code size, API surface, work in every binding), and
 what is out of scope. A proposal or ADR states this near its start.
 
-- use `mise run <task> <args>` for every task,
+- use `mise run <task> <args>` for recurring tasks; run one-off inspections
+  and migration commands directly, without adding mise tasks,
 - define tasks in ./mise/tasks/ as file tasks using `ruby` (version 4, provided by mise)
 
 ## Version control
@@ -104,6 +105,9 @@ Do it at release time, not between releases.
   Run it before a release, and before committing a change to core's
   memory layout, scheduling, hibernation or migration, or to per-actor
   costs. Say in the commit message that it passed.
+  During Python binding iteration, including prerequisite core changes,
+  use focused checks and the normal pass before each commit; a full run
+  is not required for each increment.
 - **While iterating, run the narrowest thing that covers the change.** A
   whole suite keeps every CPU of a laptop busy for minutes; do not run one
   after each edit.

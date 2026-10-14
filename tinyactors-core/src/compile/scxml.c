@@ -210,20 +210,22 @@ static const ta_xml_node *child(const ta_xml_node *node, const char *name) {
 }
 
 /* Fetch an external src at compile time through the resolver. */
-static int fetch_source(chart_builder *builder, const ta_xml_node *at, const char *source,
-                        ta_source *out) {
+typedef struct source_fetch {
+    const ta_xml_node *at;
+    const char *source;
+} source_fetch;
+
+static int fetch_source(chart_builder *builder, const source_fetch *fetch, ta_source *out) {
     const ta_compile_options *options = builder->compiler->options;
     ta_resolve_request request = {{builder->file, (uint32_t)strlen(builder->file)},
-                                  {source, (uint32_t)strlen(source)}};
-    if (!options->resolve) {
-        compile_error(builder, at, (compile_message){"src=\"%s\" requires a resolver", source});
+                                  {fetch->source, (uint32_t)strlen(fetch->source)},
+                                  &builder->compiler->arena};
+    if (!options || !options->resolve) {
+        compile_error(builder, fetch->at,
+                      (compile_message){"src=\"%s\" requires a resolver", fetch->source});
         return 0;
     }
-    if (options->resolve(options->resolve_context, &request, out) != TA_OK) {
-        compile_error(builder, at, (compile_message){"cannot resolve src=\"%s\"", source});
-        return 0;
-    }
-    return 1;
+    return ta_compiler_resolve(builder->compiler, &request, out) == TA_OK;
 }
 
 static int is_scxml_type(const char *t) {
@@ -606,7 +608,7 @@ static void exec_el(chart_builder *builder, const ta_xml_node *node) {
         uint32_t e;
         if (source) {
             ta_source s;
-            if (!fetch_source(builder, node, source, &s)) return;
+            if (!fetch_source(builder, &(source_fetch){node, source}, &s)) return;
             e = intern_expression(builder, &(expression_input){TA_EXPRESSION_SCRIPT, {s.text.pointer, s.text.length}, node});
         } else {
             e = intern_expression(builder, &(expression_input){TA_EXPRESSION_SCRIPT, {node->text, node->text_length}, node});
@@ -865,7 +867,7 @@ static uint32_t resolve_chart(chart_builder *builder, const ta_xml_node *at, con
         ta_string_map_get(&builder->compiler->source_map, source, (uint32_t)strlen(source));
     if (index != TA_NIL) return index;
     ta_source s;
-    if (!fetch_source(builder, at, source, &s)) return TA_NIL;
+    if (!fetch_source(builder, &(source_fetch){at, source}, &s)) return TA_NIL;
     /* key by the resolver's canonical name so nested src resolve relative to
      * the real location and repeated references dedupe */
     char name[1024];
@@ -972,7 +974,7 @@ static void data_declarations(chart_builder *builder, const ta_xml_node *datamod
         const char *source = ta_xml_attribute_value(d, "src");
         if (source) {
             ta_source s;
-            if (fetch_source(builder, d, source, &s))
+            if (fetch_source(builder, &(source_fetch){d, source}, &s))
                 data.expression = intern_expression(builder, &(expression_input){TA_EXPRESSION_CONTENT, {s.text.pointer, s.text.length}, d});
         } else if (data.expression == TA_NIL && (d->first || d->text_length)) {
             data.expression = content_expression(builder, d);

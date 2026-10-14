@@ -124,6 +124,127 @@ static void test_xml_arena_refusal(void) {
     }
 }
 
+typedef struct resolver_fixture {
+    int mode; /* 0: sources; 1: structured refusal; 2: status only; 3: location only */
+    uint32_t calls;
+    ta_growable_arena *scratch;
+} resolver_fixture;
+
+/* Deliberately omit the NUL: resolver results are length-delimited views. */
+static ta_string_view resolver_copy(const ta_resolve_request *request, const char *text) {
+    size_t length = strlen(text);
+    char *copy = ta_growable_arena_alloc(request->scratch, length, 1);
+    if (copy) memcpy(copy, text, length);
+    return (ta_string_view){copy, (uint32_t)length};
+}
+
+static ta_status scratch_resolve(void *context, const ta_resolve_request *request,
+                                 ta_resolve_result *out) {
+    resolver_fixture *fixture = context;
+    CHECK(request->scratch != NULL);
+    CHECK(out->source.name.pointer == NULL && out->source.text.pointer == NULL);
+    CHECK(out->error.message.pointer == NULL && out->error.line == 0 && out->error.column == 0);
+    if (fixture->scratch) CHECK(fixture->scratch == request->scratch);
+    fixture->scratch = request->scratch;
+    fixture->calls++;
+    if (fixture->mode == 2) return TA_ERROR_INVALID;
+    if (fixture->mode == 1 || fixture->mode == 3) {
+        out->source.name = resolver_copy(request, "sources/reader.py");
+        out->error.line = 7;
+        out->error.column = 11;
+        if (fixture->mode == 1)
+            out->error.message = resolver_copy(request, "name %s is not allowed");
+        return TA_ERROR_INVALID;
+    }
+    static const test_file files[] = {
+        {"data.txt", "41"}, {"script.js", "x = 7;"},
+        {"child.scxml", "<scxml name='child' initial='done'><final id='done'/></scxml>"},
+        {NULL, NULL}};
+    for (const test_file *file = files; file->name; file++)
+        if (request->source.length == strlen(file->name) &&
+            memcmp(request->source.pointer, file->name, request->source.length) == 0) {
+            out->source.name = resolver_copy(request, file->name);
+            out->source.text = resolver_copy(request, file->text);
+            return out->source.name.pointer && out->source.text.pointer ? TA_OK : TA_ERROR_NO_MEMORY;
+        }
+    return TA_ERROR_INVALID;
+}
+
+static void test_resolver_scratch(void) {
+    resolver_fixture fixture = {0};
+    compile_memory memory = {0};
+    ta_compile_options options = {0};
+    options.size = sizeof options;
+    options.alloc = (ta_allocator){&memory, compile_memory_alloc, compile_memory_free};
+    options.resolve = scratch_resolve;
+    options.resolve_context = &fixture;
+    const char *text = "<scxml datamodel='ecmascript' initial='ready'>"
+                       "<datamodel><data id='x' src='data.txt'/></datamodel>"
+                       "<state id='ready'><onentry><script src='script.js'/></onentry>"
+                       "<invoke src='child.scxml'/></state></scxml>";
+    ta_source source = {{"parent.scxml", 12}, {text, (uint32_t)strlen(text)}};
+    ta_compile_result *result = NULL;
+    CHECK_EQUAL(ta_compile_charts(&options, (ta_source_list){&source, 1}, &result), TA_OK);
+    CHECK_EQUAL(fixture.calls, 3);
+    ta_string_view bytes = ta_compile_image(result);
+    ta_image image;
+    CHECK_EQUAL(ta_image_open((ta_bytes){bytes.pointer, bytes.length}, &image), TA_OK);
+    CHECK(ta_image_chart_by_name(&image, (ta_string_view){"child", 5}) != TA_NIL);
+    int data_found = 0, script_found = 0;
+    for (uint32_t i = 0; i < ta_image_expression_count(&image, 0); i++) {
+        ta_expression_info expression = {0};
+        CHECK_EQUAL(ta_image_expression(&image, (ta_chart_item){0, i}, &expression), TA_OK);
+        if (expression.source.length == 2 && memcmp(expression.source.pointer, "41", 2) == 0)
+            data_found = 1;
+        if (expression.source.length == 6 && memcmp(expression.source.pointer, "x = 7;", 6) == 0)
+            script_found = 1;
+    }
+    CHECK(data_found && script_found); /* compiler scratch has already been freed */
+    ta_compile_free(result);
+    CHECK_EQUAL(memory.live_blocks, 0);
+    CHECK_EQUAL(memory.live_bytes, 0);
+}
+
+static void test_resolver_errors(void) {
+    /* Both entry points must preserve error views after scratch cleanup. */
+    for (uint32_t manifest = 0; manifest < 2; manifest++) {
+        for (int mode = 1; mode <= 3; mode++) {
+            resolver_fixture fixture = {0};
+            fixture.mode = mode;
+            compile_memory memory = {0};
+            ta_compile_options options = {0};
+            options.size = sizeof options;
+            options.alloc = (ta_allocator){&memory, compile_memory_alloc, compile_memory_free};
+            options.resolve = scratch_resolve;
+            options.resolve_context = &fixture;
+            const char *text = manifest
+                ? "<system><chart src='reader.py'/></system>"
+                : "<scxml initial='ready'><state id='ready'><onentry>"
+                  "<script src='reader.py'/></onentry></state></scxml>";
+            ta_source source = {{"parent.xml", 10}, {text, (uint32_t)strlen(text)}};
+            ta_compile_result *result = NULL;
+            CHECK_EQUAL(manifest ? ta_compile_system(&options, &source, &result)
+                                 : ta_compile_charts(&options, (ta_source_list){&source, 1}, &result),
+                        TA_ERROR_INVALID);
+            CHECK_EQUAL(fixture.calls, 1);
+            const ta_diagnostic *diagnostic;
+            CHECK_EQUAL(ta_compile_diagnostics(result, &diagnostic), 1);
+            CHECK_EQUAL(diagnostic[0].severity, TA_DIAGNOSTIC_ERROR);
+            CHECK_EQUAL(diagnostic[0].line, mode != 2 ? 7 : 0);
+            CHECK_EQUAL(diagnostic[0].column, mode != 2 ? 11 : 0);
+            const char *file = mode != 2 ? "sources/reader.py" : "reader.py";
+            const char *message = mode == 1 ? "name %s is not allowed" : "cannot resolve src";
+            CHECK_EQUAL(diagnostic[0].file.length, strlen(file));
+            CHECK(memcmp(diagnostic[0].file.pointer, file, strlen(file)) == 0);
+            CHECK_EQUAL(diagnostic[0].message.length, strlen(message));
+            CHECK(memcmp(diagnostic[0].message.pointer, message, strlen(message)) == 0);
+            ta_compile_free(result);
+            CHECK_EQUAL(memory.live_blocks, 0);
+            CHECK_EQUAL(memory.live_bytes, 0);
+        }
+    }
+}
+
 static const char *CHART =
     "<?xml version='1.0'?>\n"
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript'\n"
@@ -550,7 +671,7 @@ static void test_generated_ids(void) {
 /* The host's abort flag stops a compile: before it starts, from inside it
  * (here: set by the resolver), and is ignored when `size` does not cover it. */
 static volatile int abort_now;
-static ta_status abort_resolve(void *context, const ta_resolve_request *request, ta_source *out) {
+static ta_status abort_resolve(void *context, const ta_resolve_request *request, ta_resolve_result *out) {
     abort_now = 1;
     return test_resolve(context, request, out);
 }
@@ -796,6 +917,8 @@ static void test_xml_writer(void) {
     ta_xml_writer_free(writer);
 }
 int main(void) {
+    RUN(test_resolver_scratch);
+    RUN(test_resolver_errors);
     RUN(test_arena_storage);
     RUN(test_diagnostics_outlive_scratch);
     RUN(test_xml_arena_refusal);

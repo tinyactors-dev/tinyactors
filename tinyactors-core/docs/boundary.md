@@ -536,15 +536,13 @@ objects and latch allocation refusal outside the shared arena.
 
 ## 12. Compiling, and the resolver
 
-**Design (ADR 0012, decision 7; [8.2]).** A binding
-compiles with `ta_compile_charts` (`compile.h:74-75`), reads the image
+A binding compiles with `ta_compile_charts`, reads the image
 with `ta_compile_image` and the diagnostics with
 `ta_compile_diagnostics`, and frees the result with `ta_compile_free`; the
 host copies the image's bytes (section 8). A static `src` (`<script>`,
 `<data>`, `<invoke>`) is resolved during the call through
-`ta_compile_options.resolve` (`scxml.c:201-216`). The callback keeps its
-three parameters; [8.2] changes its request and its out parameter in
-place:
+`ta_compile_options.resolve`. The callback takes the resolver context,
+a request and a result:
 
 ```c
 typedef struct ta_resolve_request { ta_string_view base; ta_string_view source; ta_growable_arena *scratch; } ta_resolve_request;
@@ -553,23 +551,30 @@ typedef struct ta_resolve_result { ta_source source; ta_resolve_error error; } t
 typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request *request, ta_resolve_result *out);
 ```
 
-On `TA_OK`, `out->source` is the text. On a refusal the compiler turns
-`out->error` into an error diagnostic: file the resolved src, its line,
-column and message, copied into the result's arena, instead of today's
-bare `cannot resolve src="..."` at the referring element (`scxml.c:212`).
-`scratch` will expose the compiler's per-compilation `ta_growable_arena`,
-freed by `compiler_free` before the compile call returns; the text and
-the message may live there, and the compiler
-copies what it keeps (`link.c:40`, `scxml.c:116`).
+The compiler zeroes the result before each callback. On `TA_OK`,
+`out->source` supplies the text and an optional canonical name. On a
+refusal, `out->source.name` identifies the diagnostic file when supplied;
+otherwise the file is the requested `src`. `out->error` supplies the line,
+column and message. Unspecified positions are 0, and an absent message
+produces `cannot resolve src`. Diagnostic messages are limited to 511
+bytes. Names and messages need not be NUL-terminated.
+
+`scratch` is the compiler's per-compilation `ta_growable_arena`, freed
+before either compile entry point returns. A resolver may allocate names,
+text and messages there; it must not free the arena or release storage
+from earlier callbacks. Resolver-owned views must also remain valid until
+the compile call returns. The compiler copies queued text into its
+temporary storage, expressions into the image, and diagnostic names and
+messages into the result's arena. All access occurs on the compiling thread.
 
 | Object | Owner | Created | Read | Ends |
 |---|---|---|---|---|
-| the scratch arena | the compiler (chunks from `ta_compile_options.alloc`) | at the start of `ta_compile_charts` | by the resolver (writes) and the compiler | when `ta_compile_charts` returns |
-| a resolved text, an error's message | the scratch, or the resolver's own memory | in the resolver's call | by the compiler, which copies what it keeps | when `ta_compile_charts` returns, at the latest |
+| the scratch arena | the compiler (chunks from `ta_compile_options.alloc`) | at the start of the compile call | by the resolver (writes) and the compiler | when the compile call returns |
+| a resolved name, text or error message | the scratch, or the resolver's own memory | in the resolver's call | by the compiler, which copies what it keeps | must remain valid until the compile call returns |
 | a diagnostic (`file`, `message`) | the compile result's arena | when the compiler reports it | by the caller | `ta_compile_free` |
 | the image (`ta_compile_image`) | the compile result | at the compilation's end | by the caller; `ta_host_add_image` copies it | `ta_compile_free` |
 
-**The resolver lives only at compile time** (ADR 0012, decision 7). A static `<invoke src>` is fetched through it
+**The resolver lives only at compile time.** A static `<invoke src>` is fetched through it
 while compiling, and the invoked chart is compiled into the same image
 (`scxml.c:893-896`, `resolve_chart` at `:855-870`). A host has no
 resolver.

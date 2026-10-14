@@ -58,6 +58,9 @@ uint32_t ta_compiler_string(ta_compiler *compiler, const char *s, uint32_t lengt
 uint32_t ta_compiler_event_name(ta_compiler *compiler, const char *s, uint32_t length);
 /* Queue a chart for compilation (dedup by name); returns its chart index. */
 uint32_t ta_compiler_queue(ta_compiler *compiler, const ta_pending_document *document);
+/* Invoke the compile-time resolver; copy a refusal into result diagnostics. */
+ta_status ta_compiler_resolve(ta_compiler *compiler, const ta_resolve_request *request,
+                              ta_source *source);
 
 /* Compile pending chart `index` (appends to the global tables). */
 void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index);

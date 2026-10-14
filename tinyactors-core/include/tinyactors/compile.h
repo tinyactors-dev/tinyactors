@@ -9,6 +9,7 @@
 #define TINYACTORS_COMPILE_H
 
 #include <tinyactors/allocator.h>
+#include <tinyactors/arena.h>
 #include <tinyactors/types.h>
 
 #ifdef __cplusplus
@@ -30,14 +31,31 @@ typedef struct ta_source {
 } ta_source;
 
 /* What a static src="" (invoke/data/script) asks for: `source` as written,
- * in the document named `base`. */
+ * in the document named `base`. scratch belongs to the compiler and lives
+ * until this compile call returns. A resolver may allocate source text,
+ * names and messages there; it must not free the arena or release storage
+ * from earlier callbacks. */
 typedef struct ta_resolve_request {
     ta_string_view base;
     ta_string_view source;
+    ta_growable_arena *scratch;
 } ta_resolve_request;
-/* Resolves static src="" at compile time. */
+typedef struct ta_resolve_error {
+    uint32_t line, column; /* in the resolved source; 0 when unspecified */
+    ta_string_view message; /* need not be NUL-terminated */
+} ta_resolve_error;
+typedef struct ta_resolve_result {
+    ta_source source; /* TA_OK: name and text; refusal: optional resolved file name */
+    ta_resolve_error error; /* used on refusal */
+} ta_resolve_result;
+/* Resolves static src="" at compile time. The compiler zeroes out before
+ * calling. Views may live in scratch or resolver-owned storage, and must
+ * remain valid until the compile call returns. The compiler copies text
+ * into the image and diagnostics into its result, valid until compile_free.
+ * On refusal, source.name identifies the diagnostic file when present;
+ * otherwise request->source does. An absent message gives a generic error. */
 typedef ta_status (*ta_resolve_function)(void *context, const ta_resolve_request *request,
-                                         ta_source *out);
+                                         ta_resolve_result *out);
 
 enum { TA_COMPILE_STRIP_DEBUG = 1u << 0, TA_COMPILE_WERROR = 1u << 1 };
 #define TA_COMPILE_MAX_CONTENT_NESTING 64u

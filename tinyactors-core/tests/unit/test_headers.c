@@ -35,6 +35,18 @@ ABI_CHECK(offsetof(ta_datamodel_ecmascript_config, abort_flag) >
               offsetof(ta_datamodel_ecmascript_config, realm),
           ecmascript_config_abort_last);
 ABI_CHECK(offsetof(ta_compile_options, size) == 0, compile_options_size_first);
+ABI_CHECK(offsetof(ta_resolve_request, scratch) == 2 * sizeof(ta_string_view),
+          resolve_request_scratch_last);
+ABI_CHECK(offsetof(ta_resolve_result, source) == 0 &&
+              offsetof(ta_resolve_result, error) == sizeof(ta_source),
+          resolve_result_source_then_error);
+ABI_CHECK(offsetof(ta_resolve_error, line) == 0 &&
+              offsetof(ta_resolve_error, column) == 4 &&
+              offsetof(ta_resolve_error, message) == 8,
+          resolve_error_location_then_message);
+ABI_CHECK(sizeof(((ta_resolve_function)0)(0, (const ta_resolve_request *)0,
+                                         (ta_resolve_result *)0)) == sizeof(ta_status),
+          resolver_accepts_result);
 ABI_CHECK(offsetof(ta_compile_options, abort_flag) ==
               offsetof(ta_compile_options, resolve_context) + sizeof(void *),
           compile_options_abort_last);

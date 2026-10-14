@@ -48,6 +48,25 @@ static void test_compile_file_with_source(void) {
     ta_compile_free(result);
 }
 
+static void test_resolver_error_path(void) {
+    CHECK(fixture_write("unresolved.scxml", "<scxml initial='ready'><state id='ready'>"
+                        "<onentry><script src='absent.js'/></onentry></state></scxml>"));
+    ta_compile_result *result = NULL;
+    CHECK_EQUAL(ta_runtime_compile_file(fixture_path("unresolved.scxml"), 0, &result), TA_ERROR_INVALID);
+    const ta_diagnostic *diagnostic;
+    uint32_t count = ta_compile_diagnostics(result, &diagnostic);
+    CHECK_EQUAL(count, 1);
+    if (count) {
+        const char *path = fixture_path("absent.js");
+        CHECK_EQUAL(diagnostic[0].file.length, strlen(path));
+        CHECK(memcmp(diagnostic[0].file.pointer, path, strlen(path)) == 0);
+        CHECK_EQUAL(diagnostic[0].line, 0);
+        CHECK_EQUAL(diagnostic[0].column, 0);
+        CHECK(strcmp(diagnostic[0].message.pointer, "cannot read source file") == 0);
+    }
+    ta_compile_free(result);
+}
+
 static void test_growable_system(void) {
     CHECK(fixture_write(
         "burst.scxml",
@@ -155,6 +174,7 @@ static void test_limits_and_targeted_grow(void) {
 int main(void) {
     RUN(test_alloc_files_clock);
     RUN(test_compile_file_with_source);
+    RUN(test_resolver_error_path);
     RUN(test_growable_system);
     RUN(test_limits_and_targeted_grow);
     TEST_MAIN_END();

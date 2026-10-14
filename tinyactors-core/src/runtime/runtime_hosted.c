@@ -75,7 +75,27 @@ void ta_runtime_files_free(ta_runtime_files *files) {
     free(files);
 }
 
-ta_status ta_runtime_resolve(void *context, const ta_resolve_request *request, ta_source *out) {
+/* Preserve the attempted path before its malloc block is freed. A direct
+ * caller without compilation scratch still gets the requested src name. */
+static void runtime_resolve_error(const ta_resolve_request *request, ta_resolve_result *out,
+                                  const char *message) {
+    out->error.message = (ta_string_view){message, (uint32_t)strlen(message)};
+    ta_string_view file = out->source.name;
+    char *name = request->scratch
+                     ? ta_growable_arena_alloc(request->scratch, (size_t)file.length + 1, 1)
+                     : NULL;
+    if (name) {
+        if (file.length) memcpy(name, file.pointer, file.length);
+        name[file.length] = 0;
+        out->source.name = (ta_string_view){name, file.length};
+    } else {
+        out->source.name = request->source;
+    }
+}
+
+ta_status ta_runtime_resolve(void *context, const ta_resolve_request *request, ta_resolve_result *out) {
+    *out = (ta_resolve_result){0};
+    out->source.name = request->source;
     ta_runtime_files *files = (ta_runtime_files *)context;
     ta_string_view base = request->base, source = request->source;
     /* accept file: URIs */
@@ -94,13 +114,20 @@ ta_status ta_runtime_resolve(void *context, const ta_resolve_request *request, t
                    (source.pointer[0] == '/' || (source.length > 1 && source.pointer[1] == ':'));
     if (absolute) dir = 0;
     char *path = (char *)malloc(dir + source.length + 1);
-    if (!path) return TA_ERROR_NO_MEMORY;
+    if (!path) {
+        runtime_resolve_error(request, out, "cannot allocate resolver path");
+        return TA_ERROR_NO_MEMORY;
+    }
     if (dir) memcpy(path, base.pointer, dir);
     memcpy(path + dir, source.pointer, source.length);
     path[dir + source.length] = 0;
+    out->source.name = (ta_string_view){path, (uint32_t)strlen(path)};
     ta_bytes bytes;
     ta_status status = ta_runtime_load_file(path, &bytes);
     if (status != TA_OK) {
+        runtime_resolve_error(request, out, status == TA_ERROR_NO_MEMORY
+                                             ? "cannot allocate source file"
+                                             : "cannot read source file");
         free(path);
         return status;
     }
@@ -111,6 +138,7 @@ ta_status ta_runtime_resolve(void *context, const ta_resolve_request *request, t
         char **nn = (char **)realloc(files->names, nc * sizeof(char *));
         if (nn) files->names = nn;
         if (!nt || !nn) {
+            runtime_resolve_error(request, out, "cannot retain resolved source");
             ta_runtime_free_file(bytes);
             free(path);
             return TA_ERROR_NO_MEMORY;
@@ -120,10 +148,10 @@ ta_status ta_runtime_resolve(void *context, const ta_resolve_request *request, t
     files->texts[files->count] = (char *)bytes.pointer;
     files->names[files->count] = path;
     files->count++;
-    out->name.pointer = path;
-    out->name.length = (uint32_t)strlen(path);
-    out->text.pointer = (const char *)bytes.pointer;
-    out->text.length = (uint32_t)bytes.length;
+    out->source.name.pointer = path;
+    out->source.name.length = (uint32_t)strlen(path);
+    out->source.text.pointer = (const char *)bytes.pointer;
+    out->source.text.length = (uint32_t)bytes.length;
     return TA_OK;
 }
 
