@@ -143,9 +143,76 @@ static void test_invalid_config_and_arguments(void) {
     ta_table_free(&table);
 }
 
+/* The handle namespace saved and restored: live handles live again with
+ * zeroed rows, removed ones stale, and later adds hand out what the
+ * original table would have. */
+static void test_snapshot_and_restore(void) {
+    counting_allocator allocator;
+    counting_init(&allocator);
+    ta_table_config config = {sizeof config, 12, &allocator.api};
+    ta_table table, again;
+    ta_table_init(&table, &config);
+    uint64_t handles[40];
+    for (uint32_t i = 0; i < 40; ++i) *(uint32_t *)ta_table_add(&table, &handles[i]) = i + 1;
+    for (uint32_t i = 0; i < 40; i += 3) ta_table_remove(&table, handles[i]);
+    unsigned char bytes[2048];
+    ta_buffer small = {bytes, 8, 0};
+    CHECK_EQUAL(ta_table_snapshot(&table, &small), TA_ERROR_NO_MEMORY);
+    CHECK(small.length > 8 && small.length <= sizeof bytes);
+    ta_buffer out = {bytes, sizeof bytes, 0};
+    CHECK_EQUAL(ta_table_snapshot(&table, &out), TA_OK);
+    CHECK_EQUAL(out.length, small.length);
+    ta_bytes saved = {bytes, out.length};
+    ta_table_init(&again, &config);
+    allocator.refuse = 1;
+    CHECK_EQUAL(ta_table_restore(&again, saved), TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(again.capacity, 0);
+    allocator.refuse = 0;
+    CHECK_EQUAL(ta_table_restore(&again, saved), TA_OK);
+    CHECK_EQUAL(again.count, table.count);
+    CHECK_EQUAL(ta_table_restore(&again, saved), TA_ERROR_STATE); /* not empty */
+    for (uint32_t i = 0; i < 40; ++i) {
+        uint32_t *row = ta_table_get(&again, handles[i]);
+        if (i % 3 == 0) {
+            CHECK(row == NULL);
+        } else {
+            CHECK(row != NULL && *row == 0);
+        }
+    }
+    for (uint32_t i = 0; i < 20; ++i) {
+        uint64_t a, b;
+        CHECK(ta_table_add(&table, &a) != NULL);
+        CHECK(ta_table_add(&again, &b) != NULL);
+        CHECK_EQUAL(a, b);
+    }
+    /* bytes that are not a namespace, or one of another row size */
+    ta_table other;
+    ta_table_config wider = {sizeof wider, 24, &allocator.api};
+    ta_table_init(&other, &wider);
+    CHECK_EQUAL(ta_table_restore(&other, saved), TA_ERROR_INVALID);
+    bytes[0] ^= 1;
+    ta_table_init(&other, &config);
+    CHECK_EQUAL(ta_table_restore(&other, saved), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_table_restore(&other, (ta_bytes){bytes, 3}), TA_ERROR_INVALID);
+    bytes[0] ^= 1;
+    uint32_t loop[4 + 2 * 2] = {0x54415442u, 16, 2, 1, 0, 2, 0, 1}; /* a free list that cycles */
+    CHECK_EQUAL(ta_table_restore(&other, (ta_bytes){loop, sizeof loop}), TA_ERROR_INVALID);
+    ta_table empty, empty_again;
+    ta_table_init(&empty, &config);
+    ta_table_init(&empty_again, &config);
+    out = (ta_buffer){bytes, sizeof bytes, 0};
+    CHECK_EQUAL(ta_table_snapshot(&empty, &out), TA_OK);
+    CHECK_EQUAL(ta_table_restore(&empty_again, (ta_bytes){bytes, out.length}), TA_OK);
+    CHECK_EQUAL(empty_again.capacity, 0);
+    ta_table_free(&table);
+    ta_table_free(&again);
+    CHECK_EQUAL(allocator.live_bytes, 0);
+}
+
 int main(void) {
     RUN(test_handles_and_growth);
     RUN(test_refused_growth);
+    RUN(test_snapshot_and_restore);
     RUN(test_generation_retirement);
     RUN(test_invalid_config_and_arguments);
     TEST_MAIN_END();

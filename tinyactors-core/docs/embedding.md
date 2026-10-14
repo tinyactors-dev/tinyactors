@@ -203,7 +203,9 @@ actors a system image declares.
     integer (sessions, payloads of your datamodel): rows of your size,
     64-bit handles with a 31-bit generation, so a stale handle is
     refused; grown by doubling, so a row pointer is valid until the next
-    `ta_table_add`: keep handles, not pointers.
+    `ta_table_add`: keep handles, not pointers. `ta_table_snapshot` and
+    `ta_table_restore` save and restore a table's handle namespace for a
+    host snapshot, whose regions name your rows by handle.
   - `ta_growable_arena` (`arena.h`) for what a call of yours converts:
     linked chunks, so an allocation never moves; a mark at your call's
     entry and a release to it at its exit, which nests; released chunks

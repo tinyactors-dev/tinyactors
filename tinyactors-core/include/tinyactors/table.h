@@ -63,6 +63,18 @@ TA_API uint64_t ta_table_handle(const ta_table *table, uint32_t slot);
  * that from raw bytes. Other handles and row pointers remain unchanged. */
 TA_API void ta_table_remove(ta_table *table, uint64_t handle);
 
+/* The table's handle namespace — each slot's generation and the free list,
+ * not the rows — written into `out` (ta_buffer): what a binding saves next to
+ * a host snapshot, whose regions name its rows by handle. TA_ERROR_NO_MEMORY:
+ * out->length is the room it needs. */
+TA_API ta_status ta_table_snapshot(const ta_table *table, ta_buffer *out);
+/* That namespace back into an empty table (TA_ERROR_STATE otherwise) with
+ * the same row size (TA_ERROR_INVALID otherwise, and for bytes that are not
+ * one): every handle live when it was written is live again with a zeroed
+ * row, which the caller fills through get, and later adds hand out what they
+ * would have. TA_ERROR_NO_MEMORY: the allocator refused, the table unchanged. */
+TA_API ta_status ta_table_restore(ta_table *table, ta_bytes snapshot);
+
 /* Release storage and leave an inert empty table; repeated free is safe.
  * Release all row-owned resources first. All handles and pointers end here;
  * a later init starts a new handle namespace, not a continuation of this one. */

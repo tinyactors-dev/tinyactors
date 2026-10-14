@@ -102,6 +102,63 @@ void ta_table_remove(ta_table *table, uint64_t handle) {
     table->free = slot + 1u;
 }
 
+/* magic, row size, capacity, free; then capacity slot records */
+#define TABLE_SNAPSHOT_MAGIC 0x54415442u /* "TATB" */
+
+ta_status ta_table_snapshot(const ta_table *table, ta_buffer *out) {
+    size_t need = 4 * sizeof(uint32_t) + sizeof(ta_table_slot) * (size_t)table->capacity;
+    if (out->capacity < need || !out->pointer) {
+        out->length = need;
+        return TA_ERROR_NO_MEMORY;
+    }
+    uint32_t header[4] = {TABLE_SNAPSHOT_MAGIC, table->row_size, table->capacity, table->free};
+    ta_memcpy(out->pointer, header, sizeof header);
+    if (table->capacity)
+        ta_memcpy((unsigned char *)out->pointer + sizeof header, table_slots(table),
+                  sizeof(ta_table_slot) * table->capacity);
+    out->length = need;
+    return TA_OK;
+}
+
+ta_status ta_table_restore(ta_table *table, ta_bytes snapshot) {
+    if (!table->allocator || !table->row_size || table->capacity || table->count) return TA_ERROR_STATE;
+    uint32_t header[4];
+    if (snapshot.length < sizeof header) return TA_ERROR_INVALID;
+    ta_memcpy(header, snapshot.pointer, sizeof header);
+    uint32_t capacity = header[2], free = header[3];
+    if (header[0] != TABLE_SNAPSHOT_MAGIC || header[1] != table->row_size || free > capacity ||
+        snapshot.length != sizeof header + sizeof(ta_table_slot) * (size_t)capacity)
+        return TA_ERROR_INVALID;
+    const unsigned char *records = (const unsigned char *)snapshot.pointer + sizeof header;
+    uint32_t count = 0;
+    for (uint32_t slot = 0; slot < capacity; slot++) {
+        ta_table_slot record;
+        ta_memcpy(&record, records + sizeof record * slot, sizeof record);
+        if (record.next > capacity || ((record.generation & 1u) && record.next)) return TA_ERROR_INVALID;
+        count += record.generation & 1u;
+    }
+    /* the free list: free slots only, ending within capacity steps */
+    uint32_t at = free, steps = 0;
+    while (at) {
+        ta_table_slot record;
+        ta_memcpy(&record, records + sizeof record * (at - 1u), sizeof record);
+        if ((record.generation & 1u) || ++steps > capacity) return TA_ERROR_INVALID;
+        at = record.next;
+    }
+    if (!capacity) return TA_OK;
+    size_t stride = (size_t)table->row_size + sizeof(ta_table_slot);
+    if (capacity > SIZE_MAX / stride) return TA_ERROR_INVALID;
+    unsigned char *rows = table->allocator->alloc(table->allocator->context, stride * capacity, 8);
+    if (!rows) return TA_ERROR_NO_MEMORY;
+    ta_memset(rows, 0, (size_t)table->row_size * capacity);
+    ta_memcpy(rows + (size_t)table->row_size * capacity, records, sizeof(ta_table_slot) * capacity);
+    table->rows = rows;
+    table->capacity = capacity;
+    table->free = free;
+    table->count = count;
+    return TA_OK;
+}
+
 void ta_table_free(ta_table *table) {
     if (table->rows) {
         size_t bytes = ((size_t)table->row_size + sizeof(ta_table_slot)) * table->capacity;

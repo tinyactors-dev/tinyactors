@@ -12447,6 +12447,40 @@
       "implemented": true
     },
     {
+      "name": "ta_table_restore",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "table",
+          "type": "ta_table *"
+        },
+        {
+          "name": "snapshot",
+          "type": "ta_bytes"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_table_snapshot",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "table",
+          "type": "const ta_table *"
+        },
+        {
+          "name": "out",
+          "type": "ta_buffer *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "ta_trace_body",
       "returns": "const void *",
       "params": [

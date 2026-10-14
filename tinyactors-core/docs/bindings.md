@@ -218,7 +218,12 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
     allocator, slots reused, freed once with the host. A row pointer is
     valid until remove, free or the next successful `ta_table_add`; keep
     handles, not pointers. Release row-owned references before removing or
-    freeing their storage. The binding writes no table of its own. Images
+    freeing their storage. The binding writes no table of its own. For a
+    host snapshot, `ta_table_snapshot` writes a table's handle namespace
+    (generations and free list, not the rows) and `ta_table_restore` puts
+    it back into an empty table: the binding saves that and each row's
+    values beside the snapshot, and refills the rows at their handles
+    after `ta_host_restore`, before the first run. Images
     need no table: pass the bytes (core's `ta_compile_image` view, a
     caller's buffer, at any alignment) to `ta_host_add_image`, which copies
     them; the compile result can be freed as soon as the call returns (the

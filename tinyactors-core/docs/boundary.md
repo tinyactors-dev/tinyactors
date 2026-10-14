@@ -558,7 +558,7 @@ through the caller's `ta_allocator`:
 
 | API | What | Lifetimes |
 |---|---|---|
-| `ta_table` (`table.h`) | rows of a caller's size, named by 64-bit handles `generation << 32 \| (slot + 1)`, 31 bits of generation (odd while live); grows by doubling | a handle until `ta_table_remove` (stale for good after); a row pointer until the next `ta_table_add`; the rows until `ta_table_free` |
+| `ta_table` (`table.h`) | rows of a caller's size, named by 64-bit handles `generation << 32 \| (slot + 1)`, 31 bits of generation (odd while live); grows by doubling | a handle until `ta_table_remove` (stale for good after); a row pointer until the next `ta_table_add`; the rows until `ta_table_free`; `ta_table_snapshot` writes the handle namespace into the caller's `ta_buffer`, `ta_table_restore` puts it back into an empty table (the handles live again, the rows zeroed) |
 | `ta_growable_arena` (`arena.h`) | linked chunks, a request larger than the chunk size in a chunk of its own, marks, a release that keeps its chunks, a `ta_allocator` view. Both compiler arenas use it | an allocation until a release to a mark taken before it (it never moves); chunks until `ta_growable_arena_free`; the `ta_allocator` view while the arena lives |
 | `ta_status_name` (`types.h`) | `"TA_ERROR_STATE"` for `TA_ERROR_STATE`; NULL for a status `types.h` does not define | static text |
 

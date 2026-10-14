@@ -667,8 +667,9 @@ TA_API ta_status ta_host_adopt(ta_host *h, const ta_host_adoption *adoption, uin
  *
  * Datamodel state is not in it: regions refer to datamodel instances and
  * payloads by handle, and the host restores its datamodels so those handles
- * are valid again before the first ta_host_run (the JS bindings store their
- * value tables next to the snapshot; the C ECMAScript datamodel has
+ * are valid again before the first ta_host_run (a binding's datamodel saves
+ * its tables' namespaces, ta_table_snapshot, and their rows' values next to
+ * the snapshot; the C ECMAScript datamodel has
  * ta_datamodel_ecmascript_snapshot/_restore). Images are supplied again, one per
  * segment (empty for retired ones); ta_host_snapshot_segments tells which.
  * Snapshots are for the same build of the library (regions are raw memory). */
