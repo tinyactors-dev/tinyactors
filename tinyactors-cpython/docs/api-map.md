@@ -32,7 +32,7 @@ commit that adds the item removes the mark.
 | *planned* `with compile_charts(...) as compiled`, `Compiled.close()` | `ta_compile_free` | the collector as a fallback; `close()` while a `memoryview` of `image` is held raises `BufferError` |
 | *planned* `CompileError` | `ta_compile_diagnostics`, `TA_DIAGNOSTIC_ERROR` | a `TinyactorsError` with every diagnostic: `file`, `line`, `column`, `message` |
 | *planned* `resolver.resolve(base, source) -> str`, `tinyactors.ResolveError(message, line=None, column=None)` | `ta_compile_charts`, `ta_compile_diagnostics` | the resolver protocol, given to `compile_charts` only (static `src` at compile time); a `ResolveError`, a `SyntaxError` or the rewrite's refusal becomes a diagnostic at its line and column, the message in the compilation's scratch arena. `DirectoryResolver` is the convenience layer's, in Python |
-| *planned* `tinyactors.Host(config, io_processors, log, clock)` | `ta_host_create`, `host.config` | the config as CBOR in the call's arena (`ta_growable_arena` [8.2]); the extension posts `host.config` once for `ticksPerSecond`; the environment registers the `"python"` datamodel and quickjs |
+| *planned* `tinyactors.Host(config, io_processors, log, clock)` | `ta_host_create`, `host.config` | the config as CBOR in the call's arena (`ta_growable_arena`); the extension posts `host.config` once for `ticksPerSecond`; the environment registers the `"python"` datamodel and quickjs |
 | *planned* `with Host(...)`, `async with Host(...)`, `Host.close()` | `trace.end`, `ta_host_traces`, `ta_host_effects_ack`, `ta_host_free` | the stop of bindings.md section 4; pending response handlers dropped, never called |
 | *planned* `Host.add_image(image) -> int` | `ta_host_add_image` | the host copies the bytes during the call; returns the segment |
 | *planned* `Host.chart(name)` | `ta_host_chart` | the current version of the chart: segment and chart index |
@@ -49,7 +49,7 @@ commit that adds the item removes the mark.
 | *planned* `send.answer(event, data=None, *, traceparent=send.traceparent)` | `ta_host_send` | to `SESSION`, with the send's `sendid`, `origintype` the processor's type, and by default the send's trace; `traceparent=None` starts a new trace |
 | *planned* `send.fail()` | `ta_host_send`, `TA_EVENT_IN_ERROR_COMMUNICATION` | with the send's `sendid` and `send.traceparent`; core raises `error.communication` in the sender |
 | *planned* `log=handler(host, entry)`, `entry.session`, `entry.label`, `entry.text` | `TA_EFFECT_LOG`, `ta_host_effect_text`, `ta_host_effect_number` | the handling of an effect; `entry` a thin view until the ack |
-| *planned* `Host.actor_state(session, handler, on_error=None)` | `actor.state`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method; the handler at the `REPLY`'s dispatch; the id is a pending row's handle (`ta_table` [8.2]) |
+| *planned* `Host.actor_state(session, handler, on_error=None)` | `actor.state`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method; the handler at the `REPLY`'s dispatch; the id is a pending row's handle (`ta_table`) |
 | *planned* `Host.actor_context(session, handler, on_error=None)` | `actor.context`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | *planned* `Host.actor_list(handler, on_error=None, ...)` | `actor.list`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method; params as requests.md |
 | *planned* `Host.actor_get(session, handler, on_error=None)` | `actor.get`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
@@ -57,7 +57,7 @@ commit that adds the item removes the mark.
 | *planned* `Host.trace_configure(rules, handler, on_error=None)` | `trace.configure`, `ta_host_post` | a typed method |
 | *planned* `Host.trace_watch(rules, seconds, handler, on_error=None)`, `Host.trace_unwatch(...)` | `trace.watch`, `trace.unwatch`, `ta_host_post` | typed methods |
 | *planned* `Host.trace_spans_decode(traces, handler, on_error=None)` | `trace.spans.decode`, `ta_host_post` | a typed method |
-| *planned* `TinyactorsError` | `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a reply's error (`code`, `reason`, `path`, `message`), a refusal at a call, a fault, a stale view; the status named by `ta_status_name` [8.2] |
+| *planned* `TinyactorsError` | `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a reply's error (`code`, `reason`, `path`, `message`), a refusal at a call, a fault, a stale view; the status named by `ta_status_name` |
 | `tinyactors.encode(value)`, `tinyactors.decode(data)` | `ta_cbor_writer_init`, `ta_cbor_reader_init`, `ta_cbor_read`, `ta_cbor_writer_bytes`, `ta_cbor_writer_free` | streaming conversion of the neutral-value table; Python types, ownership and exceptions in docs/values.md |
 | `tinyactors.Address(text)`, `Address.text`, `str(Address)`, reference equality and hashing | `TA_CBOR_TAG_URI`, `ta_cbor_write_tag` | immutable Python representation of tag 32 on text; no routing, URI validation or host handle |
 | `tinyactors.UNDEFINED` | `TA_CBOR_UNDEFINED`, `ta_cbor_write_simple` | per-module singleton for undefined, preserved at the top level and inside containers; distinct from None |

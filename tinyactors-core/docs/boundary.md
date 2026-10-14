@@ -3,10 +3,8 @@
 **Status:** Current (2026-10-13). Records [ADR 0009](../../docs/adr/0009-one-host-two-queues.md),
 [ADR 0010](../../docs/adr/0010-outputs-are-views-values-stream.md),
 [ADR 0011](../../docs/adr/0011-the-control-plane-is-posted-messages.md) and
-[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md). Where the code
-does not do what ADR 0012 decides yet, the row says "(0012)"; what else
-step 8.2 adds or removes (ADR 0012, decisions 4, 5 and 7; the findings
-below) is marked "[8.2]". Both are step 8.2 of `ROADMAP.md`.
+[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md), which step
+8.2 of `ROADMAP.md` implemented.
 
 How a binding and core talk: what crosses, who owns it, for how long,
 and every alternative that was considered and rejected, with the reason
@@ -152,7 +150,7 @@ keeps first (ADR 0010 decision 1).
 | the caller's `ta_buffer` (snapshots, `environment->error`) | callers: the size is known up front, or no host exists | kept |
 | structural borrows (a segment's image, `ta_host_system`, a peer's id, a job's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
 | `REPLY` or `NOTIFICATION` | callers: an answer or news | kept |
-| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed** with `actor.subscribe` (0012, decision 4); notifications stay possible |
+| `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed** with `actor.subscribe` (ADR 0012, decision 4); notifications stay possible |
 
 ### What no test checks yet
 
@@ -160,7 +158,7 @@ From the table: a boot that fails after some boot actors spawned (a
 spawn refused past the pool's growth), documented in `host.h` but not
 tested.
 
-The findings step 8.2 settles [8.2], each a decision and a test:
+The findings of step 8.2, each settled by a decision and a test:
 
 1. **`ta_host_free` from a datamodel's code** — settled: it does nothing
    in R/G (`test_host_inputs.c` `test_lookups_answer_and_free_does_nothing`).

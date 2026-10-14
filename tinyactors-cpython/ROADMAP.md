@@ -170,7 +170,7 @@ In this order, each step a commit (or a few) that passes this project's
   `tinyactors.ResolveError(message, line=, column=)`; a `SyntaxError` or
   the rewrite's refusal is converted with its `lineno` and `offset`. The
   extension fills `ta_resolve_error`, the message in the compilation's
-  scratch arena [8.2].
+  scratch arena.
 - **`traceparent`:** in, W3C text passed as the `str`'s UTF-8 for the
   call (`send(..., *, traceparent=None)`, `send_many` items, `spawn(...,
   traceparent=None)`), parsed by core; out, `send.traceparent`, formatted

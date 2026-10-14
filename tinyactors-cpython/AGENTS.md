@@ -69,8 +69,7 @@ snake_case (`session_id`).
 ## The API
 
 Decided by the maintainer (2026-10-13); every item is in
-[`docs/api-map.md`](docs/api-map.md) with the core behind it. What core
-does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
+[`docs/api-map.md`](docs/api-map.md) with the core behind it.
 
 - **`tinyactors.compile_charts(sources: list[Source], resolver=None) ->
   Compiled`**: `ta_compile_charts`, with `resolver` as
@@ -226,7 +225,7 @@ does not have yet is marked [8.2] (root `ROADMAP.md`, step 8.2).
   call (`ta_host_post`: `TA_ERROR_NO_MEMORY`, `TA_ERROR_STATE`) raises at
   once. No synchronous request, no raw `post`, no reply object, no future.
 - **The message id is the handle of a row in the pending table**
-  (`ta_table` [8.2]) holding `(handler, on_error)`: the drain reads the
+  (`ta_table`) holding `(handler, on_error)`: the drain reads the
   `REPLY`'s `id` in C, finds the row with `ta_table_get` (O(1); the
   generation refuses a stale id), removes it and calls the handler. At
   `ta_host_free` the remaining rows are dropped and their handlers never
@@ -399,7 +398,7 @@ covered by the spike (unverified).
 
 The extension allocates almost nothing (bindings.md, section 6), and
 what it allocates comes from the host's allocator through core's base
-APIs [8.2]:
+APIs:
 
 - **One `ta_growable_arena` per host** (`tinyactors/arena.h`, ADR 0012
   decision 5), created with the `Host` and freed with

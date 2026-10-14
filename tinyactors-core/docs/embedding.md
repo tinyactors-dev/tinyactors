@@ -1,8 +1,7 @@
 # Embedding the core
 
 **Status:** Current (2026-10-13), the design after
-[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md). What core does not do yet is marked **(0012)** or
-**[8.2]**: step 8.2 of `ROADMAP.md`.
+[ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md).
 
 How to use the core from C: the loop, the inputs, the effects and the
 ack, the control plane, images, values, memory, threads, and what an
@@ -50,7 +49,7 @@ on wake (a timer fired, input arrived, I/O completed):
     drain(host)                            # what those calls appended
     ta_host_advance_time(host, {monotonic, wall_ns})
     repeat:
-        run = ta_host_run(host, budget)    # refused while a batch is open (0012)
+        run = ta_host_run(host, budget)    # refused while a batch is open
         drain(host)                        # the run's effects, then its notifications
         TA_RUN_EFFECTS      -> a send to a sync I/O processor: answer it, run again now
         TA_RUN_EFFECTS_FULL -> run again now
@@ -255,7 +254,7 @@ Must not:
 
 A chart that greets: `hello` makes it `<send>` `greeted` to the
 application's I/O processor and `<log>` a line. Everything below is the
-current API except the refusal of a run with a batch open, marked (0012).
+current API.
 Error handling is cut to keep it short.
 
 ```c

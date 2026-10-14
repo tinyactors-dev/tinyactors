@@ -48,8 +48,8 @@ the effect records read through accessors and CBOR, never a third.
 - **Publication** ([ADR 0012](../../docs/adr/0012-lifetimes-follow-the-loop.md)):
   a reply is pending until a take (`ta_host_effects`) with no batch open
   hands it out, with or without a run; a post made while a batch is open
-  is answered in the take after the ack (0012; today a second take widens
-  the open batch). A batch holds, in order: the effects appended between
+  is answered in the take after the ack; a take never widens the open
+  batch. A batch holds, in order: the effects appended between
   runs in call order (earlier replies, a deliver's `PEER_ERROR`,
   `trace.end`'s `TRACES`), then a run's effects in drain order, then the
   run's notifications at its end. A reply and its bytes live until

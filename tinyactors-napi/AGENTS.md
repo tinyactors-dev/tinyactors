@@ -207,7 +207,7 @@ least 8 on each. So the addon's `alloc` need not align by hand (an
 The addon allocates almost nothing (bindings.md, section 6):
 
 - **Rows in core's `ta_table`** (`tinyactors/table.h`, ADR 0012 decision
-  5; [8.2]): a session (its scope), a chart (its compiled functions), a
+  5): a session (its scope), a chart (its compiled functions), a
   payload (its `napi_ref` and reference count), a `<foreach>`, a pending
   typed method (its handlers). The tables grow
   through the host's allocator and are freed once with the host. Keep
@@ -218,7 +218,7 @@ The addon allocates almost nothing (bindings.md, section 6):
   once and never held; free a compile result at once. No image rows, no
   `SEGMENT_FREED` bookkeeping.
 - **One `ta_growable_arena` per host, a mark per call** (ADR 0012
-  decision 5; [8.2]). Made with the host, freed with it,
+  decision 5). Made with the host, freed with it,
   its chunks kept. Each call takes a mark at entry and releases to it at
   exit, on every path. It holds the call's CBOR (a config, a typed
   method's params, a payload for quickjs, `encode`: a `ta_cbor_writer`
