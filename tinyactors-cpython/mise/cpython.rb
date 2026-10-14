@@ -123,7 +123,8 @@ module CPython
   # with core's objects into a module CPython loads (Target#plugin: the
   # interpreter provides the C API's symbols).
   def build_extension(target, build, core)
-    includes = ["-I#{CORE_BUILD}", "-I#{ROOT.join('src')}", "-I#{include_directory(build.python)}"]
+    generated = support_include
+    includes = ["-I#{CORE_BUILD}", "-I#{ROOT.join('src')}", "-I#{generated}", "-I#{include_directory(build.python)}"]
     objects = Dir[ROOT.join(SOURCES).to_s].sort.map do |source|
       relative = Pathname.new(source).relative_path_from(ROOT.join('src')).sub_ext('.o')
       compile(target, source, build.directory.join('objects', relative),
@@ -131,6 +132,25 @@ module CPython
     end
     target.plugin([*objects, *core].map(&:to_s), into: build.extension.to_s)
     build.extension
+  end
+
+  # src/datamodel/support.py, the "python" datamodel's rewrite and the
+  # exceptions, as one C string literal (build/generated/support.inc) that
+  # src/datamodel/expressions.c includes: the module runs it once per
+  # interpreter. It is no file of the wheel. Rewritten only when it changes,
+  # so the compile cache (its -MMD dependencies) sees the change.
+  SUPPORT = 'src/datamodel/support.py'
+
+  def support_include
+    directory = BUILD.join('generated')
+    directory.mkpath
+    literal = ROOT.join(SUPPORT).read.each_line.map do |line|
+      escaped = line.chomp.gsub('\\') { '\\\\' }.gsub('"') { '\\"' }
+      "\"#{escaped}\\n\"\n"
+    end.join
+    include = directory.join('support.inc')
+    include.write(literal) unless include.file? && include.read == literal
+    directory
   end
 
   # The free-threaded interpreter of mise.toml's TA_PYTHON_FREE_THREADED,

@@ -16,7 +16,7 @@
  * keeps recursive helpers independent of mutable module export names and
  * avoids a global singleton/type pointer or a fourth function parameter. */
 typedef struct ta_python_encoder {
-    ta_cbor_writer writer;
+    ta_cbor_writer *writer;
     ta_python_module_state *state;
 } ta_python_encoder;
 
@@ -63,7 +63,7 @@ static int ta_python_write_sequence(ta_python_encoder *encoder, PyObject *items,
  * payload handle here. In-process actor sends keep their struct/handle
  * path; this codec belongs at actual CBOR boundaries. */
 static int ta_python_write(ta_python_encoder *encoder, PyObject *value, unsigned depth) {
-    ta_cbor_writer *writer = &encoder->writer;
+    ta_cbor_writer *writer = encoder->writer;
     if (depth > TA_CBOR_DEPTH_MAX) {
         PyErr_SetString(PyExc_ValueError, "CBOR nesting exceeds 64 levels");
         return -1;
@@ -145,18 +145,25 @@ static int ta_python_write(ta_python_encoder *encoder, PyObject *value, unsigned
 /* Public METH_O adapter: see extension.h and encode's Python help text.
  * Copy the finished writer view into independent Python bytes before
  * freeing the writer. Both success and failure release the raw block. */
+int ta_python_value_write(ta_python_module_state *state, ta_cbor_writer *writer, PyObject *value) {
+    ta_python_encoder encoder = {writer, state};
+    return ta_python_write(&encoder, value, 0);
+}
+
 PyObject *ta_python_encode(PyObject *module, PyObject *value) {
-    ta_python_encoder encoder = {.state = ta_python_codec_state(module)};
+    ta_cbor_writer writer;
+    ta_python_encoder encoder = {&writer, ta_python_codec_state(module)};
     if (encoder.state == NULL) return NULL;
-    ta_python_cbor_init(&encoder.writer);
+    unsigned char room[256];
+    ta_python_cbor_init(&writer, &(ta_python_room){{room, sizeof room, 0}, NULL});
     PyObject *result = NULL;
     if (ta_python_write(&encoder, value, 0) == 0) {
         ta_bytes bytes;
-        if (ta_cbor_writer_bytes(&encoder.writer, &bytes) == TA_OK)
+        if (ta_cbor_writer_bytes(&writer, &bytes) == TA_OK)
             result = PyBytes_FromStringAndSize(bytes.pointer, (Py_ssize_t)bytes.length);
         else PyErr_SetString(PyExc_ValueError, "incomplete CBOR value");
     }
-    ta_cbor_writer_free(&encoder.writer);
+    ta_cbor_writer_free(&writer);
     return result;
 }
 
@@ -255,6 +262,70 @@ static PyObject *ta_python_read(ta_python_decoder *decoder) {
  * The Python call holds value alive while the reader borrows its bytes.
  * Requiring immutable bytes also avoids retaining a view of mutable input.
  * Only return a decoded object once core confirms the message is exhausted. */
+PyObject *ta_python_value_read(ta_python_module_state *state, ta_bytes cbor) {
+    ta_python_decoder decoder = {.state = state};
+    ta_cbor_reader_init(&decoder.reader, cbor);
+    PyObject *result = ta_python_read(&decoder);
+    if (result != NULL) {
+        ta_cbor_item extra;
+        if (ta_cbor_read(&decoder.reader, &extra) != 0) {
+            Py_DECREF(result);
+            result = NULL;
+            PyErr_SetString(PyExc_ValueError, "CBOR input must contain exactly one item");
+        }
+    }
+    return result;
+}
+
+/* A copy for another actor (bindings.md, section 8: actors share no
+ * mutable value): lists and dicts copied, the immutable values of the
+ * table shared, anything else refused. Exact types only, so no user code
+ * runs. */
+static PyObject *ta_python_copy(ta_python_module_state *state, PyObject *value, unsigned depth) {
+    if (depth > TA_CBOR_DEPTH_MAX) {
+        PyErr_SetString(PyExc_ValueError, "nesting exceeds 64 levels");
+        return NULL;
+    }
+    if (value == Py_None || PyBool_Check(value) || PyLong_CheckExact(value) || PyFloat_CheckExact(value) ||
+        PyUnicode_CheckExact(value) || PyBytes_CheckExact(value) || value == state->undefined ||
+        Py_IS_TYPE(value, (PyTypeObject *)state->address_type))
+        return Py_NewRef(value);
+    if (PyList_CheckExact(value)) {
+        PyObject *items = PySequence_List(value);
+        if (!items) return NULL;
+        for (Py_ssize_t i = 0; i < PyList_Size(items); i++) {
+            PyObject *copy = ta_python_copy(state, PyList_GetItem(items, i), depth + 1);
+            if (!copy) {
+                Py_DECREF(items);
+                return NULL;
+            }
+            PyList_SetItem(items, i, copy);
+        }
+        return items;
+    }
+    if (PyDict_CheckExact(value)) {
+        PyObject *result = PyDict_New(), *pairs = result ? PyDict_Items(value) : NULL;
+        for (Py_ssize_t i = 0; pairs && i < PyList_Size(pairs); i++) {
+            PyObject *pair = PyList_GetItem(pairs, i), *key = PyTuple_GetItem(pair, 0);
+            PyObject *copy = PyUnicode_CheckExact(key) ? ta_python_copy(state, PyTuple_GetItem(pair, 1), depth + 1) : NULL;
+            if (!copy && !PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "a map's keys are str");
+            if (!copy || PyDict_SetItem(result, key, copy) < 0) Py_CLEAR(result);
+            Py_XDECREF(copy);
+            if (!result) break;
+        }
+        Py_XDECREF(pairs);
+        if (!pairs) Py_CLEAR(result);
+        return result;
+    }
+    PyErr_Format(PyExc_TypeError, "a value crossing between actors is of the value table (docs/values.md), not %R",
+                 (PyObject *)Py_TYPE(value));
+    return NULL;
+}
+
+PyObject *ta_python_value_copy(ta_python_module_state *state, PyObject *value) {
+    return ta_python_copy(state, value, 0);
+}
+
 PyObject *ta_python_decode(PyObject *module, PyObject *value) {
     ta_python_decoder decoder = {.state = ta_python_codec_state(module)};
     if (decoder.state == NULL) return NULL;

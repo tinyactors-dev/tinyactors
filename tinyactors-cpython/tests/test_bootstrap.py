@@ -96,7 +96,7 @@ class AdapterTests(unittest.TestCase):
     def test_multiple_calls_and_clean_eof(self):
         """Match reply ids, frame each error, and exit after the final frame."""
         frames = []
-        for call_id, method in [(1, "host.create"), (2, "scenario.run")]:
+        for call_id, method in [(1, "no.such.method"), (2, "host.create")]:
             message = tinyactors.encode({"id": call_id, "method": method, "params": {}})
             frames.append(len(message).to_bytes(4, "big") + message)
         result = subprocess.run(
@@ -105,11 +105,12 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertEqual(result.stderr, b"")
         output = result.stdout
-        for call_id in [1, 2]:
+        for call_id, code, reason in [(1, -32601, "unknown"), (2, -32602, "missing")]:
             size = int.from_bytes(output[:4], "big")
             reply = tinyactors.decode(output[4:4 + size])
             self.assertEqual(reply["id"], call_id)
-            self.assertEqual(reply["error"]["code"], -32601)
+            self.assertEqual(reply["error"]["code"], code)
+            self.assertEqual(reply["error"]["data"]["reason"], reason)
             self.assertNotIn("result", reply)
             output = output[4 + size:]
         self.assertEqual(output, b"")

@@ -11,7 +11,9 @@
 #     1272);
 #   - ta_cbor_*: the token lists of to_wire and from_wire (the same file,
 #     2883 and 2995);
-#   - the binding's own ta_python_* (values.c's conversion, handles.c).
+#   - ta_table_*: its rows (rows.c), core's tables (AGENTS.md, "The
+#     binding's memory");
+#   - the binding's own ta_python_* (values.c's conversion).
 #
 # Never the host, the system or the compiler (ta_host_*, ta_system_*,
 # ta_compile_*, ...). Everything else it calls is CPython's API and the C
@@ -20,7 +22,7 @@
 id: datamodel-calls-environment-and-python
 language: c
 severity: error
-message: "src/datamodel/ calls of core only ta_datamodel_environment_*, ta_image_* and ta_cbor_* (and the binding's own ta_python_*)"
+message: "src/datamodel/ calls of core only ta_datamodel_environment_*, ta_image_*, ta_cbor_* and ta_table_* (and the binding's own ta_python_*)"
 files:
   - src/datamodel/**/*.c
   - src/datamodel/**/*.h
@@ -31,4 +33,4 @@ rule:
     kind: identifier
     regex: '^ta_'
     not:
-      regex: '^ta_(datamodel_environment|image|cbor|python)_\w+$'
+      regex: '^ta_(datamodel_environment|image|cbor|table|python)_\w+$'
