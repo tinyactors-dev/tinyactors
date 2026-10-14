@@ -424,16 +424,21 @@ static ta_status ta_python_host_restore_core(ta_python_host *host, ta_python_res
 }
 
 static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build *build) {
-    static char *const names[] = {"config", "io_processors", "log", "clock", "peer", "telemetry", "wake", "migrated", NULL};
+    static char *const names[] = {"config", "io_processors", "log", "clock", "peer", "telemetry", "wake", "migrated",
+                                  "services", NULL};
     PyObject *config, *handlers = Py_None, *log = Py_None, *clock = Py_None, *peer = Py_None, *telemetry = Py_None;
-    PyObject *wake = Py_None, *migrated = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(build->arguments, build->keywords, build->pack ? "O|O$OOOOOO:restore" : "O|O$OOOOOO:Host",
-                                     names, &config, &handlers, &log, &clock, &peer, &telemetry, &wake, &migrated))
+    PyObject *wake = Py_None, *migrated = Py_None, *services = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(build->arguments, build->keywords, build->pack ? "O|O$OOOOOOO:restore" : "O|O$OOOOOOO:Host",
+                                     names, &config, &handlers, &log, &clock, &peer, &telemetry, &wake, &migrated, &services))
         return NULL;
     ta_time restored_time = 0;
     ta_string_view restored_id = {NULL, 0};
     ta_python_module_state *state = ta_python_state_of_type(type);
     if (!state) return NULL;
+    if (services != Py_None && !PyDict_Check(services)) {
+        PyErr_SetString(PyExc_TypeError, "services is a dict of an invoke's type -> handler");
+        return NULL;
+    }
     if (handlers != Py_None && !PyDict_Check(handlers)) {
         PyErr_SetString(PyExc_TypeError, "io_processors is a dict of type -> handler");
         return NULL;
@@ -454,6 +459,8 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
     host->wake = Py_NewRef(wake);
     host->migrated = Py_NewRef(migrated);
     host->jobs = PyDict_New();
+    host->services = services == Py_None ? PyDict_New() : PyDict_Copy(services);
+    host->invocations = PyDict_New();
     if (wake != Py_None) {
         PyObject *answer = PyObject_CallFunctionObjArgs(state->coroutine_function, wake, NULL);
         host->wake_async = answer ? PyObject_IsTrue(answer) : -1;
@@ -479,7 +486,8 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
     host->arena_allocator = ta_growable_arena_allocator(&host->arena);
     ta_table_config pending = {sizeof pending, sizeof(ta_python_pending_row), &host->allocator};
     ta_table_init(&host->pending, &pending);
-    if (!host->waiters || !host->ending_tasks || !host->jobs || ta_python_datamodel_init(&host->python, host) < 0) goto fail;
+    if (!host->waiters || !host->ending_tasks || !host->jobs || !host->services || !host->invocations ||
+        ta_python_datamodel_init(&host->python, host) < 0) goto fail;
     ta_datamodel_ecmascript_config ecmascript;
     memset(&ecmascript, 0, sizeof ecmascript);
     ecmascript.size = sizeof ecmascript;
@@ -621,6 +629,7 @@ static void ta_python_host_free(ta_python_host *host) {
     ta_python_pending_drop(host);
     ta_table_free(&host->pending);
     if (host->jobs) PyDict_Clear(host->jobs); /* a job's handler is dropped, never called */
+    if (host->invocations) PyDict_Clear(host->invocations); /* the services are dropped, not stopped */
     ta_python_datamodel_free(&host->python);
     if (host->ecmascript) ta_datamodel_ecmascript_free(host->ecmascript); /* after the host that used it */
     host->ecmascript = NULL;
@@ -664,6 +673,8 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     Py_VISIT(host->wake);
     Py_VISIT(host->migrated);
     Py_VISIT(host->jobs);
+    Py_VISIT(host->services);
+    Py_VISIT(host->invocations);
     Py_VISIT(host->clock);
     Py_VISIT(host->loop);
     Py_VISIT(host->timer);
@@ -693,6 +704,8 @@ static int ta_python_host_clear(PyObject *self) {
     Py_CLEAR(host->wake);
     Py_CLEAR(host->migrated);
     Py_CLEAR(host->jobs);
+    Py_CLEAR(host->services);
+    Py_CLEAR(host->invocations);
     Py_CLEAR(host->clock);
     Py_CLEAR(host->loop);
     Py_CLEAR(host->timer);
@@ -1481,7 +1494,7 @@ static PyMemberDef ta_python_host_members[] = {
 
 static PyType_Slot ta_python_host_slots[] = {
     {Py_tp_members, ta_python_host_members},
-    {Py_tp_doc, "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None)\n--\n\n"
+    {Py_tp_doc, "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None, services=None)\n--\n\n"
                 "A host (ta_host): many actor systems as one, with the \"python\" datamodel and quickjs."},
     {Py_tp_new, ta_python_host_create},
     {Py_tp_dealloc, ta_python_host_dealloc},

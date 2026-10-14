@@ -79,9 +79,11 @@ static PyObject *ta_python_send_read(ta_python_view *view, int which) {
     case TA_PYTHON_SEND_TRACEPARENT: /* formatted by core on first ask; empty when untraced */
         value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_TRACEPARENT, 1});
         break;
-    default: {
-        PyObject *row = PyList_GetItem(view->host->processors, view->processor);
-        value = row ? Py_NewRef(PyTuple_GetItem(row, 0)) : NULL;
+    default: { /* the I/O processor's type; None for a send to an invoked service */
+        PyObject *row = view->processor < (uint32_t)PyList_Size(view->host->processors)
+                            ? PyList_GetItem(view->host->processors, view->processor)
+                            : NULL;
+        value = Py_NewRef(row ? PyTuple_GetItem(row, 0) : Py_None);
     }
     }
     if (value) view->fields[which] = Py_NewRef(value);
@@ -497,10 +499,16 @@ void ta_python_take(ta_python_host *host, int traces) {
     }
 }
 
+static void ta_python_dispatch_service_send(ta_python_host *host, uint32_t index);
+
 static void ta_python_dispatch_send(ta_python_host *host, uint32_t index) {
     uint32_t processor = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_IO_PROCESSOR);
+    if (processor == TA_NIL) { /* a send to an invoked service: by (segment, token) */
+        ta_python_dispatch_service_send(host, index);
+        return;
+    }
     PyObject *row = processor < (uint32_t)PyList_Size(host->processors) ? PyList_GetItem(host->processors, processor) : NULL;
-    if (!row) return; /* a send to an invoked service (TA_NIL): no service runs in the API yet */
+    if (!row) return;
     ta_python_view *view = ta_python_view_new(host, host->state->send_type, index);
     if (!view) {
         ta_python_host_keep_error(host);
@@ -556,6 +564,291 @@ static void ta_python_dispatch_view(ta_python_host *host, ta_python_handler hand
     if (!result) ta_python_host_keep_error(host);
     Py_XDECREF(result);
     Py_XDECREF((PyObject *)view);
+}
+
+/* ---- invoked services: the application runs them -------------------------------------- */
+
+/* An invocation: what its INVOKE said, read once (it outlives the ack: the
+ * service runs until done or cancelled), and how to answer the invoker. */
+typedef struct ta_python_invocation {
+    PyObject_HEAD
+    ta_python_host *host; /* a reference */
+    uint64_t session;     /* the invoker */
+    uint32_t segment, token;
+    uint32_t ended;       /* done, cancelled or failed: answers refused */
+    uint32_t pad;
+    PyObject *invokeid, *type, *src, *data, *traceparent;
+} ta_python_invocation;
+
+/* The key of an invocation: core's (segment, token). */
+static PyObject *ta_python_invocation_key(uint32_t segment, uint32_t token) {
+    return PyLong_FromUnsignedLongLong((uint64_t)segment << 32 | token);
+}
+
+/* An event from the service to its invoker (TA_EVENT_IN_FROM_INVOKE), its
+ * done (TA_EVENT_IN_INVOKE_DONE), or its failure to start
+ * (TA_EVENT_IN_ERROR_COMMUNICATION). */
+typedef struct ta_python_service_event {
+    uint32_t flags;
+    PyObject *name; /* NULL: none (done, failure) */
+    PyObject *data;
+    PyObject *traceparent;
+} ta_python_service_event;
+
+static int ta_python_invocation_post(ta_python_invocation *invocation, const ta_python_service_event *what) {
+    ta_python_host *host = invocation->host;
+    if (invocation->ended || !host->host) {
+        ta_python_raise_status(host->state, TA_ERROR_STALE); /* done, cancelled, or the host is gone */
+        return -1;
+    }
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return -1;
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.session = invocation->session;
+    event.flags = what->flags;
+    event.token = invocation->token;
+    ta_python_payload_for payload = {event.session, {0, 0}, what->data, 0, TA_NIL};
+    int status = 0;
+    if ((what->name && ta_python_text(what->name, &event.name) < 0) || ta_python_text(what->traceparent, &event.traceparent) < 0 ||
+        (what->data != Py_None && ta_python_host_payload(host, &payload) < 0))
+        status = -1;
+    if (status == 0) {
+        event.data = payload.payload;
+        ta_status sent = ta_host_send(host->host, &event);
+        if (sent != TA_OK) {
+            ta_python_host_payload_release(host, payload.payload, payload.datamodel);
+            ta_python_raise_status(host->state, sent);
+            status = -1;
+        } else ta_python_loop_schedule(host);
+    }
+    ta_python_leave(&call);
+    return status;
+}
+
+/* The invocation ended (done, cancelled, failed): its entry goes, and with
+ * it the host's reference on the service. */
+static void ta_python_invocation_end(ta_python_invocation *invocation) {
+    invocation->ended = 1;
+    ta_python_host *host = invocation->host;
+    PyObject *key = host->invocations ? ta_python_invocation_key(invocation->segment, invocation->token) : NULL;
+    if (key && PyDict_DelItem(host->invocations, key) < 0) PyErr_Clear(); /* not there: never stored */
+    Py_XDECREF(key);
+}
+
+static PyObject *ta_python_invocation_send_back(PyObject *self, PyObject *arguments, PyObject *keywords) {
+    static char *const names[] = {"event", "data", "traceparent", NULL};
+    ta_python_invocation *invocation = (ta_python_invocation *)self;
+    PyObject *name, *data = Py_None, *traceparent = NULL;
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "U|O$O:send_back", names, &name, &data, &traceparent)) return NULL;
+    ta_python_service_event what = {TA_EVENT_IN_FROM_INVOKE, name, data, traceparent ? traceparent : invocation->traceparent};
+    if (ta_python_invocation_post(invocation, &what) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyObject *ta_python_invocation_done(PyObject *self, PyObject *arguments, PyObject *keywords) {
+    static char *const names[] = {"data", "traceparent", NULL};
+    ta_python_invocation *invocation = (ta_python_invocation *)self;
+    PyObject *data = Py_None, *traceparent = NULL;
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "|O$O:done", names, &data, &traceparent)) return NULL;
+    ta_python_service_event what = {TA_EVENT_IN_INVOKE_DONE, NULL, data, traceparent ? traceparent : invocation->traceparent};
+    if (ta_python_invocation_post(invocation, &what) < 0) return NULL;
+    ta_python_invocation_end(invocation);
+    Py_RETURN_NONE;
+}
+
+static PyObject *ta_python_invocation_session(PyObject *self, void *closure) {
+    (void)closure;
+    return PyLong_FromUnsignedLongLong(((ta_python_invocation *)self)->session);
+}
+
+/* An object field of the record; the getset's closure is its offset. */
+static PyObject *ta_python_invocation_field(PyObject *self, void *closure) {
+    return Py_NewRef(*(PyObject **)((char *)self + (size_t)closure));
+}
+
+static PyObject *ta_python_invocation_running(PyObject *self, void *closure) {
+    (void)closure;
+    ta_python_invocation *invocation = (ta_python_invocation *)self;
+    return PyBool_FromLong(!invocation->ended && invocation->host->host);
+}
+
+static int ta_python_invocation_traverse(PyObject *self, visitproc visit, void *arg) {
+    ta_python_invocation *invocation = (ta_python_invocation *)self;
+    Py_VISIT(Py_TYPE(self));
+    Py_VISIT((PyObject *)invocation->host);
+    Py_VISIT(invocation->data);
+    return 0;
+}
+
+static int ta_python_invocation_clear(PyObject *self) {
+    ta_python_invocation *invocation = (ta_python_invocation *)self;
+    Py_CLEAR(invocation->host);
+    Py_CLEAR(invocation->invokeid);
+    Py_CLEAR(invocation->type);
+    Py_CLEAR(invocation->src);
+    Py_CLEAR(invocation->data);
+    Py_CLEAR(invocation->traceparent);
+    return 0;
+}
+
+static void ta_python_invocation_dealloc(PyObject *self) {
+    PyTypeObject *type = Py_TYPE(self);
+    PyObject_GC_UnTrack(self);
+    ta_python_invocation_clear(self);
+    freefunc ta_python_release = (freefunc)PyType_GetSlot(type, Py_tp_free);
+    ta_python_release(self);
+    Py_DECREF(type);
+}
+
+static PyGetSetDef ta_python_invocation_properties[] = {
+    {"session", ta_python_invocation_session, NULL, "The invoking session (int).", NULL},
+    {"invokeid", ta_python_invocation_field, NULL, "The <invoke>'s id.", (void *)offsetof(ta_python_invocation, invokeid)},
+    {"type", ta_python_invocation_field, NULL, "The <invoke>'s type: the service's.", (void *)offsetof(ta_python_invocation, type)},
+    {"src", ta_python_invocation_field, NULL, "The <invoke>'s src (str or None).", (void *)offsetof(ta_python_invocation, src)},
+    {"data", ta_python_invocation_field, NULL, "The <invoke>'s params (or content), a value.", (void *)offsetof(ta_python_invocation, data)},
+    {"traceparent", ta_python_invocation_field, NULL, "The invoking step's trace as W3C text, or None.", (void *)offsetof(ta_python_invocation, traceparent)},
+    {"running", ta_python_invocation_running, NULL, "False once done, cancelled or failed.", NULL},
+    {NULL, NULL, NULL, NULL, NULL}
+};
+
+static PyMethodDef ta_python_invocation_methods[] = {
+    {"send_back", (PyCFunction)(void (*)(void))ta_python_invocation_send_back, METH_VARARGS | METH_KEYWORDS,
+     "send_back(event, data=None, *, traceparent=invocation.traceparent)\n--\n\nAn event from the service to its "
+     "invoker (its invokeid, from the invoked child)."},
+    {"done", (PyCFunction)(void (*)(void))ta_python_invocation_done, METH_VARARGS | METH_KEYWORDS,
+     "done(data=None, *, traceparent=invocation.traceparent)\n--\n\nThe service ended: done.invoke.<invokeid> with "
+     "`data` for the invoker. The invocation's answers end here."},
+    {NULL, NULL, 0, NULL}
+};
+
+static PyType_Slot ta_python_invocation_slots[] = {
+    {Py_tp_doc, "An invoked service's invocation: a record, valid while it runs."},
+    {Py_tp_dealloc, ta_python_invocation_dealloc},
+    {Py_tp_traverse, ta_python_invocation_traverse},
+    {Py_tp_clear, ta_python_invocation_clear},
+    {Py_tp_getset, ta_python_invocation_properties},
+    {Py_tp_methods, ta_python_invocation_methods},
+    {0, NULL}
+};
+
+static PyType_Spec ta_python_invocation_spec = {
+    "tinyactors.Invocation", sizeof(ta_python_invocation), 0,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE | Py_TPFLAGS_DISALLOW_INSTANTIATION,
+    ta_python_invocation_slots};
+
+/* A text field of an effect as str, or None when empty; interned when it
+ * repeats across invocations (the type, the src, the invokeid), so a
+ * population of invocations shares one str of each. */
+typedef struct ta_python_effect_text_of {
+    uint32_t index, field;
+    int intern;
+} ta_python_effect_text_of;
+
+static PyObject *ta_python_effect_str(ta_python_host *host, const ta_python_effect_text_of *of) {
+    ta_string_view text = ta_host_effect_text(host->host, of->index, of->field);
+    if (!text.length) return Py_NewRef(Py_None);
+    PyObject *value = PyUnicode_DecodeUTF8(text.pointer, (Py_ssize_t)text.length, "strict");
+    if (value && of->intern) PyUnicode_InternInPlace(&value);
+    return value;
+}
+
+/* TA_EFFECT_INVOKE: the handler registered for the type starts the service;
+ * what it returns is kept, keyed by (segment, token), until done or
+ * UNINVOKE. No handler, or one that raises: error.communication for the
+ * invoker (a service it cannot have), the exception raised after the turn. */
+static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
+    ta_host *core = host->host;
+    ta_python_invocation *invocation = PyObject_GC_New(ta_python_invocation, (PyTypeObject *)host->state->invocation_type);
+    if (!invocation) {
+        ta_python_host_keep_error(host);
+        return;
+    }
+    invocation->host = (ta_python_host *)Py_NewRef((PyObject *)host);
+    invocation->session = ta_host_effect_number(core, index, TA_EFFECT_FIELD_SESSION);
+    invocation->segment = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_SEGMENT);
+    invocation->token = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN);
+    invocation->ended = 0;
+    invocation->pad = 0;
+    invocation->invokeid = ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_SENDID, 1});
+    invocation->type = invocation->invokeid ? ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_EVENT, 1}) : NULL;
+    invocation->src = invocation->type ? ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_TARGET, 1}) : NULL;
+    invocation->traceparent =
+        invocation->src ? ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_TRACEPARENT, 0}) : NULL;
+    ta_python_payload_of payload = {ta_host_effect_number(core, index, TA_EFFECT_FIELD_PAYLOAD),
+                                    (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_DATAMODEL)};
+    invocation->data = !invocation->traceparent ? NULL : payload.payload ? ta_python_host_payload_value(host, &payload) : Py_NewRef(Py_None);
+    PyObject_GC_Track((PyObject *)invocation);
+    PyObject *handler = NULL, *service = NULL, *key = NULL, *entry = NULL;
+    int found = invocation->data ? PyDict_GetItemRef(host->services, invocation->type, &handler) : -1;
+    if (found == 0) PyErr_Format(host->state->error, "no service is registered for the invoke type %R", invocation->type);
+    if (found > 0) service = PyObject_CallFunctionObjArgs(handler, (PyObject *)host, (PyObject *)invocation, NULL);
+    if (service) key = ta_python_invocation_key(invocation->segment, invocation->token);
+    if (key) entry = PyTuple_Pack(2, (PyObject *)invocation, service);
+    if (!entry || PyDict_SetItem(host->invocations, key, entry) < 0) { /* it does not run: the invoker hears so */
+        PyObject *raised = PyErr_GetRaisedException();
+        if (invocation->data && !invocation->ended) {
+            ta_python_service_event failed = {TA_EVENT_IN_ERROR_COMMUNICATION, NULL, Py_None, invocation->traceparent};
+            if (ta_python_invocation_post(invocation, &failed) < 0) PyErr_Clear();
+        }
+        invocation->ended = 1;
+        PyErr_SetRaisedException(raised);
+        ta_python_host_keep_error(host);
+    }
+    Py_XDECREF(entry);
+    Py_XDECREF(key);
+    Py_XDECREF(service);
+    Py_XDECREF(handler);
+    Py_DECREF((PyObject *)invocation);
+}
+
+/* The (invocation, service) of an effect's (segment, token), or NULL. */
+static PyObject *ta_python_invocation_entry(ta_python_host *host, uint32_t index) {
+    PyObject *key = ta_python_invocation_key((uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT),
+                                             (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_TOKEN));
+    PyObject *entry = NULL;
+    if (key && PyDict_GetItemRef(host->invocations, key, &entry) < 0) PyErr_Clear();
+    Py_XDECREF(key);
+    return entry;
+}
+
+/* A send to an invoked service (IO_PROCESSOR TA_NIL): its service's
+ * receive(host, send), with the send as a thin view; none, or a service
+ * without receive: dropped. */
+static void ta_python_dispatch_service_send(ta_python_host *host, uint32_t index) {
+    PyObject *entry = ta_python_invocation_entry(host, index);
+    PyObject *receive = entry && PyObject_HasAttrString(PyTuple_GetItem(entry, 1), "receive")
+                            ? PyObject_GetAttrString(PyTuple_GetItem(entry, 1), "receive")
+                            : NULL;
+    Py_XDECREF(entry);
+    if (!receive) return;
+    ta_python_view *view = ta_python_view_new(host, host->state->send_type, index);
+    PyObject *result = NULL;
+    if (view) {
+        view->processor = TA_NIL;
+        result = PyObject_CallFunctionObjArgs(receive, (PyObject *)host, (PyObject *)view, NULL);
+    }
+    if (!result) ta_python_host_keep_error(host);
+    Py_XDECREF(result);
+    Py_XDECREF((PyObject *)view);
+    Py_DECREF(receive);
+}
+
+/* TA_EFFECT_UNINVOKE: the invoker cancelled it; the service's stop(host),
+ * then its entry goes. */
+static void ta_python_dispatch_uninvoke(ta_python_host *host, uint32_t index) {
+    PyObject *entry = ta_python_invocation_entry(host, index);
+    if (!entry) return; /* done already, or never ran */
+    ta_python_invocation *invocation = (ta_python_invocation *)PyTuple_GetItem(entry, 0);
+    PyObject *service = PyTuple_GetItem(entry, 1);
+    ta_python_invocation_end(invocation);
+    PyObject *stop = PyObject_HasAttrString(service, "stop") ? PyObject_GetAttrString(service, "stop") : NULL;
+    PyObject *result = stop ? PyObject_CallFunctionObjArgs(stop, (PyObject *)host, NULL) : Py_NewRef(Py_None);
+    if (!result) ta_python_host_keep_error(host);
+    Py_XDECREF(result);
+    Py_XDECREF(stop);
+    Py_DECREF(entry);
 }
 
 /* A job ended: its migrate call's handler gets {"job", "migrated", "failed",
@@ -614,6 +907,8 @@ void ta_python_dispatch(ta_python_host *host, uint32_t index) {
         ta_python_dispatch_view(host, (ta_python_handler){host->migrated, host->state->migration_type}, index);
         break;
     case TA_HOST_EFFECT_JOB_DONE: ta_python_dispatch_job(host, index); break;
+    case TA_EFFECT_INVOKE: ta_python_dispatch_invoke(host, index); break;
+    case TA_EFFECT_UNINVOKE: ta_python_dispatch_uninvoke(host, index); break;
     case TA_HOST_EFFECT_TRACES: /* a request is ready: taken (the next comes only after a take) */
     case TA_HOST_EFFECT_LOGS: {
         ta_python_take(host, ta_host_effect_number(core, index, TA_EFFECT_FIELD_KIND) == TA_HOST_EFFECT_TRACES);
@@ -630,7 +925,9 @@ int ta_python_effects_init_types(PyObject *module, ta_python_module_state *state
     state->entry_type = state->send_type ? PyType_FromModuleAndSpec(module, &ta_python_entry_spec, NULL) : NULL;
     state->envelope_type = state->entry_type ? PyType_FromModuleAndSpec(module, &ta_python_envelope_spec, NULL) : NULL;
     state->migration_type = state->envelope_type ? PyType_FromModuleAndSpec(module, &ta_python_migration_spec, NULL) : NULL;
-    if (!state->migration_type) return -1;
+    state->invocation_type = state->migration_type ? PyType_FromModuleAndSpec(module, &ta_python_invocation_spec, NULL) : NULL;
+    if (!state->invocation_type) return -1;
+    if (PyModule_AddObjectRef(module, "Invocation", state->invocation_type) < 0) return -1;
     if (PyModule_AddObjectRef(module, "Migration", state->migration_type) < 0) return -1;
     if (PyModule_AddObjectRef(module, "Send", state->send_type) < 0 ||
         PyModule_AddObjectRef(module, "LogEntry", state->entry_type) < 0)

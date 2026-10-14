@@ -88,7 +88,8 @@ Decided by the maintainer (2026-10-13); every item is in
   and **`close()`** call `ta_compile_free`; the collector calls it as a
   fallback.
 - **`tinyactors.Host(config, io_processors={type: handler}, log=handler,
-  clock=None, peer=None, telemetry=None, wake=None, migrated=None)`.**
+  clock=None, peer=None, telemetry=None, wake=None, migrated=None,
+  services=None)`.**
   Everything is per host: the config (a `dict`, written as CBOR into the
   call's arena for `ta_host_create`), the handlers and the clock. A host
   has no resolver ("The resolver"). No global configuration (no
@@ -292,6 +293,26 @@ Decided by the maintainer (2026-10-13); every item is in
   effect or a reply pending, or during a migration job, `TA_ERROR_STATE`.
   The ECMAScript state is written into room for the last one's length,
   so it is written once in the usual case.
+- **Invoked services** (bindings.md section 4, 2026-10-14):
+  **`services={type: handler(host, invocation)}`**. At a
+  `TA_EFFECT_INVOKE` the handler of its type (`EVENT`) gets a record,
+  `tinyactors.Invocation` (made before the ack: a service outlives it),
+  of `session`, `invokeid` (`SENDID`), `type`, `src` (`TARGET`), `data`
+  (the payload's value), `traceparent`; the type, src and invokeid are
+  interned, shared by a population. What the handler returns is the
+  service, kept in a dict on the host keyed by core's (`SEGMENT`,
+  `TOKEN`), as bindings.md says: no table of invoke ids.
+  **`invocation.send_back(event, data=None)`** is `ta_host_send` with
+  `TA_EVENT_IN_FROM_INVOKE` and the token, **`invocation.done(data=None)`**
+  with `TA_EVENT_IN_INVOKE_DONE` (the service is dropped then); both
+  refuse with `TA_ERROR_STALE` once it ended. A `TA_EFFECT_SEND` with
+  `IO_PROCESSOR` `TA_NIL` goes to the service's **`receive(host, send)`**
+  (a thin `Send` view, `type` `None`), a `TA_EFFECT_UNINVOKE` to its
+  **`stop(host)`** (then it is dropped); both optional. No handler, or a
+  handler that raises: `ta_host_send` with
+  `TA_EVENT_IN_ERROR_COMMUNICATION` to the invoker, and the exception is
+  raised after the turn. At the stop the services are dropped, not
+  stopped, as pending handlers are. `tools/services.py` is the pattern.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.

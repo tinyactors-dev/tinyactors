@@ -258,8 +258,7 @@ rules; what it found is fixed:
 Left for core (capacity planning, not the binding): a segment's region
 grows by doubling under a burst of events and is kept (12.4 KB per actor
 on quickjs after one event each at 10,000 actors).
-- **Not in the API yet** (8.5): invoked services of the application
-  (`INVOKE`, `UNINVOKE` are dropped), export and adopt, a
+- **Not in the API yet** (8.5): export and adopt, a
   `<foreach>` item that is not a declared `<data>`.
 
 ### Telemetry (8.5's first item, 2026-10-14) — done
@@ -503,6 +502,37 @@ snapshot is the same bytes; a hibernated actor wakes after a restore; a
 `set` refuses the snapshot and the host goes on; a snapshot from a
 handler is refused; a blob that is no snapshot is refused; an unaligned
 buffer restores.
+
+### Invoked services (8.5's fifth item, 2026-10-14) — done
+
+`Host(..., services={type: handler})` (`TA_EFFECT_INVOKE`), the
+`Invocation` record with `send_back` (`TA_EVENT_IN_FROM_INVOKE`) and
+`done` (`TA_EVENT_IN_INVOKE_DONE`), and the service's `receive` (sends
+with `IO_PROCESSOR` `TA_NIL`) and `stop` (`TA_EFFECT_UNINVOKE`). Whom it
+serves: the application developer whose charts call the application
+(an HTTP client, a database, a model) as SCXML services. Cost: nothing
+per event that is not the service's; per invocation one record (its
+type, src and invokeid interned) and a dict entry; per round trip a thin
+view and one `ta_host_send`. No change to core: it had every part.
+
+**The gate:** `tools/services.py` (`mise run services`; `mise run test`
+runs 10,000 actors with 50,000 round trips on both datamodels, `--full`
+200,000 with 1,000,000): every actor invokes a counter, pings it at
+random, then a third finish with done data, a third are cancelled, the
+rest keep theirs; every pong counted once, every done datum right, every
+cancelled service stopped once and no other, the ended services
+collected. Numbers in the README. Getting there found that quickjs keeps
+each actor's last event in core's pool, so its region doubled every
+pool (980 MB at 200,000) until `maxEvents` counted the actors; the
+README says so.
+
+Tests in `tests/test_services.py`: both datamodels talk to a service and
+get its done data (with `_event.invokeid`); leaving the state, and
+terminating the invoker, stop the service once; a service without
+`receive` or `stop`; no handler for the type, and a handler that raises,
+give `error.communication` and raise after the turn; services left at
+the stop are dropped, not stopped; autoforward reaches the service (and
+forwards its own answers back to it); `services` must be a dict.
 
 ## How the work runs
 

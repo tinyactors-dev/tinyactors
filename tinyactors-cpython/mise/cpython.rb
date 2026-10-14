@@ -159,12 +159,15 @@ module CPython
   # (README.md, "Hibernation"), tools/migration.py (README.md,
   # "Migration": all of them move to a new version, live) or
   # tools/snapshot.py (README.md, "Snapshots": the host to bytes and back,
-  # going on). A failed check ends the task.
-  def stress(actors:, resident:, events:, tool: 'stress')
+  # going on), or tools/services.py (README.md, "Invoked services": every
+  # actor with a service, no store, so `resident` is not passed). A failed
+  # check ends the task.
+  def stress(actors:, events:, resident: nil, tool: 'stress')
     %w[python ecmascript].each do |datamodel|
-      puts "#{tool}: #{datamodel}, #{actors} actors, #{resident} resident, #{events} events"
+      puts "#{tool}: #{datamodel}, #{actors} actors, #{resident || 'all'} resident, #{events} events"
       run(pinned('python'), "tools/#{tool}.py", '--datamodel', datamodel, '--actors', actors.to_s,
-          '--resident', resident.to_s, '--events', events.to_s, env: { 'PYTHONPATH' => BUILD.join('abi3').to_s })
+          *(resident ? ['--resident', resident.to_s] : []), '--events', events.to_s,
+          env: { 'PYTHONPATH' => BUILD.join('abi3').to_s })
     end
   end
 

@@ -48,7 +48,7 @@ with tinyactors.Host(config, {"urn:example:app": app},
   an error raises `CompileError` with every diagnostic. `Compiled.image`
   is a read-only buffer, valid until `close()` (a context manager).
 - `Host(config, io_processors=None, *, log=None, clock=None, peer=None,
-  telemetry=None, wake=None, migrated=None)`:
+  telemetry=None, wake=None, migrated=None, services=None)`:
   `config` is the host's config as a dict
   ([host-config.md](../tinyactors-core/docs/host-config.md));
   `io_processors` maps an I/O processor's type to `handler(host, send)`;
@@ -373,6 +373,76 @@ CPUs, CPython 3.13.16 with the GIL, one run each:
 A snapshot is mostly the region, as the config sized it; of the 225 MB of
 100,000 resident `"python"` actors, about 11 MB is the datamodel's state.
 
+## Invoked services
+
+A chart invokes a service the application runs with `<invoke>` of a type
+the application registered: `Host(..., services={type: handler})`. The
+handler runs when the invocation starts, with an `Invocation`, and
+returns the service: any object, kept until the invocation ends.
+
+```xml
+<state id="talking">
+  <invoke id="counter" type="urn:example:counter" src="counter://local">
+    <param name="seed" expr="seed"/>
+  </invoke>
+  <transition event="go"><send target="#_counter" event="ping"/></transition>
+  <transition event="pong">...</transition>
+  <transition event="done.invoke.counter" target="finished"/>
+</state>
+```
+
+```python
+class Counter:
+    def __init__(self, invocation):
+        self.invocation, self.count = invocation, 0
+
+    def receive(self, host, send):            # a <send target="#_counter">, or autoforwarded
+        self.count += 1
+        if send.event == "finish":
+            self.invocation.done({"total": self.count})   # done.invoke.counter
+        else:
+            self.invocation.send_back("pong", {"n": self.count})
+
+    def stop(self, host):                     # the invoker cancelled it (left the state, ended)
+        ...
+
+host = tinyactors.Host(config, services={"urn:example:counter": lambda host, invocation: Counter(invocation)})
+```
+
+- `invocation`: `session` (the invoker), `invokeid`, `type`, `src`,
+  `data` (the params, or the content), `traceparent`, `running`; and
+  `send_back(event, data=None)` (an event from the invoked child, its
+  `invokeid` set) and `done(data=None)` (`done.invoke.<invokeid>`). It is
+  a record: keep it and answer later, as long as it runs; after `done`
+  or a cancel, answers raise `TinyactorsError` (`TA_ERROR_STALE`).
+- The service's `receive(host, send)` gets each send to it as a thin
+  view (`event`, `data`, `sendid`, `traceparent`; `type` is `None`), and
+  its `stop(host)` the cancel; both are optional. A service that ended
+  with `done` is not stopped.
+- No handler for the type, or a handler that raises: the invoker gets
+  `error.communication`, and the driver raises the exception after the
+  turn. Leaving the `Host` drops the running services without stopping
+  them.
+
+`mise run services` is the pattern at scale (`tools/services.py`):
+200,000 actors, each with a counter service, 1,000,000 round trips
+(actor, service, actor), then a third finish with done data, a third are
+cancelled and the rest keep theirs; it checks every pong, every done
+datum, that every cancelled service was stopped once and no other, and
+that the host holds only the services still running. Measured on x86_64
+Linux, 4 CPUs, CPython 3.13.16 with the GIL, one run:
+
+| datamodel | start 200,000 invocations | 1,000,000 round trips | end (done, cancel) | peak resident | core's region |
+|---|---|---|---|---|---|
+| `"python"` | 3.3 s (61,000 a second) | 18.2 s (55,000 a second) | 2.0 s | 671 MB (3353 B per actor and service) | 269 MB (1346 B per actor) |
+| quickjs | 3.0 s (66,000 a second) | 24.1 s (41,000 a second) | 2.7 s | 945 MB (4727 B per actor and service) | 269 MB |
+
+An invocation is a request of core's: size `system.maxRequests` for the
+invocations that run at once. quickjs keeps each actor's last event in
+core's event pool (its datamodel does not let it go), so on quickjs
+`system.maxEvents` counts the actors too; left too small, a segment
+doubles every pool (980 MB of region here).
+
 ## Charts in Python
 
 A `datamodel="python"` chart's session is an instance of a class made for
@@ -421,8 +491,7 @@ actors share no mutable value.
   in the API) only while its variables, and the data of its pending
   delayed sends, are values of the value table; a `<foreach>`'s `item` and `index` must be declared
   `<data>`.
-- Not in the API yet: export and adopt, invoked services of the
-  application.
+- Not in the API yet: export and adopt.
 
 ## Memory
 
