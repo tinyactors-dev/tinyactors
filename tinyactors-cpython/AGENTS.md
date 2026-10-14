@@ -326,7 +326,10 @@ or read views; it never takes or acks.
 
 - **Both clocks before every run**, and at creation and before an input
   that depends on them (spawn, deliver, every typed method: a
-  `trace.watch` ends at a time of the host's clock), one timer (the sync driver's sleep or
+  `trace.watch` ends at a time of the host's clock), and with an encoder
+  after every run too (the run's span records are stamped between the
+  clocks around it; else they stretch over the handlers of the drain
+  after it, to the next advance), one timer (the sync driver's sleep or
   one asyncio `TimerHandle`) at `next_deadline`. A host created with a
   `SimulatedClock` arms no timer.
 

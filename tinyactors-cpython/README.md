@@ -120,6 +120,35 @@ with tinyactors.Host(config, telemetry=export) as host:
     export(host, "metrics", host.metrics())
 ```
 
+**Application spans above actors.** A `traceparent` given to `send` or
+`spawn` makes the macrostep it starts a child of the application's span,
+in the application's trace; sends between actors keep the trace, and an
+I/O processor gets the sending step's context in `send.traceparent`.
+With the OpenTelemetry SDK:
+
+```python
+from opentelemetry import propagate, trace
+
+tracer = trace.get_tracer("shop")
+
+def warehouse(host, send):                # continue the actor's trace in the application
+    with tracer.start_as_current_span("warehouse.reserve",
+                                      context=propagate.extract({"traceparent": send.traceparent})):
+        carrier = {}
+        propagate.inject(carrier)
+        send.answer("reserved", traceparent=carrier["traceparent"])
+
+with tracer.start_as_current_span("POST /orders"):
+    carrier = {}
+    propagate.inject(carrier)
+    host.send(session, "order", order, traceparent=carrier["traceparent"])
+    host.run_until_idle()
+```
+
+A backend then shows one trace: `POST /orders`, the actors' macrosteps
+and microsteps below it, `warehouse.reserve` below the step that sent to
+the warehouse, and the macrostep its answer started below that.
+
 `flushInterval` is in the host's clock (`system.ticksPerSecond`); without
 it a request is ready only when the staging is full, or at the stop.
 `host.trace_spans_decode(handler, traces=data)` decodes a traces request

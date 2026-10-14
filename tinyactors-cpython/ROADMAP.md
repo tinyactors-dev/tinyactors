@@ -298,6 +298,16 @@ handler asked for kept its last take's exception until a later
 in the turn, that only a turn's first exception is raised, and that a
 collected `Host` skips the last take.
 
+Application spans above actors are tested (`ApplicationTraces`) and
+checked with the OpenTelemetry SDK beside the host in otel-tui: one trace
+from the application's `POST /orders` through two actors' macrosteps and
+microsteps to the application's `warehouse.reserve` (from
+`send.traceparent`) and the macrostep its answer started. That found the
+run's span records stretched over the handlers after the run: core
+stamps them between two `ta_host_advance_time` calls, and the binding
+advanced only before a run. With an encoder it advances after each run
+too (one clock read per run; nothing without telemetry).
+
 ## How the work runs
 
 The root ROADMAP.md, step 8, "Rules for the work", sets these for every

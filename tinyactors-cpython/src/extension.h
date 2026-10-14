@@ -180,6 +180,7 @@ struct ta_python_host {
     PyObject *peer;                    /* peer handler or None */
     PyObject *telemetry;               /* telemetry handler(host, signal, data) or None */
     int telemetry_async;               /* it is an async def */
+    int encoder;                       /* the config has "telemetry": the host stamps spans */
     int ending;                        /* the last take at close is running */
     uint32_t retake;                   /* 1: traces, 2: logs: a take the allocator refused, retried next turn */
     PyObject *ending_tasks;            /* async telemetry tasks of the last take, for __aexit__ (a list) */

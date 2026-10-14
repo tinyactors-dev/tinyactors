@@ -98,6 +98,9 @@ static ta_python_next ta_python_turn(ta_python_host *host) {
     for (uint32_t runs = 0;; runs++) {
         host->inputs = 0;
         ta_run run = ta_host_run(host->host, TA_PYTHON_BUDGET); /* bounded: fuel per call */
+        if (host->encoder) ta_python_advance(host); /* the run's span records are stamped between the
+                                                       clocks around it, not stretched over the handlers
+                                                       that come after it */
         int bounded = ta_python_drain(host) || runs + 1 == TA_PYTHON_RUNS;
         if (bounded && run.status != TA_RUN_EXHAUSTED && run.status != TA_RUN_FAULT)
             return TA_PYTHON_NEXT_YIELD; /* the turn's bound: let the program run, then turn again */

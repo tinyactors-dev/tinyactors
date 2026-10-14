@@ -123,6 +123,60 @@ class Telemetry(unittest.TestCase):
         self.assertIn("traces", got)  # the last take, at the exit of async with
 
 
+class ApplicationTraces(unittest.TestCase):
+    """An application's span above, tinyactors' communication below it."""
+
+    APP_TRACE, APP_SPAN = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
+
+    def test_actor_spans_are_children_of_the_applications_span(self):
+        import time
+
+        from support import APP
+        front = chart("<state id='s'><transition event='order'><send event='reserve' targetexpr='_event.data[\"to\"]'/>"
+                      "</transition></state>", name="front")
+        stock = chart("<state id='s'><transition event='reserve'><send type='%s' target='w' event='out'/></transition>"
+                      "<transition event='reserved'/></state>" % APP, name="stock")
+        got, seen = [], []
+
+        def processor(host, send):
+            seen.append((send.traceparent, time.time_ns()))
+            time.sleep(0.02)  # a slow handler: the actor's spans must not be stretched over it
+            send.answer("reserved")  # a later turn, whose clocks come after the handler
+
+        config = {"systemID": "t", "ioProcessors": [{"type": APP}], "telemetry": {}}
+        host = tinyactors.Host(config, {APP: processor}, telemetry=lambda host, signal, data: got.append((signal, data)))
+        with tinyactors.compile_charts([("front.scxml", front), ("stock.scxml", stock)]) as compiled:
+            host.add_image(compiled.image)
+        front_session, stock_session = host.spawn(host.chart("front")), host.spawn(host.chart("stock"))
+        host.run_until_idle()
+        host.send(front_session, "order", {"to": "#_scxml_%d" % stock_session},
+                  traceparent="00-%s-%s-01" % (self.APP_TRACE, self.APP_SPAN))
+        host.run_until_idle()
+        host.close()  # the last take
+        decoder = tinyactors.Host({"systemID": "d"})
+        spans = []
+        for signal, data in got:
+            if signal == "traces":
+                decoder.trace_spans_decode(lambda host, result: spans.extend(result["spans"]), traces=data)
+        decoder.run_until_idle()
+        decoder.close()
+        ours = {(span["name"], span["attributes"].get("tinyactors.chart.name")): span
+                for span in spans if span["trace"] == self.APP_TRACE}
+        order = ours[("scxml.macrostep order", "front")]
+        sending = ours[("scxml.microstep order", "front")]
+        reserve = ours[("scxml.macrostep reserve", "stock")]
+        handling = ours[("scxml.microstep reserve", "stock")]
+        self.assertEqual(order["parent"], self.APP_SPAN)       # under the application's span
+        self.assertEqual(sending["parent"], order["span"])
+        self.assertEqual(reserve["parent"], sending["span"])   # the send between actors keeps the trace
+        self.assertEqual(handling["parent"], reserve["span"])
+        traceparent, handled_at = seen[0]
+        self.assertEqual(traceparent, "00-%s-%s-01" % (self.APP_TRACE, handling["span"]))  # and out to the application
+        self.assertLessEqual(reserve["end"], handled_at)  # stamped within its run, before the handler ran
+        self.assertLessEqual(handling["end"], handled_at)
+        self.assertLess(order["end"] - order["start"], 10_000_000)  # microseconds, not the handler's 20 ms
+
+
 class Stopping(unittest.TestCase):
     """The last take at close, when its handler calls the host again."""
 
