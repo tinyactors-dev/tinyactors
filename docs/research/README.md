@@ -18,3 +18,4 @@ plans in roadmaps, and possible future work in `docs/proposals/`.
 | [DASP: a session protocol for clients of durable actors, read for a tinyactors web app](dasp.md) | 2026-09-26 | nothing yet; related to [Durable Streams](durable-streams.md) and the [replay persistence](../proposals/replay-persistence.md) proposal |
 | [tinyjs: a freestanding, strict-mode ECMAScript engine with resumable execution](tinyjs.md) | 2026-09-30 | nothing yet; design research for a possible sibling library and a default ECMAScript data model |
 | [tinyjs, the small way: a CEK machine over the syntax tree](tinyjs-small.md) | 2026-09-30 | nothing yet; a competing design to [tinyjs](tinyjs.md), with the same goals and constraints |
+| [Running other people's expressions: QuickJS, sandboxed JavaScript and rule languages, read for staticjs](staticjs-market.md) | 2026-10-14 | the [staticjs site](../../staticjs/site/)'s front page |
