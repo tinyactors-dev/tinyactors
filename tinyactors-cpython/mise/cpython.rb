@@ -153,6 +153,17 @@ module CPython
     directory
   end
 
+  # tools/stress.py on both datamodels against the abi3 build: N actors,
+  # at most R resident, the rest hibernated into SQLite (README.md,
+  # "Hibernation"). A failed check ends the task.
+  def stress(actors:, resident:, events:)
+    %w[python ecmascript].each do |datamodel|
+      puts "stress: #{datamodel}, #{actors} actors, #{resident} resident, #{events} events"
+      run(pinned('python'), 'tools/stress.py', '--datamodel', datamodel, '--actors', actors.to_s,
+          '--resident', resident.to_s, '--events', events.to_s, env: { 'PYTHONPATH' => BUILD.join('abi3').to_s })
+    end
+  end
+
   # The free-threaded interpreter of mise.toml's TA_PYTHON_FREE_THREADED,
   # installed by the pinned uv when it is missing.
   def free_threaded_python

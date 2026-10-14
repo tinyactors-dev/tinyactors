@@ -2,6 +2,7 @@
 #MISE description="Test tinyactors-cpython: lint (rules, the binding's C, the adapter, the mapping table, the build scripts, acronyms), the build, the interpreters, and the conformance set named by MILESTONE against the adapter on both datamodels"
 #MISE sources=["src/**/*", "conform/**/*", "tests/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "pyproject.toml", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
+#USAGE flag "--full" help="the hibernation stress gate at 2,000,000 actors, 1000 resident"
 # vim:ft=ruby
 
 # The sources are this project's files and those it builds and tests
@@ -16,6 +17,10 @@
 # pass (`mise run conform -- --milestone <it> --suite <each>`, on the
 # gate's datamodels). `mise run conform` on its own runs the whole suite
 # on both datamodels.
+#
+# Then the hibernation stress gate (tools/stress.py, `mise run stress`):
+# 20,000 actors with 100 resident in the fast pass, 2,000,000 with 1000
+# resident under --full (root AGENTS.md, "Where a new test goes").
 
 require_relative '../cpython'
 
@@ -46,4 +51,13 @@ else
   CPython.run('mise', 'run', 'conform', '--', '--milestone', CPython::MILESTONE,
               *gate[:suites].flat_map { |suite| ['--suite', suite] },
               env: { 'TA_PYTHON_DATAMODELS' => gate[:datamodels].join(',') })
+end
+
+full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
+if CPython.extension?
+  if full
+    CPython.stress(actors: 2_000_000, resident: 1000, events: 200_000)
+  else
+    CPython.stress(actors: 20_000, resident: 100, events: 20_000)
+  end
 end

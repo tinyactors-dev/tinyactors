@@ -163,7 +163,7 @@ static PyObject *ta_python_drive(ta_python_host *host, int forever) {
     if (ta_python_driver_enter(host, &call) < 0) return NULL;
     if (host->has_async && host->loop == Py_None) {
         ta_python_leave(&call);
-        PyErr_SetString(PyExc_TypeError, "an I/O processor has an async def handler: drive the host with await host.idle()");
+        PyErr_SetString(PyExc_TypeError, "a handler is an async def (an I/O processor, wake or telemetry): drive the host with await host.idle()");
         return NULL;
     }
     PyObject *sleep = NULL;

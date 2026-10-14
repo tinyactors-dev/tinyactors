@@ -117,8 +117,7 @@ typedef struct ta_python_datamodel {
     PyObject *drops;            /* values whose last reference was dropped (a list) */
     PyObject *raised;           /* a BaseException an evaluation raised, raised after it */
     PyObject *output;           /* the str eval_string and log answered */
-    ta_buffer wire;             /* what to_wire wrote, from the host's allocator */
-    uint64_t serialized;        /* what serialize wrote: a session row's handle */
+    ta_buffer wire;             /* what to_wire, serialize and payload_serialize wrote, from the host's allocator */
 } ta_python_datamodel;
 
 const ta_datamodel_vtable *ta_python_datamodel_vtable(void);
@@ -179,6 +178,8 @@ struct ta_python_host {
     PyObject *log;                     /* log handler or None */
     PyObject *peer;                    /* peer handler or None */
     PyObject *telemetry;               /* telemetry handler(host, signal, data) or None */
+    PyObject *wake;                    /* wake handler(host, session) or None */
+    int wake_async;                    /* it is an async def */
     int telemetry_async;               /* it is an async def */
     int encoder;                       /* the config has "telemetry": the host stamps spans */
     int ending;                        /* the last take at close is running */
@@ -277,6 +278,10 @@ void ta_python_telemetry(ta_python_host *host, const ta_python_export *export);
  * the allocator refuses is kept for a retry (core gives no second effect)
  * and reported. */
 void ta_python_take(ta_python_host *host, int traces);
+/* A coroutine an async def handler returned (stolen), as a task on the
+ * host's loop whose exception is kept for the driver: the task, or NULL
+ * with an exception. */
+PyObject *ta_python_host_task(ta_python_host *host, PyObject *coroutine);
 /* Answer a send's async task that ended in an exception. */
 PyObject *ta_python_send_task_done(PyObject *send, PyObject *task);
 
