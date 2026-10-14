@@ -244,8 +244,7 @@ Decided by the maintainer (2026-10-13); every item is in
   when the actor is not at a stable point; **`wake=handler(host,
   session, job)`** gets each `TA_EFFECT_WAKE` (an event or a due delayed
   send for a hibernated session, one effect per hibernation, `job`
-  `None`; or a migration job asking for it, `job` its id: core marks no
-  job with `TA_NIL`, the binding passes `None`), and the handler
+  `None`; or a migration job asking for it, `job` its id), and the handler
   calls **`host.wake(session, blob)`** (`ta_host_wake`), now or later (an
   `async def` handler runs as a task; refused under `with`). Without a
   `wake` handler the effect is dropped: the session stays hibernated and

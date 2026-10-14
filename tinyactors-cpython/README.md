@@ -263,34 +263,34 @@ there what it keeps.
   "migrated", "failed", "pending": [session, ...]}`.
 - `migrated=handler(host, migration)`: each actor moved, a thin view of
   `session`, `segment`, `chart` (its name) and `job`.
-- **A job ends only when every actor it looks at moved, or at its
-  `timeout`.** Without `wake`, a hibernated actor waits for good; with it,
-  the job asks for each one once, so an actor woken for it and put back to
-  sleep before it moved waits for good too. Such a job keeps retrying
-  them in every run, and its handler never runs. Give a job a `timeout`
-  unless you wake every actor it asks for and keep it until it moved.
+- **A job ends when every actor it looks at moved, or at its
+  `timeout`.** A hibernated actor moves once it is woken, by the job's
+  WAKE or by an event's; with `wake`, the job asks again when it finds an
+  actor hibernated after a wake. Without `wake`, an actor nobody wakes
+  holds the job until its timeout, or for good without one, and its
+  handler never runs: give such a job a `timeout`. A run costs the job a
+  quantum of actors (`migrateQuantum`), however many it waits for.
 - An actor that cannot be written out stays on its version and counts as
   failed: on the `"python"` datamodel, one whose variables or pending
   delayed sends hold a value outside the value table. One that is running
   an invocation waits until it ends.
 
-**With most actors hibernated, wake them in the job's order, a batch at a
-time.** The job asks for every hibernated actor at once, early, and tries
-the ones it waits for in the order it asked; it moves an actor it asked
-for only once, so put one back to sleep only after it moved. An event
-for an actor still waiting should not wait for the job: wake it at once
-and move it with a job of its own.
+**With most actors hibernated, wake the job's actors a batch at a
+time.** The job asks for every hibernated actor at once, early; wake them
+all and they are all resident. Queue the job's WAKEs and wake a batch
+per round: the job takes each woken actor in its next runs. An event's
+WAKE (`job` is `None`) wakes its actor at once, and the job takes that
+one too. Put actors back to sleep once they moved (one put back before
+is asked for again: work, not a stall).
 
 ```python
 asked = collections.deque()
 
 def wake(host, session, job):
     if job is not None:
-        asked.append(session)             # the job's: a batch at a time, in its order
-        return
-    host.wake(session, store.get(session))
-    if not moved(session):
-        host.migrate(None, session=session)   # an event's: now, and moved now
+        asked.append(session)             # the job's: a batch at a time
+    else:
+        host.wake(session, store.get(session))   # an event's: now
 
 job = host.migrate(on_done, wake=True)
 while not done:
@@ -302,23 +302,24 @@ while not done:
 ```
 
 `mise run migration` is the pattern at scale (`tools/migration.py`), on
-SQLite: 500,000 actors of a counter chart, at most 1000 resident, moved
-to version 2 while 100,000 events go to actors drawn at random; it
+SQLite: 2,000,000 actors of a counter chart, at most 1000 resident, moved
+to version 2 while 200,000 events go to actors drawn at random; it
 checks every sampled actor's count and version, that the job left none
 behind, that version 1's segment retired, and the resident bound after
 every eviction. Measured on x86_64 Linux, 4 CPUs, CPython 3.13.16 with
 the GIL, one run:
 
-| datamodel | populate (500,000, 100,000 events) | migrate, live (100,000 events meanwhile) | woken from SQLite | peak resident | core's region (both versions, then after) | SQLite file |
+| datamodel | populate (2,000,000, 200,000 events) | migrate, live (200,000 events meanwhile) | woken from SQLite | peak resident | core's region (both versions, then after) | SQLite file |
 |---|---|---|---|---|---|---|
-| `"python"` | 7.5 s | 74.9 s (6,700 actors a second; 81,084 moved early for an event) | 617,336 | 146 MB (291 B per actor) | 71.5 MB, then 35.7 MB (71 B per actor) | 123 MB |
-| quickjs | 9.2 s | 77.7 s (6,400 actors a second; 81,084 moved early) | 617,336 | 147 MB (293 B per actor) | 71.5 MB, then 35.7 MB | 164 MB |
+| `"python"` | 37.9 s | 89.7 s (22,300 actors a second) | 2,218,199 | 487 MB (244 B per actor) | 243.6 MB, then 121.8 MB (61 B per actor) | 556 MB |
+| quickjs | 39.2 s | 102.2 s (19,600 actors a second) | 2,218,199 | 488 MB (244 B per actor) | 243.6 MB, then 121.8 MB | 756 MB |
 
-The job's time grows with the square of the hibernated actors (core
-checks each actor it asks for against the list of those it waits for,
-and goes over that list in every run); until that changes, a migration
-of this kind takes 14 s at 200,000 actors and 279 s at a million on the
-`"python"` datamodel (runs of the tool alone, not the gate above).
+A run costs the job a quantum of actors however many it waits for, so
+the time grows with the population: 13.6 s at 500,000 on the
+`"python"` datamodel, against 74.9 s when the job went over everything
+it waited for in every run. The peak is the migration's: both versions'
+regions until version 1 retires, and the job's map of the sessions it
+waits for (at most a quarter full after it is rebuilt).
 
 ## Charts in Python
 

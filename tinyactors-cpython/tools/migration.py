@@ -13,22 +13,20 @@ The application's side of migration (bindings.md section 4; README,
    moves every actor of version 1 to it. Version 2 takes the count from
    error.platform.upgrade (version 1's bindings) and knows its version.
    The job asks for each hibernated actor with a WAKE that names it: the
-   program queues those and wakes a batch at a time in the order they
-   came (the job retries the actors it waits for in that order), so at
-   most R plus two batches are resident. An event's WAKE (job None) wakes its
-   actor at once; one still on version 1 gets a job of its own
-   (migrate(session=...)), which moves it in the next run instead of when
-   the big job reaches it, so its events do not wait in the host. Meanwhile E more events go to random
-   actors, a batch after every wake: the migration is live. After each
-   batch the migrated actors at rest are hibernated again (an actor the
-   job woke must not be put back before it moved: the job asks for it
-   once);
+   program queues those and wakes a batch at a time, so at most R plus
+   two batches are resident; the job takes each woken one in its next
+   runs. An event's WAKE (job None) wakes its actor at once, and the job
+   takes that one too, so its events do not wait for the queue. Meanwhile
+   E more events go to random actors, a batch after every wake: the
+   migration is live. After each batch the migrated actors at rest are
+   hibernated again (one put back before it moved would be asked for
+   again: wasted work, not a stall);
 3. verify: the job ended with every actor migrated, none failed, none
    left; a sample of actors (all when N is small) reports its count and
    version, which must be the events it was sent and 2; the old version's
    segment was retired; after every eviction at most R actors were
    resident, plus two batches (the job's WAKEs woken in a round, and the
-   actors events woke, each moving in a job of its own).
+   actors events woke, until the job moves them).
 
 Exits with status 1 when a check fails. Prints the times, the rates, the
 store's size, the process's peak memory and the host's region per actor.
@@ -108,22 +106,13 @@ def main():
         resident[session] = None
         wakes[0] += 1
 
-    rescued = {"jobs": 0, "migrated": 0, "failed": 0}
-
-    def rescue_done(host, result):
-        rescued["migrated"] += result["migrated"]
-        rescued["failed"] += result["failed"] + len(result["pending"])
-
     def wake(host, session, job_id):
         if job_id:  # the job asks: in its order, a batch at a time
             if not queued[index(session)]:
                 queued[index(session)] = 1
                 asked.append(session)
             return
-        wake_now(host, session)  # an event's or a timer's: at once
-        if job["id"] and job["done"] is None and not moved[index(session)]:
-            host.migrate(rescue_done, session=session)  # and it moves now, in a job of its own
-            rescued["jobs"] += 1
+        wake_now(host, session)  # an event's or a timer's: at once (a job waiting for it takes it)
 
     def migrated(host, entry):
         if moved[index(entry.session)]:
@@ -247,8 +236,8 @@ def main():
         host.run_until_idle()
         evict(host, True)
         # a batch of the job's WAKEs woken this round, and up to a batch the
-        # round's events woke, each moving in a job of its own: neither may go
-        # back before it moved
+        # round's events woke, until the job moves them (only moved actors go
+        # back)
         stats = check_resident(host, 2 * BATCH)
         if region_both is None:
             region_both = stats["regionBytes"]
@@ -261,15 +250,13 @@ def main():
     store.flush()
     migration = time.perf_counter() - started
     result = job["done"] or {"job": None, "migrated": 0, "failed": 0, "pending": None}
-    if (result["job"] != job["id"] or result["migrated"] + rescued["migrated"] != options.actors or result["failed"]
-            or result["pending"] or rescued["failed"]):
-        failures.append("the job ended %r (and its own jobs %r), not %d migrated" % (result, rescued, options.actors))
+    if result["job"] != job["id"] or result["migrated"] != options.actors or result["failed"] or result["pending"]:
+        failures.append("the job ended %r, not %d migrated" % (result, options.actors))
     if moves[0] != options.actors:
         failures.append("%d MIGRATED effects for %d actors" % (moves[0], options.actors))
     stats = check_resident(host, 0)
-    print("migrate: %d actors to version 2 in %.1f s (%.0f a second), %d events meanwhile, %d woken from the store, "
-          "%d moved early for an event" % (moves[0], migration, moves[0] / migration, options.events, wakes[0],
-                                            rescued["migrated"]), flush=True)
+    print("migrate: %d actors to version 2 in %.1f s (%.0f a second), %d events meanwhile, %d woken from the store" % (
+        moves[0], migration, moves[0] / migration, options.events, wakes[0]), flush=True)
 
     # 3. verify a sample
     started = time.perf_counter()
