@@ -42,7 +42,7 @@ Every method names the core calls behind it; header references are to
 - **Bytes core takes or gives** (a config, a request, a reply, an envelope,
   a value's CBOR) are byte strings, exactly as core takes or wrote them. An
   implementation whose API takes the language's values instead (a binding's
-  `request(method, params)`) decodes the well-formed ones into those values
+  typed methods) decodes the well-formed ones into those values
   and encodes them again on the way in, as its API does: that is what the
   protocol vectors check.
 - **Event data and spawn params** in a scenario's steps are neutral values,
@@ -105,10 +105,11 @@ cases of `requests.txt` and `config.txt`, each marked with the line `only
 reference` ("envelope-level: reference only";
 [suites/protocol/README.md](../suites/protocol/README.md), "Envelope-level
 cases"): bytes that are not CBOR or not one request map, a member or an id
-the binding's `request(method, params)` never writes, and notifications.
+the binding's typed methods never write (a method that is not one of
+requests.md's, params that are not a map), and notifications.
 Since the binding writes the map and its id itself, its adapter answers
-`host.post` with a reply it builds from what its `request(method, params)`
-returned or raised, with the message's `id`, and `host.run` with the
+`host.post` with a reply it builds from what its typed method's handlers
+got, with the message's `id`, and `host.run` with the
 notifications its API delivered, written as CBOR again.
 
 The C-level methods reach core below the API a binding exposes: a
