@@ -5,6 +5,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { byteToIndex, useStaticJS } from '../staticjs/client.js';
 import { describeError, operator } from '../staticjs/runtime.js';
+import Icon from './Icon.vue';
 
 type Position = { offset: number; line: number; column: number };
 
@@ -333,14 +334,13 @@ const fuelSaved = computed(() => {
 
 <template>
   <section class="pipeline">
-    <div class="examples" role="tablist" aria-label="Examples">
+    <div class="tabs examples" role="tablist" aria-label="Examples">
       <button
         v-for="e in examples"
         :key="e.id"
         role="tab"
         type="button"
         :aria-selected="example === e.id"
-        :class="{ selected: example === e.id }"
         @click="choose(e.id)"
       >{{ e.name }}</button>
     </div>
@@ -348,9 +348,9 @@ const fuelSaved = computed(() => {
     <div class="workbench">
       <div class="input panel">
         <header class="panel-head">
-          <span class="eyebrow">Source</span>
-          <label class="toggle"><input v-model="isModule" type="checkbox" /> module</label>
-          <label class="select">push
+          <label class="toggle"><input v-model="isModule" type="checkbox" /> Compile as a module</label>
+          <span class="spacer"></span>
+          <label class="select">Push
             <select v-model.number="chunk" aria-label="Chunk size">
               <option v-for="c in chunkSizes" :key="c.value" :value="c.value">{{ c.label }}</option>
             </select>
@@ -383,31 +383,26 @@ const fuelSaved = computed(() => {
       </div>
 
       <div class="flow">
-        <ol class="stages">
-          <li v-for="s in stages" :key="s.id">
-            <button
-              type="button"
-              class="stage"
-              :class="[stageState(s.id), { selected: stage === s.id }]"
-              :aria-pressed="stage === s.id"
-              @click="stage = s.id; hovered = null"
-            >
-              <span class="num">{{ s.number }}</span>
-              <span class="name">{{ s.name }}</span>
-              <span class="blurb">{{ s.blurb }}</span>
-              <span class="stat">{{ loading ? '…' : stageStat(s.id) }}</span>
-            </button>
-          </li>
-        </ol>
+        <div class="tabs stages" role="tablist" aria-label="Stages">
+          <button
+            v-for="st in stages"
+            :key="st.id"
+            type="button"
+            role="tab"
+            :aria-selected="stage === st.id"
+            :class="stageState(st.id)"
+            @click="stage = st.id; hovered = null"
+          >
+            <span class="status" :data-kind="stageState(st.id) === 'ok' ? 'running' : stageState(st.id) === 'error' ? 'error' : 'idle'">{{ st.name }}</span>
+            <span class="stat">{{ loading ? '…' : stageStat(st.id) }}</span>
+          </button>
+        </div>
 
         <div class="detail panel" aria-live="polite">
           <p v-if="failed" class="problem">{{ failed }}</p>
           <p v-else-if="loading" class="muted">Loading staticjs.wasm…</p>
           <template v-else-if="result">
-            <div v-if="error && errorStage === stage" class="error-box">
-              <span class="chip error">{{ error.kind }}</span>
-              <span>{{ describeError(error) }}</span>
-            </div>
+            <p v-if="error && errorStage === stage" class="notice" data-kind="error">{{ describeError(error) }}</p>
 
             <!-- 01 the parser -->
             <div v-if="stage === 'parser'">
@@ -445,12 +440,12 @@ const fuelSaved = computed(() => {
                       <td>{{ i === 0 ? 'main' : i }}</td>
                       <td>{{ f.at.line }}:{{ f.at.column }}</td>
                       <td>{{ f.params }}</td>
-                      <td><span v-if="f.shape" class="chip running">{{ f.shape }}</span><span v-else class="muted">—</span></td>
+                      <td><code v-if="f.shape" class="shape">{{ f.shape }}</code><span v-else class="muted">none</span></td>
                     </tr>
                   </tbody>
                 </table>
                 <div v-if="fuelSaved" class="bars">
-                  <p class="eyebrow">Fuel, with and without shapes</p>
+                  <h3 class="minor">Fuel, with and without shapes</h3>
                   <div class="bar"><span class="lbl">with</span><span class="fill pine" :style="{ width: `${fuelSaved.ratio * 100}%` }"></span><span class="v">{{ fuelSaved.with }}</span></div>
                   <div class="bar"><span class="lbl">without</span><span class="fill" style="width: 100%"></span><span class="v">{{ fuelSaved.without }}</span></div>
                   <p class="muted small">Same value either way: a shape changes speed and fuel, never a result.</p>
@@ -463,9 +458,9 @@ const fuelSaved = computed(() => {
               <p class="explain">The evaluator runs on fuel the host pushes. Here it was pushed one unit at a time, and after each the frames were read: scrub or play to watch it work.</p>
               <template v-if="result.compile.ok && steps.length">
                 <div class="transport">
-                  <button class="sjs-button" type="button" aria-label="Back one step" @click="move(-1)">◀</button>
-                  <button class="sjs-button primary" type="button" @click="play">{{ playing ? 'Pause' : 'Play' }}</button>
-                  <button class="sjs-button" type="button" aria-label="Forward one step" @click="move(1)">▶</button>
+                  <button class="icon-button" type="button" title="Back one unit" aria-label="Back one unit of fuel" @click="move(-1)"><Icon name="step-back" /></button>
+                  <button class="icon-button primary" type="button" :title="playing ? 'Pause' : 'Play'" :aria-label="playing ? 'Pause' : 'Play'" @click="play"><Icon :name="playing ? 'pause' : 'play'" /></button>
+                  <button class="icon-button" type="button" title="Forward one unit" aria-label="Forward one unit of fuel" @click="move(1)"><Icon name="step-forward" /></button>
                   <input v-model.number="step" class="scrub" type="range" min="0" :max="steps.length - 1" aria-label="Step" @input="stop" />
                   <span class="counter">{{ steps[step]?.fuel ?? 0 }} / {{ result.fuel }} fuel</span>
                 </div>
@@ -516,29 +511,7 @@ const fuelSaved = computed(() => {
   margin: var(--space-6) 0 var(--space-12);
 }
 .examples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
   margin-bottom: var(--space-4);
-}
-.examples button {
-  height: 30px;
-  padding: 0 12px;
-  font: var(--type-ui);
-  color: var(--fg-2);
-  background: var(--surface-1);
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-}
-.examples button:hover {
-  color: var(--fg-1);
-  border-color: var(--border-strong);
-}
-.examples button.selected {
-  color: var(--fg-on-accent);
-  background: var(--accent);
-  border-color: var(--accent);
 }
 .workbench {
   display: grid;
@@ -563,8 +536,7 @@ const fuelSaved = computed(() => {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-1);
 }
-.panel-head .eyebrow {
-  margin: 0;
+.spacer {
   flex: 1;
 }
 .toggle,
@@ -572,8 +544,7 @@ const fuelSaved = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: var(--type-label);
-  letter-spacing: 0.04em;
+  font: var(--type-ui);
   color: var(--fg-2);
 }
 .select select {
@@ -674,9 +645,9 @@ const fuelSaved = computed(() => {
   margin: 0;
   padding: 8px 12px;
   border-top: 1px solid var(--border-1);
-  font: var(--type-label);
-  letter-spacing: 0.04em;
-  color: var(--fg-3);
+  font: var(--type-body-sm);
+  font-size: 12.5px;
+  color: var(--fg-2);
 }
 .legend:empty {
   display: none;
@@ -695,69 +666,32 @@ const fuelSaved = computed(() => {
 .sw.err { background: var(--state-error-bg); box-shadow: inset 0 -2px 0 var(--state-error); }
 
 .stages {
-  list-style: none;
-  margin: 0 0 var(--space-3);
-  padding: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
+  margin-bottom: var(--space-3);
 }
-@media (max-width: 640px) {
+@media (max-width: 560px) {
   .stages {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-.stages li {
-  margin: 0;
-  position: relative;
-}
-.stage {
+.stages button {
   display: grid;
-  width: 100%;
-  height: 100%;
   gap: 2px;
-  padding: 10px 12px;
+  min-width: 0;
   text-align: left;
-  background: var(--surface-1);
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-2);
-  cursor: pointer;
-  position: relative;
+  padding: var(--space-2) var(--space-3) var(--space-3) 0;
 }
-.stage::before {
-  content: '';
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  border-radius: 2px 0 0 2px;
-  background: var(--state-running);
-}
-.stage.error::before { background: var(--state-error); }
-.stage.idle::before { background: var(--border-2); }
-.stage.idle { opacity: 0.6; }
-.stage:hover { border-color: var(--border-strong); }
-.stage.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-.num {
-  font: var(--type-label);
-  letter-spacing: var(--tracking-label);
-  color: var(--accent-fg);
-}
-.stage.error .num { color: var(--state-error); }
-.name {
-  font: var(--fw-regular) 20px/1.15 var(--font-serif);
+.stages button .status {
+  font: var(--fw-regular) 19px/1.2 var(--font-display);
   color: var(--fg-1);
 }
-.blurb {
-  font-size: 12px;
+.stages button.idle .status {
   color: var(--fg-3);
 }
-.stat {
-  margin-top: 6px;
-  font-size: 12px;
-  line-height: 1.4;
+.stages .stat {
+  font: var(--type-body-sm);
+  font-size: 12.5px;
   color: var(--fg-2);
   font-variant-numeric: tabular-nums;
 }
@@ -774,16 +708,10 @@ const fuelSaved = computed(() => {
 .muted { color: var(--fg-3); }
 .small { font-size: 13px; }
 .problem { color: var(--state-error); }
-.error-box {
-  display: flex;
-  gap: var(--space-3);
-  align-items: baseline;
-  padding: 10px 12px;
-  margin-bottom: var(--space-4);
-  background: var(--state-error-bg);
-  border-radius: var(--radius-2);
-  color: var(--fg-1);
+.notice {
+  margin: 0 0 var(--space-4);
   font-size: 14px;
+  color: var(--fg-1);
 }
 .events {
   list-style: none;
@@ -834,10 +762,9 @@ const fuelSaved = computed(() => {
   background: var(--bg-app);
 }
 .facts dt {
-  font: var(--type-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: var(--fg-3);
+  font: var(--type-body-sm);
+  font-size: 13px;
+  color: var(--fg-2);
 }
 .facts dd {
   margin: 4px 0 0;
@@ -852,10 +779,9 @@ const fuelSaved = computed(() => {
   font-size: 13.5px;
 }
 .fns th {
-  font: var(--type-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: var(--fg-3);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--fg-1);
   text-align: left;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border-2);
@@ -873,8 +799,23 @@ const fuelSaved = computed(() => {
   gap: 10px;
   align-items: center;
   margin: 6px 0;
-  font: var(--type-label);
+  font: var(--type-body-sm);
+  font-size: 13px;
   color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
+}
+.minor {
+  font: var(--type-h3);
+  font-size: 15px;
+  margin: var(--space-4) 0 var(--space-2);
+}
+.shape {
+  font: var(--type-code);
+  font-size: 12px;
+  color: var(--state-running);
+  background: var(--state-running-bg);
+  padding: 1px 6px;
+  border-radius: var(--radius-2);
 }
 .bars .fill {
   display: block;
@@ -885,7 +826,6 @@ const fuelSaved = computed(() => {
 }
 .bars .fill.pine { background: var(--accent); }
 .bars .v { text-align: right; color: var(--fg-1); }
-.bars .eyebrow { margin-top: var(--space-2); }
 .transport {
   display: flex;
   flex-wrap: wrap;
@@ -899,7 +839,9 @@ const fuelSaved = computed(() => {
   accent-color: var(--accent);
 }
 .counter {
-  font: var(--type-label);
+  font: var(--type-body-sm);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
   color: var(--fg-2);
   min-width: 110px;
   text-align: right;
@@ -939,14 +881,16 @@ const fuelSaved = computed(() => {
 .frames li.function { border-left: 3px solid var(--border-2); }
 .frames li.top { border-color: var(--accent); border-left-color: var(--accent); background: var(--accent-subtle); }
 .fname { font-family: var(--font-mono); font-weight: 500; color: var(--fg-1); }
-.fat { font: var(--type-label); color: var(--fg-3); }
+.fat { font: var(--type-code); font-size: 12px; color: var(--fg-3); }
 .prog {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  font: var(--type-label);
+  font: var(--type-body-sm);
+  font-size: 13px;
   color: var(--fg-2);
+  font-variant-numeric: tabular-nums;
 }
 .track {
   display: inline-block;

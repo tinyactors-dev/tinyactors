@@ -5,6 +5,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { useStaticJS } from '../staticjs/client.js';
 import { describeError } from '../staticjs/runtime.js';
+import Icon from './Icon.vue';
 
 const props = defineProps<{ source: string; initial: string; module?: boolean }>();
 const original = decodeURIComponent(props.source);
@@ -21,7 +22,7 @@ const changed = computed(() => code.value !== original);
 /** The source line an error points at, and a caret under its column. */
 const pointer = computed(() => {
   const error = result.value.error;
-  if (!error || !error.line) return null;
+  if (!error || !error.line || !code.value.includes('\n')) return null;
   const line = code.value.split('\n')[error.line - 1] ?? '';
   const bytes = new TextEncoder().encode(line);
   const column = new TextDecoder().decode(bytes.slice(0, Math.max(0, error.column - 1))).length;
@@ -72,14 +73,6 @@ function onKey(event: KeyboardEvent) {
 
 <template>
   <figure class="live-sample" :class="{ editing }">
-    <figcaption class="bar">
-      <span class="chip running"><span class="dot" aria-hidden="true"></span>Live</span>
-      <span class="hint">{{ module ? 'a module · its value is its exports' : 'an expression' }}</span>
-      <span class="spacer"></span>
-      <button v-if="changed" class="sjs-button" type="button" @click="reset">Reset</button>
-      <button v-if="!editing" class="sjs-button" type="button" @click="edit">Edit</button>
-      <button v-else class="sjs-button primary" type="button" :disabled="running" @click="run">Run <kbd>⌘↵</kbd></button>
-    </figcaption>
     <div v-show="!editing" class="code"><slot /></div>
     <div v-if="editing" class="editor">
       <textarea
@@ -97,14 +90,18 @@ function onKey(event: KeyboardEvent) {
       <template v-if="result.ok">
         <span class="arrow" aria-hidden="true">→</span>
         <code class="value">{{ result.value }}</code>
-        <span class="meta" :title="`${result.kind}, evaluated on ${result.fuel} units of fuel`">{{ result.kind }} · {{ result.fuel }} fuel</span>
+        <span class="meta" :title="`evaluated on ${result.fuel} units of fuel`">{{ result.kind }}, {{ result.fuel }} fuel</span>
       </template>
       <template v-else>
-        <span class="chip error">{{ result.error.kind }}</span>
-        <span class="message">{{ describeError(result.error) }}</span>
+        <span class="status" data-kind="error">{{ describeError(result.error) }}</span>
         <pre v-if="pointer" class="pointer">{{ pointer.line }}
 <span>{{ pointer.caret }}</span></pre>
       </template>
+      <span class="controls">
+        <button v-if="changed" class="icon-button" type="button" title="Reset to the original" aria-label="Reset to the original" @click="reset"><Icon name="reset" /></button>
+        <button v-if="!editing" class="icon-button" type="button" title="Edit and run it here" aria-label="Edit this sample and run it in the page" @click="edit"><Icon name="pencil" /></button>
+        <button v-else class="icon-button primary" type="button" title="Run (⌘↵)" aria-label="Run" :disabled="running" @click="run"><Icon name="play" /></button>
+      </span>
     </div>
   </figure>
 </template>
@@ -117,31 +114,11 @@ function onKey(event: KeyboardEvent) {
   background: var(--surface-code);
   overflow: hidden;
 }
-.bar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 6px 8px 6px 12px;
-  border-bottom: 1px solid var(--code-border);
-  background: var(--surface-1);
-}
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.hint {
-  font: var(--type-label);
-  letter-spacing: 0.04em;
-  color: var(--fg-3);
-}
-.spacer {
-  flex: 1;
-}
-kbd {
-  font: var(--type-label);
-  opacity: 0.75;
+.controls {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+  align-self: center;
 }
 .code :deep(div[class*='language-']) {
   margin: 0 !important;
@@ -175,13 +152,10 @@ kbd {
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-2) var(--space-3);
-  padding: 10px 14px;
+  padding: 8px 8px 8px 14px;
   border-top: 1px solid var(--code-border);
   background: var(--surface-1);
   font-size: 14px;
-}
-.out.ok {
-  box-shadow: inset 3px 0 0 var(--state-running);
 }
 .out.err {
   box-shadow: inset 3px 0 0 var(--state-error);
@@ -197,22 +171,22 @@ kbd {
   font-size: 13.5px;
   color: var(--fg-1);
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
   background: none !important;
   border: 0 !important;
   padding: 0 !important;
 }
 .meta {
-  font: var(--type-label);
-  letter-spacing: 0.04em;
+  font: var(--type-body-sm);
+  font-size: 13px;
   color: var(--fg-3);
 }
-.message {
-  flex: 1;
-  min-width: 0;
+.out .status {
   color: var(--fg-1);
+  font: var(--type-body-sm);
 }
 .pointer {
+  order: 5;
   flex-basis: 100%;
   margin: 4px 0 0;
   padding: 0;

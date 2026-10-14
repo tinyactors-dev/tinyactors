@@ -145,10 +145,8 @@ body {
   width: 100%;
 }
 .vp-doc th {
-  font: var(--type-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: var(--fg-2);
+  font-weight: 600;
+  color: var(--fg-1);
   background: var(--surface-2);
 }
 .vp-doc tr:nth-child(2n) {
@@ -172,10 +170,7 @@ body {
   border-radius: var(--radius-2) !important;
 }
 .vp-doc div[class*='language-'] > span.lang {
-  font: var(--type-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: var(--code-muted);
+  display: none;
 }
 @media (max-width: 639px) {
   .vp-doc div[class*='language-'] {
@@ -188,26 +183,14 @@ body {
   font: var(--fw-regular) 22px/1 var(--font-serif);
   letter-spacing: var(--tracking-tight);
 }
-.VPNavBarTitle .title::after {
-  content: 'C · wasm';
-  margin-left: var(--space-3);
-  padding: 3px 6px;
-  font: var(--type-label);
-  letter-spacing: 0.08em;
-  color: var(--accent-fg);
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-2);
-}
 .VPNavBarMenuLink,
 .VPNavBarMenuGroup .button {
   font: var(--type-ui) !important;
 }
-.VPSidebarItem.level-0 > .item > .text,
 .VPSidebarItem.level-0 > .item .text {
-  font: var(--type-label) !important;
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: var(--fg-3);
+  font: var(--type-h3) !important;
+  font-size: 14px !important;
+  color: var(--fg-1);
 }
 .VPSidebarItem.level-1 .text {
   font-size: 14px;
@@ -217,59 +200,20 @@ body {
   font-weight: 600;
 }
 .VPDocAsideOutline .outline-title {
-  font: var(--type-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: var(--fg-3);
+  font: var(--type-h3);
+  font-size: 13px;
+  color: var(--fg-1);
 }
 .VPFooter {
   border-top: 1px solid var(--border-1) !important;
   background: var(--surface-1);
 }
 
-/* ── shared blocks ───────────────────────────────────────────────────── */
-.eyebrow {
-  font: var(--type-label);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-  color: var(--accent-fg);
-  margin: 0 0 var(--space-3);
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 22px;
-  padding: 0 8px;
-  font: var(--type-label);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-pill);
-  color: var(--fg-2);
-  background: var(--surface-1);
-  white-space: nowrap;
-}
-.chip.running {
-  color: var(--state-running);
-  background: var(--state-running-bg);
-  border-color: transparent;
-}
-.chip.error {
-  color: var(--state-error);
-  background: var(--state-error-bg);
-  border-color: transparent;
-}
-.chip.waiting {
-  color: color-mix(in srgb, var(--state-waiting) 80%, var(--fg-1));
-  background: var(--state-waiting-bg);
-  border-color: transparent;
-}
-.chip.done {
-  color: var(--state-done);
-  background: var(--state-done-bg);
-  border-color: transparent;
-}
+/* ── components of the design system ─────────────────────────────── */
+/* As scxmljs's site and playground draw them: buttons, icon buttons, the
+ * status line (a coloured dot, then plain text), notices (a coloured left
+ * rule), underline tabs, section titles, features and cards. Text carries
+ * names and values; kinds and states are a colour paired with a glyph. */
 .sjs-button {
   display: inline-flex;
   align-items: center;
@@ -277,16 +221,17 @@ body {
   height: var(--control-h-sm);
   padding: 0 var(--space-3);
   font: var(--type-ui);
-  color: var(--fg-2);
+  color: var(--fg-1);
   background: var(--surface-1);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-2);
   cursor: pointer;
   text-decoration: none;
+  transition: background var(--dur-fast) var(--ease-step), border-color var(--dur-fast) var(--ease-step);
 }
 .sjs-button:hover {
-  color: var(--fg-1);
   border-color: var(--border-strong);
+  background: var(--surface-2);
 }
 .sjs-button.primary {
   color: var(--fg-on-accent);
@@ -297,9 +242,111 @@ body {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
+.sjs-button.big {
+  height: var(--control-h-lg);
+  padding: 0 var(--space-5);
+  font: var(--fw-medium) var(--fs-14) / 1 var(--font-sans);
+}
 .sjs-button:disabled {
   opacity: 0.5;
   cursor: default;
+}
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  color: var(--fg-2);
+  background: var(--surface-1);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-2);
+  cursor: pointer;
+}
+.icon-button:hover {
+  color: var(--fg-1);
+  border-color: var(--border-strong);
+}
+.icon-button.primary {
+  color: var(--fg-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.icon-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font: var(--type-ui);
+  color: var(--fg-2);
+}
+.status::before {
+  content: '●';
+  color: var(--state-running);
+}
+.status[data-kind='error']::before {
+  color: var(--state-error);
+}
+.status[data-kind='busy']::before {
+  color: var(--state-waiting);
+}
+.status[data-kind='idle']::before {
+  color: var(--state-done);
+}
+.notice {
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-1);
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--state-done);
+  border-radius: var(--radius-2);
+}
+.notice[data-kind='error'] {
+  border-left-color: var(--state-error);
+}
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-1);
+}
+.tabs button {
+  font: var(--type-ui);
+  color: var(--fg-2);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: var(--space-2) var(--space-3);
+  min-height: 36px;
+  cursor: pointer;
+}
+.tabs button:hover {
+  color: var(--fg-1);
+}
+.tabs button[aria-selected='true'] {
+  color: var(--fg-1);
+  border-bottom-color: var(--accent);
+}
+.section-title {
+  font: var(--type-h2);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg-1);
+  margin: 0 0 var(--space-3);
+  text-wrap: balance;
+}
+.lede {
+  font: var(--type-prose);
+  color: var(--fg-2);
+  max-width: var(--prose-max);
+  margin: 0 0 var(--space-6);
+}
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-2);
 }
 
 /* The pipeline explorer's page takes the width the doc column would leave. */
