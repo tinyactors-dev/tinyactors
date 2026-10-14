@@ -30,12 +30,17 @@
  *   migration  ta_host_migrate() starts a job that moves actors of older
  *              versions to the current one at stable points (export ->
  *              translate -> adopt; error.platform.upgrade), advanced inside
- *              ta_host_run in bounded steps: busy actors are retried,
- *              hibernated ones are woken first (TA_HOST_MIGRATE_WAKE: a
- *              TA_EFFECT_WAKE effect asks the host for the blob) or wait;
- *              actors with running invocations wait until those finish
- *              (a session tree moves unchanged, but is not translated);
- *              a timeout (system ticks) ends the job with the stragglers.
+ *              ta_host_run in bounded steps (a quantum of actors per run,
+ *              however many it waits for): busy actors are retried,
+ *              hibernated ones wait until ta_host_wake brings them back,
+ *              asked for with TA_HOST_MIGRATE_WAKE (a TA_EFFECT_WAKE whose
+ *              job is the job's id), again each time the job finds one
+ *              hibernated after a wake; an actor exported meanwhile leaves
+ *              the job; actors with running invocations wait until those
+ *              finish (a session tree moves unchanged, but is not
+ *              translated); a timeout (system ticks) ends the job with the
+ *              stragglers, and a job with an actor nobody wakes ends only
+ *              there.
  *   hibernation ta_host_sweep() runs the CLOCK sweep over all segments;
  *              blobs and their storage stay with the host (ta_host_hibernate,
  *              TA_EFFECT_WAKE, ta_host_wake).
@@ -280,6 +285,7 @@ typedef struct ta_host_effect {
     uint64_t root;         /* the session of its host-spawned ancestor (attribution) */
     uint32_t token;        /* request / invoke token (per segment) */
     uint32_t io_processor; /* TA_EFFECT_SEND: index in the config's ioProcessors */
+    /* (job: MIGRATED, JOB_DONE, and a WAKE a migration job asked for; 0 otherwise) */
     uint32_t flags;        /* PEER: hops */
     uint32_t job;
     ta_string_view target, event, sendid, auxiliary; /* as in ta_effect; MIGRATED: event = chart
@@ -611,7 +617,8 @@ typedef struct ta_host_migration {
     ta_time timeout; /* system ticks from now (0 = none) */
 } ta_host_migration;
 TA_API ta_status ta_host_migrate(ta_host *h, const ta_host_migration *migration, uint32_t *job);
-/* Sessions a finished job left behind (valid until the next ta_host_run). */
+/* The sessions a job waits for while it runs, in no order; those a finished
+ * job left behind (valid until the next ta_host_run). */
 TA_API uint32_t ta_host_job_pending(const ta_host *h, uint32_t job, ta_uint64_array out);
 
 /* ---- hibernation (the host stores the blobs) ------------------------------------ */
