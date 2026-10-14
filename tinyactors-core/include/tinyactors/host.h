@@ -553,7 +553,10 @@ TA_API ta_status ta_host_peer_error(ta_host *h, const ta_peer_error *error);
  * ta_host_envelope: the effect's envelope (its data written once by the
  * datamodel's to_wire, or a relayed `wire` copied as it is) or error envelope,
  * in `out`: a view of the host's memory, valid until the ack, as the effect
- * is. The effect keeps its payload, borrowed until the ack.
+ * is. The effect keeps its payload, borrowed until the ack. `effect` is a
+ * record of the open batch (&effects[i] of ta_host_effects) or one the caller
+ * built (a PEER or PEER_ERROR record whose fields it set, to encode an
+ * envelope it holds); it is read during the call only.
  * TA_ERROR_NO_MEMORY: the allocator refused room; TA_ERROR_INVALID: another
  * effect kind, or data that is not a neutral value; TA_ERROR_STATE during a
  * run. */

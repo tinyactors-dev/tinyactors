@@ -167,8 +167,8 @@ The findings step 8.2 settles [8.2], each a decision and a test:
    lists `ta_host_segment_info_get`, `ta_host_system`,
    `ta_host_peer_status`, `ta_host_job_pending` and the effect accessors
    as lookups, and accepts `ta_host_peer_round_trip_time` (same test).
-3. **`ta_host_envelope` takes the effect's address**, not its index as
-   the accessors do (section 7, "Open").
+3. **`ta_host_envelope` takes the effect's address** — settled: it keeps
+   it, for records of the batch and records the caller builds (section 7).
 4. **A test calls `ta_system_*` from datamodel code** — settled: the
    rule stands (`datamodel.h:7-8`); `test_host_inputs.c`'s hooks show that
    nothing grew by counting the host's allocator, not by reading
@@ -448,9 +448,15 @@ waits. Each output is a block of its own in an arena the ack empties,
 kept for reuse; internal scratch (a post's reply before it reaches the
 pool) also comes from it and is reused at once while nothing is lent.
 
-**Open.** `ta_host_envelope` takes `const ta_host_effect *` (the record's
-address), the one call that needs a binding to index the effect array
-instead of passing an index as the accessors do.
+**Decided (2026-10-14): `ta_host_envelope` keeps the record's address.**
+It takes `const ta_host_effect *`: a record of the open batch
+(`&effects[i]`), or one the caller built, read during the call. A
+binding's C holds the array `ta_host_effects` returned, so the address
+costs it nothing; a caller-built record encodes an envelope that is in no
+batch (ta-conform's `envelope.read` and its `back` vectors, the encoder
+tests in `test_router.c`), which an index could not. Not an index, as
+the accessors take: it would need a second encoding call or protocol
+changes for those callers, and gains only the accessors' shape.
 
 ## 8. Images
 
