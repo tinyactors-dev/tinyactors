@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>staticjs in the browser</title>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+    textarea, pre { width: 100%; box-sizing: border-box; font: 14px/1.4 ui-monospace, monospace; }
+    pre { background: #f4f4f4; padding: 0.75rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>staticjs in the browser</h1>
+  <p>Serve this directory with <code>staticjs.wasm</code> and <code>staticjs.api.json</code> beside it
+     (for example <code>python3 -m http.server</code>), then open it.</p>
+  <textarea id="source" rows="6">[{ name: "ada", age: 36 }, { name: "grace", age: 85 }]
+  .toSorted((a, b) => b.age - a.age)
+  .map((p) => p.name)</textarea>
+  <p><label><input type="checkbox" id="module"> module</label> <button id="run">Evaluate</button></p>
+  <pre id="output"></pre>
+  <script type="module">
+    import { load } from './staticjs.mjs';
+
+    const [wasm, api] = await Promise.all([
+      fetch('staticjs.wasm').then((r) => r.arrayBuffer()),
+      fetch('staticjs.api.json').then((r) => r.json()),
+    ]);
+    const staticjs = await load(wasm, api);
+    const output = document.getElementById('output');
+    document.getElementById('run').addEventListener('click', () => {
+      try {
+        const module = document.getElementById('module').checked;
+        output.textContent = staticjs.evaluate(document.getElementById('source').value, { module });
+      } catch (error) {
+        output.textContent = error.message;
+      }
+    });
+  </script>
+</body>
+</html>

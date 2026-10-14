@@ -36,6 +36,18 @@ module StaticJS
     'bench' => { source: 'bench/bench.c', fast: ['--smoke'], full: ['--smoke'] }
   }.freeze
 
+  # The programs in examples/, each run with these argument lists in turn;
+  # what they print together must equal examples/expected/<name>.txt
+  # (`mise run examples`).
+  EXAMPLES = {
+    'hello' => [[]],
+    'eval' => [['[3, 1, 2].toSorted((a, b) => a - b)'],
+               ['--module', 'export const total = [1, 2, 3].reduce((a, b) => a + b, 0);'],
+               ['--seed', '7', 'Math.random()']],
+    'host' => [[]],
+    'stream' => [[]]
+  }.freeze
+
   module_function
 
   def sources = PlatformFiles.sources(ROOT.join('src')).map { |path| Pathname.new(path) }
@@ -43,6 +55,19 @@ module StaticJS
   def tests = TESTS.keys
 
   def library = BUILD.join('libstaticjs.a')
+
+  # Run each command and fail unless every one succeeds and what they print
+  # together equals the file `expected`.
+  def expect_output!(commands, expected)
+    output = commands.map do |command|
+      out = IO.popen(command.map(&:to_s), chdir: ROOT.to_s, &:read)
+      abort "#{command.shelljoin}: exit status #{$?.exitstatus}" unless $?.success?
+      out
+    end.join
+    return if output == File.read(expected)
+
+    abort "#{expected.relative_path_from(ROOT)}: the output differs:\n#{output}"
+  end
 
   def run(*command, chdir: ROOT)
     puts command.shelljoin

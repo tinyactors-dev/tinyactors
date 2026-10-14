@@ -13,7 +13,7 @@
  * the same functions with the same shapes.
  *
  * Each case also runs once more whole with matching off (no_shapes,
- * docs/matcher.md): it must compile to the same program but for the shapes,
+ * docs/internals/matcher.md): it must compile to the same program but for the shapes,
  * give the same outcome, tag no function, and use no less fuel than the run
  * with shapes. A case whose source holds a `/` runs once more whole with
  * every regular expression match a loop frame (no_regex_leaf): the same
@@ -245,7 +245,7 @@ static sjs_result write_value(sjs_context *context, sjs_value value, char *out, 
 
 /* ------------------------------------------------------------------------
  * Node identity: a tee between the parser and the compiler that checks each
- * event's node and start (docs/matcher.md, section 1), with a table of its
+ * event's node and start (docs/internals/matcher.md, section 1), with a table of its
  * own of which events open, separate and close a node:
  *
  *   - an event starts no later than its own token (but CHAIN_END, whose

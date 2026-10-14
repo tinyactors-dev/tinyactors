@@ -1,4 +1,4 @@
-# Regular expressions (docs/regex.md): literals, their values, and what is
+# Regular expressions (docs/internals/regex.md): literals, their values, and what is
 # refused when compiled. Every expected value was generated in Node 22.
 
 # ---------------------------------------------------------------------------
@@ -927,7 +927,7 @@ false
 
 
 # ---------------------------------------------------------------------------
-# Match results: exec, match without g, matchAll (docs/regex.md, 7.2).
+# Match results: exec, match without g, matchAll (docs/internals/regex.md, 7.2).
 
 === exec gives a match result: the match, each group, index, input, groups
 /(a)(b)?c/.exec("xxacd")
@@ -1305,7 +1305,7 @@ Array.from(/(a)(b)/.exec("ab"))
 [Object.assign(["a"],{"index":0,"input":"a","groups":undefined}),null]
 
 # ---------------------------------------------------------------------------
-# The skips of a program led by an ASCII character or by ^ (docs/regex.md,
+# The skips of a program led by an ASCII character or by ^ (docs/internals/regex.md,
 # section 15): inputs that cross a step's budget, non-ASCII characters
 # between runs of skipped bytes, groups before the leading character, and
 # folding with i and iu. Values from Node 22.

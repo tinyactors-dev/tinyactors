@@ -1,7 +1,7 @@
 # Adding a built-in
 
 How to add a built-in function or method to staticjs without making
-evaluation slower. Read `../AGENTS.md` first: the rule comes before speed. A
+evaluation slower. Read `../../AGENTS.md` first: the rule comes before speed. A
 built-in that returns a different value from JavaScript is a bug, however
 fast it is.
 
@@ -15,7 +15,7 @@ commit must show with `bench-compare` that it costs nothing.
 A built-in is one of two kinds, and the choice decides most of its cost.
 
 - **A leaf** finishes in one C call: `includes`, `slice`, `join`,
-  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/mutation.md), `Object.freeze`, `Object.seal`, `Object.isFrozen` and `Object.isSealed` (docs/mutation.md, "Frozen and sealed values"), the set methods, a map's `get` and `has`, an array's, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop` (and its `next` and `return`, on a variable a mutation: docs/mutation.md), `String.raw`,
+  `Math.max`, `Object.fromEntries`, `Object.hasOwn`, a number's `toFixed`, `toExponential`, `toPrecision` and `toString`, `Object.assign` (of a target nothing else holds; of a variable it is a mutation, docs/internals/mutation.md), `Object.freeze`, `Object.seal`, `Object.isFrozen` and `Object.isSealed` (docs/internals/mutation.md, "Frozen and sealed values"), the set methods, a map's `get` and `has`, an array's, a map's or a set's `keys`, `values` and `entries`, an iterator's `take` and `drop` (and its `next` and `return`, on a variable a mutation: docs/internals/mutation.md), `String.raw`,
   `encodeURI`, `encodeURIComponent`, `decodeURI`, `decodeURIComponent`, Temporal's
   functions and its values' methods (`src/temporal.c`), Date's (`src/date.c`), `JSON.parse` and
   `JSON.stringify` (in `src/json.c`, each over an explicit stack). It gets its arguments
@@ -92,16 +92,16 @@ Temporal value):
 2. Give its name's entry in `NAMES` (`src/builtins.c`) the ID in the
    column of the receiver kind: array, string, set, BigInt, map, iterator, regular expression, number or
    Temporal value (one ID per name for every Temporal type, and a Date's,
-   which is a type of the kind: docs/date.md; `temporal.c`'s
+   which is a type of the kind: docs/internals/date.md; `temporal.c`'s
    `METHOD_TYPES` says which types have it, and a getter is the entry's
-   `field`: docs/temporal.md). Every name Node 22 has
+   `field`: docs/internals/temporal.md). Every name Node 22 has
    on those prototypes is already listed, so that reading one faults instead
    of giving `undefined`. If the name is missing, add it in byte order;
    `names_test` checks the order and fails on a mistake. The flags say which
    prototypes have the name and whether the method changes its receiver
    (`SJS_NAME_MUTATING`, which faults, unless the name's `mutation` column
    names a method that changes a variable the function owns:
-   `docs/mutation.md`).
+   `docs/internals/mutation.md`).
 3. If it calls back, add it to `sjs_builtin_loops`.
 
 The compiler marks a key constant with its entry (`SJS_STRING_NAMED`), so
@@ -219,7 +219,7 @@ callback's own instructions.
   it: the skips of a pattern led by an ASCII character or by `^` pass
   positions without following them but add what following them counts,
   and stop where a step's budget would, so fuel and pauses do not depend
-  on which skips a build has (docs/regex.md, section 15).
+  on which skips a build has (docs/internals/regex.md, section 15).
 
 ## 7. The rule
 
@@ -243,7 +243,7 @@ callback's own instructions.
 - **Mutating methods** (`push`, `sort`, `splice`, `add`, an iterator's `next`, a Date's `setTime`, ...) change the
   receiver and return something else in JavaScript, so never implement
   them as copies. One that changes a variable the function owns, or a
-  container on a path from one, is a mutation (`docs/mutation.md`): called
+  container on a path from one, is a mutation (`docs/internals/mutation.md`): called
   through `SJS_OP_MUTATE` with the variable's slot, or `SJS_OP_PATH_CALL`
   with the container's place, never through `sjs_builtin_call`, and tagged
   `MUTATION`. Every other one faults by name (`SJS_NAME_MUTATING`).
@@ -253,7 +253,7 @@ callback's own instructions.
 1. **Add a bench case** in `bench/bench.c` when the built-in walks data:
    name `eval.<group>.<name>`, unit element, sizes L (linear) or Q
    (quadratic, capped), and the expected value at its smoke size, checked
-   against Node (`../AGENTS.md`, Benchmarks).
+   against Node (`../../AGENTS.md`, Benchmarks).
 2. **Run `mise run bench-compare <commit before it> <filter> --quick`**
    while iterating, then without `--quick` before committing. Quote the rows
    with the machine hash in the commit body.
@@ -270,13 +270,13 @@ callback's own instructions.
 ## 9. Shapes: a C path for a callback
 
 The compiler tags a function whose body has a known shape
-(`docs/matcher.md`): `x => x.key` is PLUCK, `(a, b) => a.key - b.key` is
+(`docs/internals/matcher.md`): `x => x.key` is PLUCK, `(a, b) => a.key - b.key` is
 COMPARE_BY_KEY, `(a, b) => a - b` is COMPARE_NUMERIC, `x => x.key OP c` is
 KEY_COMPARE, `x => x OP c` is ELEMENT_COMPARE (OP a strict equality or
 an order, `c` a literal), `(a, x) => a + x` is SUM and `(a, x) => a +
 x.key` is SUM_KEY, and `(a, x) => { a.push(x.key); return a; }` is
 PUSH_KEY (`a.push(x)`: PUSH). A loop built-in may run such a callback in C, as `map`
-does with PLUCK (so do `Object.groupBy`, `Array.from` and `Map.groupBy`, and an iterator's `map`, which runs as map), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC (and so `sort`, which is its loop: docs/mutation.md),
+does with PLUCK (so do `Object.groupBy`, `Array.from` and `Map.groupBy`, and an iterator's `map`, which runs as map), `toSorted` with COMPARE_BY_KEY and COMPARE_NUMERIC (and so `sort`, which is its loop: docs/internals/mutation.md),
 `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `some` and `every` with
 KEY_COMPARE and ELEMENT_COMPARE (and an iterator's `filter`, `find`,
 `some` and `every`, which run as those), and `reduce` with SUM and SUM_KEY (an iterator's too, but not `reduceRight`,
@@ -286,7 +286,7 @@ and with PUSH_KEY and PUSH (an iterator's too)
 `sum_step` and `push_step` in `src/builtins.c`). The tag only
 says what the bytecode computes; the bytecode is still there, and the C
 path must give exactly what it gives. A rule may look at a call, whose
-callee is the node before its CALL_BEGIN (`docs/matcher.md`, section 13);
+callee is the node before its CALL_BEGIN (`docs/internals/matcher.md`, section 13);
 a callback that calls a captured name, such as `x => re.test(x)` or
 `x => s.has(x.k)`, has no shape yet (11.9.3).
 
@@ -338,7 +338,7 @@ to find. Check for them before committing.
 - **A test that staticjs itself refuses.** `===` on two objects, `+`
   between a string and a number, a set of objects: each faults or is
   unsupported in staticjs, so the case tests nothing about the built-in.
-  Know what staticjs refuses before writing a case (README.md, "Where it
+  Know what staticjs refuses before writing a case (../guide/faults.md, "Where it
   faults instead of following JavaScript"); `"a".k` is `undefined`, not a
   fault.
 - **A fault message in shared code that names one built-in.** `call()` and
@@ -390,8 +390,9 @@ to find. Check for them before committing.
   `noinline` at the end of the file; and check with `llvm-nm` that the set
   of out-of-line helpers is the old one (`array_add`, `call_element` and
   `pluck_step` are now `always_inline` for this).
-- **Lists that name only the old built-ins.** `README.md`'s method list,
-  sections 1 and 9 of this guide, `docs/matcher.md`'s consumers, and
+- **Lists that name only the old built-ins.** The built-ins table in
+  `docs/guide/language.md`,
+  sections 1 and 9 of this guide, `docs/internals/matcher.md`'s consumers, and
   comments such as "findLast walks from the end" each had to be updated by
   hand. `git grep` the name of the built-in the new one resembles and
   update what lists it.
@@ -407,7 +408,7 @@ to find. Check for them before committing.
 - [ ] Spec cases written first, every expected value generated by Node, none relying on something staticjs refuses; deliberate faults where Node gives a value are fault cases; `diff-node` agrees.
 - [ ] No fault message in shared code names a built-in (`git diff -U0 | grep sjs_vm_fault`), not even through a ternary.
 - [ ] Nothing faults that JavaScript converts without coercing an object or a string.
-- [ ] Lists and comments that name similar built-ins (`README.md`, this guide, `docs/matcher.md`) name the new one too.
+- [ ] Lists and comments that name similar built-ins (`docs/guide/language.md`, `docs/guide/faults.md`, this guide, `docs/internals/matcher.md`, `docs/guide/performance.md` for a shape) name the new one too.
 - [ ] Bench case if it walks data; `bench-compare` rows and machine hash in the commit; `test --full` passes.
 - [ ] A C path for a shaped callback: entered where the bytecode would be, every precondition checked each step, stack room, falls back to the bytecode for any value the bytecode would fault on, cases with `@shapes` at each edge, fuel pinned both ways.
 - [ ] The plain built-in committed first; the fast path's commit quotes `bench-compare` against it (old -> new and fuel), not the new build alone.

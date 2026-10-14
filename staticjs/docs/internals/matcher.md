@@ -232,7 +232,7 @@ one small struct:
   `begin_function` stores ARROW_BEGIN's `node` in the function's scope
   (`scope.node`), so that a match report names the function it is for; and
   once per call, for a rewrite's report (section 12). It reads `start` to
-  find paths (docs/mutation.md, "Assignment").
+  find paths (docs/internals/mutation.md, "Assignment").
   Errors and line tables keep using `at`.
 - **The matcher** uses `node` to tell which open bracket an event belongs
   to, and copies the closing event's `node` and `start` into each report. It
@@ -372,7 +372,7 @@ rules.
 
 ```
 # src/shapes.rules: the trees the matcher looks for in the parser's events
-# (docs/matcher.md). `mise run shapes` writes src/shapes.h and
+# (docs/internals/matcher.md). `mise run shapes` writes src/shapes.h and
 # src/shapes_table.h from it; `mise run test` fails when they are stale.
 
 # ---------------------------------------------------------------------------
@@ -449,7 +449,7 @@ event END close;                        # closes the program (node 0)
 
 # ---------------------------------------------------------------------------
 # Callback shapes. The compiler records a shape on the function it matched;
-# map and toSorted run a tagged callback in C (docs/matcher.md, section 7).
+# map and toSorted run a tagged callback in C (docs/internals/matcher.md, section 7).
 
 shape PLUCK(key: text);                              # x => x.key
 shape COMPARE_BY_KEY(key: text, descending: flag);   # (a, b) => a.key - b.key, or b.key - a.key
@@ -1143,7 +1143,7 @@ Both fast paths sit in `src/builtins.c`, in the loop built-ins' steps.
   step calls back exactly as today (`call_back`). The bytecode then gives
   the value, or faults with its own message, position and subject.
 - **Fuel.** A fast step charges what it looked up, one unit per lookup,
-  which docs/builtins.md asks for. With the run loop's unit for the step,
+  which docs/internals/builtins.md asks for. With the run loop's unit for the step,
   that is less than the bytecode it replaces. The figures below are today's
   bytecode, and `api_test` pins both sides exactly. The lookups are charged
   with the step's unit, as a built-in's cost is with its call's, so a run
@@ -1388,7 +1388,7 @@ with [nodes] and is updated as each later commit lands.
 
 Changes: `include/staticjs.h` (`sjs_event.node`, `.start`, documented as in
 1.1), `src/parser.c` (1.3), `README.md` ("Push and stream": what the two
-fields are for), `docs/matcher.md`. The compiler is unchanged.
+fields are for), `docs/internals/matcher.md`. The compiler is unchanged.
 
 Tests:
 
@@ -1510,7 +1510,7 @@ Changes:
 - `src/vm.c`: `enter_callback` made shared.
 - `src/builtins.c`: the two fast paths, and the merge decision helper.
 - `bench/bench.c`: two cases.
-- `docs/builtins.md`: a section "Shapes: a C path for a callback", with the
+- `docs/internals/builtins.md`: a section "Shapes: a C path for a callback", with the
   rules of 7.1 and a checklist line.
 - `README.md` ("What it guarantees": shapes change speed and fuel, never a
   value or a fault).
@@ -2306,7 +2306,7 @@ dooms the bracket around it at once, as before.
   `closure->captures[i]`, `program->constants[i]`, `vm->globals[i]`, or
   undefined. Every binding a closure captures is const (a `let` is never
   captured), a value is never changed once shared
-  (`docs/mutation.md`), and globals are fixed for an evaluation
+  (`docs/internals/mutation.md`), and globals are fixed for an evaluation
   (`sjs_run_params`), so the value cannot change while the loop runs. It is borrowed, from the closure in LOOP_CALLBACK, its program, or
   the embedder.
 - **KEY_COMPARE and ELEMENT_COMPARE with a name.** The rule `fixed(c) <-
@@ -2517,7 +2517,7 @@ The predicate cases scan every element and find nothing, so they measure
 the loop and not where an answer happens to be. Each commit lists its cases
 in the header comment of `bench.c`, runs `bench --smoke`, and quotes `mise
 run bench-compare <the commit before it>` for its cases, for
-`eval.array.*`, for `eval.guard.*` (placement, docs/builtins.md 8.3), and
+`eval.array.*`, for `eval.guard.*` (placement, docs/internals/builtins.md 8.3), and
 for `compile.*` (11.4), with the machine hash. The fuel column shows the
 drop. Claim only what the table flags.
 
@@ -2525,7 +2525,7 @@ drop. Claim only what the table flags.
 
 Each commit passes `mise run test` and `mise run test --full` (its body
 says so), and touches `vm.c`, `builtins.c` or the matcher, so each quotes
-`bench-compare` (11.10). Each updates `docs/builtins.md` section 9 (the
+`bench-compare` (11.10). Each updates `docs/internals/builtins.md` section 9 (the
 shapes and their consumers, the checklist line unchanged) and this
 section's status.
 
@@ -2579,9 +2579,9 @@ section's status.
 
 Status: implemented, with three rewrites. MUTATE_PATH: a method that
 changes its receiver, called on a path from a variable (`o.items.push(x)`,
-docs/mutation.md, "Methods through a path"). APPEND and APPEND_SUM:
+docs/internals/mutation.md, "Methods through a path"). APPEND and APPEND_SUM:
 `s += e` and `s = s + e1 + e2`, appends to a `let` whose read the compiler
-makes a move (docs/mutation.md, "Appending to a let"; 12.8). The matcher's
+makes a move (docs/internals/mutation.md, "Appending to a let"; 12.8). The matcher's
 rules decide the form; the compiler decides what needs scopes, and rewrites
 what it compiled.
 
@@ -2648,7 +2648,7 @@ starts ended before the event inside that node, and is its first operand
 when the event takes one. An operator that is not a spine node (`(a +
 b).k`, `f(x).k`) pops the cell as its own operand, so the member after it
 finds none. The compiler finds an assignment's target the same way
-(docs/mutation.md, "Assignment").
+(docs/internals/mutation.md, "Assignment").
 
 - **Cost:** an event no anchored rule looks at that starts after the top
   cell costs a comparison; any other pops what it ends and compares two
@@ -2710,7 +2710,7 @@ MUTATE_PATH() <- CALL_BEGIN(mutating(), ...);
 ```
 
 A receiver needs a step (`stepped`): a variable read directly is the
-compiler's own mutation (docs/mutation.md, "The rule"). An optional chain,
+compiler's own mutation (docs/internals/mutation.md, "The rule"). An optional chain,
 a computed method name, or a path from a call or an operator is no
 `mutable`, so it reports nothing. A call of a method that returns its
 receiver is `mutable` again, so a chain reports each of its calls.
@@ -2752,7 +2752,7 @@ sends changed.
   for drops the path at its CALL_END.
 - `on_rewrite` marks the open call whose node the report names. At its
   CALL_END, `path_mutation_end` checks what needs scopes: the root is a
-  variable the function owns (docs/mutation.md, "The rule"), and nothing
+  variable the function owns (docs/internals/mutation.md, "The rule"), and nothing
   in the keys or arguments changed it. Then it rewrites what it compiled,
   in place, instruction for instruction of the same size, as it rewrites
   an assignment's target: the root's read becomes a RECEIVER, each step a
@@ -2805,7 +2805,7 @@ What it does not do yet, and what each would need:
 ### 12.8 APPEND and APPEND_SUM
 
 The second and third rewrites, for appending to a `let`
-(docs/mutation.md, "Appending to a let"), needed rules only, and the
+(docs/internals/mutation.md, "Appending to a let"), needed rules only, and the
 `ASSIGN` event's operator as a field (`op: operator`, 0 for `=`):
 
 ```
@@ -2832,7 +2832,7 @@ open paths (a few), at the innermost `+` of a spine only.
 ## 13. Calls in a callback: pushes into reduce's accumulator
 
 `rows.reduce((acc, r) => { acc.push(r.kwh); return acc; }, [])` builds an
-array with owned mutation (docs/mutation.md): the accumulator moves into
+array with owned mutation (docs/internals/mutation.md): the accumulator moves into
 the callback, which holds it alone, `push` changes it in place, and
 `return acc` moves it back. That costs a call per element: in bytecode
 `RECEIVER`, `METHOD_MUTATE`, the argument (`TAKE_LOCAL`, `GET_MEMBER`),

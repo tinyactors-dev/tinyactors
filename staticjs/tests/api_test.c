@@ -712,7 +712,7 @@ static void expect_nodes(const char *source, sjs_goal goal, int nodes, const cha
     CHECK(strcmp(log.text, want) == 0);
 }
 
-/* Each event carries its node's id and start (docs/matcher.md, section 1):
+/* Each event carries its node's id and start (docs/internals/matcher.md, section 1):
  * one id for every event of a bracket, an operator's markers and its last
  * event; a fresh one for every other node; the start of an operator, a
  * member, an index or a call at its first operand's. */
@@ -980,7 +980,7 @@ static void test_text_sort_fuel(sjs_context *context) {
 }
 
 /* A regular expression's match charges for the instructions it visits and
- * the slots it copies (docs/regex.md, 9.1), pinned here; it grows linearly
+ * the slots it copies (docs/internals/regex.md, 9.1), pinned here; it grows linearly
  * with the input, a pattern that backtracks exponentially included; and an
  * evaluation pauses within it. */
 static void test_regex_fuel(sjs_context *context) {
@@ -1019,7 +1019,7 @@ static void test_regex_fuel(sjs_context *context) {
 }
 
 /* A test() over an ASCII input that runs as a loop matches from a cache of
- * the automaton's steps (docs/regex.md, 12.3); by the cache and without it,
+ * the automaton's steps (docs/internals/regex.md, 12.3); by the cache and without it,
  * run whole, paused after every unit and after every 7, a test gives the
  * same result, the same fuel and the same pauses. */
 typedef struct {
@@ -1827,7 +1827,7 @@ static void test_reuse_leaves_others_alone(void) {
     CHECK(c.live == 0);
 }
 
-/* The off switch (docs/matcher.md, section 8): with no_shapes the compiler
+/* The off switch (docs/internals/matcher.md, section 8): with no_shapes the compiler
  * matches the rewrites alone (MUTATION: it made no matcher before), so it
  * does not allocate the matcher's records, and the program gives the same
  * value. A config that leaves the field out matches. */
@@ -1872,7 +1872,7 @@ static void test_no_shapes(void) {
     CHECK(by_default.allocations == with.allocations);
 }
 
-/* The shapes' C paths (docs/matcher.md, sections 7 and 11): toSorted with
+/* The shapes' C paths (docs/internals/matcher.md, sections 7 and 11): toSorted with
  * a COMPARE_BY_KEY or a COMPARE_NUMERIC comparator, map with a PLUCK
  * callback, the predicate loops with a KEY_COMPARE or an ELEMENT_COMPARE
  * callback, and reduce with a SUM or a SUM_KEY callback. A run of one
@@ -2164,10 +2164,10 @@ static void test_shape_paths(void) {
 /* Fail every allocation in turn: each run ends with an error, never a
  * crash, and frees all it took. */
 /* ------------------------------------------------------------------------
- * MUTATION: owned mutation (docs/mutation.md).
+ * MUTATION: owned mutation (docs/internals/mutation.md).
  */
 
-/* MUTATION: reduce with a PUSH_KEY or a PUSH callback (docs/matcher.md,
+/* MUTATION: reduce with a PUSH_KEY or a PUSH callback (docs/internals/matcher.md,
  * 13.2), as test_shape_paths runs the other shapes: the same value or
  * fault both ways, for less fuel. */
 static void test_mutation_push_paths(void) {
@@ -2342,7 +2342,7 @@ static void test_mutation_fuel(void) {
     const char *sorts = "(() => { const xs = [5, 3, 1, 4, 2, 0]; return xs.sort((a, b) => (a < b ? -1 : 1)); })()";
     /* The one more instruction that puts the sorted array back. */
     CHECK(fuel_of(context, sorts) == fuel_of(context, sorted) + 1u);
-    /* A comparator of a shape runs in C for both (docs/matcher.md). */
+    /* A comparator of a shape runs in C for both (docs/internals/matcher.md). */
     const char *sorted_shape = "(() => { const xs = [5, 3, 1, 4, 2, 0]; return xs.toSorted((a, b) => a - b); })()";
     const char *sorts_shape = "(() => { const xs = [5, 3, 1, 4, 2, 0]; return xs.sort((a, b) => a - b); })()";
     CHECK(fuel_of(context, sorts_shape) == fuel_of(context, sorted_shape) + 1u);
@@ -2514,7 +2514,7 @@ static void test_mutation_out_of_memory(void) {
                        SJS_GOAL_EXPRESSION);
 }
 
-/* MUTATION: removal and shrinking (docs/mutation.md, "Removal"). live_of
+/* MUTATION: removal and shrinking (docs/internals/mutation.md, "Removal"). live_of
  * and allocations_of serve STRING_APPEND's tests too: rolling mutation back
  * keeps them. */
 
@@ -2786,7 +2786,7 @@ static void test_mutation_delete_out_of_memory(void) {
                        SJS_GOAL_EXPRESSION);
 }
 
-/* MUTATION: methods through a path (docs/mutation.md, "Methods through a
+/* MUTATION: methods through a path (docs/internals/mutation.md, "Methods through a
  * path"). */
 
 /* The rewrite is semantics, so no_shapes leaves it on: the same value, and
@@ -2984,7 +2984,7 @@ static void test_string_append_interned(void) {
     CHECK(c.live == 0);
 }
 
-/* MUTATION: appending to a let (docs/mutation.md, "Appending to a let"):
+/* MUTATION: appending to a let (docs/internals/mutation.md, "Appending to a let"):
  * s += e, s = s + e1 + e2 and s = `${s}...` move the let's value to +, so
  * a string built by them takes O(log n) allocations and holds at most twice
  * its length. */

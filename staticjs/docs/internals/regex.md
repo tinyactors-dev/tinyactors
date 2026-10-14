@@ -75,12 +75,12 @@ says so (`src/compiler.c:5`), and the last-read analysis that turns a
 function's body runs at most once per frame, so on any path through a frame
 instructions run in increasing pc order" (`compiler.c:52-60`). The README
 gives the same property as part of why every evaluation ends
-(`README.md:45-50`). A matcher in the main bytecode needs backward jumps.
+(`../../README.md`, "What it guarantees"). A matcher in the main bytecode needs backward jumps.
 
 **The dispatch loop is placement-sensitive (verified).** `execute()` is
 `always_inline` into `sjs_vm_run`'s loop because "a call per instruction
 costs 5 to 10% of every evaluation ... when one more case tips it over"
-(`src/vm.c:1089-1093`). `docs/extending.md` ("To tell a real slowdown from
+(`src/vm.c:1089-1093`). `docs/internals/extending.md` ("To tell a real slowdown from
 code placement") says to keep new code out of `execute()`'s cases. Ten or
 more regex opcodes there would tax every program.
 
@@ -138,11 +138,11 @@ re.exec(s) --call()--> enter_loop --> FRAME_LOOP, builtin = REGEXP_EXEC
 | Pattern parser and compiler | `src/regex.c` (new) | iterative, explicit stack; no C library |
 | The value kind | `src/internal.h`, `src/value.c`, `src/writer.c` | `SJS_HEAP_REGEXP` |
 | The match step | `src/regex.c`, called from `sjs_loop_step` | behind one early branch, as `sort_step` |
-| Methods | `src/builtins.c` | IDs, `NAMES` columns, `sjs_builtin_loops` (docs/builtins.md, section 2) |
+| Methods | `src/builtins.c` | IDs, `NAMES` columns, `sjs_builtin_loops` (docs/internals/builtins.md, section 2) |
 
 A new `src/regex.c` keeps the new code out of the hot functions of
 `builtins.c` and `vm.c`, as `json.c` does for JSON (`src/README.md:32`).
-`docs/builtins.md` section 10 ("A test on every step that tips the
+`docs/internals/builtins.md` section 10 ("A test on every step that tips the
 inliner") applies to the branch in `sjs_loop_step`: check with `llvm-nm`
 that the set of out-of-line helpers does not change, and keep the new step
 `noinline`.
@@ -219,7 +219,7 @@ JavaScript in two places. Both rules are in the specification's
 RepeatMatcher *(inferred from ECMA-262, 22.2.2.3.1; not checked here
 against the text)*. The expected values below are what the analysis
 expects JavaScript to give; *(inferred)*: they must be generated in Node
-before they become spec cases (`docs/extending.md`, "To write a spec
+before they become spec cases (`docs/internals/extending.md`, "To write a spec
 case", step 2).
 
 ### 5.1 Captures are reset at each iteration
@@ -360,7 +360,7 @@ until then *(inferred from those functions; prototype 1 checks it)*.
 A new `SJS_EV_REGEXP` (appended to `sjs_event_kind`, `staticjs.h:455`) with
 `text` the body and `count` the flags. It is a leaf in the event stream.
 `src/shapes.rules` must declare it, or the shapes generator fails
-(`docs/extending.md`, "To add syntax", step 2); run `mise run shapes` and
+(`docs/internals/extending.md`, "To add syntax", step 2); run `mise run shapes` and
 commit the generated headers. A new event kind changes the public header,
 so `SJS_VERSION_MINOR` goes up.
 
@@ -371,7 +371,7 @@ The compiler hands the body and flags to `sjs_regex_compile` in
 
 - **Iterative.** Groups nest; the parser keeps an explicit stack of open
   groups and alternatives, bounded by `max_nesting`, as the main parser is
-  (`README.md:51-53`).
+  (`../../README.md`, "What it guarantees": nothing recurses).
 - **Two passes.** The first counts the capture groups and collects their
   names, because a group can be referred to before it is defined. The
   second builds the program.
@@ -390,7 +390,7 @@ A new value kind in `sjs_kind` (`staticjs.h:183-196`), with heap type
 `SJS_HEAP_REGEXP` (`internal.h:147-158`). Placed before `SJS_FUNCTION`,
 beside the other objects, it renumbers the kinds after it; appended at the
 end, it renumbers nothing. Either way the public enum changes, so
-`SJS_VERSION_MINOR` goes up (`docs/extending.md`, "To
+`SJS_VERSION_MINOR` goes up (`docs/internals/extending.md`, "To
 add a value kind", step 1, which also lists every switch on kind that must
 handle it).
 
@@ -400,16 +400,16 @@ group names, and the program.
 | Operation | Result |
 |---|---|
 | `typeof re` | `"object"` |
-| `re === re2` | fault, as for any two objects (`README.md:399`) |
+| `re === re2` | fault, as for any two objects (`../guide/faults.md`) |
 | `re.source`, `re.flags`, `re.global`, `re.ignoreCase`, `re.multiline`, `re.dotAll`, `re.unicode`, `re.sticky`, `re.hasIndices`, `re.unicodeSets` | their values: exact, from the flags and the source |
 | `re.lastIndex` | `0` (section 7.3) |
-| other names of `RegExp.prototype` or `Object.prototype` read as values | fault, as for the other kinds' prototype names (`README.md:431-437`) |
+| other names of `RegExp.prototype` or `Object.prototype` read as values | fault, as for the other kinds' prototype names (`../guide/faults.md`) |
 | any other property | `undefined` |
-| assignment to a property | refused or a fault, as for a set or a function (`README.md:443-449`) |
+| assignment to a property | refused or a fault, as for a set or a function (`../guide/faults.md`) |
 | as a map key, set member or computed key | fault, as for any object |
 | writer | `/source/flags` |
 | `JSON.stringify` | `{}` (a regex has no own enumerable property) *(inferred; check in Node)* |
-| `String(re)`, `` `${re}` ``, `"" + re` | fault, as `+` of an object faults (`README.md:399-401`) |
+| `String(re)`, `` `${re}` ``, `"" + re` | fault, as `+` of an object faults (`../guide/faults.md`) |
 
 `re.source` escapes a `/` and line terminators as `RegExp.prototype.source`
 does *(inferred: the exact escaping must come from Node)*.
@@ -458,7 +458,7 @@ the array's heap header and a pointer to an object of the extra keys.
   `tests/diff-node.mjs:22-36`)*.
 - The extra block must be dropped by any operation that makes a new array
   (`slice`, `map`, a spread), and a copy-on-write path that takes over a
-  receiver (`docs/builtins.md` section 4) must keep or drop it as
+  receiver (`docs/internals/builtins.md` section 4) must keep or drop it as
   JavaScript does: `concat` and `with` make a new array without the
   properties *(inferred)*.
 
@@ -483,7 +483,7 @@ the matching methods:
 *(The review checked every row of this list in Node 22.23.2, and each is
 right.)*
 
-staticjs values are never changed once shared (`README.md:38-44`). So:
+staticjs values are never changed once shared (`../../README.md`, "What it guarantees"). So:
 
 - `lastIndex` is 0 in every regex staticjs makes. No program can assign to
   it (section 7.1).
@@ -512,7 +512,7 @@ value.
 ## 8. What is accepted, refused and faulted
 
 The rule: a program staticjs accepts gives JavaScript's value or a fault
-(`README.md:10-14`). A refusal when compiled is `syntax` only where
+(`../../README.md`, "The rule"). A refusal when compiled is `syntax` only where
 JavaScript refuses the program too; JavaScript that staticjs leaves out is
 `unsupported` (`AGENTS.md`, "The rule comes first"; `diff-node` checks
 both, `tests/diff-node.mjs:1-6`).
@@ -557,7 +557,7 @@ ranges, is ASCII:
 
 **Refused** as `unsupported`: a non-ASCII letter in a pattern with `i`,
 until staticjs has case tables. It has none today: `toLowerCase` of a
-string that is not ASCII faults (`README.md:450`).
+string that is not ASCII faults (`../guide/faults.md`).
 
 ### 8.3 Refused as `unsupported`
 
@@ -599,10 +599,10 @@ implement, the refusal is `unsupported`.
 
 | Situation | Fault |
 |---|---|
-| a match, capture or `split` piece that begins or ends inside a surrogate pair | staticjs strings cannot hold a lone surrogate, as for `slice` (`README.md:450-457`) |
+| a match, capture or `split` piece that begins or ends inside a surrogate pair | staticjs strings cannot hold a lone surrogate, as for `slice` (`../guide/faults.md`) |
 | `exec` or `test` with `g` or `y`; `replace` or `match` with `y` and without `g` | section 7.3 |
-| a `split` or a `replace` with an empty match, without `u`, that would put text between the halves of a pair (`"😀".split(/(?:)/)`) | a lone surrogate, as `replaceAll` with an empty pattern faults today (`README.md:454-455`) |
-| a non-string argument where JavaScript converts it (`re.test(1)`), or a split limit that is a string or an object (`s.split(re, "2")`) | as other string methods fault on a search argument that is not a string (`README.md:458-466`) |
+| a `split` or a `replace` with an empty match, without `u`, that would put text between the halves of a pair (`"😀".split(/(?:)/)`) | a lone surrogate, as `replaceAll` with an empty pattern faults today (`../guide/faults.md`) |
+| a non-string argument where JavaScript converts it (`re.test(1)`), or a split limit that is a string or an object (`s.split(re, "2")`) | as other string methods fault on a search argument that is not a string (`../guide/faults.md`) |
 | `replace` with a function that returns an object or a BigInt | as `+` of an object faults *(proposed)*. This is a new rule: `replaceAll` today faults on any function as the replacement (`builtins.c:2545`) |
 | property reads of `m.groups` that JavaScript finds nowhere but staticjs's objects treat as prototype names | section 7.2 |
 | exceeding a limit | a limit error (section 9) |
@@ -622,7 +622,7 @@ implement, the refusal is `unsupported`.
 
 `match`, `matchAll`, `replace` and `search` are already in `NAMES` without
 an ID (`builtins.c:137-153`); each gets one in the string group, with the
-group's bound moved if it is last (`docs/builtins.md`, section 2). The
+group's bound moved if it is last (`docs/internals/builtins.md`, section 2). The
 regex methods form a new receiver column.
 
 A function replacement makes `replace` a loop that both steps the matcher
@@ -661,7 +661,7 @@ cover empty matches in `split`)*.
 
 ### 9.1 Fuel
 
-`docs/builtins.md` section 6: charge the work done, before or as it is
+`docs/internals/builtins.md` section 6: charge the work done, before or as it is
 done, in 64 bits, never less than the work; an optimization only lowers
 fuel.
 
@@ -677,7 +677,7 @@ an epsilon closure can visit up to m instructions at one position, and a
 fork copies s slots. Making captures copy-on-write would lower the second
 charge; it is an optimization for later. The figures are pinned in
 `api_test`, as `test_fuel_pinned` and `test_shape_paths` pin others
-(`docs/builtins.md`, section 6).
+(`docs/internals/builtins.md`, section 6).
 
 **How much a step does.** A step runs until it has visited a budget of
 instructions (256 *(estimate)*), finishing the position it is at, and
@@ -727,12 +727,12 @@ reached is `SJS_ERROR_LIMIT`, as `frames_full` reports one
 
 ## 10. Shapes
 
-The matcher (`docs/matcher.md`) needs only the new event declared in its
+The matcher (`docs/internals/matcher.md`) needs only the new event declared in its
 event language (section 6.3). Two optional later uses:
 
 - **A predicate shape**, `REGEX_TEST`, so that `filter`, `some`,
   `every`, `find` and their kin run the matcher without the callback's
-  bytecode. It follows `docs/builtins.md` section 9: enter the callback
+  bytecode. It follows `docs/internals/builtins.md` section 9: enter the callback
   where the bytecode would, check each precondition each step (the element
   is a string), fall back to the bytecode otherwise, and keep the stack
   room.
@@ -743,9 +743,9 @@ event language (section 6.3). Two optional later uses:
     index, as it does for text (`internal.h:841-851`).
   - The common guard, `x => re.test(x)` with `re` a `const` outside the
     callback, needs a name from outside as an operand. That is
-    `docs/matcher.md` 11.9.3, designed and not implemented: `NAME` has no
+    `docs/internals/matcher.md` 11.9.3, designed and not implemented: `NAME` has no
     operand field in `src/shapes.rules`.
-  - `docs/matcher.md` 4.3 says rules on `open N` events are refused, but
+  - `docs/internals/matcher.md` 4.3 says rules on `open N` events are refused, but
     `src/shapes.rules` has rules on `CALL_BEGIN` *(the review's reading;
     not rechecked here)*. Settle which applies to callback shapes before
     writing these rules.
@@ -767,7 +767,7 @@ A new `tests/spec/regexp.spec`, in the format at the top of
 `tests/spec_test.c:25-43`:
 
 - values for every construct of section 8.1 and every method of 8.6,
-  generated in Node, never typed by hand (`docs/extending.md`, "To write a
+  generated in Node, never typed by hand (`docs/internals/extending.md`, "To write a
   spec case", step 2);
 - the two ECMAScript rules (section 5): `/(?:(a)|b)+/.exec("ab")`,
   `/(a*)*/.exec("b")`, `/(a*)+/.exec("b")`, `/(?:a|())*?/.exec("a")`;
@@ -786,7 +786,7 @@ A new `tests/spec/regexp.spec`, in the format at the top of
 - `unsupported` cases for each row of 8.3, and `syntax` cases for each of
   8.4;
 - deliberate faults where Node gives a value, as fault cases
-  (`docs/builtins.md`, section 10).
+  (`docs/internals/builtins.md`, section 10).
 
 `spec_test` runs each case with the source pushed whole, a byte at a time
 and in chunks, on one unit of fuel per run in the byte mode, and once more
@@ -805,7 +805,7 @@ cases (`diff-node.mjs:319`). `show()` needs a branch for a regex
 ### 11.3 The random sweep
 
 A new test program, `tests/regex_test.c`, with `--print N`, as
-`number_test` and `json_test` feed `diff-node` (`README.md:16-34`;
+`number_test` and `json_test` feed `diff-node` (`testing.md`;
 `diff-node.mjs:256-310`). It writes lines of a new letter:
 
 ```
@@ -824,7 +824,7 @@ checked as the spec's are: `syntax` must throw a SyntaxError in Node;
   combination.
 - **Inputs** are short strings over the same alphabet.
 - 100,000 lines per test run, and a million once before a commit, as for
-  numbers (`docs/extending.md`, "To make number results bit-identical",
+  numbers (`docs/internals/extending.md`, "To make number results bit-identical",
   step 4).
 - The same generator, with refusals counted separately, measures how
   often real-looking patterns are refused.
@@ -874,9 +874,9 @@ New cases in `bench/bench.c`, named, sized and checked against Node as
 
 Before committing each step, `mise run bench-compare <commit before> --quick`,
 then without `--quick`, and check the rows the change should not touch,
-`eval.guard` and the array loops at least (`docs/extending.md`, "To
+`eval.guard` and the array loops at least (`docs/internals/extending.md`, "To
 measure a change"). The new branch in `sjs_loop_step` is the most likely
-cause of a regression there (`docs/builtins.md` section 10).
+cause of a regression there (`docs/internals/builtins.md` section 10).
 
 *(Estimate)*: before any prefilter or DFA, a Pike VM step over an ASCII
 input should cost tens of nanoseconds per character for small patterns,
@@ -928,7 +928,7 @@ constant data *(estimate)*. They would also let `toLowerCase` and
 ## 13. Implementation plan
 
 Small commits, each passing `mise run test`, scoped `feat(staticjs)` or
-`perf(staticjs)` (`docs/extending.md`, "To commit"). The order follows the
+`perf(staticjs)` (`docs/internals/extending.md`, "To commit"). The order follows the
 risks: refusing in the wrong class is the error the rule punishes most,
 so it comes before any matching.
 
@@ -974,11 +974,11 @@ character is measured, with the leaf path and without.
   measured.
 - The bench cases of section 12.1, with `bench-compare` showing no change
   past the noise on `eval.guard` and the loops, or showing that a change
-  is placement (`docs/extending.md`, "To tell a real slowdown from code
+  is placement (`docs/internals/extending.md`, "To tell a real slowdown from code
   placement").
 - `README.md`: the regex section, the built-ins table, "Where it faults",
   and "Refused when compiled"; `src/README.md`: `regex.c`;
-  `docs/builtins.md`: the new loops.
+  `docs/internals/builtins.md`: the new loops.
 
 ---
 
@@ -1149,13 +1149,13 @@ Each departure below was made because Node or the code said otherwise.
   its pattern is a CALL_BEGIN bracket whose first child, the callee
   `re.test`, comes before the bracket opens. The generator refuses that
   (`mise/shapes.rb`: "takes the node(s) before it as its first children,
-  which the matcher does not keep"; `docs/matcher.md` 4.3) for every rule
+  which the matcher does not keep"; `docs/internals/matcher.md` 4.3) for every rule
   but a rewrite's, whose anchored lane matches such brackets only because
   its rules bind nothing and hand nothing up, which a shape must (the
   element's name, the regex operand). This settles the question section
   10 left open: the rules on CALL_BEGIN in `src/shapes.rules` are a
   rewrite's (MUTATE_PATH), so the refusal applies to callback shapes. The
-  shape needs `docs/matcher.md` 11.9.2 ([brackets]) first, then, for
+  shape needs `docs/internals/matcher.md` 11.9.2 ([brackets]) first, then, for
   `re` read from outside, 11.9.3 ([names]), and an operand on the REGEXP
   event for a literal. Neither is built, so `eval.regex.filter` still
   calls its callback for each row.

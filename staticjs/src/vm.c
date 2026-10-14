@@ -1749,7 +1749,7 @@ void sjs_vm_destroy(sjs_vm *vm) {
 
 /* ------------------------------------------------------------------------
  * MUTATION: methods that change the variable they are called on
- * (docs/mutation.md). This section exists only for it, at the end of the
+ * (docs/internals/mutation.md). This section exists only for it, at the end of the
  * file, so that the code before it is laid out as it was.
  */
 
@@ -1859,7 +1859,7 @@ __attribute__((noinline)) static bool mutate(sjs_vm *vm, uint32_t argc, uint8_t 
 }
 
 /* MUTATION: OBJECT_ASSIGN: [callee, reference, sources], Object.assign of
- * a variable the function owns (docs/mutation.md, "Object.assign"). When a
+ * a variable the function owns (docs/internals/mutation.md, "Object.assign"). When a
  * source has a property to put, the variable's value must be an object
  * with one holder, the variable; with none, Object.assign gives its target
  * as it is, which any value but a primitive may be (JavaScript makes an
@@ -1901,11 +1901,11 @@ __attribute__((noinline)) static bool assign_variable(sjs_vm *vm, uint32_t argc,
     return push_receiver(vm, at, false);
 }
 
-/* MUTATION: assignment to a property or an element (docs/mutation.md,
+/* MUTATION: assignment to a property or an element (docs/internals/mutation.md,
  * "Assignment"), through a path of keys from a variable's slot. */
 static void path_op(sjs_vm *vm, uint32_t keys, uint8_t mode);
 
-/* MUTATION: a method called on a path (docs/mutation.md, "Methods through a
+/* MUTATION: a method called on a path (docs/internals/mutation.md, "Methods through a
  * path"): PATH_CALL's operands, and the functions after path_op. */
 typedef struct {
     uint32_t keys;
@@ -2001,7 +2001,7 @@ __attribute__((noinline)) static void execute_other(sjs_vm *vm, vm_frame *f) {
 }
 
 /* ------------------------------------------------------------------------
- * MUTATION: assignment to a property or an element (docs/mutation.md,
+ * MUTATION: assignment to a property or an element (docs/internals/mutation.md,
  * "Assignment"). A path is a reference to a variable's slot and its keys,
  * strings: the place each names is in the container the place before it
  * holds. A store changes each container on the way in place, so each must
@@ -2221,7 +2221,7 @@ static bool path_end(sjs_vm *vm, const path_last *l) {
     return element ? path_put_element(vm, &s, index) : path_put(vm, &s);
 }
 
-/* MUTATION: step 3, delete (docs/mutation.md, "delete"): the property of
+/* MUTATION: step 3, delete (docs/internals/mutation.md, "delete"): the property of
  * the object at `place` named by `key` goes, and the object shrinks as it
  * empties (sjs_object_remove). One the object does not have is fine, as in
  * JavaScript, but for __proto__ and a name of Object.prototype, which
@@ -2303,7 +2303,7 @@ __attribute__((noinline)) static void path_op(sjs_vm *vm, uint32_t keys, uint8_t
 
 /* ------------------------------------------------------------------------
  * MUTATION: a method that changes its receiver, called on a path from a
- * variable (docs/mutation.md, "Methods through a path"). The compiler made
+ * variable (docs/internals/mutation.md, "Methods through a path"). The compiler made
  * `o.items.push(x)` [reference, keys, name, room, arguments]: the keys from
  * the variable's slot to the container, the method's name and room for the
  * container, as MUTATE has it. PATH_CALL finds the container when it runs,
@@ -2491,11 +2491,11 @@ __attribute__((noinline)) static void path_sorted(sjs_vm *vm, uint32_t keys, uin
 
 /* ------------------------------------------------------------------------
  * STRING_APPEND: + and a template extend, in place, a string nothing else
- * holds (README.md, "A value nothing else holds is updated in place"): the
+ * holds (docs/guide/performance.md, "A value nothing else holds is updated in place"): the
  * left operand that a last read moved out of its variable, or one just made,
  * such as reduce's accumulator, so that building a string is amortized
  * linear. Not mutation: nothing else sees the string, so no program can
- * tell; rolling mutation back keeps it (docs/mutation.md). At the end of the
+ * tell; rolling mutation back keeps it (docs/internals/mutation.md). At the end of the
  * file, so that the code before it is laid out as it was.
  */
 
@@ -2638,7 +2638,7 @@ __attribute__((noinline)) static sjs_result order_fault(sjs_vm *vm, sjs_value a,
 }
 
 /* ------------------------------------------------------------------------
- * Maps (README.md, "Maps"): their properties, spreading one, an array
+ * Maps (docs/guide/language.md, "Maps"): their properties, spreading one, an array
  * pattern over one, and new Map. Out of line and at the end of the file, so
  * that the code before it is laid out as it was: each is reached only where
  * the code before faulted.
@@ -2860,7 +2860,7 @@ sjs_result sjs_vm_object_assign(sjs_vm *vm, sjs_value *target, sjs_values source
 }
 
 /* ------------------------------------------------------------------------
- * Frozen and sealed values (docs/mutation.md, "Frozen and sealed values").
+ * Frozen and sealed values (docs/internals/mutation.md, "Frozen and sealed values").
  * Object.freeze and Object.seal set a bit on the object or the array
  * (SJS_INTEGRITY_*), and a change that JavaScript would throw a TypeError
  * at faults: before a key or an element comes or goes on a sealed one, and

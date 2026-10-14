@@ -16,7 +16,7 @@ Implementation modules. Headers here are private; the public API is
                 read of each slot moves its value (TAKE_LOCAL); each event goes
                 through the matcher first, and a match tags its function, or,
                 for a rewrite, changes how the compiler compiles its node
-- `shapes.rules` the trees the matcher looks for (docs/matcher.md); `mise run shapes`
+- `shapes.rules` the trees the matcher looks for (docs/internals/matcher.md); `mise run shapes`
                 compiles them to `shapes.h` (the shapes, for src/ and the tests) and
                 `shapes_table.h` (the matcher's tables), both generated and checked in
 - `matcher.h`   the matcher's interface, private to the compiler and its tests
@@ -29,16 +29,16 @@ Implementation modules. Headers here are private; the public API is
 - `builtins.c`  built-in functions and methods; the ones that call back are frames,
                 and `map` and `toSorted` run a callback the matcher tagged in C;
                 the methods that change a variable the function owns
-                (../docs/mutation.md)
+                (../docs/internals/mutation.md)
 - `json.c`      JSON.parse and JSON.stringify: leaves, each over an explicit stack
-- `temporal.c`  Temporal values (../docs/temporal.md): the ISO calendar, ISO 8601
+- `temporal.c`  Temporal values (../docs/internals/temporal.md): the ISO calendar, ISO 8601
                 strings, the constructors, from, compare, getters and methods of
                 the plain types, Duration and Instant, and the tables of which
                 type has which
-- `date.c`      Date (../docs/date.md): the time value of a Temporal-kind value,
+- `date.c`      Date (../docs/internals/date.md): the time value of a Temporal-kind value,
                 the date time string format, V8's Date.UTC, the UTC getters and
                 texts, and the host clock in milliseconds
-- `regex.h`     regular expressions (../docs/regex.md): what the parser, compiler,
+- `regex.h`     regular expressions (../docs/internals/regex.md): what the parser, compiler,
                 evaluator and writer share
 - `regex.c`     a literal's pattern read iteratively, each construct classified
                 (exact, unsupported, syntax), and an exact one compiled to the

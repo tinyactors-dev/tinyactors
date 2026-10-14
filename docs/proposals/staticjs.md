@@ -67,7 +67,7 @@ The rule has three consequences:
   lists (`export { a, b as c }`) and re-exports (`export { a } from`,
   `export * from`, `export * as ns from`). A module's value is its
   namespace, keys sorted as JavaScript sorts them.
-- The built-ins listed in [`staticjs/README.md`](../../staticjs/README.md):
+- The built-ins listed in [`staticjs/docs/guide/language.md`](../../staticjs/docs/guide/language.md):
   the methods of arrays that do not change them (`map`, `filter`, `reduce`,
   `toSorted`, `with`, ...), of strings, of `Set` (including `union` and
   `difference`), and parts of `Math`, `Object`, `Number` and `Array`.

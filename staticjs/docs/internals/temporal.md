@@ -33,7 +33,7 @@ One value kind, `SJS_TEMPORAL` (appended to `sjs_kind`; `SJS_VERSION_MINOR`
 7), heap type `SJS_HEAP_TEMPORAL`, struct `sjs_temporal` in
 `src/internal.h`. The type is in `h.flags` (`sjs_temporal_type`:
 `PLAIN_DATE`, `PLAIN_TIME`, `PLAIN_DATE_TIME`, `INSTANT`, `DURATION`; and
-`DATE`, JavaScript's Date, which is not Temporal's: docs/date.md).
+`DATE`, JavaScript's Date, which is not Temporal's: docs/internals/date.md).
 One block, fixed size, no references inside: release frees it, and no
 limit bounds it. Its fields, by type:
 
@@ -100,7 +100,7 @@ Which types have a method or a getter is `temporal.c`'s to say:
   of `Object.prototype`; any other call faults.
 
 `add` is also a set's method that changes its receiver, a name the two
-kinds share (docs/mutation.md, "Shared names"). The compiler cannot tell
+kinds share (docs/internals/mutation.md, "Shared names"). The compiler cannot tell
 a Temporal value from a set by its name, so it refuses none of `add`'s
 calls but a statement, and the run decides. On a variable the function
 owns, `d.add(...)` compiles to `MUTATE`, and `mutate()` in `vm.c` calls a
@@ -447,7 +447,7 @@ reference polyfill instead (the adversarial review's PlainTime sweep).
 The current time is the host's: a read-only value that the evaluator
 holds and the host pushes, as it pushes fuel (`include/staticjs.h`,
 "The host clock"). `Temporal.Now` reads it and nothing else, and so do
-`Date.now()` and `new Date()` (docs/date.md); staticjs reads no clock of its own and
+`Date.now()` and `new Date()` (docs/internals/date.md); staticjs reads no clock of its own and
 calls back for none.
 
 ```c
@@ -607,4 +607,4 @@ arguments, `Math.random` read as a value, and the faults without a seed.
   `wide_floor` by a day, `date_at`, `set_time_of_day`), and
   `timeZoneId()` is `"UTC"`. `zonedDateTimeISO` faults. `Date.now()` and `new Date()`
   read the same clock (`vm->clock`), floored to milliseconds
-  (docs/date.md).
+  (docs/internals/date.md).

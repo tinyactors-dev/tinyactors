@@ -1,5 +1,5 @@
 /*
- * JSON.parse and JSON.stringify. Both are leaves (docs/builtins.md): their
+ * JSON.parse and JSON.stringify. Both are leaves (docs/internals/builtins.md): their
  * input is one value, and each finishes in one C call. Neither recurses: the
  * containers open while a text is read, or while a value is written, are an
  * explicit stack, as everything in staticjs keeps one.
@@ -582,7 +582,7 @@ static sjs_result json_value_out(json_writer *w, sjs_value v) {
         break;
     case SJS_TEMPORAL: {
         /* Its toJSON gives its ISO string, which is written; a Date's gives
-         * null when it is invalid (docs/date.md). */
+         * null when it is invalid (docs/internals/date.md). */
         char text[SJS_TEMPORAL_TEXT_MAX];
         uint32_t n = sjs_temporal_text(SJS_AS_TEMPORAL(v), text);
         if (n == 0) return json_put(w, SJS_STR("null"));

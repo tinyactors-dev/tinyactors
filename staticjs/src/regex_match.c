@@ -1,5 +1,5 @@
 /*
- * Regular expressions when a program runs (docs/regex.md, sections 4, 5, 7,
+ * Regular expressions when a program runs (docs/internals/regex.md, sections 4, 5, 7,
  * 8 and 9): their properties, the automaton that matches them, and the
  * methods that use it.
  *
@@ -274,7 +274,7 @@ enum { RX_FOLLOW = 0, RX_RESTORE, RX_RESTORE_RANGE };
  * in s->cur, at s->at_*, in priority order, over an explicit stack; each
  * thread that reaches a consuming instruction or MATCH joins the list,
  * unless a thread of the same pc and the same registers at the position is
- * there (docs/regex.md, 5.3). s->cur is as it was when it returns. */
+ * there (docs/internals/regex.md, 5.3). s->cur is as it was when it returns. */
 static void rx_closure(rx_search *s, const rx_threads *list, uint32_t pc) {
     const sjs_regexp *re = s->re;
     uint32_t d = re->registers;
@@ -405,7 +405,7 @@ static void rx_mid_start(rx_search *s) {
  * that cannot begin a match, the search passes each position without
  * following it, and counts what following it would have visited and
  * copied, so that fuel and the budget's stopping points are the same
- * (docs/regex.md, 12.1).
+ * (docs/internals/regex.md, 12.1).
  */
 
 /* Positions to pass, and what passing each costs. */
@@ -563,7 +563,7 @@ static bool rx_skips(const rx_search *s) {
  * the classes by the coarser ones and the end. An edge is learned
  * by running the automaton itself once, and keeps what it visited
  * and copied in the step and in the start, so a search that takes it counts
- * the same work, and fuel, as the automaton (docs/regex.md, 9.1), and stops
+ * the same work, and fuel, as the automaton (docs/internals/regex.md, 9.1), and stops
  * for its budget at the same place: after the step, where the start
  * remains to take when the search goes on (s->pending). An edge to a
  * position where the search skips (no thread, no match, and a character
@@ -1186,7 +1186,7 @@ typedef struct {
     sjs_value *out;           /* the result being built: a loop's output slot, or a leaf's result */
 } rx_work;
 
-/* Fuel for the work so far (docs/regex.md, 9.1), charged as it is done. */
+/* Fuel for the work so far (docs/internals/regex.md, 9.1), charged as it is done. */
 static void rx_charge(rx_work *w) {
     rx_job *j = w->job;
     uint64_t total = j->s.visits / 8u + j->s.copies / 16u + j->extra;
@@ -1266,7 +1266,7 @@ static sjs_result rx_push_piece(rx_work *w, uint32_t a, uint32_t b) {
 }
 
 /* ------------------------------------------------------------------------
- * Match results (docs/regex.md, 7.2): an array of the match and each
+ * Match results (docs/internals/regex.md, 7.2): an array of the match and each
  * group's text, with index, input and groups, and with d indices, as
  * properties of its own besides its elements (SJS_ARRAY_EXTRA).
  */
@@ -1610,7 +1610,7 @@ static uint8_t rx_replacement_done(rx_work *w) {
 }
 
 /* The replacement function's result (taken over), as ToString gives it of a
- * primitive; an object or a BigInt faults (docs/regex.md, 8.5). */
+ * primitive; an object or a BigInt faults (docs/internals/regex.md, 8.5). */
 static uint8_t rx_replaced(rx_work *w, sjs_value result) {
     char room[32];
     sjs_result r = SJS_OK;

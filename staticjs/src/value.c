@@ -800,7 +800,7 @@ sjs_result sjs_to_key(sjs_context *context, sjs_value v, sjs_string **out) {
 }
 
 /* ------------------------------------------------------------------------
- * MUTATION: removal from sets and objects, and shrinking (docs/mutation.md,
+ * MUTATION: removal from sets and objects, and shrinking (docs/internals/mutation.md,
  * "Removal"). Removal compacts: the items after the one removed move down,
  * so a container's items stay dense and in order, and every reader of
  * them is unchanged; its index loses the removed item's slot by backward
@@ -998,7 +998,7 @@ void sjs_set_clear(sjs_context *context, sjs_array **set) {
 
 /* ------------------------------------------------------------------------
  * STRING_APPEND: a string that one holder has, extended in place by + and a
- * template (README.md, "A value nothing else holds is updated in place").
+ * template (docs/guide/performance.md, "A value nothing else holds is updated in place").
  * Not mutation: no program can tell, as nothing else sees the string.
  */
 
@@ -1006,7 +1006,7 @@ void sjs_set_clear(sjs_context *context, sjs_array **set) {
  * not interned. Its block grows to twice its length, or to what it needs if
  * that is more, so appending n bytes a few at a time copies O(n) bytes and
  * allocates O(log n) times; the slack is at most the string's length, and
- * stays when the string is shared or kept (README.md). The new block is
+ * stays when the string is shared or kept (docs/guide/performance.md). The new block is
  * allocated before the old one is freed: out of memory, the string is as it
  * was. */
 sjs_result sjs_string_reserve(sjs_context *context, sjs_string **string, uint32_t extra) {
@@ -1184,7 +1184,7 @@ __attribute__((noinline)) static void drop_side(sjs_context *context, sjs_heap *
     else lookup_free(context, a->index);
 }
 
-/* A Temporal value (docs/temporal.md): one block, nothing in it to release. */
+/* A Temporal value (docs/internals/temporal.md): one block, nothing in it to release. */
 sjs_result sjs_temporal_make(sjs_context *context, sjs_temporal_type type, sjs_temporal **out) {
     sjs_temporal *t = heap_alloc(context, sizeof *t, SJS_HEAP_TEMPORAL);
     if (t == NULL) return SJS_ERR_NOMEM;

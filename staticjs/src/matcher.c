@@ -1,5 +1,5 @@
 /*
- * The matcher (docs/matcher.md, section 5): iburg's labeller, run bottom-up
+ * The matcher (docs/internals/matcher.md, section 5): iburg's labeller, run bottom-up
  * over the events as they arrive, with the tables src/shapes.rules compiles
  * to.
  *
@@ -80,7 +80,7 @@ typedef struct {
  * sizes). */
 #define MATCHER_FIRST_RECORDS (1024u / (uint32_t)sizeof(shape_record))
 /* Past 1 KiB a record, the first allocation would hold none: share slots
- * (docs/matcher.md, 11.4, [slots]) before the rules grow that far. */
+ * (docs/internals/matcher.md, 11.4, [slots]) before the rules grow that far. */
 _Static_assert(MATCHER_FIRST_RECORDS >= 1, "a shape_record outgrew the first 1 KiB of records");
 
 /* What one event's matching works with. */
@@ -649,7 +649,7 @@ static sjs_result matcher_node(matcher_step *s) {
  * first child (a call its callee: the generator allows one such node) takes
  * the cell on top: the marker replaces it, keeps its text, and folds it as
  * child 0. In a dead region that cell was never kept, so such a bracket is
- * part of the region (docs/matcher.md, 11.9.2). */
+ * part of the region (docs/internals/matcher.md, 11.9.2). */
 static sjs_result matcher_open(matcher_step *s) {
     sjs_matcher *m = s->m;
     const shape_event *ev = &shape_events[s->e->kind];
@@ -781,7 +781,7 @@ static sjs_result matcher_step_event(sjs_matcher *m, const sjs_event *e) {
 }
 
 /* ------------------------------------------------------------------------
- * MUTATION: the anchored lane (docs/matcher.md, 12.4), which matches the
+ * MUTATION: the anchored lane (docs/internals/matcher.md, 12.4), which matches the
  * rewrites' rules beside the labeller, in a dead region too.
  *
  * A rewrite's rule is anchored: a leaf; a postfix event whose first operand

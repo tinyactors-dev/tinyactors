@@ -1,11 +1,11 @@
 /*
  * The matcher: a bottom-up tree automaton (iburg-style dynamic programming)
  * over the parser's events, driven by the rules of src/shapes.rules
- * (docs/matcher.md). It sees each event before the compiler does and tells
+ * (docs/internals/matcher.md). It sees each event before the compiler does and tells
  * the compiler which functions compute a known shape. It never changes an
  * event and never changes what the compiler emits: a match only tags.
  *
- * MUTATION: it also reports rewrites (docs/matcher.md, section 12): nodes
+ * MUTATION: it also reports rewrites (docs/internals/matcher.md, section 12): nodes
  * the compiler compiles differently where a rewrite's rules match, which an
  * anchored lane matches beside the labeller, with shapes on and off.
  *
@@ -15,7 +15,7 @@
  *
  * The compiler calls sjs_matcher_event first in its sink, so it is a tee
  * between the parser and the compiler. A stream the matcher cannot read as
- * the tree of docs/matcher.md, section 2 (one no parser sends, such as a
+ * the tree of docs/internals/matcher.md, section 2 (one no parser sends, such as a
  * hand-built one with node 0 on every event) stops the matching, not the
  * compile.
  */
@@ -41,7 +41,7 @@ typedef struct {
 } sjs_shape_match;
 
 /* MUTATION: a node a rewrite's rules match: which rewrite, which node, and
- * where the node's source begins (docs/matcher.md, 12.5). */
+ * where the node's source begins (docs/internals/matcher.md, 12.5). */
 typedef struct {
     sjs_rewrite rewrite;
     uint32_t node;
@@ -63,7 +63,7 @@ typedef struct {
     uint32_t max_nesting;             /* sizes its bound: 4 * max_nesting + 4 records */
     sjs_shape_reporter reporter;
     /* MUTATION: match the rewrites alone, not the shapes: what no_shapes
-     * leaves on (docs/matcher.md, 12.6). */
+     * leaves on (docs/internals/matcher.md, 12.6). */
     bool rewrites_only;
 } sjs_matcher_config;
 
@@ -87,7 +87,7 @@ typedef struct {
     sjs_buf text;          /* text the records captured, in record order: in
                             * text_inline until it outgrows it */
     uint8_t text_inline[64];
-    /* MUTATION: the anchored lane (docs/matcher.md, 12.4): its cells, in
+    /* MUTATION: the anchored lane (docs/internals/matcher.md, 12.4): its cells, in
      * lane_inline until they outgrow it; the most held at once; stopped by
      * a stream it cannot read. The labeller does not run when rewrites_only. */
     bool rewrites_only;

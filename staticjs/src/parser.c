@@ -1253,7 +1253,7 @@ static handled refuse_statement(sjs_parser *p, const queued_token *t, const char
     return parse_fail(p, t, (sjs_problem){ SJS_ERROR_UNSUPPORTED, message });
 }
 
-/* MUTATION: `delete`, a statement of its own (docs/mutation.md, "delete"):
+/* MUTATION: `delete`, a statement of its own (docs/internals/mutation.md, "delete"):
  * DELETE after its operand, a member or an index, when the statement ends
  * with it. As a value it is refused, and read on as a unary operator. In
  * strict code, a module, the operand may not be a name, even in

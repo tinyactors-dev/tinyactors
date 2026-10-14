@@ -1,5 +1,5 @@
 /*
- * Temporal values (docs/temporal.md): Temporal.PlainDate, PlainTime and
+ * Temporal values (docs/internals/temporal.md): Temporal.PlainDate, PlainTime and
  * PlainDateTime in the ISO 8601 calendar, Temporal.Duration and
  * Temporal.Instant (UTC only), their constructors, from, compare, getters
  * and methods. Temporal.Now builds on the same kind, SJS_TEMPORAL, and the
@@ -3400,7 +3400,7 @@ static sjs_result time_zone_option(sjs_vm *vm, sjs_value options, time_zone *out
 }
 
 /* ------------------------------------------------------------------------
- * Temporal.Now: the host clock (sjs_vm_set_clock, docs/temporal.md "Host
+ * Temporal.Now: the host clock (sjs_vm_set_clock, docs/internals/temporal.md "Host
  * clock"), read and nothing else; a clock never set faults.
  */
 

@@ -216,13 +216,13 @@ static sjs_result next(sjs_writer *w, bool *more) {
             break;
         }
         case SJS_TEMPORAL: {
-            /* Its type's from() of its ISO string (docs/temporal.md), which
+            /* Its type's from() of its ISO string (docs/internals/temporal.md), which
              * needs no escape: Temporal.PlainDate.from("2024-01-31"). */
             const sjs_allocator *a = &w->context->counting;
             char text[SJS_TEMPORAL_TEXT_MAX];
             uint32_t n = sjs_temporal_text(SJS_AS_TEMPORAL(v), text);
             sjs_str type = sjs_temporal_type_name(sjs_temporal_type_of(v));
-            /* A Date (docs/date.md): new Date("2024-01-31T00:00:00.000Z"), and
+            /* A Date (docs/internals/date.md): new Date("2024-01-31T00:00:00.000Z"), and
              * new Date(NaN) when it is invalid. */
             bool date = sjs_temporal_type_of(v) == SJS_TEMPORAL_DATE;
             sjs_str open = date ? (n == 0 ? SJS_STR("new Date(NaN") : SJS_STR("new Date(\"")) : SJS_STR("Temporal.");

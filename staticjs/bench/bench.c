@@ -79,7 +79,7 @@
  * eval.array.spread-reduce ([...acc, r.id]) and eval.array.concat-reduce
  * (acc.concat([r.kwh])), linear now that the accumulator is appended to in
  * place and quadratic before, eval.object.fromEntries, eval.set.new, .has,
- * .union, .intersection, .difference (Q). Mutation (docs/mutation.md, L):
+ * .union, .intersection, .difference (Q). Mutation (docs/internals/mutation.md, L):
  * eval.array.push-reduce (acc.push(r.kwh) into reduce's accumulator),
  * eval.array.sort and .sort.rows (a copy of xs or rows sorted in place, as
  * .toSorted and .toSorted.rows sort), eval.set.add-reduce (s.add(id)),
@@ -544,7 +544,7 @@ static const bench_case cases[] = {
       .source = "(r => [r.length - text.length - 2 * Math.floor(text.length / 8), r.startsWith(\"r000000%2Cr000001%2C\")])"
                 "(encodeURIComponent(text))",
       .globals = { { "text", FIX_TEXT, NULL } }, .expect = "[0,true]", .check = CHECK_SAME },
-    /* Regular expressions (docs/regex.md, 12.1), on the n row ids joined by
+    /* Regular expressions (docs/internals/regex.md, 12.1), on the n row ids joined by
      * commas: a whole-string test, a replacement with g and $1, a split on
      * a class, and /(a+)+$/ on n a's and a b, exponential for a
      * backtracker and linear here. */

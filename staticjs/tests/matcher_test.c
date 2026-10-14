@@ -1,5 +1,5 @@
 /*
- * The matcher (src/matcher.c, docs/matcher.md, section 5), driven by a
+ * The matcher (src/matcher.c, docs/internals/matcher.md, section 5), driven by a
  * parser through a tee of this test's own, as the compiler drives it:
  *
  *   - reports: the exact shape, node, start and arguments for a list of
@@ -233,7 +233,7 @@ static void test_reports(void) {
     expect_reports("(a, r) => a + r.kwh", SJS_GOAL_EXPRESSION, "APPEND_SUM#5@10 SUM_KEY#1@0(kwh, false)");
     expect_reports("(a, r) => { return r.kwh + a; }", SJS_GOAL_EXPRESSION, "SUM_KEY#1@0(kwh, true)");
     /* MUTATION: pushes into reduce's accumulator: a call takes its callee,
-     * the node before it, as its first child (docs/matcher.md, 11.9.2). */
+     * the node before it, as its first child (docs/internals/matcher.md, 11.9.2). */
     expect_reports("(acc, r) => { acc.push(r.kwh); return acc; }", SJS_GOAL_EXPRESSION, "PUSH_KEY#1@0(kwh)");
     expect_reports("(a, x) => { a.push(x); return a; }", SJS_GOAL_EXPRESSION, "PUSH#1@0()");
     expect_reports("[].reduce((a, x) => { a.push(x.k); return a; }, [])", SJS_GOAL_EXPRESSION, "PUSH_KEY#4@10(k)");

@@ -1,5 +1,5 @@
 /*
- * Regular expression patterns (docs/regex.md, sections 4 to 8): a literal's
+ * Regular expression patterns (docs/internals/regex.md, sections 4 to 8): a literal's
  * flags and body read, every construct sorted into exact, unsupported or a
  * syntax error, and an exact one compiled to a program for the automaton of
  * regex_match.c.
@@ -1555,7 +1555,7 @@ sjs_result sjs_regex_check(sjs_regex_env env, sjs_regex_literal literal, sjs_reg
  * Compiling. A first walk measures each node: its instructions, whether it
  * can match empty, the groups in it and its loop registers. That says,
  * before anything is expanded, how many threads and slots the automaton
- * needs (docs/regex.md, 9.3). A second walk emits the instructions.
+ * needs (docs/internals/regex.md, 9.3). A second walk emits the instructions.
  */
 
 /* Sizes saturate here: far past any limit, and far from overflowing. */
@@ -2005,7 +2005,7 @@ sjs_result sjs_regex_compile(sjs_context *context, sjs_regex_literal literal, sj
     e.p = &p;
     e.ms = ms;
     if (r == SJS_OK) {
-        /* The automaton's size (docs/regex.md, 5.3 and 9.3): m instructions,
+        /* The automaton's size (docs/internals/regex.md, 5.3 and 9.3): m instructions,
          * the root's and SAVE 0, SAVE 1 and MATCH; 2^d threads of each per
          * position; s slots each. */
         const rx_measure *root = &ms[0];

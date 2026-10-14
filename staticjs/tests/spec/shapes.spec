@@ -1,4 +1,4 @@
-# Callback shapes (docs/matcher.md): which functions the matcher tags, and
+# Callback shapes (docs/internals/matcher.md): which functions the matcher tags, and
 # which it must not. `@shapes` lists the shape of each function of the
 # program in function index order (the order of their ARROW_BEGIN events),
 # the main program excluded; `-` is none. A shape only tags a function: every
@@ -867,7 +867,7 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 -3
 
 # ---------------------------------------------------------------------------
-# The fast paths (docs/matcher.md, section 7): toSorted runs a COMPARE_BY_KEY
+# The fast paths (docs/internals/matcher.md, section 7): toSorted runs a COMPARE_BY_KEY
 # comparator and map a PLUCK callback in C while their preconditions hold,
 # and calls the bytecode otherwise. Every case runs with and without shapes
 # (spec_test) and must give the same value, or the same fault at the same
@@ -1027,7 +1027,7 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 [[1], [2]].toSorted((a, b) => a.k - b.k)
 --- fault arithmetic in staticjs is on numbers
 
-# toSorted with COMPARE_NUMERIC (docs/matcher.md, 11.6): pairs of numbers in
+# toSorted with COMPARE_NUMERIC (docs/internals/matcher.md, 11.6): pairs of numbers in
 # C, anything else in bytecode, which faults on it.
 
 === sort numbers: equal numbers, and a larger array both ways
@@ -1259,7 +1259,7 @@ export const r = [{k: 5}].map(f).map(v => v * 2);
 [{map: 1}, [1]].map(x => x.map)
 --- fault staticjs calls methods
 
-# The predicate loops with KEY_COMPARE and ELEMENT_COMPARE (docs/matcher.md,
+# The predicate loops with KEY_COMPARE and ELEMENT_COMPARE (docs/internals/matcher.md,
 # 11.7): filter, find, findIndex, findLast, findLastIndex, some and every decide an
 # element in C while its preconditions hold, and call the bytecode for it
 # otherwise, which gives the answer or the fault.
@@ -1577,7 +1577,7 @@ true
 --- value
 true
 
-# reduce with SUM and SUM_KEY (docs/matcher.md, 11.8): a number accumulator
+# reduce with SUM and SUM_KEY (docs/internals/matcher.md, 11.8): a number accumulator
 # and a number element (or key) are added in C, anything else in bytecode,
 # which concatenates or faults.
 

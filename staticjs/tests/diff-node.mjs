@@ -27,7 +27,7 @@
 // date and time at a fixed offset, which a nanosecond moves as it moves the
 // instant).
 //
-// Date.now() and new Date() read the same clock (docs/date.md): the global
+// Date.now() and new Date() read the same clock (docs/internals/date.md): the global
 // Date the cases see is Node's, but for those two, which give the clock's
 // milliseconds (floored) and throw in a case without @clock.
 //
@@ -504,7 +504,7 @@ const jsonOutcomes = { value: 0, '!S': 0, '!O': 0 };
 const regexOutcomes = { exact: 0, unsupported: 0, syntax: 0, matched: 0, lone: 0 };
 const temporalOutcomes = { value: 0, thrown: 0, deliberate: 0 };
 // The reference for Math is V8 compiled without floating-point contraction,
-// which is Node on x86_64 (docs/extending.md). Node's build turns
+// which is Node on x86_64 (docs/internals/extending.md). Node's build turns
 // contraction off only for s390x and ppc64, so on arm64 the C compiler
 // fuses multiply-adds in V8's ieee754.cc and some Math results differ in the
 // last bit. The fixed Math lists (U, V, W) are compared only on x64; every

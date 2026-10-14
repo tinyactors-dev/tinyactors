@@ -4,13 +4,13 @@ staticjs values used never to change. This document describes the one way
 they now can: a function may change, with one of its methods, by
 assigning to one of its properties or elements or by deleting one of its
 properties, a value that a variable of that function holds alone.
-JavaScript cannot tell that from its own semantics, so the rule (`../AGENTS.md`) still holds. The invariant
+JavaScript cannot tell that from its own semantics, so the rule (`../../AGENTS.md`) still holds. The invariant
 every optimization relies on is unchanged:
 
 > **A value is never changed once it is shared.**
 
 A value nothing else holds is already updated in place today
-(`sjs_value_unique`, README.md, "A value nothing else holds is updated in
+(`sjs_value_unique`, ../guide/performance.md, "A value nothing else holds is updated in
 place"). Mutation is the same idea made visible to the program: a call
 such as `xs.push(x)` changes `xs` in place, and staticjs makes sure that no
 one else holds `xs` when it does.
@@ -32,11 +32,11 @@ rules recognise and the compiler rewrites into the path machinery of step
 2 ("Methods through a path", below); appending to a `let` (`s += x`),
 whose value moves to the `+`, which extends a string nothing else holds
 ("Appending to a let", below); a map's `set`, `delete` and `clear`,
-on a variable or a path, by the same rules (README.md, "Maps");
+on a variable or a path, by the same rules (../guide/language.md, "Maps");
 `Object.assign(x, ...sources)` of such a variable ("Object.assign",
 below); an iterator's `next` and `return` on such a variable
 ("Iterators", below); a Date's `setTime` and UTC setters on such a
-variable (docs/date.md, "Setters"); and `Object.freeze(x)` and
+variable (docs/internals/date.md, "Setters"); and `Object.freeze(x)` and
 `Object.seal(x)` of such a variable, with every mutation above faulting on
 a frozen or sealed value where JavaScript throws ("Frozen and sealed
 values", below).
@@ -66,7 +66,7 @@ values", below).
 Each has JavaScript's semantics and return value. `sort` sorts as
 `toSorted` does, with the same merge sort, fuel and faults, and the same
 C path for a comparator of a known shape (`(a, b) => a - b`,
-`(a, b) => a.key - b.key`, docs/matcher.md); without one (or with
+`(a, b) => a.key - b.key`, docs/internals/matcher.md); without one (or with
 `undefined`) it compares the elements' strings, as `toSorted()` does
 (`text_sort_start` in `src/builtins.c`), and faults before it changes
 anything when two elements or more are not `undefined` and one is not a
@@ -94,7 +94,7 @@ one) holds the array, the map or the set, so a mutation of it faults
 after the iterator's last read, which moves it, the mutation runs. So does
 `forEach`'s callback's, as the loop holds the array, the map or the set
 (`xs.forEach((x, i, a) => a.push(x))`). A Date's setters write its time
-value in place, as V8 computes it (docs/date.md, "Setters"); the mutation
+value in place, as V8 computes it (docs/internals/date.md, "Setters"); the mutation
 is the Date type's alone of the Temporal kind (`sjs_mutation_of` takes the
 receiver, and gives none for another Temporal value), and a setter called
 as any method is faults (`SJS_METHOD_TEMPORAL_DATE_SETTER`).
@@ -174,7 +174,7 @@ holds. So the evaluator checks every mutation when it runs:
   the property's result in the variable, which gave `o.sort(f)` the value
   `5` for `o` and leaked the object. So is a method of the name that
   changes nothing, a Temporal value's `add`, which makes a new value
-  (docs/temporal.md): `MUTATE` puts the variable's value in place of the
+  (docs/internals/temporal.md): `MUTATE` puts the variable's value in place of the
   reference, as an ordinary call's receiver. Its result is a value, which
   a chain goes on with as an ordinary call's receiver (below). A path call
   faults on a sort of one ("Methods through a path"), where the
@@ -221,7 +221,7 @@ effect.
 ## Shared names
 
 `add` is a set's method, which changes the set, and a Temporal value's,
-which makes a new value (docs/temporal.md). The compiler sees names, not
+which makes a new value (docs/internals/temporal.md). The compiler sees names, not
 values, so the rules above would refuse common Temporal code
 (`xs.map(n => start.add({ days: n }))`, a capture; `const e = d;
 d.add(x)`, a copy; `[d.add(a), d.add(b)]`, a store). Those rules only
@@ -466,8 +466,8 @@ ends the evaluation, as always.
 
 **The append.** `+` and the template's join then find, when `s` holds a
 string, a string with one holder, and extend it in place, with spare
-room growing geometrically (`STRING_APPEND`, README.md, "`+` and a template
-extend a string nothing else holds"): building is amortized linear. That
+room growing geometrically (`STRING_APPEND`, ../guide/performance.md, "Strings"): building is
+amortized linear. That
 part is not mutation, and serves `reduce((acc, x) => acc + x, "")` as
 well. A string another holder keeps (`const t = s`, an object's key, a
 set's member, an array's element, a program's constant, an interned
@@ -484,14 +484,14 @@ number). A template's parts convert with String's rules, and an object in
 one faults. So the append is only a fast path for a string on the left.
 
 **The rules.** `s += e` and the spine of `+` are rewrites of the shape
-rules (`src/shapes.rules`, `APPEND` and `APPEND_SUM`; docs/matcher.md,
+rules (`src/shapes.rules`, `APPEND` and `APPEND_SUM`; docs/internals/matcher.md,
 section 12): the anchored lane reports APPEND at the end of an assignment
 whose operator is `+=` and whose target is a name, and APPEND_SUM at each
 `+` of a spine from a name. The compiler takes APPEND for its open
 assignment, and APPEND_SUM when the spine's outermost `+` is the last
 instruction of a plain assignment's value and its root is the first read
 of that value, of the same `let`. The template is a bracket over no node
-before it, which the lane does not anchor (docs/matcher.md, 12.7): the
+before it, which the lane does not anchor (docs/internals/matcher.md, 12.7): the
 compiler finds it in its own code, a `CONSTANT ""` and a `LOCAL s` at the
 value's start and a `CONCAT` at its end. Then, in each case, it checks
 `binding.reads` and changes the read's opcode, at `ASSIGN_END`, before the
@@ -599,7 +599,7 @@ call, which faults ("setters change it"), and as a statement it is refused
 and the compiler compiles it so, holding the path from its CALL_BEGIN to
 its CALL_END. The shape rules (`src/shapes.rules`, MUTATE_PATH) recognise
 the call's form, and the matcher reports it during its CALL_END, with
-shapes on and off (docs/matcher.md, section 12). The compiler then checks
+shapes on and off (docs/internals/matcher.md, section 12). The compiler then checks
 the root's ownership and rewrites what it compiled, as it does an
 assignment's target: the root's read becomes a RECEIVER, each member's
 GET_MEMBER a CONSTANT of its key and each index's GET_INDEX a PATH_INDEX,
@@ -677,7 +677,7 @@ the target it copies.
 
 ## Iterators
 
-An iterator (README.md, "Iterators") yields its values once. `next()`
+An iterator (../guide/language.md, "Iterators") yields its values once. `next()`
 takes the next one and advances the iterator; a spread, a helper or any
 other reader of it afterwards gets the rest, as in JavaScript. So `next` is
 a mutation of the iterator, by the rules above, of the kind `SJS_ITERATOR`:
@@ -1023,7 +1023,7 @@ Methods through a path:
 | File | What is tagged |
 |---|---|
 | `src/shapes.rules` | the rewrites' section: `MUTATE_PATH` and its nonterminals and rules (`mise run shapes` rewrites `src/shapes.h` and `src/shapes_table.h`) |
-| `mise/shapes.rb` | rewrites, `_` and `...`, the anchored rules' checks and tables (docs/matcher.md, section 12); `mise/tasks/shapes-test` and `mise/shapes-test/small.*`, their checks and the small rewrite |
+| `mise/shapes.rb` | rewrites, `_` and `...`, the anchored rules' checks and tables (docs/internals/matcher.md, section 12); `mise/tasks/shapes-test` and `mise/shapes-test/small.*`, their checks and the small rewrite |
 | `src/matcher.h` | `sjs_rewrite_match`, the reporter's `rewrite`, `sjs_matcher_config.rewrites_only`, and the lane's fields |
 | `src/matcher.c` | `matcher_lane_reserve`, `matcher_free_lane`, the anchored lane's section, and their lines in `sjs_matcher_init`, `sjs_matcher_event` and `sjs_matcher_free` |
 | `src/internal.h` | `SJS_OP_PATH_METHOD`, `SJS_OP_PATH_CALL`, `SJS_OP_PATH_SORTED`, `SJS_PATH_CALL` |
@@ -1097,7 +1097,7 @@ Frozen and sealed values:
 | `src/vm.h` | nothing: the section's functions stay (below) |
 | `src/builtins.c` | `sjs_integrity_allows` in `array_insert`, `array_remove`, `array_fill`, `array_splice` and `reverse`; `sort`'s callee in `toSorted`'s takeover (restore its test without the bits) |
 
-Pushes into reduce's accumulator, tagged PUSH_KEY and PUSH (docs/matcher.md,
+Pushes into reduce's accumulator, tagged PUSH_KEY and PUSH (docs/internals/matcher.md,
 section 13):
 
 | File | What is tagged |
@@ -1181,12 +1181,12 @@ setters", whose cases rolling back deletes, restoring those; and its local
 setters' cases, which faulted "setters change it" too, now fault "reads
 local time", as their names are `SJS_METHOD_TEMPORAL_DATE_LOCAL` now
 (restore `SETTER` and the cases; `LOCAL`'s message gained "or the setUTC
-methods"). The README, `AGENTS.md`, `docs/builtins.md` and
-`docs/matcher.md` point here.
+methods"). The README, `AGENTS.md`, `docs/internals/builtins.md` and
+`docs/internals/matcher.md` point here.
 
 **Not mutation: `STRING_APPEND`.** `+`, a template and a string's `concat`
-extend, in place, a string that nothing else holds (README.md, "`+` and a template extend a
-string nothing else holds"). It is an optimization of immutable `+`, as
+extend, in place, a string that nothing else holds (../guide/performance.md,
+"Strings"). It is an optimization of immutable `+`, as
 reusing an accumulator nothing else holds is, and no program can tell it
 from a copy; it is tagged `STRING_APPEND` (`git grep -n STRING_APPEND --
 staticjs`), its cases are in `tests/spec/strings.spec` and `api_test`'s

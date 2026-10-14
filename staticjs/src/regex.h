@@ -1,5 +1,5 @@
 /*
- * Regular expressions (docs/regex.md): what the parser, the compiler, the
+ * Regular expressions (docs/internals/regex.md): what the parser, the compiler, the
  * evaluator, the built-ins, the writer and the tests share. Private.
  *
  * A literal is classified when it is parsed (sjs_regex_check): matched

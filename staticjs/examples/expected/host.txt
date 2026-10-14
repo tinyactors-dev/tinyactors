@@ -1,0 +1,7 @@
+68 F: the guard is false
+79 F: the guard is true
+95 F: the guard is true
+fault: a native function failed (In() takes one state's ID)
+{"today":["cold","fine","hot"]}
+"2024-01-31T10:00:00"
+"2024-01-31T11:30:00"

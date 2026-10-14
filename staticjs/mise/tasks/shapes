@@ -3,7 +3,7 @@
 #USAGE flag "--check" help="Write nothing; fail if either header differs from what it would write"
 # vim:ft=ruby
 
-# The matcher's rules are compiled to C tables (docs/matcher.md, section 4)
+# The matcher's rules are compiled to C tables (docs/internals/matcher.md, section 4)
 # by mise/shapes.rb, which reads src/shapes.rules and the event and operator
 # names of include/staticjs.h. The headers are checked in; `mise run test`
 # runs this with --check, so a stale one fails the suite instead of being

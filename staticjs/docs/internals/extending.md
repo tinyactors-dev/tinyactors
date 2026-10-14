@@ -7,13 +7,14 @@ exists because something went wrong, it says what happened.
 
 The detailed references are:
 
-- `../AGENTS.md`: the rule, the C rules, tests and benchmarks.
-- `../README.md`: the language, and where it faults.
+- `../../AGENTS.md`: the rule, the C rules, tests and benchmarks.
+- `../guide/language.md` and `../guide/faults.md`: the language, and where
+  it faults; the rest of `../guide/` is what a user relies on.
 - `builtins.md`: adding a built-in. Section 10 lists the mistakes already
   made.
 - `matcher.md`: the event stream, shapes and rewrites.
 - `mutation.md`: owned mutation and how to roll it back.
-- `../src/README.md`: what each source file holds.
+- `../../src/README.md`: what each source file holds.
 
 This guide links them into procedures. It does not repeat them.
 
@@ -50,9 +51,9 @@ This guide links them into procedures. It does not repeat them.
      when compiled;
    - `@shapes` to name each function's shape;
    - `@clock <epoch nanoseconds>` to set the host clock that `Temporal.Now`
-     reads (`docs/temporal.md`, "Host clock");
+     reads (`docs/internals/temporal.md`, "Host clock");
    - `@seed <n>` to set the seed `Math.random` draws from, a nonzero
-     int32 (`docs/temporal.md`, "Host seed"): diff-node runs the case in
+     int32 (`docs/internals/temporal.md`, "Host seed"): diff-node runs the case in
      a `node --random-seed=<n>` of its own.
 2. **Never type an expected value by hand.** Put the expression in a small
    Node script, `eval` it, and paste what it prints. The cases in
@@ -101,8 +102,9 @@ This guide links them into procedures. It does not repeat them.
 4. **Don't name a built-in in a fault message in shared code** (`call()`,
    `sjs_loop_start`, `sjs_loop_step`, helpers), not even with a ternary on
    the ID. Check with `git diff -U0 | grep sjs_vm_fault`.
-5. **Update every list that names similar built-ins:** `README.md`,
-   `builtins.md`, `matcher.md` and comments. Use
+5. **Update every list that names similar built-ins:**
+   `docs/guide/language.md` (and `faults.md` for a new fault), `builtins.md`,
+   `matcher.md` and comments. Use
    `git grep '<similar built-in>'` to find them.
 6. **Add a bench case if it walks data** ("To add a benchmark case").
 7. **Run the checks** ("To verify a change") and commit ("To commit").

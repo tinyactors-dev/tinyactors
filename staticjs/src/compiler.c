@@ -64,7 +64,7 @@
  * so far), a parameter's DEFAULT_LOCAL, and a write. A module's exports are
  * reads at its end, so a const it exports is never moved before then.
  *
- * MUTATION: two more places end a read's path (docs/mutation.md, "let" and
+ * MUTATION: two more places end a read's path (docs/internals/mutation.md, "let" and
  * "Last reads in branches"). The store of a let's new value follows its
  * value on every path, so the value's last read of the let moves
  * (store_slot). A branch of an if or a conditional does not run after
@@ -79,15 +79,15 @@
  * function whose body is a known shape during the ARROW_END that closes it,
  * while the function is still the innermost scope here, and the compiler
  * records the shape on its sjs_function_info. The code is the same either
- * way (docs/matcher.md).
+ * way (docs/internals/matcher.md).
  *
  * MUTATION: rewrites. The matcher also reports, with no_shapes too, a node
  * a rewrite's rules match, during the event that ends it: a mutating method
  * called on a path (MUTATE_PATH), which the compiler then compiles as a path
- * to the container it changes (docs/matcher.md, section 12). Restore:
+ * to the container it changes (docs/internals/matcher.md, section 12). Restore:
  * matching only unless no_shapes, as `matching` said. MUTATION: and the
  * appends to a let, `s += e` (APPEND) and `s = s + e1 + e2` (APPEND_SUM),
- * whose read of the let moves its value (docs/mutation.md, "Appending to a
+ * whose read of the let moves its value (docs/internals/mutation.md, "Appending to a
  * let").
  */
 #include "matcher.h"
@@ -97,7 +97,7 @@
 enum { B_LOCAL = 0, B_CONSTANT };
 
 /* MUTATION: what the function has done with a binding's value so far, as
- * owned mutation needs to know (docs/mutation.md, "The rule"). */
+ * owned mutation needs to know (docs/internals/mutation.md, "The rule"). */
 enum { USE_MUTATED = 1, USE_CAPTURED = 2, USE_COPIED = 4, USE_PASSED = 8, USE_STORED = 16 };
 
 typedef struct {
@@ -284,7 +284,7 @@ enum {
      * Temporal.PlainDate.from. */
     NS_TEMPORAL, NS_TEMPORAL_PLAIN_DATE, NS_TEMPORAL_PLAIN_TIME, NS_TEMPORAL_PLAIN_DATE_TIME, NS_TEMPORAL_DURATION,
     NS_TEMPORAL_INSTANT, NS_TEMPORAL_NOW,
-    /* Date: Date.now, Date.parse, Date.UTC; alone, Date called (docs/date.md). */
+    /* Date: Date.now, Date.parse, Date.UTC; alone, Date called (docs/internals/date.md). */
     NS_DATE
 };
 
@@ -707,7 +707,7 @@ static sjs_result bigint_constant(sjs_compiler *c, const sjs_event *e) {
 }
 
 /* A regular expression literal, compiled once, as a constant of the
- * program (docs/regex.md, 7.1): no program can tell one value from a new
+ * program (docs/internals/regex.md, 7.1): no program can tell one value from a new
  * object per evaluation, as === on objects faults and lastIndex never
  * changes. */
 static sjs_result regex_constant(sjs_compiler *c, const sjs_event *e) {
@@ -823,7 +823,7 @@ static void take_read(sjs_compiler *c, uint32_t entry) {
     if (entry != 0 && c->code.ptr[entry - 1u] == SJS_OP_LOCAL) c->code.ptr[entry - 1u] = SJS_OP_TAKE_LOCAL;
 }
 
-/* MUTATION: reads in a branch that has ended (docs/mutation.md, "Last
+/* MUTATION: reads in a branch that has ended (docs/internals/mutation.md, "Last
  * reads in branches"): what ends a slot's parked reads. A read, a capture
  * or a write cancels every one that is not fenced (PARKED_CANCEL); the end
  * of the slot's block or function moves every one (PARKED_SETTLE); a store
@@ -903,7 +903,7 @@ static sjs_result write_slot(sjs_compiler *c, instruction i) {
  * starts at `from`: every last read of the slot in it is the last of the
  * old value on every path, as the store follows it with nothing between
  * that reads the slot, so it moves; an earlier read stays a copy, as a
- * path that skips the store may read the slot again (docs/mutation.md,
+ * path that skips the store may read the slot again (docs/internals/mutation.md,
  * "let"). */
 static sjs_result store_slot(sjs_compiler *c, instruction i, uint32_t from) {
     uint32_t *entry = last_read(c, current(c)->function_scope, i.operand);
@@ -1091,7 +1091,7 @@ static sjs_result find_capture(sjs_compiler *c, capture *made) {
     return buf_add(c, &c->pending_captures, bytes_of(made, sizeof *made));
 }
 
-/* MUTATION: owned mutation (docs/mutation.md). Everything from here to
+/* MUTATION: owned mutation (docs/internals/mutation.md). Everything from here to
  * "MUTATION ends" exists only for it. */
 
 /* Refuse the program, as unsupported, and read on: the compiler takes no
@@ -1349,7 +1349,7 @@ static sjs_result read_name(sjs_compiler *c, const sjs_event *e) {
         return op32(c, ins(SJS_OP_CONSTANT, index, e->at));
     }
     /* RegExp is JavaScript's, bound in every program: patterns made when the
-     * program runs are left out (docs/regex.md, 12.4). */
+     * program runs are left out (docs/internals/regex.md, 12.4). */
     if (sjs_str_equal(e->text, SJS_STR("RegExp"))) {
         return fail_name(c, e, (sjs_problem){ SJS_ERROR_UNSUPPORTED, "staticjs has no RegExp: write a regular expression literal" });
     }
@@ -2215,7 +2215,7 @@ static uint8_t fallback_of(const char *why) {
  *
  * MUTATION: a shared name (sjs_mutation_shared), `fallback` not NULL: the
  * run decides, as the evaluator checks what the compiler would refuse
- * (docs/mutation.md, "Shared names"). A variable of the function is
+ * (docs/internals/mutation.md, "Shared names"). A variable of the function is
  * claimed whatever was done with it, and not noted as changed, so that a
  * later capture is not refused; anything else is an ordinary call (false),
  * with the reason in `fallback` (FB_*) for a statement to give. */
@@ -2308,7 +2308,7 @@ static sjs_result mutation_end(sjs_compiler *c, const construct *k, const sjs_ev
 }
 
 /* MUTATION: Object.assign(x, ...sources) where x is a variable the
- * function owns, read as the whole first argument (docs/mutation.md,
+ * function owns, read as the whole first argument (docs/internals/mutation.md,
  * "Object.assign"): the read becomes a RECEIVER, by the rules of a
  * mutation, and the call an OBJECT_ASSIGN after the sources, which changes
  * the variable's object in place. Any other first argument is an ordinary
@@ -2319,7 +2319,7 @@ static sjs_result mutation_end(sjs_compiler *c, const construct *k, const sjs_ev
  * OBJECT_ASSIGN telling them by the callee when it runs; as their call
  * changes nothing when the value is already frozen or sealed, a variable
  * the function owns is their receiver whatever was done with it before,
- * and the run decides, as for a shared name (docs/mutation.md, "Frozen and
+ * and the run decides, as for a shared name (docs/internals/mutation.md, "Frozen and
  * sealed values"). AT_PENDING, AT_FREEZING, or AT_NONE for another callee. */
 static uint8_t assign_callee(const sjs_compiler *c) {
     if (!c->last_op_valid || c->last_label > c->last_op || c->code.ptr[c->last_op] != SJS_OP_CONSTANT) return AT_NONE;
@@ -2370,7 +2370,7 @@ static sjs_result object_assign_end(sjs_compiler *c, const construct *k, const s
 }
 
 /* MUTATION: a method that changes its receiver, called on a path from a
- * variable the function owns (docs/mutation.md, "Methods through a path"):
+ * variable the function owns (docs/internals/mutation.md, "Methods through a path"):
  * `o.items.push(x)`, `s.byID[k].tags.add(t)`, and a chain of them. The
  * matcher reported MUTATE_PATH for the call (on_rewrite), whose rules decide
  * the form: a mutating method's name, called on a name and one step or
@@ -2713,7 +2713,7 @@ static sjs_result compile_expression_statement(sjs_compiler *c, const sjs_event 
     return op(c, SJS_OP_POP, e->at);
 }
 
-/* MUTATION: assignment (docs/mutation.md, "Assignment"): a statement that
+/* MUTATION: assignment (docs/internals/mutation.md, "Assignment"): a statement that
  * stores into a property or an element of a variable the function owns.
  * Its target's code is already there, as a read: the read of the root
  * becomes a RECEIVER, a reference to its slot that holds nothing, and each
@@ -2847,7 +2847,7 @@ static sjs_result target_store(sjs_compiler *c, const construct *k, const sjs_ev
     return k->keys == 0 ? variable_store(c, k, e) : assign_store(c, k, e);
 }
 
-/* MUTATION: appending to a let (docs/mutation.md, "Appending to a let").
+/* MUTATION: appending to a let (docs/internals/mutation.md, "Appending to a let").
  * `s += e`, `s = s + e1 + e2` and `s = `${s}...``, of a let the function
  * owns: its read becomes a TAKE_LOCAL, which moves the value out of the
  * slot, so that + (or the template's join) finds a string nothing else
@@ -2886,7 +2886,7 @@ static void append_sum(sjs_compiler *c, uint32_t start) {
 /* MUTATION: the value of `s = ...` is a template whose head is empty and
  * whose first substitution starts with a read of s: CONSTANT "", LOCAL s,
  * ..., CONCAT. A template is a bracket over no node before it, which the
- * matcher's anchored lane does not match (docs/matcher.md, 12.7), so the
+ * matcher's anchored lane does not match (docs/internals/matcher.md, 12.7), so the
  * compiler finds the form in its own code. */
 static bool append_template(sjs_compiler *c, const construct *k) {
     uint32_t at = k->root_pc;
@@ -2971,7 +2971,7 @@ static sjs_result compile_update(sjs_compiler *c, const sjs_event *e) {
     return target_store(c, &k, e);
 }
 
-/* MUTATION: DELETE, `delete t;` (docs/mutation.md, "delete"): the target
+/* MUTATION: DELETE, `delete t;` (docs/internals/mutation.md, "delete"): the target
  * is a path with one key or more, under the rules of an assignment's, and
  * PATH removes the property its keys name. The parser refuses a name. */
 static sjs_result compile_delete(sjs_compiler *c, const sjs_event *e) {
@@ -3063,7 +3063,7 @@ static sjs_result new_builtin(sjs_compiler *c, const sjs_event *e, sjs_str name)
 static sjs_result event(sjs_compiler *c, const sjs_event *e) {
     /* `String`, `Number`, `BigInt` and `Date` are functions as well as
      * namespaces: unless a member follows, each is the function, read where
-     * the name was (Date's faults when called: docs/date.md). */
+     * the name was (Date's faults when called: docs/internals/date.md). */
     if ((c->space == NS_STRING || c->space == NS_NUMBER || c->space == NS_BIGINT || c->space == NS_DATE) && e->kind != SJS_EV_MEMBER) {
         sjs_builtin_id id = c->space == NS_STRING ? SJS_BUILTIN_STRING : c->space == NS_NUMBER ? SJS_BUILTIN_NUMBER
                           : c->space == NS_BIGINT ? SJS_BUILTIN_BIGINT : SJS_BUILTIN_DATE_CALL;
@@ -3342,7 +3342,7 @@ static sjs_result on_shape(void *self, const sjs_shape_match *match) {
 }
 
 /* MUTATION: the matcher found that a rewrite's rules match the node the
- * event it is about to hand over ends (docs/matcher.md, section 12). The
+ * event it is about to hand over ends (docs/internals/matcher.md, section 12). The
  * construct of that node takes it, and its end compiles it. A report for
  * any other node is ignored; the parser's ids make that never happen. */
 static sjs_result on_rewrite(void *self, const sjs_rewrite_match *match) {

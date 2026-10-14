@@ -478,7 +478,7 @@ static sjs_result bigint_small(sjs_context *context, sjs_bigint_op *op, uint64_t
 
 /* BIGINT_REUSE: an operand the caller holds alone (op->reuse) with room
  * for `need` limbs becomes the result, written in place, as a string
- * nothing else holds is extended (README.md, "A value nothing else holds is
+ * nothing else holds is extended (docs/guide/performance.md, "A value nothing else holds is
  * updated in place"): no program can tell, as nothing else sees it. Else a
  * new block of `need` limbs and `slack` more, for a result that will grow. */
 typedef struct {

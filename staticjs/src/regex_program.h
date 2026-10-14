@@ -1,5 +1,5 @@
 /*
- * A compiled regular expression: the program of its automaton (docs/regex.md,
+ * A compiled regular expression: the program of its automaton (docs/internals/regex.md,
  * section 4), shared by regex.c, which writes it, and regex_match.c, which
  * runs it. Private.
  */
@@ -43,7 +43,7 @@ typedef struct {
     uint8_t op;
     /* How many loop registers bear on a thread here: those of the loops
      * that can match empty and whose optional iteration holds this pc
-     * (docs/regex.md, 5.3). Registers 0 to relevant - 1. */
+     * (docs/internals/regex.md, 5.3). Registers 0 to relevant - 1. */
     uint8_t relevant;
     uint16_t unused;
     uint32_t x;

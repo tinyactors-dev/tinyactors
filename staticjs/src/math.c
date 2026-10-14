@@ -3,7 +3,7 @@
  * own fdlibm, src/base/ieee754.cc of V8 12.4.254.21 (Node 22), line for
  * line, so that each gives V8's bits on every target. V8 runs these
  * functions for Math.x and for the operators alike, in every tier and in
- * its constant folding (docs/extending.md, "To make number results
+ * its constant folding (docs/internals/extending.md, "To make number results
  * bit-identical to V8").
  *
  * Its notices:

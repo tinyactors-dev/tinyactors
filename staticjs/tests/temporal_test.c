@@ -1,5 +1,5 @@
 /*
- * Temporal values on fixed lists of inputs (docs/temporal.md): sweeps too
+ * Temporal values on fixed lists of inputs (docs/internals/temporal.md): sweeps too
  * large for spec cases, and with faults among them, which one spec case
  * cannot hold.
  *
@@ -726,7 +726,7 @@ static void rounding_sweep(runner *r) {
                      * where the unit above holds an odd number of
                      * increments, below the hour: that case is left out,
                      * since diff-node's oracle is temporal-polyfill
-                     * (docs/temporal.md, "Rounding"). */
+                     * (docs/internals/temporal.md, "Rounding"). */
                     bool differ = strcmp(MODES[m], "halfEven") == 0 && unit < 5 && (parts / increment) % 2 != 0;
                     text source = { 0 };
                     put_times(&source, dated, (quantum){ increment * UNIT_NS[unit], !differ });
@@ -1073,7 +1073,7 @@ static void date_differences(runner *r) {
 /* until and since between dates and times on either side of each other's
  * time of day, over pairs of units from a year to a nanosecond. The
  * polyfills differ on months counted from the 29th to the 31st into a
- * shorter month (docs/temporal.md, "Differences, rounded"): rounded to a
+ * shorter month (docs/internals/temporal.md, "Differences, rounded"): rounded to a
  * month or a year from such a day, the line is left out. */
 static void date_time_differences(runner *r) {
     static const char *const times[][2] = { { "T00:00", "T23:59:59.999999999" }, { "T12:00", "T06:30:15.5" }, { "T23:59:59.999999999", "T00:00" } };
@@ -1189,7 +1189,7 @@ static __int128 int128_of(const char *digits) {
 /* Do temporal-polyfill and the specification (and @js-temporal/polyfill)
  * round `epoch` differently? Below zero, at an odd quotient,
  * temporal-polyfill takes trunc and expand, and halfExpand and halfTrunc
- * on a tie, the other way (docs/temporal.md): staticjs faults there. */
+ * on a tie, the other way (docs/internals/temporal.md): staticjs faults there. */
 static bool rounds_differently(__int128 epoch, long long increment, const char *mode) {
     __int128 q = epoch / increment;
     __int128 rest = epoch % increment;
@@ -1483,7 +1483,7 @@ static void instant_comparisons(runner *r) {
 }
 
 /* ------------------------------------------------------------------------
- * Date (docs/date.md): Date.parse over strings of the date time string
+ * Date (docs/internals/date.md): Date.parse over strings of the date time string
  * format and beside it, Date.UTC over its fields' edges, and the getters,
  * toISOString, toJSON and toUTCString over times at the edges of years,
  * centuries and the limits. diff-node compares them with Node's own Date

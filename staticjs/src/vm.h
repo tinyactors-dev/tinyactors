@@ -54,7 +54,7 @@ typedef struct {
     uint32_t argc;        /* loop frames: the arguments the built-in was called with */
     bool entered;         /* loop frames: the callback is a closure, and its frame is kept */
     /* Loop frames: the callback's sjs_shape when this built-in has a C path
-     * for it (docs/matcher.md, sections 7 and 11), or SJS_SHAPE_NONE; its
+     * for it (docs/internals/matcher.md, sections 7 and 11), or SJS_SHAPE_NONE; its
      * flag: for the comparators, descending; for PLUCK and KEY_COMPARE, the
      * key is on Object.prototype; and for KEY_COMPARE and ELEMENT_COMPARE,
      * the sjs_operator. */
@@ -193,7 +193,7 @@ sjs_result sjs_iterator_items(sjs_vm *vm, sjs_value iterator, sjs_array **out);
  * receiver is the value of the variable at `receiver_slot`, which holds it
  * alone; the method updates the slot when the value moves. */
 sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);
-/* Frozen and sealed values (docs/mutation.md, "Frozen and sealed values"):
+/* Frozen and sealed values (docs/internals/mutation.md, "Frozen and sealed values"):
  * false, after a fault, when `v` is an object or an array with `bit`
  * (SJS_INTEGRITY_SEALED before a key or an element comes or goes,
  * SJS_INTEGRITY_FROZEN before one changes), where JavaScript throws a
@@ -246,7 +246,7 @@ bool sjs_vm_call_back(sjs_vm *vm, vm_frame *loop, sjs_values args);
 bool sjs_vm_enter_callback(sjs_vm *vm, vm_frame *loop);
 
 /* The comparisons of the bytecode, shared with the shapes' C paths
- * (docs/matcher.md, 11.7): 1 or 0, or SJS_VM_UNDECIDED where the bytecode
+ * (docs/internals/matcher.md, 11.7): 1 or 0, or SJS_VM_UNDECIDED where the bytecode
  * faults. a === b, or two objects (identity, which staticjs lacks); a OP b
  * for <, <=, > and >=, on two numbers or two strings, or any other pair. */
 #define SJS_VM_UNDECIDED (-1)
@@ -311,7 +311,7 @@ loop_step sjs_regex_loop_step(sjs_vm *vm, vm_frame *frame);
 sjs_result sjs_json_parse(sjs_vm *vm, sjs_leaf_call *call);
 sjs_result sjs_json_stringify(sjs_vm *vm, sjs_leaf_call *call);
 
-/* Temporal (temporal.c, docs/temporal.md): its functions and constructors
+/* Temporal (temporal.c, docs/internals/temporal.md): its functions and constructors
  * (SJS_BUILTIN_TEMPORAL_FIRST on), a Temporal value's methods
  * (SJS_METHOD_TEMPORAL_*), a property of one, and the callee of
  * `t.name(...)`: its method of the name, or a fault. */
@@ -320,7 +320,7 @@ sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
 sjs_result sjs_temporal_property(sjs_vm *vm, sjs_member member, sjs_value *out);
 sjs_result sjs_temporal_callee(sjs_vm *vm, sjs_member member, sjs_value *out);
 
-/* Date (date.c, docs/date.md): a Temporal kind's value of type
+/* Date (date.c, docs/internals/date.md): a Temporal kind's value of type
  * SJS_TEMPORAL_DATE. Its functions (new Date, Date called, Date.now,
  * Date.parse, Date.UTC) and its methods, which sjs_temporal_method hands it. */
 sjs_result sjs_date_function(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call);

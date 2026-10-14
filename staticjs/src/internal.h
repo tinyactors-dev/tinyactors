@@ -282,7 +282,7 @@ typedef struct {
 
 /* An array flag: `extra` holds the object of its properties besides its
  * elements and length: a match result's index, input, groups and indices
- * (docs/regex.md, 7.2). */
+ * (docs/internals/regex.md, 7.2). */
 #define SJS_ARRAY_EXTRA 2u
 
 /* An object's or an array's integrity (Object.seal, Object.freeze): sealed,
@@ -290,7 +290,7 @@ typedef struct {
  * no key or element changes either, so freezing sets both. A value that
  * holds one is never taken over as another value's start (a spread, concat,
  * with, toSpliced, toSorted), which JavaScript makes a new, extensible
- * object of; the owned mutations of docs/mutation.md fault where JavaScript
+ * object of; the owned mutations of docs/internals/mutation.md fault where JavaScript
  * throws a TypeError ("Frozen and sealed values"). */
 #define SJS_INTEGRITY_SEALED 4u
 #define SJS_INTEGRITY_FROZEN 8u
@@ -475,7 +475,7 @@ typedef struct {
     sjs_heap h;           /* h.flags: SJS_ITERATE_*, for an array's, a map's or a set's own */
     sjs_value source;     /* the array, the map or the set */
     sjs_value items;      /* an array of what it yields, or undefined for an array's, a map's or a set's own */
-    uint32_t position;    /* MUTATION: how many values next() has taken (docs/mutation.md) */
+    uint32_t position;    /* MUTATION: how many values next() has taken (docs/internals/mutation.md) */
 } sjs_iterator;
 
 #define SJS_AS_ITERATOR(v) ((sjs_iterator *)(void *)(v).as.heap)
@@ -628,7 +628,7 @@ sjs_result sjs_bigint_wrap(sjs_context *context, sjs_bigint_wrap_params w, sjs_v
 uint32_t sjs_bigint_hash(const sjs_bigint *b);
 
 /* ========================================================================
- * Temporal values (temporal.c, docs/temporal.md)
+ * Temporal values (temporal.c, docs/internals/temporal.md)
  */
 
 /* The type of a Temporal value, in its h.flags. */
@@ -638,7 +638,7 @@ typedef enum {
     SJS_TEMPORAL_PLAIN_DATE_TIME,
     SJS_TEMPORAL_INSTANT,
     SJS_TEMPORAL_DURATION,
-    /* Not Temporal's: a Date (date.c, docs/date.md), held as the same kind
+    /* Not Temporal's: a Date (date.c, docs/internals/date.md), held as the same kind
      * because it is an object JavaScript compares by identity, as they are. */
     SJS_TEMPORAL_DATE
 } sjs_temporal_type;
@@ -667,7 +667,7 @@ typedef struct {
  * (+-8.64e21 ns) where an int64 of nanoseconds would not; `duration` for a
  * Duration, its ten fields from years to nanoseconds, each an integer held
  * exactly in a double, all of one sign; `time` for a Date. A Date is the
- * one that may change (its setters, under owned mutation: docs/mutation.md).
+ * one that may change (its setters, under owned mutation: docs/internals/mutation.md).
  */
 typedef struct {
     sjs_heap h;   /* h.flags: sjs_temporal_type */
@@ -1020,20 +1020,20 @@ typedef enum {
     SJS_METHOD_ARRAY_SORT,
     SJS_METHOD_ARRAY_UNSHIFT,
     SJS_METHOD_SET_ADD,
-    /* MUTATION: removal (docs/mutation.md, "Removal"). */
+    /* MUTATION: removal (docs/internals/mutation.md, "Removal"). */
     SJS_METHOD_SET_CLEAR,
     SJS_METHOD_SET_DELETE,
     SJS_METHOD_ARRAY_SPLICE,
-    /* MUTATION: a map's set, delete and clear (docs/mutation.md). */
+    /* MUTATION: a map's set, delete and clear (docs/internals/mutation.md). */
     SJS_METHOD_MAP_SET,
     SJS_METHOD_MAP_DELETE,
     SJS_METHOD_MAP_CLEAR,
     /* MUTATION: an iterator's next() and return() on a variable that holds
-     * it alone, which advance it and close it (docs/mutation.md). */
+     * it alone, which advance it and close it (docs/internals/mutation.md). */
     SJS_METHOD_ITERATOR_ADVANCE,
     SJS_METHOD_ITERATOR_CLOSE,
     /* MUTATION: a Date's setTime and UTC setters on a variable that holds
-     * the Date alone, which write its time value (docs/date.md). */
+     * the Date alone, which write its time value (docs/internals/date.md). */
     SJS_METHOD_DATE_SET_TIME,
     SJS_METHOD_DATE_SET_UTC_FULL_YEAR,
     SJS_METHOD_DATE_SET_UTC_MONTH,
@@ -1119,7 +1119,7 @@ bool sjs_mutation_returns_receiver(sjs_builtin_id id);
 /* MUTATION: does the name's method that changes its receiver share the name
  * with a method of another kind that changes nothing (today `add`, a set's
  * and a Temporal value's)? Then the compiler leaves to the run whether a
- * call of it changes a value (docs/mutation.md, "Shared names"). */
+ * call of it changes a value (docs/internals/mutation.md, "Shared names"). */
 bool sjs_mutation_shared(const sjs_name *name);
 
 /* ========================================================================
@@ -1194,7 +1194,7 @@ typedef enum {
                             * DROP pops them and the value above them; DELETE removes
                             * the property they name, and pops them */
     /* MUTATION: a method that changes a container on a path from a variable
-     * (docs/mutation.md, "Methods through a path"). */
+     * (docs/internals/mutation.md, "Methods through a path"). */
     SJS_OP_PATH_METHOD,    /* u32 constant (string): [reference, n keys] -> [.., name, undefined],
                             * the method's name and the room its receiver takes */
     SJS_OP_PATH_CALL,      /* u16 n, u16 argc, u8 flags (SPREAD, CHAIN): [reference, n keys,
@@ -1205,7 +1205,7 @@ typedef enum {
                             * n keys, sorted] the sorted array back in its place; then as
                             * PATH_CALL gives it */
     /* MUTATION: Object.assign of a variable the function owns
-     * (docs/mutation.md, "Object.assign"). */
+     * (docs/internals/mutation.md, "Object.assign"). */
     SJS_OP_OBJECT_ASSIGN,  /* u16 argc, u8 flags (SPREAD): [callee, reference, argc sources]
                             * put into the slot's object, held by the slot alone; then a
                             * copy of the slot's value */
@@ -1245,7 +1245,7 @@ typedef struct {
     uint16_t capture_count;
     uint8_t flags;          /* SJS_FUNCTION_* */
     /* The sjs_shape the matcher found the function computes, or
-     * SJS_SHAPE_NONE (docs/matcher.md). It only tags: the code is the same. */
+     * SJS_SHAPE_NONE (docs/internals/matcher.md). It only tags: the code is the same. */
     uint8_t shape;
     /* The shape's arguments, by sjs_shape_arg_kind(shape, i): a text's string
      * constant (an index into the program's constants: interned, NAMED, the
@@ -1254,7 +1254,7 @@ typedef struct {
     uint32_t shape_args[SJS_SHAPE_ARGS];
 } sjs_function_info;
 
-/* A shape's operand (docs/matcher.md, 11.2): a literal the callback compares
+/* A shape's operand (docs/internals/matcher.md, 11.2): a literal the callback compares
  * with, which the loop knows before it starts. The matcher keeps its kind
  * byte before the value; a function's shape_args keeps the kind in the low
  * 4 bits and, for a number or a string, the index of the constant the

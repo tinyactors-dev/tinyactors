@@ -1,5 +1,5 @@
 /*
- * Date (docs/date.md): a time value, whole milliseconds since
+ * Date (docs/internals/date.md): a time value, whole milliseconds since
  * 1970-01-01T00:00Z within 8.64e15 either way, or NaN for an invalid date,
  * held in a value of the Temporal kind (SJS_TEMPORAL_DATE, `as.time`). UTC
  * only: what reads or writes local time faults, as does what reads the
@@ -362,7 +362,7 @@ static sjs_result date_utc(sjs_vm *vm, sjs_leaf_call *call) {
  * Functions and methods
  */
 
-/* The host clock (docs/temporal.md, "Host clock") in milliseconds, toward
+/* The host clock (docs/internals/temporal.md, "Host clock") in milliseconds, toward
  * negative infinity: its seconds are, and its nanoseconds are past them. */
 static sjs_result date_clock(sjs_vm *vm, double *out) {
     if (!vm->clock_set) return sjs_vm_fault(vm, "the host has not set the clock (sjs_vm_set_clock)");
@@ -507,7 +507,7 @@ sjs_result sjs_date_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
 }
 
 /* ------------------------------------------------------------------------
- * MUTATION: a Date's setTime and UTC setters (docs/date.md, "Setters"), on a
+ * MUTATION: a Date's setTime and UTC setters (docs/internals/date.md, "Setters"), on a
  * variable of the function that holds the Date alone (SJS_OP_MUTATE). They
  * follow V8's builtins (src/builtins/builtins-date.cc): each argument
  * ToNumber (a string or an object faults: JavaScript converts it; one left

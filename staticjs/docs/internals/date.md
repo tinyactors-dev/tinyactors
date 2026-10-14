@@ -43,7 +43,7 @@ Date's but the names they share: `toJSON`, `toLocaleString`, `toString`
 and `valueOf`.
 
 A Date is the one value of the kind that changes: its setters ("Setters",
-below; the owned-mutation rules, docs/mutation.md) write `as.time` of a
+below; the owned-mutation rules, docs/internals/mutation.md) write `as.time` of a
 Date that one variable of the function holds alone. Every Temporal type
 stays immutable.
 
@@ -62,7 +62,7 @@ called. `new Date(...)` is the constructor `sjs_builtin_lookup("new",
 itself is unsupported there.
 
 - **`Date.now()` and `new Date()`** read the host clock (`vm->clock`,
-  docs/temporal.md "Host clock") in milliseconds toward negative infinity:
+  docs/internals/temporal.md "Host clock") in milliseconds toward negative infinity:
   its seconds times 1,000 plus its whole milliseconds past them, so a
   nanosecond before the epoch is -1. Never set, they fault, as
   `Temporal.Now` does. The clock's limits are a Date's.
@@ -165,7 +165,7 @@ no fields, and throws.
 ## Setters
 
 `setTime` and the UTC setters change their receiver, so they are
-mutations (docs/mutation.md): called through `SJS_OP_MUTATE` on a variable
+mutations (docs/internals/mutation.md): called through `SJS_OP_MUTATE` on a variable
 of the function that holds the Date alone, they write its time value
 (`as.time`, one double in the Date's own block) in place and give it, a
 number, not the receiver. The code is `sjs_date_set` (`src/date.c`), tagged
@@ -206,14 +206,14 @@ Node's:
   without `Date.UTC`'s 1900 to 1999 mapping), `date_make_date` and
   `date_clip` (NaN past 8.64 x 10^15 either way, -0 made +0).
 
-**The forms** are those of an array's `push` (docs/mutation.md): the
+**The forms** are those of an array's `push` (docs/internals/mutation.md): the
 compiler refuses a Date copied, stored, passed or captured (before or
 after) as `unsupported`, and the evaluator faults "held elsewhere" when
 the variable's Date has another holder (a caller's argument, a reduce's
 initial value a variable still holds, the Date given as its own
 argument). The setters' names have no namesake of another kind (a
 Temporal type's), so the shared-name rules do not apply
-(docs/mutation.md, "Shared names"). A setter called as any method is (on
+(docs/internals/mutation.md, "Shared names"). A setter called as any method is (on
 a temporary, `new Date(0).setTime(1)`; on an element, `xs[0].setTime(1)`;
 on a path, `o.d.setUTCDate(1)`, which the shape rules' `MUTATE_PATH` does
 not name; a chain, `d.setTime(1).setTime(2)`, calls the next on a number)

@@ -1,10 +1,10 @@
 /*
  * staticjs public API.
  *
- * staticjs is a pure, total subset of JavaScript (docs/proposals/staticjs.md
- * in the repository). A program it accepts is a valid JavaScript program, and
- * evaluating it gives the same result JavaScript gives, or a fault; never a
- * different value.
+ * staticjs is a pure, total subset of JavaScript. A program it accepts is a
+ * valid JavaScript program, and evaluating it gives the same result
+ * JavaScript gives, or a fault; never a different value. This header is the
+ * reference; the guide is staticjs/docs/guide/ in the repository.
  *
  * Every stage is pushed, never pulls, and never recurses:
  *
@@ -216,7 +216,7 @@ typedef enum {
     SJS_REGEXP,     /* a regular expression literal: an object, immutable; its lastIndex is 0 */
     SJS_TEMPORAL    /* a Temporal value (a Temporal.PlainDate, ...): an object, immutable;
                      * the writer writes it as Temporal.PlainDate.from("2024-01-31"); or
-                     * a Date (docs/date.md), written as new Date("2024-01-31T00:00:00.000Z") */
+                     * a Date (docs/guide/language.md, "Date"), written as new Date("2024-01-31T00:00:00.000Z") */
 } sjs_kind;
 
 typedef struct sjs_heap sjs_heap;
@@ -367,7 +367,7 @@ SJS_API sjs_result sjs_function_native(sjs_context *context, sjs_native native, 
  *
  * MUTATION: an expression statement's value comes before
  * EXPRESSION_STATEMENT, sent only for a statement whose expression, as a
- * whole, is a call (a method that changes its receiver, docs/mutation.md);
+ * whole, is a call (a method that changes its receiver, docs/guide/language.md, "Changing a value");
  * any other is refused:
  *
  *   x.m(a);                   <x.m(a)> EXPRESSION_STATEMENT
@@ -615,7 +615,7 @@ typedef struct {
      * compile at the edge of an allocator's budget can fail only with shapes.
      * For tests that compare the two, and for an embedder ruling the fast
      * paths out. false, which a designated initialiser that leaves it out
-     * gives, matches (docs/matcher.md).
+     * gives, matches (docs/internals/matcher.md).
      */
     bool no_shapes;
 } sjs_compiler_config;
@@ -661,7 +661,7 @@ typedef struct {
      * the two; false, which a designated initialiser gives, uses both. */
     bool no_regex_leaf;
     /* Run every match by the automaton itself, never from the cache of its
-     * steps a long test() keeps (docs/regex.md, 12.3). A program gives the
+     * steps a long test() keeps (docs/internals/regex.md, 12.3). A program gives the
      * same values, faults, fuel and pauses either way. For tests that
      * compare the two; false uses the cache where it applies. */
     bool no_regex_dfa;
@@ -694,7 +694,7 @@ SJS_API void sjs_vm_reset(sjs_vm *vm);
 SJS_API void sjs_vm_destroy(sjs_vm *vm);
 
 /*
- * The host clock (docs/temporal.md, "Host clock"): the one source of the
+ * The host clock (docs/guide/embedding.md, "The clock and the random seed"): the one source of the
  * current time a program reads (Temporal.Now, Date.now(), new Date()). It is a value the evaluator
  * holds and the host pushes: set it, and advance it, between runs. The
  * library never reads a clock of its own, and nothing calls back for one.
@@ -724,7 +724,7 @@ SJS_API sjs_result sjs_vm_advance_clock(sjs_vm *vm, uint64_t nanoseconds);
 SJS_API sjs_result sjs_vm_clock(const sjs_vm *vm, sjs_epoch *out);
 
 /*
- * The host seed (docs/temporal.md, "Host seed"): what Math.random draws
+ * The host seed (docs/guide/embedding.md, "The clock and the random seed"): what Math.random draws
  * from, pushed as the clock is. The evaluator holds V8's generator
  * (xorshift128+, its state hashed from the seed by MurmurHash3's
  * finalizer, its doubles drawn from a cache of 64 from the last): a seed

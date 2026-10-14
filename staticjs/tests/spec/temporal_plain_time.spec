@@ -1,4 +1,4 @@
-# Temporal.PlainTime (docs/temporal.md). Every expected value was generated
+# Temporal.PlainTime (docs/internals/temporal.md). Every expected value was generated
 # by temporal-polyfill 1.0.5 (the vendored tests/vendor/temporal-polyfill,
 # which diff-node runs as Temporal) and is the same in @js-temporal/polyfill
 # 0.5.1. A RangeError or a TypeError there is a fault here. A case named

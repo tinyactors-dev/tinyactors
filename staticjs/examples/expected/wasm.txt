@@ -1,0 +1,7 @@
+[1,2,3]
+{"total":6}
+"2024-01-31T10:00:00.000Z"
+fault at 1:14: cannot read a property of undefined (c)
+syntax error at 1:6: expected , or ]
+name error at 1:1: this name is not bound (a const is visible after its declaration)
+out of fuel: the evaluation used its 10000 units

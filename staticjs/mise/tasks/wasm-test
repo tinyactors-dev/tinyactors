@@ -8,7 +8,9 @@
 # in the test task); its interface is checked (no imports; the API, the wasm
 # functions and memory exported), and tests/wasm/release_test.mjs is run
 # against it. The release's verify stage runs the same test on the module it
-# packs.
+# packs. Then the browser example (examples/wasm/) evaluates its programs
+# through the same module, and what it prints must equal
+# examples/expected/wasm.txt.
 
 require_relative '../staticjs'
 require 'c_release'
@@ -16,7 +18,12 @@ require 'c_release'
 project = CRelease::Project.new(name: 'staticjs', prefix: 'sjs')
 test = ->(wasm) { ['node', StaticJS::ROOT.join('tests/wasm/release_test.mjs'), wasm, project.api, project.header] }
 begin
-  CRelease.verify_wasm!(CRelease.build_wasm(project, StaticJS::BUILD.join('wasm')), test: test)
+  built = CRelease.build_wasm(project, StaticJS::BUILD.join('wasm'))
+  CRelease.verify_wasm!(built, test: test)
 rescue Toolchain::Error => e
   abort "wasm-test: #{e.message}"
 end
+StaticJS.run('node', StaticJS::ROOT.join('tests/wasm/example_test.mjs'), project.header)
+StaticJS.expect_output!([['node', StaticJS::ROOT.join('examples/wasm/node.mjs'), built[:wasm], project.api]],
+                        StaticJS::ROOT.join('examples/expected/wasm.txt'))
+puts 'wasm-test: examples/wasm/node.mjs prints what examples/expected/wasm.txt says'

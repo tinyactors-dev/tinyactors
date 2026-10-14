@@ -1,0 +1,4 @@
+compiled from 7-byte chunks: 109 events, 6 functions
+evaluated in 29 slices, 14530 units of fuel
+{"first":[2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59],"sum":440}
+written in 5 pieces

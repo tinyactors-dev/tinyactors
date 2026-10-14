@@ -1,5 +1,5 @@
 /*
- * Regular expressions on random patterns (docs/regex.md, 11.3).
+ * Regular expressions on random patterns (docs/internals/regex.md, 11.3).
  *
  *   regex_test                 2,000 random literals, each compiled from its
  *                              source pushed whole and a byte at a time: both
@@ -14,7 +14,7 @@
  *                              a SyntaxError and read every other.
  *
  * Patterns come from a grammar over a small alphabet that reaches the edges
- * of the classification (docs/regex.md, section 8): Annex B forms, the
+ * of the classification (docs/internals/regex.md, section 8): Annex B forms, the
  * escapes of each mode, classes and ranges, groups, names and references,
  * lookaround, property escapes, quantifiers and their errors, every flag.
  * The inputs are deterministic (xorshift64). With REGEX_TEST_TRACE set in

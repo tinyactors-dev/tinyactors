@@ -1,5 +1,5 @@
 # src/shapes.rules: the trees the matcher looks for in the parser's events
-# (docs/matcher.md). `mise run shapes` writes src/shapes.h and
+# (docs/internals/matcher.md). `mise run shapes` writes src/shapes.h and
 # src/shapes_table.h from it; `mise run test` fails when they are stale.
 
 # ---------------------------------------------------------------------------
@@ -91,12 +91,12 @@ event EXPORT_DEFAULT postfix 1 item;
 event EXPORT_NAME leaf item;
 event EXPORT_FROM leaf item module: text;
 event BIGINT leaf;                      # a BigInt literal: not an operand a shape compares with
-event REGEXP leaf;                      # a regular expression literal (docs/regex.md)
+event REGEXP leaf;                      # a regular expression literal (docs/internals/regex.md)
 event END close;                        # closes the program (node 0)
 
 # ---------------------------------------------------------------------------
 # Callback shapes. The compiler records a shape on the function it matched
-# (docs/matcher.md, section 6); map, toSorted, the predicate loops and
+# (docs/internals/matcher.md, section 6); map, toSorted, the predicate loops and
 # reduce run a tagged callback in C (sections 7 and 11).
 
 shape PLUCK(key: text);                              # x => x.key
@@ -165,7 +165,7 @@ key_test(x, k, LESS, c)             <- BINARY{op: LESS}(key_of(x, k), fixed(c));
 key_test(x, k, LESS_EQUAL, c)       <- BINARY{op: LESS_EQUAL}(key_of(x, k), fixed(c));
 key_test(x, k, GREATER, c)          <- BINARY{op: GREATER}(key_of(x, k), fixed(c));
 key_test(x, k, GREATER_EQUAL, c)    <- BINARY{op: GREATER_EQUAL}(key_of(x, k), fixed(c));
-# c OP x.key, recorded as x.key OP' c: the operator mirrored (docs/matcher.md, 11.7.2).
+# c OP x.key, recorded as x.key OP' c: the operator mirrored (docs/internals/matcher.md, 11.7.2).
 key_test(x, k, STRICT_EQUAL, c)     <- BINARY{op: STRICT_EQUAL}(fixed(c), key_of(x, k));
 key_test(x, k, STRICT_NOT_EQUAL, c) <- BINARY{op: STRICT_NOT_EQUAL}(fixed(c), key_of(x, k));
 key_test(x, k, GREATER, c)          <- BINARY{op: LESS}(fixed(c), key_of(x, k));
@@ -223,7 +223,7 @@ SUM_KEY(k, true) <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM
 # MUTATION: (a, x) => { a.push(x.k); return a; }, and a.push(x): reduce's accumulator
 # a, parameter 0, gets the element x, parameter 1, or its property. The
 # call takes its callee, the node before it, as its first child
-# (docs/matcher.md, 11.9.2); one argument, and no other statement.
+# (docs/internals/matcher.md, 11.9.2); one argument, and no other statement.
 nonterminal push_of(receiver: read);                 # a.push, a a name
 
 push_of(a) <- MEMBER{key: "push"}(NAME{name: a});
@@ -236,7 +236,7 @@ PUSH() <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}
                                  RETURN(NAME{name: a}), BLOCK_END);
 
 # ---------------------------------------------------------------------------
-# MUTATION: rewrites (docs/matcher.md, section 12). Where a rewrite's rules
+# MUTATION: rewrites (docs/internals/matcher.md, section 12). Where a rewrite's rules
 # match, the compiler compiles the node differently: a rewrite is semantics,
 # not a tag, so these are matched with shapes on and off. Their rules are
 # anchored at a node's start, so the lane matches them in a dead region too:
@@ -246,7 +246,7 @@ PUSH() <- ARROW_BEGIN{params: 2}(PARAM{index: 0}, BIND{name: a}, PARAM{index: 1}
 
 # A mutating method called on a path from a name, ROOT(.k | [k])+ .m(...),
 # and a chain of them: the compiler rewrites it into a path to the container
-# the method changes in place (docs/mutation.md, "Methods through a path").
+# the method changes in place (docs/internals/mutation.md, "Methods through a path").
 rewrite MUTATE_PATH;
 
 nonterminal named();          # a name read
@@ -278,7 +278,7 @@ mutating() <- MEMBER{key: "delete"}(mutable());
 mutating() <- MEMBER{key: "clear"}(mutable());
 MUTATE_PATH() <- CALL_BEGIN(mutating(), ...);
 
-# A string built on a let (docs/mutation.md, "Appending to a let"): s += e,
+# A string built on a let (docs/internals/mutation.md, "Appending to a let"): s += e,
 # and s = s + e1 + e2 ..., + left-associated from a name. The compiler moves
 # the let's value out of its slot to the first +, which extends a string
 # nothing else holds in place (STRING_APPEND); the store puts it back.

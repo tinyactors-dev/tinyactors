@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Fail on a function in src/ or the public header with more than three parameters"
+#MISE description="Fail on a function in src/, examples/ or the public header with more than three parameters"
 # vim:ft=ruby
 
 # The C rule core, the kernel and tinyxml share: at most three parameters,
@@ -10,7 +10,8 @@ require_relative '../staticjs'
 require_relative '../../../tinyxml/mise/lib/c_scan'
 
 LIMIT = 3
-files = (Dir[StaticJS::ROOT.join('src/*.[ch]').to_s] + [StaticJS::ROOT.join('include/staticjs.h').to_s]).sort
+files = (Dir[StaticJS::ROOT.join('src/*.[ch]').to_s] + Dir[StaticJS::ROOT.join('examples/*.c').to_s] +
+         [StaticJS::ROOT.join('include/staticjs.h').to_s]).sort
 errors = []
 count = 0
 files.each do |path|

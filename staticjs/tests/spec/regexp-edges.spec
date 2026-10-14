@@ -1,4 +1,4 @@
-# Regular expressions: edges an adversarial review checked (docs/regex.md).
+# Regular expressions: edges an adversarial review checked (docs/internals/regex.md).
 # Every expected value was generated in Node 22.
 
 # ---------------------------------------------------------------------------
@@ -361,7 +361,7 @@ new Map([[1,Object.assign(["a","a"],{"index":0,"input":"a","groups":{"x":"a"}})]
 [["ab","a","b"],"ababundefined"]
 
 # ---------------------------------------------------------------------------
-# A long test() runs from the cache of its automaton's steps (docs/regex.md,
+# A long test() runs from the cache of its automaton's steps (docs/internals/regex.md,
 # 15): classes of characters that could be split wrongly, more classes,
 # states or instructions than the cache takes, and inputs made by methods.
 # spec_test runs each as loops paused after every unit, with the cache and

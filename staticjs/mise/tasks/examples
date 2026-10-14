@@ -1,0 +1,37 @@
+#!/usr/bin/env ruby
+#MISE description="Build each program in examples/ from the amalgamation and the public header alone, under AddressSanitizer and UBSan, and check what it prints"
+# vim:ft=ruby
+
+# The examples are what docs/guide/ quotes and what a new user copies, so
+# they are built as the guide tells a user to build them: the example, the
+# amalgamation (include/staticjs.c) and the public header, nothing from src/.
+# Each runs with the arguments StaticJS::EXAMPLES gives it, and what it
+# prints must equal examples/expected/<name>.txt. The wasm example runs in
+# `mise run wasm-test`, against the module that task builds.
+
+require_relative '../staticjs'
+require 'fileutils'
+
+# The guide quotes hello.c whole, from its first #include on: the quote must
+# be the file.
+guide = StaticJS::ROOT.join('docs/guide/getting-started.md')
+quoted = guide.read[/^```c\n(.*?)^```$/m, 1]
+hello = StaticJS::ROOT.join('examples/hello.c').read
+unless quoted && quoted == hello[hello.index('#include')..]
+  abort "examples: docs/guide/getting-started.md quotes examples/hello.c, and the two differ: copy the file's " \
+        'code, from its first #include on, into the guide'
+end
+
+build = StaticJS::BUILD.join('examples')
+FileUtils.mkdir_p(build)
+cc = Toolchain::Target.host.compile_command
+flags = [*StaticJS::WARNINGS, "-I#{StaticJS::ROOT.join('include')}", '-g', '-O1', '-fno-omit-frame-pointer',
+         '-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+amalgamation = StaticJS::ROOT.join('include/staticjs.c')
+StaticJS::EXAMPLES.each do |name, runs|
+  binary = build.join(name)
+  StaticJS.run(*cc, *flags, StaticJS::ROOT.join("examples/#{name}.c"), amalgamation, '-o', binary)
+  StaticJS.expect_output!(runs.map { |arguments| [binary, *arguments] },
+                          StaticJS::ROOT.join("examples/expected/#{name}.txt"))
+end
+puts "examples: #{StaticJS::EXAMPLES.size} programs print what examples/expected/ says"

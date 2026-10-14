@@ -23,7 +23,7 @@ tests run.
 Every expected value of a Temporal spec case comes from this polyfill, and
 is checked against `@js-temporal/polyfill` 0.5.1 (the proposal's reference
 polyfill) when the case is written; a case on which the two disagree is not
-used (`docs/temporal.md`).
+used (`docs/internals/temporal.md`).
 
 To update: `npm pack temporal-polyfill@<version>`, check the tarball's
 integrity against the registry's, copy `package/global.js` and

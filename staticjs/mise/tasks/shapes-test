@@ -2,7 +2,7 @@
 #MISE description="Self-test for the shapes generator: the C it writes for a small rules file, each check's message and line, shapes --check on stale and fresh headers, and the real rules"
 # vim:ft=ruby
 
-# docs/matcher.md, 4.6. The small rules file and the C it must produce are
+# docs/internals/matcher.md, 4.6. The small rules file and the C it must produce are
 # in mise/shapes-test/; the checks' snippets are below. shapes --check runs
 # on a copy in a temporary directory, never on src/.
 

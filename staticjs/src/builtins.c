@@ -135,7 +135,7 @@ static const sjs_function_entry FUNCTION_TABLE[] = {
  * forEach. */
 #define NAME_ITERABLE(text, flags, each, iterator) { { text, sizeof(text) - 1u }, flags, { each, 0, each, 0, each, iterator, 0, 0, 0 }, 0, 0 }
 /* A name on RegExp.prototype, with the regular expressions' method of the
- * name (docs/regex.md), or 0. */
+ * name (docs/internals/regex.md), or 0. */
 #define NAME_REGEXP(text, regexp) { { text, sizeof(text) - 1u }, SJS_NAME_ON_REGEXP, { 0, 0, 0, 0, 0, 0, regexp, 0, 0 }, 0, 0 }
 /* A name on Number.prototype alone, with a number's method. */
 #define NAME_NUMBER(text, number) { { text, sizeof(text) - 1u }, 0, { 0, 0, 0, 0, 0, 0, 0, number, 0 }, 0, 0 }
@@ -878,7 +878,7 @@ static sjs_result has_own(sjs_vm *vm, sjs_leaf_call *call) {
 
 /* Object.assign(target, ...sources) called as any function is: on a
  * target that no variable of the function owns (`Object.assign({}, a, b)`;
- * a variable's is OBJECT_ASSIGN, docs/mutation.md). JavaScript changes the
+ * a variable's is OBJECT_ASSIGN, docs/internals/mutation.md). JavaScript changes the
  * target and gives it back, so this needs a target that nothing else holds
  * (sjs_value_unique), which no program can see change: the result is a copy
  * of it with the sources put. With nothing to put, the target as it is. */
@@ -1832,7 +1832,7 @@ static sjs_result set_output(sjs_vm *vm, vm_frame *frame, sjs_value v) {
 }
 
 /* ------------------------------------------------------------------------
- * Shapes: a C path for a callback (docs/matcher.md, sections 7 and 11).
+ * Shapes: a C path for a callback (docs/internals/matcher.md, sections 7 and 11).
  * The matcher tagged the callback's function with what it computes; while a
  * step's preconditions hold, the loop does that in C, and otherwise calls
  * the bytecode, which gives the value or the fault. Either way the same
@@ -1854,7 +1854,7 @@ static sjs_result set_output(sjs_vm *vm, vm_frame *frame, sjs_value v) {
  * slot, the method, and the argument (`x`, then `x.k` in its place). */
 #define PUSH_STACK 3u
 
-/* The shapes each loop built-in runs in C (docs/matcher.md, 7 and 11.5). */
+/* The shapes each loop built-in runs in C (docs/internals/matcher.md, 7 and 11.5). */
 static const struct {
     uint16_t builtin;
     uint8_t shape;
@@ -2205,7 +2205,7 @@ static loop_step predicate_answer(sjs_vm *vm, vm_frame *frame, bool truthy) {
 /* A KEY_COMPARE or ELEMENT_COMPARE callback's answer for `v`, the element
  * or its key's value, against the literal: the bytecode's own comparison,
  * so 1 or 0; or SJS_VM_UNDECIDED where the bytecode faults. The rules
- * record `c OP x` as `x OP' c`, which is the same comparison (docs/matcher.md,
+ * record `c OP x` as `x OP' c`, which is the same comparison (docs/internals/matcher.md,
  * 11.7.2). */
 static int predicate_compare(const vm_frame *frame, sjs_value v) {
     switch (frame->shape_op) {
@@ -2248,7 +2248,7 @@ static loop_step predicate_step(sjs_vm *vm, vm_frame *frame) {
 }
 
 /* MUTATION: reduce's step for a PUSH_KEY callback, `(a, x) => { a.push(x.key);
- * return a; }`, or a PUSH, `a.push(x)`, in C (docs/matcher.md, 13.2): when
+ * return a; }`, or a PUSH, `a.push(x)`, in C (docs/internals/matcher.md, 13.2): when
  * the accumulator is an array that LOOP_OUTPUT holds alone (as the
  * callback's slot would: the bytecode moves it there), neither frozen nor
  * sealed, with room for one more element, and, for PUSH_KEY, the element
@@ -2573,7 +2573,7 @@ loop_step sjs_loop_step(sjs_vm *vm, vm_frame *frame) {
 }
 
 /* ------------------------------------------------------------------------
- * MUTATION: methods that change their receiver (docs/mutation.md), called
+ * MUTATION: methods that change their receiver (docs/internals/mutation.md), called
  * by SJS_OP_MUTATE with the slot of the variable that holds the receiver
  * alone. Each updates the slot when the receiver moves as it grows. sort is
  * toSorted's loop, which writes back (vm.c, mutate). This section exists
@@ -2810,7 +2810,7 @@ sjs_result sjs_mutation_call(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call)
 
 /* ------------------------------------------------------------------------
  * String methods added later: at the end of the file, so that the code
- * before them is laid out as it was (docs/builtins.md, section 8). None
+ * before them is laid out as it was (docs/internals/builtins.md, section 8). None
  * changes its receiver: JavaScript's strings are immutable.
  */
 
@@ -3629,7 +3629,7 @@ __attribute__((noinline)) static sjs_result bigint_number(sjs_vm *vm, sjs_builti
 
 
 /* ------------------------------------------------------------------------
- * Maps (README.md, "Maps"): get, has, a map's entries as arrays, and
+ * Maps (docs/guide/language.md, "Maps"): get, has, a map's entries as arrays, and
  * Object.fromEntries of a map. At the end of the file and out of line, so
  * that the code before it is laid out, and inlined, as it was.
  */
@@ -3989,7 +3989,7 @@ __attribute__((noinline)) static loop_step for_each_call(sjs_vm *vm, vm_frame *f
 }
 
 /* ------------------------------------------------------------------------
- * MUTATION: a map's set, delete and clear (docs/mutation.md), called by
+ * MUTATION: a map's set, delete and clear (docs/internals/mutation.md), called by
  * SJS_OP_MUTATE or SJS_OP_PATH_CALL with the place of the map, which holds
  * it alone. This section exists only for mutation.
  */
@@ -4291,7 +4291,7 @@ __attribute__((noinline)) static sjs_result regex_method(sjs_vm *vm, uint8_t op,
  * once, sjs_iterator_items). JavaScript throws a TypeError for a primitive,
  * a string included, and for an object with no iterator; staticjs faults
  * on both, and on any other object, whose iterator would be a user's
- * (README.md: user iterables are refused). Takes over `r`. */
+ * (docs/guide/language.md: user iterables are refused). Takes over `r`. */
 __attribute__((noinline)) static bool flatten_iterated(sjs_vm *vm, vm_frame *frame, sjs_value r) {
     sjs_array *list = NULL;
     sjs_result got = SJS_OK;
@@ -4447,7 +4447,7 @@ __attribute__((noinline)) static loop_step reduce_right_call(sjs_vm *vm, vm_fram
 }
 
 /* ------------------------------------------------------------------------
- * MUTATION: an iterator's next() and return() (docs/mutation.md). On a
+ * MUTATION: an iterator's next() and return() (docs/internals/mutation.md). On a
  * variable that holds the iterator alone (SJS_OP_MUTATE: ADVANCE and
  * CLOSE), next() takes the value at the iterator's position and moves past
  * it, and return() moves it to the end; JavaScript's later next(), spread
@@ -4529,7 +4529,7 @@ __attribute__((noinline)) static sjs_result iterator_step(sjs_vm *vm, sjs_builti
     return iterator_result_make(vm, call, (iterator_result){ value, done });
 }
 
-/* MUTATION: shared names (docs/mutation.md, "Shared names"), at the end
+/* MUTATION: shared names (docs/internals/mutation.md, "Shared names"), at the end
  * of the file, so that the code before it is laid out as it was.
  * `columns`: the kinds of sjs_name.methods' columns, in order. A column of
  * the mutation's own kind is the same method on a value nothing else holds
@@ -4546,7 +4546,7 @@ bool sjs_mutation_shared(const sjs_name *name) {
 
 /* ------------------------------------------------------------------------
  * Object.freeze, Object.isFrozen, Object.seal and Object.isSealed
- * (docs/mutation.md, "Frozen and sealed values"). A primitive is frozen and
+ * (docs/internals/mutation.md, "Frozen and sealed values"). A primitive is frozen and
  * sealed, and freezing or sealing one gives it back. An object or an array
  * holds its integrity in its bits (SJS_INTEGRITY_*); every other value is an
  * extensible object in JavaScript, which staticjs neither freezes nor seals.

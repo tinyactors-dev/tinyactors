@@ -2,7 +2,7 @@
  * Prints staticjs's built-in name table, the one builtins.c registers and
  * sjs_name_id searches: every name, the receivers it has a method for, and
  * the method's ID. For the list of what is built and what is not, see
- * docs/builtins-status.md.
+ * docs/internals/builtins-status.md.
  *
  *   builtin-table dump     every entry, one per line, in the table's order,
  *                          then the function table after a header line
