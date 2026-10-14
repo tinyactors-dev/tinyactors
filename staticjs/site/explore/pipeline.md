@@ -10,7 +10,11 @@ sidebar: false
 
 # The pipeline
 
-A program travels through four stages, and each is pushed by its caller: bytes into the parser, events into the compiler, fuel into the evaluator, buffer space into the writer. Pick an example, or write your own, and follow it through. Everything below is computed in this page by `staticjs.wasm`, through the library's public API.
+A program travels through four stages, and each is pushed by its caller: bytes into the parser, events into the compiler, fuel into the evaluator, buffer space into the writer.
+
+<!-- html -->
+Pick an example, or write your own, and follow it through. Everything below is computed in this page by `staticjs.wasm`, through the library's public API.
+<!-- /html -->
 
 <PipelineExplorer />
 

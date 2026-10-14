@@ -5,6 +5,12 @@ title: staticjs
 description: "A pure, total subset of JavaScript, as a freestanding C library and a WebAssembly module."
 ---
 
+<!-- markdown
+staticjs is a pure, total subset of JavaScript, as a freestanding C library and a WebAssembly module. It evaluates programs written by someone other than the host (guards, rules, filters, computed fields) and gives exactly the value JavaScript would, or a fault that says why.
+
+For example, this program, with its result:
+-->
+
 <HomePage>
 <template #demo>
 
@@ -27,8 +33,6 @@ description: "A pure, total subset of JavaScript, as a freestanding C library an
 </HomePage>
 
 <!-- markdown
-staticjs is a pure, total subset of JavaScript, as a freestanding C library and a WebAssembly module. It evaluates programs written by someone other than the host (guards, rules, filters, computed fields) and gives exactly the value JavaScript would, or a fault that says why.
-
 ## The rule
 
 A program staticjs accepts is a valid JavaScript program, and evaluating it gives the same result as JavaScript does, or a fault. Never a different value. The test suite checks this against Node.

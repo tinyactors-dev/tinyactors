@@ -31,7 +31,7 @@ const examples = [
     id: 'bigint',
     name: 'BigInt',
     module: false,
-    source: '[1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 14n, 15n]\n  .reduce((a, b) => a * b, 1n)',
+    source: '// 25 factorial, to the fourth power\nArray.from({ length: 25 }, (_, i) => BigInt(i + 1))\n  .reduce((a, b) => a * b, 1n) ** 4n',
   },
   {
     id: 'temporal',
@@ -45,10 +45,10 @@ const examples = [
 ];
 
 const stages = [
-  { id: 'parser', number: '01', name: 'Parser', blurb: 'bytes in, events out' },
-  { id: 'compiler', number: '02', name: 'Compiler', blurb: 'events in, a program out' },
-  { id: 'evaluator', number: '03', name: 'Evaluator', blurb: 'fuel in, a value out' },
-  { id: 'writer', number: '04', name: 'Writer', blurb: 'a value in, text out' },
+  { id: 'parser', number: '01', name: 'Parser', blurb: 'bytes → events' },
+  { id: 'compiler', number: '02', name: 'Compiler', blurb: 'events → program' },
+  { id: 'evaluator', number: '03', name: 'Evaluator', blurb: 'fuel → value' },
+  { id: 'writer', number: '04', name: 'Writer', blurb: 'value → text' },
 ] as const;
 
 const chunkSizes = [
@@ -97,7 +97,7 @@ async function analyse() {
     step.value = r.steps ? r.steps.length - 1 : 0;
     hovered.value = null;
     const where = errorStage.value;
-    if (where && stage.value !== where && stageIndex(stage.value) > stageIndex(where)) stage.value = where as any;
+    if (where) stage.value = where as any;
   } catch (e) {
     failed.value = String(e);
   } finally {
@@ -136,18 +136,20 @@ function stageState(id: string) {
   return a < b ? 'ok' : a === b ? 'error' : 'idle';
 }
 
+const plural = (n: number, word: string) => `${n.toLocaleString('en')} ${word}${n === 1 ? '' : 's'}`;
+
 function stageStat(id: string) {
   const r = result.value;
   if (!r) return '';
   switch (id) {
     case 'parser':
-      return `${r.bytes} bytes · ${r.compile.chunks} chunk${r.compile.chunks === 1 ? '' : 's'} · ${r.events.length} events`;
+      return `${plural(r.bytes, 'byte')} · ${plural(r.compile.chunks, 'chunk')} · ${plural(r.events.length, 'event')}`;
     case 'compiler':
-      return r.compile.ok ? `${r.functions.length} function${r.functions.length === 1 ? '' : 's'} · ${r.compile.programBytes} bytes` : 'refused';
+      return r.compile.ok ? `${plural(r.functions.length, 'function')} · ${plural(r.compile.programBytes, 'byte')}` : 'refused';
     case 'evaluator':
       return r.compile.ok ? `${r.fuel} fuel${r.status === 'fault' ? ' · faulted' : ''}` : 'not reached';
     case 'writer':
-      return r.output ? `${r.output.text.length} chars · ${r.output.pieces} pieces` : 'not reached';
+      return r.output ? `${r.output.text.length} chars · ${plural(r.output.pieces, 'piece')}` : 'not reached';
   }
   return '';
 }
@@ -660,6 +662,7 @@ const fuelSaved = computed(() => {
   color: var(--fg-on-accent);
 }
 .text .err {
+  background: var(--state-error-bg);
   text-decoration: underline wavy var(--state-error);
   text-underline-offset: 4px;
   color: var(--state-error);
