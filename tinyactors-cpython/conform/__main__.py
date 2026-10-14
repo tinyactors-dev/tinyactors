@@ -222,6 +222,8 @@ class Scenario:
         self.outcome = None
         self.clock = tinyactors.SimulatedClock()
         self.blobs = {}  # the implementation's store (driver.md): hibernated actors' blobs
+        self.snapshots = {}
+        self.host = None
 
     def wake(self, host, session, job):
         """WAKE: the actor's blob from the store."""
@@ -241,14 +243,16 @@ class Scenario:
             return {key: self.value(item) for key, item in value.items()}
         return value
 
+    CONFIG = {"systemID": "conformance", "system": {"ticksPerSecond": 1000}}
+
     def run(self, steps):
-        config = {"systemID": "conformance", "system": {"ticksPerSecond": 1000}}
-        with tinyactors.Host(config, log=self.log, clock=self.clock, wake=self.wake) as host:
+        self.host = tinyactors.Host(self.CONFIG, log=self.log, clock=self.clock, wake=self.wake)
+        try:
             for step in steps:
                 try:
-                    self.step(host, step)
+                    self.step(self.host, step)
                     if self.outcome is None:
-                        host.run_until_idle()
+                        self.host.run_until_idle()
                 except tinyactors.CompileError as error:
                     print("conform: a document does not compile: %s" % error, file=sys.stderr)
                     self.outcome = "compile"
@@ -257,6 +261,8 @@ class Scenario:
                     self.outcome = self.outcome or "fail"
                 if self.outcome is not None:
                     break
+        finally:
+            self.host.close()
         return self.outcome or "timeout"
 
     def step(self, host, step):
@@ -281,6 +287,15 @@ class Scenario:
         elif "hibernate" in step:
             session = self.session(step["hibernate"])
             self.blobs[session] = host.hibernate(session)
+        elif "snapshot" in step:
+            self.snapshots[step["snapshot"]] = host.snapshot()
+        elif "restore" in step:
+            if step["restore"] not in self.snapshots:
+                raise Refused("a restore of a snapshot no step took: %s" % step["restore"])
+            restored = tinyactors.Host.restore(self.snapshots[step["restore"]], self.CONFIG, log=self.log,
+                                               clock=self.clock, wake=self.wake)
+            host.close()
+            self.host = restored  # a restart: the restored host replaces the running one
         elif "migrate" in step:
             done = []
             host.migrate(lambda host, result: done.append(result), wake=bool(step["migrate"].get("wake")),

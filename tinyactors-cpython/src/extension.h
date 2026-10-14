@@ -130,6 +130,13 @@ int ta_python_datamodel_traverse(ta_python_datamodel *datamodel, visitproc visit
 /* Drop the values whose last reference went (bindings.md, section 8):
  * called after the outer call into core returns, never inside it. */
 void ta_python_datamodel_flush(ta_python_datamodel *datamodel);
+/* The datamodel's state for a host snapshot, as CBOR bytes: the session,
+ * payload and loop tables' handle namespaces and every row's values; NULL
+ * with TinyactorsError (TA_ERROR_UNSUPPORTED) for a value outside the
+ * value table. Restored into a fresh datamodel whose charts a host restore
+ * attached: 0, or -1 with an exception. */
+PyObject *ta_python_datamodel_snapshot(ta_python_datamodel *datamodel);
+int ta_python_datamodel_restore(ta_python_datamodel *datamodel, ta_bytes state);
 
 /* A payload of the datamodel from a Python value the application gives
  * (copied through the value table): 0 and *out, or -1 with an exception. */
@@ -168,6 +175,8 @@ struct ta_python_host {
     uint64_t ticks_per_second;         /* host.config's system.ticksPerSecond */
     unsigned long thread;              /* the creating thread */
     ta_time deadline;                  /* the last idle run's next_deadline */
+    ta_time ticks_offset;              /* added to the clock's ticks: a restored host goes on from its
+                                          snapshot's time, never back (0 for a new host) */
     uint32_t pool;                     /* the last exhausted run's TA_POOL_* */
     ta_status fault;                   /* the last faulted run's status */
     uint32_t depth;                    /* API calls in progress on the stack */
@@ -253,6 +262,7 @@ typedef enum ta_python_next {
 int ta_python_drain(ta_python_host *host);
 /* Both clocks now: before an input that depends on them, and at creation. */
 void ta_python_advance(ta_python_host *host);
+void ta_python_clock_resume(ta_python_host *host, ta_time time);
 /* After a driver's turns: raise what the turn kept or what the next step
  * says (MemoryError naming the pool, TinyactorsError for a fault): 0 or -1. */
 int ta_python_turn_raise(ta_python_host *host, ta_python_next next);

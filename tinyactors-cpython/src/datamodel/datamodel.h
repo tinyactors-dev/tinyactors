@@ -16,8 +16,9 @@ typedef struct ta_python_chart_row {
     PyObject *data;      /* tuple of the <data> ids, as str */
     PyObject *names;     /* list by the image's event-name node: the name's str, made at its first
                             event and shared by every session (None until then) */
+    uint64_t image;      /* the image's content hash and the chart's index in it: how a snapshot's */
+    uint32_t index;      /* sessions find their chart again after a restore attached the charts */
     uint32_t reads;      /* TA_PYTHON_READS_* */
-    uint32_t pad;
 } ta_python_chart_row;
 
 /* A resident session: its instance (a hibernated one has no row: its

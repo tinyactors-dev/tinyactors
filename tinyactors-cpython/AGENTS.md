@@ -273,6 +273,21 @@ Decided by the maintainer (2026-10-13); every item is in
   `SEGMENT_FREED` is dropped: the host keeps the images. How to migrate a
   mostly hibernated population with a bound on what is resident is the
   application's (README, "Migration"; `tools/migration.py`).
+- **Snapshots** (2026-10-14): **`host.snapshot() -> bytes`** is
+  `ta_host_snapshot_pack` with one datamodel state, labelled
+  `tinyactors-cpython`: a CBOR map of the `"python"` datamodel's state
+  (below, "The "python" datamodel") and quickjs's
+  (`ta_datamodel_ecmascript_snapshot`), copied once into `bytes` (no
+  arena: a snapshot's size is no call's scratch). **`Host.restore(snapshot,
+  config, io_processors=None, **handlers)`** is a class method that runs
+  `Host(...)`'s creation with `ta_host_snapshot_unpack`,
+  `ta_host_snapshot_image` and `ta_host_restore` in place of
+  `ta_host_create`, then restores both datamodels before anything runs;
+  a pack another program labelled is refused, an unaligned buffer copied.
+  The restored host's clock reads its ticks plus an offset that starts
+  it at the snapshot's time (bindings.md section 7), never earlier.
+  Quiescent only: from a handler (a batch is open) or during a migration
+  job, `TA_ERROR_STATE`.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
@@ -632,6 +647,16 @@ Registered beside quickjs, first; matched by the chart's
   `migrate` returns the old bindings as a payload, exactly the old
   chart's variables (quickjs's also names the new chart's new variables,
   undefined).
+- **Snapshots of the datamodel** write, as one CBOR document through the
+  value table, the session, payload and loop tables' handle namespaces
+  (`ta_table_snapshot`) and every row: a session's variables, `_event`,
+  `extra` and system variables, with its chart named by the image's
+  content hash and the chart's index (the restore attached the charts
+  again, under new handles); a payload's value and references; a loop's
+  items. The restore puts the namespaces back (`ta_table_restore`) and
+  fills the rows at their handles. A value outside the table refuses the
+  snapshot (`TA_ERROR_UNSUPPORTED`); values shared between variables are
+  copied apart.
 - **Measured cost per session** (`mise run measure`, 2026-10-14: x86_64
   Linux, 4 CPUs, CPython 3.13.16 with the GIL; 10,000 actors of a chart
   with three `<data>`, one of them a list, resident and idle): **433 B

@@ -321,6 +321,53 @@ it waited for in every run. The peak is the migration's: both versions'
 regions until version 1 retires, and the job's map of the sessions it
 waits for (at most a quarter full after it is rebuilt).
 
+## Snapshots
+
+`host.snapshot() -> bytes` is the whole host in one blob: every
+segment's region (actors, queues, timers, the actors' hibernation
+records), both datamodels' sessions and payloads, the images, the system
+id and the host's time. `tinyactors.Host.restore(snapshot, config, ...)`
+makes a new host running it, with the handlers `Host(...)` takes; every
+session id stays, and the clock goes on from the snapshot's time (a new
+`SimulatedClock`, or the real clock in another process, is offset to it).
+
+```python
+blob = host.snapshot()                    # quiescent: not from a handler
+host.close()
+...
+host = tinyactors.Host.restore(blob, config, log=log, wake=wake)
+```
+
+- **A snapshot is for the same build of the library, not a backup.** It
+  holds raw region memory: take a host out of memory for a while, restart
+  it, inspect it. Durability is your database's.
+- **The hibernated actors stay in your store.** The snapshot holds their
+  records, not their blobs; the restored host asks for them with the
+  same WAKE.
+- It is refused from a handler and while a migration job runs
+  (`TA_ERROR_STATE`), and when a `"python"` session or payload holds a
+  value outside the value table (`TA_ERROR_UNSUPPORTED`); the host goes
+  on. Values are written through the value table: two variables of one
+  session that share a list share it no more after a restore.
+
+`mise run snapshot` is the pattern at scale (`tools/snapshot.py`): a
+population on SQLite as in "Hibernation", 200,000 events, a delayed send
+for every resident actor, the snapshot written to a file, the host
+closed, a new one restored from the file (its own snapshot must be the
+same bytes), 200,000 events more and the delayed sends due; every
+sampled actor's count must hold both halves. Measured on x86_64 Linux, 4
+CPUs, CPython 3.13.16 with the GIL, one run each:
+
+| datamodel | actors | resident | snapshot | snapshot time | restore time | every count and delayed send |
+|---|---|---|---|---|---|---|
+| `"python"` | 2,000,000 | 1000 | 120.9 MB (60 B per actor) | 0.11 s | 0.07 s | right |
+| quickjs | 2,000,000 | 1000 | 120.9 MB | 0.13 s | 0.07 s | right |
+| `"python"` | 100,000 | all | 225.3 MB (2253 B per actor) | 0.59 s | 0.44 s | right |
+| quickjs | 100,000 | all | 232.3 MB (2323 B per actor) | 1.50 s | 0.78 s | right |
+
+A snapshot is mostly the region, as the config sized it; of the 225 MB of
+100,000 resident `"python"` actors, about 11 MB is the datamodel's state.
+
 ## Charts in Python
 
 A `datamodel="python"` chart's session is an instance of a class made for
@@ -369,8 +416,8 @@ actors share no mutable value.
   in the API) only while its variables, and the data of its pending
   delayed sends, are values of the value table; a `<foreach>`'s `item` and `index` must be declared
   `<data>`.
-- Not in the API yet: export and adopt, snapshots, invoked services of
-  the application.
+- Not in the API yet: export and adopt, invoked services of the
+  application.
 
 ## Memory
 

@@ -7,7 +7,7 @@ valid:
   - "static void ta_python_drop(ta_python_host *host) { ta_python_host_free(host); }"
   - "static const ta_allocator ta_python_allocator = {NULL, ta_python_alloc, ta_python_free};"
   - "void ta_python_cbor_init(ta_python_cbor *cbor) { ta_cbor_writer_init(&cbor->writer, (ta_buffer){cbor->room, sizeof cbor->room, 0}, &ta_python_allocator); }"
-  - "static int ta_python_host_create(ta_python_host *host, PyObject *config) { environment.allocator = ta_python_allocator; return 0; }"
+  - "static int ta_python_host_build(ta_python_host *host, PyObject *config) { environment.allocator = ta_python_allocator; return 0; }"
   - "static ta_compile_result *ta_python_compile(ta_python_host *host, const ta_python_compiling *compiling) { options.alloc = ta_python_allocator; return NULL; }"
   - "static void ta_python_done(ta_python_cbor *cbor) { ta_python_cbor_free(cbor); }"
 invalid:

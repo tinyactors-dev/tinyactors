@@ -1,0 +1,20 @@
+#!/usr/bin/env ruby
+#MISE description="Snapshots under load: N actors, R resident, the rest in SQLite; the host to bytes, closed, restored, and going on, on both datamodels (tools/snapshot.py)"
+#MISE depends=["build"]
+#USAGE flag "--actors <n>" default="2000000" help="the population"
+#USAGE flag "--resident <n>" default="1000" help="the actors in memory at most (equal to --actors: no store)"
+#USAGE flag "--events <n>" default="200000" help="the events before the snapshot, and again after the restore"
+# vim:ft=ruby
+
+# The application's side of snapshots as a program writes it: Host.snapshot
+# to a file, the host closed, Host.restore from the file with the same
+# handlers and store. It fails when the restored host's snapshot is not the
+# same bytes, when an actor's count (every event, before and after) or its
+# delayed send is wrong, or when more than R actors are resident.
+# `mise run test --full` runs it at its defaults and with 100,000 actors
+# all resident; the fast pass runs small ones.
+
+require_relative '../cpython'
+
+CPython.stress(actors: ENV.fetch('usage_actors', '2000000'), resident: ENV.fetch('usage_resident', '1000'),
+               events: ENV.fetch('usage_events', '200000'), tool: 'snapshot')

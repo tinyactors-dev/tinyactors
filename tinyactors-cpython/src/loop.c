@@ -58,7 +58,8 @@ static uint64_t ta_python_ticks(const ta_python_host *host, ta_python_rate rate)
 static ta_host_time ta_python_now(ta_python_host *host) {
     if (host->clock != Py_None) { /* the simulated time is the wall clock too */
         uint64_t milliseconds = ta_python_clock_now(host->clock);
-        return (ta_host_time){ta_python_ticks(host, (ta_python_rate){milliseconds, 1000}), milliseconds * 1000000u};
+        return (ta_host_time){ta_python_ticks(host, (ta_python_rate){milliseconds, 1000}) + host->ticks_offset,
+                              milliseconds * 1000000u};
     }
     uint64_t wall = 0;
     PyObject *now = PyObject_CallNoArgs(host->state->time_ns);
@@ -70,7 +71,16 @@ static ta_host_time ta_python_now(ta_python_host *host) {
         PyErr_Clear(); /* 0: unknown (host.h) */
         wall = 0;
     }
-    return (ta_host_time){ta_python_ticks(host, (ta_python_rate){ta_runtime_now_ns(), ta_python_billion}), wall};
+    return (ta_host_time){ta_python_ticks(host, (ta_python_rate){ta_runtime_now_ns(), ta_python_billion}) + host->ticks_offset,
+                          wall};
+}
+
+/* A restored host's clock goes on from `time`, its snapshot's: the ticks
+ * the clock reads now are offset up to it (never down). */
+void ta_python_clock_resume(ta_python_host *host, ta_time time) {
+    host->ticks_offset = 0;
+    ta_time now = ta_python_now(host).monotonic;
+    host->ticks_offset = time > now ? time - now : 0;
 }
 
 /* Both clocks, before an input that depends on them (bindings.md section

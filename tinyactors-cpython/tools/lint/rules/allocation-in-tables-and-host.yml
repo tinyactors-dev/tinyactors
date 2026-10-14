@@ -17,7 +17,7 @@
 # are the objects the binding holds.
 #
 # The host's allocator (ta_python_allocator) reaches core in three places
-# only: the host's environment (ta_python_host_create), the compiler's
+# only: the host's environment (ta_python_host_build), the compiler's
 # options (ta_python_compile), and a call's CBOR writer
 # (ta_python_cbor_init), which grows through it, or through the allocator
 # it is given (the arena's view, the host's struct), when a value
@@ -69,7 +69,7 @@ utils:
             has:
               field: declarator
               kind: function_declarator
-              has: {field: declarator, regex: '^ta_python_(host_create|compile|cbor_init)$'}
+              has: {field: declarator, regex: '^ta_python_(host_build|compile|cbor_init)$'}
         - inside:
             kind: function_definition
             stopBy: end
@@ -79,7 +79,7 @@ utils:
               has:
                 field: declarator
                 kind: function_declarator
-                has: {field: declarator, regex: '^ta_python_(host_create|compile|cbor_init)$'}
+                has: {field: declarator, regex: '^ta_python_(host_build|compile|cbor_init)$'}
   writer-elsewhere:
     kind: call_expression
     has:

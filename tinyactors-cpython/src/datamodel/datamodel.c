@@ -208,7 +208,9 @@ static ta_status ta_python_string_out(ta_python_datamodel *datamodel, PyObject *
 
 static ta_status ta_python_chart_attach(void *self, const ta_datamodel_chart *chart, void **context) {
     ta_python_datamodel *datamodel = self;
-    ta_python_chart_row made = {NULL, NULL, NULL, NULL, 0, 0};
+    ta_python_chart_row made = {NULL, NULL, NULL, NULL, 0, 0, 0};
+    ta_image_info info;
+    ta_image_get_info(chart->image, &info);
     if (ta_python_chart_compile(datamodel, &(ta_python_attach){chart->image, chart->chart}, &made) < 0 || !made.names) {
         ta_python_drop(datamodel, made.chart);
         ta_python_drop(datamodel, made.functions);
@@ -226,6 +228,8 @@ static ta_status ta_python_chart_attach(void *self, const ta_datamodel_chart *ch
         return TA_ERROR_NO_MEMORY;
     }
     *row = made;
+    row->image = info.content_hash;
+    row->index = chart->chart;
     *context = (void *)(uintptr_t)handle; /* the row's handle, never a pointer */
     return TA_OK;
 }
@@ -796,6 +800,240 @@ static ta_status ta_python_variable(const ta_datamodel_call *call, ta_string_vie
         return TA_ERROR_NO_MEMORY;
     }
     return TA_OK;
+}
+
+/* ---- snapshots: the tables' namespaces and every row's values ------------------------ */
+
+/* A table's handle namespace as bytes (ta_table_snapshot). */
+static PyObject *ta_python_table_layout(const ta_table *table) {
+    ta_buffer probe = {NULL, 0, 0};
+    ta_table_snapshot(table, &probe); /* TA_ERROR_NO_MEMORY: probe.length is the room */
+    PyObject *bytes = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)probe.length);
+    ta_buffer out = {bytes ? PyBytes_AsString(bytes) : NULL, probe.length, 0};
+    if (bytes && ta_table_snapshot(table, &out) != TA_OK) Py_CLEAR(bytes);
+    return bytes;
+}
+
+/* One session row: [handle, image, chart index, vars, _event's fields or
+ * None, extra or None, the system variables or None]. */
+static PyObject *ta_python_session_entry(ta_python_datamodel *datamodel, uint32_t slot) {
+    ta_python_session_row *row = ta_table_at(&datamodel->sessions, slot);
+    ta_python_chart_row *chart = row ? ta_table_get(&datamodel->charts, row->chart) : NULL;
+    if (!chart) {
+        PyErr_SetString(PyExc_RuntimeError, "a session without its chart");
+        return NULL;
+    }
+    PyObject *instance = row->instance, *vars = PyDict_New(), *event = NULL, *fields = NULL, *system = NULL;
+    int status = vars ? 0 : -1;
+    for (Py_ssize_t i = 0; status == 0 && i < PyTuple_Size(chart->data); i++) {
+        PyObject *id = PyTuple_GetItem(chart->data, i), *value = PyObject_GetAttr(instance, id);
+        if (!value || PyDict_SetItem(vars, id, value) < 0) status = -1;
+        Py_XDECREF(value);
+    }
+    if (status == 0) event = PyObject_GetAttr(instance, datamodel->state->event_key);
+    if (event && event != Py_None) {
+        fields = PyList_New(8);
+        for (int i = 0; fields && i < 8; i++) {
+            PyObject *field = PyObject_GetAttrString(event, ta_python_event_fields[i]);
+            if (!field) Py_CLEAR(fields);
+            else PyList_SetItem(fields, i, field);
+        }
+    } else if (event) fields = Py_NewRef(Py_None);
+    PyObject *sys = fields ? PyObject_GetAttrString(instance, "_ta_sys") : NULL;
+    if (sys) system = sys == Py_None ? Py_NewRef(Py_None) : PySequence_List(sys);
+    PyObject *entry = system ? Py_BuildValue("[KKIOOOO]", (unsigned long long)ta_table_handle(&datamodel->sessions, slot),
+                                             (unsigned long long)chart->image, chart->index, vars, fields,
+                                             row->extra ? row->extra : Py_None, system)
+                             : NULL;
+    Py_XDECREF(sys);
+    Py_XDECREF(system);
+    Py_XDECREF(fields);
+    Py_XDECREF(event);
+    Py_XDECREF(vars);
+    return entry;
+}
+
+PyObject *ta_python_datamodel_snapshot(ta_python_datamodel *datamodel) {
+    PyObject *sessions = PyList_New(0), *values = PyList_New(0), *items = PyList_New(0), *state = NULL;
+    int status = sessions && values && items ? 0 : -1;
+    for (uint32_t slot = 0; status == 0 && slot < datamodel->sessions.capacity; slot++) {
+        if (!ta_table_at(&datamodel->sessions, slot)) continue;
+        PyObject *entry = ta_python_session_entry(datamodel, slot);
+        if (!entry || PyList_Append(sessions, entry) < 0) status = -1;
+        Py_XDECREF(entry);
+    }
+    for (uint32_t slot = 0; status == 0 && slot < datamodel->payloads.capacity; slot++) {
+        ta_python_payload_row *row = ta_table_at(&datamodel->payloads, slot);
+        if (!row) continue;
+        PyObject *entry = Py_BuildValue("[KIO]", (unsigned long long)ta_table_handle(&datamodel->payloads, slot),
+                                        row->references, row->value);
+        if (!entry || PyList_Append(values, entry) < 0) status = -1;
+        Py_XDECREF(entry);
+    }
+    for (uint32_t slot = 0; status == 0 && slot < datamodel->loops.capacity; slot++) {
+        ta_python_loop_row *row = ta_table_at(&datamodel->loops, slot);
+        if (!row) continue;
+        PyObject *list = PySequence_List(row->items);
+        PyObject *entry = list ? Py_BuildValue("[KO]", (unsigned long long)ta_table_handle(&datamodel->loops, slot), list) : NULL;
+        if (!entry || PyList_Append(items, entry) < 0) status = -1;
+        Py_XDECREF(entry);
+        Py_XDECREF(list);
+    }
+    PyObject *layouts[3] = {NULL, NULL, NULL};
+    if (status == 0) {
+        layouts[0] = ta_python_table_layout(&datamodel->sessions);
+        layouts[1] = layouts[0] ? ta_python_table_layout(&datamodel->payloads) : NULL;
+        layouts[2] = layouts[1] ? ta_python_table_layout(&datamodel->loops) : NULL;
+    }
+    if (layouts[2])
+        state = Py_BuildValue("{s:O,s:O,s:O,s:O,s:O,s:O}", "sessions", layouts[0], "payloads", layouts[1], "loops", layouts[2],
+                              "rows", sessions, "values", values, "items", items);
+    for (int i = 0; i < 3; i++) Py_XDECREF(layouts[i]);
+    Py_XDECREF(sessions);
+    Py_XDECREF(values);
+    Py_XDECREF(items);
+    if (!state) return NULL;
+    ta_cbor_writer writer; /* through the host's allocator, freed here: a snapshot's size is no datamodel's room */
+    ta_python_cbor_init(&writer, &(ta_python_room){{NULL, 0, 0}, NULL});
+    PyObject *result = NULL;
+    if (ta_python_value_write(datamodel->state, &writer, state) < 0) {
+        PyObject *raised = PyErr_GetRaisedException();
+        if (raised && PyErr_GivenExceptionMatches(raised, PyExc_Exception)) { /* outside the value table */
+            ta_python_raise_status(datamodel->state, TA_ERROR_UNSUPPORTED);
+            Py_DECREF(raised);
+        } else PyErr_SetRaisedException(raised);
+    } else {
+        ta_bytes bytes;
+        if (ta_cbor_writer_bytes(&writer, &bytes) == TA_OK)
+            result = PyBytes_FromStringAndSize(bytes.pointer, (Py_ssize_t)bytes.length);
+        else PyErr_NoMemory();
+    }
+    ta_cbor_writer_free(&writer);
+    Py_DECREF(state);
+    return result;
+}
+
+/* A table's namespace back from the snapshot's bytes. */
+static int ta_python_table_restore(ta_table *table, PyObject *layout) {
+    char *pointer;
+    Py_ssize_t length;
+    if (!layout || !PyBytes_Check(layout) || PyBytes_AsStringAndSize(layout, &pointer, &length) < 0) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_ValueError, "not a snapshot of the python datamodel");
+        return -1;
+    }
+    ta_status status = ta_table_restore(table, (ta_bytes){pointer, (size_t)length});
+    if (status == TA_ERROR_NO_MEMORY) PyErr_NoMemory();
+    else if (status != TA_OK) PyErr_SetString(PyExc_ValueError, "a table of the snapshot does not restore");
+    return status == TA_OK ? 0 : -1;
+}
+
+/* The chart row a snapshot's session names by image and chart index. */
+static uint64_t ta_python_chart_find(ta_python_datamodel *datamodel, uint64_t image, uint32_t index) {
+    for (uint32_t slot = 0; slot < datamodel->charts.capacity; slot++) {
+        ta_python_chart_row *row = ta_table_at(&datamodel->charts, slot);
+        if (row && row->image == image && row->index == index) return ta_table_handle(&datamodel->charts, slot);
+    }
+    return 0;
+}
+
+/* One session row back: an instance of its chart's class with its values. */
+static int ta_python_session_restore(ta_python_datamodel *datamodel, PyObject *entry) {
+    unsigned long long handle, image;
+    unsigned int index;
+    PyObject *vars, *fields, *extra, *system;
+    if (!PyList_Check(entry) || PyList_Size(entry) != 7) {
+        PyErr_SetString(PyExc_ValueError, "not a session of a snapshot");
+        return -1;
+    }
+    PyObject *tuple = PyList_AsTuple(entry);
+    int parsed = tuple && PyArg_ParseTuple(tuple, "KKIO!OOO", &handle, &image, &index, &PyDict_Type, &vars, &fields, &extra,
+                                           &system);
+    if (parsed) Py_INCREF(vars), Py_INCREF(fields), Py_INCREF(extra), Py_INCREF(system);
+    Py_XDECREF(tuple);
+    if (!parsed) return -1;
+    uint64_t chart_handle = ta_python_chart_find(datamodel, image, index);
+    ta_python_chart_row *chart = ta_table_get(&datamodel->charts, chart_handle);
+    ta_python_session_row *row = ta_table_get(&datamodel->sessions, handle);
+    PyObject *instance = chart && row ? PyObject_CallNoArgs(chart->chart) : NULL;
+    PyObject *sys = !instance ? NULL : system == Py_None ? Py_NewRef(Py_None) : PySequence_Tuple(system);
+    PyObject *event = sys ? ta_python_event_from(datamodel, fields) : NULL;
+    int status = event && PyObject_SetAttrString(instance, "_ta_sys", sys) == 0 &&
+                         PyObject_SetAttr(instance, datamodel->state->event_key, event) == 0
+                     ? 0
+                     : -1;
+    for (Py_ssize_t i = 0; status == 0 && i < PyTuple_Size(chart->data); i++) {
+        PyObject *id = PyTuple_GetItem(chart->data, i), *value = NULL;
+        if (PyDict_GetItemRef(vars, id, &value) < 0) status = -1;
+        else status = PyObject_SetAttr(instance, id, value ? value : Py_None);
+        Py_XDECREF(value);
+    }
+    if (status == 0) {
+        row->instance = Py_NewRef(instance);
+        row->chart = chart_handle;
+        row->extra = extra == Py_None ? NULL : Py_NewRef(extra);
+    } else if (!PyErr_Occurred()) {
+        PyErr_SetString(PyExc_ValueError, chart ? "a session the snapshot's tables do not hold"
+                                                : "a session whose chart the restored host does not have");
+    }
+    ta_python_drop(datamodel, instance);
+    Py_XDECREF(sys);
+    Py_XDECREF(event);
+    Py_DECREF(vars);
+    Py_DECREF(fields);
+    Py_DECREF(extra);
+    Py_DECREF(system);
+    return status;
+}
+
+int ta_python_datamodel_restore(ta_python_datamodel *datamodel, ta_bytes bytes) {
+    if (datamodel->sessions.count || datamodel->payloads.count || datamodel->loops.count) {
+        ta_python_raise_status(datamodel->state, TA_ERROR_STATE); /* not a fresh datamodel */
+        return -1;
+    }
+    PyObject *state = ta_python_value_read(datamodel->state, bytes);
+    PyObject *parts[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
+    static const char *const names[] = {"sessions", "payloads", "loops", "rows", "values", "items"};
+    int status = state && PyDict_Check(state) ? 0 : -1;
+    for (int i = 0; status == 0 && i < 6; i++)
+        if (PyDict_GetItemStringRef(state, names[i], &parts[i]) <= 0 || (i >= 3 && !PyList_Check(parts[i]))) status = -1;
+    if (status < 0 && !PyErr_Occurred()) PyErr_SetString(PyExc_ValueError, "not a snapshot of the python datamodel");
+    if (status == 0 && (ta_python_table_restore(&datamodel->sessions, parts[0]) < 0 ||
+                        ta_python_table_restore(&datamodel->payloads, parts[1]) < 0 ||
+                        ta_python_table_restore(&datamodel->loops, parts[2]) < 0))
+        status = -1;
+    for (Py_ssize_t i = 0; status == 0 && i < PyList_Size(parts[3]); i++)
+        status = ta_python_session_restore(datamodel, PyList_GetItem(parts[3], i));
+    for (Py_ssize_t i = 0; status == 0 && i < PyList_Size(parts[4]); i++) {
+        unsigned long long handle;
+        unsigned int references;
+        PyObject *value, *entry = PyList_GetItem(parts[4], i);
+        PyObject *tuple = PyList_Check(entry) ? PyList_AsTuple(entry) : NULL;
+        ta_python_payload_row *row = NULL;
+        if (!tuple || !PyArg_ParseTuple(tuple, "KIO", &handle, &references, &value) ||
+            !(row = ta_table_get(&datamodel->payloads, handle))) {
+            if (!PyErr_Occurred()) PyErr_SetString(PyExc_ValueError, "a payload the snapshot's tables do not hold");
+            status = -1;
+        } else {
+            row->value = Py_NewRef(value);
+            row->references = references;
+        }
+        Py_XDECREF(tuple);
+    }
+    for (Py_ssize_t i = 0; status == 0 && i < PyList_Size(parts[5]); i++) {
+        unsigned long long handle;
+        PyObject *list, *entry = PyList_GetItem(parts[5], i);
+        PyObject *tuple = PyList_Check(entry) ? PyList_AsTuple(entry) : NULL;
+        ta_python_loop_row *row = NULL;
+        if (!tuple || !PyArg_ParseTuple(tuple, "KO!", &handle, &PyList_Type, &list) ||
+            !(row = ta_table_get(&datamodel->loops, handle))) {
+            if (!PyErr_Occurred()) PyErr_SetString(PyExc_ValueError, "a <foreach> the snapshot's tables do not hold");
+            status = -1;
+        } else if (!(row->items = PyList_AsTuple(list))) status = -1;
+        Py_XDECREF(tuple);
+    }
+    for (int i = 0; i < 6; i++) Py_XDECREF(parts[i]);
+    Py_XDECREF(state);
+    return status; /* on failure the host is freed: the rows filled so far go with it */
 }
 
 static const ta_datamodel_vtable ta_python_vtable = {

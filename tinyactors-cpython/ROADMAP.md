@@ -259,7 +259,7 @@ Left for core (capacity planning, not the binding): a segment's region
 grows by doubling under a burst of events and is kept (12.4 KB per actor
 on quickjs after one event each at 10,000 actors).
 - **Not in the API yet** (8.5): invoked services of the application
-  (`INVOKE`, `UNINVOKE` are dropped), snapshots and export, a
+  (`INVOKE`, `UNINVOKE` are dropped), export and adopt, a
   `<foreach>` item that is not a declared `<data>`.
 
 ### Telemetry (8.5's first item, 2026-10-14) — done
@@ -438,6 +438,45 @@ actor asked for with its job, an event's WAKE with none, the timeout
 leaving a sleeping actor in `pending`, one session or one chart, a
 `"python"` actor with a `set` failing and staying, the stale view, a
 handler that raises, a job unfinished at the stop, refused arguments.
+
+### Snapshots (8.5's fourth item, 2026-10-14) — done
+
+`host.snapshot() -> bytes` (`ta_host_snapshot_pack`) and
+`Host.restore(snapshot, config, ...)` (`ta_host_restore`), both
+datamodels' state beside the host's. Whom it serves: the application
+developer who restarts or moves a host of the same build, and the
+operator who inspects one. Cost: nothing per event; per snapshot the
+region copied once into `bytes` and the datamodels' state written once.
+
+**Asked of core and done (2026-10-14):** a binding's datamodel must
+restore its rows at the handles the regions name, and `ta_table` could
+not add a row at a given handle. `ta_table_snapshot` and
+`ta_table_restore` (`tinyactors-core/src/base/table.c`) save and restore
+a table's handle namespace (generations and free list); the rows are the
+binding's to refill.
+
+The conform adapter runs `snapshot` and `restore`: every scenario of M4
+passes on both datamodels, and the gate is M4's protocol vectors and
+scenarios (the W3C suite, M2, is not in it yet).
+
+**The gate:** `tools/snapshot.py` (`mise run snapshot`; `mise run test`
+runs 20,000 actors with 100 resident and 5,000 all resident on both
+datamodels, `--full` two million with 1000 and 100,000 all resident): a
+population on SQLite, events, a delayed send for every resident actor,
+the snapshot to a file, the host closed, a new one restored (whose own
+snapshot must be the same bytes), more events, the delayed sends due;
+every sampled count and delayed send right, at most R resident. Numbers
+in the README. Getting there found that a test's config with too few
+events for its resident actors grows the region tenfold (doubling every
+pool), and a snapshot copies the region as it is: size the pools.
+
+Tests in `tests/test_snapshot.py`: both datamodels go on after a restore
+with their variables, `_event`, a payload waiting in a mailbox and a
+delayed send due on a new clock that starts at 0; a restored host's
+snapshot is the same bytes; a hibernated actor wakes after a restore; a
+`set` refuses the snapshot and the host goes on; a snapshot from a
+handler is refused; a blob that is no snapshot is refused; an unaligned
+buffer restores.
 
 ## How the work runs
 

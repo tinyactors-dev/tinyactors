@@ -21,11 +21,12 @@ module CPython
   # The suite's set `mise run test` runs (`--milestone`, a set of
   # tinyactors-test/suites/milestones.txt), named here and nowhere else.
   # Which set the binding is held to now is in ROADMAP.md.
-  MILESTONE = 'M1'
+  MILESTONE = 'M4'
   # What of that set `mise run test` runs now: the suites (`--suite`) and
   # the datamodels the adapter passes so far. It grows with the plan
-  # (ROADMAP.md, "Plan and progress"); M1 is done when it is every suite of
-  # the set on both datamodels.
+  # (ROADMAP.md, "Plan and progress"): M4's protocol vectors and every
+  # scenario (invoke, hibernate, migrate, snapshot) pass on both
+  # datamodels; the W3C suite (M2) is not in it yet.
   GATE = { suites: %w[protocol scenarios], datamodels: %w[native quickjs] }.freeze
 
   # The extension's C (AGENTS.md, "Layout"), and the flags every file of it
@@ -155,9 +156,10 @@ module CPython
 
   # A stress tool on both datamodels against the abi3 build: N actors, at
   # most R resident, the rest hibernated into SQLite; tools/stress.py
-  # (README.md, "Hibernation") or tools/migration.py (README.md,
-  # "Migration": all of them move to a new version, live). A failed check
-  # ends the task.
+  # (README.md, "Hibernation"), tools/migration.py (README.md,
+  # "Migration": all of them move to a new version, live) or
+  # tools/snapshot.py (README.md, "Snapshots": the host to bytes and back,
+  # going on). A failed check ends the task.
   def stress(actors:, resident:, events:, tool: 'stress')
     %w[python ecmascript].each do |datamodel|
       puts "#{tool}: #{datamodel}, #{actors} actors, #{resident} resident, #{events} events"
