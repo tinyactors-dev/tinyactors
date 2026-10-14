@@ -272,9 +272,19 @@ nothing without `telemetry` in the config (core's null encoder); with
 it, one `bytes` per request (not per event) and one Python call. Tests in
 `tests/test_telemetry.py` (spans decoded back with `trace_spans_decode`,
 the last take at close, metrics in and outside a drain, a handler that
-raises, an `async def` handler); checked by hand against otel-tui 0.7.5's
-OTLP/HTTP receiver (spans, logs and metrics accepted and shown, with the
-resource and the scope's chart attributes).
+raises, an `async def` handler, watches); checked by hand against
+otel-tui 0.7.5's OTLP/HTTP receiver: spans, metrics and logs shown (the
+`<log>` lines with their macrostep's trace id), with the resource and
+the scope's chart attributes.
+
+Watches (`trace_watch`, `trace_unwatch`) are tested: with sampling at 0, a
+watch on one chart traces it alone, ends at its deadline on the host's
+clock (a simulated one, and the real one through the asyncio timer), and
+`trace_unwatch` ends one early. Testing them found that the host's clock
+started at 0: a watch posted before the first turn ended at once. The
+binding now advances both clocks at creation and before spawn, deliver
+and every typed method (bindings.md section 7: "before every run and
+every input that depends on it").
 
 ## How the work runs
 

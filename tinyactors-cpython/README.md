@@ -120,7 +120,16 @@ with tinyactors.Host(config, telemetry=export) as host:
 it a request is ready only when the staging is full, or at the stop.
 `host.trace_spans_decode(handler, traces=data)` decodes a traces request
 back into spans, and `trace_configure` and `trace_watch` choose what is
-traced ([requests.md](../tinyactors-core/docs/requests.md)).
+traced ([requests.md](../tinyactors-core/docs/requests.md)). A watch adds
+rules for a while, on the host's clock, in front of the configured ones:
+with tracing sampled down, it traces one chart in full until it ends.
+
+```python
+host.trace_configure(print, sample=0.01)                 # 1% of new traces
+host.trace_watch(lambda host, result: print("watch", result["id"]),
+                 rules=[{"chart": "checkout", "sample": "sample", "detail": "full"}],
+                 seconds=60)                             # every checkout, for a minute
+```
 
 ## Charts in Python
 
