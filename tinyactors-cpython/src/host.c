@@ -450,6 +450,7 @@ static PyObject *ta_python_host_create(PyTypeObject *type, PyObject *arguments, 
         goto fail;
     }
     if (clock != Py_None && ta_python_clock_register(clock, (PyObject *)host) < 0) goto fail;
+    ta_python_advance(host); /* the host's clock starts now, not at 0 */
     return (PyObject *)host;
 fail:
     Py_DECREF(host);
@@ -657,6 +658,7 @@ static PyObject *ta_python_host_spawn(PyObject *self, PyObject *arguments, PyObj
         ta_python_host_payload(host, &payload) == 0) {
         uint64_t session = 0;
         spawn.params = payload.payload;
+        ta_python_advance(host);
         ta_status status = ta_host_spawn(host->host, &spawn, &session);
         if (status != TA_OK) ta_python_host_payload_release(host, payload.payload, payload.datamodel);
         result = status == TA_OK ? PyLong_FromUnsignedLongLong(session) : ta_python_host_status(host, status);
@@ -826,6 +828,7 @@ static PyObject *ta_python_host_deliver(PyObject *self, PyObject *arguments) {
     ta_python_call call;
     PyObject *result = NULL;
     if (ta_python_enter(host, &call) == 0) {
+        ta_python_advance(host);
         ta_envelope envelope;
         memset(&envelope, 0, sizeof envelope);
         ta_status status = ta_host_envelope_read(host->host, (ta_bytes){view.buf, (size_t)view.len}, &envelope);

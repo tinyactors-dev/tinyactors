@@ -123,5 +123,92 @@ class Telemetry(unittest.TestCase):
         self.assertIn("traces", got)  # the last take, at the exit of async with
 
 
+TWO = [("a.scxml", chart("<state id='s'><transition event='go'/></state>", name="a")),
+       ("b.scxml", chart("<state id='s'><transition event='go'/></state>", name="b"))]
+
+
+def charts_traced(host, requests):
+    """The charts whose `go` macrosteps the traces requests hold."""
+    traced = []
+    for signal, data in requests:
+        if signal == "traces":
+            host.trace_spans_decode(lambda host, result: traced.extend(
+                span["attributes"].get("tinyactors.chart.name") for span in result["spans"]
+                if span["name"] == "scxml.macrostep go"), traces=data)
+    host.run_until_idle()
+    requests.clear()
+    return sorted(traced)
+
+
+class Watches(unittest.TestCase):
+    def test_a_watch_traces_what_it_matches_until_it_ends(self):
+        got, replies = [], []
+        clock = tinyactors.SimulatedClock()
+        host = tinyactors.Host(config(flushInterval=10), telemetry=lambda host, signal, data: got.append((signal, data)),
+                               clock=clock)
+        with tinyactors.compile_charts(TWO) as compiled:
+            host.add_image(compiled.image)
+        a, b = host.spawn(host.chart("a")), host.spawn(host.chart("b"))
+
+        def step():
+            host.send(a, "go")
+            host.send(b, "go")
+            host.run_until_idle()
+            clock.increment(20)  # past flushInterval: the requests come
+            return charts_traced(host, got)
+
+        host.trace_configure(lambda host, result: replies.append(result), sample=0)  # nothing is sampled but what a watch keeps
+        host.trace_watch(lambda host, result: replies.append(result),
+                         rules=[{"chart": "b", "sample": "sample", "detail": "full"}], seconds=1)
+        host.run_until_idle()
+        self.assertEqual(replies[-1], {"id": 1})
+        self.assertEqual(step(), ["b"])
+        clock.increment(1000)  # the watch's end: a deadline of the host's clock
+        self.assertEqual(step(), [])
+        host.trace_watch(lambda host, result: replies.append(result), rules=[{"chart": "a", "sample": "sample"}],
+                         seconds=None)
+        host.run_until_idle()
+        self.assertEqual(step(), ["a"])
+        host.trace_unwatch(lambda host, result: replies.append(result), id=replies[-1]["id"])
+        host.run_until_idle()
+        self.assertEqual(step(), [])
+        errors = []
+        host.trace_unwatch(print, lambda host, error: errors.append(error.reason), id=2)
+        host.run_until_idle()
+        self.assertEqual(errors, ["stale"])
+        host.close()
+
+    def test_a_watch_ends_on_the_real_clock_under_asyncio(self):
+        got = []
+
+        async def main():
+            config = {"systemID": "t", "telemetry": {"flushInterval": 1_000_000}}  # 1 ms: ticks are ns by default
+            async with tinyactors.Host(config, telemetry=lambda host, signal, data: got.append((signal, data))) as host:
+                with tinyactors.compile_charts(TWO) as compiled:
+                    host.add_image(compiled.image)
+
+                async def settle():  # the host's own timer flushes what is staged
+                    for _ in range(10):
+                        await asyncio.sleep(0.005)
+                        await host.idle()
+
+                a = host.spawn(host.chart("a"))
+                host.trace_configure(lambda host, result: None, sample=0)
+                host.trace_watch(lambda host, result: None, rules=[{"chart": "a", "sample": "sample"}], seconds=0.1)
+                await settle()
+                got.clear()
+                host.send(a, "go")
+                await settle()
+                during = charts_traced(host, got)
+                await asyncio.sleep(0.1)  # past the watch's end, a deadline of the host's timer
+                await settle()
+                host.send(a, "go")
+                await settle()
+                return during, charts_traced(host, got)
+
+        during, after = asyncio.run(main())
+        self.assertEqual((during, after), (["a"], []))
+
+
 if __name__ == "__main__":
     unittest.main()

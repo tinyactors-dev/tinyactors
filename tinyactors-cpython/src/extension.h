@@ -240,6 +240,8 @@ typedef enum ta_python_next {
     TA_PYTHON_NEXT_FAULT
 } ta_python_next;
 int ta_python_drain(ta_python_host *host);
+/* Both clocks now: before an input that depends on them, and at creation. */
+void ta_python_advance(ta_python_host *host);
 /* After a driver's turns: raise what the turn kept or what the next step
  * says (MemoryError naming the pool, TinyactorsError for a fault): 0 or -1. */
 int ta_python_turn_raise(ta_python_host *host, ta_python_next next);

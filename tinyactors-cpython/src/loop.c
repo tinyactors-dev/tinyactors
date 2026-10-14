@@ -68,6 +68,14 @@ static ta_host_time ta_python_now(ta_python_host *host) {
     return (ta_host_time){ta_python_ticks(host, (ta_python_rate){ta_runtime_now_ns(), ta_python_billion}), wall};
 }
 
+/* Both clocks, before an input that depends on them (bindings.md section
+ * 7: spawn, deliver, a posted message such as trace.watch, whose end is a
+ * time of the host's clock) and once at creation; a turn does it before
+ * every run. */
+void ta_python_advance(ta_python_host *host) {
+    ta_host_advance_time(host->host, ta_python_now(host));
+}
+
 /* Seconds from now to the host's deadline (0 when it is due). */
 static double ta_python_delay(ta_python_host *host) {
     ta_time now = ta_python_now(host).monotonic;

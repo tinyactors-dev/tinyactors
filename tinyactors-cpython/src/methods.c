@@ -56,6 +56,7 @@ static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typ
     else {
         row->handler = Py_NewRef(handler);
         row->on_error = Py_NewRef(on_error);
+        ta_python_advance(host); /* trace.watch's end is a time of the host's clock */
         status = ta_python_post(host, typed, id);
         if (status < 0) { /* refused at the call: nothing was applied, no reply comes */
             row = ta_table_get(&host->pending, id);

@@ -317,7 +317,9 @@ or read views; it never takes or acks.
 | `TA_PYTHON_NEXT_FAULT` | raise `TinyactorsError` with `ta_status_name(fault)` (the detail); not retried | the same |
 | a handler raised, or a reply's error had no `on_error` | finish the turn (the ack comes anyway), then raise the first | the same |
 
-- **Both clocks before every run**, one timer (the sync driver's sleep or
+- **Both clocks before every run**, and at creation and before an input
+  that depends on them (spawn, deliver, every typed method: a
+  `trace.watch` ends at a time of the host's clock), one timer (the sync driver's sleep or
   one asyncio `TimerHandle`) at `next_deadline`. A host created with a
   `SimulatedClock` arms no timer.
 
