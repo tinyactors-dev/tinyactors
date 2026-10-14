@@ -440,6 +440,9 @@ static PyObject *ta_python_host_create(PyTypeObject *type, PyObject *arguments, 
     if (PyDict_GetItemStringRef(effective, "system", &system) > 0 && PyDict_Check(system))
         PyDict_GetItemStringRef(system, "ticksPerSecond", &rate);
     host->ticks_per_second = rate ? PyLong_AsUnsignedLongLong(rate) : 0;
+    PyObject *telemetry_key = PyUnicode_FromString("telemetry");
+    host->encoder = telemetry_key && PyDict_Contains(effective, telemetry_key) == 1;
+    Py_XDECREF(telemetry_key);
     Py_XDECREF(system);
     Py_XDECREF(rate);
     int processors = PyErr_Occurred() || !host->ticks_per_second ? -1
