@@ -307,8 +307,9 @@ TA_API void ta_host_effects_ack(ta_host *h);
  * (ta_host_effect_text); bytes: WIRE (ta_host_effect_bytes). An index past
  * the batch, a field the effect kind does not set, or a field asked through
  * the wrong accessor answers 0 or empty. Text and bytes are borrowed like the effect
- * (until the ack or ta_host_free); TRACEPARENT's text is
- * written for the call and lasts until the next ta_host_effect_text.
+ * (until the ack or ta_host_free); TRACEPARENT's text is written into the
+ * batch's memory on the first ask (empty if that allocation is refused) and
+ * lasts until the ack too, however many fields are read meanwhile.
  *
  * A send to a service the host runs (an SCXML <send target="#_<invokeid>">
  * to an external invocation) is a TA_EFFECT_SEND with IO_PROCESSOR

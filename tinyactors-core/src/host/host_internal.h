@@ -183,7 +183,12 @@ struct ta_host {
     const ta_host_effect *published_effects; /* frozen until ack, including across growth */
     effect_strings *effect_strings;
     uint32_t effect_count, effect_capacity, effects_ready;
-    char effect_traceparent[TA_TRACEPARENT_LENGTH]; /* ta_host_effect_text's TRACEPARENT */
+    /* ta_host_effect_text's TRACEPARENT: TA_TRACEPARENT_LENGTH bytes for each
+     * effect of the published batch, at its index, valid until the ack. Grown
+     * only by the first ask of a batch, before any view of it is handed out;
+     * kept across batches, freed with the host. */
+    char *traceparents;
+    uint32_t traceparent_capacity; /* effects */
     char *pool;
     size_t pool_length, pool_capacity;
     /* A published batch (ta_host_effects, effects_ready > 0) is borrowed until

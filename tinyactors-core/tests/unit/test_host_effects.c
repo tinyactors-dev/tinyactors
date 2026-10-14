@@ -301,10 +301,43 @@ static void test_run_refuses_open_batch(void) {
     world_close(&w);
 }
 
+/* Every TRACEPARENT read from a batch stays valid until the ack: each effect's
+ * text has its own memory, and reading another one, or the same one again,
+ * leaves the views already taken as they were. */
+static void test_traceparents_last_until_the_ack(void) {
+    world w;
+    world_open(&w);
+    const ta_host_effect *effects;
+    run_batch(&w, &effects);
+    send_event(&w, "go");
+    uint32_t count = run_batch(&w, &effects);
+    ta_string_view views[16];
+    char expected[16][TA_TRACEPARENT_LENGTH];
+    uint32_t traced = 0;
+    for (uint32_t i = 0; i < count && traced < 16; i++) {
+        ta_buffer out = {expected[traced], TA_TRACEPARENT_LENGTH, 0};
+        if (ta_traceparent_format(&effects[i].trace, &out) != TA_OK) continue;
+        views[traced] = ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_TRACEPARENT);
+        traced++;
+    }
+    CHECK(traced >= 2); /* the log and the send of the same step */
+    for (uint32_t i = 0; i < count; i++) /* every field read again */
+        ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_TRACEPARENT);
+    for (uint32_t k = 0; k < traced; k++) {
+        CHECK_EQUAL(views[k].length, TA_TRACEPARENT_LENGTH);
+        CHECK(memcmp(views[k].pointer, expected[k], TA_TRACEPARENT_LENGTH) == 0);
+        for (uint32_t j = 0; j < k; j++)
+            CHECK(views[j].pointer != views[k].pointer);
+    }
+    ta_host_effects_ack(w.host);
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_take_freezes_batch_across_growth);
     RUN(test_run_refuses_open_batch);
     RUN(test_invoked_service_is_keyed_by_token);
     RUN(test_fields_match_the_struct);
+    RUN(test_traceparents_last_until_the_ack);
     TEST_MAIN_END();
 }

@@ -106,8 +106,7 @@ effect through the accessors by index and field id
 (`ta_host_effect_number`, `_text`, `_bytes`, `TA_EFFECT_FIELD_*`), or
 from the `ta_host_effect` records directly in C. Every field, payload
 handle, string, `WIRE` byte and `TRACEPARENT` text is valid until
-`ta_host_effects_ack` (0012 for `TRACEPARENT`, today valid until the next
-`ta_host_effect_text`).
+`ta_host_effects_ack`.
 
 | Effect | What you do | Answer with |
 |---|---|---|

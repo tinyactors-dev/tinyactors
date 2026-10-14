@@ -528,6 +528,7 @@ void ta_host_free(ta_host *host) {
     host_free(host, host->effects, sizeof(ta_host_effect) * host->effect_capacity);
     host_free(host, host->effect_strings, sizeof(effect_strings) * host->effect_capacity);
     host_free(host, host->pool, host->pool_capacity);
+    host_free(host, host->traceparents, (size_t)host->traceparent_capacity * TA_TRACEPARENT_LENGTH);
     ta_output_free(&host->output);
     ta_output_free(&host->blob);
     host_free(host, host->blob2, host->blob2_capacity);
@@ -1259,6 +1260,33 @@ ta_bytes ta_host_effect_bytes(const ta_host *host, uint32_t index, uint32_t fiel
     }
 }
 
+/* The text of effect `index`'s trace, written into its own slot so that it
+ * lasts until the ack. The batch is frozen, so effects_ready does not change
+ * until then: only the first ask of a batch can grow the slots, and no view
+ * of this batch exists yet when it does. Writing a slot again writes the
+ * same bytes. */
+static ta_string_view effect_traceparent(ta_host *host, uint32_t index) {
+    ta_string_view none = {"", 0};
+    char text[TA_TRACEPARENT_LENGTH];
+    ta_buffer out = {text, sizeof text, 0};
+    if (ta_traceparent_format(&host->published_effects[index].trace, &out) != TA_OK)
+        return none; /* untraced */
+    if (host->traceparent_capacity < host->effects_ready) {
+        uint32_t c = host->traceparent_capacity ? host->traceparent_capacity : 8;
+        while (c < host->effects_ready)
+            c *= 2;
+        char *slots = (char *)host_alloc(host, (size_t)c * TA_TRACEPARENT_LENGTH);
+        if (!slots) return none;
+        host_free(host, host->traceparents,
+                  (size_t)host->traceparent_capacity * TA_TRACEPARENT_LENGTH);
+        host->traceparents = slots;
+        host->traceparent_capacity = c;
+    }
+    char *slot = host->traceparents + (size_t)index * TA_TRACEPARENT_LENGTH;
+    ta_memcpy(slot, text, TA_TRACEPARENT_LENGTH);
+    return (ta_string_view){slot, TA_TRACEPARENT_LENGTH};
+}
+
 ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field) {
     ta_string_view none = {"", 0};
     if (index >= host->effects_ready) return none;
@@ -1271,11 +1299,7 @@ ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field
     case TA_EFFECT_FIELD_MSGID: return effect->msgid;
     case TA_EFFECT_FIELD_ORIGINTYPE: return effect->origintype;
     case TA_EFFECT_FIELD_DEDUPLICATION_KEY: return effect->deduplication_key;
-    case TA_EFFECT_FIELD_TRACEPARENT: {
-        ta_buffer out = {host->effect_traceparent, sizeof host->effect_traceparent, 0};
-        if (ta_traceparent_format(&effect->trace, &out) != TA_OK) return none;
-        return (ta_string_view){host->effect_traceparent, (uint32_t)out.length};
-    }
+    case TA_EFFECT_FIELD_TRACEPARENT: return effect_traceparent(host, index);
     default: return none;
     }
 }
