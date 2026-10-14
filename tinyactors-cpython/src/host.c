@@ -370,6 +370,7 @@ typedef struct ta_python_restoring {
     const ta_host_environment *environment;
     ta_bytes config;
     ta_time time;
+    ta_string_view system_id; /* the snapshot's, in the pack */
 } ta_python_restoring;
 
 static ta_status ta_python_host_restore_core(ta_python_host *host, ta_python_restoring *restoring) {
@@ -397,6 +398,7 @@ static ta_status ta_python_host_restore_core(ta_python_host *host, ta_python_res
         return status;
     }
     restoring->time = contents.time;
+    restoring->system_id = contents.system_id;
     /* the datamodels' handles valid again before the first run */
     PyObject *state = ta_python_value_read(host->state, (ta_bytes){contents.state, contents.state_length});
     PyObject *python = NULL, *ecmascript = NULL;
@@ -429,6 +431,7 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
                                      names, &config, &handlers, &log, &clock, &peer, &telemetry, &wake, &migrated))
         return NULL;
     ta_time restored_time = 0;
+    ta_string_view restored_id = {NULL, 0};
     ta_python_module_state *state = ta_python_state_of_type(type);
     if (!state) return NULL;
     if (handlers != Py_None && !PyDict_Check(handlers)) {
@@ -496,9 +499,10 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
                                        host->allocator, NULL, refusal.pointer ? &refusal : NULL};
     ta_status status;
     if (build->pack) {
-        ta_python_restoring restoring = {*build->pack, &environment, cbor, 0};
+        ta_python_restoring restoring = {*build->pack, &environment, cbor, 0, {NULL, 0}};
         status = ta_python_host_restore_core(host, &restoring);
         restored_time = restoring.time;
+        restored_id = restoring.system_id;
         if (status != TA_OK && PyErr_Occurred()) { /* the datamodels refused: the host is freed with ours */
             ta_growable_arena_release(&host->arena, mark);
             goto fail;
@@ -523,6 +527,17 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
     PyObject *effective = ta_python_host_config(host);
     ta_growable_arena_release(&host->arena, mark);
     if (!effective) goto fail;
+    int same_system = 1; /* a restore: the effective config's system id is the snapshot's */
+    if (build->pack) {
+        PyObject *id = NULL;
+        Py_ssize_t length = 0;
+        const char *text = PyDict_GetItemStringRef(effective, "systemID", &id) > 0 && PyUnicode_Check(id)
+                               ? PyUnicode_AsUTF8AndSize(id, &length)
+                               : NULL;
+        same_system = text && (size_t)length == restored_id.length && memcmp(text, restored_id.pointer, restored_id.length) == 0;
+        Py_XDECREF(id);
+        PyErr_Clear();
+    }
     PyObject *system = NULL, *rate = NULL;
     if (PyDict_GetItemStringRef(effective, "system", &system) > 0 && PyDict_Check(system))
         PyDict_GetItemStringRef(system, "ticksPerSecond", &rate);
@@ -541,7 +556,16 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
         goto fail;
     }
     if (clock != Py_None && ta_python_clock_register(clock, (PyObject *)host) < 0) goto fail;
-    if (build->pack) ta_python_clock_resume(host, restored_time); /* on from the snapshot's time */
+    if (build->pack) {
+        /* the config the snapshot was taken with: its system id at least (its I/O processors and
+           tick rate come from this config too, and are not in the pack) */
+        if (!same_system) {
+            PyErr_Format(PyExc_ValueError, "the snapshot is of system %.*s: restore it with the config it was taken with",
+                         (int)restored_id.length, restored_id.pointer ? restored_id.pointer : "");
+            goto fail;
+        }
+        ta_python_clock_resume(host, restored_time); /* on from the snapshot's time */
+    }
     ta_python_advance(host); /* the host's clock starts now, not at 0 */
     return (PyObject *)host;
 fail:
@@ -1173,20 +1197,30 @@ static PyObject *ta_python_host_restore(PyObject *type, PyObject *arguments, PyO
     return host;
 }
 
-/* The ECMAScript datamodel's state (ta_datamodel_ecmascript_snapshot) as bytes. */
+/* The ECMAScript datamodel's state (ta_datamodel_ecmascript_snapshot) as
+ * bytes: written into room for the last state's length and a quarter more,
+ * once more only when it outgrew that (each call writes the whole state). */
 static PyObject *ta_python_ecmascript_state(ta_python_host *host) {
-    ta_buffer probe = {NULL, 0, 0};
-    ta_status status = ta_datamodel_ecmascript_snapshot(host->ecmascript, &probe);
-    PyObject *bytes = status == TA_OK || status == TA_ERROR_NO_MEMORY
-                          ? PyBytes_FromStringAndSize(NULL, (Py_ssize_t)probe.length)
-                          : NULL;
-    ta_buffer out = {bytes ? PyBytes_AsString(bytes) : NULL, probe.length, 0};
-    if (bytes && probe.length) status = ta_datamodel_ecmascript_snapshot(host->ecmascript, &out);
-    if (status != TA_OK && (bytes || status != TA_ERROR_NO_MEMORY)) {
+    size_t room = host->ecmascript_room + host->ecmascript_room / 4 + 4096;
+    PyObject *bytes = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)room);
+    ta_buffer out = {bytes ? PyBytes_AsString(bytes) : NULL, room, 0};
+    ta_status status = bytes ? ta_datamodel_ecmascript_snapshot(host->ecmascript, &out) : TA_OK;
+    if (bytes && status == TA_ERROR_NO_MEMORY && out.length > room) { /* it outgrew the guess */
+        Py_DECREF(bytes);
+        room = out.length;
+        bytes = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)room);
+        out = (ta_buffer){bytes ? PyBytes_AsString(bytes) : NULL, room, 0};
+        status = bytes ? ta_datamodel_ecmascript_snapshot(host->ecmascript, &out) : TA_OK;
+    }
+    if (bytes && status != TA_OK) {
         Py_CLEAR(bytes);
         ta_python_raise_status(host->state, status); /* TA_ERROR_UNSUPPORTED: a value it cannot store */
     }
-    return bytes;
+    if (!bytes) return NULL;
+    host->ecmascript_room = out.length;
+    PyObject *exact = PyBytes_FromStringAndSize(PyBytes_AsString(bytes), (Py_ssize_t)out.length);
+    Py_DECREF(bytes);
+    return exact;
 }
 
 /* One value as CBOR bytes, through the host's allocator and freed here. */
@@ -1213,8 +1247,12 @@ static PyObject *ta_python_host_snapshot(PyObject *self, PyObject *unused) {
     ta_python_host *host = (ta_python_host *)self;
     ta_python_call call;
     if (ta_python_enter(host, &call) < 0) return NULL;
-    PyObject *python = host->batch ? NULL : ta_python_datamodel_snapshot(&host->python);
-    if (host->batch) ta_python_raise_status(host->state, TA_ERROR_STATE);
+    /* quiescent first (effects or replies pending, a migration job): core's own check, before the
+       datamodels' state is built for nothing */
+    ta_buffer quiet = {NULL, 0, 0};
+    ta_status ready = ta_host_snapshot(host->host, &quiet);
+    if (ready != TA_OK && ready != TA_ERROR_NO_MEMORY) ta_python_raise_status(host->state, ready);
+    PyObject *python = ready == TA_OK || ready == TA_ERROR_NO_MEMORY ? ta_python_datamodel_snapshot(&host->python) : NULL;
     PyObject *ecmascript = python ? ta_python_ecmascript_state(host) : NULL;
     PyObject *both = ecmascript ? Py_BuildValue("{s:O,s:O}", "python", python, "ecmascript", ecmascript) : NULL;
     Py_XDECREF(python);
@@ -1398,12 +1436,12 @@ static PyMethodDef ta_python_host_methods[] = {
      "wake(session, blob, /)\n--\n\nBring a hibernated actor back from its blob; its waiting events run next turn."},
     {"snapshot", ta_python_host_snapshot, METH_NOARGS,
      "snapshot()\n--\n\nThe whole host as bytes (ta_host_snapshot_pack): every segment's region, both datamodels' "
-     "state, the images. Quiescent only: not from a handler, nor while a migration job runs. For the same build of "
-     "the library."},
+     "state, the images. Quiescent only: not from a handler, not with a typed method's reply or another effect "
+     "pending (run the host first), nor while a migration job runs. For the same build of the library."},
     {"restore", (PyCFunction)(void (*)(void))ta_python_host_restore, METH_CLASS | METH_VARARGS | METH_KEYWORDS,
-     "restore(snapshot, config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, "
-     "migrated=None)\n--\n\nA new Host running a snapshot, with the handlers Host() takes; its clock goes on from "
-     "the snapshot's time."},
+     "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, "
+     "migrated=None)\n--\n\nA new Host running a snapshot, with the config it was taken with and the handlers "
+     "Host() takes; its clock goes on from the snapshot's time."},
     {"migrate", (PyCFunction)(void (*)(void))ta_python_host_migrate, METH_VARARGS | METH_KEYWORDS,
      "migrate(handler, /, *, chart=None, session=None, wake=False, timeout=0)\n--\n\nMove actors of older versions to "
      "the current version of their chart (all charts, `chart`, or one `session`) in the next runs, waking hibernated "

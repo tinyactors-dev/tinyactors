@@ -327,9 +327,12 @@ waits for (at most a quarter full after it is rebuilt).
 segment's region (actors, queues, timers, the actors' hibernation
 records), both datamodels' sessions and payloads, the images, the system
 id and the host's time. `tinyactors.Host.restore(snapshot, config, ...)`
-makes a new host running it, with the handlers `Host(...)` takes; every
-session id stays, and the clock goes on from the snapshot's time (a new
-`SimulatedClock`, or the real clock in another process, is offset to it).
+makes a new host running it, with the config it was taken with (its
+system id is checked; its I/O processors and tick rate are not in the
+snapshot) and the handlers `Host(...)` takes. Every session id stays,
+and the host's clock goes on from the snapshot's time, whatever clock
+reads it: a new `SimulatedClock`, or the real one in another process or
+on another machine, is offset to it.
 
 ```python
 blob = host.snapshot()                    # quiescent: not from a handler
@@ -344,11 +347,13 @@ host = tinyactors.Host.restore(blob, config, log=log, wake=wake)
 - **The hibernated actors stay in your store.** The snapshot holds their
   records, not their blobs; the restored host asks for them with the
   same WAKE.
-- It is refused from a handler and while a migration job runs
-  (`TA_ERROR_STATE`), and when a `"python"` session or payload holds a
-  value outside the value table (`TA_ERROR_UNSUPPORTED`); the host goes
-  on. Values are written through the value table: two variables of one
-  session that share a list share it no more after a restore.
+- It needs a quiescent host: it is refused from a handler, with an
+  effect or a typed method's reply not yet handled (run the host first),
+  and while a migration job runs (`TA_ERROR_STATE`); and when a
+  `"python"` session or payload holds a value outside the value table
+  (`TA_ERROR_UNSUPPORTED`). The host goes on either way. Values are
+  written through the value table: two variables of one session that
+  share a list share it no more after a restore.
 
 `mise run snapshot` is the pattern at scale (`tools/snapshot.py`): a
 population on SQLite as in "Hibernation", 200,000 events, a delayed send
@@ -360,10 +365,10 @@ CPUs, CPython 3.13.16 with the GIL, one run each:
 
 | datamodel | actors | resident | snapshot | snapshot time | restore time | every count and delayed send |
 |---|---|---|---|---|---|---|
-| `"python"` | 2,000,000 | 1000 | 120.9 MB (60 B per actor) | 0.11 s | 0.07 s | right |
-| quickjs | 2,000,000 | 1000 | 120.9 MB | 0.13 s | 0.07 s | right |
-| `"python"` | 100,000 | all | 225.3 MB (2253 B per actor) | 0.59 s | 0.44 s | right |
-| quickjs | 100,000 | all | 232.3 MB (2323 B per actor) | 1.50 s | 0.78 s | right |
+| `"python"` | 2,000,000 | 1000 | 121.8 MB (61 B per actor) | 0.12 s | 0.07 s | right |
+| quickjs | 2,000,000 | 1000 | 121.9 MB | 0.09 s | 0.07 s | right |
+| `"python"` | 100,000 | all | 224.8 MB (2248 B per actor) | 0.50 s | 0.39 s | right |
+| quickjs | 100,000 | all | 232.5 MB (2325 B per actor) | 1.36 s | 0.67 s | right |
 
 A snapshot is mostly the region, as the config sized it; of the 225 MB of
 100,000 resident `"python"` actors, about 11 MB is the datamodel's state.

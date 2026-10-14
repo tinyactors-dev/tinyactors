@@ -141,6 +141,78 @@ class Snapshot(unittest.TestCase):
         with tinyactors.Host.restore(shifted, CONFIG, clock=tinyactors.SimulatedClock()) as host:
             self.assertEqual(host.snapshot(), blob)
 
+    def test_one_image_in_two_segments_keeps_each_sessions_chart(self):
+        for datamodel in ("python", "ecmascript"):
+            with self.subTest(datamodel=datamodel):
+                logs, clock = Logs(), tinyactors.SimulatedClock()
+                document = COUNTER[datamodel].replace("<state id='s'>", "<state id='s'><transition event='stop' target='f'/>")
+                document = document.replace("</scxml>", "<final id='f'/></scxml>")
+                with tinyactors.compile_charts([("counter.scxml", document)]) as compiled:
+                    image = bytes(compiled.image)
+                with tinyactors.Host(CONFIG, clock=clock) as host:
+                    host.add_image(image)
+                    first = host.spawn(host.chart("counter"))
+                    host.add_image(image)  # the same image again: another segment
+                    second = host.spawn(host.chart("counter"))
+                    host.run_until_idle()
+                    blob = host.snapshot()
+                with tinyactors.Host.restore(blob, CONFIG, log=logs, clock=clock) as host:
+                    host.send(first, "stop")
+                    host.run_until_idle()
+                    host.run_until_idle()  # the first segment retires
+                    host.send(second, "inc", 1)
+                    host.send(second, "report", 0)
+                    host.run_until_idle()
+                    host.snapshot()
+                self.assertEqual(len(logs.labelled("n")), 1)
+                self.assertTrue(logs.labelled("n")[0].startswith("1 "))
+
+    def test_the_real_clock_resumes_at_the_snapshots_time(self):
+        """A snapshot taken at time 0 of a simulated clock, restored on the
+        real clock (its ticks since boot): the delayed send is still a
+        second away."""
+        logs = Logs()
+        with host_of(COUNTER["python"]) as host:
+            session = host.spawn(host.chart("counter"))
+            host.send(session, "wait")
+            host.run_until_idle()
+            blob = host.snapshot()
+        with tinyactors.Host.restore(blob, CONFIG, log=logs) as host:
+            host.run_until_idle()
+            self.assertEqual(logs.labelled("late"), [])
+            host.run()  # sleeps to the deadline: about a second
+        self.assertEqual(logs.labelled("late"), ["{'k': 0}"])
+
+    def test_a_value_nests_as_deep_in_a_snapshot_as_in_a_send(self):
+        deep = 1
+        for _ in range(62):
+            deep = [deep]
+        logs = Logs()
+        with host_of(COUNTER["python"]) as host:
+            session = host.spawn(host.chart("counter"))
+            host.send(session, "inc", deep)
+            host.run_until_idle()
+            blob = host.snapshot()
+        with tinyactors.Host.restore(blob, CONFIG, log=logs, clock=tinyactors.SimulatedClock()) as host:
+            host.send(session, "report", 0)
+            host.run_until_idle()
+        self.assertTrue(logs.labelled("n")[0].startswith("1 [[[["))
+
+    def test_restore_refuses_another_systems_config(self):
+        with host_of(COUNTER["python"]) as host:
+            blob = host.snapshot()
+        with self.assertRaisesRegex(ValueError, "system t"):
+            tinyactors.Host.restore(blob, {"systemID": "other"})
+
+    def test_a_snapshot_with_a_reply_pending_is_refused(self):
+        with host_of(COUNTER["python"]) as host:
+            host.host_stats(lambda host, result: None)
+            with self.assertRaises(tinyactors.TinyactorsError) as raised:
+                host.snapshot()
+            self.assertEqual(raised.exception.status, "TA_ERROR_STATE")
+            host.run_until_idle()
+            host.snapshot()
+
 
 if __name__ == "__main__":
     unittest.main()

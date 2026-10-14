@@ -175,8 +175,9 @@ struct ta_python_host {
     uint64_t ticks_per_second;         /* host.config's system.ticksPerSecond */
     unsigned long thread;              /* the creating thread */
     ta_time deadline;                  /* the last idle run's next_deadline */
-    ta_time ticks_offset;              /* added to the clock's ticks: a restored host goes on from its
-                                          snapshot's time, never back (0 for a new host) */
+    ta_time ticks_offset;              /* added to the clock's ticks (mod 2^64): a restored host goes on
+                                          from its snapshot's time (0 for a new host) */
+    size_t ecmascript_room;            /* the last ECMAScript state's length: the next snapshot's guess */
     uint32_t pool;                     /* the last exhausted run's TA_POOL_* */
     ta_status fault;                   /* the last faulted run's status */
     uint32_t depth;                    /* API calls in progress on the stack */

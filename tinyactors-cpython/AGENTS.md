@@ -284,10 +284,14 @@ Decided by the maintainer (2026-10-13); every item is in
   `ta_host_snapshot_image` and `ta_host_restore` in place of
   `ta_host_create`, then restores both datamodels before anything runs;
   a pack another program labelled is refused, an unaligned buffer copied.
-  The restored host's clock reads its ticks plus an offset that starts
-  it at the snapshot's time (bindings.md section 7), never earlier.
-  Quiescent only: from a handler (a batch is open) or during a migration
-  job, `TA_ERROR_STATE`.
+  The restored host's clock reads its ticks plus an offset (mod 2^64)
+  that puts it at the snapshot's time when it is restored (bindings.md
+  section 7), whatever the clock reads. The effective config's system id
+  must be the pack's. Quiescent only, which core checks first, before the
+  datamodels' state is built: from a handler (a batch is open), with an
+  effect or a reply pending, or during a migration job, `TA_ERROR_STATE`.
+  The ECMAScript state is written into room for the last one's length,
+  so it is written once in the usual case.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
@@ -650,13 +654,16 @@ Registered beside quickjs, first; matched by the chart's
 - **Snapshots of the datamodel** write, as one CBOR document through the
   value table, the session, payload and loop tables' handle namespaces
   (`ta_table_snapshot`) and every row: a session's variables, `_event`,
-  `extra` and system variables, with its chart named by the image's
-  content hash and the chart's index (the restore attached the charts
-  again, under new handles); a payload's value and references; a loop's
-  items. The restore puts the namespaces back (`ta_table_restore`) and
-  fills the rows at their handles. A value outside the table refuses the
-  snapshot (`TA_ERROR_UNSUPPORTED`); values shared between variables are
-  copied apart.
+  `extra` and system variables, each value as CBOR of its own (so it
+  nests as deep as in a send), with its chart named by its attachment's
+  segment and the chart's index (`ta_datamodel_chart.segment`: two
+  segments may run one image, and the restore attached the charts again,
+  under new handles); a payload's value and references; a loop's items.
+  The restore puts the namespaces back (`ta_table_restore`) and fills the
+  rows at their handles, refusing a row twice or rows that do not match
+  the tables. A value outside the table refuses the snapshot
+  (`TA_ERROR_UNSUPPORTED`, a `MemoryError` stays one); values shared
+  between variables are copied apart.
 - **Measured cost per session** (`mise run measure`, 2026-10-14: x86_64
   Linux, 4 CPUs, CPython 3.13.16 with the GIL; 10,000 actors of a chart
   with three `<data>`, one of them a list, resident and idle): **433 B

@@ -76,11 +76,13 @@ static ta_host_time ta_python_now(ta_python_host *host) {
 }
 
 /* A restored host's clock goes on from `time`, its snapshot's: the ticks
- * the clock reads now are offset up to it (never down). */
+ * the clock reads are offset to read `time` now (unsigned, so an offset
+ * "down" wraps and adds up right), whatever the clock: a new
+ * SimulatedClock, or the real one after a reboot, on another machine, or
+ * in another process of this one. */
 void ta_python_clock_resume(ta_python_host *host, ta_time time) {
     host->ticks_offset = 0;
-    ta_time now = ta_python_now(host).monotonic;
-    host->ticks_offset = time > now ? time - now : 0;
+    host->ticks_offset = time - ta_python_now(host).monotonic;
 }
 
 /* Both clocks, before an input that depends on them (bindings.md section

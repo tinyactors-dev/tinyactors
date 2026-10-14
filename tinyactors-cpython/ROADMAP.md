@@ -470,6 +470,32 @@ in the README. Getting there found that a test's config with too few
 events for its resident actors grows the region tenfold (doubling every
 pool), and a snapshot copies the region as it is: size the pools.
 
+A fresh agent reviewed snapshots; fixed (with tests):
+
+- two segments running one image: a restored session found the first
+  segment's chart (by image hash and index), so when that segment
+  retired the other's sessions ran a detached chart, and on quickjs core
+  crashed (its datamodel matched the same way). Core now gives a
+  datamodel the segment of each attachment (`ta_datamodel_chart.segment`,
+  from the system's first serial), and both datamodels name a session's
+  chart by segment and index;
+- the real clock resumed at the snapshot's time only on a machine up for
+  less time: the offset is now the difference, whatever the clock;
+- the snapshot is refused before the datamodels' state is built when the
+  host is not quiescent (a reply pending counts), and quickjs's state is
+  written once in the usual case, not twice;
+- values are written one by one, so one nested 61 to 64 deep no longer
+  refuses the snapshot, and a `MemoryError` is no longer reported as a
+  value outside the table;
+- a restore refuses rows that do not match the tables or come twice, and
+  a config of another system;
+- core's `ta_table_restore` read past a crafted blob on a 32-bit
+  `size_t`; the API description's pattern for unnamed records is wider.
+
+Left as is: a value written through the value table loses sharing; the
+images of a pack are walked once per image (`ta_host_snapshot_image`),
+quadratic in segments, of which a host has few.
+
 Tests in `tests/test_snapshot.py`: both datamodels go on after a restore
 with their variables, `_event`, a payload waiting in a mailbox and a
 delayed send due on a new clock that starts at 0; a restored host's
