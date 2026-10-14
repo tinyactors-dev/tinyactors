@@ -1,9 +1,9 @@
 ---
-title: In the browser
+title: Browser and Node
 description: "staticjs.wasm from JavaScript, in a browser or in Node."
 ---
 
-# staticjs in the browser, and in Node
+# Browser and Node
 
 `staticjs.wasm` is the library as a WebAssembly module. It imports
 nothing, so it runs wherever WebAssembly does, with no JavaScript glue

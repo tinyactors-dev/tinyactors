@@ -51,7 +51,17 @@ function send(res, path, status = 200, headers = {}) {
     'Cache-Control': path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
     ...headers,
   });
-  createReadStream(path).pipe(res);
+  createReadStream(path)
+    .on('error', () => res.destroy())
+    .pipe(res);
+}
+
+/** A 404: the site's page for a browser, plain text for markdown or when the page is missing. */
+function notFound(res, markdown) {
+  const page = !markdown && file('/404.html');
+  if (page) return send(res, page, 404, { Vary: 'Accept' });
+  res.writeHead(404, { 'Content-Type': `${markdown ? 'text/markdown' : 'text/plain'}; charset=utf-8`, Vary: 'Accept' });
+  res.end('# Not found\n\nNo page here. Every page is listed in /llms.txt.\n');
 }
 
 const server = createServer((req, res) => {
@@ -73,15 +83,15 @@ const server = createServer((req, res) => {
   if (direct) return send(res, direct);
 
   const route = routeOf(pathname);
-  const markdown = file(markdownURL(route));
+  const markdown = file(markdownURL(route)) ?? file(markdownURL(`${route}/`));
   if (pathname.endsWith('.md') || prefersMarkdown(req.headers.accept)) {
     if (markdown) return send(res, markdown, 200, { Vary: 'Accept' });
-    return send(res, file('/404.html'), 404, { Vary: 'Accept' });
+    return notFound(res, true);
   }
   const html = file(route === '/' ? '/index.html' : `${route}.html`) ?? file(`${route}/index.html`);
-  const alternate = markdown ? { Link: `<${markdownURL(route)}>; rel="alternate"; type="text/markdown"` } : {};
+  const alternate = markdown ? { Link: `<${markdown.slice(root.length)}>; rel="alternate"; type="text/markdown"` } : {};
   if (html) return send(res, html, 200, { Vary: 'Accept', ...alternate });
-  return send(res, file('/404.html'), 404, { Vary: 'Accept' });
+  return notFound(res, false);
 });
 server.listen(port, () => {
   console.log(`staticjs site: http://localhost:${server.address().port} (markdown at any route + .md, or with Accept: text/markdown)`);

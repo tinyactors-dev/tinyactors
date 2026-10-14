@@ -21,8 +21,8 @@ const theme = (name, type, c) => ({
 });
 
 export const vellum = theme('tinyactors-vellum', 'light', {
-  bg: '#EEE7D9', fg: '#2A2622', comment: '#857a6b', keyword: '#1F5E4A', string: '#8a5d0c', regexp: '#4F6A40',
-  number: '#3E5F70', fn: '#3A342E', property: '#5C544B', type: '#194D3D', punctuation: '#766C60',
+  bg: '#EEE7D9', fg: '#2A2622', comment: '#6b6154', keyword: '#1F5E4A', string: '#8a5d0c', regexp: '#4F6A40',
+  number: '#3E5F70', fn: '#3A342E', property: '#5C544B', type: '#194D3D', punctuation: '#655b4f',
 });
 
 export const umber = theme('tinyactors-umber', 'dark', {

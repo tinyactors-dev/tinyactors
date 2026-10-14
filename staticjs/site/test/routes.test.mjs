@@ -85,7 +85,26 @@ test('links between pages point at markdown in markdown', async () => {
 
 test('a missing page is a 404, in either form', async () => {
   assert.equal((await get('/guide/nothing')).status, 404);
-  assert.equal((await get('/guide/nothing.md')).status, 404);
+  const md = await get('/guide/nothing.md');
+  assert.equal(md.status, 404);
+  assert.match(md.headers.get('content-type'), /^text\/markdown/);
   assert.equal((await get('/guide/nothing', { Accept: 'text/markdown' })).status, 404);
   assert.equal((await get('/../../etc/passwd')).status, 404);
+});
+
+test('section indexes, the 404 page and the generated markdown', async () => {
+  for (const path of ['/guide/', '/explore/', '/guide', '/explore']) assert.equal((await get(path)).status, 200, path);
+  assert.match(await (await get('/guide/', { Accept: 'text/markdown' })).text(), /^# Guide/);
+  const missing = await get('/nowhere');
+  assert.equal(missing.status, 404);
+  assert.match(missing.headers.get('content-type'), /^text\/html/);
+  assert.doesNotMatch(await missing.text(), /404\.md/);
+  const pipeline = await (await get('/explore/pipeline.md')).text();
+  assert.match(pipeline, /## A worked example/);
+  assert.match(pipeline, /shape `PLUCK`/);
+  const examples = await (await get('/guide/examples.md')).text();
+  assert.match(examples, /```c\n[\s\S]*#include "staticjs.h"/);
+  assert.doesNotMatch(examples, /^<<<|^:::/m);
+  const full = await (await get('/llms-full.txt')).text();
+  assert.match(full, /^Source: \/guide\/language\.md$/m);
 });

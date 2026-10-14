@@ -2,8 +2,8 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
-import { StaticJS, describeError } from './theme/staticjs/runtime.js';
-import { liveInfo, llmsTxt, markdownURL, prefersMarkdown, routeOf, toAgentMarkdown } from './agents.js';
+import { StaticJS, describeError, operator } from './theme/staticjs/runtime.js';
+import { liveInfo, llmsTxt, markdownURL, pipelineMarkdown, prefersMarkdown, routeOf, toAgentMarkdown } from './agents.js';
 import { umber, vellum } from './shiki-themes.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -20,11 +20,13 @@ const evaluate = (source, options) => staticjs.evaluate(source, options);
 
 const guide = [
   { text: 'Getting started', link: '/guide/getting-started', description: 'From a download to a C program that evaluates JavaScript: prebuilt libraries, the amalgamation, a first program.' },
+  { text: 'Why staticjs?', link: '/guide/why', description: 'When staticjs fits and when it does not, and how it compares with an engine in a sandbox or a rule language.' },
+  { text: 'Quick reference', link: '/guide/reference', description: 'The language and the C API on one page: the two kinds of program, what to write instead of what staticjs leaves out, the built-ins, the calls in order.' },
   { text: 'Embedding', link: '/guide/embedding', description: 'The C API: contexts, allocators, limits, fuel, values and who owns them, globals, native functions, modules, the clock and the seed, streaming, inspection.' },
   { text: 'The language', link: '/guide/language', description: 'What a staticjs program can say: syntax, modules, every built-in, BigInt, Map, JSON, Temporal, Date, and changing a value a function owns.' },
   { text: 'Faults and refusals', link: '/guide/faults', description: 'Where staticjs stops instead of following JavaScript, and what it refuses when compiled.' },
   { text: 'Performance', link: '/guide/performance', description: 'Fuel, memory, the callbacks that run in C, and a comparison with Node and QuickJS.' },
-  { text: 'In the browser', link: '/guide/wasm', description: 'staticjs.wasm from JavaScript, in a browser or in Node.' },
+  { text: 'Browser and Node', link: '/guide/wasm', description: 'staticjs.wasm from JavaScript, in a browser or in Node.' },
   { text: 'Examples', link: '/guide/examples', description: 'Whole C programs and a browser page, built and checked by the test suite.' },
 ];
 const explore = [
@@ -34,14 +36,18 @@ const explore = [
 /** The pages, for llms.txt: each with its section, title and description. */
 const pages = [
   { route: '/', section: 'Start', title: 'staticjs', description: 'What staticjs is, what it guarantees, and how to get it.' },
+  { route: '/guide/', section: 'Guide', title: 'Guide', description: 'Every page of the guide, in reading order.' },
   ...guide.map((p) => ({ route: p.link, section: 'Guide', title: p.text, description: p.description })),
+  { route: '/explore/', section: 'Explore', title: 'Explore', description: 'Interactive views of how staticjs works.' },
   ...explore.map((p) => ({ route: p.link, section: 'Explore', title: p.text, description: p.description })),
 ];
 
 const agentMarkdown = (file) => {
   const source = readFileSync(join(srcDir, file), 'utf8');
   const page = pages.find((p) => p.route === routeOf(file));
-  return toAgentMarkdown(source, { evaluate, describeError, title: page?.title });
+  const include = (path) => readFileSync(resolve(srcDir, dirname(file), path), 'utf8');
+  const pipeline = (program) => pipelineMarkdown(staticjs.pipeline(program), { operator });
+  return toAgentMarkdown(source, { evaluate, describeError, title: page?.title, include, pipeline });
 };
 
 export default defineConfig({
@@ -58,6 +64,7 @@ export default defineConfig({
     ['link', { rel: 'alternate', type: 'text/plain', href: '/llms.txt', title: 'llms.txt' }],
   ],
   transformHead({ pageData }) {
+    if (pageData.isNotFound || pageData.relativePath === '404.md') return [];
     const route = routeOf(pageData.relativePath);
     return [['link', { rel: 'alternate', type: 'text/markdown', href: markdownURL(route) }]];
   },
@@ -126,9 +133,9 @@ export default defineConfig({
             }
             if (!wantsMarkdown) return next();
             const route = url.pathname.replace(/\.md$/, '').replace(/\/index$/, '/') || '/';
-            const page = pages.find((p) => p.route === route);
+            const page = pages.find((p) => p.route === route || p.route === `${route}/`);
             if (!page) return next();
-            const file = route === '/' ? 'index.md' : `${route.slice(1)}.md`;
+            const file = page.route.endsWith('/') ? `${page.route.slice(1)}index.md` : `${page.route.slice(1)}.md`;
             res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
             res.setHeader('Vary', 'Accept');
             res.end(agentMarkdown(file));
@@ -142,15 +149,15 @@ export default defineConfig({
     const out = siteConfig.outDir;
     const full = [];
     for (const page of pages) {
-      const file = page.route === '/' ? 'index.md' : `${page.route.slice(1)}.md`;
+      const file = page.route.endsWith('/') ? `${page.route.slice(1)}index.md` : `${page.route.slice(1)}.md`;
       const markdown = agentMarkdown(file);
       const target = join(out, markdownURL(page.route));
       mkdirSync(dirname(target), { recursive: true });
       writeFileSync(target, markdown);
-      full.push(markdown);
+      full.push(`<!-- ${siteURL}${markdownURL(page.route)} -->\n\n${markdown}\nSource: ${siteURL}${markdownURL(page.route)}\n`);
     }
     writeFileSync(join(out, 'llms.txt'), llmsTxt(pages, { siteURL }));
-    writeFileSync(join(out, 'llms-full.txt'), `${full.join('\n---\n\n')}`);
+    writeFileSync(join(out, 'llms-full.txt'), full.join('\n- - -\n\n'));
   },
 });
 

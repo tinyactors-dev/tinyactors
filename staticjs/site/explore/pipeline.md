@@ -27,4 +27,7 @@ The interactive explorer runs in a browser. What it shows, for a program you cho
 4. **Writer:** the value written as JavaScript source through a 16-byte buffer, in pieces.
 
 An error shows at the stage that reported it: a syntax error at the parser, a name error or an unsupported construct at the compiler, a fault at the evaluator.
+
 -->
+
+<!-- pipeline example: "[\n  { name: \"ada\", age: 36 },\n  { name: \"grace\", age: 85 },\n  { name: \"linus\", age: 54 },\n]\n  .toSorted((a, b) => b.age - a.age)\n  .map((p) => p.name)" -->

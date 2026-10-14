@@ -7,7 +7,7 @@ description: "From a download to a C program that evaluates JavaScript."
 
 This page takes you from a download to a program that evaluates
 JavaScript. It covers the three ways to build staticjs into a C program;
-the browser is in [In the browser](./wasm.md).
+the browser is in [Browser and Node](./wasm.md).
 
 ## 1. Get a release
 
@@ -18,7 +18,7 @@ Releases are on the repository's GitHub releases page, tagged
 |---|---|---|
 | `staticjs-<version>-src.tar.gz` | `staticjs.h`; `staticjs.c`, the whole library as one C file (the *amalgamation*); `staticjs_wasm.c`, the wasm module's allocator; `staticjs.api.json`, the API's types, constants and struct layouts | compile staticjs into your program with clang, on any target |
 | `staticjs-<version>-<target>.tar.gz` for `x86_64-linux`, `aarch64-linux`, `x86_64-macos`, `aarch64-macos` | `include/staticjs.h`, `lib/libstaticjs.a`, and the shared library (`libstaticjs.so.<major>.<minor>` with a `libstaticjs.so` link, or `libstaticjs.<major>.<minor>.dylib`) | link a prebuilt library, with any C compiler |
-| `staticjs-<version>-wasm32.tar.gz` | `staticjs.wasm` and `include/staticjs.h` | run staticjs in a browser or in Node ([In the browser](./wasm.md)) |
+| `staticjs-<version>-wasm32.tar.gz` | `staticjs.wasm` and `include/staticjs.h` | run staticjs in a browser or in Node ([Browser and Node](./wasm.md)) |
 | `staticjs-<version>.json` | the manifest: the commit, the compiler, the flags, every file's hash | check what a release was built from |
 | `SHA256SUMS` | each asset's SHA-256 | `sha256sum -c SHA256SUMS --ignore-missing` |
 
@@ -189,6 +189,6 @@ and [Faults and refusals](./faults.md) where staticjs stops.
 - [Embedding](./embedding.md): the API. Contexts, limits and fuel; values
   in and out; globals, native functions and modules; the clock and the
   random seed; streaming.
-- [In the browser](./wasm.md): staticjs in a browser or in Node.
-- [../../examples/](./examples.md): whole programs for each of
+- [Browser and Node](./wasm.md): staticjs in a browser or in Node.
+- [Examples](./examples.md): whole programs for each of
   these.

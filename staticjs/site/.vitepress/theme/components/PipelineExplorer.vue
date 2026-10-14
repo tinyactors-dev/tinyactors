@@ -70,6 +70,12 @@ const failed = ref('');
 const step = ref(0);
 const playing = ref(false);
 const hovered = ref<number | null>(null);
+// The row clicked or tapped: what the source shows when nothing is hovered.
+const pinned = ref<number | null>(null);
+function pin(i: number) {
+  pinned.value = pinned.value === i ? null : i;
+  hovered.value = pinned.value;
+}
 const viewEl = ref<HTMLElement | null>(null);
 function syncScroll(event: Event) {
   const t = event.target as HTMLTextAreaElement;
@@ -88,6 +94,15 @@ function choose(id: string) {
   isModule.value = e.module;
 }
 
+/** The first step with the most frames open: a moment worth looking at. */
+function deepest(steps?: { frames: unknown[] }[]) {
+  let best = 0;
+  steps?.forEach((s, i) => {
+    if (s.frames.length > steps[best].frames.length) best = i;
+  });
+  return best;
+}
+
 async function analyse() {
   try {
     const staticjs = await useStaticJS();
@@ -95,8 +110,8 @@ async function analyse() {
     result.value = r;
     failed.value = '';
     stop();
-    step.value = r.steps ? r.steps.length - 1 : 0;
-    hovered.value = null;
+    step.value = deepest(r.steps);
+    hovered.value = pinned.value = null;
     const where = errorStage.value;
     if (where) stage.value = where as any;
   } catch (e) {
@@ -144,13 +159,13 @@ function stageStat(id: string) {
   if (!r) return '';
   switch (id) {
     case 'parser':
-      return `${plural(r.bytes, 'byte')} · ${plural(r.compile.chunks, 'chunk')} · ${plural(r.events.length, 'event')}`;
+      return plural(r.events.length, 'event');
     case 'compiler':
-      return r.compile.ok ? `${plural(r.functions.length, 'function')} · ${plural(r.compile.programBytes, 'byte')}` : 'refused';
+      return r.compile.ok ? plural(r.functions.length, 'function') : 'refused';
     case 'evaluator':
-      return r.compile.ok ? `${r.fuel} fuel${r.status === 'fault' ? ' · faulted' : ''}` : 'not reached';
+      return r.compile.ok ? (r.status === 'fault' ? 'faulted' : `${r.fuel.toLocaleString('en')} fuel`) : 'not reached';
     case 'writer':
-      return r.output ? `${r.output.text.length} chars · ${plural(r.output.pieces, 'piece')}` : 'not reached';
+      return r.output ? plural(r.output.pieces, 'piece') : 'not reached';
   }
   return '';
 }
@@ -357,7 +372,7 @@ const fuelSaved = computed(() => {
           </label>
         </header>
         <div class="code-area">
-          <div ref="viewEl" class="view" aria-hidden="true">
+          <div ref="viewEl" class="view" :class="{ focusing: hovered !== null && (stage === 'parser' || stage === 'compiler') }" aria-hidden="true">
             <div v-for="(line, n) in lines" :key="n" class="line">
               <span class="ln">{{ n + 1 }}</span><span class="text"><span v-for="(run, k) in line.runs" :key="k" :class="run.cls">{{ run.text }}</span>{{ '\u200b' }}</span>
             </div>
@@ -391,7 +406,7 @@ const fuelSaved = computed(() => {
             role="tab"
             :aria-selected="stage === st.id"
             :class="stageState(st.id)"
-            @click="stage = st.id; hovered = null"
+            @click="stage = st.id; hovered = pinned = null"
           >
             <span class="status" :data-kind="stageState(st.id) === 'ok' ? 'running' : stageState(st.id) === 'error' ? 'error' : 'idle'">{{ st.name }}</span>
             <span class="stat">{{ loading ? '…' : stageStat(st.id) }}</span>
@@ -406,14 +421,16 @@ const fuelSaved = computed(() => {
 
             <!-- 01 the parser -->
             <div v-if="stage === 'parser'">
-              <p class="explain">The parser is pushed the source {{ chunk ? `${chunk} byte${chunk === 1 ? '' : 's'} at a time` : 'whole' }} and sends each piece of syntax to its sink as an event, in evaluation order: operands before their operator. Hover an event to see its node in the source.</p>
-              <ol class="events" @mouseleave="hovered = null">
+              <p class="explain">The parser is pushed the source {{ chunk ? `${chunk} byte${chunk === 1 ? '' : 's'} at a time` : 'whole' }} and sends each piece of syntax to its sink as an event, in evaluation order: operands before their operator. Hover or tap an event to see its node in the source.</p>
+              <p class="muted small">{{ plural(result.bytes, 'byte') }} in {{ plural(result.compile.chunks, 'chunk') }}, {{ plural(result.events.length, 'event') }}.</p>
+              <ol class="events" @mouseleave="hovered = pinned">
                 <li
                   v-for="row in events"
                   :key="row.i"
                   :class="{ on: hovered === row.i }"
                   @mouseenter="hovered = row.i"
                   @focus="hovered = row.i"
+                  @click="pin(row.i)"
                   tabindex="0"
                 >
                   <span class="idx">{{ row.i }}</span>
@@ -429,14 +446,14 @@ const fuelSaved = computed(() => {
               <p class="explain">The compiler is the parser's sink: it turns events into bytecode as they arrive, and tags each function whose shape a built-in can run in C.</p>
               <template v-if="result.compile.ok">
                 <dl class="facts">
-                  <div><dt>Program</dt><dd>{{ result.compile.programBytes }} bytes</dd></div>
+                  <div><dt>Program</dt><dd>{{ plural(result.compile.programBytes, 'byte') }}</dd></div>
                   <div><dt>Functions</dt><dd>{{ result.functions.length }}</dd></div>
                   <div><dt>Shaped</dt><dd>{{ result.functions.filter((f: any) => f.shape).length }}</dd></div>
                 </dl>
                 <table class="fns">
                   <thead><tr><th>#</th><th>begins</th><th>params</th><th>shape</th></tr></thead>
-                  <tbody @mouseleave="hovered = null">
-                    <tr v-for="(f, i) in result.functions" :key="i" :class="{ on: hovered === i }" @mouseenter="hovered = i">
+                  <tbody @mouseleave="hovered = pinned">
+                    <tr v-for="(f, i) in result.functions" :key="i" :class="{ on: hovered === i }" @mouseenter="hovered = i" @click="pin(i)">
                       <td>{{ i === 0 ? 'main' : i }}</td>
                       <td>{{ f.at.line }}:{{ f.at.column }}</td>
                       <td>{{ f.params }}</td>
@@ -462,13 +479,14 @@ const fuelSaved = computed(() => {
                   <button class="icon-button primary" type="button" :title="playing ? 'Pause' : 'Play'" :aria-label="playing ? 'Pause' : 'Play'" @click="play"><Icon :name="playing ? 'pause' : 'play'" /></button>
                   <button class="icon-button" type="button" title="Forward one unit" aria-label="Forward one unit of fuel" @click="move(1)"><Icon name="step-forward" /></button>
                   <input v-model.number="step" class="scrub" type="range" min="0" :max="steps.length - 1" aria-label="Step" @input="stop" />
-                  <span class="counter">{{ steps[step]?.fuel ?? 0 }} / {{ result.fuel }} fuel</span>
+                  <span class="counter">{{ (steps[step]?.fuel ?? 0).toLocaleString('en') }} / {{ plural(result.fuel, 'unit') }} of fuel</span>
                 </div>
                 <svg class="depth" viewBox="0 0 600 48" preserveAspectRatio="none" role="img" :aria-label="`Frame depth over ${steps.length} steps`">
                   <path :d="`${depthPath} L600,48 L0,48 Z`" class="area" />
                   <path :d="depthPath" class="line" />
                   <line :x1="cursorX" :x2="cursorX" y1="0" y2="48" class="cursor" />
                 </svg>
+                <p class="muted small depth-key">Frames open, over the fuel spent; the upright line is this step.</p>
                 <p v-if="result.truncated" class="muted small">The trace shows the first {{ steps.length - 1 }} units; the evaluation ran on to {{ result.fuel }}.</p>
                 <ol class="frames">
                   <li v-if="!frames.length" class="muted">{{ step === 0 ? 'Not started.' : result.status === 'fault' ? 'Faulted.' : 'Done: no frames left.' }}</li>
@@ -618,7 +636,12 @@ const fuelSaved = computed(() => {
   background: color-mix(in srgb, var(--data-1) 22%, transparent);
 }
 .text .span {
-  background: var(--accent-subtle);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+}
+/* While a node is shown, the chunk tint steps back. */
+.focusing .text .c1 {
+  background: transparent;
 }
 .text .tok {
   box-shadow: inset 0 -2px 0 var(--accent);
@@ -738,9 +761,12 @@ const fuelSaved = computed(() => {
 .events li:nth-child(2n) {
   background: color-mix(in srgb, var(--surface-2) 50%, transparent);
 }
+.events li { cursor: pointer; }
 .events li.on {
   background: var(--accent-subtle);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
+.depth-key { margin: 0 0 var(--space-3); }
 .idx { color: var(--fg-4); text-align: right; }
 .kind { color: var(--accent-fg); white-space: nowrap; }
 .pl { color: var(--fg-1); background: none !important; border: 0 !important; padding: 0 !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -792,7 +818,9 @@ const fuelSaved = computed(() => {
   font-family: var(--font-mono);
   font-size: 12.5px;
 }
+.fns tr { cursor: pointer; }
 .fns tr.on td { background: var(--accent-subtle); }
+.fns tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .bars .bar {
   display: grid;
   grid-template-columns: 64px 1fr 56px;
@@ -850,7 +878,7 @@ const fuelSaved = computed(() => {
   display: block;
   width: 100%;
   height: 48px;
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-1);
   background: var(--bg-grid), var(--bg-app);
   border: 1px solid var(--border-1);
   border-radius: var(--radius-2);

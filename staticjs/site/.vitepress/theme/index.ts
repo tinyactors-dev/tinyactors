@@ -12,9 +12,12 @@ import './style.css';
 import LiveSample from './components/LiveSample.vue';
 import PipelineExplorer from './components/PipelineExplorer.vue';
 import HomePage from './components/HomePage.vue';
+import NotFound from './components/NotFound.vue';
+import { h } from 'vue';
 
 export default {
   extends: DefaultTheme,
+  Layout: () => h(DefaultTheme.Layout, null, { 'not-found': () => h(NotFound) }),
   enhanceApp({ app }) {
     app.component('LiveSample', LiveSample);
     app.component('PipelineExplorer', PipelineExplorer);

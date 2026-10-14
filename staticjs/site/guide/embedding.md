@@ -3,7 +3,7 @@ title: Embedding
 description: "The C API: contexts, limits, fuel, values, globals, natives, modules, the clock, streaming and inspection."
 ---
 
-# Embedding staticjs
+# Embedding
 
 How a C program uses staticjs: what each object is, who owns what, and how
 to pass values in and get them out. `include/staticjs.h` is the reference.

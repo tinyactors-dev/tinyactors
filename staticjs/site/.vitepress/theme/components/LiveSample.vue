@@ -2,7 +2,7 @@
 // A live sample: the code, highlighted, and its value, computed when the
 // site was built. "Edit" turns the code into an editor that runs in this
 // page, through staticjs.wasm, as you type.
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useStaticJS } from '../staticjs/client.js';
 import { describeError } from '../staticjs/runtime.js';
 import Icon from './Icon.vue';
@@ -18,6 +18,21 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 
 const rows = computed(() => Math.max(2, code.value.split('\n').length));
 const changed = computed(() => code.value !== original);
+const runLabel = ref('Run (Ctrl+Enter)');
+onMounted(() => {
+  if (/Mac|iPhone|iPad/.test(navigator.platform)) runLabel.value = 'Run (⌘↵)';
+});
+
+/** A string with line breaks, as its text: what it prints, not its literal. */
+const raw = computed(() => {
+  const r = result.value;
+  if (!r.ok || r.kind !== 'string' || !r.value.includes('\\n')) return null;
+  try {
+    return JSON.parse(r.value);
+  } catch {
+    return null;
+  }
+});
 
 /** The source line an error points at, and a caret under its column. */
 const pointer = computed(() => {
@@ -90,7 +105,8 @@ function onKey(event: KeyboardEvent) {
       <template v-if="result.ok">
         <span class="arrow" aria-hidden="true">→</span>
         <code class="value">{{ result.value }}</code>
-        <span class="meta" :title="`evaluated on ${result.fuel} units of fuel`">{{ result.kind }}, {{ result.fuel }} fuel</span>
+        <span class="meta" :title="`evaluated on ${result.fuel} units of fuel`">{{ result.kind }}, {{ result.fuel.toLocaleString('en') }} fuel</span>
+        <pre v-if="raw !== null" class="raw">{{ raw }}</pre>
       </template>
       <template v-else>
         <span class="status" data-kind="error">{{ describeError(result.error) }}</span>
@@ -100,7 +116,7 @@ function onKey(event: KeyboardEvent) {
       <span class="controls">
         <button v-if="changed" class="icon-button" type="button" title="Reset to the original" aria-label="Reset to the original" @click="reset"><Icon name="reset" /></button>
         <button v-if="!editing" class="icon-button" type="button" title="Edit and run it here" aria-label="Edit this sample and run it in the page" @click="edit"><Icon name="pencil" /></button>
-        <button v-else class="icon-button primary" type="button" title="Run (⌘↵)" aria-label="Run" :disabled="running" @click="run"><Icon name="play" /></button>
+        <button v-else class="icon-button primary" type="button" :title="runLabel" aria-label="Run" :disabled="running" @click="run"><Icon name="play" /></button>
       </span>
     </div>
   </figure>
@@ -142,6 +158,7 @@ function onKey(event: KeyboardEvent) {
   color: var(--code-fg);
   background: var(--surface-code);
   tab-size: 2;
+  min-height: 7.5em;
   outline: none;
 }
 .editor textarea:focus {
@@ -184,6 +201,18 @@ function onKey(event: KeyboardEvent) {
 .out .status {
   color: var(--fg-1);
   font: var(--type-body-sm);
+}
+.raw {
+  order: 5;
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  padding: 8px 12px;
+  font: var(--type-code);
+  color: var(--fg-1);
+  background: var(--surface-code);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-2);
+  overflow-x: auto;
 }
 .pointer {
   order: 5;

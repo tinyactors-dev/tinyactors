@@ -59,7 +59,7 @@ A program staticjs accepts is a valid JavaScript program, and evaluating it give
 
 - **A C library** (any compiler): `cc -std=c11 -Iinclude app.c lib/libstaticjs.a`. See [Getting started](/guide/getting-started).
 - **One C file** (clang): `clang -O2 -I. app.c staticjs.c`, the amalgamation.
-- **WebAssembly** (browser, Node): `staticjs.wasm` imports nothing. See [In the browser](/guide/wasm).
+- **WebAssembly** (browser, Node): `staticjs.wasm` imports nothing. See [Browser and Node](/guide/wasm).
 
 ## Inside
 

@@ -198,18 +198,21 @@ compare identities, or find something on a prototype.
 
 ## Refused when compiled
 
+A loop is refused when compiled, even one that would end:
+
 ```js live fault
-(xs) => {
+((xs) => {
   let sum = 0;
   for (const x of xs) sum += x;
   return sum;
-}
+})([1, 2, 3])
 ```
+
+The same sum, with a built-in that walks the array:
 
 ```js live
-(xs) => xs.reduce((sum, x) => sum + x, 0)
+((xs) => xs.reduce((sum, x) => sum + x, 0))([1, 2, 3])
 ```
-
 
 JavaScript staticjs leaves out is refused as `unsupported`, never given a
 different meaning. Among the module forms: `export let`, `export function`,

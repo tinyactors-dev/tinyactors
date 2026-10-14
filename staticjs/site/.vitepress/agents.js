@@ -36,9 +36,65 @@ export function outcomeLine(result, describeError) {
  * only for markdown (`<!-- markdown` ... `-->`) is unwrapped; links to
  * other pages point at their markdown.
  */
-export function toAgentMarkdown(source, { evaluate, describeError, title }) {
+/**
+ * A program's way through the four stages, as markdown: what the explorer
+ * shows, for one program, from `StaticJS.pipeline`.
+ */
+export function pipelineMarkdown(r, { operator }) {
+  const payload = (ev) => {
+    if (ev.kind === 'NUMBER') return String(ev.number);
+    if (['UNARY', 'BINARY', 'LOGICAL', 'LOGICAL_END'].includes(ev.kind)) return operator(ev.count);
+    if (ev.text) return ev.kind === 'STRING' ? JSON.stringify(ev.text) : ev.text;
+    if (['CALL_END', 'NEW_END', 'ARROW_BEGIN', 'TEMPLATE_END'].includes(ev.kind)) return String(ev.count);
+    return '';
+  };
+  const deepest = r.steps.reduce((best, s, i) => (s.frames.length > r.steps[best].frames.length ? i : best), 0);
+  const frames = r.steps[deepest].frames.map((f, i) =>
+    `${i + 1}. ${f.kind === 'loop' ? `\`${f.object ? `${f.object}.` : ''}${f.name}\`${f.length ? `, element ${f.index} of ${f.length}` : ''}` : i === 0 ? 'the program' : 'a function'}, at ${f.at.line}:${f.at.column}`);
+  return [
+    '## A worked example',
+    '',
+    '```js',
+    r.source,
+    '```',
+    '',
+    `**Parser.** ${r.bytes} bytes become ${r.events.length} events. The first ${Math.min(12, r.events.length)}:`,
+    '',
+    '| # | Event | Payload | At |',
+    '|---:|---|---|---|',
+    ...r.events.slice(0, 12).map((ev, i) => `| ${i} | \`${ev.kind}\` | ${payload(ev) ? `\`${payload(ev)}\`` : ''} | ${ev.at.line}:${ev.at.column} |`),
+    '',
+    `**Compiler.** A program of ${r.compile.programBytes} bytes with ${r.functions.length} functions:`,
+    '',
+    ...r.functions.map((f, i) => `- ${i === 0 ? 'the program' : `function ${i}`}, at ${f.at.line}:${f.at.column}: ${f.shape ? `shape \`${f.shape}\`` : 'no shape'}`),
+    '',
+    r.fuelWithoutShapes ? `It runs on ${r.fuel} units of fuel with its shapes, and ${r.fuelWithoutShapes} without them, to the same value.` : '',
+    '',
+    `**Evaluator.** At step ${deepest} of ${r.steps.length - 1}, its deepest, the frames are, outermost first:`,
+    '',
+    ...frames,
+    '',
+    `**Writer.** Through a ${r.pieceSize}-byte buffer, in ${r.output.pieces} pieces, it writes:`,
+    '',
+    '```js',
+    r.output.text,
+    '```',
+  ].join('\n');
+}
+
+export function toAgentMarkdown(source, { evaluate, describeError, title, include, pipeline }) {
   const { data, body } = splitFrontmatter(source);
   let text = body
+    // A snippet included from a file (`<<< path{lang}`): its contents, fenced.
+    .replace(/^<<< (\S+?)(?:\{(\w+)\})?$/gm, (whole, path, lang) => {
+      const code = include(path).replace(/\n$/, '');
+      return `\`\`\`${lang ?? path.split('.').pop()}\n${code}\n\`\`\``;
+    })
+    // A collapsed block: its title as a paragraph, its contents shown.
+    .replace(/^::: details (.*)$/gm, '$1:')
+    .replace(/^:::$/gm, '')
+    // The pipeline explorer's worked example, computed by the build.
+    .replace(/^<!-- pipeline example: (.*) -->$/gm, (whole, json) => pipeline(JSON.parse(json)))
     .replace(/<script setup[\s\S]*?<\/script>\n?/g, '')
     .replace(/<!-- html -->[\s\S]*?<!-- \/html -->\n?/g, '')
     .replace(/<!-- markdown\n([\s\S]*?)-->\n?/g, '$1')
@@ -48,7 +104,8 @@ export function toAgentMarkdown(source, { evaluate, describeError, title }) {
     const live = liveInfo(info);
     if (!live) return whole;
     const result = evaluate(code.replace(/\n$/, ''), { module: live.module });
-    return `\`\`\`js\n${code}\`\`\`\n\n${outcomeLine(result, describeError)}`;
+    const kind = live.module ? '// A module: its value is the object of its exports.\n' : '';
+    return `\`\`\`js\n${kind}${code}\`\`\`\n\n${outcomeLine(result, describeError)}`;
   });
   // Links to the site's pages, absolute or relative, without an extension: their markdown.
   text = text.replace(/\]\((\/(?!\/)[^)#\s]*?)(#[^)\s]*)?\)/g, (whole, path, hash = '') =>
@@ -95,6 +152,8 @@ export function llmsTxt(pages, { siteURL = '' } = {}) {
     '',
     '> staticjs is a pure, total subset of JavaScript, as a freestanding C library and a WebAssembly module. A program it accepts is valid JavaScript and evaluates to the value JavaScript gives, or to a fault: never a different value. Every evaluation ends (it runs on fuel the host pushes), has no side effects, and allocates only through the host.',
     '',
+    'Use staticjs to evaluate short programs written by someone other than the host (guards, rules, filters, computed fields) when they must end, have no effects, and give the same value everywhere. Do not use it for whole applications: it has no loops, no classes, no async and no I/O. To write a program for it, read the Quick reference first.',
+    '',
     'Every page of this site is markdown at its path plus `.md`, and at its path for a request whose `Accept` header prefers `text/markdown`. `llms-full.txt` holds them all in one file. The C API reference is the public header, `staticjs.h`, whose every declaration has a comment.',
     '',
   ];
@@ -104,7 +163,7 @@ export function llmsTxt(pages, { siteURL = '' } = {}) {
     lines.push('');
   }
   lines.push('## Optional', '', `- [Everything in one file](${siteURL}/llms-full.txt): every page above, in order`,
-    '- [The C header](https://github.com/dhamidi/tinyactors/blob/main/staticjs/include/staticjs.h): the API reference',
+    '- [The C header](https://raw.githubusercontent.com/dhamidi/tinyactors/main/staticjs/include/staticjs.h): the API reference, as plain text',
     '- [Source](https://github.com/dhamidi/tinyactors/tree/main/staticjs): the library, its tests and design notes', '');
   return lines.join('\n');
 }

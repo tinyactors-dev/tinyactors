@@ -152,4 +152,4 @@ started by a host. The report gives every case, the memory each engine
 held, the method and its caveats.
 
 To measure a change to staticjs itself, see
-[../internals/benchmarks.md](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/benchmarks.md).
+[Benchmarks, in the design notes](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/benchmarks.md).
