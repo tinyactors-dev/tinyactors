@@ -280,8 +280,8 @@ h1 em {
   background: var(--surface-code);
   border: 1px solid var(--code-border);
   border-radius: var(--radius-2);
-  overflow-x: auto;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .pipeline-teaser {
   display: grid;
