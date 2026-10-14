@@ -173,10 +173,13 @@ The findings step 8.2 settles [8.2], each a decision and a test:
    rule stands (`datamodel.h:7-8`); `test_host_inputs.c`'s hooks show that
    nothing grew by counting the host's allocator, not by reading
    `ta_system_stats`.
-5. **The width of ids in `types.h`:** `types.h:7` says "ids/handles are
-   uint32_t", while a session is `uint64_t` (`host.h:183`), a payload
-   `uint64_t` (`types.h:124`) and a `ta_table` handle 64 bits: say which
-   ids are 32 bits and which 64.
+5. **The width of ids in `types.h`** — settled: `types.h` names three
+   kinds: indices (segment, chart, I/O processor, datamodel) are
+   `uint32_t` from 0 with `TA_NIL` for none; handles (actor, token, peer,
+   job, watch) are `uint32_t`, never 0, with 0 for none (an actor's and a
+   token's carry a generation, `ta_pool_handle`, `src/base/pool.h:70`);
+   sessions, payloads and `ta_table` handles are `uint64_t` with 0 for
+   none.
 6. **`detach_event` when SCXML can no longer process the event.** Core
    calls it at a stable point, only for a datamodel with
    `TA_DATAMODEL_EVENT_DETACHABLE`, and releases the event then

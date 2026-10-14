@@ -4,7 +4,16 @@
  *   - only fixed-width integers, pointers and {pointer, length} views cross the ABI;
  *   - enums are passed as uint32_t, never as C enum types inside structs;
  *   - every extensible struct starts with `uint32_t size` (= sizeof by caller);
- *   - ids/handles are uint32_t; 0 is never a valid handle;
+ *   - ids come in three kinds:
+ *       indices into what a host holds (a segment, a chart in its image,
+ *       an I/O processor, a datamodel binding) are uint32_t from 0, and
+ *       TA_NIL means none;
+ *       handles (an actor in its system, an invoke or request token, a
+ *       peer, a migration job, a trace watch) are uint32_t and never 0,
+ *       and 0 means none; an actor's and a token's carry a generation, so
+ *       a stale one is refused;
+ *       ids that outlive their segment or name values (a session, a
+ *       payload, a ta_table handle) are uint64_t, and 0 means none;
  *   - a function takes at most three parameters: what travels together is
  *     grouped in a struct (ta_bytes, ta_buffer, ta_spawn, ...).
  */
