@@ -36,6 +36,7 @@ typedef struct ta_python_module_state {
     PyObject *send_type;      /* a send to an I/O processor: a thin view or a record */
     PyObject *entry_type;     /* a <log> line: a thin view */
     PyObject *envelope_type;  /* a PEER or PEER_ERROR effect: a thin view */
+    PyObject *migration_type; /* a MIGRATED effect: a thin view */
     PyObject *event_type;     /* _event in a "python" chart */
     PyObject *support;        /* the namespace of src/datamodel/support.py */
     PyObject *error;          /* TinyactorsError, CompileError, ResolveError, Diagnostic */
@@ -180,7 +181,10 @@ struct ta_python_host {
     PyObject *log;                     /* log handler or None */
     PyObject *peer;                    /* peer handler or None */
     PyObject *telemetry;               /* telemetry handler(host, signal, data) or None */
-    PyObject *wake;                    /* wake handler(host, session) or None */
+    PyObject *wake;                    /* wake handler(host, session, job) or None */
+    PyObject *migrated;                /* migrated handler(host, migration) or None */
+    PyObject *jobs;                    /* job id -> handler(host, result) of a migrate call, until its
+                                          JOB_DONE (core's ids: no table of ours) */
     int wake_async;                    /* it is an async def */
     int telemetry_async;               /* it is an async def */
     int encoder;                       /* the config has "telemetry": the host stamps spans */

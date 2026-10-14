@@ -221,6 +221,11 @@ class Scenario:
         self.aliases = {}
         self.outcome = None
         self.clock = tinyactors.SimulatedClock()
+        self.blobs = {}  # the implementation's store (driver.md): hibernated actors' blobs
+
+    def wake(self, host, session, job):
+        """WAKE: the actor's blob from the store."""
+        host.wake(session, self.blobs.pop(session))
 
     def log(self, host, entry):
         if self.outcome is None and entry.label == "Outcome":
@@ -238,7 +243,7 @@ class Scenario:
 
     def run(self, steps):
         config = {"systemID": "conformance", "system": {"ticksPerSecond": 1000}}
-        with tinyactors.Host(config, log=self.log, clock=self.clock) as host:
+        with tinyactors.Host(config, log=self.log, clock=self.clock, wake=self.wake) as host:
             for step in steps:
                 try:
                     self.step(host, step)
@@ -273,6 +278,16 @@ class Scenario:
                 raise Refused("send_many took fewer events")
         elif "advance" in step:
             self.clock.increment(step["advance"])  # ticksPerSecond 1000: ticks are milliseconds
+        elif "hibernate" in step:
+            session = self.session(step["hibernate"])
+            self.blobs[session] = host.hibernate(session)
+        elif "migrate" in step:
+            done = []
+            host.migrate(lambda host, result: done.append(result), wake=bool(step["migrate"].get("wake")),
+                         timeout=step["migrate"].get("timeout", 0))
+            host.run_until_idle()  # the loop until its JOB_DONE: the job moves actors in the runs
+            if not done:
+                raise Refused("the migration did not end")
         else:
             raise Refused("not in the binding's API yet: %s" % ", ".join(step))
 
