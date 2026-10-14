@@ -189,6 +189,70 @@ class Services(unittest.TestCase):
         self.assertEqual(record, [("hello", "there"), ("answer", {"echo": "there"})])
         self.assertEqual(logs.labelled("answer"), ["{'echo': 'there'}"])
 
+    def test_a_service_done_in_its_handler_is_not_kept_nor_stopped(self):
+        record, alive = [], []
+
+        def start(host, invocation):
+            service = Echo(record, invocation)
+            alive.append(weakref.ref(service))
+            invocation.done({"at": "start"})
+            return service
+
+        logs = Logs()
+        with host_with([("client.scxml", CLIENT["python"])], log=logs, services={TYPE: start}) as host:
+            host.spawn(host.chart("client"))
+            host.run_until_idle()
+            gc.collect()
+            self.assertIsNone(alive[0]())  # the host does not hold it
+        self.assertNotIn("stop", [r[0] for r in record])
+        self.assertEqual(logs.labelled("done"), ["{'at': 'start'}"])
+
+    def test_a_send_to_a_service_that_failed_to_start_fails(self):
+        logs = Logs()
+
+        def start(host, invocation):
+            raise ValueError("cannot start")
+
+        with host_with([("client.scxml", CLIENT["python"])], log=logs, services={TYPE: start}) as host:
+            session = host.spawn(host.chart("client"))
+            with self.assertRaises(ValueError):
+                host.run_until_idle()
+            host.send(session, "ask", "anyone")
+            host.run_until_idle()
+            host.send(session, "leave")
+            host.run_until_idle()
+        self.assertEqual(logs.labelled("error"), ["communication", "communication"])
+
+    def test_a_failure_to_start_an_invocation_cancelled_already_is_not_reported(self):
+        document = chart("<state id='s'><invoke id='echo' type='urn:test:echo' src='echo://here'/>"
+                         "<transition event='leave' target='over'/></state>"
+                         "<state id='over'><transition event='error.communication'>"
+                         "<log label='error' expr=\"'late'\"/></transition></state>", name="client")
+        logs = Logs()
+
+        def start(host, invocation):
+            raise ValueError("cannot start")
+
+        with host_with([("client.scxml", document)], log=logs, services={TYPE: start}) as host:
+            session = host.spawn(host.chart("client"))
+            host.send(session, "leave")  # INVOKE and UNINVOKE in one batch
+            with self.assertRaises(ValueError):
+                host.run_until_idle()
+            host.run_until_idle()
+        self.assertEqual(logs.labelled("error"), [])
+
+    def test_a_snapshot_with_a_running_service_is_refused(self):
+        record = []
+        with host_with([("client.scxml", CLIENT["python"])], services={TYPE: lambda host, i: Echo(record, i)}) as host:
+            session = host.spawn(host.chart("client"))
+            host.run_until_idle()
+            with self.assertRaises(tinyactors.TinyactorsError) as raised:
+                host.snapshot()
+            self.assertEqual(raised.exception.status, "TA_ERROR_STATE")
+            host.send(session, "ask", "finish")
+            host.run_until_idle()
+            host.snapshot()
+
     def test_services_must_be_a_dict(self):
         with self.assertRaises(TypeError):
             tinyactors.Host({"systemID": "t"}, services=[TYPE])

@@ -576,7 +576,7 @@ typedef struct ta_python_invocation {
     uint64_t session;     /* the invoker */
     uint32_t segment, token;
     uint32_t ended;       /* done, cancelled or failed: answers refused */
-    uint32_t pad;
+    uint32_t failed;      /* it never ran: sends to it are answered with error.communication */
     PyObject *invokeid, *type, *src, *data, *traceparent;
 } ta_python_invocation;
 
@@ -593,11 +593,12 @@ typedef struct ta_python_service_event {
     PyObject *name; /* NULL: none (done, failure) */
     PyObject *data;
     PyObject *traceparent;
+    ta_string_view sendid; /* error.communication: the failed send's */
 } ta_python_service_event;
 
 static int ta_python_invocation_post(ta_python_invocation *invocation, const ta_python_service_event *what) {
     ta_python_host *host = invocation->host;
-    if (invocation->ended || !host->host) {
+    if ((invocation->ended && what->flags != TA_EVENT_IN_ERROR_COMMUNICATION) || !host->host) {
         ta_python_raise_status(host->state, TA_ERROR_STALE); /* done, cancelled, or the host is gone */
         return -1;
     }
@@ -609,6 +610,7 @@ static int ta_python_invocation_post(ta_python_invocation *invocation, const ta_
     event.session = invocation->session;
     event.flags = what->flags;
     event.token = invocation->token;
+    event.sendid = what->sendid;
     ta_python_payload_for payload = {event.session, {0, 0}, what->data, 0, TA_NIL};
     int status = 0;
     if ((what->name && ta_python_text(what->name, &event.name) < 0) || ta_python_text(what->traceparent, &event.traceparent) < 0 ||
@@ -642,7 +644,7 @@ static PyObject *ta_python_invocation_send_back(PyObject *self, PyObject *argume
     ta_python_invocation *invocation = (ta_python_invocation *)self;
     PyObject *name, *data = Py_None, *traceparent = NULL;
     if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "U|O$O:send_back", names, &name, &data, &traceparent)) return NULL;
-    ta_python_service_event what = {TA_EVENT_IN_FROM_INVOKE, name, data, traceparent ? traceparent : invocation->traceparent};
+    ta_python_service_event what = {TA_EVENT_IN_FROM_INVOKE, name, data, traceparent ? traceparent : invocation->traceparent, {0, 0}};
     if (ta_python_invocation_post(invocation, &what) < 0) return NULL;
     Py_RETURN_NONE;
 }
@@ -652,7 +654,7 @@ static PyObject *ta_python_invocation_done(PyObject *self, PyObject *arguments, 
     ta_python_invocation *invocation = (ta_python_invocation *)self;
     PyObject *data = Py_None, *traceparent = NULL;
     if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "|O$O:done", names, &data, &traceparent)) return NULL;
-    ta_python_service_event what = {TA_EVENT_IN_INVOKE_DONE, NULL, data, traceparent ? traceparent : invocation->traceparent};
+    ta_python_service_event what = {TA_EVENT_IN_INVOKE_DONE, NULL, data, traceparent ? traceparent : invocation->traceparent, {0, 0}};
     if (ta_python_invocation_post(invocation, &what) < 0) return NULL;
     ta_python_invocation_end(invocation);
     Py_RETURN_NONE;
@@ -754,10 +756,28 @@ static PyObject *ta_python_effect_str(ta_python_host *host, const ta_python_effe
     return value;
 }
 
+/* An UNINVOKE of the same (segment, token) later in the open batch: the
+ * invoker cancelled it in the run that started it, so a failure to start
+ * is nobody's news. */
+static int ta_python_uninvoked_in_batch(ta_python_host *host, uint32_t index) {
+    ta_host *core = host->host;
+    const ta_host_effect *effects;
+    uint32_t count = ta_host_effects(core, &effects);
+    uint64_t segment = ta_host_effect_number(core, index, TA_EFFECT_FIELD_SEGMENT);
+    uint64_t token = ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN);
+    for (uint32_t i = index + 1; i < count; i++)
+        if (ta_host_effect_number(core, i, TA_EFFECT_FIELD_KIND) == TA_EFFECT_UNINVOKE &&
+            ta_host_effect_number(core, i, TA_EFFECT_FIELD_SEGMENT) == segment &&
+            ta_host_effect_number(core, i, TA_EFFECT_FIELD_TOKEN) == token)
+            return 1;
+    return 0;
+}
+
 /* TA_EFFECT_INVOKE: the handler registered for the type starts the service;
  * what it returns is kept, keyed by (segment, token), until done or
  * UNINVOKE. No handler, or one that raises: error.communication for the
- * invoker (a service it cannot have), the exception raised after the turn. */
+ * invoker (a service it cannot have, unless it cancelled it already), the
+ * exception raised after the turn, and the entry kept as failed. */
 static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
     ta_host *core = host->host;
     ta_python_invocation *invocation = PyObject_GC_New(ta_python_invocation, (PyTypeObject *)host->state->invocation_type);
@@ -770,7 +790,7 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
     invocation->segment = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_SEGMENT);
     invocation->token = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN);
     invocation->ended = 0;
-    invocation->pad = 0;
+    invocation->failed = 0;
     invocation->invokeid = ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_SENDID, 1});
     invocation->type = invocation->invokeid ? ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_EVENT, 1}) : NULL;
     invocation->src = invocation->type ? ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_TARGET, 1}) : NULL;
@@ -784,18 +804,22 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
     int found = invocation->data ? PyDict_GetItemRef(host->services, invocation->type, &handler) : -1;
     if (found == 0) PyErr_Format(host->state->error, "no service is registered for the invoke type %R", invocation->type);
     if (found > 0) service = PyObject_CallFunctionObjArgs(handler, (PyObject *)host, (PyObject *)invocation, NULL);
-    if (service) key = ta_python_invocation_key(invocation->segment, invocation->token);
-    if (key) entry = PyTuple_Pack(2, (PyObject *)invocation, service);
-    if (!entry || PyDict_SetItem(host->invocations, key, entry) < 0) { /* it does not run: the invoker hears so */
+    if (service && invocation->ended) goto done; /* the handler called done(): nothing to keep */
+    if (!service) { /* it does not run: kept as failed, so sends to it fail too, until the UNINVOKE */
         PyObject *raised = PyErr_GetRaisedException();
-        if (invocation->data && !invocation->ended) {
-            ta_python_service_event failed = {TA_EVENT_IN_ERROR_COMMUNICATION, NULL, Py_None, invocation->traceparent};
+        invocation->ended = invocation->failed = 1;
+        service = Py_NewRef(Py_None);
+        if (invocation->data && !ta_python_uninvoked_in_batch(host, index)) {
+            ta_python_service_event failed = {TA_EVENT_IN_ERROR_COMMUNICATION, NULL, Py_None, invocation->traceparent, {0, 0}};
             if (ta_python_invocation_post(invocation, &failed) < 0) PyErr_Clear();
         }
-        invocation->ended = 1;
         PyErr_SetRaisedException(raised);
         ta_python_host_keep_error(host);
     }
+    key = ta_python_invocation_key(invocation->segment, invocation->token);
+    entry = key ? PyTuple_Pack(2, (PyObject *)invocation, service) : NULL;
+    if (!entry || PyDict_SetItem(host->invocations, key, entry) < 0) ta_python_host_keep_error(host);
+done:
     Py_XDECREF(entry);
     Py_XDECREF(key);
     Py_XDECREF(service);
@@ -814,10 +838,19 @@ static PyObject *ta_python_invocation_entry(ta_python_host *host, uint32_t index
 }
 
 /* A send to an invoked service (IO_PROCESSOR TA_NIL): its service's
- * receive(host, send), with the send as a thin view; none, or a service
- * without receive: dropped. */
+ * receive(host, send), with the send as a thin view; a service without
+ * receive, or none (done): dropped; one that failed to start: the send
+ * fails with error.communication. */
 static void ta_python_dispatch_service_send(ta_python_host *host, uint32_t index) {
     PyObject *entry = ta_python_invocation_entry(host, index);
+    ta_python_invocation *invocation = entry ? (ta_python_invocation *)PyTuple_GetItem(entry, 0) : NULL;
+    if (invocation && invocation->failed) { /* a service that never ran: the send fails, as core's do */
+        ta_python_service_event failed = {TA_EVENT_IN_ERROR_COMMUNICATION, NULL, Py_None, invocation->traceparent,
+                                          ta_host_effect_text(host->host, index, TA_EFFECT_FIELD_SENDID)};
+        if (ta_python_invocation_post(invocation, &failed) < 0) ta_python_host_keep_error(host);
+        Py_DECREF(entry);
+        return;
+    }
     PyObject *receive = entry && PyObject_HasAttrString(PyTuple_GetItem(entry, 1), "receive")
                             ? PyObject_GetAttrString(PyTuple_GetItem(entry, 1), "receive")
                             : NULL;
@@ -842,8 +875,9 @@ static void ta_python_dispatch_uninvoke(ta_python_host *host, uint32_t index) {
     if (!entry) return; /* done already, or never ran */
     ta_python_invocation *invocation = (ta_python_invocation *)PyTuple_GetItem(entry, 0);
     PyObject *service = PyTuple_GetItem(entry, 1);
+    int failed = (int)invocation->failed;
     ta_python_invocation_end(invocation);
-    PyObject *stop = PyObject_HasAttrString(service, "stop") ? PyObject_GetAttrString(service, "stop") : NULL;
+    PyObject *stop = !failed && PyObject_HasAttrString(service, "stop") ? PyObject_GetAttrString(service, "stop") : NULL;
     PyObject *result = stop ? PyObject_CallFunctionObjArgs(stop, (PyObject *)host, NULL) : Py_NewRef(Py_None);
     if (!result) ta_python_host_keep_error(host);
     Py_XDECREF(result);

@@ -290,7 +290,9 @@ Decided by the maintainer (2026-10-13); every item is in
   section 7), whatever the clock reads. The effective config's system id
   must be the pack's. Quiescent only, which core checks first, before the
   datamodels' state is built: from a handler (a batch is open), with an
-  effect or a reply pending, or during a migration job, `TA_ERROR_STATE`.
+  effect or a reply pending, or during a migration job, `TA_ERROR_STATE`;
+  then the binding refuses with `TA_ERROR_STATE` while an invoked
+  service runs (it is not in the snapshot).
   The ECMAScript state is written into room for the last one's length,
   so it is written once in the usual case.
 - **Invoked services** (bindings.md section 4, 2026-10-14):
@@ -311,7 +313,11 @@ Decided by the maintainer (2026-10-13); every item is in
   **`stop(host)`** (then it is dropped); both optional. No handler, or a
   handler that raises: `ta_host_send` with
   `TA_EVENT_IN_ERROR_COMMUNICATION` to the invoker, and the exception is
-  raised after the turn. At the stop the services are dropped, not
+  raised after the turn; none when an UNINVOKE of the same token follows
+  in the open batch (cancelled in the run that started it). A failed
+  start stays as an entry marked failed, so each send to it gets
+  `ERROR_COMMUNICATION` with its sendid, until the UNINVOKE (no `stop`).
+  A handler that calls `done` leaves nothing kept. At the stop the services are dropped, not
   stopped, as pending handlers are. `tools/services.py` is the pattern.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart

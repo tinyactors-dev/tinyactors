@@ -1253,8 +1253,9 @@ static PyObject *ta_python_host_encode(ta_python_host *host, PyObject *value) {
 
 /* snapshot() -> bytes: ta_host_snapshot_pack of the whole host, with both
  * datamodels' state, the images, the system id and the host's time. A
- * quiescent host only: not from a handler (a batch is open) nor while a
- * migration job runs (TA_ERROR_STATE). */
+ * quiescent host only: not from a handler (a batch is open), while a
+ * migration job runs, nor with an invoked service of the application
+ * running (TA_ERROR_STATE). */
 static PyObject *ta_python_host_snapshot(PyObject *self, PyObject *unused) {
     (void)unused;
     ta_python_host *host = (ta_python_host *)self;
@@ -1264,6 +1265,8 @@ static PyObject *ta_python_host_snapshot(PyObject *self, PyObject *unused) {
        datamodels' state is built for nothing */
     ta_buffer quiet = {NULL, 0, 0};
     ta_status ready = ta_host_snapshot(host->host, &quiet);
+    /* a service the application runs is not in the snapshot: a restored invoker would wait for it forever */
+    if ((ready == TA_OK || ready == TA_ERROR_NO_MEMORY) && PyDict_Size(host->invocations) > 0) ready = TA_ERROR_STATE;
     if (ready != TA_OK && ready != TA_ERROR_NO_MEMORY) ta_python_raise_status(host->state, ready);
     PyObject *python = ready == TA_OK || ready == TA_ERROR_NO_MEMORY ? ta_python_datamodel_snapshot(&host->python) : NULL;
     PyObject *ecmascript = python ? ta_python_ecmascript_state(host) : NULL;
@@ -1450,10 +1453,10 @@ static PyMethodDef ta_python_host_methods[] = {
     {"snapshot", ta_python_host_snapshot, METH_NOARGS,
      "snapshot()\n--\n\nThe whole host as bytes (ta_host_snapshot_pack): every segment's region, both datamodels' "
      "state, the images. Quiescent only: not from a handler, not with a typed method's reply or another effect "
-     "pending (run the host first), nor while a migration job runs. For the same build of the library."},
+     "pending (run the host first), while a migration job runs, nor with an invoked service running. For the same build of the library."},
     {"restore", (PyCFunction)(void (*)(void))ta_python_host_restore, METH_CLASS | METH_VARARGS | METH_KEYWORDS,
      "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, "
-     "migrated=None)\n--\n\nA new Host running a snapshot, with the config it was taken with and the handlers "
+     "migrated=None, services=None)\n--\n\nA new Host running a snapshot, with the config it was taken with and the handlers "
      "Host() takes; its clock goes on from the snapshot's time."},
     {"migrate", (PyCFunction)(void (*)(void))ta_python_host_migrate, METH_VARARGS | METH_KEYWORDS,
      "migrate(handler, /, *, chart=None, session=None, wake=False, timeout=0)\n--\n\nMove actors of older versions to "

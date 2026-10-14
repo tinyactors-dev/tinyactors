@@ -349,7 +349,9 @@ host = tinyactors.Host.restore(blob, config, log=log, wake=wake)
   same WAKE.
 - It needs a quiescent host: it is refused from a handler, with an
   effect or a typed method's reply not yet handled (run the host first),
-  and while a migration job runs (`TA_ERROR_STATE`); and when a
+  while a migration job runs, and while an invoked service of the
+  application runs (`TA_ERROR_STATE`: the service is not in the
+  snapshot, so its invoker would wait for it forever); and when a
   `"python"` session or payload holds a value outside the value table
   (`TA_ERROR_UNSUPPORTED`). The host goes on either way. Values are
   written through the value table: two variables of one session that
@@ -418,10 +420,14 @@ host = tinyactors.Host(config, services={"urn:example:counter": lambda host, inv
 - The service's `receive(host, send)` gets each send to it as a thin
   view (`event`, `data`, `sendid`, `traceparent`; `type` is `None`), and
   its `stop(host)` the cancel; both are optional. A service that ended
-  with `done` is not stopped.
+  with `done` is not stopped, nor kept: a handler may call `done` and
+  return.
 - No handler for the type, or a handler that raises: the invoker gets
-  `error.communication`, and the driver raises the exception after the
-  turn. Leaving the `Host` drops the running services without stopping
+  `error.communication` (unless it cancelled the invocation in the same
+  run), each send to the invocation gets one too until the invoker
+  leaves the state, and the driver raises the exception after the turn.
+- `Host.snapshot()` is refused while a service runs (`TA_ERROR_STATE`).
+  Leaving the `Host` drops the running services without stopping
   them.
 
 `mise run services` is the pattern at scale (`tools/services.py`):

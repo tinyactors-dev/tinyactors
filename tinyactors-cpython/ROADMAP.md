@@ -532,7 +532,11 @@ terminating the invoker, stop the service once; a service without
 `receive` or `stop`; no handler for the type, and a handler that raises,
 give `error.communication` and raise after the turn; services left at
 the stop are dropped, not stopped; autoforward reaches the service (and
-forwards its own answers back to it); `services` must be a dict.
+forwards its own answers back to it); `services` must be a dict. The
+review added: a service done in its handler is neither kept nor
+stopped; a send to a service that failed to start fails; a failure to
+start an invocation cancelled in the same run is not reported; a
+snapshot with a running service is refused.
 
 ## How the work runs
 
