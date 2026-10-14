@@ -410,7 +410,7 @@ scenarios `hibernate` and `migrate` pass on both datamodels (as does M3's
 selects by milestone, and M4 holds `snapshot`).
 
 **The gate:** `tools/migration.py` (`mise run migration`; `mise run test`
-runs 20,000 actors with 100 resident on both datamodels, `--full` 500,000
+runs 20,000 actors with 100 resident on both datamodels, `--full` two million
 with 1000): version 1 of a counter chart, most actors hibernated in
 SQLite, version 2 added, every actor moved while events go to random
 actors; every sampled count and version right, the job leaves none
@@ -425,11 +425,12 @@ after every eviction. Getting there found:
   "Migration" gives the pattern;
 - events for actors still waiting for the job piled up in the host
   (the segment's event pool, doubling every pool: 281 MB of region at
-  200,000 actors). An event's WAKE now wakes its actor at once and moves
-  it with a job of its own (`migrate(session=...)`): 93 MB peak at
-  200,000. That needed the job on the WAKE;
-- core's walk is quadratic in the hibernated actors ("Requests to
-  core"), which sizes the full gate.
+  200,000 actors). An event's WAKE now wakes its actor at once (93 MB
+  peak at 200,000); the job on the WAKE tells it from the job's;
+- core's walk was quadratic in the hibernated actors, which sized the
+  full gate at 500,000 (answered: "Requests to core"; the gate is two
+  million now). The one-actor jobs an event's WAKE started went with it:
+  core takes a woken actor into the job itself.
 
 Tests in `tests/test_migration.py`: both datamodels move with their
 bindings (the upgrade's data) and keep a delayed send, a hibernated
@@ -480,36 +481,25 @@ Gaps in core or in the suite this session finds. Each says what is
 missing, why, and which suite case or test shows it; the coordinator moves
 it into the root ROADMAP.md's "Requests to core" and answers there.
 
-- **A waking migration is quadratic in the hibernated actors**
-  (2026-10-14). `retry_push` (`tinyactors-core/src/host/host.c:1483`)
-  looks for the session in the job's whole retry list before it adds it,
-  and the walk of a `TA_HOST_MIGRATE_WAKE` job adds every hibernated
-  actor: the first `ta_host_run`s of a job over n hibernated actors cost
-  O(n²). Measured with `tools/migration.py` (1000 resident): the walk
-  takes 0.12 s at 25,000, 0.45 s at 50,000, 2.2 s at 100,000, 8 s at
-  200,000; the whole migration 69 s at 500,000 and 279 s at a million.
-  The retry list cannot hold a duplicate during the walk (each actor is
-  looked at once), so the check is needed only for the retries after it,
-  or a flag per actor would do. A second term, O(n²/quantum): every run's
-  `job_step` goes over the whole retry list to compact it
-  (`host.c:1563-1580`), during the walk only copying; retrying from a
-  cursor would remove it. (69 s is a run of the tool alone; the gate's
-  run in the README took 74.9 s with its checks.) Until then the
-  binding's migration gate runs 500,000 actors, not two million.
-- **A job never ends while it waits for an actor it will not ask for
-  again** (2026-10-14). `migrate_one` asks for a hibernated actor once
-  (`woken`, `host.c:1411-1421`): one woken for the job and hibernated
-  again before it moved, or any hibernated actor of a job without
-  `TA_HOST_MIGRATE_WAKE`, keeps the job active until its timeout, or for
-  good without one, retried in every run (and `ta_host_snapshot` refuses
-  meanwhile). Clearing `woken` when the actor hibernates again would
-  re-ask; the README tells applications to give a job a timeout. Shown by
-  `tests/test_migration.py`
-  (`test_without_wake_or_timeout_a_hibernated_actor_holds_the_job`).
-- **A WAKE that no job asked for has `job` `TA_NIL`**
-  (`tinyactors-core/src/host/host.c:1026`), while `boundary.md` (open
-  question 5) says a job handle is never 0, with 0 for none. The binding
-  passes `None` for either; one of the two should change.
+None open. Answered 2026-10-14, in core's host layer (`src/host/host.c`,
+`src/host/session_map.c`), by this session at the maintainer's request:
+
+- **A waking migration was quadratic in the hibernated actors**
+  (`retry_push` looked through the whole retry list before adding, and
+  every run compacted it): a job now keeps the sessions it waits for in
+  a session map (the moved sessions' open-addressing table, made one
+  structure, reserved through the host's allocator before any insert),
+  and only the actors in memory on a retry list tried round robin from a
+  cursor. A run costs its quantum, however many the job waits for; the
+  migration gate went from 500,000 actors to two million.
+- **A job never ended while it waited for an actor it would not ask for
+  again**: a hibernated member goes back on the job's retry list when
+  `ta_host_wake` brings it back (the job's WAKE or an event's), the job
+  asks again when it finds one hibernated after a wake, and an exported
+  member leaves the job. Without `TA_HOST_MIGRATE_WAKE` an actor nobody
+  wakes still holds the job until its timeout, as the README says.
+- **A WAKE no job asked for had `job` `TA_NIL`**, against `boundary.md`:
+  effects now carry 0 for no job.
 
 What the design needs from core is step 8.2 of the root
 roadmap. The first binding's two requests were answered on 2026-10-12

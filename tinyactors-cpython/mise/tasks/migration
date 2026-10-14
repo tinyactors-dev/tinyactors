@@ -1,9 +1,9 @@
 #!/usr/bin/env ruby
 #MISE description="Live migration under load: N actors, R resident, the rest in SQLite, all moved to a new chart version while events come, on both datamodels (tools/migration.py)"
 #MISE depends=["build"]
-#USAGE flag "--actors <n>" default="500000" help="the population"
+#USAGE flag "--actors <n>" default="2000000" help="the population"
 #USAGE flag "--resident <n>" default="1000" help="the actors in memory at most (plus two batches while the job moves them)"
-#USAGE flag "--events <n>" default="100000" help="the events before the migration, and again during it"
+#USAGE flag "--events <n>" default="200000" help="the events before the migration, and again during it"
 # vim:ft=ruby
 
 # The application's side of migration as a program writes it: Host.migrate
@@ -19,5 +19,5 @@
 
 require_relative '../cpython'
 
-CPython.stress(actors: ENV.fetch('usage_actors', '500000'), resident: ENV.fetch('usage_resident', '1000'),
-               events: ENV.fetch('usage_events', '100000'), tool: 'migration')
+CPython.stress(actors: ENV.fetch('usage_actors', '2000000'), resident: ENV.fetch('usage_resident', '1000'),
+               events: ENV.fetch('usage_events', '200000'), tool: 'migration')

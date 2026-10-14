@@ -454,8 +454,8 @@ PyObject *ta_python_host_task(ta_python_host *host, PyObject *coroutine) {
 static void ta_python_dispatch_wake(ta_python_host *host, uint32_t index) {
     if (host->wake == Py_None) return;
     PyObject *session = PyLong_FromUnsignedLongLong(ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SESSION));
-    uint64_t id = ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_JOB); /* TA_NIL: none (boundary.md says 0) */
-    PyObject *job = !session ? NULL : id && id != TA_NIL ? PyLong_FromUnsignedLongLong(id) : Py_NewRef(Py_None);
+    uint64_t id = ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_JOB); /* 0: no job asked */
+    PyObject *job = !session ? NULL : id ? PyLong_FromUnsignedLongLong(id) : Py_NewRef(Py_None);
     PyObject *result = job ? PyObject_CallFunctionObjArgs(host->wake, (PyObject *)host, session, job, NULL) : NULL;
     if (result && host->wake_async) result = ta_python_host_task(host, result);
     if (!result) ta_python_host_keep_error(host);
