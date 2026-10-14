@@ -514,7 +514,9 @@ static void job_free(ta_host *host, migration_job *job) {
 }
 
 void ta_host_free(ta_host *host) {
-    if (!host) return;
+    /* not from a datamodel's code (a run, a guarded call, or free itself):
+     * the host is in use, so the call does nothing (host.h) */
+    if (!host || host->running) return;
     /* the datamodels' destroy and release: calls back are refused, the inputs too */
     host->running = 1;
     host->closing = 1;

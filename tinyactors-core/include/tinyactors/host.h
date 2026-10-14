@@ -107,7 +107,9 @@ typedef struct ta_host_environment {
 TA_API ta_status ta_host_create(ta_bytes config, const ta_host_environment *environment,
                                 ta_host **out);
 /* Spans still open are ended and dropped with the host: a caller who wants
- * them posts the trace.end message and takes the traces first. */
+ * them posts the trace.end message and takes the traces first. Not from a
+ * datamodel's code: during a run or while the host is inside a datamodel
+ * (below, "During a run") it does nothing, and the host stays. */
 TA_API void ta_host_free(ta_host *h);
 
 /* ---- segments and versions ----------------------------------------------- */
@@ -165,8 +167,13 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
  *     invoked child its parent cancels does (for the actor whose expression
  *     terminated it: after the microstep it is in; the rest of the
  *     macrostep does not run).
- * Lookups (ta_host_chart, ta_host_locate, ta_host_actor_by_name,
- * ta_host_segment_count) answer as usual. Every other call is refused:
+ * Lookups answer as usual: ta_host_chart, ta_host_locate,
+ * ta_host_actor_by_name, ta_host_segment_count, ta_host_segment_info_get,
+ * ta_host_system, ta_host_peer_status, ta_host_job_pending, and the effect
+ * accessors (which answer 0 or empty: no batch is open in a run).
+ * ta_host_peer_round_trip_time is accepted too: it records a peer's
+ * measured round trip and changes nothing a run uses. ta_host_free does
+ * nothing. Every other call is refused:
  * TA_ERROR_STATE, an empty answer or nothing done (ta_host_effects returns
  * 0; ta_host_effects_ack, ta_host_advance_time do nothing; ta_host_sweep
  * returns 0; ta_host_run returns TA_RUN_FAULT with TA_ERROR_STATE).

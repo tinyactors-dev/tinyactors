@@ -74,6 +74,21 @@ typedef struct world {
 
 static world *current;
 
+/* The host's allocator, counted (the C library's): a hook reads the count
+ * before and after its calls to show that nothing grew while it ran. */
+static size_t allocations;
+static void *counting_alloc(void *context, size_t size, size_t align) {
+    (void)context;
+    allocations++;
+    ta_allocator c = ta_runtime_malloc();
+    return c.alloc(c.context, size, align);
+}
+static void counting_free(void *context, void *pointer, size_t size) {
+    (void)context;
+    ta_allocator c = ta_runtime_malloc();
+    c.free(c.context, pointer, size);
+}
+
 static ta_status script(const ta_datamodel_call *call, ta_expression e) {
     if (current->action) {
         void (*action)(world *) = current->action;
@@ -102,7 +117,7 @@ static void world_open(world *w, uint32_t max_events) {
     config.system.max_events = max_events;
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
-    config.allocator = ta_runtime_malloc();
+    config.allocator = (ta_allocator){NULL, counting_alloc, counting_free};
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
     w->image_bytes = compile_both(&length);
@@ -308,20 +323,103 @@ static void test_other_calls_are_refused(void) {
     world_close(&w);
 }
 
-/* ---- a full pool: nothing grows, nothing changes ------------------------------------------ */
+/* ---- lookups, a peer's round trip, and free --------------------------------------------- */
 
-static uint32_t accepted;
-static uint32_t capacity_before, capacity_after;
+static uint32_t peer_handle;
 
-static uint32_t events_capacity(world *w) {
-    ta_system_stats stats;
-    stats.size = sizeof stats;
-    ta_system_stats_get(ta_host_system(w->host, w->segment), &stats);
-    return stats.events_capacity;
+/* The lookups answer, a round trip is recorded, and ta_host_free does
+ * nothing: the run goes on with the host it had. */
+static void lookups_and_free(world *w) {
+    ta_host_segment_info info;
+    memset(&info, 0, sizeof info);
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_host_segment_info_get(w->host, w->segment, &info), TA_OK);
+    CHECK_EQUAL(info.actors, 2u);
+    CHECK(ta_host_system(w->host, w->segment) != NULL);
+    ta_peer_status status;
+    memset(&status, 0, sizeof status);
+    status.size = sizeof status;
+    CHECK_EQUAL(ta_host_peer_status(w->host, peer_handle, &status), TA_OK);
+    CHECK_EQUAL(ta_host_job_pending(w->host, 1, (ta_uint64_array){NULL, 0}), 0u);
+    CHECK_EQUAL(ta_host_effect_number(w->host, 0, TA_EFFECT_FIELD_KIND), 0u); /* no batch */
+    CHECK_EQUAL(ta_host_effect_text(w->host, 0, TA_EFFECT_FIELD_EVENT).length, 0u);
+    ta_host_peer_round_trip_time(w->host, peer_handle, 42);
+    ta_host_free(w->host);
 }
 
+static void test_lookups_answer_and_free_does_nothing(void) {
+    world w;
+    world_open(&w, 0);
+    ta_peer_config peer;
+    memset(&peer, 0, sizeof peer);
+    peer.size = sizeof peer;
+    peer.flags = TA_PEER_TRUSTED;
+    peer.id = (ta_string_view){"b", 1};
+    CHECK_EQUAL(ta_host_peer_add(w.host, &peer, &peer_handle), TA_OK);
+    start(&w, lookups_and_free);
+    CHECK_EQUAL(run_once(&w).status, TA_RUN_IDLE);
+    CHECK_EQUAL(w.actions, 1);
+    CHECK_STR(w.log, "internal;"); /* the macrostep went on */
+    ta_peer_status status;
+    memset(&status, 0, sizeof status);
+    status.size = sizeof status;
+    CHECK_EQUAL(ta_host_peer_status(w.host, peer_handle, &status), TA_OK);
+    CHECK_EQUAL(status.round_trip_time, 42u);
+    ta_host_location where; /* the host is still there */
+    CHECK_EQUAL(ta_host_locate(w.host, w.listener, &where), TA_OK);
+    world_close(&w);
+}
+
+/* ---- full pools: no memory, nothing grows ------------------------------------------------ */
+
+/* A hook never calls ta_system_* (datamodel.h): it shows that nothing grew
+ * by the host's allocator, which is not called while it runs. */
+static size_t grew; /* allocations during a hook's calls */
+static uint32_t spawned;
+static uint64_t refused_session;
+
+static void fill_actors(world *w) {
+    size_t before = allocations;
+    ta_host_chart_ref ref;
+    CHECK_EQUAL(ta_host_chart(w->host, (ta_string_view){"listener", 8}, &ref), TA_OK);
+    spawned = 0;
+    for (int i = 0; i < 100; i++) {
+        uint64_t session = 0;
+        ta_spawn spawn = {ref.segment, ref.chart, {0, 0}, 0, {0, 0}};
+        ta_status status = ta_host_spawn(w->host, &spawn, &session);
+        if (status == TA_ERROR_NO_MEMORY) {
+            refused_session = session;
+            break;
+        }
+        CHECK_EQUAL(status, TA_OK);
+        spawned++;
+    }
+    grew = allocations - before;
+}
+
+static void test_spawn_into_a_full_pool_is_no_memory(void) {
+    world w;
+    world_open(&w, 0);
+    refused_session = 99;
+    start(&w, fill_actors);
+    for (int i = 0; i < 20 && run_once(&w).status != TA_RUN_IDLE; i++) {
+    }
+    CHECK_EQUAL(w.actions, 1);
+    CHECK(spawned > 0 && spawned < 100);
+    CHECK_EQUAL(refused_session, 0u); /* no session for the refusal */
+    CHECK_EQUAL(grew, 0u);            /* nothing grew while the pool filled */
+    ta_host_segment_info info;        /* the spawned ones live, no more */
+    memset(&info, 0, sizeof info);
+    info.size = sizeof info;
+    CHECK_EQUAL(ta_host_segment_info_get(w.host, w.segment, &info), TA_OK);
+    CHECK_EQUAL(info.actors, 2u + spawned);
+    world_close(&w);
+}
+
+static uint32_t accepted;
+
 static void flood(world *w) {
-    capacity_before = events_capacity(w);
+    size_t before = allocations;
     accepted = 0;
     for (int i = 0; i < 1000; i++) {
         ta_event_in flood = event_for(w->listener, "f");
@@ -330,7 +428,7 @@ static void flood(world *w) {
         CHECK_EQUAL(status, TA_OK);
         accepted++;
     }
-    capacity_after = events_capacity(w);
+    grew = allocations - before;
 }
 
 static void test_a_full_pool_is_no_memory(void) {
@@ -340,7 +438,7 @@ static void test_a_full_pool_is_no_memory(void) {
     for (int i = 0; i < 20 && run_once(&w).status != TA_RUN_IDLE; i++) {
     }
     CHECK(accepted > 0 && accepted < 1000);
-    CHECK_EQUAL(capacity_after, capacity_before); /* nothing grew during the run */
+    CHECK_EQUAL(grew, 0u); /* nothing grew during the run */
     uint32_t got = 0;
     for (const char *p = w.log; (p = strstr(p, "got:f;")) != NULL; p++)
         got++;
@@ -357,6 +455,8 @@ int main(void) {
     RUN(test_terminate_self_ends_after_the_microstep);
     RUN(test_terminate_another_actor);
     RUN(test_other_calls_are_refused);
+    RUN(test_lookups_answer_and_free_does_nothing);
+    RUN(test_spawn_into_a_full_pool_is_no_memory);
     RUN(test_a_full_pool_is_no_memory);
     TEST_MAIN_END();
 }

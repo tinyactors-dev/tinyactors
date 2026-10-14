@@ -65,15 +65,15 @@ marks a behaviour no test checks.
 | Call (`host.h`) | When | Produces; owner; ends | Refused | Reentry | Test |
 |---|---|---|---|---|---|
 | `ta_host_create` (:105) | no host yet | the host, the caller's until `ta_host_free`; config read during the call | `TA_ERROR_INVALID` with the reply in `environment->error`, the caller's `ta_buffer`; `TA_ERROR_NO_MEMORY` (`host.c:454-461`) | none (no host) | `test_host_request.c` `test_create`, `test_config_effective`; `config.txt` |
-| `ta_host_free` (:109) | I, D | releases the open batch and its outputs, every block (`host.c:506-512`) | R/G: not checked; freeing inside a datamodel entry frees what the run is using | calls back from its own `destroy`/`release` refused (`closing`) | `test_host_guard.c` `test_free`; R/G: needed (refuse, or say it is forbidden) |
+| `ta_host_free` (:109) | I, D | releases the open batch and its outputs, every block (`host.c:506-512`) | R/G: does nothing, the host stays (`host.h`: not from a datamodel's code) | calls back from its own `destroy`/`release` refused (`closing`) | `test_host_guard.c` `test_free`; R/G: `test_host_inputs.c` `test_lookups_answer_and_free_does_nothing` |
 | `ta_host_add_image` (:119) | I, D | a segment index; the host's copy of the bytes until the segment is freed | R/G `TA_ERROR_STATE` (`host.c:555`); `TA_ERROR_INVALID`; `TA_ERROR_NO_MEMORY`, nothing added | `chart_attach` runs in G (`host.c:588`) | `test_host.c` `test_image_copied` |
 | `ta_host_chart` (:126) | all | a struct in the caller's memory | `TA_ERROR_INVALID`: no such name | a lookup: answers in R/G | `test_host.c` |
 | `ta_host_segment_count` (:135) | all | a number | none | answers in R/G | `test_host.c` |
-| `ta_host_segment_info_get` (:136) | all (not checked, `host.c:632-650`) | the caller's struct; `.image` borrowed while the segment is live | `TA_ERROR_INVALID` | answers in R/G, though `host.h:166-170` says only the four lookups do | `test_host.c` `test_image_copied`; R/G: needed (or list it as a lookup) |
-| `ta_host_system` (:140) | all (not checked, `host.c:652-655`) | a `ta_system *`, borrowed until a call that can grow or free the segment | none | answers in R/G, as above; a datamodel must not call `ta_system_*` (`datamodel.h:7-8`), yet `test_host_inputs.c`'s `flood` hook does (`:315-323`) | `test_host.c`; R: `test_host_inputs.c` `test_a_full_pool_is_no_memory` |
+| `ta_host_segment_info_get` (:136) | all (not checked, `host.c:632-650`) | the caller's struct; `.image` borrowed while the segment is live | `TA_ERROR_INVALID` | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_image_copied`; R/G: `test_host_inputs.c` `test_lookups_answer_and_free_does_nothing` |
+| `ta_host_system` (:140) | all (not checked, `host.c:652-655`) | a `ta_system *`, borrowed until a call that can grow or free the segment | none | answers in R/G, a lookup in `host.h`'s list; a datamodel must not call `ta_system_*` on it (`datamodel.h:7-8`) | `test_host.c`; R: `test_host_inputs.c` `test_a_full_pool_is_no_memory` |
 | `ta_host_boot` (:145) | I, D | the image's boot actors | R/G `TA_ERROR_STATE` (`host.c:2392`); `TA_ERROR_INVALID`: no such segment (`host.c:2394`); `TA_ERROR_NO_MEMORY` before any is spawned | `create` in G (`host.c:2405`) | `test_host.c` `test_boot_manifest`: invalid segment, growth, named actors, entry actions after run; allocation refusal and R/G: needed |
 | `ta_host_actor_by_name` (:148) | all | a session id | 0: none | a lookup | `test_host_inputs.c` |
-| `ta_host_spawn` (:183) | all | a session id; `spawn`'s views read during the call; its payload moves on success | `TA_ERROR_INVALID`: no such segment (`host.c:876`); R/G: no growth, a full pool `TA_ERROR_NO_MEMORY` with nothing changed; inside free `TA_ERROR_STATE` (`host.c:874`) | `create` in G (`host.c:880`); in R the in-run path of `<invoke>`: at the back of the run queue | `test_host_inputs.c` `test_spawn`; a full pool in R/G: needed |
+| `ta_host_spawn` (:183) | all | a session id; `spawn`'s views read during the call; its payload moves on success | `TA_ERROR_INVALID`: no such segment (`host.c:876`); R/G: no growth, a full pool `TA_ERROR_NO_MEMORY` with nothing changed; inside free `TA_ERROR_STATE` (`host.c:874`) | `create` in G (`host.c:880`); in R the in-run path of `<invoke>`: at the back of the run queue | `test_host_inputs.c` `test_spawn`; a full pool in R: `test_host_inputs.c` `test_spawn_into_a_full_pool_is_no_memory` |
 | `ta_host_locate` (:189) | all | the caller's struct | `TA_ERROR_STALE` (`host.c:663-671`) | a lookup | `test_host.c` |
 | `ta_host_send` (:191) | all | nothing kept of the caller's: views copied, payload moved on success | as spawn; the payload stays the caller's on refusal | in R the in-run path of `<send>`: to itself at the end of its macrostep, to another actor at the back of the queue (`host.h:156-161`); outside a run `release` in G for an `error.communication` (`host.c:900`) | `test_host_inputs.c` `test_send_to_self_waits_for_the_macrostep`, `test_send_and_send_many_to_another_actor` |
 | `ta_host_send_many` (:195) | all | the accepted prefix's length | stops at the first failure; that event's payload stays the caller's | as send (`release` in G at `host.c:935`) | as send |
@@ -100,10 +100,10 @@ marks a behaviour no test checks.
 | `ta_host_envelope` (:544) | D | a `PEER` or `PEER_ERROR` effect of the open batch as CBOR, a view of host memory until the ack. Takes the effect's address, not its index | R/G `TA_ERROR_STATE` (`router.c:1213`); `TA_ERROR_INVALID`: another kind or no neutral value; `TA_ERROR_NO_MEMORY` | `to_wire` once in G (`router.c:1234`) | `test_router.c` `test_envelope_bytes`; `test_host_guard.c` `test_each_output_once`; two envelopes read after both calls: `test_host_guard.c` `test_outputs_last_until_the_ack` |
 | `ta_host_envelope_read` (:557) | I, D | the caller's `ta_envelope`, views into the caller's bytes (keep them until the deliver) | R/G `TA_ERROR_STATE` (`router.c:1150`); `TA_ERROR_INVALID` (size 0: drop; size set: deliver it to answer the sender) | none | `test_router.c` `test_envelope_bytes`; `envelopes.txt` |
 | `ta_host_peer_error_read` (:560) | no host | the caller's `ta_peer_error`, views into the bytes | `TA_ERROR_INVALID` | none | `envelopes.txt` |
-| `ta_host_peer_round_trip_time` (:562) | all (not checked, `router.c:1274-1277`) | sets a counter: an input, not a read | stale: nothing | accepted in R/G, though `host.h` refuses every other call there | `test_router.c` `test_route_status` |
-| `ta_host_peer_status` (:575) | all (not checked, `router.c:1279`) | the caller's struct; `id` until the peer is removed | `TA_ERROR_STALE` | answers in R/G | `test_router.c` `test_route_status` |
+| `ta_host_peer_round_trip_time` (:562) | all (not checked, `router.c:1274-1277`) | sets a counter: an input, not a read | stale: nothing | accepted in R/G, as `host.h` says: it records a measurement and changes nothing a run uses | `test_router.c` `test_route_status` |
+| `ta_host_peer_status` (:575) | all (not checked, `router.c:1279`) | the caller's struct; `id` until the peer is removed | `TA_ERROR_STALE` | answers in R/G, a lookup in `host.h`'s list | `test_router.c` `test_route_status` |
 | `ta_host_migrate` (:587) | I, D | a job id; `MIGRATED`, `JOB_DONE` pending in later runs | R/G `TA_ERROR_STATE` (`host.c:1403`); `TA_ERROR_NO_MEMORY` | none | `test_host.c` `test_versions_and_migration` |
-| `ta_host_job_pending` (:589) | all (not checked) | the caller's array; a finished job's list is readable until the next run (`host.c:1906-1919`), which comes after the ack | none | answers in R/G | `test_host.c` `test_migration_wake_and_timeout` |
+| `ta_host_job_pending` (:589) | all (not checked) | the caller's array; a finished job's list is readable until the next run (`host.c:1906-1919`), which comes after the ack | none | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_migration_wake_and_timeout` |
 | `ta_host_sweep` (:595) | I, D | sessions in the caller's array | R/G: 0 (`host.c:1962`) | none | `test_host.c`, `test_host_memory.c` |
 | `ta_host_hibernate` (:600) | I, D | the blob, a view of host memory until the ack | R/G `TA_ERROR_STATE` (`host.c:2014`); `TA_ERROR_NO_MEMORY`: the actor stays | `serialize`, `destroy` in G (`host.c:2022`) | `test_host.c` `test_hibernate_and_wake`; `test_host_guard.c` `test_hibernate`; blob after a later call: through the same output path as `test_outputs_last_until_the_ack` |
 | `ta_host_wake` (:601) | I, D | the actor back; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2029`) | `deserialize` in G (`host.c:2035`) | `test_host.c` `test_hibernate_and_wake` |
@@ -156,30 +156,23 @@ keeps first (ADR 0010 decision 1).
 
 ### What no test checks yet
 
-From the table: the run refused in D; `ta_host_effects` not widening;
-outputs (two envelopes and a metrics request) read after later calls in
-one batch (ADR 0012, its order of work);
-`ta_host_free` from a datamodel's code; `ta_host_boot` outside
-`ta-conform`; a full pool on `ta_host_spawn` in R/G; the calls that
-answer in R/G though `host.h` lists only four lookups
-(`ta_host_segment_info_get`, `ta_host_peer_status`, `ta_host_job_pending`,
-the effect accessors, and `ta_host_system`, which a test calls in R): document
-them as lookups, or refuse them; and `ta_host_peer_round_trip_time`, a
-setter that R/G accepts: refuse it there, or say it is allowed.
+From the table: `ta_host_boot` outside `ta-conform` (its allocation
+refusal and R/G).
 
 The findings step 8.2 settles [8.2], each a decision and a test:
 
-1. **`ta_host_free` from a datamodel's code** (the row above): refuse it
-   in R/G, or forbid it in `host.h`.
-2. **Lookups during a run beyond `host.h`'s list** (`host.h:166-167`
-   names four; `ta_host_segment_info_get`, `ta_host_system`,
+1. **`ta_host_free` from a datamodel's code** — settled: it does nothing
+   in R/G (`test_host_inputs.c` `test_lookups_answer_and_free_does_nothing`).
+2. **Lookups during a run beyond `host.h`'s list** — settled: `host.h`
+   lists `ta_host_segment_info_get`, `ta_host_system`,
    `ta_host_peer_status`, `ta_host_job_pending` and the effect accessors
-   answer too): list them as lookups, or refuse them.
+   as lookups, and accepts `ta_host_peer_round_trip_time` (same test).
 3. **`ta_host_envelope` takes the effect's address**, not its index as
    the accessors do (section 7, "Open").
-4. **A test calls `ta_system_*` from datamodel code**
-   (`test_host_inputs.c:315-323`, the `flood` hook), which `datamodel.h:7-8`
-   forbids: change the test, or the rule.
+4. **A test calls `ta_system_*` from datamodel code** — settled: the
+   rule stands (`datamodel.h:7-8`); `test_host_inputs.c`'s hooks show that
+   nothing grew by counting the host's allocator, not by reading
+   `ta_system_stats`.
 5. **The width of ids in `types.h`:** `types.h:7` says "ids/handles are
    uint32_t", while a session is `uint64_t` (`host.h:183`), a payload
    `uint64_t` (`types.h:124`) and a `ta_table` handle 64 bits: say which
