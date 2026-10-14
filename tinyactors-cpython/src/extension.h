@@ -180,6 +180,9 @@ struct ta_python_host {
     PyObject *peer;                    /* peer handler or None */
     PyObject *telemetry;               /* telemetry handler(host, signal, data) or None */
     int telemetry_async;               /* it is an async def */
+    int ending;                        /* the last take at close is running */
+    uint32_t retake;                   /* 1: traces, 2: logs: a take the allocator refused, retried next turn */
+    PyObject *ending_tasks;            /* async telemetry tasks of the last take, for __aexit__ (a list) */
     PyObject *clock;                   /* a SimulatedClock or None */
     PyObject *loop;                    /* the asyncio loop of async with, or None */
     PyObject *timer;                   /* the one TimerHandle, or None */
@@ -263,12 +266,16 @@ int ta_python_clock_register(PyObject *clock, PyObject *host);
 void ta_python_dispatch(ta_python_host *host, uint32_t index);
 int ta_python_effects_init_types(PyObject *module, ta_python_module_state *state);
 /* Hand an OTLP request the host wrote to the telemetry handler: the
- * view copied once into bytes. `signal` is "traces", "logs" or "metrics". */
+ * view copied once into bytes. `signal` is "traces" or "logs". */
 typedef struct ta_python_export {
     const char *signal;
     ta_bytes data;
 } ta_python_export;
 void ta_python_telemetry(ta_python_host *host, const ta_python_export *export);
+/* Take a traces (`traces` 1) or logs request now and hand it over; a take
+ * the allocator refuses is kept for a retry (core gives no second effect)
+ * and reported. */
+void ta_python_take(ta_python_host *host, int traces);
 /* Answer a send's async task that ended in an exception. */
 PyObject *ta_python_send_task_done(PyObject *send, PyObject *task);
 

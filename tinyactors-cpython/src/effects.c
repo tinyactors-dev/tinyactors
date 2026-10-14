@@ -399,7 +399,12 @@ void ta_python_telemetry(ta_python_host *host, const ta_python_export *export) {
         PyObject *task = host->loop != Py_None ? PyObject_CallMethod(host->loop, "create_task", "O", result) : NULL;
         PyObject *done = task ? PyCFunction_New(&ta_python_telemetry_done_def, (PyObject *)host) : NULL;
         PyObject *added = done ? PyObject_CallMethod(task, "add_done_callback", "O", done) : NULL;
-        if (!added && !PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "an async telemetry handler needs async with");
+        if (!task && !PyErr_Occurred()) {
+            PyObject *closed = PyObject_CallMethod(result, "close", NULL); /* no "never awaited" warning */
+            Py_XDECREF(closed);
+            PyErr_SetString(PyExc_RuntimeError, "an async telemetry handler needs async with");
+        }
+        if (added && host->ending && host->ending_tasks) PyList_Append(host->ending_tasks, task); /* __aexit__ awaits */
         Py_XDECREF(task);
         Py_XDECREF(done);
         Py_DECREF(result);
@@ -409,6 +414,20 @@ void ta_python_telemetry(ta_python_host *host, const ta_python_export *export) {
     Py_XDECREF(result);
     Py_XDECREF(data);
     Py_XDECREF(signal);
+}
+
+void ta_python_take(ta_python_host *host, int traces) {
+    ta_bytes taken; /* the host's view, until the ack */
+    ta_status status = traces ? ta_host_traces(host->host, &taken) : ta_host_logs(host->host, &taken);
+    uint32_t bit = traces ? 1u : 2u;
+    if (status == TA_OK) {
+        host->retake &= ~bit;
+        if (taken.length) ta_python_telemetry(host, &(ta_python_export){traces ? "traces" : "logs", taken});
+    } else if (status == TA_ERROR_NO_MEMORY && !(host->retake & bit)) {
+        host->retake |= bit; /* the request stays staged; no other effect comes until a take */
+        ta_python_raise_status(host->state, status);
+        ta_python_host_keep_error(host);
+    }
 }
 
 static void ta_python_dispatch_send(ta_python_host *host, uint32_t index) {
@@ -489,10 +508,7 @@ void ta_python_dispatch(ta_python_host *host, uint32_t index) {
     case TA_HOST_EFFECT_REPLY: ta_python_reply(host, index); break;
     case TA_HOST_EFFECT_TRACES: /* a request is ready: taken (the next comes only after a take) */
     case TA_HOST_EFFECT_LOGS: {
-        int traces = ta_host_effect_number(core, index, TA_EFFECT_FIELD_KIND) == TA_HOST_EFFECT_TRACES;
-        ta_bytes taken; /* the host's view, until the ack */
-        if ((traces ? ta_host_traces(core, &taken) : ta_host_logs(core, &taken)) == TA_OK && taken.length)
-            ta_python_telemetry(host, &(ta_python_export){traces ? "traces" : "logs", taken});
+        ta_python_take(host, ta_host_effect_number(core, index, TA_EFFECT_FIELD_KIND) == TA_HOST_EFFECT_TRACES);
         break;
     }
     default: /* DONE, ERROR: the datamodel's rows went with destroy; a NOTIFICATION we do not know; the

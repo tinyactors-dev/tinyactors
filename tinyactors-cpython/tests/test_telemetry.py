@@ -123,6 +123,85 @@ class Telemetry(unittest.TestCase):
         self.assertIn("traces", got)  # the last take, at the exit of async with
 
 
+class Stopping(unittest.TestCase):
+    """The last take at close, when its handler calls the host again."""
+
+    def staged(self, handler):
+        host = host_with(handler, flushInterval=0)
+        host.send(host.spawn(host.chart("c")), "go")
+        host.run_until_idle()
+        return host
+
+    def test_close_from_the_handler_of_the_last_take(self):
+        got = []
+
+        def handler(host, signal, data):
+            got.append(signal)
+            host.close()  # deferred: the close running now finishes
+
+        host = self.staged(handler)
+        host.close()
+        self.assertTrue(host.closed)
+        self.assertIn("traces", got)
+
+    def test_inputs_from_the_handler_of_the_last_take_end(self):
+        calls = []
+
+        def handler(host, signal, data):
+            calls.append(signal)
+            host.send(host.spawn(host.chart("c")), "go")  # more records, at every take
+
+        host = self.staged(handler)
+        host.close()
+        self.assertTrue(host.closed)
+        self.assertLess(len(calls), 200)  # the last take is bounded
+
+    def test_metrics_from_the_handler_of_the_last_take(self):
+        sizes = []
+        host = self.staged(lambda host, signal, data: sizes.append(len(host.metrics())))
+        host.close()
+        self.assertTrue(sizes and all(sizes))
+
+    def test_a_close_a_handler_asked_for_raises_from_the_driver(self):
+        state = {"closing": False}
+
+        def handler(host, signal, data):
+            if state["closing"]:
+                raise ConnectionError("down at close")
+
+        def log(host, entry):
+            state["closing"] = True
+            host.close()
+
+        host = tinyactors.Host(config(flushInterval=0), telemetry=handler, log=log, clock=tinyactors.SimulatedClock())
+        with tinyactors.compile_charts([("c.scxml", DOCUMENT)]) as compiled:
+            host.add_image(compiled.image)
+        host.send(host.spawn(host.chart("c")), "go")
+        with self.assertRaises(ConnectionError):
+            host.run_until_idle()
+        self.assertTrue(host.closed)
+
+    def test_async_with_awaits_the_async_last_take(self):
+        got = []
+
+        async def handler(host, signal, data):
+            await asyncio.sleep(0.01)
+            got.append(signal)
+            if signal == "logs":
+                raise ConnectionError("down")
+
+        async def main():
+            with self.assertRaises(ConnectionError):
+                async with tinyactors.Host(config(flushInterval=0), telemetry=handler) as host:
+                    with tinyactors.compile_charts([("c.scxml", DOCUMENT)]) as compiled:
+                        host.add_image(compiled.image)
+                    host.send(host.spawn(host.chart("c")), "go")
+                    await host.idle()
+
+        asyncio.run(main())  # nothing after the async with: the tasks were awaited by it
+        self.assertEqual(sorted(got), ["logs", "traces"])
+
+
 TWO = [("a.scxml", chart("<state id='s'><transition event='go'/></state>", name="a")),
        ("b.scxml", chart("<state id='s'><transition event='go'/></state>", name="b"))]
 

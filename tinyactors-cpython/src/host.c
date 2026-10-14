@@ -392,12 +392,13 @@ static PyObject *ta_python_host_create(PyTypeObject *type, PyObject *arguments, 
     host->timer = Py_NewRef(Py_None);
     host->scheduled = Py_NewRef(Py_None);
     host->waiters = PyList_New(0);
+    host->ending_tasks = PyList_New(0);
     ta_growable_arena_config arena = {sizeof arena, 0, 16384, &host->allocator};
     ta_growable_arena_init(&host->arena, &arena);
     host->arena_allocator = ta_growable_arena_allocator(&host->arena);
     ta_table_config pending = {sizeof pending, sizeof(ta_python_pending_row), &host->allocator};
     ta_table_init(&host->pending, &pending);
-    if (!host->waiters || ta_python_datamodel_init(&host->python, host) < 0) goto fail;
+    if (!host->waiters || !host->ending_tasks || ta_python_datamodel_init(&host->python, host) < 0) goto fail;
     ta_datamodel_ecmascript_config ecmascript;
     memset(&ecmascript, 0, sizeof ecmascript);
     ecmascript.size = sizeof ecmascript;
@@ -459,6 +460,9 @@ fail:
 
 /* ---- close ----------------------------------------------------------------------- */
 
+/* Takes, and batches, the last take makes at most. */
+#define TA_PYTHON_END_TAKES 64u
+
 /* trace.end, then the last take of traces and logs, before ta_host_free
  * (bindings.md, section 4): the spans still open are ended and go to the
  * telemetry handler with the rest (a handler's exception is kept). */
@@ -470,18 +474,27 @@ static void ta_python_host_end_traces(ta_python_host *host) {
     ta_cbor_write_text(&writer, ta_string("method"));
     ta_cbor_write_text(&writer, ta_string("trace.end"));
     ta_bytes message;
+    /* a call on the stack, as a drain is: a handler's close is deferred,
+     * its metrics() joins the open batch */
+    host->depth++;
+    host->ending = 1;
     if (ta_cbor_writer_bytes(&writer, &message) == TA_OK && ta_host_post(host->host, message) == TA_OK) {
         const ta_host_effect *effects;
-        while (ta_host_effects(host->host, &effects) > 0) {
+        /* until a take writes nothing (bindings.md section 4), bounded: a
+         * handler that makes inputs here (a spawn) makes more records */
+        for (uint32_t batches = 0; batches < TA_PYTHON_END_TAKES && ta_host_effects(host->host, &effects) > 0; batches++) {
             ta_bytes taken;
-            while (ta_host_traces(host->host, &taken) == TA_OK && taken.length)
+            for (uint32_t takes = 0; takes < TA_PYTHON_END_TAKES && ta_host_traces(host->host, &taken) == TA_OK && taken.length; takes++)
                 ta_python_telemetry(host, &(ta_python_export){"traces", taken});
-            while (ta_host_logs(host->host, &taken) == TA_OK && taken.length)
+            for (uint32_t takes = 0; takes < TA_PYTHON_END_TAKES && ta_host_logs(host->host, &taken) == TA_OK && taken.length; takes++)
                 ta_python_telemetry(host, &(ta_python_export){"logs", taken});
             ta_host_effects_ack(host->host);
             host->acks++;
         }
     }
+    host->ending = 0;
+    host->depth--;
+    host->closing = 0; /* a close asked by a handler here: this one */
     ta_cbor_writer_free(&writer);
 }
 
@@ -535,6 +548,7 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     Py_VISIT(host->timer);
     Py_VISIT(host->scheduled);
     Py_VISIT(host->waiters);
+    Py_VISIT(host->ending_tasks);
     Py_VISIT(host->error);
     for (uint32_t slot = 0; slot < host->pending.capacity; slot++) {
         ta_python_pending_row *row = ta_table_at(&host->pending, slot);
@@ -560,6 +574,7 @@ static int ta_python_host_clear(PyObject *self) {
     Py_CLEAR(host->timer);
     Py_CLEAR(host->scheduled);
     Py_CLEAR(host->waiters);
+    Py_CLEAR(host->ending_tasks);
     Py_CLEAR(host->error);
     return 0;
 }
@@ -934,7 +949,19 @@ static PyObject *ta_python_host_exit_async(PyObject *self, PyObject *arguments) 
     ta_python_host *host = (ta_python_host *)self;
     PyObject *loop = Py_NewRef(host->loop);
     ta_python_host_close(host, 0);
-    PyObject *result = ta_python_host_closed_error(host) == 0 && loop != Py_None ? ta_python_done_future(loop, Py_False) : NULL;
+    PyObject *result = NULL;
+    if (ta_python_host_closed_error(host) == 0 && loop != Py_None) {
+        if (host->ending_tasks && PyList_Size(host->ending_tasks) > 0) { /* the async last take: awaited here */
+            PyObject *asyncio = PyImport_ImportModule("asyncio");
+            PyObject *tasks = asyncio ? PyList_AsTuple(host->ending_tasks) : NULL;
+            PyObject *gather = tasks ? PyObject_GetAttrString(asyncio, "gather") : NULL;
+            result = gather ? PyObject_Call(gather, tasks, NULL) : NULL; /* raises the first exception */
+            Py_XDECREF(gather);
+            Py_XDECREF(tasks);
+            Py_XDECREF(asyncio);
+            PyList_SetSlice(host->ending_tasks, 0, PyList_Size(host->ending_tasks), NULL);
+        } else result = ta_python_done_future(loop, Py_False);
+    }
     Py_DECREF(loop);
     if (!result && !PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "async with outside an event loop");
     return result;

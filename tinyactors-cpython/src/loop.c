@@ -88,6 +88,12 @@ static double ta_python_delay(ta_python_host *host) {
 static ta_python_next ta_python_turn(ta_python_host *host) {
     if (ta_python_drain(host)) return TA_PYTHON_NEXT_YIELD; /* what inputs and posts appended:
                                                                a pending reply needs no run */
+    if (host->retake) { /* a take the allocator refused: again, in a batch of its own */
+        if (host->retake & 1u) ta_python_take(host, 1);
+        if (host->retake & 2u) ta_python_take(host, 0);
+        ta_host_effects_ack(host->host);
+        host->acks++;
+    }
     ta_host_advance_time(host->host, ta_python_now(host)); /* ticks at host.config's rate, wall ns */
     for (uint32_t runs = 0;; runs++) {
         host->inputs = 0;
@@ -195,6 +201,11 @@ static PyObject *ta_python_drive(ta_python_host *host, int forever) {
     Py_XDECREF(sleep);
     ta_python_leave(&call);
     if (status < 0) return NULL;
+    if (host->error && !host->host) { /* a close a handler asked for ran at the leave, and its last take raised */
+        PyErr_SetRaisedException(host->error);
+        host->error = NULL;
+        return NULL;
+    }
     Py_RETURN_NONE;
 }
 

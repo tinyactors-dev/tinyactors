@@ -94,11 +94,15 @@ OTLP requests (protobuf): spans of every macrostep, `<log>` lines and
 failed actions as log records, and counters as metrics. The host does no
 I/O: the binding hands each request to your handler as `bytes` you keep,
 `signal` being `"traces"` or `"logs"`, and you post it. Metrics are
-pulled with `host.metrics()`. Leaving the `Host` ends the spans still
-open (`trace.end`) and hands over the last requests. Posting, retrying
-and capping what waits are yours. An `async def` handler (under `async
-with`) runs as a task; an exception from a handler is raised by the
-driver after the turn, the request lost.
+pulled with `host.metrics()`. Leaving the `Host` (`with`, `async with`,
+`close()`) ends the spans still open (`trace.end`) and hands over the
+last requests; a `Host` the collector frees does not, so leave it. Posting,
+retrying and capping what waits are yours, and the handler runs in the
+turn: a slow post holds the loop (and, under asyncio, the event loop),
+so give it a timeout, or make it an `async def` handler, which runs as a
+task (`async with` awaits the last take's). A handler's exception is
+raised by the driver after the turn, the first of a turn; every request
+whose handler raised is lost.
 
 ```python
 import urllib.request
@@ -106,7 +110,7 @@ import urllib.request
 def export(host, signal, data):           # OTLP/HTTP, to a collector or otel-tui
     request = urllib.request.Request("http://localhost:4318/v1/" + signal, data,
                                      {"Content-Type": "application/x-protobuf"})
-    urllib.request.urlopen(request).close()
+    urllib.request.urlopen(request, timeout=2).close()
 
 config = {"systemID": "shop",
           "telemetry": {"flushInterval": 5_000_000_000,       # host clock: ns by default
