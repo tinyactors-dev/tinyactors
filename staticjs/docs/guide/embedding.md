@@ -404,6 +404,41 @@ event and its order. When `sjs_parser_push` or `sjs_parser_finish` returns
 `examples/stream.c` pushes a module in 7-byte chunks through a counting
 sink.
 
+## Inspecting an evaluation
+
+A paused evaluation can say where it is, and a compiled program what it
+holds: for a debugger, a profiler, a step-by-step view, or a host that
+reports where a program ran out of fuel. Every inspection call reads on
+demand. An evaluation that nobody inspects pays nothing for them.
+
+```c
+/* Where is it? Frame 0 is the program, the last the innermost. */
+for (uint32_t i = 0; i < sjs_vm_frame_count(vm); i++) {
+    sjs_frame frame;
+    sjs_vm_frame(vm, i, &frame);
+    if (frame.kind == SJS_FRAME_LOOP)          /* map, reduce, Array.from, ... */
+        printf("%u:%u %.*s, element %u of %u\n", frame.at.line, frame.at.column,
+               (int)frame.name.length, frame.name.ptr, frame.index, frame.length);
+    else                                       /* code: the next instruction, or the call it waits on */
+        printf("%u:%u\n", frame.at.line, frame.at.column);
+}
+```
+
+- **Frames** exist while an evaluation is paused, and after a fault, where
+  they show where it faulted, until the next `sjs_vm_start` or
+  `sjs_vm_reset`. A function frame gives the source position of the
+  instruction it runs next, or of the call it waits on. A loop frame gives
+  where its built-in was called, the built-in's name (`"map"`, or
+  `"Array"` and `"from"`), and, for a loop that passes over its elements in
+  order, how many it has passed of how many.
+- **Functions:** `sjs_program_function` gives each function of a program,
+  its main code first: where its code begins, its parameters, and the shape
+  the compiler tagged it with (`"PLUCK"` for `x => x.key`), or none. A
+  callback with a shape runs in C ([performance.md](performance.md#shapes-callbacks-run-in-c)).
+
+Run on one unit of fuel at a time, and the frames trace an evaluation step
+by step.
+
 ## Threads
 
 A context, and everything made with it, is used by one thread at a time.

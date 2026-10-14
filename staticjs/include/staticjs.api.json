@@ -365,6 +365,14 @@
       "value": 52
     },
     {
+      "name": "SJS_FRAME_FUNCTION",
+      "value": 1
+    },
+    {
+      "name": "SJS_FRAME_LOOP",
+      "value": 2
+    },
+    {
       "name": "SJS_FUNCTION",
       "value": 11
     },
@@ -2014,6 +2022,126 @@
         }
       }
     },
+    "sjs_frame_kind": {
+      "kind": "enum",
+      "constants": [
+        "SJS_FRAME_FUNCTION",
+        "SJS_FRAME_LOOP"
+      ]
+    },
+    "sjs_frame": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "kind",
+          "type": "sjs_frame_kind"
+        },
+        {
+          "name": "at",
+          "type": "sjs_position"
+        },
+        {
+          "name": "object",
+          "type": "sjs_str"
+        },
+        {
+          "name": "name",
+          "type": "sjs_str"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "length",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "at": 4,
+            "object": 16,
+            "name": 32,
+            "index": 48,
+            "length": 52
+          }
+        },
+        "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "kind": 0,
+            "at": 4,
+            "object": 16,
+            "name": 32,
+            "index": 48,
+            "length": 52
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 4,
+          "offsets": {
+            "kind": 0,
+            "at": 4,
+            "object": 16,
+            "name": 24,
+            "index": 32,
+            "length": 36
+          }
+        }
+      }
+    },
+    "sjs_function_summary": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "at",
+          "type": "sjs_position"
+        },
+        {
+          "name": "params",
+          "type": "uint32_t"
+        },
+        {
+          "name": "shape",
+          "type": "sjs_str"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "at": 0,
+            "params": 12,
+            "shape": 16
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "at": 0,
+            "params": 12,
+            "shape": 16
+          }
+        },
+        "wasm32": {
+          "size": 24,
+          "align": 4,
+          "offsets": {
+            "at": 0,
+            "params": 12,
+            "shape": 16
+          }
+        }
+      }
+    },
     "sjs_writer": {
       "kind": "opaque",
       "fields": []
@@ -2690,6 +2818,40 @@
       "implemented": true
     },
     {
+      "name": "sjs_program_function",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "program",
+          "type": "const sjs_program *"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_function_summary *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_program_function_count",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "program",
+          "type": "const sjs_program *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "sjs_program_release",
       "returns": "void",
       "params": [
@@ -2912,6 +3074,40 @@
         {
           "name": "out",
           "type": "sjs_error *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_frame",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "vm",
+          "type": "const sjs_vm *"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_frame *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_vm_frame_count",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "vm",
+          "type": "const sjs_vm *"
         }
       ],
       "public": true,

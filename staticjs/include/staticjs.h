@@ -758,6 +758,68 @@ SJS_API sjs_result sjs_vm_random(const sjs_vm *vm, sjs_random *out);
 SJS_API sjs_result sjs_vm_set_random(sjs_vm *vm, const sjs_random *state);
 
 /* ========================================================================
+ * Inspection
+ *
+ * What a paused evaluation is doing, and what a compiled program holds: for
+ * a debugger, a profiler, a step-by-step view, or a host that wants to say
+ * where a program ran out of fuel. Each call reads on demand; nothing here
+ * costs an evaluation anything unless it is called.
+ */
+
+typedef enum {
+    SJS_FRAME_FUNCTION = 1, /* code: the program's own, or a function it calls */
+    SJS_FRAME_LOOP          /* a built-in that calls back for each element: map, reduce, ... */
+} sjs_frame_kind;
+
+typedef struct {
+    sjs_frame_kind kind;
+    /* A function frame: the instruction it runs next (the innermost frame
+     * of a paused evaluation), the one that faulted (of a faulted one), or
+     * the call it waits on (any other). A loop frame: where the built-in
+     * was called. */
+    sjs_position at;
+    /* Loop frames: the built-in, as the program calls it: `name` "map" and
+     * `object` empty for a method, `object` "Array" and `name` "from" for
+     * Array.from; a regular expression's loop is "RegExp" and "match". The
+     * text is the library's, valid for as long as the library is loaded. */
+    sjs_str object;
+    sjs_str name;
+    /* Loop frames that pass over their elements in order (map, filter,
+     * reduce, forEach, find, some, every, flatMap, the groupBys, Array.from
+     * with a mapper, and their kin): how many elements it has passed, of
+     * how many. 0 and 0 for a sort, a regular expression's loop and a
+     * function frame. */
+    uint32_t index;
+    uint32_t length;
+} sjs_frame;
+
+/* The frames of a paused evaluation, or of a faulted one (where it faulted,
+ * until the next sjs_vm_start or sjs_vm_reset); 0 for none, or one that is
+ * done. */
+SJS_API uint32_t sjs_vm_frame_count(const sjs_vm *vm);
+/* Frame `index`, 0 the outermost (the program), sjs_vm_frame_count() - 1
+ * the innermost. SJS_ERR_NOT_FOUND past the last. */
+SJS_API sjs_result sjs_vm_frame(const sjs_vm *vm, uint32_t index, sjs_frame *out);
+
+typedef struct {
+    /* Where the function's code begins in the source. */
+    sjs_position at;
+    /* Its parameters, a rest parameter included. */
+    uint32_t params;
+    /* The shape the compiler found the function computes, by which a
+     * built-in may run it in C ("PLUCK" for x => x.key, "COMPARE_BY_KEY"
+     * for (a, b) => a.key - b.key, ...), or empty for none. The text is the
+     * library's, valid for as long as the library is loaded. */
+    sjs_str shape;
+} sjs_function_summary;
+
+/* The functions a program declares, its main code first (index 0), then
+ * each arrow function in the order its source begins. */
+SJS_API uint32_t sjs_program_function_count(const sjs_program *program);
+/* Function `index` of the program. SJS_ERR_NOT_FOUND past the last. */
+SJS_API sjs_result sjs_program_function(const sjs_program *program, uint32_t index, sjs_function_summary *out);
+
+/* ========================================================================
  * Writer
  *
  * Writes a value as JavaScript source that evaluates to an equal value:

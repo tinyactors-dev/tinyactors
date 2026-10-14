@@ -3303,6 +3303,107 @@ static void test_json(void) {
                        SJS_GOAL_EXPRESSION);
 }
 
+/* Inspection: a program's functions and their shapes, and the frames of a
+ * paused and of a faulted evaluation, read on demand. */
+static bool str_is(sjs_str s, const char *text) {
+    return s.length == strlen(text) && memcmp(s.ptr, text, s.length) == 0;
+}
+
+static void test_inspection(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    const char *source = "[{ k: 1 }, { k: 2 }].map((x) => x.k).toSorted((a, b) => a - b)";
+    sjs_program *program;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
+                                  { source, (uint32_t)strlen(source) }, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    CHECK(sjs_program_function_count(program) == 3);
+    sjs_function_summary fn;
+    CHECK(sjs_program_function(program, 0, &fn) == SJS_OK && fn.params == 0 && fn.shape.length == 0);
+    CHECK(sjs_program_function(program, 1, &fn) == SJS_OK && fn.params == 1 && str_is(fn.shape, "PLUCK"));
+    CHECK(fn.at.line == 1 && fn.at.column == 33);
+    CHECK(sjs_program_function(program, 2, &fn) == SJS_OK && fn.params == 2 && str_is(fn.shape, "COMPARE_NUMERIC"));
+    CHECK(sjs_program_function(program, 3, &fn) == SJS_ERR_NOT_FOUND);
+    CHECK(sjs_program_function(NULL, 0, &fn) == SJS_ERR_INVALID);
+    sjs_program_release(program);
+
+    /* A paused evaluation: the program waits on map, map is on its first
+     * element of four. */
+    source = "[1, 2, 3, 4].map((x) => x * 2 + 1)";
+    params.source = (sjs_str){ source, (uint32_t)strlen(source) };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    sjs_vm *vm;
+    sjs_vm_config config = { context, false, false };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    CHECK(sjs_vm_frame_count(vm) == 0);
+    sjs_run_params run = { program, NULL, 0 };
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_frame_count(vm) == 1);
+    sjs_frame frame;
+    bool saw_loop = false;
+    while (sjs_vm_run(vm, 1) == SJS_RUN_PAUSED) {
+        uint32_t n = sjs_vm_frame_count(vm);
+        CHECK(n >= 1 && n <= 3);
+        CHECK(sjs_vm_frame(vm, 0, &frame) == SJS_OK && frame.kind == SJS_FRAME_FUNCTION && frame.at.line == 1);
+        if (n >= 2) {
+            CHECK(sjs_vm_frame(vm, 1, &frame) == SJS_OK && frame.kind == SJS_FRAME_LOOP);
+            CHECK(str_is(frame.name, "map") && frame.object.length == 0 && frame.length == 4 && frame.index <= 4);
+            CHECK(frame.at.line == 1 && frame.at.column == 17);
+            saw_loop = true;
+        }
+        CHECK(sjs_vm_frame(vm, n, &frame) == SJS_ERR_NOT_FOUND);
+    }
+    CHECK(saw_loop);
+    CHECK(sjs_vm_frame_count(vm) == 0);
+    sjs_value result;
+    CHECK(sjs_vm_take_result(vm, &result) == SJS_OK);
+    sjs_release(context, result);
+    sjs_program_release(program);
+
+    /* A faulted evaluation keeps its frames, innermost where it faulted,
+     * until the next start or reset. */
+    source = "Array.from({ length: 3 }, (_, i) => [i].filter((y) => y.z.w))";
+    params.source = (sjs_str){ source, (uint32_t)strlen(source) };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    run.program = program;
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    CHECK(sjs_vm_run(vm, 1000) == SJS_RUN_FAULT);
+    CHECK(sjs_vm_frame_count(vm) == 5);
+    CHECK(sjs_vm_frame(vm, 1, &frame) == SJS_OK && frame.kind == SJS_FRAME_LOOP);
+    CHECK(str_is(frame.object, "Array") && str_is(frame.name, "from") && frame.length == 3);
+    CHECK(sjs_vm_frame(vm, 3, &frame) == SJS_OK && str_is(frame.name, "filter"));
+    CHECK(sjs_vm_frame(vm, 4, &frame) == SJS_OK && frame.kind == SJS_FRAME_FUNCTION);
+    sjs_error error;
+    CHECK(sjs_vm_error(vm, &error) == SJS_OK && error.at.line == frame.at.line && error.at.column == frame.at.column);
+    sjs_vm_reset(vm);
+    CHECK(sjs_vm_frame_count(vm) == 0);
+    sjs_program_release(program);
+
+    /* A sort reports no progress: its index is its own bookkeeping. */
+    source = "[3, 1, 2].toSorted((a, b) => a - b + 0)";
+    params.source = (sjs_str){ source, (uint32_t)strlen(source) };
+    CHECK(sjs_compile(&params, &program) == SJS_OK);
+    run.program = program;
+    CHECK(sjs_vm_start(vm, &run) == SJS_OK);
+    bool saw_sort = false;
+    while (sjs_vm_run(vm, 1) == SJS_RUN_PAUSED) {
+        if (sjs_vm_frame_count(vm) >= 2) {
+            CHECK(sjs_vm_frame(vm, 1, &frame) == SJS_OK && str_is(frame.name, "toSorted"));
+            CHECK(frame.index == 0 && frame.length == 0);
+            saw_sort = true;
+        }
+    }
+    CHECK(saw_sort);
+    CHECK(sjs_vm_take_result(vm, &result) == SJS_OK);
+    sjs_release(context, result);
+    sjs_program_release(program);
+    CHECK(sjs_vm_frame(NULL, 0, &frame) == SJS_ERR_INVALID);
+    sjs_vm_destroy(vm);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 int main(int argc, char **argv) {
     bool full = argc > 1 && strcmp(argv[1], "--full") == 0;
     test_values();
@@ -3329,6 +3430,7 @@ int main(int argc, char **argv) {
     test_reuse_leaves_others_alone();
     test_no_shapes();
     test_shape_paths();
+    test_inspection();
     /* MUTATION */
     test_mutation_events();
     test_mutation_push_paths();
