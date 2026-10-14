@@ -45,15 +45,19 @@ static int is_state_el(const ta_xml_node *node) {
     return el(node, "state") || el(node, "parallel") || el(node, "final") || el(node, "history");
 }
 
-static void compile_error(chart_builder *builder, const ta_xml_node *node, const char *format,
-                          const char *arg) {
-    ta_diagnostics_add(&builder->compiler->diagnostics, TA_DIAGNOSTIC_ERROR, builder->file,
-                       node ? node->line : 0, node ? node->column : 0, format, arg ? arg : "");
+typedef struct compile_message {
+    const char *format, *argument;
+} compile_message;
+
+static void compile_error(chart_builder *builder, const ta_xml_node *node, compile_message message) {
+    ta_diagnostics_add(&builder->compiler->diagnostics, &(ta_diagnostic_input){
+        TA_DIAGNOSTIC_ERROR, builder->file, node ? node->line : 0, node ? node->column : 0,
+        message.format}, message.argument ? message.argument : "");
 }
-static void compile_warning(chart_builder *builder, const ta_xml_node *node, const char *format,
-                            const char *arg) {
-    ta_diagnostics_add(&builder->compiler->diagnostics, TA_DIAGNOSTIC_WARNING, builder->file,
-                       node ? node->line : 0, node ? node->column : 0, format, arg ? arg : "");
+static void compile_warning(chart_builder *builder, const ta_xml_node *node, compile_message message) {
+    ta_diagnostics_add(&builder->compiler->diagnostics, &(ta_diagnostic_input){
+        TA_DIAGNOSTIC_WARNING, builder->file, node ? node->line : 0, node ? node->column : 0,
+        message.format}, message.argument ? message.argument : "");
 }
 
 static ta_state_record *state_at(chart_builder *builder, uint32_t i) {
@@ -101,9 +105,17 @@ static int next_token(const char **p, const char **tok, uint32_t *length) {
     return 1;
 }
 
-static uint32_t intern_expression(chart_builder *builder, uint32_t kind, const char *source,
-                                  uint32_t length, const ta_xml_node *at) {
-    char *key = (char *)ta_chunk_arena_alloc(&builder->compiler->arena, length + 2);
+typedef struct expression_input {
+    uint32_t kind;
+    ta_string_view source;
+    const ta_xml_node *at;
+} expression_input;
+
+static uint32_t intern_expression(chart_builder *builder, const expression_input *input) {
+    uint32_t kind = input->kind, length = input->source.length;
+    const char *source = input->source.pointer;
+    const ta_xml_node *at = input->at;
+    char *key = (char *)ta_compile_alloc(&builder->compiler->arena, length + 2, &builder->compiler->out_of_memory);
     if (!key) return 0;
     key[0] = (char)('0' + kind);
     memcpy(key + 1, source, length);
@@ -132,7 +144,7 @@ static uint32_t event_name(chart_builder *builder, const ta_xml_node *at, const 
     for (uint32_t i = 0; i < length; i++)
         parts += s[i] == '.';
     if (parts > MAX_EVENT_PARTS) {
-        compile_error(builder, at, "event name with more than 64 dot-separated parts%s", NULL);
+        compile_error(builder, at, (compile_message){"event name with more than 64 dot-separated parts%s", NULL});
         length = 0;
     }
     return ta_compiler_event_name(builder->compiler, s, length);
@@ -142,7 +154,7 @@ static uint32_t attribute_expression(chart_builder *builder, const ta_xml_node *
                                      const char *name, uint32_t kind) {
     const ta_xml_attribute *attribute = ta_xml_find_attribute(node, name);
     return attribute
-               ? intern_expression(builder, kind, attribute->value, attribute->value_length, node)
+               ? intern_expression(builder, &(expression_input){kind, {attribute->value, attribute->value_length}, node})
                : TA_NIL;
 }
 
@@ -167,8 +179,7 @@ static void precompile_literal_document(chart_builder *builder, const ta_xml_nod
     char key[4096];
     uint32_t kl = ta_compiler_document_key(s, length, key, sizeof key);
     if (!kl) return;
-    ta_compiler_queue(builder->compiler, key, builder->text, builder->length,
-                      (ta_xml_node *)node->first);
+    ta_compiler_queue(builder->compiler, &(ta_pending_document){(ta_xml_node *)node->first, key, builder->text, builder->length});
 }
 
 /* Content of <content>/<data>/<assign>: raw markup if it has element
@@ -189,7 +200,7 @@ static uint32_t content_expression(chart_builder *builder, const ta_xml_node *no
     }
     while (length && is_whitespace(s[length - 1]))
         length--;
-    return intern_expression(builder, TA_EXPRESSION_CONTENT, s, length, node);
+    return intern_expression(builder, &(expression_input){TA_EXPRESSION_CONTENT, {s, length}, node});
 }
 
 static const ta_xml_node *child(const ta_xml_node *node, const char *name) {
@@ -205,11 +216,11 @@ static int fetch_source(chart_builder *builder, const ta_xml_node *at, const cha
     ta_resolve_request request = {{builder->file, (uint32_t)strlen(builder->file)},
                                   {source, (uint32_t)strlen(source)}};
     if (!options->resolve) {
-        compile_error(builder, at, "src=\"%s\" requires a resolver", source);
+        compile_error(builder, at, (compile_message){"src=\"%s\" requires a resolver", source});
         return 0;
     }
     if (options->resolve(options->resolve_context, &request, out) != TA_OK) {
-        compile_error(builder, at, "cannot resolve src=\"%s\"", source);
+        compile_error(builder, at, (compile_message){"cannot resolve src=\"%s\"", source});
         return 0;
     }
     return 1;
@@ -296,11 +307,11 @@ static void leave_state(chart_builder *builder, ta_xml_node *node, uint32_t inde
         state->kind = TA_STATE_COMPOUND;
         state->flags |= TA_STATE_FLAG_ROOT;
         if (!has_real_child)
-            compile_error(builder, node, "<scxml> must contain at least one state%s", NULL);
+            compile_error(builder, node, (compile_message){"<scxml> must contain at least one state%s", NULL});
     } else if (el(node, "state")) {
         state->kind = has_children ? TA_STATE_COMPOUND : TA_STATE_ATOMIC;
         if (has_children && !has_real_child)
-            compile_error(builder, node, "compound state needs a non-history child state%s", NULL);
+            compile_error(builder, node, (compile_message){"compound state needs a non-history child state%s", NULL});
     } else if (el(node, "parallel")) {
         state->kind = has_children ? TA_STATE_PARALLEL : TA_STATE_ATOMIC;
     } else if (el(node, "final")) {
@@ -341,12 +352,12 @@ static void collect(chart_builder *builder, ta_xml_node *root) {
         f->next = child->next;
         if (!is_state_el(child)) continue;
         if (el(node, "history") || el(node, "final")) {
-            compile_error(builder, child, "<%s> cannot contain states", node->name);
+            compile_error(builder, child, (compile_message){"<%s> cannot contain states", node->name});
             continue;
         }
         uint32_t depth = stack.length; /* the root is at depth 0 */
         if (depth > MAX_DEPTH) {
-            compile_error(builder, child, "state nesting too deep%s", NULL);
+            compile_error(builder, child, (compile_message){"state nesting too deep%s", NULL});
             continue;
         }
         uint32_t parent = f->index;
@@ -376,7 +387,7 @@ static uint32_t resolve_id(chart_builder *builder, const ta_xml_node *at, const 
         uint32_t l = length < sizeof buffer - 1 ? length : (uint32_t)sizeof buffer - 1;
         memcpy(buffer, id, l);
         buffer[l] = 0;
-        compile_error(builder, at, "unknown state id '%s'", buffer);
+        compile_error(builder, at, (compile_message){"unknown state id '%s'", buffer});
     }
     return i;
 }
@@ -395,7 +406,7 @@ static uint32_t capture(chart_builder *builder, const ta_xml_node *node, const c
         while (next_token(&p, &tok, &length)) {
             ta_vector_push_u32(
                 &builder->compiler->u32,
-                intern_expression(builder, TA_EXPRESSION_LOCATION, tok, length, node));
+                intern_expression(builder, &(expression_input){TA_EXPRESSION_LOCATION, {tok, length}, node}));
             capture_record.namelist_count++;
         }
     }
@@ -404,14 +415,14 @@ static uint32_t capture(chart_builder *builder, const ta_xml_node *node, const c
         if (el(child, "param")) {
             const ta_xml_attribute *nm = ta_xml_find_attribute(child, "name");
             if (!nm) {
-                compile_error(builder, child, "<param> requires 'name'%s", NULL);
+                compile_error(builder, child, (compile_message){"<param> requires 'name'%s", NULL});
                 continue;
             }
             uint32_t e = attribute_expression(builder, child, "expr", TA_EXPRESSION_VALUE);
             if (e == TA_NIL)
                 e = attribute_expression(builder, child, "location", TA_EXPRESSION_LOCATION);
             if (e == TA_NIL) {
-                compile_error(builder, child, "<param> requires 'expr' or 'location'%s", NULL);
+                compile_error(builder, child, (compile_message){"<param> requires 'expr' or 'location'%s", NULL});
                 continue;
             }
             ta_vector_push_u32(&builder->compiler->u32,
@@ -420,7 +431,7 @@ static uint32_t capture(chart_builder *builder, const ta_xml_node *node, const c
             capture_record.param_count++;
         } else if (el(child, "content") && !skip_content) {
             if (capture_record.content != TA_NIL)
-                compile_error(builder, child, "duplicate <content>%s", NULL);
+                compile_error(builder, child, (compile_message){"duplicate <content>%s", NULL});
             uint32_t e = attribute_expression(builder, child, "expr", TA_EXPRESSION_VALUE);
             capture_record.content = e != TA_NIL ? e : content_expression(builder, child);
         }
@@ -430,7 +441,7 @@ static uint32_t capture(chart_builder *builder, const ta_xml_node *node, const c
         return TA_NIL;
     if (capture_record.content != TA_NIL &&
         (capture_record.namelist_count || capture_record.param_count))
-        compile_error(builder, node, "<content> cannot be combined with namelist/<param>%s", NULL);
+        compile_error(builder, node, (compile_message){"<content> cannot be combined with namelist/<param>%s", NULL});
     ta_capture_record *dst = (ta_capture_record *)ta_vector_push(&builder->compiler->captures);
     if (!dst) return TA_NIL;
     *dst = capture_record;
@@ -447,11 +458,11 @@ static uint32_t send_def(chart_builder *builder, const ta_xml_node *node) {
     if (event) send.event = event_name(builder, node, event, (uint32_t)strlen(event));
     send.eventexpr = attribute_expression(builder, node, "eventexpr", TA_EXPRESSION_STRING);
     if (event && send.eventexpr != TA_NIL)
-        compile_error(builder, node, "<send> has both event and eventexpr%s", NULL);
+        compile_error(builder, node, (compile_message){"<send> has both event and eventexpr%s", NULL});
     const char *tg = ta_xml_attribute_value(node, "target");
     send.targetexpr = attribute_expression(builder, node, "targetexpr", TA_EXPRESSION_STRING);
     if (tg && send.targetexpr != TA_NIL)
-        compile_error(builder, node, "<send> has both target and targetexpr%s", NULL);
+        compile_error(builder, node, (compile_message){"<send> has both target and targetexpr%s", NULL});
     if (send.targetexpr != TA_NIL) {
         send.target_kind = TA_SEND_TARGET_EXPRESSION;
     } else if (!tg) {
@@ -475,18 +486,17 @@ static uint32_t send_def(chart_builder *builder, const ta_xml_node *node) {
     send.id = attr_str(builder, node, "id");
     send.idlocation = attribute_expression(builder, node, "idlocation", TA_EXPRESSION_LOCATION);
     if (send.id != TA_NIL && send.idlocation != TA_NIL)
-        compile_error(builder, node, "<send> has both id and idlocation%s", NULL);
+        compile_error(builder, node, (compile_message){"<send> has both id and idlocation%s", NULL});
     const char *delay = ta_xml_attribute_value(node, "delay");
     if (delay && !ta_parse_duration_ns(delay, &send.delay_ns))
-        compile_error(builder, node, "invalid delay '%s'", delay);
+        compile_error(builder, node, (compile_message){"invalid delay '%s'", delay});
     send.delayexpr = attribute_expression(builder, node, "delayexpr", TA_EXPRESSION_STRING);
     if ((delay || send.delayexpr != TA_NIL) && send.target_kind == TA_SEND_TARGET_INTERNAL)
-        compile_error(builder, node, "delay is not allowed with target #_internal%s", NULL);
+        compile_error(builder, node, (compile_message){"delay is not allowed with target #_internal%s", NULL});
     send.capture = capture(builder, node, ta_xml_attribute_value(node, "namelist"), 0);
     if (send.event == TA_NIL && send.eventexpr == TA_NIL && send.type == TA_NIL &&
         send.typeexpr == TA_NIL)
-        compile_error(builder, node, "<send> to the SCXML processor requires event or eventexpr%s",
-                      NULL);
+        compile_error(builder, node, (compile_message){"<send> to the SCXML processor requires event or eventexpr%s", NULL});
     ta_send_record *dst = (ta_send_record *)ta_vector_push(&builder->compiler->sends);
     if (!dst) return 0;
     *dst = send;
@@ -505,7 +515,7 @@ static void exec_children(chart_builder *builder, const ta_xml_node *container) 
 static void exec_if(chart_builder *builder, const ta_xml_node *node) {
     uint32_t condition = attribute_expression(builder, node, "cond", TA_EXPRESSION_CONDITION);
     if (condition == TA_NIL) {
-        compile_error(builder, node, "<if> requires 'cond'%s", NULL);
+        compile_error(builder, node, (compile_message){"<if> requires 'cond'%s", NULL});
         condition = 0;
     }
     ta_vector jmps;
@@ -517,7 +527,7 @@ static void exec_if(chart_builder *builder, const ta_xml_node *node) {
     int seen_else = 0;
     for (const ta_xml_node *child = node->first; child; child = child->next) {
         if (el(child, "elseif") || el(child, "else")) {
-            if (seen_else) compile_error(builder, child, "<%s> after <else>", child->name);
+            if (seen_else) compile_error(builder, child, (compile_message){"<%s> after <else>", child->name});
             emit(builder, TA_OPCODE_JUMP);
             ta_vector_push_u32(&jmps, pc(builder));
             emit(builder, 0);
@@ -526,7 +536,7 @@ static void exec_if(chart_builder *builder, const ta_xml_node *node) {
             if (el(child, "elseif")) {
                 uint32_t c2 = attribute_expression(builder, child, "cond", TA_EXPRESSION_CONDITION);
                 if (c2 == TA_NIL) {
-                    compile_error(builder, child, "<elseif> requires 'cond'%s", NULL);
+                    compile_error(builder, child, (compile_message){"<elseif> requires 'cond'%s", NULL});
                     c2 = 0;
                 }
                 emit(builder, TA_OPCODE_JUMP_IF_FALSE);
@@ -551,7 +561,7 @@ static void exec_if(chart_builder *builder, const ta_xml_node *node) {
  * the jumps linear. */
 static int nest_enter(chart_builder *builder, const ta_xml_node *node) {
     if (builder->nesting >= TA_IMAGE_MAX_NESTING) {
-        compile_error(builder, node, "<%s> nested too deep in executable content", node->name);
+        compile_error(builder, node, (compile_message){"<%s> nested too deep in executable content", node->name});
         return 0;
     }
     builder->nesting++;
@@ -561,14 +571,14 @@ static int nest_enter(chart_builder *builder, const ta_xml_node *node) {
 static void exec_el(chart_builder *builder, const ta_xml_node *node) {
     if (ta_compiler_stop(builder->compiler)) return;
     if (!is_scxml(node)) {
-        compile_warning(builder, node, "ignoring foreign executable content <%s>", node->name);
+        compile_warning(builder, node, (compile_message){"ignoring foreign executable content <%s>", node->name});
         return;
     }
     const char *nm = node->name;
     if (!strcmp(nm, "raise")) {
         const char *event = ta_xml_attribute_value(node, "event");
         if (!event) {
-            compile_error(builder, node, "<raise> requires 'event'%s", NULL);
+            compile_error(builder, node, (compile_message){"<raise> requires 'event'%s", NULL});
             return;
         }
         emit(builder, TA_OPCODE_RAISE);
@@ -581,7 +591,7 @@ static void exec_el(chart_builder *builder, const ta_xml_node *node) {
         uint32_t loc = attribute_expression(builder, node, "location", TA_EXPRESSION_LOCATION);
         uint32_t value = attribute_expression(builder, node, "expr", TA_EXPRESSION_VALUE);
         if (loc == TA_NIL) {
-            compile_error(builder, node, "<assign> requires 'location'%s", NULL);
+            compile_error(builder, node, (compile_message){"<assign> requires 'location'%s", NULL});
             return;
         }
         if (value == TA_NIL) {
@@ -597,11 +607,9 @@ static void exec_el(chart_builder *builder, const ta_xml_node *node) {
         if (source) {
             ta_source s;
             if (!fetch_source(builder, node, source, &s)) return;
-            e = intern_expression(builder, TA_EXPRESSION_SCRIPT, s.text.pointer, s.text.length,
-                                  node);
+            e = intern_expression(builder, &(expression_input){TA_EXPRESSION_SCRIPT, {s.text.pointer, s.text.length}, node});
         } else {
-            e = intern_expression(builder, TA_EXPRESSION_SCRIPT, node->text, node->text_length,
-                                  node);
+            e = intern_expression(builder, &(expression_input){TA_EXPRESSION_SCRIPT, {node->text, node->text_length}, node});
         }
         emit(builder, TA_OPCODE_SCRIPT);
         emit(builder, e);
@@ -614,7 +622,7 @@ static void exec_el(chart_builder *builder, const ta_xml_node *node) {
         uint32_t item = attribute_expression(builder, node, "item", TA_EXPRESSION_LOCATION);
         uint32_t index = attribute_expression(builder, node, "index", TA_EXPRESSION_LOCATION);
         if (arr == TA_NIL || item == TA_NIL) {
-            compile_error(builder, node, "<foreach> requires 'array' and 'item'%s", NULL);
+            compile_error(builder, node, (compile_message){"<foreach> requires 'array' and 'item'%s", NULL});
             return;
         }
         if (!nest_enter(builder, node)) return;
@@ -648,12 +656,12 @@ static void exec_el(chart_builder *builder, const ta_xml_node *node) {
             emit(builder, TA_OPCODE_CANCEL_EXPRESSION);
             emit(builder, e);
         } else {
-            compile_error(builder, node, "<cancel> requires 'sendid' or 'sendidexpr'%s", NULL);
+            compile_error(builder, node, (compile_message){"<cancel> requires 'sendid' or 'sendidexpr'%s", NULL});
         }
     } else if (!strcmp(nm, "elseif") || !strcmp(nm, "else")) {
-        compile_error(builder, node, "<%s> outside <if>", nm);
+        compile_error(builder, node, (compile_message){"<%s> outside <if>", nm});
     } else {
-        compile_error(builder, node, "unknown executable content <%s>", nm);
+        compile_error(builder, node, (compile_message){"unknown executable content <%s>", nm});
     }
 }
 
@@ -737,13 +745,13 @@ static uint32_t add_targets(chart_builder *builder, const ta_xml_node *at, const
     uint16_t n = 0;
     while (next_token(&p, &tok, &length)) {
         if (n == UINT16_MAX) {
-            compile_error(builder, at, "more than 65535 targets%s", NULL);
+            compile_error(builder, at, (compile_message){"more than 65535 targets%s", NULL});
             break;
         }
         uint32_t s = resolve_id(builder, at, tok, length);
         if (s == TA_NIL) continue;
         if (s == 0) {
-            compile_error(builder, at, "the <scxml> element is not a valid target%s", NULL);
+            compile_error(builder, at, (compile_message){"the <scxml> element is not a valid target%s", NULL});
             continue;
         }
         if (state_at(builder, s)->kind >= TA_STATE_HISTORY_SHALLOW)
@@ -770,20 +778,20 @@ static void transition(chart_builder *builder, const ta_xml_node *node, uint32_t
         uint32_t length;
         while (next_token(&p, &tok, &length)) {
             if (transition_record.event_count == UINT16_MAX) {
-                compile_error(builder, node, "more than 65535 event descriptors%s", NULL);
+                compile_error(builder, node, (compile_message){"more than 65535 event descriptors%s", NULL});
                 break;
             }
             add_descriptor(builder, node, tok, length);
             transition_record.event_count++;
         }
         if (!transition_record.event_count)
-            compile_error(builder, node, "empty event attribute%s", NULL);
+            compile_error(builder, node, (compile_message){"empty event attribute%s", NULL});
     }
     const char *type = ta_xml_attribute_value(node, "type");
     if (type && strcmp(type, "internal") == 0)
         transition_record.flags |= TA_TRANSITION_FLAG_INTERNAL;
     else if (type && strcmp(type, "external") != 0)
-        compile_error(builder, node, "invalid transition type '%s'", type);
+        compile_error(builder, node, (compile_message){"invalid transition type '%s'", type});
     const char *tg = ta_xml_attribute_value(node, "target");
     if (tg)
         transition_record.targets_offset = add_targets(
@@ -840,10 +848,10 @@ static uint32_t pseudo_transition(chart_builder *builder, const ta_xml_node *at,
     for (uint32_t k = 0; k < transition.target_count; k++) {
         uint32_t s = TA_VECTOR_AT(&builder->compiler->u32, uint32_t, transition.targets_offset + k);
         if (!is_descendant(builder, s, domain))
-            compile_error(builder, at, "initial/default target outside its state%s", NULL);
+            compile_error(builder, at, (compile_message){"initial/default target outside its state%s", NULL});
     }
     if (!transition.target_count)
-        compile_error(builder, at, "initial/default transition without target%s", NULL);
+        compile_error(builder, at, (compile_message){"initial/default transition without target%s", NULL});
     transition.action = block_one(builder, content);
     ta_vector_push(&builder->compiler->transitions);
     *transition_at(builder, transition_count(builder) - 1) = transition;
@@ -867,9 +875,9 @@ static uint32_t resolve_chart(chart_builder *builder, const ta_xml_node *at, con
         name[s.name.length] = 0;
         key = name;
     }
-    uint32_t q = ta_compiler_queue(builder->compiler, key, s.text.pointer, s.text.length, NULL);
+    uint32_t q = ta_compiler_queue(builder->compiler, &(ta_pending_document){NULL, key, s.text.pointer, s.text.length});
     if (q != TA_NIL && key != source) {
-        char *alias = ta_chunk_arena_strdup(&builder->compiler->arena, source, strlen(source));
+        char *alias = ta_compile_copy(&builder->compiler->arena, (ta_string_view){source, (uint32_t)(strlen(source))}, &builder->compiler->out_of_memory);
         if (alias)
             ta_string_map_put(&builder->compiler->source_map, alias, (uint32_t)strlen(alias), q);
     }
@@ -914,12 +922,11 @@ static void invoke(chart_builder *builder, const ta_xml_node *node, uint32_t sta
             while (ta_string_map_get(&builder->compiler->source_map, name,
                                      (uint32_t)strlen(name)) != TA_NIL);
         }
-        invoke_record.source_chart = ta_compiler_queue(
-            builder->compiler, name, builder->text, builder->length, (ta_xml_node *)content->first);
+        invoke_record.source_chart = ta_compiler_queue(builder->compiler, &(ta_pending_document){(ta_xml_node *)content->first, name, builder->text, builder->length});
     }
     if (invoke_record.source_chart == TA_NIL && source == NULL && invoke_record.srcexpr == TA_NIL &&
         !content)
-        compile_error(builder, node, "<invoke> needs src, srcexpr or <content>%s", NULL);
+        compile_error(builder, node, (compile_message){"<invoke> needs src, srcexpr or <content>%s", NULL});
     /* <content> of an invoke is the child document, never a payload: inline
      * <scxml> is compiled statically; <content expr> yields document text at
      * runtime (resolved against documents precompiled into the image). */
@@ -954,20 +961,19 @@ static void data_declarations(chart_builder *builder, const ta_xml_node *datamod
                               uint32_t state) {
     for (const ta_xml_node *d = datamodel->first; d; d = d->next) {
         if (!el(d, "data")) {
-            compile_error(builder, d, "unexpected <%s> in <datamodel>", d->name);
+            compile_error(builder, d, (compile_message){"unexpected <%s> in <datamodel>", d->name});
             continue;
         }
         ta_data_record data;
         data.state = state;
         data.id = attr_str(builder, d, "id");
-        if (data.id == TA_NIL) compile_error(builder, d, "<data> requires 'id'%s", NULL);
+        if (data.id == TA_NIL) compile_error(builder, d, (compile_message){"<data> requires 'id'%s", NULL});
         data.expression = attribute_expression(builder, d, "expr", TA_EXPRESSION_VALUE);
         const char *source = ta_xml_attribute_value(d, "src");
         if (source) {
             ta_source s;
             if (fetch_source(builder, d, source, &s))
-                data.expression = intern_expression(builder, TA_EXPRESSION_CONTENT, s.text.pointer,
-                                                    s.text.length, d);
+                data.expression = intern_expression(builder, &(expression_input){TA_EXPRESSION_CONTENT, {s.text.pointer, s.text.length}, d});
         } else if (data.expression == TA_NIL && (d->first || d->text_length)) {
             data.expression = content_expression(builder, d);
             precompile_literal_document(builder, d);
@@ -1004,12 +1010,13 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
     memset(&chart, 0, sizeof chart);
     if (!pending->root)
         pending->root =
-            ta_xml_parse(&compiler->arena, pending->text, pending->length, &compiler->diagnostics,
-                         pending->name, compiler->abort_flag, &compiler->aborted);
+            ta_xml_parse(&compiler->arena, &(ta_xml_parse_request){
+                {pending->text, pending->length}, &compiler->diagnostics, compiler->allocator,
+                pending->name, compiler->abort_flag, &compiler->aborted, &compiler->out_of_memory});
     ta_xml_node *root = pending->root;
     if (!root) goto done;
     if (!el(root, "scxml")) {
-        compile_error(c, root, "root element must be <scxml>, got <%s>", root->name);
+        compile_error(c, root, (compile_message){"root element must be <scxml>, got <%s>", root->name});
         goto done;
     }
     const char *dmname = ta_xml_attribute_value(root, "datamodel");
@@ -1020,7 +1027,7 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
     chart.datamodel = str(c, dmname ? dmname : "null");
     chart.binding = binding && strcmp(binding, "late") == 0;
     if (binding && strcmp(binding, "late") && strcmp(binding, "early"))
-        compile_error(c, root, "invalid binding '%s'", binding);
+        compile_error(c, root, (compile_message){"invalid binding '%s'", binding});
 
     collect(c, root);
     uint32_t ns = state_count(c);
@@ -1033,7 +1040,7 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
         const ta_xml_attribute *id = ta_xml_find_attribute(node_at(c, i), "id");
         if (!id) continue;
         if (ta_string_map_get(&c->ids, id->value, id->value_length) != TA_NIL)
-            compile_error(c, node_at(c, i), "duplicate state id '%s'", id->value);
+            compile_error(c, node_at(c, i), (compile_message){"duplicate state id '%s'", id->value});
         ta_string_map_put(&c->ids, id->value, id->value_length, i);
         state_at(c, i)->id = ta_compiler_string(compiler, id->value, id->value_length);
     }
@@ -1049,7 +1056,8 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
             snprintf(buffer, sizeof buffer, "_ta_s%u", k++);
         while (ta_string_map_get(&c->ids, buffer, (uint32_t)strlen(buffer)) != TA_NIL);
         next = k;
-        char *key = ta_chunk_arena_strdup(&compiler->arena, buffer, strlen(buffer));
+        char *key = ta_compile_copy(&compiler->arena, (ta_string_view){buffer, (uint32_t)(strlen(buffer))}, &compiler->out_of_memory);
+        if (!key) goto done;
         ta_string_map_put(&c->ids, key, (uint32_t)strlen(key), i);
         state_at(c, i)->id = str(c, key);
     }
@@ -1076,16 +1084,16 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
             if (el(chn, "transition")) {
                 if (kind >= TA_STATE_HISTORY_SHALLOW) continue; /* history default: below */
                 if (i == 0)
-                    compile_error(c, chn, "<transition> not allowed in <scxml>%s", NULL);
+                    compile_error(c, chn, (compile_message){"<transition> not allowed in <scxml>%s", NULL});
                 else if (kind == TA_STATE_FINAL)
-                    compile_error(c, chn, "<transition> not allowed in <final>%s", NULL);
+                    compile_error(c, chn, (compile_message){"<transition> not allowed in <final>%s", NULL});
                 else
                     transition(c, chn, i);
             } else if (el(chn, "datamodel")) {
                 data_declarations(c, chn, i);
             } else if (el(chn, "invoke")) {
                 if (i == 0)
-                    compile_error(c, chn, "<invoke> not allowed in <scxml>%s", NULL);
+                    compile_error(c, chn, (compile_message){"<invoke> not allowed in <scxml>%s", NULL});
                 else
                     invoke(c, chn, i);
             }
@@ -1120,11 +1128,11 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
             const ta_xml_node *ie = child(node, "initial");
             uint32_t t;
             if (ia && ie)
-                compile_error(c, node, "both 'initial' attribute and <initial> element%s", NULL);
+                compile_error(c, node, (compile_message){"both 'initial' attribute and <initial> element%s", NULL});
             if (ie) {
                 const ta_xml_node *it = child(ie, "transition");
                 if (!it) {
-                    compile_error(c, ie, "<initial> requires a <transition>%s", NULL);
+                    compile_error(c, ie, (compile_message){"<initial> requires a <transition>%s", NULL});
                     continue;
                 }
                 t = pseudo_transition(c, it, i, i, ta_xml_attribute_value(it, "target"), TA_NIL,
@@ -1144,14 +1152,14 @@ void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index) {
         } else if (kind >= TA_STATE_HISTORY_SHALLOW) {
             const ta_xml_node *ht = child(node, "transition");
             if (!ht) {
-                compile_error(c, node, "<history> requires a default <transition>%s", NULL);
+                compile_error(c, node, (compile_message){"<history> requires a default <transition>%s", NULL});
                 continue;
             }
             uint32_t parent = state_at(c, i)->parent;
             state_at(c, i)->initial = pseudo_transition(
                 c, ht, i, parent, ta_xml_attribute_value(ht, "target"), TA_NIL, ht);
         } else if (child(node, "initial")) {
-            compile_error(c, node, "<initial> only allowed in compound states%s", NULL);
+            compile_error(c, node, (compile_message){"<initial> only allowed in compound states%s", NULL});
         }
     }
     /* top-level scripts */
@@ -1199,7 +1207,7 @@ done:
     chart.first_invoke = c->first_invoke;
     chart.invoke_count = compiler->invokes.length - c->first_invoke;
     if (chart.invoke_count > TA_CHART_MAX_INVOKES)
-        compile_error(c, root, "a chart may have at most 65534 invocations%s", "");
+        compile_error(c, root, (compile_message){"a chart may have at most 65534 invocations%s", ""});
     chart.first_data = c->first_data;
     chart.data_count = compiler->data.length - c->first_data;
     chart.first_code = c->first_code;

@@ -6,8 +6,7 @@ hold the caller's own values and call-scoped conversions. No per-event or
 per-actor work is added to the runtime. The caller pays for the utilities
 it uses: table capacity (aligned rows plus 8-byte slot records), arena
 chunks retained until free, and an immutable status-name lookup. Actor
-scheduling, language-value cleanup and the compiler's arena migration are
-outside this increment (ADR 0012, decision 5).
+scheduling and language-value cleanup remain in their existing layers.
 
 All calls on an object are serialized by its owner. A backing allocator
 must not reenter or mutate that same object. Allocator structs and contexts
@@ -77,6 +76,26 @@ ignored, but pointer-and-offset marks cannot identify every stale mark
 once a chunk is reused. Only `ta_growable_arena_free` returns chunks;
 it ends pointers, marks and allocator views, and leaves the configured
 arena ready for a new allocation history.
+
+## Compiler storage
+
+The compiler uses the same arena implementation, with 32768-byte regular
+payload chunks. Its private helpers zero new objects and copy text with a
+trailing NUL; a separate failure flag remembers an allocation refusal even
+if a later allocation succeeds. The shared arena keeps no compiler error
+state. XML parser vectors and maps use the backing allocator directly and
+are freed at the end of parsing.
+
+| Storage | Owner | Readers | Ends |
+|---|---|---|---|
+| XML nodes, source copies, interned keys, trie nodes | temporary compiler arena | parser, compiler, linker | compiler cleanup, before the compile call returns |
+| Diagnostic file names and messages | compile result's arena | caller of `ta_compile_diagnostics` | `ta_compile_free` |
+
+Both arenas borrow the allocator stored in the compile result. Temporary
+storage is freed first; the result's allocator remains valid until its
+diagnostic arena, image and result have all been freed. The focused tests
+in `test_compile.c` cover dirty backing storage, alignment, empty copies,
+sticky refusal, diagnostic lifetimes and exact allocation-size cleanup.
 
 ## A CBOR writer using the arena
 

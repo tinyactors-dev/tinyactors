@@ -2,6 +2,127 @@
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include "image/records.h"
+#include "compile/compile_support.h"
+#include "compile/xml.h"
+
+/* Dirty backing storage detects reliance on allocator zeroing. The header
+ * records each exact allocation size so cleanup is checked on both hosts. */
+typedef struct compile_memory {
+    size_t live_bytes, live_blocks;
+    int refuse;
+    size_t allocations, fail_after;
+} compile_memory;
+
+static void *compile_memory_alloc(void *context, size_t size, size_t align) {
+    compile_memory *memory = context;
+    CHECK(align <= 8);
+    if (memory->fail_after && memory->allocations >= memory->fail_after) return NULL;
+    if (memory->refuse) return NULL;
+    uint64_t *block = malloc(sizeof *block + size);
+    if (!block) return NULL;
+    *block = size;
+    memory->live_bytes += size;
+    memory->live_blocks++;
+    memory->allocations++;
+    memset(block + 1, 0xa5, size);
+    return block + 1;
+}
+
+static void compile_memory_free(void *context, void *pointer, size_t size) {
+    compile_memory *memory = context;
+    uint64_t *block = (uint64_t *)pointer - 1;
+    CHECK_EQUAL(*block, size);
+    memory->live_bytes -= size;
+    memory->live_blocks--;
+    free(block);
+}
+
+static void test_arena_storage(void) {
+    compile_memory memory = {0};
+    ta_allocator allocator = {&memory, compile_memory_alloc, compile_memory_free};
+    ta_growable_arena arena;
+    ta_growable_arena_init(&arena, &(ta_growable_arena_config){
+        sizeof(ta_growable_arena_config), 0, 32, &allocator});
+    int failed = 0;
+    unsigned char *object = ta_compile_alloc(&arena, 8, &failed);
+    CHECK(object != NULL && (uintptr_t)object % 8 == 0);
+    for (size_t i = 0; object && i < 8; i++) CHECK_EQUAL(object[i], 0);
+    char *empty = ta_compile_copy(&arena, (ta_string_view){NULL, 0}, &failed);
+    char *text = ta_compile_copy(&arena, (ta_string_view){"abc", 3}, &failed);
+    CHECK(empty && empty[0] == 0);
+    CHECK(text && strcmp(text, "abc") == 0);
+    CHECK_EQUAL(failed, 0);
+    memory.refuse = 1;
+    CHECK(ta_compile_alloc(&arena, 64, &failed) == NULL);
+    CHECK_EQUAL(failed, 1);
+    memory.refuse = 0;
+    CHECK(ta_compile_alloc(&arena, 64, &failed) != NULL);
+    CHECK_EQUAL(failed, 1); /* later success must not hide the earlier refusal */
+    CHECK(text && strcmp(text, "abc") == 0); /* growth leaves earlier storage intact */
+    ta_growable_arena_free(&arena);
+    CHECK_EQUAL(memory.live_blocks, 0);
+    CHECK_EQUAL(memory.live_bytes, 0);
+}
+
+static void test_diagnostics_outlive_scratch(void) {
+    compile_memory memory = {0};
+    ta_allocator allocator = {&memory, compile_memory_alloc, compile_memory_free};
+    ta_compile_options options = {0};
+    options.size = sizeof options;
+    options.alloc = allocator;
+    char name[] = "bad.scxml";
+    ta_source source = {{name, 9}, {"<wrong/>", 8}};
+    ta_compile_result *result = NULL;
+    CHECK_EQUAL(ta_compile_charts(&options, (ta_source_list){&source, 1}, &result), TA_ERROR_INVALID);
+    memset(name, 'x', 9);
+    const ta_diagnostic *diagnostics;
+    uint32_t count = ta_compile_diagnostics(result, &diagnostics);
+    CHECK(count > 0);
+    if (count) {
+        CHECK_EQUAL(diagnostics[0].file.length, 9);
+        CHECK(memcmp(diagnostics[0].file.pointer, "bad.scxml", 9) == 0);
+        CHECK(strstr(diagnostics[0].message.pointer, "root element") != NULL);
+    }
+    CHECK(memory.live_blocks > 0); /* result storage survives compiler cleanup */
+    ta_compile_free(result);
+    CHECK_EQUAL(memory.live_blocks, 0);
+    CHECK_EQUAL(memory.live_bytes, 0);
+}
+
+static void test_xml_arena_refusal(void) {
+    /* One-byte regular chunks give every object/copy its own chunk on
+     * both pointer widths. Refuse the element and attribute name copies;
+     * neither may reach string operations with a NULL pointer. Parser
+     * vectors use a separate allocator so their sizes cannot move the
+     * two selected arena refusal points. */
+    const size_t allowed[] = {1, 3};
+    for (size_t i = 0; i < sizeof allowed / sizeof allowed[0]; i++) {
+        compile_memory memory = {0};
+        compile_memory vectors = {0};
+        memory.fail_after = allowed[i];
+        ta_allocator allocator = {&memory, compile_memory_alloc, compile_memory_free};
+        ta_allocator vector_allocator = {&vectors, compile_memory_alloc, compile_memory_free};
+        ta_growable_arena arena;
+        ta_growable_arena_init(&arena, &(ta_growable_arena_config){
+            sizeof(ta_growable_arena_config), 0, 1, &allocator});
+        ta_diagnostics diagnostics = {0};
+        diagnostics.arena = &arena;
+        ta_vector_init(&diagnostics.list, &vector_allocator, sizeof(ta_diagnostic));
+        int failed = 0, aborted = 0;
+        const char *text = "<root attribute='value'/>";
+        CHECK(ta_xml_parse(&arena, &(ta_xml_parse_request){
+            {text, (uint32_t)strlen(text)}, &diagnostics, &vector_allocator,
+            "test.xml", NULL, &aborted, &failed}) == NULL);
+        CHECK_EQUAL(failed, 1);
+        CHECK_EQUAL(memory.allocations, allowed[i]);
+        ta_vector_free(&diagnostics.list);
+        ta_growable_arena_free(&arena);
+        CHECK_EQUAL(memory.live_blocks, 0);
+        CHECK_EQUAL(memory.live_bytes, 0);
+        CHECK_EQUAL(vectors.live_blocks, 0);
+        CHECK_EQUAL(vectors.live_bytes, 0);
+    }
+}
 
 static const char *CHART =
     "<?xml version='1.0'?>\n"
@@ -675,6 +796,9 @@ static void test_xml_writer(void) {
     ta_xml_writer_free(writer);
 }
 int main(void) {
+    RUN(test_arena_storage);
+    RUN(test_diagnostics_outlive_scratch);
+    RUN(test_xml_arena_refusal);
     RUN(test_structure);
     RUN(test_errors);
     RUN(test_error_positions);

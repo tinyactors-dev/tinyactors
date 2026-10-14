@@ -31,9 +31,17 @@ typedef struct ta_xml_node {
  * *abort_flag (if not NULL) per markup token and every 64 KiB within one;
  * once it is set, sets *aborted
  * and fails without a diagnostic. */
-ta_xml_node *ta_xml_parse(ta_chunk_arena *ar, const char *source, uint32_t length,
-                          ta_diagnostics *d, const char *file, const volatile int *abort_flag,
-                          int *aborted);
+typedef struct ta_xml_parse_request {
+    ta_string_view source;
+    ta_diagnostics *diagnostics;
+    ta_allocator *allocator; /* backing allocator for temporary vectors and maps */
+    const char *file;
+    const volatile int *abort_flag;
+    int *aborted;
+    int *out_of_memory;
+} ta_xml_parse_request;
+
+ta_xml_node *ta_xml_parse(ta_growable_arena *arena, const ta_xml_parse_request *request);
 const ta_xml_attribute *ta_xml_find_attribute(const ta_xml_node *n, const char *name);
 const char *ta_xml_attribute_value(const ta_xml_node *n, const char *name); /* NULL if absent */
 

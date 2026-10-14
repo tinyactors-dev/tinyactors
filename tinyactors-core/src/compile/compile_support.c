@@ -20,58 +20,31 @@ ta_allocator ta_compile_default_allocator(void) {
     return allocator;
 }
 
-struct ta_chunk_arena_chunk {
-    ta_chunk_arena_chunk *next;
-    size_t size, used;
-    /* data follows (8-aligned) */
-};
-
-#define CHUNK_HEADER ((sizeof(ta_chunk_arena_chunk) + 7u) & ~(size_t)7u)
-
-void ta_chunk_arena_init(ta_chunk_arena *arena, ta_allocator *allocator) {
-    arena->allocator = allocator;
-    arena->head = NULL;
-    arena->out_of_memory = 0;
-}
-
-void *ta_chunk_arena_alloc(ta_chunk_arena *arena, size_t size) {
-    size = (size + 7u) & ~(size_t)7u;
-    if (!arena->head || arena->head->size - arena->head->used < size) {
-        size_t csz = size > 32768 ? size : 32768;
-        ta_chunk_arena_chunk *chunk = (ta_chunk_arena_chunk *)arena->allocator->alloc(
-            arena->allocator->context, CHUNK_HEADER + csz, 8);
-        if (!chunk) {
-            arena->out_of_memory = 1;
-            return NULL;
-        }
-        chunk->next = arena->head;
-        chunk->size = csz;
-        chunk->used = 0;
-        arena->head = chunk;
+void *ta_compile_alloc(ta_growable_arena *arena, size_t size, int *out_of_memory) {
+    /* Keep zero-byte compiler requests usable without sharing an address
+     * with a later object; the shared arena itself refuses zero sizes. */
+    if (!size) size = 1;
+    void *p = ta_growable_arena_alloc(arena, size, 8);
+    if (!p) {
+        *out_of_memory = 1;
+        return NULL;
     }
-    void *p = (unsigned char *)arena->head + CHUNK_HEADER + arena->head->used;
-    arena->head->used += size;
     memset(p, 0, size);
     return p;
 }
 
-char *ta_chunk_arena_strdup(ta_chunk_arena *arena, const char *s, size_t length) {
-    char *p = (char *)ta_chunk_arena_alloc(arena, length + 1);
+char *ta_compile_copy(ta_growable_arena *arena, ta_string_view text, int *out_of_memory) {
+    size_t length = text.length;
+    if (length == SIZE_MAX) {
+        *out_of_memory = 1;
+        return NULL;
+    }
+    char *p = (char *)ta_compile_alloc(arena, length + 1, out_of_memory);
     if (p) {
-        if (length) memcpy(p, s, length);
-        p[length] = 0;
+        if (text.length) memcpy(p, text.pointer, text.length);
+        p[text.length] = 0;
     }
     return p;
-}
-
-void ta_chunk_arena_free(ta_chunk_arena *arena) {
-    ta_chunk_arena_chunk *chunk = arena->head;
-    while (chunk) {
-        ta_chunk_arena_chunk *new_chunk = chunk->next;
-        arena->allocator->free(arena->allocator->context, chunk, CHUNK_HEADER + chunk->size);
-        chunk = new_chunk;
-    }
-    arena->head = NULL;
 }
 
 void ta_vector_init(ta_vector *vector, ta_allocator *allocator, uint32_t elem) {
@@ -200,15 +173,16 @@ void ta_string_map_free(ta_string_map *map) {
     map->capacity = map->count = 0;
 }
 
-void ta_diagnostics_add(ta_diagnostics *d, uint32_t severity, const char *file, uint32_t line,
-                        uint32_t col, const char *format, ...) {
+void ta_diagnostics_add(ta_diagnostics *d, const ta_diagnostic_input *input, ...) {
+    uint32_t severity = input->severity, line = input->line, col = input->column;
+    const char *file = input->file;
     if (severity == TA_DIAGNOSTIC_ERROR) d->errors++;
     if (severity == TA_DIAGNOSTIC_WARNING) d->warnings++;
     if (d->list.length >= TA_DIAGNOSTICS_MAX) return;
     char buffer[512];
     va_list ap;
-    va_start(ap, format);
-    int n = vsnprintf(buffer, sizeof buffer, format, ap);
+    va_start(ap, input);
+    int n = vsnprintf(buffer, sizeof buffer, input->format, ap);
     va_end(ap);
     if (d->list.length == TA_DIAGNOSTICS_MAX - 1) { /* a document with an error per line */
         severity = TA_DIAGNOSTIC_NOTE;
@@ -223,10 +197,12 @@ void ta_diagnostics_add(ta_diagnostics *d, uint32_t severity, const char *file, 
     diagnostic->severity = severity;
     diagnostic->line = line;
     diagnostic->column = col;
-    diagnostic->file.pointer = file ? ta_chunk_arena_strdup(d->arena, file, strlen(file)) : NULL;
-    diagnostic->file.length = file ? (uint32_t)strlen(file) : 0;
-    diagnostic->message.pointer = ta_chunk_arena_strdup(d->arena, buffer, (size_t)n);
-    diagnostic->message.length = (uint32_t)n;
+    diagnostic->file.pointer = file ? ta_compile_copy(
+        d->arena, (ta_string_view){file, (uint32_t)strlen(file)}, &d->out_of_memory) : NULL;
+    diagnostic->file.length = diagnostic->file.pointer ? (uint32_t)strlen(file) : 0;
+    diagnostic->message.pointer = ta_compile_copy(
+        d->arena, (ta_string_view){buffer, (uint32_t)n}, &d->out_of_memory);
+    diagnostic->message.length = diagnostic->message.pointer ? (uint32_t)n : 0;
 }
 
 int ta_c_string_equal(const char *a, uint32_t alen, const char *b) {

@@ -1,4 +1,4 @@
-/* compile_support.h — compile-time utilities: chunked arena, growable vectors,
+/* compile_support.h — compile-time utilities: arena storage, growable vectors,
  * string map, diagnostics. Hosted code; all memory via ta_allocator. */
 #ifndef TINYACTORS_COMPILE_COMPILE_SUPPORT_H
 #define TINYACTORS_COMPILE_COMPILE_SUPPORT_H
@@ -7,23 +7,16 @@
 
 #include "base/config.h"
 #include <tinyactors/compile.h>
+#include <tinyactors/arena.h>
 
 /* The C library's malloc, for callers that pass no allocator. */
 ta_allocator ta_compile_default_allocator(void);
 
-/* ---- chunked arena -------------------------------------------------------- */
-typedef struct ta_chunk_arena_chunk ta_chunk_arena_chunk;
-typedef struct ta_chunk_arena {
-    ta_allocator *allocator;
-    ta_chunk_arena_chunk *head;
-    int out_of_memory;
-} ta_chunk_arena;
-
-void ta_chunk_arena_init(ta_chunk_arena *ar, ta_allocator *a);
-void *ta_chunk_arena_alloc(ta_chunk_arena *ar, size_t size); /* 8-aligned, zeroed; NULL on OOM */
-char *ta_chunk_arena_strdup(ta_chunk_arena *ar, const char *s,
-                            size_t length); /* NUL-terminated copy */
-void ta_chunk_arena_free(ta_chunk_arena *ar);
+/* Compiler objects require zeroed, 8-aligned storage and a sticky failure
+ * flag. Chunk ownership and lifetime belong to the shared arena; these
+ * helpers add only initialization and compiler error bookkeeping. */
+void *ta_compile_alloc(ta_growable_arena *arena, size_t size, int *out_of_memory);
+char *ta_compile_copy(ta_growable_arena *arena, ta_string_view text, int *out_of_memory);
 
 /* ---- growable vector ------------------------------------------------------ */
 typedef struct ta_vector {
@@ -65,12 +58,19 @@ void ta_string_map_free(ta_string_map *m);
 #define TA_DIAGNOSTICS_MAX 200u
 typedef struct ta_diagnostics {
     ta_vector list; /* ta_diagnostic */
-    ta_chunk_arena *arena;
+    ta_growable_arena *arena;
+    int out_of_memory;
     uint32_t errors, warnings;
 } ta_diagnostics;
 
-void ta_diagnostics_add(ta_diagnostics *d, uint32_t severity, const char *file, uint32_t line,
-                        uint32_t col, const char *format, ...);
+typedef struct ta_diagnostic_input {
+    uint32_t severity;
+    const char *file;
+    uint32_t line, column;
+    const char *format;
+} ta_diagnostic_input;
+
+void ta_diagnostics_add(ta_diagnostics *d, const ta_diagnostic_input *input, ...);
 
 int ta_c_string_equal(const char *a, uint32_t alen, const char *b);
 

@@ -13,7 +13,7 @@ uint32_t ta_compiler_string(ta_compiler *compiler, const char *s, uint32_t lengt
     if (!dst) return 0;
     memcpy(dst, &length, 4);
     if (length) memcpy(dst + 4, s, length);
-    char *key = ta_chunk_arena_strdup(&compiler->arena, s, length);
+    char *key = ta_compile_copy(&compiler->arena, (ta_string_view){s, (uint32_t)(length)}, &compiler->out_of_memory);
     if (key) ta_string_map_put(&compiler->string_map, key, length, sid);
     return sid;
 }
@@ -21,7 +21,7 @@ uint32_t ta_compiler_string(ta_compiler *compiler, const char *s, uint32_t lengt
 uint32_t ta_compiler_event_name(ta_compiler *compiler, const char *s, uint32_t length) {
     uint32_t hit = ta_string_map_get(&compiler->event_name_map, s, length);
     if (hit != TA_NIL) return hit;
-    char *key = ta_chunk_arena_strdup(&compiler->arena, s, length);
+    char *key = ta_compile_copy(&compiler->arena, (ta_string_view){s, (uint32_t)(length)}, &compiler->out_of_memory);
     ta_string_view *e = (ta_string_view *)ta_vector_push(&compiler->event_names);
     if (!key || !e) return 0;
     e->pointer = key;
@@ -30,14 +30,16 @@ uint32_t ta_compiler_event_name(ta_compiler *compiler, const char *s, uint32_t l
     return compiler->event_names.length - 1;
 }
 
-uint32_t ta_compiler_queue(ta_compiler *compiler, const char *name, const char *text,
-                           uint32_t length, ta_xml_node *root) {
+uint32_t ta_compiler_queue(ta_compiler *compiler, const ta_pending_document *document) {
+    const char *name = document->name, *text = document->text;
+    uint32_t length = document->length;
+    ta_xml_node *root = document->root;
     uint32_t hit = ta_string_map_get(&compiler->source_map, name, (uint32_t)strlen(name));
     if (hit != TA_NIL) return hit;
     ta_pending_document *pending = (ta_pending_document *)ta_vector_push(&compiler->pending);
     if (!pending) return TA_NIL;
-    pending->name = ta_chunk_arena_strdup(&compiler->arena, name, strlen(name));
-    pending->text = root ? text : ta_chunk_arena_strdup(&compiler->arena, text, length);
+    pending->name = ta_compile_copy(&compiler->arena, (ta_string_view){name, (uint32_t)(strlen(name))}, &compiler->out_of_memory);
+    pending->text = root ? text : ta_compile_copy(&compiler->arena, (ta_string_view){text, (uint32_t)(length)}, &compiler->out_of_memory);
     pending->length = length;
     pending->root = root;
     uint32_t index = compiler->pending.length - 1;
@@ -68,19 +70,26 @@ typedef struct trie_index {
     ta_vector key;     /* scratch */
 } trie_index;
 
-static trie_node *tnode_new(ta_compiler *compiler, const char *tok, uint32_t tlen, const char *full,
-                            uint32_t flen) {
-    trie_node *n = (trie_node *)ta_chunk_arena_alloc(&compiler->arena, sizeof *n);
+static trie_node *tnode_new(ta_compiler *compiler, ta_string_view token, ta_string_view full) {
+    trie_node *n = (trie_node *)ta_compile_alloc(&compiler->arena, sizeof *n, &compiler->out_of_memory);
     if (!n) return NULL;
-    n->token = tok;
-    n->token_length = tlen;
-    n->full = full;
-    n->full_length = flen;
+    n->token = token.pointer;
+    n->token_length = token.length;
+    n->full = full.pointer;
+    n->full_length = full.length;
     return n;
 }
 
-static trie_node *tnode_child(ta_compiler *compiler, trie_index *ix, trie_node *n, const char *tok,
-                              uint32_t tlen, const char *full, uint32_t flen) {
+typedef struct trie_child_request {
+    trie_node *parent;
+    ta_string_view token, full;
+} trie_child_request;
+
+static trie_node *tnode_child(ta_compiler *compiler, trie_index *ix,
+                              const trie_child_request *request) {
+    trie_node *n = request->parent;
+    const char *tok = request->token.pointer;
+    uint32_t tlen = request->token.length;
     ix->key.length = 0;
     char *key = (char *)ta_vector_push_many(&ix->key, 4 + tlen);
     if (!key) return NULL;
@@ -91,15 +100,15 @@ static trie_node *tnode_child(ta_compiler *compiler, trie_index *ix, trie_node *
     if (n->child_count == n->child_capacity) {
         uint32_t nc = n->child_capacity ? n->child_capacity * 2 : 4;
         trie_node **nk =
-            (trie_node **)ta_chunk_arena_alloc(&compiler->arena, sizeof(trie_node *) * nc);
+            (trie_node **)ta_compile_alloc(&compiler->arena, sizeof(trie_node *) * nc, &compiler->out_of_memory);
         if (!nk) return NULL;
         if (n->child_count) memcpy(nk, n->children, sizeof(trie_node *) * n->child_count);
         n->children = nk;
         n->child_capacity = nc;
     }
-    trie_node *k = tnode_new(compiler, tok, tlen, full, flen);
+    trie_node *k = tnode_new(compiler, request->token, request->full);
     trie_node **slot = (trie_node **)ta_vector_push(&ix->nodes);
-    char *kept = ta_chunk_arena_strdup(&compiler->arena, key, 4 + tlen);
+    char *kept = ta_compile_copy(&compiler->arena, (ta_string_view){key, (uint32_t)(4 + tlen)}, &compiler->out_of_memory);
     if (!k || !slot || !kept) return NULL;
     *slot = k;
     k->index = ix->nodes.length;
@@ -179,7 +188,7 @@ void ta_compiler_link_names(ta_compiler *compiler) {
     for (size_t i = 0; i < sizeof platform / sizeof platform[0]; i++)
         ta_compiler_event_name(compiler, platform[i], (uint32_t)strlen(platform[i]));
 
-    trie_node *root = tnode_new(compiler, "", 0, "", 0);
+    trie_node *root = tnode_new(compiler, (ta_string_view){"", 0}, (ta_string_view){"", 0});
     if (!root) return;
     ta_vector leaf; /* event name -> trie_node* */
     ta_vector_init(&leaf, compiler->allocator, sizeof(trie_node *));
@@ -196,7 +205,7 @@ void ta_compiler_link_names(ta_compiler *compiler) {
             uint32_t e = position;
             while (e < nm.length && nm.pointer[e] != '.')
                 e++;
-            n = tnode_child(compiler, &ix, n, nm.pointer + position, e - position, nm.pointer, e);
+            n = tnode_child(compiler, &ix, &(trie_child_request){n, {nm.pointer + position, e - position}, {nm.pointer, e}});
             position = e + 1;
         }
         trie_node **slot = (trie_node **)ta_vector_push(&leaf);
@@ -207,7 +216,7 @@ void ta_compiler_link_names(ta_compiler *compiler) {
     ta_vector_free(&ix.nodes);
     ta_vector_free(&ix.key);
     if (oom || ta_compiler_stop(compiler)) {
-        compiler->arena.out_of_memory |= oom; /* reported as out of memory by the caller */
+        compiler->out_of_memory |= oom; /* reported as out of memory by the caller */
         ta_vector_free(&leaf);
         return;
     }

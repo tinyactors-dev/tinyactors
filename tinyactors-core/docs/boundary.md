@@ -513,26 +513,26 @@ binding's own lifecycle (release its rows), not callbacks. `PEER` versus
 
 ## 11. Base APIs for embedders and bindings
 
-**Implemented (ADR 0012, decision 5).** Three things every binding needs and
-no language's API is part of, in `src/base`, freestanding, allocating
-only through the caller's `ta_allocator`:
+Base supplies three utilities for embedders and bindings. They are
+freestanding, have no dependency on a language's API, and allocate only
+through the caller's `ta_allocator`:
 
 | API | What | Lifetimes |
 |---|---|---|
 | `ta_table` (`table.h`) | rows of a caller's size, named by 64-bit handles `generation << 32 \| (slot + 1)`, 31 bits of generation (odd while live); grows by doubling | a handle until `ta_table_remove` (stale for good after); a row pointer until the next `ta_table_add`; the rows until `ta_table_free` |
-| `ta_growable_arena` (`arena.h`) | built in base from tinyxml's `txml_arena` (`tinyxml/src/arena.c`): linked chunks, a request larger than the chunk size in a chunk of its own, marks, a release that keeps its chunks, a `ta_allocator` view. The compiler's private `ta_chunk_arena` (`src/compile/compile_support.h:14-26`) moves onto it: one chunked arena in core (ADR 0012, decision 5) | an allocation until a release to a mark taken before it (it never moves); chunks until `ta_growable_arena_free`; the `ta_allocator` view while the arena lives |
+| `ta_growable_arena` (`arena.h`) | linked chunks, a request larger than the chunk size in a chunk of its own, marks, a release that keeps its chunks, a `ta_allocator` view. Both compiler arenas use it | an allocation until a release to a mark taken before it (it never moves); chunks until `ta_growable_arena_free`; the `ta_allocator` view while the arena lives |
 | `ta_status_name` (`types.h`) | `"TA_ERROR_STATE"` for `TA_ERROR_STATE`; NULL for a status `types.h` does not define | static text |
 
 The internal `ta_arena` (`src/base/arena.h`: a caller's region carved by
 offset, with a measure mode, for `ta_system_layout` and `ta_system_init`)
 keeps its name and its job; it never allocates.
 
-**Rejected.** A table, a status table or an arena in each binding (the
-same code twice, compared file by file in the audit). Making `ta_arena`
-public (it cannot grow). txml's release, which frees chunks past one
-spare (an allocator pair per call; ADR 0012, rejected alternatives).
-The compiler's private `ta_chunk_arena` still awaits migration to
-`ta_growable_arena` in the next part of step 8.2 (ADR 0012, decision 5).
+Bindings use these shared utilities for tables, status names and scratch
+storage. Arena release retains all chunks for reuse; only free returns
+them to the allocator.
+The compiler uses one `ta_growable_arena` for its temporary objects and
+another for diagnostic strings kept by the result. Its helpers zero
+objects and latch allocation refusal outside the shared arena.
 
 ## 12. Compiling, and the resolver
 
@@ -557,9 +557,9 @@ On `TA_OK`, `out->source` is the text. On a refusal the compiler turns
 `out->error` into an error diagnostic: file the resolved src, its line,
 column and message, copied into the result's arena, instead of today's
 bare `cannot resolve src="..."` at the referring element (`scxml.c:212`).
-`scratch` is the compiler's per-compilation arena (today a
-`ta_chunk_arena`, `compile.c:37`, freed at `:87` before the call
-returns); the text and the message may live there, and the compiler
+`scratch` will expose the compiler's per-compilation `ta_growable_arena`,
+freed by `compiler_free` before the compile call returns; the text and
+the message may live there, and the compiler
 copies what it keeps (`link.c:40`, `scxml.c:116`).
 
 | Object | Owner | Created | Read | Ends |

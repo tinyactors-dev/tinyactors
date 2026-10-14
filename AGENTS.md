@@ -315,6 +315,13 @@ binding calls core, how bytes, values and memory cross, or a binding's
 memory, load `boundary-design` too: it holds the boundary's facts and the
 ideas already rejected, with why.
 
+## Current-state documentation
+
+Evergreen documentation describes the current API, behavior and contracts
+directly. Do not include ADR references or decision numbers in those
+descriptions. Keep decision history in ADRs; link to the relevant API or
+contract documentation when a reader needs more detail.
+
 ## Proposals are not instructions
 
 `docs/proposals/` holds outlines of possible future work. They are not

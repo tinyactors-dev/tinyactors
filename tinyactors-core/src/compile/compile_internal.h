@@ -17,7 +17,8 @@ typedef struct ta_pending_document {
 
 typedef struct ta_compiler {
     ta_allocator *allocator;
-    ta_chunk_arena arena;
+    ta_growable_arena arena;
+    int out_of_memory;
     ta_diagnostics diagnostics;
     const ta_compile_options *options;
 
@@ -56,8 +57,7 @@ TA_INLINE int ta_compiler_stop(ta_compiler *compiler) {
 uint32_t ta_compiler_string(ta_compiler *compiler, const char *s, uint32_t length);
 uint32_t ta_compiler_event_name(ta_compiler *compiler, const char *s, uint32_t length);
 /* Queue a chart for compilation (dedup by name); returns its chart index. */
-uint32_t ta_compiler_queue(ta_compiler *compiler, const char *name, const char *text,
-                           uint32_t length, ta_xml_node *root);
+uint32_t ta_compiler_queue(ta_compiler *compiler, const ta_pending_document *document);
 
 /* Compile pending chart `index` (appends to the global tables). */
 void ta_compiler_compile_chart(ta_compiler *compiler, uint32_t index);

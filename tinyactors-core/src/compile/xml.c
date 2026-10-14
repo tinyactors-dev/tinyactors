@@ -3,7 +3,8 @@
 #include <string.h>
 
 typedef struct xml_parser {
-    ta_chunk_arena *arena;
+    ta_growable_arena *arena;
+    int *out_of_memory;
     const char *source;
     uint32_t length, position;
     ta_diagnostics *diagnostics;
@@ -60,8 +61,7 @@ static void error_at(xml_parser *parser, uint32_t offset, const char *message) {
     uint32_t l, c;
     loc(parser, offset, &l, &c);
     if (!parser->failed)
-        ta_diagnostics_add(parser->diagnostics, TA_DIAGNOSTIC_ERROR, parser->file, l, c, "XML: %s",
-                           message);
+        ta_diagnostics_add(parser->diagnostics, &(ta_diagnostic_input){TA_DIAGNOSTIC_ERROR, parser->file, l, c, "XML: %s"}, message);
     parser->failed = 1;
 }
 
@@ -189,11 +189,19 @@ static void unescape(xml_parser *parser, ta_vector *vector, uint32_t a, uint32_t
     }
 }
 
-static char *finish_vector_string(xml_parser *parser, ta_vector *vector, uint32_t start,
-                                  uint32_t *out_length) {
+typedef struct vector_string_request {
+    ta_vector *vector;
+    uint32_t start;
+    uint32_t *out_length;
+} vector_string_request;
+
+static char *finish_vector_string(xml_parser *parser, const vector_string_request *request) {
+    ta_vector *vector = request->vector;
+    uint32_t start = request->start;
     uint32_t n = vector->length - start;
-    char *s = ta_chunk_arena_strdup(parser->arena, (const char *)vector->data + start, n);
-    *out_length = n;
+    const char *text = vector->data ? (const char *)vector->data + start : NULL;
+    char *s = ta_compile_copy(parser->arena, (ta_string_view){text, n}, parser->out_of_memory);
+    *request->out_length = n;
     vector->length = start;
     return s;
 }
@@ -264,13 +272,17 @@ static void open_tag(xml_parser *parser) {
         error_at(parser, tag_offset, "expected element name");
         return;
     }
-    ta_xml_node *node = (ta_xml_node *)ta_chunk_arena_alloc(parser->arena, sizeof *node);
+    ta_xml_node *node = (ta_xml_node *)ta_compile_alloc(parser->arena, sizeof *node, parser->out_of_memory);
     if (!node) {
         parser->failed = 1;
         return;
     }
     loc(parser, tag_offset, &node->line, &node->column);
-    char *qname = ta_chunk_arena_strdup(parser->arena, parser->source + ns, nl);
+    char *qname = ta_compile_copy(parser->arena, (ta_string_view){parser->source + ns, (uint32_t)(nl)}, parser->out_of_memory);
+    if (!qname) {
+        parser->failed = 1;
+        return;
+    }
     char *colon = strchr(qname, ':');
     if (colon) {
         *colon = 0;
@@ -315,17 +327,21 @@ static void open_tag(xml_parser *parser) {
         }
         uint32_t ve = parser->position++;
         ta_xml_attribute *attribute =
-            (ta_xml_attribute *)ta_chunk_arena_alloc(parser->arena, sizeof *attribute);
+            (ta_xml_attribute *)ta_compile_alloc(parser->arena, sizeof *attribute, parser->out_of_memory);
         if (!attribute) {
             parser->failed = 1;
             return;
         }
-        attribute->name = ta_chunk_arena_strdup(parser->arena, parser->source + an, al);
+        attribute->name = ta_compile_copy(parser->arena, (ta_string_view){parser->source + an, (uint32_t)(al)}, parser->out_of_memory);
         uint32_t start = parser->text.length;
         unescape(parser, &parser->text, vs, ve);
         uint32_t vl;
-        attribute->value = finish_vector_string(parser, &parser->text, start, &vl);
+        attribute->value = finish_vector_string(parser, &(vector_string_request){&parser->text, start, &vl});
         attribute->value_length = vl;
+        if (!attribute->name || !attribute->value) {
+            parser->failed = 1;
+            return;
+        }
         *tail = attribute;
         tail = &attribute->next;
     }
@@ -358,7 +374,7 @@ static void open_tag(xml_parser *parser) {
         }
         parser->position++;
         node->inner_start = node->inner_end = parser->position;
-        node->text = ta_chunk_arena_strdup(parser->arena, "", 0);
+        node->text = ta_compile_copy(parser->arena, (ta_string_view){"", (uint32_t)(0)}, parser->out_of_memory);
         return;
     }
     parser->position++; /* '>' */
@@ -404,30 +420,31 @@ static ta_xml_node *close_tag(xml_parser *parser) {
         return NULL;
     }
     node->inner_end = offset;
-    node->text = finish_vector_string(parser, &parser->text, f->text_start, &node->text_length);
+    node->text = finish_vector_string(parser, &(vector_string_request){&parser->text, f->text_start, &node->text_length});
     unscope_ns(parser, f->namespace_mark, f->default_namespace);
     parser->stack.length--;
     return node;
 }
 
-ta_xml_node *ta_xml_parse(ta_chunk_arena *arena, const char *source, uint32_t length,
-                          ta_diagnostics *d, const char *file, const volatile int *abort_flag,
-                          int *aborted) {
+ta_xml_node *ta_xml_parse(ta_growable_arena *arena, const ta_xml_parse_request *request) {
+    const char *source = request->source.pointer;
+    uint32_t length = request->source.length;
     xml_parser parser;
     memset(&parser, 0, sizeof parser);
     parser.arena = arena;
+    parser.out_of_memory = request->out_of_memory;
     parser.source = source;
     parser.length = length;
-    parser.diagnostics = d;
-    parser.file = file;
+    parser.diagnostics = request->diagnostics;
+    parser.file = request->file;
     parser.location_line = parser.location_column = 1;
-    parser.abort_flag = abort_flag;
-    parser.aborted = aborted;
+    parser.abort_flag = request->abort_flag;
+    parser.aborted = request->aborted;
     parser.default_namespace = "";
-    ta_vector_init(&parser.text, arena->allocator, 1);
-    ta_vector_init(&parser.stack, arena->allocator, sizeof(xml_frame));
-    ta_vector_init(&parser.namespace_bindings, arena->allocator, sizeof(namespace_binding));
-    ta_string_map_init(&parser.namespace_map, arena->allocator);
+    ta_vector_init(&parser.text, request->allocator, 1);
+    ta_vector_init(&parser.stack, request->allocator, sizeof(xml_frame));
+    ta_vector_init(&parser.namespace_bindings, request->allocator, sizeof(namespace_binding));
+    ta_string_map_init(&parser.namespace_map, request->allocator);
     if (length >= 3 && (unsigned char)source[0] == 0xEF && (unsigned char)source[1] == 0xBB &&
         (unsigned char)source[2] == 0xBF)
         parser.position = 3;
@@ -486,7 +503,7 @@ ta_xml_node *ta_xml_parse(ta_chunk_arena *arena, const char *source, uint32_t le
     if (!parser.failed && !parser.root) error_at(&parser, 0, "no root element");
     if (parser.text.out_of_memory || parser.stack.out_of_memory ||
         parser.namespace_bindings.out_of_memory || parser.namespace_map.out_of_memory ||
-        arena->out_of_memory) {
+        *parser.out_of_memory) {
         if (!parser.failed) error_at(&parser, 0, "out of memory");
     }
     ta_vector_free(&parser.text);

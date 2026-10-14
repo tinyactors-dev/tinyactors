@@ -327,7 +327,7 @@ row; the example of embedding.md compiles and runs. Gates:
 unit tests and API descriptions. The table retires exhausted generations;
 the arena retains regular and oversized chunks, supports nested marks,
 and supplies an allocator view. The remaining 8.2 items below still need
-implementation; the compiler migration and host loop have not changed.
+implementation; the host loop has not changed.
 Contracts and usage are in
 [`tinyactors-core/docs/base-storage.md`](tinyactors-core/docs/base-storage.md).
 Validation: core's full gate passes (sanitizers, conformance, wasm,
@@ -345,6 +345,20 @@ no actors, a manifest's three named actors fit after growth from capacity
 one, and entry actions run only when the host loop runs. Allocation refusal
 and calls during a run or datamodel guard remain to be covered.
 
+Compiler arena migration (2026-10-14): temporary compiler storage and
+returned diagnostic strings now use separate `ta_growable_arena`s; the
+private `ta_chunk_arena` is deleted. Compiler allocations remain zeroed
+and allocation refusals remain latched. XML parser vectors still use
+the backing allocator and are freed when parsing ends. This serves the
+binding author: the next resolver increment can lend the shared scratch
+arena to Python. It adds no work per actor or event and no Python API;
+compilation keeps 32 KiB payload chunks with the shared arena's headers.
+The resolver's scratch and structured errors are the next increment.
+Validation: core's full gate passes (sanitizers, conformance, wasm, every
+torture scenario and cross-builds). Root `mise run test:full` reaches
+Python's existing red M1 gate and stops because `host.create` is absent;
+both Python builds still pass their 20 codec tests.
+
 - **Base:** `ta_status_name` (NULL for a status `types.h` does not
   define), `ta_table` (64-bit handles, 31-bit generation, rows grown by
   doubling through a `ta_allocator`, a row pointer valid until the next
@@ -356,7 +370,7 @@ and calls during a run or datamodel guard remain to be covered.
   free call), and a `ta_allocator` view so `ta_cbor_writer` grows into
   it. The internal `ta_arena` (`src/base/arena.h`) keeps its name and
   job. Unit tests and `tinyactors.api.json` entries for all three.
-- **One chunked arena in core** (ADR 0012, decision 5): the compiler's private `ta_chunk_arena`
+- **One chunked arena in core — done** (ADR 0012, decision 5): the compiler's private `ta_chunk_arena`
   (`src/compile/compile_support.h:14-26`; the per-compilation arena,
   `compile.c:37`, and the result's, `compile.c:13`) moves onto
   `ta_growable_arena`, and `ta_chunk_arena` is deleted.
