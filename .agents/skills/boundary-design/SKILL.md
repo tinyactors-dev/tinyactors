@@ -77,6 +77,7 @@ Do not re-propose one without new evidence that answers its reason.
 | Caller-sized `ta_buffer` outputs with retries | core ran datamodel code two or three times per output | ADR 0010 context |
 | Scratch shared between calls | not reentrant: a nested request corrupted the outer one | napi `8d600f4c` |
 | Holding the caller's image bytes | transfer, resize or sharing made core read freed memory | napi `38fc05c9` |
+| A host output handed to the application as a view for a handler's call (external `ArrayBuffer` detached, or a buffer exporter checked, before the ack) | `transfer()`, queued socket and `http` writes and Bun's I/O read memory reused after the ack; a held `memoryview` either reads it or stops the host; decided instead: one copy in the binding | `tinyactors-core/docs/boundary.md` section 7 (spikes, 2026-10-14) |
 | Cross-thread hazards in a binding | the host has one owning thread | guide section 5 |
 | Struct layouts read from Python or JS | ADR 0009, "Only C touches host structs" | ADR 0009 |
 

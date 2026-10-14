@@ -411,9 +411,49 @@ decision 2): a handler that posts, delivers or writes a second envelope
 ends the view it is reading, and both bindings copied every output
 before any call (ADR 0012).
 
-**Not yet decided.** Handing over ownership of large outputs (an OTLP
-batch as a block the language wraps without a copy): unmeasured; it pays
-only for large outputs.
+**Decided (2026-10-14): one copy, in the binding.** An output reaches
+the application as memory the language owns: the binding copies the
+host's view once (`napi_create_buffer_copy`, `PyBytes_FromStringAndSize`)
+before the ack, and the application gets a `Buffer` or `bytes` it may keep,
+with no further copy. It works on every runtime, Electron included, and
+core adds nothing for it. Not a view scoped to a handler: proposed and
+refuted (2026-10-14, by spikes in CPython 3.13, Node 22
+and 26, and Bun 1.4):
+
+- **Node and Bun:** an external `ArrayBuffer` must stay valid until its
+  finalizer runs (Node-API docs, `napi_create_external_arraybuffer`), and
+  detaching after the handler does not end every reader:
+  `ArrayBuffer.prototype.transfer()` in the handler moves the bytes to a
+  buffer the binding cannot detach, which then reads memory the host
+  reused after the ack; Bun's `fs.promises.writeFile` reads the old
+  pointer after the detach; a `socket.write` or `http` write queued
+  under backpressure, or before a connection, loses its bytes and the
+  connection stalls. Electron refuses external buffers
+  (`napi_no_external_buffers_allowed`), so a copy is needed there anyway.
+- **Python:** a buffer exporter counts its exports reliably, but a
+  `memoryview` cannot be pointed elsewhere, so a view held past the
+  handler reads reused memory after the ack, or the ack must wait for it.
+  Waiting stops the host (`ta_host_run` refuses while a batch is open),
+  and ordinary code holds views: a handler that raised (its traceback),
+  a view in a reference cycle, an asyncio transport under backpressure
+  (`_SelectorSocketTransport.write` keeps `memoryview(data)[n:]`).
+- This repeats, in the other direction, the reason a caller's image
+  bytes are not held (napi `38fc05c9`).
+
+Not the host handing a block's ownership to the binding, freed when the
+language's object is collected: a new core call, host memory outside the
+loop's lifetimes and the allocator called from finalizers, to save one
+copy of a few kilobytes (unmeasured; to be measured only if large
+hibernation or export blobs make the copy matter).
+
+**Open for the "outputs until the ack" step.** An output taken with no
+effects published opens a batch (ADR 0012, decision 1), but the code
+knows a batch only by its effect count (`effects_ready`): the run
+refuses only when it is nonzero, and `host.h` says an empty take opens
+no batch. The step needs a state for a batch of outputs alone, and a
+rule for a take while one is open (ADR 0012, decision 2: the same batch,
+so no effects; today's code would publish pending effects into it and
+the drain's ack would end the output too).
 
 **Open.** `ta_host_envelope` takes `const ta_host_effect *` (the record's
 address), the one call that needs a binding to index the effect array
