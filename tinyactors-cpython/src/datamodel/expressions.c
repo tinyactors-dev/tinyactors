@@ -60,9 +60,10 @@ int ta_python_support_init(PyObject *module, ta_python_module_state *state) {
         state->time_ns = ta_python_attribute_of("time", "time_ns");
         state->coroutine_function = ta_python_attribute_of("inspect", "iscoroutinefunction");
         state->event_kinds = Py_BuildValue("(sss)", "platform", "internal", "external");
+        state->event_key = PyUnicode_InternFromString("_event");
         if (!state->error || !state->compile_error || !state->resolve_error || !state->diagnostic || !state->attach ||
             !state->check_file || !names || !state->builtins || !state->time_ns || !state->coroutine_function ||
-            !state->event_kinds)
+            !state->event_kinds || !state->event_key)
             status = -1;
         static const char *const exported[] = {"TinyactorsError", "CompileError", "ResolveError", "Diagnostic"};
         for (size_t i = 0; status == 0 && i < sizeof exported / sizeof exported[0]; i++) {
@@ -88,7 +89,11 @@ int ta_python_check_file(ta_python_module_state *state, PyObject *file, PyObject
 /* In(state): the active state configuration of the evaluating session
  * (SCXML's In()), through the evaluation's environment. */
 static PyObject *ta_python_in(PyObject *self, PyObject *name) {
-    ta_python_datamodel *datamodel = &((ta_python_host *)self)->python;
+    ta_python_datamodel *datamodel = PyCapsule_GetContext(self); /* NULL once the host is freed */
+    if (!datamodel) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "In() of a freed host");
+        return NULL;
+    }
     ta_datamodel_environment *environment = datamodel->environment;
     ta_string_view text;
     if (!PyUnicode_Check(name) || ta_python_text(name, &text) < 0) {
@@ -106,9 +111,14 @@ static PyObject *ta_python_in(PyObject *self, PyObject *name) {
 
 static PyMethodDef ta_python_in_def = {"In", ta_python_in, METH_O, "In(state, /)\n--\n\nWhether the session is in the state."};
 
-/* The globals of a host's chart code: the allowed builtins and In(). */
+/* The globals of a host's chart code: the allowed builtins and In().
+ * In() reaches the datamodel through a capsule that holds no reference to
+ * the Host, so a Host the application drops is freed at once, not at the
+ * collector's next pass; ta_python_datamodel_free clears the capsule. */
 int ta_python_namespace_init(ta_python_datamodel *datamodel) {
-    PyObject *in = PyCFunction_New(&ta_python_in_def, (PyObject *)datamodel->host);
+    datamodel->capsule = PyCapsule_New(datamodel, "tinyactors.datamodel", NULL);
+    if (!datamodel->capsule || PyCapsule_SetContext(datamodel->capsule, datamodel) < 0) return -1;
+    PyObject *in = PyCFunction_New(&ta_python_in_def, datamodel->capsule);
     datamodel->namespace = in ? PyDict_New() : NULL;
     int status = datamodel->namespace && PyDict_SetItemString(datamodel->namespace, "__builtins__", datamodel->state->builtins) == 0 &&
                          PyDict_SetItemString(datamodel->namespace, "In", in) == 0
@@ -164,6 +174,11 @@ int ta_python_chart_compile(ta_python_datamodel *datamodel, const ta_python_atta
     row->chart = Py_NewRef(PyTuple_GetItem(made, 0));
     row->functions = Py_NewRef(PyTuple_GetItem(made, 1));
     row->data = data;
+    ta_image_info info;
+    info.size = sizeof info;
+    ta_image_get_info(image, &info);
+    row->names = PyList_New(info.event_name_count);
+    for (uint32_t i = 0; row->names && i < info.event_name_count; i++) PyList_SetItem(row->names, i, Py_NewRef(Py_None));
     PyObject *reads = PyTuple_GetItem(made, 2);
     static const char *const names[] = {"_sessionid", "_name", "_ioprocessors"};
     for (uint32_t i = 0; i < 3; i++) {

@@ -88,6 +88,8 @@ int ta_python_datamodel_init(ta_python_datamodel *datamodel, ta_python_host *hos
 void ta_python_datamodel_free(ta_python_datamodel *datamodel) {
     if (!datamodel->state) return;
     ta_python_rows_free(datamodel);
+    if (datamodel->capsule) PyCapsule_SetContext(datamodel->capsule, NULL); /* In() of a freed host refuses */
+    Py_CLEAR(datamodel->capsule);
     Py_CLEAR(datamodel->namespace);
     Py_CLEAR(datamodel->raised);
     Py_CLEAR(datamodel->output);
@@ -206,8 +208,11 @@ static ta_status ta_python_string_out(ta_python_datamodel *datamodel, PyObject *
 
 static ta_status ta_python_chart_attach(void *self, const ta_datamodel_chart *chart, void **context) {
     ta_python_datamodel *datamodel = self;
-    ta_python_chart_row made = {NULL, NULL, NULL, 0, 0};
-    if (ta_python_chart_compile(datamodel, &(ta_python_attach){chart->image, chart->chart}, &made) < 0) {
+    ta_python_chart_row made = {NULL, NULL, NULL, NULL, 0, 0};
+    if (ta_python_chart_compile(datamodel, &(ta_python_attach){chart->image, chart->chart}, &made) < 0 || !made.names) {
+        ta_python_drop(datamodel, made.chart);
+        ta_python_drop(datamodel, made.functions);
+        ta_python_drop(datamodel, made.data);
         PyErr_Clear(); /* a chart this datamodel cannot run: the image is refused */
         return TA_ERROR_INVALID;
     }
@@ -217,6 +222,7 @@ static ta_status ta_python_chart_attach(void *self, const ta_datamodel_chart *ch
         ta_python_drop(datamodel, made.chart);
         ta_python_drop(datamodel, made.functions);
         ta_python_drop(datamodel, made.data);
+        ta_python_drop(datamodel, made.names);
         return TA_ERROR_NO_MEMORY;
     }
     *row = made;
@@ -234,6 +240,7 @@ static void ta_python_chart_detach(void *self, void *context) {
     ta_python_drop(datamodel, kept.chart);
     ta_python_drop(datamodel, kept.functions);
     ta_python_drop(datamodel, kept.data);
+    ta_python_drop(datamodel, kept.names);
 }
 
 static PyObject *ta_python_view_str(ta_string_view text) {
@@ -368,6 +375,23 @@ static ta_status ta_python_init_data(const ta_datamodel_call *call, uint32_t dec
     return status;
 }
 
+/* An event's name: the chart's shared str for a name its image has (one
+ * per name, not one per event and session), else a new one. */
+static PyObject *ta_python_event_name(ta_python_datamodel *datamodel, uint64_t chart, const ta_event_view *view) {
+    ta_python_chart_row *row = ta_table_get(&datamodel->charts, chart);
+    PyObject *names = row ? row->names : NULL;
+    if (!names || view->name_id >= (uint32_t)PyList_Size(names)) return ta_python_view_str(view->name);
+    PyObject *name = PyList_GetItem(names, view->name_id);
+    Py_ssize_t length = 0;
+    const char *text = name != Py_None ? PyUnicode_AsUTF8AndSize(name, &length) : NULL;
+    if (text && (size_t)length == view->name.length && !memcmp(text, view->name.pointer, view->name.length))
+        return Py_NewRef(name);
+    PyErr_Clear();
+    PyObject *made = ta_python_view_str(view->name);
+    if (made && name == Py_None) PyList_SetItem(names, view->name_id, Py_NewRef(made)); /* the first: kept */
+    return made;
+}
+
 static PyObject *ta_python_optional_str(ta_string_view text) {
     return text.length ? ta_python_view_str(text) : Py_NewRef(Py_None);
 }
@@ -377,6 +401,7 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
     ta_python_session_row *row = ta_table_get(&datamodel->sessions, call->instance);
     if (!row || !row->instance) return TA_ERROR_EXECUTION;
     PyObject *instance = Py_NewRef(row->instance);
+    uint64_t chart = row->chart;
     if (row->extra) { /* the params were read by init_data: an event has come */
         ta_python_drop(datamodel, row->extra);
         row->extra = NULL;
@@ -385,7 +410,7 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
     ta_status status = TA_OK;
     if (event) {
         PyObject *data = view->data ? ta_python_payload_value(datamodel, view->data) : NULL;
-        event->name = ta_python_view_str(view->name);
+        event->name = ta_python_event_name(datamodel, chart, view);
         event->type = Py_NewRef(PyTuple_GetItem(datamodel->state->event_kinds, view->type % 3));
         event->sendid = ta_python_optional_str(view->sendid);
         event->origin = ta_python_optional_str(view->origin);
@@ -394,7 +419,7 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
         event->data = Py_NewRef(data ? data : Py_None); /* the payload's value itself (held by the Event) */
         event->raw = view->size >= sizeof *view ? ta_python_optional_str(view->raw) : Py_NewRef(Py_None);
         if (!event->name || !event->sendid || !event->origin || !event->origintype || !event->invokeid || !event->raw ||
-            PyObject_SetAttrString(instance, "_event", (PyObject *)event) < 0)
+            PyObject_SetAttr(instance, datamodel->state->event_key, (PyObject *)event) < 0)
             status = ta_python_failed(datamodel);
         Py_DECREF(event); /* the instance holds it now */
     } else status = ta_python_failed(datamodel);
@@ -604,24 +629,33 @@ static ta_status ta_python_serialize(const ta_datamodel_call *call, ta_bytes *ou
 
 /* The bindings of the old version that the new chart does not declare,
  * and the instance of the new class with the slots both declare. */
-static int ta_python_migrate_instance(ta_python_datamodel *datamodel, ta_python_session_row *row,
-                                      const ta_datamodel_start *start) {
+static int ta_python_migrate_instance(ta_python_datamodel *datamodel, uint64_t handle, const ta_datamodel_start *start) {
+    /* Python code runs below (a finalizer may spawn, which adds rows): the
+     * rows are read by handle again before they are written */
+    ta_python_session_row copied = *(ta_python_session_row *)ta_table_get(&datamodel->sessions, handle);
+    ta_python_session_row *row = &copied;
+    PyObject *old_instance = Py_NewRef(row->instance);
     ta_python_chart_row *chart = ta_table_get(&datamodel->charts, (uint64_t)(uintptr_t)start->chart_context);
     ta_python_chart_row *old = ta_table_get(&datamodel->charts, row->chart);
+    PyObject *new_data = chart ? Py_NewRef(chart->data) : NULL, *old_data = old ? Py_NewRef(old->data) : NULL;
     PyObject *instance = chart ? ta_python_instance(datamodel, chart, start->system_variables) : NULL;
     PyObject *bindings = instance ? PyDict_New() : NULL;
     int status = bindings ? 0 : -1;
-    for (Py_ssize_t i = 0; status == 0 && old && i < PyTuple_Size(old->data); i++) {
-        PyObject *id = PyTuple_GetItem(old->data, i), *value = PyObject_GetAttr(row->instance, id);
-        int shared = value ? PySequence_Contains(chart->data, id) : -1;
+    for (Py_ssize_t i = 0; status == 0 && old_data && i < PyTuple_Size(old_data); i++) {
+        PyObject *id = PyTuple_GetItem(old_data, i), *value = PyObject_GetAttr(old_instance, id);
+        int shared = value ? PySequence_Contains(new_data, id) : -1;
         if (shared < 0 || PyDict_SetItem(bindings, id, value) < 0) status = -1;
         else if (shared == 1) status = PyObject_SetAttr(instance, id, value);
         Py_XDECREF(value);
     }
-    PyObject *event = status == 0 ? PyObject_GetAttrString(row->instance, "_event") : NULL;
+    PyObject *event = status == 0 ? PyObject_GetAttrString(old_instance, "_event") : NULL;
     if (!event || PyObject_SetAttrString(instance, "_event", event) < 0) status = -1;
     Py_XDECREF(event);
-    if (status < 0) {
+    Py_XDECREF(new_data);
+    Py_XDECREF(old_data);
+    Py_DECREF(old_instance);
+    row = ta_table_get(&datamodel->sessions, handle);
+    if (status < 0 || !row) {
         Py_XDECREF(instance);
         Py_XDECREF(bindings);
         return -1;
@@ -641,7 +675,7 @@ static ta_status ta_python_deserialize(void *self, const ta_datamodel_start *sta
     memcpy(&handle, start->state.pointer, sizeof handle);
     ta_python_session_row *row = ta_table_get(&datamodel->sessions, handle);
     if (!row || !(row->flags & TA_PYTHON_SESSION_HIBERNATED)) return TA_ERROR_INVALID;
-    if (row->chart != (uint64_t)(uintptr_t)start->chart_context && ta_python_migrate_instance(datamodel, row, start) < 0) {
+    if (row->chart != (uint64_t)(uintptr_t)start->chart_context && ta_python_migrate_instance(datamodel, handle, start) < 0) {
         ta_python_failed(datamodel);
         return TA_ERROR_INVALID;
     }

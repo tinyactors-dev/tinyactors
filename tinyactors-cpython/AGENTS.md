@@ -554,10 +554,14 @@ Registered beside quickjs, first; matched by the chart's
   old bindings as a payload.
 - **Measured cost per session** (`mise run measure`, 2026-10-14: x86_64
   Linux, 4 CPUs, CPython 3.13.16 with the GIL; 10,000 actors of a chart
-  with three `<data>`, one of them a list, resident and idle): **423 B
-  resident per actor** on the `"python"` datamodel against **1093 B** on
-  quickjs, of which 193 B are Python's heap (tracemalloc: the instance,
-  its list, the session row) and 204 B core's region (both datamodels).
+  with three `<data>`, one of them a list, resident and idle): **433 B
+  resident per actor** on the `"python"` datamodel against **1104 B** on
+  quickjs, of which about 193 B are Python's heap (tracemalloc: the
+  instance, its list, the session row) and 204 B core's region (both
+  datamodels). After one event each, a session also keeps its `_event`,
+  one Event of about 100 B (its name is the chart's shared `str` for that
+  name in the image): 814 B resident against quickjs's 13777 B, most of
+  which is core's region growing its pools.
   The estimate it replaces (the instance 32 B + 8 B per slot, a row
   ~16 B, the system variables ~100–250 B) was close for the instance (80
   B with five slots, plus its GC header); the system variables cost

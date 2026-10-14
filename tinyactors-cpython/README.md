@@ -139,12 +139,20 @@ actors share no mutable value.
 
 Measured with `mise run measure` (x86_64 Linux, 4 CPUs, CPython 3.13.16
 with the GIL; 10,000 actors of one chart with three `<data>`, resident
-and idle):
+and idle; then once more after one event to each actor, which keeps its
+`_event` until the next):
 
-| datamodel | resident per actor | Python heap per actor | core's region per actor |
-|---|---|---|---|
-| `"python"` | 423 B | 193 B | 204 B |
-| quickjs | 1093 B | — | 204 B |
+| datamodel | resident per actor | traced per actor | core's region per actor | resident after one event | region after one event |
+|---|---|---|---|---|---|
+| `"python"` | 433 B | 201 B | 204 B | 814 B | 398 B |
+| quickjs | 1104 B | — | 204 B | 13777 B | 12440 B |
+
+"Traced" is tracemalloc's: the sessions' Python objects and the
+binding's rows (it includes an 8 B array of the harness). After an event
+a `"python"` session keeps one more object, its `_event` (about 100 B;
+the event's name is a `str` the chart shares). The region's growth after
+the events is core's (it grows its event pools by doubling and keeps
+them), and much larger on quickjs.
 
 ## Building
 

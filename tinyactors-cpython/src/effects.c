@@ -182,6 +182,7 @@ typedef struct ta_python_answer {
 } ta_python_answer;
 
 static int ta_python_send_answer_with(ta_python_view *view, const ta_python_answer *answer) {
+    if (ta_python_view_live(view) < 0) return -1; /* a thin view answers before its ack, whatever was read */
     if (view->answered) {
         PyErr_SetString(view->host->state->error, "the send was answered already");
         return -1;
