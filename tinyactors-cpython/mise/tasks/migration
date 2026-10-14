@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+#MISE description="Live migration under load: N actors, R resident, the rest in SQLite, all moved to a new chart version while events come, on both datamodels (tools/migration.py)"
+#MISE depends=["build"]
+#USAGE flag "--actors <n>" default="500000" help="the population"
+#USAGE flag "--resident <n>" default="1000" help="the actors in memory at most (plus the batch the job is moving)"
+#USAGE flag "--events <n>" default="100000" help="the events before the migration, and again during it"
+# vim:ft=ruby
+
+# The application's side of migration as a program writes it: Host.migrate
+# with wake, the job's WAKEs queued and woken a batch at a time in their
+# order, an event's WAKE woken at once with a job of its own, the migrated
+# actors swept back into SQLite. It fails when an actor's count or version
+# is wrong, when the job leaves an actor behind, when version 1's segment
+# is not retired, or when more than R actors (plus a batch) are resident.
+# `mise run test --full` runs it at its defaults; the fast pass runs a
+# small one.
+
+require_relative '../cpython'
+
+CPython.stress(actors: ENV.fetch('usage_actors', '500000'), resident: ENV.fetch('usage_resident', '1000'),
+               events: ENV.fetch('usage_events', '100000'), tool: 'migration')

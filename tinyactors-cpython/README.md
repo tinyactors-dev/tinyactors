@@ -48,16 +48,17 @@ with tinyactors.Host(config, {"urn:example:app": app},
   an error raises `CompileError` with every diagnostic. `Compiled.image`
   is a read-only buffer, valid until `close()` (a context manager).
 - `Host(config, io_processors=None, *, log=None, clock=None, peer=None,
-  telemetry=None, wake=None)`:
+  telemetry=None, wake=None, migrated=None)`:
   `config` is the host's config as a dict
   ([host-config.md](../tinyactors-core/docs/host-config.md));
   `io_processors` maps an I/O processor's type to `handler(host, send)`;
   `log` gets each `<log>` line as `handler(host, entry)`; `clock` is a
   `SimulatedClock` or `None` for the real clocks; `peer` gets each
   envelope for another system as `handler(host, envelope)`; `telemetry`
-  gets each OTLP request as `handler(host, signal, data)`, and `wake`
-  each hibernated actor an event came for as `handler(host, session)`
-  (both below).
+  gets each OTLP request as `handler(host, signal, data)`, `wake` each
+  hibernated actor an event or a migration asks for as `handler(host,
+  session, job)`, and `migrated` each actor a migration moved as
+  `handler(host, migration)` (all below).
 - Inputs, applied at the call: `add_image(image) -> segment`,
   `chart(name) -> ChartRef`, `spawn(ref, name=None, params=None,
   traceparent=None) -> session`, `send(session, event, data=None, *,
@@ -181,8 +182,9 @@ hands each blob over as `bytes`, and asks for it back.
   a `"python"` actor holding a value outside the value table (a `set`, a
   `tuple`, an object): it stays resident. A pending delayed send stays
   in the host, and when it falls due it wakes the actor.
-- `wake=handler(host, session)`: an event (or a due delayed send) came
-  for a hibernated actor; it waits in the mailbox while your handler
+- `wake=handler(host, session, job)`: an event (or a due delayed send)
+  came for a hibernated actor (`job` is `None`), or a migration asks for
+  it (`job` is its id, below); it waits in the mailbox while your handler
   loads the blob and calls `host.wake(session, blob)`, now or later (an
   `async def` handler runs as a task, under `async with`). One call per
   hibernation, however many events come. Without a `wake` handler the
@@ -195,7 +197,7 @@ import sqlite3
 db = sqlite3.connect("actors.db", isolation_level=None)
 db.execute("CREATE TABLE IF NOT EXISTS blobs (session INTEGER PRIMARY KEY, blob BLOB)")
 
-def wake(host, session):
+def wake(host, session, job):
     (blob,) = db.execute("SELECT blob FROM blobs WHERE session = ?", (session,)).fetchone()
     host.wake(session, blob)
 
@@ -235,6 +237,81 @@ x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, one run:
 The region is core's (about 60 B per actor, hibernated or not); the
 store is SQLite's file. Every actor's count matched the events it was
 sent, and after every eviction at most 1000 actors were resident.
+
+## Migration
+
+A new version of a chart (`add_image` of an image with a chart of the
+same `name`) runs the actors spawned from then on; `host.migrate` moves
+the running ones to it, at their stable points, in the next runs. Each
+moved actor keeps its session id, its state configuration (states match
+by id) and its delayed sends, and gets `error.platform.upgrade` first,
+whose data is version 1's `<datamodel>` bindings: version 2 takes from
+there what it keeps.
+
+```xml
+<transition event="error.platform.upgrade">
+  <assign location="n" expr="_event.data['n']"/>
+</transition>
+```
+
+- `host.migrate(handler, /, *, chart=None, session=None, wake=False,
+  timeout=0) -> job`: every chart, one `chart` by name, or one `session`.
+  With `wake`, a hibernated actor is asked for (`wake=handler(host,
+  session, job)` with this job's id); without it, it waits, and the job
+  ends with it in `pending` at `timeout` (host ticks; 0: none).
+  `handler(host, result)` runs when the job ends, with `{"job",
+  "migrated", "failed", "pending": [session, ...]}`.
+- `migrated=handler(host, migration)`: each actor moved, a thin view of
+  `session`, `segment`, `chart` (its name) and `job`.
+- An actor that cannot be written out stays on its version and counts as
+  failed: on the `"python"` datamodel, one whose variables or pending
+  delayed sends hold a value outside the value table. One that is running
+  an invocation waits until it ends.
+
+**With most actors hibernated, wake them in the job's order, a batch at a
+time.** The job asks for every hibernated actor at once, early, and tries
+the ones it waits for in the order it asked; it moves an actor it asked
+for only once, so put one back to sleep only after it moved. An event
+for an actor still waiting should not wait for the job: wake it at once
+and move it with a job of its own.
+
+```python
+asked = collections.deque()
+
+def wake(host, session, job):
+    if job is not None:
+        asked.append(session)             # the job's: a batch at a time, in its order
+        return
+    host.wake(session, store.get(session))
+    if not moved(session):
+        host.migrate(None, session=session)   # an event's: now, and moved now
+
+job = host.migrate(on_done, wake=True)
+while not done:
+    for _ in range(min(256, len(asked))):
+        session = asked.popleft()
+        host.wake(session, store.get(session))
+    host.run_until_idle()
+    evict_moved(host)                     # the moved actors at rest go back to the store
+```
+
+`mise run migration` is the pattern at scale (`tools/migration.py`), on
+SQLite: 500,000 actors of a counter chart, at most 1000 resident, moved
+to version 2 while 100,000 events go to actors drawn at random; it
+checks every sampled actor's count and version, that the job left none
+behind, that version 1's segment retired, and the resident bound after
+every eviction. Measured on x86_64 Linux, 4 CPUs, CPython 3.13.16 with
+the GIL, one run:
+
+| datamodel | populate (500,000, 100,000 events) | migrate, live (100,000 events meanwhile) | woken from SQLite | peak resident | core's region (both versions, then after) | SQLite file |
+|---|---|---|---|---|---|---|
+| `"python"` | 7.5 s | 74.9 s (6,700 actors a second; 81,084 moved early for an event) | 617,336 | 146 MB (291 B per actor) | 71.5 MB, then 35.7 MB (71 B per actor) | 123 MB |
+| quickjs | 9.2 s | 77.7 s (6,400 actors a second; 81,084 moved early) | 617,336 | 147 MB (293 B per actor) | 71.5 MB, then 35.7 MB | 164 MB |
+
+The job's time grows with the square of the hibernated actors (core
+checks each actor it asks for against the list of those it waits for);
+until that changes, it is 14 s at 200,000 and 279 s at a million on the
+`"python"` datamodel.
 
 ## Charts in Python
 
@@ -280,12 +357,12 @@ actors share no mutable value.
 - **Nesting is limited to 64,** which stops cycles but not a value that
   shares subtrees (`a = [a, a]` sixty times): another reason charts are
   trusted code.
-- A `"python"` actor hibernates (and exports, and migrates, once those
-  are in the API) only while its variables, and the data of its pending
+- A `"python"` actor hibernates and migrates (and exports, once that is
+  in the API) only while its variables, and the data of its pending
   delayed sends, are values of the value table; a `<foreach>`'s `item` and `index` must be declared
   `<data>`.
-- Not in the API yet: export and snapshots, migration, invoked services
-  of the application.
+- Not in the API yet: export and adopt, snapshots, invoked services of
+  the application.
 
 ## Memory
 

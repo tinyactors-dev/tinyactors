@@ -153,13 +153,15 @@ module CPython
     directory
   end
 
-  # tools/stress.py on both datamodels against the abi3 build: N actors,
-  # at most R resident, the rest hibernated into SQLite (README.md,
-  # "Hibernation"). A failed check ends the task.
-  def stress(actors:, resident:, events:)
+  # A stress tool on both datamodels against the abi3 build: N actors, at
+  # most R resident, the rest hibernated into SQLite; tools/stress.py
+  # (README.md, "Hibernation") or tools/migration.py (README.md,
+  # "Migration": all of them move to a new version, live). A failed check
+  # ends the task.
+  def stress(actors:, resident:, events:, tool: 'stress')
     %w[python ecmascript].each do |datamodel|
-      puts "stress: #{datamodel}, #{actors} actors, #{resident} resident, #{events} events"
-      run(pinned('python'), 'tools/stress.py', '--datamodel', datamodel, '--actors', actors.to_s,
+      puts "#{tool}: #{datamodel}, #{actors} actors, #{resident} resident, #{events} events"
+      run(pinned('python'), "tools/#{tool}.py", '--datamodel', datamodel, '--actors', actors.to_s,
           '--resident', resident.to_s, '--events', events.to_s, env: { 'PYTHONPATH' => BUILD.join('abi3').to_s })
     end
   end

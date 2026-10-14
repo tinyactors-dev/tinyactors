@@ -259,8 +259,7 @@ Left for core (capacity planning, not the binding): a segment's region
 grows by doubling under a burst of events and is kept (12.4 KB per actor
 on quickjs after one event each at 10,000 actors).
 - **Not in the API yet** (8.5): invoked services of the application
-  (`INVOKE`, `UNINVOKE` are dropped), migration's progress, snapshots
-  and export, a
+  (`INVOKE`, `UNINVOKE` are dropped), snapshots and export, a
   `<foreach>` item that is not a declared `<data>`.
 
 ### Telemetry (8.5's first item, 2026-10-14) — done
@@ -391,6 +390,54 @@ Not changed: `deserialize` sets each variable twice (to `None`, then its
 value), a small cost per wake; a `KeyboardInterrupt` during `wake`'s
 `deserialize` is raised at the next turn rather than by `wake()`.
 
+### Migration (8.5's third item, 2026-10-14) — done
+
+`host.migrate(handler, /, *, chart=None, session=None, wake=False,
+timeout=0) -> job` (`ta_host_migrate`; the handler at `JOB_DONE` with
+`migrated`, `failed` and `pending` from `ta_host_job_pending`), and
+`migrated=handler(host, migration)` for `TA_HOST_EFFECT_MIGRATED`. The
+wake handler gets the job that asks (`wake(host, session, job)`; `None`
+for an event), which an application that keeps few actors resident
+needs to tell the job's WAKEs from an event's. Whom it serves: the
+application developer who deploys a new version of a chart under load,
+and the operator, who sees the job's result. Cost: nothing per event; per
+moved actor a thin view only with a `migrated` handler; per job a dict
+entry and, at its end, a list of the pending sessions.
+
+The conform adapter runs `hibernate` and `migrate` steps: the suite's M4
+scenarios `hibernate` and `migrate` pass on both datamodels (as does M3's
+`invoke`; `snapshot` waits for snapshots). The gate stays M1 (the runner
+selects by milestone, and M4 holds `snapshot`).
+
+**The gate:** `tools/migration.py` (`mise run migration`; `mise run test`
+runs 20,000 actors with 100 resident on both datamodels, `--full` 500,000
+with 1000): version 1 of a counter chart, most actors hibernated in
+SQLite, version 2 added, every actor moved while events go to random
+actors; every sampled count and version right, the job leaves none
+behind, version 1's segment retired, at most R resident (plus a batch)
+after every eviction. Getting there found:
+
+- an application that wakes every actor the job asks for at once has
+  them all resident; one that queues the job's WAKEs must wake them in
+  the job's order (the job retries the actors it waits for from the front
+  of its list, a quantum per run) and must not put back one the job
+  asked for before it moved (the job asks once). The README's
+  "Migration" gives the pattern;
+- events for actors still waiting for the job piled up in the host
+  (the segment's event pool, doubling every pool: 281 MB of region at
+  200,000 actors). An event's WAKE now wakes its actor at once and moves
+  it with a job of its own (`migrate(session=...)`): 93 MB peak at
+  200,000. That needed the job on the WAKE;
+- core's walk is quadratic in the hibernated actors ("Requests to
+  core"), which sizes the full gate.
+
+Tests in `tests/test_migration.py`: both datamodels move with their
+bindings (the upgrade's data) and keep a delayed send, a hibernated
+actor asked for with its job, an event's WAKE with none, the timeout
+leaving a sleeping actor in `pending`, one session or one chart, a
+`"python"` actor with a `set` failing and staying, the stale view, a
+handler that raises, a job unfinished at the stop, refused arguments.
+
 ## How the work runs
 
 The root ROADMAP.md, step 8, "Rules for the work", sets these for every
@@ -433,7 +480,24 @@ Gaps in core or in the suite this session finds. Each says what is
 missing, why, and which suite case or test shows it; the coordinator moves
 it into the root ROADMAP.md's "Requests to core" and answers there.
 
-None open. What the design needs from core is step 8.2 of the root
+- **A waking migration is quadratic in the hibernated actors**
+  (2026-10-14). `retry_push` (`tinyactors-core/src/host/host.c:1483`)
+  looks for the session in the job's whole retry list before it adds it,
+  and the walk of a `TA_HOST_MIGRATE_WAKE` job adds every hibernated
+  actor: the first `ta_host_run`s of a job over n hibernated actors cost
+  O(n²). Measured with `tools/migration.py` (1000 resident): the walk
+  takes 0.12 s at 25,000, 0.45 s at 50,000, 2.2 s at 100,000, 8 s at
+  200,000; the whole migration 69 s at 500,000 and 279 s at a million.
+  The retry list cannot hold a duplicate during the walk (each actor is
+  looked at once), so the check is needed only for the retries after it,
+  or a flag per actor would do. Until then the binding's migration gate
+  runs 500,000 actors, not two million.
+- **A WAKE that no job asked for has `job` `TA_NIL`**
+  (`tinyactors-core/src/host/host.c:1026`), while `boundary.md` (open
+  question 5) says a job handle is never 0, with 0 for none. The binding
+  passes `None` for either; one of the two should change.
+
+What the design needs from core is step 8.2 of the root
 roadmap. The first binding's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
 tick rate through `host.config`, `9bd33f03`); their text is in this
