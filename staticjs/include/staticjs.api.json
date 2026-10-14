@@ -1056,7 +1056,7 @@
         },
         {
           "name": "as",
-          "type": "union (unnamed at /Users/dhamidi/project/tinyactors-scratch/staticjs/include/staticjs.h:233:5)"
+          "type": "union (unnamed at staticjs.h:233:5)"
         }
       ],
       "layout": {

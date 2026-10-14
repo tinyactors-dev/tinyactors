@@ -100,6 +100,11 @@ module CAPI
     end
   end
 
+  # A type as clang spells it, without the machine's paths: an unnamed
+  # record is named by its header's file name and position, so the
+  # description is the same on every host.
+  def self.portable(type) = type&.gsub(%r{\(unnamed at [^()]*/([^/()]+:\d+:\d+)\)}, '(unnamed at \\1)')
+
   # The header's AST, read for one target: its prefixed declarations.
   class AST
     def initialize(root, prefix, exclude)
@@ -119,7 +124,7 @@ module CAPI
       @functions ||= @decls.select { |node| node['kind'] == 'FunctionDecl' && api?(node) }.uniq { |node| node['name'] }
                            .map do |node|
         params = node.fetch('inner', []).select { |inner| inner['kind'] == 'ParmVarDecl' }
-                     .map { |param| { 'name' => param['name'].to_s, 'type' => param.dig('type', 'qualType') } }
+                     .map { |param| { 'name' => param['name'].to_s, 'type' => CAPI.portable(param.dig('type', 'qualType')) } }
         { 'name' => node['name'], 'returns' => node.dig('type', 'qualType').sub(/\s*\(.*\z/m, ''),
           'params' => params, 'public' => true, 'static_inline' => false }
       end
@@ -136,12 +141,12 @@ module CAPI
         record = record_of(node)
         entry = if record && record['kind'] == 'RecordDecl'
                   fields = record.fetch('inner', []).select { |inner| inner['kind'] == 'FieldDecl' }
-                                 .map { |field| { 'name' => field['name'].to_s, 'type' => field.dig('type', 'qualType') } }
+                                 .map { |field| { 'name' => field['name'].to_s, 'type' => CAPI.portable(field.dig('type', 'qualType')) } }
                   { 'kind' => record['completeDefinition'] ? record['tagUsed'] : 'opaque', 'fields' => fields }
                 elsif record && record['kind'] == 'EnumDecl'
                   { 'kind' => 'enum', 'constants' => record.fetch('inner', []).map { |constant| constant['name'] } }
                 else
-                  { 'kind' => 'alias', 'type' => node.dig('type', 'qualType') }
+                  { 'kind' => 'alias', 'type' => CAPI.portable(node.dig('type', 'qualType')) }
                 end
         [node['name'], entry]
       end
