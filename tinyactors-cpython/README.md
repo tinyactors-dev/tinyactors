@@ -1,15 +1,157 @@
 # tinyactors for Python
 
-**Status: bootstrap written from scratch.** The C extension exposes
-`encode`, `decode`, `Address` and `UNDEFINED` for the complete
-[neutral-value mapping](docs/values.md). Host and
-actor execution are still planned in [ROADMAP.md](ROADMAP.md).
+SCXML actors in a host, driven from Python: charts written in Python (the
+`"python"` datamodel) or in ECMAScript (quickjs), a `Host` driven from a
+script or from asyncio, and values that are Python objects. The extension
+is the direct layer: each item mirrors a call of the C library
+([docs/api-map.md](docs/api-map.md) names the core behind every one).
 
-Run `mise run build` to build the extension. `mise run test` checks lint
-and the codec and adapter on both interpreters, then runs M1. M1 is
-deliberately red: the adapter exchanges valid driver frames and answers
-every method with -32601 until its real public API exists. Run it alone
-with `mise run conform -- --milestone M1`.
+```python
+import tinyactors
+
+CHART = """<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+               datamodel="python" name="greeter" initial="idle">
+  <datamodel><data id="greeted" expr="0"/></datamodel>
+  <state id="idle">
+    <transition event="hello">
+      <assign location="greeted" expr="greeted + 1"/>
+      <log label="greeter" expr="f'hello, {_event.data[&quot;who&quot;]} ({greeted})'"/>
+      <send type="urn:example:app" target="out" event="greeted">
+        <content expr="{'count': greeted}"/>
+      </send>
+    </transition>
+  </state>
+</scxml>"""
+
+def app(host, send):                      # an I/O processor: the actor's output
+    print("app got", send.event, send.data)
+    send.answer("thanks")                 # an event back to the sender
+
+config = {"systemID": "demo", "ioProcessors": [{"type": "urn:example:app"}]}
+with tinyactors.Host(config, {"urn:example:app": app},
+                     log=lambda host, entry: print("log:", entry.text)) as host:
+    with tinyactors.compile_charts([("greeter.scxml", CHART)]) as compiled:
+        host.add_image(compiled.image)    # the host copies the image
+    session = host.spawn(host.chart("greeter"))
+    host.send(session, "hello", {"who": "world"})
+    host.run_until_idle()
+    host.actor_context(lambda host, result: print(result["variables"]), session=session)
+    host.run_until_idle()                 # the reply's handler runs at a later drain
+```
+
+## The API
+
+- `compile_charts(sources, resolver=None) -> Compiled`: `(name, text)`
+  pairs into one image. A resolver is an object with `resolve(base,
+  source) -> str` that reads a static `src=` at compile time; it refuses
+  with `ResolveError(message, line=None, column=None)`. A compilation with
+  an error raises `CompileError` with every diagnostic. `Compiled.image`
+  is a read-only buffer, valid until `close()` (a context manager).
+- `Host(config, io_processors=None, *, log=None, clock=None, peer=None)`:
+  `config` is the host's config as a dict
+  ([host-config.md](../tinyactors-core/docs/host-config.md));
+  `io_processors` maps an I/O processor's type to `handler(host, send)`;
+  `log` gets each `<log>` line as `handler(host, entry)`; `clock` is a
+  `SimulatedClock` or `None` for the real clocks; `peer` gets each
+  envelope for another system as `handler(host, envelope)`.
+- Inputs, applied at the call: `add_image(image) -> segment`,
+  `chart(name) -> ChartRef`, `spawn(ref, name=None, params=None,
+  traceparent=None) -> session`, `send(session, event, data=None, *,
+  traceparent=None)`, `send_many([(session, event, data, traceparent),
+  ...]) -> accepted`, `terminate(session)`, `peer_add(id, *,
+  trusted=False) -> peer`, `deliver(peer, envelope_bytes) -> route`.
+- Drivers: `run_until_idle()`; `run()`, which sleeps to each deadline
+  while there is one; `SimulatedClock.increment(ms)`; and under asyncio
+  (`async with Host(...)`), `await host.idle()`.
+- Typed methods, one per method of
+  [requests.md](../tinyactors-core/docs/requests.md):
+  `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`,
+  `host_config`, `trace_configure`, `trace_watch`, `trace_unwatch`,
+  `trace_end`, `trace_spans_decode`, each `(handler, on_error=None, /,
+  **params)`, returning `None`. The method's params are keywords, passed
+  to core as given; `handler(host, result)` or `on_error(host, error)`
+  runs when the reply is drained, later. An error without `on_error` is
+  raised by the driver after the turn.
+- `send` and `entry` are thin views: their fields are read when you read
+  them, and a read after the batch's ack raises `TinyactorsError` with
+  `status == "TA_ERROR_STALE"`. Read what you need inside the handler. An
+  `async def` I/O processor (under asyncio only) gets a record instead,
+  which it can answer later. A handler that raises before answering has
+  its send failed (the sender gets `error.communication`), and the
+  exception is raised from the driver after the turn.
+- `encode(value) -> bytes`, `decode(data) -> value`: the value table
+  ([docs/values.md](docs/values.md)) as CBOR.
+
+A `Host` is used from the thread that made it; other threads are refused.
+Several hosts, one per thread, exchange envelopes.
+
+## Charts in Python
+
+A `datamodel="python"` chart's session is an instance of a class made for
+the chart: its `<data>` ids are its slots, `_event`, `_sessionid`, `_name`
+and `_ioprocessors` are read-only, and `In(state)` is SCXML's `In()`.
+Expressions are compiled once per chart into functions of the session,
+by a restrictive rewrite:
+
+- *expressions:* literals, arithmetic, comparisons, boolean operations,
+  conditional expressions, indexing and slicing, comprehensions and
+  generator expressions, f-strings, calls to the chart's methods and to
+  the allowed builtins, attribute access except dunder names;
+- *statements*, in `<script>` and `.py` files a `src=` names: assignment,
+  plain or augmented, to a `<data>` id or to its items or attributes;
+  `if`, `for`, `while`, `pass` and expression statements; `def` at the top
+  level of a script, which makes a method of the chart;
+- *refused:* `import`, `global`, `nonlocal`, `lambda`, `await`, `yield`,
+  the walrus (`:=`), `del`, `try` and `raise`, `with`, `class`;
+- *builtins:* `len`, `min`, `max`, `sum`, `abs`, `round`, `sorted`,
+  `reversed`, `enumerate`, `zip`, `range`, `any`, `all`, `isinstance`,
+  `str`, `int`, `float`, `bool`, `list`, `dict`, `tuple`, `set`,
+  `frozenset`, `map`, `filter`.
+
+An undeclared name, a refused construct or an assignment to a system
+variable is `error.execution` when the expression is evaluated, as SCXML
+requires; a `.py` file's refused constructs are compile errors at their
+line. What crosses to another actor (`<send>` data, `<donedata>`, invoke
+params, data from the application) is copied through the value table:
+actors share no mutable value.
+
+## Limits
+
+- **Charts are trusted code. The rewrite is not a sandbox:** it keeps a
+  chart inside SCXML's scope rules, nothing more. A chart in Python runs
+  in your interpreter, cannot be preempted in the middle of an
+  expression, and is limited in memory by nothing (unlike quickjs, which
+  has an operation limit and its own allocator).
+- **Python values lie outside the host's allocator.** The host, its
+  tables and its scratch allocate through `PyMem_RawMalloc`; the values
+  of a Python chart's sessions and payloads are Python objects on
+  Python's heap.
+- **Nesting is limited to 64,** which stops cycles but not a value that
+  shares subtrees (`a = [a, a]` sixty times): another reason charts are
+  trusted code.
+- Export and snapshots of a `"python"` actor are not supported; a
+  `<foreach>`'s `item` and `index` must be declared `<data>`.
+- Not in the API yet: hibernation with a store, migration, invoked
+  services of the application, telemetry exporters (the host's OTLP
+  requests are taken and dropped).
+
+## Memory
+
+Measured with `mise run measure` (x86_64 Linux, 4 CPUs, CPython 3.13.16
+with the GIL; 10,000 actors of one chart with three `<data>`, resident
+and idle):
+
+| datamodel | resident per actor | Python heap per actor | core's region per actor |
+|---|---|---|---|
+| `"python"` | 423 B | 193 B | 204 B |
+| quickjs | 1093 B | — | 204 B |
+
+## Building
+
+`mise run build` builds the extension for CPython 3.13 (abi3) and for the
+free-threaded test interpreter; `mise run test` lints, runs `tests/` on
+both, and runs the conformance suite's milestone set against the adapter
+(`python -m conform`) on both datamodels.
 
 ## License
 

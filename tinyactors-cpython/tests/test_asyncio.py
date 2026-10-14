@@ -1,0 +1,117 @@
+"""The asyncio driver: await host.idle(), async def processors, one timer."""
+
+import asyncio
+import unittest
+
+import tinyactors
+from support import APP, Logs, chart
+
+DOCUMENT = chart(
+    "<state id='s'>"
+    "<transition event='go'><send type='%s' target='app' event='out'><content expr='_event.data'/></send></transition>"
+    "<transition event='ack'><log label='ack' expr='str(_event.data)'/></transition>"
+    "<transition event='error.communication'><log label='failed' expr=\"'yes'\"/></transition>"
+    "<transition event='later'><send event='tick' delay='20ms'/></transition>"
+    "<transition event='tick'><log label='tick' expr=\"'yes'\"/></transition>"
+    "</state>" % APP, name="echo")
+CONFIG = {"systemID": "t", "ioProcessors": [{"type": APP}]}
+
+
+def image():
+    with tinyactors.compile_charts([("echo.scxml", DOCUMENT)]) as compiled:
+        return bytes(compiled.image)
+
+
+class Asyncio(unittest.TestCase):
+    def test_an_async_processor_gets_a_record_that_answers_after_the_ack(self):
+        logs = Logs()
+
+        async def processor(host, send):
+            await asyncio.sleep(0)
+            send.answer("ack", {"echo": send.data})
+
+        async def main():
+            async with tinyactors.Host(CONFIG, {APP: processor}, log=logs) as host:
+                host.add_image(image())
+                host.send(host.spawn(host.chart("echo")), "go", [1])
+                await host.idle()
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                await host.idle()
+
+        asyncio.run(main())
+        self.assertEqual(logs.labelled("ack"), ["{'echo': [1]}"])
+
+    def test_an_async_processor_that_raises_fails_its_send(self):
+        logs = Logs()
+
+        async def processor(host, send):
+            raise ValueError("no")
+
+        async def main():
+            async with tinyactors.Host(CONFIG, {APP: processor}, log=logs) as host:
+                host.add_image(image())
+                host.send(host.spawn(host.chart("echo")), "go")
+                await host.idle()
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                with self.assertRaises(ValueError):
+                    await host.idle()
+                await host.idle()
+
+        asyncio.run(main())
+        self.assertEqual(logs.labelled("failed"), ["yes"])
+
+    def test_the_timer_fires_a_delayed_send(self):
+        logs = Logs()
+
+        async def main():
+            async with tinyactors.Host(CONFIG, log=logs) as host:
+                host.add_image(image())
+                host.send(host.spawn(host.chart("echo")), "later")
+                await host.idle()
+                self.assertEqual(logs.labelled("tick"), [])
+                await asyncio.sleep(0.1)
+                await host.idle()
+
+        asyncio.run(main())
+        self.assertEqual(logs.labelled("tick"), ["yes"])
+
+    def test_typed_methods_under_asyncio(self):
+        got = []
+
+        async def main():
+            async with tinyactors.Host(CONFIG) as host:
+                host.host_stats(lambda host, result: got.append(result["host"]["segments"]))
+                await host.idle()
+
+        asyncio.run(main())
+        self.assertEqual(got, [0])
+
+
+class Synchronous(unittest.TestCase):
+    def test_run_sleeps_to_the_deadline(self):
+        logs = Logs()
+        with tinyactors.Host(CONFIG, log=logs) as host:
+            host.add_image(image())
+            host.send(host.spawn(host.chart("echo")), "later")
+            host.run()
+        self.assertEqual(logs.labelled("tick"), ["yes"])
+
+    def test_a_simulated_clock_moves_only_with_increment(self):
+        logs = Logs()
+        clock = tinyactors.SimulatedClock()
+        with tinyactors.Host(CONFIG, log=logs, clock=clock) as host:
+            host.add_image(image())
+            host.send(host.spawn(host.chart("echo")), "later")
+            host.run()
+            self.assertEqual(logs.labelled("tick"), [])
+            clock.increment(19)
+            self.assertEqual(logs.labelled("tick"), [])
+            clock.increment(1)
+            self.assertEqual(logs.labelled("tick"), ["yes"])
+            self.assertEqual(clock.now, 20)
+
+
+if __name__ == "__main__":
+    unittest.main()

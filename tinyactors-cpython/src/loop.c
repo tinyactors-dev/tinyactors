@@ -72,13 +72,15 @@ static ta_python_next ta_python_turn(ta_python_host *host) {
                                                             a pending reply needs no run */
     ta_host_advance_time(host->host, ta_python_now(host)); /* ticks at host.config's rate, wall ns */
     for (;;) {
+        host->inputs = 0;
         ta_run run = ta_host_run(host->host, TA_PYTHON_BUDGET); /* bounded: fuel per call */
         ta_python_drain(host);
         switch (run.status) {
         case TA_RUN_EFFECTS:      /* a sync I/O processor's send: answered in the drain, or its sender waits */
         case TA_RUN_EFFECTS_FULL: continue; /* run again now */
         case TA_RUN_YIELDED:      return TA_PYTHON_NEXT_YIELD; /* budget spent, actors still runnable */
-        case TA_RUN_IDLE:         host->deadline = run.next_deadline; /* UINT64_MAX: none */
+        case TA_RUN_IDLE:         if (host->inputs) continue; /* handlers fed inputs in the drain: run them */
+                                  host->deadline = run.next_deadline; /* UINT64_MAX: none */
                                   return TA_PYTHON_NEXT_IDLE;
         case TA_RUN_EXHAUSTED:    host->pool = run.detail; /* a TA_POOL_* */
                                   return TA_PYTHON_NEXT_EXHAUSTED;
@@ -212,6 +214,7 @@ static PyObject *ta_python_loop_call(ta_python_host *host, double delay) {
 }
 
 void ta_python_loop_schedule(ta_python_host *host) {
+    host->inputs = 1;
     if (host->loop == Py_None || host->turning || host->scheduled != Py_None || !host->host) return;
     PyObject *handle = ta_python_loop_call(host, -1.0);
     if (!handle) {

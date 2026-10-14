@@ -187,9 +187,11 @@ class Rewrite:
             node.value = self.expression(node.value, local)
             if isinstance(node, ast.Subscript):
                 node.slice = self.expression(node.slice, local)
+            node.ctx = ast.Store()
             return node
         if isinstance(node, (ast.Tuple, ast.List)):
             node.elts = [self.target(element, local, in_def) for element in node.elts]
+            node.ctx = ast.Store()
             return node
         self.refuse(node, "this is not a location")
 
@@ -347,7 +349,7 @@ def attach(name, data, expressions, namespace, file):
                         raise
                     functions.append(_constant(source.strip()))
             system |= rewrite.system
-        except SyntaxError as error:
+        except Exception as error:  # refused, or not compiled: error.execution when evaluated
             functions.append(error)
     slots = tuple(data) + ("_event", "_ta_sys")
     body = {"__slots__": slots, "__module__": "tinyactors.charts"}

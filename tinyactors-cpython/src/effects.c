@@ -436,6 +436,7 @@ void ta_python_dispatch(ta_python_host *host, uint32_t index) {
         ta_resume resume = {(uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_SEGMENT),
                             (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN), TA_ERROR_INVALID, 0, 0};
         ta_host_resume(core, &resume);
+        ta_python_loop_schedule(host); /* an input: the turn runs it */
         break;
     }
     case TA_HOST_EFFECT_REPLY: ta_python_reply(host, index); break;
