@@ -1,20 +1,43 @@
 <script setup lang="ts">
 import { withBase } from 'vitepress';
+import EngineRace from './EngineRace.vue';
 import Icon from './Icon.vue';
 
-const guarantees = [
-  { title: 'The value JavaScript gives', text: 'Or a fault that says why. Never a different value: where JavaScript would coerce, compare identities or look on a prototype, staticjs stops.' },
-  { title: 'Every evaluation ends', text: 'No loops but the built-ins over collections, no recursion. A program runs on fuel the host pushes, pauses where it runs out, and resumes.' },
-  { title: 'No side effects', text: 'A program reaches only what the host passes in. No I/O, no global state, no clock of its own: even Date.now() and Math.random() are the host’s.' },
-  { title: 'Deterministic', text: 'The same program on the same inputs gives the same value and the same fuel on every machine, down to the last bit of Math.sin.' },
-  { title: 'Bounded memory', text: 'Memory comes from the host’s allocator, every construct has a limit, and nothing recurses, so no program can overflow the C stack.' },
-  { title: 'Freestanding', text: 'No C library. One C file builds for Linux, macOS and WebAssembly from the same source, and the wasm module imports nothing.' },
+// What goes wrong when an application runs code someone else wrote, and what staticjs does about it.
+const pains = [
+  {
+    title: 'A rule that never finishes',
+    text: 'A timeout depends on the machine it runs on, and in Node’s vm a promise callback outlives it. staticjs has no loops and no recursion: a program runs on fuel you push, pauses where it runs out, and resumes when you push more.',
+  },
+  {
+    title: 'A way out of the sandbox',
+    text: 'A sandbox around a whole engine must take away the network, the files, the globals and the prototypes, and every one it misses is an escape. A staticjs program starts with nothing: it reaches only what you pass in.',
+  },
+  {
+    title: 'Memory that grows until the process dies',
+    text: 'Every byte comes from your allocator, every construct has a limit, and nothing recurses, so no program can overflow the C stack. With a small stack, an evaluator holds about 41 KiB.',
+  },
+  {
+    title: 'A different answer on another machine',
+    text: 'Time limits depend on the machine, and engines disagree on the last bits of Math. staticjs gives the same value and spends the same fuel everywhere; the clock and Math.random’s seed are yours.',
+  },
+  {
+    title: 'A new language for every author',
+    text: 'Rule languages are pure and end, but each has a syntax of its own to learn. staticjs is JavaScript: authors test a rule in a browser console, and their editor already knows it.',
+  },
+  {
+    title: 'A wrong value that looks right',
+    text: 'In JavaScript, "5" * 2 is 10. Where JavaScript would coerce, compare identities or look on a prototype, staticjs stops with a fault that says why. Every other value is the one Node gives, and the test suite checks it against Node.',
+  },
 ];
 
-const ways = [
-  { title: 'A C library', tag: 'Any C11 compiler', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries for Linux and macOS, x86_64 and arm64.', link: '/guide/getting-started' },
-  { title: 'One C file', tag: 'Built with clang', code: 'clang -O2 -I. app.c staticjs.c', text: 'The amalgamation: the whole library as staticjs.c and staticjs.h.', link: '/guide/getting-started#_3-build-it' },
-  { title: 'WebAssembly', tag: 'Browsers and Node', code: "await WebAssembly.instantiate(bytes, {})", text: 'staticjs.wasm imports nothing and brings its own allocator.', link: '/guide/wasm' },
+const versus = [
+  { what: 'Language', quickjs: 'All of modern JavaScript', sjs: 'Expressions and modules of pure JavaScript: no loops, recursion, classes, async or I/O' },
+  { what: 'A program that never ends', quickjs: 'Stopped by an interrupt handler you write', sjs: 'Ends: each evaluation runs on the fuel you push, and pauses where it runs out' },
+  { what: 'Memory', quickjs: 'A limit you set on the runtime', sjs: 'Your allocator, and a limit on every construct' },
+  { what: '"5" * 2', quickjs: '10, as JavaScript gives', sjs: 'A fault that says why' },
+  { what: 'Time, both as WebAssembly', quickjs: 'Measured below, in your browser', sjs: 'Measured below, in your browser' },
+  { what: 'Time, staticjs as a C library', quickjs: '4.8 times staticjs’s, over 33 evaluation cases', sjs: 'About 5 times faster than QuickJS-NG in WebAssembly' },
 ];
 
 const stops = [
@@ -23,21 +46,28 @@ const stops = [
   { src: '({}).a.b', js: 'TypeError', sjs: 'fault: cannot read a property of undefined' },
   { src: '() => { for (;;) {} }', js: 'never ends, if called', sjs: 'refused when compiled: staticjs has no loops' },
 ];
+
+const ways = [
+  { title: 'A C library', tag: 'Any C11 compiler', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries for Linux and macOS, x86_64 and arm64.', link: '/guide/getting-started' },
+  { title: 'One C file', tag: 'Built with clang', code: 'clang -O2 -I. app.c staticjs.c', text: 'The amalgamation: the whole library as staticjs.c and staticjs.h.', link: '/guide/getting-started#_3-build-it' },
+  { title: 'WebAssembly', tag: 'Browsers and Node', code: "await WebAssembly.instantiate(bytes, {})", text: 'staticjs.wasm imports nothing and brings its own allocator.', link: '/guide/wasm' },
+];
 </script>
 
 <template>
   <div class="home">
     <section class="hero">
       <div class="copy">
-        <h1>JavaScript that <em>always ends</em>, and never surprises.</h1>
+        <h1>Let others write the rules. Every one of them <em>ends</em>.</h1>
         <p class="lede">
-          staticjs is a pure, total subset of JavaScript. It evaluates programs written by someone else (guards, rules,
-          filters, computed fields) and gives exactly the value JavaScript would, or a fault that says why. It is a
-          freestanding C library, and a WebAssembly module for the browser.
+          Guards, filters, pricing formulas, computed fields: code someone else writes and your application runs.
+          staticjs runs it in a subset of JavaScript that has no loop to hang on, nothing of the host to reach and no
+          clock of its own, and gives exactly the value Node gives, or a fault that says why. It is a freestanding C
+          library, and a WebAssembly module that imports nothing.
         </p>
         <div class="actions">
           <a class="sjs-button primary big" :href="withBase('/guide/getting-started')">Get started</a>
-          <a class="sjs-button big" :href="withBase('/explore/pipeline')">Watch a program run</a>
+          <a class="sjs-button big" :href="withBase('/guide/why')">Why staticjs?</a>
         </div>
       </div>
       <figure class="demo">
@@ -47,18 +77,47 @@ const stops = [
     </section>
 
     <section class="band">
-      <h2 class="section-title">What it guarantees</h2>
-      <p class="lede">Six promises, held by the test suite on every change.</p>
-      <div class="features">
-        <article v-for="g in guarantees" :key="g.title" class="feature">
-          <h3>{{ g.title }}</h3>
-          <p>{{ g.text }}</p>
+      <h2 class="section-title">What running someone else’s code costs you, and what staticjs takes away</h2>
+      <p class="lede">
+        A sandbox around a JavaScript engine leaves you some of these problems, and a rule language of its own leaves
+        you others. staticjs is built so that none of them can happen.
+      </p>
+      <div class="pains">
+        <article v-for="p in pains" :key="p.title" class="card pain">
+          <h3>{{ p.title }}</h3>
+          <p>{{ p.text }}</p>
         </article>
       </div>
     </section>
 
     <section class="band">
-      <h2 class="section-title">A fault is never a different value</h2>
+      <h2 class="section-title">staticjs or QuickJS?</h2>
+      <p class="lede">
+        QuickJS runs all of JavaScript, and if your users write whole programs, use it. staticjs gives up loops,
+        classes and I/O, and in exchange guarantees what a host running someone else’s rules needs.
+      </p>
+      <table class="compare">
+        <thead><tr><th scope="col"></th><th scope="col">QuickJS-NG</th><th scope="col">staticjs</th></tr></thead>
+        <tbody>
+          <tr v-for="v in versus" :key="v.what">
+            <th scope="row">{{ v.what }}</th>
+            <td class="other" data-label="QuickJS-NG">{{ v.quickjs }}</td>
+            <td data-label="staticjs">{{ v.sjs }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note">
+        Measured on one 4-core x86_64 machine, staticjs as a C library and QuickJS-NG compiled to WebAssembly and run
+        by Node, on the same programs and inputs: proportions, not a promise. Node with its JIT is faster than both,
+        taking 0.43 of staticjs’s time; without its JIT, Node is about as fast as staticjs.
+        <a :href="withBase('/guide/performance#compared-with-other-engines')">Every case, and how it was measured <Icon name="arrow-right" :size="14" /></a>
+      </p>
+    </section>
+
+    <EngineRace />
+
+    <section class="band">
+      <h2 class="section-title">A fault, never a plausible wrong value</h2>
       <p class="lede">Where JavaScript would coerce, compare identities or look on a prototype, staticjs stops and says why.</p>
       <table class="stops">
         <thead><tr><th scope="col">Program</th><th scope="col">JavaScript</th><th scope="col">staticjs</th></tr></thead>
@@ -75,6 +134,7 @@ const stops = [
 
     <section class="band">
       <h2 class="section-title">The same library, wherever it runs</h2>
+      <p class="lede">No C library and no imports: one C file builds for Linux, macOS and WebAssembly from the same source.</p>
       <div class="two-up">
         <a v-for="w in ways" :key="w.title" class="card way" :href="withBase(w.link)">
           <h3>{{ w.title }}</h3>
@@ -154,43 +214,45 @@ h1 em {
   border-top: 1px solid var(--border-1);
   margin-top: var(--space-10);
 }
-.features {
+.pains {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-8) var(--space-6);
+  gap: var(--space-5);
   margin: var(--space-6) 0 0;
 }
 @media (max-width: 1000px) {
-  .features {
+  .pains {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 @media (max-width: 640px) {
-  .features {
+  .pains {
     grid-template-columns: minmax(0, 1fr);
   }
 }
-.feature h3 {
-  font: var(--type-h3);
-  margin: 0 0 var(--space-2);
-  color: var(--fg-1);
-  padding-top: var(--space-3);
-  border-top: 2px solid var(--accent);
-  width: fit-content;
+.pain {
+  padding: var(--space-6);
 }
-.feature p {
+.pain h3 {
+  font: var(--fw-regular) var(--fs-22) / var(--lh-snug) var(--font-display);
+  margin: 0 0 var(--space-3);
+  color: var(--fg-1);
+}
+.pain p {
   margin: 0;
   font: var(--type-body-sm);
   color: var(--fg-2);
 }
-.stops {
+.stops,
+.compare {
   width: 100%;
   border-collapse: collapse;
   background: var(--surface-1);
   border: 1px solid var(--border-2);
   font: var(--type-body-sm);
 }
-.stops th {
+.stops th,
+.compare th {
   text-align: left;
   font-weight: 600;
   color: var(--fg-1);
@@ -198,7 +260,8 @@ h1 em {
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border-2);
 }
-.stops td {
+.stops td,
+.compare td {
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border-1);
   vertical-align: baseline;
@@ -217,25 +280,52 @@ h1 em {
   font: var(--type-body-sm);
   color: var(--fg-1);
 }
+.compare th[scope='row'] {
+  width: 22%;
+  background: none;
+  border-bottom: 0;
+  border-top: 1px solid var(--border-1);
+  vertical-align: baseline;
+}
+.compare .other {
+  color: var(--fg-2);
+}
 @media (max-width: 720px) {
-  .stops thead {
+  .stops thead,
+  .compare thead {
     display: none;
   }
-  .stops tr {
+  .stops tr,
+  .compare tr {
     display: grid;
     gap: 4px;
     padding: var(--space-3) var(--space-4);
     border-top: 1px solid var(--border-1);
   }
-  .stops td {
+  .stops td,
+  .compare td,
+  .compare th[scope='row'] {
+    width: auto;
     padding: 0;
     border: 0;
   }
+  .compare td::before {
+    content: attr(data-label) ': ';
+    font-weight: 600;
+    color: var(--fg-1);
+  }
+}
+.note {
+  margin: var(--space-4) 0 0;
+  max-width: var(--prose-max);
+  font: var(--type-body-sm);
+  color: var(--fg-2);
 }
 .more {
   margin: var(--space-4) 0 0;
 }
-.more a {
+.more a,
+.note a {
   display: inline-flex;
   align-items: center;
   gap: 6px;

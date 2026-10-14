@@ -14,5 +14,8 @@
     "@fontsource/newsreader": "5.3.0",
     "vitepress": "1.6.4",
     "vue": "3.5.44"
+  },
+  "dependencies": {
+    "quickjs-wasi": "3.6.2"
   }
 }
