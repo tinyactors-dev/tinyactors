@@ -45,8 +45,8 @@ TEST_UNUSED static ta_cbor_writer *ask_begin(host_ask *a, const char *method, ui
 /* ta_host_post of `message`, then its REPLY, the last effect of the batch
  * ta_host_effects publishes, copied into `reply` (length 0: the last effect
  * is not a REPLY; post messages with an id here). The batch is acknowledged
- * when the REPLY is all it holds; else it is left for the test (the next
- * run releases it). The status of ta_host_post; TA_ERROR_NO_MEMORY also
+ * when the REPLY is all it holds; else the test must acknowledge it before
+ * the next run. The status of ta_host_post; TA_ERROR_NO_MEMORY also
  * when the reply does not fit `reply`. */
 TEST_UNUSED static ta_status host_post_copy(ta_host *host, ta_bytes message, ta_buffer *reply) {
     reply->length = 0;

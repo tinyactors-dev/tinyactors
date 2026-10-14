@@ -389,7 +389,7 @@ static const char *wire_text(ta_host *host, uint32_t index) {
     return text;
 }
 
-/* ta_host_post (docs/adr/0011, decisions 1, 2, 3 and 5): the reply is the
+/* ta_host_post: the reply is the
  * last effect the post appends, published without a run, after the
  * method's own effects; a message without an id gets none; refusals. */
 static void test_post(void) {
@@ -407,14 +407,17 @@ static void test_post(void) {
     CHECK_EQUAL(ta_host_effect_number(w.host, 0, TA_EFFECT_FIELD_SESSION), 0u);
     CHECK(reply_is(wire_text(w.host, 0), RESULT("{\"session\":1,\"segment\":0,\"chart\":\"pinged\","
                                                 "\"parent\":null,\"mailbox\":0,\"invocations\":0}")));
-    /* two posts before the ack: both replies, in call order, the first still readable */
+    /* A post during dispatch leaves its reply for the next batch. */
     length = message(bytes, sizeof bytes, "actor.unsubscribe", 2, w.session);
     CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
-    CHECK_EQUAL(ta_host_effects(w.host, &effects), 2u);
-    CHECK(reply_is(wire_text(w.host, 1),
-                   "{\"id\":2," ERROR_BODY("-32001", "stale", "params.session", "the session is not subscribed")));
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
+    CHECK_EQUAL(ta_host_effect_bytes(w.host, 1, TA_EFFECT_FIELD_WIRE).length, 0);
     CHECK(reply_is(wire_text(w.host, 0), RESULT("{\"session\":1,\"segment\":0,\"chart\":\"pinged\","
                                                 "\"parent\":null,\"mailbox\":0,\"invocations\":0}")));
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
+    CHECK(reply_is(wire_text(w.host, 0),
+                   "{\"id\":2," ERROR_BODY("-32001", "stale", "params.session", "the session is not subscribed")));
     ta_host_effects_ack(w.host);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
     /* without an id: applied, no REPLY */

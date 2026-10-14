@@ -69,10 +69,9 @@ drain(host):
   everything pending. While it is open, a take returns the same batch:
   effects your handlers cause (a reply to a message you post, a
   deliver's `PEER_ERROR`) are pending and come with the next take, after
-  the ack (0012; today a second take widens the batch).
+  the ack. An empty take opens no batch.
 - **Ack before you run.** `ta_host_run` while a batch is open answers
-  `TA_RUN_FAULT` with `TA_ERROR_STATE` and runs nothing (0012; today the
-  run releases the batch, read or not).
+  `TA_RUN_FAULT` with `TA_ERROR_STATE` and runs nothing, with `used` 0 and `next_deadline` `UINT64_MAX`.
 - **One timer.** `next_deadline` holds every deadline the host has:
   timers and delayed sends, migration timeouts, the TTL of envelopes for
   a peer that is down, a trace watch's end, the encoder's flush.

@@ -102,7 +102,7 @@ the ack.
 - **One drain at a time:** take (`ta_host_effects`), handle every effect
   of the batch, ack (`ta_host_effects_ack`), and take again until a take
   is empty; then, at most, a run. A take never widens the open batch, and
-  `ta_host_run` refuses while one is open (ADR 0012, decision 2). There
+  `ta_host_run` refuses while one is open. There
   is no nested drain: JavaScript a handler runs (an I/O processor's
   callback) may call the `Host` to add inputs, post, or read outputs; it
   never takes or acks.

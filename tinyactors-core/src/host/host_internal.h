@@ -180,13 +180,14 @@ struct ta_host {
     ta_time now;
     /* effects of the current batch; effects and effect_strings have effect_capacity entries */
     ta_host_effect *effects;
+    const ta_host_effect *published_effects; /* frozen until ack, including across growth */
     effect_strings *effect_strings;
     uint32_t effect_count, effect_capacity, effects_ready;
     char effect_traceparent[TA_TRACEPARENT_LENGTH]; /* ta_host_effect_text's TRACEPARENT */
     char *pool;
     size_t pool_length, pool_capacity;
     /* A published batch (ta_host_effects, effects_ready > 0) is borrowed until
-     * the next ack, run or free. Growing the effect array or the pool in the
+     * the next ack or free. Growing the effect array or the pool in the
      * meantime copies into new blocks and holds the old ones, unchanged,
      * until then (effects_release frees them). */
     void *held[HELD_BLOCKS_MAX];

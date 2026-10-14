@@ -11,6 +11,7 @@ require_relative '../core'
 require 'open3'
 
 conform = Core.program_path('dev', 'ta-conform').to_s
+Core.run('ruby', Core::ROOT.join('tests/conform/batch.rb').to_s, conform)
 # - quickjs, auto realm: every suite;
 # - quickjs, isolated realms: scenarios and W3C;
 # - the tests' datamodel (tests/support/datamodel_test.c): W3C, but for

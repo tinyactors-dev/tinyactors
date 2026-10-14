@@ -207,7 +207,8 @@ const char *conform_outcome(const ta_host_effect *effect);
 typedef struct conform_vectors {
     ta_host *host;
     int refusing; /* the host's allocator refuses every block (host.post's `refuse`) */
-    uint32_t answered; /* effects of the published batch whose notifications a post answered */
+    ta_buffer pending_envelopes[64]; /* copied by post, returned by the next run */
+    uint32_t pending_envelope_count;
     conform_datamodel datamodel;
 } conform_vectors;
 

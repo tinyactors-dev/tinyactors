@@ -745,8 +745,8 @@ static void refused_delivery(ta_host *host, uint32_t peer, int i) {
     CHECK_EQUAL(ta_host_deliver(host, peer, &envelope), TA_ROUTE_REFUSED);
 }
 
-/* What ta_host_effects returns stays valid until ta_host_effects_ack or the
- * next ta_host_run (host.h), even when calls in between make so many effects
+/* What ta_host_effects returns stays valid until ta_host_effects_ack,
+ * even when calls in between make so many effects
  * that the host's effect array and string pool have to grow. */
 static void test_published_effects_stay_valid(void) {
     test_memory m;

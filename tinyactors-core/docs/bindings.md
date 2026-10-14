@@ -78,7 +78,7 @@ section 2's loop as these two functions, named with its prefix
 drivers). The comments carry the rules:
 
 ```c
-static void drain(binding_host *host) {                     /* one batch at a time [8.2] */
+static void drain(binding_host *host) {                     /* one batch at a time */
     const ta_host_effect *e; uint32_t n;
     while ((n = ta_host_effects(host->h, &e)) > 0) {
         for (uint32_t i = 0; i < n; i++) dispatch(host, i); /* handlers may call the host:
@@ -173,7 +173,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 ## 5 · Inputs and reentrancy
 
 - **Between runs, any call is fine,** including from an effect handler before the ack, except `ta_host_run` and snapshots: effects already taken stay where they are, outputs the call hands out live until the ack, and effects the call makes come with the next take.
-- **One drain at a time** (ADR 0012, decision 2). A take returns the open batch and never widens it (0012); the drain handles it whole and acks once; effects that handlers caused come with the next take. `ta_host_run` while a batch is open answers `TA_RUN_FAULT` with `TA_ERROR_STATE` and runs nothing (0012; today it releases the batch, read or not, and a lost `TRACES` or `LOGS` stops telemetry for good). There is no nested drain: a language callback that runs during a drain (an I/O processor’s handler) and calls the binding again appends inputs, posts or reads outputs; it never takes or acks.
+- **One drain at a time.** A take returns the open batch and never widens it; the drain handles it whole and acks once; effects that handlers caused come with the next take. `ta_host_run` while a batch is open answers `TA_RUN_FAULT` with `TA_ERROR_STATE` and runs nothing. An empty take opens no batch. There is no nested drain: a language callback that runs during a drain (an I/O processor’s handler) and calls the binding again appends inputs, posts or reads outputs; it never takes or acks.
 - **During a run** (a datamodel entry evaluating an expression), `ta_host_send`, `ta_host_send_many`, `ta_host_spawn` and `ta_host_terminate` take the paths of an internal `<send>`, `<invoke>` and cancel: no queue of their own, no copy, and nothing grows, so a full pool answers `TA_ERROR_NO_MEMORY` and the payload stays the caller’s. When they take effect:
   - an event for the actor whose expression sent it: at the end of the macrostep it is in, never inside it;
   - an event for another actor, or a spawned actor: at the back of its segment’s run queue, later in this run if the budget allows, else in the next;

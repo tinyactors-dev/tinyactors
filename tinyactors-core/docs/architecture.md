@@ -763,7 +763,13 @@ route is resolved **at fire time** (target may have terminated ⇒
 5. **Growth:** because the region holds only indices and self-relative
    offsets, `ta_system_relocate()` copies it into a larger block with larger
    capacities. The runtime layer does this automatically on `TA_RUN_EXHAUSTED`.
-6. **Host:** a `ta_host` gets every block — its segments' regions, its
+6. **Host:** a nonempty `ta_host_effects` take freezes the published
+   pointer and count until the ack. One private pointer per host tracks
+   the published array; replaced arrays and pools are held until the ack.
+   Effects appended during a drain wait for the next batch. The ack closes
+   publication before freeing blocks or calling payload release hooks.
+   `ta_host_run` refuses an open batch without doing work or releasing it.
+   A `ta_host` gets every block — its segments' regions, its
    tables, its effect copies — from the `ta_allocator` in its
    configuration, and gives each back with its size. When the allocator
    refuses, a call returns `TA_ERROR_NO_MEMORY` with the host unchanged and

@@ -198,7 +198,112 @@ static void test_fields_match_the_struct(void) {
     world_close(&w);
 }
 
+static void post_config(ta_host *host, uint64_t id) {
+    unsigned char bytes[128];
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){bytes, sizeof bytes, 0}, NULL);
+    ta_cbor_write_map(&writer, 2);
+    ta_cbor_write_text(&writer, ta_string("id"));
+    ta_cbor_write_uint(&writer, id);
+    ta_cbor_write_text(&writer, ta_string("method"));
+    ta_cbor_write_text(&writer, ta_string("host.config"));
+    ta_bytes message;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&writer, &message), TA_OK);
+    CHECK_EQUAL(ta_host_post(host, message), TA_OK);
+    ta_cbor_writer_free(&writer);
+}
+
+static void test_take_freezes_batch_across_growth(void) {
+    world w;
+    world_open(&w);
+    CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
+    post_config(w.host, 0);
+    const ta_host_effect *first, *again;
+    uint32_t count = ta_host_effects(w.host, &first);
+    CHECK(count > 0);
+    CHECK_EQUAL(ta_host_effects(w.host, &again), count);
+    CHECK(first == again);
+    uint32_t reply = find(w.host, count, TA_HOST_EFFECT_REPLY);
+    uint32_t invoke = find(w.host, count, TA_EFFECT_INVOKE);
+    CHECK(reply != TA_NIL && invoke != TA_NIL);
+    if (reply == TA_NIL || invoke == TA_NIL) {
+        world_close(&w);
+        return;
+    }
+    ta_bytes wire = ta_host_effect_bytes(w.host, reply, TA_EFFECT_FIELD_WIRE);
+    void *saved = malloc(wire.length);
+    CHECK(saved != NULL);
+    if (!saved) {
+        world_close(&w);
+        return;
+    }
+    memcpy(saved, wire.pointer, wire.length);
+    ta_string_view target = ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_TARGET);
+    uintptr_t first_address = (uintptr_t)first;
+    size_t bytes = 0;
+    /* Enough replies to grow both the eight-record array and 4 KiB pool. */
+    for (uint64_t id = 1; id <= 20; id++) {
+        post_config(w.host, id);
+        bytes += wire.length;
+        CHECK_EQUAL(ta_host_effects(w.host, &again), count);
+        CHECK(first == again);
+        CHECK_EQUAL(ta_host_effect_number(w.host, count, TA_EFFECT_FIELD_KIND), 0);
+        CHECK_EQUAL(ta_host_effect_number(w.host, reply, TA_EFFECT_FIELD_KIND), TA_HOST_EFFECT_REPLY);
+        ta_bytes current = ta_host_effect_bytes(w.host, reply, TA_EFFECT_FIELD_WIRE);
+        CHECK(current.pointer == wire.pointer && current.length == wire.length);
+        CHECK(memcmp(current.pointer, saved, wire.length) == 0);
+        ta_string_view current_target = ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_TARGET);
+        CHECK(current_target.pointer == target.pointer && text_is(current_target, "svc:x"));
+    }
+    CHECK(bytes > 4096);
+    free(saved);
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_effect_number(w.host, 0, TA_EFFECT_FIELD_KIND), 0);
+    CHECK_EQUAL(ta_host_effects(w.host, &again), 20);
+    CHECK((uintptr_t)again != first_address); /* the array really grew */
+    for (uint32_t i = 0; i < 20; i++) {
+        CHECK_EQUAL(again[i].kind, TA_HOST_EFFECT_REPLY);
+        ta_cbor_token tokens[512];
+        ta_cbor_document document = {again[i].wire, tokens, 512, 0};
+        CHECK_EQUAL(ta_cbor_decode(&document), TA_OK);
+        uint32_t id = ta_cbor_member(&document, 0, ta_string("id"));
+        CHECK(id != TA_NIL);
+        if (id != TA_NIL) CHECK_EQUAL(tokens[id].value, i + 1);
+    }
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_effects(w.host, &again), 0);
+    world_close(&w);
+}
+
+static void test_run_refuses_open_batch(void) {
+    world w;
+    world_open(&w);
+    const ta_host_effect *first, *again;
+    uint32_t count = run_batch(&w, &first);
+    CHECK(count > 0);
+    send_event(&w, "end");
+    ta_run refused = ta_host_run(w.host, 1000000);
+    CHECK_EQUAL(refused.status, TA_RUN_FAULT);
+    CHECK_EQUAL((ta_status)refused.detail, TA_ERROR_STATE);
+    CHECK_EQUAL(refused.used, 0);
+    CHECK_EQUAL(refused.next_deadline, UINT64_MAX);
+    CHECK_EQUAL(ta_host_effects(w.host, &again), count);
+    CHECK(first == again);
+    ta_host_location location;
+    CHECK_EQUAL(ta_host_locate(w.host, w.session, &location), TA_OK);
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
+    count = ta_host_effects(w.host, &again);
+    CHECK(find(w.host, count, TA_EFFECT_DONE) != TA_NIL);
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_effects(w.host, &again), 0);
+    CHECK_EQUAL(ta_host_run(w.host, 1).status, TA_RUN_IDLE); /* empty take is not a batch */
+    world_close(&w);
+}
+
 int main(void) {
+    RUN(test_take_freezes_batch_across_growth);
+    RUN(test_run_refuses_open_batch);
     RUN(test_invoked_service_is_keyed_by_token);
     RUN(test_fields_match_the_struct);
     TEST_MAIN_END();

@@ -244,7 +244,7 @@ functions (bindings.md section 3) with our names. The comments carry the
 rules:
 
 ```c
-static void ta_python_drain(ta_python_host *host) {         /* one batch at a time [8.2] */
+static void ta_python_drain(ta_python_host *host) {         /* one batch at a time */
     const ta_host_effect *e; uint32_t n;
     while ((n = ta_host_effects(host->h, &e)) > 0) {
         for (uint32_t i = 0; i < n; i++) ta_python_dispatch(host, i);
@@ -285,8 +285,7 @@ static ta_python_next ta_python_turn(ta_python_host *host) {
 
 `ta_run` and the statuses are `tinyactors-core/include/tinyactors/system.h:196-218`,
 `ta_host_time` is `host.h:205-208`. `ta_host_run` refuses while a batch
-is open (`TA_RUN_FAULT`, detail `TA_ERROR_STATE`, ADR 0012 decision 2;
-[8.2]), which the drain before each run rules out. There is no nested
+is open (`TA_RUN_FAULT`, detail `TA_ERROR_STATE`), which the drain before each run rules out. There is no nested
 drain: Python code a handler runs may call the `Host` to add inputs, post
 or read views; it never takes or acks.
 

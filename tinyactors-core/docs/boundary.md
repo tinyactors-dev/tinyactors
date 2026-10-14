@@ -80,10 +80,10 @@ marks a behaviour no test checks.
 | `ta_host_terminate` (:196) | all | nothing | as spawn | exits at its next microstep boundary (`host.h:162-165`) | `test_host_inputs.c` `test_terminate_self_ends_after_the_microstep`, `test_terminate_another_actor` |
 | `ta_host_resume` (:198) | I, D | nothing | R/G `TA_ERROR_STATE` (`host.c:958`); `TA_ERROR_INVALID`: no such segment (`host.c:960`) | `release` in G (`host.c:962`) | `test_host_inputs.c` `test_other_calls_are_refused` (R) |
 | `ta_host_advance_time` (:214) | I, D | nothing; envelope expiries pending | R/G: nothing done (`host.c:1671`) | `release` in G for expired envelopes' payloads (`ta_router_time`, `host.c:1676`; `router.c:433-458`) | `test_host_telemetry.c`; `test_host.c` |
-| `ta_host_run` (:229) | I | a `ta_run` by value; its effects pending, then its notifications | D: `TA_RUN_FAULT`, detail `TA_ERROR_STATE`, nothing runs (0012; today it releases the batch, `host.c:1834`); R/G: the same (`host.c:1828-1833`) | the datamodel vtable, in R | R: `test_host_inputs.c` `test_other_calls_are_refused`; D: needed (0012) |
-| `ta_host_effects` (:288) | I, D | I: opens a batch of everything pending; D: the open batch again, never widened (0012; today it widens, `host.c:1200-1201`). Records, their strings, `WIRE` bytes and payloads are the host's until the ack | R/G: 0 (`host.c:1196-1199`) | none | `test_host_memory.c` `test_published_effects_stay_valid`, `test_pool_is_reclaimed_with_effects_pending`; no widening: needed (0012) |
+| `ta_host_run` (:229) | I | a `ta_run` by value; its effects pending, then its notifications | D: `TA_RUN_FAULT`, detail `TA_ERROR_STATE`, nothing runs or is released; `used` 0, `next_deadline` `UINT64_MAX`; R/G: the same (`host.c:1828-1833`) | the datamodel vtable, in R | R: `test_host_inputs.c` `test_other_calls_are_refused`; D: `test_host_effects.c` `test_run_refuses_open_batch` |
+| `ta_host_effects` (:288) | I, D | I: opens a batch of everything pending; D: the same pointer and count, never widened; an empty take opens no batch. Records, their strings, `WIRE` bytes and payloads are the host's until the ack | R/G: 0 (`host.c:1196-1199`) | none | `test_host_memory.c` `test_published_effects_stay_valid`, `test_pool_is_reclaimed_with_effects_pending`; `test_host_effects.c` `test_take_freezes_batch_across_growth` |
 | `ta_host_effects_ack` (:289) | I, D | closes the batch: its effects, their payloads (`release` in G, `host.c:1044-1048`) and the batch's outputs end | R/G: nothing (`host.c:1275`) | `release` may run language code: a binding defers the last drop (bindings.md section 8) | `test_host_guard.c` `test_envelope_and_ack`; `test_host_memory.c` |
-| `ta_host_effect_number`, `_text`, `_bytes` (:334-336) | D | a field of the open batch, valid until the ack; `TRACEPARENT`'s text written on first ask, valid until the ack (0012; today until the next `_text`, `host.c:1265-1268`) | an index past the batch, a field the kind does not set, or the wrong accessor: 0 or empty; not checked for R/G (`host.c:1218-1271`): in the ack's `release` they still answer for the batch being released (`host.c:1043-1056`) | none | `test_host_effects.c` `test_fields_match_the_struct` (number, text); `_bytes`: `test_host_request.c`, `test_router.c`; two `TRACEPARENT`s read together: needed (0012) |
+| `ta_host_effect_number`, `_text`, `_bytes` (:334-336) | D | a field of the open batch, valid until the ack; `TRACEPARENT`'s text written on first ask, valid until the ack (0012; today until the next `_text`, `host.c:1265-1268`) | an index past the batch, a field the kind does not set, or the wrong accessor: 0 or empty; not checked for R/G (`host.c:1218-1271`): publication closes before ack/free release callbacks, so they answer 0 or empty | none | `test_host_effects.c` `test_fields_match_the_struct` (number, text); `_bytes`: `test_host_request.c`, `test_router.c`; closed publication: `test_host_guard.c` `test_closed_batch_during_release`; two `TRACEPARENT`s read together: needed (0012) |
 | `ta_host_traces`, `ta_host_logs` (:348-349) | I, D | an OTLP request, a view of host memory until the ack (0012; today until the next call); length 0: none staged | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:289`, `:301`); `TA_ERROR_NO_MEMORY`: the spans stay staged | `to_wire` for traced values in G (`telemetry.c:90`) | `test_host_telemetry.c` `test_drain_and_take`, `test_take_refused`; `test_host_guard.c` `test_traces`; the view after a later call: needed (0012) |
 | `ta_host_route_begin` (:446) | I, D | the caller's `ta_route_request`; its views borrow the envelope and the host until the request finishes | R/G `TA_ERROR_STATE` (`router.c:644`) | none | `test_router.c` `test_external_storage` |
 | `ta_host_route_step` (:449) | no host | the caller's request | `TA_ERROR_INVALID`; `TA_ERROR_STATE`: a request in the wrong action (`router.c:705-719`) | none | `test_router.c` `test_external_storage` |
@@ -114,7 +114,7 @@ marks a behaviour no test checks.
 | `ta_host_restore` (:660) | no host | a new host; images copied as by `add_image` | `TA_ERROR_INVALID`, `NO_MEMORY` | `chart_attach` in G (`host.c:2669`) | `test_host.c` `test_snapshot_restore`, `test_restore_after_images_freed` |
 | `ta_host_snapshot_pack` (:671) | I with nothing pending | into the caller's `ta_buffer` | as `ta_host_snapshot` (it calls it, `host.c:2764`) | none | `test_host.c` `test_snapshot_pack` |
 | `ta_host_snapshot_unpack`, `_image` (:684-686) | no host | views into the pack | `TA_ERROR_INVALID`; empty | none | `test_host.c` `test_snapshot_pack` |
-| `ta_host_post` (:711) | I, D | applies the method; its effects, then its `REPLY` (with an id), pending: in D they come after the ack (0012) | R/G `TA_ERROR_STATE` (`request.c:996`); `TA_ERROR_NO_MEMORY`: nothing applied, no `REPLY` | `actor.context`: `variable`, `to_wire`, `release` in G (`request.c:701`, `:738`, `:747`) | `test_host_request.c` `test_post` (`test_subscribe`, `test_subscribe_refused` go with the methods [8.2]); `test_host_guard.c` `test_request`; `requests.txt` |
+| `ta_host_post` (:711) | I, D | applies the method; its effects, then its `REPLY` (with an id), pending: in D they come after the ack | R/G `TA_ERROR_STATE` (`request.c:996`); `TA_ERROR_NO_MEMORY`: nothing applied, no `REPLY` | `actor.context`: `variable`, `to_wire`, `release` in G (`request.c:701`, `:738`, `:747`) | `test_host_request.c` `test_post` (`test_subscribe`, `test_subscribe_refused` go with the methods [8.2]); `test_host_guard.c` `test_request`; `requests.txt` |
 | `ta_host_metrics` (:718) | I, D | an OTLP metrics request, a view until the ack (0012; today until the next call) | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:295`); `TA_ERROR_NO_MEMORY` | none | `test_host_request.c` `test_spans_and_metrics` |
 
 ### The vtable, as core calls it
@@ -243,8 +243,9 @@ run, not the reads: several calls, then one `ta_host_run`.
 
 **Design.** The loop of embedding.md: drain (take, handle, ack until a
 take is empty), `ta_host_advance_time`, `ta_host_run(budget)`, drain, one
-timer at `next_deadline`. A run refuses while a batch is open (ADR 0012,
-decision 2). The tick rate comes from the effective config
+timer at `next_deadline`. A run refuses while a batch is open: fault with
+detail `TA_ERROR_STATE`, `used` 0 and `next_deadline` `UINT64_MAX`, without
+work or release. The tick rate comes from the effective config
 (`host.config`). Each binding offers `SimulatedClock.increment(ms)`.
 Node's timer is the global `setTimeout`.
 
@@ -261,9 +262,13 @@ ADR 0012).
 by field id (`ta_host_effect_number`, `_text`, `_bytes`). A take
 (`ta_host_effects`) with no batch open opens one with everything pending;
 while it is open, a take returns the same batch and effects appended
-meanwhile wait for the next take (ADR 0012, decision 2). Every field,
-`TRACEPARENT`'s text included, is valid until `ta_host_effects_ack` or
-`ta_host_free`.
+meanwhile wait for the next take after the ack. An empty take opens no
+batch. A private pointer fixes the published array across growth; replaced
+arrays and pools stay held until the ack. Publication closes before ack/free
+release callbacks, so accessors cannot read records being freed.
+Records, strings, wire bytes and payloads live until `ta_host_effects_ack`
+or `ta_host_free`. `TRACEPARENT`'s text still needs the lifetime change
+marked below.
 
 | Object | Owner | Created | Read | Ends |
 |---|---|---|---|---|

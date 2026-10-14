@@ -52,11 +52,13 @@
  *              stopped: nothing is lost or done twice.
  *
  * Calls are synchronous and budgeted like ta_system_run; outcomes are effects
- * (ta_host_effects), borrowed until ta_host_effects_ack, the next ta_host_run
- * or ta_host_free: calls in between that make more effects (ta_host_deliver
+ * (ta_host_effects), borrowed until ta_host_effects_ack or ta_host_free:
+ * calls in between that make more effects (ta_host_deliver
  * answering a peer, ta_host_peer_up flushing a queue, ...) leave the borrowed
  * records and their strings where they are; the new effects come with the
- * next ta_host_effects. Payloads passed in are moved on success and stay the caller's
+ * next batch, after the ack. Repeated takes return the same pointer and
+ * count; ta_host_run refuses while a batch is open. Payloads passed in are
+ * moved on success and stay the caller's
  * on failure. No callbacks besides the datamodel vtables.
  *
  * What the host writes for its caller — an envelope, traces, logs,
@@ -213,8 +215,11 @@ typedef struct ta_host_time {
  * run. */
 TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
 /* Run segments with work for up to `budget` fuel in total, deliver sends
- * between them, advance migration jobs, free retired segments. status:
- * TA_RUN_IDLE / TA_RUN_YIELDED / TA_RUN_EFFECTS_FULL / TA_RUN_FAULT /
+ * between them, advance migration jobs, free retired segments.
+ * With an open effect batch, or from a guarded call, return TA_RUN_FAULT,
+ * detail TA_ERROR_STATE, used 0 and next_deadline UINT64_MAX; nothing runs
+ * or is released. Acknowledge every batch before calling run.
+ * status: TA_RUN_IDLE / TA_RUN_YIELDED / TA_RUN_EFFECTS_FULL / TA_RUN_FAULT /
  * TA_RUN_EXHAUSTED (the allocator refused memory: run again once it has
  * some; detail as for ta_system_run, TA_POOL_NONE for the host's own) /
  * TA_RUN_EFFECTS (the run stopped right after a send to a
@@ -287,7 +292,13 @@ typedef struct ta_host_effect {
                       as it arrived (payload is 0). Copy it to ta_envelope.wire.
                       REPLY, NOTIFICATION: the message, CBOR */
 } ta_host_effect;
+/* First nonempty take opens one batch. Further takes return that same
+ * pointer and count, including after calls append effects or grow storage.
+ * Effects appended during dispatch wait until after the ack. An empty take
+ * opens no batch. During a guarded call, returns 0 with *out NULL. */
 TA_API uint32_t ta_host_effects(ta_host *h, const ta_host_effect **out);
+/* End the published borrow and release only that batch; later effects stay
+ * pending. Publication is closed before payload-release callbacks run. */
 TA_API void ta_host_effects_ack(ta_host *h);
 
 /* A field of effect `index` of the batch ta_host_effects published, so that a
@@ -296,7 +307,7 @@ TA_API void ta_host_effects_ack(ta_host *h);
  * (ta_host_effect_text); bytes: WIRE (ta_host_effect_bytes). An index past
  * the batch, a field the effect kind does not set, or a field asked through
  * the wrong accessor answers 0 or empty. Text and bytes are borrowed like the effect
- * (until the ack, the next run or ta_host_free); TRACEPARENT's text is
+ * (until the ack or ta_host_free); TRACEPARENT's text is
  * written for the call and lasts until the next ta_host_effect_text.
  *
  * A send to a service the host runs (an SCXML <send target="#_<invokeid>">

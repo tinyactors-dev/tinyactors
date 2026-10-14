@@ -14,6 +14,8 @@
 void conform_vectors_close(conform_vectors *vectors) {
     if (vectors->host) ta_host_free(vectors->host);
     vectors->host = NULL;
+    for (uint32_t i = 0; i < 64; i++) conform_buffer_free(&vectors->pending_envelopes[i]);
+    vectors->pending_envelope_count = 0;
     conform_datamodel_close(&vectors->datamodel);
 }
 
@@ -91,28 +93,50 @@ static void host_free(conform *state, conform_call *call, conform_result *result
     if (host_of(state, call)) conform_vectors_close(&state->vectors);
 }
 
-/* The notifications of the batch ta_host_effects published, from `from`
- * on: each NOTIFICATION's bytes, kept, appended to `list` (up to 64). */
+/* The batch's NOTIFICATION bytes, copied in order into `list` (up to 64). */
 typedef struct kept_list {
     ta_bytes items[64];
     uint32_t count;
 } kept_list;
 
-static void notifications_keep(conform *state, uint32_t from, kept_list *list) {
+static void notifications_keep(conform *state, kept_list *list) {
     ta_host *host = state->vectors.host;
     const ta_host_effect *effects;
     uint32_t count = ta_host_effects(host, &effects);
-    for (uint32_t i = from; i < count; i++)
+    for (uint32_t i = 0; i < count; i++)
         if (effects[i].kind == TA_HOST_EFFECT_NOTIFICATION &&
             list->count < sizeof list->items / sizeof list->items[0])
             list->items[list->count++] = conform_keep(state, ta_host_effect_bytes(host, i, TA_EFFECT_FIELD_WIRE));
 }
 
-/* ta_host_post, then the batch ta_host_effects publishes: the REPLY at its
- * last index (when the post appended one) and the NOTIFICATIONs not answered
- * yet, their bytes kept (copied) at once. The batch is acknowledged when it
- * holds nothing else; else host.run takes it before it runs. With `refuse`,
- * the host's allocator refuses every block during the call. */
+/* Keep envelopes across protocol responses: conform_keep ends with this
+ * response, but host.run must return effects drained by a successful post. */
+static ta_status envelopes_pending(conform_vectors *vectors) {
+    const ta_host_effect *effects;
+    uint32_t count = ta_host_effects(vectors->host, &effects);
+    uint32_t before = vectors->pending_envelope_count;
+    for (uint32_t i = 0; i < count; i++) {
+        if (effects[i].kind != TA_HOST_EFFECT_PEER && effects[i].kind != TA_HOST_EFFECT_PEER_ERROR) continue;
+        if (vectors->pending_envelope_count == 64) continue; /* the protocol's existing output limit */
+        ta_bytes bytes = {NULL, 0};
+        ta_status status = ta_host_envelope(vectors->host, &effects[i], &bytes);
+        ta_buffer *buffer = &vectors->pending_envelopes[vectors->pending_envelope_count];
+        if (status == TA_OK && !conform_buffer_reserve(buffer, bytes.length)) status = TA_ERROR_NO_MEMORY;
+        if (status != TA_OK) {
+            vectors->pending_envelope_count = before;
+            return status;
+        }
+        if (bytes.length) memcpy(buffer->pointer, bytes.pointer, bytes.length);
+        buffer->length = bytes.length;
+        vectors->pending_envelope_count++;
+    }
+    return TA_OK;
+}
+
+/* Post before taking: refusal leaves pending effects untouched. Success
+ * copies the reply and notifications, retains envelopes for host.run, and
+ * acknowledges the entire batch. With `refuse`, only the host allocator
+ * refuses blocks during the post. */
 static void host_post(conform *state, conform_call *call, conform_result *result) {
     conform_vectors *vectors = &state->vectors;
     ta_host *host = host_of(state, call);
@@ -122,28 +146,27 @@ static void host_post(conform *state, conform_call *call, conform_result *result
         !conform_boolean(call, "refuse", &refuse))
         return;
     const ta_host_effect *effects;
-    uint32_t before = ta_host_effects(host, &effects);
     vectors->refusing = refuse;
     ta_status status = ta_host_post(host, message);
     vectors->refusing = 0;
     conform_result_integer(result, "status", status);
     if (status != TA_OK) return;
-    uint32_t count = ta_host_effects(host, &effects);
     static kept_list notifications;
     notifications.count = 0;
-    notifications_keep(state, vectors->answered, &notifications);
-    vectors->answered = count;
-    if (count > before && effects[count - 1].kind == TA_HOST_EFFECT_REPLY)
-        conform_result_bytes(result, "reply",
-                             conform_keep(state, ta_host_effect_bytes(host, count - 1, TA_EFFECT_FIELD_WIRE)));
-    conform_result_list(result, "notifications", (conform_bytes_list){notifications.items, notifications.count});
-    int others = 0;
-    for (uint32_t i = 0; i < count; i++)
-        others |= effects[i].kind != TA_HOST_EFFECT_REPLY && effects[i].kind != TA_HOST_EFFECT_NOTIFICATION;
-    if (!others) {
+    uint32_t count;
+    while ((count = ta_host_effects(host, &effects)) != 0) {
+        status = envelopes_pending(vectors);
+        if (status != TA_OK) {
+            conform_fail(call, &(conform_failure){CONFORM_STATE, "state", ""}, "cannot retain peer envelopes");
+            return;
+        }
+        notifications_keep(state, &notifications);
+        if (effects[count - 1].kind == TA_HOST_EFFECT_REPLY)
+            conform_result_bytes(result, "reply",
+                                 conform_keep(state, ta_host_effect_bytes(host, count - 1, TA_EFFECT_FIELD_WIRE)));
         ta_host_effects_ack(host);
-        vectors->answered = 0;
     }
+    conform_result_list(result, "notifications", (conform_bytes_list){notifications.items, notifications.count});
 }
 
 /* ---- image.add, actor.spawn, actor.send, clock.advance, host.run ------------------ */
@@ -219,9 +242,9 @@ static void clock_advance(conform *state, conform_call *call, conform_result *re
 }
 
 /* The PEER and PEER_ERROR effects of the batch ta_host_effects publishes,
- * each written as an envelope and kept, and its NOTIFICATIONs from `from`
- * on; then the batch is acknowledged. */
-static void batch_take(conform *state, uint32_t from, kept_list *envelopes, kept_list *notifications) {
+ * each written as an envelope and kept, and its NOTIFICATIONs; then the
+ * batch is acknowledged. */
+static void batch_take(conform *state, kept_list *envelopes, kept_list *notifications) {
     ta_host *host = state->vectors.host;
     const ta_host_effect *effects;
     uint32_t effect_count = ta_host_effects(host, &effects);
@@ -233,26 +256,30 @@ static void batch_take(conform *state, uint32_t from, kept_list *envelopes, kept
         else if (envelopes->count < sizeof envelopes->items / sizeof envelopes->items[0])
             envelopes->items[envelopes->count++] = conform_keep(state, out);
     }
-    notifications_keep(state, from, notifications);
+    notifications_keep(state, notifications);
     ta_host_effects_ack(host);
-    state->vectors.answered = 0;
 }
 
-/* First the batch a post left published (or effects appended since the
- * last ack), which the run would release; then runs while the host yields
- * or its effects are full. Each PEER and PEER_ERROR effect written as an
- * envelope, in order, and each NOTIFICATION's bytes no post answered. */
+/* First the envelopes retained by posts, then pending effects. Run only
+ * after acknowledging each batch; keep envelopes and notifications in order. */
 static void host_run(conform *state, conform_call *call, conform_result *result) {
     ta_host *host = host_of(state, call);
     if (!host) return;
     static kept_list envelopes, notifications;
     envelopes.count = notifications.count = 0;
-    batch_take(state, state->vectors.answered, &envelopes, &notifications);
+    conform_vectors *vectors = &state->vectors;
+    for (uint32_t i = 0; i < vectors->pending_envelope_count; i++) {
+        ta_buffer *buffer = &vectors->pending_envelopes[i];
+        envelopes.items[envelopes.count++] = conform_keep(state, (ta_bytes){buffer->pointer, buffer->length});
+        conform_buffer_free(buffer);
+    }
+    vectors->pending_envelope_count = 0;
+    batch_take(state, &envelopes, &notifications);
     ta_run run;
     int rounds = 0;
     do {
         run = ta_host_run(host, 1000000);
-        batch_take(state, 0, &envelopes, &notifications);
+        batch_take(state, &envelopes, &notifications);
     } while ((run.status == TA_RUN_YIELDED || run.status == TA_RUN_EFFECTS_FULL) && ++rounds < 1000);
     conform_result_integer(result, "status", run.status);
     conform_result_list(result, "envelopes", (conform_bytes_list){envelopes.items, envelopes.count});

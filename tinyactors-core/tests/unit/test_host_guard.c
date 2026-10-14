@@ -456,7 +456,42 @@ static void test_outputs_grow_between_runs(void) {
     world_close(&w);
 }
 
+static void batch_closed(world *w) {
+    CHECK_EQUAL(ta_host_effect_number(w->host, 0, TA_EFFECT_FIELD_KIND), 0);
+    CHECK_EQUAL(ta_host_effect_number(w->host, 19, TA_EFFECT_FIELD_KIND), 0);
+    CHECK_EQUAL(ta_host_effect_text(w->host, 0, TA_EFFECT_FIELD_EVENT).length, 0);
+    CHECK_EQUAL(ta_host_effect_bytes(w->host, 0, TA_EFFECT_FIELD_WIRE).length, 0);
+}
+
+static void test_closed_batch_during_release(void) {
+    for (int closing = 0; closing < 2; closing++) {
+        world w;
+        world_open(&w, 0);
+        send_event(&w, w.session, "out");
+        CHECK_EQUAL(ta_host_run(w.host, 100000).status, TA_RUN_IDLE);
+        const ta_host_effect *effects;
+        uint32_t count = ta_host_effects(w.host, &effects);
+        int payload = 0;
+        for (uint32_t i = 0; i < count; i++) payload |= effects[i].payload != 0;
+        CHECK(payload);
+        size_t before = allocations;
+        for (int i = 0; i < 20; i++)
+            CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){STATS, sizeof STATS - 1}), TA_OK);
+        CHECK(allocations > before); /* the borrowed array was replaced and held */
+        w.hook = batch_closed;
+        if (closing) {
+            ta_host_free(w.host);
+            w.host = NULL;
+        } else {
+            ta_host_effects_ack(w.host);
+        }
+        CHECK_EQUAL(w.hooks, 1);
+        world_close(&w);
+    }
+}
+
 int main(void) {
+    RUN(test_closed_batch_during_release);
     RUN(test_request);
     RUN(test_envelope_and_ack);
     RUN(test_deliver);

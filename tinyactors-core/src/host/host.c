@@ -5,7 +5,7 @@
  * segment come out as TA_EFFECT_SEND effects, which this layer delivers
  * itself. Effects that leave the host are copied (strings into a pool,
  * payloads retained) so segments can be acknowledged right away and keep
- * running; the copies live until ta_host_effects_ack / the next run.
+ * running; the copies live until ta_host_effects_ack or ta_host_free.
  *
  * Memory comes from the config's ta_allocator only (host_internal.h). When
  * it refuses, a call returns TA_ERROR_NO_MEMORY with the host unchanged, and
@@ -1037,10 +1037,15 @@ static void pool_compact(ta_host *host) {
  * ta_host_deliver answering with an `err` — stay for the next batch. The
  * borrow ends here: the blocks it held are freed. */
 static void effects_release(ta_host *host) {
+    uint32_t seen = host->effects_ready;
+    /* Ack ends the borrow before allocator or payload-release callbacks.
+     * Teardown may release more than the published batch, so its release
+     * count must never widen what field accessors can read. */
+    host->effects_ready = 0;
+    host->published_effects = NULL;
     for (uint32_t i = 0; i < host->held_count; i++)
         host_free(host, host->held[i], host->held_size[i]);
     host->held_count = 0;
-    uint32_t seen = host->effects_ready;
     for (uint32_t i = 0; i < seen; i++) {
         ta_host_effect *effect = &host->effects[i];
         if (effect->payload && effect->datamodel < host->config.datamodel_count)
@@ -1053,7 +1058,6 @@ static void effects_release(ta_host *host) {
                    keep * sizeof *host->effect_strings);
     }
     host->effect_count = keep;
-    host->effects_ready = 0;
     pool_compact(host); /* (nothing kept and no error pending: the pool empties) */
 }
 
@@ -1197,8 +1201,12 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
         *out = (const ta_host_effect *)0;
         return 0;
     }
+    if (host->effects_ready) {
+        *out = host->published_effects;
+        return host->effects_ready;
+    }
     host->effects_ready =
-        host->effect_count; /* these are seen now: released by the next ack or run */
+        host->effect_count; /* these are seen now: released by the next ack */
     for (uint32_t i = 0; i < host->effect_count; i++) {
         ta_host_effect *effect = &host->effects[i];
         ta_string_view *dst[EFFECT_STRINGS - 1] = {
@@ -1212,12 +1220,13 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
                                    : host->pool + offset[EFFECT_STRINGS - 1];
     }
     *out = host->effects;
+    host->published_effects = host->effects_ready ? host->effects : NULL;
     return host->effect_count;
 }
 
 uint64_t ta_host_effect_number(const ta_host *host, uint32_t index, uint32_t field) {
     if (index >= host->effects_ready) return 0;
-    const ta_host_effect *effect = &host->effects[index];
+    const ta_host_effect *effect = &host->published_effects[index];
     switch (field) {
     case TA_EFFECT_FIELD_KIND: return effect->kind;
     case TA_EFFECT_FIELD_SEGMENT: return effect->segment;
@@ -1243,7 +1252,7 @@ uint64_t ta_host_effect_number(const ta_host *host, uint32_t index, uint32_t fie
 ta_bytes ta_host_effect_bytes(const ta_host *host, uint32_t index, uint32_t field) {
     ta_bytes none = {"", 0};
     if (index >= host->effects_ready) return none;
-    const ta_host_effect *effect = &host->effects[index];
+    const ta_host_effect *effect = &host->published_effects[index];
     switch (field) {
     case TA_EFFECT_FIELD_WIRE: return effect->wire;
     default: return none;
@@ -1253,7 +1262,7 @@ ta_bytes ta_host_effect_bytes(const ta_host *host, uint32_t index, uint32_t fiel
 ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field) {
     ta_string_view none = {"", 0};
     if (index >= host->effects_ready) return none;
-    const ta_host_effect *effect = &host->effects[index];
+    const ta_host_effect *effect = &host->published_effects[index];
     switch (field) {
     case TA_EFFECT_FIELD_TARGET: return effect->target;
     case TA_EFFECT_FIELD_EVENT: return effect->event;
@@ -1825,13 +1834,12 @@ static int retire(ta_host *host) {
 ta_run ta_host_run(ta_host *host, uint32_t budget) {
     ta_run out;
     ta_memset(&out, 0, sizeof out);
-    if (host->running) { /* called from a datamodel during a run */
+    if (host->running || host->effects_ready) { /* a guarded call or an open batch */
         out.status = TA_RUN_FAULT;
         out.detail = (uint32_t)TA_ERROR_STATE;
         out.next_deadline = UINT64_MAX;
         return out;
     }
-    effects_release(host); /* the previous batch, if not acknowledged */
     host->encoder->drain(host); /* records written up to the last ta_host_advance_time */
     host->encoder->effects(host);
     subscriptions_arm(host);

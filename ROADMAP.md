@@ -404,9 +404,16 @@ Python M1's missing `host.create`; both Python builds pass 20 codec tests.
   `document_resolve`, the tests' `test_resolve` and `abort_resolve`, and
   the lint rule's test. A test of a refusal's diagnostic and of a text
   left in scratch.
-- **One drain at a time:** `ta_host_effects` returns the open batch;
-  `ta_host_run` refuses while one is open (`TA_RUN_FAULT`, detail
-  `TA_ERROR_STATE`).
+- **One drain at a time — done (2026-10-14):** `ta_host_effects`
+  freezes a nonempty batch's pointer, count and fields until the ack;
+  appended effects wait for the next take. An empty take opens no batch.
+  `ta_host_run` refuses while a batch is open (`TA_RUN_FAULT`, detail
+  `TA_ERROR_STATE`, no work or release). The ack closes publication before
+  release callbacks. This serves the C embedder and binding author with
+  one extra pointer per host, no per-actor cost and no serialization.
+  Focused growth, refusal and release-callback tests cover the contract;
+  the C driver drains successful posts and retains peer envelopes until
+  its next run. Host outputs and `TRACEPARENT` remain the next increment.
 - **Outputs until the ack:** the host's outputs and `TRACEPARENT`.
 - **`actor.subscribe`, `actor.unsubscribe` and `actor.changed`
   removed** (ADR 0012, decision 4): the host's
