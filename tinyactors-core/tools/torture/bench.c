@@ -1982,7 +1982,7 @@ static uint32_t hib_sweep(bench_system *system, uint32_t max, uint32_t scan) {
     for (;;) {
         uint32_t n = ta_host_sweep(system->host, scan, (ta_uint64_array){cold, 4096});
         for (uint32_t k = 0; k < n && done < max; k++) {
-            ta_bytes written = {NULL, 0}; /* the host's, until the next call into it */
+            ta_bytes written = {NULL, 0}; /* the host's, until the ack */
             ta_status status = ta_host_hibernate(system->host, cold[k], &written);
             if (status != TA_OK) continue; /* e.g. functions in its data: stays resident */
             size_t length = written.length;
@@ -1992,6 +1992,7 @@ static uint32_t hib_sweep(bench_system *system, uint32_t max, uint32_t scan) {
                     (unsigned char *)realloc(hibernation_buffer, hibernation_buffer_capacity);
             }
             memcpy(hibernation_buffer, written.pointer, length);
+            ta_host_effects_ack(system->host); /* copied: the output's batch ends */
             bench_hibernate *hibernation = hib_find(system, cold[k], 1);
             uint64_t t = ta_runtime_now_ns();
             ssize_t w = hibernation ? pwrite(system->hibernation_fd, hibernation_buffer, length,
@@ -2175,7 +2176,7 @@ static void drain_effects(int si) {
 /* The host's OTLP requests, taken and let go (a binding would post them). */
 static int trace_flush(bench_system *system) {
     for (int i = 0; i < 2; i++) {
-        ta_bytes out = {NULL, 0}; /* the host's, until the next call into it */
+        ta_bytes out = {NULL, 0}; /* the host's, until the ack */
         ta_status status =
             i ? ta_host_logs(system->host, &out) : ta_host_traces(system->host, &out);
         if (status == TA_ERROR_NO_MEMORY) return 0;
@@ -2193,6 +2194,7 @@ static void trace_drain(bench_system *system) {
         do {
             before = system->otlp_bytes;
         } while (trace_flush(system) && system->otlp_bytes != before);
+        ta_host_effects_ack(system->host); /* counted, let go: the outputs' batch ends */
     } else {
         for (uint32_t k = 0; k < ta_host_segment_count(system->host); k++) {
             ta_system *segment = ta_host_system(system->host, k);

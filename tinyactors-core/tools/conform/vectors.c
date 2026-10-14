@@ -250,7 +250,7 @@ static void batch_take(conform *state, kept_list *envelopes, kept_list *notifica
     uint32_t effect_count = ta_host_effects(host, &effects);
     for (uint32_t i = 0; i < effect_count; i++) {
         if (effects[i].kind != TA_HOST_EFFECT_PEER && effects[i].kind != TA_HOST_EFFECT_PEER_ERROR) continue;
-        ta_bytes out = {NULL, 0}; /* the host's, until the next call into it: kept */
+        ta_bytes out = {NULL, 0}; /* the host's, until the ack: kept */
         ta_status status = ta_host_envelope(host, &effects[i], &out);
         if (status != TA_OK) fprintf(stderr, "ta-conform: ta_host_envelope refused an effect: %d\n", (int)status);
         else if (envelopes->count < sizeof envelopes->items / sizeof envelopes->items[0])
@@ -351,11 +351,12 @@ static void envelope_read(conform *state, conform_call *call, conform_result *re
     ta_envelope envelope;
     ta_peer_error error;
     ta_status status = is_error ? ta_host_peer_error_read(cbor, &error) : ta_host_envelope_read(host, cbor, &envelope);
-    ta_bytes back = {NULL, 0}; /* the host's, until the next call into it: kept */
+    ta_bytes back = {NULL, 0}; /* the host's, until the ack: kept */
     envelope_writing writing = {host, is_error ? NULL : &envelope, is_error ? &error : NULL};
     if (status == TA_OK) status = envelope_write(&writing, &back);
     conform_result_integer(result, "status", status);
     if (status == TA_OK) conform_result_bytes(result, "back", conform_keep(state, back));
+    ta_host_effects_ack(host); /* the envelope is kept: the output's batch ends */
 }
 
 static void envelope_deliver(conform *state, conform_call *call, conform_result *result) {

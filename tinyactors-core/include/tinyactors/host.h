@@ -6,10 +6,8 @@
  * control plane, images, values, memory, threads, and a complete loop in C —
  * is docs/embedding.md; the contract of every call below (when it applies,
  * what it produces, who owns it, how long it lives, what refuses it) is
- * docs/boundary.md. ADR 0012 (docs/adr/0012 in the repository root) makes
- * everything the host hands out live until ta_host_effects_ack and refuses
- * ta_host_run while a batch is open; the comments below describe the code
- * as it is until that change lands.
+ * docs/boundary.md. Everything the host hands out lives until
+ * ta_host_effects_ack, and ta_host_run refuses while a batch is open.
  *
  * A ta_host owns *segments*: one ta_system per image. All segments share one
  * base URI and one set of datamodel bindings; segment k creates sessions
@@ -63,12 +61,14 @@
  *
  * What the host writes for its caller — an envelope, traces, logs,
  * metrics, a hibernation or export blob — comes out as a
- * ta_bytes view of memory the host owns, valid until the next call into the
- * host (copy it to keep it, or before anything that can call into the host).
- * The host grows that memory through its allocator, between runs, and keeps
- * its largest size until ta_host_free; TA_ERROR_NO_MEMORY from one of these
- * calls means the allocator refused room (docs/adr/0010 in the repository
- * root, decision 2). Snapshots are written into the caller's ta_buffer.
+ * ta_bytes view of memory the host owns, valid until ta_host_effects_ack or
+ * ta_host_free, whatever calls come between (copy it to keep it past the
+ * ack). Taken while a batch is open, it joins that batch; taken with none
+ * open, it opens a batch of its own: ta_host_effects returns 0 and
+ * ta_host_run refuses until the ack. The host grows that memory through its
+ * allocator, between runs, and keeps it for reuse until ta_host_free;
+ * TA_ERROR_NO_MEMORY from one of these calls means the allocator refused
+ * room. Snapshots are written into the caller's ta_buffer.
  */
 #ifndef TINYACTORS_HOST_H
 #define TINYACTORS_HOST_H
@@ -295,7 +295,9 @@ typedef struct ta_host_effect {
 /* First nonempty take opens one batch. Further takes return that same
  * pointer and count, including after calls append effects or grow storage.
  * Effects appended during dispatch wait until after the ack. An empty take
- * opens no batch. During a guarded call, returns 0 with *out NULL. */
+ * opens no batch. While a batch of outputs alone is open (an output taken
+ * with no batch open), returns 0 with *out NULL: pending effects wait for
+ * the ack. During a guarded call, returns 0 with *out NULL. */
 TA_API uint32_t ta_host_effects(ta_host *h, const ta_host_effect **out);
 /* End the published borrow and release only that batch; later effects stay
  * pending. Publication is closed before payload-release callbacks run. */
@@ -352,13 +354,13 @@ TA_API ta_bytes ta_host_effect_bytes(const ta_host *h, uint32_t index, uint32_t 
 /* ---- telemetry ------------------------------------------------------------------ */
 /* The ExportTraceServiceRequest (`/v1/traces`, application/x-protobuf) of
  * the spans staged so far, in `out`: a view of the host's memory, valid until
- * the next call into the host (length 0 when there are none); the trace
+ * the ack (length 0 when there are none); the trace
  * records written since the last run are read first. The spans leave the
  * staging only on TA_OK: TA_ERROR_NO_MEMORY means the allocator refused room
  * and nothing changed. Posting it, retrying and capping what waits are the
  * caller's. TA_ERROR_STATE during a run or without an encoder (the config's
  * "telemetry"). ta_host_logs: the same for the ExportLogsServiceRequest
- * (`/v1/logs`), a view valid until the next call into the host. */
+ * (`/v1/logs`), a view valid until the ack. */
 TA_API ta_status ta_host_traces(ta_host *h, ta_bytes *out);
 TA_API ta_status ta_host_logs(ta_host *h, ta_bytes *out);
 
@@ -550,8 +552,8 @@ TA_API ta_status ta_host_peer_error(ta_host *h, const ta_peer_error *error);
  *
  * ta_host_envelope: the effect's envelope (its data written once by the
  * datamodel's to_wire, or a relayed `wire` copied as it is) or error envelope,
- * in `out`: a view of the host's memory, valid until the next call into the
- * host. The effect keeps its payload, borrowed until the ack.
+ * in `out`: a view of the host's memory, valid until the ack, as the effect
+ * is. The effect keeps its payload, borrowed until the ack.
  * TA_ERROR_NO_MEMORY: the allocator refused room; TA_ERROR_INVALID: another
  * effect kind, or data that is not a neutral value; TA_ERROR_STATE during a
  * run. */
@@ -608,8 +610,8 @@ TA_API uint32_t ta_host_job_pending(const ta_host *h, uint32_t job, ta_uint64_ar
  * be hibernated now. */
 TA_API uint32_t ta_host_sweep(ta_host *h, uint32_t max_scan, ta_uint64_array out);
 /* ta_actor_hibernate of `session`: the blob in `out`, a view of the host's
- * memory, valid until the next call into the host (store or copy it before
- * anything else); written in one pass, the datamodel's serialize called
+ * memory, valid until the ack (store or copy it before then); written in
+ * one pass, the datamodel's serialize called
  * once. TA_ERROR_NO_MEMORY: the allocator refused room, and the actor stays. */
 TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, ta_bytes *out);
 TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);
@@ -627,7 +629,7 @@ TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);
  * Delayed sends keep their due times: for hosts with separate clocks, ta_blob_rebase
  * the blob first.
  * The export blob is in `out`, a view of the host's memory, valid until the
- * next call into the host; it is written in one pass (serialize once per
+ * ack; it is written in one pass (serialize once per
  * session, payload_serialize once per delayed send). TA_ERROR_NO_MEMORY: the
  * allocator refused room, and the actor stays. */
 TA_API ta_status ta_host_export_actor(ta_host *h, uint64_t session, ta_bytes *out);
@@ -725,7 +727,7 @@ enum { TA_HOST_REQUEST_TOKENS = 256 };
 TA_API ta_status ta_host_post(ta_host *h, ta_bytes message);
 /* The host's counters now, as an ExportMetricsServiceRequest (`/v1/metrics`,
  * docs/adr/0007), in `out`: per chart, per segment and the host's own, a view
- * of the host's memory, valid until the next call into the host. There is no
+ * of the host's memory, valid until the ack. There is no
  * metrics timer or effect: call it when the application wants them.
  * TA_ERROR_NO_MEMORY: the allocator refused room. TA_ERROR_STATE during a run
  * or without an encoder (the config's "telemetry"). */

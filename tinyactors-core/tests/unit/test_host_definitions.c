@@ -229,7 +229,7 @@ static void test_linked_retired_freed(void) {
     world w;
     world_open(&w, 1);
     scenario(&w);
-    ta_bytes out; /* the host's, until the next call into it */
+    ta_bytes out; /* the host's, until the ack */
     CHECK_EQUAL(ta_host_logs(w.host, &out), TA_OK);
     record r[8];
     uint32_t n = definition_records(out.pointer, out.length, r, 8);

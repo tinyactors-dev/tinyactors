@@ -415,6 +415,18 @@ Python M1's missing `host.create`; both Python builds pass 20 codec tests.
   the C driver drains successful posts and retains peer envelopes until
   its next run. Host outputs and `TRACEPARENT` remain the next increment.
 - **Outputs until the ack:** the host's outputs and `TRACEPARENT`.
+  `TRACEPARENT` done (2026-10-14, `62255a80`): a slot per effect of the
+  batch, written on first ask. Outputs (2026-10-14): each envelope,
+  traces, logs, metrics, hibernation or export blob is a block of its own
+  in an arena the ack empties (chunks kept); an output taken with no
+  batch open opens a batch of outputs alone, so `ta_host_run` and
+  snapshots refuse and a take returns 0 until the ack. Tests, ta-conform
+  and the torture bench ack after copying an output. Serves the binding
+  author and C embedder (an output survives later calls in its batch);
+  costs nothing per event, and one extra block per output until the ack.
+  Bindings copy an output once into language memory (boundary.md,
+  section 7). Left: the blob scratch of migration (`blob`, `blob2`) is
+  internal and keeps its own lifetime.
 - **`actor.subscribe`, `actor.unsubscribe` and `actor.changed`
   removed** (ADR 0012, decision 4): the host's
   subscription table, the methods, the config key `maxSubscriptions`,

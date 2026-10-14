@@ -408,14 +408,16 @@ static void workload_run(workload *w) {
     m->phase = "hibernation";
     static unsigned char blob[1 << 16];
     size_t length = 0;
-    ta_bytes written; /* the host's, until the next call into it */
+    ta_bytes written; /* the host's, until the ack */
     RETRY(m, TA_OK, ta_host_hibernate(w->host, workers[1], &written));
     length = output_copy(written, blob, sizeof blob);
+    ta_host_effects_ack(w->host); /* the output is copied: its batch ends */
     RETRY(m, TA_OK, ta_host_wake(w->host, workers[1], (ta_bytes){blob, length}));
     run_idle(w, w->host);
     m->phase = "adoption";
     RETRY(m, TA_OK, ta_host_export_actor(w->host, workers[2], &written));
     length = output_copy(written, blob, sizeof blob);
+    ta_host_effects_ack(w->host); /* the output is copied: its batch ends */
     uint64_t adopted = 0;
     RETRY(m, TA_OK, ta_host_adopt(w->host, &(ta_host_adoption){2, 0, {blob, length}}, &adopted));
     CHECK_EQUAL(adopted, workers[2]);

@@ -41,15 +41,24 @@ void host_free(ta_host *host, void *pointer, size_t size) {
  * (tinyactors-core/AGENTS.md, "Region memory is fixed"). */
 ta_output *host_output(ta_host *host) {
     TA_ASSERT(!host->running);
-    host->output.length = 0;
-    host->output.allocator = &host->config.allocator;
+    if (!host->outputs_lent) /* nothing handed out: start the arena over */
+        ta_growable_arena_release(&host->outputs, (ta_growable_arena_mark){0, 0});
+    host->output = ta_output_over((ta_buffer){0, 0, 0}, &host->outputs_allocator);
     return &host->output;
 }
 
 ta_status host_output_view(ta_host *host, ta_bytes *out) {
     int fits = ta_output_fits(&host->output);
     *out = (ta_bytes){host->output.bytes, fits ? host->output.length : 0};
+    if (fits) host->outputs_lent = 1; /* until the ack (effects_release) */
     return fits ? TA_OK : TA_ERROR_NO_MEMORY;
+}
+
+/* The outputs handed out end: their blocks go back to the arena, kept. */
+static void outputs_release(ta_host *host) {
+    host->outputs_lent = 0;
+    host->output = ta_output_over((ta_buffer){0, 0, 0}, (const ta_allocator *)0);
+    ta_growable_arena_release(&host->outputs, (ta_growable_arena_mark){0, 0});
 }
 
 /* The scratch block for blobs, emptied, growing through the host's
@@ -369,6 +378,9 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     if (config->telemetry.otlp.size)
         ta_otlp_config_normalize(&config->telemetry.otlp, &host->config.telemetry.otlp);
     if (!host->config.migrate_quantum) host->config.migrate_quantum = 256;
+    ta_growable_arena_config outputs = {sizeof outputs, 0, 16384, &host->config.allocator};
+    ta_growable_arena_init(&host->outputs, &outputs);
+    host->outputs_allocator = ta_growable_arena_allocator(&host->outputs);
     if (!host->config.max_subscriptions) host->config.max_subscriptions = 64;
     host->config.telemetry.resource = (const ta_otlp_attribute *)0; /* the config's: copied below */
     host->config.telemetry.resource_count = 0;
@@ -529,7 +541,7 @@ void ta_host_free(ta_host *host) {
     host_free(host, host->effect_strings, sizeof(effect_strings) * host->effect_capacity);
     host_free(host, host->pool, host->pool_capacity);
     host_free(host, host->traceparents, (size_t)host->traceparent_capacity * TA_TRACEPARENT_LENGTH);
-    ta_output_free(&host->output);
+    ta_growable_arena_free(&host->outputs);
     ta_output_free(&host->blob);
     host_free(host, host->blob2, host->blob2_capacity);
     host_free(host, host->errors, sizeof(pending_error) * host->error_capacity);
@@ -1044,6 +1056,7 @@ static void effects_release(ta_host *host) {
      * count must never widen what field accessors can read. */
     host->effects_ready = 0;
     host->published_effects = NULL;
+    outputs_release(host);
     for (uint32_t i = 0; i < host->held_count; i++)
         host_free(host, host->held[i], host->held_size[i]);
     host->held_count = 0;
@@ -1205,6 +1218,10 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
     if (host->effects_ready) {
         *out = host->published_effects;
         return host->effects_ready;
+    }
+    if (host->outputs_lent) { /* a batch of outputs only: it does not widen */
+        *out = (const ta_host_effect *)0;
+        return 0;
     }
     host->effects_ready =
         host->effect_count; /* these are seen now: released by the next ack */
@@ -1858,7 +1875,7 @@ static int retire(ta_host *host) {
 ta_run ta_host_run(ta_host *host, uint32_t budget) {
     ta_run out;
     ta_memset(&out, 0, sizeof out);
-    if (host->running || host->effects_ready) { /* a guarded call or an open batch */
+    if (host->running || host->effects_ready || host->outputs_lent) { /* guarded, or a batch open */
         out.status = TA_RUN_FAULT;
         out.detail = (uint32_t)TA_ERROR_STATE;
         out.next_deadline = UINT64_MAX;
@@ -2499,7 +2516,8 @@ static ta_status region_length(const ta_system *system, size_t *length) {
 
 ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
-    if (host->effect_count) return TA_ERROR_STATE; /* acknowledge the effects first */
+    if (host->effect_count || host->outputs_lent)
+        return TA_ERROR_STATE; /* acknowledge the effects and outputs first */
     for (uint32_t i = 0; i < host->job_count; i++)
         if (host->jobs[i].active) return TA_ERROR_STATE;
     size_t need = sizeof(snapshot_header);

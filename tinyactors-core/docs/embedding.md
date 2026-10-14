@@ -123,9 +123,9 @@ handle, string, `WIRE` byte and `TRACEPARENT` text is valid until
 
 **While handling, call the host as you need:** take traces, write
 envelopes, post, deliver, hibernate. What those calls hand you lives
-until the ack too, however many calls come between (0012; today a host
-output is valid until the next call into the host). What they append
-waits for the next take.
+until the ack too, however many calls come between. What they append
+waits for the next take. An output taken with no batch open (metrics on
+a timer) opens a batch of its own: ack it before the next take or run.
 
 ## 5 · The control plane
 

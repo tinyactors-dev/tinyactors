@@ -125,7 +125,7 @@ static void test_spans_and_metrics(void) {
     world w;
     world_open(&w, 1, NULL);
     settle(&w);
-    ta_bytes out; /* the host's, until the next call into it: copied into the request */
+    ta_bytes out; /* the host's, until the ack: copied into the request */
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     CHECK(out.length > 0);
     /* the request, built by hand: {"method": "trace.spans.decode", "params": {"traces": bytes}} */
@@ -138,6 +138,7 @@ static void test_spans_and_metrics(void) {
     request[n++] = (unsigned char)out.length;
     memcpy(request + n, out.pointer, out.length);
     n += out.length;
+    ta_host_effects_ack(w.host); /* the output is copied: its batch ends */
     static unsigned char reply[1 << 16];
     ta_buffer answer = {reply, sizeof reply, 0};
     CHECK_EQUAL(host_post_copy(w.host, (ta_bytes){request, n}, &answer), TA_OK);
@@ -184,9 +185,10 @@ static void test_actor_context(void) {
     CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":null}}")));
     /* hibernated: wake it first */
     static unsigned char blob[1 << 16];
-    ta_bytes hibernated; /* the host's, until the next call into it */
+    ta_bytes hibernated; /* the host's, until the ack */
     CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
     size_t length = output_copy(hibernated, blob, sizeof blob);
+    ta_host_effects_ack(w.host); /* the output is copied: its batch ends */
     writer = ask_begin(&a, "actor.context", 1);
     ta_cbor_write_text(writer, ta_string("session"));
     ta_cbor_write_uint(writer, w.session);
@@ -301,17 +303,19 @@ static void test_subscribe(void) {
 
     /* across hibernation: the subscription is the host's, the watch the actor's */
     static unsigned char blob[1 << 16];
-    ta_bytes hibernated; /* the host's, until the next call into it */
+    ta_bytes hibernated; /* the host's, until the ack */
     CHECK(reply_is(subscription(&w, "actor.subscribe", w.session), RESULT("{}")));
     CHECK_EQUAL(changed(&w, w.session), 0u); /* armed, nothing ran */
     CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
     size_t length = output_copy(hibernated, blob, sizeof blob);
+    ta_host_effects_ack(w.host); /* the output is copied: its batch ends */
     CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
     ping(&w, w.session);
     CHECK_EQUAL(changed(&w, w.session), 1u); /* still subscribed: watched again */
     CHECK_EQUAL(changed(&w, w.session), 0u); /* armed again */
     CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
     length = output_copy(hibernated, blob, sizeof blob);
+    ta_host_effects_ack(w.host); /* the output is copied: its batch ends */
     CHECK(reply_is(subscription(&w, "actor.unsubscribe", w.session), RESULT("{}")));
     CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
     ping(&w, w.session);

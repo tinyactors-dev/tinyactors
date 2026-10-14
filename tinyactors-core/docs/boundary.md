@@ -47,7 +47,7 @@ A call's answer depends on where the caller is in the loop:
 | Phase | When | What may be called |
 |---|---|---|
 | **I**, idle | between runs, no batch open | everything |
-| **D**, dispatch | between runs, a batch open: after a `ta_host_effects` that returned effects or an output call that handed out a view, until `ta_host_effects_ack` | everything but `ta_host_run` and snapshots (0012) |
+| **D**, dispatch | between runs, a batch open: after a `ta_host_effects` that returned effects or an output call that handed out a view, until `ta_host_effects_ack` | everything but `ta_host_run` and snapshots; a take returns the open batch (none while it holds outputs alone) |
 | **R**, run | inside `ta_host_run`, from a datamodel entry | the inputs on their in-run paths and the lookups; everything else refused (`host.h:151-170`) |
 | **G**, guard | inside a datamodel entry core calls outside a run (a post, an envelope, deliver, hibernate, wake, export, adopt, the telemetry takes, `release` in the ack, `ta_host_free`) | as R (`host.h:172-179`; ADR 0010 decision 3; `host_guard`, `src/host/host_internal.h:242-247`) |
 
@@ -84,7 +84,7 @@ marks a behaviour no test checks.
 | `ta_host_effects` (:288) | I, D | I: opens a batch of everything pending; D: the same pointer and count, never widened; an empty take opens no batch. Records, their strings, `WIRE` bytes and payloads are the host's until the ack | R/G: 0 (`host.c:1196-1199`) | none | `test_host_memory.c` `test_published_effects_stay_valid`, `test_pool_is_reclaimed_with_effects_pending`; `test_host_effects.c` `test_take_freezes_batch_across_growth` |
 | `ta_host_effects_ack` (:289) | I, D | closes the batch: its effects, their payloads (`release` in G, `host.c:1044-1048`) and the batch's outputs end | R/G: nothing (`host.c:1275`) | `release` may run language code: a binding defers the last drop (bindings.md section 8) | `test_host_guard.c` `test_envelope_and_ack`; `test_host_memory.c` |
 | `ta_host_effect_number`, `_text`, `_bytes` (:334-336) | D | a field of the open batch, valid until the ack; `TRACEPARENT`'s text written on first ask into a slot per effect, valid until the ack (`effect_traceparent`, `host.c`) | an index past the batch, a field the kind does not set, or the wrong accessor: 0 or empty; not checked for R/G (`host.c:1218-1271`): publication closes before ack/free release callbacks, so they answer 0 or empty | none | `test_host_effects.c` `test_fields_match_the_struct` (number, text); `_bytes`: `test_host_request.c`, `test_router.c`; closed publication: `test_host_guard.c` `test_closed_batch_during_release`; two `TRACEPARENT`s read together: `test_host_effects.c` `test_traceparents_last_until_the_ack` |
-| `ta_host_traces`, `ta_host_logs` (:348-349) | I, D | an OTLP request, a view of host memory until the ack (0012; today until the next call); length 0: none staged | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:289`, `:301`); `TA_ERROR_NO_MEMORY`: the spans stay staged | `to_wire` for traced values in G (`telemetry.c:90`) | `test_host_telemetry.c` `test_drain_and_take`, `test_take_refused`; `test_host_guard.c` `test_traces`; the view after a later call: needed (0012) |
+| `ta_host_traces`, `ta_host_logs` (:348-349) | I, D | an OTLP request, a view of host memory until the ack (`outputs`, `host_output`); length 0: none staged | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:289`, `:301`); `TA_ERROR_NO_MEMORY`: the spans stay staged | `to_wire` for traced values in G (`telemetry.c:90`) | `test_host_telemetry.c` `test_drain_and_take`, `test_take_refused`; `test_host_guard.c` `test_traces`; the view after a later call: `test_host_guard.c` `test_outputs_last_until_the_ack` (metrics, through the same output path) |
 | `ta_host_route_begin` (:446) | I, D | the caller's `ta_route_request`; its views borrow the envelope and the host until the request finishes | R/G `TA_ERROR_STATE` (`router.c:644`) | none | `test_router.c` `test_external_storage` |
 | `ta_host_route_step` (:449) | no host | the caller's request | `TA_ERROR_INVALID`; `TA_ERROR_STATE`: a request in the wrong action (`router.c:705-719`) | none | `test_router.c` `test_external_storage` |
 | `ta_host_route_reason` (:450) | no host | static text | none | none | `test_router.c` |
@@ -97,7 +97,7 @@ marks a behaviour no test checks.
 | `ta_host_peer_reach`, `ta_host_route`, `ta_host_export` (:490-502) | I, D | routing tables | R/G `TA_ERROR_STATE` (`router.c:828`, `:934`, `:963`); `TA_ERROR_STALE`, `INVALID`, `NO_MEMORY` | none | `test_router.c` `test_origin_validation` (reach), `test_relay_routes` (route), `test_policy` (export) |
 | `ta_host_deliver` (:518) | I, D | a `TA_ROUTE_*` outcome; views read during the call; `data` moves on success; a refusal's `PEER_ERROR` or a relay's `PEER` pending | R/G `TA_ERROR_STATE` (`router.c:989`); `TA_ERROR_NO_MEMORY`: nothing done or remembered | `from_wire` of the target's datamodel in G (`router.c:552`) | `test_router.c` `test_decode_at_target`, `test_dedup`; `test_host_guard.c` `test_deliver` |
 | `ta_host_peer_error` (:526) | I, D | `error.communication` for the origin, or a relayed error pending | R/G `TA_ERROR_STATE` (`router.c:1064`); `TA_ERROR_STALE`; `TA_ERROR_INVALID`, `TA_ERROR_NO_MEMORY` (`router.c:1074`, `local_error`) | `release` in G for the error event (`router.c:1070`, `host.c:900`) | `test_router.c` `test_errors_back` |
-| `ta_host_envelope` (:544) | D | a `PEER` or `PEER_ERROR` effect of the open batch as CBOR, a view of host memory until the ack (0012; today until the next call). Takes the effect's address, not its index | R/G `TA_ERROR_STATE` (`router.c:1213`); `TA_ERROR_INVALID`: another kind or no neutral value; `TA_ERROR_NO_MEMORY` | `to_wire` once in G (`router.c:1234`) | `test_router.c` `test_envelope_bytes`; `test_host_guard.c` `test_each_output_once`; two envelopes read after both calls: needed (0012) |
+| `ta_host_envelope` (:544) | D | a `PEER` or `PEER_ERROR` effect of the open batch as CBOR, a view of host memory until the ack. Takes the effect's address, not its index | R/G `TA_ERROR_STATE` (`router.c:1213`); `TA_ERROR_INVALID`: another kind or no neutral value; `TA_ERROR_NO_MEMORY` | `to_wire` once in G (`router.c:1234`) | `test_router.c` `test_envelope_bytes`; `test_host_guard.c` `test_each_output_once`; two envelopes read after both calls: `test_host_guard.c` `test_outputs_last_until_the_ack` |
 | `ta_host_envelope_read` (:557) | I, D | the caller's `ta_envelope`, views into the caller's bytes (keep them until the deliver) | R/G `TA_ERROR_STATE` (`router.c:1150`); `TA_ERROR_INVALID` (size 0: drop; size set: deliver it to answer the sender) | none | `test_router.c` `test_envelope_bytes`; `envelopes.txt` |
 | `ta_host_peer_error_read` (:560) | no host | the caller's `ta_peer_error`, views into the bytes | `TA_ERROR_INVALID` | none | `envelopes.txt` |
 | `ta_host_peer_round_trip_time` (:562) | all (not checked, `router.c:1274-1277`) | sets a counter: an input, not a read | stale: nothing | accepted in R/G, though `host.h` refuses every other call there | `test_router.c` `test_route_status` |
@@ -105,17 +105,17 @@ marks a behaviour no test checks.
 | `ta_host_migrate` (:587) | I, D | a job id; `MIGRATED`, `JOB_DONE` pending in later runs | R/G `TA_ERROR_STATE` (`host.c:1403`); `TA_ERROR_NO_MEMORY` | none | `test_host.c` `test_versions_and_migration` |
 | `ta_host_job_pending` (:589) | all (not checked) | the caller's array; a finished job's list is readable until the next run (`host.c:1906-1919`), which comes after the ack | none | answers in R/G | `test_host.c` `test_migration_wake_and_timeout` |
 | `ta_host_sweep` (:595) | I, D | sessions in the caller's array | R/G: 0 (`host.c:1962`) | none | `test_host.c`, `test_host_memory.c` |
-| `ta_host_hibernate` (:600) | I, D | the blob, a view of host memory until the ack (0012; today until the next call) | R/G `TA_ERROR_STATE` (`host.c:2014`); `TA_ERROR_NO_MEMORY`: the actor stays | `serialize`, `destroy` in G (`host.c:2022`) | `test_host.c` `test_hibernate_and_wake`; `test_host_guard.c` `test_hibernate`; blob after a later call: needed (0012) |
+| `ta_host_hibernate` (:600) | I, D | the blob, a view of host memory until the ack | R/G `TA_ERROR_STATE` (`host.c:2014`); `TA_ERROR_NO_MEMORY`: the actor stays | `serialize`, `destroy` in G (`host.c:2022`) | `test_host.c` `test_hibernate_and_wake`; `test_host_guard.c` `test_hibernate`; blob after a later call: through the same output path as `test_outputs_last_until_the_ack` |
 | `ta_host_wake` (:601) | I, D | the actor back; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2029`) | `deserialize` in G (`host.c:2035`) | `test_host.c` `test_hibernate_and_wake` |
-| `ta_host_export_actor` (:619) | I, D | the blob, a view until the ack (0012; today until the next call); the actor leaves | R/G `TA_ERROR_STATE` (`host.c:2048`); `TA_ERROR_NO_MEMORY`: it stays | `serialize`, `payload_serialize`, `destroy` in G (`host.c:2055`) | `test_host.c` `test_export_adopt_between_hosts`; `test_host_guard.c` `test_each_output_once` |
+| `ta_host_export_actor` (:619) | I, D | the blob, a view until the ack; the actor leaves | R/G `TA_ERROR_STATE` (`host.c:2048`); `TA_ERROR_NO_MEMORY`: it stays | `serialize`, `payload_serialize`, `destroy` in G (`host.c:2055`) | `test_host.c` `test_export_adopt_between_hosts`; `test_host_guard.c` `test_each_output_once` |
 | `ta_host_adopt` (:625) | I, D | a session id; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2122`); `TA_ERROR_INVALID`, `TA_ERROR_STATE` (ids taken), `TA_ERROR_NO_MEMORY` | `deserialize`, `payload_deserialize`, `migrate` in G (`host.c:2133`); `serialize` when it exports the tree back (`host.c:2148`) | `test_host.c` `test_export_adopt_between_hosts`, `test_adopt_tree_collision` |
-| `ta_host_snapshot` (:642) | I with nothing pending | into the caller's `ta_buffer` | effects published or pending (`host.c:2470`), or a job active: `TA_ERROR_STATE`; a batch opened only by an output view: (0012); R/G too (`host.c:2469`); `TA_ERROR_NO_MEMORY`: `length` is what it needs | none | `test_host.c` `test_snapshot_restore` |
+| `ta_host_snapshot` (:642) | I with nothing pending | into the caller's `ta_buffer` | effects published or pending (`host.c:2470`), or a job active: `TA_ERROR_STATE`; a batch opened only by an output view too; R/G too (`host.c:2469`); `TA_ERROR_NO_MEMORY`: `length` is what it needs | none | `test_host.c` `test_snapshot_restore` |
 | `ta_host_snapshot_segments` (:646) | no host | hashes in the caller's array | 0: not a snapshot | none | `test_host.c` |
 | `ta_host_restore` (:660) | no host | a new host; images copied as by `add_image` | `TA_ERROR_INVALID`, `NO_MEMORY` | `chart_attach` in G (`host.c:2669`) | `test_host.c` `test_snapshot_restore`, `test_restore_after_images_freed` |
 | `ta_host_snapshot_pack` (:671) | I with nothing pending | into the caller's `ta_buffer` | as `ta_host_snapshot` (it calls it, `host.c:2764`) | none | `test_host.c` `test_snapshot_pack` |
 | `ta_host_snapshot_unpack`, `_image` (:684-686) | no host | views into the pack | `TA_ERROR_INVALID`; empty | none | `test_host.c` `test_snapshot_pack` |
 | `ta_host_post` (:711) | I, D | applies the method; its effects, then its `REPLY` (with an id), pending: in D they come after the ack | R/G `TA_ERROR_STATE` (`request.c:996`); `TA_ERROR_NO_MEMORY`: nothing applied, no `REPLY` | `actor.context`: `variable`, `to_wire`, `release` in G (`request.c:701`, `:738`, `:747`) | `test_host_request.c` `test_post` (`test_subscribe`, `test_subscribe_refused` go with the methods [8.2]); `test_host_guard.c` `test_request`; `requests.txt` |
-| `ta_host_metrics` (:718) | I, D | an OTLP metrics request, a view until the ack (0012; today until the next call) | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:295`); `TA_ERROR_NO_MEMORY` | none | `test_host_request.c` `test_spans_and_metrics` |
+| `ta_host_metrics` (:718) | I, D | an OTLP metrics request, a view until the ack; with no batch open it opens one of its own | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:295`); `TA_ERROR_NO_MEMORY` | none | `test_host_request.c` `test_spans_and_metrics`; `test_host_guard.c` `test_outputs_last_until_the_ack` |
 
 ### The vtable, as core calls it
 
@@ -363,7 +363,7 @@ socket, in the order the takes give them.
 | Object | Owner | Created | Read | Ends |
 |---|---|---|---|---|
 | the posted message | caller | before the call | parsed into tokens on the C stack during `ta_host_post` | the call returns |
-| the reply's first writing | the host's output | during the call | copied into the effect pool at the end of the call | the call returns (0012: post's scratch, not a handed-out view) |
+| the reply's first writing | the host's output arena (scratch, never handed out) | during the call | copied into the effect pool at the end of the call | reused by the next output while nothing is lent; else the ack |
 | a REPLY or NOTIFICATION's WIRE | the effect pool | the post (REPLY), the end of a run (NOTIFICATION) | `ta_host_effect_bytes` in D | `ta_host_effects_ack` or `ta_host_free` |
 
 **Rejected.** Keeping `ta_host_request` beside `ta_host_post` (two ways;
@@ -446,14 +446,14 @@ loop's lifetimes and the allocator called from finalizers, to save one
 copy of a few kilobytes (unmeasured; to be measured only if large
 hibernation or export blobs make the copy matter).
 
-**Open for the "outputs until the ack" step.** An output taken with no
-effects published opens a batch (ADR 0012, decision 1), but the code
-knows a batch only by its effect count (`effects_ready`): the run
-refuses only when it is nonzero, and `host.h` says an empty take opens
-no batch. The step needs a state for a batch of outputs alone, and a
-rule for a take while one is open (ADR 0012, decision 2: the same batch,
-so no effects; today's code would publish pending effects into it and
-the drain's ack would end the output too).
+**A batch of outputs alone.** An output taken with no effects published
+opens a batch (`outputs_lent`, `src/host/host_internal.h`): `ta_host_run`
+and snapshots refuse, and a take returns 0 with pending effects waiting,
+until the ack (ADR 0012, decision 2: a take never widens the open batch).
+A caller that pulls metrics before a drain acks first, or the drain
+waits. Each output is a block of its own in an arena the ack empties,
+kept for reuse; internal scratch (a post's reply before it reaches the
+pool) also comes from it and is reused at once while nothing is lent.
 
 **Open.** `ta_host_envelope` takes `const ta_host_effect *` (the record's
 address), the one call that needs a binding to index the effect array

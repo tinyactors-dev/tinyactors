@@ -1042,12 +1042,13 @@ static int host_hibernate_some(world *w) {
     while ((n = host_actors_page(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
         for (uint32_t k = 0; k < n; k++) {
             if (rnd() % 3 == 0) continue;
-            ta_bytes written; /* the host's, until the next call into it */
+            ta_bytes written; /* the host's, until the ack */
             ta_status status = ta_host_hibernate(w->host, sessions[k], &written);
             if (status == TA_ERROR_STATE) continue;
             if (status != TA_OK) return 0;
             void *p = malloc(written.length ? written.length : 1);
             memcpy(p, written.pointer, written.length);
+            ta_host_effects_ack(w->host); /* the output is copied: its batch ends */
             if (hib_put(w, sessions[k], p, written.length) != TA_OK) {
                 free(p);
                 return 0;

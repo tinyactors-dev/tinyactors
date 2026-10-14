@@ -9,6 +9,7 @@
 #define TINYACTORS_HOST_HOST_INTERNAL_H
 
 #include <tinyactors/address.h>
+#include <tinyactors/arena.h>
 #include <tinyactors/host.h>
 
 #include "base/output.h"
@@ -203,12 +204,18 @@ struct ta_host {
     uint32_t job_count, job_capacity, job_sequence;
     /* sweep cursor */
     uint32_t sweep_segment, sweep_cursor;
-    /* What the host writes for its caller (docs/adr/0010 in the repository
-     * root, decision 2): a request's reply, an envelope, traces, logs,
-     * metrics, a hibernation or export blob, each a view of this block until
-     * the next call into the host. It grows through the host's allocator
-     * (host_output) and keeps its largest size until ta_host_free. */
+    /* What the host writes for its caller: an envelope, traces, logs,
+     * metrics, a hibernation or export blob (and, as scratch, a request's
+     * reply before it is copied into the pool). Each output is a block of its
+     * own in `outputs`, so a view handed out (host_output_view) never moves
+     * and lasts until the ack. `outputs_lent` is set by a view handed out: a
+     * batch is open (ta_host_run refuses, the ack ends it); with none lent,
+     * the next output starts the arena over. Released chunks are kept until
+     * ta_host_free, so after warm-up no output reaches the allocator. */
     ta_output output;
+    ta_growable_arena outputs;
+    ta_allocator outputs_allocator; /* the arena's view, which `output` grows through */
+    uint32_t outputs_lent;
     /* scratch for blobs: an export moving between segments (it grows like
      * the output), and its translation */
     ta_output blob;

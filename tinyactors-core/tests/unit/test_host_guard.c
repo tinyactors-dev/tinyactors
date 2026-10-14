@@ -330,7 +330,8 @@ static void test_hibernate(void) {
     ta_bytes out;
     CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &out), TA_OK);
     CHECK(out.length <= sizeof blob);
-    memcpy(blob, out.pointer, out.length); /* the host's view, until the next call into it */
+    memcpy(blob, out.pointer, out.length); /* the host's view, until the ack */
+    ta_host_effects_ack(w.host); /* the output is copied: its batch ends */
     CHECK_EQUAL(w.hooks, 1);
     /* terminated while it was written: it exits once woken */
     CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, out.length}), TA_OK);
@@ -411,6 +412,68 @@ static void test_each_output_once(void) {
     CHECK_EQUAL(ta_host_export_actor(w.host, w.session, &out), TA_OK);
     CHECK_EQUAL(serialize_calls, 1);         /* the session's state */
     CHECK_EQUAL(payload_serialize_calls, 1); /* the delayed send's value */
+    world_close(&w);
+}
+
+/* ---- outputs until the ack (ADR 0012, decision 1) ------------------------------------ */
+
+static int same_bytes(ta_bytes view, const unsigned char *copy, size_t length) {
+    return view.length == length && memcmp(view.pointer, copy, length) == 0;
+}
+
+/* Two envelopes and a metrics request taken in one batch, with calls into the
+ * host between them, all read after the last one; an output taken with no
+ * batch open opens one: the run refuses and a take gives nothing until the
+ * ack. */
+static void test_outputs_last_until_the_ack(void) {
+    world w;
+    world_open(&w, 1);
+    send_event(&w, w.session, "out");
+    send_event(&w, w.other, "out");
+    ta_host_run(w.host, 100000);
+    const ta_host_effect *effects;
+    uint32_t n = ta_host_effects(w.host, &effects);
+    uint32_t peers[2], found = 0;
+    for (uint32_t i = 0; i < n && found < 2; i++)
+        if (effects[i].kind == TA_HOST_EFFECT_PEER) peers[found++] = i;
+    CHECK_EQUAL(found, 2u);
+    if (found != 2) {
+        world_close(&w);
+        return;
+    }
+    static unsigned char first_copy[4096], metrics_copy[1 << 16];
+    ta_bytes first, metrics, second;
+    CHECK_EQUAL(ta_host_envelope(w.host, &effects[peers[0]], &first), TA_OK);
+    CHECK(first.length > 0 && first.length <= sizeof first_copy);
+    memcpy(first_copy, first.pointer, first.length);
+    CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_OK);
+    CHECK(metrics.length > 0 && metrics.length <= sizeof metrics_copy);
+    memcpy(metrics_copy, metrics.pointer, metrics.length);
+    host_ask a; /* a post writes its reply through the host's output too */
+    ask_begin(&a, "host.stats", 0);
+    ta_bytes request;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&a.writer, &request), TA_OK);
+    CHECK_EQUAL(ta_host_post(w.host, request), TA_OK);
+    CHECK_EQUAL(ta_host_envelope(w.host, &effects[peers[1]], &second), TA_OK);
+    CHECK(same_bytes(first, first_copy, first.length));
+    CHECK(same_bytes(metrics, metrics_copy, metrics.length));
+    CHECK(second.pointer != first.pointer && second.pointer != metrics.pointer);
+    ta_host_effects_ack(w.host);
+    /* the post's REPLY waited for the next take */
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
+    ta_host_effects_ack(w.host);
+    /* with no batch open, an output opens one of its own */
+    CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_OK);
+    CHECK_EQUAL(ta_host_post(w.host, request), TA_OK); /* its REPLY is pending */
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u);
+    ta_run refused = ta_host_run(w.host, 100000);
+    CHECK_EQUAL(refused.status, TA_RUN_FAULT);
+    CHECK_EQUAL(refused.detail, (uint32_t)TA_ERROR_STATE);
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
+    ta_host_effects_ack(w.host);
+    CHECK(ta_host_run(w.host, 100000).status != TA_RUN_FAULT);
+    ta_cbor_writer_free(&a.writer);
     world_close(&w);
 }
 
@@ -499,6 +562,7 @@ int main(void) {
     RUN(test_traces);
     RUN(test_free);
     RUN(test_each_output_once);
+    RUN(test_outputs_last_until_the_ack);
     RUN(test_outputs_grow_between_runs);
     TEST_MAIN_END();
 }

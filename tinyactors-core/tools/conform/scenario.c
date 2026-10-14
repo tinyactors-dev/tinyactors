@@ -291,10 +291,11 @@ static int step_hibernate(scenario *run, const scenario_step *step) {
     if (run->store_count == sizeof run->store / sizeof run->store[0]) return refused(run, "the store is full");
     scenario_blob *blob = &run->store[run->store_count];
     *blob = (scenario_blob){alias->session, {NULL, 0, 0}};
-    ta_bytes written = {NULL, 0}; /* the host's, until the next call into it: stored */
+    ta_bytes written = {NULL, 0}; /* the host's, until the ack: stored */
     if (ta_host_hibernate(run->host, alias->session, &written) != TA_OK) return refused(run, "ta_host_hibernate refused");
     if (!conform_buffer_reserve(&blob->bytes, written.length)) return refused(run, "no memory for the blob");
     memcpy(blob->bytes.pointer, written.pointer, written.length);
+    ta_host_effects_ack(run->host); /* the blob is stored: the output's batch ends */
     blob->bytes.length = written.length;
     run->store_count++;
     return 1;

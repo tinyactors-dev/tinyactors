@@ -456,9 +456,10 @@ static void test_migration_wake_and_timeout(void) {
     world_add(&e, W1);
     uint64_t a = spawn(&e, "w"), b = spawn(&e, "w");
     run(&e);
-    ta_bytes written; /* the host's, until the next call into it */
+    ta_bytes written; /* the host's, until the ack */
     CHECK_EQUAL(ta_host_hibernate(e.host, a, &written), TA_OK);
     e.blob_length = output_copy(written, e.blob, sizeof e.blob);
+    ta_host_effects_ack(e.host); /* the output is copied: its batch ends */
     world_add(&e, W2);
     /* without wake, with a timeout: b moves, a is left behind and reported */
     ta_host_advance_time(e.host, (ta_host_time){1000, 0});
@@ -773,11 +774,12 @@ static void test_export_adopt_between_hosts(void) {
     run(&a); /* its delayed send is due at 100 */
     ta_host_advance_time(a.host, (ta_host_time){30, 0});
     run(&a);
-    ta_bytes written; /* the host's, until the next call into it */
+    ta_bytes written; /* the host's, until the ack */
     CHECK_EQUAL(ta_host_export_actor(a.host, s, &written), TA_OK);
     size_t capacity = 2 * written.length + 4096;
     unsigned char *blob = (unsigned char *)malloc(capacity);
     size_t length = output_copy(written, blob, capacity);
+    ta_host_effects_ack(a.host); /* the output is copied: its batch ends */
     CHECK_EQUAL(ta_host_locate(a.host, s, &(ta_host_location){0, 0}), TA_ERROR_STALE); /* it left */
     CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, 7}}, NULL),
                 TA_ERROR_INVALID);
@@ -811,6 +813,7 @@ static void test_export_adopt_between_hosts(void) {
     /* back to a, into its home segment, from a blob that is overdue there */
     CHECK_EQUAL(ta_host_export_actor(b.host, s, &written), TA_OK);
     length = output_copy(written, blob, capacity);
+    ta_host_effects_ack(b.host); /* the output is copied: its batch ends */
     CHECK_EQUAL(ta_host_adopt(a.host, &(ta_host_adoption){1, 0, {blob, length}}, &got), TA_OK);
     CHECK_EQUAL(ta_host_locate(a.host, s, &location), TA_OK);
     segment = location.segment;
@@ -842,14 +845,16 @@ static void test_adopt_tree_collision(void) {
     CHECK_EQUAL(kid, 2u);
     size_t capacity = 65536, length = 0;
     unsigned char *blob = (unsigned char *)malloc(capacity);
-    ta_bytes written; /* the host's, until the next call into it */
+    ta_bytes written; /* the host's, until the ack */
     CHECK_EQUAL(ta_host_export_actor(a.host, root, &written), TA_OK);
     length = output_copy(written, blob, capacity);
+    ta_host_effects_ack(a.host); /* the output is copied: its batch ends */
     /* b: session 2 lives in segment 0, session 1 does not */
     CHECK_EQUAL(spawn(&b, "echo"), 1u);
     CHECK_EQUAL(spawn(&b, "echo"), 2u);
     run(&b);
     CHECK_EQUAL(ta_host_export_actor(b.host, 1, &written), TA_OK);
+    ta_host_effects_ack(b.host); /* the blob is not needed: its batch ends */
     uint64_t got = 9;
     CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){1, 0, {blob, length}}, &got),
                 TA_ERROR_STATE);
@@ -1008,9 +1013,10 @@ static void test_hibernate_and_wake(void) {
     CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
     run(&e);
     CHECK(strcmp(e.log, "touched 1;") == 0);
-    ta_bytes written; /* the host's, until the next call into it */
+    ta_bytes written; /* the host's, until the ack */
     CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
     e.blob_length = output_copy(written, e.blob, sizeof e.blob);
+    ta_host_effects_ack(e.host); /* the output is copied: its batch ends */
     CHECK_EQUAL(hibernated(&e, s), 1);
     CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
     run(&e);
@@ -1027,6 +1033,7 @@ static void test_hibernate_and_wake(void) {
     /* again, and the alarm it set before both hibernations wakes it */
     CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
     e.blob_length = output_copy(written, e.blob, sizeof e.blob);
+    ta_host_effects_ack(e.host); /* the output is copied: its batch ends */
     CHECK_EQUAL(hibernated(&e, s), 1);
     ta_host_advance_time(e.host, (ta_host_time){250, 0});
     run(&e);

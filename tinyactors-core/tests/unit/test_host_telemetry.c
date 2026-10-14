@@ -169,7 +169,7 @@ static void test_drain_and_take(void) {
     advance(&w, 20);
     run_once(&w); /* reads the pings' records */
     CHECK_EQUAL(w.traces, 0u); /* no interval, staging not full */
-    ta_bytes out; /* the host's, until the next call into it */
+    ta_bytes out; /* the host's, until the ack */
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
     CHECK(span_count(out.pointer, out.length) >= 3);
     CHECK_EQUAL(ta_host_traces(w.host, &out), TA_OK);
