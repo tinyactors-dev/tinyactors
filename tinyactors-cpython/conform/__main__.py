@@ -285,7 +285,10 @@ class Scenario:
             done = []
             host.migrate(lambda host, result: done.append(result), wake=bool(step["migrate"].get("wake")),
                          timeout=step["migrate"].get("timeout", 0))
-            host.run_until_idle()  # the loop until its JOB_DONE: the job moves actors in the runs
+            for _ in range(100):  # the loop until its JOB_DONE, bounded as ta-conform's settles
+                host.run_until_idle()
+                if done:
+                    break
             if not done:
                 raise Refused("the migration did not end")
         else:

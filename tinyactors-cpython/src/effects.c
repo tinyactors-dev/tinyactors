@@ -17,6 +17,10 @@ enum { TA_PYTHON_ENTRY_SESSION, TA_PYTHON_ENTRY_LABEL, TA_PYTHON_ENTRY_TEXT, TA_
 enum { TA_PYTHON_ENVELOPE_PEER, TA_PYTHON_ENVELOPE_ERROR, TA_PYTHON_ENVELOPE_CBOR, TA_PYTHON_ENVELOPE_FIELDS };
 enum { TA_PYTHON_MIGRATION_SESSION, TA_PYTHON_MIGRATION_SEGMENT, TA_PYTHON_MIGRATION_CHART, TA_PYTHON_MIGRATION_JOB,
        TA_PYTHON_MIGRATION_FIELDS };
+/* every view's fields fit the send's array */
+_Static_assert(TA_PYTHON_ENTRY_FIELDS <= TA_PYTHON_SEND_FIELDS && TA_PYTHON_ENVELOPE_FIELDS <= TA_PYTHON_SEND_FIELDS &&
+                   TA_PYTHON_MIGRATION_FIELDS <= TA_PYTHON_SEND_FIELDS,
+               "a view's fields outgrow ta_python_view.fields");
 
 /* What every view holds: where its effect is. */
 typedef struct ta_python_view {
