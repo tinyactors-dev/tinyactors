@@ -490,8 +490,22 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   200,000; the whole migration 69 s at 500,000 and 279 s at a million.
   The retry list cannot hold a duplicate during the walk (each actor is
   looked at once), so the check is needed only for the retries after it,
-  or a flag per actor would do. Until then the binding's migration gate
-  runs 500,000 actors, not two million.
+  or a flag per actor would do. A second term, O(n²/quantum): every run's
+  `job_step` goes over the whole retry list to compact it
+  (`host.c:1563-1580`), during the walk only copying; retrying from a
+  cursor would remove it. (69 s is a run of the tool alone; the gate's
+  run in the README took 74.9 s with its checks.) Until then the
+  binding's migration gate runs 500,000 actors, not two million.
+- **A job never ends while it waits for an actor it will not ask for
+  again** (2026-10-14). `migrate_one` asks for a hibernated actor once
+  (`woken`, `host.c:1411-1421`): one woken for the job and hibernated
+  again before it moved, or any hibernated actor of a job without
+  `TA_HOST_MIGRATE_WAKE`, keeps the job active until its timeout, or for
+  good without one, retried in every run (and `ta_host_snapshot` refuses
+  meanwhile). Clearing `woken` when the actor hibernates again would
+  re-ask; the README tells applications to give a job a timeout. Shown by
+  `tests/test_migration.py`
+  (`test_without_wake_or_timeout_a_hibernated_actor_holds_the_job`).
 - **A WAKE that no job asked for has `job` `TA_NIL`**
   (`tinyactors-core/src/host/host.c:1026`), while `boundary.md` (open
   question 5) says a job handle is never 0, with 0 for none. The binding

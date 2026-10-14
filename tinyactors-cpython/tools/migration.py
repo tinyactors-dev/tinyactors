@@ -15,7 +15,7 @@ The application's side of migration (bindings.md section 4; README,
    The job asks for each hibernated actor with a WAKE that names it: the
    program queues those and wakes a batch at a time in the order they
    came (the job retries the actors it waits for in that order), so at
-   most R plus a batch are resident. An event's WAKE (job 0) wakes its
+   most R plus two batches are resident. An event's WAKE (job None) wakes its
    actor at once; one still on version 1 gets a job of its own
    (migrate(session=...)), which moves it in the next run instead of when
    the big job reaches it, so its events do not wait in the host. Meanwhile E more events go to random
@@ -27,7 +27,8 @@ The application's side of migration (bindings.md section 4; README,
    left; a sample of actors (all when N is small) reports its count and
    version, which must be the events it was sent and 2; the old version's
    segment was retired; after every eviction at most R actors were
-   resident, plus the batch the job is moving.
+   resident, plus two batches (the job's WAKEs woken in a round, and the
+   actors events woke, each moving in a job of its own).
 
 Exits with status 1 when a check fails. Prints the times, the rates, the
 store's size, the process's peak memory and the host's region per actor.
@@ -83,7 +84,7 @@ def main():
     parser.add_argument("--actors", type=int, default=1_000_000)
     parser.add_argument("--resident", type=int, default=1000)
     parser.add_argument("--events", type=int, default=100_000)
-    parser.add_argument("--sample", type=int, default=10_000)
+    parser.add_argument("--sample", type=int, default=25_000)
     parser.add_argument("--datamodel", choices=sorted(VERSIONS), default="python")
     parser.add_argument("--seed", type=int, default=1)
     options = parser.parse_args()
@@ -196,6 +197,8 @@ def main():
             evict(host, False)
     host.run_until_idle()
     evict(host, False)
+    if sessions and sessions[-1] != sessions[0] + options.actors - 1:
+        failures.append("the sessions are not numbered 1..N in segment 0: index() is wrong")
 
     def traffic(count):
         items = []
@@ -243,6 +246,9 @@ def main():
             live_events += min(BATCH, options.events - live_events)
         host.run_until_idle()
         evict(host, True)
+        # a batch of the job's WAKEs woken this round, and up to a batch the
+        # round's events woke, each moving in a job of its own: neither may go
+        # back before it moved
         stats = check_resident(host, 2 * BATCH)
         if region_both is None:
             region_both = stats["regionBytes"]

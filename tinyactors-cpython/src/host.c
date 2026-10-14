@@ -1028,6 +1028,10 @@ static PyObject *ta_python_host_migrate(PyObject *self, PyObject *arguments, PyO
             if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "chart is a chart's name (str) or None");
             return NULL;
         }
+        if (!length) { /* core reads an empty name as every chart */
+            PyErr_SetString(PyExc_ValueError, "chart is a chart's name; None for every chart");
+            return NULL;
+        }
         migration.name = (ta_string_view){name, (size_t)length};
     }
     if (session != Py_None) {
@@ -1047,6 +1051,8 @@ static PyObject *ta_python_host_migrate(PyObject *self, PyObject *arguments, PyO
     PyObject *result = NULL;
     if (status != TA_OK) ta_python_raise_status(host->state, status);
     else {
+        /* the job runs from here: should Python refuse memory now, the caller gets the exception, no
+           job id, and the handler is never called (the job still moves actors) */
         result = PyLong_FromUnsignedLong(job);
         if (result && handler != Py_None && PyDict_SetItem(host->jobs, result, handler) < 0) Py_CLEAR(result);
         ta_python_loop_schedule(host); /* the job moves actors in the next runs */

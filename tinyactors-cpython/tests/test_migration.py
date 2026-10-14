@@ -126,6 +126,21 @@ class Migration(unittest.TestCase):
             host.run_until_idle()
         self.assertEqual(asked, [None])
 
+    def test_without_wake_or_timeout_a_hibernated_actor_holds_the_job(self):
+        """The job asks for a sleeping actor never (no wake) and so never
+        ends without a timeout: the README says so."""
+        v1, v2 = versions("python")
+        done, clock = [], tinyactors.SimulatedClock()
+        with host_with([("counter.scxml", v1)], clock=clock) as host:
+            asleep = host.spawn(host.chart("counter"))
+            host.run_until_idle()
+            host.hibernate(asleep)
+            add(host, v2)
+            host.migrate(lambda host, result: done.append(result))
+            host.run_until_idle()
+            clock.increment(60_000)
+        self.assertEqual(done, [])
+
     def test_without_wake_a_hibernated_actor_is_left_at_the_timeout(self):
         v1, v2 = versions("python")
         done, clock = [], tinyactors.SimulatedClock()
@@ -216,6 +231,8 @@ class Migration(unittest.TestCase):
         with host_with([("counter.scxml", versions("python")[0])]) as host:
             with self.assertRaises(TypeError):
                 host.migrate(None, chart=3)
+            with self.assertRaises(ValueError):
+                host.migrate(None, chart="")
             with self.assertRaises(ValueError):
                 host.migrate(None, session=0)
             with self.assertRaises(OverflowError):

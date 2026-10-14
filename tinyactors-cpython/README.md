@@ -263,6 +263,12 @@ there what it keeps.
   "migrated", "failed", "pending": [session, ...]}`.
 - `migrated=handler(host, migration)`: each actor moved, a thin view of
   `session`, `segment`, `chart` (its name) and `job`.
+- **A job ends only when every actor it looks at moved, or at its
+  `timeout`.** Without `wake`, a hibernated actor waits for good; with it,
+  the job asks for each one once, so an actor woken for it and put back to
+  sleep before it moved waits for good too. Such a job keeps retrying
+  them in every run, and its handler never runs. Give a job a `timeout`
+  unless you wake every actor it asks for and keep it until it moved.
 - An actor that cannot be written out stays on its version and counts as
   failed: on the `"python"` datamodel, one whose variables or pending
   delayed sends hold a value outside the value table. One that is running
@@ -309,9 +315,10 @@ the GIL, one run:
 | quickjs | 9.2 s | 77.7 s (6,400 actors a second; 81,084 moved early) | 617,336 | 147 MB (293 B per actor) | 71.5 MB, then 35.7 MB | 164 MB |
 
 The job's time grows with the square of the hibernated actors (core
-checks each actor it asks for against the list of those it waits for);
-until that changes, it is 14 s at 200,000 and 279 s at a million on the
-`"python"` datamodel.
+checks each actor it asks for against the list of those it waits for,
+and goes over that list in every run); until that changes, a migration
+of this kind takes 14 s at 200,000 actors and 279 s at a million on the
+`"python"` datamodel (runs of the tool alone, not the gate above).
 
 ## Charts in Python
 
