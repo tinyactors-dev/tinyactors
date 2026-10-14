@@ -365,6 +365,52 @@ PyObject *ta_python_send_task_done(PyObject *send, PyObject *task) {
     Py_RETURN_NONE;
 }
 
+static PyObject *ta_python_telemetry_done(PyObject *host, PyObject *task);
+
+static PyMethodDef ta_python_telemetry_done_def = {"done", ta_python_telemetry_done, METH_O,
+                                                   "An async telemetry handler's task ended."};
+
+/* An async telemetry handler's task ended: its exception is kept for the
+ * driver, as a plain handler's is. */
+static PyObject *ta_python_telemetry_done(PyObject *self, PyObject *task) {
+    ta_python_host *host = (ta_python_host *)self;
+    PyObject *cancelled = PyObject_CallMethod(task, "cancelled", NULL);
+    int was_cancelled = cancelled ? PyObject_IsTrue(cancelled) : 1;
+    Py_XDECREF(cancelled);
+    PyObject *exception = was_cancelled ? NULL : PyObject_CallMethod(task, "exception", NULL);
+    if (exception && exception != Py_None && host->host) {
+        if (!host->error) host->error = Py_NewRef(exception);
+        ta_python_loop_schedule(host);
+    }
+    Py_XDECREF(exception);
+    PyErr_Clear();
+    Py_RETURN_NONE;
+}
+
+/* The application's exporter gets the request as bytes it keeps (one copy,
+ * boundary.md section 7); posting it, retrying and capping what waits are
+ * the application's. Without a handler the request is dropped. */
+void ta_python_telemetry(ta_python_host *host, const ta_python_export *export) {
+    if (!host->telemetry || host->telemetry == Py_None) return;
+    PyObject *signal = PyUnicode_InternFromString(export->signal);
+    PyObject *data = signal ? PyBytes_FromStringAndSize(export->data.pointer, (Py_ssize_t)export->data.length) : NULL;
+    PyObject *result = data ? PyObject_CallFunctionObjArgs(host->telemetry, (PyObject *)host, signal, data, NULL) : NULL;
+    if (result && host->telemetry_async) { /* a coroutine: a task on the host's loop */
+        PyObject *task = host->loop != Py_None ? PyObject_CallMethod(host->loop, "create_task", "O", result) : NULL;
+        PyObject *done = task ? PyCFunction_New(&ta_python_telemetry_done_def, (PyObject *)host) : NULL;
+        PyObject *added = done ? PyObject_CallMethod(task, "add_done_callback", "O", done) : NULL;
+        if (!added && !PyErr_Occurred()) PyErr_SetString(PyExc_RuntimeError, "an async telemetry handler needs async with");
+        Py_XDECREF(task);
+        Py_XDECREF(done);
+        Py_DECREF(result);
+        result = added;
+    }
+    if (!result) ta_python_host_keep_error(host);
+    Py_XDECREF(result);
+    Py_XDECREF(data);
+    Py_XDECREF(signal);
+}
+
 static void ta_python_dispatch_send(ta_python_host *host, uint32_t index) {
     uint32_t processor = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_IO_PROCESSOR);
     PyObject *row = processor < (uint32_t)PyList_Size(host->processors) ? PyList_GetItem(host->processors, processor) : NULL;
@@ -441,10 +487,12 @@ void ta_python_dispatch(ta_python_host *host, uint32_t index) {
         break;
     }
     case TA_HOST_EFFECT_REPLY: ta_python_reply(host, index); break;
-    case TA_HOST_EFFECT_TRACES:
-    case TA_HOST_EFFECT_LOGS: { /* no exporter in the API yet: taken, so the encoder goes on, and dropped */
-        ta_bytes taken;
-        (void)(ta_host_traces(core, &taken) == TA_OK && ta_host_logs(core, &taken) == TA_OK);
+    case TA_HOST_EFFECT_TRACES: /* a request is ready: taken (the next comes only after a take) */
+    case TA_HOST_EFFECT_LOGS: {
+        int traces = ta_host_effect_number(core, index, TA_EFFECT_FIELD_KIND) == TA_HOST_EFFECT_TRACES;
+        ta_bytes taken; /* the host's view, until the ack */
+        if ((traces ? ta_host_traces(core, &taken) : ta_host_logs(core, &taken)) == TA_OK && taken.length)
+            ta_python_telemetry(host, &(ta_python_export){traces ? "traces" : "logs", taken});
         break;
     }
     default: /* DONE, ERROR: the datamodel's rows went with destroy; a NOTIFICATION we do not know; the

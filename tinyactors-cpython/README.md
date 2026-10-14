@@ -47,13 +47,15 @@ with tinyactors.Host(config, {"urn:example:app": app},
   with `ResolveError(message, line=None, column=None)`. A compilation with
   an error raises `CompileError` with every diagnostic. `Compiled.image`
   is a read-only buffer, valid until `close()` (a context manager).
-- `Host(config, io_processors=None, *, log=None, clock=None, peer=None)`:
+- `Host(config, io_processors=None, *, log=None, clock=None, peer=None,
+  telemetry=None)`:
   `config` is the host's config as a dict
   ([host-config.md](../tinyactors-core/docs/host-config.md));
   `io_processors` maps an I/O processor's type to `handler(host, send)`;
   `log` gets each `<log>` line as `handler(host, entry)`; `clock` is a
   `SimulatedClock` or `None` for the real clocks; `peer` gets each
-  envelope for another system as `handler(host, envelope)`.
+  envelope for another system as `handler(host, envelope)`; `telemetry`
+  gets each OTLP request as `handler(host, signal, data)` (below).
 - Inputs, applied at the call: `add_image(image) -> segment`,
   `chart(name) -> ChartRef`, `spawn(ref, name=None, params=None,
   traceparent=None) -> session`, `send(session, event, data=None, *,
@@ -84,6 +86,41 @@ with tinyactors.Host(config, {"urn:example:app": app},
 
 A `Host` is used from the thread that made it; other threads are refused.
 Several hosts, one per thread, exchange envelopes.
+
+## Telemetry
+
+With `"telemetry"` in the config the host traces its actors and writes
+OTLP requests (protobuf): spans of every macrostep, `<log>` lines and
+failed actions as log records, and counters as metrics. The host does no
+I/O: the binding hands each request to your handler as `bytes` you keep,
+`signal` being `"traces"` or `"logs"`, and you post it. Metrics are
+pulled with `host.metrics()`. Leaving the `Host` ends the spans still
+open (`trace.end`) and hands over the last requests. Posting, retrying
+and capping what waits are yours. An `async def` handler (under `async
+with`) runs as a task; an exception from a handler is raised by the
+driver after the turn, the request lost.
+
+```python
+import urllib.request
+
+def export(host, signal, data):           # OTLP/HTTP, to a collector or otel-tui
+    request = urllib.request.Request("http://localhost:4318/v1/" + signal, data,
+                                     {"Content-Type": "application/x-protobuf"})
+    urllib.request.urlopen(request).close()
+
+config = {"systemID": "shop",
+          "telemetry": {"flushInterval": 5_000_000_000,       # host clock: ns by default
+                        "resource": {"service.name": "shop"}}}
+with tinyactors.Host(config, telemetry=export) as host:
+    ...
+    export(host, "metrics", host.metrics())
+```
+
+`flushInterval` is in the host's clock (`system.ticksPerSecond`); without
+it a request is ready only when the staging is full, or at the stop.
+`host.trace_spans_decode(handler, traces=data)` decodes a traces request
+back into spans, and `trace_configure` and `trace_watch` choose what is
+traced ([requests.md](../tinyactors-core/docs/requests.md)).
 
 ## Charts in Python
 
@@ -132,8 +169,7 @@ actors share no mutable value.
 - Export and snapshots of a `"python"` actor are not supported; a
   `<foreach>`'s `item` and `index` must be declared `<data>`.
 - Not in the API yet: hibernation with a store, migration, invoked
-  services of the application, telemetry exporters (the host's OTLP
-  requests are taken and dropped).
+  services of the application.
 
 ## Memory
 
