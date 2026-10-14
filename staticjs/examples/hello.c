@@ -2,7 +2,7 @@
  * evaluates it on a budget of fuel, and prints the value as JavaScript
  * source.
  *
- *   cc -std=c11 -I. hello.c staticjs.c -o hello      (from a source tarball)
+ *   clang -std=c11 -O2 -I. hello.c staticjs.c -o hello   (from a source tarball)
  *   ./hello
  *   {"total":55,"names":["ada","grace"]}
  */

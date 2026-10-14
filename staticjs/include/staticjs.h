@@ -569,8 +569,10 @@ typedef struct {
 } sjs_parser_config;
 
 SJS_API sjs_result sjs_parser_init(sjs_parser **out, const sjs_parser_config *config);
-/* Read a chunk. SJS_ERR_PROGRAM: the source is not staticjs, or the sink
- * refused an event; sjs_parser_error() says which. */
+/* Read a chunk. SJS_ERR_PROGRAM: the source is not staticjs
+ * (sjs_parser_error() says why), or the sink refused an event
+ * (sjs_parser_error() gives SJS_ERR_NOT_FOUND; ask the sink:
+ * sjs_compiler_error() for the compiler). */
 SJS_API sjs_result sjs_parser_push(sjs_parser *parser, sjs_bytes chunk);
 /* The source is complete. On success the sink has seen SJS_EV_END. */
 SJS_API sjs_result sjs_parser_finish(sjs_parser *parser);

@@ -11,11 +11,15 @@ evaluator, and per element for the built-ins that loop. The same program
 on the same inputs uses the same fuel on every machine and every target,
 so fuel is a budget you can set per program and rely on. Time is not.
 
-Some figures, from `examples/eval.c --stats` over an array of 100 objects:
+Some figures. A guard is bound to a global `event`; the others run over
+`xs`, an array of 100 objects (`Array.from({ length: 100 }, (_, i) => ({ k:
+i % 7, v: i }))`), measured with `examples/eval.c --stats` as a module that
+builds `xs` and exports the expression, less the fuel of the same module
+exporting `0`:
 
 | Program | Fuel |
 |---|---:|
-| `event.f > 25` (a guard) | 7 |
+| `event.f > 25` (a guard) | 5 |
 | `xs.map((x) => x.k)` | 205 |
 | `xs.map((x) => x.k + 0)` | 605 |
 | `xs.filter((x) => x.k > 3)` | 205 |
@@ -97,7 +101,7 @@ small BigInts in a `reduce` then allocates nothing per element.
 Memory comes only from your allocator. `sjs_context_live_bytes` gives what
 a context holds now. An evaluator with the default limits holds about
 101 KiB, and a compiled guard such as `event.f > 25` about 0.3 KiB more.
-About 60 KiB of the evaluator is its stack of `max_stack` slots, so
+About 64 KiB of the evaluator is its stack of `max_stack` slots, so
 `max_stack = 256` makes an evaluator of about 41 KiB. Keep one evaluator
 and start each evaluation on it, rather than making one per evaluation.
 `max_value_items`, `max_string_bytes` and the other limits bound what one
@@ -105,7 +109,7 @@ evaluation can allocate ([embedding.md](embedding.md#limits)).
 
 ## Compared with other engines
 
-`bench/engines/REPORT.md` compares staticjs with Node 22 (with its JIT and
+[`bench/engines/REPORT.md`](../../bench/engines/REPORT.md) compares staticjs with Node 22 (with its JIT and
 `--jitless`) and with QuickJS-NG compiled to WebAssembly, on the same
 programs and inputs, run as the C API runs them. The figures below are from
 one run, on one 4-core x86_64 machine (`f9d38355aeb8`, October 2026). They

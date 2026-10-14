@@ -2,7 +2,7 @@
 
 For contributors: how staticjs is built, tested and measured, and why its
 parts are designed as they are. To use staticjs, read
-[../guide/](../README.md) instead. Start with `../../AGENTS.md`: the rule,
+the [guide](../README.md) instead. Start with [AGENTS.md](../../AGENTS.md): the rule,
 the C rules, and what each kind of change must come with.
 
 ## Working on staticjs

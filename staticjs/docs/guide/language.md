@@ -102,7 +102,7 @@ Values are never changed once shared. A function may still change a value
 that one of its own variables holds alone, so the usual idioms work:
 
 ```js
-// The accumulator is the callback's alone: assignment and push change it in place.
+// The accumulator is the callback's alone: an assignment changes it in place.
 rows.reduce((acc, r) => { acc[r.region] = (acc[r.region] ?? 0) + r.kwh; return acc; }, {})
 
 // A function's own const, changed by its methods.
@@ -159,8 +159,7 @@ The compiler
 refuses any other receiver or target it can see is shared, and the
 evaluator faults when the variable's value, or a container on the path,
 has another holder: a caller, the embedder, a module's export, another
-variable, or itself (`xs.push(xs)`, `o.self = o`). The rules, the check
-are in the design notes on [owned mutation](../internals/mutation.md).
+variable, or itself (`xs.push(xs)`, `o.self = o`). The rules and the check are in the design notes on [owned mutation](../internals/mutation.md).
 
 ## Functions from the host
 

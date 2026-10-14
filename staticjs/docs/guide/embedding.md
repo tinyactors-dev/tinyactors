@@ -25,7 +25,9 @@ program + fuel --push--> evaluator --> value --> writer --> text
 | `sjs_writer` | `sjs_writer_init` | `sjs_writer_destroy` | Writes one value as text. |
 | `sjs_parser`, `sjs_compiler` | `sjs_parser_init`, `sjs_compiler_init` | `..._destroy` | The two halves of `sjs_compile`, for a source that arrives in pieces. |
 
-Every call returns an `sjs_result`:
+Most calls return an `sjs_result`; the evaluator's `sjs_vm_run` returns an
+`sjs_run`, and the readers (`sjs_length`, `sjs_array_at`, ...) return what
+they read:
 
 | Result | Means |
 |---|---|
@@ -105,12 +107,15 @@ sjs_compile_params params = {
     .source = { text, length },
     .error = &error,                                         /* optional */
 };
-if (sjs_compile(&params, &program) == SJS_ERR_PROGRAM) {
+sjs_result r = sjs_compile(&params, &program);
+if (r == SJS_ERR_PROGRAM) {
     /* error.code, error.at.line, error.at.column, error.message */
+} else if (r != SJS_OK) {
+    /* SJS_ERR_NOMEM or SJS_ERR_INVALID: no program, and error is not filled */
 }
 ```
 
-A compile error is one of:
+An `SJS_ERR_PROGRAM` result fills `error`, whose code is one of:
 
 | `error.code` | Means |
 |---|---|
@@ -169,9 +174,9 @@ if (status == SJS_RUN_DONE) {
   once you have taken the result; `sjs_vm_reset` abandons a paused one and
   releases what it holds. One evaluator runs one evaluation at a time; a
   program may run on several evaluators at once.
-- **How much fuel.** A guard such as `event.f > 25` takes 7 units, and a
-  callback over an array a few units per element: `xs.map((x) => x * 2)`
-  over 10 numbers takes 77. `examples/eval.c --stats` prints what a program
+- **How much fuel.** A guard such as `event.f > 25`, with `event` a
+  global, takes 5 units, and a callback over an array a few units per
+  element: `xs.map((x) => x * 2)` over 10 numbers takes 55. `examples/eval.c --stats` prints what a program
   used; [performance.md](performance.md) has more costs.
 
 `examples/stream.c` runs a module in slices of 500 units.
@@ -218,7 +223,7 @@ sjs_object_put(context, &event, &(sjs_property){ SJS_STR("f"), sjs_number(79) })
 
 `sjs_object_put` sets a key as JavaScript does on a fresh object: a key that
 is already there keeps its place, and keys that are array indices come
-first. It refuses `__proto__`. A set takes primitives only. A map's key is
+first. It refuses the key `__proto__` with `SJS_ERR_INVALID`. A set takes primitives only. A map's key is
 any primitive, compared as SameValueZero. `sjs_bigint_new` reads a BigInt's
 text as `BigInt(text)` does.
 
@@ -330,7 +335,12 @@ static const sjs_modules_vtable modules_vtable = { find_module };
 ```
 
 Evaluating a module gives its namespace, which is what `find` answers for
-it later. A namespace is a value. To call a function a module exports, read
+it later. `find` may also answer with an object you built (`sjs_object_new`),
+in any order: the compiler sorts it into a namespace. The exports must be
+an object, and one with an array-index key or a `__proto__` key is refused
+as unsupported. Any result of `find` other than `SJS_OK`, `SJS_ERR_NOMEM`
+included, refuses the import as a name error ("there is no module of this
+name"). A namespace is a value. To call a function a module exports, read
 it from the namespace (`sjs_object_get`) and pass it to an expression as a
 global (`celsius(event.data.f) > limit`). There is no call from C into a
 staticjs function: a program calls it.
@@ -365,15 +375,21 @@ a source as it arrives, or to see its syntax:
 sjs_compiler *compiler;
 sjs_compiler_init(&compiler, &(sjs_compiler_config){ .context = context, .goal = SJS_GOAL_MODULE });
 sjs_parser *parser;
-sjs_parser_config pc = { allocator, SJS_LIMITS_DEFAULT, SJS_GOAL_MODULE, sjs_compiler_sink(compiler) };
+sjs_parser_config pc = { allocator, limits, SJS_GOAL_MODULE, sjs_compiler_sink(compiler) };
 sjs_parser_init(&parser, &pc);
-while (more) sjs_parser_push(parser, next_chunk());   /* any size, down to one byte */
-sjs_parser_finish(parser);
+sjs_result r = SJS_OK;
+while (r == SJS_OK && more) r = sjs_parser_push(parser, next_chunk());   /* any size, down to one byte */
+if (r == SJS_OK) r = sjs_parser_finish(parser);
 sjs_program *program;
 sjs_compiler_finish(compiler, &program);
 sjs_parser_destroy(parser);
 sjs_compiler_destroy(compiler);
 ```
+
+The parser takes its allocator and limits from its own config, not from
+the context: give it the allocator and the limits you gave the context.
+`sjs_compile` does so for you. The parser's memory comes from that
+allocator directly, so `sjs_context_live_bytes` does not count it.
 
 The parser sends a program to a *sink* as a stream of events, in evaluation
 order: operands before their operator, a `const`'s value before its

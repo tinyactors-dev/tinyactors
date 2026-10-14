@@ -140,8 +140,8 @@ It prints:
 
 The amalgamation needs clang: it computes square roots with clang's
 `__builtin_elementwise_sqrt`, which GCC does not have, so GCC fails to link
-it. It builds with clang 18 and with clang 22, the version the releases are
-built with. With GCC, link a prebuilt library. Compile the amalgamation with
+it. It builds with clang 18 and clang 22; the release's libraries are built
+with `zig cc` (LLVM 21). With GCC, link a prebuilt library. Compile the amalgamation with
 `-O2`. It is freestanding: it includes nothing but the compiler's
 `stdint.h`, `stddef.h` and `stdbool.h`.
 
@@ -163,8 +163,8 @@ $ ./eval '({ a: 1 }).b.c'
 fault at 1:14: cannot read a property of undefined (c)
 $ ./eval '[1, 2] === [1, 2]'
 fault at 1:8: === on two objects compares identity, which staticjs does not have
-$ ./eval 'while (true) {}'
-syntax error at 1:1: expected an expression
+$ ./eval '() => { while (true) {} }'
+unsupported at 1:9: staticjs has no loops: use map, filter, reduce or some
 ```
 
 A fault is staticjs declining to give a value where JavaScript would throw,

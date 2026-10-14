@@ -12,7 +12,8 @@ You need two files from a release: `staticjs.wasm` from
 `staticjs-<version>-wasm32.tar.gz`, and `staticjs.api.json` from
 `staticjs-<version>-src.tar.gz`. The API description gives the wrapper
 the module's struct layouts and constants. Put them beside the three files
-of `examples/wasm/`:
+of [`examples/wasm/`](../../examples/wasm/) in this repository (no release
+ships them):
 
 ```
 staticjs.mjs        the wrapper
@@ -92,7 +93,10 @@ wasm32 decides how arguments cross:
   `offsets`. A struct passed by value is passed as a pointer to a copy. A
   struct returned by value, such as `sjs_wasm_allocator()`'s, is written
   through a pointer passed first.
-- **64-bit integers** (fuel, the seed, the clock's seconds) are BigInts.
+- **64-bit integers** passed or returned (`sjs_vm_run`'s fuel,
+  `sjs_vm_set_seed`'s seed, `sjs_vm_advance_clock`'s nanoseconds,
+  `sjs_vm_fuel_used`) are BigInts. A 64-bit field of a struct, such as
+  `sjs_epoch.seconds`, is written with `DataView.setBigInt64`.
 - **Constants** (`SJS_OK`, `SJS_GOAL_MODULE`, `SJS_RUN_PAUSED`, ...) are in
   `staticjs.api.json` under `constants`.
 
@@ -103,7 +107,7 @@ what a call reads (a config, a source's bytes, an out-parameter) with
 freed blocks. Linear memory never shrinks, so a module's memory stays at its
 peak.
 
-`tests/wasm/release_test.mjs` drives the module through the raw API: it
+[`tests/wasm/release_test.mjs`](../../tests/wasm/release_test.mjs) drives the module through the raw API: it
 compiles, runs on fuel 16 units at a time, writes the result, and checks
 that every allocation is given back.
 
