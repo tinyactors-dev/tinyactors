@@ -690,7 +690,13 @@ typedef struct ta_host_snapshot_input {
     uint32_t pad;
 } ta_host_snapshot_input;
 /* A new host (input->config and environment as for ta_host_create) running
- * the snapshot. Charts are attached to the datamodels again during the call. */
+ * the snapshot. Charts are attached to the datamodels again during the call.
+ * Restore the datamodels' state before the first ta_host_run: that run
+ * announces again each external invocation that was running, before any
+ * actor runs, as a TA_EFFECT_INVOKE flagged TA_EFFECT_FLAG_RESTORED (its
+ * token, type, src, invoke id and params as before), so the embedder
+ * starts its service again or answers the invoker with
+ * TA_EVENT_IN_ERROR_COMMUNICATION. */
 TA_API ta_status ta_host_restore(const ta_host_environment *environment,
                                  const ta_host_snapshot_input *input, ta_host **out);
 /* The datamodels' state as the caller keeps it, labelled with their name. */

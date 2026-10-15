@@ -14,7 +14,7 @@
 #define TA_SYSTEM_MAGIC 0x53594154u /* "TAYS" */
 /* The region's layout: 2 since the step counters and trace references
  * (docs/adr/0006 in the repository root); a snapshot of another is refused. */
-#define TA_SYSTEM_VERSION      3u
+#define TA_SYSTEM_VERSION      4u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -67,7 +67,11 @@ typedef struct ta_request {
     uint32_t invokeid; /* string reference (owned) */
     uint32_t source;   /* string reference (owned); REQUEST_PENDING_SPAWN: chart index */
     uint32_t pad;      /* datamodel index owning `payload` */
-    uint64_t payload;  /* invoke params awaiting a resolved chart / a free slot */
+    uint64_t payload;  /* invoke params awaiting a resolved chart / a free slot; an external
+                          invocation's params, retained while it runs (a restore announces it
+                          again with them) */
+    uint32_t type;     /* REQUEST_EXTERNAL_INVOKE: the service's type, string reference (owned) */
+    uint32_t pad2;
 } ta_request;
 
 /* Internal effect record; ta_effect views are materialized on demand. */
@@ -243,6 +247,12 @@ void ta_system_cancel_timers(ta_system *s, uint32_t index);
 void ta_system_fire_timers(ta_system *s);
 uint32_t ta_system_invoke(ta_system *s, uint32_t parent, const ta_core_out *o);
 void ta_system_uninvoke(ta_system *s, uint32_t parent, const ta_core_out *o);
+/* An external invocation ends: its request and what it holds (invoke id, type, src, params). */
+void ta_system_external_free(ta_system *s, uint32_t ri);
+/* The first external invocation at request index `from` or past it, as a TA_EFFECT_INVOKE view
+ * (flagged TA_EFFECT_FLAG_RESTORED; strings valid until the system's next call); its index, or
+ * TA_NIL when there is none. A restored host's first run announces each one again with it. */
+uint32_t ta_system_external_invocation(ta_system *s, uint32_t from, ta_effect *out);
 void ta_system_autoforward(ta_system *s, uint32_t parent, const ta_core_out *o);
 void ta_system_done(ta_system *s, uint32_t index, ta_payload done, uint32_t final_state);
 /* Retry spawns parked by pool exhaustion; returns TA_POOL_* still exhausted. */

@@ -11,7 +11,8 @@
 #define CHART                                                                                      \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='caller' "         \
     "initial='s'><state id='s'>"                                                                   \
-    "<invoke id='svc' type='http://example.com/service' src='svc:x'/>"                            \
+    "<invoke id='svc' type='http://example.com/service' src='svc:x'>"                             \
+    "<param name='seed' expr='7'/></invoke>"                                                       \
     "<transition event='go'><log label='said' expr=\"'hello'\"/>"                                  \
     "<send target='#_svc' event='poke' id='p1'/></transition>"                                     \
     "<transition event='end' target='f'/></state><final id='f'/></scxml>"
@@ -333,11 +334,93 @@ static void test_traceparents_last_until_the_ack(void) {
     world_close(&w);
 }
 
+/* A host restored from a snapshot announces each external invocation that
+ * was running again, at its first run (after the datamodels' state is
+ * back): the same segment, token, type, src and invoke id, its params, the
+ * invoker's session, flagged TA_EFFECT_FLAG_RESTORED; once. Its token stays
+ * good for the service's answers. */
+static void test_restore_announces_external_invocations(void) {
+    world w;
+    world_open(&w);
+    const ta_host_effect *effects;
+    uint32_t count = run_batch(&w, &effects);
+    uint32_t invoke = find(w.host, count, TA_EFFECT_INVOKE);
+    CHECK(invoke != TA_NIL);
+    uint64_t token = ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_TOKEN);
+    CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_FLAGS) & TA_EFFECT_FLAG_RESTORED, 0u);
+    ta_host_effects_ack(w.host);
+    /* the datamodel's state and the host, packed */
+    ta_buffer probe = {NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w.ecmascript, &probe), TA_ERROR_NO_MEMORY);
+    void *state = malloc(probe.length);
+    ta_buffer state_out = {state, probe.length, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w.ecmascript, &state_out), TA_OK);
+    ta_datamodel_state contents = {{"t", 1}, {state, state_out.length}};
+    probe = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot_pack(w.host, &contents, &probe), TA_ERROR_NO_MEMORY);
+    void *pack = aligned_alloc(8, (probe.length + 7) & ~(size_t)7);
+    ta_buffer pack_out = {pack, probe.length, 0};
+    CHECK_EQUAL(ta_host_snapshot_pack(w.host, &contents, &pack_out), TA_OK);
+    ta_host_free(w.host);
+    ta_datamodel_ecmascript_free(w.ecmascript);
+    w.ecmascript = ta_datamodel_ecmascript_new(NULL);
+    w.binding = ta_datamodel_ecmascript_binding(w.ecmascript);
+    ta_host_snapshot_contents unpacked;
+    memset(&unpacked, 0, sizeof unpacked);
+    unpacked.size = sizeof unpacked;
+    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, pack_out.length}, &unpacked), TA_OK);
+    ta_bytes image = ta_host_snapshot_image((ta_bytes){pack, pack_out.length}, 0);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.system.size = sizeof config.system;
+    config.system.max_actors = 8;
+    config.datamodels = &w.binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    ta_host_snapshot_input input = {{0, 0}, {unpacked.host, unpacked.host_length}, &image, 1, 0};
+    CHECK_EQUAL(test_host_restore(&config, &input, &w.host), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(w.ecmascript, (ta_bytes){unpacked.state, unpacked.state_length}),
+                TA_OK);
+    CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u); /* a take before the run: nothing yet */
+    CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
+    count = ta_host_effects(w.host, &effects);
+    invoke = find(w.host, count, TA_EFFECT_INVOKE);
+    CHECK(invoke != TA_NIL);
+    CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_FLAGS) & TA_EFFECT_FLAG_RESTORED,
+                (uint64_t)TA_EFFECT_FLAG_RESTORED);
+    CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_TOKEN), token);
+    CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_SEGMENT), w.segment);
+    CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_SESSION), w.session);
+    CHECK(text_is(ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_TARGET), "svc:x"));
+    CHECK(text_is(ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_EVENT), "http://example.com/service"));
+    CHECK(text_is(ta_host_effect_text(w.host, invoke, TA_EFFECT_FIELD_SENDID), "svc"));
+    CHECK(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_PAYLOAD) != 0);
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
+    count = ta_host_effects(w.host, &effects);
+    CHECK_EQUAL(find(w.host, count, TA_EFFECT_INVOKE), TA_NIL); /* once */
+    ta_host_effects_ack(w.host);
+    ta_event_in back;
+    memset(&back, 0, sizeof back);
+    back.size = sizeof back;
+    back.session = w.session;
+    back.flags = TA_EVENT_IN_INVOKE_DONE;
+    back.token = (uint32_t)token;
+    CHECK_EQUAL(ta_host_send(w.host, &back), TA_OK); /* the token is the invocation's still */
+    CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
+    free(state);
+    free(pack);
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_take_freezes_batch_across_growth);
     RUN(test_run_refuses_open_batch);
     RUN(test_invoked_service_is_keyed_by_token);
     RUN(test_fields_match_the_struct);
     RUN(test_traceparents_last_until_the_ack);
+    RUN(test_restore_announces_external_invocations);
     TEST_MAIN_END();
 }

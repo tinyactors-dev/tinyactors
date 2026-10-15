@@ -234,7 +234,12 @@ enum {
     TA_EFFECT_WAKE = 8, /* a hibernated actor has work: load its blob, call ta_actor_wake() */
     TA_EFFECT_CHANGED = 9 /* a watched actor finished a macrostep (ta_actor_watch) */
 };
-enum { TA_EFFECT_FLAG_NEEDS_RESPONSE = 1u << 0 };
+enum {
+    TA_EFFECT_FLAG_NEEDS_RESPONSE = 1u << 0,
+    /* TA_EFFECT_INVOKE of an external invocation that was running when the host's snapshot was
+       taken: the first ta_host_run after ta_host_restore announces each one again */
+    TA_EFFECT_FLAG_RESTORED = 1u << 1
+};
 /* Field use per kind (unused fields are empty / 0):
  *   SEND      target, event (name), sendid, payload, io_processor; token = external
  *             invoke token when sending to an external invoke ("#_<id>")

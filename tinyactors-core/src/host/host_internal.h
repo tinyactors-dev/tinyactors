@@ -208,6 +208,11 @@ struct ta_host {
     ta_growable_arena outputs;
     ta_allocator outputs_allocator; /* the arena's view, which `output` grows through */
     uint32_t outputs_lent;
+    /* after ta_host_restore: the external invocations still to announce again (TA_EFFECT_INVOKE
+       flagged TA_EFFECT_FLAG_RESTORED) at the next run, from segment announce_segment's request
+       announce_from on; the datamodels' state is back by then */
+    int announcing;
+    uint32_t announce_segment, announce_from;
     /* scratch for blobs: an export moving between segments (it grows like
      * the output), and its translation */
     ta_output blob;

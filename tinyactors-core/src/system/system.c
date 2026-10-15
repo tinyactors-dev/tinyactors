@@ -801,6 +801,10 @@ void ta_system_deinit(ta_system *system) {
     for (uint32_t i = 0; i < system->requests.high_water_mark; i++) {
         if (!ta_pool_live(&system->requests, i)) continue;
         ta_request *request = (ta_request *)ta_pool_at(&system->requests, i);
+        if (request->kind == REQUEST_EXTERNAL_INVOKE) {
+            ta_system_external_free(system, i);
+            continue;
+        }
         ta_shared_string_release(&system->core, request->invokeid);
         if (request->kind != REQUEST_PENDING_SPAWN)
             ta_shared_string_release(&system->core, request->source);

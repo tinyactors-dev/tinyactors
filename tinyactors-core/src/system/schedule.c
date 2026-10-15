@@ -52,11 +52,7 @@ static uint32_t next_external(ta_system *system, uint32_t index) {
         uint32_t child = event->origin;
         if (child & TA_EXTERNAL_INVOKE_BIT) {
             uint32_t ri = ta_pool_resolve(&system->requests, child & ~TA_EXTERNAL_INVOKE_BIT);
-            if (ri != TA_NIL) {
-                ta_shared_string_release(
-                    core, ((ta_request *)ta_pool_at(&system->requests, ri))->invokeid);
-                ta_pool_free(&system->requests, ri);
-            }
+            if (ri != TA_NIL) ta_system_external_free(system, ri);
         }
         /* the invocation is complete (the event holds its own id ref) */
         ta_core_clear_invoke_child(core, instance, event->invoke_slot);

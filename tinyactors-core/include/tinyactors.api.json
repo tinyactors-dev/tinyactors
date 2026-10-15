@@ -269,6 +269,10 @@
       "value": 1
     },
     {
+      "name": "TA_EFFECT_FLAG_RESTORED",
+      "value": 2
+    },
+    {
       "name": "TA_EFFECT_INVOKE",
       "value": 3
     },

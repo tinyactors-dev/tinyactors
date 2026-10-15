@@ -1025,6 +1025,30 @@ static ta_status effect_copy(ta_host *host, uint32_t si, const ta_effect *effect
     return TA_OK;
 }
 
+/* After a restore, each external invocation that was running is announced
+ * again as a TA_EFFECT_INVOKE (TA_EFFECT_FLAG_RESTORED), so the embedder
+ * starts its service again, or tells the invoker it cannot. At the first
+ * run, before any actor runs, so the announcements come first in the batch
+ * the embedder drains after it: not at the restore (the effect retains its
+ * params, which needs the datamodels' state back), nor at a take (one the
+ * embedder makes for itself before running, as for host.config, would ack
+ * them unhandled). 0 when the effects cannot hold them all: the rest wait
+ * for the next run. */
+static int announce_invocations(ta_host *host) {
+    for (; host->announce_segment < host->segment_count; host->announce_segment++, host->announce_from = 0) {
+        host_segment *segment = &host->segments[host->announce_segment];
+        if (!segment->live) continue;
+        ta_effect effect;
+        uint32_t at;
+        while ((at = ta_system_external_invocation(segment->system, host->announce_from, &effect)) != TA_NIL) {
+            if (effect_copy(host, host->announce_segment, &effect, TA_NIL) != TA_OK) return 0;
+            host->announce_from = at + 1;
+        }
+    }
+    host->announcing = 0;
+    return 1;
+}
+
 uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
     if (host->running) { /* not during a run (host.h) */
         *out = (const ta_host_effect *)0;
@@ -1770,6 +1794,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         ta_router_time(host);
         if (host->expiry_behind) exhausted = 1;
     }
+    if (host->announcing && !announce_invocations(host)) exhausted = 1; /* after a restore */
     for (int round = 0; round < 64 && !full && !exhausted && !sync; round++) {
         int ran = 0;
         /* fair shares: a runaway segment must not starve the others */
@@ -2642,6 +2667,7 @@ ta_status ta_host_restore(const ta_host_environment *environment,
     host->retired = hd->retired;
     versions_recompute(host);
     clocks_sync(host);
+    host->announcing = 1; /* the external invocations, again, at the first run */
     *out = host;
     return TA_OK;
 }

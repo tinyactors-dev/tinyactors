@@ -92,7 +92,13 @@ Why the refusals:
   plus the datamodel's own snapshot; they need a drained outbox
   (`ta_system_snapshot`) or a quiescent host (effects
   acknowledged, no migration job: `ta_host_snapshot`). Hibernation blobs stay
-  with the host and are not part of a snapshot.
+  with the host and are not part of a snapshot. External invocations are
+  kept with their type, src, invoke id and params, but the services the
+  embedder runs are not in a snapshot: the restored host's first run
+  announces each invocation again (`TA_EFFECT_INVOKE` with
+  `TA_EFFECT_FLAG_RESTORED`), and the embedder starts a service (the real
+  one, or a stand-in on a copy) or answers the invoker with
+  `error.communication`.
 - **Migration** changes the chart, so it is observable by design: the session
   processes `error.platform.upgrade` (its `_event` until the next event; its
   data the previous bindings) before its mailbox. States are mapped by id and
@@ -182,7 +188,9 @@ state: they live in the region, so relocation and a system snapshot keep
 them, and a hibernation or an export leaves them where they were made. A host
 keeps the totals of the segments it retired, by chart name, in its own
 snapshot. The snapshot formats (`ta_system` `version` 3, the host's
-`SNAPSHOT_VERSION` 2) changed with them: older ones are refused.
+`SNAPSHOT_VERSION` 2) changed with them: older ones are refused. An external
+invocation's request keeps its type and params since `ta_system` `version`
+4, which refuses the older ones too.
 
 ## Trace policy (ADR 0007)
 

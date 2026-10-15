@@ -393,6 +393,45 @@ static void trace_invoked(ta_system *system, ta_instance *pin, const ta_core_out
 
 static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *out);
 
+void ta_system_external_free(ta_system *system, uint32_t ri) {
+    ta_core *core = &system->core;
+    ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
+    ta_shared_string_release(core, request->invokeid);
+    ta_shared_string_release(core, request->source);
+    ta_shared_string_release(core, request->type);
+    if (request->payload && request->pad < system->datamodel_count) {
+        const ta_datamodel_binding *binding = &system->datamodels[request->pad];
+        if (binding->vtable->release) binding->vtable->release(binding->datamodel, request->payload);
+    }
+    ta_pool_free(&system->requests, ri);
+}
+
+uint32_t ta_system_external_invocation(ta_system *system, uint32_t from, ta_effect *out) {
+    ta_core *core = &system->core;
+    for (uint32_t i = from; i < system->requests.high_water_mark; i++) {
+        if (!ta_pool_live(&system->requests, i)) continue;
+        const ta_request *request = (const ta_request *)ta_pool_at(&system->requests, i);
+        if (request->kind != REQUEST_EXTERNAL_INVOKE) continue;
+        uint32_t parent = ta_system_resolve_actor(system, request->actor);
+        if (parent == TA_NIL) continue;
+        ta_memset(out, 0, sizeof *out);
+        out->size = sizeof *out;
+        out->kind = TA_EFFECT_INVOKE;
+        out->actor = request->actor;
+        out->session = actor_at(system, parent)->serial;
+        out->token = ta_pool_handle(&system->requests, i);
+        out->io_processor = TA_NIL;
+        out->flags = TA_EFFECT_FLAG_RESTORED;
+        out->target = ta_shared_string_get(core, request->source);
+        out->event = ta_shared_string_get(core, request->type);
+        out->sendid = ta_shared_string_get(core, request->invokeid);
+        out->payload = request->payload;
+        out->datamodel = request->payload && request->pad < system->datamodel_count ? request->pad : TA_NIL;
+        return i;
+    }
+    return TA_NIL;
+}
+
 uint32_t ta_system_invoke(ta_system *system, uint32_t parent, const ta_core_out *out) {
     uint32_t pool = invoke(system, parent, out);
     trace_invoked(system, ta_actor_instance(system, actor_at(system, parent)), out);
@@ -420,8 +459,16 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
         request->slot = out->slot;
         request->invokeid = out->invokeid;
         ta_shared_string_retain(core, out->invokeid);
-        request->source = TA_NIL;
+        request->source = out->source; /* kept while it runs: a restore announces it again */
+        ta_shared_string_retain(core, out->source);
+        request->type = out->type;
+        ta_shared_string_retain(core, out->type);
         request->pad = core->chart_datamodel[ta_actor_chart(system, pa)];
+        const ta_datamodel_binding *binding = &system->datamodels[request->pad];
+        if (out->payload && binding->vtable->retain) { /* the effect's reference, and the request's */
+            binding->vtable->retain(binding->datamodel, out->payload);
+            request->payload = out->payload;
+        }
         uint32_t tok = ta_pool_handle(&system->requests, ri);
         effect->token = tok;
         effect->target = out->source;
@@ -589,12 +636,10 @@ void ta_system_uninvoke(ta_system *system, uint32_t parent, const ta_core_out *o
     if (out->child & TA_EXTERNAL_INVOKE_BIT) {
         uint32_t ri = ta_pool_resolve(&system->requests, out->child & ~TA_EXTERNAL_INVOKE_BIT);
         if (ri == TA_NIL) return;
-        ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
         ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_UNINVOKE, parent);
         if (effect) effect->token = out->child & ~TA_EXTERNAL_INVOKE_BIT;
         purge_from(system, parent, out->child);
-        ta_shared_string_release(core, request->invokeid);
-        ta_pool_free(&system->requests, ri);
+        ta_system_external_free(system, ri);
         return;
     }
     uint32_t c = ta_system_resolve_actor(system, out->child);
