@@ -3,10 +3,23 @@
  * Each case generates a pathological document at size n and 8n (deep
  * nesting, many siblings, many event names, deep event names, long descriptor lists, big
  * executable content, colliding generated ids, deep namespace scopes, many
- * inline documents, many documents per image) and compares the best-of-3
- * compile times. Linear work gives a ratio near 8; every case was quadratic
- * once (ratio near 64), which the bound below catches with a wide margin
- * for timer noise and sanitizers. */
+ * inline documents, many documents per image) and compares the best
+ * compile times of each. Linear work gives a ratio near 8; every case was
+ * quadratic once (ratio near 64), which the bound below catches with a wide
+ * margin for timer noise and sanitizers.
+ *
+ * A ratio of two timings is only as good as the worse of them, so both are
+ * taken the same way:
+ * - the process's CPU time, which time spent descheduled does not count
+ *   (the monotonic clock where a platform has none, as under wasmtime);
+ * - measurements of the same length: eight compiles of n in a row against
+ *   one compile of 8n. A short compile fits in a scheduler's time slice and
+ *   a long one does not, so on a busy machine a wall clock preempts only the
+ *   long one, and timing one compile of n would double the ratio;
+ * - the two interleaved, round after round, so a busy moment of the
+ *   machine falls on both rather than on one, and the best of each kept.
+ * The test runs alone (mise/core.rb, `alone:`), never beside other test
+ * programs. */
 #if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -127,53 +140,90 @@ static void g_deepinline(string_buffer *b, int n) { /* inline documents nested i
     put(b, "</scxml>");
 }
 
+#define ROUNDS 5
+
+/* The clock the timings are read from: the process's CPU time where the
+ * platform has it (wasmtime gives none), else the monotonic clock. */
+static clockid_t timer(void) {
+#ifdef CLOCK_PROCESS_CPUTIME_ID
+    struct timespec ts;
+    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts) == 0 && (ts.tv_sec != 0 || ts.tv_nsec != 0))
+        return CLOCK_PROCESS_CPUTIME_ID;
+#endif
+    return CLOCK_MONOTONIC;
+}
+
+static clockid_t timer_clock;
+
 static double now(void) {
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    clock_gettime(timer_clock, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
-/* Best of 3 compiles of n sources (all `text`, or `gen(n)` once). */
-static double compile_time(void (*generate)(string_buffer *, int), int n, int document_count,
-                           int *ok) {
-    string_buffer b = {NULL, 0, 0};
+/* A compile's input: `document_count` sources, all `gen(n)` (or one small
+ * chart when there is no generator). */
+typedef struct charts {
+    string_buffer text;
+    ta_source *source;
+    char *names;
+    uint32_t count;
+} charts;
+
+static void charts_make(charts *c, void (*generate)(string_buffer *, int), int n) {
+    int document_count = generate ? 1 : n;
+    memset(c, 0, sizeof *c);
     if (generate)
-        generate(&b, n);
+        generate(&c->text, n);
     else
-        put(&b, HEAD "<state id='a'><transition event='go' target='a'/></state></scxml>");
-    ta_source *source = (ta_source *)calloc((size_t)document_count, sizeof *source);
-    char *names = (char *)malloc((size_t)document_count * 16);
+        put(&c->text, HEAD "<state id='a'><transition event='go' target='a'/></state></scxml>");
+    c->source = (ta_source *)calloc((size_t)document_count, sizeof *c->source);
+    c->names = (char *)malloc((size_t)document_count * 16);
+    c->count = (uint32_t)document_count;
     for (int i = 0; i < document_count; i++) {
-        snprintf(names + 16 * i, 16, "c%d", i);
-        source[i].name.pointer = names + 16 * i;
-        source[i].name.length = (uint32_t)strlen(names + 16 * i);
-        source[i].text.pointer = b.data;
-        source[i].text.length = (uint32_t)b.length;
+        snprintf(c->names + 16 * i, 16, "c%d", i);
+        c->source[i].name.pointer = c->names + 16 * i;
+        c->source[i].name.length = (uint32_t)strlen(c->names + 16 * i);
+        c->source[i].text.pointer = c->text.data;
+        c->source[i].text.length = (uint32_t)c->text.length;
     }
+}
+
+static void charts_free(charts *c) {
+    free(c->names);
+    free(c->source);
+    free(c->text.data);
+}
+
+/* `times` compiles in a row: their time, and in *ok whether each compiled. */
+static double compile_times(const charts *c, int times, int *ok) {
     ta_compile_options options;
     memset(&options, 0, sizeof options);
     options.size = sizeof options;
-    double best = 1e9;
-    for (int rep = 0; rep < 3; rep++) {
+    *ok = 1;
+    double t0 = now();
+    for (int i = 0; i < times; i++) {
         ta_compile_result *result = NULL;
-        double t0 = now();
-        *ok = ta_compile_charts(&options, (ta_source_list){source, (uint32_t)document_count},
-                                &result) == TA_OK;
-        double t = now() - t0;
+        *ok &= ta_compile_charts(&options, (ta_source_list){c->source, c->count}, &result) == TA_OK;
         ta_compile_free(result);
-        if (t < best) best = t;
     }
-    free(names);
-    free(source);
-    free(b.data);
-    return best;
+    return now() - t0;
 }
 
 static void linear(const char *name, void (*generate)(string_buffer *, int), int n, int expect_ok) {
-    int ok1, ok8;
-    int documents = generate ? 1 : n;
-    double t1 = compile_time(generate, n, documents, &ok1);
-    double t8 = compile_time(generate, 8 * n, generate ? 1 : 8 * n, &ok8);
+    charts small, large;
+    charts_make(&small, generate, n);
+    charts_make(&large, generate, 8 * n);
+    int ok1 = 0, ok8 = 0;
+    double t1 = 1e9, t8 = 1e9;
+    for (int round = 0; round < ROUNDS; round++) {
+        double t = compile_times(&small, 8, &ok1) / 8;
+        if (t < t1) t1 = t;
+        t = compile_times(&large, 1, &ok8);
+        if (t < t8) t8 = t;
+    }
+    charts_free(&small);
+    charts_free(&large);
     double ratio = t8 / (t1 > 1e-6 ? t1 : 1e-6);
     fprintf(stderr, "  %-11s n=%-6d %8.2f ms   8n %8.2f ms   x%.1f\n", name, n, t1 * 1e3, t8 * 1e3,
             ratio);
@@ -183,6 +233,12 @@ static void linear(const char *name, void (*generate)(string_buffer *, int), int
 }
 
 static void test_linear(void) {
+    timer_clock = timer();
+#ifdef CLOCK_PROCESS_CPUTIME_ID
+    fprintf(stderr, "  timed by %s\n", timer_clock == CLOCK_PROCESS_CPUTIME_ID ? "CPU time" : "the monotonic clock");
+#else
+    fprintf(stderr, "  timed by the monotonic clock\n");
+#endif
     linear("deep", g_deep, 4000, 0);
     linear("wide", g_wide, 2000, 1);
     linear("ifs", g_ifs, 1000, 1);
