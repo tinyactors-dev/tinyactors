@@ -5,10 +5,9 @@ import asyncio
 import unittest
 
 import tinyactors
-from support import chart
+from support import fixture, load, text
 
-DOCUMENT = chart("<state id='s'><transition event='go'><log label='l' expr=\"'hi'\"/>"
-                 "<assign location='n' expr='n + 1'/></transition></state>", data="<data id='n' expr='0'/>")
+DOCUMENT = fixture("test_telemetry/log.python.scxml")
 
 
 def config(**telemetry):
@@ -132,10 +131,8 @@ class ApplicationTraces(unittest.TestCase):
         import time
 
         from support import APP
-        front = chart("<state id='s'><transition event='order'><send event='reserve' targetexpr='_event.data[\"to\"]'/>"
-                      "</transition></state>", name="front")
-        stock = chart("<state id='s'><transition event='reserve'><send type='%s' target='w' event='out'/></transition>"
-                      "<transition event='reserved'/></state>" % APP, name="stock")
+        front = fixture("test_telemetry/front.python.scxml")
+        stock = fixture("test_telemetry/stock.python.scxml")
         got, seen = [], []
 
         def processor(host, send):
@@ -256,8 +253,7 @@ class Stopping(unittest.TestCase):
         self.assertEqual(sorted(got), ["logs", "traces"])
 
 
-TWO = [("a.scxml", chart("<state id='s'><transition event='go'/></state>", name="a")),
-       ("b.scxml", chart("<state id='s'><transition event='go'/></state>", name="b"))]
+TWO = [("%s.scxml" % name, text(load("test_telemetry/quiet.python.scxml", name=name))) for name in ("a", "b")]
 
 
 def charts_traced(host, requests):

@@ -43,39 +43,7 @@ import tempfile
 import time
 
 import tinyactors
-from stress import BATCH, Store
-
-VERSIONS = {
-    "python": ("""<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='python' name='counter' initial='s'>
-  <datamodel><data id='n' expr='0'/><data id='last' expr='None'/></datamodel>
-  <state id='s'>
-    <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='report'><log label='count' expr="f'{_sessionid} {n} 1'"/></transition>
-  </state>
-</scxml>""", """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='python' name='counter' initial='s'>
-  <datamodel><data id='n' expr='0'/><data id='last' expr='None'/><data id='version' expr='2'/></datamodel>
-  <state id='s'>
-    <transition event='error.platform.upgrade'><assign location='n' expr="_event.data['n']"/><assign location='last' expr="_event.data['last']"/></transition>
-    <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='report'><log label='count' expr="f'{_sessionid} {n} {version}'"/></transition>
-  </state>
-</scxml>"""),
-    "ecmascript": ("""<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='counter' initial='s'>
-  <datamodel><data id='n' expr='0'/><data id='last' expr='null'/></datamodel>
-  <state id='s'>
-    <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='report'><log label='count' expr="_sessionid + ' ' + n + ' 1'"/></transition>
-  </state>
-</scxml>""", """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='counter' initial='s'>
-  <datamodel><data id='n' expr='0'/><data id='last' expr='null'/><data id='version' expr='2'/></datamodel>
-  <state id='s'>
-    <transition event='error.platform.upgrade'><assign location='n' expr='_event.data.n'/><assign location='last' expr='_event.data.last'/></transition>
-    <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='report'><log label='count' expr="_sessionid + ' ' + n + ' ' + version"/></transition>
-  </state>
-</scxml>"""),
-}
-
+from stress import BATCH, DATAMODELS, Store, read_chart
 
 def main():
     parser = argparse.ArgumentParser()
@@ -83,7 +51,7 @@ def main():
     parser.add_argument("--resident", type=int, default=1000)
     parser.add_argument("--events", type=int, default=100_000)
     parser.add_argument("--sample", type=int, default=25_000)
-    parser.add_argument("--datamodel", choices=sorted(VERSIONS), default="python")
+    parser.add_argument("--datamodel", choices=DATAMODELS, default="python")
     parser.add_argument("--seed", type=int, default=1)
     options = parser.parse_args()
     random.seed(options.seed)
@@ -168,7 +136,7 @@ def main():
                                                   "instanceBytes": 2048 * resident_room,
                                                   "stringBytes": 16384 + 64 * resident_room}}
     host = tinyactors.Host(config, wake=wake, log=log, migrated=migrated)
-    v1, v2 = VERSIONS[options.datamodel]
+    v1, v2 = (read_chart(version, options.datamodel) for version in ("counter-v1", "counter-v2"))
     with tinyactors.compile_charts([("counter.scxml", v1)]) as compiled:
         host.add_image(compiled.image)
     chart = host.chart("counter")

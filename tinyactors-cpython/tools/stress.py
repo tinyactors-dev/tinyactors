@@ -25,6 +25,7 @@ import argparse
 import array
 import collections
 import os
+import pathlib
 import random
 import resource
 import sqlite3
@@ -34,22 +35,16 @@ import time
 
 import tinyactors
 
-CHARTS = {
-    "python": """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='python' name='counter' initial='s'>
-  <datamodel><data id='n' expr='0'/><data id='last' expr='None'/></datamodel>
-  <state id='s'>
-    <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='report'><log label='count' expr="f'{_sessionid} {n}'"/></transition>
-  </state>
-</scxml>""",
-    "ecmascript": """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='counter' initial='s'>
-  <datamodel><data id='n' expr='0'/><data id='last' expr='null'/></datamodel>
-  <state id='s'>
-    <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='report'><log label='count' expr="_sessionid + ' ' + n"/></transition>
-  </state>
-</scxml>""",
-}
+# The charts are files in tools/charts/, <name>.<datamodel>.scxml.
+CHARTS = pathlib.Path(__file__).resolve().parent / "charts"
+DATAMODELS = ("ecmascript", "python")
+
+
+def read_chart(name, datamodel):
+    """The text of the chart file tools/charts/<name>.<datamodel>.scxml."""
+    return (CHARTS / ("%s.%s.scxml" % (name, datamodel))).read_text(encoding="utf-8")
+
+
 BATCH = 256
 
 
@@ -90,7 +85,7 @@ def main():
     parser.add_argument("--resident", type=int, default=1000)
     parser.add_argument("--events", type=int, default=200_000)
     parser.add_argument("--sample", type=int, default=10_000)
-    parser.add_argument("--datamodel", choices=sorted(CHARTS), default="python")
+    parser.add_argument("--datamodel", choices=DATAMODELS, default="python")
     parser.add_argument("--seed", type=int, default=1)
     options = parser.parse_args()
     random.seed(options.seed)
@@ -158,7 +153,7 @@ def main():
                                                "instanceBytes": 2048 * resident_room,
                                                "stringBytes": 16384 + 64 * resident_room}}
     host = tinyactors.Host(config, wake=wake, log=log)
-    with tinyactors.compile_charts([("counter.scxml", CHARTS[options.datamodel])]) as compiled:
+    with tinyactors.compile_charts([("counter.scxml", read_chart("counter", options.datamodel))]) as compiled:
         host.add_image(compiled.image)
     chart = host.chart("counter")
 

@@ -8,16 +8,11 @@ import unittest
 import weakref
 
 import tinyactors
-from support import APP, Logs, chart, host_with
+from support import APP, Logs, fixture, host_with
 
 # A chart that sends `out` with its event's data to the application's
 # processor, and logs what the answer brings.
-ECHO = chart(
-    "<state id='s'>"
-    "<transition event='go'><send type='%s' target='app' event='out'><content expr='_event.data'/></send></transition>"
-    "<transition event='ack'><log label='ack' expr='str(_event.data)'/></transition>"
-    "<transition event='error.communication'><log label='failed' expr='_event.sendid or \"none\"'/></transition>"
-    "</state>" % APP, name="echo")
+ECHO = fixture("test_host/echo.python.scxml")
 
 
 def spawn(host, name="echo", **options):
@@ -91,7 +86,7 @@ class Views(unittest.TestCase):
 
     def test_a_log_entry_is_a_thin_view(self):
         entries = []
-        doc = chart("<state id='s'><onentry><log label='l' expr=\"'text'\"/></onentry></state>")
+        doc = fixture("test_host/log.python.scxml")
         host = host_with([("c.scxml", doc)], log=lambda host, entry: entries.append((entry, entry.label)))
         session = spawn(host, "c")
         host.run_until_idle()
@@ -134,9 +129,7 @@ class Bounds(unittest.TestCase):
             gc.enable()
 
     def test_send_many_in_slices(self):
-        counter = chart("<state id='s'><transition event='inc'><assign location='n' expr='n + 1'/></transition>"
-                        "<transition event='show'><log label='n' expr='str(n)'/></transition></state>",
-                        name="counter", data="<data id='n' expr='0'/>")
+        counter = fixture("test_host/counter.python.scxml")
         logs = Logs()
         host = tinyactors.Host({"systemID": "t", "system": {"maxEvents": 4096}}, log=logs)
         with tinyactors.compile_charts([("counter.scxml", counter)]) as compiled:
@@ -278,9 +271,7 @@ class Lifetime(unittest.TestCase):
 
 class Inputs(unittest.TestCase):
     def test_send_many_and_spawn_params(self):
-        counter = chart("<state id='s'><transition event='inc'><assign location='n' expr='n + (_event.data or 1)'/></transition>"
-                        "<transition event='show'><log label='n' expr='str(n)'/></transition></state>",
-                        name="counter", data="<data id='n' expr='0'/>")
+        counter = fixture("test_host/counter-params.python.scxml")
         logs = Logs()
         host = host_with([("counter.scxml", counter)], log=logs)
         session = host.spawn(host.chart("counter"), params={"n": 10})
@@ -311,11 +302,7 @@ class Traces(unittest.TestCase):
     TRACEPARENT = "00-0102030405060708090a0b0c0d0e0f10-a1a2a3a4a5a6a7a8-01"
 
     def test_traces_cross(self):
-        relay = chart(
-            "<state id='s'>"
-            "<transition event='go'><send type='%s' target='app' event='first'/></transition>"
-            "<transition event='ack'><send type='%s' target='app' event='second'/></transition>"
-            "</state>" % (APP, APP), name="relay")
+        relay = fixture("test_host/relay.python.scxml")
         seen = []
         mode = {"keep": True}
 
@@ -346,10 +333,7 @@ class Traces(unittest.TestCase):
 
 class Requests(unittest.TestCase):
     def test_a_fetch_at_run_time_is_refused_in_c(self):
-        parent = chart(
-            "<state id='s'><invoke srcexpr=\"'missing.scxml'\"/>"
-            "<transition event='error.execution'><log label='refused' expr=\"'yes'\"/></transition></state>",
-            name="parent")
+        parent = fixture("test_host/parent.python.scxml")
         logs = Logs()
         host = host_with([("parent.scxml", parent)], log=logs)
         spawn(host, "parent")

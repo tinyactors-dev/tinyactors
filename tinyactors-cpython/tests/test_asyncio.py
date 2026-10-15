@@ -4,16 +4,9 @@ import asyncio
 import unittest
 
 import tinyactors
-from support import APP, Logs, chart
+from support import APP, Logs, fixture
 
-DOCUMENT = chart(
-    "<state id='s'>"
-    "<transition event='go'><send type='%s' target='app' event='out'><content expr='_event.data'/></send></transition>"
-    "<transition event='ack'><log label='ack' expr='str(_event.data)'/></transition>"
-    "<transition event='error.communication'><log label='failed' expr=\"'yes'\"/></transition>"
-    "<transition event='later'><send event='tick' delay='20ms'/></transition>"
-    "<transition event='tick'><log label='tick' expr=\"'yes'\"/></transition>"
-    "</state>" % APP, name="echo")
+DOCUMENT = fixture("test_asyncio/echo.python.scxml")
 CONFIG = {"systemID": "t", "ioProcessors": [{"type": APP}]}
 
 
@@ -80,11 +73,7 @@ class Asyncio(unittest.TestCase):
     def test_a_busy_host_lets_other_tasks_run(self):
         """A turn is bounded: a ping-pong between a handler and its actor
         (each answer makes the next send) yields to the loop."""
-        pong = chart("<state id='s'>"
-                     "<transition event='go'><send type='%s' target='app' event='ping'/></transition>"
-                     "<transition event='ack' cond='n &lt; 20000'><assign location='n' expr='n + 1'/>"
-                     "<send type='%s' target='app' event='ping'/></transition></state>" % (APP, APP),
-                     name="pong", data="<data id='n' expr='0'/>")
+        pong = fixture("test_asyncio/pong.python.scxml")
         ticks = []
 
         async def ticker():

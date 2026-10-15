@@ -30,6 +30,7 @@ import argparse
 import array
 import json
 import os
+import pathlib
 import platform
 import resource
 import subprocess
@@ -38,22 +39,14 @@ import tracemalloc
 
 import tinyactors
 
-CHARTS = {
-    "python": """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='python' name='fit' initial='idle'>
-  <datamodel><data id='count' expr='0'/><data id='label' expr="'actor'"/><data id='items' expr='[]'/></datamodel>
-  <state id='idle'>
-    <transition event='inc' cond='count &lt; 100'><assign location='count' expr='count + 1'/></transition>
-    <transition event='add'><script>items.append(_event.data)</script></transition>
-  </state>
-</scxml>""",
-    "ecmascript": """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='fit' initial='idle'>
-  <datamodel><data id='count' expr='0'/><data id='label' expr="'actor'"/><data id='items' expr='[]'/></datamodel>
-  <state id='idle'>
-    <transition event='inc' cond='count &lt; 100'><assign location='count' expr='count + 1'/></transition>
-    <transition event='add'><script>items.push(_event.data)</script></transition>
-  </state>
-</scxml>""",
-}
+# The charts are files in tools/charts/, <name>.<datamodel>.scxml.
+CHARTS = pathlib.Path(__file__).resolve().parent / "charts"
+DATAMODELS = ("ecmascript", "python")
+
+
+def read_chart(name, datamodel):
+    """The text of the chart file tools/charts/<name>.<datamodel>.scxml."""
+    return (CHARTS / ("%s.%s.scxml" % (name, datamodel))).read_text(encoding="utf-8")
 
 
 def resident():
@@ -76,7 +69,7 @@ def region(host):
 def measure(datamodel, actors):
     config = {"systemID": "measure", "system": {"maxActors": actors + 16}}
     with tinyactors.Host(config) as host:
-        with tinyactors.compile_charts([("fit.scxml", CHARTS[datamodel])]) as compiled:
+        with tinyactors.compile_charts([("fit.scxml", read_chart("fit", datamodel))]) as compiled:
             host.add_image(compiled.image)
         chart = host.chart("fit")
         warm = host.spawn(chart)  # the chart's code attached and warmed
@@ -115,7 +108,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--actors", type=int, default=10000)
     parser.add_argument("--json")
-    parser.add_argument("--one", choices=sorted(CHARTS))
+    parser.add_argument("--one", choices=DATAMODELS)
     options = parser.parse_args()
     if options.one:
         print(json.dumps(measure(options.one, options.actors)))

@@ -3,27 +3,10 @@
 import unittest
 
 import tinyactors
-from support import Logs, chart
+from support import Logs, element, find, fixture, load, text
 
 CONFIG = {"systemID": "t", "system": {"ticksPerSecond": 1000}}
-COUNTER = {
-    "python": chart(
-        "<state id='s'>"
-        "<transition event='inc'><assign location='n' expr='n + 1'/><assign location='items' expr='items + [_event.data]'/></transition>"
-        "<transition event='report'><log label='n' expr=\"f'{n} {items} {_event.name} {_sessionid == str(_event.data)}'\"/></transition>"
-        "<transition event='wait'><send event='late' delay='1s'><content expr=\"{'k': n}\"/></send></transition>"
-        "<transition event='late'><log label='late' expr='str(_event.data)'/></transition>"
-        "<transition event='odd'><assign location='other' expr='{1, 2}'/></transition>"
-        "</state>", name="counter", data="<data id='n' expr='0'/><data id='items' expr='[]'/><data id='other' expr='0'/>"),
-    "ecmascript": chart(
-        "<state id='s'>"
-        "<transition event='inc'><assign location='n' expr='n + 1'/><assign location='items' expr='items.concat([_event.data])'/></transition>"
-        "<transition event='report'><log label='n' expr=\"n + ' ' + JSON.stringify(items) + ' ' + _event.name + ' ' + (_sessionid == String(_event.data))\"/></transition>"
-        "<transition event='wait'><send event='late' delay='1s'><content expr='({k: n})'/></send></transition>"
-        "<transition event='late'><log label='late' expr='JSON.stringify(_event.data)'/></transition>"
-        "</state>", name="counter", datamodel="ecmascript",
-        data="<data id='n' expr='0'/><data id='items' expr='[]'/><data id='other' expr='0'/>"),
-}
+COUNTER = {datamodel: fixture("test_snapshot/counter.%s.scxml" % datamodel) for datamodel in ("python", "ecmascript")}
 
 
 def host_of(document, **options):
@@ -145,9 +128,10 @@ class Snapshot(unittest.TestCase):
         for datamodel in ("python", "ecmascript"):
             with self.subTest(datamodel=datamodel):
                 logs, clock = Logs(), tinyactors.SimulatedClock()
-                document = COUNTER[datamodel].replace("<state id='s'>", "<state id='s'><transition event='stop' target='f'/>")
-                document = document.replace("</scxml>", "<final id='f'/></scxml>")
-                with tinyactors.compile_charts([("counter.scxml", document)]) as compiled:
+                document = load("test_snapshot/counter.%s.scxml" % datamodel)
+                find(document, "state[@id='s']").insert(0, element("transition", event="stop", target="f"))
+                document.append(element("final", id="f"))
+                with tinyactors.compile_charts([("counter.scxml", text(document))]) as compiled:
                     image = bytes(compiled.image)
                 with tinyactors.Host(CONFIG, clock=clock) as host:
                     host.add_image(image)

@@ -3,39 +3,15 @@
 import unittest
 
 import tinyactors
-from support import Logs, chart, host_with
-
-UPGRADE = {
-    "python": "<assign location='n' expr=\"_event.data['n']\"/><assign location='seen' expr=\"sorted(_event.data)\"/>",
-    "ecmascript": "<assign location='n' expr='_event.data.n'/><assign location='seen' "
-                  "expr='Object.keys(_event.data).filter(function (k) { return _event.data[k] !== undefined; }).sort()'/>",
-}
-REPORT = {
-    "python": "f'{n} {version} {seen}'",
-    "ecmascript": "n + ' ' + version + ' ' + JSON.stringify(seen)",
-}
+from support import Logs, fixture, host_with
 
 
 def versions(datamodel):
     """Version 1 counts in n; version 2 takes n from error.platform.upgrade
     and adds `version`. quickjs's upgrade data names version 2's new
     variables too, undefined; `seen` leaves those out."""
-    v1 = chart("<state id='s'>"
-               "<transition event='inc'><assign location='n' expr='n + 1'/></transition>"
-               "<transition event='wait'><send event='later' delay='1s'/></transition>"
-               "<transition event='odd'><assign location='other' expr='{1, 2}'/></transition>"
-               "</state>", name="counter", datamodel=datamodel,
-               data="<data id='n' expr='0'/><data id='other' expr='0'/>")
-    v2 = chart("<state id='s'>"
-               "<transition event='error.platform.upgrade'>%s</transition>"
-               "<transition event='inc'><assign location='n' expr='n + 1'/></transition>"
-               "<transition event='report'><log label='n' expr=\"%s\"/></transition>"
-               "<transition event='later'><log label='later' expr='String(n)'/></transition>"
-               "</state>" % (UPGRADE[datamodel], REPORT[datamodel]), name="counter", datamodel=datamodel,
-               data="<data id='n' expr='0'/><data id='version' expr='2'/><data id='seen' expr='0'/>")
-    if datamodel == "python":
-        v2 = v2.replace("String(n)", "str(n)")
-    return v1, v2
+    return (fixture("test_migration/counter-v1.%s.scxml" % datamodel),
+            fixture("test_migration/counter-v2.%s.scxml" % datamodel))
 
 
 def add(host, document):
@@ -158,7 +134,7 @@ class Migration(unittest.TestCase):
 
     def test_one_session_or_one_chart(self):
         v1, v2 = versions("python")
-        other = chart("<state id='s'/>", name="other")
+        other = fixture("test_migration/other.python.scxml")
         done = []
         with host_with([("counter.scxml", v1), ("other.scxml", other)]) as host:
             a, b = host.spawn(host.chart("counter")), host.spawn(host.chart("counter"))

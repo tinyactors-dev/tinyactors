@@ -52,42 +52,9 @@ import tempfile
 import time
 
 import tinyactors
-from stress import BATCH, Store
+from stress import BATCH, DATAMODELS, Store, read_chart
 
 PAYMENT = "urn:example:payment"
-CHARTS = {}
-for _datamodel, _none, _upgrade, _report, _version_expr in (
-    ("python", "None", "<assign location='{0}' expr=\"_event.data['{0}']\"/>",
-     "f'{{_sessionid}} {{n}} {{late}} {{paid}} {version}'", "{version}"),
-    ("ecmascript", "null", "<assign location='{0}' expr='_event.data.{0}'/>",
-     "_sessionid + ' ' + n + ' ' + late + ' ' + paid + ' ' + {version}", "version"),
-):
-    _versions = []
-    for _version in (1, 2):
-        _data = "<data id='n' expr='0'/><data id='last' expr='%s'/><data id='late' expr='0'/><data id='paid' expr='-1'/>" % _none
-        _extra = ""
-        if _version == 2:
-            _data += "<data id='version' expr='2'/>"
-            _extra = "<transition event='error.platform.upgrade'>%s</transition>" % "".join(
-                _upgrade.format(name) for name in ("n", "last", "late", "paid"))
-        _report_expr = _report.format(version=_version_expr if _version == 2 else "1")
-        _versions.append("""<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='%s' name='order' initial='open'>
-  <datamodel>%s</datamodel>
-  <state id='order' initial='open'>
-    %s
-    <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='wait'><send event='late' delay='10s'/></transition>
-    <transition event='late'><assign location='late' expr='late + 1'/></transition>
-    <transition event='report'><log label='report' expr="%s"/></transition>
-    <state id='open'><transition event='pay' target='paying'/></state>
-    <state id='paying'>
-      <invoke id='payment' type='urn:example:payment' src='payment://live'><param name='amount' expr='n'/></invoke>
-      <transition event='paid' target='open'><assign location='paid' expr='1'/></transition>
-      <transition event='declined' target='open'><assign location='paid' expr='0'/></transition>
-    </state>
-  </state>
-</scxml>""" % (_datamodel, _data, _extra, _report_expr))
-    CHARTS[_datamodel] = tuple(_versions)
 
 
 def index(session):
@@ -194,13 +161,13 @@ def main():
     parser.add_argument("--resident", type=int, default=1000)
     parser.add_argument("--events", type=int, default=200_000)
     parser.add_argument("--sample", type=int, default=25_000)
-    parser.add_argument("--datamodel", choices=sorted(CHARTS), default="python")
+    parser.add_argument("--datamodel", choices=DATAMODELS, default="python")
     parser.add_argument("--seed", type=int, default=1)
     options = parser.parse_args()
     random.seed(options.seed)
     failures = []
     directory = tempfile.TemporaryDirectory()
-    v1, v2 = CHARTS[options.datamodel]
+    v1, v2 = (read_chart(version, options.datamodel) for version in ("order-v1", "order-v2"))
 
     resident_room = min(options.resident, options.actors) + 4 * BATCH
     config = {"systemID": "orders", "system": {"ticksPerSecond": 1000,

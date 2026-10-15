@@ -30,6 +30,7 @@ a second, the process's peak memory and the host's region per actor.
 
 import argparse
 import array
+import pathlib
 import random
 import resource
 import sys
@@ -41,48 +42,14 @@ import tinyactors
 
 BATCH = 256
 COUNTER = "urn:example:counter"
-CHARTS = {
-    "python": """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='python' name='client' initial='talking'>
-  <datamodel><data id='pongs' expr='0'/><data id='total' expr='-1'/><data id='seed' expr='0'/></datamodel>
-  <state id='talking'>
-    <invoke id='counter' type='urn:example:counter' src='counter://local'>
-      <param name='seed' expr='seed'/>
-    </invoke>
-    <transition event='go'><send target='#_counter' event='ping'><content expr="{'n': pongs}"/></send></transition>
-    <transition event='pong'><assign location='pongs' expr='pongs + 1'/></transition>
-    <transition event='end'><send target='#_counter' event='finish'/></transition>
-    <transition event='done.invoke.counter' target='finished'><assign location='total' expr="_event.data['total']"/></transition>
-    <transition event='leave' target='left'/>
-    <transition event='report'><log label='report' expr="f'{_sessionid} {pongs} {total} talking'"/></transition>
-  </state>
-  <state id='finished'>
-    <transition event='report'><log label='report' expr="f'{_sessionid} {pongs} {total} finished'"/></transition>
-  </state>
-  <state id='left'>
-    <transition event='report'><log label='report' expr="f'{_sessionid} {pongs} {total} left'"/></transition>
-  </state>
-</scxml>""",
-    "ecmascript": """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='client' initial='talking'>
-  <datamodel><data id='pongs' expr='0'/><data id='total' expr='-1'/><data id='seed' expr='0'/></datamodel>
-  <state id='talking'>
-    <invoke id='counter' type='urn:example:counter' src='counter://local'>
-      <param name='seed' expr='seed'/>
-    </invoke>
-    <transition event='go'><send target='#_counter' event='ping'><content expr='({n: pongs})'/></send></transition>
-    <transition event='pong'><assign location='pongs' expr='pongs + 1'/></transition>
-    <transition event='end'><send target='#_counter' event='finish'/></transition>
-    <transition event='done.invoke.counter' target='finished'><assign location='total' expr='_event.data.total'/></transition>
-    <transition event='leave' target='left'/>
-    <transition event='report'><log label='report' expr="_sessionid + ' ' + pongs + ' ' + total + ' talking'"/></transition>
-  </state>
-  <state id='finished'>
-    <transition event='report'><log label='report' expr="_sessionid + ' ' + pongs + ' ' + total + ' finished'"/></transition>
-  </state>
-  <state id='left'>
-    <transition event='report'><log label='report' expr="_sessionid + ' ' + pongs + ' ' + total + ' left'"/></transition>
-  </state>
-</scxml>""",
-}
+# The charts are files in tools/charts/, <name>.<datamodel>.scxml.
+CHARTS = pathlib.Path(__file__).resolve().parent / "charts"
+DATAMODELS = ("ecmascript", "python")
+
+
+def read_chart(name, datamodel):
+    """The text of the chart file tools/charts/<name>.<datamodel>.scxml."""
+    return (CHARTS / ("%s.%s.scxml" % (name, datamodel))).read_text(encoding="utf-8")
 
 
 class Counter:
@@ -135,7 +102,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--actors", type=int, default=200_000)
     parser.add_argument("--events", type=int, default=1_000_000)
-    parser.add_argument("--datamodel", choices=sorted(CHARTS), default="python")
+    parser.add_argument("--datamodel", choices=DATAMODELS, default="python")
     parser.add_argument("--seed", type=int, default=1)
     options = parser.parse_args()
     random.seed(options.seed)
@@ -147,7 +114,7 @@ def main():
     config = {"systemID": "services", "system": {"maxActors": room, "maxRequests": room, "maxEvents": room + 16384,
                                                  "instanceBytes": 512 * room, "stringBytes": 16384 + 64 * room}}
     host = tinyactors.Host(config, log=world.log, services={COUNTER: world.start})
-    with tinyactors.compile_charts([("client.scxml", CHARTS[options.datamodel])]) as compiled:
+    with tinyactors.compile_charts([("client.scxml", read_chart("client", options.datamodel))]) as compiled:
         host.add_image(compiled.image)
     chart = host.chart("client")
 

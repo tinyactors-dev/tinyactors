@@ -6,29 +6,10 @@ import unittest
 import weakref
 
 import tinyactors
-from support import Logs, chart, host_with
+from support import Logs, fixture, host_with
 
-TYPE = "urn:test:echo"
-CLIENT = {
-    "python": chart(
-        "<state id='s'>"
-        "<invoke id='echo' type='urn:test:echo' src='echo://here'><param name='hello' expr=\"'world'\"/></invoke>"
-        "<transition event='ask'><send target='#_echo' event='question'><content expr='_event.data'/></send></transition>"
-        "<transition event='answer'><log label='answer' expr=\"f'{_event.data} {_event.invokeid}'\"/></transition>"
-        "<transition event='done.invoke.echo' target='over'><log label='done' expr='str(_event.data)'/></transition>"
-        "<transition event='error.communication'><log label='error' expr=\"'communication'\"/></transition>"
-        "<transition event='leave' target='over'/>"
-        "</state><state id='over'/>", name="client"),
-    "ecmascript": chart(
-        "<state id='s'>"
-        "<invoke id='echo' type='urn:test:echo' src='echo://here'><param name='hello' expr=\"'world'\"/></invoke>"
-        "<transition event='ask'><send target='#_echo' event='question'><content expr='_event.data'/></send></transition>"
-        "<transition event='answer'><log label='answer' expr=\"JSON.stringify(_event.data) + ' ' + _event.invokeid\"/></transition>"
-        "<transition event='done.invoke.echo' target='over'><log label='done' expr='JSON.stringify(_event.data)'/></transition>"
-        "<transition event='error.communication'><log label='error' expr=\"'communication'\"/></transition>"
-        "<transition event='leave' target='over'/>"
-        "</state><state id='over'/>", name="client", datamodel="ecmascript"),
-}
+TYPE = "urn:test:echo"  # the fixtures' <invoke type="urn:test:echo">
+CLIENT = {datamodel: fixture("test_services/client.%s.scxml" % datamodel) for datamodel in ("python", "ecmascript")}
 
 
 class Echo:
@@ -167,9 +148,7 @@ class Services(unittest.TestCase):
         self.assertIsNone(alive[0]())
 
     def test_autoforward_reaches_the_service(self):
-        document = chart("<state id='s'><invoke id='echo' type='urn:test:echo' src='echo://here' autoforward='true'/>"
-                         "<transition event='answer'><log label='answer' expr='str(_event.data)'/></transition>"
-                         "</state>", name="client")
+        document = fixture("test_services/autoforward.python.scxml")
         logs, record = Logs(), []
 
         class Forwarded:  # every external event of the invoker reaches it, its own answers too
@@ -224,10 +203,7 @@ class Services(unittest.TestCase):
         self.assertEqual(logs.labelled("error"), ["communication", "communication"])
 
     def test_a_failure_to_start_an_invocation_cancelled_already_is_not_reported(self):
-        document = chart("<state id='s'><invoke id='echo' type='urn:test:echo' src='echo://here'/>"
-                         "<transition event='leave' target='over'/></state>"
-                         "<state id='over'><transition event='error.communication'>"
-                         "<log label='error' expr=\"'late'\"/></transition></state>", name="client")
+        document = fixture("test_services/cancelled.python.scxml")
         logs = Logs()
 
         def start(host, invocation):

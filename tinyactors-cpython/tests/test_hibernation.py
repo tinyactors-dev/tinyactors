@@ -5,24 +5,9 @@ import gc
 import unittest
 
 import tinyactors
-from support import APP, Logs, chart, host_with
+from support import APP, Logs, element, find, fixture, host_with, load, text
 
-COUNTER = {
-    "python": chart(
-        "<state id='s'>"
-        "<transition event='inc'><assign location='n' expr='n + 1'/><assign location='items' expr='items + [_event.data]'/></transition>"
-        "<transition event='report'><log label='n' expr=\"f'{n} {items} {_event.name}'\"/></transition>"
-        "<transition event='last'><log label='last' expr='str(_event.data)'/></transition>"
-        "<transition event='wait'><send event='later' delay='1s'/></transition>"
-        "</state>", name="counter", data="<data id='n' expr='0'/><data id='items' expr='[]'/>"),
-    "ecmascript": chart(
-        "<state id='s'>"
-        "<transition event='inc'><assign location='n' expr='n + 1'/><assign location='items' expr='items.concat([_event.data])'/></transition>"
-        "<transition event='report'><log label='n' expr=\"n + ' ' + JSON.stringify(items) + ' ' + _event.name\"/></transition>"
-        "<transition event='last'><log label='last' expr='JSON.stringify(_event.data)'/></transition>"
-        "<transition event='wait'><send event='later' delay='1s'/></transition>"
-        "</state>", name="counter", datamodel="ecmascript", data="<data id='n' expr='0'/><data id='items' expr='[]'/>"),
-}
+COUNTER = {datamodel: fixture("test_hibernation/counter.%s.scxml" % datamodel) for datamodel in ("python", "ecmascript")}
 
 
 class Store:
@@ -63,13 +48,15 @@ class Hibernation(unittest.TestCase):
         """_event stays bound to the last event across hibernation (SCXML
         5.10): the blob carries it, and the <onexit> of an actor terminated
         at rest reads it."""
-        exits = {"python": "<onexit><log label='exit' expr=\"f'{_event.name} {_event.data}'\"/></onexit>",
-                 "ecmascript": "<onexit><log label='exit' expr=\"_event.name + ' ' + JSON.stringify(_event.data)\"/></onexit>"}
+        exits = {"python": "f'{_event.name} {_event.data}'",
+                 "ecmascript": "_event.name + ' ' + JSON.stringify(_event.data)"}
         for datamodel, expected in (("python", "inc {'k': 7}"), ("ecmascript", 'inc {"k":7}')):
             with self.subTest(datamodel=datamodel):
                 logs, store = Logs(), Store()
-                document = COUNTER[datamodel].replace("<state id='s'>", "<state id='s'>" + exits[datamodel])
-                with host_with([("counter.scxml", document)], log=logs, wake=store) as host:
+                document = load("test_hibernation/counter.%s.scxml" % datamodel)
+                on_exit = element("onexit", element("log", label="exit", expr=exits[datamodel]))
+                find(document, "state[@id='s']").insert(0, on_exit)
+                with host_with([("counter.scxml", text(document))], log=logs, wake=store) as host:
                     session = host.spawn(host.chart("counter"))
                     host.send(session, "inc", {"k": 7})
                     host.run_until_idle()
@@ -116,8 +103,10 @@ class Hibernation(unittest.TestCase):
         and delivers it."""
         logs, store = Logs(), Store()
         clock = tinyactors.SimulatedClock()
-        document = COUNTER["python"].replace("</state>", "<transition event='later'><log label='later' expr='str(n)'/></transition></state>")
-        with host_with([("counter.scxml", document)], log=logs, wake=store, clock=clock) as host:
+        document = load("test_hibernation/counter.python.scxml")
+        later = element("transition", element("log", label="later", expr="str(n)"), event="later")
+        find(document, "state[@id='s']").append(later)
+        with host_with([("counter.scxml", text(document))], log=logs, wake=store, clock=clock) as host:
             session = host.spawn(host.chart("counter"))
             host.send(session, "inc", 0)
             host.send(session, "wait")
@@ -143,10 +132,7 @@ class Hibernation(unittest.TestCase):
 
     def test_a_value_outside_the_table_keeps_the_actor_resident(self):
         logs = Logs()
-        document = chart("<state id='s'>"
-                         "<transition event='odd'><assign location='v' expr='{1, 2}'/></transition>"
-                         "<transition event='report'><log label='v' expr='str(sorted(v))'/></transition></state>",
-                         name="odd", data="<data id='v' expr='0'/>")
+        document = fixture("test_hibernation/odd.python.scxml")
         with host_with([("odd.scxml", document)], log=logs) as host:
             session = host.spawn(host.chart("odd"))
             host.send(session, "odd")
