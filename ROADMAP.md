@@ -955,6 +955,20 @@ In progress beside M0, in core:
 - **ADR 0012: lifetimes follow the loop.** The documents are step 8.1
   (done); core's change is step 8.2.
 
+In staticjs, ADR 0013 (the JavaScript package, `@tinyactors/staticjs`):
+
+1. The library's requests, each with its tests and its documentation in
+   `staticjs.h` and the embedding guide: R6, a compile error's subject
+   that outlives `sjs_compile` (done, `1533735`); R3, iterators read; R4,
+   a regular expression's source and flags; R2, Dates and Temporal values
+   made and read; R7, a frame's function; R5, a native's release hook;
+   R1, a function value called; R8, values read from and written as JSON
+   and CBOR, with the conformance suite's value cases.
+2. `staticjs-js/`: its `AGENTS.md`, `docs/api-map.md`, the C layer and its
+   lint, the conversions and their tests, `load` for Node and browsers
+   with a Chromium test, packaging ready to publish, and a changelog.
+3. `staticjs/examples/wasm/` and the wasm guide give way to the package.
+
 ## Deferred
 
 Decided not to do now; each comes back as its own proposal or roadmap

@@ -1,9 +1,10 @@
 # A JavaScript API for staticjs.wasm
 
-**Status: Sketch.** Touches: a new package, `staticjs-js/`
-(`@tinyactors/staticjs`), with a C layer of its own; staticjs's release
-packaging; seven small additions to staticjs's C API ("Requests to
-staticjs"), one of which waits on a fix to a staticjs bug.
+**Status: Adopted → [ADR 0013](../adr/0013-staticjs-javascript-package.md)**
+(2026-10-15), which records the maintainer's decisions and adds request
+R8 (values read from and written as JSON and CBOR). Touches: a new
+package, `staticjs-js/` (`@tinyactors/staticjs`), with a C layer of its
+own; staticjs's release packaging; additions to staticjs's C API.
 
 The maintainer approved the direction (2026-10-14). This revision answers a second adversarial review; "The review, answered" lists each finding of both reviews and where it went.
 
