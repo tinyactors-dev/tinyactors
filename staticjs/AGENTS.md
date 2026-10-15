@@ -115,10 +115,21 @@ staticjs with Node and quickjs-wasi.
 
 - Before committing a change to `vm.c`, `value.c`, `builtins.c`,
   `memory.c`, or the hot paths of the parser and the compiler, run
-  `mise run bench-compare <commit before it>` and quote its table, with
-  the machine hash, in the commit body. Claim only what it flags: a
-  change within the runs' noise, or marked `?`, is not evidence either
-  way (`docs/internals/benchmarks.md`, "Noise", says how far a build
+  `mise run bench-compare <commit before it> <prefix> --quick` for the
+  cases the change runs (`vm` and `eval.guard` for a change to starting
+  or running an evaluation, `eval.json` for JSON, `write` for the
+  writer; `build/bench --list` lists the names), and quote its
+  table, with the machine hash, in the commit body. It takes minutes; a
+  full comparison takes 30 to 60, too long for every commit.
+- **Once per batch** of such commits (a request implemented over several
+  commits, a day's work), run the full `mise run bench-compare <commit
+  before the batch>` against its last commit, and quote it in a commit
+  of its own or the batch's last. It catches what a filter missed; a row
+  it flags is bisected within the batch. Compile nothing while it runs:
+  the build shares the machine's CPUs with it.
+- Claim only what a comparison flags: a change within the runs' noise,
+  or marked `?`, is not evidence either way
+  (`docs/internals/benchmarks.md`, "Noise", says how far a build
   compared with itself moves).
 - A new case in `bench/bench.c` gets a name (`group.subject[.variant]`),
   a unit, its sizes (L for linear work; Q for work that is quadratic today,
