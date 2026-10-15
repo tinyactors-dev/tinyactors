@@ -20,7 +20,7 @@ breaking [the rule](staticjs.md#the-rule).
   to call the host's tools concurrently and get control back to the host
   while those run.
 - **Then the C embedder**: a tool call that takes time cannot be a
-  synchronous native (`include/staticjs.h:351`: "must finish quickly").
+  synchronous native (`include/staticjs.h:353`: "must finish quickly").
   Today such a host must split a program by hand around every call.
 - **The binding author** (`staticjs-js`) maps a deferred native onto a
   JavaScript promise: one new run status and one call.
@@ -48,10 +48,15 @@ against it.
 
 1. **One evaluation per evaluator, driven by fuel, on an explicit stack.**
    `sjs_vm_run(vm, fuel)` returns `SJS_RUN_DONE`, `SJS_RUN_PAUSED` or
-   `SJS_RUN_FAULT` (`include/staticjs.h:738`); frames and slots are arrays
+   `SJS_RUN_FAULT` (`include/staticjs.h:739`); frames and slots are arrays
    in `sjs_vm` (`src/vm.h`, `struct sjs_vm`), never the C stack (AGENTS.md,
    "No recursion"). An evaluation pauses anywhere, a callback of `map`
    included, because a looping built-in is a frame too (`FRAME_LOOP`).
+   Iterator helpers are the exception to laziness: a helper runs its
+   callback over every value when it is called, not when its result is
+   read (`docs/guide/language.md`, "Iterators";
+   `docs/internals/builtins-status.md`), which no program can tell while a
+   callback can only fault.
 2. **The only abnormal exit is a fault, and a fault ends the evaluation.**
    Nothing catches it; `cut` releases the stack (`src/vm.c:73`).
 3. **Values are never changed once shared**, and a function changes a
@@ -63,7 +68,10 @@ against it.
    takes the value before the right-hand side runs and stores it after:
    "The store follows the whole value on every path, so the move is never
    seen; a fault ends the evaluation, as always"
-   (`docs/internals/mutation.md`, "Appending to a let"). `sort` on a
+   (`docs/internals/mutation.md`, "Appending to a let"). A `let`
+   reassigned from its own value (`xs = f(xs)`, `it = it.map(g)`) moves
+   its last read even when reads follow, as the store cancels them
+   (`store_slot`, `src/compiler.c:908`). `sort` on a
    variable or a path leaves the place undefined while toSorted's loop,
    comparator included, runs (`src/vm.c:2067`, `src/vm.c:2593`).
 5. **Every jump goes forward, and a running function cannot be entered
@@ -74,7 +82,8 @@ against it.
    (`sjs_native_call`, `include/staticjs.h:357`).
 7. **Programs and closures outlive an evaluation**; a closure called in a
    later evaluation reads its realm's globals (`sjs_run_params.function`).
-8. **The parser already refuses** `try`, `throw` (`src/parser.c:1168`),
+8. **The parser already refuses** `try` and `throw` ("staticjs has no
+   exceptions", `src/parser.c:3067`),
    `async` (`src/parser.c:1086`) and `await` (`src/parser.c:1178`), and
    reads arrow parameter lists ahead (`max_lookahead`).
 
@@ -108,11 +117,23 @@ error's `name` and `message` equal V8's and `diff-node` checks them.
 `JSON.parse` is the first candidate: it is the call people wrap in `try`.
 That is a follow-up per built-in, not part of this design.
 
+**Eager iterator helpers.** In JavaScript
+`try { [1,2].values().map((x) => { throw 1 }); r = "made" } catch { r = "caught" }`
+gives `"made"`: the callback never runs, as nothing reads the helper.
+`[1,2,3].values().map((x) => { if (x === 3) throw 0; return x; }).take(2).toArray()`
+gives `[1,2]`. staticjs runs the callbacks when the helper is called
+(fact 1), so with `catch` it would give `"caught"` and a throw, a
+different value. Until helpers are lazy, **a throw that leaves an iterator
+helper's callback is a fault**, never caught: the unwinder faults when it
+meets a helper's loop frame. The same eagerness calls natives in another
+order than JavaScript; part 2 inherits that (below).
+
 ### Error values
 
 `new Error(message, { cause })`, and `TypeError`, `RangeError`,
 `SyntaxError` the same way, make a new value kind. Its own properties are
-`message` and `cause`, which JavaScript makes non-enumerable: `Object.keys`
+`message`, only when one was given, and `cause`, only when the options
+have the key (`Object.hasOwn` can tell), both non-enumerable: `Object.keys`
 gives `[]`, `JSON.stringify` gives `"{}"`, `{...e}` gives `{}`, and
 `String(e)` gives `"Error: x"` (spike). `name` comes from the kind. `stack`
 is the engine's text, so reading it faults. `instanceof` stays out; a
@@ -129,11 +150,17 @@ reads the slot. Callers cannot see a callee's slots, so only a handler in
 
 | Window | Today | With a handler in the function | Fix |
 |---|---|---|---|
-| Last read moves (`TAKE_LOCAL`) into a callee, which changes it in place and throws | never seen | the `catch` reads `undefined`; JavaScript gives `[1,2]` | compiler: a read inside a `try` is not last while a `catch`, a `finally`, or code after the `try` reads the slot. Then the callee's change faults ("held elsewhere"), which the rule allows |
-| A `return` inside a `try` ends its path, so its reads move (`mutation.md`, "Last reads in branches") | never seen | `try { return use(x) } catch { return x }` | compiler: a `return` inside a `try` with a handler does not end the path for the slots the handler reads |
-| Append to a `let` takes the value before the right-hand side | never seen | `s` is `undefined` after `s = s + f()` throws; JavaScript keeps `"ab"` | compiler: evaluate the right-hand side first, then take, then append (`APPEND slot`). Nothing in the right-hand side can read or change `s` (a `let` is never captured, and a right-hand side that reads `s` already keeps its copy), and `+` on what staticjs accepts calls nothing, so the order cannot be seen |
-| `sort` takes the array from its variable or path while its comparator runs | never seen | the variable is `undefined` after a comparator throws; JavaScript leaves the array unsorted | evaluator: unwinding a sort's loop frame puts `LOOP_RECEIVER` back in its place. The sort works on scratch arrays and orders the receiver only at its end (`src/builtins.c`, `sort_step`), so the receiver is the unsorted original |
-| Others that take a value out while code may run | | | **untraced**: an audit of every opcode that leaves a slot or a place empty (iterator helpers' `next` with a callback first). Each gets one of the two fixes, or a compile-time refusal inside a `try` |
+| Last read moves (`TAKE_LOCAL`) into a callee, which changes it in place and throws | never seen | the `catch` reads `undefined`; JavaScript gives `[1,2]` | compiler: a read inside a `try` is not last while a `catch`, a `finally`, or code after the `try` reads the slot. Plain reads need nothing new: the handler's code is compiled later, and its read cancels the earlier one (`read_slot`, `src/compiler.c:866`). Then the callee's change faults ("held elsewhere"), which the rule allows |
+| A `return` inside a `try` ends its path, so its reads move (`end_branch`, `src/compiler.c:928`) | never seen | `try { return use(x) } catch {} return x` | compiler: the move is decided at the `return`, before the handler and the code after the `try` are compiled. Inside a `try` with a handler, park it instead (as branches' reads are parked), and move it at the `try`'s end only if neither the handler nor anything after the `try` read the slot |
+| A `let` reassigned from its own value moves its read (`store_slot`, `src/compiler.c:908`) | never seen | `xs` is `undefined` after `xs = f(xs)` throws; JavaScript keeps the old value | compiler: the same deferral: inside a `try` with a handler, the store's move waits for the `try`'s end, and is cancelled by any read of the slot in the handler or after the `try` |
+| Append to a `let` takes the value before the right-hand side | never seen | `s` is `undefined` after `s = s + f()` throws; JavaScript keeps `"ab"` | compiler, by form: `s += e` and a template with one substitution evaluate `e` first, then take, then append (`APPEND slot`); nothing in `e` can read or change `s`, and one `+` after `e` is where JavaScript's runs too. A chain `s = s + e1 + e2` cannot be reordered: each `+` runs before the next operand, and a `+` can fault where JavaScript throws (`1n + 1`), so moving `e2` ahead of it would let a later throw be caught first. Inside a `try` with a handler, a chain keeps its copy (quadratic, correct) |
+| `sort` takes the array from its variable or path while its comparator runs | never seen | the variable is `undefined` after a comparator throws; JavaScript leaves the array unsorted | evaluator: unwinding a sort's loop frame puts `LOOP_RECEIVER` back. The sort works on scratch arrays and orders the receiver only at its end (`sort_step`, `src/builtins.c:2371`), so the receiver is the unsorted original. A variable's place is the slot `SORTED` names; a path's is not in the frame: `PATH_SORTED` walks it again from the reference and keys below (`src/vm.c:2595`), so the unwinder decodes the caller's next instruction and does the same walk |
+| Iterator helpers run callbacks eagerly | never seen | see above | the unwinder faults at a helper's loop frame |
+
+An audit of every place in `vm.c` and `builtins.c` that writes
+`undefined` into a slot found no other window: reduce's accumulator, a
+receiver taken by a method, `Object.assign`'s target and a path's store
+empty nothing a program can read while code runs.
 
 The rule of thumb for each window: close it in the compiler when the order
 cannot be seen, otherwise give the unwinder a restore. Every case gets a
@@ -166,15 +193,20 @@ variable of the function that holds it alone when nothing else does, so
     return, throw; and its value). A `return` inside a `try` with a
     `finally` stores the completion and jumps forward to it;
     `END_FINALLY` then goes on, returns or rethrows, to the next
-    `finally` out when there is one. Every jump stays forward (fact 5);
+    `finally` out when there is one. Every jump stays forward (fact 5):
+    handlers and `finally` lie after their regions;
   - the move rules of the table above;
   - the matcher (`src/matcher.c`) passes the new events through, and a
-    shape never matches a body with a `try`.
+    shape never matches a body with a `try` or a `throw`, as a shape's C
+    path would skip the throw.
 - **Evaluator:** `THROW` sets the thrown value and unwinds: from the top
   frame down, a code frame whose table covers its `pc` cuts the stack to
   the handler's height, pushes the value and jumps; any other frame is cut
   (a loop frame through `sjs_loop_free`, a sort restoring its receiver
-  first), a unit of fuel per frame. Past frame 0 the evaluation ends with
+  first, an iterator helper's turning the throw into a fault), a unit of
+  fuel per frame. Unwinding can run out of fuel midway, so its state
+  (the value, the frame reached) lives in `sjs_vm` and the next run goes
+  on with it. Past frame 0 the evaluation ends with
   the value thrown. A native may throw: `sjs_native_call` gains a flag
   that makes its `result` the thrown value.
 - **Values and built-ins:** the error kinds above, in `builtins.md`'s
@@ -190,10 +222,14 @@ variable of the function that holds it alone when nothing else does, so
 
 Nothing staticjs shares can change (fact 3), so two interleaved async
 functions cannot see each other's work except through what they return.
-Order is observable in two places only: which promise settles first
-(`Promise.race`, `Promise.any`), and the order in which natives are
-called. Both must match JavaScript's job order exactly; everything else
-about interleaving is invisible. That keeps the surface small, and says
+Order is observable in three places: which promise settles first
+(`Promise.race`, `Promise.any`), the order in which natives are called,
+and which job gets which `Math.random` draw (the generator is the
+evaluator's, `src/vm.h`). All three must match JavaScript's job order
+exactly; everything else about interleaving is invisible. Eager iterator
+helpers already call natives in an order JavaScript does not, inside one
+job; that is a fault of today's helpers to fix with laziness, not of the
+job order. That keeps the surface small, and says
 what the tests must pin down.
 
 ### Promises as values
@@ -207,7 +243,11 @@ are freed when the evaluation ends, all at once; a settled record also
 drops its reactions at once, so a long evaluation does not keep what it
 finished with. A handle read after its evaluation ended faults ("a promise
 belongs to the evaluation that made it"), as a closure can carry one out
-(fact 7). The writer faults on a promise.
+(fact 7), even into another evaluator (`sjs_run_params.function`). So a
+handle names its evaluation as well as its record: an evaluation number
+unique in the context, checked with the generation, or an index and
+generation alone would match a live record of another evaluator.
+**Untraced:** how many bits that takes in `sjs_value`. The writer faults on a promise.
 
 **Unverified:** whether records should also be reference counted by their
 handles, so that one nothing holds is freed before the end. The cost is a
@@ -228,15 +268,22 @@ need not have at first.
 
 An `await` is in the body of the async function itself, so when it
 suspends exactly one frame suspends: the top one. `AWAIT` moves the frame
-record and its slots `[base, sp)` into an activation record, without
-touching a reference count (a move), removes the frame, and pushes the
-function's promise where its return value would go, as `RETURN` does. The
+record and the stack from `bottom` to `sp` into an activation record,
+removes the frame, and pushes the function's promise at `bottom`. The
+range starts at `bottom`, not at `base`: a code frame does not hold its
+closure (`enter_closure` stores the pointer without a reference,
+`src/vm.c:762`); the callee slot below `base` does, and `RETURN`'s cut
+to `bottom` (`src/vm.c:1502`) would free it, leaving a resumed frame to
+read freed captures. Moving the callee slot with the rest keeps it held,
+and moves no count. The
 caller goes on, as JavaScript's does. The awaited promise's reaction
 owns the activation, alone. A job that resumes it copies the slots back
 to the top of the stack, pushes the frame, and either pushes the value or
 throws it at the `AWAIT`'s `pc`, where the handler table of part 1 finds a
-`catch`. `RETURN` from an async frame resolves its promise, and pushes the
-promise only when the frame was entered by a call, not by a job.
+`catch`. Returning from an async frame resolves its promise, and pushes the
+promise only when the frame was entered by a call, not by a job: an
+opcode of its own (`ASYNC_RETURN`), so `RETURN`, which runs in the hot
+`execute`, tests nothing new.
 
 An async function called as a loop's callback (`xs.map(async (x) =>
 ...)`) cannot keep its frame for the whole loop, as a synchronous closure
@@ -269,7 +316,10 @@ sjs_vm_settle(vm, &(sjs_settlement){ .ticket = t, .value = v, .rejected = false 
 2. take the next job and run it (back to 1);
 3. with no job left: if a rejected promise has no handler, fault
    ("a promise was rejected and nothing handled it"), as Node exits with
-   the error (spike: `p.catch` in a later timeout is too late);
+   the error (spike: `p.catch` in a later timeout is too late). The
+   evaluation's result promise counts as handled, by the host, so
+   `(async () => { throw 1 })()` as a program's value ends as step 5 says;
+   where Node would report it as unhandled, the host is the handler;
 4. take the next settlement, settle its promise, and go to 2;
 5. with nothing queued: if tickets are pending, return the new status
    **`SJS_RUN_WAITING`**: control is the host's until it settles one; else
@@ -297,11 +347,13 @@ gone from the stack, so a function can schedule itself through a promise.
 
 ```js
 const step = (k) => Promise.resolve(k).then((g) => g(g));
-step(step)
+export const r = step(step);
 ```
 
-`step` is never running when `g(g)` enters it, so `closure_running`
-allows it, and the jobs never end; fuel stops it, but the structural
+Its synchronous form compiles too (nothing refuses passing a function to
+itself) and faults when it runs: "this function is already running". With
+the promise, `step` is never running when `g(g)` enters it, so
+`closure_running` allows it, and the jobs never end; fuel stops it, but the structural
 guarantee is gone. The proposed rule: **a job carries its lineage**, the
 functions that were running when its reaction was registered (an `await`,
 a `then`), and a function in the lineage cannot be entered in that job.
@@ -312,9 +364,15 @@ other is as short. Resuming an activation is not entering its function.
 Programs that keep working: `Promise.all(xs.map(async (x) => ...))`,
 `await f(); await f();` (each `f` finished before the next; the lineage is
 the scheduler's, not the resolver's), and `p.then(a).then(b).then(a)`
-(all three registered by the same function). **Plausible**: the argument
-above needs writing out as a proof in the internals note, and spec cases
-that try to break it. The fallback is to say that an async program ends
+(all three registered by the same function). It costs data-bounded async
+recursion (fetch the next page while there is one, retry n times), which
+JavaScript runs and staticjs, with no loops and no recursion, then cannot
+express at all; the first users named above write exactly that. A
+bounded built-in for it (a page loop over a native) is a separate
+question. **Plausible**: the argument above needs writing out as a proof
+in the internals note, covering the steps where a lineage does not grow
+(thenable jobs, built-in reaction functions, resuming an activation,
+which its forward `pc` bounds), and spec cases that try to break it. The fallback is to say that an async program ends
 only by fuel.
 
 ### Through the pipeline
@@ -353,7 +411,7 @@ only by fuel.
 | completion of a `finally` | two hidden slots of the frame | entering `finally` | `END_FINALLY` | released by it, or by the frame's cut |
 | promise record | the evaluator's table | a promise-making call or `async` call | `then`, `await`, the jobs, the host's settle | the evaluation's end; its reactions at settlement |
 | promise handle | any value, without a reference | as the record | anyone | never freed; dead after the evaluation |
-| activation | the reaction of the promise awaited, alone | `AWAIT` suspending | the job resuming it | moved back to the stack by that job, or freed with the records |
+| activation (frame, callee slot, slots) | the reaction of the promise awaited, alone | `AWAIT` suspending | the job resuming it | moved back to the stack by that job, or freed with the records |
 | job | the job queue | a settlement or a resolution | `sjs_vm_run`, once | when it runs, or at reset |
 | settlement value | the host until `sjs_vm_settle`, then the evaluator | the host | the job that settles | moved into the record |
 | ticket | the host's bookkeeping, a number | `sjs_native_defer` | the host's settle | its settlement, or the evaluation's end |
@@ -361,8 +419,8 @@ only by fuel.
 ## Costs
 
 - **Per instruction:** nothing new on the dispatch path. Handlers are
-  found only on a throw; `AWAIT` and `THROW` are opcodes of their own in
-  `execute_other`.
+  found only on a throw; `AWAIT`, `ASYNC_RETURN` and `THROW` are opcodes
+  of their own in `execute_other`.
 - **Per call:** one more flag in `fn->flags`, read where `REST` is read.
 - **Per frame:** no growth (above).
 - **Per evaluator:** the queues and the table, empty until a program first
@@ -381,7 +439,8 @@ Each step lands with its spec cases, `diff-node`, and its guide pages.
 1. `throw` with any value, uncaught: the parser, `THROW`, the new error
    code and `sjs_vm_take_thrown`. No handlers yet.
 2. `try`/`catch`: the handler table and unwinding through code and loop
-   frames, a sort's restore, the compiler's move rules, the error kinds.
+   frames, a sort's restore, the helpers' fault, the compiler's deferred
+   moves, the error kinds.
 3. `finally`.
 4. A native that throws.
 5. Promises without `async`: the records, the job queue, `then` and the
@@ -399,11 +458,19 @@ Each step lands with its spec cases, `diff-node`, and its guide pages.
 - Lineage, or fuel only, for async termination.
 - Reference-counted promise records, or freed at the evaluation's end
   only.
+- Lazy iterator helpers, so that a throw in a helper's callback can be
+  caught and natives are called in JavaScript's order.
 - Whether an evaluation should be done when its result settles even with
   tickets pending (the host then cancels them), rather than when nothing
   is pending, as Node does.
 
 ## Evidence
+
+A reviewer with no stake in the design checked its claims against the
+repository and Node; its corrections are in the text above (the eager
+helpers, the append chain, `store_slot`, the deferred moves, the closure
+held by the callee slot, handles across evaluators, `Math.random`, the
+result promise as handled, the error properties).
 
 Node 22.22.0, `node s1.mjs` (JavaScript semantics the design copies):
 
