@@ -96,13 +96,14 @@ by the command under test, so an adapter cannot lower its own bar.
 | `binding` (the default) | every method but the C-level one, `value.encode`; `host.post` without `refuse`, which the runner does not send it | each binding's adapter |
 
 The reference runs every case. A binding's run skips, besides the
-C-level methods' cases and those with `refused`, the envelope-level
-cases of `requests.txt` and `config.txt`, each marked with the line `only
-reference` ("envelope-level: reference only";
-[suites/protocol/README.md](../suites/protocol/README.md), "Envelope-level
+C-level methods' cases and those with `refused`, the cases of
+`requests.txt` and `config.txt` marked with the line `only reference`
+("reference only";
+[suites/protocol/README.md](../suites/protocol/README.md), "Reference-only
 cases"): bytes that are not CBOR or not one request map, a member or an id
 the binding's typed methods never write (a method that is not one of
-requests.md's, params that are not a map), and notifications.
+requests.md's, params that are not a map), notifications, and
+`actor.send`, which a binding offers as its `send`.
 Since the binding writes the map and its id itself, its adapter answers
 `host.post` with a reply it builds from what its typed method's handlers
 got, with the message's `id`, and `host.run` with the

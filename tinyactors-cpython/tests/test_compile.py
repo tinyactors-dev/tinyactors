@@ -1,4 +1,4 @@
-"""compile_charts, Compiled and the resolver protocol."""
+"""compile_charts, Compiled and the resolver."""
 
 import unittest
 
@@ -14,7 +14,7 @@ class Resolver:
         self.files = files
         self.asked = []
 
-    def resolve(self, base, source):
+    def __call__(self, base, source):
         self.asked.append((base, source))
         if source not in self.files:
             raise tinyactors.ResolveError("no file %s" % source, line=3, column=7)
@@ -67,12 +67,15 @@ class Compile(unittest.TestCase):
             pass
 
     def test_another_exception_of_a_resolver_is_raised(self):
-        class Broken:
-            def resolve(self, base, source):
-                raise OSError("disk")
+        def broken(base, source):
+            raise OSError("disk")
 
         with self.assertRaises(OSError):
-            tinyactors.compile_charts([("parent.scxml", PARENT)], Broken())
+            tinyactors.compile_charts([("parent.scxml", PARENT)], broken)
+
+    def test_a_resolver_is_a_callable(self):
+        with self.assertRaises(TypeError):
+            tinyactors.compile_charts([("parent.scxml", PARENT)], {"child.scxml": ""})
 
     def test_without_a_resolver_src_is_refused(self):
         with self.assertRaises(tinyactors.CompileError):

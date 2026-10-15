@@ -584,6 +584,27 @@ in `tests/`:
 - `hasattr` among the builtins (W3C 330: whether `_event`'s fields are
   bound).
 
+### The API review (2026-10-15) — applied
+
+The review of the direct layer (the doc "tinyactors Python binding: API
+review") asked seven questions; each recommendation is in:
+
+- **Seconds at every boundary:** `migrate(timeout=)` (ticks rounded up),
+  `SimulatedClock.increment(seconds)` and `.now` (a float) join
+  `next_deadline`; ticks stay inside the extension.
+- **`on_error` by keyword too:** a typed method takes it second or as
+  `on_error=`, never as a param for core.
+- **No `actor_send`:** a typed method mirrors a method of requests.md
+  only where the language has no direct call (bindings.md, section 10);
+  `host.send` is `actor.send`'s, and its suite cases are reference only.
+- **Addresses only in `send`:** kept; an address is what arrives from
+  another system.
+- **The resolver is any callable** `resolver(base, source)`.
+- **A reply needs a second drive:** kept; the README's first example
+  says so.
+- **XML in conditions:** no API change; the README shows conditions as
+  methods of a `.py` file.
+
 ## How the work runs
 
 The root ROADMAP.md, step 8, "Rules for the work", sets these for every

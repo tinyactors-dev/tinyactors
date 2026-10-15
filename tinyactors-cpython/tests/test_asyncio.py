@@ -124,11 +124,11 @@ class Synchronous(unittest.TestCase):
             host.send(host.spawn(host.chart("echo")), "later")
             host.run()
             self.assertEqual(logs.labelled("tick"), [])
-            clock.increment(19)
+            clock.increment(0.019)
             self.assertEqual(logs.labelled("tick"), [])
-            clock.increment(1)
+            clock.increment(0.001)
             self.assertEqual(logs.labelled("tick"), ["yes"])
-            self.assertEqual(clock.now, 20)
+            self.assertAlmostEqual(clock.now, 0.02)
 
 
 if __name__ == "__main__":

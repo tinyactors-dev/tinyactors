@@ -135,17 +135,17 @@ class Runner
     end
   end
 
-  # A case marked "only reference" is envelope-level: its bytes are no
-  # request or config a binding's API makes (request(method, params)
-  # writes the map and its id; the config is encoded from a language value),
-  # so only the reference runs it (suites/protocol/README.md,
-  # "Envelope-level cases").
+  # A case marked "only reference" sends bytes no binding's API makes: an
+  # envelope (a typed method writes the map and its id; the config is
+  # encoded from a language value), or a method a binding offers as a
+  # direct call (actor.send is host.send), so only the reference runs it
+  # (suites/protocol/README.md, "Reference-only cases").
   def reference_only!(vector)
     only = vector.get('only')
     return unless only
 
     raise Failed, "only #{only}: a case can be limited to the reference alone" unless only == 'reference'
-    raise Skipped, 'envelope-level: reference only' unless @kind == 'reference'
+    raise Skipped, 'reference only' unless @kind == 'reference'
   end
 
   # Every send with the reply after it, in order, on one host; a refused

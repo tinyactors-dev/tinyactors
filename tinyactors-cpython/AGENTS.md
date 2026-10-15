@@ -51,7 +51,7 @@ layers"):
   core's file resolver: `ta_runtime_resolve`
   (`tinyactors-core/src/runtime/runtime_hosted.c:78`) accepts absolute
   paths and does not confine reads to a root. The direct layer has only
-  the resolver protocol ("The resolver").
+  the resolver ("The resolver").
   Nothing in 8.4 depends on it.
 
 ## Names
@@ -132,8 +132,9 @@ Decided by the maintainer (2026-10-13); every item is in
       host.send(session, "http.request", request.json(),
                 traceparent=request.headers.get("traceparent"))
   ```
-- **The resolver** is an object of its own with one method,
-  **`resolve(base, source) -> str`**, given to `compile_charts` only:
+- **The resolver** is any callable **`resolver(base, source) -> str`**
+  (a function, a lambda, an object with `__call__`; 2026-10-15, the
+  API review), given to `compile_charts` only:
   **it lives only at compile time** (boundary.md section 12).
   It is the compile-time callback
   (`ta_compile_options.resolve`) for every static `src`, and an invoked
@@ -267,8 +268,8 @@ Decided by the maintainer (2026-10-13); every item is in
   host's, and "migration" renamed migration, 2026-10-15): **`host.migrate(*,
   chart=None, session=None, wake=False, timeout=0) -> migration`** is
   `ta_host_migrate` (every chart, a chart's name, or one session;
-  `TA_HOST_MIGRATE_WAKE`; a timeout in host ticks, counted from the clock
-  advanced at the call) and returns core's migration id; the migration
+  `TA_HOST_MIGRATE_WAKE`; a timeout in seconds, converted to host ticks
+  rounded up and counted from the clock advanced at the call) and returns core's migration id; the migration
   moves actors in later runs, so the call schedules a turn. Its
   `MIGRATION_DONE` goes to the host's **`migration_done=handler(host,
   result)`** with `{"migration", "migrated", "failed", "pending"}`, the
@@ -350,11 +351,14 @@ Decided by the maintainer (2026-10-13); every item is in
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
-- **Typed methods over post**: `actor_state`, `actor_context`, `actor_send`,
+- **Typed methods over post**: `actor_state`, `actor_context`,
   `actor_list`, `actor_get`, `host_stats`, `host_config` and `trace_*`
-  (one per method of `tinyactors-core/docs/requests.md`), each
-  `(handler, on_error=None, /, **params)`, returning `None`: the method's
-  params are keywords, passed to core as given, so core checks them and
+  (one per method of `tinyactors-core/docs/requests.md` that Python has
+  no direct call for: `actor.send` is `host.send`, so it has none;
+  2026-10-15, the API review), each
+  `(handler, on_error=None, /, **params)`, returning `None`, with
+  `on_error` also taken by keyword (never passed to core as a param): the
+  method's other params are keywords, passed to core as given, so core checks them and
   answers in the reply (8.4; ROADMAP.md, "Decided in 8.4"). The handler `(host, result)` runs when the method's
   `REPLY` is dispatched, in a later drain; `on_error(host, error)` gets a
   `TinyactorsError(code, reason, path, message)`; an error with no
@@ -425,14 +429,18 @@ is open (`TA_RUN_FAULT`, detail `TA_ERROR_STATE`), which the drain before each r
 drain: Python code a handler runs may call the `Host` to add inputs, post
 or read views; it never takes or acks.
 
-| `ta_python_turn` returns | Synchronous driver (`run_until_idle()`, `run()`, `SimulatedClock.increment(ms)`) | asyncio (`await host.idle()`) |
+| `ta_python_turn` returns | Synchronous driver (`run_until_idle()`, `run()`, `SimulatedClock.increment(seconds)`) | asyncio (`await host.idle()`) |
 |---|---|---|
 | `TA_PYTHON_NEXT_YIELD` | check signals (`PyErr_CheckSignals`; a `KeyboardInterrupt` is raised between turns), then turn again | yield to the loop: `loop.call_soon(turn)` |
-| `TA_PYTHON_NEXT_IDLE` | `run_until_idle()` returns; `run()` sleeps to `deadline` (converted with `system.ticksPerSecond`) and turns again; `increment(ms)` advances the simulated clock (`ta_host_advance_time`, the simulated time as the wall clock) and turns until idle, arming nothing | one `loop.call_at` timer at `deadline` (none at `UINT64_MAX`), replacing the last; `idle()` completes; an input from outside a turn schedules one turn with `loop.call_soon` |
+| `TA_PYTHON_NEXT_IDLE` | `run_until_idle()` returns; `run()` sleeps to `deadline` (converted with `system.ticksPerSecond`) and turns again; `increment(seconds)` advances the simulated clock (`ta_host_advance_time`, the simulated time as the wall clock) and turns until idle, arming nothing | one `loop.call_at` timer at `deadline` (none at `UINT64_MAX`), replacing the last; `idle()` completes; an input from outside a turn schedules one turn with `loop.call_soon` |
 | `TA_PYTHON_NEXT_EXHAUSTED` | raise `MemoryError` naming the pool; the host stays usable and the next turn goes on where the run stopped | the same, from the turn |
 | `TA_PYTHON_NEXT_FAULT` | raise `TinyactorsError` with `ta_status_name(fault)` (the detail); not retried | the same |
 | a handler raised, or a reply's error had no `on_error` | finish the turn (the ack comes anyway), then raise the first | the same |
 
+- **Time in the API is seconds** (an `int` or a `float`), converted
+  with the config's `ticksPerSecond`: `next_deadline`, `migrate`'s
+  `timeout`, `SimulatedClock.increment` and `.now` (2026-10-15, the API
+  review). Ticks stay inside the extension.
 - **Both clocks before every run**, and at creation and before an input
   that depends on them (spawn, deliver, every typed method: a
   `trace.watch` ends at a time of the host's clock), and with an encoder
@@ -980,7 +988,7 @@ src/                 extension.h, docs.h (every public docstring: when and how t
                      module.c, host.c (Host, inputs, the arena's marks),
                      loop.c (drain, turn, both drivers), effects.c (dispatch, thin views,
                      records), methods.c (typed methods, the pending table), values.c,
-                     compile.c (compile_charts, Compiled, the resolver protocol, ResolveError),
+                     compile.c (compile_charts, Compiled, the resolver, ResolveError),
                      datamodel/{datamodel.h, datamodel.c, rows.c, expressions.c,
                      support.py (the rewrite, the exceptions; embedded, not shipped)}
 conform/             the suite's adapter, python -m conform; not in the wheel

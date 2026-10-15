@@ -196,6 +196,16 @@ class Methods(unittest.TestCase):
         self.assertEqual(raised.exception.reason, "stale")
         host.close()
 
+    def test_on_error_by_keyword_is_the_error_handler_not_a_param(self):
+        errors = []
+        host = host_with([("echo.scxml", ECHO)])
+        host.actor_get(print, on_error=lambda host, error: errors.append(error.reason), session=99)
+        host.run_until_idle()
+        self.assertEqual(errors, ["stale"])
+        with self.assertRaises(TypeError):
+            host.actor_get(print, print, on_error=print, session=99)
+        host.close()
+
     def test_params_pass_through_to_core(self):
         errors = []
         host = host_with([("echo.scxml", ECHO)])
@@ -311,7 +321,7 @@ class Inputs(unittest.TestCase):
             host.run_until_idle()
             self.assertEqual(logs.labelled("booted"), ["booted"])
             self.assertAlmostEqual(host.next_deadline, 1.5)
-            clock.increment(round(host.next_deadline * 1000))
+            clock.increment(host.next_deadline)
             self.assertEqual(logs.labelled("later"), ["fired"])
             self.assertIsNone(host.next_deadline)
             with self.assertRaises(tinyactors.TinyactorsError):
@@ -365,17 +375,10 @@ class OtherSystems(unittest.TestCase):
             host.run_until_idle()
             self.assertEqual(logs.labelled("got")[-1], "tinyactors://c/@x %s None" % self.SCXML)
 
-    def test_actor_send_is_the_remote_clients_way_in(self):
-        """actor.send, the typed method: the target by address, its data read
-        by the target's datamodel, the origin passed through."""
-        logs, replies = Logs(), []
-        with self.host([], logs) as host:
-            host.spawn(host.chart("talker"), name="talker")
-            host.actor_send(lambda host, result: replies.append(result), address="tinyactors://a/@talker",
-                            event="hello", data={"k": [1]}, origin="tinyactors://b/#_scxml_5")
-            host.run_until_idle()
-            self.assertEqual(replies, [{}])
-            self.assertEqual(logs.labelled("got"), ["tinyactors://b/#_scxml_5 %s {'k': [1]}" % self.SCXML])
+    def test_send_is_the_way_in_and_actor_send_is_not_offered(self):
+        """A program sends with Host.send; actor.send is for a client outside
+        the process, so it has no typed method here."""
+        self.assertFalse(hasattr(tinyactors.Host, "actor_send"))
 
     def test_an_address_that_names_nothing_here_is_refused(self):
         with self.host([], Logs()) as host:

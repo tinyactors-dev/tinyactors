@@ -39,11 +39,16 @@ with tinyactors.Host(config, {"urn:example:app": app},
     host.run_until_idle()                 # the reply's handler runs at a later drain
 ```
 
+A typed method such as `actor_context` returns nothing: its handler runs
+when the reply is drained, so a script drives the host once more to read
+it (above: one `run_until_idle()` for the event, one for the reply).
+Under asyncio, `await host.idle()` does the same.
+
 ## The API
 
 - `compile_charts(sources, resolver=None) -> Compiled`: `(name, text)`
-  pairs into one image. A resolver is an object with `resolve(base,
-  source) -> str` that reads a static `src=` at compile time; it refuses
+  pairs into one image. A resolver is a callable `resolver(base, source)
+  -> str` that reads a static `src=` at compile time; it refuses
   with `ResolveError(message, line=None, column=None)`. A compilation with
   an error raises `CompileError` with every diagnostic. `Compiled.image`
   is a read-only buffer, valid until `close()` (a context manager).
@@ -62,26 +67,31 @@ with tinyactors.Host(config, {"urn:example:app": app},
   as `handler(host, result)` (all below).
 - Inputs, applied at the call: `add_image(image) -> segment`,
   `chart(name) -> ChartRef`, `spawn(ref, name=None, params=None,
-  traceparent=None) -> session`, `send(session, event, data=None, *,
-  traceparent=None)`, `send_many([(session, event, data, traceparent),
+  traceparent=None) -> session`, `send(target, event, data=None, *,
+  traceparent=None, origin=None)` (`target` a session or a local
+  address), `send_many([(session, event, data, traceparent),
   ...]) -> accepted`, `terminate(session)`, `boot(segment)` (the image's
   boot actors: its `<system><actor>`s, or the first chart compiled, each
   under its name).
 - Drivers: `run_until_idle()`; `run()`, which sleeps to each deadline
-  while there is one; `SimulatedClock.increment(ms)`; and under asyncio
-  (`async with Host(...)`), `await host.idle()`. `host.next_deadline` is
-  the seconds from now to the next deadline (`None`: none), which a
-  `SimulatedClock` can be incremented by.
+  while there is one; `SimulatedClock.increment(seconds)`; and under
+  asyncio (`async with Host(...)`), `await host.idle()`. `host.next_deadline`
+  is the seconds from now to the next deadline (`None`: none), which a
+  `SimulatedClock` can be incremented by. Every time the API takes or
+  gives is in seconds (an int or a float); the host converts with the
+  config's `ticksPerSecond`.
 - An I/O processor answers with `send.answer(event, data=None, *,
   traceparent=send.traceparent, origin=None, raw=None)` (`origin` and
   `raw` become `_event.origin` and `_event.raw`: where to reply, and the
   transport's message) or fails the send with `send.fail()`.
 - Typed methods, one per method of
-  [requests.md](../tinyactors-core/docs/requests.md):
-  `actor_state`, `actor_context`, `actor_send`, `actor_list`, `actor_get`, `host_stats`,
+  [requests.md](../tinyactors-core/docs/requests.md) but `actor.send`
+  (which is `send`):
+  `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`,
   `host_config`, `trace_configure`, `trace_watch`, `trace_unwatch`,
   `trace_end`, `trace_spans_decode`, each `(handler, on_error=None, /,
-  **params)`, returning `None`. The method's params are keywords, passed
+  **params)`, returning `None`; `on_error` may also be passed as
+  `on_error=`. The method's params are the other keywords, passed
   to core as given; `handler(host, result)` or `on_error(host, error)`
   runs when the reply is drained, later. An error without `on_error` is
   raised by the driver after the turn.
@@ -267,7 +277,7 @@ there what it keeps.
   one `session`, and returns its id. With `wake`, a hibernated actor is
   asked for (`wake=handler(host, session, migration)` with this
   migration's id); without it, it waits, and the migration ends with it
-  in `pending` at `timeout` (host ticks; 0: none).
+  in `pending` at `timeout` (seconds; 0: none).
 - `migration_done=handler(host, result)`, a handler of the host: each
   migration's end, with `{"migration", "migrated", "failed", "pending":
   [session, ...]}`. Being the host's, it also gets the end of a migration
@@ -558,6 +568,27 @@ requires; a `.py` file's refused constructs are compile errors at their
 line. What crosses to another actor (`<send>` data, `<donedata>`, invoke
 params, data from the application) is copied through the value table:
 actors share no mutable value.
+
+Inside a chart, an expression is XML text: `<` is written `&lt;`, `&` is
+`&amp;`, and a quote inside a quoted attribute is `&quot;`. Write any
+logic longer than a comparison as a method in a `.py` file the chart
+names with `<script src>`, and call it from the condition; the file is
+plain Python, checked by the same rewrite at compile time:
+
+```python
+# rules.py
+def under_limit(tries, limit):
+    return tries < limit
+```
+
+```xml
+<script src="rules.py"/>
+...
+<transition event="retry" cond="under_limit(tries, 3)" target="trying"/>
+```
+
+The resolver given to `compile_charts` reads `rules.py`, for example
+`lambda base, source: pathlib.Path("charts", source).read_text()`.
 
 ## Limits
 

@@ -69,7 +69,7 @@ static const char ta_python_doc_compile_charts[] =
     "all the charts a host should run as one segment together (a chart and\n"
     "the charts it invokes), and a later call for a new version.\n"
     "\n"
-    "`resolver`, an object with resolve(base, source) -> str, is called at\n"
+    "`resolver`, a callable resolver(base, source) -> str, is called at\n"
     "compile time for each static src= that is not among the sources (a\n"
     "<script src>, an <invoke src>, a .py file of methods); it returns the\n"
     "text, or refuses by raising ResolveError, which the compiler reports at\n"
@@ -195,8 +195,8 @@ static const char ta_python_doc_host_closed[] =
 
 static const char ta_python_doc_host_ticks[] =
     "The host's clock rate, config's system.ticksPerSecond, read once at\n"
-    "creation: delays in charts and Host.migrate's timeout count in these\n"
-    "ticks.";
+    "creation: delays in charts count in these ticks; the API takes and\n"
+    "gives seconds (next_deadline, migrate's timeout, SimulatedClock).";
 
 static const char ta_python_doc_host_next_deadline[] =
     "Seconds from now to the host's next deadline (a delayed send, a\n"
@@ -370,7 +370,8 @@ static const char ta_python_doc_host_migrate[] =
     "error.platform.upgrade with its old variables first. A busy actor is\n"
     "retried; a hibernated one waits until something wakes it, or, with\n"
     "`wake`, is asked for through the wake handler (with this migration's\n"
-    "id). `timeout` (in host ticks, 0 for none) ends the migration anyway.\n"
+    "id). `timeout` (seconds of the host's clock, 0 for none) ends the\n"
+    "migration anyway.\n"
     "\n"
     "The host's migration_done handler gets its end, with result\n"
     "{\"migration\", \"migrated\", \"failed\", \"pending\": [session, ...]}; the\n"
@@ -434,7 +435,8 @@ static const char ta_python_doc_typed_actor_state[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_actor_context[] =
@@ -448,23 +450,8 @@ static const char ta_python_doc_typed_actor_context[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
-
-static const char ta_python_doc_typed_actor_send[] =
-    "actor_send(handler, on_error=None, /, **params)\n"
-    "--\n"
-    "\n"
-    "Give an actor an event the way a remote client does (params: session or\n"
-    "address, event, data, origin, sendid): for tools; your program calls\n"
-    "Host.send.\n"
-    "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_actor_list[] =
@@ -478,7 +465,8 @@ static const char ta_python_doc_typed_actor_list[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_actor_get[] =
@@ -492,7 +480,8 @@ static const char ta_python_doc_typed_actor_get[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_host_stats[] =
@@ -506,7 +495,8 @@ static const char ta_python_doc_typed_host_stats[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_host_config[] =
@@ -520,7 +510,8 @@ static const char ta_python_doc_typed_host_config[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_trace_configure[] =
@@ -534,7 +525,8 @@ static const char ta_python_doc_typed_trace_configure[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_trace_watch[] =
@@ -548,7 +540,8 @@ static const char ta_python_doc_typed_trace_watch[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_trace_unwatch[] =
@@ -562,7 +555,8 @@ static const char ta_python_doc_typed_trace_unwatch[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_trace_end[] =
@@ -576,7 +570,8 @@ static const char ta_python_doc_typed_trace_end[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_typed_trace_spans_decode[] =
@@ -590,7 +585,8 @@ static const char ta_python_doc_typed_trace_spans_decode[] =
     "result): pass the params as keywords; core checks them. Returns\n"
     "None at once; handler(host, result) runs at a later drain with the\n"
     "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "TinyactorsError (without on_error the driver raises it; pass it\n"
+    "second or as on_error=, never a param of core's). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
 static const char ta_python_doc_chart_ref[] =
@@ -761,14 +757,15 @@ static const char ta_python_doc_clock[] =
     "on a simulated clock never sleeps.";
 
 static const char ta_python_doc_clock_increment[] =
-    "increment(ms, /)\n"
+    "increment(seconds, /)\n"
     "--\n"
     "\n"
-    "Move the clock on by `ms` milliseconds and turn every host made with it\n"
-    "until idle, so the timers due by then run.";
+    "Move the clock on by `seconds` (an int or a float, as next_deadline\n"
+    "gives) and turn every host made with it until idle, so the timers due\n"
+    "by then run.";
 
 static const char ta_python_doc_clock_now[] =
-    "The simulated time in milliseconds since the clock was made (it starts at 0).";
+    "The simulated time in seconds (a float) since the clock was made (it starts at 0.0).";
 
 static const char ta_python_doc_address[] =
     "Address(text, /)\n"

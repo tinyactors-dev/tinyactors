@@ -8,7 +8,8 @@
  * REPLY, a later one, finds the row by the id and calls a handler. */
 #include "extension.h"
 
-/* The typed method of `method`: (handler, on_error=None, /, **params). */
+/* The typed method of `method`: (handler, on_error=None, /, **params), with
+ * on_error also taken by keyword, so no param of core's is named on_error. */
 typedef struct ta_python_typed {
     const char *method;
     PyObject *arguments;
@@ -16,7 +17,15 @@ typedef struct ta_python_typed {
 } ta_python_typed;
 
 static int ta_python_post(ta_python_host *host, const ta_python_typed *typed, uint64_t id) {
-    PyObject *params = typed->params;
+    PyObject *params = typed->params ? PyDict_Copy(typed->params) : NULL;
+    PyObject *on_error = NULL; /* the error handler, not a param of core's */
+    if (typed->params && (!params || PyDict_GetItemStringRef(params, "on_error", &on_error) < 0 ||
+                          (on_error && PyDict_DelItemString(params, "on_error") < 0))) {
+        Py_XDECREF(on_error);
+        Py_XDECREF(params);
+        return -1;
+    }
+    Py_XDECREF(on_error);
     ta_cbor_writer writer;
     ta_python_cbor_init(&writer, &(ta_python_room){{NULL, 0, 0}, &host->arena_allocator});
     int with_params = params && PyDict_Size(params) > 0;
@@ -25,8 +34,10 @@ static int ta_python_post(ta_python_host *host, const ta_python_typed *typed, ui
     ta_cbor_write_text(&writer, ta_string(typed->method));
     if (with_params) {
         ta_cbor_write_text(&writer, ta_string("params"));
-        if (ta_python_value_write(host->state, &writer, params) < 0) return -1;
-    }
+        int written = ta_python_value_write(host->state, &writer, params);
+        Py_DECREF(params);
+        if (written < 0) return -1;
+    } else Py_XDECREF(params);
     ta_cbor_write_text(&writer, ta_string("id"));
     ta_cbor_write_uint(&writer, id);
     ta_bytes message;
@@ -41,8 +52,18 @@ static int ta_python_post(ta_python_host *host, const ta_python_typed *typed, ui
 
 static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typed) {
     ta_python_host *host = (ta_python_host *)self;
-    PyObject *handler, *on_error = Py_None;
+    PyObject *handler, *on_error = Py_None, *keyword = NULL;
     if (!PyArg_ParseTuple(typed->arguments, "O|O", &handler, &on_error)) return NULL;
+    if (typed->params && PyDict_GetItemStringRef(typed->params, "on_error", &keyword) < 0) return NULL;
+    if (keyword) {
+        int twice = PyTuple_Size(typed->arguments) > 1;
+        on_error = keyword;
+        Py_DECREF(keyword); /* the params dict holds it for the call */
+        if (twice) {
+            PyErr_Format(PyExc_TypeError, "%s got on_error twice", typed->method);
+            return NULL;
+        }
+    }
     if (!PyCallable_Check(handler) || (on_error != Py_None && !PyCallable_Check(on_error))) {
         PyErr_Format(PyExc_TypeError, "%s takes a handler(host, result) and on_error(host, error) or None", typed->method);
         return NULL;
@@ -79,7 +100,6 @@ static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typ
 
 TA_PYTHON_METHOD(actor_state, "actor.state")
 TA_PYTHON_METHOD(actor_context, "actor.context")
-TA_PYTHON_METHOD(actor_send, "actor.send")
 TA_PYTHON_METHOD(actor_list, "actor.list")
 TA_PYTHON_METHOD(actor_get, "actor.get")
 TA_PYTHON_METHOD(host_stats, "host.stats")

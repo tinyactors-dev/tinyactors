@@ -40,19 +40,21 @@ diagnostic notation (`ta_cbor_diagnostic`), which the runner checks too, so
 the hex and what a person reads cannot drift apart. A line `only
 reference` limits a case to the reference (below).
 
-## Envelope-level cases
+## Reference-only cases
 
 Some cases of `requests.txt` and `config.txt` send bytes that no binding's
-API makes. A binding's typed method (one per method of requests.md,
-taking the method's params and response handlers: ADR 0012, decision 3)
+API makes. A binding's typed method (one per method of requests.md that
+its language has no direct call for, taking the method's params and
+response handlers: ADR 0012, decision 3)
 writes the request map itself, with the method's name and an id of its
 own, and hands its handlers the result or the error; its host is created from a config
 the binding encodes from a language value
-(`tinyactors-core/docs/bindings.md`, sections 3 and 10). These cases test
-how core reads the envelope around a request, not a method, so each has
+(`tinyactors-core/docs/bindings.md`, sections 3 and 10). Most of these cases test
+how core reads the envelope around a request, not a method; the others
+test a method a binding offers as a direct call. Each has
 the line `only reference`: the reference (`ta-conform`, `--kind
 reference`) runs it, and a binding's run (`--kind binding`) skips it with
-"envelope-level: reference only", as it skips `refused`. The runner does
+"reference only", as it skips `refused`. The runner does
 not guess this from the bytes; the line says it. (The line is `only`, not
 `kind`: a case's first word is already its kind.)
 
@@ -67,6 +69,7 @@ not guess this from the bytes; the line says it. (The line is `only`, not
 | "more items than a request holds" | no id, answered `"id": null`; the binding sends an id |
 | "notification: no reply", "notification: no error either", "notification: applied", "notification: a request that is not one is answered" | messages without an id (JSON-RPC's notifications, not the host's NOTIFICATION effects): the binding's request always has an id and wants the reply |
 | "actor.send: data that is no neutral value" | a binding's typed method takes the language's values, which are all neutral values: it cannot write tag 99 |
+| the other `actor.send` cases | a binding mirrors a method with a typed method only where its language has no direct call: a program sends with the binding's `send` (`ta_host_resolve` and `ta_host_send`); `actor.send` is for a client outside the process |
 | "method is not text", "no such method", "params is not a map" | a binding has no raw post (ADR 0012, decision 3): its typed methods, one per method of requests.md, write the method's name and the params map themselves |
 
 A binding passes the caller's values through unchecked, so the cases of

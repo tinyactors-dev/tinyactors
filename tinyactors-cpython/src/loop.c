@@ -56,11 +56,55 @@ static uint64_t ta_python_ticks(const ta_python_host *host, ta_python_rate rate)
     return seconds * host->ticks_per_second + rest * host->ticks_per_second / rate.per_second;
 }
 
+/* A duration in seconds (an int or a float, not negative) as nanoseconds:
+ * every time the API takes is in seconds, converted with the host's rate. */
+int ta_python_nanoseconds(PyObject *seconds, uint64_t *nanoseconds) {
+    if (PyLong_Check(seconds)) {
+        int overflow = 0;
+        long long sign = PyLong_AsLongLongAndOverflow(seconds, &overflow);
+        if (sign == -1 && PyErr_Occurred()) return -1;
+        if (sign < 0 || overflow < 0) {
+            PyErr_SetString(PyExc_ValueError, "a duration is a number of seconds, not negative");
+            return -1;
+        }
+        unsigned long long whole = PyLong_AsUnsignedLongLong(seconds);
+        if (PyErr_Occurred()) return -1;
+        if (whole > UINT64_MAX / ta_python_billion) {
+            PyErr_SetString(PyExc_OverflowError, "a duration of more than 2^64 nanoseconds");
+            return -1;
+        }
+        *nanoseconds = whole * ta_python_billion;
+        return 0;
+    }
+    double value = PyFloat_AsDouble(seconds);
+    if (value == -1.0 && PyErr_Occurred()) return -1;
+    if (value != value || value < 0) { /* NaN, or negative */
+        PyErr_SetString(PyExc_ValueError, "a duration is a number of seconds, not negative");
+        return -1;
+    }
+    double scaled = value * (double)ta_python_billion + 0.5;
+    if (scaled >= 18446744073709551616.0) { /* 2^64, and infinity */
+        PyErr_SetString(PyExc_OverflowError, "a duration of more than 2^64 nanoseconds");
+        return -1;
+    }
+    *nanoseconds = (uint64_t)scaled;
+    return 0;
+}
+
+/* Nanoseconds as the host's ticks, rounded up: a timeout shorter than a
+ * tick is one tick, never none. */
+uint64_t ta_python_ticks_after(const ta_python_host *host, uint64_t nanoseconds) {
+    uint64_t ticks = ta_python_ticks(host, (ta_python_rate){nanoseconds, ta_python_billion});
+    uint64_t back = ticks / host->ticks_per_second * ta_python_billion +
+                    ticks % host->ticks_per_second * ta_python_billion / host->ticks_per_second;
+    return back < nanoseconds ? ticks + 1 : ticks;
+}
+
 static ta_host_time ta_python_now(ta_python_host *host) {
     if (host->clock != Py_None) { /* the simulated time is the wall clock too */
-        uint64_t milliseconds = ta_python_clock_now(host->clock);
-        return (ta_host_time){ta_python_ticks(host, (ta_python_rate){milliseconds, 1000}) + host->ticks_offset,
-                              milliseconds * 1000000u};
+        uint64_t nanoseconds = ta_python_clock_now(host->clock);
+        return (ta_host_time){ta_python_ticks(host, (ta_python_rate){nanoseconds, ta_python_billion}) + host->ticks_offset,
+                              nanoseconds};
     }
     uint64_t wall = 0;
     PyObject *now = PyObject_CallNoArgs(host->state->time_ns);
@@ -380,16 +424,16 @@ void ta_python_loop_stop(ta_python_host *host) {
 /* ---- SimulatedClock ------------------------------------------------------------------ */
 
 /* A caller's own clock (bindings.md, section 3): time moves only with
- * increment(ms), which advances every host made with the clock and turns
+ * increment(seconds), which advances every host made with the clock and turns
  * each until idle. A host made with one arms no timer. */
 typedef struct ta_python_clock {
     PyObject_HEAD
-    uint64_t milliseconds;
+    uint64_t nanoseconds;
     PyObject *hosts; /* weak references to the hosts made with it (a list): no cycle through a host */
 } ta_python_clock;
 
 uint64_t ta_python_clock_now(PyObject *clock) {
-    return ((ta_python_clock *)clock)->milliseconds;
+    return ((ta_python_clock *)clock)->nanoseconds;
 }
 
 int ta_python_clock_register(PyObject *clock, PyObject *host) {
@@ -425,9 +469,9 @@ static PyObject *ta_python_clock_new(PyTypeObject *type, PyObject *arguments, Py
 
 static PyObject *ta_python_clock_increment(PyObject *self, PyObject *amount) {
     ta_python_clock *clock = (ta_python_clock *)self;
-    unsigned long long milliseconds = PyLong_AsUnsignedLongLong(amount);
-    if (PyErr_Occurred()) return NULL;
-    clock->milliseconds += milliseconds;
+    uint64_t nanoseconds = 0;
+    if (ta_python_nanoseconds(amount, &nanoseconds) < 0) return NULL;
+    clock->nanoseconds += nanoseconds;
     PyObject *hosts = PyList_GetSlice(clock->hosts, 0, PyList_Size(clock->hosts));
     if (!hosts) return NULL;
     for (Py_ssize_t i = 0; i < PyList_Size(hosts); i++) {
@@ -449,9 +493,9 @@ static PyObject *ta_python_clock_increment(PyObject *self, PyObject *amount) {
     Py_RETURN_NONE;
 }
 
-static PyObject *ta_python_clock_milliseconds(PyObject *self, void *closure) {
+static PyObject *ta_python_clock_seconds(PyObject *self, void *closure) {
     (void)closure;
-    return PyLong_FromUnsignedLongLong(((ta_python_clock *)self)->milliseconds);
+    return PyFloat_FromDouble((double)((ta_python_clock *)self)->nanoseconds / (double)ta_python_billion);
 }
 
 static int ta_python_clock_traverse(PyObject *self, visitproc visit, void *arg) {
@@ -481,7 +525,7 @@ static PyMethodDef ta_python_clock_methods[] = {
 };
 
 static PyGetSetDef ta_python_clock_properties[] = {
-    {"now", ta_python_clock_milliseconds, NULL, ta_python_doc_clock_now, NULL},
+    {"now", ta_python_clock_seconds, NULL, ta_python_doc_clock_now, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 

@@ -35,9 +35,9 @@ class Snapshot(unittest.TestCase):
             host.send(session, "report", str(session))
             host.run_until_idle()
             self.assertEqual(logs.labelled("late"), [])
-            clock.increment(999)
+            clock.increment(0.999)
             self.assertEqual(logs.labelled("late"), [])
-            clock.increment(1)
+            clock.increment(0.001)
             other = host.spawn(host.chart("counter"))
             self.assertNotEqual(other, session)
         return logs

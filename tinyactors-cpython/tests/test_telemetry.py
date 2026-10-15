@@ -39,7 +39,7 @@ class Telemetry(unittest.TestCase):
         host.send(host.spawn(host.chart("c")), "go")
         host.run_until_idle()
         self.assertEqual(got, [])  # staged until flushInterval passed
-        clock.increment(200)
+        clock.increment(0.2)
         self.assertEqual(sorted(signal for signal, _ in got), ["logs", "traces"])
         self.assertTrue(all(isinstance(data, bytes) and data for _, data in got))
         self.assertIn("scxml.macrostep go", span_names(host, got))
@@ -80,7 +80,7 @@ class Telemetry(unittest.TestCase):
         host = host_with(handler, clock)
         host.send(host.spawn(host.chart("c")), "go")
         host.run_until_idle()
-        clock.increment(200)
+        clock.increment(0.2)
         self.assertTrue(got and all(got))
         host.send(host.spawn(host.chart("c")), "go")
         host.run_until_idle()
@@ -95,7 +95,7 @@ class Telemetry(unittest.TestCase):
         host.send(host.spawn(host.chart("c")), "go")
         host.run_until_idle()
         with self.assertRaises(ConnectionError):
-            clock.increment(200)
+            clock.increment(0.2)
         host.send(host.spawn(host.chart("c")), "go")  # the encoder goes on: the request was taken
         host.run_until_idle()
         with self.assertRaises(ConnectionError):  # the last take at close, raised after the host is freed
@@ -283,7 +283,7 @@ class Watches(unittest.TestCase):
             host.send(a, "go")
             host.send(b, "go")
             host.run_until_idle()
-            clock.increment(20)  # past flushInterval: the requests come
+            clock.increment(0.02)  # past flushInterval: the requests come
             return charts_traced(host, got)
 
         host.trace_configure(lambda host, result: replies.append(result), sample=0)  # nothing is sampled but what a watch keeps
@@ -292,7 +292,7 @@ class Watches(unittest.TestCase):
         host.run_until_idle()
         self.assertEqual(replies[-1], {"id": 1})
         self.assertEqual(step(), ["b"])
-        clock.increment(1000)  # the watch's end: a deadline of the host's clock
+        clock.increment(1)  # the watch's end: a deadline of the host's clock
         self.assertEqual(step(), [])
         host.trace_watch(lambda host, result: replies.append(result), rules=[{"chart": "a", "sample": "sample"}],
                          seconds=None)

@@ -112,9 +112,9 @@ class Hibernation(unittest.TestCase):
             host.send(session, "wait")
             host.run_until_idle()
             store.blobs[session] = host.hibernate(session)
-            clock.increment(999)
+            clock.increment(0.999)
             self.assertEqual(store.wakes, [])
-            clock.increment(1)
+            clock.increment(0.001)
             self.assertEqual(store.wakes, [session])
         self.assertEqual(logs.labelled("later"), ["1"])
 

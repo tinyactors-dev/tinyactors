@@ -28,7 +28,7 @@ STATUS = {
 TA_RUN_IDLE, TA_RUN_FAULT, TA_RUN_EXHAUSTED = 0, 4, 3
 # The driver's datamodel names, and the vtable names a Host answers for them.
 DATAMODELS = {"native": "python", "quickjs": "ecmascript"}
-TYPED = {"actor.state", "actor.context", "actor.send", "actor.list", "actor.get", "host.stats", "host.config",
+TYPED = {"actor.state", "actor.context", "actor.list", "actor.get", "host.stats", "host.config",
          "trace.configure", "trace.watch", "trace.unwatch", "trace.end", "trace.spans.decode"}
 
 
@@ -62,7 +62,7 @@ class Documents:
     def __init__(self, documents):
         self.documents = {document["name"]: document["text"] for document in documents}
 
-    def resolve(self, base, source):
+    def __call__(self, base, source):
         for prefix in ("file://", "file:", "./"):
             if source.startswith(prefix):
                 source = source[len(prefix):]
@@ -183,8 +183,9 @@ class Adapter:
     def clock_advance(self, params):
         host = self.need_host()
         milliseconds = params.get("monotonic", 0) * 1000 // host.ticks_per_second
-        if milliseconds > self.clock.now:
-            self.clock.increment(milliseconds - self.clock.now)
+        now = round(self.clock.now * 1000)
+        if milliseconds > now:
+            self.clock.increment((milliseconds - now) / 1000)
         return {}
 
     def host_run(self, params):
@@ -293,7 +294,7 @@ class Scenario:
             if host.send_many(items) != len(items):
                 raise Refused("send_many took fewer events")
         elif "advance" in step:
-            self.clock.increment(step["advance"])  # ticksPerSecond 1000: ticks are milliseconds
+            self.clock.increment(step["advance"] / 1000)  # ticksPerSecond 1000: ticks are milliseconds
         elif "hibernate" in step:
             session = self.session(step["hibernate"])
             self.blobs[session] = host.hibernate(session)
@@ -308,7 +309,7 @@ class Scenario:
             self.host = restored  # a restart: the restored host replaces the running one
         elif "migrate" in step:
             ended = len(self.migrations_done)
-            host.migrate(wake=bool(step["migrate"].get("wake")), timeout=step["migrate"].get("timeout", 0))
+            host.migrate(wake=bool(step["migrate"].get("wake")), timeout=step["migrate"].get("timeout", 0) / 1000)
             for _ in range(100):  # the loop until its MIGRATION_DONE, bounded as ta-conform's settles
                 host.run_until_idle()
                 if len(self.migrations_done) > ended:
@@ -372,7 +373,7 @@ class W3C:
                 delay = host.next_deadline
                 if self.outcome is not None or delay is None:
                     break
-                clock.increment(max(1, math.ceil(round(delay * 1000, 6))))  # ticksPerSecond 1000
+                clock.increment(max(1, math.ceil(round(delay * 1000, 6))) / 1000)  # ticksPerSecond 1000
         except (tinyactors.TinyactorsError, MemoryError) as error:
             print("conform: the run ended: %r" % error, file=sys.stderr)
         finally:

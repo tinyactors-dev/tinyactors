@@ -1105,15 +1105,15 @@ static PyObject *ta_python_host_wake(PyObject *self, PyObject *arguments) {
 /* migrate(*, chart=None, session=None, wake=False, timeout=0) -> migration:
  * ta_host_migrate of every chart (or `chart`, or one `session`), waking
  * hibernated actors for it with `wake` (TA_HOST_MIGRATE_WAKE: a WAKE each),
- * ending after `timeout` ticks of the host's clock (0: none). The migration moves
+ * ending after `timeout` seconds of the host's clock, as ticks rounded up (0: none). The migration moves
  * actors in later runs; the host's migration_done handler gets its MIGRATION_DONE. */
 static PyObject *ta_python_host_migrate(PyObject *self, PyObject *arguments, PyObject *keywords) {
     static char *const names[] = {"chart", "session", "wake", "timeout", NULL};
     ta_python_host *host = (ta_python_host *)self;
     PyObject *chart = Py_None, *session = Py_None, *timeout = NULL;
     int wake = 0;
-    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "|$OOpO!:migrate", names, &chart, &session, &wake,
-                                     &PyLong_Type, &timeout))
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "|$OOpO:migrate", names, &chart, &session, &wake,
+                                     &timeout))
         return NULL;
     ta_host_migration request;
     memset(&request, 0, sizeof request);
@@ -1137,8 +1137,9 @@ static PyObject *ta_python_host_migrate(PyObject *self, PyObject *arguments, PyO
         if (PyErr_Occurred()) return NULL;
     }
     if (timeout) {
-        request.timeout = PyLong_AsUnsignedLongLong(timeout);
-        if (PyErr_Occurred()) return NULL;
+        uint64_t nanoseconds = 0;
+        if (ta_python_nanoseconds(timeout, &nanoseconds) < 0) return NULL;
+        request.timeout = ta_python_ticks_after(host, nanoseconds);
     }
     ta_python_call call;
     if (ta_python_enter(host, &call) < 0) return NULL;
@@ -1394,7 +1395,6 @@ static PyGetSetDef ta_python_host_properties[] = {
 
 PyObject *ta_python_method_actor_state(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_actor_context(PyObject *self, PyObject *arguments, PyObject *keywords);
-PyObject *ta_python_method_actor_send(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_actor_list(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_actor_get(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_host_stats(PyObject *self, PyObject *arguments, PyObject *keywords);
@@ -1447,7 +1447,6 @@ static PyMethodDef ta_python_host_methods[] = {
     {"__aexit__", ta_python_host_exit_async, METH_VARARGS, ta_python_doc_host_aexit},
     TA_PYTHON_TYPED(actor_state, ta_python_method_actor_state),
     TA_PYTHON_TYPED(actor_context, ta_python_method_actor_context),
-    TA_PYTHON_TYPED(actor_send, ta_python_method_actor_send),
     TA_PYTHON_TYPED(actor_list, ta_python_method_actor_list),
     TA_PYTHON_TYPED(actor_get, ta_python_method_actor_get),
     TA_PYTHON_TYPED(host_stats, ta_python_method_host_stats),

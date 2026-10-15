@@ -155,7 +155,7 @@ class RunnerTest < Minitest::Test
     assert ok, @out.string
     assert_equal({ 'requests.txt "id: text"' => :skip, 'requests.txt "echo"' => :pass, 'config.txt "marked"' => :skip },
                  verdicts(results))
-    assert_includes @out.string, 'skip protocol requests.txt "id: text": envelope-level: reference only'
+    assert_includes @out.string, 'skip protocol requests.txt "id: text": reference only'
 
     @out = StringIO.new
     _ok, results = run_suites('protocol', kind: 'reference')

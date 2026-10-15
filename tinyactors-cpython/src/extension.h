@@ -280,8 +280,12 @@ void ta_python_loop_schedule(ta_python_host *host);
 /* Stop the loop's timer and pending turn (the host is closing). */
 void ta_python_loop_stop(ta_python_host *host);
 int ta_python_clock_init_type(PyObject *module, ta_python_module_state *state);
-/* The SimulatedClock's time in milliseconds. */
+/* The SimulatedClock's time in nanoseconds. */
 uint64_t ta_python_clock_now(PyObject *clock);
+/* A duration in seconds (int or float, not negative) as nanoseconds; -1 with an exception. */
+int ta_python_nanoseconds(PyObject *seconds, uint64_t *nanoseconds);
+/* Nanoseconds as the host's ticks, rounded up. */
+uint64_t ta_python_ticks_after(const ta_python_host *host, uint64_t nanoseconds);
 void ta_python_clock_forget(PyObject *clock, PyObject *host);
 int ta_python_clock_register(PyObject *clock, PyObject *host);
 

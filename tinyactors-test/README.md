@@ -53,11 +53,11 @@ case; the runner starts the command again and goes on. The exit status is
 1 when any case fails, and when the run proves nothing: a suite that
 passed no case, or a method the command's kind must offer that it did not
 ([docs/driver.md](docs/driver.md), "Kinds"). A binding's run also skips
-the protocol suite's envelope-level cases, each marked `only reference`
-in its file: requests and configs whose bytes no binding's API makes (not
-CBOR, not one request map, an id of the caller's, messages without an id), which
+the protocol suite's cases marked `only reference` in its file: requests
+and configs whose bytes no binding's API makes (not CBOR, not one request
+map, an id of the caller's, messages without an id, `actor.send`), which
 `ta-conform` runs ([suites/protocol/README.md](suites/protocol/README.md),
-"Envelope-level cases").
+"Reference-only cases").
 
 A binding's `test` task runs the set of the milestone it is working on
 (`--milestone M1`), named once in its `conform` task, and moves it on

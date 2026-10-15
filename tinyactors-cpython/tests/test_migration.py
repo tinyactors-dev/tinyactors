@@ -61,7 +61,7 @@ class Migration(unittest.TestCase):
                     add(host, v2)
                     host.migrate()
                     host.run_until_idle()
-                    clock.increment(1000)
+                    clock.increment(1)
                 self.assertEqual(logs.labelled("later"), ["1"])
 
     def test_a_hibernated_actor_is_asked_for_with_its_migration(self):
@@ -114,7 +114,7 @@ class Migration(unittest.TestCase):
             add(host, v2)
             host.migrate()
             host.run_until_idle()
-            clock.increment(60_000)
+            clock.increment(60)
         self.assertEqual(done, [])
 
     def test_without_wake_a_hibernated_actor_is_left_at_the_timeout(self):
@@ -125,10 +125,10 @@ class Migration(unittest.TestCase):
             host.run_until_idle()
             host.hibernate(asleep)
             add(host, v2)
-            migration = host.migrate(timeout=500)
+            migration = host.migrate(timeout=0.5)
             host.run_until_idle()
             self.assertEqual(done, [])
-            clock.increment(500)
+            clock.increment(0.5)
         self.assertEqual(done, [{"migration": migration, "migrated": 1, "failed": 0, "pending": [asleep]}])
         self.assertNotIn(awake, done[0]["pending"])
 
@@ -211,8 +211,12 @@ class Migration(unittest.TestCase):
                 host.migrate(chart="")
             with self.assertRaises(ValueError):
                 host.migrate(session=0)
-            with self.assertRaises(OverflowError):
+            with self.assertRaises(ValueError):
                 host.migrate(timeout=-1)
+            with self.assertRaises(ValueError):
+                host.migrate(timeout=float("nan"))
+            with self.assertRaises(OverflowError):
+                host.migrate(timeout=float("inf"))
             with self.assertRaises(TypeError):
                 host.migrate(3)
 

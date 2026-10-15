@@ -1,6 +1,6 @@
 /* The compiler (AGENTS.md, "The API"): compile_charts is
- * ta_compile_charts, Compiled holds its result, and a resolver object
- * (resolve(base, source) -> str) is its ta_compile_options.resolve, the
+ * ta_compile_charts, Compiled holds its result, and a resolver, a callable
+ * resolver(base, source) -> str, is its ta_compile_options.resolve, the
  * only place a resolver is given: it lives at compile time only. */
 #include "extension.h"
 #include "docs.h"
@@ -44,7 +44,7 @@ static PyObject *ta_python_diagnostics(ta_python_module_state *state, const ta_c
     return list;
 }
 
-/* ---- the resolver protocol ------------------------------------------------------- */
+/* ---- the resolver ----------------------------------------------------------------- */
 
 typedef struct ta_python_resolving {
     ta_python_module_state *state;
@@ -110,11 +110,11 @@ static int ta_python_ends_with(ta_string_view text, const char *suffix) {
 static ta_status ta_python_resolve(void *context, const ta_resolve_request *request, ta_resolve_result *out) {
     ta_python_resolving *resolving = context;
     PyObject *base = ta_python_view_text(request->base), *source = ta_python_view_text(request->source);
-    PyObject *text = base && source ? PyObject_CallMethod(resolving->resolver, "resolve", "OO", base, source) : NULL;
+    PyObject *text = base && source ? PyObject_CallFunctionObjArgs(resolving->resolver, base, source, NULL) : NULL;
     ta_status status = TA_OK;
     if (text && !PyUnicode_Check(text)) {
         Py_CLEAR(text);
-        PyErr_SetString(PyExc_TypeError, "a resolver's resolve(base, source) returns a str");
+        PyErr_SetString(PyExc_TypeError, "resolver(base, source) returns a str");
     }
     /* a .py file gets the "python" datamodel's check as it is read */
     if (text && ta_python_ends_with(request->source, ".py") && ta_python_check_file(resolving->state, source, text) < 0)
@@ -171,8 +171,8 @@ PyObject *ta_python_compile_charts(PyObject *module, PyObject *const *args, Py_s
             goto done;
         }
     }
-    if (resolver != Py_None && !PyObject_HasAttrString(resolver, "resolve")) {
-        PyErr_SetString(PyExc_TypeError, "a resolver has a method resolve(base, source)");
+    if (resolver != Py_None && !PyCallable_Check(resolver)) {
+        PyErr_SetString(PyExc_TypeError, "a resolver is a callable resolver(base, source) -> str");
         goto done;
     }
     ta_compile_options options;
