@@ -596,6 +596,37 @@ Gaps in core or in the suite this session finds. Each says what is
 missing, why, and which suite case or test shows it; the coordinator moves
 it into the root ROADMAP.md's "Requests to core" and answers there.
 
+- **Open: one exhausted pool doubles every pool.** What: when any pool of a
+  segment runs out, `segment_grow` doubles all of them, derives
+  `instanceBytes` again from the doubled `maxActors`, and holds the old and
+  the new region at once (`src/host/host.c`, `segment_grow`). Why: a
+  `send_many` of 1000 events with `maxEvents` 256 took a region of
+  `maxActors` 200,000 from 15 MB to 127 MB, and at 2,000,000 from 118 MB
+  to 1243 MB; quickjs, which keeps each actor's last event, grew a 10,000
+  actor host to 13.7 KB per actor (1.5 KB with `maxEvents` sized). The
+  capacity planner cannot see it coming: `host.stats` reports
+  `regionBytes`, not each pool's capacity and high-water mark. Ask: grow
+  only the pool that ran out, keep an explicit `instanceBytes`, and report
+  each pool's capacity and high-water mark in `host.stats`. Which test:
+  the memory investigation's `grow_cliff.py` (2026-10-15).
+- **Open: the trace journal is sized from `maxEvents`.** What: with
+  tracing on (the default), `traceBytes` is 512 × `maxEvents` and
+  `traceContexts` is `maxEvents` (`src/system/system.c`), 618 B per event
+  slot. Why: sizing `maxEvents` for quickjs's actors (above) adds 618 B per
+  actor to the region for traces, whatever the trace volume. Ask: a trace
+  journal sized for the trace volume (a fixed default, or one the config
+  states), not derived from the event pool.
+- **Open: the region is zeroed whole at creation.** What: `ta_system_init`
+  zeroes the whole region (`src/system/system.c`), so everything a config
+  reserves is resident at once. Ask: take memory already zeroed (calloc,
+  mmap) so unused pool space costs address space, not memory. Unverified
+  saving: what a config reserves beyond use.
+- **Open: the host's maps live outside the region.** What: the `moved` map
+  (12 B per entry at load one half, kept for each migrated actor's life)
+  and a job's member map are host allocations `regionBytes` does not
+  count: about 50 MB kept and 50 to 100 MB while a job runs at 2,000,000
+  actors (estimated from 400,000). Ask: count them in `host.stats`, or a
+  dense per-segment array indexed by serial.
 - **Open, a known limit: no snapshot while a migration job runs.** What:
   `ta_host_snapshot` refuses with `TA_ERROR_STATE` while a job is active
   (`src/host/host.c`, `ta_host_snapshot`), and a rollout that wakes a
