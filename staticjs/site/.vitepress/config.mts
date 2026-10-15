@@ -20,7 +20,7 @@ const evaluate = (source, options) => staticjs.evaluate(source, options);
 
 const guide = [
   { text: 'Getting started', link: '/guide/getting-started', description: 'From a download to a C program that evaluates JavaScript: prebuilt libraries, the amalgamation, a first program.' },
-  { text: 'Why staticjs?', link: '/guide/why', description: 'When staticjs fits and when it does not, and how it compares with an engine in a sandbox or a rule language.' },
+  { text: 'Why staticjs?', link: '/guide/why', description: 'When staticjs fits and when it does not, and how it compares with a full JavaScript engine and with expression languages.' },
   { text: 'Quick reference', link: '/guide/reference', description: 'The language and the C API on one page: the two kinds of program, what to write instead of what staticjs leaves out, the built-ins, the calls in order.' },
   { text: 'Embedding', link: '/guide/embedding', description: 'The C API: contexts, allocators, limits, fuel, values and who owns them, globals, native functions, modules, the clock and the seed, streaming, inspection.' },
   { text: 'The language', link: '/guide/language', description: 'What a staticjs program can say: syntax, modules, every built-in, BigInt, Map, JSON, Temporal, Date, and changing a value a function owns.' },
@@ -35,7 +35,7 @@ const explore = [
 
 /** The pages, for llms.txt: each with its section, title and description. */
 const pages = [
-  { route: '/', section: 'Start', title: 'staticjs', description: 'What staticjs is, what it guarantees, and how to get it.' },
+  { route: '/', section: 'Start', title: 'staticjs', description: 'What staticjs is, the language against JavaScript, its properties, how to install it, how it works, its performance, a comparison with QuickJS, CEL and Starlark, and its limitations.' },
   { route: '/guide/', section: 'Guide', title: 'Guide', description: 'Every page of the guide, in reading order.' },
   ...guide.map((p) => ({ route: p.link, section: 'Guide', title: p.text, description: p.description })),
   { route: '/explore/', section: 'Explore', title: 'Explore', description: 'Interactive views of how staticjs works.' },

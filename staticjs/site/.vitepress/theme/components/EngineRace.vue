@@ -67,12 +67,12 @@ onBeforeUnmount(() => {
 const finished = computed(() => raceCases.filter((c) => rows[c.id].times));
 const faster = computed(() => finished.value.filter((c) => rows[c.id].times!.quickjs.ns >= 1.05 * rows[c.id].times!.staticjs.ns).length);
 const status = computed(() => {
-  if (phase.value === 'idle') return { kind: 'idle', text: 'Runs when this section scrolls into view.' };
-  if (phase.value === 'loading') return { kind: 'busy', text: 'Loading both engines' };
+  if (phase.value === 'idle') return { kind: 'idle', text: 'Waiting to start.' };
+  if (phase.value === 'loading') return { kind: 'busy', text: 'Loading both engines.' };
   if (phase.value === 'error') return { kind: 'error', text: `The race stopped: ${message.value}` };
   const now = raceCases.find((c) => rows[c.id].state === 'running');
-  if (phase.value === 'running') return { kind: 'busy', text: now ? `Running ${now.name.toLowerCase()}` : 'Running' };
-  return { kind: 'running', text: `staticjs was faster on ${faster.value} of ${finished.value.length} programs here.` };
+  if (phase.value === 'running') return { kind: 'busy', text: now ? `Running ${now.name.toLowerCase()}.` : 'Running.' };
+  return { kind: 'running', text: `staticjs was faster on ${faster.value} of ${finished.value.length} programs.` };
 });
 
 function time(ns: number) {
@@ -92,18 +92,18 @@ const running = computed(() => phase.value === 'loading' || phase.value === 'run
 </script>
 
 <template>
-  <section ref="root" class="band race" aria-labelledby="race-title">
+  <div ref="root" class="race" aria-labelledby="race-title">
     <div class="head">
       <div>
-        <h2 id="race-title" class="section-title">staticjs against QuickJS-NG</h2>
+        <h3 id="race-title" class="race-title">Comparison with QuickJS-NG</h3>
         <p class="lede">
-          Eight programs through staticjs and QuickJS-NG, both as wasm, on your machine. A row is timed only if both
-          return the same result.
+          staticjs and QuickJS-NG, both compiled to WebAssembly, run eight programs in a web worker, and a row is timed
+          only when both engines return the same result.
         </p>
       </div>
       <button class="sjs-button big" :class="{ primary: phase !== 'done' }" type="button" :disabled="running" @click="start">
         <Icon :name="phase === 'done' || phase === 'error' ? 'reset' : 'play'" />
-        {{ phase === 'done' || phase === 'error' ? 'Run again' : 'Run the benchmark' }}
+        {{ phase === 'done' || phase === 'error' ? 'Run again' : 'Run the comparison' }}
       </button>
     </div>
 
@@ -135,7 +135,7 @@ const running = computed(() => phase.value === 'loading' || phase.value === 'run
               <span class="bar"><span class="fill other" :style="{ width: width(rows[c.id].times!, 'quickjs') }"></span></span>
               <span class="verdict">{{ ratio(rows[c.id].times!) }}</span>
             </template>
-            <span v-else-if="rows[c.id].state === 'done'" class="status" data-kind="error">Results differ, not timed</span>
+            <span v-else-if="rows[c.id].state === 'done'" class="status" data-kind="error">The engines returned different results, so this row has no time.</span>
             <span v-else-if="rows[c.id].state === 'running'" class="status" data-kind="busy">running</span>
           </span>
         </div>
@@ -152,18 +152,27 @@ const running = computed(() => phase.value === 'loading' || phase.value === 'run
     </div>
 
     <p class="note">
-      Median of five samples, each repeating the program for at least 40 ms. staticjs is called from JavaScript once
-      per run, the way a host calls its C API. QuickJS-NG (quickjs-wasi{{ startup ? ` ${startup.quickjs.version}` : '' }})
-      loops inside the engine and is called once per sample, so it crosses the boundary less.
+      Each time is the median of five samples of at least 40 ms. staticjs is called from JavaScript once per run, as a
+      host calls the C API. QuickJS-NG (quickjs-wasi{{ startup ? ` ${startup.quickjs.version}` : '' }}) loops inside its
+      engine and is called once per sample.
       <template v-if="startup">
-        A fresh engine from its compiled module took {{ startup.staticjs.ms.toFixed(2) }} ms for staticjs and
+        Starting from a compiled module takes {{ startup.staticjs.ms.toFixed(2) }} ms for staticjs and
         {{ startup.quickjs.ms.toFixed(2) }} ms for QuickJS-NG.
       </template>
     </p>
-  </section>
+  </div>
 </template>
 
 <style scoped>
+.race {
+  margin-top: var(--space-10);
+}
+.race-title {
+  font: var(--type-h3);
+  font-size: 20px;
+  color: var(--fg-1);
+  margin: 0 0 var(--space-2);
+}
 .head {
   display: flex;
   flex-wrap: wrap;

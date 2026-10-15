@@ -3,46 +3,64 @@ import { withBase } from 'vitepress';
 import EngineRace from './EngineRace.vue';
 import Icon from './Icon.vue';
 
-// The six properties, the first three backing the headline.
-const features = [
-  { title: 'Small', text: 'One C file, one header, no dependencies, no libc. The language is small as well: no loops, recursion or classes. An evaluator at max_stack = 256 is about 41 KiB.' },
-  { title: 'Embeddable', text: 'Freestanding C11. Static and shared libraries for Linux and macOS on x86_64 and arm64, or one wasm module that imports nothing. Runs in browsers and Node.' },
-  { title: 'Fast', text: 'A compiled guard evaluates from C in about 0.14 µs. Compiling it takes 6.4 µs. Against QuickJS-NG, both as wasm in Chromium, staticjs won 7 of 8 programs.' },
-  { title: 'Total', text: 'Every evaluation ends. The host pushes fuel, one unit per instruction and per element a built-in walks. When it runs out the program pauses, and it resumes from any point once more arrives.' },
-  { title: 'Exact', text: 'A program staticjs accepts is valid JavaScript and gives the value Node gives, or a fault that says why. "5" * 2 faults instead of giving 10. About 4,200 test cases also run in Node and must match.' },
-  { title: 'Hermetic', text: 'A program sees only the values the host passes in. No file system, network, clock or randomness of its own; the host supplies the clock and Math.random’s seed. Same program and inputs give the same value and the same fuel on every machine.' },
+const properties = [
+  { name: 'Total', text: 'Every evaluation ends: the evaluator runs on fuel the host pushes, and when the fuel runs out it pauses and resumes from where it stopped, inside a callback included.' },
+  { name: 'Exact', text: 'A program staticjs accepts is valid JavaScript and evaluates to the value Node gives, or to a fault with a line, a column and a fixed message.' },
+  { name: 'Hermetic', text: 'A program reads only the values the host passes in and imports only modules the host provides, with no file system, network, clock or randomness of its own.' },
+  { name: 'Deterministic', text: 'The same program with the same inputs gives the same value and uses the same fuel on every machine.' },
+  { name: 'Bounded', text: 'Every byte comes from the allocator the host gives, and every construct has a limit set by the host.' },
 ];
 
-// staticjs among QuickJS, CEL and Starlark; "—" where their pages say nothing.
+const faults = [
+  '[1, 2] === [1, 2]     // fault: === on two objects compares identity, which staticjs does not have',
+  '"5" * 2               // fault: arithmetic in staticjs is on numbers',
+  '({}).a.b              // fault: cannot read a property of undefined',
+  '() => { for (;;) {} } // refused when compiled: staticjs has no loops',
+].join('\n');
+
+const ways = [
+  { title: 'Prebuilt libraries', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries with staticjs.h, for Linux and macOS on x86_64 and arm64. Link with any C11 compiler.', link: '/guide/getting-started' },
+  { title: 'Amalgamation', code: 'clang -O2 -I. app.c staticjs.c', text: 'staticjs.c and staticjs.h, two files to add to a C project. They build with clang and need no C library.', link: '/guide/getting-started#_3-build-it' },
+  { title: 'staticjs.wasm', code: 'await WebAssembly.instantiate(bytes, {})', text: 'A WebAssembly module for browsers and Node. It imports nothing and brings its own allocator.', link: '/guide/wasm' },
+];
+
 const compare = [
-  { what: 'Syntax', sjs: 'JavaScript (a pure subset)', quickjs: 'JavaScript (ES2025)', cel: 'Its own C-like syntax', starlark: 'A dialect of Python' },
-  { what: 'Functions users write', sjs: 'Arrow functions, no recursion', quickjs: 'All of JavaScript', cel: 'No; macros and host functions', starlark: 'def functions, no recursion' },
-  { what: 'Loops', sjs: 'None; map, filter, reduce, find', quickjs: 'All of JavaScript', cel: 'None; map, filter, all, exists', starlark: 'for over finite collections' },
-  { what: 'Runaway programs', sjs: 'Cannot run away; host-pushed fuel', quickjs: 'Host’s interrupt handler stops it', cel: 'Non-Turing complete', starlark: '—' },
-  { what: 'Reaches', sjs: 'Only values the host passes in', quickjs: '—', cel: 'Only data the host provides', starlark: 'No file system, network, clock' },
-  { what: 'Memory', sjs: 'Host allocator; limit per construct', quickjs: 'Limit set on the runtime', cel: '—', starlark: '—' },
-  { what: 'Same result everywhere', sjs: 'Same value and same fuel', quickjs: '—', cel: '—', starlark: 'Deterministic evaluation' },
-  { what: 'Coercion', sjs: 'Stops with a fault', quickjs: '—', cel: '—', starlark: '—' },
-  { what: 'Embeds in', sjs: 'Freestanding C11, one file; wasm', quickjs: 'A few C files, no dependency', cel: 'Go, Java, C++', starlark: 'Go, Java, Rust' },
+  { what: 'Syntax', sjs: 'Subset of JavaScript', quickjs: 'All of JavaScript (ES2025)', cel: 'C-like syntax of its own', starlark: 'Dialect of Python' },
+  { what: 'Functions in programs', sjs: 'Arrow functions', quickjs: 'All JavaScript functions', cel: 'None; the host provides them', starlark: 'def functions' },
+  { what: 'Loops', sjs: 'None', quickjs: 'All JavaScript loops', cel: 'None; macros such as all, map, filter', starlark: 'for over finite sequences' },
+  { what: 'Every evaluation ends', sjs: 'Yes; fuel the host pushes', quickjs: 'No; the host’s interrupt handler stops it', cel: 'Yes; not Turing complete', starlark: 'Yes; no recursion, no unbounded loops' },
+  { what: 'What a program can reach', sjs: 'Values and modules the host passes in', quickjs: '—', cel: 'Variables and functions the host provides', starlark: 'Hermetic' },
+  { what: 'Determinism', sjs: 'Same value and fuel on every machine', quickjs: '—', cel: '—', starlark: 'Deterministic' },
+  { what: 'Memory limits', sjs: 'Host’s allocator; limits set by the host', quickjs: 'A memory limit on the runtime', cel: '—', starlark: '—' },
+  { what: 'Coercion and identity', sjs: 'Faults on both', quickjs: 'Follows JavaScript: "5" * 2 is 10', cel: '—', starlark: '—' },
+  { what: 'Implementations', sjs: 'Freestanding C11, WebAssembly', quickjs: 'A few C files; QuickJS-NG fork', cel: 'Go, Java, C++', starlark: 'Go, Java, Rust' },
 ];
 
 const others = [
-  'QuickJS if you need all of JavaScript. It passes nearly all of the ES2025 tests.',
-  'CEL if you need formal verification, or a library for Go, Java or C++.',
-  'Starlark if you want Python-style configuration, as Bazel uses it.',
+  'QuickJS runs all of JavaScript, ES2025 included.',
+  'CEL has type checking and formal verification.',
+  'Starlark has def functions and runs threads in parallel over frozen shared data.',
 ];
 
-const stops = [
-  { src: '[1, 2] === [1, 2]', js: 'false', sjs: 'fault: === on two objects compares identity, which staticjs does not have' },
-  { src: '"5" * 2', js: '10', sjs: 'fault: arithmetic in staticjs is on numbers' },
-  { src: '({}).a.b', js: 'TypeError', sjs: 'fault: cannot read a property of undefined' },
-  { src: '() => { for (;;) {} }', js: 'never ends, if called', sjs: 'refused when compiled: staticjs has no loops' },
+const limits = [
+  'staticjs runs a subset of JavaScript. The language leaves out what the overview lists, so a program written for Node usually needs rewriting with map, filter and reduce before staticjs accepts it.',
+  'Some valid JavaScript faults. Where JavaScript would coerce or compare objects by identity, staticjs stops with a fault: "5" * 2 and [1, 2] === [1, 2] both fault, and each fault carries a line, a column and a fixed English message.',
+  'JavaScript that staticjs leaves out is refused when the program is compiled, as an unsupported error. It never reaches the evaluator.',
+  'Temporal supports the ISO calendar with UTC and fixed offsets. IANA time zones are not available.',
+  'Date is UTC only.',
+  'Regular expressions run in linear time, without backtracking. Lookahead, lookbehind, backreferences, \\p{...} and the v flag are not supported.',
+  'staticjs is at version 0.9.0, and the API may change.',
+  'staticjs is not faster than Node’s JIT, and its WebAssembly module (about 950 KiB) is larger than QuickJS’s (about 620 KiB).',
 ];
 
-const ways = [
-  { title: 'Prebuilt libraries', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries for Linux and macOS, x86_64 and arm64. Link with any C11 compiler.', link: '/guide/getting-started' },
-  { title: 'Amalgamation', code: 'clang -O2 -I. app.c staticjs.c', text: 'staticjs.c and staticjs.h, the whole library. Add both to your project and build with clang.', link: '/guide/getting-started#_3-build-it' },
-  { title: 'WebAssembly', code: "await WebAssembly.instantiate(bytes, {})", text: 'staticjs.wasm imports nothing and brings its own allocator. Runs in browsers and Node.', link: '/guide/wasm' },
+const header = 'https://github.com/dhamidi/tinyactors/blob/main/staticjs/include/staticjs.h';
+const docs = [
+  { label: 'Guide (Getting started)', href: withBase('/guide/getting-started') },
+  { label: 'The language', href: withBase('/guide/language') },
+  { label: 'Faults and refusals', href: withBase('/guide/faults') },
+  { label: 'Embedding', href: withBase('/guide/embedding') },
+  { label: 'staticjs.h', href: header },
+  { label: 'Pipeline explorer', href: withBase('/explore/pipeline') },
 ];
 </script>
 
@@ -52,42 +70,116 @@ const ways = [
       <div class="copy">
         <h1>A small, embeddable and fast JavaScript engine</h1>
         <p class="lede">
-          A pure subset of JavaScript, for running code your users write. Every program ends, sees only what you hand
-          it, and returns what Node returns or a fault with a line and column.
+          staticjs is a JavaScript engine for a pure, total subset of the language: every program it accepts ends, and
+          gives the value Node gives or a fault.
         </p>
         <div class="actions">
           <a class="sjs-button primary big" :href="withBase('/guide/getting-started')">Getting started</a>
-          <a class="sjs-button big" href="#compare">Compare with QuickJS, CEL, Starlark</a>
+          <a class="sjs-button big" href="#install">Install</a>
         </div>
-        <ul class="facts" aria-label="At a glance">
-          <li>One C file, no libc</li>
-          <li>Wasm module, no imports</li>
-          <li>0.14 µs to evaluate a guard</li>
-          <li>Runs on fuel you push</li>
-        </ul>
       </div>
       <figure class="demo">
         <div class="vp-doc"><slot name="demo" /></div>
-        <figcaption>Edit it. It runs live in staticjs.wasm, and the result shows the fuel spent.</figcaption>
+        <figcaption>Edit the program to filter and sort orders; the result and fuel used update.</figcaption>
       </figure>
     </section>
 
-    <section class="band">
-      <h2 class="section-title">What you get</h2>
-      <div class="pains">
-        <article v-for="f in features" :key="f.title" class="card pain">
-          <h3>{{ f.title }}</h3>
-          <p>{{ f.text }}</p>
-        </article>
+    <section class="band overview">
+      <h2 class="section-title">Overview</h2>
+      <div class="prose">
+        <p>
+          Like JavaScript, staticjs has numbers, BigInt, strings, template literals, arrays, objects, Set, Map, Temporal
+          and Date, arrow functions, destructuring with defaults and rest, spread, optional chaining and the usual
+          operators. A program is one expression, or a module of imports, const declarations and exports. Unlike
+          JavaScript, it has no loops and no recursion, and every evaluation ends.
+        </p>
+        <p>
+          staticjs leaves out loops (for, while, do), recursion, classes, async/await and promises, generators,
+          try/catch/throw, var, labels, switch, eval, this, prototypes, getters and setters, and I/O. A function may
+          change only a value it owns, such as an array it made; shared values never change.
+        </p>
+        <p>
+          The host passes in the program’s globals by name, adds native functions written in C, and provides the
+          modules a program can import.
+        </p>
+      </div>
+      <dl class="properties">
+        <div v-for="p in properties" :key="p.name">
+          <dt>{{ p.name }}</dt>
+          <dd>{{ p.text }}</dd>
+        </div>
+      </dl>
+      <p class="code-intro">
+        Where JavaScript would coerce, compare by identity or look on a prototype, staticjs faults; a loop is refused
+        when the program is compiled.
+      </p>
+      <pre class="faults"><code>{{ faults }}</code></pre>
+    </section>
+
+    <section id="install" class="band">
+      <h2 class="section-title">Install</h2>
+      <p class="lede">
+        staticjs is freestanding C11: it needs no C library, only stdint.h, stddef.h and stdbool.h, and has one public
+        header, staticjs.h.
+      </p>
+      <div class="two-up">
+        <a v-for="w in ways" :key="w.title" class="card way" :href="withBase(w.link)">
+          <h3>{{ w.title }}</h3>
+          <p>{{ w.text }}</p>
+          <code>{{ w.code }}</code>
+        </a>
       </div>
     </section>
 
-    <section id="compare" class="band">
-      <h2 class="section-title">How staticjs compares</h2>
-      <p class="lede">
-        Basically CEL with JavaScript syntax and user functions. Next to QuickJS it can’t run away; next to Starlark it’s
-        JavaScript instead of a Python dialect.
+    <section class="band pipeline-teaser">
+      <div>
+        <h2 class="section-title">How it works</h2>
+        <div class="prose">
+          <p>
+            staticjs has four stages: the parser, the compiler, the evaluator and the writer. A caller pushes into each
+            one: bytes into the parser, which sends events to a sink, operands before their operator; the compiler is
+            that sink and makes bytecode as the events arrive; fuel into the evaluator; buffer space into the writer.
+            None blocks or calls back for more input, so a host can stream source in chunks, and there is no recursion
+            anywhere in the C code.
+          </p>
+          <p>
+            The compiler also tags functions whose shape a built-in can run in C, such as <code>x =&gt; x.key</code> or
+            <code>(a, b) =&gt; a.k - b.k</code>. A tagged function saves fuel and never changes a value. A host can pause
+            an evaluation and read its frames, for example the program, map at element 2 of 4, and the callback, each
+            with a position.
+          </p>
+          <p>
+            The explorer runs staticjs.wasm in the browser and shows the parser’s events, the compiler’s functions and
+            shapes with the fuel used with and without them, the evaluator one unit of fuel at a time with its frames,
+            and the writer’s output in 16-byte pieces.
+          </p>
+        </div>
+        <a class="sjs-button primary big" :href="withBase('/explore/pipeline')">Open the explorer</a>
+      </div>
+      <ol class="flow" aria-label="The four stages">
+        <li><strong>Parser</strong><span>bytes → events</span></li>
+        <li><strong>Compiler</strong><span>events → bytecode</span></li>
+        <li><strong>Evaluator</strong><span>bytecode, fuel → value</span></li>
+        <li><strong>Writer</strong><span>value → source text</span></li>
+      </ol>
+    </section>
+
+    <section class="band">
+      <h2 class="section-title">Performance</h2>
+      <p class="prose-p">
+        On a 4-core x86_64 machine, evaluating a compiled small expression from C takes about 0.14 µs, and compiling it
+        takes 6.4 µs. Node’s vm.Script.runInContext takes 1.4 µs for the same expression, and creating a fresh V8
+        context takes 330 µs. Over 33 evaluation cases, Node with its JIT takes 0.43 of staticjs’s time, so Node’s JIT is
+        faster. Node with --jitless takes about as long as staticjs, and QuickJS-NG compiled to WebAssembly takes 4.8
+        times as long.
+        <a :href="withBase('/guide/performance#compared-with-other-engines')">Benchmark report <Icon name="arrow-right" :size="14" /></a>
       </p>
+      <EngineRace />
+    </section>
+
+    <section class="band">
+      <h2 class="section-title">Comparison</h2>
+      <p class="lede">staticjs is basically CEL with JavaScript syntax and user functions.</p>
       <table class="compare">
         <thead>
           <tr><th scope="col"></th><th scope="col">staticjs</th><th scope="col">QuickJS</th><th scope="col">CEL</th><th scope="col">Starlark</th></tr>
@@ -105,58 +197,17 @@ const ways = [
       <ul class="choose">
         <li v-for="o in others" :key="o">{{ o }}</li>
       </ul>
-      <p class="note">
-        What we say about QuickJS, CEL and Starlark comes from their own pages. The race below runs in your browser; the
-        benchmark report has one machine’s numbers.
-        <a :href="withBase('/guide/performance#compared-with-other-engines')">The benchmark report <Icon name="arrow-right" :size="14" /></a>
-      </p>
-    </section>
-
-    <EngineRace />
-
-    <section class="band">
-      <h2 class="section-title">When a rule is wrong</h2>
-      <p class="lede">Mistakes in a rule come back as a fault with a line and column.</p>
-      <table class="stops">
-        <thead><tr><th scope="col">Program</th><th scope="col">JavaScript</th><th scope="col">staticjs</th></tr></thead>
-        <tbody>
-          <tr v-for="s in stops" :key="s.src">
-            <td><code>{{ s.src }}</code></td>
-            <td class="js">{{ s.js }}</td>
-            <td><span class="status" data-kind="error">{{ s.sjs }}</span></td>
-          </tr>
-        </tbody>
-      </table>
-      <p class="more"><a :href="withBase('/guide/faults')">All faults and refusals <Icon name="arrow-right" :size="14" /></a></p>
     </section>
 
     <section class="band">
-      <h2 class="section-title">Three ways in</h2>
-      <div class="two-up">
-        <a v-for="w in ways" :key="w.title" class="card way" :href="withBase(w.link)">
-          <h3>{{ w.title }}</h3>
-          <p>{{ w.text }}</p>
-          <code>{{ w.code }}</code>
-        </a>
-      </div>
-    </section>
-
-    <section class="band pipeline-teaser">
-      <div>
-        <h2 class="section-title">Inside the pipeline</h2>
-        <p class="lede">
-          Step through the parser, compiler and evaluator on a program of your own. Push the parser 1, 4 or 16 bytes at a
-          time, look at the compiled function shapes, spend fuel one unit at a time, and read the output in 16-byte
-          pieces. Runs on staticjs.wasm.
-        </p>
-        <a class="sjs-button primary big" :href="withBase('/explore/pipeline')">Open the pipeline explorer</a>
-      </div>
-      <ol class="flow" aria-label="The four stages">
-        <li><strong>Parser</strong><span>bytes → events</span></li>
-        <li><strong>Compiler</strong><span>events → bytecode</span></li>
-        <li><strong>Evaluator</strong><span>bytecode → value</span></li>
-        <li><strong>Writer</strong><span>value → JS source</span></li>
-      </ol>
+      <h2 class="section-title">Limitations</h2>
+      <ul class="limits">
+        <li v-for="l in limits" :key="l">{{ l }}</li>
+      </ul>
+      <h3 class="minor-title">Documentation</h3>
+      <ul class="docs">
+        <li v-for="d in docs" :key="d.label"><a :href="d.href">{{ d.label }} <Icon name="arrow-right" :size="14" /></a></li>
+      </ul>
     </section>
   </div>
 </template>
@@ -232,6 +283,81 @@ h1 em {
   margin-top: -8px;
   font: var(--type-body-sm);
   color: var(--fg-2);
+}
+.prose p,
+.prose-p {
+  max-width: var(--prose-max);
+  margin: 0 0 var(--space-4);
+  font: var(--type-body);
+  line-height: 1.65;
+  color: var(--fg-1);
+}
+.prose code {
+  font: var(--type-code);
+  font-size: 0.9em;
+  color: var(--code-fg);
+}
+.prose-p a,
+.docs a {
+  color: var(--text-link);
+  font-weight: 500;
+  text-decoration: none;
+}
+.properties {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4) var(--space-8);
+  margin: var(--space-6) 0;
+}
+.properties dt {
+  font: var(--type-h3);
+  color: var(--fg-1);
+}
+.properties dd {
+  margin: var(--space-1) 0 0;
+  font: var(--type-body-sm);
+  color: var(--fg-2);
+}
+.code-intro {
+  max-width: var(--prose-max);
+  margin: var(--space-6) 0 var(--space-3);
+  font: var(--type-body);
+  color: var(--fg-1);
+}
+.faults {
+  margin: 0;
+  padding: var(--space-4) var(--space-5);
+  font: var(--type-code);
+  font-size: 13px;
+  color: var(--code-fg);
+  background: var(--surface-code);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-2);
+  overflow-x: auto;
+}
+.limits {
+  max-width: var(--prose-max);
+  margin: 0 0 var(--space-8);
+  padding-left: var(--space-5);
+  font: var(--type-body);
+  color: var(--fg-1);
+}
+.limits li + li {
+  margin-top: var(--space-2);
+}
+.minor-title {
+  font: var(--type-h3);
+  color: var(--fg-1);
+  margin: 0 0 var(--space-3);
+}
+.docs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: var(--type-ui);
 }
 .band {
   padding: var(--space-12) 0 0;

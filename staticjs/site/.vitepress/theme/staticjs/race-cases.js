@@ -4,8 +4,8 @@
 export const raceCases = [
   {
     id: 'guard',
-    name: 'Guard',
-    note: 'One small rule',
+    name: 'A small expression',
+    note: 'one expression',
     source: '((event) => event.type === "order" && event.total > 100 && event.items.some((item) => item.qty > 2))({ type: "order", total: 250, items: [{ qty: 1 }, { qty: 3 }] })',
   },
   {
@@ -16,8 +16,8 @@ export const raceCases = [
   },
   {
     id: 'sort',
-    name: 'Sort',
-    note: '5,000 rows by a key',
+    name: 'Sort by a key',
+    note: '5,000 rows',
     source: 'Array.from({ length: 5000 }, (_, i) => ({ id: i, score: (i * 7919) % 5003 }))\n  .toSorted((a, b) => a.score - b.score)\n  .slice(0, 3)\n  .map((row) => row.id)',
   },
   {

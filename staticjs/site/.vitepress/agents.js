@@ -150,9 +150,9 @@ export function llmsTxt(pages, { siteURL = '' } = {}) {
   const lines = [
     '# staticjs',
     '',
-    '> staticjs is a pure, total subset of JavaScript, as a freestanding C library and a WebAssembly module. A program it accepts is valid JavaScript and evaluates to the value JavaScript gives, or to a fault: never a different value. Every evaluation ends (it runs on fuel the host pushes), has no side effects, and allocates only through the host.',
+    '> staticjs is a small, embeddable and fast JavaScript engine for a pure, total subset of the language, as a freestanding C library and a WebAssembly module. A program it accepts is valid JavaScript and evaluates to the value JavaScript gives, or to a fault: never a different value. Every evaluation ends (it runs on fuel the host pushes), has no side effects, and allocates only through the host.',
     '',
-    'Use staticjs to evaluate short programs written by someone other than the host (guards, rules, filters, computed fields) when they must end, have no effects, and give the same value everywhere. Do not use it for whole applications: it has no loops, no classes, no async and no I/O. To write a program for it, read the Quick reference first.',
+    'Like JavaScript, the language has arrow functions, destructuring, Map, Set, BigInt, JSON and Temporal. Unlike JavaScript, it has no loops, recursion, classes, exceptions, async or I/O, and every evaluation ends. Programs written for Node usually need rewriting with map, filter and reduce. The Quick reference lists what to write instead.',
     '',
     'Every page of this site is markdown at its path plus `.md`, and at its path for a request whose `Accept` header prefers `text/markdown`. `llms-full.txt` holds them all in one file. The C API reference is the public header, `staticjs.h`, whose every declaration has a comment.',
     '',
