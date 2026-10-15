@@ -1,7 +1,7 @@
-68 F: the guard is false
-79 F: the guard is true
-95 F: the guard is true
-fault: a native function failed (In() takes one state's ID)
-{"today":["cold","fine","hot"]}
+{"id":"a1","eur":11.04}
+{"id":"a2","eur":93.6}
+{"id":"a3","eur":5.5}
+fault: a native function failed (rate() takes a currency the host has a rate for)
+{"sizes":["small","medium","large"]}
 "2024-01-31T10:00:00"
 "2024-01-31T11:30:00"

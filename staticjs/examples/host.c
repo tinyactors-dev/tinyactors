@@ -1,9 +1,9 @@
-/* host: staticjs embedded as a statechart's data model would embed it.
+/* host: a host that runs a plugin its users wrote to transform records.
  *
  * - a library module, compiled and evaluated once; its exports are a value;
- * - a guard, an expression compiled once with the names the host binds
- *   (globals), evaluated for each event with that event's values;
- * - a native function, In(), answering from the host's own state;
+ * - the plugin, an expression compiled once with the names the host binds
+ *   (globals), evaluated for each record with that record's values;
+ * - a native function, rate(), answering from the host's own tables;
  * - a second module importing the first by name, through a modules adapter;
  * - the clock, pushed by the host: the library never reads one.
  *
@@ -33,7 +33,7 @@ static const sjs_allocator_vtable heap = { allocate, release };
 typedef struct {
     sjs_context *context;
     sjs_vm *vm;
-    sjs_value units;
+    sjs_value money;
 } host;
 
 static void fail(const char *what, const sjs_error *error) {
@@ -81,41 +81,59 @@ static sjs_result evaluate(host *h, const sjs_run_params *run, sjs_value *out) {
     return SJS_ERR_PROGRAM;
 }
 
-/* In(id): whether the statechart is in a state. The host's state is the
+/* The host's exchange rates to euros: the table rate() answers from. */
+typedef struct {
+    const char *currency;
+    double euros;
+} rate_row;
+
+static const rate_row rates[] = { { "EUR", 1 }, { "GBP", 1.17 }, { "USD", 0.92 } };
+
+/* rate(currency): one unit of a currency, in euros. The table is the
  * native's `self`; a native must not change anything a program can see. */
-static sjs_result in_state(void *self, sjs_native_call *call) {
-    const char *active = self;
-    if (call->count != 1 || call->arguments[0].kind != SJS_STRING) {
-        call->fault = SJS_STR("In() takes one state's ID");
-        return SJS_ERR_PROGRAM;
+static sjs_result rate(void *self, sjs_native_call *call) {
+    const rate_row *row = self;
+    if (call->count == 1 && call->arguments[0].kind == SJS_STRING) {
+        sjs_str code = sjs_string_text(call->arguments[0]);
+        for (size_t i = 0; i < sizeof rates / sizeof rates[0]; i++) {
+            if (strlen(row[i].currency) == code.length && memcmp(row[i].currency, code.ptr, code.length) == 0) {
+                call->result = sjs_number(row[i].euros);
+                return SJS_OK;
+            }
+        }
     }
-    sjs_str id = sjs_string_text(call->arguments[0]);
-    call->result = sjs_boolean(strlen(active) == id.length && memcmp(active, id.ptr, id.length) == 0);
-    return SJS_OK;
+    call->fault = SJS_STR("rate() takes a currency the host has a rate for");
+    return SJS_ERR_PROGRAM;
 }
 
-static const sjs_native_vtable in_vtable = { in_state };
+static const sjs_native_vtable rate_vtable = { rate };
 
-/* The modules adapter: one module, "units", whose exports the host holds. */
+/* The modules adapter: one module, "money", whose exports the host holds. */
 static sjs_result find_module(void *self, sjs_str name, sjs_value *exports) {
     host *h = self;
-    if (name.length != 5 || memcmp(name.ptr, "units", 5) != 0) return SJS_ERR_NOT_FOUND;
-    *exports = h->units; /* borrowed: the program retains what it imports */
+    if (name.length != 5 || memcmp(name.ptr, "money", 5) != 0) return SJS_ERR_NOT_FOUND;
+    *exports = h->money; /* borrowed: the program retains what it imports */
     return SJS_OK;
 }
 
 static const sjs_modules_vtable modules_vtable = { find_module };
 
-/* An event as the host builds it: { name, data: { f } }. */
-static sjs_value event(host *h, const char *name, double fahrenheit) {
-    sjs_value e, data, text;
-    check(sjs_object_new(h->context, 2, &e), "event");
-    check(sjs_object_new(h->context, 1, &data), "data");
-    check(sjs_string_new(h->context, (sjs_str){ name, (uint32_t)strlen(name) }, &text), "name");
-    check(sjs_object_put(h->context, &data, &(sjs_property){ SJS_STR("f"), sjs_number(fahrenheit) }), "f");
-    check(sjs_object_put(h->context, &e, &(sjs_property){ SJS_STR("name"), text }), "put name");
-    check(sjs_object_put(h->context, &e, &(sjs_property){ SJS_STR("data"), data }), "put data");
-    return e;
+/* A record as the host builds it: { id, amount, currency }. */
+typedef struct {
+    const char *id;
+    double amount;
+    const char *currency;
+} order;
+
+static sjs_value record(host *h, const order *o) {
+    sjs_value r, id, currency;
+    check(sjs_object_new(h->context, 3, &r), "record");
+    check(sjs_string_new(h->context, (sjs_str){ o->id, (uint32_t)strlen(o->id) }, &id), "id");
+    check(sjs_string_new(h->context, (sjs_str){ o->currency, (uint32_t)strlen(o->currency) }, &currency), "currency");
+    check(sjs_object_put(h->context, &r, &(sjs_property){ SJS_STR("id"), id }), "put id");
+    check(sjs_object_put(h->context, &r, &(sjs_property){ SJS_STR("amount"), sjs_number(o->amount) }), "put amount");
+    check(sjs_object_put(h->context, &r, &(sjs_property){ SJS_STR("currency"), currency }), "put currency");
+    return r;
 }
 
 int main(void) {
@@ -125,50 +143,50 @@ int main(void) {
 
     /* 1. A library module: compiled and evaluated once. Its value is its
      * namespace, an object of its exports. */
-    sjs_program *units = compile(&(sjs_compiler_config){ .context = h.context, .goal = SJS_GOAL_MODULE },
-                                 "export const celsius = (f) => Math.round((f - 32) * 50 / 9) / 10;\n"
-                                 "export const describe = (c) => c > 25 ? \"hot\" : c < 15 ? \"cold\" : \"fine\";\n");
-    if (evaluate(&h, &(sjs_run_params){ .program = units }, &h.units) != SJS_OK) return 1;
-    sjs_program_release(units);
+    sjs_program *money = compile(&(sjs_compiler_config){ .context = h.context, .goal = SJS_GOAL_MODULE },
+                                 "export const cents = (x) => Math.round(x * 100) / 100;\n"
+                                 "export const size = (eur) => eur >= 100 ? \"large\" : eur >= 20 ? \"medium\" : \"small\";\n");
+    if (evaluate(&h, &(sjs_run_params){ .program = money }, &h.money) != SJS_OK) return 1;
+    sjs_program_release(money);
 
-    /* 2. A guard: an expression compiled once against the names the host
-     * binds, then evaluated for each event with that event's values. */
-    static const sjs_str names[] = { SJS_STR("In"), SJS_STR("celsius"), SJS_STR("event"), SJS_STR("limit") };
-    sjs_program *guard = compile(
-                                 &(sjs_compiler_config){ .context = h.context, .goal = SJS_GOAL_EXPRESSION,
-                                                         .globals = names, .global_count = 4 },
-                                 "In(\"heating\") && celsius(event.data.f) > limit");
-    sjs_value in, celsius;
-    check(sjs_function_native(h.context, (sjs_native){ (void *)"heating", &in_vtable }, &in), "native");
-    check(sjs_object_get(h.units, SJS_STR("celsius"), &celsius), "celsius"); /* borrowed from the exports */
-    static const double readings[] = { 68, 79, 95 };
+    /* 2. The plugin: an expression a user wrote, compiled once against the
+     * names the host binds, then evaluated for each record. */
+    static const sjs_str names[] = { SJS_STR("rate"), SJS_STR("cents"), SJS_STR("record") };
+    sjs_program *plugin = compile(
+                                  &(sjs_compiler_config){ .context = h.context, .goal = SJS_GOAL_EXPRESSION,
+                                                          .globals = names, .global_count = 3 },
+                                  "({ id: record.id, eur: cents(record.amount * rate(record.currency)) })");
+    sjs_value rate_fn, cents;
+    check(sjs_function_native(h.context, (sjs_native){ (void *)rates, &rate_vtable }, &rate_fn), "native");
+    check(sjs_object_get(h.money, SJS_STR("cents"), &cents), "cents"); /* borrowed from the exports */
+    static const order orders[] = { { "a1", 12, "USD" }, { "a2", 80, "GBP" }, { "a3", 5.5, "EUR" } };
     for (int i = 0; i < 3; i++) {
-        sjs_value values[] = { in, celsius, event(&h, "reading", readings[i]), sjs_number(25) };
+        sjs_value values[] = { rate_fn, cents, record(&h, &orders[i]) };
         sjs_value result;
-        if (evaluate(&h, &(sjs_run_params){ guard, values, 4 }, &result) == SJS_OK) {
-            printf("%g F: the guard is %s\n", readings[i], result.kind == SJS_BOOLEAN && result.boolean ? "true" : "false");
+        if (evaluate(&h, &(sjs_run_params){ plugin, values, 3 }, &result) == SJS_OK) {
+            print(&h, result);
             sjs_release(h.context, result);
         }
         sjs_release(h.context, values[2]);
     }
-    sjs_program_release(guard);
+    sjs_program_release(plugin);
 
     /* A native that refuses its arguments faults the evaluation. */
     sjs_program *misuse = compile(
                                   &(sjs_compiler_config){ .context = h.context, .goal = SJS_GOAL_EXPRESSION,
                                                           .globals = names, .global_count = 1 },
-                                  "In(42)");
+                                  "rate(\"JPY\")");
     sjs_value result;
-    if (evaluate(&h, &(sjs_run_params){ misuse, &in, 1 }, &result) == SJS_OK) sjs_release(h.context, result);
+    if (evaluate(&h, &(sjs_run_params){ misuse, &rate_fn, 1 }, &result) == SJS_OK) sjs_release(h.context, result);
     sjs_program_release(misuse);
-    sjs_release(h.context, in);
+    sjs_release(h.context, rate_fn);
 
-    /* 3. A module importing "units" by name, through the adapter. */
+    /* 3. A module importing "money" by name, through the adapter. */
     sjs_program *report = compile(
                                   &(sjs_compiler_config){ .context = h.context, .goal = SJS_GOAL_MODULE,
                                                           .modules = { &h, &modules_vtable } },
-                                  "import { celsius, describe } from \"units\";\n"
-                                  "export const today = [50, 72, 88].map((f) => describe(celsius(f)));\n");
+                                  "import { cents, size } from \"money\";\n"
+                                  "export const sizes = [5.004, 42, 250].map((eur) => size(cents(eur)));\n");
     if (evaluate(&h, &(sjs_run_params){ .program = report }, &result) == SJS_OK) {
         print(&h, result);
         sjs_release(h.context, result);
@@ -189,7 +207,7 @@ int main(void) {
     }
     sjs_program_release(now);
 
-    sjs_release(h.context, h.units);
+    sjs_release(h.context, h.money);
     sjs_vm_destroy(h.vm);
     if (sjs_context_live_bytes(h.context) != 0) return fprintf(stderr, "leaked\n"), 1;
     sjs_context_destroy(h.context);

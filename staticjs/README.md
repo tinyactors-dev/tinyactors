@@ -3,9 +3,11 @@
 staticjs is a pure, total subset of JavaScript, as a freestanding C library.
 Give it a source and some fuel, and it gives back a value: from C, or from
 JavaScript through a WebAssembly module. It is meant for programs written
-by someone other than the host: a statechart's guards and assignments, a
-rule, a filter, a computed field. These must give the same answer every
-time, end, and touch nothing but what they are given.
+by someone other than the host: a plugin a user writes to transform their
+records, a filter, a computed field, or a program an agent writes to call
+the host's tools in code instead of one tool call at a time. These must
+give the same answer every time, end, and touch nothing but what they are
+given.
 
 ```js
 orders

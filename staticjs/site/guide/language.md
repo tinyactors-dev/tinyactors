@@ -16,7 +16,7 @@ JavaScript reads `(` source `)`), or a **module** (`SJS_GOAL_MODULE`):
 imports, `const` declarations and exports.
 
 ```js
-// An expression: a guard, an assignment's value, a send's target.
+// An expression: a filter, a computed field, a user's plugin.
 orders.filter((o) => o.total > limit).map((o) => o.id)
 
 // A module: imports, consts and exports. "money" is a module the host provides.
@@ -217,8 +217,9 @@ variable, or itself (`xs.push(xs)`, `o.self = o`). The rules and the check are i
 
 ## Functions from the host
 
-The embedder can add functions (`sjs_function_native`), such as SCXML's
-`In()`. They are the one way into a program from outside.
+The embedder can add functions (`sjs_function_native`), such as a lookup
+in the host's tables, or the tools a program written by an agent calls.
+They are the one way into a program from outside.
 
 ## Regular expressions
 

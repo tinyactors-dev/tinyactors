@@ -3,7 +3,7 @@
 // before its time is shown. Plain JavaScript that both engines accept.
 export const raceCases = [
   {
-    id: 'guard',
+    id: 'expression',
     name: 'A small expression',
     note: 'one expression',
     source: '((event) => event.type === "order" && event.total > 100 && event.items.some((item) => item.qty > 2))({ type: "order", total: 250, items: [{ qty: 1 }, { qty: 3 }] })',

@@ -310,7 +310,7 @@ SJS_API sjs_result sjs_map_get(sjs_value map, sjs_value key, sjs_value *out);
 SJS_API sjs_result sjs_map_at(sjs_value map, uint32_t index, sjs_map_entry *out);
 
 /*
- * Functions the embedder provides, such as SCXML's In(). A native is called
+ * Functions the embedder provides, such as a lookup in its tables. A native is called
  * synchronously, must finish quickly and must not change anything a program
  * can see: it is the one way into a program from outside, and the library
  * cannot check that it keeps the rule.

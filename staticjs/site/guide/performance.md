@@ -16,7 +16,7 @@ evaluator, and per element for the built-ins that loop. The same program
 on the same inputs uses the same fuel on every machine and every target,
 so fuel is a budget you can set per program and rely on. Time is not.
 
-Some figures. A guard is bound to a global `event`; the others run over
+Some figures. `event.f > 25`, a filter, is bound to a global `event`; the others run over
 `xs`, an array of 100 objects (`Array.from({ length: 100 }, (_, i) => ({ k:
 i % 7, v: i }))`), measured with `examples/eval.c --stats` as a module that
 builds `xs` and exports the expression, less the fuel of the same module
@@ -24,7 +24,7 @@ exporting `0`:
 
 | Program | Fuel |
 |---|---:|
-| `event.f > 25` (a guard) | 5 |
+| `event.f > 25` (a filter) | 5 |
 | `xs.map((x) => x.k)` | 205 |
 | `xs.map((x) => x.k + 0)` | 605 |
 | `xs.filter((x) => x.k > 3)` | 205 |
@@ -123,7 +123,7 @@ small BigInts in a `reduce` then allocates nothing per element.
 
 Memory comes only from your allocator. `sjs_context_live_bytes` gives what
 a context holds now. An evaluator with the default limits holds about
-101 KiB, and a compiled guard such as `event.f > 25` about 0.3 KiB more.
+101 KiB, and a compiled filter such as `event.f > 25` about 0.3 KiB more.
 About 64 KiB of the evaluator is its stack of `max_stack` slots, so
 `max_stack = 256` makes an evaluator of about 41 KiB. Keep one evaluator
 and start each evaluation on it, rather than making one per evaluation.
@@ -145,8 +145,8 @@ geometric mean of the other engine's time over staticjs's was:
 | Node 22, `--jitless` | 1.10 | about the same as staticjs |
 | QuickJS-NG in wasm | 4.81 | staticjs is about 5 times faster |
 
-Evaluating a compiled guard from C took 0.14 µs; compiling one took
-6.4 µs. Node's `vm.Script.runInContext` of the same guard took 1.4 µs, and
+Evaluating a compiled filter from C took 0.14 µs; compiling one took
+6.4 µs. Node's `vm.Script.runInContext` of the same filter took 1.4 µs, and
 a fresh V8 context 330 µs. staticjs suits many short evaluations, each
 started by a host. The report gives every case, the memory each engine
 held, the method and its caveats.

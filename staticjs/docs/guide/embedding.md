@@ -174,7 +174,7 @@ if (status == SJS_RUN_DONE) {
   once you have taken the result; `sjs_vm_reset` abandons a paused one and
   releases what it holds. One evaluator runs one evaluation at a time; a
   program may run on several evaluators at once.
-- **How much fuel.** A guard such as `event.f > 25`, with `event` a
+- **How much fuel.** A filter such as `event.f > 25`, with `event` a
   global, takes 5 units, and a callback over an array a few units per
   element: `xs.map((x) => x * 2)` over 10 numbers takes 55. `examples/eval.c --stats` prints what a program
   used; [performance.md](performance.md) has more costs.
@@ -292,25 +292,30 @@ when compiled, never at run time.
 
 ## Native functions
 
-A native function is the one way a program calls into the host: SCXML's
-`In()`, a lookup in the host's tables. Make one with `sjs_function_native`
-and pass it as a global:
+A native function is the one way a program calls into the host: a lookup
+in the host's tables for a user's plugin, or a tool for a program an agent
+wrote. Make one with `sjs_function_native` and pass it as a global:
 
 ```c
-static sjs_result in_state(void *self, sjs_native_call *call) {
-    const char *active = self;
-    if (call->count != 1 || call->arguments[0].kind != SJS_STRING) {
-        call->fault = SJS_STR("In() takes one state's ID");
-        return SJS_ERR_PROGRAM;                  /* faults the evaluation */
+/* rate(currency): one unit of a currency, in euros, from the host's table. */
+static sjs_result rate(void *self, sjs_native_call *call) {
+    const rate_row *row = self;
+    if (call->count == 1 && call->arguments[0].kind == SJS_STRING) {
+        sjs_str code = sjs_string_text(call->arguments[0]);
+        for (size_t i = 0; i < rate_count; i++) {
+            if (strlen(row[i].currency) == code.length && memcmp(row[i].currency, code.ptr, code.length) == 0) {
+                call->result = sjs_number(row[i].euros);
+                return SJS_OK;
+            }
+        }
     }
-    sjs_str id = sjs_string_text(call->arguments[0]);
-    call->result = sjs_boolean(strlen(active) == id.length && memcmp(active, id.ptr, id.length) == 0);
-    return SJS_OK;
+    call->fault = SJS_STR("rate() takes a currency the host has a rate for");
+    return SJS_ERR_PROGRAM;                      /* faults the evaluation */
 }
-static const sjs_native_vtable in_vtable = { in_state };
+static const sjs_native_vtable rate_vtable = { rate };
 
-sjs_value in;
-sjs_function_native(context, (sjs_native){ (void *)"heating", &in_vtable }, &in);
+sjs_value rate_fn;
+sjs_function_native(context, (sjs_native){ (void *)rates, &rate_vtable }, &rate_fn);
 ```
 
 A native is called synchronously and must return quickly: fuel does not
@@ -456,6 +461,6 @@ separate threads with no locking.
 |---|---|
 | `examples/hello.c` | the smallest whole program |
 | `examples/eval.c` | a command-line evaluator: error reports, fuel, the clock, the seed |
-| `examples/host.c` | a library module, a guard compiled once and run per event, globals, a native, a module imported by name, the clock |
+| `examples/host.c` | a library module, a user's plugin compiled once and run per record, globals, a native, a module imported by name, the clock |
 | `examples/stream.c` | chunks pushed to the parser, a sink before the compiler, slices of fuel, a small output buffer |
 | `examples/wasm/` | the same from JavaScript, through `staticjs.wasm` |

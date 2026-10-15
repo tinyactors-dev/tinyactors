@@ -5,8 +5,9 @@ description: "When staticjs fits, when it does not, and how it compares with run
 
 # Why staticjs?
 
-staticjs runs code that someone other than you wrote: a guard in a
-statechart, a filter a user typed, a pricing rule, a computed field. That
+staticjs runs code that someone other than you wrote: a plugin a user
+writes to transform their records, a filter they type, a computed field,
+or a program an agent writes to call your tools. That
 code should be easy to write, should not be able to harm the host, and
 should give the answer its author expects. staticjs gives that code
 JavaScript's syntax and values, and takes away whatever could go wrong.
@@ -14,7 +15,8 @@ JavaScript's syntax and values, and takes away whatever could go wrong.
 ## When does it fit?
 
 - **Short expressions and small modules, run many times.** Evaluating a
-  compiled guard from C takes well under a microsecond.
+  compiled filter from C takes well under a microsecond, so a plugin can
+  run once per record.
 - **Code you do not trust, or do not want to review.** A program reaches
   only what the host passes in. It has no I/O, no globals of the host and
   no time of its own, and the host's limits bound its fuel and memory.
@@ -24,6 +26,37 @@ JavaScript's syntax and values, and takes away whatever could go wrong.
 - **Hosts without a JavaScript engine.** staticjs is freestanding C with no
   C library, so it builds for microcontrollers, servers and WebAssembly
   alike.
+
+## Plugins
+
+A plugin is a function your users write to reshape their own data. The
+host compiles it once, binds `record` and any helpers as globals, and
+evaluates it for each record:
+
+```js
+({ id: record.id, eur: cents(record.amount * rate(record.currency)) })
+```
+
+Here `rate` is a native function that reads the host's table of exchange
+rates, and `cents` comes from a module the host provides.
+`examples/host.c` is this host, whole.
+
+## Code mode
+
+An agent can write one program that calls your tools instead of making
+one tool call at a time. Each tool is a native function the host passes
+in as a global. A native must not change what a program can see, so tools
+read, and the program returns what should happen next for the host to
+carry out:
+
+```js
+orders("open")
+  .filter((order) => order.total > 500)
+  .map((order) => ({ flag: order.id, notify: customer(order.customer).manager }))
+```
+
+The program sees only the tools it was given, ends within the fuel the
+host pushed, and gives the same value for the same answers from the tools.
 
 ## When does it not fit?
 
