@@ -61,6 +61,7 @@ typedef struct {
     sjs_position error_at;
     site_bytes message;
     site_bytes subject;
+    uint32_t memory[13]; /* SJS_SITE_MEMORY_WORDS, for sjs_site_memory */
 } sjs_site;
 
 static void copy_bytes(uint8_t *to, const uint8_t *from, uint32_t length) {
@@ -445,6 +446,60 @@ SJS_SITE uint32_t sjs_site_error_message_length(const sjs_site *s) { return s->m
 SJS_SITE const uint8_t *sjs_site_error_subject(const sjs_site *s) { return s->subject.ptr; }
 SJS_SITE uint32_t sjs_site_error_subject_length(const sjs_site *s) { return s->subject.length; }
 SJS_SITE uint32_t sjs_site_live_bytes(const sjs_site *s) { return (uint32_t)sjs_context_live_bytes(s->context); }
+
+/*
+ * Where things are in the module's memory, for the page's memory map: a
+ * record of SJS_SITE_MEMORY_WORDS uint32_t words, in this order. Every
+ * address is a byte offset into the module's one linear memory. The linker
+ * puts the C stack first (it grows down from MEM_STACK_HIGH), then the
+ * module's data, then the heap the allocator carves upward from
+ * MEM_HEAP_BASE. MEM_RESULT is the result's sjs_value (16 bytes) inside the
+ * session, and MEM_RESULT_OBJECT the heap object it points to, or 0 for a
+ * value held in the struct itself.
+ */
+enum {
+    MEM_STACK_LOW, MEM_STACK_HIGH, MEM_DATA_START, MEM_DATA_END, MEM_HEAP_BASE,
+    MEM_SESSION, MEM_CONTEXT, MEM_VM, MEM_PROGRAM, MEM_RESULT, MEM_RESULT_OBJECT,
+    MEM_LIVE_BYTES, MEM_PAGES,
+    SJS_SITE_MEMORY_WORDS
+};
+
+extern unsigned char __stack_low;
+extern unsigned char __stack_high;
+extern unsigned char __global_base;
+extern unsigned char __data_end;
+extern unsigned char __heap_base;
+
+/* The heap object a value points to, or 0 when the value holds no pointer. */
+static uint32_t heap_object(sjs_value value) {
+    switch (value.kind) {
+    case SJS_UNDEFINED:
+    case SJS_NULL:
+    case SJS_BOOLEAN:
+    case SJS_NUMBER:
+        return 0;
+    default:
+        return (uint32_t)(uintptr_t)value.as.heap;
+    }
+}
+
+SJS_SITE const uint32_t *sjs_site_memory(sjs_site *s) {
+    uint32_t *m = s->memory;
+    m[MEM_STACK_LOW] = (uint32_t)(uintptr_t)&__stack_low;
+    m[MEM_STACK_HIGH] = (uint32_t)(uintptr_t)&__stack_high;
+    m[MEM_DATA_START] = (uint32_t)(uintptr_t)&__global_base;
+    m[MEM_DATA_END] = (uint32_t)(uintptr_t)&__data_end;
+    m[MEM_HEAP_BASE] = (uint32_t)(uintptr_t)&__heap_base;
+    m[MEM_SESSION] = (uint32_t)(uintptr_t)s;
+    m[MEM_CONTEXT] = (uint32_t)(uintptr_t)s->context;
+    m[MEM_VM] = (uint32_t)(uintptr_t)s->vm;
+    m[MEM_PROGRAM] = (uint32_t)(uintptr_t)s->program;
+    m[MEM_RESULT] = s->has_result ? (uint32_t)(uintptr_t)&s->result : 0u;
+    m[MEM_RESULT_OBJECT] = s->has_result ? heap_object(s->result) : 0u;
+    m[MEM_LIVE_BYTES] = (uint32_t)sjs_context_live_bytes(s->context);
+    m[MEM_PAGES] = (uint32_t)__builtin_wasm_memory_size(0);
+    return m;
+}
 
 /*
  * Inspection, for the pipeline explorer: a frame or a function as a record

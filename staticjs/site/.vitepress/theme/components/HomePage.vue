@@ -5,6 +5,7 @@ import MemoryLayout from './ds/MemoryLayout.vue';
 import Sheet from './ds/Sheet.vue';
 import EngineRace from './EngineRace.vue';
 import EvaluationFrames from './EvaluationFrames.vue';
+import MemoryMap from './MemoryMap.vue';
 import type { Block, Wire, Zone } from './ds/arch';
 import Icon from './Icon.vue';
 
@@ -89,6 +90,8 @@ const pipeline: { blocks: Block[]; zones: Zone[]; wires: Wire[] } = {
 };
 
 // sjs_value, as staticjs.h declares it.
+const memoryPrograms = ['0.1 + 0.2', '"tiny" + "actors"', '[3, 1, 2].toSorted((a, b) => a - b)', '10 > 9'];
+
 const valueFields = [
   { name: 'kind', type: 'uint8_t', size: 1, note: 'sjs_kind' },
   { name: 'internal', type: 'uint8_t', size: 1, note: 'zero outside the library' },
@@ -246,10 +249,29 @@ const docs = [
       </p>
       <a class="sjs-button primary big" :href="withBase('/explore/pipeline')">Open the explorer</a>
 
-      <h3 class="minor-title">Values</h3>
+      <h3 class="minor-title">Memory</h3>
+      <p class="prose-p">
+        On WebAssembly, everything staticjs has lives in the module’s one linear memory. JavaScript sees it as one
+        ArrayBuffer, <code>memory.buffer</code>, in 64 KiB pages. In address order it holds the C stack (the first 1 MiB,
+        growing down), the module’s data (about 60 KB of built-in tables and constants), and then the heap. The
+        allocator hands out heap blocks in power-of-two sizes, reuses freed blocks first and grows memory a page at a
+        time. Memory never shrinks. A pointer is a byte offset into the buffer, so a host in JavaScript reads a value
+        where it lies.
+      </p>
+      <figure class="memory">
+        <Sheet grid class="memory-sheet">
+          <MemoryMap :programs="memoryPrograms" />
+        </Sheet>
+        <figcaption>
+          Top: the buffer, to scale. Middle: the start of the heap, with the addresses of the context, the evaluator,
+          the program, the result and its object. Bottom: the result’s 16 bytes, tinted by field.
+        </figcaption>
+      </figure>
       <p class="prose-p">
         Every value is a 16-byte <code>sjs_value</code>: its kind, a boolean, and a number or a pointer to a
-        reference-counted heap object. Copying the struct does not retain the object.
+        reference-counted heap object. A number is the 8 bytes of a double inside the value. A string, array, object,
+        Map or Set is a pointer to a heap object. Byte order is little-endian. Copying the struct does not retain the
+        object.
       </p>
       <MemoryLayout name="sjs_value" :fields="valueFields" :bytes-per-row="8" :row-height="48" />
     </section>
@@ -332,6 +354,22 @@ h1 em {
 }
 .demo figcaption {
   margin-top: -8px;
+  font: var(--type-body-sm);
+  color: var(--fg-2);
+}
+.how .memory {
+  margin: var(--space-6) 0;
+}
+.how .memory-sheet :deep(.ta-sheet__body) {
+  padding: var(--space-5);
+}
+@media (max-width: 640px) {
+  .how .memory-sheet :deep(.ta-sheet__body) {
+    padding: var(--space-3);
+  }
+}
+.how .memory figcaption {
+  margin-top: var(--space-3);
   font: var(--type-body-sm);
   color: var(--fg-2);
 }

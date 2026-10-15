@@ -6,6 +6,7 @@ import C from './constants.json';
 
 const EVENT_WORDS = 12;
 const NODE_WORDS = 9;
+const MEMORY_WORDS = 13;
 /** The call that reached each value of a result, by the record's `via`. */
 const vias = ['sjs_vm_take_result', 'sjs_array_at', 'sjs_object_at', 'sjs_set_at', 'sjs_map_at', 'sjs_map_at'];
 const encoder = new TextEncoder();
@@ -238,6 +239,21 @@ export class StaticJS {
     if (status === 'fault') return { ok: false, error: this.error(), fuel: fuelUsed };
     const written = this.write();
     return { ok: true, value: written.text, kind: this.resultKind(), fuel: fuelUsed };
+  }
+
+  /**
+   * Where things are in the module's memory (sjs_site_memory): byte offsets
+   * into `memory.buffer`, the result's 16 bytes as they are there, and the
+   * buffer's size.
+   */
+  memory() {
+    const m = [...this.u32(this.x.sjs_site_memory(this.s), MEMORY_WORDS)];
+    const [stackLow, stackHigh, dataStart, dataEnd, heapBase, session, context, vm, program, result, resultObject, liveBytes, pages] = m;
+    return {
+      stackLow, stackHigh, dataStart, dataEnd, heapBase, session, context, vm, program, result, resultObject, liveBytes, pages,
+      size: this.x.memory.buffer.byteLength,
+      resultBytes: result ? [...new Uint8Array(this.x.memory.buffer, result, 16)] : null,
+    };
   }
 }
 

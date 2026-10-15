@@ -114,9 +114,19 @@ The host pushes bytes into the parser, the parser streams events into the compil
 
 On the page, `[[3, 1], [2]].map((row) => row.toSorted((a, b) => a - b).map((n) => n * 10))` runs one unit of fuel at a time, and its frames are drawn as a waterfall on an axis of fuel: the program, the outer `map`, each `(row) => …` callback, `toSorted`, the inner `map` and each `(n) => …` callback. The comparator `(a, b) => a - b` has a shape that `toSorted` runs in C, so it opens no frame of its own.
 
-### Values
+### Memory
 
-Every value is a 16-byte `sjs_value`: its kind, a boolean, and a number or a pointer to a reference-counted heap object. Copying the struct does not retain the object.
+On WebAssembly, everything staticjs has is in the module's one linear memory, which JavaScript sees as one ArrayBuffer (`memory.buffer`). A pointer is a byte offset into it, so `new Uint8Array(memory.buffer, address, 16)` is a value's 16 bytes. The site's module starts at 17 pages of 64 KiB (1,114,112 bytes). The allocator grows it a page at a time, and WebAssembly memory never shrinks.
+
+| Region | From | Size | Holds |
+|---|---|---|---|
+| C stack | 0 | 1 MiB | the C call stack, growing down |
+| Data | 1 MiB | about 60 KB | the built-ins' tables and constants |
+| Heap | after the data | the rest of the memory | the context, the evaluator, the program, results and their objects, in power-of-two blocks |
+
+A result is one 16-byte value, with the fields kind, internal, reserved, boolean and as. The page prints it in hex, with the addresses of the context, the evaluator, the program, the result and its object marked on the start of the heap. For `0.1 + 0.2` the 8 bytes of `as` are the double itself. For `"tiny" + "actors"` and for `[3, 1, 2].toSorted((a, b) => a - b)` they are a pointer to a heap object.
+
+Every value is a 16-byte `sjs_value`: its kind, a boolean, and a number or a pointer to a reference-counted heap object. Byte order is little-endian. Copying the struct does not retain the object.
 
 | Offset | Size | Type | Field |
 |---:|---:|---|---|

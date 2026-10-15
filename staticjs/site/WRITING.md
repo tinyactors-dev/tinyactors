@@ -203,6 +203,7 @@ when none fits:
 | `ArchDiagram` on a `Sheet` | blocks, zones and wires whose kind says what a hop is (stream, call, shared memory) | the pipeline: host, parser, compiler, program, evaluator, writer |
 | `SpanTree` | a waterfall of nested spans on an axis | the frames of a real evaluation, on an axis of fuel |
 | `MemoryLayout` | a struct's bytes, field by field | `sjs_value`'s 16 bytes |
+| `MemoryMap` (the site's own, from the memory sketches' strip and hex map) | the module's `memory.buffer` to scale, the heap enlarged with pins, a value's bytes in hex tinted by field, read live | the Memory part of How it works |
 
 - A diagram shows a fact a reader could check in the code, and runs live
   where it can (`EvaluationFrames` runs its program in the page).
@@ -266,7 +267,7 @@ The order is fixed by the maintainer:
 7. **How it works:**
    - the pipeline diagram;
    - the frames of an evaluation;
-   - `sjs_value`'s layout;
+   - memory: the module's one linear memory and a value's bytes, live (`MemoryMap`), then `sjs_value`'s layout;
    - the link to the pipeline explorer.
 8. **Documentation:** links to the guide, the language and the C header.
 
