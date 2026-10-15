@@ -1,7 +1,8 @@
 /* ta_host_post (docs/requests.md; docs/adr/0011 in the repository root),
  * beyond its protocol vectors (tinyactors-test/suites/protocol): what bytes
  * alone cannot show — spans of real traces, variables after a run,
- * hibernation, a datamodel without variables, a config
+ * hibernation, a datamodel without variables, actor.send's values read by
+ * the target's datamodel, a config
  * nothing points into afterwards. Also ta_host_metrics. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
@@ -15,7 +16,9 @@
 #define CHART                                                                                      \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='pinged' "         \
     "initial='s'><datamodel><data id='n' expr='1'/><data id='who' expr=\"'bob'\"/>"              \
-    "<data id='nothing'/></datamodel><state id='s'><transition event='ping' target='t'>"         \
+    "<data id='nothing'/></datamodel><state id='s'><transition event='set'>"                       \
+    "<assign location='n' expr='_event.data.n'/><assign location='who' expr='_event.origin'/>"     \
+    "</transition><transition event='ping' target='t'>"                                             \
     "<assign location='n' expr='n + 1'/></transition></state><state id='t'>"                      \
     "<transition event='ping' target='u'/></state><state id='u'/></scxml>"
 
@@ -210,6 +213,111 @@ static void test_actor_context(void) {
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
     CHECK(reply_is(a.text, ERROR("-32002", "state", "params.session",
                                  "the actor's datamodel does not show its variables")));
+    world_close(&w);
+}
+
+/* actor.send with `params` (its members written by `write`) into `a`. */
+typedef void (*send_params)(ta_cbor_writer *writer, uint64_t session);
+
+static ta_status send_ask(world *w, host_ask *a, send_params write, uint32_t count) {
+    ta_cbor_writer *writer = ask_begin(a, "actor.send", count);
+    write(writer, w->session);
+    return ask_send(w->host, a);
+}
+
+static void set_by_session(ta_cbor_writer *writer, uint64_t session) {
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, session);
+    ta_cbor_write_text(writer, ta_string("event"));
+    ta_cbor_write_text(writer, ta_string("set"));
+    ta_cbor_write_text(writer, ta_string("data"));
+    ta_cbor_write_map(writer, 1);
+    ta_cbor_write_text(writer, ta_string("n"));
+    ta_cbor_write_uint(writer, 7);
+    ta_cbor_write_text(writer, ta_string("origin"));
+    ta_cbor_write_text(writer, ta_string("tinyactors://b/@x"));
+}
+
+static void ping_by_address(ta_cbor_writer *writer, uint64_t session) {
+    (void)session;
+    ta_cbor_write_text(writer, ta_string("address"));
+    ta_cbor_write_text(writer, ta_string("tinyactors://h/#_scxml_1"));
+    ta_cbor_write_text(writer, ta_string("event"));
+    ta_cbor_write_text(writer, ta_string("ping"));
+}
+
+static void elsewhere(ta_cbor_writer *writer, uint64_t session) {
+    (void)session;
+    ta_cbor_write_text(writer, ta_string("address"));
+    ta_cbor_write_text(writer, ta_string("tinyactors://b/#_scxml_1"));
+    ta_cbor_write_text(writer, ta_string("event"));
+    ta_cbor_write_text(writer, ta_string("ping"));
+}
+
+static void nobody(ta_cbor_writer *writer, uint64_t session) {
+    (void)session;
+    ta_cbor_write_text(writer, ta_string("address"));
+    ta_cbor_write_text(writer, ta_string("tinyactors://h/@nobody"));
+    ta_cbor_write_text(writer, ta_string("event"));
+    ta_cbor_write_text(writer, ta_string("ping"));
+}
+
+static void no_event(ta_cbor_writer *writer, uint64_t session) {
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, session);
+}
+
+static void not_a_value(ta_cbor_writer *writer, uint64_t session) {
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, session);
+    ta_cbor_write_text(writer, ta_string("event"));
+    ta_cbor_write_text(writer, ta_string("set"));
+    ta_cbor_write_text(writer, ta_string("data"));
+    ta_cbor_write_tag(writer, 99); /* no neutral value has tag 99 */
+    ta_cbor_write_uint(writer, 1);
+}
+
+/* An event from a remote client: the target by session or address, its data
+ * read by the target's datamodel, the origin passed through. */
+static void test_actor_send(void) {
+    world w;
+    world_open(&w, 0, NULL);
+    settle(&w);
+    static host_ask a;
+    CHECK_EQUAL(send_ask(&w, &a, set_by_session, 4), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{}")));
+    settle(&w);
+    ta_cbor_writer *writer = ask_begin(&a, "actor.context", 1);
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, w.session);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":7,\"who\":\"tinyactors://b/@x\",\"nothing\":null}}")));
+    CHECK_EQUAL(send_ask(&w, &a, ping_by_address, 2), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{}")));
+    settle(&w);
+    char state[64];
+    CHECK_EQUAL(ask_state(w.host, w.session, state, sizeof state), TA_OK);
+    CHECK(strcmp(state, "\"t\"") == 0);
+    CHECK_EQUAL(send_ask(&w, &a, elsewhere, 2), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32602", "range", "params.address", "address is not an address of this host's system")));
+    CHECK_EQUAL(send_ask(&w, &a, nobody, 2), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32001", "stale", "params.address", "the address names no actor in this host")));
+    CHECK_EQUAL(send_ask(&w, &a, no_event, 1), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32602", "missing", "params.event", "event is the event's name")));
+    CHECK_EQUAL(send_ask(&w, &a, not_a_value, 3), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32006", "malformed", "params.data", "data is no value the actor's datamodel reads")));
+    world_close(&w);
+
+    /* a datamodel that reads no values (no `from_wire` entry) */
+    static ta_datamodel_vtable deaf;
+    deaf = *ta_datamodel_ecmascript_vtable();
+    deaf.from_wire = NULL;
+    world_open(&w, 0, &deaf);
+    settle(&w);
+    CHECK_EQUAL(send_ask(&w, &a, set_by_session, 4), TA_OK);
+    CHECK(reply_is(a.text, ERROR("-32002", "state", "params.data", "the actor's datamodel reads no values")));
+    CHECK_EQUAL(send_ask(&w, &a, ping_by_address, 2), TA_OK); /* no data: no reading */
+    CHECK(reply_is(a.text, RESULT("{}")));
     world_close(&w);
 }
 
@@ -519,6 +627,7 @@ int main(void) {
     RUN(test_post);
     RUN(test_spans_and_metrics);
     RUN(test_actor_context);
+    RUN(test_actor_send);
     RUN(test_create);
     RUN(test_config_effective);
     TEST_MAIN_END();

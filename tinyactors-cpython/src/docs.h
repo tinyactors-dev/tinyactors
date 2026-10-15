@@ -451,6 +451,22 @@ static const char ta_python_doc_typed_actor_context[] =
     "TinyactorsError (without on_error the driver raises it). A refusal\n"
     "at the call (a full host, a closed one) raises at once.";
 
+static const char ta_python_doc_typed_actor_send[] =
+    "actor_send(handler, on_error=None, /, **params)\n"
+    "--\n"
+    "\n"
+    "Give an actor an event the way a remote client does (params: session or\n"
+    "address, event, data, origin, sendid): for tools; your program calls\n"
+    "Host.send.\n"
+    "\n"
+    "A typed method over the control plane message of the same name\n"
+    "(the core's requests documentation lists its params and its\n"
+    "result): pass the params as keywords; core checks them. Returns\n"
+    "None at once; handler(host, result) runs at a later drain with the\n"
+    "result as Python values, or on_error(host, error) with a\n"
+    "TinyactorsError (without on_error the driver raises it). A refusal\n"
+    "at the call (a full host, a closed one) raises at once.";
+
 static const char ta_python_doc_typed_actor_list[] =
     "actor_list(handler, on_error=None, /, **params)\n"
     "--\n"

@@ -350,7 +350,7 @@ Decided by the maintainer (2026-10-13); every item is in
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
-- **Typed methods over post**: `actor_state`, `actor_context`,
+- **Typed methods over post**: `actor_state`, `actor_context`, `actor_send`,
   `actor_list`, `actor_get`, `host_stats`, `host_config` and `trace_*`
   (one per method of `tinyactors-core/docs/requests.md`), each
   `(handler, on_error=None, /, **params)`, returning `None`: the method's

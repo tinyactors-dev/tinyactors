@@ -94,8 +94,8 @@ Following [docs/roles.md](../roles.md):
   `TA_HOST_EFFECT_PEER`/`PEER_ERROR` and the effect fields only they set
   (`peer`, `datamodel`, `msgid`, `origintype`, `deduplication_key`,
   `wire` for PEER). The snapshot no longer carries a dedup window.
-- The datamodel vtable's `from_wire` loses its only caller (the router)
-  and goes; `to_wire` stays (OTLP values, `actor.context`).
+- The datamodel vtable's `from_wire` loses its only caller (the router);
+  it stays, as the reader of `actor.send`'s data ([ADR 0015](0015-values-cross-core-at-its-language-free-interfaces.md)).
 - The torture chamber's multi-system transport moves onto the remote
   processor.
 - `routed` counts sends delivered between segments of the host, as

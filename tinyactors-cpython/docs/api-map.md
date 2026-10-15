@@ -9,7 +9,7 @@ same commit, and kept in step with the module.
 
 - a function of core's API descriptions
   (`tinyactors-core/include/*.api.json`): `ta_host_send`;
-- a constant of them: an effect (`TA_EFFECT_LOG`, `TA_HOST_EFFECT_PEER`),
+- a constant of them: an effect (`TA_EFFECT_LOG`, `TA_HOST_EFFECT_REPLY`),
   a run status (`TA_RUN_IDLE`), a flag;
 - a request method of `tinyactors-core/docs/requests.md`: `actor.context`;
 
@@ -67,6 +67,7 @@ A core function no item uses is listed below the table: used internally
 | `log=handler(host, entry)`, `entry.session`, `entry.label`, `entry.text` | `TA_EFFECT_LOG`, `ta_host_effect_text`, `ta_host_effect_number` | the handling of an effect; `entry` a thin view until the ack |
 | `Host.actor_state(handler, on_error=None, /, **params)` | `actor.state`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method: params passed through as keywords; the handler at the `REPLY`'s dispatch; the id is a pending row's handle (`ta_table`) |
 | `Host.actor_context(handler, on_error=None, /, **params)` | `actor.context`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
+| `Host.actor_send(handler, on_error=None, /, **params)` | `actor.send`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method; `Host.send` is the program's call |
 | `Host.actor_list(handler, on_error=None, /, **params)` | `actor.list`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | `Host.actor_get(handler, on_error=None, /, **params)` | `actor.get`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | `Host.host_stats(handler, on_error=None, /, **params)` | `host.stats`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |

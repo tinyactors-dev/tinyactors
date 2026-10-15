@@ -113,8 +113,8 @@ keeps first (ADR 0010 decision 1).
 | `retain`, `release` | R; G | effect copies (`host.c:1190`), the ack (`:1047`), the drain (`:1359`), resume (`:962`), sends that fail outside a run (`:900`, `:935`), sends between segments in a run's drain (`local_send`, `host.c`), post (`request.c:747`), free | `test_host_guard.c` `test_send_and_ack` |
 | `serialize`, `deserialize` | G | hibernate (`host.c:2022`), wake (`:2035`), migration (`:1470`, `:1508`, `:1529`) | `test_host_guard.c` `test_hibernate`, `test_each_output_once` |
 | `payload_serialize`, `payload_deserialize`, `migrate` | G | migration (as above) | `test_durable.c`; `test_migrate.c` |
+| `from_wire` | G | `actor.send` at the target (`request_run_actor_send`, `request.c`) | `test_host_request.c` `test_actor_send` |
 | `to_wire` | G | `actor.context` (`request.c:701`), traced values when records are read (`telemetry.c:90`, at a run's start and at a take) | `test_host_guard.c` `test_each_output_once`, `test_traces` |
-| `from_wire` | — | no caller in core (the router was its only one, ADR 0014) | — |
 | `variable` | G | `actor.context` (`request.c:738`) | `test_host_request.c` `test_actor_context` |
 
 ### Which distinctions callers need

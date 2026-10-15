@@ -295,6 +295,30 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 → {"id": 1, "result": {"variables": {"n": 2, "who": "bob", "nothing": null}}}
 ```
 
+### `actor.send`
+
+An event for an actor, from a client that has no binding: a debugger, an
+admin tool, a test driver. Params: the target, `session` (uint) or
+`address` (text: a local address, `tinyactors://<this system>/#_scxml_<id>`
+or `.../@<name>`), exactly one; `event` (text, required); `data` (a neutral
+value, read by the target's datamodel, `from_wire`); `origin` and `sendid`
+(text): `_event.origin` and `_event.sendid`, an origin getting the SCXML
+event processor as its origintype. The event goes to the actor's mailbox
+as `ta_host_send` puts it there; a hibernated actor's `WAKE` follows.
+
+Result: `{}`, once the event is in the mailbox.
+
+Errors: `missing`, `type`, `unknown`; `range` for both targets or for
+another system's address; `stale` for a session or address that names no
+actor; `malformed` (-32006) for data the datamodel cannot read; `state`
+(-32002) when the datamodel reads no values (no `from_wire`) or the actor
+ended.
+
+```
+{"id": 1, "method": "actor.send", "params": {"address": "tinyactors://h/@counter", "event": "set", "data": {"n": 7}}}
+→ {"id": 1, "result": {}}
+```
+
 ### `actor.state`
 
 A session's configuration as a nested state value, in the shape of xstate's
@@ -362,8 +386,10 @@ that reads a method it does not know drops the effect.
 ## Not methods
 
 These stay C calls:
-- **The hot path:** spawn, send, send_many, terminate, deliver,
-  advance_time, resume, run, and the effects and their ack.
+- **The hot path:** spawn, send, send_many, terminate, advance_time,
+  resume, run, and the effects and their ack. (`actor.send` is for a
+  client without a binding; a program in the process calls
+  `ta_host_send`.)
 - **Images:** `ta_host_add_image` takes the image's bytes and keeps a copy.
 - **Bytes that the host writes or takes:** `ta_host_traces`, `ta_host_logs`,
   `ta_host_metrics`, hibernate, wake, migrate, snapshot,

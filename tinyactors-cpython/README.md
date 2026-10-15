@@ -78,7 +78,7 @@ with tinyactors.Host(config, {"urn:example:app": app},
   transport's message) or fails the send with `send.fail()`.
 - Typed methods, one per method of
   [requests.md](../tinyactors-core/docs/requests.md):
-  `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`,
+  `actor_state`, `actor_context`, `actor_send`, `actor_list`, `actor_get`, `host_stats`,
   `host_config`, `trace_configure`, `trace_watch`, `trace_unwatch`,
   `trace_end`, `trace_spans_decode`, each `(handler, on_error=None, /,
   **params)`, returning `None`. The method's params are keywords, passed

@@ -66,6 +66,7 @@ not guess this from the bytes; the line says it. (The line is `only`, not
 | "id: an unsigned integer", "id: a negative integer", "id: text", "id: null" | the id is the binding's own: the adapter writes it back, so the case would test the adapter, not core |
 | "more items than a request holds" | no id, answered `"id": null`; the binding sends an id |
 | "notification: no reply", "notification: no error either", "notification: applied", "notification: a request that is not one is answered" | messages without an id (JSON-RPC's notifications, not the host's NOTIFICATION effects): the binding's request always has an id and wants the reply |
+| "actor.send: data that is no neutral value" | a binding's typed method takes the language's values, which are all neutral values: it cannot write tag 99 |
 | "method is not text", "no such method", "params is not a map" | a binding has no raw post (ADR 0012, decision 3): its typed methods, one per method of requests.md, write the method's name and the params map themselves |
 
 A binding passes the caller's values through unchecked, so the cases of

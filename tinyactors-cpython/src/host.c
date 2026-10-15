@@ -1394,6 +1394,7 @@ static PyGetSetDef ta_python_host_properties[] = {
 
 PyObject *ta_python_method_actor_state(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_actor_context(PyObject *self, PyObject *arguments, PyObject *keywords);
+PyObject *ta_python_method_actor_send(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_actor_list(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_actor_get(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_host_stats(PyObject *self, PyObject *arguments, PyObject *keywords);
@@ -1446,6 +1447,7 @@ static PyMethodDef ta_python_host_methods[] = {
     {"__aexit__", ta_python_host_exit_async, METH_VARARGS, ta_python_doc_host_aexit},
     TA_PYTHON_TYPED(actor_state, ta_python_method_actor_state),
     TA_PYTHON_TYPED(actor_context, ta_python_method_actor_context),
+    TA_PYTHON_TYPED(actor_send, ta_python_method_actor_send),
     TA_PYTHON_TYPED(actor_list, ta_python_method_actor_list),
     TA_PYTHON_TYPED(actor_get, ta_python_method_actor_get),
     TA_PYTHON_TYPED(host_stats, ta_python_method_host_stats),

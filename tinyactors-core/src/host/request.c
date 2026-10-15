@@ -714,6 +714,123 @@ static void request_run_actor_context(request *r, uint32_t map) {
     }
 }
 
+/* The item at `at` of the message written again at the end of the reply's
+ * output, as one CBOR item: what the target's datamodel reads. The caller
+ * takes it back off the output. */
+static void request_put_item(request *r, uint32_t at) {
+    uint32_t end = ta_cbor_next(r->document, at);
+    for (uint32_t i = at; i < end; i++) {
+        const ta_cbor_token *token = request_token(r, i);
+        ta_string_view text;
+        switch (token->kind) {
+        case TA_CBOR_UINT: cbor_output_head(&r->out, CBOR_MAJOR_UINT, token->value); break;
+        case TA_CBOR_NEGINT: cbor_output_head(&r->out, CBOR_MAJOR_NEGINT, token->value); break;
+        case TA_CBOR_TEXT:
+        case TA_CBOR_BYTES:
+            text = ta_cbor_string(r->document, i);
+            cbor_output_head(&r->out, token->kind == TA_CBOR_TEXT ? CBOR_MAJOR_TEXT : CBOR_MAJOR_BYTES, text.length);
+            ta_output_write(&r->out, text.pointer, text.length);
+            break;
+        case TA_CBOR_ARRAY: cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, token->count); break;
+        case TA_CBOR_MAP: cbor_output_head(&r->out, CBOR_MAJOR_MAP, token->count); break;
+        case TA_CBOR_TAG: cbor_output_head(&r->out, CBOR_MAJOR_TAG, token->value); break;
+        case TA_CBOR_SIMPLE: cbor_output_simple(&r->out, (uint32_t)token->value); break;
+        default: cbor_output_float(&r->out, token->value); break;
+        }
+    }
+}
+
+/* The target of actor.send: its session, or the local address that names one. */
+static int request_read_target(request *r, uint32_t map, uint64_t *session, uint32_t *segment,
+                               uint32_t *actor) {
+    uint32_t address_at = request_member(r, map, "address");
+    if (address_at == TA_NIL) return request_read_session(r, map, session, segment, actor);
+    request_path_set(r, NULL, 0, "address");
+    ta_string_view text;
+    if (request_member(r, map, "session") != TA_NIL) {
+        request_refuse(r, "range", "give session or address, not both");
+        return 0;
+    }
+    if (!request_read_text(r, address_at, &text)) return 0;
+    ta_status status = ta_host_resolve(r->host, text, session);
+    if (status == TA_ERROR_INVALID) {
+        request_refuse(r, "range", "address is not an address of this host's system");
+        return 0;
+    }
+    if (status != TA_OK || host_locate(r->host, *session, segment, actor) != TA_OK) {
+        request_refuse(r, "stale", "the address names no actor in this host");
+        return 0;
+    }
+    return 1;
+}
+
+static void request_run_actor_send(request *r, uint32_t map) {
+    static const char *const fields[] = {"session", "address", "event", "data", "origin", "sendid", NULL};
+    uint64_t session;
+    uint32_t segment, actor;
+    ta_event_in event;
+    if (!request_keys_known(r, map, NULL, 0, fields)) return;
+    if (!request_read_target(r, map, &session, &segment, &actor)) return;
+    ta_memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.session = session;
+    uint32_t event_at = request_member(r, map, "event");
+    request_path_set(r, NULL, 0, "event");
+    if (event_at == TA_NIL) {
+        request_refuse(r, "missing", "event is the event's name");
+        return;
+    }
+    if (!request_read_text(r, event_at, &event.name)) return;
+    request_path_set(r, NULL, 0, "origin");
+    if (!request_read_text(r, request_member(r, map, "origin"), &event.origin)) return;
+    request_path_set(r, NULL, 0, "sendid");
+    if (!request_read_text(r, request_member(r, map, "sendid"), &event.sendid)) return;
+    uint32_t data_at = request_member(r, map, "data");
+    const ta_datamodel_binding *binding = (const ta_datamodel_binding *)0;
+    if (data_at != TA_NIL) {
+        ta_actor_info info;
+        info.size = sizeof info;
+        ta_actor_info_get(ta_host_system(r->host, segment), actor, &info);
+        binding = host_chart_datamodel(r->host, segment, info.chart);
+        request_path_set(r, NULL, 0, "data");
+        if (!binding || binding->vtable->size < offsetof(ta_datamodel_vtable, from_wire) + sizeof binding->vtable->from_wire ||
+            !binding->vtable->from_wire) {
+            request_refuse(r, "state", "the actor's datamodel reads no values");
+            return;
+        }
+        size_t mark = r->out.length; /* the value, read by the target's datamodel, then taken back */
+        request_put_item(r, data_at);
+        if (!ta_output_fits(&r->out)) {
+            r->no_room = 1;
+            return;
+        }
+        uint32_t was = host_guard(r->host);
+        ta_status status =
+            binding->vtable->from_wire(binding->datamodel, (ta_bytes){r->out.bytes + mark, r->out.length - mark}, &event.data);
+        host_unguard(r->host, was);
+        r->out.length = mark;
+        if (status == TA_ERROR_NO_MEMORY) {
+            r->no_room = 1;
+            return;
+        }
+        if (status != TA_OK) {
+            request_refuse(r, "malformed", "data is no value the actor's datamodel reads");
+            return;
+        }
+    }
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 0);
+    ta_status status = request_fits(r) ? host_send_to(r->host, segment, actor, &event) : TA_ERROR_NO_MEMORY;
+    if (status != TA_OK && event.data) host_release(r->host, binding, event.data);
+    if (status == TA_ERROR_NO_MEMORY) {
+        r->no_room = 1;
+        return;
+    }
+    if (status != TA_OK) {
+        request_path_set(r, NULL, 0, "");
+        request_refuse(r, "state", "the actor takes no events (it ended)");
+    }
+}
+
 /* ---- decoded spans ------------------------------------------------------------------- */
 
 static void request_put_trace_id(request *r, ta_trace_id trace) {
@@ -883,6 +1000,7 @@ static const request_method REQUEST_METHODS[] = {
     {"actor.list", request_run_actor_list},
     {"actor.get", request_run_actor_get},
     {"actor.context", request_run_actor_context},
+    {"actor.send", request_run_actor_send},
     {"actor.state", request_run_actor_state},
 };
 

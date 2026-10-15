@@ -28,7 +28,7 @@ STATUS = {
 TA_RUN_IDLE, TA_RUN_FAULT, TA_RUN_EXHAUSTED = 0, 4, 3
 # The driver's datamodel names, and the vtable names a Host answers for them.
 DATAMODELS = {"native": "python", "quickjs": "ecmascript"}
-TYPED = {"actor.state", "actor.context", "actor.list", "actor.get", "host.stats", "host.config",
+TYPED = {"actor.state", "actor.context", "actor.send", "actor.list", "actor.get", "host.stats", "host.config",
          "trace.configure", "trace.watch", "trace.unwatch", "trace.end", "trace.spans.decode"}
 
 

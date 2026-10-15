@@ -79,6 +79,7 @@ static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typ
 
 TA_PYTHON_METHOD(actor_state, "actor.state")
 TA_PYTHON_METHOD(actor_context, "actor.context")
+TA_PYTHON_METHOD(actor_send, "actor.send")
 TA_PYTHON_METHOD(actor_list, "actor.list")
 TA_PYTHON_METHOD(actor_get, "actor.get")
 TA_PYTHON_METHOD(host_stats, "host.stats")

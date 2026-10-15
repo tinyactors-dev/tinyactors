@@ -205,17 +205,18 @@ typedef struct ta_datamodel_vtable {
      * error.platform.upgrade with that payload as its data. */
     ta_status (*migrate)(const ta_datamodel_call *call, ta_payload *bindings);
 
-    /* Neutral values (optional; docs/protocol.md, "Values"): event data
-     * between systems, and in traces, is one CBOR item (RFC 8949): integers,
+    /* Neutral values (optional; docs/protocol.md, "Values"): a value at
+     * core's language-free interfaces is one CBOR item (RFC 8949): integers,
      * floats, text, bytes, arrays, maps with text keys, true, false, null,
      * undefined, and an actor reference as tag 32 on its address.
      * to_wire: payload p as CBOR in `out`, a view of memory the datamodel
      * owns, valid until the next call on the datamodel; TA_ERROR_INVALID if p
      * cannot be a neutral value (a cycle, nested too deep). Core calls it
-     * once per value it writes.
+     * once per value it writes out: in traces and in actor.context's reply.
      * from_wire: a new payload (one reference) from CBOR; TA_ERROR_INVALID if
-     * it is not one well-formed neutral value. Transports between systems
-     * use them; within a system payloads never leave the datamodel. */
+     * it is not one well-formed neutral value. Core calls it for a value that
+     * comes in: actor.send's data, read by the target session's datamodel.
+     * Within the process payloads never leave the datamodel. */
     ta_status (*to_wire)(void *datamodel, ta_payload p, ta_bytes *out);
     ta_status (*from_wire)(void *datamodel, ta_bytes cbor, ta_payload *out);
 

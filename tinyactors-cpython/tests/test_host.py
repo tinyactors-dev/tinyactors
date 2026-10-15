@@ -365,6 +365,18 @@ class OtherSystems(unittest.TestCase):
             host.run_until_idle()
             self.assertEqual(logs.labelled("got")[-1], "tinyactors://c/@x %s None" % self.SCXML)
 
+    def test_actor_send_is_the_remote_clients_way_in(self):
+        """actor.send, the typed method: the target by address, its data read
+        by the target's datamodel, the origin passed through."""
+        logs, replies = Logs(), []
+        with self.host([], logs) as host:
+            host.spawn(host.chart("talker"), name="talker")
+            host.actor_send(lambda host, result: replies.append(result), address="tinyactors://a/@talker",
+                            event="hello", data={"k": [1]}, origin="tinyactors://b/#_scxml_5")
+            host.run_until_idle()
+            self.assertEqual(replies, [{}])
+            self.assertEqual(logs.labelled("got"), ["tinyactors://b/#_scxml_5 %s {'k': [1]}" % self.SCXML])
+
     def test_an_address_that_names_nothing_here_is_refused(self):
         with self.host([], Logs()) as host:
             for address, status in (("tinyactors://b/#_scxml_1", "TA_ERROR_INVALID"),

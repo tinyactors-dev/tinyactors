@@ -103,10 +103,12 @@ indefinite length is refused. A key starting with `$` is an ordinary key.
 Writers use the shortest form of every integer, length and float, and write
 NaN as `f9 7e00` (`ta_cbor_writer`); map keys stay in the order written.
 
-Datamodels write their values as neutral values (`to_wire` in the datamodel
-vtable; quickjs reads them back with
-`ta_datamodel_ecmascript_payload_from_cbor`, a binding with its own codec):
-only the datamodel knows a `PyObject *` or a quickjs value. The ECMAScript datamodel writes what
+Datamodels write and read their values as neutral values (`to_wire` and
+`from_wire` in the datamodel vtable): only the datamodel knows a
+`PyObject *` or a quickjs value. Core uses them at its language-free
+interfaces: a value out in a trace or in `actor.context`'s reply, a value
+in with `actor.send` (docs/requests.md), read by the target session's
+datamodel once core knows which session that is. The ECMAScript datamodel writes what
 `JSON.stringify` keeps, with numbers, BigInts and bytes exact: an integer
 within ±(2^53-1) as an integer and any other number as a float, a BigInt as
 an integer (past 64 bits it is not a neutral value), and an `ArrayBuffer`, a
