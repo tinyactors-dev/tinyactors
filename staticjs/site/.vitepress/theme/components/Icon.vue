@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // One icon from Lucide (lucide.dev, ISC), drawn as the Tinyactors elements
 // draw theirs: inline SVG, decorative, named by the control around it.
-defineProps<{ name: 'play' | 'pause' | 'step-back' | 'step-forward' | 'pencil' | 'reset' | 'arrow-right' | 'check' | 'x'; size?: number }>();
+defineProps<{ name: 'play' | 'pause' | 'step-back' | 'step-forward' | 'pencil' | 'reset' | 'arrow-right' | 'check' | 'x' | 'chevron-right' | 'alert-triangle'; size?: number }>();
 </script>
 
 <template>
@@ -27,6 +27,8 @@ defineProps<{ name: 'play' | 'pause' | 'step-back' | 'step-forward' | 'pencil' |
     <template v-else-if="name === 'arrow-right'"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></template>
     <template v-else-if="name === 'check'"><path d="M20 6 9 17l-5-5" /></template>
     <template v-else-if="name === 'x'"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></template>
+    <template v-else-if="name === 'chevron-right'"><path d="m9 18 6-6-6-6" /></template>
+    <template v-else-if="name === 'alert-triangle'"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /><path d="M12 9v4" /><path d="M12 17h.01" /></template>
   </svg>
 </template>
 

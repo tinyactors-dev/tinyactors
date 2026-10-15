@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { withBase } from 'vitepress';
+import ArchDiagram from './ds/ArchDiagram.vue';
+import MemoryLayout from './ds/MemoryLayout.vue';
+import Sheet from './ds/Sheet.vue';
 import EngineRace from './EngineRace.vue';
+import EvaluationFrames from './EvaluationFrames.vue';
+import type { Block, Wire, Zone } from './ds/arch';
 import Icon from './Icon.vue';
 
 const properties = [
@@ -49,6 +54,43 @@ const limits = [
   'The WebAssembly module (about 950 KiB) is larger than QuickJS’s (about 620 KiB).',
   'staticjs is at version 0.9.0, and the API may change.',
 ]
+
+// The four stages and the host, as the design system draws architecture.
+const pipeline: { blocks: Block[]; zones: Zone[]; wires: Wire[] } = {
+  zones: [{ x: 200, y: 16, w: 794, h: 298, label: 'staticjs', meta: 'memory from the host’s allocator' }],
+  blocks: [
+    { id: 'host', kind: 'external', name: 'host', tech: 'C or JavaScript', x: 16, y: 104, w: 150, h: 120,
+      ports: [{ id: 'src', side: 'right', at: 0.25 }, { id: 'fuel', side: 'top', at: 0.5 }, { id: 'buf', side: 'right', at: 0.8 }] },
+    { id: 'parser', kind: 'component', name: 'parser', tech: 'bytes, in any chunks', x: 232, y: 96, w: 160, h: 72,
+      ports: [{ id: 'in', side: 'left' }, { id: 'out', side: 'right' }] },
+    { id: 'compiler', kind: 'component', name: 'compiler', tech: 'events → bytecode', x: 432, y: 96, w: 160, h: 72,
+      ports: [{ id: 'in', side: 'left' }, { id: 'out', side: 'right' }] },
+    { id: 'program', kind: 'memory', name: 'program', tech: 'bytecode, shapes', x: 632, y: 96, w: 140, h: 72,
+      ports: [{ id: 'in', side: 'left' }, { id: 'out', side: 'right' }] },
+    { id: 'evaluator', kind: 'component', name: 'evaluator', tech: 'runs on fuel', x: 812, y: 96, w: 160, h: 72,
+      ports: [{ id: 'in', side: 'left' }, { id: 'fuel', side: 'top' }, { id: 'out', side: 'bottom' }] },
+    { id: 'writer', kind: 'component', name: 'writer', tech: 'value → source text', x: 812, y: 222, w: 160, h: 72,
+      ports: [{ id: 'in', side: 'top' }, { id: 'out', side: 'left' }] },
+  ],
+  wires: [
+    { from: 'host.src', to: 'parser.in', kind: 'stream', label: 'bytes' },
+    { from: 'parser.out', to: 'compiler.in', kind: 'stream', label: 'events' },
+    { from: 'compiler.out', to: 'program.in', kind: 'call', label: 'finish' },
+    { from: 'program.out', to: 'evaluator.in', kind: 'shared', label: 'read' },
+    { from: 'host.fuel', to: 'evaluator.fuel', kind: 'call', label: 'fuel', hot: true, mid: 68 },
+    { from: 'evaluator.out', to: 'writer.in', kind: 'call', label: 'value' },
+    { from: 'writer.out', to: 'host.buf', kind: 'stream', label: 'text, in pieces' },
+  ],
+};
+
+// sjs_value, as staticjs.h declares it.
+const valueFields = [
+  { name: 'kind', type: 'uint8_t', size: 1, note: 'sjs_kind' },
+  { name: 'internal', type: 'uint8_t', size: 1, note: 'zero outside the library' },
+  { name: 'reserved', type: 'uint16_t', size: 2 },
+  { name: 'boolean', type: 'uint32_t', size: 4, note: 'SJS_BOOLEAN' },
+  { name: 'as', type: 'double | sjs_heap *', size: 8, kind: 'ptr' as const, note: 'a number, or a heap object for strings and the kinds after them' },
+];
 
 const header = 'https://github.com/dhamidi/tinyactors/blob/main/staticjs/include/staticjs.h';
 const docs = [
@@ -163,37 +205,47 @@ const docs = [
       </ul>
     </section>
 
-    <section class="band pipeline-teaser">
-      <div>
-        <h2 class="section-title">How it works</h2>
-        <div class="prose">
-          <p>
-            staticjs has four stages: the parser, the compiler, the evaluator and the writer. A caller pushes into each
-            one: bytes into the parser, which sends events to a sink, operands before their operator; the compiler is
-            that sink and makes bytecode as the events arrive; fuel into the evaluator; buffer space into the writer.
-            None blocks or calls back for more input, so a host can stream source in chunks, and there is no recursion
-            anywhere in the C code.
-          </p>
-          <p>
-            The compiler also tags functions whose shape a built-in can run in C, such as <code>x =&gt; x.key</code> or
-            <code>(a, b) =&gt; a.k - b.k</code>. A tagged function saves fuel and never changes a value. A host can pause
-            an evaluation and read its frames, for example the program, map at element 2 of 4, and the callback, each
-            with a position.
-          </p>
-          <p>
-            The explorer runs staticjs.wasm in the browser and shows the parser’s events, the compiler’s functions and
-            shapes with the fuel used with and without them, the evaluator one unit of fuel at a time with its frames,
-            and the writer’s output in 16-byte pieces.
-          </p>
-        </div>
-        <a class="sjs-button primary big" :href="withBase('/explore/pipeline')">Open the explorer</a>
+    <section class="band how">
+      <h2 class="section-title">How it works</h2>
+      <Sheet grid class="pipeline-sheet">
+        <ArchDiagram :blocks="pipeline.blocks" :zones="pipeline.zones" :wires="pipeline.wires" :width="1010" :height="330" :grid="false" legend />
+      </Sheet>
+      <div class="prose">
+        <p>
+          staticjs has four stages: the parser, the compiler, the evaluator and the writer. A caller pushes into each
+          one: bytes into the parser, which sends events to a sink, operands before their operator; the compiler is
+          that sink and makes bytecode as the events arrive; fuel into the evaluator; buffer space into the writer.
+          None blocks or calls back for more input, so a host can stream source in chunks, and there is no recursion
+          anywhere in the C code.
+        </p>
+        <p>
+          The compiler also tags functions whose shape a built-in can run in C, such as <code>x =&gt; x.key</code> or
+          <code>(a, b) =&gt; a.k - b.k</code>. A tagged function saves fuel and never changes a value. A host can pause
+          an evaluation and read its frames, for example the program, map at element 2 of 4, and the callback, each
+          with a position.
+        </p>
       </div>
-      <ol class="flow" aria-label="The four stages">
-        <li><strong>Parser</strong><span>bytes → events</span></li>
-        <li><strong>Compiler</strong><span>events → bytecode</span></li>
-        <li><strong>Evaluator</strong><span>bytecode, fuel → value</span></li>
-        <li><strong>Writer</strong><span>value → source text</span></li>
-      </ol>
+
+      <h3 class="minor-title">Frames of an evaluation</h3>
+      <p class="prose-p">
+        The program below runs in this page one unit of fuel at a time, and after each unit the page reads the
+        evaluation’s frames. The comparator <code>(a, b) =&gt; a - b</code> has a shape that <code>toSorted</code> runs in C,
+        so it opens no frame of its own.
+      </p>
+      <EvaluationFrames source="[[3, 1], [2]].map((row) => row.toSorted((a, b) => a - b).map((n) => n * 10))" />
+      <p class="prose-p explorer">
+        The explorer runs staticjs.wasm in the browser and shows the parser’s events, the compiler’s functions and shapes
+        with the fuel used with and without them, the evaluator one unit of fuel at a time with its frames, and the
+        writer’s output in 16-byte pieces.
+      </p>
+      <a class="sjs-button primary big" :href="withBase('/explore/pipeline')">Open the explorer</a>
+
+      <h3 class="minor-title">Values</h3>
+      <p class="prose-p">
+        Every value is a 16-byte <code>sjs_value</code>: its kind, a boolean, and a number or a pointer to a
+        reference-counted heap object. Copying the struct does not retain the object.
+      </p>
+      <MemoryLayout name="sjs_value" :fields="valueFields" :bytes-per-row="8" :row-height="48" />
     </section>
 
     <section class="band docs-band">
@@ -276,6 +328,26 @@ h1 em {
   margin-top: -8px;
   font: var(--type-body-sm);
   color: var(--fg-2);
+}
+.how .pipeline-sheet {
+  margin: 0 0 var(--space-6);
+}
+.how .pipeline-sheet :deep(.ta-sheet__body) {
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+.how .pipeline-sheet :deep(.ta-arch) {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 auto;
+}
+.how .minor-title {
+  margin-top: var(--space-10);
+}
+.how .explorer {
+  margin-top: var(--space-6);
+}
+.how :deep(.ta-mem) {
+  max-width: 640px;
 }
 .prose p,
 .prose-p {

@@ -108,7 +108,23 @@ The compiler also tags functions whose shape a built-in can run in C, such as `x
 
 The [pipeline explorer](/explore/pipeline) runs staticjs.wasm in the browser and shows the parser's events, the compiler's functions and shapes with the fuel used with and without them, the evaluator one unit of fuel at a time with its frames, and the writer's output in 16-byte pieces.
 
-Parser: bytes → events. Compiler: events → bytecode. Evaluator: bytecode, fuel → value. Writer: value → source text.
+The host pushes bytes into the parser, the parser streams events into the compiler, and the compiler finishes a program, which the evaluator reads without copying. The host pushes fuel into the evaluator, the evaluator hands its value to the writer, and the writer streams text back to the host in pieces. All of it lives in memory from the host's allocator.
+
+### Frames of an evaluation
+
+On the page, `[[3, 1], [2]].map((row) => row.toSorted((a, b) => a - b).map((n) => n * 10))` runs one unit of fuel at a time, and its frames are drawn as a waterfall on an axis of fuel: the program, the outer `map`, each `(row) => …` callback, `toSorted`, the inner `map` and each `(n) => …` callback. The comparator `(a, b) => a - b` has a shape that `toSorted` runs in C, so it opens no frame of its own.
+
+### Values
+
+Every value is a 16-byte `sjs_value`: its kind, a boolean, and a number or a pointer to a reference-counted heap object. Copying the struct does not retain the object.
+
+| Offset | Size | Type | Field |
+|---:|---:|---|---|
+| 0 | 1 | `uint8_t` | `kind` |
+| 1 | 1 | `uint8_t` | `internal` |
+| 2 | 2 | `uint16_t` | `reserved` |
+| 4 | 4 | `uint32_t` | `boolean` |
+| 8 | 8 | `double` or `sjs_heap *` | `as` |
 
 ## Documentation
 

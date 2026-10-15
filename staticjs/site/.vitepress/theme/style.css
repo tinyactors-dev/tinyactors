@@ -8,6 +8,7 @@
 @import './tokens/typography.css';
 @import './tokens/spacing.css';
 @import './tokens/effects.css';
+@import './ds-components.css';
 
 /* ── VitePress, in the system's colours and type ─────────────────────── */
 :root,

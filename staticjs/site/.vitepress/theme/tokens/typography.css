@@ -1,4 +1,4 @@
-/* The Tinyactors design system's typography tokens, vendored from tinyactors-dev/scxmljs@56b7d9b (examples/playground/web/css/tokens/typography.css). Dark values apply under VitePress's .dark class. */
+/* The Tinyactors design system's typography tokens, vendored from tinyactors-dev/website@b54312f (.agents/skills/tinyactors-design/tokens/typography.css). Dark values apply under VitePress's .dark class. */
 :root{
 --font-sans:'IBM Plex Sans',system-ui,sans-serif;
 --font-mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
