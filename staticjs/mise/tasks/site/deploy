@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+#MISE description="Build the documentation site for https://staticjs.tinyactors.dev and deploy it to Cloudflare Workers (site/wrangler.jsonc)"
+#MISE depends=["site:wasm"]
+# vim:ft=ruby
+
+# It builds as site:build does, with STATICJS_SITE_URL set so that llms.txt
+# and llms-full.txt carry absolute links, then runs `wrangler deploy`: the
+# build as the Worker's static assets, site/worker.mjs in front of them for
+# the routing server.mjs does locally, on the custom domain. Wrangler reads
+# its credentials from CLOUDFLARE_API_TOKEN, or from `wrangler login`.
+
+require_relative '../../staticjs'
+
+URL = 'https://staticjs.tinyactors.dev'
+WRANGLER = 'wrangler@4.146.0'
+
+site = StaticJS::ROOT.join('site')
+StaticJS.run('npm', 'ci', '--no-audit', '--no-fund', chdir: site) unless site.join('node_modules/.package-lock.json').file?
+ENV['STATICJS_SITE_URL'] = URL
+StaticJS.run('npx', 'vitepress', 'build', chdir: site)
+StaticJS.run('npx', '--yes', WRANGLER, 'deploy', chdir: site)
