@@ -158,8 +158,8 @@ module CPython
   # most R resident, the rest hibernated into SQLite; tools/stress.py
   # (README.md, "Hibernation"), tools/migration.py (README.md,
   # "Migration": all of them move to a new version, live) or
-  # tools/snapshot.py (README.md, "Snapshots": the host to bytes and back,
-  # going on), or tools/services.py (README.md, "Invoked services": every
+  # tools/snapshot.py (README.md, "Snapshots": a deploy rehearsed on a
+  # copy of a live host), or tools/services.py (README.md, "Invoked services": every
   # actor with a service, no store, so `resident` is not passed). A failed
   # check ends the task.
   def stress(actors:, events:, resident: nil, tool: 'stress')

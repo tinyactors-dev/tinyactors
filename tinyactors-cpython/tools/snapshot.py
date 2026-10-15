@@ -1,39 +1,49 @@
-"""Snapshots under load: a whole host to bytes and back, its actors going
-on where they stopped, most of them asleep in SQLite.
+"""Snapshots under load: a deploy rehearsed on a copy of a live host, most
+of whose actors sleep in SQLite and some of whose payments are in flight.
 
     python tools/snapshot.py [--actors N] [--resident R] [--events E] [--datamodel python|ecmascript]
 
 The application's side of snapshots (README, "Snapshots"), as a program
-would write it, to take a host out of memory for a while (a restart, a
-move to another process of the same build):
+would write it to try a new chart version on a copy of production before
+deploying it:
 
-1. populate: N actors of a counter chart, at most R resident, the rest
+1. live: N order actors of version 1, at most R resident, the rest
    hibernated into SQLite (tools/stress.py's store); E events to actors
-   drawn at random; every resident actor gets a delayed send that falls
-   due after the restore;
-2. snapshot: Host.snapshot() writes the whole host (every segment's
-   region, the datamodels' sessions and payloads, the images) to bytes,
-   written to a file; the host is closed and every Python object of it
-   collected;
-3. restore: Host.restore(bytes, config, ...) makes a new host from the
-   file, with the same handlers and the same store. A snapshot of the
-   restored host, before it runs, must be the same bytes: nothing is
-   lost or changed on the way;
-4. go on: E more events to random actors (the hibernated ones wake from
-   the store, as before), the clock past the delayed sends' due time;
-5. verify: a sample of actors (all of them up to 25,000) reports its
-   count, which must be every event it was sent, before and after the
-   restore, and whether its delayed send came (the resident ones);
-   after every eviction at most R actors are resident.
+   drawn at random; every resident actor gets a delayed send due in 10 s,
+   and half of them start paying: each invokes the payment service
+   (<invoke type="urn:example:payment">, its amount as a param), which the
+   live host runs and which has not answered yet;
+2. snapshot: Host.snapshot() of the live host, written to a file, and a
+   copy of its store (a copy writes blobs too: it must not write the live
+   one). The live host is not stopped;
+3. restore: Host.restore makes the copy from the file, with its own store,
+   clock and handlers, and a stand-in payment service: a copy must never
+   reach the real one. A snapshot of the copy before it runs must be the
+   same bytes. At its first run the copy announces each payment that was
+   in flight; the stand-in gets each (invocation.restored, the same amount)
+   and declines it;
+4. rehearse: the copy adds version 2 and migrates every actor to it
+   (Host.migrate, waking the hibernated ones a batch at a time from the
+   copy's store, as tools/migration.py does), with E more events, then
+   runs its clock past the delayed sends;
+5. verify the copy: the job migrated every actor, none failed; a sample
+   (all up to 25,000) reports its count (every event, before and after
+   the snapshot), its delayed send, its payment (declined for the payers)
+   and version 2; the real payment service got nothing from the copy;
+6. verify the live host: it goes on with E events of its own; its sample
+   reports version 1, its own counts, payments still in flight; the real
+   service was started once per payer, never stopped, and the live store
+   holds no blob the copy wrote. After every eviction, on both hosts, at
+   most R actors are resident (plus two batches while migrating).
 
-Exits with status 1 when a check fails. Prints the times, the sizes,
-the process's peak memory and the host's region per actor.
+With R = N every actor stays resident, so the datamodels' own state is most
+of the snapshot. Exits with status 1 when a check fails. Prints the times,
+the sizes, the process's peak memory and the hosts' regions per actor.
 """
 
 import argparse
 import array
 import collections
-import gc
 import os
 import random
 import resource
@@ -44,26 +54,138 @@ import time
 import tinyactors
 from stress import BATCH, Store
 
-CHARTS = {
-    "python": """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='python' name='counter' initial='s'>
-  <datamodel><data id='n' expr='0'/><data id='last' expr='None'/><data id='late' expr='0'/></datamodel>
-  <state id='s'>
+PAYMENT = "urn:example:payment"
+CHARTS = {}
+for _datamodel, _none, _upgrade, _report, _version_expr in (
+    ("python", "None", "<assign location='{0}' expr=\"_event.data['{0}']\"/>",
+     "f'{{_sessionid}} {{n}} {{late}} {{paid}} {version}'", "{version}"),
+    ("ecmascript", "null", "<assign location='{0}' expr='_event.data.{0}'/>",
+     "_sessionid + ' ' + n + ' ' + late + ' ' + paid + ' ' + {version}", "version"),
+):
+    _versions = []
+    for _version in (1, 2):
+        _data = "<data id='n' expr='0'/><data id='last' expr='%s'/><data id='late' expr='0'/><data id='paid' expr='-1'/>" % _none
+        _extra = ""
+        if _version == 2:
+            _data += "<data id='version' expr='2'/>"
+            _extra = "<transition event='error.platform.upgrade'>%s</transition>" % "".join(
+                _upgrade.format(name) for name in ("n", "last", "late", "paid"))
+        _report_expr = _report.format(version=_version_expr if _version == 2 else "1")
+        _versions.append("""<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='%s' name='order' initial='open'>
+  <datamodel>%s</datamodel>
+  <state id='order' initial='open'>
+    %s
     <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='wait'><send event='late' delay='10s'><content expr='{"due": True}'/></send></transition>
+    <transition event='wait'><send event='late' delay='10s'/></transition>
     <transition event='late'><assign location='late' expr='late + 1'/></transition>
-    <transition event='report'><log label='count' expr="f'{_sessionid} {n} {late}'"/></transition>
+    <transition event='report'><log label='report' expr="%s"/></transition>
+    <state id='open'><transition event='pay' target='paying'/></state>
+    <state id='paying'>
+      <invoke id='payment' type='urn:example:payment' src='payment://live'><param name='amount' expr='n'/></invoke>
+      <transition event='paid' target='open'><assign location='paid' expr='1'/></transition>
+      <transition event='declined' target='open'><assign location='paid' expr='0'/></transition>
+    </state>
   </state>
-</scxml>""",
-    "ecmascript": """<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' datamodel='ecmascript' name='counter' initial='s'>
-  <datamodel><data id='n' expr='0'/><data id='last' expr='null'/><data id='late' expr='0'/></datamodel>
-  <state id='s'>
-    <transition event='inc'><assign location='n' expr='n + 1'/><assign location='last' expr='_event.data'/></transition>
-    <transition event='wait'><send event='late' delay='10s'><content expr='({due: true})'/></send></transition>
-    <transition event='late'><assign location='late' expr='late + 1'/></transition>
-    <transition event='report'><log label='count' expr="_sessionid + ' ' + n + ' ' + late"/></transition>
-  </state>
-</scxml>""",
-}
+</scxml>""" % (_datamodel, _data, _extra, _report_expr))
+    CHARTS[_datamodel] = tuple(_versions)
+
+
+def index(session):
+    return (session & 0xFFFFFFFF) - 1  # segment 0 numbers its sessions 1, 2, ...
+
+
+class Population:
+    """One host's actors: its store, the resident ones (least recently used
+    first), the job's wake queue, the reports; as tools/migration.py."""
+
+    def __init__(self, name, store, options, failures):
+        self.name, self.store, self.options, self.failures = name, store, options, failures
+        self.resident = collections.OrderedDict()
+        self.moved = bytearray(options.actors)   # 1: migrated (the MIGRATED effect)
+        self.queued = bytearray(options.actors)  # 1: the job asked for it, waiting in `asked`
+        self.asked = collections.deque()
+        self.reports, self.wakes, self.moves, self.peak = {}, 0, 0, 0
+        self.migrating, self.job_done = False, None
+
+    def wake_now(self, host, session):
+        host.wake(session, self.store.get(session))
+        self.resident[session] = None
+        self.wakes += 1
+
+    def wake(self, host, session, job):
+        if job:  # the job asks: in its order, a batch at a time
+            if not self.queued[index(session)]:
+                self.queued[index(session)] = 1
+                self.asked.append(session)
+            return
+        self.wake_now(host, session)  # an event's or a timer's: at once
+
+    def migrated(self, host, entry):
+        if self.moved[index(entry.session)]:
+            self.failures.append("%s: actor %d moved twice" % (self.name, entry.session))
+        self.moved[index(entry.session)] = 1
+        self.moves += 1
+
+    def log(self, host, entry):
+        session, n, late, paid, version = entry.text.split()
+        self.reports[int(session)] = (int(n), int(late), int(paid), int(version))
+
+    def hibernate(self, host, session):
+        try:
+            self.store.put(session, host.hibernate(session))
+        except tinyactors.TinyactorsError as error:
+            if error.status != "TA_ERROR_STATE":
+                raise
+            return False  # not at rest, or paying (an invocation keeps it in memory): it stays
+        self.resident.pop(session, None)
+        return True
+
+    def evict(self, host):
+        """Down to R resident: cold actors first, then the least recently
+        used; while migrating, only the actors that moved already."""
+        def may(session):
+            return not self.migrating or self.moved[index(session)]
+
+        while len(self.resident) > self.options.resident:
+            cold = [s for s in host.sweep(1 << 20, len(self.resident) - self.options.resident) if may(s)]
+            if not sum(self.hibernate(host, session) for session in cold):
+                break
+        for session in list(self.resident):  # payers stay (an invocation keeps an actor in memory)
+            if len(self.resident) <= self.options.resident:
+                break
+            if may(session):
+                self.hibernate(host, session)
+
+    def check_resident(self, host, slack=0):
+        got = []
+        host.host_stats(lambda host, result: got.append(result["host"]))
+        host.run_until_idle()
+        stats = got[0]
+        live = stats["actors"] - stats["hibernated"]
+        self.peak = max(self.peak, live)
+        if live > self.options.resident + slack:
+            self.failures.append("%s: %d actors resident, more than %d + %d" % (
+                self.name, live, self.options.resident, slack))
+        return stats
+
+
+class Payments:
+    """A payment service: the live host's real one, which has not answered
+    yet, or the copy's stand-in, which declines what it is given."""
+
+    def __init__(self, decline):
+        self.decline, self.started, self.stopped, self.amounts, self.restored = decline, {}, set(), {}, 0
+
+    def start(self, host, invocation):
+        self.started[invocation.session] = self.started.get(invocation.session, 0) + 1
+        self.amounts[invocation.session] = invocation.data["amount"]
+        self.restored += invocation.restored
+        if self.decline:
+            invocation.send_back("declined")
+        return self
+
+    def stop(self, host):
+        pass  # the live host's payers never leave paying; the stand-in's answer ends nothing it needs
 
 
 def main():
@@ -77,160 +199,211 @@ def main():
     options = parser.parse_args()
     random.seed(options.seed)
     failures = []
-
     directory = tempfile.TemporaryDirectory()
-    store = Store(os.path.join(directory.name, "actors.db"))
-    resident = collections.OrderedDict()  # sessions in memory, least recently used first
-    counts, wakes = {}, [0]
+    v1, v2 = CHARTS[options.datamodel]
 
-    def wake(host, session, job):
-        host.wake(session, store.get(session))
-        resident[session] = None
-        wakes[0] += 1
-
-    def log(host, entry):
-        session, count, late = entry.text.split()
-        counts[int(session)] = (int(count), int(late))
-
-    def hibernate(host, session):
-        try:
-            store.put(session, host.hibernate(session))
-        except tinyactors.TinyactorsError as error:
-            if error.status != "TA_ERROR_STATE":
-                raise
-            return False  # not at rest now: it stays resident
-        resident.pop(session, None)
-        return True
-
-    def evict(host):
-        while len(resident) > options.resident:
-            cold = host.sweep(1 << 20, len(resident) - options.resident)
-            if not sum(hibernate(host, session) for session in cold):
-                break
-        for session in list(resident)[:max(0, len(resident) - options.resident)]:
-            hibernate(host, session)
-
-    peak = [0]
-
-    def check_resident(host):
-        got = []
-        host.host_stats(lambda host, result: got.append(result["host"]))
-        host.run_until_idle()
-        stats = got[0]
-        live = stats["actors"] - stats["hibernated"]
-        peak[0] = max(peak[0], live)
-        if live > options.resident:
-            failures.append("%d actors resident, more than %d" % (live, options.resident))
-        return stats
-
-    resident_room = options.resident + 2 * BATCH
-    config = {"systemID": "snapshot", "system": {"ticksPerSecond": 1000,
-                                                 "maxActors": options.actors + resident_room, "maxEvents": 4096 + resident_room,
-                                                 "maxTimers": resident_room,
-                                                 "instanceBytes": 2048 * resident_room,
-                                                 "stringBytes": 16384 + 64 * resident_room}}
-    clock = tinyactors.SimulatedClock()
-    host = tinyactors.Host(config, wake=wake, log=log, clock=clock)
-    with tinyactors.compile_charts([("counter.scxml", CHARTS[options.datamodel])]) as compiled:
+    resident_room = min(options.resident, options.actors) + 4 * BATCH
+    config = {"systemID": "orders", "system": {"ticksPerSecond": 1000,
+                                               "maxActors": options.actors + resident_room,
+                                               "maxEvents": 4096 + 2 * resident_room, "maxTimers": resident_room,
+                                               "maxRequests": resident_room,
+                                               "instanceBytes": 2048 * resident_room,
+                                               "stringBytes": 16384 + 64 * resident_room}}
+    live_store = Store(os.path.join(directory.name, "live.db"))
+    live = Population("live", live_store, options, failures)
+    real = Payments(decline=False)
+    live_clock = tinyactors.SimulatedClock()
+    host = tinyactors.Host(config, wake=live.wake, log=live.log, clock=live_clock, services={PAYMENT: real.start})
+    with tinyactors.compile_charts([("order.scxml", v1)]) as compiled:
         host.add_image(compiled.image)
-    chart = host.chart("counter")
+    chart = host.chart("order")
     sessions = array.array("Q")
-    sent = array.array("I", bytes(4 * options.actors))
+    sent = array.array("I", bytes(4 * options.actors))       # events before the snapshot
+    sent_live = array.array("I", bytes(4 * options.actors))  # the live host's after it
+    sent_copy = array.array("I", bytes(4 * options.actors))  # the copy's after it
 
-    def traffic(host, count):
-        for first in range(0, count, BATCH):
+    def traffic(population, host, counts, total):
+        for first in range(0, total, BATCH):
             items = []
-            for _ in range(min(BATCH, count - first)):
+            for _ in range(min(BATCH, total - first)):
                 i = random.randrange(options.actors)
-                sent[i] += 1
+                counts[i] += 1
                 items.append((sessions[i], "inc", {"k": i}))
-                if sessions[i] in resident:
-                    resident.move_to_end(sessions[i])
+                if sessions[i] in population.resident:
+                    population.resident.move_to_end(sessions[i])
             if host.send_many(items) != len(items):
-                failures.append("send_many refused events")
+                failures.append("%s: send_many refused events" % population.name)
             host.run_until_idle()
-            evict(host)
-            check_resident(host)
+            if not population.migrating:
+                population.evict(host)
+                population.check_resident(host)
 
-    # 1. populate, R resident at most; events; a delayed send for each resident actor
+    # 1. live: populate, events, delayed sends, payments in flight
     started = time.perf_counter()
     for i in range(options.actors):
         session = host.spawn(chart)
         sessions.append(session)
-        resident[session] = None
-        if len(resident) >= options.resident + BATCH:
+        live.resident[session] = None
+        if len(live.resident) >= options.resident + BATCH:
             host.run_until_idle()
-            evict(host)
+            live.evict(host)
     host.run_until_idle()
-    evict(host)
-    traffic(host, options.events)
-    waiting = list(resident)  # their delayed sends are due 10 s on, after the restore
-    if host.send_many([(session, "wait") for session in waiting]) != len(waiting):
-        failures.append("send_many refused events")
-    host.run_until_idle()
-    store.flush()
-    stats = check_resident(host)
-    populated = time.perf_counter() - started
-    region = stats["regionBytes"]
-    print("populate: %d actors and %d events in %.1f s, %d resident with a delayed send, %d hibernated" % (
-        options.actors, options.events, populated, len(waiting), stats["hibernated"]), flush=True)
+    live.evict(host)
+    if sessions and sessions[-1] != sessions[0] + options.actors - 1:
+        failures.append("the sessions are not numbered 1..N in segment 0: index() is wrong")
+    traffic(live, host, sent, options.events)
+    waiting = list(live.resident)
+    payers = waiting[::2]
+    for first in range(0, len(waiting), BATCH):
+        host.send_many([(s, "wait") for s in waiting[first:first + BATCH]])
+        host.send_many([(s, "pay") for s in waiting[first:first + BATCH:2]])
+        host.run_until_idle()
+    live_store.flush()
+    stats = live.check_resident(host)
+    if len(real.started) != len(payers):
+        failures.append("live: %d payments started for %d payers" % (len(real.started), len(payers)))
+    amounts = {s: sent[index(s)] for s in payers}
+    print("live: %d actors and %d events in %.1f s; %d resident with a delayed send, %d of them paying; %d hibernated" % (
+        options.actors, options.events, time.perf_counter() - started, len(waiting), len(payers),
+        stats["hibernated"]), flush=True)
 
-    # 2. snapshot, to a file; the host goes
+    # 2. snapshot, to a file; a copy of the store; the live host goes on
     started = time.perf_counter()
     blob = host.snapshot()
     taken = time.perf_counter() - started
-    path = os.path.join(directory.name, "host.snapshot")
+    path = os.path.join(directory.name, "orders.snapshot")
     with open(path, "wb") as file:
         file.write(blob)
-    host.close()
-    del host, blob
-    gc.collect()
-    print("snapshot: %.1f MB in %.2f s (%.0f B an actor), the host closed" % (
-        os.path.getsize(path) / 1e6, taken, os.path.getsize(path) / options.actors), flush=True)
+    in_memory = list(live.resident)  # resident at the snapshot: resident in the copy too
+    copy_store = Store(os.path.join(directory.name, "copy.db"))
+    live_store.db.backup(copy_store.db)
+    print("snapshot: %.1f MB in %.2f s (%.0f B an actor); the store copied" % (
+        len(blob) / 1e6, taken, len(blob) / options.actors), flush=True)
+    del blob
 
-    # 3. restore from the file; a snapshot of it before it runs is the same bytes
+    # 3. restore the copy, with stand-ins; its snapshot before it runs is the same bytes
     with open(path, "rb") as file:
         blob = file.read()
+    copy = Population("copy", copy_store, options, failures)
+    stand_in = Payments(decline=True)
+    copy_clock = tinyactors.SimulatedClock()  # a clock of its own: the copy's time is not the live host's
     started = time.perf_counter()
-    host = tinyactors.Host.restore(blob, config, wake=wake, log=log, clock=clock)
+    rehearsal = tinyactors.Host.restore(blob, config, wake=copy.wake, log=copy.log, migrated=copy.migrated,
+                                        clock=copy_clock, services={PAYMENT: stand_in.start})
     restored = time.perf_counter() - started
-    again = host.snapshot()
+    again = rehearsal.snapshot()
     if again != blob:
-        failures.append("the restored host's snapshot differs from the one it was restored from (%d and %d bytes)" % (
+        failures.append("the copy's snapshot differs from the one it was restored from (%d and %d bytes)" % (
             len(again), len(blob)))
     del again, blob
-    print("restore: in %.2f s" % restored, flush=True)
+    copy.resident.update((s, None) for s in in_memory)
+    rehearsal.run_until_idle()  # the payments in flight, announced again: the stand-in declines them
+    if stand_in.started != {s: 1 for s in payers} or stand_in.restored != len(payers):
+        failures.append("copy: the stand-in started %d payments (%d restored) for %d payers" % (
+            len(stand_in.started), stand_in.restored, len(payers)))
+    if stand_in.amounts != amounts:
+        failures.append("copy: a restored payment lost its amount")
+    print("restore: in %.2f s; %d payments in flight started again on the stand-in" % (
+        restored, stand_in.restored), flush=True)
 
-    # 4. go on: events, the hibernated actors wake from the store; the delayed sends fall due
+    # 4. rehearse the deploy: version 2, migrate everyone with events meanwhile, the clock past the sends
     started = time.perf_counter()
-    traffic(host, options.events)
-    clock.increment(10_000)
-    evict(host)
-    went_on = time.perf_counter() - started
-    print("after: %d events and the delayed sends in %.1f s, %d woken from the store in all" % (
-        options.events, went_on, wakes[0]), flush=True)
+    with tinyactors.compile_charts([("order.scxml", v2)]) as compiled:
+        rehearsal.add_image(compiled.image)
+    copy.migrating = True
+    job = rehearsal.migrate(lambda host, result: setattr(copy, "job_done", result), wake=True)
+    copy_events, stalled, before = 0, 0, -1
+    while copy.job_done is None:
+        stalled = stalled + 1 if copy.moves == before and not copy.asked else 0
+        before = copy.moves
+        if stalled > 100:
+            failures.append("copy: the job stalled with %d actors moved" % before)
+            break
+        woken = 0
+        while copy.asked and woken < BATCH:
+            session = copy.asked.popleft()
+            copy.queued[index(session)] = 0
+            if session not in copy.resident and not copy.moved[index(session)]:
+                copy.wake_now(rehearsal, session)
+                woken += 1
+        if copy_events < options.events:
+            n = min(BATCH, options.events - copy_events)
+            traffic(copy, rehearsal, sent_copy, n)
+            copy_events += n
+        rehearsal.run_until_idle()
+        copy.evict(rehearsal)
+        copy.check_resident(rehearsal, 2 * BATCH)
+    copy.migrating = False
+    traffic(copy, rehearsal, sent_copy, options.events - copy_events)
+    result = copy.job_done or {"job": None, "migrated": 0, "failed": 0, "pending": None}
+    if result["job"] != job or result["migrated"] != options.actors or result["failed"] or result["pending"]:
+        failures.append("copy: the job ended %r, not %d migrated" % (result, options.actors))
+    rehearsed = time.perf_counter() - started
+    print("rehearse: %d actors to version 2 in %.1f s, %d events meanwhile, %d woken from the copy's store" % (
+        copy.moves, rehearsed, options.events, copy.wakes), flush=True)
+    return finish(options, failures, directory, sessions, (sent, sent_live, sent_copy), (live, copy),
+                  (host, rehearsal), (real, stand_in), (payers, waiting, live_clock, copy_clock), traffic)
 
-    # 5. verify a sample: every event before and after, and the delayed sends
-    late = set(waiting)
+
+def finish(options, failures, directory, sessions, sent_all, populations, hosts, services, groups, traffic):
+    sent, sent_live, sent_copy = sent_all
+    live, copy = populations
+    host, rehearsal = hosts
+    real, stand_in = services
+    payers, waiting, live_clock, copy_clock = groups
+    paying, late = set(payers), set(waiting)
+
+    def report(population, h, sample):
+        population.reports.clear()
+        for chunk in range(0, len(sample), BATCH):
+            h.send_many([(sessions[i], "report") for i in sample[chunk:chunk + BATCH]])
+            h.run_until_idle()
+            population.evict(h)
+            population.check_resident(h)
+
     sample = range(options.actors) if options.actors <= options.sample else random.sample(range(options.actors), options.sample)
-    sample = sorted(set(sample) | {(s & 0xFFFFFFFF) - 1 for s in waiting[:100]})  # segment 0 numbers them 1, 2, ...
-    for chunk in range(0, len(sample), BATCH):
-        host.send_many([(sessions[i], "report") for i in sample[chunk:chunk + BATCH]])
-        host.run_until_idle()
-        evict(host)
-        check_resident(host)
-    wrong = [i for i in sample if counts.get(sessions[i]) != (sent[i], 1 if sessions[i] in late else 0)]
+    sample = sorted(set(sample) | {index(s) for s in payers[:50]} | {index(s) for s in waiting[1::2][:50]})
+
+    # 5. the copy: the clock past the delayed sends, then every count, send, payment and version
+    copy_clock.increment(10_000)
+    copy.evict(rehearsal)
+    copy_region = copy.check_resident(rehearsal)["regionBytes"]
+    report(copy, rehearsal, sample)
+    expected = {i: (sent[i] + sent_copy[i], 1 if sessions[i] in late else 0, 0 if sessions[i] in paying else -1, 2)
+                for i in sample}
+    wrong = [i for i in sample if copy.reports.get(sessions[i]) != expected[i]]
     if wrong:
-        failures.append("%d of %d actors wrong, e.g. actor %d: %r, sent %d" % (
-            len(wrong), len(sample), wrong[0], counts.get(sessions[wrong[0]]), sent[wrong[0]]))
+        failures.append("copy: %d of %d actors wrong, e.g. actor %d: %r, expected %r" % (
+            len(wrong), len(sample), wrong[0], copy.reports.get(sessions[wrong[0]]), expected[wrong[0]]))
+    rehearsal.close()
+
+    # 6. the live host goes on: its own events, the clock past its delayed sends; payments still in flight
+    traffic(live, host, sent_live, options.events)
+    live_clock.increment(10_000)
+    live.evict(host)
+    report(live, host, sample)
+    expected = {i: (sent[i] + sent_live[i], 1 if sessions[i] in late else 0, -1, 1) for i in sample}
+    wrong_live = [i for i in sample if live.reports.get(sessions[i]) != expected[i]]
+    if wrong_live:
+        failures.append("live: %d of %d actors wrong, e.g. actor %d: %r, expected %r" % (
+            len(wrong_live), len(sample), wrong_live[0], live.reports.get(sessions[wrong_live[0]]), expected[wrong_live[0]]))
+    if real.started != {s: 1 for s in payers} or real.restored:
+        failures.append("live: the real payment service was started %d times for %d payers (%d restored)" % (
+            sum(real.started.values()), len(payers), real.restored))
+    live_region = live.check_resident(host)["regionBytes"]
     host.close()
-    store.flush()
+    live.store.flush()
+    copied = live.store.db.execute("SELECT COUNT(*) FROM blobs").fetchone()[0]
+    if copied > options.actors:
+        failures.append("live: the store holds %d blobs for %d actors" % (copied, options.actors))
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
-    print("verify: %d actors' counts and delayed sends, %d wrong" % (len(sample), len(wrong)))
-    print("memory: peak resident %.0f MB (%.0f B an actor); region %.1f MB (%.0f B an actor); at most %d actors "
-          "resident after an eviction" % (peak_rss / 1e6, peak_rss / options.actors, region / 1e6,
-                                          region / options.actors, peak[0]))
-    for failure in failures:
+    print("verify: %d actors on each host, %d wrong on the copy, %d on the live host" % (
+        len(sample), len(wrong), len(wrong_live)))
+    print("memory: peak resident %.0f MB (%.0f B an actor, both hosts); region %.1f MB live, %.1f MB the copy "
+          "(%.0f B an actor); at most %d actors resident after an eviction" % (
+              peak_rss / 1e6, peak_rss / options.actors, live_region / 1e6, copy_region / 1e6,
+              live_region / options.actors, max(live.peak, copy.peak)))
+    for failure in failures[:20]:
         print("FAIL " + failure)
     sys.exit(1 if failures else 0)
 

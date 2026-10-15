@@ -23,7 +23,8 @@
 # resident under --full (root AGENTS.md, "Where a new test goes"); and
 # the live migration gate (tools/migration.py, `mise run migration`):
 # 20,000 actors with 100 resident, 2,000,000 with 1000 under --full; and
-# the snapshot gate (tools/snapshot.py, `mise run snapshot`) the same, and
+# the snapshot gate (tools/snapshot.py, `mise run snapshot`: a deploy
+# rehearsed on a copy of a live host, with payments in flight) the same, and
 # once with every actor resident (5,000 in the fast pass, 100,000 under
 # --full), so that the datamodels' own state is most of the snapshot;
 # and the invoked services gate (tools/services.py, `mise run services`):
