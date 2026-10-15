@@ -151,10 +151,14 @@ TA_API uint32_t ta_system_actors(const ta_system *system, uint32_t *cursor, ta_u
 /* ---- inbound ------------------------------------------------------------ */
 enum {
     TA_EVENT_IN_FROM_INVOKE = 1u << 0, /* invoke_token identifies an external invoke */
-    TA_EVENT_IN_INVOKE_DONE = 1u << 1, /* generate done.invoke.<id> for invoke_token */
+    TA_EVENT_IN_INVOKE_DONE = 1u << 1, /* generate done.invoke.<id> for invoke_token; once accepted,
+                                          the token's later events are refused (TA_ERROR_STALE) */
     TA_EVENT_IN_ERROR_COMMUNICATION = 1u
         << 2 /* failure of an earlier TA_EFFECT_SEND: error.communication is
-   placed in the target's internal queue (sendid copied) */
+   placed in the target's internal queue (sendid copied). With
+   TA_EVENT_IN_FROM_INVOKE and the token: the external invocation failed (it
+   could not start, or crashed); its FROM_INVOKE / INVOKE_DONE are refused
+   from then on, and a restore does not announce it again */
 };
 typedef struct ta_event_in {
     uint32_t size;
@@ -248,7 +252,9 @@ enum {
  *             .result = chart_index + 1} or an error
  *   INVOKE    event = type, target = src, sendid = invokeid, payload = params;
  *             report back with ta_event_in{.token, TA_EVENT_IN_FROM_INVOKE /
- *             TA_EVENT_IN_INVOKE_DONE}
+ *             TA_EVENT_IN_INVOKE_DONE}, a failure with TA_EVENT_IN_FROM_INVOKE |
+ *             TA_EVENT_IN_ERROR_COMMUNICATION; flags TA_EFFECT_FLAG_RESTORED when
+ *             a restored host announces a running one again
  *   UNINVOKE  token
  *   LOG       aux = label, event = text
  *   DONE      target = actor name, payload = donedata, aux = id of the top-level

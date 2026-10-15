@@ -13,7 +13,9 @@
 
 #define TA_SYSTEM_MAGIC 0x53594154u /* "TAYS" */
 /* The region's layout: 2 since the step counters and trace references
- * (docs/adr/0006 in the repository root); a snapshot of another is refused. */
+ * (docs/adr/0006 in the repository root), 3 with the charts' counts, 4 since
+ * an external invocation's request keeps its type and params; a snapshot of
+ * another is refused. */
 #define TA_SYSTEM_VERSION      4u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
@@ -71,7 +73,9 @@ typedef struct ta_request {
                           invocation's params, retained while it runs (a restore announces it
                           again with them) */
     uint32_t type;     /* REQUEST_EXTERNAL_INVOKE: the service's type, string reference (owned) */
-    uint32_t pad2;
+    uint32_t ended;    /* REQUEST_EXTERNAL_INVOKE: the service finished (its INVOKE_DONE was accepted,
+                          the done.invoke not taken yet) or failed (ERROR_COMMUNICATION from it): not
+                          announced after a restore, and its FROM_INVOKE / INVOKE_DONE refused */
 } ta_request;
 
 /* Internal effect record; ta_effect views are materialized on demand. */

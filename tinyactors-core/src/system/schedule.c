@@ -322,6 +322,17 @@ static uint32_t opt_str(ta_core *core, ta_string_view v, int *oom) {
     return r;
 }
 
+/* The running external invocation an event from a service names: its
+ * token's request, which must be an external invocation of the target
+ * actor. NULL otherwise. */
+static ta_request *external_request(ta_system *system, const ta_event_in *event_in) {
+    uint32_t ri = ta_pool_resolve(&system->requests, event_in->token);
+    ta_request *request = ri == TA_NIL ? (ta_request *)0 : (ta_request *)ta_pool_at(&system->requests, ri);
+    return request && request->kind == REQUEST_EXTERNAL_INVOKE && request->actor == event_in->target
+               ? request
+               : (ta_request *)0;
+}
+
 /* Also during a run, from a datamodel (system.h): the event takes the path
  * of an internal <send>, the target's mailbox, read at its next stable point. */
 ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
@@ -340,6 +351,13 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
             : 0;
     ta_trace_ask ask = {TA_TRACE_AT_START, TA_TRACE_FROM_HOST, index, ta_actor_chart(system, actor),
                         TA_NIL};
+    if ((event_in->flags & TA_EVENT_IN_ERROR_COMMUNICATION) &&
+        (event_in->flags & TA_EVENT_IN_FROM_INVOKE)) {
+        /* the external invocation of the token failed: it is over for the service's side */
+        ta_request *failed = external_request(system, event_in);
+        if (!failed) return TA_ERROR_STALE;
+        failed->ended = 1;
+    }
     if ((event_in->flags & TA_EVENT_IN_ERROR_COMMUNICATION) &&
         actor->state == TA_ACTOR_HIBERNATED) {
         /* parked in the mailbox; moved to the internal queue when woken */
@@ -382,10 +400,8 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
     int oom = 0;
     ta_request *request = (ta_request *)0;
     if (event_in->flags & (TA_EVENT_IN_FROM_INVOKE | TA_EVENT_IN_INVOKE_DONE)) {
-        uint32_t ri = ta_pool_resolve(&system->requests, event_in->token);
-        request = ri == TA_NIL ? (ta_request *)0 : (ta_request *)ta_pool_at(&system->requests, ri);
-        if (!request || request->kind != REQUEST_EXTERNAL_INVOKE ||
-            request->actor != event_in->target) {
+        request = external_request(system, event_in);
+        if (!request || request->ended) { /* not this actor's, or the service said done or failed */
             event->payload = 0; /* the caller's */
             ta_event_release(core, event_index);
             return TA_ERROR_STALE;
@@ -426,6 +442,7 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
     ask.event = event_index;
     event->trace = ta_system_start_trace(system, traceparent, trace_flags, &ask, &value);
     ta_system_mailbox_push(system, index, event_index);
+    if (request && (event_in->flags & TA_EVENT_IN_INVOKE_DONE)) request->ended = 1; /* accepted: done */
     return TA_OK;
 }
 

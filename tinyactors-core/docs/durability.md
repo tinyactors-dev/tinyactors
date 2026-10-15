@@ -86,8 +86,10 @@ Why the refusals:
 - **Export needs every session idle with empty queues** (14–18): queued events
   and requests are in flight *to* the session; the host runs the system first
   (the next `ta_system_run` drains them) and exports then.
-- **Snapshots** are for inspection and for taking a host out of memory for a
-  while, never for durability or backups: a snapshot is raw region memory,
+- **Snapshots** are a copy of the whole host, every segment and chart version
+  at once: for rehearsing a deploy on a copy, capturing a host for a
+  developer, preparing tests, and taking a host out of the process for a
+  while; never for durability or backups: a snapshot is raw region memory,
   valid for the same build of the library only. They are the region bytes
   plus the datamodel's own snapshot; they need a drained outbox
   (`ta_system_snapshot`) or a quiescent host (effects
@@ -98,7 +100,9 @@ Why the refusals:
   announces each invocation again (`TA_EFFECT_INVOKE` with
   `TA_EFFECT_FLAG_RESTORED`), and the embedder starts a service (the real
   one, or a stand-in on a copy) or answers the invoker with
-  `error.communication`.
+  `error.communication`. Params are kept when the datamodel can retain a
+  payload (both shipped ones can). An invocation whose service said done or
+  failed is not announced again.
 - **Migration** changes the chart, so it is observable by design: the session
   processes `error.platform.upgrade` (its `_event` until the next event; its
   data the previous bindings) before its mailbox. States are mapped by id and

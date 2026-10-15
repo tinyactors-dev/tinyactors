@@ -334,6 +334,47 @@ static void test_traceparents_last_until_the_ack(void) {
     world_close(&w);
 }
 
+/* The world's host snapshotted and packed, freed, and restored with a new
+ * datamodel: the restore before its first run. */
+static void restore_world(world *w) {
+    /* the datamodel's state and the host, packed */
+    ta_buffer probe = {NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &probe), TA_ERROR_NO_MEMORY);
+    void *state = malloc(probe.length);
+    ta_buffer state_out = {state, probe.length, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w->ecmascript, &state_out), TA_OK);
+    ta_datamodel_state contents = {{"t", 1}, {state, state_out.length}};
+    probe = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot_pack(w->host, &contents, &probe), TA_ERROR_NO_MEMORY);
+    void *pack = aligned_alloc(8, (probe.length + 7) & ~(size_t)7);
+    ta_buffer pack_out = {pack, probe.length, 0};
+    CHECK_EQUAL(ta_host_snapshot_pack(w->host, &contents, &pack_out), TA_OK);
+    ta_host_free(w->host);
+    ta_datamodel_ecmascript_free(w->ecmascript);
+    w->ecmascript = ta_datamodel_ecmascript_new(NULL);
+    w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
+    ta_host_snapshot_contents unpacked;
+    memset(&unpacked, 0, sizeof unpacked);
+    unpacked.size = sizeof unpacked;
+    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, pack_out.length}, &unpacked), TA_OK);
+    ta_bytes image = ta_host_snapshot_image((ta_bytes){pack, pack_out.length}, 0);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.system.size = sizeof config.system;
+    config.system.max_actors = 8;
+    config.datamodels = &w->binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    ta_host_snapshot_input input = {{0, 0}, {unpacked.host, unpacked.host_length}, &image, 1, 0};
+    CHECK_EQUAL(test_host_restore(&config, &input, &w->host), TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(w->ecmascript, (ta_bytes){unpacked.state, unpacked.state_length}),
+                TA_OK);
+    free(state);
+    free(pack);
+}
+
 /* A host restored from a snapshot announces each external invocation that
  * was running again, at its first run (after the datamodels' state is
  * back): the same segment, token, type, src and invoke id, its params, the
@@ -349,40 +390,7 @@ static void test_restore_announces_external_invocations(void) {
     uint64_t token = ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_TOKEN);
     CHECK_EQUAL(ta_host_effect_number(w.host, invoke, TA_EFFECT_FIELD_FLAGS) & TA_EFFECT_FLAG_RESTORED, 0u);
     ta_host_effects_ack(w.host);
-    /* the datamodel's state and the host, packed */
-    ta_buffer probe = {NULL, 0, 0};
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w.ecmascript, &probe), TA_ERROR_NO_MEMORY);
-    void *state = malloc(probe.length);
-    ta_buffer state_out = {state, probe.length, 0};
-    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(w.ecmascript, &state_out), TA_OK);
-    ta_datamodel_state contents = {{"t", 1}, {state, state_out.length}};
-    probe = (ta_buffer){NULL, 0, 0};
-    CHECK_EQUAL(ta_host_snapshot_pack(w.host, &contents, &probe), TA_ERROR_NO_MEMORY);
-    void *pack = aligned_alloc(8, (probe.length + 7) & ~(size_t)7);
-    ta_buffer pack_out = {pack, probe.length, 0};
-    CHECK_EQUAL(ta_host_snapshot_pack(w.host, &contents, &pack_out), TA_OK);
-    ta_host_free(w.host);
-    ta_datamodel_ecmascript_free(w.ecmascript);
-    w.ecmascript = ta_datamodel_ecmascript_new(NULL);
-    w.binding = ta_datamodel_ecmascript_binding(w.ecmascript);
-    ta_host_snapshot_contents unpacked;
-    memset(&unpacked, 0, sizeof unpacked);
-    unpacked.size = sizeof unpacked;
-    CHECK_EQUAL(ta_host_snapshot_unpack((ta_bytes){pack, pack_out.length}, &unpacked), TA_OK);
-    ta_bytes image = ta_host_snapshot_image((ta_bytes){pack, pack_out.length}, 0);
-    test_host_config config;
-    memset(&config, 0, sizeof config);
-    config.size = sizeof config;
-    config.system_id = (ta_string_view){"h", 1};
-    config.system.size = sizeof config.system;
-    config.system.max_actors = 8;
-    config.datamodels = &w.binding;
-    config.datamodel_count = 1;
-    config.allocator = ta_runtime_malloc();
-    ta_host_snapshot_input input = {{0, 0}, {unpacked.host, unpacked.host_length}, &image, 1, 0};
-    CHECK_EQUAL(test_host_restore(&config, &input, &w.host), TA_OK);
-    CHECK_EQUAL(ta_datamodel_ecmascript_restore(w.ecmascript, (ta_bytes){unpacked.state, unpacked.state_length}),
-                TA_OK);
+    restore_world(&w);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 0u); /* a take before the run: nothing yet */
     CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
     count = ta_host_effects(w.host, &effects);
@@ -410,9 +418,43 @@ static void test_restore_announces_external_invocations(void) {
     back.token = (uint32_t)token;
     CHECK_EQUAL(ta_host_send(w.host, &back), TA_OK); /* the token is the invocation's still */
     CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
-    free(state);
-    free(pack);
     world_close(&w);
+}
+
+static ta_status from_service(world *w, uint32_t token, uint32_t flags) {
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.session = w->session;
+    event.flags = flags;
+    event.token = token;
+    event.name = (ta_string_view){"news", 4};
+    return ta_host_send(w->host, &event);
+}
+
+/* An invocation whose service said done (its done.invoke not taken yet) or
+ * failed is over for the service's side: a restore does not announce it
+ * again, and the service's later events are refused. */
+static void test_restore_skips_ended_invocations(void) {
+    for (int failed = 0; failed < 2; failed++) {
+        world w;
+        world_open(&w);
+        const ta_host_effect *effects;
+        uint32_t count = run_batch(&w, &effects);
+        uint32_t token = (uint32_t)ta_host_effect_number(w.host, find(w.host, count, TA_EFFECT_INVOKE),
+                                                         TA_EFFECT_FIELD_TOKEN);
+        ta_host_effects_ack(w.host);
+        uint32_t ended = failed ? TA_EVENT_IN_ERROR_COMMUNICATION | TA_EVENT_IN_FROM_INVOKE : TA_EVENT_IN_INVOKE_DONE;
+        CHECK_EQUAL(from_service(&w, token, ended), TA_OK); /* not run: the actor has not taken it */
+        CHECK_EQUAL(from_service(&w, token, TA_EVENT_IN_FROM_INVOKE), TA_ERROR_STALE);
+        CHECK_EQUAL(from_service(&w, token, TA_EVENT_IN_INVOKE_DONE), TA_ERROR_STALE);
+        restore_world(&w);
+        CHECK_EQUAL(ta_host_run(w.host, 1000000).status, TA_RUN_IDLE);
+        count = ta_host_effects(w.host, &effects);
+        CHECK_EQUAL(find(w.host, count, TA_EFFECT_INVOKE), TA_NIL);
+        ta_host_effects_ack(w.host);
+        world_close(&w);
+    }
 }
 
 int main(void) {
@@ -422,5 +464,6 @@ int main(void) {
     RUN(test_fields_match_the_struct);
     RUN(test_traceparents_last_until_the_ack);
     RUN(test_restore_announces_external_invocations);
+    RUN(test_restore_skips_ended_invocations);
     TEST_MAIN_END();
 }

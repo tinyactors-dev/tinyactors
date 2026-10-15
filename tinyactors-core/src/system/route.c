@@ -411,7 +411,7 @@ uint32_t ta_system_external_invocation(ta_system *system, uint32_t from, ta_effe
     for (uint32_t i = from; i < system->requests.high_water_mark; i++) {
         if (!ta_pool_live(&system->requests, i)) continue;
         const ta_request *request = (const ta_request *)ta_pool_at(&system->requests, i);
-        if (request->kind != REQUEST_EXTERNAL_INVOKE) continue;
+        if (request->kind != REQUEST_EXTERNAL_INVOKE || request->ended) continue;
         uint32_t parent = ta_system_resolve_actor(system, request->actor);
         if (parent == TA_NIL) continue;
         ta_memset(out, 0, sizeof *out);

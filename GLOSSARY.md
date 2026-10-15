@@ -126,12 +126,14 @@ group, the words build on each other.
 - **Hibernate, hibernation.** An actor at a stable point written to a
   *blob* and removed from memory; its record (session id, mailbox,
   timers) stays in the host, so events and timers for it still arrive.
-  The application stores the blob. Only actors without children and
-  external invocations can hibernate.
+  The application stores the blob. Only an actor at a stable point with
+  an empty mailbox, no children, no external invocations and no pending
+  request can hibernate.
 - **Wake.** Bringing a hibernated actor back: the host asks with a
   `WAKE` effect when an event or a timer arrives for it, or a job wants
   it, and the application answers with `ta_host_wake` and the blob. A
-  blob wakes only in the host that wrote it.
+  blob wakes only in the host that wrote it, or in a host restored from a
+  snapshot of that host taken after it was written.
 - **Sweep.** The host's CLOCK sweep (`ta_host_sweep`): the sessions that
   did not run since the last sweep and can hibernate now, so the
   application can keep at most so many resident.
