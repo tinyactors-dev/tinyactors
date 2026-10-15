@@ -194,6 +194,13 @@ static const char ta_python_doc_host_ticks[] =
     "creation: delays in charts and Host.migrate's timeout count in these\n"
     "ticks.";
 
+static const char ta_python_doc_host_next_deadline[] =
+    "Seconds from now to the host's next deadline (a delayed send, a\n"
+    "migration's timeout), as the last turn that went idle left it: 0.0 when\n"
+    "it is due, None when there is none. The synchronous driver's run()\n"
+    "sleeps for it; with a SimulatedClock, which arms no timer, increment\n"
+    "the clock by it to move straight to the next thing that happens.";
+
 static const char ta_python_doc_host_add_image[] =
     "add_image(image, /)\n"
     "--\n"
@@ -254,6 +261,17 @@ static const char ta_python_doc_host_terminate[] =
     "\n"
     "End the actor `session` (one you spawned): it leaves its states,\n"
     "cancelling its invocations, and is gone after the next turn.";
+
+static const char ta_python_doc_host_boot[] =
+    "boot(segment, /)\n"
+    "--\n"
+    "\n"
+    "Spawn the boot actors of a segment add_image returned: the image's\n"
+    "<system><actor> entries, or its default boot chart (the first source\n"
+    "given to compile_charts), each under its name, so actor_get by name\n"
+    "finds it. Use it to start an application from its image alone; spawn\n"
+    "starts one actor of a chart you name. A boot that fails part way leaves\n"
+    "the actors already spawned; a second boot spawns them all again.";
 
 static const char ta_python_doc_host_peer_add[] =
     "peer_add(id, *, trusted=False)\n"
@@ -613,13 +631,17 @@ static const char ta_python_doc_send_type[] =
     "The I/O processor's type from the config (None for a send to an invoked service).";
 
 static const char ta_python_doc_send_answer[] =
-    "answer(event, data=None, *, traceparent=send.traceparent)\n"
+    "answer(event, data=None, *, traceparent=send.traceparent, origin=None,\n"
+    "       raw=None)\n"
     "--\n"
     "\n"
     "Give the sending actor an event in reply, with this send's sendid and\n"
     "the processor's type as origintype. It keeps the send's trace; pass\n"
-    "traceparent=None to start a new one. Answering after the batch's ack\n"
-    "needs a record (an async def handler).";
+    "traceparent=None to start a new one. `origin` (a str) is where the\n"
+    "actor replies to, _event.origin, and `raw` (a str) the message as the\n"
+    "transport carried it, _event.raw: an HTTP processor passes the request\n"
+    "it read. Answering after the batch's ack needs a record (an async def\n"
+    "handler).";
 
 static const char ta_python_doc_send_fail[] =
     "fail()\n"

@@ -167,14 +167,15 @@ int ta_python_chart_compile(ta_python_datamodel *datamodel, const ta_python_atta
     Py_XDECREF(name);
     Py_XDECREF(file);
     Py_XDECREF(expressions);
-    if (!made || !PyTuple_Check(made) || PyTuple_Size(made) != 3) {
+    if (!made || !PyTuple_Check(made) || PyTuple_Size(made) != 4) {
         Py_XDECREF(made);
         Py_XDECREF(data);
         return -1;
     }
     row->chart = Py_NewRef(PyTuple_GetItem(made, 0));
     row->functions = Py_NewRef(PyTuple_GetItem(made, 1));
-    row->data = data;
+    row->data = Py_NewRef(PyTuple_GetItem(made, 3)); /* the <data> ids first, then what the chart declares */
+    Py_DECREF(data);
     ta_image_info info;
     info.size = sizeof info;
     ta_image_get_info(image, &info);

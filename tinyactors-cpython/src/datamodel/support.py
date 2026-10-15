@@ -99,7 +99,7 @@ for _type in (TinyactorsError, CompileError, ResolveError, Diagnostic):
 # ---- the rewrite ---------------------------------------------------------
 
 BUILTINS = ("len", "min", "max", "sum", "abs", "round", "sorted", "reversed", "enumerate", "zip",
-            "range", "any", "all", "isinstance", "str", "int", "float", "bool", "list", "dict",
+            "range", "any", "all", "isinstance", "hasattr", "str", "int", "float", "bool", "list", "dict",
             "tuple", "set", "frozenset", "map", "filter")
 # The session's read-only system variables, properties of its class.
 SYSTEM = ("_sessionid", "_name", "_ioprocessors")
@@ -318,17 +318,43 @@ def _function(body, parameters, namespace, file):
     return local["_ta_f"]
 
 
-CONDITION, VALUE_KIND, LOCATION, SCRIPT, STRING, CONTENT = 1, 2, 3, 4, 5, 6
+CONDITION, VALUE_KIND, LOCATION, SCRIPT, STRING, CONTENT, ITEM = 1, 2, 3, 4, 5, 6, 7
+
+
+def _names_bound(target, names):
+    if isinstance(target, ast.Name):
+        names.add(target.id)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for element in target.elts:
+            _names_bound(element, names)
+
+
+def _declared_by(body, names):
+    """The names a script's statements assign or loop over outside its
+    defs: the variables it declares, as a module's top level does."""
+    for node in body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                _names_bound(target, names)
+        elif isinstance(node, ast.For):
+            _names_bound(node.target, names)
+        if isinstance(node, (ast.If, ast.While, ast.For)):
+            _declared_by(node.body, names)
+            _declared_by(node.orelse, names)
+    return names
 
 
 def attach(name, data, expressions, namespace, file):
     """A chart's class and its compiled expressions. `data` holds the
     <data> ids, `expressions` (kind, source, line) per expression id.
-    Returns (class, functions, system): functions[e] is a function of
-    the session (CONDITION, VALUE, STRING, SCRIPT, CONTENT), a pair
-    (getter, setter) for a LOCATION, or the SyntaxError that refused it
-    (an evaluation of it is error.execution); system the set of system
-    variables the chart reads."""
+    Returns (class, functions, system, variables): functions[e] is a
+    function of the session (CONDITION, VALUE, STRING, SCRIPT, CONTENT),
+    a pair (getter, setter) for a LOCATION or an ITEM, or the SyntaxError
+    that refused it (an evaluation of it is error.execution); system the
+    set of system variables the chart reads; variables the session's
+    variables: the <data> ids, then the names a <foreach> item or index
+    or a <script> outside its defs binds, which the chart declares too
+    (SCXML 4.6, and as a module's top level does)."""
     for identifier in data:
         if not identifier.isidentifier() or identifier.startswith("_"):
             raise SyntaxError("the <data> id %r is not a Python name the chart may declare" % identifier)
@@ -345,11 +371,20 @@ def attach(name, data, expressions, namespace, file):
             for node in tree.body:
                 if isinstance(node, ast.FunctionDef):
                     methods[node.name] = node
-    names = set(data) | {"_event"} | set(methods)
+    declared = set()
+    for index, tree in scripts:
+        _declared_by(tree.body, declared)
+    for kind, source, line in expressions:
+        if kind == ITEM and source.strip().isidentifier():
+            declared.add(source.strip())
+    declared = {identifier for identifier in declared - set(data) - set(methods)
+                if not identifier.startswith("_")}
+    variables = tuple(data) + tuple(sorted(declared))
+    names = set(variables) | {"_event"} | set(methods)
     system = set()
     compiled_methods = {}
     for method_name, node in methods.items():
-        if method_name in data or method_name in SYSTEM or method_name.startswith("_"):
+        if method_name in variables or method_name in SYSTEM or method_name.startswith("_"):
             raise SyntaxError("the def %s has the name of a variable" % method_name)
         rewrite = Rewrite(names, file, 1)
         rewrite.methods = set(methods)
@@ -366,7 +401,7 @@ def attach(name, data, expressions, namespace, file):
                 body = [rewrite.statement(node, set(), False) for node in tree.body
                         if not isinstance(node, ast.FunctionDef)]
                 functions.append(_function(body, [SESSION], namespace, file))
-            elif kind == LOCATION:
+            elif kind in (LOCATION, ITEM):
                 tree = _parse(source, "eval", file, line).body
                 getter = _expression(_moved(rewrite.expression(copy.deepcopy(tree), set()), line), namespace, file)
                 setter = ast.copy_location(ast.Assign([_moved(rewrite.target(tree, set(), False), line)],
@@ -383,14 +418,14 @@ def attach(name, data, expressions, namespace, file):
             system |= rewrite.system
         except Exception as error:  # refused, or not compiled: error.execution when evaluated
             functions.append(error)
-    slots = tuple(data) + ("_event", "_ta_sys")
+    slots = variables + ("_event", "_ta_sys")
     body = {"__slots__": slots, "__module__": "tinyactors.charts"}
     body["_sessionid"] = property(lambda session: session._ta_sys[0])
     body["_name"] = property(lambda session: session._ta_sys[1])
     body["_ioprocessors"] = property(lambda session: session._ta_sys[2])
     body.update(compiled_methods)
     chart = type(name if name.isidentifier() else "Chart", (), body)
-    return chart, tuple(functions), frozenset(system)
+    return chart, tuple(functions), frozenset(system), variables
 
 
 def _moved(tree, line):

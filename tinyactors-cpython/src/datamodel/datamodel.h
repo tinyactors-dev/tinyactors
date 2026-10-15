@@ -13,7 +13,7 @@ enum { TA_PYTHON_READS_SESSIONID = 1u, TA_PYTHON_READS_NAME = 2u, TA_PYTHON_READ
 typedef struct ta_python_chart_row {
     PyObject *chart;     /* the class: an instance per session */
     PyObject *functions; /* tuple: per expression, a function, (getter, setter), or a SyntaxError */
-    PyObject *data;      /* tuple of the <data> ids, as str */
+    PyObject *data;      /* tuple of the variables, as str: the <data> ids, then what <foreach> and <script> declare */
     PyObject *names;     /* list by the image's event-name node: the name's str, made at its first
                             event and shared by every session (None until then) */
     PyObject *invokeids; /* lists by the chart's <invoke> slot: the invoke's id and the origin of */

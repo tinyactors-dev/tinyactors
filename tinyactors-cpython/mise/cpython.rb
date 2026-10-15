@@ -24,10 +24,11 @@ module CPython
   MILESTONE = 'M4'
   # What of that set `mise run test` runs now: the suites (`--suite`) and
   # the datamodels the adapter passes so far. It grows with the plan
-  # (ROADMAP.md, "Plan and progress"): M4's protocol vectors and every
-  # scenario (invoke, hibernate, migrate, snapshot) pass on both
-  # datamodels; the W3C suite (M2) is not in it yet.
-  GATE = { suites: %w[protocol scenarios], datamodels: %w[native quickjs] }.freeze
+  # (ROADMAP.md, "Plan and progress"): M4's protocol vectors, the W3C
+  # suite (M2: on the native datamodel less the tests
+  # tinyactors-test/suites/w3c/skip-python.txt names) and every scenario
+  # (invoke, hibernate, migrate, snapshot) pass on both datamodels.
+  GATE = { suites: %w[protocol w3c scenarios], datamodels: %w[native quickjs] }.freeze
 
   # The extension's C (AGENTS.md, "Layout"), and the flags every file of it
   # compiles with: all of its warnings are errors, and nothing but

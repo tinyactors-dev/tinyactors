@@ -205,6 +205,7 @@ TA_PYTHON_GETTER(migrated, migration, TA_PYTHON_MIGRATED_MIGRATION)
  * its sendid (bindings.md, section 4). `name` NULL: the failure. */
 typedef struct ta_python_answer {
     PyObject *name, *data, *traceparent;
+    PyObject *origin, *raw; /* where to reply, the transport's message: NULL for none */
 } ta_python_answer;
 
 static int ta_python_send_answer_with(ta_python_view *view, const ta_python_answer *answer) {
@@ -230,6 +231,7 @@ static int ta_python_send_answer_with(ta_python_view *view, const ta_python_answ
             status = -1;
         else if (!answer->name) event.flags = TA_EVENT_IN_ERROR_COMMUNICATION; /* the name is not repeated */
         else if (ta_python_text(answer->name, &event.name) < 0 || ta_python_text(type, &event.origintype) < 0 ||
+                 ta_python_text(answer->origin, &event.origin) < 0 || ta_python_text(answer->raw, &event.raw) < 0 ||
                  ta_python_host_payload(host, &payload) < 0)
             status = -1;
         if (status == 0) {
@@ -254,12 +256,14 @@ static int ta_python_send_answer_with(ta_python_view *view, const ta_python_answ
 
 static PyObject *ta_python_send_answer(PyObject *self, PyObject *arguments, PyObject *keywords) {
     ta_python_view *view = (ta_python_view *)self;
-    PyObject *name, *data = Py_None, *traceparent = NULL;
-    static char *const names[] = {"event", "data", "traceparent", NULL};
-    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "U|O$O:answer", names, &name, &data, &traceparent)) return NULL;
+    PyObject *name, *data = Py_None, *traceparent = NULL, *origin = NULL, *raw = NULL;
+    static char *const names[] = {"event", "data", "traceparent", "origin", "raw", NULL};
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "U|O$OOO:answer", names, &name, &data, &traceparent, &origin,
+                                     &raw))
+        return NULL;
     PyObject *kept = traceparent ? Py_NewRef(traceparent) : ta_python_send_read(view, TA_PYTHON_SEND_TRACEPARENT);
     if (!kept) return NULL;
-    ta_python_answer answer = {name, data, kept};
+    ta_python_answer answer = {name, data, kept, origin, raw};
     int status = ta_python_send_answer_with(view, &answer);
     Py_DECREF(kept);
     if (status < 0) return NULL;
@@ -271,7 +275,7 @@ static PyObject *ta_python_send_fail(PyObject *self, PyObject *unused) {
     ta_python_view *view = (ta_python_view *)self;
     PyObject *traceparent = ta_python_send_read(view, TA_PYTHON_SEND_TRACEPARENT);
     if (!traceparent) return NULL;
-    ta_python_answer answer = {NULL, Py_None, traceparent};
+    ta_python_answer answer = {NULL, Py_None, traceparent, NULL, NULL};
     int status = ta_python_send_answer_with(view, &answer);
     Py_DECREF(traceparent);
     if (status < 0) return NULL;

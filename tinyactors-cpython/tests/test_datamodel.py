@@ -25,6 +25,22 @@ class Scope(unittest.TestCase):
         logs = run(fixture("test_datamodel/undeclared-location.python.scxml"), ["go"])
         self.assertEqual(logs.labelled("n"), ["0"])  # the rest of the block did not run
 
+    def test_foreach_and_script_declare_variables(self):
+        """A <foreach>'s item and index and the names a <script> assigns
+        outside its defs are the chart's variables, None until set (SCXML
+        4.6), and hibernate with the rest."""
+        logs, blobs = Logs(), {}
+        with host_with([("c.scxml", fixture("test_datamodel/declared.python.scxml"))], log=logs,
+                       wake=lambda host, session, migration: host.wake(session, blobs.pop(session))) as host:
+            session = host.spawn(host.chart("c"))
+            host.run_until_idle()
+            blobs[session] = host.hibernate(session)
+            host.send(session, "report")
+            host.run_until_idle()
+        self.assertEqual(logs.labelled("before"), ["[None, None]"])
+        self.assertEqual(logs.labelled("after"), ["[4, 20, 20, 1]"])
+        self.assertEqual(logs.labelled("report"), ["[4, 20, 20, 1]"])
+
     def test_a_system_variable_is_read_only(self):
         for location in ("_sessionid", "_event", "_name"):
             with self.subTest(location=location):

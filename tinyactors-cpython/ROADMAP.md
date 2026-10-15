@@ -456,7 +456,7 @@ binding's to refill.
 
 The conform adapter runs `snapshot` and `restore`: every scenario of M4
 passes on both datamodels, and the gate is M4's protocol vectors and
-scenarios (the W3C suite, M2, is not in it yet).
+scenarios (the W3C suite joined it with M2, below).
 
 **The gate:** `tools/snapshot.py` (`mise run snapshot`; `mise run test`
 runs 20,000 actors with 100 resident and 5,000 all resident on both
@@ -553,6 +553,37 @@ stand-ins make a sandbox, no handler gives its invokers
 <send> and <invoke>"; a crashing `receive` gives the same). The request
 to core below was answered in core by this session at the maintainer's
 request. The binding keeps no table of its own: core holds the facts.
+
+### The W3C suite, M2 (2026-10-15) — done
+
+The adapter offers `w3c.run` (tinyactors-test/docs/driver.md, "The W3C
+environment"): the start chart booted on a host of its own, BasicHTTP as
+a sync I/O processor whose handler writes the send as a POST, reads it
+back and answers with it as the incoming request (`origin` the location,
+`raw` the message), and a `SimulatedClock` moved to the next deadline
+whenever the host is idle. **191 of 191 on quickjs, 171 of 171 on the
+native datamodel** (the other 20 are `skip-python.txt`'s, each with a
+reason); the gate is M4's protocol vectors, the W3C suite and the
+scenarios on both datamodels.
+
+What it took, each a core call exposed or a datamodel rule, with a test
+in `tests/`:
+
+- `Host.boot(segment)`: `ta_host_boot`, which the binding lacked.
+- `Host.next_deadline`: `ta_run.next_deadline`, as seconds from now, so
+  a `SimulatedClock` can move straight to it.
+- `send.answer(..., origin=, raw=)`: `ta_event_in`'s fields, which an
+  I/O processor that reads a transport's message passes on.
+- **The chart declares the variables `<foreach>` and `<script>` bind**
+  (W3C 150, 151, 302, 304, 525): a `<foreach>`'s `item` and `index`
+  (SCXML 4.6: "a new variable" when there is none) and a script's
+  assignments outside its defs, `None` until set, serialized with the
+  `<data>` ids. Asked of core and done by this session: the compiler
+  wrote a `<foreach>`'s item as any location, so the datamodel could not
+  tell it from an `<assign>`'s (which must stay `error.execution` when
+  undeclared, W3C 286); it is `TA_EXPRESSION_ITEM` now.
+- `hasattr` among the builtins (W3C 330: whether `_event`'s fields are
+  bound).
 
 ## How the work runs
 

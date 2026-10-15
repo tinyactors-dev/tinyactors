@@ -286,6 +286,39 @@ class Inputs(unittest.TestCase):
             host.send(12345, "go", {"x": 1})
         host.close()
 
+    def test_answer_with_origin_and_raw(self):
+        def processor(host, send):
+            send.answer("ack", origin="urn:test:back", raw="the message")
+
+        logs = Logs()
+        host = host_with([("answered.scxml", fixture("test_host/answered.python.scxml"))], {APP: processor}, log=logs)
+        spawn(host, "answered")
+        host.run_until_idle()
+        self.assertEqual(logs.labelled("ack"), ["['urn:test:back', '%s', 'the message']" % APP])
+        host.close()
+
+    def test_boot_and_next_deadline(self):
+        """boot spawns the image's boot actor (the first chart compiled)
+        under its name; next_deadline is its delayed send, which a
+        SimulatedClock reaches by that increment."""
+        logs, clock = Logs(), tinyactors.SimulatedClock()
+        config = {"systemID": "t", "system": {"ticksPerSecond": 1000}}
+        with tinyactors.Host(config, log=logs, clock=clock) as host:
+            self.assertIsNone(host.next_deadline)
+            with tinyactors.compile_charts([("boot.scxml", fixture("test_host/boot.python.scxml"))]) as compiled:
+                segment = host.add_image(compiled.image)
+            host.boot(segment)
+            host.run_until_idle()
+            self.assertEqual(logs.labelled("booted"), ["booted"])
+            self.assertAlmostEqual(host.next_deadline, 1.5)
+            clock.increment(round(host.next_deadline * 1000))
+            self.assertEqual(logs.labelled("later"), ["fired"])
+            self.assertIsNone(host.next_deadline)
+            with self.assertRaises(tinyactors.TinyactorsError):
+                host.boot(segment + 1)
+            with self.assertRaises(TypeError):
+                host.boot("0")
+
     def test_terminate(self):
         host = host_with([("echo.scxml", ECHO)])
         session = spawn(host)

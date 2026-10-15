@@ -12,7 +12,9 @@ peer handler. Standard output holds frames only; diagnostics go to
 standard error.
 """
 
+import math
 import sys
+import urllib.parse
 
 import tinyactors
 
@@ -206,6 +208,11 @@ class Adapter:
             raise DriverError(-32602, "range", "params.datamodel", "no such datamodel")
         return {"outcome": Scenario(params["documents"]).run(params["steps"])}
 
+    def w3c_run(self, params):
+        if params.get("datamodel", "quickjs") not in DATAMODELS:
+            raise DriverError(-32602, "range", "params.datamodel", "no such datamodel")
+        return {"outcome": W3C(params["documents"]).run()}
+
 
 class Refused(Exception):
     """A step the host refused: the scenario fails (driver.md)."""
@@ -317,6 +324,113 @@ class Scenario:
         if alias not in self.aliases:
             raise Refused("a send to an alias no spawn made: %s" % alias)
         return self.aliases[alias]
+
+
+class W3C:
+    """w3c.run in the W3C environment (driver.md): the start chart booted
+    on a host of its own, BasicHTTP as a loopback, and the clock moved to
+    the next deadline whenever the host is idle."""
+
+    LOCATION = "http://localhost:8080/scxml"
+    BASIC_HTTP = "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor"
+    CONFIG = {"systemID": "w3c",
+              "system": {"ticksPerSecond": 1000, "maxEvents": 1024, "maxActors": 64},
+              "ioProcessors": [{"type": BASIC_HTTP, "location": LOCATION, "sync": True}]}
+    ROUNDS = 200
+
+    def __init__(self, documents):
+        self.documents = documents
+        self.outcome = None
+
+    def log(self, host, entry):
+        if self.outcome is None and entry.label == "Outcome":
+            self.outcome = "pass" if entry.text == "pass" else "fail"
+
+    def post(self, host, send):
+        """A send to BasicHTTP: written as a POST, read back, and delivered to
+        its sender, as an incoming request is; a send to another target
+        cannot be written."""
+        if not (send.target or "").startswith(self.LOCATION):
+            send.fail()
+            return
+        message = post_encode(send.target, send.event or "", send.data)
+        event, fields = post_parse(message)
+        send.answer(event, fields, origin=self.LOCATION, raw=message)
+
+    def run(self):
+        charts = [document for index, document in enumerate(self.documents)
+                  if index == 0 or document["name"].endswith(".scxml")]
+        clock = tinyactors.SimulatedClock()
+        host = tinyactors.Host(self.CONFIG, io_processors={self.BASIC_HTTP: self.post}, log=self.log,
+                               clock=clock)
+        try:
+            try:
+                host.boot(compile_image(host, charts, self.documents))
+            except tinyactors.CompileError as error:
+                print("conform: a document does not compile: %s" % error, file=sys.stderr)
+                return "compile"
+            for _ in range(self.ROUNDS):
+                host.run_until_idle()
+                delay = host.next_deadline
+                if self.outcome is not None or delay is None:
+                    break
+                clock.increment(max(1, math.ceil(round(delay * 1000, 6))))  # ticksPerSecond 1000
+        except (tinyactors.TinyactorsError, MemoryError) as error:
+            print("conform: the run ended: %r" % error, file=sys.stderr)
+        finally:
+            host.close()
+        return self.outcome or "timeout"
+
+
+def diagnostic(value):
+    """A value in CBOR diagnostic notation (RFC 8949, 8)."""
+    if value is True or value is False:
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if value is tinyactors.UNDEFINED:
+        return "undefined"
+    if isinstance(value, str):
+        return '"%s"' % value.replace("\\", "\\\\").replace('"', '\\"')
+    if isinstance(value, bytes):
+        return "h'%s'" % value.hex()
+    if isinstance(value, float):
+        return repr(value) if math.isfinite(value) else ("NaN" if value != value else
+                                                         "Infinity" if value > 0 else "-Infinity")
+    if isinstance(value, list):
+        return "[%s]" % ", ".join(diagnostic(item) for item in value)
+    if isinstance(value, dict):
+        return "{%s}" % ", ".join("%s: %s" % (diagnostic(key), diagnostic(item)) for key, item in value.items())
+    return str(value)
+
+
+def post_encode(url, event, data):
+    """The POST of a BasicHTTP send (SCXML 1.0, C.2.1): form fields, the
+    event name as _scxmleventname and the data's when it is a map (each
+    value as text: text as it is, anything else in diagnostic notation), or
+    the data as the body when it is text."""
+    parts = urllib.parse.urlsplit(url)
+    fields = [(key, value if isinstance(value, str) else diagnostic(value))
+              for key, value in data.items()] if isinstance(data, dict) else []
+    if fields or event:
+        named = [("_scxmleventname", event)] if event else []
+        body = "&".join("%s=%s" % (urllib.parse.quote(key, safe=""), urllib.parse.quote(value, safe=""))
+                        for key, value in named + fields)
+    else:
+        body = urllib.parse.quote(data, safe="") if isinstance(data, str) else ""
+    return ("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/x-www-form-urlencoded\r\n"
+            "Content-Length: %d\r\n\r\n%s" % (parts.path or "/", parts.netloc, len(body.encode()), body))
+
+
+def post_parse(message):
+    """An incoming request (SCXML 1.0, C.2.2): the event, _scxmleventname
+    or HTTP.<method>, and the other form fields as a map of text; a body
+    without "=" is content, not fields."""
+    head, _, body = message.partition("\r\n\r\n")
+    method = head.split(" ", 1)[0]
+    fields = urllib.parse.parse_qsl(body, keep_blank_values=True) if "=" in body else []
+    event = next((value for key, value in fields if key == "_scxmleventname"), "") or "HTTP." + method
+    return event, {key: value for key, value in fields if key != "_scxmleventname" and key}
 
 
 def read_exactly(stream, size):

@@ -65,11 +65,19 @@ with tinyactors.Host(config, {"urn:example:app": app},
   `chart(name) -> ChartRef`, `spawn(ref, name=None, params=None,
   traceparent=None) -> session`, `send(session, event, data=None, *,
   traceparent=None)`, `send_many([(session, event, data, traceparent),
-  ...]) -> accepted`, `terminate(session)`, `peer_add(id, *,
+  ...]) -> accepted`, `terminate(session)`, `boot(segment)` (the image's
+  boot actors: its `<system><actor>`s, or the first chart compiled, each
+  under its name), `peer_add(id, *,
   trusted=False) -> peer`, `deliver(peer, envelope_bytes) -> route`.
 - Drivers: `run_until_idle()`; `run()`, which sleeps to each deadline
   while there is one; `SimulatedClock.increment(ms)`; and under asyncio
-  (`async with Host(...)`), `await host.idle()`.
+  (`async with Host(...)`), `await host.idle()`. `host.next_deadline` is
+  the seconds from now to the next deadline (`None`: none), which a
+  `SimulatedClock` can be incremented by.
+- An I/O processor answers with `send.answer(event, data=None, *,
+  traceparent=send.traceparent, origin=None, raw=None)` (`origin` and
+  `raw` become `_event.origin` and `_event.raw`: where to reply, and the
+  transport's message) or fails the send with `send.fail()`.
 - Typed methods, one per method of
   [requests.md](../tinyactors-core/docs/requests.md):
   `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`,
@@ -490,7 +498,10 @@ doubles every pool (980 MB of region here).
 ## Charts in Python
 
 A `datamodel="python"` chart's session is an instance of a class made for
-the chart: its `<data>` ids are its slots, `_event`, `_sessionid`, `_name`
+the chart: its variables are its slots (its `<data>` ids, and the names
+a `<foreach>`'s `item` or `index` or a `<script>` outside its defs
+assigns, which the chart declares too, as SCXML 4.6 and a module's top
+level do; each is `None` until set), `_event`, `_sessionid`, `_name`
 and `_ioprocessors` are read-only, and `In(state)` is SCXML's `In()`.
 Expressions are compiled once per chart into functions of the session,
 by a restrictive rewrite:
@@ -500,14 +511,14 @@ by a restrictive rewrite:
   generator expressions, f-strings, calls to the chart's methods and to
   the allowed builtins, attribute access except dunder names;
 - *statements*, in `<script>` and `.py` files a `src=` names: assignment,
-  plain or augmented, to a `<data>` id or to its items or attributes;
+  plain or augmented, to a variable or to its items or attributes;
   `if`, `for`, `while`, `pass` and expression statements; `def` at the top
   level of a script, which makes a method of the chart;
 - *refused:* `import`, `global`, `nonlocal`, `lambda`, `await`, `yield`,
   the walrus (`:=`), `del`, `try` and `raise`, `with`, `class`;
 - *builtins:* `len`, `min`, `max`, `sum`, `abs`, `round`, `sorted`,
   `reversed`, `enumerate`, `zip`, `range`, `any`, `all`, `isinstance`,
-  `str`, `int`, `float`, `bool`, `list`, `dict`, `tuple`, `set`,
+  `hasattr`, `str`, `int`, `float`, `bool`, `list`, `dict`, `tuple`, `set`,
   `frozenset`, `map`, `filter`.
 
 An undeclared name, a refused construct or an assignment to a system

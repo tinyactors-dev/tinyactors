@@ -95,7 +95,7 @@ void ta_python_advance(ta_python_host *host) {
 }
 
 /* Seconds from now to the host's deadline (0 when it is due). */
-static double ta_python_delay(ta_python_host *host) {
+double ta_python_delay(ta_python_host *host) {
     ta_time now = ta_python_now(host).monotonic;
     if (host->deadline <= now) return 0.0;
     return (double)(host->deadline - now) / (double)host->ticks_per_second;

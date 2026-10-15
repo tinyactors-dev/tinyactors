@@ -1,5 +1,5 @@
 /* The Host (AGENTS.md, "The API"): ta_host_create from Python options, the
- * inputs (add_image, chart, spawn, send, send_many, terminate, peers),
+ * inputs (add_image, chart, spawn, send, send_many, terminate, boot, peers),
  * the call's arena mark, and close. The host's allocator is here, and
  * nowhere else calls an allocator (tools/lint/rules/
  * allocation-in-tables-and-host.yml). The loop is loop.c, the effects
@@ -946,6 +946,29 @@ static PyObject *ta_python_host_terminate(PyObject *self, PyObject *value) {
     return result;
 }
 
+/* The segment's boot actors (ta_host_boot): the image's <system><actor>s,
+ * or its default boot chart, each spawned under its name. */
+static PyObject *ta_python_host_boot(PyObject *self, PyObject *value) {
+    ta_python_host *host = (ta_python_host *)self;
+    unsigned long segment = PyLong_Check(value) ? PyLong_AsUnsignedLong(value) : (unsigned long)-1;
+    if (segment > UINT32_MAX) {
+        if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "boot requires a segment (an int add_image returned)");
+        else if (PyErr_ExceptionMatches(PyExc_OverflowError)) {
+            PyErr_Clear();
+            PyErr_SetString(PyExc_ValueError, "boot requires a segment (an int add_image returned)");
+        }
+        return NULL;
+    }
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    ta_python_advance(host);
+    ta_status status = ta_host_boot(host->host, (uint32_t)segment);
+    if (status == TA_OK) ta_python_loop_schedule(host);
+    PyObject *result = ta_python_host_status(host, status);
+    ta_python_leave(&call);
+    return result;
+}
+
 /* A peer: another system through one connection (ta_host_peer_add). */
 static PyObject *ta_python_host_peer_add(PyObject *self, PyObject *arguments, PyObject *keywords) {
     static char *const names[] = {"id", "trusted", NULL};
@@ -1391,9 +1414,18 @@ static PyObject *ta_python_host_ticks(PyObject *self, void *closure) {
     return PyLong_FromUnsignedLongLong(((ta_python_host *)self)->ticks_per_second);
 }
 
+/* The last idle run's next_deadline (ta_run), as seconds from now. */
+static PyObject *ta_python_host_next_deadline(PyObject *self, void *closure) {
+    (void)closure;
+    ta_python_host *host = (ta_python_host *)self;
+    if (!host->host || host->deadline == UINT64_MAX) Py_RETURN_NONE;
+    return PyFloat_FromDouble(ta_python_delay(host));
+}
+
 static PyGetSetDef ta_python_host_properties[] = {
     {"closed", ta_python_host_closed, NULL, ta_python_doc_host_closed, NULL},
     {"ticks_per_second", ta_python_host_ticks, NULL, ta_python_doc_host_ticks, NULL},
+    {"next_deadline", ta_python_host_next_deadline, NULL, ta_python_doc_host_next_deadline, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
@@ -1423,6 +1455,7 @@ static PyMethodDef ta_python_host_methods[] = {
     {"send_many", ta_python_host_send_many, METH_O,
      ta_python_doc_host_send_many},
     {"terminate", ta_python_host_terminate, METH_O, ta_python_doc_host_terminate},
+    {"boot", ta_python_host_boot, METH_O, ta_python_doc_host_boot},
     {"peer_add", (PyCFunction)(void (*)(void))ta_python_host_peer_add, METH_VARARGS | METH_KEYWORDS,
      ta_python_doc_host_peer_add},
     {"deliver", ta_python_host_deliver, METH_VARARGS,

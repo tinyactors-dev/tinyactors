@@ -114,7 +114,8 @@ Decided by the maintainer (2026-10-13); every item is in
   int`** (`ta_host_send_many`: each item carries the arguments of `send`,
   `traceparent` included; it returns the length of the accepted prefix,
   `host.h:192-195`), **`host.terminate(session)`**
-  (`ta_host_terminate`): applied at the call, read during it; a payload
+  (`ta_host_terminate`), **`host.boot(segment)`** (`ta_host_boot`, the
+  image's boot actors): applied at the call, read during it; a payload
   moves to core on success and is released on refusal. Under asyncio an
   input made outside a turn schedules one turn.
 - **`traceparent` in: W3C text, parsed by core.** `ta_spawn.traceparent`
@@ -175,11 +176,14 @@ Decided by the maintainer (2026-10-13); every item is in
     `host.h:284`); `TA_EFFECT_FIELD_TRACEPARENT` formats it as text
     (`host.h:330`, empty when untraced), so the view formats it on first
     read, like every other field.
-  - `send.answer(event, data=None, *, traceparent=send.traceparent)`:
+  - `send.answer(event, data=None, *, traceparent=send.traceparent,
+    origin=None, raw=None)`:
     `ta_host_send` to the sending session (`SESSION`) with the send's
     `sendid`, `origintype` the processor's type, and the send's trace
     (decided 2026-10-13: an answer keeps the trace); passing
-    `traceparent=None` starts a new trace.
+    `traceparent=None` starts a new trace. `origin` and `raw` are
+    `ta_event_in`'s (2026-10-15, W3C's BasicHTTP: the location to reply
+    to and the message as read).
   - `send.fail()`: `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION`,
     the `sendid` and `send.traceparent`
     (`tinyactors-core/include/tinyactors/system.h:155-157`: core places
@@ -625,7 +629,11 @@ Registered beside quickjs, first; matched by the chart's
     generator expressions, f-strings, calls to the chart's methods and
     to the allowed builtins, attribute access except dunder names;
   - *statements*, in `<script>` and `.py`: assignment, plain or
-    augmented, to a `<data>` id or to its items or attributes; `if`,
+    augmented, to a variable or to its items or attributes (the
+    variables: the `<data>` ids, then the names a `<foreach>`'s `item`
+    or `index` (core's `TA_EXPRESSION_ITEM`) or a `<script>` outside its
+    defs binds, declared by the chart, `None` until set; 2026-10-15,
+    for W3C tests 150, 151, 302, 304, 525); `if`,
     `for`, `while`, `pass` and expression statements; `def` only at the
     top level of a script (any script's top-level defs are the chart's
     methods);
@@ -634,7 +642,8 @@ Registered beside quickjs, first; matched by the chart's
     `class`;
   - *builtins:* `len`, `min`, `max`, `sum`, `abs`, `round`, `sorted`,
     `reversed`, `enumerate`, `zip`, `range`, `any`, `all`,
-    `isinstance`, `str`, `int`, `float`, `bool`, `list`, `dict`,
+    `isinstance`, `hasattr` (2026-10-15: whether an `_event` field is
+    bound, W3C test 330), `str`, `int`, `float`, `bool`, `list`, `dict`,
     `tuple`, `set`, `frozenset`, `map`, `filter`; and not `open`,
     `eval`, `exec`, `getattr`, `setattr`, `vars`, `globals`,
     `__import__`.
