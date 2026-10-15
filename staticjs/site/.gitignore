@@ -4,3 +4,4 @@ node_modules/
 public/staticjs-site.wasm
 .vitepress/theme/staticjs/constants.json
 .screenshots/
+.wrangler/
