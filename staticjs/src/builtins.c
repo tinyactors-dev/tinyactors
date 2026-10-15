@@ -3786,7 +3786,7 @@ static sjs_result iterator_range(sjs_vm *vm, item_range range, sjs_array **out) 
         return sjs_vm_fault(vm, "an iterator yields its values once: staticjs reads one only where nothing else holds it");
     }
     const sjs_iterator *it = SJS_AS_ITERATOR(range.iterator);
-    uint32_t n = sjs_iterator_count(it);
+    uint32_t n = sjs_iterator_left(it);
     uint32_t to = range.to < n ? range.to : n;
     uint32_t from = range.from < to ? range.from : to;
     /* MUTATION: past what next() took. Restore: without these lines. */
@@ -4516,7 +4516,7 @@ __attribute__((noinline)) static sjs_result iterator_step(sjs_vm *vm, sjs_builti
         return sjs_vm_fault(vm, "next and return change an iterator: staticjs calls them only on a variable of the function that holds it alone, or on an iterator nothing else holds");
     }
     if (closes) {
-        if (owned) it->position += sjs_iterator_count(it);
+        if (owned) it->position += sjs_iterator_left(it);
         return iterator_result_make(vm, call, (iterator_result){ sjs_undefined(), true });
     }
     sjs_array *a;

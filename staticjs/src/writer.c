@@ -127,14 +127,12 @@ static sjs_value entry_part(const sjs_array *entries, uint32_t index, uint32_t p
     return entries->items[index];
 }
 
-/* The value an iterator yields at `index`: from its items, a set's member,
- * an array's element or index, or its map's key or value (an entry's is
- * written by entries_of's phases). */
+/* The value an iterator yields at `index` (an entry's is written by
+ * entries_of's phases). */
 static sjs_value iterated(sjs_value v, uint32_t index) {
-    const sjs_iterator *it = SJS_AS_ITERATOR(v);
-    index += it->position; /* MUTATION */
-    if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->items[index];
-    return entry_part(SJS_AS_ARRAY(it->source), index, it->h.flags == SJS_ITERATE_VALUES ? 1u : 0u);
+    sjs_iterated item;
+    sjs_iterator_at(v, index, &item);
+    return item.value;
 }
 
 static void say_number(sjs_writer *w, double d) {
@@ -203,13 +201,12 @@ static sjs_result next(sjs_writer *w, bool *more) {
         case SJS_REGEXP: {
             /* As its literal: /source/flags, the flags in their order. */
             const sjs_allocator *a = &w->context->counting;
-            char flags[8];
-            sjs_str source = sjs_regex_source(v.as.heap);
-            uint32_t n = sjs_regex_flag_text(sjs_regex_flag_set(v.as.heap), flags);
+            sjs_regexp_text re;
+            sjs_regexp_read(v, &re);
             sjs_result r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"/", 1 });
-            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)source.ptr, source.length });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)re.source.ptr, re.source.length });
             if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"/", 1 });
-            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)flags, n });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)re.flags, re.flag_count });
             if (r != SJS_OK) return r;
             w->pending = w->literal.ptr;
             w->pending_length = w->literal.length;
@@ -246,7 +243,7 @@ static sjs_result next(sjs_writer *w, bool *more) {
         w->stack.length -= (uint32_t)sizeof(wframe);
         return SJS_OK;
     }
-    uint32_t count = v.kind == SJS_ITERATOR ? sjs_iterator_count(SJS_AS_ITERATOR(v)) : sjs_length(v);
+    uint32_t count = v.kind == SJS_ITERATOR ? sjs_iterator_left(SJS_AS_ITERATOR(v)) : sjs_length(v);
     switch (f->phase) {
     case W_EXTRA:
         say(w, "],");

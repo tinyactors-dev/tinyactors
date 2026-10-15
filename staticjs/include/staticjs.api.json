@@ -1227,6 +1227,98 @@
         }
       }
     },
+    "sjs_iterated": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "entry",
+          "type": "_Bool"
+        },
+        {
+          "name": "key",
+          "type": "sjs_value"
+        },
+        {
+          "name": "value",
+          "type": "sjs_value"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "entry": 0,
+            "key": 8,
+            "value": 24
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "entry": 0,
+            "key": 8,
+            "value": 24
+          }
+        },
+        "wasm32": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "entry": 0,
+            "key": 8,
+            "value": 24
+          }
+        }
+      }
+    },
+    "sjs_regexp_text": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "source",
+          "type": "sjs_str"
+        },
+        {
+          "name": "flags",
+          "type": "char[8]"
+        },
+        {
+          "name": "flag_count",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "source": 0,
+            "flags": 16,
+            "flag_count": 24
+          }
+        },
+        "aarch64": {
+          "size": 32,
+          "align": 8,
+          "offsets": {
+            "source": 0,
+            "flags": 16,
+            "flag_count": 24
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "source": 0,
+            "flags": 8,
+            "flag_count": 16
+          }
+        }
+      }
+    },
     "sjs_native_call": {
       "kind": "struct",
       "fields": [
@@ -2533,6 +2625,40 @@
       "implemented": true
     },
     {
+      "name": "sjs_iterator_at",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "iterator",
+          "type": "sjs_value"
+        },
+        {
+          "name": "index",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "sjs_iterated *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_iterator_count",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "iterator",
+          "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
       "name": "sjs_length",
       "returns": "uint32_t",
       "params": [
@@ -2878,6 +3004,23 @@
         {
           "name": "program",
           "type": "sjs_program *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_regexp_read",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "regexp",
+          "type": "sjs_value"
+        },
+        {
+          "name": "out",
+          "type": "sjs_regexp_text *"
         }
       ],
       "public": true,

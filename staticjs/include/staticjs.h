@@ -318,6 +318,36 @@ SJS_API sjs_result sjs_map_get(sjs_value map, sjs_value key, sjs_value *out);
 SJS_API sjs_result sjs_map_at(sjs_value map, uint32_t index, sjs_map_entry *out);
 
 /*
+ * Iterators: what an iterator has left to yield, read without taking it, so
+ * the iterator is the same afterwards. An entries iterator of an array, a map
+ * or a set yields [key, value] pairs; its items give the key and the value
+ * without making the pair. sjs_length gives 0 for an iterator.
+ */
+typedef struct {
+    bool entry;        /* an entries iterator's: `key` and `value` are the pair's */
+    sjs_value key;     /* the pair's key, or undefined */
+    sjs_value value;   /* what it yields, or the pair's value */
+} sjs_iterated;
+
+/* The values an iterator has left to yield; 0 for any other value. */
+SJS_API uint32_t sjs_iterator_count(sjs_value iterator);
+/* The item at `index`, borrowed: valid while the iterator is.
+ * SJS_ERR_NOT_FOUND past the end, SJS_ERR_INVALID for a value that is not
+ * an iterator. */
+SJS_API sjs_result sjs_iterator_at(sjs_value iterator, uint32_t index, sjs_iterated *out);
+
+/* A regular expression (SJS_REGEXP), as RegExp.prototype.source and
+ * RegExp.prototype.flags give it. */
+typedef struct {
+    sjs_str source;        /* borrowed: valid while the value is */
+    char flags[8];         /* in the order "dgimsuvy", as many as flag_count */
+    uint32_t flag_count;
+} sjs_regexp_text;
+
+/* SJS_ERR_INVALID for a value that is not a regular expression. */
+SJS_API sjs_result sjs_regexp_read(sjs_value regexp, sjs_regexp_text *out);
+
+/*
  * Functions the embedder provides, such as a lookup in its tables. A native is called
  * synchronously, must finish quickly and must not change anything a program
  * can see: it is the one way into a program from outside, and the library

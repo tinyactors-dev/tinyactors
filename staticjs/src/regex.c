@@ -1984,6 +1984,13 @@ sjs_str sjs_regex_source(const sjs_heap *regexp) {
     return (sjs_str){ re->text, re->source_length };
 }
 
+sjs_result sjs_regexp_read(sjs_value regexp, sjs_regexp_text *out) {
+    if (regexp.kind != SJS_REGEXP || regexp.internal != 0 || out == NULL) return SJS_ERR_INVALID;
+    out->source = sjs_regex_source(regexp.as.heap);
+    out->flag_count = sjs_regex_flag_text(sjs_regex_flag_set(regexp.as.heap), out->flags);
+    return SJS_OK;
+}
+
 uint32_t sjs_regex_flag_set(const sjs_heap *regexp) {
     return ((const sjs_regexp *)(const void *)regexp)->flags;
 }

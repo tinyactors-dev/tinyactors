@@ -662,7 +662,7 @@ typedef struct {
 } sjs_iterator_spec;
 SJS_PRIVATE sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_value *out);
 /* How many values an iterator yields (MUTATION: after its position). */
-SJS_PRIVATE uint32_t sjs_iterator_count(const sjs_iterator *it);
+SJS_PRIVATE uint32_t sjs_iterator_left(const sjs_iterator *it);
 
 /* A map with room for `entries` entries. */
 SJS_PRIVATE sjs_result sjs_map_make(sjs_context *context, uint32_t entries, sjs_array **out);
@@ -6577,7 +6577,7 @@ static sjs_result iterator_range(sjs_vm *vm, item_range range, sjs_array **out) 
         return sjs_vm_fault(vm, "an iterator yields its values once: staticjs reads one only where nothing else holds it");
     }
     const sjs_iterator *it = SJS_AS_ITERATOR(range.iterator);
-    uint32_t n = sjs_iterator_count(it);
+    uint32_t n = sjs_iterator_left(it);
     uint32_t to = range.to < n ? range.to : n;
     uint32_t from = range.from < to ? range.from : to;
     /* MUTATION: past what next() took. Restore: without these lines. */
@@ -7307,7 +7307,7 @@ __attribute__((noinline)) static sjs_result iterator_step(sjs_vm *vm, sjs_builti
         return sjs_vm_fault(vm, "next and return change an iterator: staticjs calls them only on a variable of the function that holds it alone, or on an iterator nothing else holds");
     }
     if (closes) {
-        if (owned) it->position += sjs_iterator_count(it);
+        if (owned) it->position += sjs_iterator_left(it);
         return iterator_result_make(vm, call, (iterator_result){ sjs_undefined(), true });
     }
     sjs_array *a;
@@ -25743,6 +25743,13 @@ SJS_PRIVATE sjs_str sjs_regex_source(const sjs_heap *regexp) {
     return (sjs_str){ re->text, re->source_length };
 }
 
+sjs_result sjs_regexp_read(sjs_value regexp, sjs_regexp_text *out) {
+    if (regexp.kind != SJS_REGEXP || regexp.internal != 0 || out == NULL) return SJS_ERR_INVALID;
+    out->source = sjs_regex_source(regexp.as.heap);
+    out->flag_count = sjs_regex_flag_text(sjs_regex_flag_set(regexp.as.heap), out->flags);
+    return SJS_OK;
+}
+
 SJS_PRIVATE uint32_t sjs_regex_flag_set(const sjs_heap *regexp) {
     return ((const sjs_regexp *)(const void *)regexp)->flags;
 }
@@ -32656,7 +32663,7 @@ SJS_PRIVATE sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec
     return SJS_OK;
 }
 
-SJS_PRIVATE uint32_t sjs_iterator_count(const sjs_iterator *it) {
+SJS_PRIVATE uint32_t sjs_iterator_left(const sjs_iterator *it) {
     uint32_t n;
     if (it->items.kind == SJS_ARRAY) {
         n = SJS_AS_ARRAY(it->items)->length;
@@ -32665,6 +32672,32 @@ SJS_PRIVATE uint32_t sjs_iterator_count(const sjs_iterator *it) {
         n = it->source.kind == SJS_MAP ? source->length / 2u : source->length;
     }
     return n - it->position; /* MUTATION: what next() took is gone. Restore: n. */
+}
+
+uint32_t sjs_iterator_count(sjs_value iterator) {
+    if (iterator.kind != SJS_ITERATOR || iterator.internal != 0) return 0;
+    return sjs_iterator_left(SJS_AS_ITERATOR(iterator));
+}
+
+sjs_result sjs_iterator_at(sjs_value iterator, uint32_t index, sjs_iterated *out) {
+    if (iterator.kind != SJS_ITERATOR || iterator.internal != 0 || out == NULL) return SJS_ERR_INVALID;
+    const sjs_iterator *it = SJS_AS_ITERATOR(iterator);
+    if (index >= sjs_iterator_left(it)) return SJS_ERR_NOT_FOUND;
+    index += it->position; /* MUTATION: past what next() took */
+    *out = (sjs_iterated){ false, sjs_undefined(), sjs_undefined() };
+    if (it->items.kind == SJS_ARRAY) {
+        out->value = SJS_AS_ARRAY(it->items)->items[index];
+        return SJS_OK;
+    }
+    const sjs_array *source = SJS_AS_ARRAY(it->source);
+    /* A map's entry is two items, key then value; a set's member is its own
+     * key; an array's key is its index. */
+    sjs_value key = it->source.kind == SJS_MAP ? source->items[2u * index]
+                  : it->source.kind == SJS_SET ? source->items[index] : sjs_number((double)index);
+    sjs_value value = it->source.kind == SJS_MAP ? source->items[2u * index + 1u] : source->items[index];
+    if (it->h.flags == SJS_ITERATE_ENTRIES) *out = (sjs_iterated){ true, key, value };
+    else out->value = it->h.flags == SJS_ITERATE_KEYS ? key : value;
+    return SJS_OK;
 }
 
 /* What an array, a set or a map holds beside its items: a set's or a map's
@@ -35469,7 +35502,7 @@ __attribute__((noinline)) static sjs_result spread_other(sjs_vm *vm, sjs_value *
 /* How many arguments a spread of a map or an iterator gives, or its fault. */
 __attribute__((noinline)) static bool spread_size(sjs_vm *vm, sjs_value source, uint64_t *total) {
     if (source.kind == SJS_ITERATOR) {
-        *total += sjs_iterator_count(SJS_AS_ITERATOR(source));
+        *total += sjs_iterator_left(SJS_AS_ITERATOR(source));
         return true;
     }
     if (source.kind != SJS_MAP) {
@@ -35811,14 +35844,12 @@ static sjs_value entry_part(const sjs_array *entries, uint32_t index, uint32_t p
     return entries->items[index];
 }
 
-/* The value an iterator yields at `index`: from its items, a set's member,
- * an array's element or index, or its map's key or value (an entry's is
- * written by entries_of's phases). */
+/* The value an iterator yields at `index` (an entry's is written by
+ * entries_of's phases). */
 static sjs_value iterated(sjs_value v, uint32_t index) {
-    const sjs_iterator *it = SJS_AS_ITERATOR(v);
-    index += it->position; /* MUTATION */
-    if (it->items.kind == SJS_ARRAY) return SJS_AS_ARRAY(it->items)->items[index];
-    return entry_part(SJS_AS_ARRAY(it->source), index, it->h.flags == SJS_ITERATE_VALUES ? 1u : 0u);
+    sjs_iterated item;
+    sjs_iterator_at(v, index, &item);
+    return item.value;
 }
 
 static void say_number(sjs_writer *w, double d) {
@@ -35887,13 +35918,12 @@ static sjs_result next(sjs_writer *w, bool *more) {
         case SJS_REGEXP: {
             /* As its literal: /source/flags, the flags in their order. */
             const sjs_allocator *a = &w->context->counting;
-            char flags[8];
-            sjs_str source = sjs_regex_source(v.as.heap);
-            uint32_t n = sjs_regex_flag_text(sjs_regex_flag_set(v.as.heap), flags);
+            sjs_regexp_text re;
+            sjs_regexp_read(v, &re);
             sjs_result r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"/", 1 });
-            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)source.ptr, source.length });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)re.source.ptr, re.source.length });
             if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)"/", 1 });
-            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)flags, n });
+            if (r == SJS_OK) r = sjs_buf_append(a, &w->literal, (sjs_bytes){ (const uint8_t *)re.flags, re.flag_count });
             if (r != SJS_OK) return r;
             w->pending = w->literal.ptr;
             w->pending_length = w->literal.length;
@@ -35930,7 +35960,7 @@ static sjs_result next(sjs_writer *w, bool *more) {
         w->stack.length -= (uint32_t)sizeof(wframe);
         return SJS_OK;
     }
-    uint32_t count = v.kind == SJS_ITERATOR ? sjs_iterator_count(SJS_AS_ITERATOR(v)) : sjs_length(v);
+    uint32_t count = v.kind == SJS_ITERATOR ? sjs_iterator_left(SJS_AS_ITERATOR(v)) : sjs_length(v);
     switch (f->phase) {
     case W_EXTRA:
         say(w, "],");

@@ -2781,7 +2781,7 @@ __attribute__((noinline)) static sjs_result spread_other(sjs_vm *vm, sjs_value *
 /* How many arguments a spread of a map or an iterator gives, or its fault. */
 __attribute__((noinline)) static bool spread_size(sjs_vm *vm, sjs_value source, uint64_t *total) {
     if (source.kind == SJS_ITERATOR) {
-        *total += sjs_iterator_count(SJS_AS_ITERATOR(source));
+        *total += sjs_iterator_left(SJS_AS_ITERATOR(source));
         return true;
     }
     if (source.kind != SJS_MAP) {

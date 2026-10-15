@@ -251,7 +251,7 @@ reference:
 | You get a value from | It is |
 |---|---|
 | `sjs_vm_take_result`, `sjs_string_new`, `sjs_bigint_new`, `sjs_array_new`, `sjs_object_new`, `sjs_set_new`, `sjs_map_new`, `sjs_function_native` | yours: `sjs_release` it |
-| `sjs_array_at`, `sjs_set_at`, `sjs_object_at`, `sjs_object_get`, `sjs_map_at`, `sjs_map_get` | borrowed, valid while its container is: `sjs_retain` it to keep it longer |
+| `sjs_array_at`, `sjs_set_at`, `sjs_object_at`, `sjs_object_get`, `sjs_map_at`, `sjs_map_get`, `sjs_iterator_at` | borrowed, valid while its container is: `sjs_retain` it to keep it longer |
 | a native's `call->arguments` | borrowed for the call |
 
 | You give a value to | It |
@@ -290,6 +290,24 @@ read them. `sjs_string_text` gives a string's UTF-8. `sjs_bigint_text`
 writes a BigInt's decimal digits into an `sjs_buffer` of at least
 `sjs_bigint_text_bound` bytes. A value a program froze or sealed refuses
 to be added to (`SJS_ERR_INVALID`), as JavaScript would refuse it.
+
+An iterator (`map.keys()`, `xs.values().filter(f)`) is read without taking
+anything from it: `sjs_iterator_count` gives what it has left to yield, and
+`sjs_iterator_at` the item at an index. An entries iterator's item gives its
+key and its value without making the `[key, value]` pair:
+
+```c
+for (uint32_t i = 0; i < sjs_iterator_count(result); i++) {
+    sjs_iterated item;
+    sjs_iterator_at(result, i, &item);   /* borrowed, valid while the iterator is */
+    if (item.entry) use_entry(item.key, item.value);
+    else use(item.value);
+}
+```
+
+`sjs_regexp_read` gives a regular expression's source and flags, as
+`RegExp.prototype.source` and `.flags` give them: `/a+/gi` is `a+` and
+`gi`.
 
 ## Writing values as text
 

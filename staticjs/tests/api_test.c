@@ -542,6 +542,82 @@ static sjs_value result_of(sjs_context *context, sjs_goal goal, const char *sour
 
 /* An array or an object a program froze or sealed, and a module's
  * namespace, which is sealed, take nothing from the embedder either. */
+/* An iterator's items read without taking them: values, keys, entries as
+ * key and value, what a helper gave, and what next() left. */
+static void test_iterators_read(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    struct { const char *source; const char *want; } cases[] = {
+        { "[1, 2, 3].values()", "1 2 3" },
+        { "[\"a\", \"b\"].keys()", "0 1" },
+        { "[\"a\", \"b\"].entries()", "0=\"a\" 1=\"b\"" },
+        { "new Map([[\"k\", 1], [\"j\", 2]]).keys()", "\"k\" \"j\"" },
+        { "new Map([[\"k\", 1], [\"j\", 2]]).values()", "1 2" },
+        { "new Map([[\"k\", 1]]).entries()", "\"k\"=1" },
+        { "new Set([\"x\"]).entries()", "\"x\"=\"x\"" },
+        { "[1, 2, 3].values().map((x) => x * 10)", "10 20 30" },
+        { "[1, 2, 3].values().filter((x) => x > 1).map((x) => [x, x])", "[2,2] [3,3]" },
+        { "(() => { const it = [1, 2, 3].values(); it.next(); return it; })()", "2 3" },
+        { "[].values()", "" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        sjs_value it = result_of(context, SJS_GOAL_EXPRESSION, cases[i].source);
+        CHECK(it.kind == SJS_ITERATOR);
+        CHECK(sjs_length(it) == 0);
+        char got[256] = "", text[64];
+        uint32_t n = sjs_iterator_count(it);
+        for (uint32_t k = 0; k < n; k++) {
+            sjs_iterated item;
+            CHECK(sjs_iterator_at(it, k, &item) == SJS_OK);
+            if (k > 0) strcat(got, " ");
+            if (item.entry) {
+                write_text(context, item.key, text, sizeof text);
+                strcat(got, text);
+                strcat(got, "=");
+            } else {
+                CHECK(item.key.kind == SJS_UNDEFINED);
+            }
+            write_text(context, item.value, text, sizeof text);
+            strcat(got, text);
+        }
+        if (strcmp(got, cases[i].want) != 0) fprintf(stderr, "%s: got %s\n", cases[i].source, got);
+        CHECK(strcmp(got, cases[i].want) == 0);
+        sjs_iterated item;
+        CHECK(sjs_iterator_at(it, n, &item) == SJS_ERR_NOT_FOUND);
+        CHECK(sjs_iterator_count(it) == n);   /* reading took nothing */
+        sjs_release(context, it);
+    }
+    sjs_iterated item;
+    CHECK(sjs_iterator_count(sjs_number(1)) == 0);
+    CHECK(sjs_iterator_at(sjs_number(1), 0, &item) == SJS_ERR_INVALID);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* A regular expression's source and flags, as RegExp.prototype gives them. */
+static void test_regexp_read(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    struct { const char *source; const char *body, *flags; } cases[] = {
+        { "/a+(b)/", "a+(b)", "" },
+        { "/x/yigsmd", "x", "dgimsy" },
+        { "/a\\/b/u", "a\\/b", "u" },
+        { "/[é]/u", "[é]", "u" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        sjs_value re = result_of(context, SJS_GOAL_EXPRESSION, cases[i].source);
+        sjs_regexp_text text;
+        CHECK(sjs_regexp_read(re, &text) == SJS_OK);
+        CHECK(text.source.length == strlen(cases[i].body) && memcmp(text.source.ptr, cases[i].body, text.source.length) == 0);
+        CHECK(text.flag_count == strlen(cases[i].flags) && memcmp(text.flags, cases[i].flags, text.flag_count) == 0);
+        sjs_release(context, re);
+    }
+    sjs_regexp_text text;
+    CHECK(sjs_regexp_read(sjs_null(), &text) == SJS_ERR_INVALID);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 static void test_frozen_values(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
@@ -3578,6 +3654,8 @@ int main(int argc, char **argv) {
     test_natives_and_globals();
     test_closure_globals();
     test_compile_subject();
+    test_iterators_read();
+    test_regexp_read();
     test_unbound_where_it_never_runs();
     test_modules();
     test_frozen_values();

@@ -494,7 +494,7 @@ typedef struct {
 } sjs_iterator_spec;
 sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_value *out);
 /* How many values an iterator yields (MUTATION: after its position). */
-uint32_t sjs_iterator_count(const sjs_iterator *it);
+uint32_t sjs_iterator_left(const sjs_iterator *it);
 
 /* A map with room for `entries` entries. */
 sjs_result sjs_map_make(sjs_context *context, uint32_t entries, sjs_array **out);

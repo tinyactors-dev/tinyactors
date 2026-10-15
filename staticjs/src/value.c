@@ -1166,7 +1166,7 @@ sjs_result sjs_iterator_make(sjs_context *context, sjs_iterator_spec spec, sjs_v
     return SJS_OK;
 }
 
-uint32_t sjs_iterator_count(const sjs_iterator *it) {
+uint32_t sjs_iterator_left(const sjs_iterator *it) {
     uint32_t n;
     if (it->items.kind == SJS_ARRAY) {
         n = SJS_AS_ARRAY(it->items)->length;
@@ -1175,6 +1175,32 @@ uint32_t sjs_iterator_count(const sjs_iterator *it) {
         n = it->source.kind == SJS_MAP ? source->length / 2u : source->length;
     }
     return n - it->position; /* MUTATION: what next() took is gone. Restore: n. */
+}
+
+uint32_t sjs_iterator_count(sjs_value iterator) {
+    if (iterator.kind != SJS_ITERATOR || iterator.internal != 0) return 0;
+    return sjs_iterator_left(SJS_AS_ITERATOR(iterator));
+}
+
+sjs_result sjs_iterator_at(sjs_value iterator, uint32_t index, sjs_iterated *out) {
+    if (iterator.kind != SJS_ITERATOR || iterator.internal != 0 || out == NULL) return SJS_ERR_INVALID;
+    const sjs_iterator *it = SJS_AS_ITERATOR(iterator);
+    if (index >= sjs_iterator_left(it)) return SJS_ERR_NOT_FOUND;
+    index += it->position; /* MUTATION: past what next() took */
+    *out = (sjs_iterated){ false, sjs_undefined(), sjs_undefined() };
+    if (it->items.kind == SJS_ARRAY) {
+        out->value = SJS_AS_ARRAY(it->items)->items[index];
+        return SJS_OK;
+    }
+    const sjs_array *source = SJS_AS_ARRAY(it->source);
+    /* A map's entry is two items, key then value; a set's member is its own
+     * key; an array's key is its index. */
+    sjs_value key = it->source.kind == SJS_MAP ? source->items[2u * index]
+                  : it->source.kind == SJS_SET ? source->items[index] : sjs_number((double)index);
+    sjs_value value = it->source.kind == SJS_MAP ? source->items[2u * index + 1u] : source->items[index];
+    if (it->h.flags == SJS_ITERATE_ENTRIES) *out = (sjs_iterated){ true, key, value };
+    else out->value = it->h.flags == SJS_ITERATE_KEYS ? key : value;
+    return SJS_OK;
 }
 
 /* What an array, a set or a map holds beside its items: a set's or a map's
