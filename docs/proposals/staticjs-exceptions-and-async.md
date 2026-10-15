@@ -418,19 +418,67 @@ only by fuel.
 
 ## Costs
 
-- **Per instruction:** nothing new on the dispatch path. Handlers are
-  found only on a throw; `AWAIT`, `ASYNC_RETURN` and `THROW` are opcodes
-  of their own in `execute_other`.
-- **Per call:** one more flag in `fn->flags`, read where `REST` is read.
-- **Per frame:** no growth (above).
-- **Per evaluator:** the queues and the table, empty until a program first
-  makes a promise.
-- **Per async step:** a copy of the frame's slots out and back per
-  `await`, and a job; a unit of fuel each, plus a unit per frame unwound
-  on a throw.
-- **Benchmarks:** `vm` and `eval.guard` with `bench-compare` for the
-  closure-call change; a new `async.*` group (a chain of `then`s, an
-  `await` per element over `Promise.all`) checked against Node.
+Three places, measured where this machine could measure them (a
+4-core cloud container, system clang 18 at the release flags, not the
+pinned toolchain; the spike's sources are not in the repository).
+
+**Programs that use neither feature: no measurable cost.**
+
+- Per instruction: nothing new on the dispatch path. Handlers are found
+  only on a throw; `AWAIT`, `ASYNC_RETURN` and `THROW` are opcodes of
+  their own in `execute_other`. Frames stay 112 bytes, and a value stays
+  16 bytes: a promise handle fits in `boolean` and `as`.
+- A promise's kind sorts before `SJS_STRING`, so `sjs_is_heap` stays one
+  comparison, and `sjs_ref` and `sjs_release` test nothing new.
+- Per call: a spike added the checks this design puts on the paths every
+  program runs: the async flag in `enter_closure` and in
+  `sjs_vm_call_back` (per element, the pessimistic place), and a lineage
+  test in `closure_running`. Results and fuel are the same. Counted with
+  callgrind on two programs, the instructions changed by +0.30% (a
+  200,000-element map, filter and reduce: about 2 instructions per
+  callback) and by -2.0% (100,000 rows of four small calls), which is
+  the size of a change in code layout. Timing could not tell: the
+  baseline against itself moved by up to 40% on this machine. The
+  repository's `bench-compare --quick` on the maintainer's machine
+  (`vm`, `eval.guard`, `eval.array`) settles it. The check in
+  `sjs_vm_call_back` can also run once per loop rather than per element,
+  as a loop's callback does not change.
+
+**Functions with a `try`: lost moves can be quadratic.** This is the real
+cost. A read that a handler, or code after the `try`, may read again does
+not move (the move table above), so a reduce whose callback says
+`try { return acc.concat([f(x)]); } catch { return acc; }` copies its
+accumulator on every element. Today's compiler shows what that costs:
+with a later read of `acc` in place of the `catch`, a reduce over 20,000
+elements uses 200,410,015 units of fuel and 0.76 s, against 260,015 units
+and 0.008 s when the read moves (770 times the fuel; at 5,000 elements,
+190 times). JavaScript's `concat` copies too, so this is V8's own cost,
+but it is a cliff against the same code without `try`.
+
+The fix is to **take late**: inside a `try` with a handler, such a read
+pushes a reference to its slot, as a mutation's `RECEIVER` does, and
+the value is taken where it is consumed, after everything between them
+has run. A throw before then leaves the slot whole. It moves again when
+the consumer is a built-in that cannot throw once it has the value
+(`concat`, `+`, `with`, a spread into a literal, a mutating method's
+arguments); a closure that might change the value and then throw still
+gets a copy, and its change faults ("held elsewhere"). It costs one
+instruction per such read, and only inside a `try`. **Untraced:** which
+consumers qualify, and how the reference crosses `CALL`'s argument
+layout.
+
+**Async code: an allocation per `await`.** Each suspension allocates an
+activation (the frame and its slots), and each promise and job a record.
+Free lists in the evaluator would make that no allocation after warm-up.
+**Unmeasured**: the `async.*` group below, against Node, decides whether
+that is needed.
+
+- Fuel: a unit per job, per `await`'s copy out and back, and per frame
+  unwound on a throw.
+- Benchmarks to add: an `async.*` group (a chain of `then`s, an `await`
+  per element over `Promise.all`) and a `try.*` group (a reduce with
+  `try` in its callback, with and without the late take), checked
+  against Node.
 
 ## Order of work
 
