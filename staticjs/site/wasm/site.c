@@ -47,6 +47,9 @@ typedef struct {
     site_bytes numbers;  /* one double per event */
     site_bytes text;
     site_bytes output;
+    site_bytes tree;      /* records of SJS_SITE_NODE_WORDS words */
+    site_bytes tree_text;
+    bool tree_truncated;
     uint32_t chunk;      /* the chunk being pushed, for the record */
     uint32_t chunks;
     uint32_t pieces;
@@ -281,6 +284,152 @@ SJS_SITE int32_t sjs_site_write(sjs_site *s, uint32_t piece) {
     sjs_writer_destroy(writer);
     return r;
 }
+
+/*
+ * The result as a host reads it through the value API, for the pipeline
+ * explorer: one record of SJS_SITE_NODE_WORDS words per value, depth first.
+ *   kind, depth, count (elements, properties, or entries), via, index,
+ *   key offset, key length, text offset, text length
+ * `via` is the call that reached the value: the result itself
+ * (sjs_vm_take_result), sjs_array_at, sjs_object_at (its key is the
+ * property's name), sjs_set_at, or sjs_map_at (an entry's key, then its
+ * value). The text is a string's bytes (sjs_string_text), a BigInt's digits
+ * (sjs_bigint_text), and for the other kinds that are not containers what
+ * the writer writes for them. Offsets are into the tree's text arena.
+ */
+enum {
+    NODE_KIND, NODE_DEPTH, NODE_COUNT, NODE_VIA, NODE_INDEX,
+    NODE_KEY_OFFSET, NODE_KEY_LENGTH, NODE_TEXT_OFFSET, NODE_TEXT_LENGTH,
+    SJS_SITE_NODE_WORDS
+};
+enum { VIA_RESULT, VIA_ARRAY_AT, VIA_OBJECT_AT, VIA_SET_AT, VIA_MAP_KEY, VIA_MAP_VALUE };
+#define TREE_DEPTH 32u
+
+typedef struct {
+    uint32_t depth;
+    uint32_t via;
+    uint32_t index;
+    sjs_str key;
+} site_place;
+
+typedef struct {
+    sjs_value value;
+    uint32_t next;
+    uint32_t count;
+} tree_frame;
+
+static bool is_container(sjs_value v) {
+    return v.kind == SJS_ARRAY || v.kind == SJS_OBJECT || v.kind == SJS_SET || v.kind == SJS_MAP;
+}
+
+/* Children a container's walk visits: a map's entries count twice. */
+static uint32_t children(sjs_value v) { return v.kind == SJS_MAP ? 2u * sjs_map_size(v) : sjs_length(v); }
+
+/* The writer's text for `value`, appended to `to`. */
+static sjs_result append_written(sjs_site *s, sjs_value value, site_bytes *to) {
+    sjs_writer *writer;
+    sjs_writer_config config = { s->context, value, SJS_STR("<function>") };
+    sjs_result r = sjs_writer_init(&writer, &config);
+    if (r != SJS_OK) return r;
+    do {
+        if (!reserve(to, 256u)) {
+            r = SJS_ERR_NOMEM;
+            break;
+        }
+        sjs_buffer buffer = { to->ptr + to->length, 256u, 0 };
+        r = sjs_writer_write(writer, &buffer);
+        to->length += buffer.length;
+    } while (r == SJS_NEED_SPACE);
+    sjs_writer_destroy(writer);
+    return r;
+}
+
+static sjs_result add_node(sjs_site *s, sjs_value value, const site_place *place) {
+    uint32_t words[SJS_SITE_NODE_WORDS] = { 0 };
+    words[NODE_KIND] = value.kind;
+    words[NODE_DEPTH] = place->depth;
+    words[NODE_COUNT] = value.kind == SJS_MAP ? sjs_map_size(value) : sjs_length(value);
+    words[NODE_VIA] = place->via;
+    words[NODE_INDEX] = place->index;
+    words[NODE_KEY_OFFSET] = s->tree_text.length;
+    words[NODE_KEY_LENGTH] = place->key.length;
+    if (!append(&s->tree_text, place->key.ptr, place->key.length)) return SJS_ERR_NOMEM;
+    words[NODE_TEXT_OFFSET] = s->tree_text.length;
+    sjs_result r = SJS_OK;
+    if (value.kind == SJS_STRING) {
+        sjs_str text = sjs_string_text(value);
+        if (!append(&s->tree_text, text.ptr, text.length)) return SJS_ERR_NOMEM;
+    } else if (value.kind == SJS_BIGINT) {
+        uint32_t bound = sjs_bigint_text_bound(value);
+        if (!reserve(&s->tree_text, bound)) return SJS_ERR_NOMEM;
+        sjs_buffer buffer = { s->tree_text.ptr + s->tree_text.length, bound, 0 };
+        r = sjs_bigint_text(s->context, value, &buffer);
+        s->tree_text.length += buffer.length;
+    } else if (!is_container(value)) {
+        r = append_written(s, value, &s->tree_text);
+    }
+    if (r != SJS_OK) return r;
+    words[NODE_TEXT_LENGTH] = s->tree_text.length - words[NODE_TEXT_OFFSET];
+    return append(&s->tree, words, sizeof words) ? SJS_OK : SJS_ERR_NOMEM;
+}
+
+/* Read the result into records, at most `max` of them. */
+SJS_SITE int32_t sjs_site_read(sjs_site *s, uint32_t max) {
+    s->tree.length = 0;
+    s->tree_text.length = 0;
+    s->tree_truncated = false;
+    if (!s->has_result || max == 0u) return SJS_ERR_INVALID;
+    sjs_result r = add_node(s, s->result, &(site_place){ 0, VIA_RESULT, 0, { NULL, 0 } });
+    uint32_t nodes = 1;
+    tree_frame stack[TREE_DEPTH];
+    uint32_t depth = 0;
+    if (is_container(s->result)) stack[depth++] = (tree_frame){ s->result, 0, children(s->result) };
+    while (r == SJS_OK && depth > 0) {
+        tree_frame *frame = &stack[depth - 1u];
+        if (frame->next == frame->count) {
+            depth--;
+            continue;
+        }
+        if (nodes == max) {
+            s->tree_truncated = true;
+            break;
+        }
+        uint32_t i = frame->next++;
+        site_place place = { depth, VIA_ARRAY_AT, i, { NULL, 0 } };
+        sjs_value child;
+        if (frame->value.kind == SJS_ARRAY) {
+            child = sjs_array_at(frame->value, i);
+        } else if (frame->value.kind == SJS_SET) {
+            child = sjs_set_at(frame->value, i);
+            place.via = VIA_SET_AT;
+        } else if (frame->value.kind == SJS_OBJECT) {
+            sjs_property property;
+            r = sjs_object_at(frame->value, i, &property);
+            child = property.value;
+            place.via = VIA_OBJECT_AT;
+            place.key = property.key;
+        } else {
+            sjs_map_entry entry;
+            r = sjs_map_at(frame->value, i / 2u, &entry);
+            child = i % 2u == 0u ? entry.key : entry.value;
+            place.via = i % 2u == 0u ? VIA_MAP_KEY : VIA_MAP_VALUE;
+            place.index = i / 2u;
+        }
+        if (r != SJS_OK) break;
+        r = add_node(s, child, &place);
+        nodes++;
+        if (r == SJS_OK && is_container(child) && children(child) > 0u) {
+            if (depth == TREE_DEPTH) s->tree_truncated = true;
+            else stack[depth++] = (tree_frame){ child, 0, children(child) };
+        }
+    }
+    return r;
+}
+
+SJS_SITE uint32_t sjs_site_node_count(const sjs_site *s) { return s->tree.length / (SJS_SITE_NODE_WORDS * 4u); }
+SJS_SITE const uint8_t *sjs_site_nodes(const sjs_site *s) { return s->tree.ptr; }
+SJS_SITE const uint8_t *sjs_site_node_text(const sjs_site *s) { return s->tree_text.ptr; }
+SJS_SITE uint32_t sjs_site_nodes_truncated(const sjs_site *s) { return s->tree_truncated ? 1u : 0u; }
 
 SJS_SITE const uint8_t *sjs_site_output(const sjs_site *s) { return s->output.ptr; }
 SJS_SITE uint32_t sjs_site_output_length(const sjs_site *s) { return s->output.length; }

@@ -102,13 +102,13 @@ staticjs is basically CEL with JavaScript syntax and user functions.
 
 ## How it works
 
-staticjs has four stages: the parser, the compiler, the evaluator and the writer. A caller pushes into each one: bytes into the parser, which sends events to a sink, operands before their operator; the compiler is that sink and makes bytecode as the events arrive; fuel into the evaluator; buffer space into the writer. None blocks or calls back for more input, so a host can stream source in chunks, and there is no recursion anywhere in the C code.
+staticjs has four stages: the parser, the compiler, the evaluator and the writer. A caller pushes into each one: bytes into the parser, which sends events to a sink, operands before their operator; the compiler is that sink and makes bytecode as the events arrive; fuel into the evaluator; buffer space into the writer. None blocks or calls back for more input, so a host can stream source in chunks, and there is no recursion anywhere in the C code. The host takes the evaluator's value and reads it in place, kind by kind and element by element, or has the writer write it as JavaScript source.
 
 The compiler also tags functions whose shape a built-in can run in C, such as `x => x.key` or `(a, b) => a.k - b.k`. A tagged function saves fuel and never changes a value. A host can pause an evaluation and read its frames, for example the program, map at element 2 of 4, and the callback, each with a position.
 
-The [pipeline explorer](/explore/pipeline) runs staticjs.wasm in the browser and shows the parser's events, the compiler's functions and shapes with the fuel used with and without them, the evaluator one unit of fuel at a time with its frames, and the writer's output in 16-byte pieces.
+The [pipeline explorer](/explore/pipeline) runs staticjs.wasm in the browser and shows the parser's events, the compiler's functions and shapes with the fuel used with and without them, the evaluator one unit of fuel at a time with its frames, and the result read through the value API and written in 16-byte pieces.
 
-The host pushes bytes into the parser, the parser streams events into the compiler, and the compiler finishes a program, which the evaluator reads without copying. The host pushes fuel into the evaluator, the evaluator hands its value to the writer, and the writer streams text back to the host in pieces. All of it lives in memory from the host's allocator.
+The host pushes bytes into the parser, the parser streams events into the compiler, and the compiler finishes a program, which the evaluator reads without copying. The host pushes fuel into the evaluator and takes its value, the result. The host reads the result in place through the value API, or hands it to the writer, which streams text back to the host in pieces. All of it lives in memory from the host's allocator.
 
 ### Frames of an evaluation
 

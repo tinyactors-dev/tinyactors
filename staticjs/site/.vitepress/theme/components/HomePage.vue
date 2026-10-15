@@ -60,7 +60,8 @@ const pipeline: { blocks: Block[]; zones: Zone[]; wires: Wire[] } = {
   zones: [{ x: 200, y: 16, w: 794, h: 298, label: 'staticjs', meta: 'memory from the host’s allocator' }],
   blocks: [
     { id: 'host', kind: 'external', name: 'host', tech: 'C or JavaScript', x: 16, y: 104, w: 150, h: 120,
-      ports: [{ id: 'src', side: 'right', at: 0.25 }, { id: 'fuel', side: 'top', at: 0.5 }, { id: 'buf', side: 'right', at: 0.8 }] },
+      ports: [{ id: 'src', side: 'right', at: 0.25 }, { id: 'fuel', side: 'top', at: 0.5 }, { id: 'value', side: 'right', at: 0.8 },
+        { id: 'text', side: 'bottom', at: 0.5 }] },
     { id: 'parser', kind: 'component', name: 'parser', tech: 'bytes, in any chunks', x: 232, y: 96, w: 160, h: 72,
       ports: [{ id: 'in', side: 'left' }, { id: 'out', side: 'right' }] },
     { id: 'compiler', kind: 'component', name: 'compiler', tech: 'events → bytecode', x: 432, y: 96, w: 160, h: 72,
@@ -69,8 +70,10 @@ const pipeline: { blocks: Block[]; zones: Zone[]; wires: Wire[] } = {
       ports: [{ id: 'in', side: 'left' }, { id: 'out', side: 'right' }] },
     { id: 'evaluator', kind: 'component', name: 'evaluator', tech: 'runs on fuel', x: 812, y: 96, w: 160, h: 72,
       ports: [{ id: 'in', side: 'left' }, { id: 'fuel', side: 'top' }, { id: 'out', side: 'bottom' }] },
-    { id: 'writer', kind: 'component', name: 'writer', tech: 'value → source text', x: 812, y: 222, w: 160, h: 72,
-      ports: [{ id: 'in', side: 'top' }, { id: 'out', side: 'left' }] },
+    { id: 'result', kind: 'memory', name: 'result', tech: 'sjs_value', x: 812, y: 222, w: 160, h: 72,
+      ports: [{ id: 'in', side: 'top' }, { id: 'read', side: 'top', at: 0.15 }, { id: 'write', side: 'left' }] },
+    { id: 'writer', kind: 'component', name: 'writer', tech: 'value → source text', x: 612, y: 222, w: 160, h: 72,
+      ports: [{ id: 'in', side: 'right' }, { id: 'out', side: 'left' }] },
   ],
   wires: [
     { from: 'host.src', to: 'parser.in', kind: 'stream', label: 'bytes' },
@@ -78,8 +81,10 @@ const pipeline: { blocks: Block[]; zones: Zone[]; wires: Wire[] } = {
     { from: 'compiler.out', to: 'program.in', kind: 'call', label: 'finish' },
     { from: 'program.out', to: 'evaluator.in', kind: 'shared', label: 'read' },
     { from: 'host.fuel', to: 'evaluator.fuel', kind: 'call', label: 'fuel', hot: true, mid: 68 },
-    { from: 'evaluator.out', to: 'writer.in', kind: 'call', label: 'value' },
-    { from: 'writer.out', to: 'host.buf', kind: 'stream', label: 'text, in pieces' },
+    { from: 'evaluator.out', to: 'result.in', kind: 'call', label: 'take' },
+    { from: 'result.read', to: 'host.value', kind: 'shared', label: 'read through the value API', via: [[836, 200]] },
+    { from: 'result.write', to: 'writer.in', kind: 'call' },
+    { from: 'writer.out', to: 'host.text', kind: 'stream', label: 'text, in pieces' },
   ],
 };
 
@@ -216,7 +221,8 @@ const docs = [
           one: bytes into the parser, which sends events to a sink, operands before their operator; the compiler is
           that sink and makes bytecode as the events arrive; fuel into the evaluator; buffer space into the writer.
           None blocks or calls back for more input, so a host can stream source in chunks, and there is no recursion
-          anywhere in the C code.
+          anywhere in the C code. The host takes the evaluator’s value and reads it in place, kind by kind and element
+          by element, or has the writer write it as JavaScript source.
         </p>
         <p>
           The compiler also tags functions whose shape a built-in can run in C, such as <code>x =&gt; x.key</code> or
@@ -236,7 +242,7 @@ const docs = [
       <p class="prose-p explorer">
         The explorer runs staticjs.wasm in the browser and shows the parser’s events, the compiler’s functions and shapes
         with the fuel used with and without them, the evaluator one unit of fuel at a time with its frames, and the
-        writer’s output in 16-byte pieces.
+        result read through the value API and written in 16-byte pieces.
       </p>
       <a class="sjs-button primary big" :href="withBase('/explore/pipeline')">Open the explorer</a>
 

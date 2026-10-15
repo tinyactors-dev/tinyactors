@@ -1,6 +1,6 @@
 ---
 title: The pipeline
-description: "Follow a program through the parser, the compiler, the evaluator and the writer, step by step, live."
+description: "Follow a program through the parser, the compiler and the evaluator to its result, step by step, live."
 aside: false
 pageClass: pipeline-page
 next: false
@@ -24,7 +24,7 @@ The interactive explorer runs in a browser. What it shows, for a program you cho
 1. **Parser:** the source pushed in chunks of 1, 4 or 16 bytes, or whole; the events the parser sends its sink, in evaluation order (operands before their operator), each with the syntax node it belongs to and its position. The same events arrive however the source is cut.
 2. **Compiler:** the compiler is the parser's sink. It shows the program's size, each function with where it begins and the shape the compiler tagged it with (`PLUCK` for `x => x.key`, `COMPARE_BY_KEY`, `COMPARE_NUMERIC`, `SUM`, ...), and the fuel the program uses with shapes and without: a shape changes fuel, never a value.
 3. **Evaluator:** the evaluation run on one unit of fuel at a time, reading its frames after each unit (`sjs_vm_frame`): the program, each looping built-in (`map`, element 2 of 4) and each callback, with the source position each is at.
-4. **Writer:** the value written as JavaScript source through a 16-byte buffer, in pieces.
+4. **Result:** the value as the host reads it through the value API, one value per line, each with the call that reached it (`sjs_array_at(…, 2)`, `sjs_object_at(…, 0)` and its key, `sjs_map_at(…, 0).key`) and what it holds; then the same value written as JavaScript source through a 16-byte buffer, in pieces.
 
 An error shows at the stage that reported it: a syntax error at the parser, a name error or an unsupported construct at the compiler, a fault at the evaluator.
 

@@ -49,7 +49,7 @@ const stages = [
   { id: 'parser', number: '01', name: 'Parser', blurb: 'bytes → events' },
   { id: 'compiler', number: '02', name: 'Compiler', blurb: 'events → program' },
   { id: 'evaluator', number: '03', name: 'Evaluator', blurb: 'fuel → value' },
-  { id: 'writer', number: '04', name: 'Writer', blurb: 'value → text' },
+  { id: 'writer', number: '04', name: 'Result', blurb: 'value → host' },
 ] as const;
 
 const chunkSizes = [
@@ -165,7 +165,7 @@ function stageStat(id: string) {
     case 'evaluator':
       return r.compile.ok ? (r.status === 'fault' ? 'faulted' : `${r.fuel.toLocaleString('en')} fuel`) : 'not reached';
     case 'writer':
-      return r.output ? plural(r.output.pieces, 'piece') : 'not reached';
+      return r.read ? plural(r.read.nodes.length, 'value') : 'not reached';
   }
   return '';
 }
@@ -329,6 +329,25 @@ function frameLabel(f: any, i: number) {
   if (f.kind === 'loop') return `${f.object ? `${f.object}.` : ''}${f.name}`;
   return i === 0 ? (isModule.value ? 'module' : 'program') : 'function';
 }
+
+// ── the result, read through the value API ────────────────────────────
+const reads: Record<string, string> = {
+  string: 'sjs_string_text', bigint: 'sjs_bigint_text', number: 'value.as.number', boolean: 'value.boolean',
+  array: 'sjs_length', object: 'sjs_length', set: 'sjs_length', map: 'sjs_map_size',
+};
+/** The call that reached a value: sjs_array_at(…, 2), sjs_map_at(…, 0).key. */
+function reachedBy(n: any): string {
+  if (n.via === 'sjs_vm_take_result') return n.via;
+  return `${n.via}(…, ${n.index})${n.entry ? `.${n.entry}` : n.key !== null ? `.key ${JSON.stringify(n.key)}` : ''}`;
+}
+/** What a value holds, as the page shows it. */
+function shown(n: any): string {
+  if (n.kind === 'string') return JSON.stringify(n.text);
+  if (n.kind === 'bigint') return `${n.text}n`;
+  if (['array', 'object', 'set', 'map'].includes(n.kind)) return plural(n.count, n.kind === 'object' ? 'property' : n.kind === 'map' ? 'entry' : 'element');
+  return n.text;
+}
+const readBy = (n: any) => reads[n.kind] ?? (n.kind === 'undefined' || n.kind === 'null' ? 'value.kind' : 'the writer');
 
 // ── the writer's pieces ───────────────────────────────────────────────
 const pieces = computed(() => {
@@ -503,10 +522,19 @@ const fuelSaved = computed(() => {
               <p v-else class="muted">The program was refused before it could run.</p>
             </div>
 
-            <!-- 04 the writer -->
+            <!-- 04 the result -->
             <div v-else-if="stage === 'writer'">
-              <p class="explain">The writer writes the value as JavaScript source that evaluates to an equal value, into a buffer of any size: here {{ result.pieceSize }} bytes, so it stops and resumes.</p>
-              <template v-if="result.output">
+              <template v-if="result.read">
+                <p class="explain">The host takes the value and reads it through the value API: its kind, then each element, property or entry, by the call on the left. Nothing is encoded on the way.</p>
+                <ol class="reads">
+                  <li v-for="(n, i) in result.read.nodes" :key="i" :style="{ paddingLeft: `calc(${n.depth} * var(--space-4) + var(--space-2))` }">
+                    <span class="rcall">{{ reachedBy(n) }}</span>
+                    <span class="rkind">{{ n.kind }}</span>
+                    <span class="rval" :title="readBy(n)">{{ shown(n) }}</span>
+                  </li>
+                </ol>
+                <p v-if="result.read.truncated" class="muted small">The list stops at the first {{ result.read.nodes.length }} values.</p>
+                <p class="explain">Or the writer writes the value as JavaScript source that evaluates to an equal value, into a buffer of any size: here {{ result.pieceSize }} bytes, so it stops and resumes.</p>
                 <dl class="facts">
                   <div><dt>Kind</dt><dd>{{ result.kind }}</dd></div>
                   <div><dt>Pieces</dt><dd>{{ result.output.pieces }}</dd></div>
@@ -514,7 +542,7 @@ const fuelSaved = computed(() => {
                 </dl>
                 <p class="output"><span v-for="(p, i) in pieces" :key="i" :class="`p${i % 2}`" :title="`piece ${i + 1}`">{{ p }}</span></p>
               </template>
-              <p v-else class="muted">Nothing to write: the program did not give a value.</p>
+              <p v-else class="muted">No result: the program did not give a value.</p>
             </div>
           </template>
         </div>
@@ -909,6 +937,24 @@ const fuelSaved = computed(() => {
 .frames li.function { border-left: 3px solid var(--border-2); }
 .frames li.top { border-color: var(--accent); border-left-color: var(--accent); background: var(--accent-subtle); }
 .fname { font-family: var(--font-mono); font-weight: 500; color: var(--fg-1); }
+.reads {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+.reads li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+  padding-top: 2px;
+  padding-bottom: 2px;
+  border-left: 1px solid var(--border-2);
+}
+.rcall { color: var(--fg-3); }
+.rkind { color: var(--accent); }
+.rval { color: var(--fg-1); overflow-wrap: anywhere; }
 .fat { font: var(--type-code); font-size: 12px; color: var(--fg-3); }
 .prog {
   display: inline-flex;

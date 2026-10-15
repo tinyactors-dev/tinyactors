@@ -5,6 +5,9 @@
 import C from './constants.json';
 
 const EVENT_WORDS = 12;
+const NODE_WORDS = 9;
+/** The call that reached each value of a result, by the record's `via`. */
+const vias = ['sjs_vm_take_result', 'sjs_array_at', 'sjs_object_at', 'sjs_set_at', 'sjs_map_at', 'sjs_map_at'];
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -146,6 +149,31 @@ export class StaticJS {
     return out;
   }
 
+  /**
+   * The result as a host reads it through the value API, depth first, at
+   * most `max` values: each one's kind, depth, element or property count,
+   * the call that reached it (`via`, with its index, or a property's key, or
+   * which half of a map entry), and its text.
+   */
+  read(max = 200) {
+    const x = this.x, s = this.s;
+    if (x.sjs_site_read(s, max) !== C.SJS_OK) return null;
+    const base = x.sjs_site_node_text(s);
+    const n = x.sjs_site_node_count(s);
+    const w = this.u32(x.sjs_site_nodes(s), n * NODE_WORDS);
+    const nodes = [];
+    for (let i = 0; i < n; i++) {
+      const r = w.subarray(i * NODE_WORDS, (i + 1) * NODE_WORDS);
+      nodes.push({
+        kind: valueKinds[r[0]], depth: r[1], count: r[2], via: vias[r[3]], index: r[4],
+        entry: r[3] === 4 ? 'key' : r[3] === 5 ? 'value' : null,
+        key: r[3] === 2 ? this.text(base + r[5], r[6]) : null,
+        text: this.text(base + r[7], r[8]),
+      });
+    }
+    return { nodes, truncated: x.sjs_site_nodes_truncated(s) === 1 };
+  }
+
   /** Write the result as JavaScript source, through a buffer of `piece` bytes. */
   write(piece = 0) {
     const x = this.x, s = this.s;
@@ -157,7 +185,7 @@ export class StaticJS {
    * Every stage of a program, for the pipeline explorer: the compile with
    * its events and functions, the fuel with and without shapes, a trace of
    * the evaluation one unit of fuel at a time (its frames at each step), and
-   * the value written through a small buffer.
+   * the value read through the value API and written through a small buffer.
    */
   pipeline(source, { module = false, chunk = 0, maxSteps = 4000, piece = 16 } = {}) {
     const out = { source, module, chunk };
@@ -190,6 +218,7 @@ export class StaticJS {
       return out;
     }
     out.kind = this.resultKind();
+    out.read = this.read();
     out.output = this.write(piece);
     out.pieceSize = piece;
     return out;
