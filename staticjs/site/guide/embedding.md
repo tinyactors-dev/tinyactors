@@ -18,7 +18,8 @@ file or a clock, or calls back for more input:
 
 ```
 source bytes --push--> parser --events--> compiler --> program
-program + fuel --push--> evaluator --> value --> writer --> text
+program + fuel --push--> evaluator --> value --+--> the value API: kinds, elements, properties, entries
+                                                +--> writer --> text
 ```
 
 | Object | Made by | Ended by | Lifetime and sharing |
@@ -143,10 +144,17 @@ destroying them.
 
 ## Evaluating, on fuel
 
-The evaluator runs a program on fuel that you push: one unit per
-instruction, and per element for the built-ins that loop. `sjs_vm_run`
-returns when the program is done, when it faults, or when the fuel is
-spent:
+Fuel is the evaluator's measure of work: one unit per instruction, and per
+element for the built-ins that loop. You push it: `sjs_vm_run(vm, fuel)`
+runs until the program is done, until it faults, or until it has used the
+fuel it was given, and then returns. An evaluation that ran out of fuel is
+paused, and the next `sjs_vm_run` resumes it where it stopped.
+
+The fuel pushed in total bounds the work of an evaluation, and the same
+program on the same inputs uses the same fuel on every machine. Each call
+does a bounded piece of work and returns, so an evaluation shares its
+thread with other evaluations and with an event loop.
+
 
 ```c
 sjs_vm *vm;
@@ -185,6 +193,36 @@ if (status == SJS_RUN_DONE) {
   used; [Performance](./performance.md) has more costs.
 
 `examples/stream.c` runs a module in slices of 500 units.
+
+### Fuel in an event loop
+
+One slice per turn of an event loop leaves the loop its timers and
+sockets in between. With libuv, an idle handle calls back once per turn:
+
+```c
+typedef struct {
+    uv_idle_t idle;
+    sjs_vm *vm;
+    uint64_t budget;
+} evaluation;
+
+static void slice(uv_idle_t *idle) {
+    evaluation *e = idle->data;
+    sjs_run status = sjs_vm_run(e->vm, 10000);
+    if (status == SJS_RUN_PAUSED && sjs_vm_fuel_used(e->vm) < e->budget) return;   /* again next turn */
+    uv_idle_stop(idle);
+    finish(e, status);   /* take the result or the error, or sjs_vm_reset past the budget */
+}
+
+/* after sjs_vm_start(e->vm, ...) */
+uv_idle_init(loop, &e->idle);
+e->idle.data = e;
+uv_idle_start(&e->idle, slice);
+```
+
+Each evaluation in flight needs an evaluator of its own. To bound a turn
+by time, run small slices until it is up, as [the wasm guide](./wasm.md#fuel-and-the-event-loop) does in
+JavaScript.
 
 ## Values
 
