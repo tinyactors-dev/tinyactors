@@ -248,7 +248,7 @@ compare identities, or find something on a prototype.
   them), `toString`'s `timeZone` other than `UTC` or a fixed offset (time
   zone data), `toZonedDateTimeISO`, and the roundings of an Instant before
   1970 that temporal-polyfill and the specification give differently
-  (design notes: [Instant](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/temporal.md#instant)); `Temporal.Now` when the host never set
+  (design notes: [Instant](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/temporal.md#instant)); `Temporal.Now` when the host never set
   the clock (JavaScript reads the machine's), with a time zone's name, or
   its `zonedDateTimeISO`.
 - Of Dates ([The language](./language.md#date)): what reads or writes local time (`new Date(y, m)`

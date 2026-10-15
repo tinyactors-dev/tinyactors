@@ -96,7 +96,7 @@ exits with status 1 on any other system.
 |--------|---------|---------|
 | `--prefix DIR` | `$HOME/.local` | Where `bin`, `include`, `lib` and `share` go. |
 | `--version VER` | the latest release of the repository | The version to download, such as `0.1.0`. Without it the script takes the tag of the repository's latest release, which can belong to another component of the repository. |
-| `--repo OWNER/REPO` | `dhamidi/tinyactors` | The GitHub repository to download from. |
+| `--repo OWNER/REPO` | `tinyactors-dev/tinyactors` | The GitHub repository to download from. |
 | `--from-file FILE` | none | Install `FILE` and download nothing. |
 
 1. From the `tinyparse/` directory, install a tarball you have:
@@ -126,7 +126,7 @@ exits with status 1 on any other system.
    time:
 
    ```sh
-   git clone https://github.com/dhamidi/tinyactors
+   git clone https://github.com/tinyactors-dev/tinyactors
    cd tinyactors
    mise trust
    mise install

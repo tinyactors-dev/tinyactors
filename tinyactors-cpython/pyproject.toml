@@ -26,6 +26,6 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dhamidi/tinyactors/tree/main/tinyactors-cpython#readme"
-Repository = "https://github.com/dhamidi/tinyactors"
-Issues = "https://github.com/dhamidi/tinyactors/issues"
+Homepage = "https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-cpython#readme"
+Repository = "https://github.com/tinyactors-dev/tinyactors"
+Issues = "https://github.com/tinyactors-dev/tinyactors/issues"

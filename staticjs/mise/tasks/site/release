@@ -18,7 +18,7 @@ require 'fileutils'
 require 'json'
 require 'open3'
 
-REPOSITORY = 'dhamidi/tinyactors'
+REPOSITORY = 'tinyactors-dev/tinyactors'
 PREFIX = 'staticjs/v'
 
 def gh(*args, binary: false)

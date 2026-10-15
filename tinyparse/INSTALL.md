@@ -74,4 +74,4 @@ functions of a source tree.
 
 The full installation guide, including the `install.sh` script, is
 `tinyparse/docs/how-to/install.md` in the repository
-(https://github.com/dhamidi/tinyactors).
+(https://github.com/tinyactors-dev/tinyactors).

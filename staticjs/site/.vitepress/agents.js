@@ -163,7 +163,7 @@ export function llmsTxt(pages, { siteURL = '' } = {}) {
     lines.push('');
   }
   lines.push('## Optional', '', `- [Everything in one file](${siteURL}/llms-full.txt): every page above, in order`,
-    '- [The C header](https://raw.githubusercontent.com/dhamidi/tinyactors/main/staticjs/include/staticjs.h): the API reference, as plain text',
-    '- [Source](https://github.com/dhamidi/tinyactors/tree/main/staticjs): the library, its tests and design notes', '');
+    '- [The C header](https://raw.githubusercontent.com/tinyactors-dev/tinyactors/main/staticjs/include/staticjs.h): the API reference, as plain text',
+    '- [Source](https://github.com/tinyactors-dev/tinyactors/tree/main/staticjs): the library, its tests and design notes', '');
   return lines.join('\n');
 }

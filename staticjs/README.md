@@ -82,7 +82,7 @@ rules, then [docs/internals/](docs/internals/README.md) for testing,
 benchmarks, how to extend staticjs, and design notes on each part.
 
 Reading this in a release tarball? The documentation is in the repository,
-under `staticjs/` at <https://github.com/dhamidi/tinyactors>.
+under `staticjs/` at <https://github.com/tinyactors-dev/tinyactors>.
 
 ## Status
 

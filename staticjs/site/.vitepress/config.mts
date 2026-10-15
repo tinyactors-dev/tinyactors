@@ -9,7 +9,7 @@ import { umber, vellum } from './shiki-themes.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const srcDir = resolve(here, '..');
 const siteURL = (process.env.STATICJS_SITE_URL ?? '').replace(/\/$/, '');
-const repo = 'https://github.com/dhamidi/tinyactors';
+const repo = 'https://github.com/tinyactors-dev/tinyactors';
 
 // staticjs in Node, for the build: every live sample's result is computed
 // here, so the page shows it before any JavaScript runs, and its markdown
@@ -156,7 +156,7 @@ export default defineConfig({
     footer: {
       message: 'Every page is also markdown: add <code>.md</code> to its path, or ask for <code>text/markdown</code>. Agents start at <a href="/llms.txt">/llms.txt</a>.',
       copyright:
-        '<a class="tinyactors-logo" href="https://github.com/dhamidi/tinyactors" aria-label="staticjs is part of tinyactors">' +
+        '<a class="tinyactors-logo" href="https://github.com/tinyactors-dev/tinyactors" aria-label="staticjs is part of tinyactors">' +
         '<span>staticjs is part of</span>' +
         '<img class="on-light" src="/brand/tinyactors-horizontal-ink.svg" alt="tinyactors" width="112" height="29">' +
         '<img class="on-dark" src="/brand/tinyactors-horizontal-parchment.svg" alt="tinyactors" width="112" height="29">' +

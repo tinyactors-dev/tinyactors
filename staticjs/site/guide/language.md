@@ -281,7 +281,7 @@ before the call. `add`, a set's method and a Temporal value's (which
 changes nothing), is checked when it runs instead: a Temporal value's
 works on any receiver but a chain through a path, and a set's faults
 unless the call is on a variable of the function that is the set's one
-holder (design notes: [shared names](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/mutation.md#shared-names)). Such a call, or a chain of them (`s.add(1).add(2)`), may
+holder (design notes: [shared names](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/mutation.md#shared-names)). Such a call, or a chain of them (`s.add(1).add(2)`), may
 also be a statement. So may an assignment to a property or an element of
 such a variable, as deep as it goes (`acc[r.id] = r.kwh`, `o.a[i].n += 1`,
 `o.k ??= []`, `o.n++`), with JavaScript's evaluation order, and to a `let`
@@ -292,11 +292,11 @@ receiver called on such a path (`acc.byKey[x.k].push(x)`,
 `o.a.sort(f).reverse()`). Appending to a `let` (`s += x`, `s = s + x + y`,
 `` s = `${s}${x}` ``) moves its value to the `+`, which extends a string
 nothing else holds, so building a string with them is linear
-(design notes: [appending to a let](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/mutation.md#appending-to-a-let)).
+(design notes: [appending to a let](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/mutation.md#appending-to-a-let)).
 `Object.assign(x, ...)` changes such a variable's object, and may be a
 statement; any other target must be a value nothing else holds
 (`Object.assign({}, a, b)`), and faults otherwise (design notes:
-[Object.assign](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/mutation.md#objectassign)).
+[Object.assign](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/mutation.md#objectassign)).
 
 **Frozen and sealed values.** `Object.freeze(x)` and `Object.seal(x)` set
 a bit on an object or an array, which every copy of the value shares, and
@@ -319,12 +319,12 @@ of the function that holds it alone, as a mutation does, unless the value
 is already frozen or sealed; it faults on a set, a map, a Date, a function,
 an iterator, a regular expression and a Temporal value, whose internal
 state JavaScript leaves changeable (design notes: [frozen and sealed
-values](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/mutation.md#frozen-and-sealed-values)).
+values](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/mutation.md#frozen-and-sealed-values)).
 The compiler
 refuses any other receiver or target it can see is shared, and the
 evaluator faults when the variable's value, or a container on the path,
 has another holder: a caller, the embedder, a module's export, another
-variable, or itself (`xs.push(xs)`, `o.self = o`). The rules and the check are in the design notes on [owned mutation](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/mutation.md).
+variable, or itself (`xs.push(xs)`, `o.self = o`). The rules and the check are in the design notes on [owned mutation](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/mutation.md).
 
 ## Functions from the host
 
@@ -473,7 +473,7 @@ and a later reader gets the rest; `return()` closes a helper's result, and
 faults on an array's, a map's, a set's or `matchAll`'s iterator, which has
 none; on an
 iterator nothing else holds (`m.keys().next()`) both give the same, and on
-one held elsewhere they fault (design notes: [iterators](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/mutation.md#iterators)). A property an
+one held elsewhere they fault (design notes: [iterators](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/mutation.md#iterators)). A property an
 iterator lacks is `undefined`. The writer writes an iterator as
 `[...].values()`, an iterator that yields the same values.
 
@@ -556,7 +556,7 @@ JSON.stringify(
 ## Temporal
 
 A Temporal value is an object, immutable, in the ISO 8601 calendar
-(design notes: [Temporal](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/temporal.md)): `Temporal.PlainDate`,
+(design notes: [Temporal](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/temporal.md)): `Temporal.PlainDate`,
 `Temporal.PlainTime`, `Temporal.PlainDateTime`, `Temporal.Duration` and
 `Temporal.Instant` (UTC only) are built, the first three's limits
 Temporal's (-271821-04-19 to +275760-09-13; a date and time a nanosecond
@@ -603,7 +603,7 @@ time zone is UTC.
 ## Date
 
 A Date is a time value, whole milliseconds since 1970-01-01T00:00Z within
-8.64 x 10^15 either way or NaN, in UTC only (design notes: [Date](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/date.md)).
+8.64 x 10^15 either way or NaN, in UTC only (design notes: [Date](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/date.md)).
 It is an object (`typeof` gives `"object"`), held as a value of the
 Temporal kind; the writer writes it as `new Date("2024-01-31T00:00:00.000Z")`
 or `new Date(NaN)`, and `JSON.stringify` its `toJSON`: the ISO string, or

@@ -142,6 +142,6 @@ Every value is a 16-byte `sjs_value`: its kind, a boolean, and a number or a poi
 - [The language](/guide/language)
 - [Faults and refusals](/guide/faults)
 - [Embedding](/guide/embedding)
-- [staticjs.h](https://github.com/dhamidi/tinyactors/blob/main/staticjs/include/staticjs.h)
+- [staticjs.h](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/include/staticjs.h)
 - [Pipeline explorer](/explore/pipeline)
 -->

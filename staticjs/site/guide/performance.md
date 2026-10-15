@@ -132,7 +132,7 @@ evaluation can allocate ([Embedding](./embedding.md#limits)).
 
 ## Compared with other engines
 
-[`bench/engines/REPORT.md`](https://github.com/dhamidi/tinyactors/blob/main/staticjs/bench/engines/REPORT.md) compares staticjs with Node 22 (with its JIT and
+[`bench/engines/REPORT.md`](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/bench/engines/REPORT.md) compares staticjs with Node 22 (with its JIT and
 `--jitless`) and with QuickJS-NG compiled to WebAssembly, on the same
 programs and inputs, run as the C API runs them. The figures below are from
 one run, on one 4-core x86_64 machine (`f9d38355aeb8`, October 2026). They
@@ -152,4 +152,4 @@ started by a host. The report gives every case, the memory each engine
 held, the method and its caveats.
 
 To measure a change to staticjs itself, see
-[Benchmarks, in the design notes](https://github.com/dhamidi/tinyactors/blob/main/staticjs/docs/internals/benchmarks.md).
+[Benchmarks, in the design notes](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/docs/internals/benchmarks.md).

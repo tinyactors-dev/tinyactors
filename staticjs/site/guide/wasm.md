@@ -6,7 +6,7 @@ description: "@tinyactors/staticjs: staticjs from JavaScript, in a browser or in
 # Browser and Node
 
 `@tinyactors/staticjs` is staticjs from JavaScript, in Node and in
-browsers ([`staticjs-js/`](https://github.com/dhamidi/tinyactors/tree/main/staticjs-js) in this repository). It ships a
+browsers ([`staticjs-js/`](https://github.com/tinyactors-dev/tinyactors/tree/main/staticjs-js) in this repository). It ships a
 WebAssembly module of its own, about 1 MB (330 KB compressed); values go
 in and come out as JavaScript values, and a run takes the fuel it is
 given, so it takes turns with the event loop.
@@ -214,7 +214,7 @@ what a call reads (a config, a source's bytes, an out-parameter) with
 freed blocks. Linear memory never shrinks, so a module's memory stays at its
 peak.
 
-[`tests/wasm/release_test.mjs`](https://github.com/dhamidi/tinyactors/blob/main/staticjs/tests/wasm/release_test.mjs) drives the module through the raw API: it
+[`tests/wasm/release_test.mjs`](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/tests/wasm/release_test.mjs) drives the module through the raw API: it
 compiles, runs on fuel 16 units at a time, writes the result, and checks
 that every allocation is given back.
 

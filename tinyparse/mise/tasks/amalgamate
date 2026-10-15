@@ -57,7 +57,7 @@ readme = <<~MARKDOWN
   `-std=c99 -pedantic-errors` rejects.
 
   The documentation, the C API reference among it, is in the `tinyparse/docs/`
-  directory of https://github.com/dhamidi/tinyactors.
+  directory of https://github.com/tinyactors-dev/tinyactors.
 MARKDOWN
 
 outputs = {

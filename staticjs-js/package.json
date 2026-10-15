@@ -14,11 +14,11 @@
   "homepage": "https://staticjs.tinyactors.dev",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dhamidi/tinyactors.git",
+    "url": "git+https://github.com/tinyactors-dev/tinyactors.git",
     "directory": "staticjs-js"
   },
   "bugs": {
-    "url": "https://github.com/dhamidi/tinyactors/issues"
+    "url": "https://github.com/tinyactors-dev/tinyactors/issues"
   },
   "license": "MIT",
   "type": "module",

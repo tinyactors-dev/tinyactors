@@ -100,7 +100,7 @@ const valueFields = [
   { name: 'as', type: 'double | sjs_heap *', size: 8, kind: 'ptr' as const, note: 'a number, or a heap object for strings and the kinds after them' },
 ];
 
-const header = 'https://github.com/dhamidi/tinyactors/blob/main/staticjs/include/staticjs.h';
+const header = 'https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/include/staticjs.h';
 const docs = [
   { label: 'Guide (Getting started)', href: withBase('/guide/getting-started') },
   { label: 'The language', href: withBase('/guide/language') },

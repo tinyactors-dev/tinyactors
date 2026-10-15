@@ -11,14 +11,14 @@
     "napi",
     "bun"
   ],
-  "homepage": "https://github.com/dhamidi/tinyactors/tree/main/tinyactors-napi#readme",
+  "homepage": "https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dhamidi/tinyactors.git",
+    "url": "git+https://github.com/tinyactors-dev/tinyactors.git",
     "directory": "tinyactors-napi"
   },
   "bugs": {
-    "url": "https://github.com/dhamidi/tinyactors/issues"
+    "url": "https://github.com/tinyactors-dev/tinyactors/issues"
   },
   "license": "MIT",
   "type": "module",

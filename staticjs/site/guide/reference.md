@@ -101,5 +101,5 @@ The full list, with each method, is under
 | Let go                   | `sjs_release`, `sjs_program_release`, `sjs_vm_destroy`, `sjs_context_destroy` |
 
 Each declaration in
-[`staticjs.h`](https://github.com/dhamidi/tinyactors/blob/main/staticjs/include/staticjs.h)
+[`staticjs.h`](https://github.com/tinyactors-dev/tinyactors/blob/main/staticjs/include/staticjs.h)
 has a comment, and [Embedding](./embedding.md) explains each step.

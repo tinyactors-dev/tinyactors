@@ -497,7 +497,7 @@ diagnostics reference; see SEE ALSO.
 cc(1), mandoc(1)
 
 The references in the `tinyparse` directory of the source repository,
-https://github.com/dhamidi/tinyactors:
+https://github.com/tinyactors-dev/tinyactors:
 
 - [`docs/reference/grammar.md`](docs/reference/grammar.md): the grammar language and `package.scm`
 - [`docs/reference/query-language.md`](docs/reference/query-language.md): the query language
