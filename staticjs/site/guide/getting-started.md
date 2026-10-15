@@ -11,16 +11,11 @@ the browser is in [Browser and Node](./wasm.md).
 
 ## 1. Get a release
 
-Releases are on the repository's GitHub releases page, tagged
-`staticjs/v<version>`. Each one has these assets:
+<!-- release downloads -->
 
-| Asset | What it holds | Use it to |
-|---|---|---|
-| `staticjs-<version>-src.tar.gz` | `staticjs.h`; `staticjs.c`, the whole library as one C file (the *amalgamation*); `staticjs_wasm.c`, the wasm module's allocator; `staticjs.api.json`, the API's types, constants and struct layouts | compile staticjs into your program with clang, on any target |
-| `staticjs-<version>-<target>.tar.gz` for `x86_64-linux`, `aarch64-linux`, `x86_64-macos`, `aarch64-macos` | `include/staticjs.h`, `lib/libstaticjs.a`, and the shared library (`libstaticjs.so.<major>.<minor>` with a `libstaticjs.so` link, or `libstaticjs.<major>.<minor>.dylib`) | link a prebuilt library, with any C compiler |
-| `staticjs-<version>-wasm32.tar.gz` | `staticjs.wasm` and `include/staticjs.h` | run staticjs in a browser or in Node ([Browser and Node](./wasm.md)) |
-| `staticjs-<version>.json` | the manifest: the commit, the compiler, the flags, every file's hash | check what a release was built from |
-| `SHA256SUMS` | each asset's SHA-256 | `sha256sum -c SHA256SUMS --ignore-missing` |
+Each prebuilt tarball holds `include/staticjs.h`, `lib/libstaticjs.a`, and
+the shared library (`libstaticjs.so.<major>.<minor>` with a
+`libstaticjs.so` link, or `libstaticjs.<major>.<minor>.dylib`).
 
 Every tarball carries `LICENSE` and the notices of the code staticjs ports
 (`LICENSE.fdlibm`, `LICENSE.v8`); keep them with what you ship.

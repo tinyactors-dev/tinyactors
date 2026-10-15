@@ -17,6 +17,7 @@ const types = {
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
   '.wasm': 'application/wasm',
+  '.gz': 'application/gzip',
 };
 
 function extname(path) {
@@ -56,6 +57,10 @@ export default {
       const out = new Headers(found.response.headers);
       out.set('Content-Type', types[extname(found.path)] ?? 'application/octet-stream');
       out.set('Cache-Control', found.path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache');
+      if (found.path.startsWith('/download/')) {
+        out.set('Content-Disposition', `attachment; filename="${found.path.split('/').pop()}"`);
+        if (!extname(found.path)) out.set('Content-Type', 'text/plain; charset=utf-8');
+      }
       for (const [name, value] of Object.entries(headers)) out.set(name, value);
       return new Response(found.response.body, { status: found.response.status === 304 ? 304 : status, headers: out });
     };
@@ -68,8 +73,9 @@ export default {
       });
     };
 
-    // A file as named: assets, the wasm module, llms.txt, a page's .md.
-    const direct = !pathname.endsWith('/') && extname(pathname) && (await file(pathname));
+    // A file as named: assets, the wasm module, llms.txt, a page's .md, and
+    // the release's downloads (SHA256SUMS has no extension).
+    const direct = !pathname.endsWith('/') && (extname(pathname) || pathname.startsWith('/download/')) && (await file(pathname));
     if (direct) return send(direct);
 
     const route = routeOf(pathname);

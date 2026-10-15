@@ -5,3 +5,5 @@ public/staticjs-site.wasm
 .vitepress/theme/staticjs/constants.json
 .screenshots/
 .wrangler/
+public/download/
+.vitepress/release.json

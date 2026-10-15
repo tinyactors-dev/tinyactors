@@ -60,7 +60,7 @@ What staticjs gives for four valid JavaScript programs:
 
 staticjs is freestanding C11: it needs no C library, only stdint.h, stddef.h and stdbool.h, and has one public header, staticjs.h.
 
-- **Prebuilt libraries.** Static and shared libraries for Linux and macOS on x86_64 and arm64. Link with any C11 compiler: `cc -std=c11 -Iinclude app.c lib/libstaticjs.a`. See [Getting started](/guide/getting-started).
+- **Prebuilt libraries.** Static and shared libraries for Linux and macOS on x86_64 and arm64. Link with any C11 compiler: `cc -std=c11 -Iinclude app.c lib/libstaticjs.a`. Download them from [Getting started](/guide/getting-started#_1-get-a-release).
 - **Amalgamation.** staticjs.c and staticjs.h, two files to add to a C project. They build with clang: `clang -O2 -I. app.c staticjs.c`.
 - **npm.** For Node and browsers: staticjs as WebAssembly, with JavaScript values in and out: `npm install @tinyactors/staticjs`. See [Browser and Node](/guide/wasm).
 

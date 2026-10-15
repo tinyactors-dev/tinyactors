@@ -1,0 +1,73 @@
+#!/usr/bin/env ruby
+#MISE description="Download the latest staticjs release into the documentation site (site/public/download/<version>/), verified against its SHA256SUMS"
+# vim:ft=ruby
+
+# The repository is private, so its GitHub releases page is not a place to
+# send readers: the site serves the release files itself. This task finds
+# the latest published `staticjs/v<version>` release through GitHub's REST
+# API (`gh api`, with the credentials of `gh auth login` or GH_TOKEN),
+# downloads each of its assets into site/public/download/<version>/, checks
+# every file against the release's SHA256SUMS, and writes
+# site/.vitepress/release.json: the version, the date, and each file's
+# name, size and SHA-256, which Getting started lists as downloads.
+# Files already there with the right hash are not fetched again.
+
+require_relative '../../staticjs'
+require 'digest'
+require 'fileutils'
+require 'json'
+require 'open3'
+
+REPOSITORY = 'dhamidi/tinyactors'
+PREFIX = 'staticjs/v'
+
+def gh(*args, binary: false)
+  out, err, status = Open3.capture3('gh', 'api', *args, binmode: binary)
+  abort "site:release: gh api #{args.last}: #{err.strip}" unless status.success?
+  out
+end
+
+releases = JSON.parse(gh('--paginate', '--slurp', "repos/#{REPOSITORY}/releases")).flatten
+release = releases
+          .reject { |r| r['draft'] || r['prerelease'] }
+          .select { |r| r['tag_name'].start_with?(PREFIX) && r['tag_name'][PREFIX.length..].match?(/\A\d+\.\d+\.\d+\z/) }
+          .max_by { |r| r['tag_name'][PREFIX.length..].split('.').map(&:to_i) }
+abort "site:release: no published #{PREFIX}<version> release in #{REPOSITORY}" if release.nil?
+version = release['tag_name'][PREFIX.length..]
+
+site = StaticJS::ROOT.join('site')
+dir = site.join('public/download', version)
+FileUtils.mkdir_p(dir)
+assets = release['assets'].to_h { |a| [a['name'], a] }
+abort "site:release: #{release['tag_name']} has no SHA256SUMS" unless assets.key?('SHA256SUMS')
+
+fetch = lambda do |name|
+  bytes = gh('-H', 'Accept: application/octet-stream', "repos/#{REPOSITORY}/releases/assets/#{assets.fetch(name)['id']}", binary: true)
+  dir.join(name).binwrite(bytes)
+end
+
+fetch.call('SHA256SUMS')
+sums = dir.join('SHA256SUMS').read.lines.to_h do |line|
+  hash, name = line.strip.split(/\s+\*?/, 2)
+  [name, hash]
+end
+missing = sums.keys - assets.keys
+abort "site:release: SHA256SUMS lists files the release lacks: #{missing.join(', ')}" unless missing.empty?
+
+files = sums.map do |name, hash|
+  path = dir.join(name)
+  fetch.call(name) unless path.file? && Digest::SHA256.file(path).hexdigest == hash
+  actual = Digest::SHA256.file(path).hexdigest
+  abort "site:release: #{name}: SHA-256 #{actual}, SHA256SUMS says #{hash}" unless actual == hash
+  { 'name' => name, 'size' => path.size, 'sha256' => hash }
+end
+files << { 'name' => 'SHA256SUMS', 'size' => dir.join('SHA256SUMS').size, 'sha256' => Digest::SHA256.file(dir.join('SHA256SUMS')).hexdigest }
+
+# Older versions' downloads are not served.
+Dir.children(site.join('public/download')).each do |child|
+  FileUtils.rm_rf(site.join('public/download', child)) unless child == version
+end
+
+record = { 'version' => version, 'tag' => release['tag_name'], 'date' => release['published_at'][0, 10], 'files' => files }
+site.join('.vitepress/release.json').write("#{JSON.pretty_generate(record)}\n")
+puts "site:release: staticjs #{version} (#{release['published_at'][0, 10]}), #{files.size} files in #{dir.relative_path_from(StaticJS::ROOT)}, every SHA-256 checked"

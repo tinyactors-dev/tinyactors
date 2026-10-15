@@ -25,7 +25,7 @@ const faults = [
 ].join('\n');
 
 const ways = [
-  { title: 'Prebuilt libraries', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries for Linux and macOS on x86_64 and arm64. Link with any C11 compiler.', link: '/guide/getting-started' },
+  { title: 'Prebuilt libraries', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries for Linux and macOS on x86_64 and arm64. Link with any C11 compiler.', link: '/guide/getting-started#_1-get-a-release' },
   { title: 'Amalgamation', code: 'clang -O2 -I. app.c staticjs.c', text: 'staticjs.c and staticjs.h, two files to add to a C project. They build with clang.', link: '/guide/getting-started#_3-build-it' },
   { title: 'npm', code: 'npm install @tinyactors/staticjs', text: 'For Node and browsers: staticjs as WebAssembly, with JavaScript values in and out.', link: '/guide/wasm' },
 ];

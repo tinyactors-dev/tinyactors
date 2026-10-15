@@ -29,6 +29,7 @@ const types = {
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
   '.wasm': 'application/wasm',
+  '.gz': 'application/gzip',
 };
 
 /** The file under dist for a path, or null: no escaping the root. */
@@ -49,6 +50,9 @@ function send(res, path, status = 200, headers = {}) {
   res.writeHead(status, {
     'Content-Type': types[extname(path)] ?? 'application/octet-stream',
     'Cache-Control': path.includes('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
+    ...(path.startsWith(join(root, 'download/'))
+      ? { 'Content-Disposition': `attachment; filename="${path.split('/').pop()}"`, ...(extname(path) ? {} : { 'Content-Type': 'text/plain; charset=utf-8' }) }
+      : {}),
     ...headers,
   });
   createReadStream(path)
@@ -78,8 +82,9 @@ const server = createServer((req, res) => {
     return;
   }
 
-  // A file as named: assets, the wasm module, llms.txt, a page's .md.
-  const direct = !pathname.endsWith('/') && extname(pathname) && file(pathname);
+  // A file as named: assets, the wasm module, llms.txt, a page's .md, and
+  // the release's downloads (SHA256SUMS has no extension).
+  const direct = !pathname.endsWith('/') && (extname(pathname) || pathname.startsWith('/download/')) && file(pathname);
   if (direct) return send(res, direct);
 
   const route = routeOf(pathname);

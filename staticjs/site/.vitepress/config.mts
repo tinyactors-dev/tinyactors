@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
@@ -42,8 +42,46 @@ const pages = [
   ...explore.map((p) => ({ route: p.link, section: 'Explore', title: p.text, description: p.description })),
 ];
 
+// The latest release, downloaded into public/download/<version>/ by
+// `mise run site:release` (site:deploy runs it first): Getting started lists
+// its files as downloads from this site. A build without it says so.
+const releaseFile = join(here, 'release.json');
+const release = existsSync(releaseFile) ? JSON.parse(readFileSync(releaseFile, 'utf8')) : null;
+const RELEASE_MARKER = '<!-- release downloads -->';
+const assetRows = [
+  ['src', '`staticjs.h`; `staticjs.c`, the whole library as one C file (the *amalgamation*); `staticjs_wasm.c`, the wasm module\'s allocator; `staticjs.api.json`, the API\'s types, constants and struct layouts', 'compile staticjs into your program with clang, on any target'],
+  ['x86_64-linux', 'prebuilt, for x86_64 Linux', 'link a prebuilt library, with any C compiler'],
+  ['aarch64-linux', 'prebuilt, for arm64 Linux', 'link a prebuilt library, with any C compiler'],
+  ['x86_64-macos', 'prebuilt, for Intel Macs', 'link a prebuilt library, with any C compiler'],
+  ['aarch64-macos', 'prebuilt, for Apple silicon', 'link a prebuilt library, with any C compiler'],
+  ['wasm32', '`staticjs.wasm` and `include/staticjs.h`', 'run the bare module ([Browser and Node](./wasm.md) has the npm package)'],
+];
+const size = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / 1048576).toFixed(1)}&nbsp;MB` : `${Math.round(bytes / 1024)}&nbsp;KB`);
+function releaseMarkdown() {
+  if (!release) return 'This build of the site has no release to offer: `mise run site:release` downloads the latest one.';
+  const href = (name) => `${siteURL}/download/${release.version}/${name}`;
+  const link = (name) => `<a href="${href(name)}" download>${name}</a>`;
+  const file = (name) => release.files.find((f) => f.name === name);
+  const rows = [];
+  for (const [suffix, holds, use] of assetRows) {
+    const f = file(`staticjs-${release.version}-${suffix}.tar.gz`);
+    if (f) rows.push(`| ${link(f.name)} | ${size(f.size)} | ${holds} | ${use} |`);
+  }
+  const manifest = file(`staticjs-${release.version}.json`);
+  if (manifest) rows.push(`| ${link(manifest.name)} | ${size(manifest.size)} | the manifest: the commit, the compiler, the flags, every file's hash | check what a release was built from |`);
+  rows.push(`| ${link('SHA256SUMS')} | ${size(file('SHA256SUMS')?.size ?? 0)} | each file's SHA-256 | \`sha256sum -c SHA256SUMS --ignore-missing\` |`);
+  return [
+    `staticjs ${release.version}, released ${release.date}:`,
+    '',
+    '| Download | Size | What it holds | Use it to |',
+    '|---|---|---|---|',
+    ...rows,
+  ].join('\n');
+}
+const withRelease = (source) => source.replace(RELEASE_MARKER, releaseMarkdown);
+
 const agentMarkdown = (file) => {
-  const source = readFileSync(join(srcDir, file), 'utf8');
+  const source = withRelease(readFileSync(join(srcDir, file), 'utf8'));
   const page = pages.find((p) => p.route === routeOf(file));
   const include = (path) => readFileSync(resolve(srcDir, dirname(file), path), 'utf8');
   const pipeline = (program) => pipelineMarkdown(staticjs.pipeline(program), { operator });
@@ -71,6 +109,9 @@ export default defineConfig({
   markdown: {
     theme: { light: vellum, dark: umber },
     config(md) {
+      md.core.ruler.before('normalize', 'staticjs-release', (state) => {
+        state.src = withRelease(state.src);
+      });
       const fence = md.renderer.rules.fence;
       md.renderer.rules.fence = (tokens, idx, options, env, self) => {
         const token = tokens[idx];

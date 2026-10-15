@@ -108,3 +108,22 @@ test('section indexes, the 404 page and the generated markdown', async () => {
   const full = await (await get('/llms-full.txt')).text();
   assert.match(full, /^Source: \/guide\/language\.md$/m);
 });
+
+test('Getting started offers the release, every file a download from this site', async (t) => {
+  const html = await (await get('/guide/getting-started')).text();
+  const links = [...html.matchAll(/<a href="(\/download\/[^"]+)" download>/g)].map((m) => m[1]);
+  if (links.length === 0) {
+    assert.match(html, /mise run site:release/);
+    t.skip('this build has no release (mise run site:release)');
+    return;
+  }
+  assert.ok(links.some((l) => l.endsWith('/SHA256SUMS')), 'SHA256SUMS is offered');
+  for (const link of links) {
+    const res = await get(link);
+    assert.equal(res.status, 200, link);
+    assert.match(res.headers.get('content-disposition'), /^attachment; filename="/, link);
+    assert.ok((await res.arrayBuffer()).byteLength > 0, link);
+  }
+  const markdown = await (await get('/guide/getting-started.md')).text();
+  for (const link of links) assert.ok(markdown.includes(link), `${link} in the markdown`);
+});
