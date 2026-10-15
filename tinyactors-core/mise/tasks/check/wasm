@@ -14,7 +14,7 @@ Core.build_layers('wasi')
 Core.in_parallel(programs) { |program| Core.build_program('wasi', program) }
 failed = []
 lock = Mutex.new
-Core.in_parallel(programs) do |program|
+run = lambda do |program|
   scratch = Core.directory('wasi').join('scratch', program.name)
   FileUtils.rm_rf(scratch)
   FileUtils.mkdir_p(scratch)
@@ -27,5 +27,7 @@ Core.in_parallel(programs) do |program|
     puts "FAIL #{program.name}", output.lines.last(40).join
   end
 end
+Core.in_parallel(programs.reject(&:alone)) { |program| run.call(program) }
+programs.select(&:alone).each { |program| run.call(program) } # timings: by themselves, after the rest
 abort "check:wasm: failed: #{failed.sort.join(', ')}" unless failed.empty?
 puts "check:wasm: #{programs.size} test programs pass under wasmtime"

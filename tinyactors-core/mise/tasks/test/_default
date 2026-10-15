@@ -14,7 +14,10 @@ require_relative '../../core'
 require 'open3'
 
 full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
-runs = Core::PROGRAMS.map do |program|
+runs = Core::PROGRAMS.reject(&:alone).map do |program|
+  [program.name, [Core.program_path('dev', program.name), *program.arguments, *(full && program.full ? ['--full'] : [])]]
+end
+alone = Core::PROGRAMS.select(&:alone).map do |program|
   [program.name, [Core.program_path('dev', program.name), *program.arguments, *(full && program.full ? ['--full'] : [])]]
 end
 # A short self-checking run of the torture chamber (its scenario's
@@ -24,7 +27,7 @@ runs << ['torture', [Core.program_path('dev', 'torture-bench'), Core::ROOT.join(
 
 failed = []
 lock = Mutex.new
-Core.in_parallel(runs) do |name, command|
+run = lambda do |name, command|
   scratch = Core.directory('dev').join('scratch', name)
   FileUtils.rm_rf(scratch)
   FileUtils.mkdir_p(scratch)
@@ -36,8 +39,10 @@ Core.in_parallel(runs) do |name, command|
     puts "FAIL #{name}", output.lines.last(40).join
   end
 end
+Core.in_parallel(runs) { |name, command| run.call(name, command) }
+alone.each { |name, command| run.call(name, command) } # timings: by themselves, after the rest
 abort "tinyactors-core: failed: #{failed.sort.join(', ')}" unless failed.empty?
-puts "tinyactors-core: #{runs.size} test programs pass"
+puts "tinyactors-core: #{runs.size + alone.size} test programs pass"
 
 # The rest are tasks of their own; each runs alone too.
 # `api --check` builds the amalgamations first, and fails when a checked-in

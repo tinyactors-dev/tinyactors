@@ -152,11 +152,13 @@ module Core
   # runs from its own directory under the build, so programs that write files
   # can run side by side (AGENTS.md, "Tests run in parallel"). A `full` one
   # has an exhaustive mode, which `mise run test --full` asks for with
-  # `--full` (AGENTS.md, "Where a new test goes").
-  Program = Struct.new(:name, :sources, :uses, :defines, :arguments, :cxx, :full, keyword_init: true)
+  # `--full` (AGENTS.md, "Where a new test goes"). An `alone` one compares
+  # timings, so it runs after the others, by itself (AGENTS.md, "Tests run in
+  # parallel").
+  Program = Struct.new(:name, :sources, :uses, :defines, :arguments, :cxx, :full, :alone, keyword_init: true)
 
-  def self.unit(name, *uses, defines: {}, full: false)
-    Program.new(name: name, sources: ["tests/unit/#{name}.c"], uses: uses, defines: defines, full: full)
+  def self.unit(name, *uses, defines: {}, full: false, alone: false)
+    Program.new(name: name, sources: ["tests/unit/#{name}.c"], uses: uses, defines: defines, full: full, alone: alone)
   end
 
   ECMASCRIPT = %w[datamodel_ecmascript quickjs].freeze
@@ -180,7 +182,7 @@ module Core
     Program.new(name: 'test_headers_cxx', sources: %w[tests/unit/test_headers.cpp], uses: %w[base], cxx: true),
     unit('test_image', 'compile'),
     unit('test_compile', 'compile'),
-    unit('test_compile_scale', 'compile'),
+    unit('test_compile_scale', 'compile', alone: true), # compile times at n and 8n
     unit('test_core', 'core', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_system', 'system', 'compile', 'test_datamodel'),
     unit('test_tracing', 'system', 'compile', 'test_datamodel'),
