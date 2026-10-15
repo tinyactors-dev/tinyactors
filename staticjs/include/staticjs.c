@@ -21501,8 +21501,15 @@ static handled operand_name(sjs_parser *p, const queued_token *t) {
     case SJS_K_IMPORT:
         return import_word(p, t);
     case SJS_K_CONST:
-    case SJS_K_RETURN:
     case SJS_K_EXPORT:
+        /* At the start of a program of one expression: a module is what
+         * holds declarations and exports. JavaScript refuses `(const ...)`
+         * too, so it stays a syntax error. */
+        if (top_frame(p)->type == F_EXPRESSION_GOAL && top_op(p) == NULL) {
+            return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "an expression program is one expression: const and export need a module" });
+        }
+        return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
+    case SJS_K_RETURN:
     case SJS_K_IN:
         return parse_fail(p, t, (sjs_problem){ SJS_ERROR_SYNTAX, "expected an expression" });
     case SJS_K_NONE:

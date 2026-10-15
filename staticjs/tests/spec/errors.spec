@@ -14,6 +14,19 @@ def"]
 1 +
 --- error syntax ends inside an expression
 
+=== a const opening an expression program names the module goal
+const a = 1;
+a
+--- error syntax const and export need a module
+
+=== an export opening an expression program names the module goal
+export default 1
+--- error syntax const and export need a module
+
+=== a const after an operator is only a missing operand
+1 + const
+--- error syntax expected an expression
+
 === an operator with no operand before ]
 [typeof]
 --- error syntax expected an expression
