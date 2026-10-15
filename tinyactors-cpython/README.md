@@ -47,15 +47,14 @@ with tinyactors.Host(config, {"urn:example:app": app},
   with `ResolveError(message, line=None, column=None)`. A compilation with
   an error raises `CompileError` with every diagnostic. `Compiled.image`
   is a read-only buffer, valid until `close()` (a context manager).
-- `Host(config, io_processors=None, *, log=None, clock=None, peer=None,
+- `Host(config, io_processors=None, *, log=None, clock=None,
   telemetry=None, wake=None, migrated=None, services=None,
   migration_done=None)`:
   `config` is the host's config as a dict
   ([host-config.md](../tinyactors-core/docs/host-config.md));
   `io_processors` maps an I/O processor's type to `handler(host, send)`;
   `log` gets each `<log>` line as `handler(host, entry)`; `clock` is a
-  `SimulatedClock` or `None` for the real clocks; `peer` gets each
-  envelope for another system as `handler(host, envelope)`; `telemetry`
+  `SimulatedClock` or `None` for the real clocks; `telemetry`
   gets each OTLP request as `handler(host, signal, data)`, `wake` each
   hibernated actor an event or a migration asks for as `handler(host,
   session, migration)`, `migrated` each actor a migration moved as
@@ -67,8 +66,7 @@ with tinyactors.Host(config, {"urn:example:app": app},
   traceparent=None)`, `send_many([(session, event, data, traceparent),
   ...]) -> accepted`, `terminate(session)`, `boot(segment)` (the image's
   boot actors: its `<system><actor>`s, or the first chart compiled, each
-  under its name), `peer_add(id, *,
-  trusted=False) -> peer`, `deliver(peer, envelope_bytes) -> route`.
+  under its name).
 - Drivers: `run_until_idle()`; `run()`, which sleeps to each deadline
   while there is one; `SimulatedClock.increment(ms)`; and under asyncio
   (`async with Host(...)`), `await host.idle()`. `host.next_deadline` is
@@ -98,7 +96,8 @@ with tinyactors.Host(config, {"urn:example:app": app},
   ([docs/values.md](docs/values.md)) as CBOR.
 
 A `Host` is used from the thread that made it; other threads are refused.
-Several hosts, one per thread, exchange envelopes.
+Several hosts, one per thread, talk through the I/O processor each
+config marks `"remote"` (below, "Other systems").
 
 ## Telemetry
 
@@ -494,6 +493,38 @@ invocations that run at once. quickjs keeps each actor's last event in
 core's event pool (its datamodel does not let it go), so on quickjs
 `system.maxEvents` counts the actors too; left too small, a segment
 doubles every pool (980 MB of region here).
+
+## Other systems
+
+How systems talk (threads and a queue, a WebSocket to a browser, HTTP) is
+the application's choice. A chart addresses another system with the plain
+SCXML target, `tinyactors://<systemID>/#_scxml_<n>` or `.../@<name>`; the
+host delivers a target of its own system itself, and hands every other one
+to the I/O processor the config marks `"remote"` (at most one):
+
+```python
+config = {"systemID": "a", "ioProcessors": [{"type": "urn:app:mesh", "remote": True}]}
+
+def mesh(host, send):            # every send to another system
+    queue_for(send.target).put((send.target, send.event, send.data, send.origin))
+
+host = tinyactors.Host(config, {"urn:app:mesh": mesh})
+```
+
+The other side delivers it as an input, by address, with the sender's
+address as origin, so a chart's reply to `_event.origin` goes back the
+same way:
+
+```python
+target, event, data, origin = queue.get()
+other.send(target, event, data, origin=origin)   # _event.origintype is SCXML's
+```
+
+A send the transport took needs no answer; one it cannot deliver is
+`send.fail()`, and the sender gets `error.communication`. The data is a
+Python value: encode it for the wire as you like (`tinyactors.encode` gives
+the value table's CBOR). Without a remote processor, a send to another
+system is `error.communication`.
 
 ## Charts in Python
 

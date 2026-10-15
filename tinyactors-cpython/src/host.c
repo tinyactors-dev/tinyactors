@@ -1,5 +1,5 @@
 /* The Host (AGENTS.md, "The API"): ta_host_create from Python options, the
- * inputs (add_image, chart, spawn, send, send_many, terminate, boot, peers),
+ * inputs (add_image, chart, spawn, send, send_many, terminate, boot),
  * the call's arena mark, and close. The host's allocator is here, and
  * nowhere else calls an allocator (tools/lint/rules/
  * allocation-in-tables-and-host.yml). The loop is loop.c, the effects
@@ -425,12 +425,12 @@ static ta_status ta_python_host_restore_core(ta_python_host *host, ta_python_res
 }
 
 static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build *build) {
-    static char *const names[] = {"config", "io_processors", "log", "clock", "peer", "telemetry", "wake", "migrated",
+    static char *const names[] = {"config", "io_processors", "log", "clock", "telemetry", "wake", "migrated",
                                   "services", "migration_done", NULL};
-    PyObject *config, *handlers = Py_None, *log = Py_None, *clock = Py_None, *peer = Py_None, *telemetry = Py_None;
+    PyObject *config, *handlers = Py_None, *log = Py_None, *clock = Py_None, *telemetry = Py_None;
     PyObject *wake = Py_None, *migrated = Py_None, *services = Py_None, *migration_done = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(build->arguments, build->keywords, build->pack ? "O|O$OOOOOOOO:restore" : "O|O$OOOOOOOO:Host",
-                                     names, &config, &handlers, &log, &clock, &peer, &telemetry, &wake, &migrated, &services,
+    if (!PyArg_ParseTupleAndKeywords(build->arguments, build->keywords, build->pack ? "O|O$OOOOOOO:restore" : "O|O$OOOOOOO:Host",
+                                     names, &config, &handlers, &log, &clock, &telemetry, &wake, &migrated, &services,
                                      &migration_done))
         return NULL;
     ta_time restored_time = 0;
@@ -456,7 +456,6 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
     host->allocator = ta_python_allocator;
     host->deadline = UINT64_MAX;
     host->log = Py_NewRef(log);
-    host->peer = Py_NewRef(peer);
     host->telemetry = Py_NewRef(telemetry);
     host->wake = Py_NewRef(wake);
     host->migrated = Py_NewRef(migrated);
@@ -669,7 +668,6 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     Py_VISIT(Py_TYPE(self));
     Py_VISIT(host->processors);
     Py_VISIT(host->log);
-    Py_VISIT(host->peer);
     Py_VISIT(host->telemetry);
     Py_VISIT(host->wake);
     Py_VISIT(host->migrated);
@@ -700,7 +698,6 @@ static int ta_python_host_clear(PyObject *self) {
     if (host->host && host->depth == 0 && !host->turning) ta_python_host_close(host, 1);
     Py_CLEAR(host->processors);
     Py_CLEAR(host->log);
-    Py_CLEAR(host->peer);
     Py_CLEAR(host->telemetry);
     Py_CLEAR(host->wake);
     Py_CLEAR(host->migrated);
@@ -823,15 +820,31 @@ static PyObject *ta_python_host_spawn(PyObject *self, PyObject *arguments, PyObj
 
 /* An event of send or send_many: fills `event` and its payload. */
 typedef struct ta_python_send_item {
-    PyObject *session, *name, *data, *traceparent;
+    PyObject *target, *name, *data, *traceparent, *origin;
     uint32_t datamodel; /* out: the payload's */
 } ta_python_send_item;
+
+/* A send's target: a session, or a local address core resolves to one
+ * (ta_host_resolve), before the payload is made in that session's
+ * datamodel. */
+static int ta_python_target(ta_python_host *host, PyObject *target, uint64_t *session) {
+    if (!PyUnicode_Check(target)) return ta_python_session(target, session);
+    ta_string_view address;
+    if (ta_python_text(target, &address) < 0) return -1;
+    ta_status status = ta_host_resolve(host->host, address, session);
+    if (status != TA_OK) {
+        ta_python_raise_status(host->state, status);
+        return -1;
+    }
+    return 0;
+}
 
 static int ta_python_event(ta_python_host *host, ta_python_send_item *item, ta_event_in *event) {
     memset(event, 0, sizeof *event);
     event->size = sizeof *event;
     item->datamodel = TA_NIL;
-    if (ta_python_session(item->session, &event->session) < 0 || ta_python_text(item->traceparent, &event->traceparent) < 0)
+    if (ta_python_target(host, item->target, &event->session) < 0 ||
+        ta_python_text(item->traceparent, &event->traceparent) < 0 || ta_python_text(item->origin, &event->origin) < 0)
         return -1;
     if (!PyUnicode_Check(item->name)) {
         PyErr_SetString(PyExc_TypeError, "an event's name is a str");
@@ -846,11 +859,11 @@ static int ta_python_event(ta_python_host *host, ta_python_send_item *item, ta_e
 }
 
 static PyObject *ta_python_host_send(PyObject *self, PyObject *arguments, PyObject *keywords) {
-    static char *const names[] = {"session", "event", "data", "traceparent", NULL};
+    static char *const names[] = {"target", "event", "data", "traceparent", "origin", NULL};
     ta_python_host *host = (ta_python_host *)self;
-    ta_python_send_item item = {NULL, NULL, Py_None, Py_None, TA_NIL};
-    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "OO|O$O:send", names, &item.session, &item.name, &item.data,
-                                     &item.traceparent))
+    ta_python_send_item item = {NULL, NULL, Py_None, Py_None, Py_None, TA_NIL};
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "OO|O$OO:send", names, &item.target, &item.name, &item.data,
+                                     &item.traceparent, &item.origin))
         return NULL;
     ta_python_call call;
     if (ta_python_enter(host, &call) < 0) return NULL;
@@ -890,12 +903,12 @@ static Py_ssize_t ta_python_send_slice(ta_python_host *host, const ta_python_sli
             PyObject *entry = PyList_GetItem(slice->list, slice->first + made);
             Py_ssize_t size = PyTuple_Check(entry) ? PyTuple_Size(entry) : 0;
             if (size < 2 || size > 4) {
-                PyErr_SetString(PyExc_TypeError, "a send_many item is (session, event[, data[, traceparent]])");
+                PyErr_SetString(PyExc_TypeError, "a send_many item is (target, event[, data[, traceparent]])");
                 break;
             }
             ta_python_send_item item = {PyTuple_GetItem(entry, 0), PyTuple_GetItem(entry, 1),
                                         size > 2 ? PyTuple_GetItem(entry, 2) : Py_None,
-                                        size > 3 ? PyTuple_GetItem(entry, 3) : Py_None, TA_NIL};
+                                        size > 3 ? PyTuple_GetItem(entry, 3) : Py_None, Py_None, TA_NIL};
             if (ta_python_event(host, &item, &events[made]) < 0) break;
             datamodels[made] = item.datamodel;
         }
@@ -966,56 +979,6 @@ static PyObject *ta_python_host_boot(PyObject *self, PyObject *value) {
     if (status == TA_OK) ta_python_loop_schedule(host);
     PyObject *result = ta_python_host_status(host, status);
     ta_python_leave(&call);
-    return result;
-}
-
-/* A peer: another system through one connection (ta_host_peer_add). */
-static PyObject *ta_python_host_peer_add(PyObject *self, PyObject *arguments, PyObject *keywords) {
-    static char *const names[] = {"id", "trusted", NULL};
-    ta_python_host *host = (ta_python_host *)self;
-    PyObject *id;
-    int trusted = 0;
-    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "U|$p:peer_add", names, &id, &trusted)) return NULL;
-    ta_python_call call;
-    if (ta_python_enter(host, &call) < 0) return NULL;
-    PyObject *result = NULL;
-    ta_peer_config peer;
-    memset(&peer, 0, sizeof peer);
-    peer.size = sizeof peer;
-    peer.flags = trusted ? TA_PEER_TRUSTED : 0;
-    if (ta_python_text(id, &peer.id) == 0) {
-        uint32_t handle = 0;
-        ta_status status = ta_host_peer_add(host->host, &peer, &handle);
-        result = status == TA_OK ? PyLong_FromUnsignedLong(handle) : ta_python_host_status(host, status);
-    }
-    ta_python_leave(&call);
-    return result;
-}
-
-/* deliver(peer, envelope): an envelope's bytes from `peer` (0: this
- * host's own code): ta_host_envelope_read, then ta_host_deliver, also
- * for data that is not one item (deliver answers it as malformed,
- * host.h). Returns the TA_ROUTE_* outcome. */
-static PyObject *ta_python_host_deliver(PyObject *self, PyObject *arguments) {
-    ta_python_host *host = (ta_python_host *)self;
-    unsigned long peer;
-    Py_buffer view;
-    if (!PyArg_ParseTuple(arguments, "ky*:deliver", &peer, &view)) return NULL;
-    ta_python_call call;
-    PyObject *result = NULL;
-    if (ta_python_enter(host, &call) == 0) {
-        ta_python_advance(host);
-        ta_envelope envelope;
-        memset(&envelope, 0, sizeof envelope);
-        ta_status status = ta_host_envelope_read(host->host, (ta_bytes){view.buf, (size_t)view.len}, &envelope);
-        int32_t route = status == TA_OK || envelope.size ? ta_host_deliver(host->host, (uint32_t)peer, &envelope) : status;
-        if (route >= 0) {
-            result = PyLong_FromLong(route);
-            ta_python_loop_schedule(host);
-        } else ta_python_raise_status(host->state, route);
-        ta_python_leave(&call);
-    }
-    PyBuffer_Release(&view);
     return result;
 }
 
@@ -1456,10 +1419,6 @@ static PyMethodDef ta_python_host_methods[] = {
      ta_python_doc_host_send_many},
     {"terminate", ta_python_host_terminate, METH_O, ta_python_doc_host_terminate},
     {"boot", ta_python_host_boot, METH_O, ta_python_doc_host_boot},
-    {"peer_add", (PyCFunction)(void (*)(void))ta_python_host_peer_add, METH_VARARGS | METH_KEYWORDS,
-     ta_python_doc_host_peer_add},
-    {"deliver", ta_python_host_deliver, METH_VARARGS,
-     ta_python_doc_host_deliver},
     {"metrics", ta_python_host_metrics, METH_NOARGS,
      ta_python_doc_host_metrics},
     {"sweep", ta_python_host_sweep, METH_VARARGS,

@@ -33,8 +33,11 @@ static const char ta_python_doc_module[] =
     "  Host(...): io_processors for <send> to a transport (each gets a Send),\n"
     "  services for <invoke> of a service you run (each gets an Invocation),\n"
     "  log for <log> (a LogEntry), wake for a hibernated actor that has work\n"
-    "  (Host.wake answers it), migrated (a Migration), peer (an Envelope for\n"
-    "  another host) and telemetry (OTLP bytes). A handler that is a plain\n"
+    "  (Host.wake answers it), migrated (a Migration) and telemetry (OTLP\n"
+    "  bytes). Other systems (another thread's host, a browser) are reached\n"
+    "  through the I/O processor the config marks \"remote\": its handler\n"
+    "  carries a Send to the other side, where Host.send(address, ...,\n"
+    "  origin=send.origin) delivers it. A handler that is a plain\n"
     "  function gets a thin view, valid until the host acknowledges the batch\n"
     "  it came in; an async def handler gets a record.\n"
     "- Questions about the host itself are typed methods (actor_state,\n"
@@ -84,7 +87,7 @@ static const char ta_python_doc_encode[] =
     "Encode one Python value as CBOR bytes of the value table.\n"
     "\n"
     "Use it where a value crosses a process boundary: a config written to a\n"
-    "file, a message for a peer, a value another program decodes. Values you\n"
+    "file, a message for another system, a value another program decodes. Values you\n"
     "pass to a Host in this process (send, spawn's params, a service's\n"
     "data) need no encoding: they cross as Python objects.\n"
     "\n"
@@ -148,7 +151,7 @@ static const char ta_python_doc_compiled_close[] =
     "a fallback.";
 
 static const char ta_python_doc_host[] =
-    "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
+    "Host(config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
     "--\n"
     "\n"
     "A host: many actor systems run as one, the object that holds actors.\n"
@@ -159,7 +162,9 @@ static const char ta_python_doc_host[] =
     "host, all optional:\n"
     "\n"
     "- io_processors: {type: handler(host, send)} for each I/O processor the\n"
-    "  config declares; an actor's <send type=...> reaches it as a Send.\n"
+    "  config declares; an actor's <send type=...> reaches it as a Send. The\n"
+    "  one the config marks \"remote\" gets every send to another system's\n"
+    "  address (tinyactors://<other systemID>/...): your transport.\n"
     "- services: {type: handler(host, invocation)} for the services your\n"
     "  application runs; an <invoke type=...> starts one with an Invocation,\n"
     "  and the handler returns the service object (README, \"Invoked\n"
@@ -171,7 +176,6 @@ static const char ta_python_doc_host[] =
     "- migrated: handler(host, migrated) for each actor a migration moved.\n"
     "- migration_done: handler(host, result) when a migration (Host.migrate)\n"
     "  ends, with its counts and the sessions it left behind.\n"
-    "- peer: handler(host, envelope) for an envelope to another host.\n"
     "- telemetry: handler(host, signal, data) with OTLP bytes, signal\n"
     "  \"traces\" or \"logs\".\n"
     "- clock: a SimulatedClock, for tests; the real clock otherwise.\n"
@@ -235,16 +239,22 @@ static const char ta_python_doc_host_spawn[] =
     "next turn.";
 
 static const char ta_python_doc_host_send[] =
-    "send(session, event, data=None, *, traceparent=None)\n"
+    "send(target, event, data=None, *, traceparent=None, origin=None)\n"
     "--\n"
     "\n"
-    "Give the actor `session` the external event `event` with optional\n"
-    "`data` (a value of the value table, as a Python object).\n"
+    "Give an actor the external event `event` with optional `data` (a value\n"
+    "of the value table, as a Python object). `target` is its session (an\n"
+    "int), or a local address (a str, tinyactors://<this systemID>/#_scxml_<n>\n"
+    "or .../@<name>), which the host resolves.\n"
     "\n"
     "Applied at the call: the event waits in the actor's mailbox and runs in\n"
     "the next turn; a hibernated actor's wake handler is called first.\n"
-    "`traceparent` continues your caller's trace. Refused with\n"
-    "TinyactorsError when the session does not exist or the host is full.";
+    "`traceparent` continues your caller's trace. `origin` is the sender's\n"
+    "address when the event comes from another system (what its remote I/O\n"
+    "processor handed over as send.origin): it becomes _event.origin, a\n"
+    "chart's reply goes back there, and _event.origintype is SCXML's. Refused\n"
+    "with TinyactorsError when the target does not exist (TA_ERROR_STALE),\n"
+    "is another system's address (TA_ERROR_INVALID) or the host is full.";
 
 static const char ta_python_doc_host_send_many[] =
     "send_many(items, /)\n"
@@ -272,22 +282,6 @@ static const char ta_python_doc_host_boot[] =
     "finds it. Use it to start an application from its image alone; spawn\n"
     "starts one actor of a chart you name. A boot that fails part way leaves\n"
     "the actors already spawned; a second boot spawns them all again.";
-
-static const char ta_python_doc_host_peer_add[] =
-    "peer_add(id, *, trusted=False)\n"
-    "--\n"
-    "\n"
-    "Add another host this one exchanges events with, by its id (a str), and\n"
-    "return its peer handle for deliver. Events for it reach the peer\n"
-    "handler as Envelope; `trusted` lets it address any session of this host.";
-
-static const char ta_python_doc_host_deliver[] =
-    "deliver(peer, envelope, /)\n"
-    "--\n"
-    "\n"
-    "Hand this host an envelope that arrived from `peer` (a handle of\n"
-    "peer_add; 0 for envelopes your own code wrote). Returns the route's\n"
-    "outcome: 0 delivered, 1 relayed onward, 2 a duplicate, 3 refused.";
 
 static const char ta_python_doc_host_metrics[] =
     "metrics()\n"
@@ -349,7 +343,7 @@ static const char ta_python_doc_host_snapshot[] =
     "run are not in it either; Host.restore starts them again.";
 
 static const char ta_python_doc_host_restore[] =
-    "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
+    "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
     "--\n"
     "\n"
     "A new Host running a snapshot of Host.snapshot.\n"
@@ -630,6 +624,11 @@ static const char ta_python_doc_send_traceparent[] =
 static const char ta_python_doc_send_type[] =
     "The I/O processor's type from the config (None for a send to an invoked service).";
 
+static const char ta_python_doc_send_origin[] =
+    "The sending actor's address, tinyactors://<systemID>/#_scxml_<session>: what\n"
+    "a remote I/O processor hands the other system, whose Host.send takes it\n"
+    "as origin so a reply finds its way back.";
+
 static const char ta_python_doc_send_answer[] =
     "answer(event, data=None, *, traceparent=send.traceparent, origin=None,\n"
     "       raw=None)\n"
@@ -663,20 +662,6 @@ static const char ta_python_doc_entry_label[] =
 
 static const char ta_python_doc_entry_text[] =
     "The <log>'s evaluated expression, as text.";
-
-static const char ta_python_doc_envelope[] =
-    "An event for another host, given to the peer handler: send its cbor\n"
-    "bytes over your connection to that peer, where Host.deliver takes it.\n"
-    "A thin view, valid until the batch's ack.";
-
-static const char ta_python_doc_envelope_peer[] =
-    "The peer handle (from Host.peer_add) it is for.";
-
-static const char ta_python_doc_envelope_error[] =
-    "True for an error envelope: a delivery failure going back to its sender.";
-
-static const char ta_python_doc_envelope_cbor[] =
-    "The envelope as CBOR bytes, written on first read: what you transmit.";
 
 static const char ta_python_doc_migrated[] =
     "An actor that a migration moved to its chart's current version, given\n"

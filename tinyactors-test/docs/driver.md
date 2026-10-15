@@ -11,7 +11,7 @@ happened themselves and end in a final state that logs `Outcome` `pass` or
 `fail`. The implementation runs them with its own loop and effect handlers,
 in the test environment below, and answers only the outcome. What the suite
 compares byte for byte is what core takes and gives at its API (the
-protocol vectors): configs, requests and replies, envelopes, values.
+protocol vectors): configs, requests and replies, values.
 
 Every method names the core calls behind it; header references are to
 `tinyactors-core/include/tinyactors/`.
@@ -39,8 +39,7 @@ Every method names the core calls behind it; header references are to
   returning `ta_status` reports it as `"status"`, the integer of `types.h`
   (0 `TA_OK` … -9 `TA_ERROR_ABORTED`), and its other members only when it
   is 0, unless the method says otherwise.
-- **Bytes core takes or gives** (a config, a request, a reply, an envelope,
-  a value's CBOR) are byte strings, exactly as core takes or wrote them. An
+- **Bytes core takes or gives** (a config, a request, a reply, a value's CBOR) are byte strings, exactly as core takes or wrote them. An
   implementation whose API takes the language's values instead (a binding's
   typed methods) decodes the well-formed ones into those values
   and encodes them again on the way in, as its API does: that is what the
@@ -57,15 +56,12 @@ Every method names the core calls behind it; header references are to
 | `w3c.run` | `documents`: the test's start document first, then its dependencies: charts (`.scxml`) and the files a `src` reads (`.txt`); `datamodel`, `realm` | `outcome`, as `scenario.run` | one W3C IRP test in the W3C environment (below) |
 | `host.create` | `config` (bytes); `datamodel`, `realm` | `status`; `datamodel`: the vtable's `name` (`datamodel.h`); `error` (bytes) when refused | `ta_host_create` (`host.h`) with `environment->error` set; quickjs: `ta_datamodel_ecmascript_new` with `realm` (`datamodel_ecmascript.h`); native: the implementation's own vtable, or -32602 `range` when it has none |
 | `host.free` | — | `{}` | `ta_host_free` |
-| `host.post` | `message` (bytes); `refuse` (bool) | `status`; when it is 0, `reply` (bytes): the `TA_HOST_EFFECT_REPLY`'s WIRE, left out when the post appended none (a message without an id), and `notifications`: array of bytes, the WIRE of each `TA_HOST_EFFECT_NOTIFICATION` the batch holds that no call answered yet, in order | `ta_host_post`, then `ta_host_effects`: the REPLY is the batch's last effect (`host.h`); its bytes and the notifications' are copied at once. Every successful post drains and acknowledges all pending batches. Peer envelopes are copied into driver-owned buffers for the next `host.run`; a refused post leaves pending effects untouched. With `refuse`, the host's allocator refuses every block during the call: `TA_ERROR_NO_MEMORY`, nothing applied and no REPLY |
+| `host.post` | `message` (bytes); `refuse` (bool) | `status`; when it is 0, `reply` (bytes): the `TA_HOST_EFFECT_REPLY`'s WIRE, left out when the post appended none (a message without an id), and `notifications`: array of bytes, the WIRE of each `TA_HOST_EFFECT_NOTIFICATION` the batch holds that no call answered yet, in order | `ta_host_post`, then `ta_host_effects`: the REPLY is the batch's last effect (`host.h`); its bytes and the notifications' are copied at once. Every successful post drains and acknowledges all pending batches; a refused post leaves pending effects untouched. With `refuse`, the host's allocator refuses every block during the call: `TA_ERROR_NO_MEMORY`, nothing applied and no REPLY |
 | `image.add` | `charts`: array of `{"name", "text"}` | `status`; `segment` | `ta_compile_charts`, `ta_compile_image` (`compile.h`), `ta_host_add_image` with the image's bytes (the host copies them; the compile result is freed once added) |
 | `actor.spawn` | `chart` (its name); `params` (value) | `status`; `session` | `ta_host_chart`, `ta_host_spawn` |
-| `actor.send` | `session`, `event`; `data` (value) | `status` | `ta_host_send` |
+| `actor.send` | `session`, `event`; `data` (value), or `cbor` (bytes: the data as the value table's CBOR, read by the target session's datamodel: quickjs `ta_datamodel_ecmascript_payload_from_cbor`, a binding its own reader; data it cannot read is `TA_ERROR_INVALID`); `origin` (text: the sender's address in another system) | `status` | `ta_host_send` (an origin without an origintype gets the SCXML event processor's) |
 | `clock.advance` | `monotonic` (ticks), `wallNs` | `{}` | `ta_host_advance_time` |
-| `host.run` | — | `status` of the last run; `envelopes`: array of bytes; `notifications`: array of bytes | First the envelopes retained by successful posts, then any pending batch (for example, appended by `envelope.deliver`): `ta_host_effects`, handled as below, then `ta_host_effects_ack`. Then `ta_host_run`, again while it answers `TA_RUN_YIELDED` or `TA_RUN_EFFECTS_FULL` (`system.h`), at most 1,000 times, acknowledging the effects after each run. For each `PEER` and `PEER_ERROR` effect, in order, the bytes `ta_host_envelope` writes; for each `NOTIFICATION` no `host.post` answered, its WIRE. No other effect is handled |
-| `peer.add` | `id`; `trusted` (bool) | `status`; `peer` | `ta_host_peer_add` (`TA_PEER_TRUSTED`) |
-| `envelope.read` | `cbor` (bytes); `error` (bool: an error envelope) | `status`; `back` (bytes): what was read, written again | `ta_host_envelope_read` or `ta_host_peer_error_read`, then `ta_host_envelope` of a `PEER` (`PEER_ERROR`) effect holding it |
-| `envelope.deliver` | `peer`, `cbor` (bytes) | `status`; `route` (`TA_ROUTE_*`) | `ta_host_envelope_read`, then `ta_host_deliver`, also when the read failed with the envelope's `size` set (data that is not one well-formed item: `ta_host_deliver` refuses it as malformed and answers the sender, `host.h`); `status` is the read's when it failed with `size` 0 (nothing to answer), and `ta_host_deliver`'s answer when it is negative |
+| `host.run` | — | `status` of the last run; `sends`: array of `{"target", "event", "origin", "data"}`; `notifications`: array of bytes | First any pending batch: `ta_host_effects`, handled as below, then `ta_host_effects_ack`. Then `ta_host_run`, again while it answers `TA_RUN_YIELDED` or `TA_RUN_EFFECTS_FULL` (`system.h`), at most 1,000 times, acknowledging the effects after each run. For each `TA_EFFECT_SEND` to the I/O processor the config marks `remote`, in order: its target, event, origin (`TA_EFFECT_FIELD_ORIGIN`) and, when it has data, `data` (bytes: the value table's CBOR the sender's datamodel writes, `to_wire`, or a binding its own writer); for each `NOTIFICATION` no `host.post` answered, its WIRE. No other effect is handled |
 | `value.encode` | `expression` (text, ECMAScript) | `status`; `cbor` (bytes) | ECMAScript datamodels only: the expression's value, then `to_wire` (quickjs: `ta_datamodel_ecmascript_payload_eval`); an expression that throws is `TA_ERROR_EXECUTION`, another datamodel `TA_ERROR_UNSUPPORTED` |
 
 **Datamodels.** `datamodel` names one the implementation offers:
@@ -97,7 +93,7 @@ by the command under test, so an adapter cannot lower its own bar.
 | Kind | Must offer | Used by |
 |---|---|---|
 | `reference` | every method above | `ta-conform` (`tinyactors-core`'s `mise run conform`) |
-| `binding` (the default) | every method but the C-level ones: `envelope.read` and `value.encode`; `host.post` without `refuse`, which the runner does not send it | each binding's adapter |
+| `binding` (the default) | every method but the C-level one, `value.encode`; `host.post` without `refuse`, which the runner does not send it | each binding's adapter |
 
 The reference runs every case. A binding's run skips, besides the
 C-level methods' cases and those with `refused`, the envelope-level
@@ -112,14 +108,14 @@ Since the binding writes the map and its id itself, its adapter answers
 got, with the message's `id`, and `host.run` with the
 notifications its API delivered, written as CBOR again.
 
-The C-level methods reach core below the API a binding exposes: a
-binding's API reads an envelope only to deliver it (`envelope.deliver`),
-evaluates no expression outside a chart (`value.encode`), and answers a
-request with its whole reply. A value's round trip goes through the
-public path instead: `values.txt` delivers it in an envelope to the echo
-setup, whose datamodel reads it (`from_wire`) and writes it into the
-envelope it sends back (`to_wire`). A binding may offer them; the
-runner skips their cases when it does not.
+The C-level method reaches core below the API a binding exposes: a
+binding's API evaluates no expression outside a chart (`value.encode`).
+A value's round trip goes through the public path instead: `values.txt`
+gives it to the echo setup as the data of an event from another system
+(`actor.send` with `cbor` and `origin`), whose chart sends it back to its
+origin, out through the remote I/O processor (`host.run`'s `sends`). A
+binding may offer `value.encode`; the runner skips its cases when it does
+not.
 
 **`src`.** A chart's `src` attribute (`<invoke src>`, `<data src>`) names
 a document of the call's `documents`, by its `name` with a leading
@@ -172,7 +168,7 @@ What the world does around a scenario, and nothing more (`ta-conform`:
 
 - **The host:** config `{"systemID": "conformance", "system":
   {"ticksPerSecond": 1000}}` (`config_write`), one datamodel, no
-  I/O processors, no peers. The scenarios send only to actors of the same
+  I/O processors. The scenarios send only to actors of the same
   host (`#_scxml_<session>`, `#_parent`, `#_<invokeid>`).
 - **Time:** the monotonic clock starts at 0 and moves only with `advance`
   steps; `wallNs` is 0 (`step_advance`).

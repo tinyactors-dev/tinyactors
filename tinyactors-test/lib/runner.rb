@@ -16,33 +16,29 @@ class Runner
   SUITES = %w[protocol scenarios w3c].freeze
   PROTOCOL = Pathname.new(__dir__).join('../suites/protocol').expand_path
 
-  # Statuses of tinyactors-core/include/tinyactors/types.h, and the routes
-  # of host.h that envelopes.txt expects (TA_ROUTE_RELAYED, TA_ROUTE_REFUSED).
+  # Statuses of tinyactors-core/include/tinyactors/types.h.
   OK = 0
   INVALID = -3
   NO_MEMORY = -4
-  ROUTES = { 'relay' => 1, 'refused' => 3 }.freeze
-  DELIVERED = 0
 
-  # The echo setup's peer, and the error envelope it gets back for a value
-  # the echo's datamodel cannot read (values.txt, malformed).
+  # The echo setup's sender in another system, and its remote I/O processor
+  # (suites/protocol/README.md, "Setups").
   ECHO_ORIGIN = 'tinyactors://p/#_scxml_9'
-  MALFORMED = CBOR.from_diagnostic(%({"error":"malformed","sendid":"s1","origin":"#{ECHO_ORIGIN}","msgid":"m1"}))
-                  .unpack1('H*')
+  REMOTE = 'urn:tinyactors:test:remote'
 
   # The wall clock a setup's runs see (suites/protocol/README.md, "Setups").
   WALL_NS = 1_700_000_000_000_000_000
 
   # The setups' system ids (suites/protocol/README.md, "Setups").
-  SYSTEMS = { 'empty' => 'h', 'pinged' => 'h', 'pinged2' => 'h', 'pinger' => 'a', 'relay' => 'b' }.freeze
+  SYSTEMS = { 'empty' => 'h', 'pinged' => 'h', 'pinged2' => 'h' }.freeze
 
   # The methods of docs/driver.md, and those each kind of implementation
   # must offer (docs/driver.md, "Kinds"): the reference all of them, a
   # binding all but the C-level ones, which call core below the API a
   # binding exposes (it sends a binding no `refuse` either).
   METHODS = %w[scenario.run w3c.run host.create host.free host.post image.add actor.spawn actor.send
-               clock.advance host.run peer.add envelope.read envelope.deliver value.encode].freeze
-  C_LEVEL = %w[envelope.read value.encode].freeze
+               clock.advance host.run value.encode].freeze
+  C_LEVEL = %w[value.encode].freeze
   REQUIRED = { 'reference' => METHODS, 'binding' => METHODS - C_LEVEL }.freeze
 
   Result = Struct.new(:suite, :name, :verdict, :detail)
@@ -125,7 +121,7 @@ class Runner
   # ---- the protocol vectors --------------------------------------------------
 
   def protocol
-    %w[requests config envelopes values].each do |kind|
+    %w[requests config values].each do |kind|
       path = @protocol.join("#{kind}.txt")
       next unless path.file?
       next if @only && !@only.protocol.include?(kind)
@@ -205,34 +201,11 @@ class Runner
     end
   end
 
-  def envelopes_case(vector)
-    kind = vector.kind
-    routed = ROUTES.key?(kind)
-    setup(vector.get('setup') || (routed ? 'relay' : 'empty'))
-    envelope = bytes(vector.get('cbor').to_s)
-    case kind
-    when 'send' then envelopes!(vector)
-    when 'relay', 'refused'
-      read = call('envelope.deliver', 'peer' => @peers.fetch('a'), 'cbor' => envelope)
-      status!(read, OK, 'ta_host_deliver')
-      raise Failed, "route #{read['route']}, expected #{ROUTES[kind]} (#{kind})" unless read['route'] == ROUTES[kind]
-
-      envelopes!(vector)
-    when 'roundtrip', 'error-roundtrip'
-      read = call('envelope.read', 'cbor' => envelope, 'error' => kind.start_with?('error'))
-      status!(read, OK, 'reading it')
-      same!('written back', vector.get('back') || vector.get('cbor'), read['back'])
-    when 'invalid', 'error-invalid'
-      status!(call('envelope.read', 'cbor' => envelope, 'error' => kind.start_with?('error')), INVALID, 'reading it')
-    else raise Failed, "unknown kind #{kind}"
-    end
-  end
-
   # On the datamodel under test; ECMAScript expressions and the cases named
   # "ECMAScript: ..." only on an ECMAScript one, those named "not
   # ECMAScript: ..." only on another (values.txt, its header).
   def values_case(vector)
-    created = create(config('h'), @datamodel)
+    created = create(config('h', remote: true), @datamodel)
     status!(created, OK, 'ta_host_create')
     ecmascript = created['datamodel'] == 'ecmascript'
     case vector.kind
@@ -256,34 +229,28 @@ class Runner
     end
   end
 
-  # The value of a roundtrip or malformed case, delivered in an envelope
-  # from the peer "p" to the echo setup's session, through the calls a
-  # binding's API makes (ta_host_envelope_read, ta_host_deliver): its
-  # datamodel's from_wire reads it, and the PEER envelope the echo sends
-  # back carries what its to_wire wrote. A malformed value is refused, and
-  # the error envelope back to "p" says so (host.h, ta_host_deliver).
+  # The value of a roundtrip or malformed case, given to the echo setup's
+  # session as the data of an event from another system (actor.send with
+  # `cbor` and `origin`): the target's datamodel reads it, the echo sends it
+  # back to its origin, and that send leaves through the remote I/O
+  # processor (host.run's `sends`), its data written by the implementation.
+  # A malformed value is refused at the input (TA_ERROR_INVALID).
   def echoed!(vector)
-    value = CBOR::Tag.new(24, CBOR::Bytes.new(hex(vector.get('cbor'))))
-    envelope = CBOR::Map.new([['target', "tinyactors://h/#_scxml_#{@echo}"], ['name', 'v'], ['data', value],
-                              ['sendid', 's1'], ['origin', ECHO_ORIGIN], ['msgid', 'm1']])
-    delivered = call('envelope.deliver', 'peer' => @peers.fetch('p'), 'cbor' => CBOR::Bytes.new(CBOR.encode(envelope)))
-    status!(delivered, OK, 'ta_host_deliver')
-    malformed = vector.kind == 'malformed'
-    route = malformed ? ROUTES['refused'] : DELIVERED
-    raise Failed, "route #{delivered['route'].inspect}, expected #{route}" unless delivered['route'] == route
+    sent = call('actor.send', 'session' => @echo, 'event' => 'v', 'origin' => ECHO_ORIGIN,
+                              'cbor' => bytes(vector.get('cbor')))
+    return status!(sent, INVALID, 'the input of a malformed value') if vector.kind == 'malformed'
 
-    call('clock.advance', 'monotonic' => 0, 'wallNs' => WALL_NS)
-    sent = call('host.run').fetch('envelopes', [])
-    raise Failed, "#{sent.size} envelopes back, expected 1" unless sent.size == 1
-    return same!('the error envelope', MALFORMED, sent.first) if malformed
+    status!(sent, OK, 'ta_host_send')
+    sends = run_host.fetch('sends', [])
+    raise Failed, "#{sends.size} sends to the remote processor, expected 1" unless sends.size == 1
 
-    back = CBOR.decode(data(sent.first))
-    data = back.major == 5 && back.children.each_slice(2).find { |key, _| CBOR.value(key) == 'data' }&.last
-    unless data&.major == 6 && data.argument == 24 && data.children.first.major == 2
-      raise Failed, "the envelope back has no data as tag 24 on bytes\n  got  #{CBOR.diagnostic(back)}"
+    back = sends.first
+    unless back['target'] == ECHO_ORIGIN && back['event'] == 'back'
+      raise Failed, "the echo sent #{back['event'].inspect} to #{back['target'].inspect}, expected back to #{ECHO_ORIGIN}"
     end
+    raise Failed, 'the send back has no data' unless back['data']
 
-    same!('the data sent back', vector.get('back') || vector.get('cbor'), CBOR.payload(data.children.first))
+    same!('the data sent back', vector.get('back') || vector.get('cbor'), back['data'])
   end
 
   # ---- scenarios and W3C: outcomes -----------------------------------------------
@@ -397,9 +364,10 @@ class Runner
 
   # ---- setups (suites/protocol/README.md) -----------------------------------------
 
-  def config(system)
-    CBOR.encode({ 'systemID' => system,
-                  'system' => { 'maxActors' => 8, 'ticksPerSecond' => 1000, 'traceSeed' => 1 } })
+  def config(system, remote: false)
+    config = { 'systemID' => system, 'system' => { 'maxActors' => 8, 'ticksPerSecond' => 1000, 'traceSeed' => 1 } }
+    config['ioProcessors'] = [{ 'type' => REMOTE, 'remote' => true }] if remote
+    CBOR.encode(config)
   end
 
   def create(config, datamodel)
@@ -420,20 +388,11 @@ class Runner
       chart('pinged')
       (name == 'pinged2' ? 2 : 1).times { spawn_actor('pinged') }
       settle
-    when 'pinger'
-      chart('pinger')
-      session = spawn_actor('pinger')
-      peer('b')
-      sent = call('actor.send', 'session' => session, 'event' => 'go',
-                                'data' => { 'to' => 'tinyactors://b/@echo', 'n' => 1 })
-      status!(sent, OK, 'setup pinger: ta_host_send')
-    when 'relay'
-      @peers = { 'a' => peer('a'), 'c' => peer('c') }
     end
   end
 
-  # The echo setup on a host already created as `empty`: the echo chart in
-  # the datamodel's language, one session of it, and the peer "p".
+  # The echo setup on a host created with the remote I/O processor: the
+  # echo chart in the datamodel's language and one session of it.
   def echo(language)
     unless W3C.stylesheets.key?(language)
       raise Failed, "the datamodel is #{language.inspect}, and no stylesheet writes the echo chart in it"
@@ -442,7 +401,6 @@ class Runner
     text = Pathname.new(@setups || W3C.setups(language)).join('echo.scxml').read
     status!(call('image.add', 'charts' => [{ 'name' => 'echo.scxml', 'text' => text }]), OK, 'image echo')
     @echo = spawn_actor('echo')
-    @peers = { 'p' => peer('p') }
     settle
   end
 
@@ -455,12 +413,6 @@ class Runner
     spawned = call('actor.spawn', 'chart' => chart)
     status!(spawned, OK, "spawn #{chart}")
     spawned['session']
-  end
-
-  def peer(id)
-    added = call('peer.add', 'id' => id, 'trusted' => true)
-    status!(added, OK, "peer #{id}")
-    added['peer']
   end
 
   def settle
@@ -521,20 +473,6 @@ class Runner
       same!("notification #{index + 1}", want[index], notification)
     end
     raise Failed, "#{got.size} notifications after the run, expected #{want.size}" if got.size < want.size
-  end
-
-  # The envelopes of the host's next run, against the vector's envelope
-  # lines in order.
-  def envelopes!(vector)
-    call('clock.advance', 'monotonic' => 0, 'wallNs' => WALL_NS)
-    got = call('host.run').fetch('envelopes', [])
-    want = vector.all('envelope')
-    got.each_with_index do |envelope, index|
-      raise Failed, "an envelope more than expected\n  got  #{diagnostic(envelope)}" unless want[index]
-
-      same!("envelope #{index + 1}", want[index], envelope)
-    end
-    raise Failed, "#{got.size} envelopes, expected #{want.size}" if got.size < want.size
   end
 
   def outcome!(result, expected = 'pass')

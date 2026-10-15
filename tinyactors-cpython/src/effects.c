@@ -12,15 +12,13 @@
 
 enum {
     TA_PYTHON_SEND_SESSION, TA_PYTHON_SEND_SENDID, TA_PYTHON_SEND_EVENT, TA_PYTHON_SEND_TARGET,
-    TA_PYTHON_SEND_DATA, TA_PYTHON_SEND_TRACEPARENT, TA_PYTHON_SEND_TYPE, TA_PYTHON_SEND_FIELDS
+    TA_PYTHON_SEND_DATA, TA_PYTHON_SEND_TRACEPARENT, TA_PYTHON_SEND_TYPE, TA_PYTHON_SEND_ORIGIN, TA_PYTHON_SEND_FIELDS
 };
 enum { TA_PYTHON_ENTRY_SESSION, TA_PYTHON_ENTRY_LABEL, TA_PYTHON_ENTRY_TEXT, TA_PYTHON_ENTRY_FIELDS };
-enum { TA_PYTHON_ENVELOPE_PEER, TA_PYTHON_ENVELOPE_ERROR, TA_PYTHON_ENVELOPE_CBOR, TA_PYTHON_ENVELOPE_FIELDS };
 enum { TA_PYTHON_MIGRATED_SESSION, TA_PYTHON_MIGRATED_SEGMENT, TA_PYTHON_MIGRATED_CHART, TA_PYTHON_MIGRATED_MIGRATION,
        TA_PYTHON_MIGRATION_FIELDS };
 /* every view's fields fit the send's array */
-_Static_assert(TA_PYTHON_ENTRY_FIELDS <= TA_PYTHON_SEND_FIELDS && TA_PYTHON_ENVELOPE_FIELDS <= TA_PYTHON_SEND_FIELDS &&
-                   TA_PYTHON_MIGRATION_FIELDS <= TA_PYTHON_SEND_FIELDS,
+_Static_assert(TA_PYTHON_ENTRY_FIELDS <= TA_PYTHON_SEND_FIELDS && TA_PYTHON_MIGRATION_FIELDS <= TA_PYTHON_SEND_FIELDS,
                "a view's fields outgrow ta_python_view.fields");
 
 /* What every view holds: where its effect is. */
@@ -80,6 +78,9 @@ static PyObject *ta_python_send_read(ta_python_view *view, int which) {
     case TA_PYTHON_SEND_TRACEPARENT: /* formatted by core on first ask; empty when untraced */
         value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_TRACEPARENT, 1});
         break;
+    case TA_PYTHON_SEND_ORIGIN: /* the sender's address, formatted by core on first ask */
+        value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_ORIGIN, 1});
+        break;
     default: { /* the I/O processor's type; None for a send to an invoked service */
         PyObject *row = view->processor < (uint32_t)PyList_Size(view->host->processors)
                             ? PyList_GetItem(view->host->processors, view->processor)
@@ -112,30 +113,6 @@ static PyObject *ta_python_migrated_read(ta_python_view *view, int which) {
     PyObject *value = which == TA_PYTHON_MIGRATED_CHART
                           ? ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_EVENT, 0})
                           : PyLong_FromUnsignedLongLong(ta_host_effect_number(view->host->host, view->index, numbers[which]));
-    if (value) view->fields[which] = Py_NewRef(value);
-    return value;
-}
-
-/* An envelope's bytes, written by ta_host_envelope (a view of the host's
- * until the ack) and copied once into a bytes the application keeps. */
-static PyObject *ta_python_envelope_read(ta_python_view *view, int which) {
-    if (view->fields[which]) return Py_NewRef(view->fields[which]);
-    if (ta_python_view_live(view) < 0) return NULL;
-    ta_host *core = view->host->host;
-    PyObject *value = NULL;
-    if (which == TA_PYTHON_ENVELOPE_PEER)
-        value = PyLong_FromUnsignedLongLong(ta_host_effect_number(core, view->index, TA_EFFECT_FIELD_PEER));
-    else if (which == TA_PYTHON_ENVELOPE_ERROR)
-        value = PyBool_FromLong(ta_host_effect_number(core, view->index, TA_EFFECT_FIELD_KIND) == TA_HOST_EFFECT_PEER_ERROR);
-    else {
-        const ta_host_effect *effects;
-        ta_bytes bytes;
-        ta_status status = ta_host_effects(core, &effects) > view->index
-                               ? ta_host_envelope(core, &effects[view->index], &bytes)
-                               : TA_ERROR_STALE;
-        if (status != TA_OK) ta_python_raise_status(view->host->state, status);
-        else value = PyBytes_FromStringAndSize(bytes.pointer, (Py_ssize_t)bytes.length);
-    }
     if (value) view->fields[which] = Py_NewRef(value);
     return value;
 }
@@ -188,12 +165,10 @@ TA_PYTHON_GETTER(send, target, TA_PYTHON_SEND_TARGET)
 TA_PYTHON_GETTER(send, data, TA_PYTHON_SEND_DATA)
 TA_PYTHON_GETTER(send, traceparent, TA_PYTHON_SEND_TRACEPARENT)
 TA_PYTHON_GETTER(send, type, TA_PYTHON_SEND_TYPE)
+TA_PYTHON_GETTER(send, origin, TA_PYTHON_SEND_ORIGIN)
 TA_PYTHON_GETTER(entry, session, TA_PYTHON_ENTRY_SESSION)
 TA_PYTHON_GETTER(entry, label, TA_PYTHON_ENTRY_LABEL)
 TA_PYTHON_GETTER(entry, text, TA_PYTHON_ENTRY_TEXT)
-TA_PYTHON_GETTER(envelope, peer, TA_PYTHON_ENVELOPE_PEER)
-TA_PYTHON_GETTER(envelope, error, TA_PYTHON_ENVELOPE_ERROR)
-TA_PYTHON_GETTER(envelope, cbor, TA_PYTHON_ENVELOPE_CBOR)
 TA_PYTHON_GETTER(migrated, session, TA_PYTHON_MIGRATED_SESSION)
 TA_PYTHON_GETTER(migrated, segment, TA_PYTHON_MIGRATED_SEGMENT)
 TA_PYTHON_GETTER(migrated, chart, TA_PYTHON_MIGRATED_CHART)
@@ -308,6 +283,7 @@ static PyGetSetDef ta_python_send_properties[] = {
     {"data", ta_python_send_data, NULL, ta_python_doc_send_data, NULL},
     {"traceparent", ta_python_send_traceparent, NULL, ta_python_doc_send_traceparent, NULL},
     {"type", ta_python_send_type, NULL, ta_python_doc_send_type, NULL},
+    {"origin", ta_python_send_origin, NULL, ta_python_doc_send_origin, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
@@ -346,21 +322,6 @@ static PyType_Slot ta_python_entry_slots[] = {
     {0, NULL}
 };
 
-static PyGetSetDef ta_python_envelope_properties[] = {
-    {"peer", ta_python_envelope_peer, NULL, ta_python_doc_envelope_peer, NULL},
-    {"error", ta_python_envelope_error, NULL, ta_python_doc_envelope_error, NULL},
-    {"cbor", ta_python_envelope_cbor, NULL, ta_python_doc_envelope_cbor, NULL},
-    {NULL, NULL, NULL, NULL, NULL}
-};
-
-static PyType_Slot ta_python_envelope_slots[] = {
-    {Py_tp_doc, (void *)ta_python_doc_envelope},
-    {Py_tp_dealloc, ta_python_view_dealloc},
-    {Py_tp_traverse, ta_python_view_traverse},
-    {Py_tp_clear, ta_python_view_clear},
-    {Py_tp_getset, ta_python_envelope_properties},
-    {0, NULL}
-};
 
 static PyGetSetDef ta_python_migrated_properties[] = {
     {"session", ta_python_migrated_session, NULL, ta_python_doc_migrated_session, NULL},
@@ -382,8 +343,6 @@ static PyType_Slot ta_python_migrated_slots[] = {
 #define TA_PYTHON_VIEW_FLAGS (Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_IMMUTABLETYPE | Py_TPFLAGS_DISALLOW_INSTANTIATION)
 static PyType_Spec ta_python_send_spec = {"tinyactors.Send", sizeof(ta_python_view), 0, TA_PYTHON_VIEW_FLAGS, ta_python_send_slots};
 static PyType_Spec ta_python_entry_spec = {"tinyactors.LogEntry", sizeof(ta_python_view), 0, TA_PYTHON_VIEW_FLAGS, ta_python_entry_slots};
-static PyType_Spec ta_python_envelope_spec = {"tinyactors.Envelope", sizeof(ta_python_view), 0, TA_PYTHON_VIEW_FLAGS,
-                                              ta_python_envelope_slots};
 static PyType_Spec ta_python_migrated_spec = {"tinyactors.Migrated", sizeof(ta_python_view), 0, TA_PYTHON_VIEW_FLAGS,
                                                ta_python_migrated_slots};
 
@@ -555,7 +514,7 @@ static void ta_python_dispatch_send(ta_python_host *host, uint32_t index) {
     Py_DECREF(view);
 }
 
-/* A log line or an envelope to its handler, as a thin view. */
+/* A log line to its handler, as a thin view. */
 typedef struct ta_python_handler {
     PyObject *handler; /* None: the effect is dropped */
     PyObject *type;    /* the view's */
@@ -968,8 +927,6 @@ void ta_python_dispatch(ta_python_host *host, uint32_t index) {
     switch ((uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_KIND)) {
     case TA_EFFECT_SEND: ta_python_dispatch_send(host, index); break;
     case TA_EFFECT_LOG: ta_python_dispatch_view(host, (ta_python_handler){host->log, host->state->entry_type}, index); break;
-    case TA_HOST_EFFECT_PEER:
-    case TA_HOST_EFFECT_PEER_ERROR: ta_python_dispatch_view(host, (ta_python_handler){host->peer, host->state->envelope_type}, index); break;
     case TA_EFFECT_REQUEST: { /* a fetch at run time: refused in C until it is built (AGENTS.md) */
         ta_resume resume = {(uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_SEGMENT),
                             (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN), TA_ERROR_INVALID, 0, 0};
@@ -999,14 +956,11 @@ void ta_python_dispatch(ta_python_host *host, uint32_t index) {
 int ta_python_effects_init_types(PyObject *module, ta_python_module_state *state) {
     state->send_type = PyType_FromModuleAndSpec(module, &ta_python_send_spec, NULL);
     state->entry_type = state->send_type ? PyType_FromModuleAndSpec(module, &ta_python_entry_spec, NULL) : NULL;
-    state->envelope_type = state->entry_type ? PyType_FromModuleAndSpec(module, &ta_python_envelope_spec, NULL) : NULL;
-    state->migrated_type = state->envelope_type ? PyType_FromModuleAndSpec(module, &ta_python_migrated_spec, NULL) : NULL;
+    state->migrated_type = state->entry_type ? PyType_FromModuleAndSpec(module, &ta_python_migrated_spec, NULL) : NULL;
     state->invocation_type = state->migrated_type ? PyType_FromModuleAndSpec(module, &ta_python_invocation_spec, NULL) : NULL;
     if (!state->invocation_type) return -1;
     if (PyModule_AddObjectRef(module, "Invocation", state->invocation_type) < 0) return -1;
     if (PyModule_AddObjectRef(module, "Migrated", state->migrated_type) < 0) return -1;
-    if (PyModule_AddObjectRef(module, "Send", state->send_type) < 0 ||
-        PyModule_AddObjectRef(module, "LogEntry", state->entry_type) < 0)
-        return -1;
-    return PyModule_AddObjectRef(module, "Envelope", state->envelope_type);
+    if (PyModule_AddObjectRef(module, "Send", state->send_type) < 0) return -1;
+    return PyModule_AddObjectRef(module, "LogEntry", state->entry_type);
 }

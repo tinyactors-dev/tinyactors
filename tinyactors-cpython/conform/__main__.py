@@ -7,8 +7,8 @@ path. Frames are a four-byte big-endian length and one CBOR message, read
 and written with tinyactors.decode and tinyactors.encode. Each driver
 method is the binding's own calls, as an application makes them: a host
 is a tinyactors.Host, a control message is the typed method of its name,
-an envelope goes through Host.deliver and comes back through the Host's
-peer handler. Standard output holds frames only; diagnostics go to
+and what goes to another system leaves through the I/O processor the
+config marks remote. Standard output holds frames only; diagnostics go to
 standard error.
 """
 
@@ -82,10 +82,13 @@ class Adapter:
     def __init__(self):
         self.host = None
         self.clock = None
-        self.envelopes = []
+        self.sends = []
 
-    def peer(self, host, envelope):
-        self.envelopes.append(envelope.cbor)
+    def remote(self, host, send):
+        """A send to another system: kept for host.run, its data written
+        with the binding's own codec (no data reads as None, null's CBOR)."""
+        self.sends.append({"target": send.target, "event": send.event, "origin": send.origin,
+                           "data": tinyactors.encode(send.data)})
 
     def need_host(self):
         if self.host is None:
@@ -102,9 +105,12 @@ class Adapter:
             raise DriverError(-32602, "range", "params.datamodel", "no such datamodel")
         config = tinyactors.decode(params["config"])
         self.clock = tinyactors.SimulatedClock()
-        self.envelopes = []
+        self.sends = []
+        processors = config.get("ioProcessors") if isinstance(config, dict) else None
+        remote = {processor["type"]: self.remote for processor in processors
+                  if isinstance(processor, dict) and processor.get("remote")} if isinstance(processors, list) else {}
         try:
-            self.host = tinyactors.Host(config, peer=self.peer, clock=self.clock)
+            self.host = tinyactors.Host(config, remote, clock=self.clock)
         except tinyactors.TinyactorsError as error:
             result = {"status": status_of(error)}
             if error.code is not None:
@@ -162,8 +168,14 @@ class Adapter:
 
     def actor_send(self, params):
         host = self.need_host()
+        data = params.get("data")
+        if "cbor" in params:
+            try:
+                data = tinyactors.decode(params["cbor"])
+            except (ValueError, TypeError, tinyactors.TinyactorsError):
+                return {"status": STATUS["TA_ERROR_INVALID"]}
         try:
-            host.send(params["session"], params["event"], params.get("data"))
+            host.send(params["session"], params["event"], data, origin=params.get("origin"))
         except (tinyactors.TinyactorsError, MemoryError) as error:
             return {"status": status_of(error)}
         return {"status": 0}
@@ -184,22 +196,8 @@ class Adapter:
             status = TA_RUN_EXHAUSTED
         except tinyactors.TinyactorsError:
             status = TA_RUN_FAULT
-        envelopes, self.envelopes = self.envelopes, []
-        return {"status": status, "envelopes": envelopes, "notifications": []}
-
-    def peer_add(self, params):
-        host = self.need_host()
-        try:
-            return {"status": 0, "peer": host.peer_add(params["id"], trusted=bool(params.get("trusted")))}
-        except (tinyactors.TinyactorsError, MemoryError) as error:
-            return {"status": status_of(error)}
-
-    def envelope_deliver(self, params):
-        host = self.need_host()
-        try:
-            return {"status": 0, "route": host.deliver(params["peer"], params["cbor"])}
-        except (tinyactors.TinyactorsError, MemoryError) as error:
-            return {"status": status_of(error)}
+        sends, self.sends = self.sends, []
+        return {"status": status, "sends": sends, "notifications": []}
 
     # ---- scenarios --------------------------------------------------------------
 
@@ -447,7 +445,7 @@ def read_exactly(stream, size):
 def answer(adapter, call):
     method = call.get("method")
     function = getattr(adapter, method.replace(".", "_"), None) if isinstance(method, str) else None
-    if function is None or method.startswith("_") or method in ("need.host", "peer"):
+    if function is None or method.startswith("_") or method in ("need.host", "remote"):
         return {"id": call["id"], "error": {"code": -32601, "message": "%s is not offered" % method,
                                              "data": {"reason": "unknown", "path": "method"}}}
     try:

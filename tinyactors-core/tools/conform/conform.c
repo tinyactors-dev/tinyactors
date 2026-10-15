@@ -262,6 +262,11 @@ void conform_result_list(conform_result *result, const char *name, conform_bytes
     if (field) field->list = list;
 }
 
+void conform_result_sends(conform_result *result, const char *name, conform_sends sends) {
+    conform_field *field = field_add(result, name, CONFORM_FIELD_SENDS);
+    if (field) field->sends = sends;
+}
+
 const char *conform_outcome(const ta_host_effect *effect) {
     if (effect->kind != TA_EFFECT_LOG || effect->auxiliary.length != 7 || memcmp(effect->auxiliary.pointer, "Outcome", 7))
         return NULL;
@@ -284,6 +289,23 @@ static void write_field(ta_cbor_writer *writer, const conform_field *field) {
     case CONFORM_FIELD_INTEGER: ta_cbor_write_int(writer, field->integer); break;
     case CONFORM_FIELD_TEXT: ta_cbor_write_text(writer, field->text); break;
     case CONFORM_FIELD_BYTES: ta_cbor_write_bytes(writer, field->bytes); break;
+    case CONFORM_FIELD_SENDS:
+        ta_cbor_write_array(writer, field->sends.count);
+        for (uint32_t i = 0; i < field->sends.count; i++) {
+            const conform_send *send = &field->sends.pointer[i];
+            ta_cbor_write_map(writer, send->data.pointer ? 4 : 3);
+            ta_cbor_write_text(writer, ta_string("target"));
+            ta_cbor_write_text(writer, send->target);
+            ta_cbor_write_text(writer, ta_string("event"));
+            ta_cbor_write_text(writer, send->event);
+            ta_cbor_write_text(writer, ta_string("origin"));
+            ta_cbor_write_text(writer, send->origin);
+            if (send->data.pointer) {
+                ta_cbor_write_text(writer, ta_string("data"));
+                ta_cbor_write_bytes(writer, send->data);
+            }
+        }
+        break;
     default:
         ta_cbor_write_array(writer, field->list.count);
         for (uint32_t i = 0; i < field->list.count; i++)

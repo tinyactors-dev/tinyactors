@@ -96,14 +96,14 @@ class RunnerTest < Minitest::Test
   end
 
   def test_a_method_not_offered_is_skipped
-    vectors('envelopes.txt', [['roundtrip one', 'cbor {"target":"tinyactors://h/@a","name":"x"}'],
-                              ['roundtrip two', 'cbor {"target":"tinyactors://h/@a","name":"y"}']])
+    vectors('values.txt', [['encode one', 'ecmascript 1', 'cbor 1'],
+                           ['encode two', 'ecmascript 2', 'cbor 2']])
     vectors('requests.txt', [['request echo', 'send {"id":1,"method":"echo","params":[]}', 'reply {"id":1,"result":[]}']])
     ok, results = run_suites('protocol')
     assert ok, @out.string
     assert_equal %i[pass skip skip], results.map(&:verdict)
-    assert_equal 1, @out.string.scan('envelope.read is not offered').size
-    assert_includes @out.string, 'not offered: envelope.read'
+    assert_equal 1, @out.string.scan('value.encode is not offered').size
+    assert_includes @out.string, 'not offered: value.encode'
   end
 
   def test_values_go_through_the_echo_setup
@@ -122,7 +122,7 @@ class RunnerTest < Minitest::Test
   # ---- runs that prove nothing (docs/driver.md, "Kinds") -----------------------
 
   def test_a_suite_that_passes_nothing_fails_the_run
-    vectors('envelopes.txt', [['roundtrip one', 'cbor {"target":"tinyactors://h/@a","name":"x"}']])
+    vectors('values.txt', [['encode one', 'ecmascript 1', 'cbor 1']])
     ok, results = run_suites('protocol')
     refute ok
     assert_equal %i[skip], results.map(&:verdict)
@@ -130,11 +130,11 @@ class RunnerTest < Minitest::Test
   end
 
   def test_the_reference_must_offer_the_c_level_methods
-    vectors('envelopes.txt', [['roundtrip one', 'cbor {"target":"tinyactors://h/@a","name":"x"}']])
+    vectors('values.txt', [['encode one', 'ecmascript 1', 'cbor 1']])
     vectors('requests.txt', [['request echo', 'send {"id":1,"method":"echo","params":[]}', 'reply {"id":1,"result":[]}']])
     ok, = run_suites('protocol', kind: 'reference')
     refute ok
-    assert_includes @out.string, 'FAIL not offered, but a reference must offer: envelope.read'
+    assert_includes @out.string, 'FAIL not offered, but a reference must offer: value.encode'
   end
 
   def test_a_binding_is_sent_no_refuse

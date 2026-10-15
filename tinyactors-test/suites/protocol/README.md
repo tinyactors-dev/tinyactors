@@ -11,7 +11,6 @@ out ([ADR 0009](../../../docs/adr/0009-one-host-two-queues.md), decision 11).
 |---|---|---|
 | `requests.txt` | messages posted with `ta_host_post`, their replies, and the notifications of the runs between them (`tinyactors-core/docs/requests.md`) | the runner |
 | `config.txt` | configs of `ta_host_create`, and the error it writes for a refused one (`tinyactors-core/docs/host-config.md`) | the runner |
-| `envelopes.txt` | envelopes and error envelopes between systems (`tinyactors-core/docs/protocol.md`, Envelope) | the runner |
 | `values.txt` | neutral values (`tinyactors-core/docs/protocol.md`, Values), through the echo setup | the runner; core's `tests/unit/test_datamodel_ecmascript.c` too |
 
 ## Running them
@@ -35,7 +34,7 @@ and the actual bytes in hex.
 
 Each file starts with comments (`#`) that list its line kinds. A case is a
 line `<kind> <name>` and the lines after it, up to a blank line. A line is
-a key and a value: `send`, `reply`, `cbor`, `error`, `envelope` and `back`
+a key and a value: `send`, `reply`, `cbor`, `error` and `back`
 hold CBOR in hex, and each is followed by `diag`, the same bytes in
 diagnostic notation (`ta_cbor_diagnostic`), which the runner checks too, so
 the hex and what a person reads cannot drift apart. A line `only
@@ -122,7 +121,7 @@ and no telemetry encoder. The charts are in
 wall clock at 1700000000000000000 ns. The runner builds them with the
 driver's methods (`lib/runner.rb`, `setup` and `echo`).
 
-The setups of `requests.txt` and `envelopes.txt` run the ECMAScript
+The setups of `requests.txt` run the ECMAScript
 datamodel (quickjs, whatever datamodel the runner was given: their charts,
 `setups/*.scxml`, are ECMAScript). `values.txt` runs on the echo setup,
 on the datamodel the runner was given: its chart, `setups/echo.txml`, is
@@ -135,9 +134,7 @@ language like the scenarios (`build/setups/<language>/`, checked by
 | `empty` | system `h`, no chart (the default) |
 | `pinged` | system `h`, the chart `pinged` (`<data>` `n` = 1, `who` = `"bob"`, `nothing`; states `s`, `t`) and one session, 1, run until idle |
 | `pinged2` | as `pinged`, with two sessions, 1 and 2 |
-| `pinger` | system `a`, a peer `b`, the chart `pinger` and one session that was sent `go` with `{to: "tinyactors://b/@echo", n: 1}`: its run sends `ping` (with data) and `note` (without) to `b` |
-| `relay` | system `b` with the peers `a` and `c`, no chart |
-| `echo` | system `h` on the datamodel under test, the chart `echo` (each event `v` is sent back to its `_event.origin` as `back`, with `_event.data` as its content) and one session, and a peer `p`; a case delivers `{"target": "tinyactors://h/#_scxml_<session>", "name": "v", "data": 24(<cbor>), "sendid": "s1", "origin": "tinyactors://p/#_scxml_9", "msgid": "m1"}` from `p` (`envelope.deliver`), and runs the host once (`host.run`) |
+| `echo` | system `h` on the datamodel under test, with one I/O processor, `urn:tinyactors:test:remote`, marked `remote`; the chart `echo` (each event `v` is sent back to its `_event.origin` as `back`, with `_event.data` as its content) and one session; a case sends it `v` with the value as `cbor` and the origin `tinyactors://p/#_scxml_9` (`actor.send`), runs the host once (`host.run`) and compares the data of the one send to the remote processor |
 
 ## What they leave to unit tests
 
@@ -145,5 +142,5 @@ What bytes cannot show stays in `tinyactors-core/tests/unit`: a call during a ru
 (`test_host_inputs.c`), an allocator that refuses (`test_host_memory.c`),
 `actor.context` of a hibernated actor or of a datamodel without variables,
 a post's REPLY after its method's own effects (`test_host_request.c`),
-and moving envelopes between hosts
-(`test_router.c`).
+and sends to other systems through the remote I/O processor
+(`test_remote.c`).

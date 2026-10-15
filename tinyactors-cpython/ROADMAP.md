@@ -210,10 +210,9 @@ needed; the maintainer confirms or changes them at the API review.
   ADR 0012 removed; no typed method can send them. They carry `only
   reference` in `tinyactors-test/suites/protocol/requests.txt` (a change
   to the suite, made in this step, `e738095`); ta-conform still runs them.
-- **Peers:** `Host(..., peer=handler)`, `peer_add(id, *, trusted=False)`
-  and `deliver(peer, envelope)`, the least that runs M1's envelope and
-  value vectors (which deliver to the echo setup and read the envelope it
-  sends) through the API. AGENTS.md had `PEER` and `PEER_ERROR` deferred.
+- **Peers** (`peer=`, `peer_add`, `deliver`) were added here to run M1's
+  envelope vectors and removed with core's router (ADR 0014, 2026-10-15):
+  other systems are the remote I/O processor and `send` by address.
 - **A resolver's other exceptions** (an `OSError`, a bug) are raised from
   `compile_charts` after the result is freed; the compiler's diagnostic
   for that `src` is not reported.

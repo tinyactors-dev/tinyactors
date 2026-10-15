@@ -5,7 +5,7 @@
 # each is a key and a value. Lines starting with # are comments.
 module Vectors
   # The keys whose value is CBOR in hex, each followed by a diag line.
-  HEX_KEYS = %w[send reply cbor back error envelope notification].freeze
+  HEX_KEYS = %w[send reply cbor back error notification].freeze
 
   Case = Struct.new(:file, :kind, :name, :lines) do
     # The value of the nth line with `key`, or nil.

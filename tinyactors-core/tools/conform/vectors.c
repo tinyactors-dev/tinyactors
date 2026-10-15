@@ -14,8 +14,6 @@
 void conform_vectors_close(conform_vectors *vectors) {
     if (vectors->host) ta_host_free(vectors->host);
     vectors->host = NULL;
-    for (uint32_t i = 0; i < 64; i++) conform_buffer_free(&vectors->pending_envelopes[i]);
-    vectors->pending_envelope_count = 0;
     conform_datamodel_close(&vectors->datamodel);
 }
 
@@ -109,33 +107,8 @@ static void notifications_keep(conform *state, kept_list *list) {
             list->items[list->count++] = conform_keep(state, ta_host_effect_bytes(host, i, TA_EFFECT_FIELD_WIRE));
 }
 
-/* Keep envelopes across protocol responses: conform_keep ends with this
- * response, but host.run must return effects drained by a successful post. */
-static ta_status envelopes_pending(conform_vectors *vectors) {
-    const ta_host_effect *effects;
-    uint32_t count = ta_host_effects(vectors->host, &effects);
-    uint32_t before = vectors->pending_envelope_count;
-    for (uint32_t i = 0; i < count; i++) {
-        if (effects[i].kind != TA_HOST_EFFECT_PEER && effects[i].kind != TA_HOST_EFFECT_PEER_ERROR) continue;
-        if (vectors->pending_envelope_count == 64) continue; /* the protocol's existing output limit */
-        ta_bytes bytes = {NULL, 0};
-        ta_status status = ta_host_envelope(vectors->host, &effects[i], &bytes);
-        ta_buffer *buffer = &vectors->pending_envelopes[vectors->pending_envelope_count];
-        if (status == TA_OK && !conform_buffer_reserve(buffer, bytes.length)) status = TA_ERROR_NO_MEMORY;
-        if (status != TA_OK) {
-            vectors->pending_envelope_count = before;
-            return status;
-        }
-        if (bytes.length) memcpy(buffer->pointer, bytes.pointer, bytes.length);
-        buffer->length = bytes.length;
-        vectors->pending_envelope_count++;
-    }
-    return TA_OK;
-}
-
 /* Post before taking: refusal leaves pending effects untouched. Success
- * copies the reply and notifications, retains envelopes for host.run, and
- * acknowledges the entire batch. With `refuse`, only the host allocator
+ * copies the reply and notifications and acknowledges the entire batch. With `refuse`, only the host allocator
  * refuses blocks during the post. */
 static void host_post(conform *state, conform_call *call, conform_result *result) {
     conform_vectors *vectors = &state->vectors;
@@ -155,11 +128,6 @@ static void host_post(conform *state, conform_call *call, conform_result *result
     notifications.count = 0;
     uint32_t count;
     while ((count = ta_host_effects(host, &effects)) != 0) {
-        status = envelopes_pending(vectors);
-        if (status != TA_OK) {
-            conform_fail(call, &(conform_failure){CONFORM_STATE, "state", ""}, "cannot retain peer envelopes");
-            return;
-        }
         notifications_keep(state, &notifications);
         if (effects[count - 1].kind == TA_HOST_EFFECT_REPLY)
             conform_result_bytes(result, "reply",
@@ -223,7 +191,13 @@ static void actor_send(conform *state, conform_call *call, conform_result *resul
         !conform_integer(call, "session", &session) || !conform_text(call, "event", &event.name))
         return;
     event.session = (uint64_t)session;
+    if (!conform_text(call, "origin", &event.origin)) return;
     payload_reading data = payload_read(state, call, "data");
+    ta_bytes cbor = {NULL, 0}; /* the data as the value table's CBOR, read by the datamodel */
+    if (conform_param(call, "cbor") != TA_NIL) {
+        if (!conform_bytes(call, "cbor", &cbor)) return;
+        data.status = conform_datamodel_read(&state->vectors.datamodel, cbor, &data.payload);
+    }
     ta_status status = data.status;
     event.data = data.payload;
     if (status == TA_OK) {
@@ -241,144 +215,59 @@ static void clock_advance(conform *state, conform_call *call, conform_result *re
     ta_host_advance_time(host, (ta_host_time){(ta_time)monotonic, (uint64_t)wall});
 }
 
-/* The PEER and PEER_ERROR effects of the batch ta_host_effects publishes,
- * each written as an envelope and kept, and its NOTIFICATIONs; then the
- * batch is acknowledged. */
-static void batch_take(conform *state, kept_list *envelopes, kept_list *notifications) {
+/* The sends to the remote I/O processor of the batch ta_host_effects
+ * publishes, each kept (its data written by the sender's datamodel), and
+ * its NOTIFICATIONs; then the batch is acknowledged. */
+static ta_string_view text_of(ta_bytes bytes) {
+    return (ta_string_view){(const char *)bytes.pointer, (uint32_t)bytes.length};
+}
+
+typedef struct send_list {
+    conform_send items[64];
+    uint32_t count;
+} send_list;
+
+static void batch_take(conform *state, send_list *sends, kept_list *notifications) {
     ta_host *host = state->vectors.host;
     const ta_host_effect *effects;
     uint32_t effect_count = ta_host_effects(host, &effects);
     for (uint32_t i = 0; i < effect_count; i++) {
-        if (effects[i].kind != TA_HOST_EFFECT_PEER && effects[i].kind != TA_HOST_EFFECT_PEER_ERROR) continue;
-        ta_bytes out = {NULL, 0}; /* the host's, until the ack: kept */
-        ta_status status = ta_host_envelope(host, &effects[i], &out);
-        if (status != TA_OK) fprintf(stderr, "ta-conform: ta_host_envelope refused an effect: %d\n", (int)status);
-        else if (envelopes->count < sizeof envelopes->items / sizeof envelopes->items[0])
-            envelopes->items[envelopes->count++] = conform_keep(state, out);
+        if (effects[i].kind != TA_EFFECT_SEND || effects[i].io_processor != 0 ||
+            sends->count == sizeof sends->items / sizeof sends->items[0])
+            continue; /* the vectors' configs have one I/O processor, the remote one */
+        conform_send *send = &sends->items[sends->count++];
+        send->target = text_of(conform_keep(state, (ta_bytes){effects[i].target.pointer, effects[i].target.length}));
+        send->event = text_of(conform_keep(state, (ta_bytes){effects[i].event.pointer, effects[i].event.length}));
+        ta_string_view origin = ta_host_effect_text(host, i, TA_EFFECT_FIELD_ORIGIN);
+        send->origin = text_of(conform_keep(state, (ta_bytes){origin.pointer, origin.length}));
+        send->data = (ta_bytes){NULL, 0};
+        ta_bytes data = {NULL, 0}; /* the datamodel's view, until its next call: kept */
+        if (effects[i].payload && conform_datamodel_write(&state->vectors.datamodel, effects[i].payload, &data) == TA_OK)
+            send->data = conform_keep(state, data);
     }
     notifications_keep(state, notifications);
     ta_host_effects_ack(host);
 }
 
-/* First the envelopes retained by posts, then pending effects. Run only
- * after acknowledging each batch; keep envelopes and notifications in order. */
+/* Pending effects first, then runs, acknowledging each batch; sends and
+ * notifications kept in order. */
 static void host_run(conform *state, conform_call *call, conform_result *result) {
     ta_host *host = host_of(state, call);
     if (!host) return;
-    static kept_list envelopes, notifications;
-    envelopes.count = notifications.count = 0;
-    conform_vectors *vectors = &state->vectors;
-    for (uint32_t i = 0; i < vectors->pending_envelope_count; i++) {
-        ta_buffer *buffer = &vectors->pending_envelopes[i];
-        envelopes.items[envelopes.count++] = conform_keep(state, (ta_bytes){buffer->pointer, buffer->length});
-        conform_buffer_free(buffer);
-    }
-    vectors->pending_envelope_count = 0;
-    batch_take(state, &envelopes, &notifications);
+    static send_list sends;
+    static kept_list notifications;
+    sends.count = notifications.count = 0;
+    batch_take(state, &sends, &notifications);
     ta_run run;
     int rounds = 0;
     do {
         run = ta_host_run(host, 1000000);
-        batch_take(state, &envelopes, &notifications);
+        batch_take(state, &sends, &notifications);
     } while ((run.status == TA_RUN_YIELDED || run.status == TA_RUN_EFFECTS_FULL) && ++rounds < 1000);
     conform_result_integer(result, "status", run.status);
-    conform_result_list(result, "envelopes", (conform_bytes_list){envelopes.items, envelopes.count});
+    conform_result_sends(result, "sends", (conform_sends){sends.items, sends.count});
     conform_result_list(result, "notifications", (conform_bytes_list){notifications.items, notifications.count});
 }
-
-/* ---- peer.add, envelope.read, envelope.deliver ------------------------------------- */
-
-static void peer_add(conform *state, conform_call *call, conform_result *result) {
-    ta_host *host = host_of(state, call);
-    ta_peer_config peer;
-    memset(&peer, 0, sizeof peer);
-    peer.size = sizeof peer;
-    int trusted = 0;
-    if (!host || !conform_required(call, "id") || !conform_text(call, "id", &peer.id) ||
-        !conform_boolean(call, "trusted", &trusted))
-        return;
-    peer.flags = trusted ? TA_PEER_TRUSTED : 0;
-    uint32_t handle = 0;
-    ta_status status = ta_host_peer_add(host, &peer, &handle);
-    conform_result_integer(result, "status", status);
-    if (status == TA_OK) conform_result_integer(result, "peer", handle);
-}
-
-/* An envelope (or an error envelope) read back into a PEER (PEER_ERROR)
- * effect, so that ta_host_envelope writes it again. */
-typedef struct envelope_writing {
-    ta_host *host;
-    const ta_envelope *envelope; /* or */
-    const ta_peer_error *error;
-} envelope_writing;
-
-static ta_status envelope_write(const envelope_writing *writing, ta_bytes *out) {
-    ta_host_effect effect;
-    memset(&effect, 0, sizeof effect);
-    effect.size = sizeof effect;
-    if (writing->error) {
-        effect.kind = TA_HOST_EFFECT_PEER_ERROR;
-        effect.token = writing->error->reason;
-        effect.auxiliary = writing->error->origin;
-        effect.msgid = writing->error->msgid;
-        effect.sendid = writing->error->sendid;
-        return ta_host_envelope(writing->host, &effect, out);
-    }
-    const ta_envelope *envelope = writing->envelope;
-    effect.kind = TA_HOST_EFFECT_PEER;
-    effect.target = envelope->target;
-    effect.event = envelope->name;
-    effect.sendid = envelope->sendid;
-    effect.auxiliary = envelope->origin;
-    effect.origintype = envelope->origintype;
-    effect.msgid = envelope->msgid;
-    effect.deduplication_key = envelope->deduplication_key;
-    effect.flags = envelope->hops;
-    effect.wire = envelope->wire;
-    effect.datamodel = TA_NIL;
-    if (envelope->traceparent.length && ta_traceparent_parse(envelope->traceparent, &effect.trace) != TA_OK)
-        return TA_ERROR_INVALID;
-    return ta_host_envelope(writing->host, &effect, out);
-}
-
-static void envelope_read(conform *state, conform_call *call, conform_result *result) {
-    ta_host *host = host_of(state, call);
-    ta_bytes cbor = {NULL, 0};
-    int is_error = 0;
-    if (!host || !conform_required(call, "cbor") || !conform_bytes(call, "cbor", &cbor) ||
-        !conform_boolean(call, "error", &is_error))
-        return;
-    ta_envelope envelope;
-    ta_peer_error error;
-    ta_status status = is_error ? ta_host_peer_error_read(cbor, &error) : ta_host_envelope_read(host, cbor, &envelope);
-    ta_bytes back = {NULL, 0}; /* the host's, until the ack: kept */
-    envelope_writing writing = {host, is_error ? NULL : &envelope, is_error ? &error : NULL};
-    if (status == TA_OK) status = envelope_write(&writing, &back);
-    conform_result_integer(result, "status", status);
-    if (status == TA_OK) conform_result_bytes(result, "back", conform_keep(state, back));
-    ta_host_effects_ack(host); /* the envelope is kept: the output's batch ends */
-}
-
-static void envelope_deliver(conform *state, conform_call *call, conform_result *result) {
-    ta_host *host = host_of(state, call);
-    ta_bytes cbor = {NULL, 0};
-    int64_t peer = 0;
-    if (!host || !conform_required(call, "peer") || !conform_required(call, "cbor") ||
-        !conform_integer(call, "peer", &peer) || !conform_bytes(call, "cbor", &cbor))
-        return;
-    ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
-    ta_status status = ta_host_envelope_read(host, cbor, &envelope);
-    /* A read that failed with envelope.size set is an envelope whose data is
-     * not one item: ta_host_deliver refuses it as malformed and answers its
-     * sender (host.h, ta_host_envelope_read). With size 0 there is nobody to
-     * answer. */
-    int32_t route = status == TA_OK || envelope.size ? ta_host_deliver(host, (uint32_t)peer, &envelope) : status;
-    conform_result_integer(result, "status", route < 0 ? route : TA_OK);
-    if (route >= 0) conform_result_integer(result, "route", route);
-}
-
-/* ---- value.encode ------------------------------------------------------------------- */
 
 /* quickjs only: an expression that throws is TA_ERROR_EXECUTION. */
 static void value_encode(conform *state, conform_call *call, conform_result *result) {
@@ -405,11 +294,8 @@ static const char *const no_params[] = {NULL};
 static const char *const post_params[] = {"message", "refuse", NULL};
 static const char *const image_params[] = {"charts", NULL};
 static const char *const spawn_params[] = {"chart", "params", NULL};
-static const char *const send_params[] = {"session", "event", "data", NULL};
+static const char *const send_params[] = {"session", "event", "data", "cbor", "origin", NULL};
 static const char *const clock_params[] = {"monotonic", "wallNs", NULL};
-static const char *const peer_params[] = {"id", "trusted", NULL};
-static const char *const read_params[] = {"cbor", "error", NULL};
-static const char *const deliver_params[] = {"peer", "cbor", NULL};
 static const char *const encode_params[] = {"expression", NULL};
 
 const conform_method conform_vector_methods[] = {
@@ -421,9 +307,6 @@ const conform_method conform_vector_methods[] = {
     {"actor.send", actor_send, send_params},
     {"clock.advance", clock_advance, clock_params},
     {"host.run", host_run, no_params},
-    {"peer.add", peer_add, peer_params},
-    {"envelope.read", envelope_read, read_params},
-    {"envelope.deliver", envelope_deliver, deliver_params},
     {"value.encode", value_encode, encode_params},
     {NULL, NULL, NULL},
 };

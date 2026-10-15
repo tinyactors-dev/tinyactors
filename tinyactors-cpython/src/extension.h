@@ -35,7 +35,6 @@ typedef struct ta_python_module_state {
     PyObject *chart_type;     /* ChartRef */
     PyObject *send_type;      /* a send to an I/O processor: a thin view or a record */
     PyObject *entry_type;     /* a <log> line: a thin view */
-    PyObject *envelope_type;  /* a PEER or PEER_ERROR effect: a thin view */
     PyObject *migrated_type; /* a MIGRATED effect: a thin view */
     PyObject *invocation_type; /* an invoked service's invocation: a record (it outlives the ack) */
     PyObject *event_type;     /* _event in a "python" chart */
@@ -193,7 +192,6 @@ struct ta_python_host {
     int inputs;                        /* an input was made since the last run */
     PyObject *processors;              /* per ioProcessors index: (type, handler, async) */
     PyObject *log;                     /* log handler or None */
-    PyObject *peer;                    /* peer handler or None */
     PyObject *telemetry;               /* telemetry handler(host, signal, data) or None */
     PyObject *wake;                    /* wake handler(host, session, migration) or None */
     PyObject *migrated;                /* migrated handler(host, migration) or None */

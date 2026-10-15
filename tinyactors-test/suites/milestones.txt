@@ -5,7 +5,7 @@
 # (ta-conform's `mise run conform` does).
 #
 #   <milestone> protocol <file>…     vector files of suites/protocol (requests,
-#                                    config, envelopes, values), without .txt
+#                                    config, values), without .txt
 #   <milestone> scenarios <name>…    scenarios of suites/scenarios, by directory
 #   <milestone> w3c                  the W3C suite, but each skip list's tests
 #   <milestone>                      a milestone that adds no case
@@ -18,7 +18,7 @@
 # M1, walking skeletons ("Gates"): every protocol vector (values.txt round
 # trips through the echo setup on each datamodel), the basics scenario, and
 # the outcome canaries, so an adapter that answers pass for everything fails.
-M1 protocol requests config envelopes values
+M1 protocol requests config values
 M1 scenarios basics outcome-compile outcome-fail outcome-timeout
 
 # M2, W3C in each language: the IRP suite, but the skip lists (skip.txt,
@@ -28,8 +28,7 @@ M2 w3c
 # M3, every effect: invoke and its done events.
 M3 scenarios invoke
 
-# M4, lifecycle and peers: hibernation with a store, migration, snapshots.
-# (The envelope vectors, which ROADMAP.md names in M4's gates, are in M1.)
+# M4, lifecycle: hibernation with a store, migration, snapshots.
 M4 scenarios hibernate migrate snapshot
 
 # M5, examples and release: the whole suite, nothing it adds.

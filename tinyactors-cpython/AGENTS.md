@@ -88,7 +88,7 @@ Decided by the maintainer (2026-10-13); every item is in
   and **`close()`** call `ta_compile_free`; the collector calls it as a
   fallback.
 - **`tinyactors.Host(config, io_processors={type: handler}, log=handler,
-  clock=None, peer=None, telemetry=None, wake=None, migrated=None,
+  clock=None, telemetry=None, wake=None, migrated=None,
   services=None, migration_done=None)`.**
   Everything is per host: the config (a `dict`, written as CBOR into the
   call's arena for `ta_host_create`), the handlers and the clock. A host
@@ -337,6 +337,16 @@ Decided by the maintainer (2026-10-13); every item is in
   a type with no handler gives `ERROR_COMMUNICATION` without raising.
   At the stop the services are dropped, not
   stopped, as pending handlers are. `tools/services.py` is the pattern.
+- **Other systems** (ADR 0014, 2026-10-15): the config's I/O processor
+  marked `"remote"` is an ordinary I/O processor handler that gets every
+  send to another system's address (core decides local or not); its
+  `send.origin` is `TA_EFFECT_FIELD_ORIGIN`, the sender's address. The
+  other side calls **`host.send(target, event, data, origin=...)`**, where
+  `target` may be a local address (`str`) that core resolves
+  (`ta_host_resolve`) before the payload is made in the target session's
+  datamodel. Success needs no answer; `send.fail()` gives the sender
+  `error.communication`. No peers, envelopes or routes: the transport and
+  the wire encoding are the application's.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.
@@ -358,12 +368,7 @@ Decided by the maintainer (2026-10-13); every item is in
   `ta_host_free` the remaining rows are dropped and their handlers never
   called.
 - **`DONE` and `ERROR` are internal** (the rows of the session are
-  released); **`PEER` and `PEER_ERROR` go to `peer=handler(host,
-  envelope)`**, a thin view (`peer`, `error`, `cbor`: `ta_host_envelope`'s
-  bytes copied once), with `host.peer_add(id, *, trusted=False)` and
-  `host.deliver(peer, envelope)` beside it, the least that runs the M1
-  envelope and value vectors through the API (8.4; ROADMAP.md, "Decided
-  in 8.4"); no notification is
+  released); no notification is
   defined (`actor.subscribe` and `actor.changed` are removed, ADR 0012
   decision 4), and the extension drops a
   `TA_HOST_EFFECT_NOTIFICATION` whose method it does not know.
@@ -440,7 +445,7 @@ or read views; it never takes or acks.
 ## Lifetimes and thin views
 
 ADR 0012: **everything the host hands out about a batch lives until the
-ack** (effect fields, `TRACEPARENT`, envelopes, traces, logs, metrics,
+ack** (effect fields, `TRACEPARENT`, traces, logs, metrics,
 hibernation blobs), across any later call into the host. A
 datamodel's outputs live until its next call. Snapshots and the refused
 config's error fill a `ta_buffer` the extension lends.
@@ -573,7 +578,7 @@ APIs:
   by its next call; strings handed back to core (`eval_string`, `log`)
   are the UTF-8 of a `str` the datamodel holds until its next call.
 - **Payloads are copied, not encoded,** between the API and the
-  `"python"` datamodel; CBOR only toward quickjs and in envelopes. A
+  `"python"` datamodel; CBOR only toward quickjs. A
   value the application passes in becomes a payload of the target
   session's datamodel (its chart's `datamodel`, `ta_image_chart_datamodel`).
 - **Statuses are named by core:** a bare status in a message is

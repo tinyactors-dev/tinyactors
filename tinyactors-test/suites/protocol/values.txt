@@ -1,8 +1,9 @@
-# Neutral values (docs/protocol.md, "Values"): event data between systems,
-# as CBOR. The runner runs them on the datamodel under test: a roundtrip or
-# malformed value is delivered in an envelope from a peer to the echo
-# setup (README.md, "Setups"), whose chart sends the event's data back to
-# its origin, and the data of that envelope is compared; encode and invalid
+# Neutral values (docs/protocol.md, "Values"): event data as CBOR, the form
+# a binding's codec and a datamodel's reader and writer share. The runner
+# runs them on the datamodel under test: a roundtrip or malformed value is
+# given to the echo setup (README.md, "Setups") as the data of an event
+# from another system, whose chart sends the event's data back to its
+# origin through the remote I/O processor, and that data is compared; encode and invalid
 # cases are value.encode's (docs/driver.md), on ECMAScript datamodels. Core's
 # tests/unit/test_datamodel_ecmascript.c runs them against the vtable of
 # the ECMAScript datamodel (quickjs-ng) too. A datamodel in another language
@@ -19,13 +20,11 @@
 #                       Python has it: for the Python binding's own tests of
 #                       its conversion (value.encode is ECMAScript's)
 # The kinds:
-#   roundtrip   from_wire of `cbor`, then to_wire, writes `back` (or `cbor`):
-#               the echo's envelope back carries it as its data
+#   roundtrip   reading `cbor`, then to_wire, writes `back` (or `cbor`):
+#               the echo's send back carries it as its data
 #   encode      to_wire of the `ecmascript` value writes `cbor`
 #   invalid     to_wire of the `ecmascript` value is TA_ERROR_INVALID
-#   malformed   from_wire of `cbor` is TA_ERROR_INVALID: ta_host_deliver
-#               answers TA_ROUTE_REFUSED, and the envelope back to the peer
-#               is the error envelope "malformed"
+#   malformed   reading `cbor` is TA_ERROR_INVALID: the input is refused
 #
 # Integers within ±(2^53-1) are numbers in ECMAScript and others BigInts, so
 # every integer comes back as itself. ECMAScript has no reference type: a

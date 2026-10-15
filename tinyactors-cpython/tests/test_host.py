@@ -331,6 +331,51 @@ class Inputs(unittest.TestCase):
         host.close()
 
 
+class OtherSystems(unittest.TestCase):
+    """The I/O processor the config marks remote carries sends to other
+    systems; what arrives from one is Host.send by address with its origin."""
+
+    REMOTE = "urn:test:remote"
+    SCXML = "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
+
+    def host(self, sends, logs):
+        config = {"systemID": "a", "system": {"ticksPerSecond": 1000},
+                  "ioProcessors": [{"type": self.REMOTE, "remote": True}]}
+        host = tinyactors.Host(config, {self.REMOTE: lambda host, send: sends.append(
+            (send.target, send.event, send.origin, send.data, send.type))}, log=logs,
+            clock=tinyactors.SimulatedClock())
+        with tinyactors.compile_charts([("remote.scxml", fixture("test_host/remote.python.scxml"))]) as compiled:
+            host.add_image(compiled.image)
+        return host
+
+    def test_a_send_to_another_system_and_the_reply_to_its_origin(self):
+        sends, logs = [], Logs()
+        with self.host(sends, logs) as host:
+            session = host.spawn(host.chart("talker"), name="talker")
+            host.send(session, "call")
+            host.run_until_idle()
+            self.assertEqual(sends, [("tinyactors://b/#_scxml_5", "hello", "tinyactors://a/#_scxml_%d" % session,
+                                      {"n": 41}, self.REMOTE)])
+            sends.clear()
+            host.send("tinyactors://a/@talker", "hello", [1], origin="tinyactors://b/#_scxml_5")
+            host.run_until_idle()
+            self.assertEqual(logs.labelled("got"), ["tinyactors://b/#_scxml_5 %s [1]" % self.SCXML])
+            self.assertEqual([(target, event) for target, event, *_ in sends], [("tinyactors://b/#_scxml_5", "thanks")])
+            host.send("tinyactors://a/#_scxml_%d" % session, "hello", origin="tinyactors://c/@x")
+            host.run_until_idle()
+            self.assertEqual(logs.labelled("got")[-1], "tinyactors://c/@x %s None" % self.SCXML)
+
+    def test_an_address_that_names_nothing_here_is_refused(self):
+        with self.host([], Logs()) as host:
+            for address, status in (("tinyactors://b/#_scxml_1", "TA_ERROR_INVALID"),
+                                    ("tinyactors://a/@nobody", "TA_ERROR_STALE"),
+                                    ("not an address", "TA_ERROR_INVALID")):
+                with self.subTest(address=address):
+                    with self.assertRaises(tinyactors.TinyactorsError) as raised:
+                        host.send(address, "hello")
+                    self.assertEqual(raised.exception.status, status)
+
+
 class Traces(unittest.TestCase):
     TRACEPARENT = "00-0102030405060708090a0b0c0d0e0f10-a1a2a3a4a5a6a7a8-01"
 

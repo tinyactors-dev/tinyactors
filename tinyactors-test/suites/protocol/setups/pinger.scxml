@@ -1,1 +1,0 @@
-<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='pinger' initial='s'><state id='s'><transition event='go'><send targetexpr='_event.data.to' event='ping' id='p1'><param name='n' expr='_event.data.n'/></send><send targetexpr='_event.data.to' event='note' id='p2'/></transition></state></scxml>

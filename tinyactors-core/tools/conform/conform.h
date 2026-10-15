@@ -121,11 +121,21 @@ ta_status conform_item_bytes(const conform_call *call, const conform_item *item,
 
 /* ---- a result -------------------------------------------------------------------- */
 
-enum { CONFORM_FIELD_INTEGER = 1, CONFORM_FIELD_TEXT, CONFORM_FIELD_BYTES, CONFORM_FIELD_BYTES_LIST };
+enum { CONFORM_FIELD_INTEGER = 1, CONFORM_FIELD_TEXT, CONFORM_FIELD_BYTES, CONFORM_FIELD_BYTES_LIST, CONFORM_FIELD_SENDS };
 typedef struct conform_bytes_list {
     const ta_bytes *pointer;
     uint32_t count;
 } conform_bytes_list;
+/* A send to the remote I/O processor, as host.run answers it (driver.md);
+ * data.pointer NULL: no data. */
+typedef struct conform_send {
+    ta_string_view target, event, origin;
+    ta_bytes data;
+} conform_send;
+typedef struct conform_sends {
+    const conform_send *pointer;
+    uint32_t count;
+} conform_sends;
 typedef struct conform_field {
     const char *name;
     uint32_t kind;
@@ -133,6 +143,7 @@ typedef struct conform_field {
     ta_string_view text;
     ta_bytes bytes;
     conform_bytes_list list;
+    conform_sends sends;
 } conform_field;
 /* A result map, its members in the order they were added. Text and bytes
  * are borrowed until the reply is written. */
@@ -144,6 +155,7 @@ void conform_result_integer(conform_result *result, const char *name, int64_t va
 void conform_result_text(conform_result *result, const char *name, ta_string_view text);
 void conform_result_bytes(conform_result *result, const char *name, ta_bytes bytes);
 void conform_result_list(conform_result *result, const char *name, conform_bytes_list list);
+void conform_result_sends(conform_result *result, const char *name, conform_sends sends);
 
 /* ---- datamodels ------------------------------------------------------------------- */
 
@@ -207,8 +219,6 @@ const char *conform_outcome(const ta_host_effect *effect);
 typedef struct conform_vectors {
     ta_host *host;
     int refusing; /* the host's allocator refuses every block (host.post's `refuse`) */
-    ta_buffer pending_envelopes[64]; /* copied by post, returned by the next run */
-    uint32_t pending_envelope_count;
     conform_datamodel datamodel;
 } conform_vectors;
 
