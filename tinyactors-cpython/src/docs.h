@@ -80,6 +80,23 @@ static const char ta_python_doc_compile_charts[] =
     "notes. A compilation with an error raises CompileError, with every\n"
     "diagnostic, after freeing the result.";
 
+static const char ta_python_doc_compile_system[] =
+    "compile_system(manifest, resolver=None)\n"
+    "--\n"
+    "\n"
+    "Compile a system manifest into one image: its charts and the actors it\n"
+    "boots.\n"
+    "\n"
+    "`manifest` is a (name, text) pair whose text is a <system> document:\n"
+    "<chart name=\"worker\" src=\"worker.scxml\"/> for each chart, read through\n"
+    "`resolver` (as for compile_charts), and <actor name=\"first\"\n"
+    "chart=\"worker\"/> for each actor Host.boot spawns, under that name. Use\n"
+    "it when the image should say which actors an application starts with;\n"
+    "compile_charts when your program spawns them itself.\n"
+    "\n"
+    "Returns a Compiled, as compile_charts does; an error raises\n"
+    "CompileError with every diagnostic.";
+
 static const char ta_python_doc_encode[] =
     "encode($module, value, /)\n"
     "--\n"
@@ -226,6 +243,16 @@ static const char ta_python_doc_host_chart[] =
     "\n"
     "Ask again after add_image: a reference names one version.";
 
+static const char ta_python_doc_host_actor_by_name[] =
+    "actor_by_name(name, /)\n"
+    "--\n"
+    "\n"
+    "The session of the live actor spawned with `name` (boot actors carry\n"
+    "their manifest name), newest segment first; None when there is none.\n"
+    "\n"
+    "Use it to find an actor you named, for terminate or an input by\n"
+    "session; send also takes the address tinyactors://<systemID>/@<name>.";
+
 static const char ta_python_doc_host_spawn[] =
     "spawn(ref, name=None, params=None, traceparent=None)\n"
     "--\n"
@@ -277,9 +304,9 @@ static const char ta_python_doc_host_boot[] =
     "--\n"
     "\n"
     "Spawn the boot actors of a segment add_image returned: the image's\n"
-    "<system><actor> entries, or its default boot chart (the first source\n"
-    "given to compile_charts), each under its name, so actor_get by name\n"
-    "finds it. Use it to start an application from its image alone; spawn\n"
+    "<system><actor> entries (compile_system), or its default boot chart\n"
+    "(the first source given to compile_charts), each under its name, so\n"
+    "actor_by_name finds it. Use it to start an application from its image alone; spawn\n"
     "starts one actor of a chart you name. A boot that fails part way leaves\n"
     "the actors already spawned; a second boot spawns them all again.";
 

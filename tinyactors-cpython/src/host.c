@@ -35,10 +35,14 @@ void ta_python_cbor_init(ta_cbor_writer *writer, const ta_python_room *room) {
     ta_cbor_writer_init(writer, room->room, room->allocator ? room->allocator : &ta_python_allocator);
 }
 
-/* The compiler allocates through the host's allocator too (compile.c). */
-ta_status ta_python_compile(ta_compile_options *options, ta_source_list charts, ta_compile_result **out) {
+/* The compiler allocates through the host's allocator too (compile.c):
+ * ta_compile_system of the one source when it is a manifest, else
+ * ta_compile_charts of them all. */
+ta_status ta_python_compile(ta_compile_options *options, const ta_python_compilation *compilation,
+                            ta_compile_result **out) {
     options->alloc = ta_python_allocator;
-    return ta_compile_charts(options, charts, out);
+    if (compilation->manifest) return ta_compile_system(options, compilation->charts.pointer, out);
+    return ta_compile_charts(options, compilation->charts, out);
 }
 
 /* ---- errors -------------------------------------------------------------------- */
@@ -776,6 +780,23 @@ static PyObject *ta_python_host_chart(PyObject *self, PyObject *name) {
     return result;
 }
 
+/* actor_by_name(name) -> session or None: ta_host_actor_by_name, the live
+ * actor spawned with `name` (boot actors carry their manifest name), newest
+ * segment first. */
+static PyObject *ta_python_host_actor_by_name(PyObject *self, PyObject *name) {
+    ta_python_host *host = (ta_python_host *)self;
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    PyObject *result = NULL;
+    ta_string_view text;
+    if (PyUnicode_Check(name) && ta_python_text(name, &text) == 0) {
+        uint64_t session = ta_host_actor_by_name(host->host, text);
+        result = session ? PyLong_FromUnsignedLongLong(session) : Py_NewRef(Py_None);
+    } else if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "actor_by_name takes the actor's name, a str");
+    ta_python_leave(&call);
+    return result;
+}
+
 static int ta_python_session(PyObject *value, uint64_t *out) {
     *out = PyLong_Check(value) ? PyLong_AsUnsignedLongLong(value) : 0;
     if (PyErr_Occurred()) return -1;
@@ -1412,6 +1433,7 @@ static PyMethodDef ta_python_host_methods[] = {
     {"add_image", ta_python_host_add_image, METH_O,
      ta_python_doc_host_add_image},
     {"chart", ta_python_host_chart, METH_O, ta_python_doc_host_chart},
+    {"actor_by_name", ta_python_host_actor_by_name, METH_O, ta_python_doc_host_actor_by_name},
     {"spawn", (PyCFunction)(void (*)(void))ta_python_host_spawn, METH_VARARGS | METH_KEYWORDS,
      ta_python_doc_host_spawn},
     {"send", (PyCFunction)(void (*)(void))ta_python_host_send, METH_VARARGS | METH_KEYWORDS,

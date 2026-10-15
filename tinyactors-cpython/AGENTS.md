@@ -79,6 +79,12 @@ Decided by the maintainer (2026-10-13); every item is in
   **`CompileError`**, a subclass of `TinyactorsError`, carrying every
   diagnostic (`ta_compile_diagnostics`: `file`, `line`, `column`,
   `message`, and the severity) and freeing the result before it raises.
+- **`tinyactors.compile_system(manifest: Source, resolver=None) ->
+  Compiled`**: `ta_compile_system` (2026-10-15), the image of a
+  `<system>` manifest: its `<chart name src>`s, read through the
+  resolver, and the `<actor name chart>`s `host.boot` spawns. The same
+  path as `compile_charts` (`ta_python_compile` takes a
+  `ta_python_compilation`), the same `Compiled` and `CompileError`.
 - **`Compiled`** holds the compile result: **`compiled.image`** is a thin
   view of `ta_compile_image`'s bytes (a read-only buffer, valid until
   `close`; a read after it raises `TinyactorsError` with
@@ -115,7 +121,9 @@ Decided by the maintainer (2026-10-13); every item is in
   `traceparent` included; it returns the length of the accepted prefix,
   `host.h:192-195`), **`host.terminate(session)`**
   (`ta_host_terminate`), **`host.boot(segment)`** (`ta_host_boot`, the
-  image's boot actors): applied at the call, read during it; a payload
+  image's boot actors), **`host.actor_by_name(name) -> int | None`**
+  (`ta_host_actor_by_name`, 2026-10-15: the live actor spawned with
+  `name`, newest segment first; `None` for core's 0): applied at the call, read during it; a payload
   moves to core on success and is released on refusal. Under asyncio an
   input made outside a turn schedules one turn.
 - **`traceparent` in: W3C text, parsed by core.** `ta_spawn.traceparent`
@@ -988,7 +996,7 @@ src/                 extension.h, docs.h (every public docstring: when and how t
                      module.c, host.c (Host, inputs, the arena's marks),
                      loop.c (drain, turn, both drivers), effects.c (dispatch, thin views,
                      records), methods.c (typed methods, the pending table), values.c,
-                     compile.c (compile_charts, Compiled, the resolver, ResolveError),
+                     compile.c (compile_charts, compile_system, Compiled, the resolver, ResolveError),
                      datamodel/{datamodel.h, datamodel.c, rows.c, expressions.c,
                      support.py (the rewrite, the exceptions; embedded, not shipped)}
 conform/             the suite's adapter, python -m conform; not in the wheel

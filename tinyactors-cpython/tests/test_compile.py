@@ -3,7 +3,7 @@
 import unittest
 
 import tinyactors
-from support import fixture
+from support import Logs, fixture
 
 GOOD = fixture("test_compile/good.python.scxml")
 PARENT = fixture("test_compile/parent.python.scxml")
@@ -76,6 +76,32 @@ class Compile(unittest.TestCase):
     def test_a_resolver_is_a_callable(self):
         with self.assertRaises(TypeError):
             tinyactors.compile_charts([("parent.scxml", PARENT)], {"child.scxml": ""})
+
+    def test_a_manifest_compiles_into_an_image_whose_actors_boot_by_name(self):
+        resolver = Resolver({"worker.scxml": fixture("test_compile/worker.python.scxml")})
+        logs = Logs()
+        with tinyactors.compile_system(("system.xml", fixture("test_compile/system.xml")), resolver) as compiled:
+            with tinyactors.Host({"systemID": "t"}, log=logs, clock=tinyactors.SimulatedClock()) as host:
+                segment = host.add_image(compiled.image)
+                self.assertIsNone(host.actor_by_name("first"))
+                host.boot(segment)
+                host.run_until_idle()
+                first, second = host.actor_by_name("first"), host.actor_by_name("second")
+                self.assertTrue(first and second and first != second)
+                self.assertEqual(sorted(logs.labelled("boot")), ["first", "second"])
+                host.terminate(first)
+                host.run_until_idle()
+                self.assertIsNone(host.actor_by_name("first"))
+                with self.assertRaises(TypeError):
+                    host.actor_by_name(1)
+        self.assertEqual(resolver.asked, [("system.xml", "worker.scxml")])
+
+    def test_a_manifest_with_an_error_raises_compile_error(self):
+        with self.assertRaises(tinyactors.CompileError) as raised:
+            tinyactors.compile_system(("system.xml", "<charts/>"))
+        self.assertIn("<system>", raised.exception.diagnostics[0].message)
+        with self.assertRaises(TypeError):
+            tinyactors.compile_system([("system.xml", "<system/>")])
 
     def test_without_a_resolver_src_is_refused(self):
         with self.assertRaises(tinyactors.CompileError):

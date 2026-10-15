@@ -10,6 +10,8 @@ static PyMethodDef ta_python_methods[] = {
     {"decode", ta_python_decode, METH_O, ta_python_doc_decode},
     {"compile_charts", (PyCFunction)(void (*)(void))ta_python_compile_charts, METH_FASTCALL | METH_KEYWORDS,
      ta_python_doc_compile_charts},
+    {"compile_system", (PyCFunction)(void (*)(void))ta_python_compile_system, METH_FASTCALL | METH_KEYWORDS,
+     ta_python_doc_compile_system},
     {NULL, NULL, 0, NULL}
 };
 

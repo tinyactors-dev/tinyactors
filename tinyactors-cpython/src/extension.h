@@ -319,7 +319,16 @@ void ta_python_pending_drop(ta_python_host *host);
 
 /* ---- the compiler (compile.c) ---------------------------------------------- */
 
+/* What to compile (host.c, ta_python_compile): `charts`, or with
+ * `manifest` the one system manifest in charts.pointer[0]. */
+typedef struct ta_python_compilation {
+    ta_source_list charts;
+    int manifest;
+} ta_python_compilation;
+ta_status ta_python_compile(ta_compile_options *options, const ta_python_compilation *compilation,
+                            ta_compile_result **out);
 PyObject *ta_python_compile_charts(PyObject *module, PyObject *const *args, Py_ssize_t count, PyObject *names);
+PyObject *ta_python_compile_system(PyObject *module, PyObject *const *args, Py_ssize_t count, PyObject *names);
 int ta_python_compile_init_type(PyObject *module, ta_python_module_state *state);
 
 /* ---- the support namespace (src/datamodel/expressions.c) ------------------- */

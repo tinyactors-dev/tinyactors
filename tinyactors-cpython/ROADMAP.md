@@ -1,7 +1,8 @@
 # Roadmap: tinyactors-cpython
 
-**Step 8.4 is implemented and measured (2026-10-14); next: the API
-review by the maintainer, then step 8.5.** The first binding (M1 of the
+**Step 8.4 is implemented and measured (2026-10-14), most of step 8.5
+is done, and the API review is applied (2026-10-15; below, "The API
+review"); next: packaging, the examples and the release tasks.** The first binding (M1 of the
 earlier plan, 2026-10-12) was removed (`6426816a`); the rewrite follows
 the design of [AGENTS.md](AGENTS.md), with the changes below ("Decided in
 8.4, for the API review"). The design (2026-10-13) is in [AGENTS.md](AGENTS.md) ("The API",
@@ -604,6 +605,14 @@ review") asked seven questions; each recommendation is in:
   says so.
 - **XML in conditions:** no API change; the README shows conditions as
   methods of a `.py` file.
+
+Then, to complete the surface against core's public headers:
+`tinyactors.compile_system` (`ta_compile_system`, an image from a
+`<system>` manifest whose actors `Host.boot` spawns) and
+`Host.actor_by_name` (`ta_host_actor_by_name`). What stays out:
+`ta_host_segment_count` (`host_stats` has `segments`) and
+`ta_host_snapshot_segments` (`Host.restore` reads the images from the
+pack).
 
 ## How the work runs
 

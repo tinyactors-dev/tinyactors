@@ -52,6 +52,10 @@ Under asyncio, `await host.idle()` does the same.
   with `ResolveError(message, line=None, column=None)`. A compilation with
   an error raises `CompileError` with every diagnostic. `Compiled.image`
   is a read-only buffer, valid until `close()` (a context manager).
+- `compile_system(manifest, resolver=None) -> Compiled`: a `(name, text)`
+  manifest, a `<system>` of `<chart name src>`s (read through the
+  resolver) and `<actor name chart>`s, into one image whose actors
+  `boot(segment)` spawns under their names.
 - `Host(config, io_processors=None, *, log=None, clock=None,
   telemetry=None, wake=None, migrated=None, services=None,
   migration_done=None)`:
@@ -72,7 +76,8 @@ Under asyncio, `await host.idle()` does the same.
   address), `send_many([(session, event, data, traceparent),
   ...]) -> accepted`, `terminate(session)`, `boot(segment)` (the image's
   boot actors: its `<system><actor>`s, or the first chart compiled, each
-  under its name).
+  under its name). `actor_by_name(name) -> session` finds a live actor
+  spawned with a name (`None`: none).
 - Drivers: `run_until_idle()`; `run()`, which sleeps to each deadline
   while there is one; `SimulatedClock.increment(seconds)`; and under
   asyncio (`async with Host(...)`), `await host.idle()`. `host.next_deadline`

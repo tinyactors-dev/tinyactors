@@ -1,12 +1,12 @@
 /* The compiler (AGENTS.md, "The API"): compile_charts is
- * ta_compile_charts, Compiled holds its result, and a resolver, a callable
+ * ta_compile_charts, compile_system is ta_compile_system (a manifest:
+ * charts, boot actors, I/O processors), Compiled holds the result of either, and a resolver, a callable
  * resolver(base, source) -> str, is its ta_compile_options.resolve, the
  * only place a resolver is given: it lives at compile time only. */
 #include "extension.h"
 #include "docs.h"
 #include <string.h>
 
-ta_status ta_python_compile(ta_compile_options *options, ta_source_list charts, ta_compile_result **out);
 
 typedef struct ta_python_compiled {
     PyObject_HEAD
@@ -128,30 +128,48 @@ static ta_status ta_python_resolve(void *context, const ta_resolve_request *requ
     return status;
 }
 
-/* ---- compile_charts ------------------------------------------------------------------ */
+/* ---- compile_charts, compile_system -------------------------------------------------- */
 
-PyObject *ta_python_compile_charts(PyObject *module, PyObject *const *args, Py_ssize_t count, PyObject *names) {
+/* The arguments of a compile call: `first` is the sources, or the manifest
+ * as a list of its one pair; `name` is the call's, for its messages. */
+typedef struct ta_python_compile_call {
+    const char *name;
+    const char *first; /* the first parameter's keyword */
+    int manifest;
+} ta_python_compile_call;
+
+typedef struct ta_python_arguments {
+    PyObject *const *args;
+    Py_ssize_t count;
+    PyObject *names;
+} ta_python_arguments;
+
+static PyObject *ta_python_compile_with(PyObject *module, const ta_python_arguments *given,
+                                        const ta_python_compile_call *how) {
     ta_python_module_state *state = ta_python_codec_state(module);
     if (!state) return NULL;
+    PyObject *const *args = given->args;
+    Py_ssize_t count = given->count;
     PyObject *sources = NULL, *resolver = Py_None;
-    Py_ssize_t keywords = names ? PyTuple_Size(names) : 0;
+    Py_ssize_t keywords = given->names ? PyTuple_Size(given->names) : 0;
     if (count >= 1) sources = args[0];
     if (count >= 2) resolver = args[1];
     for (Py_ssize_t i = 0; i < keywords; i++) {
-        PyObject *name = PyTuple_GetItem(names, i);
+        PyObject *name = PyTuple_GetItem(given->names, i);
         if (PyUnicode_CompareWithASCIIString(name, "resolver") == 0 && count < 2) resolver = args[count + i];
-        else if (PyUnicode_CompareWithASCIIString(name, "sources") == 0 && count < 1) sources = args[count + i];
+        else if (PyUnicode_CompareWithASCIIString(name, how->first) == 0 && count < 1) sources = args[count + i];
         else {
-            PyErr_Format(PyExc_TypeError, "compile_charts() got an unexpected keyword argument %R", name);
+            PyErr_Format(PyExc_TypeError, "%s() got an unexpected keyword argument %R", how->name, name);
             return NULL;
         }
     }
     if (!sources || count > 2) {
-        PyErr_SetString(PyExc_TypeError, "compile_charts(sources, resolver=None)");
+        PyErr_Format(PyExc_TypeError, "%s(%s, resolver=None)", how->name, how->first);
         return NULL;
     }
-    PyObject *list = PySequence_List(sources);
+    PyObject *list = how->manifest ? PyList_New(1) : PySequence_List(sources);
     if (!list) return NULL;
+    if (how->manifest) PyList_SetItem(list, 0, Py_NewRef(sources));
     Py_ssize_t total = PyList_Size(list);
     /* the ta_source array in a Python bytes: the call's memory, no host here */
     PyObject *room = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)sizeof(ta_source) * (total ? total : 1));
@@ -167,7 +185,9 @@ PyObject *ta_python_compile_charts(PyObject *module, PyObject *const *args, Py_s
                  ta_python_text(PyTuple_GetItem(pair, 1), &charts[i].text) == 0;
         Py_XDECREF(pair);
         if (!ok) {
-            if (!PyErr_Occurred()) PyErr_SetString(PyExc_TypeError, "a source is a (name, text) pair of str");
+            if (!PyErr_Occurred())
+                PyErr_SetString(PyExc_TypeError, how->manifest ? "a manifest is a (name, text) pair of str"
+                                                               : "a source is a (name, text) pair of str");
             goto done;
         }
     }
@@ -183,7 +203,8 @@ PyObject *ta_python_compile_charts(PyObject *module, PyObject *const *args, Py_s
         options.resolve_context = &resolving;
     }
     ta_compile_result *compiled = NULL;
-    ta_status status = ta_python_compile(&options, (ta_source_list){charts, (uint32_t)total}, &compiled);
+    ta_python_compilation compilation = {{charts, (uint32_t)total}, how->manifest};
+    ta_status status = ta_python_compile(&options, &compilation, &compiled);
     int errors = 0;
     PyObject *diagnostics = ta_python_diagnostics(state, compiled, &errors);
     if (!diagnostics || resolving.raised || status != TA_OK || errors) {
@@ -224,6 +245,16 @@ done:
     Py_XDECREF(room);
     Py_DECREF(list);
     return result;
+}
+
+PyObject *ta_python_compile_charts(PyObject *module, PyObject *const *args, Py_ssize_t count, PyObject *names) {
+    static const ta_python_compile_call how = {"compile_charts", "sources", 0};
+    return ta_python_compile_with(module, &(ta_python_arguments){args, count, names}, &how);
+}
+
+PyObject *ta_python_compile_system(PyObject *module, PyObject *const *args, Py_ssize_t count, PyObject *names) {
+    static const ta_python_compile_call how = {"compile_system", "manifest", 1};
+    return ta_python_compile_with(module, &(ta_python_arguments){args, count, names}, &how);
 }
 
 /* ---- Compiled -------------------------------------------------------------------------- */
