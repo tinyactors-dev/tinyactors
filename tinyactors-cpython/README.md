@@ -368,22 +368,32 @@ host = tinyactors.Host.restore(blob, config, log=log, wake=wake)
   share a list share it no more after a restore.
 
 `mise run snapshot` is the pattern at scale (`tools/snapshot.py`): a
+deploy rehearsed on a copy of a live host. The live host has its
 population on SQLite as in "Hibernation", 200,000 events, a delayed send
-for every resident actor, the snapshot written to a file, the host
-closed, a new one restored from the file (its own snapshot must be the
-same bytes), 200,000 events more and the delayed sends due; every
-sampled actor's count must hold both halves. Measured on x86_64 Linux, 4
-CPUs, CPython 3.13.16 with the GIL, one run each:
+for every resident actor, and half of those paying through an invoked
+payment service that has not answered. Its snapshot is written to a
+file, its store copied (a copy writes blobs too), and a copy restored
+from the file with a stand-in payment service, which gets every payment
+in flight again (`restored`, with its amount) and declines it. The copy
+must snapshot to the same bytes before it runs; then it adds version 2
+and migrates every actor, waking the hibernated ones a batch at a time,
+with 200,000 events meanwhile, while the live host goes on with 200,000
+events of its own. Both hosts' sampled actors must hold every count,
+delayed send and payment, the copy's on version 2 and declined, the
+live host's on version 1 and still paying, and the copy must never reach
+the real service. Measured on x86_64 Linux, 4 CPUs, CPython 3.13.16 with
+the GIL, one run each, both hosts in one process:
 
-| datamodel | actors | resident | snapshot | snapshot time | restore time | every count and delayed send |
-|---|---|---|---|---|---|---|
-| `"python"` | 2,000,000 | 1000 | 121.8 MB (61 B per actor) | 0.12 s | 0.07 s | right |
-| quickjs | 2,000,000 | 1000 | 121.9 MB | 0.09 s | 0.07 s | right |
-| `"python"` | 100,000 | all | 224.8 MB (2248 B per actor) | 0.50 s | 0.39 s | right |
-| quickjs | 100,000 | all | 232.5 MB (2325 B per actor) | 1.36 s | 0.67 s | right |
+| datamodel | actors | resident | snapshot | snapshot time | restore time | migrating the copy | peak resident, both hosts | every actor right |
+|---|---|---|---|---|---|---|---|---|
+| `"python"` | 2,000,000 | 1000 | 124.6 MB (62 B per actor) | 0.16 s | 1.06 s | 131 s | 642 MB | yes |
+| quickjs | 2,000,000 | 1000 | 124.7 MB | 0.15 s | 0.38 s | 158 s | 643 MB | yes |
+| `"python"` | 100,000 | all | 372.0 MB (3720 B per actor) | 0.95 s | 0.73 s | 21.4 s | 1761 MB | yes |
+| quickjs | 100,000 | all | 379.5 MB (3795 B per actor) | 2.82 s | 1.49 s | 21.6 s | 1988 MB | yes |
 
-A snapshot is mostly the region, as the config sized it; of the 225 MB of
-100,000 resident `"python"` actors, about 11 MB is the datamodel's state.
+A snapshot is mostly the region, as the config sized it. Migrating 2,000,000
+mostly hibernated actors is the store's work: each is woken, moved and
+hibernated again (2,018,332 wakes, events included).
 
 ## Invoked services
 
