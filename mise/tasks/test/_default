@@ -46,7 +46,10 @@ steps = [
   # Depends on nothing else here. --full: each gate's exhaustive version (tinyparse/mise/tasks/gate/).
   ['tinyparse', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('tinyparse')],
   # --full: every spec case with each of its allocations failing.
-  ['staticjs', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('staticjs')]
+  ['staticjs', ['mise', 'run', *flags.call(*(full ? ['--full'] : []))], root.join('staticjs')],
+  # @tinyactors/staticjs (docs/adr/0013): its module from staticjs's
+  # amalgamation, its tests in Node and Chromium, and its tarball installed.
+  ['staticjs-js', ['mise', 'run', *flags.call], root.join('staticjs-js')]
 ]
 
 clock = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }

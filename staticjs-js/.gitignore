@@ -1,0 +1,4 @@
+# Built by `mise run build`; packed by `mise run pack`.
+/staticjs.wasm
+/build/
+/LICENSE

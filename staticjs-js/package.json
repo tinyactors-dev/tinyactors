@@ -1,0 +1,49 @@
+{
+  "name": "@tinyactors/staticjs",
+  "version": "0.1.0",
+  "description": "staticjs, a small embeddable JavaScript engine for a pure, total subset of the language, as WebAssembly for Node and browsers",
+  "keywords": [
+    "javascript",
+    "interpreter",
+    "sandbox",
+    "webassembly",
+    "wasm",
+    "expressions",
+    "plugins"
+  ],
+  "homepage": "https://staticjs.tinyactors.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dhamidi/tinyactors.git",
+    "directory": "staticjs-js"
+  },
+  "bugs": {
+    "url": "https://github.com/dhamidi/tinyactors/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    },
+    "./staticjs.wasm": "./staticjs.wasm"
+  },
+  "types": "./index.d.ts",
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "staticjs.wasm",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

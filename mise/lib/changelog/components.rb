@@ -46,6 +46,10 @@ module Changelog
                   api_files: [], api_ignore: nil),
     Component.new(name: 'staticjs', dir: 'staticjs', scopes: %w[staticjs],
                   api_json: 'include/staticjs.api.json', api_ignore: VERSION_MACROS),
+    # staticjs for JavaScript, @tinyactors/staticjs (docs/adr/0013): its
+    # API is its declaration file.
+    Component.new(name: 'staticjs-js', dir: 'staticjs-js', scopes: %w[staticjs-js],
+                  api_files: %w[index.d.ts], api_ignore: nil),
     Component.new(name: 'tinyxml', dir: 'tinyxml', scopes: %w[tinyxml txml],
                   api_json: 'include/txml.api.json', api_ignore: VERSION_MACROS)
   ].freeze

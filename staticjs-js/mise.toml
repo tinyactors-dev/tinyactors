@@ -1,0 +1,8 @@
+# staticjs-js: the npm package @tinyactors/staticjs (AGENTS.md). Tasks are
+# Ruby file tasks in mise/tasks/. The compiler and zig are the root
+# mise.toml's (mise/lib/toolchain/): the module is built with
+# Toolchain::Target.release, as staticjs.wasm is.
+
+[tools]
+# The oldest Node.js the package claims: it is tested on it.
+node = "22"

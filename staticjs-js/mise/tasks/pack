@@ -1,0 +1,44 @@
+#!/usr/bin/env ruby
+#MISE description="Pack @tinyactors/staticjs into build/pack/, ready to publish, and check the tarball: installed into an empty project, it loads and evaluates"
+#MISE depends=["build"]
+# vim:ft=ruby
+
+# The tarball holds what package.json's `files` names: index.mjs,
+# index.d.ts, staticjs.wasm, the README, the changelog and the repository's
+# LICENSE (copied here for the pack). It is checked the way a user gets it:
+# `npm install <tarball>` into an empty directory, then a program imports
+# the package by its name and evaluates. `npm publish build/pack/<it>` is
+# the maintainer's (docs/adr/0013, decision 8).
+
+require_relative '../staticjs_js'
+require 'fileutils'
+require 'json'
+require 'tmpdir'
+
+root = StaticJSPackage::ROOT
+FileUtils.cp(root.parent.join('LICENSE'), root.join('LICENSE'))
+out = StaticJSPackage::BUILD.join('pack')
+FileUtils.rm_rf(out)
+FileUtils.mkdir_p(out)
+StaticJSPackage.run('npm', 'pack', '--silent', '--pack-destination', out.to_s)
+tarball = Dir[out.join('*.tgz').to_s].fetch(0)
+listing = IO.popen(['tar', '-tzf', tarball], &:read).split.sort
+wanted = %w[CHANGELOG.md LICENSE README.md index.d.ts index.mjs package.json staticjs.wasm].map { |f| "package/#{f}" }
+abort "pack: the tarball holds #{listing.inspect}, not #{wanted.inspect}" unless listing == wanted
+
+Dir.mktmpdir('staticjs-pack') do |dir|
+  File.write(File.join(dir, 'package.json'), JSON.generate({ name: 'pack-check', private: true, type: 'module' }))
+  StaticJSPackage.run('npm', 'install', '--silent', '--no-audit', '--no-fund', '--offline', tarball, chdir: dir)
+  File.write(File.join(dir, 'check.mjs'), <<~JS)
+    import { load } from '@tinyactors/staticjs';
+    const staticjs = await load();
+    const context = staticjs.createContext();
+    const program = context.compile('[3, 1, 2].toSorted((a, b) => a - b)');
+    const run = program.start();
+    run.step(1000);
+    console.log(JSON.stringify(run.result()));
+  JS
+  printed = IO.popen(['node', 'check.mjs'], chdir: dir, &:read).strip
+  abort "pack: the installed package printed #{printed.inspect}" unless printed == '[1,2,3]'
+end
+puts "pack: #{Pathname.new(tarball).relative_path_from(root)} (#{File.size(tarball)} bytes): installs, loads and evaluates"

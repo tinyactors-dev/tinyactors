@@ -1,0 +1,33 @@
+#!/usr/bin/env ruby
+#MISE description="Build staticjs.wasm, the package's module: staticjs's amalgamation and src/js.c, the C layer the JavaScript calls"
+#MISE sources=["src/**/*", "../staticjs/include/staticjs.c", "../staticjs/include/staticjs_wasm.c", "../staticjs/include/staticjs.h", "mise/**/*"]
+#MISE outputs=["staticjs.wasm"]
+# vim:ft=ruby
+
+# Built as the release builds staticjs.wasm (Toolchain::Target.release, the
+# amalgamation, -O2 by the target, no debug information), with the
+# package's C layer, whose sjs_js_* functions are the module's exports. It
+# imports two functions, staticjs_js.native and staticjs_js.release, which
+# index.mjs gives: a native function's call and its release
+# (docs/adr/0013, decision 3: the released staticjs.wasm imports nothing).
+
+require_relative '../staticjs_js'
+
+target = Toolchain::Target.release('wasm32-freestanding')
+work = StaticJSPackage::BUILD.join('wasm')
+include_dir = StaticJSPackage::STATICJS.join('include')
+sources = [include_dir.join('staticjs.c'), include_dir.join('staticjs_wasm.c'), StaticJSPackage::ROOT.join('src/js.c')]
+objects = sources.map do |source|
+  target.compile(source.to_s, into: work.join("#{source.basename('.c')}.o").to_s, includes: [include_dir.to_s],
+                              flags: ['-g0']).path
+end
+exports = StaticJSPackage::ROOT.join('src/js.c').read.scan(/^JS\s[^{;]*?\b(sjs_js_\w+)\s*\(/).flatten.uniq.sort
+exports << 'sjs_version'
+module_path = StaticJSPackage::WASM
+target.wasm_module(objects, into: module_path.to_s, exports: exports)
+imports = IO.popen(['node', '-e', "const m = new WebAssembly.Module(require('fs').readFileSync(process.argv[1])); " \
+                                  "console.log(WebAssembly.Module.imports(m).map((i) => i.module + '.' + i.name).join(' '))",
+                    module_path.to_s], &:read).strip
+expected = 'staticjs_js.native staticjs_js.release'
+abort "build: staticjs.wasm imports #{imports.inspect}, not #{expected}" unless imports.split.sort == expected.split
+puts "build: #{module_path.relative_path_from(StaticJSPackage::ROOT)} (#{module_path.size} bytes, #{exports.size} exports, imports #{expected})"

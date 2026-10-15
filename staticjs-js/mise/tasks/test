@@ -1,0 +1,30 @@
+#!/usr/bin/env ruby
+#MISE description="Test @tinyactors/staticjs: the C layer's parameters, the build, the package's tests in Node and in Chromium (skipped without Playwright), and the packed tarball installed and imported"
+#MISE sources=["src/**/*", "index.mjs", "index.d.ts", "test/**/*", "package.json", "mise/**/*", "mise.toml", "../staticjs/include/**/*", "../staticjs/src/**/*", "../tinyxml/mise/lib/c_scan.rb", "../mise/lib/**/*", "../mise.toml"]
+#MISE outputs={auto=true}
+# vim:ft=ruby
+
+# The C layer keeps the repository's rule of at most three parameters
+# (AGENTS.md), checked with tinyxml's scanner as staticjs checks its own.
+# Each test file runs under node --test; the Chromium test finds the
+# environment's Playwright, and a pinned Chromium through
+# PLAYWRIGHT_CHROMIUM when one is installed at /opt/pw-browsers.
+
+require_relative '../staticjs_js'
+require_relative '../../../tinyxml/mise/lib/c_scan'
+
+source = StaticJSPackage::ROOT.join('src/js.c')
+text = source.read
+over = CScan.functions(text).select { |f| CScan.count_parameters(f.params) > 3 }
+abort "test: #{over.map(&:name).join(', ')} take more than three parameters" unless over.empty?
+puts "test: src/js.c: #{CScan.functions(text).size} functions, none with more than three parameters"
+
+StaticJSPackage.run('mise', 'run', 'build')
+env = {}
+chromium = Pathname.new('/opt/pw-browsers/chromium')
+env['PLAYWRIGHT_CHROMIUM'] = chromium.to_s if chromium.executable?
+pid = Process.spawn(env, 'node', '--test', *Dir[StaticJSPackage::ROOT.join('test/*.test.mjs').to_s].sort,
+                    chdir: StaticJSPackage::ROOT.to_s)
+_pid, status = Process.wait2(pid)
+abort 'test: the package tests failed' unless status.success?
+StaticJSPackage.run('mise', 'run', 'pack')
