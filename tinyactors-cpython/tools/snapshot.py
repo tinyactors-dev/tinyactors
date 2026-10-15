@@ -29,11 +29,13 @@ deploying it:
 5. verify the copy: the job migrated every actor, none failed; a sample
    (all up to 25,000) reports its count (every event, before and after
    the snapshot), its delayed send, its payment (declined for the payers)
-   and version 2; the real payment service got nothing from the copy;
+   and version 2; each payment in flight reached the stand-in once, with
+   its amount, and was cancelled after its decline (stop);
 6. verify the live host: it goes on with E events of its own; its sample
    reports version 1, its own counts, payments still in flight; the real
-   service was started once per payer, never stopped, and the live store
-   holds no blob the copy wrote. After every eviction, on both hosts, at
+   service was started once per payer and never stopped, and every blob
+   in the live store is the last one the live host wrote for its session
+   (the copy wrote into its own). After every eviction, on both hosts, at
    most R actors are resident (plus two batches while migrating).
 
 With R = N every actor stays resident, so the datamodels' own state is most
@@ -50,6 +52,7 @@ import resource
 import sys
 import tempfile
 import time
+import zlib
 
 import tinyactors
 from stress import BATCH, DATAMODELS, Store, read_chart
@@ -73,6 +76,7 @@ class Population:
         self.asked = collections.deque()
         self.reports, self.wakes, self.moves, self.peak = {}, 0, 0, 0
         self.migrating, self.job_done = False, None
+        self.written = array.array("Q", bytes(8 * options.actors))  # crc32 + 1 of the last blob it put
 
     def wake_now(self, host, session):
         host.wake(session, self.store.get(session))
@@ -99,7 +103,9 @@ class Population:
 
     def hibernate(self, host, session):
         try:
-            self.store.put(session, host.hibernate(session))
+            blob = host.hibernate(session)
+            self.written[index(session)] = zlib.crc32(blob) + 1
+            self.store.put(session, blob)
         except tinyactors.TinyactorsError as error:
             if error.status != "TA_ERROR_STATE":
                 raise
@@ -138,7 +144,8 @@ class Population:
 
 class Payments:
     """A payment service: the live host's real one, which has not answered
-    yet, or the copy's stand-in, which declines what it is given."""
+    yet, or the copy's stand-in, which declines what it is given. Each
+    invocation gets a Payment, the service object the host keeps."""
 
     def __init__(self, decline):
         self.decline, self.started, self.stopped, self.amounts, self.restored = decline, {}, set(), {}, 0
@@ -149,10 +156,21 @@ class Payments:
         self.restored += invocation.restored
         if self.decline:
             invocation.send_back("declined")
-        return self
+        return Payment(self, invocation.session)
+
+
+class Payment:
+    """One payment in flight; stop() is its cancel (the payer left paying)."""
+
+    __slots__ = ("payments", "session")
+
+    def __init__(self, payments, session):
+        self.payments, self.session = payments, session
 
     def stop(self, host):
-        pass  # the live host's payers never leave paying; the stand-in's answer ends nothing it needs
+        if self.session in self.payments.stopped:
+            self.payments.stopped.add(-self.session)  # twice: the check below sees it
+        self.payments.stopped.add(self.session)
 
 
 def main():
@@ -354,15 +372,19 @@ def finish(options, failures, directory, sessions, sent_all, populations, hosts,
     if wrong_live:
         failures.append("live: %d of %d actors wrong, e.g. actor %d: %r, expected %r" % (
             len(wrong_live), len(sample), wrong_live[0], live.reports.get(sessions[wrong_live[0]]), expected[wrong_live[0]]))
-    if real.started != {s: 1 for s in payers} or real.restored:
-        failures.append("live: the real payment service was started %d times for %d payers (%d restored)" % (
-            sum(real.started.values()), len(payers), real.restored))
+    if real.started != {s: 1 for s in payers} or real.restored or real.stopped:
+        failures.append("live: the real payment service was started %d times for %d payers (%d restored), "
+                        "stopped %d times" % (sum(real.started.values()), len(payers), real.restored, len(real.stopped)))
+    if stand_in.stopped != set(payers):
+        failures.append("copy: %d stand-in payments cancelled after their decline, %d payers" % (
+            len(stand_in.stopped), len(payers)))
     live_region = live.check_resident(host)["regionBytes"]
     host.close()
     live.store.flush()
-    copied = live.store.db.execute("SELECT COUNT(*) FROM blobs").fetchone()[0]
-    if copied > options.actors:
-        failures.append("live: the store holds %d blobs for %d actors" % (copied, options.actors))
+    foreign = sum(1 for session, blob in live.store.db.execute("SELECT session, blob FROM blobs")
+                  if live.written[index(session)] != zlib.crc32(blob) + 1)
+    if foreign:
+        failures.append("live: %d blobs in the live store are not the live host's last" % foreign)
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
     print("verify: %d actors on each host, %d wrong on the copy, %d on the live host" % (
         len(sample), len(wrong), len(wrong_live)))

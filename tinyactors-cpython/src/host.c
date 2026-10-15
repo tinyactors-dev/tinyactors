@@ -1256,7 +1256,7 @@ static PyObject *ta_python_host_encode(ta_python_host *host, PyObject *value) {
  * datamodels' state, the images, the system id and the host's time. A
  * quiescent host only: not from a handler (a batch is open) nor while a
  * migration job runs (TA_ERROR_STATE). The services running are not in
- * it: the restored host's first take announces each invocation again. */
+ * it: the restored host's first run announces each invocation again. */
 static PyObject *ta_python_host_snapshot(PyObject *self, PyObject *unused) {
     (void)unused;
     ta_python_host *host = (ta_python_host *)self;

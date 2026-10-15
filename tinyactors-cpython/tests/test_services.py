@@ -254,6 +254,55 @@ class Services(unittest.TestCase):
                 self.assertEqual(len(logs.labelled("answer")), 1)
                 self.assertEqual(len(logs.labelled("done")), 1)
 
+    def test_a_service_done_before_the_snapshot_is_not_started_again(self):
+        """Its done.invoke was waiting for the actor when the snapshot was
+        taken: the restored host delivers it, and starts no service."""
+        logs, invocations, started = Logs(), [], []
+        with host_with([("client.scxml", CLIENT["python"])],
+                       services={TYPE: lambda host, i: invocations.append(i)}) as host:
+            host.spawn(host.chart("client"))
+            host.run_until_idle()
+            invocations[0].done({"paid": 1})  # the service settles; the actor has not run since
+            blob = host.snapshot()
+        with self.restore(blob, log=logs, services={TYPE: lambda host, i: started.append(i)}) as host:
+            host.run_until_idle()
+        self.assertEqual(started, [])
+        self.assertEqual(logs.labelled("done"), ["{'paid': 1}"])
+
+    def test_a_service_that_crashed_is_not_started_again(self):
+        logs, started = Logs(), []
+
+        class Crashing:
+            def receive(self, host, send):
+                raise ValueError("crashed")
+
+        with host_with([("client.scxml", CLIENT["python"])], log=logs,
+                       services={TYPE: lambda host, i: Crashing()}) as host:
+            session = host.spawn(host.chart("client"))
+            host.run_until_idle()
+            host.send(session, "ask", "first")
+            with self.assertRaises(ValueError):
+                host.run_until_idle()
+            host.run_until_idle()
+            blob = host.snapshot()
+        restored_logs = Logs()
+        with self.restore(blob, log=restored_logs, services={TYPE: lambda host, i: started.append(i)}) as host:
+            host.run_until_idle()
+        self.assertEqual(logs.labelled("error"), ["communication"])
+        self.assertEqual(started, [])
+        self.assertEqual(restored_logs.labelled("error"), [])
+
+    def test_a_restore_of_a_restore_reports_a_missing_service_once(self):
+        session, blob = self.snapshot_with_a_service("python")
+        logs, started = Logs(), []
+        with self.restore(blob, log=logs) as host:
+            host.run_until_idle()
+            again = host.snapshot()
+        with self.restore(again, log=logs, services={TYPE: lambda host, i: started.append(i)}) as host:
+            host.run_until_idle()
+        self.assertEqual(logs.labelled("error"), ["communication"])
+        self.assertEqual(started, [])
+
     def test_a_restore_with_a_stand_in_service(self):
         session, blob = self.snapshot_with_a_service("python")
         logs = Logs()

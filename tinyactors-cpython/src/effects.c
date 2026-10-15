@@ -598,9 +598,14 @@ typedef struct ta_python_service_event {
     ta_string_view sendid; /* error.communication: the failed send's */
 } ta_python_service_event;
 
+/* The invocation failed (it could not start, or crashed): error.communication
+ * for the invoker, and core marks the invocation over, so a restore does not
+ * announce it again. */
+#define TA_PYTHON_INVOCATION_FAILED (TA_EVENT_IN_ERROR_COMMUNICATION | TA_EVENT_IN_FROM_INVOKE)
+
 static int ta_python_invocation_post(ta_python_invocation *invocation, const ta_python_service_event *what) {
     ta_python_host *host = invocation->host;
-    if ((invocation->ended && what->flags != TA_EVENT_IN_ERROR_COMMUNICATION) || !host->host) {
+    if ((invocation->ended && !(what->flags & TA_EVENT_IN_ERROR_COMMUNICATION)) || !host->host) {
         ta_python_raise_status(host->state, TA_ERROR_STALE); /* done, cancelled, or the host is gone */
         return -1;
     }
@@ -820,7 +825,7 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
         invocation->ended = invocation->failed = 1;
         service = Py_NewRef(Py_None);
         if (invocation->data && !ta_python_uninvoked_in_batch(host, index)) {
-            ta_python_service_event failed = {TA_EVENT_IN_ERROR_COMMUNICATION, NULL, Py_None, invocation->traceparent, {0, 0}};
+            ta_python_service_event failed = {TA_PYTHON_INVOCATION_FAILED, NULL, Py_None, invocation->traceparent, {0, 0}};
             if (ta_python_invocation_post(invocation, &failed) < 0) PyErr_Clear();
         }
         PyErr_SetRaisedException(raised);
@@ -862,7 +867,7 @@ static void ta_python_invocation_crashed(ta_python_host *host, uint32_t index) {
         if (!key || !failed_entry || PyDict_SetItem(host->invocations, key, failed_entry) < 0) PyErr_Clear();
         Py_XDECREF(failed_entry);
         Py_XDECREF(key);
-        ta_python_service_event failed = {TA_EVENT_IN_ERROR_COMMUNICATION, NULL, Py_None, invocation->traceparent,
+        ta_python_service_event failed = {TA_PYTHON_INVOCATION_FAILED, NULL, Py_None, invocation->traceparent,
                                           ta_host_effect_text(host->host, index, TA_EFFECT_FIELD_SENDID)};
         if (ta_python_invocation_post(invocation, &failed) < 0) PyErr_Clear();
     }
@@ -879,7 +884,7 @@ static void ta_python_dispatch_service_send(ta_python_host *host, uint32_t index
     PyObject *entry = ta_python_invocation_entry(host, index);
     ta_python_invocation *invocation = entry ? (ta_python_invocation *)PyTuple_GetItem(entry, 0) : NULL;
     if (invocation && invocation->failed) { /* a service that never ran: the send fails, as core's do */
-        ta_python_service_event failed = {TA_EVENT_IN_ERROR_COMMUNICATION, NULL, Py_None, invocation->traceparent,
+        ta_python_service_event failed = {TA_PYTHON_INVOCATION_FAILED, NULL, Py_None, invocation->traceparent,
                                           ta_host_effect_text(host->host, index, TA_EFFECT_FIELD_SENDID)};
         if (ta_python_invocation_post(invocation, &failed) < 0) ta_python_host_keep_error(host);
         Py_DECREF(entry);
