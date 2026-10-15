@@ -57,7 +57,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: false,
   appearance: true,
-  srcExclude: ['README.md', 'node_modules/**', 'wasm/**'],
+  srcExclude: ['README.md', 'WRITING.md', 'node_modules/**', 'wasm/**'],
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#F4EEE2' }],
