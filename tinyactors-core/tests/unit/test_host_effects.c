@@ -138,63 +138,71 @@ static void test_invoked_service_is_keyed_by_token(void) {
     world_close(&w);
 }
 
-/* Every number and text field matches the struct; unknown fields, the wrong
- * kind of field and an index past the batch answer nothing. */
+/* Every number and text field of the published batch matches the struct;
+ * ORIGIN is the sender's address on a SEND; unknown fields, the wrong kind of
+ * field and an index past the batch answer nothing. */
+static void check_fields(world *w, const ta_host_effect *effects, uint32_t count) {
+    for (uint32_t i = 0; i < count; i++) {
+        const ta_host_effect *e = &effects[i];
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_KIND), e->kind);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_SEGMENT), e->segment);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_ACTOR), e->actor);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_SESSION), e->session);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_ROOT), e->root);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_TOKEN), e->token);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_IO_PROCESSOR), e->io_processor);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_FLAGS), e->flags);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_MIGRATION), e->migration);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_PAYLOAD), e->payload);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_DATAMODEL), e->datamodel);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_DELAY_HINT), e->delay_hint);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_CHART), e->chart);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_MIGRATED), e->migrated);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_FAILED), e->failed);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_PENDING), e->pending);
+        ta_string_view t = ta_host_effect_text(w->host, i, TA_EFFECT_FIELD_TARGET);
+        CHECK(t.length == e->target.length && memcmp(t.pointer, e->target.pointer, t.length) == 0);
+        t = ta_host_effect_text(w->host, i, TA_EFFECT_FIELD_EVENT);
+        CHECK(t.length == e->event.length && memcmp(t.pointer, e->event.pointer, t.length) == 0);
+        t = ta_host_effect_text(w->host, i, TA_EFFECT_FIELD_SENDID);
+        CHECK(t.length == e->sendid.length && memcmp(t.pointer, e->sendid.pointer, t.length) == 0);
+        t = ta_host_effect_text(w->host, i, TA_EFFECT_FIELD_AUXILIARY);
+        CHECK(t.length == e->auxiliary.length &&
+              memcmp(t.pointer, e->auxiliary.pointer, t.length) == 0);
+        char origin[64] = "";
+        if (e->kind == TA_EFFECT_SEND && e->session)
+            snprintf(origin, sizeof origin, "tinyactors://h/#_scxml_%llu", (unsigned long long)e->session);
+        CHECK(text_is(ta_host_effect_text(w->host, i, TA_EFFECT_FIELD_ORIGIN), origin));
+        char expected[TA_TRACEPARENT_LENGTH];
+        ta_buffer out = {expected, sizeof expected, 0};
+        int traced = ta_traceparent_format(&e->trace, &out) == TA_OK;
+        t = ta_host_effect_text(w->host, i, TA_EFFECT_FIELD_TRACEPARENT);
+        CHECK_EQUAL(t.length, traced ? TA_TRACEPARENT_LENGTH : 0u);
+        CHECK(!traced || memcmp(t.pointer, expected, t.length) == 0);
+        /* unknown fields and the wrong kind */
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, 0), 0u);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, 999), 0u);
+        CHECK_EQUAL(ta_host_effect_number(w->host, i, TA_EFFECT_FIELD_TARGET), 0u);
+        CHECK_EQUAL(ta_host_effect_text(w->host, i, TA_EFFECT_FIELD_KIND).length, 0u);
+    }
+    CHECK_EQUAL(ta_host_effect_number(w->host, count, TA_EFFECT_FIELD_KIND), 0u);
+    CHECK_EQUAL(ta_host_effect_text(w->host, count, TA_EFFECT_FIELD_EVENT).length, 0u);
+}
+
 static void test_fields_match_the_struct(void) {
     world w;
     world_open(&w);
     const ta_host_effect *effects;
     run_batch(&w, &effects);
     send_event(&w, "go");
-    run_batch(&w, &effects);
-    send_event(&w, "end");
     uint32_t count = run_batch(&w, &effects);
+    CHECK(find(w.host, count, TA_EFFECT_SEND) != TA_NIL);
+    check_fields(&w, effects, count);
+    send_event(&w, "end");
+    count = run_batch(&w, &effects);
     CHECK(find(w.host, count, TA_EFFECT_DONE) != TA_NIL);
     CHECK(find(w.host, count, TA_EFFECT_UNINVOKE) != TA_NIL);
-    for (uint32_t i = 0; i < count; i++) {
-        const ta_host_effect *e = &effects[i];
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_KIND), e->kind);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_SEGMENT), e->segment);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_ACTOR), e->actor);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_SESSION), e->session);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_ROOT), e->root);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_TOKEN), e->token);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_IO_PROCESSOR), e->io_processor);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_FLAGS), e->flags);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_MIGRATION), e->migration);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_PAYLOAD), e->payload);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_DATAMODEL), e->datamodel);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_DELAY_HINT), e->delay_hint);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_CHART), e->chart);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_MIGRATED), e->migrated);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_FAILED), e->failed);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_PENDING), e->pending);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_PEER), e->peer);
-        ta_string_view t = ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_TARGET);
-        CHECK(t.length == e->target.length && memcmp(t.pointer, e->target.pointer, t.length) == 0);
-        t = ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_EVENT);
-        CHECK(t.length == e->event.length && memcmp(t.pointer, e->event.pointer, t.length) == 0);
-        t = ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_SENDID);
-        CHECK(t.length == e->sendid.length && memcmp(t.pointer, e->sendid.pointer, t.length) == 0);
-        t = ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_AUXILIARY);
-        CHECK(t.length == e->auxiliary.length &&
-              memcmp(t.pointer, e->auxiliary.pointer, t.length) == 0);
-        t = ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_MSGID);
-        CHECK(t.length == e->msgid.length && memcmp(t.pointer, e->msgid.pointer, t.length) == 0);
-        char expected[TA_TRACEPARENT_LENGTH];
-        ta_buffer out = {expected, sizeof expected, 0};
-        int traced = ta_traceparent_format(&e->trace, &out) == TA_OK;
-        t = ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_TRACEPARENT);
-        CHECK_EQUAL(t.length, traced ? TA_TRACEPARENT_LENGTH : 0u);
-        CHECK(!traced || memcmp(t.pointer, expected, t.length) == 0);
-        /* unknown fields and the wrong kind */
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, 0), 0u);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, 999), 0u);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_TARGET), 0u);
-        CHECK_EQUAL(ta_host_effect_text(w.host, i, TA_EFFECT_FIELD_KIND).length, 0u);
-    }
-    CHECK_EQUAL(ta_host_effect_number(w.host, count, TA_EFFECT_FIELD_KIND), 0u);
-    CHECK_EQUAL(ta_host_effect_text(w.host, count, TA_EFFECT_FIELD_EVENT).length, 0u);
+    check_fields(&w, effects, count);
     /* after the ack the batch is gone */
     ta_host_effects_ack(w.host);
     CHECK_EQUAL(ta_host_effect_number(w.host, 0, TA_EFFECT_FIELD_KIND), 0u);

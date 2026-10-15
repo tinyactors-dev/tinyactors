@@ -43,7 +43,7 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
 │                                                                                     │
 │  scenario scripts (quickjs)          systems (ta_system + own ECMAScript runtime)   │
 │  ┌──────────────────────┐  spawn/   ┌──────────┐  tinyactors://b/#_scxml_7  ┌──────┐ │
-│  │ prelude.js  bench.*  │──send───▶ │ system a │ ─── TA_EFFECT_SEND ──router──▶ │  b   │ │
+│  │ prelude.js  bench.*  │──send───▶ │ system a │ ─ TA_EFFECT_SEND ─remote─▶ │  b   │ │
 │  │ setup / generators / │           └──────────┘ ◀── _event.origin ─────── └──────┘ │
 │  │ mutations            │◀── <send type="bench"> (results, latencies) ──────────────│
 │  └──────────────────────┘                                                           │
@@ -57,11 +57,16 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
 - **Systems** are independent `ta_system`s, each with its own quickjs-ng
   datamodel runtime (like separate processes). Charts may also use the null
   datamodel.
-- **Cross-system addressing** uses the runtime's `TA_IO_PROCESSOR_SCXML_REMOTE`
-  processor: a chart sends to `tinyactors://<system>/#_scxml_<session>`; the
-  bench routes the `TA_EFFECT_SEND` to the other system (payload re-encoded as
-  JSON) with `origin` set, so replies work via `_event.origin`. Unknown systems
-  or sessions answer the sender with `error.communication`.
+- **Cross-system addressing** goes through each host's remote I/O processor
+  (`TA_IO_PROCESSOR_REMOTE`, the config's `"remote": true`): a chart sends to
+  `tinyactors://<system>/#_scxml_<session>` (or `.../@<name>`), the host hands
+  the bench a `TA_EFFECT_SEND` for that processor, and the bench's in-process
+  transport finds the system the address names, resolves the target there
+  (`ta_host_resolve`) and sends the event in (`ta_host_send`) with the sender's
+  address (`TA_EFFECT_FIELD_ORIGIN`) as origin and the sendid, the payload
+  re-encoded as CBOR between the two datamodels; replies work via
+  `_event.origin`. Unknown systems or sessions answer the sender with
+  `error.communication`.
 - **Charts talk to the bench** with `<send type="bench" event="...">`; scripts
   receive them with `bench.on(...)`.
 - **The `system` I/O processor** (`type="system"` or

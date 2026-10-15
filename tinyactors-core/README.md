@@ -14,13 +14,13 @@ drain tagged effects.
 - [docs/durability.md](docs/durability.md) — what a session is when it is not running:
   hibernation, export, migration and snapshots (none of them is persistence)
 - [docs/protocol.md](docs/protocol.md) — actors in different systems: addresses, values
-  and envelopes as CBOR, routing, delivery and errors
+  as CBOR, and other systems through the remote I/O processor
 - [docs/scenarios.md](docs/scenarios.md) — twelve execution walkthroughs
 - [docs/layout.md](docs/layout.md) — file tree, tooling, tasks
 - [docs/distribution.md](docs/distribution.md) — what is released (the C libraries), the
   release targets and tasks
 - [docs/bindings.md](docs/bindings.md) — writing a binding: the queue loop, effects and
-  the drain rule, posted messages, values and envelopes, what a binding owns and what it
+  the drain rule, posted messages, values and other systems, what a binding owns and what it
   must not do
 - [docs/requests.md](docs/requests.md) — the messages `ta_host_post` takes, their replies
   and the host's notifications (JSON-RPC's shape, in CBOR), and how to add a method

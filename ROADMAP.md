@@ -126,7 +126,7 @@ Every gate is mechanical and runs in the owning project's `mise run test`.
 
 | Gate | Where | Catches |
 |---|---|---|
-| **Protocol vectors**: byte-exact requests, config, envelopes and values, through the binding's own CBOR conversion | `tinyactors-test/suites/protocol` | drift in what crosses as CBOR |
+| **Protocol vectors**: byte-exact requests, config and values, through the binding's own CBOR conversion | `tinyactors-test/suites/protocol` | drift in what crosses as CBOR |
 | **Scenarios**: charts in the W3C notation that check what happened themselves and end in `pass` or `fail`, with the host operations between runs (`steps.txt`), run by the implementation's real loop and effect handlers; no effect is compared | `tinyactors-test/suites/scenarios` | the loop, effect handling, ordering, time, hibernation, migration, snapshots |
 | **Differential runs**: the same scenarios and W3C suite on the native datamodel and on quickjs; both must pass, and no outcome is compared beyond that | the runner | a native datamodel, or quickjs, that fails the suite |
 | **W3C IRP**: every automatic test per datamodel, except its language's skip list (`skip-<language>.txt`, each with a reason) | `tinyactors-test/suites/w3c` | SCXML semantics end to end |
@@ -603,8 +603,9 @@ earlier plan's M2 to M5 held: the W3C suite per datamodel (`skip-python.txt`;
 (the 8.3 list) through the language's API, both drivers in Python and
 Node's liveness, graceful shutdown (`trace.end`, the last take, free);
 hibernation with a store, migration, snapshots,
-envelopes between hosts and across processes, a Python host and an
-ECMAScript host exchanging envelopes; the examples, release tasks and
+other systems through the remote I/O processor (ADR 0014), between hosts
+and across processes, a Python host and an ECMAScript host talking through
+it; the examples, release tasks and
 changelogs. The browser (below, "Decided later") after that.
 
 #### Pitfalls each binding handles
@@ -693,12 +694,11 @@ tinyactors-test/
 │                            without "jsonrpc", CBOR, length-prefixed on stdin/stdout;
 │                            scenario.run and w3c.run (outcomes), and for the vectors
 │                            host.create, host.request, image.add, actor.spawn,
-│                            actor.send, clock.advance, host.run, peer.add,
-│                            envelope.read, envelope.deliver, value.encode;
+│                            actor.send, clock.advance, host.run, value.encode;
 │                            the kinds; the scenario and W3C environments
 ├── suites/
 │   ├── milestones.txt       what each milestone of step 8 runs (--milestone), cumulative
-│   ├── protocol/            requests.txt, config.txt, envelopes.txt, values.txt;
+│   ├── protocol/            requests.txt, config.txt, values.txt;
 │   │                        setups/ (the charts of the vectors' setups)
 │   ├── scenarios/           <name>/<document>.txml (conf: notation) and steps.txt
 │   │                        (host operations); the charts judge: pass or fail

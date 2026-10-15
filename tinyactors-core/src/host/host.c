@@ -474,7 +474,6 @@ void ta_host_free(ta_host *host) {
     host->closing = 1;
     host->effects_ready = host->effect_count; /* all of them */
     effects_release(host);
-    ta_router_free(host);
     for (uint32_t i = 0; i < host->segment_count; i++) {
         if (host->segments[i].live) {
             ta_system_deinit(host->segments[i].system);
@@ -848,13 +847,12 @@ static void effects_block_replaced(ta_host *host, void *block, size_t size) {
     host->held_size[host->held_count++] = size;
 }
 
-/* The pool offset of string k (EFFECT_STRINGS, in that order: seven texts,
+/* The pool offset of string k (EFFECT_STRINGS, in that order: four texts,
  * then the wire bytes) of effect e, and its length. */
 static size_t *effect_string(ta_host *host, uint32_t e, uint32_t k, uint32_t *length) {
     const ta_host_effect *effect = &host->effects[e];
     const ta_string_view *views[EFFECT_STRINGS - 1] = {
-        &effect->target, &effect->event,      &effect->sendid,           &effect->auxiliary,
-        &effect->msgid,  &effect->origintype, &effect->deduplication_key};
+        &effect->target, &effect->event, &effect->sendid, &effect->auxiliary};
     *length = k < EFFECT_STRINGS - 1 ? views[k]->length : (uint32_t)effect->wire.length;
     return &host->effect_strings[e].offset[k];
 }
@@ -1108,8 +1106,7 @@ uint32_t ta_host_effects(ta_host *host, const ta_host_effect **out) {
     for (uint32_t i = 0; i < host->effect_count; i++) {
         ta_host_effect *effect = &host->effects[i];
         ta_string_view *dst[EFFECT_STRINGS - 1] = {
-            &effect->target, &effect->event,      &effect->sendid,           &effect->auxiliary,
-            &effect->msgid,  &effect->origintype, &effect->deduplication_key};
+            &effect->target, &effect->event, &effect->sendid, &effect->auxiliary};
         const size_t *offset = host->effect_strings[i].offset;
         for (int k = 0; k < EFFECT_STRINGS - 1; k++)
             dst[k]->pointer = offset[k] == (size_t)-1 ? "" : host->pool + offset[k];
@@ -1142,7 +1139,6 @@ uint64_t ta_host_effect_number(const ta_host *host, uint32_t index, uint32_t fie
     case TA_EFFECT_FIELD_MIGRATED: return effect->migrated;
     case TA_EFFECT_FIELD_FAILED: return effect->failed;
     case TA_EFFECT_FIELD_PENDING: return effect->pending;
-    case TA_EFFECT_FIELD_PEER: return effect->peer;
     default: return 0;
     }
 }
@@ -1215,9 +1211,6 @@ ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field
     case TA_EFFECT_FIELD_EVENT: return effect->event;
     case TA_EFFECT_FIELD_SENDID: return effect->sendid;
     case TA_EFFECT_FIELD_AUXILIARY: return effect->auxiliary;
-    case TA_EFFECT_FIELD_MSGID: return effect->msgid;
-    case TA_EFFECT_FIELD_ORIGINTYPE: return effect->origintype;
-    case TA_EFFECT_FIELD_DEDUPLICATION_KEY: return effect->deduplication_key;
     case TA_EFFECT_FIELD_TRACEPARENT: return effect_traceparent(host, index);
     case TA_EFFECT_FIELD_ORIGIN: return effect_origin(host, index);
     default: return none;
@@ -1234,7 +1227,10 @@ void ta_host_effects_ack(ta_host *host) {
 static ta_status communication_error_now(ta_host *host, uint32_t si, uint32_t actor,
                                          ta_string_view sendid) {
     ta_event_in event;
-    ta_host_error_event(sendid, &event);
+    ta_memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
+    event.sendid = sendid;
     /* a sender that is gone has nobody to tell; only memory is worth retrying */
     return host_send_to(host, si, actor, &event) == TA_ERROR_NO_MEMORY ? TA_ERROR_NO_MEMORY : TA_OK;
 }
@@ -1320,7 +1316,7 @@ static ta_status scxml_send(ta_host *host, uint32_t si, const ta_effect *effect)
         return host_communication_error(host, si, effect->actor, effect->sendid);
     if (host_is_local(host, to.system)) return local_send(host, si, effect, &to);
     if (host->remote_processor != TA_NIL) return effect_copy(host, si, effect, host->remote_processor);
-    return ta_router_outbound(host, si, effect);
+    return host_communication_error(host, si, effect->actor, effect->sendid);
 }
 
 /* Drain a segment's effects: route, copy out, acknowledge. TA_ERROR_NO_MEMORY:
@@ -1731,7 +1727,6 @@ void ta_host_advance_time(ta_host *host, ta_host_time now) {
     host->encoder->mark(host, now.wall_ns);
     for (uint32_t i = 0; i < host->segment_count; i++)
         if (host->segments[i].live) ta_system_advance_time(host->segments[i].system, now.monotonic);
-    ta_router_time(host); /* envelopes queued for absent peers past their TTL */
     if (host->watch_count) watches_expire(host);
 }
 
@@ -1897,10 +1892,6 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     uint32_t detail = TA_POOL_NONE;
     /* what an earlier run or call could not finish for lack of memory */
     if (host->error_count && errors_deliver(host) != TA_OK) exhausted = 1;
-    if (host->expiry_behind) {
-        ta_router_time(host);
-        if (host->expiry_behind) exhausted = 1;
-    }
     if (host->announcing && !announce_invocations(host)) exhausted = 1; /* after a restore */
     for (int round = 0; round < 64 && !full && !exhausted && !sync; round++) {
         int ran = 0;
@@ -1994,8 +1985,6 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         busy |= migration->walking;
         if (migration->deadline && migration->deadline < out.next_deadline) out.next_deadline = migration->deadline;
     }
-    ta_time qd = ta_router_deadline(host); /* queued envelopes expire then */
-    if (qd < out.next_deadline) out.next_deadline = qd;
     for (uint32_t i = 0; i < host->watch_count; i++) /* watches end then */
         if (host->watches[i].until < out.next_deadline) out.next_deadline = host->watches[i].until;
     host->encoder->note(host);
@@ -2379,14 +2368,12 @@ uint64_t ta_host_actor_by_name(const ta_host *host, ta_string_view name) {
 /* ---- snapshot / restore ------------------------------------------------------------- */
 
 #define SNAPSHOT_MAGIC   0x53484154u /* "TAHS" */
-#define SNAPSHOT_VERSION 2u
+#define SNAPSHOT_VERSION 3u
 
 typedef struct snapshot_header {
     uint32_t magic, version, segment_count, moved_count;
     uint32_t round_robin, migration_sequence, config_size, retired_charts;
     uint64_t now, routed, migrated, retired;
-    uint64_t message_sequence,
-        router_length; /* the router's dedup window follows the moved sessions */
 } snapshot_header;
 
 typedef struct snapshot_segment {
@@ -2400,7 +2387,7 @@ typedef struct snapshot_moved {
     uint32_t segment, pad;
 } snapshot_moved;
 
-/* after the router's bytes: each retired chart's totals, then its name (8-aligned) */
+/* after the moved sessions: each retired chart's totals, then its name (8-aligned) */
 typedef struct snapshot_retired {
     uint32_t name_length, pad;
     ta_chart_stats totals; /* name: none */
@@ -2436,8 +2423,6 @@ ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
     }
     uint32_t moved_count = host->moved.count;
     need += (size_t)moved_count * sizeof(snapshot_moved);
-    size_t rlen = ta_router_snapshot(host, NULL, 0);
-    need += rlen;
     size_t retired_offset = need;
     for (uint32_t i = 0; i < host->retired_chart_count; i++)
         need += sizeof(snapshot_retired) + pad8(host->retired_charts[i].name_length);
@@ -2459,8 +2444,6 @@ ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
     hd.routed = host->routed;
     hd.migrated = host->migrated;
     hd.retired = host->retired;
-    hd.message_sequence = host->message_sequence;
-    hd.router_length = rlen;
     hd.retired_charts = host->retired_chart_count;
     ta_memcpy(p, &hd, sizeof hd);
     p += sizeof hd;
@@ -2497,7 +2480,6 @@ ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
         ta_memcpy(p, &m, sizeof m);
         p += sizeof m;
     }
-    ta_router_snapshot(host, p, rlen);
     p = (unsigned char *)buffer + retired_offset;
     for (uint32_t i = 0; i < host->retired_chart_count; i++) {
         snapshot_retired r;
@@ -2535,8 +2517,6 @@ static const snapshot_header *snap_check(const void *snap, size_t length) {
     }
     if ((length - offset) / sizeof(snapshot_moved) < hd->moved_count) return NULL;
     offset += (size_t)hd->moved_count * sizeof(snapshot_moved);
-    if (hd->router_length > length - offset) return NULL;
-    offset += (size_t)hd->router_length;
     for (uint32_t i = 0; i < hd->retired_charts; i++) {
         if (length - offset < sizeof(snapshot_retired)) return NULL;
         snapshot_retired r;
@@ -2644,11 +2624,6 @@ ta_status ta_host_restore(const ta_host_environment *environment,
         p += sizeof m;
         moved_put(host, m.session, m.segment);
     }
-    if (hd->router_length) {
-        status = ta_router_restore(host, p, (size_t)hd->router_length);
-        if (status != TA_OK) return restore_failed(host, status);
-    }
-    p += hd->router_length;
     for (uint32_t i = 0; i < hd->retired_charts; i++) {
         snapshot_retired r;
         ta_memcpy(&r, p, sizeof r);
@@ -2659,7 +2634,6 @@ ta_status ta_host_restore(const ta_host_environment *environment,
         entry->totals = r.totals;
         p += pad8(r.name_length);
     }
-    host->message_sequence = hd->message_sequence;
     host->round_robin = hd->segment_count ? hd->round_robin % hd->segment_count : 0;
     host->migration_sequence = hd->migration_sequence;
     host->routed = hd->routed;

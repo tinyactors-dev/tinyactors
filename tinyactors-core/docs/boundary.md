@@ -47,7 +47,7 @@ A call's answer depends on where the caller is in the loop:
 | **I**, idle | between runs, no batch open | everything |
 | **D**, dispatch | between runs, a batch open: after a `ta_host_effects` that returned effects or an output call that handed out a view, until `ta_host_effects_ack` | everything but `ta_host_run` and snapshots; a take returns the open batch (none while it holds outputs alone) |
 | **R**, run | inside `ta_host_run`, from a datamodel entry | the inputs on their in-run paths and the lookups; everything else refused (`host.h:151-170`) |
-| **G**, guard | inside a datamodel entry core calls outside a run (a post, an envelope, deliver, hibernate, wake, the telemetry takes, `release` in the ack, `ta_host_free`) | as R (`host.h:172-179`; ADR 0010 decision 3; `host_guard`, `src/host/host_internal.h:242-247`) |
+| **G**, guard | inside a datamodel entry core calls outside a run (a post, hibernate, wake, the telemetry takes, `release` in the ack, `ta_host_free`) | as R (`host.h:172-179`; ADR 0010 decision 3; `host_guard`, `src/host/host_internal.h:242-247`) |
 
 R and G hold one rule: the guard sets the flag a run sets
 (`host_internal.h:242-246`), so the checks below read "R/G".
@@ -74,32 +74,16 @@ marks a behaviour no test checks.
 | `ta_host_spawn` (:183) | all | a session id; `spawn`'s views read during the call; its payload moves on success | `TA_ERROR_INVALID`: no such segment (`host.c:876`); R/G: no growth, a full pool `TA_ERROR_NO_MEMORY` with nothing changed; inside free `TA_ERROR_STATE` (`host.c:874`) | `create` in G (`host.c:880`); in R the in-run path of `<invoke>`: at the back of the run queue | `test_host_inputs.c` `test_spawn`; a full pool in R: `test_host_inputs.c` `test_spawn_into_a_full_pool_is_no_memory` |
 | `ta_host_locate` (:189) | all | the caller's struct | `TA_ERROR_STALE` (`host.c:663-671`) | a lookup | `test_host.c` |
 | `ta_host_send` (:191) | all | nothing kept of the caller's: views copied, payload moved on success | as spawn; the payload stays the caller's on refusal | in R the in-run path of `<send>`: to itself at the end of its macrostep, to another actor at the back of the queue (`host.h:156-161`); outside a run `release` in G for an `error.communication` (`host.c:900`) | `test_host_inputs.c` `test_send_to_self_waits_for_the_macrostep`, `test_send_and_send_many_to_another_actor` |
+| `ta_host_resolve` | all | the session a local address names, into the caller's `uint64_t` | `TA_ERROR_INVALID` (not an address, another system's), `TA_ERROR_STALE` (names nothing); answers in R/G, a lookup in `host.h`'s list | none | `test_remote.c` |
 | `ta_host_send_many` (:195) | all | the accepted prefix's length | stops at the first failure; that event's payload stays the caller's | as send (`release` in G at `host.c:935`) | as send |
 | `ta_host_terminate` (:196) | all | nothing | as spawn | exits at its next microstep boundary (`host.h:162-165`) | `test_host_inputs.c` `test_terminate_self_ends_after_the_microstep`, `test_terminate_another_actor` |
 | `ta_host_resume` (:198) | I, D | nothing | R/G `TA_ERROR_STATE` (`host.c:958`); `TA_ERROR_INVALID`: no such segment (`host.c:960`) | `release` in G (`host.c:962`) | `test_host_inputs.c` `test_other_calls_are_refused` (R) |
-| `ta_host_advance_time` (:214) | I, D | nothing; envelope expiries pending | R/G: nothing done (`host.c:1671`) | `release` in G for expired envelopes' payloads (`ta_router_time`, `host.c:1676`; `router.c:433-458`) | `test_host_telemetry.c`; `test_host.c` |
+| `ta_host_advance_time` (:214) | I, D | nothing | R/G: nothing done (`host.c:1671`) | none | `test_host_telemetry.c`; `test_host.c` |
 | `ta_host_run` (:229) | I | a `ta_run` by value; its effects pending, then its notifications | D: `TA_RUN_FAULT`, detail `TA_ERROR_STATE`, nothing runs or is released; `used` 0, `next_deadline` `UINT64_MAX`; R/G: the same (`host.c:1828-1833`) | the datamodel vtable, in R | R: `test_host_inputs.c` `test_other_calls_are_refused`; D: `test_host_effects.c` `test_run_refuses_open_batch` |
 | `ta_host_effects` (:288) | I, D | I: opens a batch of everything pending; D: the same pointer and count, never widened; an empty take opens no batch. Records, their strings, `WIRE` bytes and payloads are the host's until the ack | R/G: 0 (`host.c:1196-1199`) | none | `test_host_memory.c` `test_published_effects_stay_valid`, `test_pool_is_reclaimed_with_effects_pending`; `test_host_effects.c` `test_take_freezes_batch_across_growth` |
-| `ta_host_effects_ack` (:289) | I, D | closes the batch: its effects, their payloads (`release` in G, `host.c:1044-1048`) and the batch's outputs end | R/G: nothing (`host.c:1275`) | `release` may run language code: a binding defers the last drop (bindings.md section 8) | `test_host_guard.c` `test_envelope_and_ack`; `test_host_memory.c` |
-| `ta_host_effect_number`, `_text`, `_bytes` (:334-336) | D | a field of the open batch, valid until the ack; `TRACEPARENT`'s text written on first ask into a slot per effect, valid until the ack (`effect_traceparent`, `host.c`) | an index past the batch, a field the kind does not set, or the wrong accessor: 0 or empty; not checked for R/G (`host.c:1218-1271`): publication closes before ack/free release callbacks, so they answer 0 or empty | none | `test_host_effects.c` `test_fields_match_the_struct` (number, text); `_bytes`: `test_host_request.c`, `test_router.c`; closed publication: `test_host_guard.c` `test_closed_batch_during_release`; two `TRACEPARENT`s read together: `test_host_effects.c` `test_traceparents_last_until_the_ack` |
+| `ta_host_effects_ack` (:289) | I, D | closes the batch: its effects, their payloads (`release` in G, `host.c:1044-1048`) and the batch's outputs end | R/G: nothing (`host.c:1275`) | `release` may run language code: a binding defers the last drop (bindings.md section 8) | `test_host_guard.c` `test_send_and_ack`; `test_host_memory.c` |
+| `ta_host_effect_number`, `_text`, `_bytes` (:334-336) | D | a field of the open batch, valid until the ack; `TRACEPARENT`'s and `ORIGIN`'s text written on first ask into a slot per effect, valid until the ack (`effect_traceparent`, `effect_origin`, `host.c`) | an index past the batch, a field the kind does not set, or the wrong accessor: 0 or empty; not checked for R/G (`host.c:1218-1271`): publication closes before ack/free release callbacks, so they answer 0 or empty | none | `test_host_effects.c` `test_fields_match_the_struct` (number, text); `_bytes`: `test_host_request.c`; closed publication: `test_host_guard.c` `test_closed_batch_during_release`; two `TRACEPARENT`s read together: `test_host_effects.c` `test_traceparents_last_until_the_ack` |
 | `ta_host_traces`, `ta_host_logs` (:348-349) | I, D | an OTLP request, a view of host memory until the ack (`outputs`, `host_output`); length 0: none staged | R/G and without an encoder `TA_ERROR_STATE` (`telemetry.c:289`, `:301`); `TA_ERROR_NO_MEMORY`: the spans stay staged | `to_wire` for traced values in G (`telemetry.c:90`) | `test_host_telemetry.c` `test_drain_and_take`, `test_take_refused`; `test_host_guard.c` `test_traces`; the view after a later call: `test_host_guard.c` `test_outputs_last_until_the_ack` (metrics, through the same output path) |
-| `ta_host_route_begin` (:446) | I, D | the caller's `ta_route_request`; its views borrow the envelope and the host until the request finishes | R/G `TA_ERROR_STATE` (`router.c:644`) | none | `test_router.c` `test_external_storage` |
-| `ta_host_route_step` (:449) | no host | the caller's request | `TA_ERROR_INVALID`; `TA_ERROR_STATE`: a request in the wrong action (`router.c:705-719`) | none | `test_router.c` `test_external_storage` |
-| `ta_host_route_reason` (:450) | no host | static text | none | none | `test_router.c` |
-| `ta_host_error_event` (:452) | no host | the caller's `ta_event_in` | none | none | `test_router.c` `test_durable_message` |
-| `ta_host_error_route` (:455) | I, D | the caller's request | R/G `TA_ERROR_STATE` (`router.c:623`) | none | `test_router.c` |
-| `ta_host_message_init` (:475) | I, D | the caller's `ta_host_message` (identity strings in its `storage`); target and name borrow the system `ta_effect` it is given | R/G `TA_ERROR_STATE` (`router.c:723`) | none | `test_router.c` `test_durable_message` |
-| `ta_host_peer_add` (:480) | I, D | a peer handle (slot and generation) | R/G `TA_ERROR_STATE` (`router.c:839`); `TA_ERROR_INVALID`; `TA_ERROR_NO_MEMORY` | none | `test_router.c` |
-| `ta_host_peer_up` (:485) | I, D | up: queued envelopes as `PEER` effects, pending; down without `TA_PEER_QUEUE`: the queue fails (`router.c:898`) | R/G `TA_ERROR_STATE` (`router.c:892`); `TA_ERROR_STALE`; `TA_ERROR_NO_MEMORY`: the rest stay queued | down: `release` in G for failed envelopes (`fail_queue`, `router.c:333-364`) | `test_router.c` `test_route_status_queue` |
-| `ta_host_peer_remove` (:488) | I, D | queued envelopes fail (`PEER_ERROR`s or `error.communication`), pending | R/G `TA_ERROR_STATE` (`router.c:903`); `TA_ERROR_STALE`; `TA_ERROR_NO_MEMORY`: the peer stays | `release` in G for failed envelopes (`fail_queue`) | `test_router.c` `test_stale_handle` |
-| `ta_host_peer_reach`, `ta_host_route`, `ta_host_export` (:490-502) | I, D | routing tables | R/G `TA_ERROR_STATE` (`router.c:828`, `:934`, `:963`); `TA_ERROR_STALE`, `INVALID`, `NO_MEMORY` | none | `test_router.c` `test_origin_validation` (reach), `test_relay_routes` (route), `test_policy` (export) |
-| `ta_host_deliver` (:518) | I, D | a `TA_ROUTE_*` outcome; views read during the call; `data` moves on success; a refusal's `PEER_ERROR` or a relay's `PEER` pending | R/G `TA_ERROR_STATE` (`router.c:989`); `TA_ERROR_NO_MEMORY`: nothing done or remembered | `from_wire` of the target's datamodel in G (`router.c:552`) | `test_router.c` `test_decode_at_target`, `test_dedup`; `test_host_guard.c` `test_deliver` |
-| `ta_host_peer_error` (:526) | I, D | `error.communication` for the origin, or a relayed error pending | R/G `TA_ERROR_STATE` (`router.c:1064`); `TA_ERROR_STALE`; `TA_ERROR_INVALID`, `TA_ERROR_NO_MEMORY` (`router.c:1074`, `local_error`) | `release` in G for the error event (`router.c:1070`, `host.c:900`) | `test_router.c` `test_errors_back` |
-| `ta_host_envelope` (:544) | D | a `PEER` or `PEER_ERROR` effect of the open batch as CBOR, a view of host memory until the ack. Takes the effect's address, not its index | R/G `TA_ERROR_STATE` (`router.c:1213`); `TA_ERROR_INVALID`: another kind or no neutral value; `TA_ERROR_NO_MEMORY` | `to_wire` once in G (`router.c:1234`) | `test_router.c` `test_envelope_bytes`; `test_host_guard.c` `test_each_output_once`; two envelopes read after both calls: `test_host_guard.c` `test_outputs_last_until_the_ack` |
-| `ta_host_envelope_read` (:557) | I, D | the caller's `ta_envelope`, views into the caller's bytes (keep them until the deliver) | R/G `TA_ERROR_STATE` (`router.c:1150`); `TA_ERROR_INVALID` (size 0: drop; size set: deliver it to answer the sender) | none | `test_router.c` `test_envelope_bytes`; `envelopes.txt` |
-| `ta_host_peer_error_read` (:560) | no host | the caller's `ta_peer_error`, views into the bytes | `TA_ERROR_INVALID` | none | `envelopes.txt` |
-| `ta_host_peer_round_trip_time` (:562) | all (not checked, `router.c:1274-1277`) | sets a counter: an input, not a read | stale: nothing | accepted in R/G, as `host.h` says: it records a measurement and changes nothing a run uses | `test_router.c` `test_route_status` |
-| `ta_host_peer_status` (:575) | all (not checked, `router.c:1279`) | the caller's struct; `id` until the peer is removed | `TA_ERROR_STALE` | answers in R/G, a lookup in `host.h`'s list | `test_router.c` `test_route_status` |
 | `ta_host_migrate` (:587) | I, D | a migration id; `MIGRATED`, `MIGRATION_DONE` pending in later runs | R/G `TA_ERROR_STATE` (`host.c:1403`); `TA_ERROR_NO_MEMORY` | none | `test_host.c` `test_versions_and_migration` |
 | `ta_host_migration_pending` (:589) | all (not checked) | the caller's array: the sessions a running migration waits for, in no order; a finished migration's list is readable until the next run, which comes after the ack | none | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_migration_wake_and_timeout` |
 | `ta_host_sweep` (:595) | I, D | sessions in the caller's array | R/G: 0 (`host.c:1962`) | none | `test_host.c`, `test_host_memory.c` |
@@ -126,11 +110,11 @@ keeps first (ADR 0010 decision 1).
 | `create` | R; G | `<invoke>` in a run; `ta_host_spawn` (`host.c:880`), `ta_host_boot` (`:2405`) | `test_host_inputs.c` |
 | `chart_attach` | G | `ta_host_add_image` (`host.c:588`), `ta_host_restore` (`:2669`) | `test_host.c` `test_image_copied` |
 | `destroy`, `chart_detach` | R; G | an actor exits in a run; retirement (`host.c:1807`), hibernate, migration (`host.c:1508`), `ta_host_free` | `test_host_guard.c` `test_free`, `test_outputs_grow_between_runs` |
-| `retain`, `release` | R; G | effect copies (`host.c:1190`), the ack (`:1047`), the drain (`:1359`), resume (`:962`), sends that fail outside a run (`:900`, `:935`), the router's sends in a run's drain (`router.c:526`, `:530`), failed envelope queues (`router.c:333-364`, `:433-458`: `ta_host_advance_time`, `ta_host_peer_up`, `ta_host_peer_remove`), peer errors (`router.c:1070`), deliver, post (`request.c:747`), free | `test_host_guard.c` `test_envelope_and_ack` |
+| `retain`, `release` | R; G | effect copies (`host.c:1190`), the ack (`:1047`), the drain (`:1359`), resume (`:962`), sends that fail outside a run (`:900`, `:935`), sends between segments in a run's drain (`local_send`, `host.c`), post (`request.c:747`), free | `test_host_guard.c` `test_send_and_ack` |
 | `serialize`, `deserialize` | G | hibernate (`host.c:2022`), wake (`:2035`), migration (`:1470`, `:1508`, `:1529`) | `test_host_guard.c` `test_hibernate`, `test_each_output_once` |
 | `payload_serialize`, `payload_deserialize`, `migrate` | G | migration (as above) | `test_durable.c`; `test_migrate.c` |
-| `to_wire` | G | `ta_host_envelope` (`router.c:1234`), `actor.context` (`request.c:701`), traced values when records are read (`telemetry.c:90`, at a run's start and at a take) | `test_host_guard.c` `test_each_output_once`, `test_traces` |
-| `from_wire` | G | `ta_host_deliver` at the target (`router.c:552`) | `test_router.c` `test_decode_at_target` |
+| `to_wire` | G | `actor.context` (`request.c:701`), traced values when records are read (`telemetry.c:90`, at a run's start and at a take) | `test_host_guard.c` `test_each_output_once`, `test_traces` |
+| `from_wire` | — | no caller in core (the router was its only one, ADR 0014) | — |
 | `variable` | G | `actor.context` (`request.c:738`) | `test_host_request.c` `test_actor_context` |
 
 ### Which distinctions callers need
@@ -146,7 +130,7 @@ keeps first (ADR 0010 decision 1).
 | a host output until the next call into the host | bookkeeping: one block reused | **removed**: until the ack |
 | a datamodel's output until its next call | callers (datamodel authors): core consumes it inside its own call | kept |
 | the caller's `ta_buffer` (snapshots, `environment->error`) | callers: the size is known up front, or no host exists | kept |
-| structural borrows (a segment's image, `ta_host_system`, a peer's id, a migration's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
+| structural borrows (a segment's image, `ta_host_system`, a migration's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
 | `REPLY` or `NOTIFICATION` | callers: an answer or news | kept |
 | `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed** with `actor.subscribe` (ADR 0012, decision 4); notifications stay possible |
 
@@ -161,23 +145,21 @@ The findings of step 8.2, each settled by a decision and a test:
 1. **`ta_host_free` from a datamodel's code** — settled: it does nothing
    in R/G (`test_host_inputs.c` `test_lookups_answer_and_free_does_nothing`).
 2. **Lookups during a run beyond `host.h`'s list** — settled: `host.h`
-   lists `ta_host_segment_info_get`, `ta_host_system`,
-   `ta_host_peer_status`, `ta_host_migration_pending` and the effect accessors
-   as lookups, and accepts `ta_host_peer_round_trip_time` (same test).
-3. **`ta_host_envelope` takes the effect's address** — settled: it keeps
-   it, for records of the batch and records the caller builds (section 7).
-4. **A test calls `ta_system_*` from datamodel code** — settled: the
+   lists `ta_host_segment_info_get`, `ta_host_system`, `ta_host_resolve`,
+   `ta_host_migration_pending` and the effect accessors as lookups (same
+   test).
+3. **A test calls `ta_system_*` from datamodel code** — settled: the
    rule stands (`datamodel.h:7-8`); `test_host_inputs.c`'s hooks show that
    nothing grew by counting the host's allocator, not by reading
    `ta_system_stats`.
-5. **The width of ids in `types.h`** — settled: `types.h` names three
+4. **The width of ids in `types.h`** — settled: `types.h` names three
    kinds: indices (segment, chart, I/O processor, datamodel) are
-   `uint32_t` from 0 with `TA_NIL` for none; handles (actor, token, peer,
+   `uint32_t` from 0 with `TA_NIL` for none; handles (actor, token,
    migration, watch) are `uint32_t`, never 0, with 0 for none (an actor's and a
    token's carry a generation, `ta_pool_handle`, `src/base/pool.h:70`);
    sessions, payloads and `ta_table` handles are `uint64_t` with 0 for
    none.
-6. **`detach_event`** — settled: the datamodel keeps `_event` after it,
+5. **`detach_event`** — settled: the datamodel keeps `_event` after it,
    until the next `bind_event` or `destroy`; core frees only its own copy.
    SCXML keeps `_event` bound to the last event until another is
    processed (`docs/SCXML.md`, 5.10), and a cancel runs `exitInterpreter`
@@ -189,7 +171,7 @@ The findings of step 8.2, each settled by a decision and a test:
 ## 1. Inputs
 
 **Design.** `ta_host_send`, `ta_host_send_many`, `ta_host_spawn`,
-`ta_host_terminate`, `ta_host_resume`, `ta_host_deliver`. Each takes a C
+`ta_host_terminate`, `ta_host_resume`. Each takes a C
 struct (`ta_event_in`, `ta_spawn`, ...) read during the call: core copies
 the views (name, sendid, origin, origintype, raw, traceparent) into the
 system's slab and takes the payload handle (`src/system/schedule.c`, send
@@ -287,8 +269,8 @@ keeps its `_event` until the next `bind_event` or `destroy` (finding 6
 above).
 
 **Rejected.** Caller-sized outputs with retries: core ran datamodel code
-two or three times per output (`router.c`, `hibernate.c`), and a 1 KB
-envelope walked its value six times. Strings handed back into a buffer
+two or three times per output (`hibernate.c`, and the envelopes of the
+router since removed), and a 1 KB value was walked six times. Strings handed back into a buffer
 core provides: user expressions cannot run twice. No guard: a `toJSON`
 that terminated its actor left core calling a destroyed instance (an ASan
 crash, `tests/unit/test_host_guard.c`). A handle table in each binding
@@ -300,8 +282,7 @@ crash, `tests/unit/test_host_guard.c`). A handle table in each binding
 an allocator; `ta_cbor_reader` is a cursor (ADR 0010, decision 4). Token
 lists remain only as the random-access index requests are parsed with.
 Inside the process, values cross by copy through the value table between
-the API and the binding's own datamodel; CBOR only toward quickjs and in
-envelopes.
+the API and the binding's own datamodel; CBOR only toward quickjs.
 
 **Rejected.** Token lists in bindings (caller-sized scratch; streaming is
 faster: 2.5 vs 3.7 µs encode, 6.7 vs 8.5 µs decode for 1 KB, no 294 KB of
@@ -317,8 +298,7 @@ Its reply is the last effect the call appends, `TA_HOST_EFFECT_REPLY`
 method appends itself (`trace.end`'s TRACES and LOGS); all of them are
 pending, so a post made while a batch is open is answered in the next
 take. The reply is written into the host's output, then copied once into
-the effect pool (string slot 7, WIRE, as the router's PEER relay keeps a
-value). A method that changes the host reserves room by capacity for the
+the effect pool (its last string slot, WIRE). A method that changes the host reserves room by capacity for the
 reply and three records before it applies (`request_fits`), so
 `TA_ERROR_NO_MEMORY` means nothing was applied and no REPLY appended; a
 method that only reads, and a refusal after a method tried, reserve after
@@ -377,7 +357,7 @@ carries none).
 
 ## 7. Host outputs
 
-**Design.** `ta_host_envelope`, `ta_host_traces`, `ta_host_logs`,
+**Design.** `ta_host_traces`, `ta_host_logs`,
 `ta_host_metrics`, `ta_host_hibernate`: views of
 host memory valid until `ta_host_effects_ack` (ADR 0012, decision 1). An
 output taken with no batch open opens one. The host keeps a batch's
@@ -393,7 +373,7 @@ pass through the host's allocator, between runs only
 | an output view | the batch's memory (the host's allocator) | the output call, in I or D | by the caller, across any later calls | the ack |
 
 **Rejected.** A view until the next call into the host (ADR 0010
-decision 2): a handler that posts, delivers or writes a second envelope
+decision 2): a handler that posts, sends or takes a second output
 ends the view it is reading, and both bindings copied every output
 before any call (ADR 0012).
 
@@ -440,16 +420,6 @@ A caller that pulls metrics before a drain acks first, or the drain
 waits. Each output is a block of its own in an arena the ack empties,
 kept for reuse; internal scratch (a post's reply before it reaches the
 pool) also comes from it and is reused at once while nothing is lent.
-
-**Decided (2026-10-14): `ta_host_envelope` keeps the record's address.**
-It takes `const ta_host_effect *`: a record of the open batch
-(`&effects[i]`), or one the caller built, read during the call. A
-binding's C holds the array `ta_host_effects` returned, so the address
-costs it nothing; a caller-built record encodes an envelope that is in no
-batch (ta-conform's `envelope.read` and its `back` vectors, the encoder
-tests in `test_router.c`), which an index could not. Not an index, as
-the accessors take: it would need a second encoding call or protocol
-changes for those callers, and gains only the accessors' shape.
 
 ## 8. Images
 
@@ -544,8 +514,9 @@ an I/O processor the application configured (`TA_EFFECT_SEND`), whose
 handler may answer it. State: `actor.state`, a typed method. Inspection:
 typed methods over post with response handlers. `<log>`: a log handler
 configured per host, no global configuration. `DONE` and `ERROR`: the
-binding's own lifecycle (release its rows), not callbacks. `PEER` versus
-`PEER_ERROR` in an API: deferred.
+binding's own lifecycle (release its rows), not callbacks. Other systems:
+the I/O processor the config marks remote, an ordinary I/O processor of
+the application's (ADR 0014).
 
 ## 11. Base APIs for embedders and bindings
 

@@ -1,4 +1,4 @@
-/* host_internal.h — ta_host internals shared by host.c and router.c.
+/* host_internal.h — ta_host internals shared by the host layer's files.
  *
  * Every block the host owns comes from its config's ta_allocator
  * (host_alloc) and goes back with its size (host_free): each array keeps
@@ -109,8 +109,8 @@ typedef struct host_migration {
     uint32_t left_count, left_capacity;
 } host_migration;
 
-/* target, event, sendid, aux, msgid, origintype, deduplication_key */
-#define EFFECT_STRINGS 8
+/* target, event, sendid, aux, then the wire bytes */
+#define EFFECT_STRINGS 5
 typedef struct effect_strings {
     size_t offset[EFFECT_STRINGS]; /* in the string pool (SIZE_MAX: empty) */
 } effect_strings;
@@ -231,10 +231,7 @@ struct ta_host {
     retired_chart *retired_charts;
     uint32_t retired_chart_count, retired_chart_capacity;
     uint64_t fuel_clock;       /* the segments' common fuel clock (docs/adr/0006, section 9) */
-    struct ta_router *router;  /* other systems (router.c); NULL until a peer exists */
-    uint64_t message_sequence; /* outbound message ids */
     uint32_t draining;         /* segment whose effects are being drained (TA_NIL: none) */
-    uint32_t expiry_behind;    /* an expired envelope could not be reported yet */
     /* the encoder's operations (telemetry.c: the OTLP one, or the null one
      * when no encoder memory was given), the OTLP encoder and its block */
     const struct host_encoder *encoder;
@@ -299,7 +296,6 @@ ta_status host_locate(const ta_host *h, uint64_t session, uint32_t *segment, uin
 ta_status host_communication_error(ta_host *h, uint32_t si, uint32_t actor, ta_string_view sendid);
 uint32_t host_moved_get(const ta_host *h, uint64_t key);
 
-/* router.c */
 /* an SCXML send of segment si to another system (target not ours);
  * TA_ERROR_NO_MEMORY: nothing done, the effect stays for the next drain */
 /* The rarely called host operations, behind ta_host_post (request.c).
@@ -367,13 +363,7 @@ void host_telemetry_free(ta_host *h);
 enum { HOST_DEFINITION_LINKED = 0, HOST_DEFINITION_RETIRED = 1, HOST_DEFINITION_FREED = 2 };
 void host_definitions_otlp(ta_host *h, uint32_t kind, uint32_t segment);
 
-ta_status ta_router_outbound(ta_host *h, uint32_t si, const ta_effect *f);
 int host_is_local(const ta_host *h, ta_string_view system);
 uint64_t host_address_session(const ta_host *h, const ta_address *address);
-void ta_router_time(ta_host *h);              /* expire queued envelopes */
-ta_time ta_router_deadline(const ta_host *h); /* the next expiry (UINT64_MAX: none) */
-void ta_router_free(ta_host *h);
-size_t ta_router_snapshot(const ta_host *h, unsigned char *out, size_t capacity); /* dedup window */
-ta_status ta_router_restore(ta_host *h, const unsigned char *p, size_t length);
 
 #endif /* TINYACTORS_HOST_HOST_INTERNAL_H */

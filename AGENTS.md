@@ -224,15 +224,14 @@ terminate, deliver, advance_time, resume, run, and the effects and their ack
 table). CBOR is for two things only:
 
 - **rarely called calls:** `ta_host_post` (a control message; its reply is an effect, ADR 0011) and the host's config;
-- **a process boundary:** bytes that leave or enter the process (an
-  envelope for another system, OTLP, blobs). The encoding sits beside the
-  struct call (`ta_host_envelope` writes a PEER effect as CBOR,
-  `ta_host_envelope_read` fills a `ta_envelope`, and `ta_host_deliver`
-  still takes the struct), so a caller in the same process never encodes.
+- **a process boundary:** bytes that leave or enter the process (OTLP,
+  blobs, snapshots). Values for another system are the application's to
+  encode (ADR 0014): core hands them out as payloads of a `SEND` and takes
+  them back as payloads of an input.
 
 Before changing a call's input or output to bytes, find its callers inside
-core (`git grep`, ast-grep). If core calls it per event, as the router calls
-`ta_host_deliver` for every routed send, it stays a struct. A brief for
+core (`git grep`, ast-grep). If core calls it per event, as the host calls
+`ta_system_send` for every send between segments, it stays a struct. A brief for
 such a change states the cost per event, which must be nothing.
 
 ## Lifetimes follow the loop
@@ -242,8 +241,7 @@ The loop is take (`ta_host_effects`), handle, ack
 
 - **Everything the host hands out lives until the ack:** effect records
   and their fields, `TRACEPARENT`'s text, and the outputs taken while
-  handling (envelopes, traces, logs, metrics, hibernation and export
-  blobs). Snapshots and `environment->error` fill the caller's
+  handling (traces, logs, metrics, hibernation blobs). Snapshots and `environment->error` fill the caller's
   `ta_buffer`; a datamodel's outputs live until its next call.
 - **One drain at a time:** a take never widens the open batch, and a run
   refuses while one is open.

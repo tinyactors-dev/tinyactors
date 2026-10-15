@@ -47,7 +47,7 @@ module Core
     # Many systems as one (versions, routing, migration jobs, hibernation
     # policy). Freestanding: it allocates only through the ta_allocator its
     # configuration gives it (docs/adr/0005).
-    Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/router.c src/host/telemetry.c src/host/request.c src/host/definitions.c src/host/session_map.c]),
+    Layer.new(name: 'host', uses: %w[system otlp], freestanding: true, sources: %w[src/host/host.c src/host/telemetry.c src/host/request.c src/host/definitions.c src/host/session_map.c]),
     Layer.new(name: 'runtime', uses: %w[system compile], sources: %w[src/runtime/runtime.c src/runtime/runtime_hosted.c]),
     # The BasicHTTP Event I/O Processor's codec; the transport stays with the host.
     Layer.new(name: 'basic_http', uses: %w[base], freestanding: true, sources: %w[src/basic_http/basic_http.c]),
@@ -195,7 +195,6 @@ module Core
     unit('test_migrate', 'system', 'compile', 'test_datamodel', *ECMASCRIPT),
     unit('test_durable', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host', 'host', 'runtime', 'compile', *ECMASCRIPT),
-    unit('test_router', 'host', 'runtime', 'compile', *ECMASCRIPT),
     # The host's memory: accounting, a fixed arena, and refusals (--full: each
     # allocation of the workload refused in turn).
     unit('test_host_memory', 'host', 'compile', *ECMASCRIPT, full: true),

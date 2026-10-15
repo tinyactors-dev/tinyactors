@@ -69,7 +69,6 @@
 #define LOG_RING    200
 #define BUDGET      4000
 
-#define REMOTE_TYPE "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
 #define BENCH_TYPE  "bench"
 /* The test runtime's system I/O processor (SCXML 1.0 §6.2.5: platforms MAY
  * add Event I/O Processors). The SCXML processor itself only reaches existing
@@ -82,10 +81,12 @@
 #define SYSTEM_TYPE  "http://tinyactors.dev/torture/#SystemEventProcessor"
 #define SYSTEM_SHORT "system"
 /* host I/O processors of every system (the config's ioProcessors; TA_EFFECT_SEND.io_processor):
- * SCXML sends to other systems come out of their router as TA_HOST_EFFECT_PEER */
+ * SCXML sends to other systems come out as TA_EFFECT_SEND for the remote one */
+#define REMOTE_TYPE "http://tinyactors.dev/torture/#RemoteEventProcessor"
 #define IO_BENCH  0
 #define IO_SYSTEM 1 /* and 2 (short form) */
-#define IO_HOST   3 /* first scenario-defined host processor */
+#define IO_REMOTE 3 /* "remote": the in-process transport to the other systems */
+#define IO_HOST   4 /* first scenario-defined host processor */
 #define MAX_IO    16
 #define ID_SHIFT  281474976710656.0 /* 2^48: script actor id = system * 2^48 + session */
 
@@ -164,7 +165,6 @@ typedef struct bench_system {
     int busy;          /* not idle after its last run */
     uint64_t deadline; /* next timer (system ticks = µs), UINT64_MAX if none */
     uint64_t remote_out, remote_in, remote_fail, to_bench, logs, done, faults, host_sent, host_io;
-    uint32_t peer_of[MAX_SYSTEMS]; /* peer handle of each other system in our router (0: none) */
     double busy_ms;
     size_t js_heap;
     /* previous sample, for rates */
@@ -319,10 +319,7 @@ static int system_by_name(const char *name, size_t length) {
     return -1;
 }
 
-static void peers_disconnect(int si);
-static void peers_connect(int si);
 static void system_free(bench_system *system) {
-    if (system->live) peers_disconnect((int)(system - B.system)); /* the others' routes to us */
     for (uint32_t i = 0; i < system->source_count; i++) {
         free(system->source_names[i]);
         free(system->source_texts[i]);
@@ -429,6 +426,9 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     system->io_processors[IO_SYSTEM + 1].type =
         (ta_string_view){SYSTEM_SHORT, (uint32_t)strlen(SYSTEM_SHORT)};
     system->io_processors[IO_SYSTEM + 1].location = (ta_string_view){"#_system", 8};
+    system->io_processors[IO_REMOTE].type =
+        (ta_string_view){REMOTE_TYPE, (uint32_t)strlen(REMOTE_TYPE)};
+    system->io_processors[IO_REMOTE].flags = TA_IO_PROCESSOR_REMOTE;
     system->io_processor_count = IO_HOST;
     for (uint32_t i = 0; i < host_io_count && system->io_processor_count < MAX_IO - 1;
          i++, system->io_processor_count++) {
@@ -474,7 +474,6 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     }
     system->live = 1;
     system->deadline = UINT64_MAX;
-    peers_connect(index);
     system->busy = 1;
     system->source_count = n; /* reload() replaces some of them */
     system->source_names = (char **)calloc(n ? n : 1, sizeof(char *));
@@ -1704,90 +1703,49 @@ static int spawn_take(bench_system *system, uint64_t session, bench_spawn *out) 
     return 0;
 }
 
-/* The in-process transport (docs/protocol.md, Transports): every system is a
- * trusted peer of every other; an envelope one router hands out
- * (TA_HOST_EFFECT_PEER) goes into the other system's router (ta_host_deliver),
- * an error back (TA_HOST_EFFECT_PEER_ERROR) into the sender's (ta_host_peer_error).
- * Payloads cross as neutral values, CBOR: the systems have separate datamodels. */
-static void peers_connect(int si) {
-    bench_system *system = &B.system[si];
-    for (int k = 0; k < MAX_SYSTEMS; k++) {
-        bench_system *o = &B.system[k];
-        if (k == si || !o->live) continue;
-        ta_peer_config peer_config;
-        memset(&peer_config, 0, sizeof peer_config);
-        peer_config.size = sizeof peer_config;
-        peer_config.flags = TA_PEER_TRUSTED;
-        peer_config.id = (ta_string_view){o->name, (uint32_t)strlen(o->name)};
-        ta_host_peer_add(system->host, &peer_config, &system->peer_of[k]);
-        peer_config.id = (ta_string_view){system->name, (uint32_t)strlen(system->name)};
-        ta_host_peer_add(o->host, &peer_config, &o->peer_of[si]);
-    }
-}
-static void peers_disconnect(int si) {
-    for (int k = 0; k < MAX_SYSTEMS; k++) {
-        bench_system *o = &B.system[k];
-        if (k == si || !o->live || !o->peer_of[si]) continue;
-        ta_host_peer_remove(o->host, o->peer_of[si]); /* queued sends: error.communication */
-        o->peer_of[si] = 0;
-        o->busy = 1;
-    }
-}
-static int peer_index(bench_system *system, uint32_t peer) {
-    for (int k = 0; k < MAX_SYSTEMS; k++)
-        if (system->peer_of[k] == peer && B.system[k].live) return k;
-    return -1;
-}
-
-static void deliver_remote(bench_system *from, const ta_host_effect *effect) {
-    int ti = peer_index(from, effect->peer);
+/* The in-process transport: each system's remote I/O processor. A send to
+ * another system's address (TA_EFFECT_SEND for IO_REMOTE) goes to the live
+ * system its address names: the target resolved there (ta_host_resolve), then
+ * an input with the sender's address as origin (TA_EFFECT_FIELD_ORIGIN) and
+ * the sendid. Payloads cross as neutral values, CBOR: the systems have
+ * separate datamodels. A send nobody takes fails back to its sender as
+ * error.communication, after the sender's batch is acknowledged. */
+static void deliver_remote(bench_system *from, uint32_t index, const ta_host_effect *effect) {
+    ta_address address;
+    int ti = -1;
+    if (ta_address_parse(effect->target, &address) == TA_OK)
+        ti = system_by_name(address.system.pointer, address.system.length);
     bench_system *to = ti >= 0 ? &B.system[ti] : NULL;
-    int fi = (int)(from - B.system);
-    if (!to) { /* the peer went away meanwhile */
+    uint64_t session = 0;
+    if (!to || ta_host_resolve(to->host, effect->target, &session) != TA_OK) {
         from->remote_fail++;
-        ta_host_peer_error(from->host,
-                           &(ta_peer_error){effect->peer, TA_ROUTE_ERROR_UNREACHABLE,
-                                            effect->auxiliary, effect->msgid, effect->sendid});
+        bench_operation *operation = operation_push(OPERATION_COMMUNICATION_ERROR, effect->session);
+        operation->sendid = effect->sendid.length ? dup_str(effect->sendid) : NULL;
         return;
     }
     size_t length = 0;
     unsigned char *cbor = payload_cbor(from->ecmascript, effect->payload, &length);
-    ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
-    envelope.size = sizeof envelope;
-    envelope.hops = effect->flags;
-    envelope.target = effect->target;
-    envelope.name = effect->event;
-    envelope.sendid = effect->sendid;
-    envelope.origin = effect->auxiliary;
-    envelope.msgid = effect->msgid;
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.session = session;
+    event.name = effect->event;
+    event.sendid = effect->sendid;
+    event.origin = ta_host_effect_text(from->host, index, TA_EFFECT_FIELD_ORIGIN);
     if (!cbor || ta_datamodel_ecmascript_payload_from_cbor(to->ecmascript, (ta_bytes){cbor, length},
-                                                           &envelope.data) != TA_OK)
-        envelope.data = 0;
-    envelope.datamodel = 0; /* the ECMAScript datamodel */
+                                                           &event.data) != TA_OK)
+        event.data = 0;
     free(cbor);
-    int32_t outcome = ta_host_deliver(to->host, to->peer_of[fi], &envelope);
-    if (outcome == TA_ROUTE_DELIVERED || outcome == TA_ROUTE_RELAYED) {
+    if (ta_host_send(to->host, &event) == TA_OK) {
         from->remote_out++;
         to->remote_in++;
         to->busy = 1;
-    } else {
-        if (outcome != TA_ROUTE_DUPLICATE) from->remote_fail++;
-        release(to, envelope.data);
-        to->busy = 1; /* its router may have an error for us */
+    } else { /* gone meanwhile, or no room */
+        release(to, event.data);
+        from->remote_fail++;
+        bench_operation *operation = operation_push(OPERATION_COMMUNICATION_ERROR, effect->session);
+        operation->sendid = effect->sendid.length ? dup_str(effect->sendid) : NULL;
     }
-}
-
-/* an `err` for one of our envelopes */
-static void deliver_remote_error(bench_system *from, const ta_host_effect *effect) {
-    int ti = peer_index(from, effect->peer);
-    if (ti < 0) return;
-    bench_system *to = &B.system[ti];
-    ta_host_peer_error(to->host,
-                       &(ta_peer_error){to->peer_of[(int)(from - B.system)], effect->token,
-                                        effect->auxiliary, effect->msgid, effect->sendid});
-    to->remote_fail++;
-    to->busy = 1;
 }
 
 /* the system I/O processor (after the effect batch was acknowledged) */
@@ -2080,18 +2038,14 @@ static void drain_effects(int si) {
                 bench_log("chart", source, effect->event.pointer, effect->event.length);
             }
             break;
-        case TA_HOST_EFFECT_PEER:
-            deliver_remote(system, effect);
-            break;
-        case TA_HOST_EFFECT_PEER_ERROR:
-            deliver_remote_error(system, effect);
-            break;
         case TA_HOST_EFFECT_TRACES: /* the staging filled during the run */
         case TA_HOST_EFFECT_LOGS:
             trace_flush(system);
             break;
         case TA_EFFECT_SEND:
-            if (effect->io_processor == IO_BENCH) {
+            if (effect->io_processor == IO_REMOTE) {
+                deliver_remote(system, i, effect);
+            } else if (effect->io_processor == IO_BENCH) {
                 system->to_bench++;
                 bench_operation *operation = operation_push(OPERATION_TO_BENCH, effect->session);
                 operation->event = dup_str(effect->event);

@@ -177,10 +177,6 @@
       "value": 11
     },
     {
-      "name": "TA_EFFECT_FIELD_DEDUPLICATION_KEY",
-      "value": 39
-    },
-    {
       "name": "TA_EFFECT_FIELD_DELAY_HINT",
       "value": 12
     },
@@ -213,24 +209,12 @@
       "value": 9
     },
     {
-      "name": "TA_EFFECT_FIELD_MSGID",
-      "value": 36
-    },
-    {
       "name": "TA_EFFECT_FIELD_ORIGIN",
-      "value": 40
-    },
-    {
-      "name": "TA_EFFECT_FIELD_ORIGINTYPE",
-      "value": 38
+      "value": 37
     },
     {
       "name": "TA_EFFECT_FIELD_PAYLOAD",
       "value": 10
-    },
-    {
-      "name": "TA_EFFECT_FIELD_PEER",
-      "value": 17
     },
     {
       "name": "TA_EFFECT_FIELD_PENDING",
@@ -262,7 +246,7 @@
     },
     {
       "name": "TA_EFFECT_FIELD_TRACEPARENT",
-      "value": 37
+      "value": 36
     },
     {
       "name": "TA_EFFECT_FIELD_WIRE",
@@ -403,14 +387,6 @@
     {
       "name": "TA_HOST_EFFECT_NOTIFICATION",
       "value": 24
-    },
-    {
-      "name": "TA_HOST_EFFECT_PEER",
-      "value": 19
-    },
-    {
-      "name": "TA_HOST_EFFECT_PEER_ERROR",
-      "value": 20
     },
     {
       "name": "TA_HOST_EFFECT_REPLY",
@@ -593,30 +569,6 @@
       "value": 1
     },
     {
-      "name": "TA_PEER_CLOSED",
-      "value": 3
-    },
-    {
-      "name": "TA_PEER_CONNECTING",
-      "value": 0
-    },
-    {
-      "name": "TA_PEER_OPEN",
-      "value": 1
-    },
-    {
-      "name": "TA_PEER_QUEUE",
-      "value": 2
-    },
-    {
-      "name": "TA_PEER_RECONNECTING",
-      "value": 2
-    },
-    {
-      "name": "TA_PEER_TRUSTED",
-      "value": 1
-    },
-    {
       "name": "TA_POOL_ACTORS",
       "value": 4
     },
@@ -639,86 +591,6 @@
     {
       "name": "TA_POOL_TIMERS",
       "value": 3
-    },
-    {
-      "name": "TA_ROUTE_ASK_PEERS",
-      "value": 8
-    },
-    {
-      "name": "TA_ROUTE_DEDUPLICATE",
-      "value": 5
-    },
-    {
-      "name": "TA_ROUTE_DEDUPLICATE_HOST",
-      "value": 2
-    },
-    {
-      "name": "TA_ROUTE_DELIVERED",
-      "value": 0
-    },
-    {
-      "name": "TA_ROUTE_DUPLICATE",
-      "value": 2
-    },
-    {
-      "name": "TA_ROUTE_DURABLE",
-      "value": 1
-    },
-    {
-      "name": "TA_ROUTE_ERROR_DENIED",
-      "value": 3
-    },
-    {
-      "name": "TA_ROUTE_ERROR_EXPIRED",
-      "value": 4
-    },
-    {
-      "name": "TA_ROUTE_ERROR_HOPS",
-      "value": 5
-    },
-    {
-      "name": "TA_ROUTE_ERROR_MALFORMED",
-      "value": 6
-    },
-    {
-      "name": "TA_ROUTE_ERROR_UNKNOWN_TARGET",
-      "value": 1
-    },
-    {
-      "name": "TA_ROUTE_ERROR_UNREACHABLE",
-      "value": 2
-    },
-    {
-      "name": "TA_ROUTE_LOCAL",
-      "value": 6
-    },
-    {
-      "name": "TA_ROUTE_LOCAL_ONLY",
-      "value": 4
-    },
-    {
-      "name": "TA_ROUTE_LOOKUP",
-      "value": 4
-    },
-    {
-      "name": "TA_ROUTE_MAX_HOPS",
-      "value": 8
-    },
-    {
-      "name": "TA_ROUTE_PEER",
-      "value": 7
-    },
-    {
-      "name": "TA_ROUTE_PEERS",
-      "value": 8
-    },
-    {
-      "name": "TA_ROUTE_REFUSED",
-      "value": 3
-    },
-    {
-      "name": "TA_ROUTE_RELAYED",
-      "value": 1
     },
     {
       "name": "TA_RUN_EFFECTS",
@@ -7790,24 +7662,12 @@
           "type": "uint32_t"
         },
         {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
           "name": "datamodel",
           "type": "uint32_t"
         },
         {
-          "name": "msgid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "origintype",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "deduplication_key",
-          "type": "ta_string_view"
+          "name": "pad",
+          "type": "uint32_t"
         },
         {
           "name": "trace",
@@ -7820,7 +7680,7 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 248,
+          "size": 200,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7843,17 +7703,14 @@
             "migrated": 132,
             "failed": 136,
             "pending": 140,
-            "peer": 144,
-            "datamodel": 148,
-            "msgid": 152,
-            "origintype": 168,
-            "deduplication_key": 184,
-            "trace": 200,
-            "wire": 232
+            "datamodel": 144,
+            "pad": 148,
+            "trace": 152,
+            "wire": 184
           }
         },
         "aarch64": {
-          "size": 248,
+          "size": 200,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7876,17 +7733,14 @@
             "migrated": 132,
             "failed": 136,
             "pending": 140,
-            "peer": 144,
-            "datamodel": 148,
-            "msgid": 152,
-            "origintype": 168,
-            "deduplication_key": 184,
-            "trace": 200,
-            "wire": 232
+            "datamodel": 144,
+            "pad": 148,
+            "trace": 152,
+            "wire": 184
           }
         },
         "wasm32": {
-          "size": 184,
+          "size": 160,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7909,622 +7763,10 @@
             "migrated": 100,
             "failed": 104,
             "pending": 108,
-            "peer": 112,
-            "datamodel": 116,
-            "msgid": 120,
-            "origintype": 128,
-            "deduplication_key": 136,
-            "trace": 144,
-            "wire": 176
-          }
-        }
-      }
-    },
-    "ta_envelope": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "hops",
-          "type": "uint32_t"
-        },
-        {
-          "name": "target",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "data",
-          "type": "ta_payload"
-        },
-        {
-          "name": "datamodel",
-          "type": "uint32_t"
-        },
-        {
-          "name": "trace_flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "origin",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "origintype",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "msgid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "deduplication_key",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "traceparent",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "wire",
-          "type": "ta_bytes"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 168,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "hops": 4,
-            "target": 8,
-            "name": 24,
-            "data": 40,
-            "datamodel": 48,
-            "trace_flags": 52,
-            "sendid": 56,
-            "origin": 72,
-            "origintype": 88,
-            "msgid": 104,
-            "deduplication_key": 120,
-            "traceparent": 136,
+            "datamodel": 112,
+            "pad": 116,
+            "trace": 120,
             "wire": 152
-          }
-        },
-        "aarch64": {
-          "size": 168,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "hops": 4,
-            "target": 8,
-            "name": 24,
-            "data": 40,
-            "datamodel": 48,
-            "trace_flags": 52,
-            "sendid": 56,
-            "origin": 72,
-            "origintype": 88,
-            "msgid": 104,
-            "deduplication_key": 120,
-            "traceparent": 136,
-            "wire": 152
-          }
-        },
-        "wasm32": {
-          "size": 96,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "hops": 4,
-            "target": 8,
-            "name": 16,
-            "data": 24,
-            "datamodel": 32,
-            "trace_flags": 36,
-            "sendid": 40,
-            "origin": 48,
-            "origintype": 56,
-            "msgid": 64,
-            "deduplication_key": 72,
-            "traceparent": 80,
-            "wire": 88
-          }
-        }
-      }
-    },
-    "ta_peer_config": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "id",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "reach",
-          "type": "ta_string_list"
-        },
-        {
-          "name": "max_queue",
-          "type": "uint32_t"
-        },
-        {
-          "name": "queue_ttl",
-          "type": "ta_time"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 56,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "id": 8,
-            "reach": 24,
-            "max_queue": 40,
-            "queue_ttl": 48
-          }
-        },
-        "aarch64": {
-          "size": 56,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "id": 8,
-            "reach": 24,
-            "max_queue": 40,
-            "queue_ttl": 48
-          }
-        },
-        "wasm32": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "flags": 4,
-            "id": 8,
-            "reach": 16,
-            "max_queue": 24,
-            "queue_ttl": 32
-          }
-        }
-      }
-    },
-    "ta_route_request": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "action",
-          "type": "uint32_t"
-        },
-        {
-          "name": "reason",
-          "type": "uint32_t"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "hops",
-          "type": "uint32_t"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "from",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "session",
-          "type": "uint64_t"
-        },
-        {
-          "name": "system",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "peer_id",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "origin",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "key",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 120,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "action": 4,
-            "reason": 8,
-            "peer": 12,
-            "hops": 16,
-            "flags": 20,
-            "from": 24,
-            "pad": 28,
-            "session": 32,
-            "system": 40,
-            "name": 56,
-            "peer_id": 72,
-            "origin": 88,
-            "key": 104
-          }
-        },
-        "aarch64": {
-          "size": 120,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "action": 4,
-            "reason": 8,
-            "peer": 12,
-            "hops": 16,
-            "flags": 20,
-            "from": 24,
-            "pad": 28,
-            "session": 32,
-            "system": 40,
-            "name": 56,
-            "peer_id": 72,
-            "origin": 88,
-            "key": 104
-          }
-        },
-        "wasm32": {
-          "size": 80,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "action": 4,
-            "reason": 8,
-            "peer": 12,
-            "hops": 16,
-            "flags": 20,
-            "from": 24,
-            "pad": 28,
-            "session": 32,
-            "system": 40,
-            "name": 48,
-            "peer_id": 56,
-            "origin": 64,
-            "key": 72
-          }
-        }
-      }
-    },
-    "ta_host_message": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "index",
-          "type": "uint32_t"
-        },
-        {
-          "name": "revision",
-          "type": "uint64_t"
-        },
-        {
-          "name": "envelope",
-          "type": "ta_envelope"
-        },
-        {
-          "name": "key",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "storage",
-          "type": "char[768]"
-        },
-        {
-          "name": "traceparent",
-          "type": "char[55]"
-        },
-        {
-          "name": "pad2",
-          "type": "uint32_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 1048,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "index": 4,
-            "revision": 8,
-            "envelope": 16,
-            "key": 184,
-            "sendid": 200,
-            "storage": 216,
-            "traceparent": 984,
-            "pad2": 1040
-          }
-        },
-        "aarch64": {
-          "size": 1048,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "index": 4,
-            "revision": 8,
-            "envelope": 16,
-            "key": 184,
-            "sendid": 200,
-            "storage": 216,
-            "traceparent": 984,
-            "pad2": 1040
-          }
-        },
-        "wasm32": {
-          "size": 960,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "index": 4,
-            "revision": 8,
-            "envelope": 16,
-            "key": 112,
-            "sendid": 120,
-            "storage": 128,
-            "traceparent": 896,
-            "pad2": 952
-          }
-        }
-      }
-    },
-    "ta_export_rule": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "name",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "events",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "peer": 0,
-            "pad": 4,
-            "name": 8,
-            "events": 24
-          }
-        },
-        "aarch64": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "peer": 0,
-            "pad": 4,
-            "name": 8,
-            "events": 24
-          }
-        },
-        "wasm32": {
-          "size": 24,
-          "align": 4,
-          "offsets": {
-            "peer": 0,
-            "pad": 4,
-            "name": 8,
-            "events": 16
-          }
-        }
-      }
-    },
-    "ta_peer_error": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "reason",
-          "type": "uint32_t"
-        },
-        {
-          "name": "origin",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "msgid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 56,
-          "align": 8,
-          "offsets": {
-            "peer": 0,
-            "reason": 4,
-            "origin": 8,
-            "msgid": 24,
-            "sendid": 40
-          }
-        },
-        "aarch64": {
-          "size": 56,
-          "align": 8,
-          "offsets": {
-            "peer": 0,
-            "reason": 4,
-            "origin": 8,
-            "msgid": 24,
-            "sendid": 40
-          }
-        },
-        "wasm32": {
-          "size": 32,
-          "align": 4,
-          "offsets": {
-            "peer": 0,
-            "reason": 4,
-            "origin": 8,
-            "msgid": 16,
-            "sendid": 24
-          }
-        }
-      }
-    },
-    "ta_peer_status": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "size",
-          "type": "uint32_t"
-        },
-        {
-          "name": "state",
-          "type": "uint32_t"
-        },
-        {
-          "name": "queued",
-          "type": "uint32_t"
-        },
-        {
-          "name": "round_trip_time",
-          "type": "uint32_t"
-        },
-        {
-          "name": "lag",
-          "type": "ta_time"
-        },
-        {
-          "name": "sent",
-          "type": "uint64_t"
-        },
-        {
-          "name": "received",
-          "type": "uint64_t"
-        },
-        {
-          "name": "errors",
-          "type": "uint64_t"
-        },
-        {
-          "name": "duplicates",
-          "type": "uint64_t"
-        },
-        {
-          "name": "id",
-          "type": "ta_string_view"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "state": 4,
-            "queued": 8,
-            "round_trip_time": 12,
-            "lag": 16,
-            "sent": 24,
-            "received": 32,
-            "errors": 40,
-            "duplicates": 48,
-            "id": 56
-          }
-        },
-        "aarch64": {
-          "size": 72,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "state": 4,
-            "queued": 8,
-            "round_trip_time": 12,
-            "lag": 16,
-            "sent": 24,
-            "received": 32,
-            "errors": 40,
-            "duplicates": 48,
-            "id": 56
-          }
-        },
-        "wasm32": {
-          "size": 64,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "state": 4,
-            "queued": 8,
-            "round_trip_time": 12,
-            "lag": 16,
-            "sent": 24,
-            "received": 32,
-            "errors": 40,
-            "duplicates": 48,
-            "id": 56
           }
         }
       }
@@ -9906,27 +9148,6 @@
       "implemented": true
     },
     {
-      "name": "ta_host_deliver",
-      "returns": "int32_t",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "envelope",
-          "type": "const ta_envelope *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_host_effect_bytes",
       "returns": "ta_bytes",
       "params": [
@@ -10020,103 +9241,6 @@
       "implemented": true
     },
     {
-      "name": "ta_host_envelope",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "effect",
-          "type": "const ta_host_effect *"
-        },
-        {
-          "name": "out",
-          "type": "ta_bytes *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_envelope_read",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "cbor",
-          "type": "ta_bytes"
-        },
-        {
-          "name": "out",
-          "type": "ta_envelope *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_error_event",
-      "returns": "void",
-      "params": [
-        {
-          "name": "sendid",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "event",
-          "type": "ta_event_in *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_error_route",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "origin",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "request",
-          "type": "ta_route_request *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_export",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "rule",
-          "type": "const ta_export_rule *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_host_free",
       "returns": "void",
       "params": [
@@ -10189,27 +9313,6 @@
       "implemented": true
     },
     {
-      "name": "ta_host_message_init",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "effect",
-          "type": "const ta_effect *"
-        },
-        {
-          "name": "message",
-          "type": "ta_host_message *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_host_metrics",
       "returns": "ta_status",
       "params": [
@@ -10262,162 +9365,6 @@
         {
           "name": "out",
           "type": "ta_uint64_array"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_peer_add",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "config",
-          "type": "const ta_peer_config *"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_peer_error",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "error",
-          "type": "const ta_peer_error *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_peer_error_read",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "cbor",
-          "type": "ta_bytes"
-        },
-        {
-          "name": "out",
-          "type": "ta_peer_error *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_peer_reach",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "reach",
-          "type": "ta_string_list"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_peer_remove",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_peer_round_trip_time",
-      "returns": "void",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "ms",
-          "type": "uint32_t"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_peer_status",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "const ta_host *"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "out",
-          "type": "ta_peer_status *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_peer_up",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        },
-        {
-          "name": "up",
-          "type": "int"
         }
       ],
       "public": true,
@@ -10494,78 +9441,6 @@
         {
           "name": "resume",
           "type": "const ta_resume *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_route",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "system",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "peer",
-          "type": "uint32_t"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_route_begin",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "envelope",
-          "type": "const ta_envelope *"
-        },
-        {
-          "name": "request",
-          "type": "ta_route_request *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_route_reason",
-      "returns": "ta_string_view",
-      "params": [
-        {
-          "name": "reason",
-          "type": "uint32_t"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_route_step",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "request",
-          "type": "ta_route_request *"
-        },
-        {
-          "name": "session",
-          "type": "uint64_t"
         }
       ],
       "public": true,

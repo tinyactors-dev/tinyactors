@@ -101,7 +101,7 @@ static void drain(host_world *e) {
             snprintf(e->log + l, sizeof e->log - l, "%.*s;", (int)effect->event.length,
                      effect->event.pointer);
         }
-        if (effect->kind == TA_HOST_EFFECT_PEER) e->routed_out_count++;
+        if (effect->kind == TA_EFFECT_SEND) e->routed_out_count++;
         if (effect->kind == TA_EFFECT_WAKE) {
             e->wake_count++;
             e->wake_session = effect->session;
@@ -316,26 +316,15 @@ static void test_routing_between_segments(void) {
     CHECK_EQUAL(host_stats_fill(e.host, &stats), TA_OK);
     CHECK(stats.routed == 2 && stats.segments == 2 && stats.actors == 2);
 
-    /* nobody has that session: error.communication; another system without a
-     * route to it: error.communication too (unreachable, docs/protocol.md) */
+    /* nobody has that session: error.communication; another system, with no
+     * remote I/O processor: error.communication too */
     e.log[0] = 0;
     CHECK_EQUAL(send(&e, w, "ask", "{\"to\": \"" BASE "#_scxml_999\"}"), TA_OK);
     CHECK_EQUAL(send(&e, w, "ask", "{\"to\": \"tinyactors://elsewhere/#_scxml_1\"}"), TA_OK);
     run(&e);
     CHECK(strcmp(e.log, "comm;comm;") == 0);
     CHECK_EQUAL(e.routed_out_count, 0);
-    /* with a peer for it: out as a TA_HOST_EFFECT_PEER effect */
-    ta_peer_config peer_config;
-    memset(&peer_config, 0, sizeof peer_config);
-    peer_config.size = sizeof peer_config;
-    peer_config.id = (ta_string_view){"elsewhere", 9};
-    uint32_t peer = 0;
-    CHECK_EQUAL(ta_host_peer_add(e.host, &peer_config, &peer), TA_OK);
-    e.log[0] = 0;
-    CHECK_EQUAL(send(&e, w, "ask", "{\"to\": \"tinyactors://elsewhere/#_scxml_1\"}"), TA_OK);
-    run(&e);
-    CHECK(strcmp(e.log, "") == 0);
-    CHECK_EQUAL(e.routed_out_count, 1);
+    /* (with a remote I/O processor it leaves as a SEND: test_remote.c) */
 
     /* growth: more actors than the configured 8, spawned and messaged */
 

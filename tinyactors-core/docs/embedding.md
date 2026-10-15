@@ -45,7 +45,7 @@ you about the batch ends there.
 ```
 on wake (a timer fired, input arrived, I/O completed):
     feed inputs: ta_host_send / _send_many / _spawn / _terminate /
-                 ta_host_deliver / ta_host_resume / ta_host_post
+                 ta_host_resume / ta_host_post
     drain(host)                            # what those calls appended
     ta_host_advance_time(host, {monotonic, wall_ns})
     repeat:
@@ -72,8 +72,8 @@ drain(host):
 - **Ack before you run.** `ta_host_run` while a batch is open answers
   `TA_RUN_FAULT` with `TA_ERROR_STATE` and runs nothing, with `used` 0 and `next_deadline` `UINT64_MAX`.
 - **One timer.** `next_deadline` holds every deadline the host has:
-  timers and delayed sends, migration timeouts, the TTL of envelopes for
-  a peer that is down, a trace watch's end, the encoder's flush.
+  timers and delayed sends, migration timeouts, a trace watch's end, the
+  encoder's flush.
 - **Both clocks in one call.** `monotonic` in ticks at the config's
   `system.ticksPerSecond` (default 1e9, nanoseconds: pair it with
   `ta_runtime_now_ns`), and `wall_ns`, nanoseconds since the Unix epoch,
@@ -84,8 +84,8 @@ drain(host):
 ## 3 · Inputs
 
 `ta_host_spawn`, `ta_host_send`, `ta_host_send_many`,
-`ta_host_terminate`, `ta_host_resume`, `ta_host_deliver` take C structs
-(`ta_spawn`, `ta_event_in`, `ta_resume`, `ta_envelope`) and **read them
+`ta_host_terminate`, `ta_host_resume` take C structs
+(`ta_spawn`, `ta_event_in`, `ta_resume`) and **read them
 during the call**: core copies the views (names, sendids, origins,
 traceparents) before it returns. A payload handle in an input moves to
 the host on success and stays yours on failure. Batching means
@@ -95,8 +95,7 @@ During a run, a datamodel's code may call spawn, send, send_many and
 terminate (`host.h:151-170`): they take the paths of an internal
 `<invoke>`, `<send>` and cancel, nothing grows, and a full pool is
 `TA_ERROR_NO_MEMORY`. The same holds while core is inside a datamodel
-outside a run (a post, an envelope, deliver, hibernate, the ack's
-`release`). Lookups answer there; everything else is refused.
+outside a run (a post, hibernate, the ack's `release`). Lookups answer there; everything else is refused.
 
 ## 4 · Effects and the ack
 
@@ -115,13 +114,12 @@ handle, string, `WIRE` byte and `TRACEPARENT` text is valid until
 | `TA_EFFECT_WAKE` | load the session's hibernation blob: an event or a timer came for it (`MIGRATION` 0), or a migration asks for it (`MIGRATION` its id), again when it finds the actor hibernated after a wake | `ta_host_wake` |
 | `TA_EFFECT_LOG` | a `<log>`: label `AUXILIARY`, text `EVENT`; to your logging | nothing |
 | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` | a root actor finished or faulted: release what you keep for the session | nothing |
-| `TA_HOST_EFFECT_PEER`, `_PEER_ERROR` | an envelope for another system: `ta_host_envelope` writes it as CBOR, or fill a `ta_envelope` within the process | `ta_host_deliver`, `ta_host_peer_error` for what comes back |
 | `TA_HOST_EFFECT_TRACES`, `_LOGS` | take the OTLP request (`ta_host_traces`, `ta_host_logs`) and post it | nothing; the next comes after a take |
 | `TA_HOST_EFFECT_REPLY`, `_NOTIFICATION` | the control plane (section 5) | nothing |
 | `TA_HOST_EFFECT_MIGRATED`, `_MIGRATION_DONE`, `_SEGMENT_FREED` | a migration's progress and end (`ta_host_migration_pending`), a retired version | nothing |
 
-**While handling, call the host as you need:** take traces, write
-envelopes, post, deliver, hibernate. What those calls hand you lives
+**While handling, call the host as you need:** take traces, post,
+send, hibernate. What those calls hand you lives
 until the ack too, however many calls come between. What they append
 waits for the next take. An output taken with no batch open (metrics on
 a timer) opens a batch of its own: ack it before the next take or run.
@@ -174,7 +172,7 @@ actors a system image declares.
   grows through an allocator you pass, such as a `ta_growable_arena`'s
   view, section 8), read with `ta_cbor_reader` (a
   cursor), or index with `ta_cbor_decode` (`cbor.h`). Configs, posted
-  messages, replies, notifications and envelopes are CBOR; the calls made
+  messages, replies and notifications are CBOR; the calls made
   per event take C structs.
 
 ## 8 · Memory and allocators
@@ -188,7 +186,7 @@ actors a system image declares.
 - **Nothing grows during a run.** The host grows its blocks between runs;
   below the host, the system never allocates after `ta_system_init`.
 - **What the host hands out lives until the ack** (effects, their fields,
-  envelopes, traces, logs, metrics, hibernation blobs). The
+  traces, logs, metrics, hibernation blobs). The
   host holds a batch's outputs until then, so acking often bounds what it
   holds. Copy what you keep past the ack.
 - **Snapshots and a refused config** are written into your `ta_buffer`;
@@ -221,10 +219,12 @@ actors a system image declares.
 
 A host is used from the thread that made it, and only from there. It
 starts no thread and takes no lock. Parallelism is shared-nothing:
-several hosts, one per thread, exchanging envelopes
-(`TA_HOST_EFFECT_PEER` filled into a `ta_envelope` and passed to the
-other host's `ta_host_deliver`, through your own queue between the
-threads). A producer that cannot call the host (an interrupt handler)
+several hosts, one per thread, each with an I/O processor its config
+marks `"remote"`: a `TA_EFFECT_SEND` to another system's address goes
+through your own queue to the thread that owns that system, which
+resolves the target (`ta_host_resolve`) and calls `ta_host_send` with the
+data made a payload of its datamodel and the origin
+(`TA_EFFECT_FIELD_ORIGIN`); see [protocol.md](protocol.md#other-systems). A producer that cannot call the host (an interrupt handler)
 writes into a queue of yours that the owning thread drains into the
 inputs.
 

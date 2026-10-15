@@ -942,8 +942,7 @@ static const request_method *request_envelope(request *r, uint32_t *params) {
 }
 
 /* The reply in the host's output as the last effect, TA_HOST_EFFECT_REPLY,
- * its bytes in the pool (string 7, WIRE, as the router's PEER relay keeps a
- * value). TA_ERROR_NO_MEMORY: the allocator refused room (or the held-block
+ * its bytes in the pool (the last string, WIRE). TA_ERROR_NO_MEMORY: the allocator refused room (or the held-block
  * limit was reached), and nothing was appended. */
 static ta_status request_reply(ta_host *host) {
     size_t length = host->output.length;

@@ -102,7 +102,7 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
 - Code free of any language's API that every binding needs (a handle
   table, a status's name) is in base and public (`ta_table`,
   `ta_status_name`; ADR 0012), never written again in a binding.
-- Bytes that cross the API (requests, configs, envelopes, values) are
+- Bytes that cross the API (requests, configs, values) are
   fixed by the protocol vectors in `../tinyactors-test/suites/protocol/`
   (its README.md): a
   change to them changes a vector, and every binding follows it.

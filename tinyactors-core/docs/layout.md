@@ -52,7 +52,7 @@ implementation of that layer). Layer dependency rules are in
 │   │   ├── journal.[ch]       ✅ lossy ring of variable-size records (the trace journal)
 │   │   ├── address.c          ✅ the address grammar (include/tinyactors/address.h)
 │   │   ├── cbor.c             ✅ CBOR: writer, reader, token lists (include/tinyactors/cbor.h)
-│   │   ├── cbor_output.h      ✅ CBOR heads written into an output (the host's replies, envelopes)
+│   │   ├── cbor_output.h      ✅ CBOR heads written into an output (the host's replies)
 │   │   ├── output.[ch]        ✅ bytes into a room grown through a caller's allocator (ADR 0010)
 │   │
 │   ├── image/                 shared by compiler (writer) and runtime (reader)
@@ -96,11 +96,10 @@ implementation of that layer). Layer dependency rules are in
 │   │   └── runtime.c          ✅ malloc allocator, files + resolver, clock, grow-by-relocation
 │   │
 │   ├── host/                  the policy every embedder would rebuild, once (freestanding; its caller's ta_allocator)
-│   │   ├── host_internal.h    ✅ host state shared by host.c and router.c
+│   │   ├── host_internal.h    ✅ host state shared by the host layer's files
 │   │   ├── host.c             ✅ segments + session ranges, image copies, cross-segment routing,
 │   │   │                         versions and retirement, quantum-bounded migrations, CLOCK
 │   │   │                         sweep, growth, boot, whole-host snapshot/restore
-│   │   ├── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
 │   │   ├── telemetry.c        ✅ the host's OTLP encoder, or the null one (traces, logs, metrics)
 │   │   └── request.c          ✅ ta_host_post: the control plane, CBOR messages in JSON-RPC's shape answered by REPLY effects (docs/requests.md); the host's CBOR config (docs/host-config.md)
 │   │
@@ -128,7 +127,7 @@ implementation of that layer). Layer dependency rules are in
 │   │                             (datamodel.c), the vector methods (vectors.c), scenario.run
 │   │                             (scenario.c), w3c.run with a BasicHTTP loopback (w3c.c)
 │   ├── lint/rules/            ✅ ast-grep rules (no-retired-abbreviations: the naming lint)
-│   ├── torture/               ✅ torture-bench: scenario host (bench.c: systems, router, the
+│   ├── torture/               ✅ torture-bench: scenario host (bench.c: systems and their transport, the
 │   │   │                         test runtime's `system` I/O processor, scenario switching),
 │   │   │                         HTTP+WebSocket server (net.c), event loop (loop.c), scenario
 │   │   │                         engine (prelude.js)
@@ -147,7 +146,7 @@ implementation of that layer). Layer dependency rules are in
 │   │                             does not pass (datamodel_test_w3c_skip.txt), compile/system/file
 │   │                             helpers, payloads as text
 │   ├── unit/                  ✅ test_{base,image,compile,compile_scale,core,system,scenarios,runtime,e2e,
-│   │                             datamodel_ecmascript,hibernate,migrate,host,router,address,cbor,headers,
+│   │                             datamodel_ecmascript,hibernate,migrate,host,remote,address,cbor,headers,
 │   │                             trace,journal,tracing,otlp};
 │   │                             test_torture_loop; test_durable:
 │   │                             every path out of memory vs. a run that never left it (durability.md)

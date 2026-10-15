@@ -58,16 +58,16 @@
  *
  * Calls are synchronous and budgeted like ta_system_run; outcomes are effects
  * (ta_host_effects), borrowed until ta_host_effects_ack or ta_host_free:
- * calls in between that make more effects (ta_host_deliver
- * answering a peer, ta_host_peer_up flushing a queue, ...) leave the borrowed
+ * calls in between that make more effects (ta_host_post appending its
+ * REPLY, ta_host_send failing a sender, ...) leave the borrowed
  * records and their strings where they are; the new effects come with the
  * next batch, after the ack. Repeated takes return the same pointer and
  * count; ta_host_run refuses while a batch is open. Payloads passed in are
  * moved on success and stay the caller's
  * on failure. No callbacks besides the datamodel vtables.
  *
- * What the host writes for its caller — an envelope, traces, logs,
- * metrics, a hibernation blob — comes out as a
+ * What the host writes for its caller — traces, logs, metrics, a
+ * hibernation blob — comes out as a
  * ta_bytes view of memory the host owns, valid until ta_host_effects_ack or
  * ta_host_free, whatever calls come between (copy it to keep it past the
  * ack). Taken while a batch is open, it joins that batch; taken with none
@@ -183,18 +183,15 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
  *     macrostep does not run).
  * Lookups answer as usual: ta_host_chart, ta_host_locate,
  * ta_host_actor_by_name, ta_host_segment_count, ta_host_segment_info_get,
- * ta_host_system, ta_host_peer_status, ta_host_migration_pending, and the effect
+ * ta_host_system, ta_host_resolve, ta_host_migration_pending, and the effect
  * accessors (which answer 0 or empty: no batch is open in a run).
- * ta_host_peer_round_trip_time is accepted too: it records a peer's
- * measured round trip and changes nothing a run uses. ta_host_free does
- * nothing. Every other call is refused:
+ * ta_host_free does nothing. Every other call is refused:
  * TA_ERROR_STATE, an empty answer or nothing done (ta_host_effects returns
  * 0; ta_host_effects_ack, ta_host_advance_time do nothing; ta_host_sweep
  * returns 0; ta_host_run returns TA_RUN_FAULT with TA_ERROR_STATE).
  *
  * Outside a run, the same rules hold while the host is inside a datamodel:
- * a posted message (actor.context), ta_host_envelope, ta_host_deliver,
- * hibernating, waking, the telemetry takes,
+ * a posted message (actor.context), hibernating, waking, the telemetry takes,
  * `release` in the ack and at the start of a run, and the like. A
  * datamodel's code that calls back into the host there can add inputs but
  * cannot change what the host is using (docs/adr/0010 in the repository
@@ -237,9 +234,7 @@ typedef struct ta_host_time {
     ta_time monotonic;
     uint64_t wall_ns;
 } ta_host_time;
-/* Move every segment's clock; queued envelopes past their TTL fail (an
- * expiry the allocator leaves no room to report is reported by the next
- * ta_host_run). With an encoder, the trace records written since the last
+/* Move every segment's clock. With an encoder, the trace records written since the last
  * call are stamped between its wall time and this one: call it before each
  * run. */
 TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
@@ -256,8 +251,7 @@ TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
  * — ta_host_send of events or of TA_EVENT_IN_ERROR_COMMUNICATION to the
  * sender — and run again; the sender goes on only then);
  * next_deadline: the earliest of the segments' timers, the migrations'
- * timeouts, the expiry of envelopes queued for a peer that is down, the end
- * of a trace watch, and the encoder's flush (flush_interval after a request's
+ * timeouts, the end of a trace watch, and the encoder's flush (flush_interval after a request's
  * first record); UINT64_MAX for none. Arm one timer for it and call
  * ta_host_advance_time, then ta_host_run, when it comes. */
 TA_API ta_run ta_host_run(ta_host *h, uint32_t budget);
@@ -267,11 +261,6 @@ enum {
     TA_HOST_EFFECT_MIGRATED = 16, /* session moved to (segment, chart); migration */
     TA_HOST_EFFECT_MIGRATION_DONE = 17, /* migration ended: migrated, failed, pending (ta_host_migration_pending) */
     TA_HOST_EFFECT_SEGMENT_FREED = 18, /* segment retired (the host freed its image copy) */
-    /* the router (docs/protocol.md): */
-    TA_HOST_EFFECT_PEER = 19,      /* send an envelope to `peer`: target, event, sendid, payload,
-                                  aux = origin, msgid, hops (in `flags`) */
-    TA_HOST_EFFECT_PEER_ERROR = 20, /* send an error envelope to `peer` (ta_host_envelope):
-                                       aux = origin, msgid, sendid, token = reason */
     /* the encoder (the config's "telemetry"): a request is ready, because the
      * staging is full or flush_interval passed since its first record; take
      * it with ta_host_traces (ta_host_logs). At most one of each kind is
@@ -296,24 +285,18 @@ typedef struct ta_host_effect {
     uint32_t token;        /* request / invoke token (per segment) */
     uint32_t io_processor; /* TA_EFFECT_SEND: index in the config's ioProcessors */
     /* (migration: MIGRATED, MIGRATION_DONE, and a WAKE a migration asked for; 0 otherwise) */
-    uint32_t flags;        /* PEER: hops */
+    uint32_t flags;        /* TA_EFFECT_FLAG_* (system.h) */
     uint32_t migration;
     ta_string_view target, event, sendid, auxiliary; /* as in ta_effect; MIGRATED: event = chart
-                                          name; PEER, PEER_ERR: aux = origin */
+                                          name */
     ta_payload payload;                              /* borrowed */
     ta_time delay_hint;
     uint32_t chart;                     /* MIGRATED: chart index in `segment` */
     uint32_t migrated, failed, pending; /* MIGRATION_DONE */
-    uint32_t peer;                      /* PEER, PEER_ERR: the peer handle */
-    uint32_t datamodel;                 /* PEER: datamodel index of payload (TA_NIL: none) */
-    ta_string_view msgid;               /* PEER, PEER_ERR */
-    ta_string_view origintype;          /* PEER: the envelope's origintype (may be empty) */
-    ta_string_view deduplication_key;   /* PEER: the envelope's dedup key (may be empty) */
-    ta_trace_context trace; /* as in ta_effect; PEER: the envelope's traceparent (format it
-                               with ta_traceparent_format for the wire) */
-    ta_bytes wire; /* PEER relaying an envelope that arrived as bytes: its value as CBOR,
-                      as it arrived (payload is 0). Copy it to ta_envelope.wire.
-                      REPLY, NOTIFICATION: the message, CBOR */
+    uint32_t datamodel;                 /* SEND: datamodel index of payload (TA_NIL: none) */
+    uint32_t pad;
+    ta_trace_context trace; /* as in ta_effect */
+    ta_bytes wire;          /* REPLY, NOTIFICATION: the message, CBOR */
 } ta_host_effect;
 /* First nonempty take opens one batch. Further takes return that same
  * pointer and count, including after calls append effects or grow storage.
@@ -328,13 +311,14 @@ TA_API void ta_host_effects_ack(ta_host *h);
 
 /* A field of effect `index` of the batch ta_host_effects published, so that a
  * binding reads effects without knowing ta_host_effect's layout. Numbers:
- * KIND .. PEER (ta_host_effect_number); text: TARGET .. DEDUPLICATION_KEY
+ * KIND .. PENDING (ta_host_effect_number); text: TARGET .. ORIGIN
  * (ta_host_effect_text); bytes: WIRE (ta_host_effect_bytes). An index past
  * the batch, a field the effect kind does not set, or a field asked through
  * the wrong accessor answers 0 or empty. Text and bytes are borrowed like the effect
  * (until the ack or ta_host_free); TRACEPARENT's text is written into the
  * batch's memory on the first ask (empty if that allocation is refused) and
- * lasts until the ack too, however many fields are read meanwhile.
+ * lasts until the ack too, however many fields are read meanwhile, and so
+ * does ORIGIN's.
  *
  * A send to a service the host runs (an SCXML <send target="#_<invokeid>">
  * to an external invocation) is a TA_EFFECT_SEND with IO_PROCESSOR
@@ -358,18 +342,13 @@ enum {
     TA_EFFECT_FIELD_MIGRATED = 14,
     TA_EFFECT_FIELD_FAILED = 15,
     TA_EFFECT_FIELD_PENDING = 16,
-    TA_EFFECT_FIELD_PEER = 17,
     TA_EFFECT_FIELD_TARGET = 32,
     TA_EFFECT_FIELD_EVENT = 33,
     TA_EFFECT_FIELD_SENDID = 34,
     TA_EFFECT_FIELD_AUXILIARY = 35,
-    TA_EFFECT_FIELD_MSGID = 36,
-    TA_EFFECT_FIELD_TRACEPARENT = 37, /* W3C text of `trace`; empty when untraced */
-    TA_EFFECT_FIELD_ORIGINTYPE = 38,
-    TA_EFFECT_FIELD_DEDUPLICATION_KEY = 39,
-    TA_EFFECT_FIELD_ORIGIN = 40, /* SEND: the sender's address, tinyactors://<system id>/#_scxml_<session> */
-    TA_EFFECT_FIELD_WIRE = 64 /* bytes (ta_host_effect_bytes). PEER: the relayed value's CBOR;
-                                 REPLY, NOTIFICATION: the message's CBOR */
+    TA_EFFECT_FIELD_TRACEPARENT = 36, /* W3C text of `trace`; empty when untraced */
+    TA_EFFECT_FIELD_ORIGIN = 37, /* SEND: the sender's address, tinyactors://<system id>/#_scxml_<session> */
+    TA_EFFECT_FIELD_WIRE = 64 /* bytes (ta_host_effect_bytes). REPLY, NOTIFICATION: the message's CBOR */
 };
 TA_API uint64_t ta_host_effect_number(const ta_host *h, uint32_t index, uint32_t field);
 TA_API ta_string_view ta_host_effect_text(ta_host *h, uint32_t index, uint32_t field);
@@ -387,235 +366,6 @@ TA_API ta_bytes ta_host_effect_bytes(const ta_host *h, uint32_t index, uint32_t 
  * (`/v1/logs`), a view valid until the ack. */
 TA_API ta_status ta_host_traces(ta_host *h, ta_bytes *out);
 TA_API ta_status ta_host_logs(ta_host *h, ta_bytes *out);
-
-/* ---- the router: other systems (docs/protocol.md, Routing) -------------------------
- * A peer is another system as seen through one transport connection (a
- * socket, a broker subject, a worker's port...). The host owns peers as integer handles
- * that pack their slot and a generation: removing a peer (ta_host_peer_remove)
- * makes its handle stale (TA_ERROR_STALE), even when a newer peer reuses the
- * slot; the transport (host code, any language) moves envelopes: inbound with
- * ta_host_deliver, outbound from TA_HOST_EFFECT_PEER effects. Routes map system
- * ids to peers: configured (ta_host_route) and announced (the systems a peer
- * reaches, ta_host_peer_add / ta_host_peer_reach). The host never does I/O. */
-
-/* An envelope (docs/protocol.md, Envelope): one SCXML event on its way to one
- * target. Views are borrowed for the call. */
-typedef struct ta_envelope {
-    uint32_t size;
-    uint32_t hops;             /* relays passed so far */
-    ta_string_view target;     /* address */
-    ta_string_view name;       /* event name */
-    ta_payload data;           /* datamodel payload (moved on success; the caller's on failure) */
-    uint32_t datamodel;        /* datamodel index of `data` (ta_host_environment.datamodels) */
-    uint32_t trace_flags;      /* local to this process: the sender's detail class (ta_event_in) */
-    ta_string_view sendid;     /* the sender's sendid (may be empty) */
-    ta_string_view origin;     /* the sending session's address */
-    ta_string_view origintype; /* empty: the SCXML event processor */
-    ta_string_view msgid;      /* unique per origin: errors, acks and dedup refer to it */
-    ta_string_view deduplication_key; /* optional key for duplicate detection instead of msgid */
-    ta_string_view traceparent;       /* W3C: the sending step's trace (empty: none), kept across
-                                         systems and relays */
-    ta_bytes wire; /* the value as CBOR, borrowed for the call (ta_host_envelope_read): set this
-                      or `data`, never both. The target's datamodel decodes it; a relay
-                      forwards it as it is */
-} ta_envelope;
-
-/* Peer flags. */
-enum {
-    TA_PEER_TRUSTED = 1u << 0, /* policy: everything allowed (default: only exported names) */
-    TA_PEER_QUEUE = 1u << 1    /* while down: queue envelopes up to queue_ttl (else fail at once) */
-};
-typedef struct ta_peer_config {
-    uint32_t size;
-    uint32_t flags;       /* TA_PEER_* */
-    ta_string_view id;    /* the peer's own system id */
-    ta_string_list reach; /* further systems reachable through it (announced) */
-    uint32_t max_queue;   /* TA_PEER_QUEUE: envelopes kept while down (default 1000) */
-    ta_time queue_ttl;  /* TA_PEER_QUEUE: ticks an envelope may wait (0 = forever) */
-} ta_peer_config;
-
-/* Reasons (docs/protocol.md, Errors). */
-enum {
-    TA_ROUTE_ERROR_UNKNOWN_TARGET = 1,
-    TA_ROUTE_ERROR_UNREACHABLE = 2,
-    TA_ROUTE_ERROR_DENIED = 3,
-    TA_ROUTE_ERROR_EXPIRED = 4,
-    TA_ROUTE_ERROR_HOPS = 5,
-    TA_ROUTE_ERROR_MALFORMED = 6
-};
-#define TA_ROUTE_MAX_HOPS 8u
-
-/* External storage driver. No segments or callbacks are needed: begin validates
- * and routes, then the caller answers LOOKUP (session/name exists) and DEDUP
- * (atomically insert (origin,key), true if inserted) with route_step. All views
- * borrow the envelope/host until the request finishes. Storage and delivery must
- * commit together; aborting the transaction also aborts the request.
- * PEER carries the next hop; an empty handle with a peer_id is a durable route
- * whose peer is not added yet (ta_host_peer_add). LOCAL carries a resolved session, ready for an inbox.
- * An envelope with `wire` (it arrived as bytes) is never decoded here: the
- * caller keeps the value's CBOR as it is, for the session's own datamodel to
- * read with from_wire when the event is delivered, as ta_host_deliver does.
- * PEERS (only with TA_ROUTE_ASK_PEERS): the next hop depends on the peers the
- * caller has not loaded yet; add them (ta_host_peer_add) and begin again
- * without the flag. Local sends never need them.
- * The resident host drives this same protocol with its own tables. */
-enum {
-    TA_ROUTE_LOOKUP = 4,
-    TA_ROUTE_DEDUPLICATE = 5,
-    TA_ROUTE_LOCAL = 6,
-    TA_ROUTE_PEER = 7,
-    TA_ROUTE_PEERS = 8
-};
-enum {
-    TA_ROUTE_DURABLE = 1u << 0,          /* unknown remote systems wait under their own id */
-    TA_ROUTE_DEDUPLICATE_HOST = 1u << 1, /* deduplicate host-code input too */
-    TA_ROUTE_LOCAL_ONLY = 1u << 2,       /* endpoint transport: do not accept transit traffic */
-    TA_ROUTE_ASK_PEERS = 1u << 3         /* host without its peers yet: PEERS before a next hop */
-};
-typedef struct ta_route_request {
-    uint32_t size;
-    uint32_t action, reason, peer;
-    uint32_t hops;
-    uint32_t flags; /* in: TA_ROUTE_* for ta_host_route_begin */
-    uint32_t from;  /* in: the peer the envelope came from (0: this host's own code) */
-    uint32_t pad;
-    uint64_t session;
-    ta_string_view system, name, peer_id, origin, key; /* name is percent encoded */
-} ta_route_request;
-/* Set request->size, ->flags and ->from first; the rest is written. */
-TA_API ta_status ta_host_route_begin(ta_host *h, const ta_envelope *envelope,
-                                     ta_route_request *request);
-/* LOOKUP: session=0 means missing. DEDUP: session=0 means already present. */
-TA_API ta_status ta_host_route_step(ta_route_request *request, uint64_t session);
-TA_API ta_string_view ta_host_route_reason(uint32_t reason);
-/* Construct the SCXML error event (the caller supplies target/data). */
-TA_API void ta_host_error_event(ta_string_view sendid, ta_event_in *event);
-/* Resolve an error's local origin session; REFUSED if foreign/malformed/a name.
- * The caller answers LOOKUP as for route_begin; errors are never deduplicated. */
-TA_API ta_status ta_host_error_route(ta_host *h, ta_string_view origin, ta_route_request *request);
-
-/* Stable outbound identity. revision>0: durable processing number and effect
- * index; revision=0: host counter. Identity strings borrow this result;
- * target/name/explicit sendid borrow the effect. `sendid` includes a generated
- * fallback for transports whose outbox requires one; envelope.sendid preserves
- * the SCXML sendid, including its absence.
- * Persist the revision with the actor, in the same transaction as its outbox.
- * Set size, revision and index first; the rest is written. */
-typedef struct ta_host_message {
-    uint32_t size;
-    uint32_t index;    /* in: the effect's index (with a revision) */
-    uint64_t revision; /* in: durable processing number; 0: a host counter */
-    ta_envelope envelope;
-    ta_string_view key;
-    ta_string_view sendid;
-    char storage[768];
-    char traceparent[TA_TRACEPARENT_LENGTH]; /* envelope.traceparent's bytes */
-    uint32_t pad2;
-} ta_host_message;
-TA_API ta_status ta_host_message_init(ta_host *h, const ta_effect *effect,
-                                      ta_host_message *message);
-
-/* Add a peer (connected). Its id and reach become routes to it; an id that
- * already has a peer replaces it (the newer connection wins). */
-TA_API ta_status ta_host_peer_add(ta_host *h, const ta_peer_config *config, uint32_t *peer);
-/* The transport lost the connection (TA_PEER_QUEUE peers keep their routes and
- * queue; others fail at once) or got it back (queued envelopes come out as
- * TA_HOST_EFFECT_PEER effects, in order). TA_ERROR_NO_MEMORY: the envelopes
- * not flushed or failed yet stay queued; call it again. */
-TA_API ta_status ta_host_peer_up(ta_host *h, uint32_t peer, int up);
-/* Remove a peer and its routes; queued envelopes fail (unreachable).
- * TA_ERROR_NO_MEMORY: the peer stays, with the envelopes not failed yet. */
-TA_API ta_status ta_host_peer_remove(ta_host *h, uint32_t peer);
-/* Replace what a peer announced it reaches. */
-TA_API ta_status ta_host_peer_reach(ta_host *h, uint32_t peer, ta_string_list reach);
-/* A configured route: envelopes for `system` go to `peer` (0: remove). */
-TA_API ta_status ta_host_route(ta_host *h, ta_string_view system, uint32_t peer);
-/* Policy for untrusted peers: export a local @name (or "*" for every name and
- * session) to `peer` (0: to every peer), optionally limited to event names
- * matching `events` (SCXML event descriptors; empty: all). */
-typedef struct ta_export_rule {
-    uint32_t peer;
-    uint32_t pad;
-    ta_string_view name;
-    ta_string_view events;
-} ta_export_rule;
-TA_API ta_status ta_host_export(ta_host *h, const ta_export_rule *rule);
-
-/* An envelope from `peer` (0: from this host's own code, no checks):
- * origin validated against the peer's announced systems, policy applied,
- * duplicates dropped (TA_ROUTE_DUPLICATE), then delivered locally or relayed
- * to another peer. Returns the outcome, TA_ROUTE_* (0 or more), or an error
- * (negative). A refusal is reported both as TA_ROUTE_REFUSED and as a
- * TA_HOST_EFFECT_PEER_ERROR effect addressed back to the peer, so the
- * sender's system can turn it into error.communication. TA_ERROR_NO_MEMORY:
- * nothing was done or remembered (delivering it again is not a duplicate).
- * The envelope's value is `data` (a payload, as from this process) or `wire`
- * (CBOR, as from ta_host_envelope_read). `wire` is decoded only on local
- * delivery, by the target session's datamodel (its chart's): a value it
- * cannot read is refused as TA_ROUTE_ERROR_MALFORMED. A relay forwards `wire`
- * as it is and decodes nothing; the PEER effect carries it until the ack. */
-enum { TA_ROUTE_DELIVERED = 0, TA_ROUTE_RELAYED = 1, TA_ROUTE_DUPLICATE = 2, TA_ROUTE_REFUSED = 3 };
-TA_API int32_t ta_host_deliver(ta_host *h, uint32_t peer, const ta_envelope *envelope);
-/* An error envelope from a peer about an envelope this host sent: the origin session
- * gets error.communication (with the sendid); relayed errors go back further. */
-typedef struct ta_peer_error {
-    uint32_t peer;   /* the peer it came from */
-    uint32_t reason; /* TA_ROUTE_ERROR_* */
-    ta_string_view origin, msgid, sendid;
-} ta_peer_error;
-TA_API ta_status ta_host_peer_error(ta_host *h, const ta_peer_error *error);
-
-/* Envelopes across a process boundary (docs/protocol.md, Envelope): CBOR.
- * Within a process, a transport fills ta_envelope and ta_peer_error from the
- * effects directly; no bytes are written. Across one, the sender writes each
- * TA_HOST_EFFECT_PEER and TA_HOST_EFFECT_PEER_ERROR effect with
- * ta_host_envelope and sends the bytes to the effect's peer; the receiver
- * reads an envelope with ta_host_envelope_read and passes it to
- * ta_host_deliver, and an error envelope with ta_host_peer_error_read (it
- * sets `peer`) and passes it to ta_host_peer_error.
- *
- * ta_host_envelope: the effect's envelope (its data written once by the
- * datamodel's to_wire, or a relayed `wire` copied as it is) or error envelope,
- * in `out`: a view of the host's memory, valid until the ack, as the effect
- * is. The effect keeps its payload, borrowed until the ack. `effect` is a
- * record of the open batch (&effects[i] of ta_host_effects) or one the caller
- * built (a PEER or PEER_ERROR record whose fields it set, to encode an
- * envelope it holds); it is read during the call only.
- * TA_ERROR_NO_MEMORY: the allocator refused room; TA_ERROR_INVALID: another
- * effect kind, or data that is not a neutral value; TA_ERROR_STATE during a
- * run. */
-TA_API ta_status ta_host_envelope(ta_host *h, const ta_host_effect *effect, ta_bytes *out);
-/* An envelope from bytes: views into `cbor` (keep the bytes until the
- * ta_host_deliver). Its data, if any, is not decoded: out->wire points at the
- * value's CBOR, checked to be one well-formed item, and out->data stays 0.
- * ta_host_deliver decodes it with the target's datamodel, or a relay forwards
- * it. Nothing is allocated, so there is nothing to release. TA_OK.
- * TA_ERROR_INVALID with out->size 0: not an envelope (not CBOR, not a map,
- * an unknown or repeated key, a wrong type, an error envelope); nothing to
- * answer, drop it. TA_ERROR_INVALID with out->size set: an envelope whose
- * data is not one well-formed CBOR item; out holds no target and no value,
- * so ta_host_deliver of it refuses it as malformed (TA_ROUTE_ERROR_MALFORMED)
- * and answers the sender with a TA_HOST_EFFECT_PEER_ERROR, as for any
- * malformed envelope. TA_ERROR_STATE during a run. */
-TA_API ta_status ta_host_envelope_read(ta_host *h, ta_bytes cbor, ta_envelope *out);
-/* An error envelope from bytes: views into `cbor`; out->peer is left for the
- * caller to set. TA_ERROR_INVALID: not an error envelope. */
-TA_API ta_status ta_host_peer_error_read(ta_bytes cbor, ta_peer_error *out);
-/* A round trip the transport measured (ms), for the route status. */
-TA_API void ta_host_peer_round_trip_time(ta_host *h, uint32_t peer, uint32_t ms);
-
-/* Route status (docs/protocol.md, Observability). */
-enum { TA_PEER_CONNECTING = 0, TA_PEER_OPEN = 1, TA_PEER_RECONNECTING = 2, TA_PEER_CLOSED = 3 };
-typedef struct ta_peer_status {
-    uint32_t size;
-    uint32_t state;                              /* TA_PEER_* */
-    uint32_t queued;                             /* envelopes waiting for the peer */
-    uint32_t round_trip_time;                    /* ms, last measured (0: unknown) */
-    ta_time lag;                                 /* ticks the oldest queued envelope has waited */
-    uint64_t sent, received, errors, duplicates; /* monotonic */
-    ta_string_view id; /* the peer's system id (valid until the peer is removed) */
-} ta_peer_status;
-TA_API ta_status ta_host_peer_status(const ta_host *h, uint32_t peer, ta_peer_status *out);
 
 /* ---- migration ---------------------------------------------------------------- */
 enum { TA_HOST_MIGRATE_WAKE = 1u << 0 };

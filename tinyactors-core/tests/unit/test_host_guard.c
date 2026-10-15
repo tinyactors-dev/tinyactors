@@ -1,6 +1,6 @@
 /* The guard (docs/adr/0010 in the repository root, decision 3): while the
- * host calls into a datamodel outside a run (a request, an envelope,
- * hibernate, the telemetry takes, release in the ack, deliver, free), calls
+ * host calls into a datamodel outside a run (a request, hibernate, the
+ * telemetry takes, release in the ack and in an input, free), calls
  * back into the host follow the rules of a run (host.h, "During a run"):
  * send, spawn and terminate are taken, lookups answer, everything else is
  * refused. Each case wraps one entry of the ECMAScript datamodel with a C
@@ -14,7 +14,8 @@
 #include "../support/host_config.h"
 
 /* `a` and `b` are variables for actor.context; `out` sends a value to
- * another system; `self` sends a value to itself (a traced value). */
+ * another system (a SEND for the remote I/O processor); `self` sends a value
+ * to itself (a traced value). */
 #define CHART                                                                                      \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='guarded' "        \
     "initial='s'><datamodel><data id='a' expr='1'/><data id='b' expr='({x: 2})'/></datamodel>"     \
@@ -74,10 +75,6 @@ static ta_status to_wire(void *datamodel, ta_payload p, ta_bytes *out) {
     hook();
     return inner()->to_wire(datamodel, p, out);
 }
-static ta_status from_wire(void *datamodel, ta_bytes cbor, ta_payload *out) {
-    hook();
-    return inner()->from_wire(datamodel, cbor, out);
-}
 static ta_status variable(const ta_datamodel_call *call, ta_string_view name, ta_payload *out) {
     hook();
     return inner()->variable(call, name, out);
@@ -125,7 +122,8 @@ static ta_run run_once(world *w) {
     return result;
 }
 
-/* A host with the guarded chart, two actors of it and a peer for system b. */
+/* A host with the guarded chart, two actors of it and a remote I/O
+ * processor, which takes the sends to system b. */
 static void world_open(world *w, int telemetry) {
     memset(w, 0, sizeof *w);
     current = w;
@@ -133,7 +131,6 @@ static void world_open(world *w, int telemetry) {
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
     w->vtable = *w->binding.vtable;
     w->vtable.to_wire = to_wire;
-    w->vtable.from_wire = from_wire;
     w->vtable.variable = variable;
     w->vtable.serialize = serialize;
     w->vtable.payload_serialize = payload_serialize;
@@ -157,6 +154,10 @@ static void world_open(world *w, int telemetry) {
     }
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
+    static const ta_io_processor_descriptor remote = {
+        {"urn:test:remote", 15}, {"", 0}, TA_IO_PROCESSOR_REMOTE, 0};
+    config.io_processors = &remote;
+    config.io_processor_count = 1;
     config.allocator = (ta_allocator){NULL, counting_alloc, counting_free};
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
@@ -172,13 +173,6 @@ static void world_open(world *w, int telemetry) {
     CHECK_EQUAL(ta_host_spawn(w->host, &spawn, &w->session), TA_OK);
     spawn.name = (ta_string_view){"h", 1};
     CHECK_EQUAL(ta_host_spawn(w->host, &spawn, &w->other), TA_OK);
-    ta_peer_config peer;
-    memset(&peer, 0, sizeof peer);
-    peer.size = sizeof peer;
-    peer.flags = TA_PEER_TRUSTED;
-    peer.id = (ta_string_view){"b", 1};
-    uint32_t handle;
-    CHECK_EQUAL(ta_host_peer_add(w->host, &peer, &handle), TA_OK);
     ta_host_advance_time(w->host, (ta_host_time){1, 1700000000000000000ull});
     run_once(w);
 }
@@ -223,6 +217,9 @@ static void refused(world *w) {
     ta_host_location where; /* lookups answer */
     CHECK_EQUAL(ta_host_locate(w->host, w->other, &where), TA_OK);
     CHECK_EQUAL(ta_host_actor_by_name(w->host, (ta_string_view){"h", 1}), w->other);
+    uint64_t resolved = 0;
+    CHECK_EQUAL(ta_host_resolve(w->host, (ta_string_view){"tinyactors://a/@h", 17}, &resolved), TA_OK);
+    CHECK_EQUAL(resolved, w->other);
 }
 
 /* The inputs: an event for the other actor, and this actor terminated. */
@@ -262,60 +259,46 @@ static void test_request(void) {
     world_close(&w);
 }
 
-/* ---- ta_host_envelope: to_wire, and release in the ack -------------------------------- */
+/* ---- a SEND for the remote I/O processor: release in the ack ------------------------- */
 
-static void test_envelope_and_ack(void) {
+static void test_send_and_ack(void) {
     world w;
     world_open(&w, 0);
     send_event(&w, w.session, "out");
     ta_host_run(w.host, 100000);
     const ta_host_effect *effects;
-    uint32_t n = ta_host_effects(w.host, &effects), peer = n;
+    uint32_t n = ta_host_effects(w.host, &effects), send = n;
     for (uint32_t i = 0; i < n; i++)
-        if (effects[i].kind == TA_HOST_EFFECT_PEER) peer = i;
-    CHECK(peer < n);
-    if (peer < n) {
-        w.hook = refused;
-        ta_bytes out;
-        CHECK_EQUAL(ta_host_envelope(w.host, &effects[peer], &out), TA_OK);
-        CHECK_EQUAL(w.hooks, 1);
-        CHECK(out.length > 0);
-    }
-    w.hook = inputs; /* in the release of the PEER effect's payload */
+        if (effects[i].kind == TA_EFFECT_SEND && effects[i].payload) send = i;
+    CHECK(send < n);
+    w.hook = inputs; /* in the release of the SEND effect's payload */
     ta_host_effects_ack(w.host);
-    CHECK_EQUAL(w.hooks, 2);
+    CHECK_EQUAL(w.hooks, 1);
     run_once(&w);
     CHECK(!alive(&w, w.session));
     world_close(&w);
 }
 
-/* ---- deliver: from_wire ------------------------------------------------------------------ */
+/* ---- an input: release of an error.communication's payload --------------------------- */
 
-static void deliver_refused(world *w) {
-    refused(w);
-    ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
-    envelope.size = sizeof envelope;
-    envelope.target = (ta_string_view){"tinyactors://a/@h", 17};
-    envelope.name = (ta_string_view){"self", 4};
-    CHECK_EQUAL(ta_host_deliver(w->host, 0, &envelope), TA_ERROR_STATE);
-    send_event(w, w->other, "self");
-}
-
-static void test_deliver(void) {
+static void test_input(void) {
     world w;
     world_open(&w, 0);
-    ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
-    envelope.size = sizeof envelope;
-    envelope.target = (ta_string_view){"tinyactors://a/@g", 17};
-    envelope.name = (ta_string_view){"back", 4};
-    envelope.origin = (ta_string_view){"tinyactors://b/@x", 17};
-    envelope.msgid = (ta_string_view){"m1", 2};
-    envelope.wire = (ta_bytes){"\xa1\x61v\x01", 4}; /* {"v": 1} */
-    w.hook = deliver_refused;
-    CHECK_EQUAL(ta_host_deliver(w.host, 0, &envelope), TA_ROUTE_DELIVERED);
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.session = w.session;
+    event.flags = TA_EVENT_IN_ERROR_COMMUNICATION; /* a transport failing a send */
+    event.sendid = (ta_string_view){"m1", 2};
+    CHECK_EQUAL(ta_datamodel_ecmascript_payload_from_cbor(w.ecmascript, (ta_bytes){"\xa1\x61v\x01", 4},
+                                                          &event.data), /* {"v": 1} */
+                TA_OK);
+    w.hook = inputs; /* the event carries no value: its payload is released */
+    CHECK_EQUAL(ta_host_send(w.host, &event), TA_OK);
     CHECK_EQUAL(w.hooks, 1);
+    run_once(&w);
+    CHECK(!alive(&w, w.session));
+    CHECK(alive(&w, w.other));
     world_close(&w);
 }
 
@@ -393,18 +376,16 @@ static void test_free(void) {
 static void test_each_output_once(void) {
     world w;
     world_open(&w, 0);
+    to_wire_calls = 0;
     send_event(&w, w.session, "later"); /* a delayed send with a value */
-    send_event(&w, w.other, "out");     /* a PEER effect with a value */
+    send_event(&w, w.other, "out");     /* a SEND for the remote processor with a value */
     ta_host_run(w.host, 100000);
     const ta_host_effect *effects;
-    uint32_t n = ta_host_effects(w.host, &effects);
-    to_wire_calls = 0;
+    uint32_t n = ta_host_effects(w.host, &effects), send = n;
     for (uint32_t i = 0; i < n; i++)
-        if (effects[i].kind == TA_HOST_EFFECT_PEER) {
-            ta_bytes out;
-            CHECK_EQUAL(ta_host_envelope(w.host, &effects[i], &out), TA_OK);
-        }
-    CHECK_EQUAL(to_wire_calls, 1); /* the envelope's value, once */
+        if (effects[i].kind == TA_EFFECT_SEND && effects[i].payload) send = i;
+    CHECK(send < n);
+    CHECK_EQUAL(to_wire_calls, 0); /* the SEND's value stays a payload: the transport writes it */
     ta_host_effects_ack(w.host);
     serialize_calls = payload_serialize_calls = 0;
     ta_bytes out;
@@ -420,31 +401,22 @@ static int same_bytes(ta_bytes view, const unsigned char *copy, size_t length) {
     return view.length == length && memcmp(view.pointer, copy, length) == 0;
 }
 
-/* Two envelopes and a metrics request taken in one batch, with calls into the
- * host between them, all read after the last one; an output taken with no
- * batch open opens one: the run refuses and a take gives nothing until the
- * ack. */
+/* Traces, a metrics request and a hibernation blob taken in one batch, with
+ * calls into the host between them, all read after the last one; an output
+ * taken with no batch open opens one: the run refuses and a take gives
+ * nothing until the ack. */
 static void test_outputs_last_until_the_ack(void) {
     world w;
     world_open(&w, 1);
-    send_event(&w, w.session, "out");
-    send_event(&w, w.other, "out");
+    send_event(&w, w.session, "self");
     ta_host_run(w.host, 100000);
     const ta_host_effect *effects;
-    uint32_t n = ta_host_effects(w.host, &effects);
-    uint32_t peers[2], found = 0;
-    for (uint32_t i = 0; i < n && found < 2; i++)
-        if (effects[i].kind == TA_HOST_EFFECT_PEER) peers[found++] = i;
-    CHECK_EQUAL(found, 2u);
-    if (found != 2) {
-        world_close(&w);
-        return;
-    }
-    static unsigned char first_copy[4096], metrics_copy[1 << 16];
-    ta_bytes first, metrics, second;
-    CHECK_EQUAL(ta_host_envelope(w.host, &effects[peers[0]], &first), TA_OK);
-    CHECK(first.length > 0 && first.length <= sizeof first_copy);
-    memcpy(first_copy, first.pointer, first.length);
+    CHECK(ta_host_effects(w.host, &effects) > 0); /* the batch is open */
+    static unsigned char traces_copy[1 << 16], metrics_copy[1 << 16];
+    ta_bytes traces, metrics, blob;
+    CHECK_EQUAL(ta_host_traces(w.host, &traces), TA_OK);
+    CHECK(traces.length > 0 && traces.length <= sizeof traces_copy);
+    memcpy(traces_copy, traces.pointer, traces.length);
     CHECK_EQUAL(ta_host_metrics(w.host, &metrics), TA_OK);
     CHECK(metrics.length > 0 && metrics.length <= sizeof metrics_copy);
     memcpy(metrics_copy, metrics.pointer, metrics.length);
@@ -453,10 +425,11 @@ static void test_outputs_last_until_the_ack(void) {
     ta_bytes request;
     CHECK_EQUAL(ta_cbor_writer_bytes(&a.writer, &request), TA_OK);
     CHECK_EQUAL(ta_host_post(w.host, request), TA_OK);
-    CHECK_EQUAL(ta_host_envelope(w.host, &effects[peers[1]], &second), TA_OK);
-    CHECK(same_bytes(first, first_copy, first.length));
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.other, &blob), TA_OK);
+    CHECK(blob.length > 0);
+    CHECK(same_bytes(traces, traces_copy, traces.length));
     CHECK(same_bytes(metrics, metrics_copy, metrics.length));
-    CHECK(second.pointer != first.pointer && second.pointer != metrics.pointer);
+    CHECK(blob.pointer != traces.pointer && blob.pointer != metrics.pointer);
     ta_host_effects_ack(w.host);
     /* the post's REPLY waited for the next take */
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
@@ -554,8 +527,8 @@ static void test_closed_batch_during_release(void) {
 int main(void) {
     RUN(test_closed_batch_during_release);
     RUN(test_request);
-    RUN(test_envelope_and_ack);
-    RUN(test_deliver);
+    RUN(test_send_and_ack);
+    RUN(test_input);
     RUN(test_hibernate);
     RUN(test_traces);
     RUN(test_free);

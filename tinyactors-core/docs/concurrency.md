@@ -114,12 +114,12 @@ and let them address each other:
 ```
 
 - An actor's address is `tinyactors://<system>/#_scxml_<id>` (or
-  `.../@<name>`). A send to another system goes to the router in `ta_host`,
-  which hands it to the transport of the *peer* that reaches that system as
-  a `TA_HOST_EFFECT_PEER` effect; the transport (a queue between threads, a
-  socket, a `postMessage`, SQL) delivers it with `ta_host_deliver` on the
-  other side. Replies use `_event.origin`. See
-  [protocol.md](protocol.md) and section 6 below.
+  `.../@<name>`). A send to another system is a `TA_EFFECT_SEND` for the
+  I/O processor the config marks `"remote"`, your transport (a queue
+  between threads, a socket, a `postMessage`), which delivers it on the
+  other side with `ta_host_resolve` and `ta_host_send`, the sender's
+  address as origin. Replies use `_event.origin`. See
+  [protocol.md](protocol.md#other-systems).
 - Systems share nothing, so they need no locks between them. The only
   coordination is the hand-over of events, which you own.
 - A datamodel instance belongs to one thread at a time: give each system (or
@@ -133,42 +133,31 @@ and let them address each other:
 host (chart versions, segments) — on one thread. It is a convenience for
 hot reload and growth, not a parallelism mechanism.
 
-## 4. Between systems: what each transport guarantees
+## 4. Between systems: what the transport guarantees
 
 Inside one system, SCXML's rules hold exactly. Between systems there is no
 shared clock, no shared lock and no shared transaction, so the guarantees
-are those of the transport that carries the envelope — and every transport
-states them ([protocol.md](protocol.md), "Delivery"):
+are those of the transport the application runs as its remote I/O
+processor; core makes none of its own:
 
-| transport | order | duplicates | loss | errors back |
+| between | order | duplicates | loss | errors back |
 |---|---|---|---|---|
-| in-process (segments of one `ta_host`) | per sender and receiver | never | never | `error.communication` at once |
-| WebSocket (a transport the application runs) | per sender and receiver while connected; queued envelopes keep their order across a reconnect | never on one connection | possible if a process dies with envelopes in memory (at-most-once across crashes) | an error envelope → `error.communication`; queued past the TTL → `expired` |
+| segments of one `ta_host` | per sender and receiver | never | never | `error.communication` at once |
+| systems through the remote I/O processor | the transport's | the transport's | the transport's | the transport fails the send: `error.communication` with the `sendid` |
 
 What this means for you:
 
-- **Nothing is dropped silently.** An envelope that cannot be delivered —
-  unknown session or name, no route, refused by policy, queue full, expired —
-  becomes `error.communication` (with the `sendid`) in the session that sent
-  it, across any number of hops. Design charts to handle it.
-- **Order holds per pair, not globally.** Two envelopes from A to X arrive
-  in order; envelopes from A and from B to X interleave. Relays keep the
-  order of each pair.
-- **At-least-once needs idempotent receivers, and the router gives you
-  that.** Every envelope has a `msgid` (`<origin>/<counter>`), stable across
-  retries; each system keeps a dedup window (in its snapshots). An
-  application key can
-  replace it (`dedup`: "this payment, once").
+- **A send the transport cannot deliver is failed.** Answer the effect with
+  `TA_EVENT_IN_ERROR_COMMUNICATION` and its sendid, and the sender gets
+  `error.communication`. Design charts to handle it.
+- **Order, retries and duplicates are the transport's.** A transport that
+  retries needs receivers that tolerate a repeat; session ids restart in a
+  fresh host, so an application that keeps addresses across restarts says
+  how it tells incarnations apart.
 - **No distributed transactions.** A send to another system is never part of
-  a transaction spanning both. The envelope leaves after the step that sent
-  it; it reaches the other system some time later, and its reply is a new
-  event in a new step.
-  "My write and the event, together" is the local system's job; "exactly
-  once over there" is at-least-once plus dedup.
-- **Ephemeral peers resume.** A peer that reconnects with the same system
-  id gets what was queued for it (`TA_PEER_QUEUE`), in order; past the
-  queue's TTL the senders get `error.communication` (`expired`). The TTL
-  runs on the host's clock.
+  a transaction spanning both. It leaves after the step that sent it,
+  reaches the other system some time later, and its reply is a new event in
+  a new step. "My write and the event, together" is the local system's job.
 
 ## 5. What tinyactors never does
 

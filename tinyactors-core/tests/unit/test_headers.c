@@ -104,14 +104,6 @@ ABI_CHECK(offsetof(ta_system_stats, traces_started) > offsetof(ta_system_stats, 
 ABI_CHECK(offsetof(ta_chart_stats, size) == 0, chart_stats_size_first);
 ABI_CHECK(offsetof(ta_chart_stats, actors) == 8 + sizeof(ta_string_view),
           chart_stats_actors_offset);
-ABI_CHECK(offsetof(ta_route_request, size) == 0, route_request_size_first);
-ABI_CHECK(offsetof(ta_route_request, session) == 32, route_request_session_offset);
-ABI_CHECK(offsetof(ta_host_message, size) == 0, host_message_size_first);
-ABI_CHECK(offsetof(ta_host_message, revision) == 8, host_message_revision_offset);
-ABI_CHECK(offsetof(ta_host_message, envelope) == 16, host_message_envelope_offset);
-ABI_CHECK(offsetof(ta_envelope, size) == 0, envelope_size_first);
-ABI_CHECK(offsetof(ta_peer_config, size) == 0, peer_config_size_first);
-ABI_CHECK(offsetof(ta_peer_status, size) == 0, peer_status_size_first);
 /* trace values: plain integers, the same layout on every target */
 ABI_CHECK(sizeof(ta_trace_id) == 16, trace_id_size);
 ABI_CHECK(sizeof(ta_span_id) == 8, span_id_size);

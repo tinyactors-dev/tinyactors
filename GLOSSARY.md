@@ -96,8 +96,6 @@ group, the words build on each other.
   otherwise, and can time out. Each actor moved is a `MIGRATED` effect;
   the end is a `MIGRATION_DONE` effect that says how many moved, how many
   failed and which were left behind.
-- **Router.** The host's part that delivers a send to a session in
-  another segment, or out to a peer.
 - **Effects, take, ack.** The host's loop: *take* a batch of effects
   (`ta_host_effects`), *handle* them, *ack* the batch
   (`ta_host_effects_ack`), *run* again (`ta_host_run`). Everything the
@@ -154,9 +152,13 @@ group, the words build on each other.
   it from its old segment, adopt makes it run in the new one with the
   same session id. Internal: no host call hands an export blob out, and
   an actor does not move between hosts.
-- **Peer, envelope.** Another host this one exchanges events with, and
-  the CBOR message that carries an event between them. Within one
-  process the struct form is used and nothing is encoded.
+- **Other system, remote I/O processor.** A system with another system
+  id: another thread's host, another process, a browser. A send to its
+  address is a `SEND` for the I/O processor the config marks `"remote"`,
+  the application's transport, with the sender's address as *origin*;
+  what arrives is an input by address (`ta_host_resolve`) with that
+  origin. Transports, encodings and delivery guarantees are the
+  application's.
 - **Durability.** None of the above is durability. Keeping data is the
   application's database.
 

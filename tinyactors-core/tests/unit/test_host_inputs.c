@@ -282,17 +282,6 @@ static void refused(world *w) {
     ta_bytes out;
     CHECK_EQUAL(ta_host_hibernate(w->host, w->listener, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_snapshot(w->host, &room), TA_ERROR_STATE);
-    { /* envelopes across a process boundary */
-        static const unsigned char envelope[] = {0xa2, 0x66, 't', 'a', 'r', 'g', 'e', 't', 0x61, 'x',
-                                                 0x64, 'n',  'a', 'm', 'e', 0x61, 'e'};
-        ta_envelope read;
-        CHECK_EQUAL(ta_host_envelope_read(w->host, (ta_bytes){envelope, sizeof envelope}, &read),
-                    TA_ERROR_STATE);
-        ta_host_effect effect;
-        memset(&effect, 0, sizeof effect);
-        effect.kind = TA_HOST_EFFECT_PEER;
-        CHECK_EQUAL(ta_host_envelope(w->host, &effect, &out), TA_ERROR_STATE);
-    }
     CHECK_EQUAL(ta_host_post(w->host, (ta_bytes){"\xa1\x62op\x65stats", 9}),
                 TA_ERROR_STATE);
     uint32_t segment;
@@ -323,12 +312,10 @@ static void test_other_calls_are_refused(void) {
     world_close(&w);
 }
 
-/* ---- lookups, a peer's round trip, and free --------------------------------------------- */
+/* ---- lookups and free ------------------------------------------------------------------ */
 
-static uint32_t peer_handle;
-
-/* The lookups answer, a round trip is recorded, and ta_host_free does
- * nothing: the run goes on with the host it had. */
+/* The lookups answer, an address resolves, and ta_host_free does nothing:
+ * the run goes on with the host it had. */
 static void lookups_and_free(world *w) {
     ta_host_segment_info info;
     memset(&info, 0, sizeof info);
@@ -336,35 +323,23 @@ static void lookups_and_free(world *w) {
     CHECK_EQUAL(ta_host_segment_info_get(w->host, w->segment, &info), TA_OK);
     CHECK_EQUAL(info.actors, 2u);
     CHECK(ta_host_system(w->host, w->segment) != NULL);
-    ta_peer_status status;
-    memset(&status, 0, sizeof status);
-    status.size = sizeof status;
-    CHECK_EQUAL(ta_host_peer_status(w->host, peer_handle, &status), TA_OK);
+    uint64_t resolved = 0;
+    CHECK_EQUAL(ta_host_resolve(w->host, (ta_string_view){"tinyactors://h/@listener", 24}, &resolved),
+                TA_OK);
+    CHECK_EQUAL(resolved, w->listener);
     CHECK_EQUAL(ta_host_migration_pending(w->host, 1, (ta_uint64_array){NULL, 0}), 0u);
     CHECK_EQUAL(ta_host_effect_number(w->host, 0, TA_EFFECT_FIELD_KIND), 0u); /* no batch */
     CHECK_EQUAL(ta_host_effect_text(w->host, 0, TA_EFFECT_FIELD_EVENT).length, 0u);
-    ta_host_peer_round_trip_time(w->host, peer_handle, 42);
     ta_host_free(w->host);
 }
 
 static void test_lookups_answer_and_free_does_nothing(void) {
     world w;
     world_open(&w, 0);
-    ta_peer_config peer;
-    memset(&peer, 0, sizeof peer);
-    peer.size = sizeof peer;
-    peer.flags = TA_PEER_TRUSTED;
-    peer.id = (ta_string_view){"b", 1};
-    CHECK_EQUAL(ta_host_peer_add(w.host, &peer, &peer_handle), TA_OK);
     start(&w, lookups_and_free);
     CHECK_EQUAL(run_once(&w).status, TA_RUN_IDLE);
     CHECK_EQUAL(w.actions, 1);
     CHECK_STR(w.log, "internal;"); /* the macrostep went on */
-    ta_peer_status status;
-    memset(&status, 0, sizeof status);
-    status.size = sizeof status;
-    CHECK_EQUAL(ta_host_peer_status(w.host, peer_handle, &status), TA_OK);
-    CHECK_EQUAL(status.round_trip_time, 42u);
     ta_host_location where; /* the host is still there */
     CHECK_EQUAL(ta_host_locate(w.host, w.listener, &where), TA_OK);
     world_close(&w);

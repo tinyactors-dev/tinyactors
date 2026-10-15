@@ -6,16 +6,17 @@
  *   arena        a host over a fixed buffer, no malloc behind it: two
  *                segments, a send between them, a relocation, a migration.
  *   refusals     a workload that reaches every allocating path of the host
- *                (segments, relocation, routing between segments, the
- *                router's queue, migration, hibernation,
- *                delivery from a peer, expiry, restore) runs with an
- *                allocator that refuses its n-th allocation once. Each
- *                refusal comes back as TA_ERROR_NO_MEMORY or TA_RUN_EXHAUSTED,
- *                the step is retried, and the run ends with the same effects
- *                as one that was never refused: nothing lost or done twice.
- *                The fast pass refuses the first allocation of segment
- *                creation, of the router's queue growing and of relocation;
- *                --full refuses every allocation of the run, one per run. */
+ *                (segments, relocation, routing between segments, sends to
+ *                another system through the remote I/O processor, the
+ *                transport failing them back, inputs by address, migration,
+ *                hibernation, restore) runs with an allocator that refuses
+ *                its n-th allocation once. Each refusal comes back as
+ *                TA_ERROR_NO_MEMORY or TA_RUN_EXHAUSTED, the step is
+ *                retried, and the run ends with the same effects as one that
+ *                was never refused: nothing lost or done twice. The fast
+ *                pass refuses the first allocation of segment creation, of
+ *                the sends to another system and of relocation; --full
+ *                refuses every allocation of the run, one per run. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include <tinyactors/datamodel_ecmascript.h>
@@ -167,8 +168,7 @@ static void images_close(images *im) {
 }
 
 /* What a run did: its effects, as text, order-free (a refused run goes on in
- * the next, which may visit segments in another order). Message ids are left
- * out: a refused outbound send gets a new one when it is sent again. */
+ * the next, which may visit segments in another order). */
 typedef struct transcript {
     char **lines;
     uint32_t count, capacity;
@@ -287,6 +287,10 @@ static test_host_config workload_config(workload *w) {
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
     config.migrate_quantum = 2;
+    static const ta_io_processor_descriptor remote = {
+        {"urn:test:remote", 15}, {"", 0}, TA_IO_PROCESSOR_REMOTE, 0};
+    config.io_processors = &remote; /* the sends to system "far" */
+    config.io_processor_count = 1;
     config.allocator = memory_allocator(w->memory);
     return config;
 }
@@ -337,62 +341,54 @@ static void workload_run(workload *w) {
     RETRY(m, TA_OK, send_event(w, workers[0], "ask", nobody));
     run_idle(w, w->host);
 
-    /* the router: a peer that is down queues (the ring grows past 16), then flushes */
-    m->phase = "queue";
-    ta_peer_config peer_config;
-    memset(&peer_config, 0, sizeof peer_config);
-    peer_config.size = sizeof peer_config;
-    peer_config.flags = TA_PEER_QUEUE | TA_PEER_TRUSTED;
-    peer_config.id = (ta_string_view){"far", 3};
-    uint32_t far = 0;
-    RETRY(m, TA_OK, ta_host_peer_add(w->host, &peer_config, &far));
-    RETRY(m, TA_OK, ta_host_peer_up(w->host, far, 0));
+    /* another system: a SEND for the remote I/O processor each (more than
+     * the effect array holds at first) */
+    m->phase = "remote";
     for (int k = 0; k < 20; k++) {
         ta_payload data = json(w, "{\"to\": \"tinyactors://far/@x\"}");
         RETRY(m, TA_OK, send_event(w, workers[k % 4], "ask", data));
     }
     run_idle(w, w->host);
-    m->phase = "flush";
-    RETRY(m, TA_OK, ta_host_peer_up(w->host, far, 1));
-    collect(w, w->host);
-
-    /* expiry: a peer with a TTL, whose envelope fails back to its sender */
-    m->phase = "expiry";
-    peer_config.id = (ta_string_view){"slow", 4};
-    peer_config.queue_ttl = 10;
-    uint32_t slow = 0;
-    RETRY(m, TA_OK, ta_host_peer_add(w->host, &peer_config, &slow));
-    RETRY(m, TA_OK, ta_host_route(w->host, (ta_string_view){"slower", 6}, slow));
-    RETRY(m, TA_OK, ta_host_peer_up(w->host, slow, 0));
-    ta_payload data = json(w, "{\"to\": \"tinyactors://slower/@y\"}");
-    RETRY(m, TA_OK, send_event(w, workers[0], "ask", data));
-    run_idle(w, w->host);
-    ta_host_advance_time(w->host, (ta_host_time){100, 0}); /* (what it cannot report, the next run does) */
+    /* the transport fails them back to their senders (raised in place: no
+     * allocation of its own, swept with the sends in --full) */
+    for (int k = 0; k < 20; k++) {
+        ta_event_in failed;
+        memset(&failed, 0, sizeof failed);
+        failed.size = sizeof failed;
+        failed.session = workers[k % 4];
+        failed.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
+        RETRY(m, TA_OK, ta_host_send(w->host, &failed));
+    }
     run_idle(w, w->host);
 
-    /* delivery from a peer, deduplicated */
-    m->phase = "deliver";
+    /* inputs from another system: resolved by address, sent with their origin */
+    m->phase = "input";
     char target[96];
     snprintf(target, sizeof target, BASE "#_scxml_%llu", (unsigned long long)echoes[0]);
-    ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
-    envelope.size = sizeof envelope;
-    envelope.target = (ta_string_view){target, (uint32_t)strlen(target)};
-    envelope.name = (ta_string_view){"poke", 4};
-    envelope.origin = (ta_string_view){"tinyactors://far/#_scxml_9", 26};
-    envelope.msgid = (ta_string_view){"far-1", 5};
-    envelope.datamodel = TA_NIL;
-    RETRY(m, TA_ROUTE_DELIVERED, ta_host_deliver(w->host, far, &envelope));
-    RETRY(m, TA_ROUTE_DUPLICATE, ta_host_deliver(w->host, far, &envelope));
-    /* to a name nobody has, longer than the decoding buffer on the stack: an
-     * error back to the peer */
+    uint64_t resolved = 0;
+    CHECK_EQUAL(ta_host_resolve(w->host, (ta_string_view){target, (uint32_t)strlen(target)}, &resolved),
+                TA_OK);
+    CHECK_EQUAL(resolved, echoes[0]);
+    for (int k = 0; k < 40; k++) {
+        char origin[96];
+        snprintf(origin, sizeof origin, "tinyactors://far/#_scxml_%d-padding-so-the-pool-grows", k);
+        ta_event_in poke;
+        memset(&poke, 0, sizeof poke);
+        poke.size = sizeof poke;
+        poke.session = resolved;
+        poke.name = (ta_string_view){"poke", 4};
+        poke.origin = (ta_string_view){origin, (uint32_t)strlen(origin)};
+        RETRY(m, TA_OK, ta_host_send(w->host, &poke));
+    }
+    /* a name nobody has, longer than the decoding buffer on the stack: no
+     * session, and nothing allocated */
     char name[320] = BASE "@";
     size_t prefix = strlen(name);
     memset(name + prefix, 'n', 300);
-    envelope.target = (ta_string_view){name, (uint32_t)(prefix + 300)};
-    envelope.msgid = (ta_string_view){"far-2", 5};
-    RETRY(m, TA_ROUTE_REFUSED, ta_host_deliver(w->host, far, &envelope));
-    collect(w, w->host);
+    uint64_t before = m->count;
+    CHECK_EQUAL(ta_host_resolve(w->host, (ta_string_view){name, (uint32_t)(prefix + 300)}, &resolved),
+                TA_ERROR_STALE);
+    CHECK_EQUAL(m->count, before);
     run_idle(w, w->host);
 
     /* a new version, and every worker migrates to it */
@@ -529,8 +525,8 @@ static void test_refusals(void) {
     workload_once(&im, 0, &reference_memory, NULL, &reference);
     uint64_t total = reference_memory.count;
     /* every path the workload takes allocates */
-    const char *phases[] = {"new",    "segment", "relocation", "routing", "queue",
-                            "flush",  "expiry",  "deliver",    "migration", "restore"};
+    const char *phases[] = {"new",    "segment", "relocation", "routing",
+                            "remote", "input",   "migration",  "restore"};
     for (size_t i = 0; i < sizeof phases / sizeof phases[0]; i++)
         if (!phase_first(&reference_memory, phases[i])) {
             fprintf(stderr, "  phase %s allocates nothing\n", phases[i]);
@@ -542,8 +538,8 @@ static void test_refusals(void) {
         fprintf(stderr, "  refused each of %llu allocations, one per run\n",
                 (unsigned long long)total);
     } else {
-        /* segment creation, the router's queue growing, relocation */
-        const char *chosen[] = {"segment", "queue", "relocation"};
+        /* segment creation, the sends to another system, relocation */
+        const char *chosen[] = {"segment", "remote", "relocation"};
         for (size_t i = 0; i < 3; i++)
             workload_once(&im, phase_first(&reference_memory, chosen[i]), NULL, &reference, NULL);
     }
@@ -721,27 +717,43 @@ static void test_fixed_arena(void) {
 
 /* ---- the borrow of published effects ------------------------------------------------------ */
 
-/* An envelope from `peer` to a session nobody has: refused, and answered
- * with a TA_HOST_EFFECT_PEER_ERROR effect carrying origin, msgid and sendid. */
-static void refused_delivery(ta_host *host, uint32_t peer, int i) {
-    char msgid[96], sendid[64];
-    snprintf(msgid, sizeof msgid, "message-%04d-padding-so-the-string-pool-grows-quickly", i);
-    snprintf(sendid, sizeof sendid, "send-%04d", i);
-    ta_envelope envelope;
-    memset(&envelope, 0, sizeof envelope);
-    envelope.size = sizeof envelope;
-    envelope.target = (ta_string_view){"tinyactors://h/#_scxml_99", 25};
-    envelope.name = (ta_string_view){"e", 1};
-    envelope.origin = (ta_string_view){"tinyactors://far/#_scxml_7", 26};
-    envelope.msgid = (ta_string_view){msgid, (uint32_t)strlen(msgid)};
-    envelope.sendid = (ta_string_view){sendid, (uint32_t)strlen(sendid)};
-    envelope.datamodel = TA_NIL;
-    CHECK_EQUAL(ta_host_deliver(host, peer, &envelope), TA_ROUTE_REFUSED);
+/* A posted request whose reply carries a long id, made outside a run: a
+ * TA_HOST_EFFECT_REPLY effect whose WIRE echoes the id. */
+static void id_text(int i, char *out, size_t size) {
+    snprintf(out, size, "message-%04d-padding-so-the-pool-grows-quickly", i);
+}
+
+static void post_request(ta_host *host, int i) {
+    char id[96];
+    id_text(i, id, sizeof id);
+    unsigned char bytes[160];
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){bytes, sizeof bytes, 0}, NULL);
+    ta_cbor_write_map(&writer, 2);
+    ta_cbor_write_text(&writer, ta_string("id"));
+    ta_cbor_write_text(&writer, ta_string(id));
+    ta_cbor_write_text(&writer, ta_string("method"));
+    ta_cbor_write_text(&writer, ta_string("host.stats"));
+    ta_bytes message;
+    CHECK_EQUAL(ta_cbor_writer_bytes(&writer, &message), TA_OK);
+    CHECK_EQUAL(ta_host_post(host, message), TA_OK);
+}
+
+/* Whether a REPLY's WIRE holds the id of request `i`. */
+static int reply_has_id(const ta_host_effect *effect, int i) {
+    char id[96];
+    id_text(i, id, sizeof id);
+    size_t length = strlen(id);
+    if (effect->kind != TA_HOST_EFFECT_REPLY || effect->wire.length < length) return 0;
+    const unsigned char *wire = (const unsigned char *)effect->wire.pointer;
+    for (size_t at = 0; at + length <= effect->wire.length; at++)
+        if (memcmp(wire + at, id, length) == 0) return 1;
+    return 0;
 }
 
 /* What ta_host_effects returns stays valid until ta_host_effects_ack,
  * even when calls in between make so many effects
- * that the host's effect array and string pool have to grow. */
+ * that the host's effect array and pool have to grow. */
 static void test_published_effects_stay_valid(void) {
     test_memory m;
     memset(&m, 0, sizeof m);
@@ -752,44 +764,29 @@ static void test_published_effects_stay_valid(void) {
     config.allocator = memory_allocator(&m);
     ta_host *host = NULL;
     CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
-    ta_peer_config peer_config;
-    memset(&peer_config, 0, sizeof peer_config);
-    peer_config.size = sizeof peer_config;
-    peer_config.flags = TA_PEER_TRUSTED;
-    peer_config.id = (ta_string_view){"far", 3};
-    uint32_t peer = 0;
-    CHECK_EQUAL(ta_host_peer_add(host, &peer_config, &peer), TA_OK);
     for (int i = 0; i < 5; i++)
-        refused_delivery(host, peer, i);
+        post_request(host, i);
     const ta_host_effect *borrowed;
     uint32_t n = ta_host_effects(host, &borrowed);
     CHECK_EQUAL(n, 5);
     /* while they are borrowed: hundreds more, past the array's and the pool's capacity */
     for (int i = 5; i < 400; i++)
-        refused_delivery(host, peer, i);
-    for (uint32_t i = 0; i < n; i++) { /* (ASan: no read of freed memory) */
-        char msgid[96], sendid[64];
-        snprintf(msgid, sizeof msgid, "message-%04u-padding-so-the-string-pool-grows-quickly", i);
-        snprintf(sendid, sizeof sendid, "send-%04u", i);
-        CHECK_EQUAL(borrowed[i].kind, TA_HOST_EFFECT_PEER_ERROR);
-        CHECK(borrowed[i].msgid.length == strlen(msgid) &&
-              memcmp(borrowed[i].msgid.pointer, msgid, borrowed[i].msgid.length) == 0);
-        CHECK(borrowed[i].sendid.length == strlen(sendid) &&
-              memcmp(borrowed[i].sendid.pointer, sendid, borrowed[i].sendid.length) == 0);
-    }
+        post_request(host, i);
+    for (uint32_t i = 0; i < n; i++) /* (ASan: no read of freed memory) */
+        CHECK(reply_has_id(&borrowed[i], (int)i));
     ta_host_effects_ack(host); /* the five; the later ones stay for the next batch */
     const ta_host_effect *next;
     CHECK_EQUAL(ta_host_effects(host, &next), 395);
-    CHECK(next[0].sendid.length == 9 && memcmp(next[0].sendid.pointer, "send-0005", 9) == 0);
-    CHECK(next[394].sendid.length == 9 && memcmp(next[394].sendid.pointer, "send-0399", 9) == 0);
+    CHECK(reply_has_id(&next[0], 5));
+    CHECK(reply_has_id(&next[394], 399));
     ta_host_effects_ack(host);
     ta_host_free(host);
     CHECK(m.live_blocks == 0 && m.bad_frees == 0);
 }
 
-/* The string pool is reclaimed even when an effect is always left over at
- * the ack (one made after ta_host_effects): what the host holds stays
- * bounded by what is pending, not by everything ever produced. */
+/* The pool is reclaimed even when an effect is always left over at the ack
+ * (one made after ta_host_effects): what the host holds stays bounded by
+ * what is pending, not by everything ever produced. */
 static void test_pool_is_reclaimed_with_effects_pending(void) {
     test_memory m;
     memset(&m, 0, sizeof m);
@@ -800,29 +797,18 @@ static void test_pool_is_reclaimed_with_effects_pending(void) {
     config.allocator = memory_allocator(&m);
     ta_host *host = NULL;
     CHECK_EQUAL(test_host_new(&config, &host), TA_OK);
-    ta_peer_config peer_config;
-    memset(&peer_config, 0, sizeof peer_config);
-    peer_config.size = sizeof peer_config;
-    peer_config.flags = TA_PEER_TRUSTED;
-    peer_config.id = (ta_string_view){"far", 3};
-    uint32_t peer = 0;
-    CHECK_EQUAL(ta_host_peer_add(host, &peer_config, &peer), TA_OK);
-    refused_delivery(host, peer, 0);
+    post_request(host, 0);
     uint64_t settled = 0;
     for (int i = 1; i <= 4000; i++) {
         const ta_host_effect *effects;
         CHECK_EQUAL(ta_host_effects(host, &effects), 1);
-        refused_delivery(host, peer, i); /* made while the batch is borrowed: kept */
+        post_request(host, i); /* made while the batch is borrowed: kept */
         ta_host_effects_ack(host);
         if (i == 100) settled = m.live_bytes;
     }
     const ta_host_effect *last;
     CHECK_EQUAL(ta_host_effects(host, &last), 1); /* the one made last, intact */
-    CHECK(last[0].sendid.length == 9 && memcmp(last[0].sendid.pointer, "send-4000", 9) == 0);
-    char msgid[96];
-    snprintf(msgid, sizeof msgid, "message-%04d-padding-so-the-string-pool-grows-quickly", 4000);
-    CHECK(last[0].msgid.length == strlen(msgid) &&
-          memcmp(last[0].msgid.pointer, msgid, last[0].msgid.length) == 0);
+    CHECK(reply_has_id(&last[0], 4000));
     if (m.live_bytes != settled)
         fprintf(stderr, "  held %llu bytes after 100 rounds, %llu after 4000\n",
                 (unsigned long long)settled, (unsigned long long)m.live_bytes);

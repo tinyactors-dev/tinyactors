@@ -63,8 +63,8 @@ diagnostic notation.
 Why these defaults:
 
 - **`systemID` has none.** It is part of every address this system hands
-  out and of every envelope it sends, so two systems must never share one
-  by accident. Only the application can choose it.
+  out and of every origin it gives another system, so two systems must
+  never share one by accident. Only the application can choose it.
 - **`system`: the system's own defaults.** A 0 or an absent key means
   `ta_system_config`'s default, so a host and a system created alone have
   the same capacities, and the numbers are kept in one place.

@@ -350,7 +350,7 @@ The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects: their
 `WIRE` is a JSON-RPC notification, `{"method", "params"}`, their `EVENT`
 the method's name, and their `SESSION` the session it is about (0: none).
 They live until the ack, like every effect, and come with the next take after the run that appended them. A notification never stands
-for an effect a binding must act on (`WAKE`, `PEER`, `TRACES`, ... stay
+for an effect a binding must act on (`WAKE`, `SEND`, `TRACES`, ... stay
 effects of their own).
 
 No notification is defined. An application reads a session's state with
@@ -371,8 +371,7 @@ These stay C calls:
 - **Calls that need no host:** `ta_host_snapshot_unpack`, `_image` and
   `_segments` read a snapshot before a host exists.
 - **Lookups that spawning and routing use:** `ta_host_chart`,
-  `ta_host_locate` and `ta_host_actor_by_name`.
-- **The router's calls:** peers, routes and exports, which a transport makes.
+  `ta_host_locate`, `ta_host_actor_by_name` and `ta_host_resolve`.
 
 ## Adding a method
 

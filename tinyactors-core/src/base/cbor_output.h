@@ -1,6 +1,6 @@
 /* base/cbor_output.h — CBOR written straight into an output (base/output.h),
- * item by item, for core's own replies and envelopes (src/host/request.c,
- * src/host/router.c). Shortest heads, as the CBOR writer writes them. */
+ * item by item, for core's own replies (src/host/request.c,
+ * the host). Shortest heads, as the CBOR writer writes them. */
 #ifndef TINYACTORS_BASE_CBOR_OUTPUT_H
 #define TINYACTORS_BASE_CBOR_OUTPUT_H
 #include <tinyactors/types.h>
