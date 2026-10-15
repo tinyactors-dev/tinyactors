@@ -4,8 +4,9 @@
 
 # The repository is private, so its GitHub releases page is not a place to
 # send readers: the site serves the release files itself. This task finds
-# the latest published `staticjs/v<version>` release through GitHub's REST
-# API (`gh api`, with the credentials of `gh auth login` or GH_TOKEN),
+# the latest release of staticjs's release repository, tagged `v<version>`,
+# through GitHub's REST API (`gh api`, with the credentials of
+# `gh auth login` or GH_TOKEN),
 # downloads each of its assets into site/public/download/<version>/, checks
 # every file against the release's SHA256SUMS, and writes
 # site/.vitepress/release.json: the version, the date, and each file's
@@ -17,9 +18,9 @@ require 'digest'
 require 'fileutils'
 require 'json'
 require 'open3'
+require 'release'
 
-REPOSITORY = 'tinyactors-dev/tinyactors'
-PREFIX = 'staticjs/v'
+REPOSITORY = Release.release_repository('staticjs')
 
 def gh(*args, binary: false)
   out, err, status = Open3.capture3('gh', 'api', *args, binmode: binary)
@@ -27,13 +28,11 @@ def gh(*args, binary: false)
   out
 end
 
-releases = JSON.parse(gh('--paginate', '--slurp', "repos/#{REPOSITORY}/releases")).flatten
-release = releases
-          .reject { |r| r['draft'] || r['prerelease'] }
-          .select { |r| r['tag_name'].start_with?(PREFIX) && r['tag_name'][PREFIX.length..].match?(/\A\d+\.\d+\.\d+\z/) }
-          .max_by { |r| r['tag_name'][PREFIX.length..].split('.').map(&:to_i) }
-abort "site:release: no published #{PREFIX}<version> release in #{REPOSITORY}" if release.nil?
-version = release['tag_name'][PREFIX.length..]
+# The latest release: GitHub's, which is neither a draft nor a prerelease.
+release = JSON.parse(gh("repos/#{REPOSITORY}/releases/latest"))
+version = release['tag_name'].delete_prefix('v')
+abort "site:release: #{REPOSITORY}'s latest release is #{release['tag_name']}, not v<version>" unless
+  version.match?(/\A\d+\.\d+\.\d+\z/)
 
 site = StaticJS::ROOT.join('site')
 dir = site.join('public/download', version)

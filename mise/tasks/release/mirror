@@ -1,0 +1,79 @@
+#!/usr/bin/env ruby
+#MISE description="Publish a release tag of this repository as a GitHub release of its component's release repository: push the directory's snapshot, then create the release with the tag's notes and the given assets"
+#USAGE arg "<tag>" help="The release tag here, <directory>/v<version> (tinyxml/v0.1.0)"
+#USAGE flag "--assets <dir>" help="The release's files (with their SHA256SUMS), as a release task left them in build/release/; without it, the assets of this repository's own GitHub release of the tag"
+# vim:ft=ruby
+
+# Two uses (docs/adr/0016-a-release-repository-per-component.md):
+#
+#   mise run release:mirror -- tinyxml/v0.1.0
+#     copies a release made before the release repositories existed: its
+#     title, notes and assets from this repository's GitHub release;
+#   mise run release:mirror -- staticjs/v0.10.0 --assets staticjs/build/release/0.10.0/assets
+#     finishes a release whose tag is pushed but whose GitHub release was
+#     not made: the notes are the tag's message, the files those built.
+#
+# Either way the snapshot goes first (Release.push_snapshot!), so the
+# release repository's tag holds the directory as tagged, and a release
+# that exists already is left as it is. Run it again after a stop.
+
+require 'json'
+require 'release'
+
+tag = ENV['usage_tag'] || ARGV[0]
+assets_dir = ENV['usage_assets'].to_s.empty? ? nil : ENV['usage_assets']
+assets_dir ||= ARGV[ARGV.index('--assets') + 1] if ARGV.include?('--assets')
+Release.fail!('usage: mise run release:mirror -- <directory>/v<version> [--assets <dir>]') unless tag
+directory, version = Release.split_tag(tag)
+
+unless Release::REPO.join(directory).directory?
+  Release.fail!("#{directory}/ is not in the repository any more; its releases stay where they are")
+end
+Release.git('fetch', '--quiet', '--tags', 'origin') or Release.fail!('git fetch origin failed')
+Release.fail!("origin has no tag #{tag}; a release is pushed before it is published") unless Release.pushed?(tag)
+
+repository, release_tag = Release.push_snapshot!(tag)
+if Release.released?(repository, release_tag)
+  puts "release:mirror: #{repository} has the release #{release_tag} already; left as it is"
+  exit
+end
+
+Dir.mktmpdir('release-mirror') do |tmp|
+  tmp = Pathname.new(tmp)
+  notes = tmp.join('notes.md')
+  if assets_dir
+    dir = Pathname.new(assets_dir).expand_path(Release::REPO)
+    Release.fail!("#{assets_dir} is not a directory") unless dir.directory?
+    message = Release.git('for-each-ref', "refs/tags/#{tag}", '--format=%(contents)').to_s
+    Release.fail!("#{tag} has no message to take the notes from") if message.strip.empty?
+    title = message[/\A# (.+)$/, 1] || "#{directory} #{version}"
+    notes.write(message)
+  else
+    out, status = Open3.capture2('gh', 'release', 'view', tag, '--repo', Release::MONOREPO, '--json', 'name,body')
+    Release.fail!("#{Release::MONOREPO} has no GitHub release #{tag}; pass --assets") unless status.success?
+    source = JSON.parse(out)
+    title = source['name'].to_s.empty? ? "#{directory} #{version}" : source['name']
+    notes.write(source['body'].to_s)
+    dir = tmp.join('assets')
+    Release.run('gh', 'release', 'download', tag, '--repo', Release::MONOREPO, '--dir', dir.to_s)
+  end
+
+  # With a SHA256SUMS, the files it lists and itself, each checked (a
+  # release task's directory holds its notes too); without, every file.
+  sums = dir.join('SHA256SUMS')
+  if sums.file?
+    listed = sums.readlines.to_h { |line| line.split.reverse }
+    files = listed.map do |name, expected|
+      file = dir.join(name)
+      Release.fail!("#{name} does not match SHA256SUMS") unless file.file? && Digest::SHA256.file(file).hexdigest == expected
+      file
+    end
+    files = [*files.sort, sums]
+  else
+    files = dir.children.select(&:file?).sort
+  end
+  Release.fail!("#{dir} has no files") if files.empty?
+  Release.run('gh', 'release', 'create', release_tag, '--repo', repository, '--verify-tag', '--title', title,
+              '--notes-file', notes.to_s, *files.map(&:to_s))
+  puts "release:mirror: #{tag} is #{repository}'s release #{release_tag}, with #{files.size} files"
+end

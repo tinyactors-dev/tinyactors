@@ -6,8 +6,8 @@ the browser is in [wasm.md](wasm.md).
 
 ## 1. Get a release
 
-Releases are on the repository's GitHub releases page, tagged
-`staticjs/v<version>`. Each one has these assets:
+Releases are on the GitHub releases page of `tinyactors-dev/staticjs`,
+tagged `v<version>`. Each one has these assets:
 
 | Asset | What it holds | Use it to |
 |---|---|---|

@@ -24,6 +24,8 @@ laid out how each library and the addon would ship. It was discussed on
    `amalgamate` and `dist` already do instead of a second build system.
 3. **Each project is released on its own**, with its own version and tag
    (`tinyxml/v0.2.0`, `tinyactors-core/v0.1.0`, `tinyactors-napi/v0.1.0`).
+   Its GitHub releases are in a release repository of its own
+   ([ADR 0016](0016-a-release-repository-per-component.md), 2026-10-15).
 4. **What a C-only project ships:** its public header; a source-only
    amalgamation; a `wasm32-freestanding` build, one standalone `.wasm`
    module and no archive of wasm objects; a static and a dynamic library

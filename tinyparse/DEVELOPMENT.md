@@ -364,15 +364,15 @@ of the build machine ends up in them, and then checks:
 unpack and run what it built, so the tarballs are the files the suite tested.
 
 Nothing publishes a release. `mise run release` builds the tarballs and
-stops, and three pieces a published release needs are missing:
+stops. A published release would be tagged `tinyparse/v<version>` in the
+monorepo and released as `v<version>` in tinyparse's release repository,
+`tinyactors-dev/tinyparse`, which is where [`install.sh`](install.sh)
+downloads from (the monorepo's `Release.push_and_release!` pushes a tag
+made before it, then publishes it there). Two pieces it needs are missing:
 
-- **Tags.** [`install.sh`](install.sh) downloads from a GitHub release tagged
-  `tinyparse-v<version>`. The monorepo tags a component release
-  `<directory>/v<version>`, which for tinyparse is `tinyparse/v<version>`. One
-  of the two has to change before `install.sh` can find a release.
 - **A changelog.** A component release in the monorepo needs a section in the
   component's `CHANGELOG.md` that `mise run changelog:check` accepts.
   tinyparse has no `CHANGELOG.md` and is not listed in `COMPONENTS` in the
   monorepo's `mise/lib/changelog/components.rb`.
-- **A release job.** The monorepo's `mise run test` runs tinyparse's tests,
-  but no job builds and uploads the tarballs when a tag is pushed.
+- **A publish step.** tinyparse's `mise run release` packs the tarballs but
+  neither tags it nor calls `Release.push_and_release!`.

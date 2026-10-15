@@ -22,7 +22,7 @@ Pick a route; each needs different tools:
 | Amalgamation | `tinyparse.h`, `tinyparse.c` and `tinyparse_cli.c`, to compile yourself | A C11 compiler |
 | `tinyparse init` and `tinyparse vendor` | `init`: a starter project, with the amalgamation unless `--lib` is given. `vendor`: the amalgamation, or with `--lib` only the header | A `tinyparse` command from another route and a C compiler |
 
-A tarball comes from a GitHub release of the repository or from a source
+A tarball comes from a GitHub release of `tinyactors-dev/tinyparse` or from a source
 tree, where `mise run release` writes one per target to `dist/release/`.
 Each route below says which directory its commands run in.
 
@@ -85,18 +85,19 @@ into a prefix, as the steps above do. It is in the `tinyparse/` directory of
 a source tree.
 
 Without `--from-file`, the script downloads
-`tinyparse-<version>-<target>.tar.gz` from the GitHub release tagged
-`tinyparse-v<version>`, so the download works only once such a release is
-published. On 2026-10-04 the repository had none, and `--from-file` with a
-tarball built by `mise run release` was the working route. The script picks
+`tinyparse-<version>-<target>.tar.gz` from the release tagged `v<version>`
+in tinyparse's release repository, `tinyactors-dev/tinyparse`, so the
+download works only once such a release is published. Until then,
+`--from-file` with a tarball built by `mise run release` is the working
+route. The script picks
 the target from `uname`, supports Linux on x86-64 and macOS on arm64, and
 exits with status 1 on any other system.
 
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `--prefix DIR` | `$HOME/.local` | Where `bin`, `include`, `lib` and `share` go. |
-| `--version VER` | the latest release of the repository | The version to download, such as `0.1.0`. Without it the script takes the tag of the repository's latest release, which can belong to another component of the repository. |
-| `--repo OWNER/REPO` | `tinyactors-dev/tinyactors` | The GitHub repository to download from. |
+| `--version VER` | the latest release of the repository | The version to download, such as `0.1.0`. |
+| `--repo OWNER/REPO` | `tinyactors-dev/tinyparse` | The GitHub repository to download from. |
 | `--from-file FILE` | none | Install `FILE` and download nothing. |
 
 1. From the `tinyparse/` directory, install a tarball you have:

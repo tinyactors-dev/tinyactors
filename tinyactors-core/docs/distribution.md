@@ -3,8 +3,10 @@
 One release is built today, by `mise run release` in `tinyactors-core`, as
 [ADR 0001](../../docs/adr/0001-packaging-and-releases.md) lays out: **the C
 libraries** libtinyactors, libtinyactors_runtime and
-libtinyactors_datamodel_ecmascript, released together on GitHub and tagged
-`tinyactors-core/v<version>`. Version 0.2.0 was released on 2026-10-06.
+libtinyactors_datamodel_ecmascript, released together, tagged
+`tinyactors-core/v<version>` in the monorepo and published as `v<version>`
+on the GitHub releases page of `tinyactors-dev/tinyactors-core`. Version
+0.2.0 was released on 2026-10-06.
 
 `@tinyactors/node`, the Node.js binding on npm (tags
 `tinyactors-napi/v<version>`, also 0.2.0), is not built:

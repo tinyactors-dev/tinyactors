@@ -47,7 +47,7 @@ are loaded with `require_relative`.
 | `task_stamp` | Forces a task whose declared outputs were deleted |
 | `platform_files` | Which `src/` files a target builds, by file name suffix |
 | `c_release` | `dist` and the C libraries' release |
-| `release` | Tags, notes and the GitHub release every project shares |
+| `release` | Tags, notes, the release repositories and the GitHub release every project shares |
 | `build_scripts` | The list of build scripts, and their static analysis |
 | `c_header` | A C header's declarations, read with ast-grep's C parser |
 | `acronym_case` | The acronym check |
@@ -168,8 +168,21 @@ all of them are released under one tag. The stages:
    the wasm module's imports and exports, and its test.
 5. **Pack:** deterministic tarballs (pinned GNU tar and gzip), a manifest
    per library and one `SHA256SUMS`.
-6. **Publish** (`--publish`): push the commit and tag, then the GitHub
-   release.
+6. **Publish** (`--publish`): push the commit and tag, then a snapshot of
+   the project's directory to its release repository (`tinyxml/` to
+   `tinyactors-dev/tinyxml`), tagged `v<version>`, and the GitHub release
+   there.
+
+The monorepo keeps every release's tag (`tinyxml/v0.2.0`), which the
+changelogs and the next version read; the GitHub releases are in the
+release repositories, one per project, so each has its own releases page
+and latest release. A release repository holds one commit per release,
+whose tree is the project's directory at the tag and whose parent is the
+previous release's. `Release.push_and_release!` creates the repository
+the first time, and every step of the publish can run again after a stop.
+`mise run release:mirror -- <tag>` publishes a tag that is pushed but not
+released: a release copied from the monorepo's own releases page, or one
+whose publish stopped (with `--assets <dir>`).
 
 `dist` is the host case: each project publishes its header, amalgamation,
 API description and a host archive into `dist/`, for the other projects

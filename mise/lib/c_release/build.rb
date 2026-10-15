@@ -112,20 +112,23 @@ module CRelease
     end.join('.')
   end
 
-  # Downloads `dependency`'s published release of its version at HEAD into
+  # Downloads `dependency`'s published release of its version at HEAD, from
+  # its release repository (Release.release_repository), into
   # <out>/dependencies/<name>/, checks every file against its SHA256SUMS,
   # unpacks it, and fails unless the published header, amalgamation and API
   # description equal HEAD's. Answers { name:, version:, api:, targets: {
   # target name => unpacked directory } }.
   def fetch_dependency!(dependency, out)
     version = dependency_version(dependency)
-    tag = "#{dependency.directory}/v#{version}"
+    repository = Release.release_repository(dependency.directory)
+    tag = "#{repository} v#{version}"
     base = "#{dependency.name}-#{version}"
     dir = out.join('dependencies', dependency.name)
     FileUtils.rm_rf(dir)
     FileUtils.mkdir_p(dir)
     wanted = ["#{base}.json", 'SHA256SUMS', "#{base}-src.tar.gz", *NATIVE_TARGETS.map { |name| "#{base}-#{name}.tar.gz" }]
-    capture!('gh', 'release', 'download', tag, '--dir', dir, *wanted.flat_map { |file| ['--pattern', file] })
+    capture!('gh', 'release', 'download', "v#{version}", '--repo', repository, '--dir', dir,
+             *wanted.flat_map { |file| ['--pattern', file] })
     sums = dir.join('SHA256SUMS').read.lines.to_h { |line| line.split.reverse }
     wanted.reject { |file| file == 'SHA256SUMS' }.each do |file|
       expected = sums[file] or release_fail!("#{tag}: SHA256SUMS does not list #{file}")
@@ -616,7 +619,9 @@ module CRelease
   #    target, the wasm module's interface and its test;
   # 5. pack: deterministic tarballs, a manifest per library and one
   #    SHA256SUMS in build/release/<version>/assets/;
-  # 6. publish (--publish): push the commit and tag, then the GitHub release.
+  # 6. publish (--publish): push the commit and tag, then the snapshot to
+  #    the project's release repository and the GitHub release there
+  #    (Release.push_and_release!).
   #
   # A failure after the commit and tag, before anything is pushed, undoes
   # them. The first library's version macros are the release's.
@@ -669,6 +674,7 @@ module CRelease
     changed = []
     committed = false
     tagged = false
+    pushing = false # from the push on, origin may have the tag
     pushed = false
     begin
       # 2. Version.
@@ -708,11 +714,15 @@ module CRelease
       end
 
       # 6. Publish.
+      pushing = true
       Release.push_and_release!(tag: tag, title: title, notes_file: notes, assets: assets_list)
       pushed = true
       puts "release: published #{libraries.map(&:name).join(' and ')} #{version}, tagged #{tag}"
     ensure
-      if tagged && !pushed
+      if tagged && !pushed && pushing && Release.pushed?(tag) != false
+        warn "release: #{tag} may be on origin, so the local commit and tag stay; check, and finish with: " \
+             "mise run release:mirror -- #{tag} --assets #{out.join('assets').relative_path_from(Release::REPO)}"
+      elsif tagged && !pushed
         if committed
           Release.undo_commit_and_tag!(subject: subject, tag: tag)
         else

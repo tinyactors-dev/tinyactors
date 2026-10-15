@@ -8,7 +8,7 @@
 #
 #   --prefix DIR      install root (default: $HOME/.local)
 #   --version VER     release version (default: latest GitHub release)
-#   --repo OWNER/REPO GitHub repository (default: tinyactors-dev/tinyactors)
+#   --repo OWNER/REPO GitHub repository (default: tinyactors-dev/tinyparse)
 #   --from-file FILE  install from a local tarball; skips all network access
 #
 # The result is a prefix-shaped tree:
@@ -19,7 +19,7 @@
 set -eu
 
 PREFIX="${HOME:-}/.local"
-REPO="tinyactors-dev/tinyactors"
+REPO="tinyactors-dev/tinyparse"
 VERSION=""
 FROM_FILE=""
 
@@ -98,7 +98,7 @@ fetch_stdout() {
 
 # ---------------------------------------------------------------------------
 # resolve_latest_version REPO: query the GitHub API for the latest release tag
-# and strip a leading `tinyparse-v` to get the bare version.
+# and strip its leading `v` to get the bare version.
 # ---------------------------------------------------------------------------
 resolve_latest_version() {
   repo="$1"
@@ -109,9 +109,7 @@ resolve_latest_version() {
     | head -n 1 \
     | sed -e 's/.*"tag_name"[[:space:]]*:[[:space:]]*"//' -e 's/".*//')"
   [ -n "$tag" ] || die "could not read tag_name from $api response"
-  # Strip a leading tinyparse-v (or a bare leading v) to get the version.
-  ver="${tag#tinyparse-v}"
-  ver="${ver#v}"
+  ver="${tag#v}"
   [ -n "$ver" ] || die "could not derive a version from tag '$tag'"
   echo "$ver"
 }
@@ -145,7 +143,7 @@ else
   log "version: $VERSION"
 
   ASSET="tinyparse-$VERSION-$PLAT.tar.gz"
-  URL="https://github.com/$REPO/releases/download/tinyparse-v$VERSION/$ASSET"
+  URL="https://github.com/$REPO/releases/download/v$VERSION/$ASSET"
   TARBALL="$TMPDIR_INSTALL/$ASSET"
   log "downloading $URL"
   fetch "$URL" "$TARBALL" \

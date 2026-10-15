@@ -11,8 +11,19 @@ require 'tmpdir'
 # Conventional Commits, SHA256SUMS, the npm and PyPI credentials and the GitHub
 # release. A project's task says what to build and publish; this module
 # knows nothing about any one project.
+#
+# Development happens in this repository, which keeps every release's tag
+# (`tinyxml/v0.2.0`). A project's GitHub releases are in a repository of
+# its own, named after its directory (tinyactors-dev/tinyxml), which holds
+# one snapshot commit of the directory per release, tagged `v0.2.0`
+# (docs/adr/0016-a-release-repository-per-component.md).
 module Release
   REPO = Pathname.new(__dir__).join('../..').expand_path
+
+  # The GitHub organization of this repository and of the release
+  # repositories.
+  ORG = 'tinyactors-dev'
+  MONOREPO = "#{ORG}/tinyactors"
 
   # The commit author's trailer on every commit a release makes.
   TRAILER = 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
@@ -24,12 +35,18 @@ module Release
   end
 
   # Runs `command`, streaming its output; fails the release when it fails.
+  # A URL's credentials are left out of what is printed.
   def run(*command, chdir: REPO, env: {})
-    puts "$ #{command.join(' ')}"
+    shown = redact(command.join(' '))
+    puts "$ #{shown}"
     pid = Process.spawn(env, *command, chdir: chdir.to_s)
     _pid, status = Process.wait2(pid)
-    fail!("#{command.join(' ')} failed") unless status.success?
+    fail!("#{shown} failed") unless status.success?
   end
+
+  # `text` without the user and password of any URL in it
+  # (`https://x-access-token:...@github.com/...`).
+  def redact(text) = text.gsub(%r{(\w+://)[^/@\s]+@}, '\1')
 
   # `git` in the repository; answers stdout, or nil when git fails.
   def git(*args)
@@ -277,10 +294,155 @@ module Release
     run('git', 'tag', '--annotate', '--cleanup=verbatim', tag, '--file', notes_file.to_s)
   end
 
-  # Pushes main and the tag, then creates the GitHub release with `assets`.
+  # Whether origin has `tag`, so a release whose push went through is not
+  # undone: nil when origin cannot be asked.
+  def pushed?(tag)
+    remote = git('ls-remote', '--tags', 'origin', "refs/tags/#{tag}") or return nil
+    !remote.strip.empty?
+  end
+
+  # Pushes `tag` to origin, with main when the tag's commit is not on
+  # origin's main yet, in one atomic push: both refs or neither. When it is
+  # (a publish run again after another session pushed to main), only the
+  # tag goes, so a local main that is behind is not pushed.
+  def push_to_origin!(tag)
+    git('fetch', '--quiet', 'origin', 'main') or fail!('git fetch origin main failed')
+    if system('git', 'merge-base', '--is-ancestor', "#{tag}^{commit}", 'origin/main', chdir: REPO.to_s)
+      run('git', 'push', 'origin', "refs/tags/#{tag}")
+    else
+      run('git', 'push', '--atomic', 'origin', 'main', "refs/tags/#{tag}")
+    end
+  end
+
+  # Whether `repository` has the GitHub release `release_tag`. A draft,
+  # which `gh release create` leaves when an upload fails, fails the
+  # release: its files are not all there.
+  def released?(repository, release_tag)
+    out, status = Open3.capture2('gh', 'release', 'view', release_tag, '--repo', repository, '--json', 'isDraft',
+                                 err: File::NULL)
+    return false unless status.success?
+    return true unless out.include?('"isDraft":true')
+
+    fail!("#{repository}'s release #{release_tag} is a draft, left by a stopped upload; delete it " \
+          "(gh release delete #{release_tag} --repo #{repository}) and run the publish again")
+  end
+
+  # A release tag of this repository, `<directory>/v<version>`, split into
+  # its directory and version.
+  def split_tag(tag)
+    directory, version = tag.split(%r{/v(?=[^/]*\z)}, 2)
+    fail!("#{tag.inspect} is not a release tag (<directory>/v<version>)") if version.nil? || directory.empty?
+    parse_version(version)
+    [directory, version]
+  end
+
+  # The repository that holds the GitHub releases of `directory`.
+  def release_repository(directory) = "#{ORG}/#{directory}"
+
+  # The git URL of `repository`, written as origin's is (HTTPS or SSH), so
+  # it uses the same credentials.
+  def repository_url(repository)
+    origin = git('remote', 'get-url', 'origin').to_s.strip
+    url = origin.sub(%r{#{Regexp.escape(MONOREPO)}(\.git)?/?\z}) { "#{repository}#{Regexp.last_match(1)}" }
+    fail!("origin is #{origin.inspect}, not #{MONOREPO}") if url == origin
+
+    url
+  end
+
+  # Creates `repository`, private like this one (ADR 0001, decision 13),
+  # without issues or a wiki: those stay in this repository. Nothing when
+  # it exists.
+  def ensure_release_repository!(repository, directory)
+    return if system('gh', 'repo', 'view', repository, '--json', 'name', out: File::NULL, err: File::NULL)
+
+    run('gh', 'repo', 'create', repository, '--private', '--disable-issues', '--disable-wiki',
+        '--description', "Releases of #{directory}/ from #{MONOREPO}, where it is developed")
+  end
+
+  # The tags of the repository at `url`, as { name => commit }.
+  def remote_tags(url)
+    out = git('ls-remote', '--tags', url) or fail!("git ls-remote #{redact(url)} failed")
+    out.lines.each_with_object({}) do |line, tags|
+      sha, ref = line.split
+      name = ref.delete_prefix('refs/tags/')
+      peeled = name.end_with?('^{}')
+      name = name.delete_suffix('^{}')
+      tags[name] = sha if peeled || !tags.key?(name)
+    end
+  end
+
+  # Pushes the snapshot of `tag` (`<directory>/v<version>`) to the
+  # directory's release repository, creating it when it is missing: one
+  # commit whose tree is the directory's tree at the tag and whose parent
+  # is the release repository's main (none for the first), with the tagged
+  # commit's author, committer and dates, pushed as main and tagged
+  # `v<version>`. Answers the repository and that tag.
+  #
+  # It can run again: when the release repository has the tag with the same
+  # tree, nothing is pushed, and with another tree it fails. A version not
+  # above the release repository's latest is refused, so its main only
+  # moves forward.
+  def push_snapshot!(tag)
+    directory, version = split_tag(tag)
+    repository = release_repository(directory)
+    release_tag = "v#{version}"
+    commit = git('rev-parse', '--verify', '--quiet', "#{tag}^{commit}").to_s.strip
+    fail!("there is no tag #{tag}") if commit.empty?
+    tree = git('rev-parse', '--verify', '--quiet', "#{commit}:#{directory}").to_s.strip
+    fail!("#{tag} has no directory #{directory}/") if tree.empty?
+
+    ensure_release_repository!(repository, directory)
+    url = repository_url(repository)
+    tags = remote_tags(url)
+    if (existing = tags[release_tag])
+      run('git', 'fetch', '--quiet', '--no-tags', url, "refs/tags/#{release_tag}")
+      unless git('rev-parse', "#{existing}^{tree}").to_s.strip == tree
+        fail!("#{repository} has #{release_tag} with a tree other than #{directory}/ at #{tag}")
+      end
+      puts "release: #{repository} has #{release_tag} already, with #{directory}/ at #{tag}"
+      return [repository, release_tag]
+    end
+    released = tags.keys.filter_map { |name| name[1..] if name.start_with?('v') && VERSION.match?(name[1..]) }
+    latest = released.max { |a, b| compare_versions(a, b) }
+    if latest && compare_versions(version, latest) <= 0
+      fail!("#{repository}'s latest release is v#{latest}; #{release_tag} would move its main back " \
+            '(copy a release made before the release repositories before the next one is published)')
+    end
+
+    parent = git('ls-remote', url, 'refs/heads/main').to_s.split.first
+    run('git', 'fetch', '--quiet', '--no-tags', url, 'refs/heads/main') if parent
+    snapshot = commit_tree!(tree: tree, parent: parent, from: commit,
+                            message: "#{directory} #{version}\n\n#{directory}/ at #{tag} in #{MONOREPO} (#{commit}).\n")
+    run('git', 'push', '--atomic', url, "#{snapshot}:refs/heads/main", "#{snapshot}:refs/tags/#{release_tag}")
+    [repository, release_tag]
+  end
+
+  # `git commit-tree` of `tree` on `parent` (none when nil), with the
+  # identity and dates of the commit `from`.
+  def commit_tree!(tree:, parent:, from:, message:)
+    fields = git('show', '-s', '--format=%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd', '--date=raw', from).to_s.chomp.split("\0")
+    fail!("cannot read the commit #{from}") unless fields.size == 6
+    env = %w[GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE]
+          .zip(fields).to_h
+    command = ['git', 'commit-tree', tree, *(parent ? ['-p', parent] : []), '-m', message]
+    out, status = Open3.capture2(env, *command, chdir: REPO.to_s)
+    fail!("#{command.join(' ')} failed") unless status.success?
+    out.strip
+  end
+
+  # Pushes main and the tag to origin (push_to_origin!), then the
+  # directory's snapshot to its release repository (push_snapshot!), then
+  # creates the GitHub release there with `assets`. Each step can run again
+  # after a stop: origin and the release repository take what they have
+  # already, and a release that exists is left as it is.
   def push_and_release!(tag:, title:, notes_file:, assets:)
-    run('git', 'push', 'origin', 'main', tag)
-    run('gh', 'release', 'create', tag, '--verify-tag', '--title', title, '--notes-file', notes_file.to_s,
-        *assets.map(&:to_s))
+    push_to_origin!(tag)
+    repository, release_tag = push_snapshot!(tag)
+    if released?(repository, release_tag)
+      puts "release: #{repository} has the release #{release_tag} already; left as it is"
+      return
+    end
+    run('gh', 'release', 'create', release_tag, '--repo', repository, '--verify-tag', '--title', title,
+        '--notes-file', notes_file.to_s, *assets.map(&:to_s))
   end
 end

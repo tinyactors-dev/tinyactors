@@ -54,8 +54,8 @@ expressions and dates.
 | staticjs compiled into your build | the amalgamation, one `staticjs.c` beside `staticjs.h`, built with clang | [Getting started](docs/guide/getting-started.md) |
 | staticjs in a browser or in Node | `staticjs.wasm`, which imports nothing, and a small JavaScript wrapper | [In the browser](docs/guide/wasm.md) |
 
-Releases are tagged `staticjs/v<version>` on the repository's GitHub
-releases page. [CHANGELOG.md](CHANGELOG.md) says what changed in each.
+Releases are tagged `v<version>` on the GitHub releases page of
+`tinyactors-dev/staticjs`. [CHANGELOG.md](CHANGELOG.md) says what changed in each.
 
 ## Documentation
 
