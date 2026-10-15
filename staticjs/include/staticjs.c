@@ -34477,8 +34477,8 @@ static sjs_result hold_globals(sjs_vm *vm) {
     return SJS_OK;
 }
 
-SJS_KEEP __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *f) {
-    const uint8_t *code = f->program->code;
+/* `code` is f's program's: sjs_vm_run reads it once for the frame. */
+SJS_KEEP __attribute__((always_inline)) static inline void execute(sjs_vm *vm, vm_frame *f, const uint8_t *code) {
     uint32_t pc = f->pc;
     vm->op_pc = pc;
     uint8_t opcode = code[pc++];
@@ -35065,13 +35065,24 @@ sjs_run sjs_vm_run(sjs_vm *vm, uint64_t fuel) {
     }
     uint64_t limit = fuel > UINT64_MAX - vm->fuel_used ? UINT64_MAX : vm->fuel_used + fuel;
     while (vm->status == VM_RUNNING) {
-        if (vm->fuel_used >= limit) return SJS_RUN_PAUSED;
-        vm->fuel_used++;
         vm_frame *f = &vm->frames[vm->frame_count - 1];
         if (f->kind == FRAME_CODE) {
-            execute(vm, f);
+            /* The frame's instructions, while it stays on top: an instruction
+             * only pushes frames, or pops its own (RETURN), and loop frames
+             * finish below, so the same count is the same frame. The frames
+             * never move (sjs_vm_init allocates them once), nor does the
+             * program's code while the frame holds it. */
+            uint32_t count = vm->frame_count;
+            const uint8_t *code = f->program->code;
+            do {
+                if (vm->fuel_used >= limit) return SJS_RUN_PAUSED;
+                vm->fuel_used++;
+                execute(vm, f, code);
+            } while (vm->frame_count == count && vm->status == VM_RUNNING);
             continue;
         }
+        if (vm->fuel_used >= limit) return SJS_RUN_PAUSED;
+        vm->fuel_used++;
         if (f->entered) clear_callback(vm);
         if (sjs_loop_step(vm, f) == LOOP_DONE) finish_loop(vm, f);
     }
