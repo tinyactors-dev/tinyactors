@@ -53,3 +53,6 @@ JsFence        tinyparse/examples/nesting/README.md                      # std.f
 # tree-sitter-javascript's corpus: other people's code, kept byte for byte.
 userId         tinyparse/test/suite/jsfamily/inputs/expressions__56.js   # tree-sitter-javascript corpus input
 creatorId      tinyparse/test/suite/jsfamily/inputs/expressions__56.js   # tree-sitter-javascript corpus input
+
+# Temporal's property naming a value's calendar.
+calendarId     staticjs-js/index.mjs                                     # Temporal.PlainDate#calendarId
