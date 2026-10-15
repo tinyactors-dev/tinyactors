@@ -484,6 +484,52 @@ as unsupported. Any result of `find` other than `SJS_OK`, `SJS_ERR_NOMEM`
 included, refuses the import as a name error ("there is no module of this
 name"). A namespace is a value.
 
+### Several modules
+
+A modules adapter (`sjs_modules`, with a `find(self, name, &exports)`
+function) in the compiler config answers each import. Evaluate a module
+with `sjs_vm_start` and `sjs_vm_run`, take its namespace with
+`sjs_vm_take_result`, and keep it in a table under its name. Load `money`,
+then `pricing`, then the program that imports `pricing`. The namespace
+`find` answers is borrowed, and a program retains what it imports. The
+table owns the namespaces; release each with `sjs_release` when you are
+done with the modules.
+
+```c
+typedef struct { const char *name; const char *source; } module_source;
+typedef struct { sjs_str name; sjs_value exports; } loaded;
+typedef struct { sjs_context *context; loaded items[16]; uint32_t count; } module_table;
+
+static sjs_result find_module(void *self, sjs_str name, sjs_value *exports) {
+    module_table *table = self;
+    for (uint32_t i = 0; i < table->count; i++) {
+        if (table->items[i].name.length == name.length && memcmp(table->items[i].name.ptr, name.ptr, name.length) == 0) {
+            *exports = table->items[i].exports;    /* borrowed: the program retains what it imports */
+            return SJS_OK;
+        }
+    }
+    return SJS_ERR_NOT_FOUND;
+}
+static const sjs_modules_vtable modules_vtable = { find_module };
+
+/* Compile and evaluate one module, and keep its namespace under its name. */
+static sjs_result load_module(sjs_vm *vm, module_table *table, const module_source *m) {
+    sjs_program *program;
+    sjs_compile_params params = {
+        .compiler = { .context = table->context, .goal = SJS_GOAL_MODULE, .modules = { table, &modules_vtable } },
+        .source = { m->source, (uint32_t)strlen(m->source) },
+    };
+    sjs_result r = sjs_compile(&params, &program);
+    if (r != SJS_OK) return r;
+    r = sjs_vm_start(vm, &(sjs_run_params){ .program = program });
+    sjs_program_release(program);                 /* the evaluator holds it while it runs */
+    if (r != SJS_OK) return r;
+    if (sjs_vm_run(vm, 100000) != SJS_RUN_DONE) return SJS_ERR_PROGRAM;
+    table->items[table->count++] = (loaded){ { m->name, (uint32_t)strlen(m->name) }, sjs_undefined() };
+    return sjs_vm_take_result(vm, &table->items[table->count - 1].exports);   /* the namespace, now the table's */
+}
+```
+
 To call a function a module exports, read it from the namespace
 (`sjs_object_get`) and start the evaluator on it, with no program:
 

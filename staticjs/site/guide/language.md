@@ -11,19 +11,28 @@ following JavaScript is in [Faults and refusals](./faults.md), with what it refu
 when compiled. How a program reaches the library is in
 [Embedding](./embedding.md).
 
-A program is either one **expression** (`SJS_GOAL_EXPRESSION`, read as
-JavaScript reads `(` source `)`), or a **module** (`SJS_GOAL_MODULE`):
-imports, `const` declarations and exports.
+A program's goal is an **expression** (`SJS_GOAL_EXPRESSION`, the npm
+package's default), which is one expression read as JavaScript reads `(`
+source `)`, or a **module** (`SJS_GOAL_MODULE`, `{ module: true }` in the
+npm package), which holds imports, `const` declarations and exports.
 
 ```js
-// An expression: a filter, a computed field, a user's plugin.
+// An expression program: a filter, a computed field.
 orders.filter((o) => o.total > limit).map((o) => o.id)
-
-// A module: imports, consts and exports. "money" is a module the host provides.
-import { round2 } from "money";
-export const net = (lines) => round2(lines.reduce((sum, l) => sum + l.price * l.qty, 0));
-export default net;
 ```
+
+```js
+// A module program: a user's plugin, which imports what the host provides.
+import { net, inEUR } from "pricing";
+export default (order) => inEUR(net(order.gross, order.vat), order.currency);
+```
+
+`const`, `import` and `export` appear only at the top level of a module. In
+an expression program they are a syntax error: `const a = 1; a` gives "an
+expression program is one expression: const and export need a module", and
+`import` gives "import declares only at the top level of a module". An
+expression declares names with `const` inside an arrow function's block
+body: `((x) => { const y = x * 2; return y + 1; })(3)` gives 7.
 
 ## Expressions and statements
 
@@ -83,13 +92,11 @@ as ns`, `import "m"`; `export const`, `export default` of an expression,
 and the re-exports `export { a, b as c } from "m"`, `export * from "m"`
 and `export * as ns from "m"`. A line break ends a statement where
 JavaScript inserts a semicolon. Imports may come anywhere at the top level,
-but a name is bound only from its import on. A module's value is its
-namespace: an object of every export, with keys sorted by UTF-16 code units
-as JavaScript sorts a namespace's. A later program imports it by name
-through an `sjs_modules` adapter, and only a module already evaluated can
-be imported, so imports cannot form a cycle.
+but a name is bound only from its import on.
 
-A module's value is the object of its exports:
+A module's value is its namespace: an object of every export, with keys
+sorted by UTF-16 code units as JavaScript sorts a namespace's, and sealed.
+A module with no exports gives `{}`.
 
 ```js live module
 const rate = 0.2;
@@ -98,6 +105,110 @@ const net = (gross) => Math.round((gross / (1 + rate)) * 100) / 100;
 export const prices = [120, 60, 9.99].map(net);
 export default prices.reduce((a, b) => a + b, 0);
 ```
+
+### Linking
+
+The host gives the compiler the modules a program may import, by name.
+Each is the namespace of a module the host has already compiled and
+evaluated, or an object the host built. An import is resolved when the
+importing module is compiled, so the host evaluates modules in dependency
+order, and imports cannot form a cycle. One evaluation of a module serves
+every program that imports it.
+
+`money` and `fx` import nothing, `pricing` imports both, and the plugin
+imports `pricing`:
+
+```js
+// money
+export const round2 = (x) => Math.round(x * 100) / 100;
+```
+
+```js
+// fx: reads a global `rates`, given when the module is evaluated
+export const rate = (currency) => rates[currency];
+```
+
+```js
+// pricing
+import { round2 } from "money";
+import { rate } from "fx";
+export const net = (gross, vat) => round2(gross / (1 + vat));
+export const inEUR = (amount, currency) => round2(amount * rate(currency));
+```
+
+```js
+// the plugin
+import { net, inEUR } from "pricing";
+export default (order) => inEUR(net(order.gross, order.vat), order.currency);
+```
+
+The host evaluates `money` and `fx`, then `pricing`, then compiles the
+plugin against all three. Called with `{ gross: 120, vat: 0.2, currency:
+'USD' }` and the rates `{ EUR: 1, USD: 0.92 }`, the plugin gives 92.
+
+In C, a modules adapter in the compiler's config answers each import (see
+[Embedding](./embedding.md#modules)). In the npm package, `modules` maps a
+name to the result of a module's run (see [Browser and Node](./wasm.md#modules)).
+
+### Host values
+
+A module reads its globals as an expression does: the names are fixed when
+it is compiled, and the values are given when it runs. With `rows` as
+`[1, 2]` and `rate` as 3, this module gives `{ total: 6 }`:
+
+```js
+export const total = rows.length * rate;
+```
+
+A function a module exports keeps reading the globals of the run that
+evaluated its module. This module is evaluated with `factor: 10`:
+
+```js
+export const scaled = (x) => x * factor;
+```
+
+Another module imports it and gives 20, though the importer has no global
+`factor`:
+
+```js
+import { scaled } from "scaled";
+export default scaled(2);
+```
+
+Host functions reach a program as globals, or as a module: the host builds
+an object of functions, gives it to the compiler as a module, and a program
+imports from it. In the npm package, `context.value({ rate: (c) =>
+rates[c], base: 'EUR' })` under the name `fx` serves this import; in C, the
+object comes from `sjs_object_new`, with native functions
+(`sjs_function_native`) as its values.
+
+```js
+import { rate, base } from "fx";
+```
+
+An expression cannot import. The host passes a module's exports to it as a
+global, and `pricing.net(120, 0.2)` gives 100 when `pricing` is a global
+holding the namespace of the module above.
+
+The host can also call a function a module exports. In the npm package,
+`run.result()` gives the namespace with the function as a Value, and
+`value.start([args])` runs it on fuel. In C, `sjs_object_get` reads the
+function from the namespace, and the evaluator starts with `.function` and
+`.arguments` and no program.
+
+### Refusals
+
+- A top-level `let`, `if` or expression statement is refused as
+  unsupported: "a staticjs module holds imports, const declarations and
+  exports".
+- A program cannot change an imported value. `import { list } from "s";
+  export default list.push(3);` is refused when compiled: "staticjs changes
+  only a value a variable of the function holds, and this is an import".
+- A module the host did not give is a name error when compiled: "there is
+  no module of this name", or "there are no modules to import from" when
+  the host gave none.
+- A name the module does not export is a name error: "the module does not
+  export this name".
 
 ## Built-ins
 

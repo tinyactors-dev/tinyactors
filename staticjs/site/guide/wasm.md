@@ -88,6 +88,50 @@ run.step(10_000);
 run.result();   // [2.2]
 ```
 
+## Modules
+
+`context.compile(source, { module: true, modules })` compiles a module, and
+`modules` maps a name to a Value: the `resultValue()` of a module's run.
+
+```js
+// Evaluate a module and keep its exports, a Value, under the name others import.
+const modules = {};
+function define(name, source, globals = {}) {
+  const run = context.compile(source, { module: true, modules, globals: Object.keys(globals) }).start(globals);
+  if (!run.step(100_000)) throw new Error(`${name} ran out of fuel`);
+  modules[name] = run.resultValue();
+}
+
+// In dependency order: a module imports only what is already defined.
+define('fx', 'export const rate = (currency) => rates[currency];', { rates: { EUR: 1, USD: 0.92 } });
+define('money', 'export const round2 = (x) => Math.round(x * 100) / 100;');
+define('pricing', `
+import { round2 } from "money";
+import { rate } from "fx";
+export const net = (gross, vat) => round2(gross / (1 + vat));
+export const inEUR = (amount, currency) => round2(amount * rate(currency));
+`);
+
+// A user's plugin imports them by name.
+const plugin = context.compile(`
+import { net, inEUR } from "pricing";
+export default (order) => inEUR(net(order.gross, order.vat), order.currency);
+`, { module: true, modules });
+const run = plugin.start();
+run.step(100_000);
+const { default: price } = run.result();           // a function staticjs made: a Value
+const call = price.start([{ gross: 120, vat: 0.2, currency: 'USD' }]);
+call.step(100_000);
+call.result();                                       // 92
+```
+
+To use a module's exports in an expression, pass them as a global:
+`pricing.net(120, 0.2)` compiled with `globals: ['pricing']` and run with
+`{ pricing: modules.pricing }` gives 100. A module can also be built from
+host functions with `context.value({ ... })`: `modules: { fx:
+context.value({ rate: (c) => rates[c], base: 'EUR' }) }` serves `import {
+rate, base } from "fx";`.
+
 ## Fuel and the event loop
 
 The evaluator runs on the fuel it is given
