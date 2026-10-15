@@ -45,7 +45,8 @@ what is out of scope. A proposal or ADR states this near its start.
   default rule about branching before committing to the default branch.
 - **Integrate frequently.** Commit each small, working increment as you reach
   it, rather than accumulating a large change and landing it at the end. A
-  commit is expected to build and pass `mise run test` (see Tests below).
+  commit is expected to build and pass the tests of the projects it
+  changes (see Tests below).
 - Keep history linear: rebase rather than merge, and never create a merge
   commit.
 
@@ -71,12 +72,19 @@ Do it at release time, not between releases.
 
 ## Tests: what to run
 
-- **`mise run test` before every commit.** It is what "a commit passes"
-  means. It checks acronyms and the build scripts' portability, runs the
-  toolchain self-test, and builds, then runs the `test` task of each
-  project whose sources changed since that task last passed, and ends with
-  the time of each step, marking the projects it skipped as up to date.
-  mise decides what changed: each project's `test` task lists its sources
+- **`mise run test` in each project you changed, before every commit,**
+  and in the projects the table below says a change reruns, with
+  `mise run check-acronyms` at the root. That is what "a commit passes"
+  means. A change to the root `mise/lib`, `mise.toml` or a build script
+  also runs `mise run check-portability` and `mise run toolchain-test` at
+  the root. At the root, `mise run test` runs nothing: it prints this.
+- **`mise run test --force --full`** at the root is the whole fast pass,
+  for when a change reaches many projects. It checks acronyms and the
+  build scripts' portability, runs the toolchain self-test, and builds,
+  then runs the `test` task of each project whose sources changed since
+  that task last passed, and ends with the time of each step, marking the
+  projects it skipped as up to date. It keeps every CPU busy for many
+  minutes. mise decides what changed: each project's `test` task lists its sources
   in `#MISE sources` (its own code and tests, and those of the projects it
   builds against), with `#MISE outputs={auto=true}` so mise remembers the
   last pass. A failed run is not remembered, so it runs again.
@@ -98,7 +106,8 @@ Do it at release time, not between releases.
 
   When you add a directory a project's tests read, add it to that
   project's `#MISE sources`, or a change there will not rerun them.
-- **`mise run test --all`** runs every project's tests, changed or not.
+- **`mise run test --force --full --all`** runs every project's tests,
+  changed or not.
 - **`mise run test:full`** runs everything, plus what the fast pass leaves
   out:
   - every torture chamber scenario (the fast pass runs one);

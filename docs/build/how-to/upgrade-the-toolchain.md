@@ -41,8 +41,8 @@ change is not something an upgrade may cause.
 ### 3. Run everything that uses clang
 
 ```sh
-mise run test --all --full   # the host builds, the checks, every project,
-                             # core's sanitizer build and its Node-API addon
+mise run test:full   # the host builds, the checks, every project,
+                     # core's sanitizer build and its Node-API addon
 ```
 
 The host compile commands name clang's path, so every host object

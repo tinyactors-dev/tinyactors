@@ -1,21 +1,45 @@
 #!/usr/bin/env ruby
-#MISE description="Run the tests of every project whose sources changed since its tests last passed (the fast pass); --all runs them all"
-#USAGE flag "--full" help="Also run the exhaustive checks (implies --all)"
-#USAGE flag "--all" help="Run every project's tests, changed or not"
+#MISE description="Say which project's tests to run; --force --full runs every project whose sources changed (the whole fast pass), --all every project, --exhaustive the exhaustive checks too"
+#USAGE flag "--force" help="Run tests here instead of saying which project's to run (with --full)"
+#USAGE flag "--full" help="Every project whose sources changed, not one project (with --force)"
+#USAGE flag "--all" help="Run every project's tests, changed or not (with --force --full)"
+#USAGE flag "--exhaustive" help="Also run the exhaustive checks (implies --all; with --force --full)"
 
 require 'fileutils'
 require 'open3'
 require 'pathname'
 
 root = Pathname.new(__dir__).join('../../..').expand_path
+flag = ->(name) { ENV["usage_#{name}"] == 'true' || ARGV.include?("--#{name}") }
+
+# The whole fast pass keeps every CPU busy for many minutes, so without
+# --force --full this task runs nothing and says what to run instead.
+unless flag.call('force') && flag.call('full')
+  puts <<~TEXT
+    mise run test: no tests ran. Run the tests of the project you changed, inside it:
+
+      You changed                              Run
+      tinyactors-core                          mise run test in tinyactors-core (then in tinyactors-napi, tinyactors-cpython)
+      tinyactors-test                          mise run test in tinyactors-test (then core, napi, cpython)
+      tinyactors-napi, tinyactors-cpython,     mise run test in that directory
+      tinyxml, tinyparse, staticjs, staticjs-js
+      root mise/lib, mise.toml, build scripts  mise run check-portability and mise run toolchain-test here
+      code anywhere                            mise run check-acronyms here (it is quick)
+
+    mise run test --force --full   the whole fast pass: every project whose sources changed
+    mise run test:full             every project, the exhaustive checks included
+  TEXT
+  exit 0
+end
+
 Dir[root.join('{,*/}mise/tasks/**/*')].each { |task| FileUtils.chmod('+x', task) if File.file?(task) }
-full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
-all = full || ENV['usage_all'] == 'true' || ARGV.include?('--all')
+full = flag.call('exhaustive')
+all = full || flag.call('all')
 
 # Each project's `test` task lists its sources: its own files and those of
 # the projects it builds against (`#MISE sources` in its task file). mise
 # skips a task whose sources did not change since it last passed, so only
-# the projects a change can affect run; --all and --full force every one.
+# the projects a change can affect run; --all and --exhaustive force every one.
 flags = ->(*extra) { [*(all ? ['--force'] : []), 'test', *extra] }
 steps = [
   ['acronyms', %w[mise run check-acronyms-test], root],
