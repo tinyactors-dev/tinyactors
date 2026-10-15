@@ -1,5 +1,5 @@
 /* ta_host: many systems as one — segments sharing a base URI, routing between
- * them inside the library, versions and retirement, migration jobs (wake,
+ * them inside the library, versions and retirement, migrations (wake,
  * timeout), hibernation through the host, requests, growth, enumeration. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
@@ -25,7 +25,7 @@ typedef struct host_world {
     int image_count;
     char log[8192];
     int routed_out_count, wake_count, done_count, freed_count, migrated_count;
-    uint32_t last_job;
+    uint32_t last_migration;
     ta_host_effect last_done;
     uint64_t wake_session;
     uint64_t done_session;  /* the last DONE effect's */
@@ -34,7 +34,7 @@ typedef struct host_world {
     uint32_t request_segment, request_token;
     char request_source[64];
     unsigned char blob[1 << 16];
-    uint32_t wake_job; /* the last WAKE's job: 0 when no job asked */
+    uint32_t wake_migration; /* the last WAKE's migration: 0 when no migration asked */
     size_t blob_length;
 } host_world;
 
@@ -66,7 +66,7 @@ static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor
     config.system.max_actors = max_actors;
     config.datamodels = &e->binding;
     config.datamodel_count = 1;
-    config.migrate_quantum = 3; /* small steps: jobs span several runs */
+    config.migrate_quantum = 3; /* small steps: migrations span several runs */
     config.io_processors = io;
     config.io_processor_count = io_count;
     config.allocator = (ta_allocator){NULL, refusable_alloc, refusable_free};
@@ -105,7 +105,7 @@ static void drain(host_world *e) {
         if (effect->kind == TA_EFFECT_WAKE) {
             e->wake_count++;
             e->wake_session = effect->session;
-            e->wake_job = effect->job;
+            e->wake_migration = effect->migration;
         }
         if (effect->kind == TA_EFFECT_DONE) {
             e->done_count++;
@@ -122,8 +122,8 @@ static void drain(host_world *e) {
         }
         if (effect->kind == TA_HOST_EFFECT_SEGMENT_FREED) e->freed_count++;
         if (effect->kind == TA_HOST_EFFECT_MIGRATED) e->migrated_count++;
-        if (effect->kind == TA_HOST_EFFECT_JOB_DONE) {
-            e->last_job = effect->job;
+        if (effect->kind == TA_HOST_EFFECT_MIGRATION_DONE) {
+            e->last_migration = effect->migration;
             e->last_done = *effect;
         }
     }
@@ -379,16 +379,16 @@ static void test_versions_and_migration(void) {
     uint64_t fresh = spawn(&e, "w"); /* new actors: the new version */
     CHECK_EQUAL(fresh >> 32, s2);
     e.log[0] = 0;
-    uint32_t job;
+    uint32_t migration;
     CHECK_EQUAL(
-        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, 0, 0, 0, 0}, &job),
+        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, 0, 0, 0, 0}, &migration),
         TA_OK);
     CHECK_EQUAL(ta_host_run(e.host, 100000).status, TA_RUN_YIELDED);
     drain(&e);
     CHECK_EQUAL(e.migrated_count, 3); /* one quantum per run */
     run(&e);
     CHECK_EQUAL(e.migrated_count, 5);
-    CHECK(e.last_job == job && e.last_done.migrated == 5 && e.last_done.pending == 0);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 5 && e.last_done.pending == 0);
     CHECK(strstr(e.log, "upgraded:1;") && strstr(e.log, "upgraded in b;")); /* states by id */
     uint32_t at;
     ta_host_location location;
@@ -479,21 +479,21 @@ static void test_migration_wake_and_timeout(void) {
     world_add(&e, W2);
     /* without wake, with a timeout: b moves, a is left behind and reported */
     ta_host_advance_time(e.host, (ta_host_time){1000, 0});
-    uint32_t job;
+    uint32_t migration;
     CHECK_EQUAL(
-        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 50}, &job),
+        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 50}, &migration),
         TA_OK);
     ta_run result = ta_host_run(e.host, 100000);
     CHECK(result.next_deadline <= 1050); /* idle, but due at the timeout */
     drain(&e);
     run(&e);
-    CHECK_EQUAL(e.last_job, 0u); /* not over yet: a waits */
+    CHECK_EQUAL(e.last_migration, 0u); /* not over yet: a waits */
     ta_host_advance_time(e.host, (ta_host_time){1060, 0});
     run(&e);
-    CHECK_EQUAL(e.last_job, job);
+    CHECK_EQUAL(e.last_migration, migration);
     CHECK(e.last_done.migrated == 1 && e.last_done.pending == 1);
     uint64_t left[4];
-    CHECK_EQUAL(ta_host_job_pending(e.host, job, (ta_uint64_array){left, 4}),
+    CHECK_EQUAL(ta_host_migration_pending(e.host, migration, (ta_uint64_array){left, 4}),
                 1); /* until the next run */
     CHECK_EQUAL(left[0], a);
     CHECK_EQUAL(e.wake_count, 0);
@@ -501,13 +501,13 @@ static void test_migration_wake_and_timeout(void) {
     CHECK_EQUAL(
         ta_host_migrate(e.host,
                         &(ta_host_migration){(ta_string_view){0, 0}, a, TA_HOST_MIGRATE_WAKE, 0, 0},
-                        &job),
+                        &migration),
         TA_OK);
     run(&e);
     CHECK(e.wake_count == 1 && e.wake_session == a);
     CHECK_EQUAL(ta_host_wake(e.host, a, (ta_bytes){e.blob, e.blob_length}), TA_OK);
     run(&e);
-    CHECK(e.last_job == job && e.last_done.migrated == 1 && e.last_done.pending == 0);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 1 && e.last_done.pending == 0);
     uint32_t at;
     ta_host_location location;
     CHECK_EQUAL(ta_host_locate(e.host, a, &location), TA_OK);
@@ -544,10 +544,10 @@ static ta_bytes kept(const kept_blob *blob) {
     return (ta_bytes){blob->bytes, blob->length};
 }
 
-/* A job asks for a hibernated actor with its id, and again when it finds
- * it hibernated after a wake; an actor an event wakes (a WAKE with no job)
- * joins a job that waits for it, with or without TA_HOST_MIGRATE_WAKE; an
- * actor exported while the job waits leaves it. */
+/* A migration asks for a hibernated actor with its id, and again when it finds
+ * it hibernated after a wake; an actor an event wakes (a WAKE with no migration)
+ * joins a migration that waits for it, with or without TA_HOST_MIGRATE_WAKE; an
+ * actor exported while the migration waits leaves it. */
 static void test_migration_asks_again_and_takes_the_woken(void) {
     host_world e;
     world_open(&e, 16, NULL, 0);
@@ -558,38 +558,38 @@ static void test_migration_asks_again_and_takes_the_woken(void) {
     keep(&e, a, &blob_a);
     keep(&e, b, &blob_b);
     keep(&e, c, &blob_c);
-    /* an event's WAKE names no job */
+    /* an event's WAKE names no migration */
     CHECK_EQUAL(ta_host_send(e.host, &(ta_event_in){.size = sizeof(ta_event_in), .session = c, .name = {"pong", 4}}), TA_OK);
     run(&e);
-    CHECK(e.wake_count == 1 && e.wake_session == c && e.wake_job == 0u);
+    CHECK(e.wake_count == 1 && e.wake_session == c && e.wake_migration == 0u);
     world_add(&e, W2);
-    uint32_t job;
-    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, TA_HOST_MIGRATE_WAKE, 0, 0}, &job),
+    uint32_t migration;
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, TA_HOST_MIGRATE_WAKE, 0, 0}, &migration),
                 TA_OK);
     run(&e); /* d moves; a, b and c are asleep, each asked for (c besides its event's WAKE) */
     CHECK_EQUAL(e.migrated_count, 1);
     CHECK_EQUAL(e.wake_count, 4);
-    CHECK_EQUAL(e.wake_job, job);
+    CHECK_EQUAL(e.wake_migration, migration);
     uint64_t pending[8];
-    CHECK_EQUAL(ta_host_job_pending(e.host, job, (ta_uint64_array){pending, 8}), 3u);
-    /* a woken and put back before the job tried it: asked for again */
+    CHECK_EQUAL(ta_host_migration_pending(e.host, migration, (ta_uint64_array){pending, 8}), 3u);
+    /* a woken and put back before the migration tried it: asked for again */
     CHECK_EQUAL(ta_host_wake(e.host, a, kept(&blob_a)), TA_OK);
     keep(&e, a, &blob_a);
     run(&e);
-    CHECK(e.wake_count == 5 && e.wake_session == a && e.wake_job == job);
+    CHECK(e.wake_count == 5 && e.wake_session == a && e.wake_migration == migration);
     CHECK_EQUAL(ta_host_wake(e.host, a, kept(&blob_a)), TA_OK);
     CHECK_EQUAL(ta_host_wake(e.host, c, kept(&blob_c)), TA_OK); /* the event's actor: moved too */
     run(&e);
     CHECK_EQUAL(e.migrated_count, 3);
-    CHECK_EQUAL(e.last_job, 0u); /* b still asleep */
+    CHECK_EQUAL(e.last_migration, 0u); /* b still asleep */
     CHECK_EQUAL(ta_host_wake(e.host, b, kept(&blob_b)), TA_OK);
     run(&e);
-    CHECK(e.last_job == job && e.last_done.migrated == 4 && e.last_done.pending == 0 && e.last_done.failed == 0);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 4 && e.last_done.pending == 0 && e.last_done.failed == 0);
     (void)d;
     world_close(&e);
 
-    /* without TA_HOST_MIGRATE_WAKE: an actor an event wakes joins the job;
-     * one exported meanwhile leaves it, and the job ends with no timeout */
+    /* without TA_HOST_MIGRATE_WAKE: an actor an event wakes joins the migration;
+     * one exported meanwhile leaves it, and the migration ends with no timeout */
     world_open(&e, 16, NULL, 0);
     world_add(&e, W1);
     uint64_t x = spawn(&e, "w"), y = spawn(&e, "w");
@@ -598,26 +598,26 @@ static void test_migration_asks_again_and_takes_the_woken(void) {
     keep(&e, x, &blob_x);
     keep(&e, y, &blob_y);
     world_add(&e, W2);
-    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 0}, &job), TA_OK);
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 0}, &migration), TA_OK);
     run(&e);
     CHECK_EQUAL(e.wake_count, 0);
     CHECK_EQUAL(ta_host_send(e.host, &(ta_event_in){.size = sizeof(ta_event_in), .session = x, .name = {"pong", 4}}), TA_OK);
     run(&e);
-    CHECK(e.wake_count == 1 && e.wake_session == x && e.wake_job == 0u);
+    CHECK(e.wake_count == 1 && e.wake_session == x && e.wake_migration == 0u);
     CHECK_EQUAL(ta_host_wake(e.host, x, kept(&blob_x)), TA_OK);
     run(&e);
     CHECK_EQUAL(e.migrated_count, 1);
-    CHECK_EQUAL(e.last_job, 0u); /* y asleep */
+    CHECK_EQUAL(e.last_migration, 0u); /* y asleep */
     CHECK_EQUAL(ta_host_wake(e.host, y, kept(&blob_y)), TA_OK); /* y leaves the host: woken, exported */
     ta_bytes exported;
     CHECK_EQUAL(ta_host_export_actor(e.host, y, &exported), TA_OK);
     ta_host_effects_ack(e.host);
     run(&e);
-    CHECK(e.last_job == job && e.last_done.migrated == 1 && e.last_done.pending == 0);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 1 && e.last_done.pending == 0);
     world_close(&e);
 }
 
-/* A job over many hibernated actors: the walk (a quantum of 3 per run here)
+/* A migration over many hibernated actors: the walk (a quantum of 3 per run here)
  * asks for each once, and the runs after it look at none of the sleeping
  * ones. */
 static void test_migration_of_many_hibernated_actors(void) {
@@ -633,8 +633,8 @@ static void test_migration_of_many_hibernated_actors(void) {
     for (int i = 0; i < N; i++)
         keep(&e, sessions[i], &blob); /* the blobs are not needed: nobody wakes them */
     world_add(&e, W2);
-    uint32_t job;
-    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, TA_HOST_MIGRATE_WAKE, 0, 0}, &job),
+    uint32_t migration;
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, TA_HOST_MIGRATE_WAKE, 0, 0}, &migration),
                 TA_OK);
     for (int i = 0; i < 2 * N && e.wake_count < N; i++) {
         ta_host_run(e.host, 100000);
@@ -642,7 +642,7 @@ static void test_migration_of_many_hibernated_actors(void) {
     }
     CHECK_EQUAL(e.wake_count, N); /* each asked for once */
     uint64_t one;
-    CHECK_EQUAL(ta_host_job_pending(e.host, job, (ta_uint64_array){&one, 1}), (uint32_t)N);
+    CHECK_EQUAL(ta_host_migration_pending(e.host, migration, (ta_uint64_array){&one, 1}), (uint32_t)N);
     ta_run result = ta_host_run(e.host, 100000); /* waits: idle, nothing asked again */
     drain(&e);
     CHECK_EQUAL(result.status, TA_RUN_IDLE);
@@ -675,14 +675,14 @@ static void test_migration_waits_for_invocations(void) {
     CHECK_EQUAL(ta_host_locate(e.host, p, &location), TA_OK);
     actor = location.actor;
     world_add(&e, P2);
-    uint32_t job;
+    uint32_t migration;
     CHECK_EQUAL(
-        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 0}, &job),
+        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 0}, &migration),
         TA_OK);
     for (int i = 0; i < 5; i++)
         run(&e);
     CHECK_EQUAL(e.migrated_count, 0); /* waiting: its kid runs */
-    CHECK_EQUAL(e.last_job, 0u);
+    CHECK_EQUAL(e.last_migration, 0u);
     uint32_t again;
     CHECK_EQUAL(ta_host_locate(e.host, p, &location), TA_OK);
     again = location.actor;
@@ -692,7 +692,7 @@ static void test_migration_waits_for_invocations(void) {
     run(&e);
     run(&e);
     CHECK_EQUAL(e.migrated_count, 1);
-    CHECK(e.last_job == job && e.last_done.migrated == 1 && e.last_done.pending == 0);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 1 && e.last_done.pending == 0);
     CHECK(strstr(e.log, "upgraded;") != NULL);
     world_close(&e);
 }

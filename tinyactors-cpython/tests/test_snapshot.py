@@ -69,7 +69,7 @@ class Snapshot(unittest.TestCase):
     def test_a_hibernated_actor_wakes_after_a_restore(self):
         logs, blobs = Logs(), {}
 
-        def wake(host, session, job):
+        def wake(host, session, migration):
             host.wake(session, blobs.pop(session))
 
         with host_of(COUNTER["python"]) as host:

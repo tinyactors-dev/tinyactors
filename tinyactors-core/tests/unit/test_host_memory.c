@@ -398,10 +398,10 @@ static void workload_run(workload *w) {
     /* a new version, and every worker migrates to it */
     add_image(w, 2);
     m->phase = "migration";
-    uint32_t job = 0;
+    uint32_t migration = 0;
     RETRY(
         m, TA_OK,
-        ta_host_migrate(w->host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 0}, &job));
+        ta_host_migrate(w->host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 0}, &migration));
     run_idle(w, w->host);
 
     /* hibernation, export and adoption */
@@ -693,9 +693,9 @@ static void test_fixed_arena(void) {
     CHECK_EQUAL(ta_actor_info_get(ta_host_system(host, segment), actor, &info), TA_OK);
     /* a new version of p, and p moves to it in state b */
     CHECK_EQUAL(ta_host_add_image(host, ta_image_bytes(&im.image[2]), NULL), TA_OK);
-    uint32_t job = 0;
+    uint32_t migration = 0;
     CHECK_EQUAL(
-        ta_host_migrate(host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 0}, &job),
+        ta_host_migrate(host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 0}, &migration),
         TA_OK);
     int moved = 0;
     for (int i = 0; i < 20; i++) {

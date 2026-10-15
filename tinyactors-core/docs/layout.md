@@ -31,7 +31,7 @@ implementation of that layer). Layer dependency rules are in
 │       ├── compile.h          ✅ compiler API (diagnostics, source resolver, manifests)
 │       ├── runtime.h          ✅ OS conveniences (malloc, files, resolver, clock, auto-grow)
 │       ├── host.h             ✅ host layer: segments sharing a base URI, routing, versions,
-│       │                         migration jobs, sweep, growth, boot, snapshot/restore
+│       │                         migrations, sweep, growth, boot, snapshot/restore
 │       ├── trace.h            ✅ trace values (IDs, step keys, span IDs, traceparent, generator,
 │       │                         sampling) and the trace record schema (ADR 0006)
 │       ├── otlp.h             ✅ the OTLP codec: trace records -> OTLP protobuf, and decoding
@@ -98,7 +98,7 @@ implementation of that layer). Layer dependency rules are in
 │   ├── host/                  the policy every embedder would rebuild, once (freestanding; its caller's ta_allocator)
 │   │   ├── host_internal.h    ✅ host state shared by host.c and router.c
 │   │   ├── host.c             ✅ segments + session ranges, image copies, cross-segment routing,
-│   │   │                         versions and retirement, quantum-bounded migration jobs, CLOCK
+│   │   │                         versions and retirement, quantum-bounded migrations, CLOCK
 │   │   │                         sweep, growth, boot, whole-host snapshot/restore
 │   │   ├── router.c           ✅ envelopes, peers, routes, deduplication (docs/protocol.md)
 │   │   ├── telemetry.c        ✅ the host's OTLP encoder, or the null one (traces, logs, metrics)

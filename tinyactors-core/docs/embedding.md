@@ -112,13 +112,13 @@ handle, string, `WIRE` byte and `TRACEPARENT` text is valid until
 | `TA_EFFECT_SEND` | an I/O processor's send: index `IO_PROCESSOR` in the config's `ioProcessors`; `TA_NIL` is a send to a service you run, keyed by (`SEGMENT`, `TOKEN`) | its reply events (`ta_host_send`), or `TA_EVENT_IN_ERROR_COMMUNICATION` with the `sendid`; a sync processor's before the next run |
 | `TA_EFFECT_INVOKE`, `TA_EFFECT_UNINVOKE` | start or stop the service of type `EVENT` with src `TARGET`, keyed by (`SEGMENT`, `TOKEN`); an `INVOKE` flagged `TA_EFFECT_FLAG_RESTORED` comes from a restored host's first run, for an invocation that was running at the snapshot: start the service again, or a stand-in | events with `TA_EVENT_IN_FROM_INVOKE` and the token; `TA_EVENT_IN_INVOKE_DONE` at its end; its failure (it cannot start, it crashed) `TA_EVENT_IN_FROM_INVOKE \| TA_EVENT_IN_ERROR_COMMUNICATION`: the invoker gets `error.communication`, and the token's later events are refused |
 | `TA_EFFECT_REQUEST` | a fetch at run time (it stays, 2026-10-13): an `<invoke srcexpr>` whose name (`AUXILIARY`) core normalized and found no chart for in the requesting segment's image. The fetching is built out later (boundary.md section 12; `ROADMAP.md`, "Decided later"). Not the control plane | `ta_host_resume` with `TA_ERROR_INVALID` until then (the parent gets `error.execution`): a resume names only a chart of that image, where core has already looked |
-| `TA_EFFECT_WAKE` | load the session's hibernation blob: an event or a timer came for it (`JOB` 0), or a migration job asks for it (`JOB` its id), again when it finds the actor hibernated after a wake | `ta_host_wake` |
+| `TA_EFFECT_WAKE` | load the session's hibernation blob: an event or a timer came for it (`MIGRATION` 0), or a migration asks for it (`MIGRATION` its id), again when it finds the actor hibernated after a wake | `ta_host_wake` |
 | `TA_EFFECT_LOG` | a `<log>`: label `AUXILIARY`, text `EVENT`; to your logging | nothing |
 | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` | a root actor finished or faulted: release what you keep for the session | nothing |
 | `TA_HOST_EFFECT_PEER`, `_PEER_ERROR` | an envelope for another system: `ta_host_envelope` writes it as CBOR, or fill a `ta_envelope` within the process | `ta_host_deliver`, `ta_host_peer_error` for what comes back |
 | `TA_HOST_EFFECT_TRACES`, `_LOGS` | take the OTLP request (`ta_host_traces`, `ta_host_logs`) and post it | nothing; the next comes after a take |
 | `TA_HOST_EFFECT_REPLY`, `_NOTIFICATION` | the control plane (section 5) | nothing |
-| `TA_HOST_EFFECT_MIGRATED`, `_JOB_DONE`, `_SEGMENT_FREED` | a migration's progress and end (`ta_host_job_pending`), a retired version | nothing |
+| `TA_HOST_EFFECT_MIGRATED`, `_MIGRATION_DONE`, `_SEGMENT_FREED` | a migration's progress and end (`ta_host_migration_pending`), a retired version | nothing |
 
 **While handling, call the host as you need:** take traces, write
 envelopes, post, deliver, hibernate. What those calls hand you lives

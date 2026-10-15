@@ -480,8 +480,8 @@ only:
   `TA_EVENT_IN_INVOKE_DONE`; `UNINVOKE` stops another; `REQUEST` answered
   with `ta_host_resume`;
 - **hibernation:** `ta_host_sweep`, `ta_host_hibernate` into a store the
-  program keeps, a `WAKE` answered with `ta_host_wake`; a migration job
-  (`MIGRATED`, `JOB_DONE`) and a retired version (`SEGMENT_FREED`);
+  program keeps, a `WAKE` answered with `ta_host_wake`; a migration
+  (`MIGRATED`, `MIGRATION_DONE`) and a retired version (`SEGMENT_FREED`);
 - **peers:** two hosts in one process exchanging envelopes as bytes
   (`ta_host_envelope`, `ta_host_envelope_read`, `ta_host_deliver`), a
   refused one coming back as `PEER_ERROR` (`ta_host_peer_error_read`,

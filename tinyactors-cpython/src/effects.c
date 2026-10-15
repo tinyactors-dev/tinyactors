@@ -16,7 +16,7 @@ enum {
 };
 enum { TA_PYTHON_ENTRY_SESSION, TA_PYTHON_ENTRY_LABEL, TA_PYTHON_ENTRY_TEXT, TA_PYTHON_ENTRY_FIELDS };
 enum { TA_PYTHON_ENVELOPE_PEER, TA_PYTHON_ENVELOPE_ERROR, TA_PYTHON_ENVELOPE_CBOR, TA_PYTHON_ENVELOPE_FIELDS };
-enum { TA_PYTHON_MIGRATION_SESSION, TA_PYTHON_MIGRATION_SEGMENT, TA_PYTHON_MIGRATION_CHART, TA_PYTHON_MIGRATION_JOB,
+enum { TA_PYTHON_MIGRATED_SESSION, TA_PYTHON_MIGRATED_SEGMENT, TA_PYTHON_MIGRATED_CHART, TA_PYTHON_MIGRATED_MIGRATION,
        TA_PYTHON_MIGRATION_FIELDS };
 /* every view's fields fit the send's array */
 _Static_assert(TA_PYTHON_ENTRY_FIELDS <= TA_PYTHON_SEND_FIELDS && TA_PYTHON_ENVELOPE_FIELDS <= TA_PYTHON_SEND_FIELDS &&
@@ -104,12 +104,12 @@ static PyObject *ta_python_entry_read(ta_python_view *view, int which) {
 }
 
 /* A MIGRATED effect's field: the session, the segment and chart name it
- * moved to (the chart is EVENT's text), its job. */
-static PyObject *ta_python_migration_read(ta_python_view *view, int which) {
+ * moved to (the chart is EVENT's text), its migration. */
+static PyObject *ta_python_migrated_read(ta_python_view *view, int which) {
     if (view->fields[which]) return Py_NewRef(view->fields[which]);
     if (ta_python_view_live(view) < 0) return NULL;
-    static const uint32_t numbers[] = {TA_EFFECT_FIELD_SESSION, TA_EFFECT_FIELD_SEGMENT, 0, TA_EFFECT_FIELD_JOB};
-    PyObject *value = which == TA_PYTHON_MIGRATION_CHART
+    static const uint32_t numbers[] = {TA_EFFECT_FIELD_SESSION, TA_EFFECT_FIELD_SEGMENT, 0, TA_EFFECT_FIELD_MIGRATION};
+    PyObject *value = which == TA_PYTHON_MIGRATED_CHART
                           ? ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_EVENT, 0})
                           : PyLong_FromUnsignedLongLong(ta_host_effect_number(view->host->host, view->index, numbers[which]));
     if (value) view->fields[which] = Py_NewRef(value);
@@ -194,10 +194,10 @@ TA_PYTHON_GETTER(entry, text, TA_PYTHON_ENTRY_TEXT)
 TA_PYTHON_GETTER(envelope, peer, TA_PYTHON_ENVELOPE_PEER)
 TA_PYTHON_GETTER(envelope, error, TA_PYTHON_ENVELOPE_ERROR)
 TA_PYTHON_GETTER(envelope, cbor, TA_PYTHON_ENVELOPE_CBOR)
-TA_PYTHON_GETTER(migration, session, TA_PYTHON_MIGRATION_SESSION)
-TA_PYTHON_GETTER(migration, segment, TA_PYTHON_MIGRATION_SEGMENT)
-TA_PYTHON_GETTER(migration, chart, TA_PYTHON_MIGRATION_CHART)
-TA_PYTHON_GETTER(migration, job, TA_PYTHON_MIGRATION_JOB)
+TA_PYTHON_GETTER(migrated, session, TA_PYTHON_MIGRATED_SESSION)
+TA_PYTHON_GETTER(migrated, segment, TA_PYTHON_MIGRATED_SEGMENT)
+TA_PYTHON_GETTER(migrated, chart, TA_PYTHON_MIGRATED_CHART)
+TA_PYTHON_GETTER(migrated, migration, TA_PYTHON_MIGRATED_MIGRATION)
 
 /* ---- answering a send ------------------------------------------------------------------ */
 
@@ -358,20 +358,20 @@ static PyType_Slot ta_python_envelope_slots[] = {
     {0, NULL}
 };
 
-static PyGetSetDef ta_python_migration_properties[] = {
-    {"session", ta_python_migration_session, NULL, ta_python_doc_migration_session, NULL},
-    {"segment", ta_python_migration_segment, NULL, ta_python_doc_migration_segment, NULL},
-    {"chart", ta_python_migration_chart, NULL, ta_python_doc_migration_chart, NULL},
-    {"job", ta_python_migration_job, NULL, ta_python_doc_migration_job, NULL},
+static PyGetSetDef ta_python_migrated_properties[] = {
+    {"session", ta_python_migrated_session, NULL, ta_python_doc_migrated_session, NULL},
+    {"segment", ta_python_migrated_segment, NULL, ta_python_doc_migrated_segment, NULL},
+    {"chart", ta_python_migrated_chart, NULL, ta_python_doc_migrated_chart, NULL},
+    {"migration", ta_python_migrated_migration, NULL, ta_python_doc_migrated_migration, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
-static PyType_Slot ta_python_migration_slots[] = {
-    {Py_tp_doc, (void *)ta_python_doc_migration},
+static PyType_Slot ta_python_migrated_slots[] = {
+    {Py_tp_doc, (void *)ta_python_doc_migrated},
     {Py_tp_dealloc, ta_python_view_dealloc},
     {Py_tp_traverse, ta_python_view_traverse},
     {Py_tp_clear, ta_python_view_clear},
-    {Py_tp_getset, ta_python_migration_properties},
+    {Py_tp_getset, ta_python_migrated_properties},
     {0, NULL}
 };
 
@@ -380,8 +380,8 @@ static PyType_Spec ta_python_send_spec = {"tinyactors.Send", sizeof(ta_python_vi
 static PyType_Spec ta_python_entry_spec = {"tinyactors.LogEntry", sizeof(ta_python_view), 0, TA_PYTHON_VIEW_FLAGS, ta_python_entry_slots};
 static PyType_Spec ta_python_envelope_spec = {"tinyactors.Envelope", sizeof(ta_python_view), 0, TA_PYTHON_VIEW_FLAGS,
                                               ta_python_envelope_slots};
-static PyType_Spec ta_python_migration_spec = {"tinyactors.Migration", sizeof(ta_python_view), 0, TA_PYTHON_VIEW_FLAGS,
-                                               ta_python_migration_slots};
+static PyType_Spec ta_python_migrated_spec = {"tinyactors.Migrated", sizeof(ta_python_view), 0, TA_PYTHON_VIEW_FLAGS,
+                                               ta_python_migrated_slots};
 
 /* ---- dispatch -------------------------------------------------------------------------- */
 
@@ -448,21 +448,21 @@ PyObject *ta_python_host_task(ta_python_host *host, PyObject *coroutine) {
 }
 
 /* A WAKE: an event or a due delayed send came for a hibernated session
- * (one effect per hibernation, however many come), or a migration job
- * asks for it (JOB: that job; None to Python otherwise). The application's handler
+ * (one effect per hibernation, however many come), or a migration
+ * asks for it (MIGRATION: its id; None to Python otherwise). The application's handler
  * loads the session's blob and calls host.wake(session, blob), now or
  * later (an async def handler runs as a task); the events wait in its
  * mailbox. */
 static void ta_python_dispatch_wake(ta_python_host *host, uint32_t index) {
     if (host->wake == Py_None) return;
     PyObject *session = PyLong_FromUnsignedLongLong(ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SESSION));
-    uint64_t id = ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_JOB); /* 0: no job asked */
-    PyObject *job = !session ? NULL : id ? PyLong_FromUnsignedLongLong(id) : Py_NewRef(Py_None);
-    PyObject *result = job ? PyObject_CallFunctionObjArgs(host->wake, (PyObject *)host, session, job, NULL) : NULL;
+    uint64_t id = ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_MIGRATION); /* 0: no migration asked */
+    PyObject *migration = !session ? NULL : id ? PyLong_FromUnsignedLongLong(id) : Py_NewRef(Py_None);
+    PyObject *result = migration ? PyObject_CallFunctionObjArgs(host->wake, (PyObject *)host, session, migration, NULL) : NULL;
     if (result && host->wake_async) result = ta_python_host_task(host, result);
     if (!result) ta_python_host_keep_error(host);
     Py_XDECREF(result);
-    Py_XDECREF(job);
+    Py_XDECREF(migration);
     Py_XDECREF(session);
 }
 
@@ -925,21 +925,20 @@ static void ta_python_dispatch_uninvoke(ta_python_host *host, uint32_t index) {
     Py_DECREF(entry);
 }
 
-/* A job ended: its migrate call's handler gets {"job", "migrated", "failed",
- * "pending"}, the sessions it left behind read now (ta_host_job_pending:
+/* A migration ended: the host's migration_done handler gets {"migration",
+ * "migrated", "failed", "pending"}, the sessions it left behind read now (ta_host_migration_pending:
  * valid until the next run) into a bytes the list is made from, then
  * dropped; no handler, nothing read. */
-static void ta_python_dispatch_job(ta_python_host *host, uint32_t index) {
+static void ta_python_dispatch_migration(ta_python_host *host, uint32_t index) {
     ta_host *core = host->host;
-    uint32_t id = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_JOB);
-    PyObject *job = PyLong_FromUnsignedLong(id), *handler = NULL, *pending = NULL, *result = NULL, *called = NULL;
-    int found = job ? PyDict_GetItemRef(host->jobs, job, &handler) : -1;
-    if (found > 0 && PyDict_DelItem(host->jobs, job) < 0) found = -1;
+    uint32_t id = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_MIGRATION);
+    PyObject *handler = host->migration_done, *migration = NULL, *pending = NULL, *result = NULL, *called = NULL;
+    int found = handler == Py_None ? 0 : (migration = PyLong_FromUnsignedLong(id)) ? 1 : -1;
     if (found > 0) {
         uint32_t count = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_PENDING);
         PyObject *room = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)count * 8);
         uint64_t *left = room ? (uint64_t *)PyBytes_AsString(room) : NULL;
-        uint32_t got = left ? ta_host_job_pending(core, id, (ta_uint64_array){left, count}) : 0;
+        uint32_t got = left ? ta_host_migration_pending(core, id, (ta_uint64_array){left, count}) : 0;
         pending = left ? PyList_New(got < count ? got : count) : NULL;
         for (uint32_t i = 0; pending && i < got && i < count; i++) {
             PyObject *session = PyLong_FromUnsignedLongLong(left[i]);
@@ -947,7 +946,7 @@ static void ta_python_dispatch_job(ta_python_host *host, uint32_t index) {
             else PyList_SetItem(pending, i, session);
         }
         Py_XDECREF(room);
-        result = pending ? Py_BuildValue("{s:O,s:k,s:k,s:O}", "job", job, "migrated",
+        result = pending ? Py_BuildValue("{s:O,s:k,s:k,s:O}", "migration", migration, "migrated",
                                          (unsigned long)ta_host_effect_number(core, index, TA_EFFECT_FIELD_MIGRATED), "failed",
                                          (unsigned long)ta_host_effect_number(core, index, TA_EFFECT_FIELD_FAILED), "pending", pending)
                          : NULL;
@@ -957,8 +956,7 @@ static void ta_python_dispatch_job(ta_python_host *host, uint32_t index) {
     Py_XDECREF(called);
     Py_XDECREF(result);
     Py_XDECREF(pending);
-    Py_XDECREF(handler);
-    Py_XDECREF(job);
+    Py_XDECREF(migration);
 }
 
 void ta_python_dispatch(ta_python_host *host, uint32_t index) {
@@ -978,9 +976,9 @@ void ta_python_dispatch(ta_python_host *host, uint32_t index) {
     case TA_HOST_EFFECT_REPLY: ta_python_reply(host, index); break;
     case TA_EFFECT_WAKE: ta_python_dispatch_wake(host, index); break;
     case TA_HOST_EFFECT_MIGRATED:
-        ta_python_dispatch_view(host, (ta_python_handler){host->migrated, host->state->migration_type}, index);
+        ta_python_dispatch_view(host, (ta_python_handler){host->migrated, host->state->migrated_type}, index);
         break;
-    case TA_HOST_EFFECT_JOB_DONE: ta_python_dispatch_job(host, index); break;
+    case TA_HOST_EFFECT_MIGRATION_DONE: ta_python_dispatch_migration(host, index); break;
     case TA_EFFECT_INVOKE: ta_python_dispatch_invoke(host, index); break;
     case TA_EFFECT_UNINVOKE: ta_python_dispatch_uninvoke(host, index); break;
     case TA_HOST_EFFECT_TRACES: /* a request is ready: taken (the next comes only after a take) */
@@ -998,11 +996,11 @@ int ta_python_effects_init_types(PyObject *module, ta_python_module_state *state
     state->send_type = PyType_FromModuleAndSpec(module, &ta_python_send_spec, NULL);
     state->entry_type = state->send_type ? PyType_FromModuleAndSpec(module, &ta_python_entry_spec, NULL) : NULL;
     state->envelope_type = state->entry_type ? PyType_FromModuleAndSpec(module, &ta_python_envelope_spec, NULL) : NULL;
-    state->migration_type = state->envelope_type ? PyType_FromModuleAndSpec(module, &ta_python_migration_spec, NULL) : NULL;
-    state->invocation_type = state->migration_type ? PyType_FromModuleAndSpec(module, &ta_python_invocation_spec, NULL) : NULL;
+    state->migrated_type = state->envelope_type ? PyType_FromModuleAndSpec(module, &ta_python_migrated_spec, NULL) : NULL;
+    state->invocation_type = state->migrated_type ? PyType_FromModuleAndSpec(module, &ta_python_invocation_spec, NULL) : NULL;
     if (!state->invocation_type) return -1;
     if (PyModule_AddObjectRef(module, "Invocation", state->invocation_type) < 0) return -1;
-    if (PyModule_AddObjectRef(module, "Migration", state->migration_type) < 0) return -1;
+    if (PyModule_AddObjectRef(module, "Migrated", state->migrated_type) < 0) return -1;
     if (PyModule_AddObjectRef(module, "Send", state->send_type) < 0 ||
         PyModule_AddObjectRef(module, "LogEntry", state->entry_type) < 0)
         return -1;

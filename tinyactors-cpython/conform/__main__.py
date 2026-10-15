@@ -223,11 +223,15 @@ class Scenario:
         self.clock = tinyactors.SimulatedClock()
         self.blobs = {}  # the implementation's store (driver.md): hibernated actors' blobs
         self.snapshots = {}
+        self.migrations_done = []  # the results migration_done got
         self.host = None
 
-    def wake(self, host, session, job):
+    def wake(self, host, session, migration):
         """WAKE: the actor's blob from the store."""
         host.wake(session, self.blobs.pop(session))
+
+    def migration_done(self, host, result):
+        self.migrations_done.append(result)
 
     def log(self, host, entry):
         if self.outcome is None and entry.label == "Outcome":
@@ -246,7 +250,8 @@ class Scenario:
     CONFIG = {"systemID": "conformance", "system": {"ticksPerSecond": 1000}}
 
     def run(self, steps):
-        self.host = tinyactors.Host(self.CONFIG, log=self.log, clock=self.clock, wake=self.wake)
+        self.host = tinyactors.Host(self.CONFIG, log=self.log, clock=self.clock, wake=self.wake,
+                                    migration_done=self.migration_done)
         try:
             for step in steps:
                 try:
@@ -293,18 +298,17 @@ class Scenario:
             if step["restore"] not in self.snapshots:
                 raise Refused("a restore of a snapshot no step took: %s" % step["restore"])
             restored = tinyactors.Host.restore(self.snapshots[step["restore"]], self.CONFIG, log=self.log,
-                                               clock=self.clock, wake=self.wake)
+                                               clock=self.clock, wake=self.wake, migration_done=self.migration_done)
             host.close()
             self.host = restored  # a restart: the restored host replaces the running one
         elif "migrate" in step:
-            done = []
-            host.migrate(lambda host, result: done.append(result), wake=bool(step["migrate"].get("wake")),
-                         timeout=step["migrate"].get("timeout", 0))
-            for _ in range(100):  # the loop until its JOB_DONE, bounded as ta-conform's settles
+            ended = len(self.migrations_done)
+            host.migrate(wake=bool(step["migrate"].get("wake")), timeout=step["migrate"].get("timeout", 0))
+            for _ in range(100):  # the loop until its MIGRATION_DONE, bounded as ta-conform's settles
                 host.run_until_idle()
-                if done:
+                if len(self.migrations_done) > ended:
                     break
-            if not done:
+            if len(self.migrations_done) == ended:
                 raise Refused("the migration did not end")
         else:
             raise Refused("not in the binding's API yet: %s" % ", ".join(step))

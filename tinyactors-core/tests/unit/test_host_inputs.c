@@ -341,7 +341,7 @@ static void lookups_and_free(world *w) {
     memset(&status, 0, sizeof status);
     status.size = sizeof status;
     CHECK_EQUAL(ta_host_peer_status(w->host, peer_handle, &status), TA_OK);
-    CHECK_EQUAL(ta_host_job_pending(w->host, 1, (ta_uint64_array){NULL, 0}), 0u);
+    CHECK_EQUAL(ta_host_migration_pending(w->host, 1, (ta_uint64_array){NULL, 0}), 0u);
     CHECK_EQUAL(ta_host_effect_number(w->host, 0, TA_EFFECT_FIELD_KIND), 0u); /* no batch */
     CHECK_EQUAL(ta_host_effect_text(w->host, 0, TA_EFFECT_FIELD_EVENT).length, 0u);
     ta_host_peer_round_trip_time(w->host, peer_handle, 42);

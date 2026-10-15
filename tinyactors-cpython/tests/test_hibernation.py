@@ -17,7 +17,7 @@ class Store:
         self.blobs = {}
         self.wakes = []
 
-    def __call__(self, host, session, job):
+    def __call__(self, host, session, migration):
         self.wakes.append(session)
         host.wake(session, self.blobs.pop(session))
 
@@ -71,7 +71,7 @@ class Hibernation(unittest.TestCase):
         order once the application wakes the actor."""
         logs = Logs()
         wakes = []
-        with host_with([("counter.scxml", COUNTER["python"])], log=logs, wake=lambda host, s, job: wakes.append(s)) as host:
+        with host_with([("counter.scxml", COUNTER["python"])], log=logs, wake=lambda host, s, migration: wakes.append(s)) as host:
             session = host.spawn(host.chart("counter"))
             host.run_until_idle()
             blob = host.hibernate(session)
@@ -170,7 +170,7 @@ class Hibernation(unittest.TestCase):
                 host.wake(session, b"\x00not a blob")
 
     def test_a_wake_handler_that_raises_is_raised_by_the_driver(self):
-        def wake(host, session, job):
+        def wake(host, session, migration):
             raise ValueError("store down")
 
         with host_with([("counter.scxml", COUNTER["python"])], wake=wake) as host:
@@ -234,7 +234,7 @@ class Hibernation(unittest.TestCase):
                 host.wake(-1, b"")
 
     def test_an_async_wake_handler_under_with_raises_type_error(self):
-        async def wake(host, session, job):
+        async def wake(host, session, migration):
             pass
 
         with self.assertRaisesRegex(TypeError, "wake"):
@@ -244,7 +244,7 @@ class Hibernation(unittest.TestCase):
     def test_an_async_wake_handler_runs_as_a_task(self):
         logs, blobs = Logs(), {}
 
-        async def wake(host, session, job):
+        async def wake(host, session, migration):
             await asyncio.sleep(0)
             host.wake(session, blobs.pop(session))
 

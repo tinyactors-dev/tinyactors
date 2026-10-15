@@ -57,7 +57,7 @@ diagnostic notation.
 | `systemID` | text | required | this system's id: its addresses are `tinyactors://<systemID>/...` (docs/protocol.md, Addresses) |
 | `system` | map | `{}` | the capacities of each new segment, below |
 | `ioProcessors` | list of maps, at most 16 | `[]` | the host's I/O processors: `type` (text, required), `location` (text), `sync` (bool: the run stops after a send to it, `TA_IO_PROCESSOR_SYNC`) |
-| `migrateQuantum` | uint | `256` | actors a migration job looks at per run |
+| `migrateQuantum` | uint | `256` | actors a migration looks at per run |
 | `telemetry` | map | absent: no encoder | the OTLP encoder, below |
 
 Why these defaults:
@@ -70,7 +70,7 @@ Why these defaults:
   the same capacities, and the numbers are kept in one place.
 - **`ioProcessors`: none.** Core does no I/O. A processor is something the
   binding serves, so the binding names the ones it has.
-- **`migrateQuantum`: 256.** A migration job works between runs. 256 actors
+- **`migrateQuantum`: 256.** A migration works between runs. 256 actors
   per run keep a run short while a large segment still moves in a few
   thousand runs.
 - **`telemetry`: absent.** An encoder takes memory for its staging and

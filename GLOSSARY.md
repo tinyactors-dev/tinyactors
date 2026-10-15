@@ -75,7 +75,7 @@ group, the words build on each other.
 
 - **Host.** Many systems run as one actor system (`ta_host`): one
   segment per image, routing between them, chart versions, migration
-  jobs, hibernation, snapshots, the control plane and telemetry. A
+  migrations, hibernation, snapshots, the control plane and telemetry. A
   binding's API sits on the host.
 - **Segment.** One system inside a host, made from one image by
   `ta_host_add_image`. Segment k numbers its sessions k·2³²+1 and up, so
@@ -89,12 +89,13 @@ group, the words build on each other.
 - **Migration.** Moving running actors from an old version of their
   chart to the current one, each at its stable point, keeping its session
   id, its state configuration (states match by id) and its delayed sends;
-  it gets the upgrade event first.
-- **Job.** A migration in progress (`ta_host_migrate` returns its id). It
+  each actor gets the upgrade event first. One is started with
+  `ta_host_migrate`, which returns its id, and runs over the next runs: it
   moves actors a few per run, retries the busy ones, asks for the
   hibernated ones with a WAKE when told to wake them, waits for them
-  otherwise, and can time out. It ends with a `JOB_DONE` effect that says
-  how many moved, how many failed and which were left behind.
+  otherwise, and can time out. Each actor moved is a `MIGRATED` effect;
+  the end is a `MIGRATION_DONE` effect that says how many moved, how many
+  failed and which were left behind.
 - **Router.** The host's part that delivers a send to a session in
   another segment, or out to a peer.
 - **Effects, take, ack.** The host's loop: *take* a batch of effects
@@ -130,7 +131,7 @@ group, the words build on each other.
   an empty mailbox, no children, no external invocations and no pending
   request can hibernate.
 - **Wake.** Bringing a hibernated actor back: the host asks with a
-  `WAKE` effect when an event or a timer arrives for it, or a job wants
+  `WAKE` effect when an event or a timer arrives for it, or a migration wants
   it, and the application answers with `ta_host_wake` and the blob. A
   blob wakes only in the host that wrote it, or in a host restored from a
   snapshot of that host taken after it was written.

@@ -12,21 +12,21 @@ The application's side of migration (bindings.md section 4; README,
 2. migrate: version 2 of the chart is added, and Host.migrate(wake=True)
    moves every actor of version 1 to it. Version 2 takes the count from
    error.platform.upgrade (version 1's bindings) and knows its version.
-   The job asks for each hibernated actor with a WAKE that names it: the
+   The migration asks for each hibernated actor with a WAKE that names it: the
    program queues those and wakes a batch at a time, so at most R plus
-   two batches are resident; the job takes each woken one in its next
-   runs. An event's WAKE (job None) wakes its actor at once, and the job
+   two batches are resident; the migration takes each woken one in its next
+   runs. An event's WAKE (migration None) wakes its actor at once, and the migration
    takes that one too, so its events do not wait for the queue. Meanwhile
    E more events go to random actors, a batch after every wake: the
    migration is live. After each batch the migrated actors at rest are
    hibernated again (one put back before it moved would be asked for
    again: wasted work, not a stall);
-3. verify: the job ended with every actor migrated, none failed, none
+3. verify: the migration ended with every actor migrated, none failed, none
    left; a sample of actors (all when N is small) reports its count and
    version, which must be the events it was sent and 2; the old version's
    segment was retired; after every eviction at most R actors were
-   resident, plus two batches (the job's WAKEs woken in a round, and the
-   actors events woke, until the job moves them).
+   resident, plus two batches (the migration's WAKEs woken in a round, and the
+   actors events woke, until the migration moves them).
 
 Exits with status 1 when a check fails. Prints the times, the rates, the
 store's size, the process's peak memory and the host's region per actor.
@@ -61,10 +61,10 @@ def main():
     store = Store(os.path.join(directory.name, "actors.db"))
     resident = collections.OrderedDict()  # sessions in memory, least recently used first
     moved = bytearray(options.actors)     # 1: migrated to version 2 (the MIGRATED effect)
-    queued = bytearray(options.actors)    # 1: the job asked for it, waiting in `asked`
-    asked = collections.deque()           # the job's WAKEs, in the order they came
+    queued = bytearray(options.actors)    # 1: the migration asked for it, waiting in `asked`
+    asked = collections.deque()           # the migration's WAKEs, in the order they came
     counts, wakes, moves = {}, [0], [0]
-    job = {"done": None, "id": None}
+    current = {"result": None, "id": None}  # the migration: its id, then migration_done's result
 
     def index(session):
         return (session & 0xFFFFFFFF) - 1  # segment 0 numbers its sessions 1, 2, ...
@@ -74,13 +74,13 @@ def main():
         resident[session] = None
         wakes[0] += 1
 
-    def wake(host, session, job_id):
-        if job_id:  # the job asks: in its order, a batch at a time
+    def wake(host, session, migration):
+        if migration:  # the migration asks: in its order, a batch at a time
             if not queued[index(session)]:
                 queued[index(session)] = 1
                 asked.append(session)
             return
-        wake_now(host, session)  # an event's or a timer's: at once (a job waiting for it takes it)
+        wake_now(host, session)  # an event's or a timer's: at once (a migration waiting for it takes it)
 
     def migrated(host, entry):
         if moved[index(entry.session)]:
@@ -89,7 +89,7 @@ def main():
         moves[0] += 1
 
     def done(host, result):
-        job["done"] = result
+        current["result"] = result
 
     def log(host, entry):
         session, count, version = entry.text.split()
@@ -136,7 +136,7 @@ def main():
     config = {"systemID": "migration", "system": {"maxActors": options.actors + 4 * BATCH, "maxEvents": 4096,
                                                   "instanceBytes": 128 * resident_room,
                                                   "stringBytes": 16384 + 16 * resident_room, "tracing": False}}
-    host = tinyactors.Host(config, wake=wake, log=log, migrated=migrated)
+    host = tinyactors.Host(config, wake=wake, log=log, migrated=migrated, migration_done=done)
     v1, v2 = (read_chart(version, options.datamodel) for version in ("counter-v1", "counter-v2"))
     with tinyactors.compile_charts([("counter.scxml", v1)]) as compiled:
         host.add_image(compiled.image)
@@ -184,13 +184,13 @@ def main():
     with tinyactors.compile_charts([("counter.scxml", v2)]) as compiled:
         host.add_image(compiled.image)
     region_both = None
-    job["id"] = host.migrate(done, wake=True)
+    current["id"] = host.migrate(wake=True)
     live_events, stalled, before = 0, 0, -1
-    while job["done"] is None:
+    while current["result"] is None:
         stalled = stalled + 1 if moves[0] == before and not asked else 0
         before = moves[0]
         if stalled > 100:
-            failures.append("the job stalled: nothing moved in 100 rounds, %d actors moved" % before)
+            failures.append("the migration stalled: nothing moved in 100 rounds, %d actors moved" % before)
             break
         woken = 0
         while asked and woken < BATCH:
@@ -204,13 +204,13 @@ def main():
             live_events += min(BATCH, options.events - live_events)
         host.run_until_idle()
         evict(host, True)
-        # a batch of the job's WAKEs woken this round, and up to a batch the
-        # round's events woke, until the job moves them (only moved actors go
+        # a batch of the migration's WAKEs woken this round, and up to a batch the
+        # round's events woke, until the migration moves them (only moved actors go
         # back)
         stats = check_resident(host, 2 * BATCH)
         if region_both is None:
             region_both = stats["regionBytes"]
-    while live_events < options.events:  # the rest after the job, so every run has its E events
+    while live_events < options.events:  # the rest after the migration, so every run has its E events
         traffic(min(BATCH, options.events - live_events))
         live_events += min(BATCH, options.events - live_events)
         host.run_until_idle()
@@ -218,9 +218,9 @@ def main():
     evict(host, False)
     store.flush()
     migration = time.perf_counter() - started
-    result = job["done"] or {"job": None, "migrated": 0, "failed": 0, "pending": None}
-    if result["job"] != job["id"] or result["migrated"] != options.actors or result["failed"] or result["pending"]:
-        failures.append("the job ended %r, not %d migrated" % (result, options.actors))
+    result = current["result"] or {"migration": None, "migrated": 0, "failed": 0, "pending": None}
+    if result["migration"] != current["id"] or result["migrated"] != options.actors or result["failed"] or result["pending"]:
+        failures.append("the migration ended %r, not %d migrated" % (result, options.actors))
     if moves[0] != options.actors:
         failures.append("%d MIGRATED effects for %d actors" % (moves[0], options.actors))
     stats = check_resident(host, 0)

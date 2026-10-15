@@ -100,14 +100,14 @@ marks a behaviour no test checks.
 | `ta_host_peer_error_read` (:560) | no host | the caller's `ta_peer_error`, views into the bytes | `TA_ERROR_INVALID` | none | `envelopes.txt` |
 | `ta_host_peer_round_trip_time` (:562) | all (not checked, `router.c:1274-1277`) | sets a counter: an input, not a read | stale: nothing | accepted in R/G, as `host.h` says: it records a measurement and changes nothing a run uses | `test_router.c` `test_route_status` |
 | `ta_host_peer_status` (:575) | all (not checked, `router.c:1279`) | the caller's struct; `id` until the peer is removed | `TA_ERROR_STALE` | answers in R/G, a lookup in `host.h`'s list | `test_router.c` `test_route_status` |
-| `ta_host_migrate` (:587) | I, D | a job id; `MIGRATED`, `JOB_DONE` pending in later runs | R/G `TA_ERROR_STATE` (`host.c:1403`); `TA_ERROR_NO_MEMORY` | none | `test_host.c` `test_versions_and_migration` |
-| `ta_host_job_pending` (:589) | all (not checked) | the caller's array: the sessions a running job waits for, in no order; a finished job's list is readable until the next run, which comes after the ack | none | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_migration_wake_and_timeout` |
+| `ta_host_migrate` (:587) | I, D | a migration id; `MIGRATED`, `MIGRATION_DONE` pending in later runs | R/G `TA_ERROR_STATE` (`host.c:1403`); `TA_ERROR_NO_MEMORY` | none | `test_host.c` `test_versions_and_migration` |
+| `ta_host_migration_pending` (:589) | all (not checked) | the caller's array: the sessions a running migration waits for, in no order; a finished migration's list is readable until the next run, which comes after the ack | none | answers in R/G, a lookup in `host.h`'s list | `test_host.c` `test_migration_wake_and_timeout` |
 | `ta_host_sweep` (:595) | I, D | sessions in the caller's array | R/G: 0 (`host.c:1962`) | none | `test_host.c`, `test_host_memory.c` |
 | `ta_host_hibernate` (:600) | I, D | the blob, a view of host memory until the ack | R/G `TA_ERROR_STATE` (`host.c:2014`); `TA_ERROR_NO_MEMORY`: the actor stays | `serialize`, `destroy` in G (`host.c:2022`) | `test_host.c` `test_hibernate_and_wake`; `test_host_guard.c` `test_hibernate`; blob after a later call: through the same output path as `test_outputs_last_until_the_ack` |
-| `ta_host_wake` (:601) | I, D | the actor back, and back on the retry list of a migration job that waits for it; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2029`); `TA_ERROR_NO_MEMORY` (a job's list could not grow, or the segment): the actor stays hibernated | `deserialize` in G (`host.c:2035`) | `test_host.c` `test_hibernate_and_wake` |
-| `ta_host_export_actor` (:619) | I, D | the blob, a view until the ack; the actor leaves, and leaves the migration jobs that wait for it | R/G `TA_ERROR_STATE` (`host.c:2048`); `TA_ERROR_NO_MEMORY`: it stays | `serialize`, `payload_serialize`, `destroy` in G (`host.c:2055`) | `test_host.c` `test_export_adopt_between_hosts`; `test_host_guard.c` `test_each_output_once` |
+| `ta_host_wake` (:601) | I, D | the actor back, and back on the retry list of a migration that waits for it; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2029`); `TA_ERROR_NO_MEMORY` (a migration's list could not grow, or the segment): the actor stays hibernated | `deserialize` in G (`host.c:2035`) | `test_host.c` `test_hibernate_and_wake` |
+| `ta_host_export_actor` (:619) | I, D | the blob, a view until the ack; the actor leaves, and leaves the migrations that wait for it | R/G `TA_ERROR_STATE` (`host.c:2048`); `TA_ERROR_NO_MEMORY`: it stays | `serialize`, `payload_serialize`, `destroy` in G (`host.c:2055`) | `test_host.c` `test_export_adopt_between_hosts`; `test_host_guard.c` `test_each_output_once` |
 | `ta_host_adopt` (:625) | I, D | a session id; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2122`); `TA_ERROR_INVALID`, `TA_ERROR_STATE` (ids taken), `TA_ERROR_NO_MEMORY` | `deserialize`, `payload_deserialize`, `migrate` in G (`host.c:2133`); `serialize` when it exports the tree back (`host.c:2148`) | `test_host.c` `test_export_adopt_between_hosts`, `test_adopt_tree_collision` |
-| `ta_host_snapshot` (:642) | I with nothing pending | into the caller's `ta_buffer` | effects published or pending (`host.c:2470`), or a job active: `TA_ERROR_STATE`; a batch opened only by an output view too; R/G too (`host.c:2469`); `TA_ERROR_NO_MEMORY`: `length` is what it needs | none | `test_host.c` `test_snapshot_restore` |
+| `ta_host_snapshot` (:642) | I with nothing pending | into the caller's `ta_buffer` | effects published or pending (`host.c:2470`), or a migration active: `TA_ERROR_STATE`; a batch opened only by an output view too; R/G too (`host.c:2469`); `TA_ERROR_NO_MEMORY`: `length` is what it needs | none | `test_host.c` `test_snapshot_restore` |
 | `ta_host_snapshot_segments` (:646) | no host | hashes in the caller's array | 0: not a snapshot | none | `test_host.c` |
 | `ta_host_restore` (:700) | no host | a new host; images copied as by `add_image`; its first `ta_host_run` (after the datamodels' state is restored) announces each external invocation that was running again, before any actor runs: a `TA_EFFECT_INVOKE` with `TA_EFFECT_FLAG_RESTORED`, its token, type, src, invoke id and params | `TA_ERROR_INVALID`, `NO_MEMORY` | `chart_attach` in G (`host.c:2669`) | `test_host.c` `test_snapshot_restore`, `test_host_effects.c` `test_restore_announces_external_invocations`, `test_restore_after_images_freed` |
 | `ta_host_snapshot_pack` (:671) | I with nothing pending | into the caller's `ta_buffer` | as `ta_host_snapshot` (it calls it, `host.c:2764`) | none | `test_host.c` `test_snapshot_pack` |
@@ -148,7 +148,7 @@ keeps first (ADR 0010 decision 1).
 | a host output until the next call into the host | bookkeeping: one block reused | **removed**: until the ack |
 | a datamodel's output until its next call | callers (datamodel authors): core consumes it inside its own call | kept |
 | the caller's `ta_buffer` (snapshots, `environment->error`) | callers: the size is known up front, or no host exists | kept |
-| structural borrows (a segment's image, `ta_host_system`, a peer's id, a job's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
+| structural borrows (a segment's image, `ta_host_system`, a peer's id, a migration's pending list) | bookkeeping a binding rarely reads | kept, as `host.h` states each |
 | `REPLY` or `NOTIFICATION` | callers: an answer or news | kept |
 | `actor.changed` with `value`, `null`, or no `value` | the third was a limit's leftover | **removed** with `actor.subscribe` (ADR 0012, decision 4); notifications stay possible |
 
@@ -164,7 +164,7 @@ The findings of step 8.2, each settled by a decision and a test:
    in R/G (`test_host_inputs.c` `test_lookups_answer_and_free_does_nothing`).
 2. **Lookups during a run beyond `host.h`'s list** — settled: `host.h`
    lists `ta_host_segment_info_get`, `ta_host_system`,
-   `ta_host_peer_status`, `ta_host_job_pending` and the effect accessors
+   `ta_host_peer_status`, `ta_host_migration_pending` and the effect accessors
    as lookups, and accepts `ta_host_peer_round_trip_time` (same test).
 3. **`ta_host_envelope` takes the effect's address** — settled: it keeps
    it, for records of the batch and records the caller builds (section 7).
@@ -175,7 +175,7 @@ The findings of step 8.2, each settled by a decision and a test:
 5. **The width of ids in `types.h`** — settled: `types.h` names three
    kinds: indices (segment, chart, I/O processor, datamodel) are
    `uint32_t` from 0 with `TA_NIL` for none; handles (actor, token, peer,
-   job, watch) are `uint32_t`, never 0, with 0 for none (an actor's and a
+   migration, watch) are `uint32_t`, never 0, with 0 for none (an actor's and a
    token's carry a generation, `ta_pool_handle`, `src/base/pool.h:70`);
    sessions, payloads and `ta_table` handles are `uint64_t` with 0 for
    none.

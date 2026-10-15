@@ -201,16 +201,16 @@
       "value": 7
     },
     {
-      "name": "TA_EFFECT_FIELD_JOB",
-      "value": 9
-    },
-    {
       "name": "TA_EFFECT_FIELD_KIND",
       "value": 1
     },
     {
       "name": "TA_EFFECT_FIELD_MIGRATED",
       "value": 14
+    },
+    {
+      "name": "TA_EFFECT_FIELD_MIGRATION",
+      "value": 9
     },
     {
       "name": "TA_EFFECT_FIELD_MSGID",
@@ -381,16 +381,16 @@
       "value": 2
     },
     {
-      "name": "TA_HOST_EFFECT_JOB_DONE",
-      "value": 17
-    },
-    {
       "name": "TA_HOST_EFFECT_LOGS",
       "value": 22
     },
     {
       "name": "TA_HOST_EFFECT_MIGRATED",
       "value": 16
+    },
+    {
+      "name": "TA_HOST_EFFECT_MIGRATION_DONE",
+      "value": 17
     },
     {
       "name": "TA_HOST_EFFECT_NOTIFICATION",
@@ -3568,7 +3568,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "jobs",
+          "name": "migrations",
           "type": "uint32_t"
         },
         {
@@ -3606,7 +3606,7 @@
             "actors": 8,
             "hibernated": 12,
             "runnable": 16,
-            "jobs": 20,
+            "migrations": 20,
             "region_bytes": 24,
             "delivered": 32,
             "routed": 40,
@@ -3624,7 +3624,7 @@
             "actors": 8,
             "hibernated": 12,
             "runnable": 16,
-            "jobs": 20,
+            "migrations": 20,
             "region_bytes": 24,
             "delivered": 32,
             "routed": 40,
@@ -3642,7 +3642,7 @@
             "actors": 8,
             "hibernated": 12,
             "runnable": 16,
-            "jobs": 20,
+            "migrations": 20,
             "region_bytes": 24,
             "delivered": 32,
             "routed": 40,
@@ -7734,7 +7734,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "job",
+          "name": "migration",
           "type": "uint32_t"
         },
         {
@@ -7820,7 +7820,7 @@
             "token": 32,
             "io_processor": 36,
             "flags": 40,
-            "job": 44,
+            "migration": 44,
             "target": 48,
             "event": 64,
             "sendid": 80,
@@ -7853,7 +7853,7 @@
             "token": 32,
             "io_processor": 36,
             "flags": 40,
-            "job": 44,
+            "migration": 44,
             "target": 48,
             "event": 64,
             "sendid": 80,
@@ -7886,7 +7886,7 @@
             "token": 32,
             "io_processor": 36,
             "flags": 40,
-            "job": 44,
+            "migration": 44,
             "target": 48,
             "event": 56,
             "sendid": 64,
@@ -10248,27 +10248,6 @@
       "implemented": true
     },
     {
-      "name": "ta_host_job_pending",
-      "returns": "uint32_t",
-      "params": [
-        {
-          "name": "h",
-          "type": "const ta_host *"
-        },
-        {
-          "name": "job",
-          "type": "uint32_t"
-        },
-        {
-          "name": "out",
-          "type": "ta_uint64_array"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_host_locate",
       "returns": "ta_status",
       "params": [
@@ -10353,12 +10332,33 @@
           "type": "ta_host *"
         },
         {
-          "name": "migration",
+          "name": "request",
           "type": "const ta_host_migration *"
         },
         {
-          "name": "job",
+          "name": "migration",
           "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_migration_pending",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "h",
+          "type": "const ta_host *"
+        },
+        {
+          "name": "migration",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_uint64_array"
         }
       ],
       "public": true,

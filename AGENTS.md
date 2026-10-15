@@ -1,7 +1,7 @@
 # Working in this repo
 
 **Words.** [GLOSSARY.md](GLOSSARY.md) defines the terms (host, system,
-segment, version, migration, job, hibernation, snapshot, effect, ...).
+segment, version, migration, hibernation, snapshot, effect, ...).
 Use them as it does, and add a term there when you introduce one.
 
 **Layers.** Core decides what inputs mean and runs actors in one block of

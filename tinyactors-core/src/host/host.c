@@ -448,11 +448,11 @@ static void image_free(ta_host *host, host_segment *segment) {
     segment->image_size = 0;
 }
 
-static void job_free(ta_host *host, migration_job *job) {
-    host_free(host, job->name, job->name_length);
-    session_map_free(&job->members, &host->config.allocator);
-    host_free(host, job->retry, sizeof(uint64_t) * job->retry_capacity);
-    host_free(host, job->left, sizeof(uint64_t) * job->left_capacity);
+static void migration_free(ta_host *host, host_migration *migration) {
+    host_free(host, migration->name, migration->name_length);
+    session_map_free(&migration->members, &host->config.allocator);
+    host_free(host, migration->retry, sizeof(uint64_t) * migration->retry_capacity);
+    host_free(host, migration->left, sizeof(uint64_t) * migration->left_capacity);
 }
 
 void ta_host_free(ta_host *host) {
@@ -474,9 +474,9 @@ void ta_host_free(ta_host *host) {
     }
     host_free(host, host->segments, sizeof(host_segment) * host->segment_capacity);
     host_free(host, host->versions, sizeof(chart_version) * host->version_capacity);
-    for (uint32_t i = 0; i < host->job_count; i++)
-        job_free(host, &host->jobs[i]);
-    host_free(host, host->jobs, sizeof(migration_job) * host->job_capacity);
+    for (uint32_t i = 0; i < host->migration_count; i++)
+        migration_free(host, &host->migrations[i]);
+    host_free(host, host->migrations, sizeof(host_migration) * host->migration_capacity);
     session_map_free(&host->moved, &host->config.allocator);
     host_free(host, host->effects, sizeof(ta_host_effect) * host->effect_capacity);
     host_free(host, host->effect_strings, sizeof(effect_strings) * host->effect_capacity);
@@ -964,7 +964,7 @@ ta_host_effect *host_effect_new(ta_host *host, uint32_t kind, uint32_t segment) 
     effect->size = sizeof *effect;
     effect->kind = kind;
     effect->segment = segment;
-    effect->job = 0; /* a handle: 0 for none (boundary.md) */
+    effect->migration = 0; /* a handle: 0 for none (boundary.md) */
     effect->chart = TA_NIL;
     effect->datamodel = TA_NIL;
     for (int k = 0; k < EFFECT_STRINGS; k++)
@@ -1093,7 +1093,7 @@ uint64_t ta_host_effect_number(const ta_host *host, uint32_t index, uint32_t fie
     case TA_EFFECT_FIELD_TOKEN: return effect->token;
     case TA_EFFECT_FIELD_IO_PROCESSOR: return effect->io_processor;
     case TA_EFFECT_FIELD_FLAGS: return effect->flags;
-    case TA_EFFECT_FIELD_JOB: return effect->job;
+    case TA_EFFECT_FIELD_MIGRATION: return effect->migration;
     case TA_EFFECT_FIELD_PAYLOAD: return effect->payload;
     case TA_EFFECT_FIELD_DATAMODEL: return effect->datamodel;
     case TA_EFFECT_FIELD_DELAY_HINT: return effect->delay_hint;
@@ -1255,106 +1255,106 @@ static ta_status drain(ta_host *host, uint32_t si) {
 
 /* ---- migration ------------------------------------------------------------------------ */
 
-static migration_job *job_by_id(const ta_host *host, uint32_t id) {
-    for (uint32_t i = 0; i < host->job_count; i++)
-        if (host->jobs[i].id == id) return &host->jobs[i];
+static host_migration *migration_by_id(const ta_host *host, uint32_t id) {
+    for (uint32_t i = 0; i < host->migration_count; i++)
+        if (host->migrations[i].id == id) return &host->migrations[i];
     return NULL;
 }
 
-/* Room in a job for `extra` more sessions in its retry list (and, with
- * `members`, as members); 0 if refused (the job unchanged). */
-typedef struct job_room {
+/* Room in a migration for `extra` more sessions in its retry list (and, with
+ * `members`, as members); 0 if refused (the migration unchanged). */
+typedef struct migration_room {
     uint32_t extra;
     int members;
-} job_room;
+} migration_room;
 
-static int job_reserve(ta_host *host, migration_job *job, job_room room) {
-    if (room.members && !session_map_reserve(&job->members, room.extra, &host->config.allocator)) return 0;
-    uint32_t need = job->retry_count + room.extra;
-    if (need <= job->retry_capacity) return 1;
-    uint32_t c = job->retry_capacity ? job->retry_capacity : 8;
+static int migration_reserve(ta_host *host, host_migration *migration, migration_room room) {
+    if (room.members && !session_map_reserve(&migration->members, room.extra, &host->config.allocator)) return 0;
+    uint32_t need = migration->retry_count + room.extra;
+    if (need <= migration->retry_capacity) return 1;
+    uint32_t c = migration->retry_capacity ? migration->retry_capacity : 8;
     while (c < need)
         c *= 2;
     uint64_t *retry = (uint64_t *)host_alloc(host, sizeof(uint64_t) * c);
     if (!retry) return 0;
-    if (job->retry_count) ta_memcpy(retry, job->retry, sizeof(uint64_t) * job->retry_count);
-    host_free(host, job->retry, sizeof(uint64_t) * job->retry_capacity);
-    job->retry = retry;
-    job->retry_capacity = c;
+    if (migration->retry_count) ta_memcpy(retry, migration->retry, sizeof(uint64_t) * migration->retry_count);
+    host_free(host, migration->retry, sizeof(uint64_t) * migration->retry_capacity);
+    migration->retry = retry;
+    migration->retry_capacity = c;
     return 1;
 }
 
-/* A session the job waits for: JOB_ASLEEP (hibernated; asked for when the
- * job wakes them) or JOB_RETRY (in memory, at its retry list until a stable
+/* A session the migration waits for: MIGRATION_ASLEEP (hibernated; asked for when the
+ * migration wakes them) or MIGRATION_RETRY (in memory, at its retry list until a stable
  * point). Joining the retry list needs job_reserve first, a new member
  * job_reserve with members. */
-enum { JOB_ASLEEP = 1, JOB_RETRY = 2 };
+enum { MIGRATION_ASLEEP = 1, MIGRATION_RETRY = 2 };
 
-static void job_wait(migration_job *job, uint64_t session, uint32_t state) {
-    uint32_t was = session_map_get(&job->members, session);
-    session_map_put(&job->members, session, state);
-    if (state == JOB_RETRY && was != JOB_RETRY) job->retry[job->retry_count++] = session;
+static void migration_wait(host_migration *migration, uint64_t session, uint32_t state) {
+    uint32_t was = session_map_get(&migration->members, session);
+    session_map_put(&migration->members, session, state);
+    if (state == MIGRATION_RETRY && was != MIGRATION_RETRY) migration->retry[migration->retry_count++] = session;
 }
 
-ta_status ta_host_migrate(ta_host *host, const ta_host_migration *migration, uint32_t *id) {
+ta_status ta_host_migrate(ta_host *host, const ta_host_migration *request, uint32_t *id) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
-    ta_string_view name = migration->name;
-    uint64_t session = migration->session;
-    uint32_t flags = migration->flags;
-    ta_time timeout = migration->timeout;
-    if (!host_grow(host, (void **)&host->jobs, &host->job_capacity, host->job_count + 1,
-                   sizeof(migration_job)))
+    ta_string_view name = request->name;
+    uint64_t session = request->session;
+    uint32_t flags = request->flags;
+    ta_time timeout = request->timeout;
+    if (!host_grow(host, (void **)&host->migrations, &host->migration_capacity, host->migration_count + 1,
+                   sizeof(host_migration)))
         return TA_ERROR_NO_MEMORY;
-    migration_job job;
-    ta_memset(&job, 0, sizeof job);
+    host_migration migration;
+    ta_memset(&migration, 0, sizeof migration);
     if (name.length) {
-        job.name = (char *)host_alloc(host, name.length);
-        if (!job.name) return TA_ERROR_NO_MEMORY;
-        ta_memcpy(job.name, name.pointer, name.length);
-        job.name_length = name.length;
+        migration.name = (char *)host_alloc(host, name.length);
+        if (!migration.name) return TA_ERROR_NO_MEMORY;
+        ta_memcpy(migration.name, name.pointer, name.length);
+        migration.name_length = name.length;
     }
     if (session) {
-        if (!job_reserve(host, &job, (job_room){1, 1})) {
-            job_free(host, &job);
+        if (!migration_reserve(host, &migration, (migration_room){1, 1})) {
+            migration_free(host, &migration);
             return TA_ERROR_NO_MEMORY;
         }
-        job_wait(&job, session, JOB_RETRY);
+        migration_wait(&migration, session, MIGRATION_RETRY);
     }
-    job.id = ++host->job_sequence;
-    job.active = 1;
-    job.flags = flags;
-    job.session = session;
-    job.deadline = timeout ? host->now + timeout : 0;
-    job.walking = session == 0;
-    host->jobs[host->job_count++] = job;
-    if (id) *id = job.id;
+    migration.id = ++host->migration_sequence;
+    migration.active = 1;
+    migration.flags = flags;
+    migration.session = session;
+    migration.deadline = timeout ? host->now + timeout : 0;
+    migration.walking = session == 0;
+    host->migrations[host->migration_count++] = migration;
+    if (id) *id = migration.id;
     return TA_OK;
 }
 
-uint32_t ta_host_job_pending(const ta_host *host, uint32_t id, ta_uint64_array out) {
-    const migration_job *job = job_by_id(host, id);
-    if (!job) return 0;
-    if (!job->active) {
-        for (uint32_t i = 0; i < job->left_count && i < out.capacity; i++)
-            out.pointer[i] = job->left[i];
-        return job->left_count;
+uint32_t ta_host_migration_pending(const ta_host *host, uint32_t id, ta_uint64_array out) {
+    const host_migration *migration = migration_by_id(host, id);
+    if (!migration) return 0;
+    if (!migration->active) {
+        for (uint32_t i = 0; i < migration->left_count && i < out.capacity; i++)
+            out.pointer[i] = migration->left[i];
+        return migration->left_count;
     }
     uint64_t session;
     uint32_t n = 0;
-    for (uint32_t cursor = 0; session_map_next(&job->members, &cursor, &session) != TA_NIL; n++)
+    for (uint32_t cursor = 0; session_map_next(&migration->members, &cursor, &session) != TA_NIL; n++)
         if (n < out.capacity) out.pointer[n] = session;
     return n;
 }
 
-/* Should (segment, actor) move for this job? Returns the target version. */
-static const chart_version *candidate(ta_host *host, migration_job *job, uint32_t si,
+/* Should (segment, actor) move for this migration? Returns the target version. */
+static const chart_version *candidate(ta_host *host, host_migration *migration, uint32_t si,
                                       uint32_t actor, ta_actor_info *actor_info) {
     host_segment *segment = &host->segments[si];
     actor_info->size = sizeof *actor_info;
     if (ta_actor_info_get(segment->system, actor, actor_info) != TA_OK || actor_info->parent)
         return NULL;
     ta_string_view k = chart_key(segment->image, actor_info->chart);
-    if (job->name_length && !name_equal(k, job->name, job->name_length)) return NULL;
+    if (migration->name_length && !name_equal(k, migration->name, migration->name_length)) return NULL;
     const chart_version *version = version_of(host, k);
     return version && version->segment != si ? version : NULL;
 }
@@ -1378,11 +1378,11 @@ static void adopt_home(ta_host *host, host_segment *from, const unsigned char *b
 /* 1 moved; MIGRATE_LATER (busy), MIGRATE_ASLEEP (hibernated), MIGRATE_FAILED,
  * MIGRATE_SKIP (not a candidate anymore), MIGRATE_NO_MEMORY (the actor stays
  * where it was; later) */
-static int migrate_one(ta_host *host, migration_job *job, uint64_t session) {
+static int migrate_one(ta_host *host, host_migration *migration, uint64_t session) {
     uint32_t si, actor;
     if (host_locate(host, session, &si, &actor) != TA_OK) return MIGRATE_SKIP;
     ta_actor_info actor_info;
-    const chart_version *version = candidate(host, job, si, actor, &actor_info);
+    const chart_version *version = candidate(host, migration, si, actor, &actor_info);
     if (!version) return MIGRATE_SKIP;
     host_segment *from = &host->segments[si], *to = &host->segments[version->segment];
     if (actor_info.state == TA_ACTOR_HIBERNATED) return MIGRATE_ASLEEP;
@@ -1392,7 +1392,7 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session) {
     /* everything the move needs once the actor has left its segment */
     if (!host_effects_reserve(host, 1, key.length) || !moved_reserve(host, 1))
         return MIGRATE_NO_MEMORY;
-    /* between the segments' runs (ta_host_run's job step): the blob grows
+    /* between the segments' runs (ta_host_run's migration step): the blob grows
      * through the host's allocator while it is written, once */
     ta_output *scratch = blob_scratch(host);
     uint32_t was = host_guard(host); /* serialize, payload_serialize, destroy */
@@ -1403,15 +1403,15 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session) {
     if (status != TA_OK) return MIGRATE_FAILED;
     size_t length = host->blob.length;
     int moved = 0, refused = 0;
-    ta_blob_migration migration = {from->image, to->image, chart, 0, {host->blob.bytes, length}};
+    ta_blob_migration blob_request = {from->image, to->image, chart, 0, {host->blob.bytes, length}};
     ta_buffer migrated = {(void *)0, 0, 0};
-    ta_status ms = ta_blob_migrate(&migration, &migrated);
+    ta_status ms = ta_blob_migrate(&blob_request, &migrated);
     if (ms == TA_ERROR_NO_MEMORY &&
         !buffer_at(host, &host->blob2, &host->blob2_capacity, migrated.length)) {
         refused = 1;
     } else if (ms == TA_ERROR_NO_MEMORY) {
         migrated = (ta_buffer){host->blob2, host->blob2_capacity, 0};
-        if (ta_blob_migrate(&migration, &migrated) == TA_OK) {
+        if (ta_blob_migrate(&blob_request, &migrated) == TA_OK) {
             ta_bytes blob = {host->blob2, migrated.length};
             uint32_t na;
             ta_status grown = TA_OK;
@@ -1439,78 +1439,78 @@ static int migrate_one(ta_host *host, migration_job *job, uint64_t session) {
     host_locate(host, session, NULL, &na);
     effect->actor = na;
     effect->session = effect->root = session;
-    effect->job = job->id;
+    effect->migration = migration->id;
     effect->chart = chart;
     host_effect_strings_set(host, (ta_string_view){0, 0}, key, (ta_string_view){0, 0},
                             (ta_string_view){0, 0});
     return 1;
 }
 
-/* A WAKE naming the job: the host loads a hibernated member. 0 if the
+/* A WAKE naming the migration: the host loads a hibernated member. 0 if the
  * effect could not be reserved (asked again in a later run). */
-static int job_ask(ta_host *host, migration_job *job, uint64_t session) {
+static int migration_ask(ta_host *host, host_migration *migration, uint64_t session) {
     uint32_t si, actor;
     if (host_locate(host, session, &si, &actor) != TA_OK) return 1;
     if (!host_effects_reserve(host, 1, 0)) return 0;
     ta_host_effect *effect = host_effect_new(host, TA_EFFECT_WAKE, si);
     effect->actor = actor;
     effect->session = effect->root = session;
-    effect->job = job->id;
+    effect->migration = migration->id;
     return 1;
 }
 
-/* What migrate_one answered for a session, and what the job does with it. */
-typedef struct job_outcome {
+/* What migrate_one answered for a session, and what the migration does with it. */
+typedef struct migration_outcome {
     uint64_t session;
     int result;
-} job_outcome;
+} migration_outcome;
 
 /* Counts it, and keeps waiting for it or lets it go. A hibernated one is
- * asked for (TA_HOST_MIGRATE_WAKE) each time the job finds it asleep: it was
- * in memory since the last time, so the job's earlier WAKE was answered.
+ * asked for (TA_HOST_MIGRATE_WAKE) each time the migration finds it asleep: it was
+ * in memory since the last time, so the migration's earlier WAKE was answered.
  * Needs job_reserve with members for a session that is no member yet.
  * TA_ERROR_NO_MEMORY: it is tried again in a later run. */
-static ta_status job_settle(ta_host *host, migration_job *job, job_outcome outcome) {
+static ta_status migration_settle(ta_host *host, host_migration *migration, migration_outcome outcome) {
     int r = outcome.result;
-    if (r > 0) job->migrated++;
-    if (r == MIGRATE_FAILED) job->failed++;
+    if (r > 0) migration->migrated++;
+    if (r == MIGRATE_FAILED) migration->failed++;
     if (r > 0 || r == MIGRATE_FAILED || r == MIGRATE_SKIP) {
-        session_map_put(&job->members, outcome.session, TA_NIL);
+        session_map_put(&migration->members, outcome.session, TA_NIL);
         return TA_OK;
     }
-    if (r == MIGRATE_ASLEEP && (job->flags & TA_HOST_MIGRATE_WAKE) && !job_ask(host, job, outcome.session))
+    if (r == MIGRATE_ASLEEP && (migration->flags & TA_HOST_MIGRATE_WAKE) && !migration_ask(host, migration, outcome.session))
         r = MIGRATE_NO_MEMORY;
-    job_wait(job, outcome.session, r == MIGRATE_ASLEEP ? JOB_ASLEEP : JOB_RETRY);
+    migration_wait(migration, outcome.session, r == MIGRATE_ASLEEP ? MIGRATION_ASLEEP : MIGRATION_RETRY);
     return r == MIGRATE_NO_MEMORY ? TA_ERROR_NO_MEMORY : TA_OK;
 }
 
 /* The candidates a timed-out walk did not reach join the members, chunk by
  * chunk (the walk's place kept, so a refusal resumes where it stopped). */
-static ta_status job_walk_rest(ta_host *host, migration_job *job) {
-    for (; job->walk_segment < host->segment_count; job->walk_segment++, job->cursor = 0) {
-        host_segment *segment = segment_of(host, job->walk_segment);
+static ta_status migration_walk_rest(ta_host *host, host_migration *migration) {
+    for (; migration->walk_segment < host->segment_count; migration->walk_segment++, migration->cursor = 0) {
+        host_segment *segment = segment_of(host, migration->walk_segment);
         if (!segment) continue;
         uint32_t list[256], n;
         for (;;) {
-            if (!job_reserve(host, job, (job_room){256, 1})) return TA_ERROR_NO_MEMORY;
-            if (!(n = ta_system_actors(segment->system, &job->cursor, (ta_uint32_array){list, 256}))) break;
+            if (!migration_reserve(host, migration, (migration_room){256, 1})) return TA_ERROR_NO_MEMORY;
+            if (!(n = ta_system_actors(segment->system, &migration->cursor, (ta_uint32_array){list, 256}))) break;
             for (uint32_t k = 0; k < n; k++) {
                 ta_actor_info actor_info;
-                if (candidate(host, job, job->walk_segment, list[k], &actor_info) &&
-                    session_map_get(&job->members, actor_info.serial) == TA_NIL)
-                    session_map_put(&job->members, actor_info.serial, JOB_ASLEEP); /* left: not retried */
+                if (candidate(host, migration, migration->walk_segment, list[k], &actor_info) &&
+                    session_map_get(&migration->members, actor_info.serial) == TA_NIL)
+                    session_map_put(&migration->members, actor_info.serial, MIGRATION_ASLEEP); /* left: not retried */
             }
         }
     }
-    job->walking = 0;
+    migration->walking = 0;
     return TA_OK;
 }
 
-/* End a job: its members are left behind. TA_ERROR_NO_MEMORY leaves it
+/* End a migration: its members are left behind. TA_ERROR_NO_MEMORY leaves it
  * active (it ends in a later run). */
-static ta_status job_end(ta_host *host, migration_job *job) {
-    if (job->walking && job_walk_rest(host, job) != TA_OK) return TA_ERROR_NO_MEMORY;
-    uint32_t count = job->members.count;
+static ta_status migration_end(ta_host *host, host_migration *migration) {
+    if (migration->walking && migration_walk_rest(host, migration) != TA_OK) return TA_ERROR_NO_MEMORY;
+    uint32_t count = migration->members.count;
     uint64_t *left = count ? (uint64_t *)host_alloc(host, sizeof(uint64_t) * count) : NULL;
     if ((count && !left) || !host_effects_reserve(host, 1, 0)) {
         host_free(host, left, sizeof(uint64_t) * count);
@@ -1518,100 +1518,100 @@ static ta_status job_end(ta_host *host, migration_job *job) {
     }
     uint64_t session;
     uint32_t n = 0;
-    for (uint32_t cursor = 0; n < count && session_map_next(&job->members, &cursor, &session) != TA_NIL;)
+    for (uint32_t cursor = 0; n < count && session_map_next(&migration->members, &cursor, &session) != TA_NIL;)
         left[n++] = session;
-    job->active = 0;
-    job->left = left;
-    job->left_count = job->left_capacity = count;
-    session_map_free(&job->members, &host->config.allocator);
-    host_free(host, job->retry, sizeof(uint64_t) * job->retry_capacity);
-    job->retry = NULL;
-    job->retry_count = job->retry_capacity = job->retry_next = 0;
-    ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_JOB_DONE, TA_NIL);
-    effect->job = job->id;
-    effect->migrated = job->migrated;
-    effect->failed = job->failed;
-    effect->pending = job->left_count;
+    migration->active = 0;
+    migration->left = left;
+    migration->left_count = migration->left_capacity = count;
+    session_map_free(&migration->members, &host->config.allocator);
+    host_free(host, migration->retry, sizeof(uint64_t) * migration->retry_capacity);
+    migration->retry = NULL;
+    migration->retry_count = migration->retry_capacity = migration->retry_next = 0;
+    ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_MIGRATION_DONE, TA_NIL);
+    effect->migration = migration->id;
+    effect->migrated = migration->migrated;
+    effect->failed = migration->failed;
+    effect->pending = migration->left_count;
     return TA_OK;
 }
 
-/* Advance a job by up to `quantum` actors: the walk looks at the next
+/* Advance a migration by up to `quantum` actors: the walk looks at the next
  * candidates once each, then the retry list goes round from where the last
  * run stopped. Hibernated members are not looked at: a wake puts them on
  * the retry list (job_woken). So a run costs its quantum, however many
- * the job waits for. TA_ERROR_NO_MEMORY: some actors could not move for
- * lack of memory, or the job could not end; they are tried again in the
+ * the migration waits for. TA_ERROR_NO_MEMORY: some actors could not move for
+ * lack of memory, or the migration could not end; they are tried again in the
  * next run. */
-static ta_status job_step(ta_host *host, migration_job *job, uint32_t quantum) {
+static ta_status migration_step(ta_host *host, host_migration *migration, uint32_t quantum) {
     /* every actor the walk looks at may join the members and the retry list */
-    if (job->walking && !job_reserve(host, job, (job_room){quantum, 1})) return TA_ERROR_NO_MEMORY;
+    if (migration->walking && !migration_reserve(host, migration, (migration_room){quantum, 1})) return TA_ERROR_NO_MEMORY;
     ta_status status = TA_OK;
     uint32_t looked = 0;
-    while (job->walking && looked < quantum) {
-        host_segment *segment = segment_of(host, job->walk_segment);
-        if (job->walk_segment >= host->segment_count) {
-            job->walking = 0;
+    while (migration->walking && looked < quantum) {
+        host_segment *segment = segment_of(host, migration->walk_segment);
+        if (migration->walk_segment >= host->segment_count) {
+            migration->walking = 0;
             break;
         }
         if (!segment) {
-            job->walk_segment++;
-            job->cursor = 0;
+            migration->walk_segment++;
+            migration->cursor = 0;
             continue;
         }
         uint32_t list[64], want = quantum - looked < 64 ? quantum - looked : 64;
-        uint32_t n = ta_system_actors(segment->system, &job->cursor, (ta_uint32_array){list, want});
+        uint32_t n = ta_system_actors(segment->system, &migration->cursor, (ta_uint32_array){list, want});
         if (!n) {
-            job->walk_segment++;
-            job->cursor = 0;
+            migration->walk_segment++;
+            migration->cursor = 0;
             continue;
         }
         for (uint32_t k = 0; k < n; k++, looked++) {
             ta_actor_info actor_info;
-            if (!candidate(host, job, job->walk_segment, list[k], &actor_info)) continue;
+            if (!candidate(host, migration, migration->walk_segment, list[k], &actor_info)) continue;
             /* a member already: moved back home under another handle (adopt_home) */
-            if (session_map_get(&job->members, actor_info.serial) != TA_NIL) continue;
-            int r = migrate_one(host, job, actor_info.serial);
-            if (job_settle(host, job, (job_outcome){actor_info.serial, r}) != TA_OK) status = TA_ERROR_NO_MEMORY;
+            if (session_map_get(&migration->members, actor_info.serial) != TA_NIL) continue;
+            int r = migrate_one(host, migration, actor_info.serial);
+            if (migration_settle(host, migration, (migration_outcome){actor_info.serial, r}) != TA_OK) status = TA_ERROR_NO_MEMORY;
         }
     }
-    uint32_t tries = quantum - looked < job->retry_count ? quantum - looked : job->retry_count;
-    uint32_t i = job->retry_next;
-    while (tries-- && job->retry_count) {
-        if (i >= job->retry_count) i = 0;
-        uint64_t session = job->retry[i];
-        int r = migrate_one(host, job, session);
-        if (job_settle(host, job, (job_outcome){session, r}) != TA_OK) status = TA_ERROR_NO_MEMORY;
-        if (session_map_get(&job->members, session) == JOB_RETRY)
+    uint32_t tries = quantum - looked < migration->retry_count ? quantum - looked : migration->retry_count;
+    uint32_t i = migration->retry_next;
+    while (tries-- && migration->retry_count) {
+        if (i >= migration->retry_count) i = 0;
+        uint64_t session = migration->retry[i];
+        int r = migrate_one(host, migration, session);
+        if (migration_settle(host, migration, (migration_outcome){session, r}) != TA_OK) status = TA_ERROR_NO_MEMORY;
+        if (session_map_get(&migration->members, session) == MIGRATION_RETRY)
             i++;
         else /* moved, failed, gone or asleep: out of the list, the last one in its place */
-            job->retry[i] = job->retry[--job->retry_count];
+            migration->retry[i] = migration->retry[--migration->retry_count];
     }
-    job->retry_next = i;
-    if ((!job->walking && !job->members.count) || (job->deadline && host->now >= job->deadline)) {
-        ta_status ended = job_end(host, job);
+    migration->retry_next = i;
+    if ((!migration->walking && !migration->members.count) || (migration->deadline && host->now >= migration->deadline)) {
+        ta_status ended = migration_end(host, migration);
         if (ended != TA_OK) status = ended;
     }
     return status;
 }
 
-/* A member woken (ta_host_wake): the job tries it from its retry list. */
-static int jobs_reserve_wake(ta_host *host) {
-    for (uint32_t j = 0; j < host->job_count; j++)
-        if (host->jobs[j].active && !job_reserve(host, &host->jobs[j], (job_room){1, 0})) return 0;
+/* A member woken (ta_host_wake): the migration tries it from its retry list. */
+static int migrations_reserve_wake(ta_host *host) {
+    for (uint32_t j = 0; j < host->migration_count; j++)
+        if (host->migrations[j].active && !migration_reserve(host, &host->migrations[j], (migration_room){1, 0})) return 0;
     return 1;
 }
 
-static void jobs_woken(ta_host *host, uint64_t session) {
-    for (uint32_t j = 0; j < host->job_count; j++)
-        if (host->jobs[j].active && session_map_get(&host->jobs[j].members, session) == JOB_ASLEEP)
-            job_wait(&host->jobs[j], session, JOB_RETRY);
+static void migrations_woken(ta_host *host, uint64_t session) {
+    for (uint32_t j = 0; j < host->migration_count; j++)
+        if (host->migrations[j].active && session_map_get(&host->migrations[j].members, session) == MIGRATION_ASLEEP)
+            migration_wait(&host->migrations[j], session, MIGRATION_RETRY);
 }
 
-/* A session that left the host (exported): no job waits for it. */
-static void jobs_forget(ta_host *host, uint64_t session) {
-    for (uint32_t j = 0; j < host->job_count; j++)
-        if (host->jobs[j].active && session_map_get(&host->jobs[j].members, session) == JOB_ASLEEP)
-            session_map_put(&host->jobs[j].members, session, TA_NIL);
+/* A session that left the host (exported): no migration waits for it. */
+static void migrations_forget(ta_host *host, uint64_t session) {
+    for (uint32_t j = 0; j < host->migration_count; j++)
+        if (host->migrations[j].active && session_map_get(&host->migrations[j].members, session) == MIGRATION_ASLEEP)
+            session_map_put(&host->migrations[j].members, session, TA_NIL);
 }
 
 /* ---- running ------------------------------------------------------------------------- */
@@ -1841,9 +1841,9 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             if (result.status == TA_RUN_EFFECTS) sync = 1;
             if (host->effect_count >= EFFECTS_PER_RUN) full = 1;
         }
-        for (uint32_t i = 0; i < host->job_count && round == 0; i++) /* one quantum per run */
-            if (host->jobs[i].active) {
-                if (job_step(host, &host->jobs[i], host->config.migrate_quantum) != TA_OK)
+        for (uint32_t i = 0; i < host->migration_count && round == 0; i++) /* one quantum per run */
+            if (host->migrations[i].active) {
+                if (migration_step(host, &host->migrations[i], host->config.migrate_quantum) != TA_OK)
                     exhausted = 1;
                 ran = 1;
             }
@@ -1854,23 +1854,23 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         if (!more) break;
     }
     host->round_robin = host->segment_count ? (host->round_robin + 1) % host->segment_count : 0;
-    /* drop jobs that ended before this run (their `left` lists were readable until now) */
+    /* drop migrations that ended before this run (their `left` lists were readable until now) */
     uint32_t kj = 0;
-    for (uint32_t i = 0; i < host->job_count; i++) {
-        migration_job *job = &host->jobs[i];
+    for (uint32_t i = 0; i < host->migration_count; i++) {
+        host_migration *migration = &host->migrations[i];
         int ended_now = 0;
         for (uint32_t e = 0; e < host->effect_count; e++)
             ended_now |=
-                host->effects[e].kind == TA_HOST_EFFECT_JOB_DONE && host->effects[e].job == job->id;
-        if (job->active || ended_now)
-            host->jobs[kj++] = *job;
+                host->effects[e].kind == TA_HOST_EFFECT_MIGRATION_DONE && host->effects[e].migration == migration->id;
+        if (migration->active || ended_now)
+            host->migrations[kj++] = *migration;
         else
-            job_free(host, job);
+            migration_free(host, migration);
     }
-    host->job_count = kj;
+    host->migration_count = kj;
     if (!retire(host)) exhausted = 1;
     clocks_sync(host);
-    /* yielded: segments have work, or a job has actors left to look at. A job
+    /* yielded: segments have work, or a migration has actors left to look at. A migration
      * that only waits (busy or sleeping actors) moves on when they change —
      * the next run after an event — or at its timeout (next_deadline). */
     int busy = 0;
@@ -1881,11 +1881,11 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
         busy |= segment->busy | segment->retiring; /* retired by the next run */
         if (segment->deadline < out.next_deadline) out.next_deadline = segment->deadline;
     }
-    for (uint32_t i = 0; i < host->job_count; i++) {
-        const migration_job *job = &host->jobs[i];
-        if (!job->active) continue;
-        busy |= job->walking;
-        if (job->deadline && job->deadline < out.next_deadline) out.next_deadline = job->deadline;
+    for (uint32_t i = 0; i < host->migration_count; i++) {
+        const host_migration *migration = &host->migrations[i];
+        if (!migration->active) continue;
+        busy |= migration->walking;
+        if (migration->deadline && migration->deadline < out.next_deadline) out.next_deadline = migration->deadline;
     }
     ta_time qd = ta_router_deadline(host); /* queued envelopes expire then */
     if (qd < out.next_deadline) out.next_deadline = qd;
@@ -1981,7 +1981,7 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
     ta_status status = host_locate(host, session, &si, &actor);
     if (status != TA_OK) return status;
     host_segment *segment = &host->segments[si];
-    if (!jobs_reserve_wake(host)) return TA_ERROR_NO_MEMORY; /* a job waiting for it takes it back */
+    if (!migrations_reserve_wake(host)) return TA_ERROR_NO_MEMORY; /* a migration waiting for it takes it back */
     for (;;) {
         uint32_t was = host_guard(host); /* deserialize */
         status = ta_actor_wake(segment->system, actor, blob);
@@ -1990,7 +1990,7 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
     }
     if (status == TA_OK) {
         segment->busy = 1;
-        jobs_woken(host, session);
+        migrations_woken(host, session);
     }
     return status;
 }
@@ -2013,7 +2013,7 @@ ta_status ta_host_export_actor(ta_host *host, uint64_t session, ta_bytes *out) {
     if (status == TA_OK) {
         if (host_moved_get(host, session) != TA_NIL) moved_put(host, session, TA_NIL);
         host->segments[si].busy = 1;
-        jobs_forget(host, session);
+        migrations_forget(host, session);
     }
     return status;
 }
@@ -2304,8 +2304,8 @@ void host_stats_get(const ta_host *host, ta_host_stats *o) {
         z.delivered += stats.delivered;
     }
     z.fuel_clock = host->fuel_clock;
-    for (uint32_t i = 0; i < host->job_count; i++)
-        z.jobs += (uint32_t)host->jobs[i].active;
+    for (uint32_t i = 0; i < host->migration_count; i++)
+        z.migrations += (uint32_t)host->migrations[i].active;
     z.routed = host->routed;
     z.migrated = host->migrated;
     z.retired = host->retired;
@@ -2383,7 +2383,7 @@ uint64_t ta_host_actor_by_name(const ta_host *host, ta_string_view name) {
 
 typedef struct snapshot_header {
     uint32_t magic, version, segment_count, moved_count;
-    uint32_t round_robin, job_sequence, config_size, retired_charts;
+    uint32_t round_robin, migration_sequence, config_size, retired_charts;
     uint64_t now, routed, migrated, retired;
     uint64_t message_sequence,
         router_length; /* the router's dedup window follows the moved sessions */
@@ -2423,8 +2423,8 @@ ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
     if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
     if (host->effect_count || host->outputs_lent)
         return TA_ERROR_STATE; /* acknowledge the effects and outputs first */
-    for (uint32_t i = 0; i < host->job_count; i++)
-        if (host->jobs[i].active) return TA_ERROR_STATE;
+    for (uint32_t i = 0; i < host->migration_count; i++)
+        if (host->migrations[i].active) return TA_ERROR_STATE;
     size_t need = sizeof(snapshot_header);
     for (uint32_t i = 0; i < host->segment_count; i++) {
         need += sizeof(snapshot_segment);
@@ -2453,7 +2453,7 @@ ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
     hd.segment_count = host->segment_count;
     hd.moved_count = moved_count;
     hd.round_robin = host->round_robin;
-    hd.job_sequence = host->job_sequence;
+    hd.migration_sequence = host->migration_sequence;
     hd.config_size = (uint32_t)sizeof(ta_system_config);
     hd.now = host->now;
     hd.routed = host->routed;
@@ -2661,7 +2661,7 @@ ta_status ta_host_restore(const ta_host_environment *environment,
     }
     host->message_sequence = hd->message_sequence;
     host->round_robin = hd->segment_count ? hd->round_robin % hd->segment_count : 0;
-    host->job_sequence = hd->job_sequence;
+    host->migration_sequence = hd->migration_sequence;
     host->routed = hd->routed;
     host->migrated = hd->migrated;
     host->retired = hd->retired;

@@ -26,7 +26,7 @@ deploying it:
    (Host.migrate, waking the hibernated ones a batch at a time from the
    copy's store, as tools/migration.py does), with E more events, then
    runs its clock past the delayed sends;
-5. verify the copy: the job migrated every actor, none failed; a sample
+5. verify the copy: the migration migrated every actor, none failed; a sample
    (all up to 25,000) reports its count (every event, before and after
    the snapshot), its delayed send, its payment (declined for the payers)
    and version 2; each payment in flight reached the stand-in once, with
@@ -67,16 +67,16 @@ def index(session):
 
 class Population:
     """One host's actors: its store, the resident ones (least recently used
-    first), the job's wake queue, the reports; as tools/migration.py."""
+    first), the migration's wake queue, the reports; as tools/migration.py."""
 
     def __init__(self, name, store, options, failures):
         self.name, self.store, self.options, self.failures = name, store, options, failures
         self.resident = collections.OrderedDict()
         self.moved = bytearray(options.actors)   # 1: migrated (the MIGRATED effect)
-        self.queued = bytearray(options.actors)  # 1: the job asked for it, waiting in `asked`
+        self.queued = bytearray(options.actors)  # 1: the migration asked for it, waiting in `asked`
         self.asked = collections.deque()
         self.reports, self.wakes, self.moves, self.peak = {}, 0, 0, 0
-        self.migrating, self.job_done = False, None
+        self.migrating, self.migration_done = False, None
         self.written = array.array("Q", bytes(8 * options.actors))  # crc32 + 1 of the last blob it put
 
     def wake_now(self, host, session):
@@ -84,8 +84,8 @@ class Population:
         self.resident[session] = None
         self.wakes += 1
 
-    def wake(self, host, session, job):
-        if job:  # the job asks: in its order, a batch at a time
+    def wake(self, host, session, migration):
+        if migration:  # the migration asks: in its order, a batch at a time
             if not self.queued[index(session)]:
                 self.queued[index(session)] = 1
                 self.asked.append(session)
@@ -279,7 +279,8 @@ def main():
     copy_clock = tinyactors.SimulatedClock()  # a clock of its own: the copy's time is not the live host's
     started = time.perf_counter()
     rehearsal = tinyactors.Host.restore(blob, config, wake=copy.wake, log=copy.log, migrated=copy.migrated,
-                                        clock=copy_clock, services={PAYMENT: stand_in.start})
+                                        clock=copy_clock, services={PAYMENT: stand_in.start},
+                                        migration_done=lambda host, result: setattr(copy, "migration_done", result))
     restored = time.perf_counter() - started
     del blob
     again = rehearsal.snapshot()
@@ -301,13 +302,13 @@ def main():
     with tinyactors.compile_charts([("order.scxml", v2)]) as compiled:
         rehearsal.add_image(compiled.image)
     copy.migrating = True
-    job = rehearsal.migrate(lambda host, result: setattr(copy, "job_done", result), wake=True)
+    migration = rehearsal.migrate(wake=True)
     copy_events, stalled, before = 0, 0, -1
-    while copy.job_done is None:
+    while copy.migration_done is None:
         stalled = stalled + 1 if copy.moves == before and not copy.asked else 0
         before = copy.moves
         if stalled > 100:
-            failures.append("copy: the job stalled with %d actors moved" % before)
+            failures.append("copy: the migration stalled with %d actors moved" % before)
             break
         woken = 0
         while copy.asked and woken < BATCH:
@@ -325,9 +326,9 @@ def main():
         copy.check_resident(rehearsal, 2 * BATCH)
     copy.migrating = False
     traffic(copy, rehearsal, sent_copy, options.events - copy_events)
-    result = copy.job_done or {"job": None, "migrated": 0, "failed": 0, "pending": None}
-    if result["job"] != job or result["migrated"] != options.actors or result["failed"] or result["pending"]:
-        failures.append("copy: the job ended %r, not %d migrated" % (result, options.actors))
+    result = copy.migration_done or {"migration": None, "migrated": 0, "failed": 0, "pending": None}
+    if result["migration"] != migration or result["migrated"] != options.actors or result["failed"] or result["pending"]:
+        failures.append("copy: the migration ended %r, not %d migrated" % (result, options.actors))
     rehearsed = time.perf_counter() - started
     print("rehearse: %d actors to version 2 in %.1f s, %d events meanwhile, %d woken from the copy's store" % (
         copy.moves, rehearsed, options.events, copy.wakes), flush=True)

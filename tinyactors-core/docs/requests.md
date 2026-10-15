@@ -184,7 +184,7 @@ The host's counters (`ta_host_stats`) and each chart's
 versions included. No params.
 
 Result: `{"host": {...}, "charts": [...]}`:
-- `host`: `segments`, `actors`, `hibernated`, `runnable`, `jobs`,
+- `host`: `segments`, `actors`, `hibernated`, `runnable`, `migrations`,
   `regionBytes`, `delivered`, `routed`, `migrated`, `retired`, `fuelClock`.
   `regionBytes` sums the live segments' regions; the host's copies of
   their images (`ta_host_add_image`) are not in it.
@@ -196,7 +196,7 @@ All the numbers are unsigned integers.
 
 ```
 {"id": 1, "method": "host.stats"}
-→ {"id": 1, "result": {"host": {"segments": 1, "actors": 1, "hibernated": 0, "runnable": 0, "jobs": 0,
+→ {"id": 1, "result": {"host": {"segments": 1, "actors": 1, "hibernated": 0, "runnable": 0, "migrations": 0,
    "regionBytes": 131072, "delivered": 0, "routed": 0, "migrated": 0, "retired": 0,
    "fuelClock": 3},
    "charts": [{"name": "pinged", "actors": 1, "hibernated": 0, "spawned": 1,

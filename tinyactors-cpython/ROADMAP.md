@@ -392,15 +392,15 @@ value), a small cost per wake; a `KeyboardInterrupt` during `wake`'s
 ### Migration (8.5's third item, 2026-10-14) — done
 
 `host.migrate(handler, /, *, chart=None, session=None, wake=False,
-timeout=0) -> job` (`ta_host_migrate`; the handler at `JOB_DONE` with
-`migrated`, `failed` and `pending` from `ta_host_job_pending`), and
+timeout=0) -> migration` (`ta_host_migrate`; the handler at `MIGRATION_DONE` with
+`migrated`, `failed` and `pending` from `ta_host_migration_pending`), and
 `migrated=handler(host, migration)` for `TA_HOST_EFFECT_MIGRATED`. The
-wake handler gets the job that asks (`wake(host, session, job)`; `None`
+wake handler gets the migration that asks (`wake(host, session, migration)`; `None`
 for an event), which an application that keeps few actors resident
-needs to tell the job's WAKEs from an event's. Whom it serves: the
+needs to tell the migration's WAKEs from an event's. Whom it serves: the
 application developer who deploys a new version of a chart under load,
-and the operator, who sees the job's result. Cost: nothing per event; per
-moved actor a thin view only with a `migrated` handler; per job a dict
+and the operator, who sees the migration's result. Cost: nothing per event; per
+moved actor a thin view only with a `migrated` handler; per migration a dict
 entry and, at its end, a list of the pending sessions.
 
 The conform adapter runs `hibernate` and `migrate` steps: the suite's M4
@@ -412,31 +412,31 @@ selects by milestone, and M4 holds `snapshot`).
 runs 20,000 actors with 100 resident on both datamodels, `--full` two million
 with 1000): version 1 of a counter chart, most actors hibernated in
 SQLite, version 2 added, every actor moved while events go to random
-actors; every sampled count and version right, the job leaves none
+actors; every sampled count and version right, the migration leaves none
 behind, version 1's segment retired, at most R resident (plus a batch)
 after every eviction. Getting there found:
 
-- an application that wakes every actor the job asks for at once has
-  them all resident; one that queues the job's WAKEs must wake them in
-  the job's order (the job retries the actors it waits for from the front
-  of its list, a quantum per run) and must not put back one the job
-  asked for before it moved (the job asks once). The README's
+- an application that wakes every actor the migration asks for at once has
+  them all resident; one that queues the migration's WAKEs must wake them in
+  the migration's order (the migration retries the actors it waits for from the front
+  of its list, a quantum per run) and must not put back one the migration
+  asked for before it moved (the migration asks once). The README's
   "Migration" gives the pattern;
-- events for actors still waiting for the job piled up in the host
+- events for actors still waiting for the migration piled up in the host
   (the segment's event pool, doubling every pool: 281 MB of region at
   200,000 actors). An event's WAKE now wakes its actor at once (93 MB
-  peak at 200,000); the job on the WAKE tells it from the job's;
+  peak at 200,000); the migration on the WAKE tells it from the migration's;
 - core's walk was quadratic in the hibernated actors, which sized the
   full gate at 500,000 (answered: "Requests to core"; the gate is two
-  million now). The one-actor jobs an event's WAKE started went with it:
-  core takes a woken actor into the job itself.
+  million now). The one-actor migrations an event's WAKE started went with it:
+  core takes a woken actor into the migration itself.
 
 Tests in `tests/test_migration.py`: both datamodels move with their
 bindings (the upgrade's data) and keep a delayed send, a hibernated
-actor asked for with its job, an event's WAKE with none, the timeout
+actor asked for with its migration, an event's WAKE with none, the timeout
 leaving a sleeping actor in `pending`, one session or one chart, a
 `"python"` actor with a `set` failing and staying, the stale view, a
-handler that raises, a job unfinished at the stop, refused arguments.
+handler that raises, a migration unfinished at the stop, refused arguments.
 
 ### Snapshots (8.5's fourth item, 2026-10-14) — done
 
@@ -623,22 +623,23 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   saving: what a config reserves beyond use.
 - **Open: the host's maps live outside the region.** What: the `moved` map
   (12 B per entry at load one half, kept for each migrated actor's life)
-  and a job's member map are host allocations `regionBytes` does not
-  count: about 50 MB kept and 50 to 100 MB while a job runs at 2,000,000
+  and a migration's member map are host allocations `regionBytes` does not
+  count: about 50 MB kept and 50 to 100 MB while a migration runs at 2,000,000
   actors (estimated from 400,000). Ask: count them in `host.stats`, or a
   dense per-segment array indexed by serial.
-- **Open, a known limit: no snapshot while a migration job runs.** What:
-  `ta_host_snapshot` refuses with `TA_ERROR_STATE` while a job is active
+- **Open, a known limit: no snapshot while a migration runs.** What:
+  `ta_host_snapshot` refuses with `TA_ERROR_STATE` while a migration is active
   (`src/host/host.c`, `ta_host_snapshot`), and a rollout that wakes a
   mostly hibernated population can run for hours, so a host cannot be
-  captured during it. Why it is not technical: a job is plain data in
+  captured during it. Why it is not technical: a migration is plain data in
   host memory (`migration_job`, `src/host/host_internal.h`: id, flags,
   deadline, a walk cursor into a segment's actors, the sessions it waits
   for, a retry list, counters), all valid after a restore, which puts
   every region back as it was; the snapshot just does not write it. The
-  binding's side: the job's completion handler is a Python callable, so
-  `Host.restore` would need to take the handlers of restored jobs. No
-  test shows it yet; the snapshot gate snapshots before migrating.
+  binding's side is ready: `migration_done` is a handler of the host
+  (2026-10-15), so a restored host's migrations reach the one
+  `Host.restore` is given. No test shows it yet; the snapshot gate
+  snapshots before migrating.
 
 Answered 2026-10-15, in core, by this session at the maintainer's
 request:
@@ -668,20 +669,20 @@ Answered 2026-10-14, in core's host layer (`src/host/host.c`,
 
 - **A waking migration was quadratic in the hibernated actors**
   (`retry_push` looked through the whole retry list before adding, and
-  every run compacted it): a job now keeps the sessions it waits for in
+  every run compacted it): a migration now keeps the sessions it waits for in
   a session map (the moved sessions' open-addressing table, made one
   structure, reserved through the host's allocator before any insert),
   and only the actors in memory on a retry list tried round robin from a
-  cursor. A run costs its quantum, however many the job waits for; the
+  cursor. A run costs its quantum, however many the migration waits for; the
   migration gate went from 500,000 actors to two million.
-- **A job never ended while it waited for an actor it would not ask for
-  again**: a hibernated member goes back on the job's retry list when
-  `ta_host_wake` brings it back (the job's WAKE or an event's), the job
+- **A migration never ended while it waited for an actor it would not ask for
+  again**: a hibernated member goes back on the migration's retry list when
+  `ta_host_wake` brings it back (the migration's WAKE or an event's), the migration
   asks again when it finds one hibernated after a wake, and an exported
-  member leaves the job. Without `TA_HOST_MIGRATE_WAKE` an actor nobody
-  wakes still holds the job until its timeout, as the README says.
-- **A WAKE no job asked for had `job` `TA_NIL`**, against `boundary.md`:
-  effects now carry 0 for no job.
+  member leaves the migration. Without `TA_HOST_MIGRATE_WAKE` an actor nobody
+  wakes still holds the migration until its timeout, as the README says.
+- **A WAKE no migration asked for had `migration` `TA_NIL`**, against `boundary.md`:
+  effects now carry 0 for no migration.
 
 What the design needs from core is step 8.2 of the root
 roadmap. The first binding's two requests were answered on 2026-10-12

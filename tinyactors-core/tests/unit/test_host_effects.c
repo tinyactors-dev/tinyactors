@@ -161,7 +161,7 @@ static void test_fields_match_the_struct(void) {
         CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_TOKEN), e->token);
         CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_IO_PROCESSOR), e->io_processor);
         CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_FLAGS), e->flags);
-        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_JOB), e->job);
+        CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_MIGRATION), e->migration);
         CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_PAYLOAD), e->payload);
         CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_DATAMODEL), e->datamodel);
         CHECK_EQUAL(ta_host_effect_number(w.host, i, TA_EFFECT_FIELD_DELAY_HINT), e->delay_hint);

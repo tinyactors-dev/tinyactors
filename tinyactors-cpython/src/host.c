@@ -426,11 +426,12 @@ static ta_status ta_python_host_restore_core(ta_python_host *host, ta_python_res
 
 static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build *build) {
     static char *const names[] = {"config", "io_processors", "log", "clock", "peer", "telemetry", "wake", "migrated",
-                                  "services", NULL};
+                                  "services", "migration_done", NULL};
     PyObject *config, *handlers = Py_None, *log = Py_None, *clock = Py_None, *peer = Py_None, *telemetry = Py_None;
-    PyObject *wake = Py_None, *migrated = Py_None, *services = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(build->arguments, build->keywords, build->pack ? "O|O$OOOOOOO:restore" : "O|O$OOOOOOO:Host",
-                                     names, &config, &handlers, &log, &clock, &peer, &telemetry, &wake, &migrated, &services))
+    PyObject *wake = Py_None, *migrated = Py_None, *services = Py_None, *migration_done = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(build->arguments, build->keywords, build->pack ? "O|O$OOOOOOOO:restore" : "O|O$OOOOOOOO:Host",
+                                     names, &config, &handlers, &log, &clock, &peer, &telemetry, &wake, &migrated, &services,
+                                     &migration_done))
         return NULL;
     ta_time restored_time = 0;
     ta_string_view restored_id = {NULL, 0};
@@ -459,7 +460,7 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
     host->telemetry = Py_NewRef(telemetry);
     host->wake = Py_NewRef(wake);
     host->migrated = Py_NewRef(migrated);
-    host->jobs = PyDict_New();
+    host->migration_done = Py_NewRef(migration_done);
     host->services = services == Py_None ? PyDict_New() : PyDict_Copy(services);
     host->invocations = PyDict_New();
     if (wake != Py_None) {
@@ -487,7 +488,7 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
     host->arena_allocator = ta_growable_arena_allocator(&host->arena);
     ta_table_config pending = {sizeof pending, sizeof(ta_python_pending_row), &host->allocator};
     ta_table_init(&host->pending, &pending);
-    if (!host->waiters || !host->ending_tasks || !host->jobs || !host->services || !host->invocations ||
+    if (!host->waiters || !host->ending_tasks || !host->services || !host->invocations ||
         ta_python_datamodel_init(&host->python, host) < 0) goto fail;
     ta_datamodel_ecmascript_config ecmascript;
     memset(&ecmascript, 0, sizeof ecmascript);
@@ -629,7 +630,6 @@ static void ta_python_host_free(ta_python_host *host) {
     host->host = NULL;
     ta_python_pending_drop(host);
     ta_table_free(&host->pending);
-    if (host->jobs) PyDict_Clear(host->jobs); /* a job's handler is dropped, never called */
     if (host->invocations) PyDict_Clear(host->invocations); /* the services are dropped, not stopped */
     ta_python_datamodel_free(&host->python);
     if (host->ecmascript) ta_datamodel_ecmascript_free(host->ecmascript); /* after the host that used it */
@@ -673,7 +673,7 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     Py_VISIT(host->telemetry);
     Py_VISIT(host->wake);
     Py_VISIT(host->migrated);
-    Py_VISIT(host->jobs);
+    Py_VISIT(host->migration_done);
     Py_VISIT(host->services);
     Py_VISIT(host->invocations);
     Py_VISIT(host->clock);
@@ -704,7 +704,7 @@ static int ta_python_host_clear(PyObject *self) {
     Py_CLEAR(host->telemetry);
     Py_CLEAR(host->wake);
     Py_CLEAR(host->migrated);
-    Py_CLEAR(host->jobs);
+    Py_CLEAR(host->migration_done);
     Py_CLEAR(host->services);
     Py_CLEAR(host->invocations);
     Py_CLEAR(host->clock);
@@ -1116,26 +1116,22 @@ static PyObject *ta_python_host_wake(PyObject *self, PyObject *arguments) {
 
 /* ---- migration: actors move to the current version of their chart ----------------- */
 
-/* migrate(handler, /, *, chart=None, session=None, wake=False, timeout=0) -> job:
+/* migrate(*, chart=None, session=None, wake=False, timeout=0) -> migration:
  * ta_host_migrate of every chart (or `chart`, or one `session`), waking
  * hibernated actors for it with `wake` (TA_HOST_MIGRATE_WAKE: a WAKE each),
- * ending after `timeout` ticks of the host's clock (0: none). The job moves
- * actors in later runs; handler(host, result) runs at its JOB_DONE. */
+ * ending after `timeout` ticks of the host's clock (0: none). The migration moves
+ * actors in later runs; the host's migration_done handler gets its MIGRATION_DONE. */
 static PyObject *ta_python_host_migrate(PyObject *self, PyObject *arguments, PyObject *keywords) {
-    static char *const names[] = {"", "chart", "session", "wake", "timeout", NULL};
+    static char *const names[] = {"chart", "session", "wake", "timeout", NULL};
     ta_python_host *host = (ta_python_host *)self;
-    PyObject *handler, *chart = Py_None, *session = Py_None, *timeout = NULL;
+    PyObject *chart = Py_None, *session = Py_None, *timeout = NULL;
     int wake = 0;
-    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "O|$OOpO!:migrate", names, &handler, &chart, &session, &wake,
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "|$OOpO!:migrate", names, &chart, &session, &wake,
                                      &PyLong_Type, &timeout))
         return NULL;
-    ta_host_migration migration;
-    memset(&migration, 0, sizeof migration);
-    migration.flags = wake ? TA_HOST_MIGRATE_WAKE : 0;
-    if (handler != Py_None && !PyCallable_Check(handler)) {
-        PyErr_SetString(PyExc_TypeError, "migrate's handler is a callable or None");
-        return NULL;
-    }
+    ta_host_migration request;
+    memset(&request, 0, sizeof request);
+    request.flags = wake ? TA_HOST_MIGRATE_WAKE : 0;
     if (chart != Py_None) {
         Py_ssize_t length = 0;
         const char *name = PyUnicode_Check(chart) ? PyUnicode_AsUTF8AndSize(chart, &length) : NULL;
@@ -1147,30 +1143,29 @@ static PyObject *ta_python_host_migrate(PyObject *self, PyObject *arguments, PyO
             PyErr_SetString(PyExc_ValueError, "chart is a chart's name; None for every chart");
             return NULL;
         }
-        migration.name = (ta_string_view){name, (size_t)length};
+        request.name = (ta_string_view){name, (size_t)length};
     }
     if (session != Py_None) {
-        migration.session = PyLong_Check(session) ? PyLong_AsUnsignedLongLong(session) : 0;
-        if (!PyErr_Occurred() && !migration.session) PyErr_SetString(PyExc_ValueError, "session is a session id (int) or None");
+        request.session = PyLong_Check(session) ? PyLong_AsUnsignedLongLong(session) : 0;
+        if (!PyErr_Occurred() && !request.session) PyErr_SetString(PyExc_ValueError, "session is a session id (int) or None");
         if (PyErr_Occurred()) return NULL;
     }
     if (timeout) {
-        migration.timeout = PyLong_AsUnsignedLongLong(timeout);
+        request.timeout = PyLong_AsUnsignedLongLong(timeout);
         if (PyErr_Occurred()) return NULL;
     }
     ta_python_call call;
     if (ta_python_enter(host, &call) < 0) return NULL;
     ta_python_advance(host); /* the timeout counts from the host's clock now */
-    uint32_t job = 0;
-    ta_status status = ta_host_migrate(host->host, &migration, &job);
+    uint32_t migration = 0;
+    ta_status status = ta_host_migrate(host->host, &request, &migration);
     PyObject *result = NULL;
     if (status != TA_OK) ta_python_raise_status(host->state, status);
     else {
-        /* the job runs from here: should Python refuse memory now, the caller gets the exception, no
-           job id, and the handler is never called (the job still moves actors) */
-        result = PyLong_FromUnsignedLong(job);
-        if (result && handler != Py_None && PyDict_SetItem(host->jobs, result, handler) < 0) Py_CLEAR(result);
-        ta_python_loop_schedule(host); /* the job moves actors in the next runs */
+        /* the migration runs from here: should Python refuse memory now, the caller gets the exception
+           and no id (the migration still moves actors, and migration_done still gets its end) */
+        result = PyLong_FromUnsignedLong(migration);
+        ta_python_loop_schedule(host); /* the migration moves actors in the next runs */
     }
     ta_python_leave(&call);
     return result;
@@ -1255,14 +1250,14 @@ static PyObject *ta_python_host_encode(ta_python_host *host, PyObject *value) {
 /* snapshot() -> bytes: ta_host_snapshot_pack of the whole host, with both
  * datamodels' state, the images, the system id and the host's time. A
  * quiescent host only: not from a handler (a batch is open) nor while a
- * migration job runs (TA_ERROR_STATE). The services running are not in
+ * migration runs (TA_ERROR_STATE). The services running are not in
  * it: the restored host's first run announces each invocation again. */
 static PyObject *ta_python_host_snapshot(PyObject *self, PyObject *unused) {
     (void)unused;
     ta_python_host *host = (ta_python_host *)self;
     ta_python_call call;
     if (ta_python_enter(host, &call) < 0) return NULL;
-    /* quiescent first (effects or replies pending, a migration job): core's own check, before the
+    /* quiescent first (effects or replies pending, a migration): core's own check, before the
        datamodels' state is built for nothing */
     ta_buffer quiet = {NULL, 0, 0};
     ta_status ready = ta_host_snapshot(host->host, &quiet);

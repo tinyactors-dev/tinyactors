@@ -158,7 +158,7 @@ TEST_UNUSED static ta_status host_stats_fill(ta_host *host, ta_host_stats *out) 
     out->actors = (uint32_t)ask_uint(&a, m, "actors");
     out->hibernated = (uint32_t)ask_uint(&a, m, "hibernated");
     out->runnable = (uint32_t)ask_uint(&a, m, "runnable");
-    out->jobs = (uint32_t)ask_uint(&a, m, "jobs");
+    out->migrations = (uint32_t)ask_uint(&a, m, "migrations");
     out->region_bytes = ask_uint(&a, m, "regionBytes");
     out->delivered = ask_uint(&a, m, "delivered");
     out->routed = ask_uint(&a, m, "routed");

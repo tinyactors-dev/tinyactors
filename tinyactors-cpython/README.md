@@ -48,7 +48,8 @@ with tinyactors.Host(config, {"urn:example:app": app},
   an error raises `CompileError` with every diagnostic. `Compiled.image`
   is a read-only buffer, valid until `close()` (a context manager).
 - `Host(config, io_processors=None, *, log=None, clock=None, peer=None,
-  telemetry=None, wake=None, migrated=None, services=None)`:
+  telemetry=None, wake=None, migrated=None, services=None,
+  migration_done=None)`:
   `config` is the host's config as a dict
   ([host-config.md](../tinyactors-core/docs/host-config.md));
   `io_processors` maps an I/O processor's type to `handler(host, send)`;
@@ -57,8 +58,9 @@ with tinyactors.Host(config, {"urn:example:app": app},
   envelope for another system as `handler(host, envelope)`; `telemetry`
   gets each OTLP request as `handler(host, signal, data)`, `wake` each
   hibernated actor an event or a migration asks for as `handler(host,
-  session, job)`, and `migrated` each actor a migration moved as
-  `handler(host, migration)` (all below).
+  session, migration)`, `migrated` each actor a migration moved as
+  `handler(host, migrated)`, and `migration_done` each migration's end
+  as `handler(host, result)` (all below).
 - Inputs, applied at the call: `add_image(image) -> segment`,
   `chart(name) -> ChartRef`, `spawn(ref, name=None, params=None,
   traceparent=None) -> session`, `send(session, event, data=None, *,
@@ -182,9 +184,9 @@ hands each blob over as `bytes`, and asks for it back.
   a `"python"` actor holding a value outside the value table (a `set`, a
   `tuple`, an object): it stays resident. A pending delayed send stays
   in the host, and when it falls due it wakes the actor.
-- `wake=handler(host, session, job)`: an event (or a due delayed send)
-  came for a hibernated actor (`job` is `None`), or a migration asks for
-  it (`job` is its id, below); it waits in the mailbox while your handler
+- `wake=handler(host, session, migration)`: an event (or a due delayed
+  send) came for a hibernated actor (`migration` is `None`), or a
+  migration asks for it (`migration` is its id, below); it waits in the mailbox while your handler
   loads the blob and calls `host.wake(session, blob)`, now or later (an
   `async def` handler runs as a task, under `async with`). One call per
   hibernation, however many events come. Without a `wake` handler the
@@ -197,7 +199,7 @@ import sqlite3
 db = sqlite3.connect("actors.db", isolation_level=None)
 db.execute("CREATE TABLE IF NOT EXISTS blobs (session INTEGER PRIMARY KEY, blob BLOB)")
 
-def wake(host, session, job):
+def wake(host, session, migration):
     (blob,) = db.execute("SELECT blob FROM blobs WHERE session = ?", (session,)).fetchone()
     host.wake(session, blob)
 
@@ -253,45 +255,51 @@ there what it keeps.
 </transition>
 ```
 
-- `host.migrate(handler, /, *, chart=None, session=None, wake=False,
-  timeout=0) -> job`: every chart, one `chart` by name, or one `session`.
-  With `wake`, a hibernated actor is asked for (`wake=handler(host,
-  session, job)` with this job's id); without it, it waits, and the job
-  ends with it in `pending` at `timeout` (host ticks; 0: none).
-  `handler(host, result)` runs when the job ends, with `{"job",
-  "migrated", "failed", "pending": [session, ...]}`.
-- `migrated=handler(host, migration)`: each actor moved, a thin view of
-  `session`, `segment`, `chart` (its name) and `job`.
-- **A job ends when every actor it looks at moved, or at its
-  `timeout`.** A hibernated actor moves once it is woken, by the job's
-  WAKE or by an event's; with `wake`, the job asks again when it finds an
+- `host.migrate(*, chart=None, session=None, wake=False, timeout=0) ->
+  migration`: starts a migration of every chart, one `chart` by name, or
+  one `session`, and returns its id. With `wake`, a hibernated actor is
+  asked for (`wake=handler(host, session, migration)` with this
+  migration's id); without it, it waits, and the migration ends with it
+  in `pending` at `timeout` (host ticks; 0: none).
+- `migration_done=handler(host, result)`, a handler of the host: each
+  migration's end, with `{"migration", "migrated", "failed", "pending":
+  [session, ...]}`. Being the host's, it also gets the end of a migration
+  a restored host goes on with.
+- `migrated=handler(host, migrated)`: each actor moved, a thin
+  `Migrated` view of `session`, `segment`, `chart` (its name) and
+  `migration`.
+- **A migration ends when every actor it looks at moved, or at its
+  `timeout`.** A hibernated actor moves once it is woken, by the migration's
+  WAKE or by an event's; with `wake`, the migration asks again when it finds an
   actor hibernated after a wake. Without `wake`, an actor nobody wakes
-  holds the job until its timeout, or for good without one, and its
-  handler never runs: give such a job a `timeout`. A run costs the job a
+  holds the migration until its timeout, or for good without one, and its
+  handler never runs: give such a migration a `timeout`. A run costs the migration a
   quantum of actors (`migrateQuantum`), however many it waits for.
 - An actor that cannot be written out stays on its version and counts as
   failed: on the `"python"` datamodel, one whose variables or pending
   delayed sends hold a value outside the value table. One that is running
   an invocation waits until it ends.
 
-**With most actors hibernated, wake the job's actors a batch at a
-time.** The job asks for every hibernated actor at once, early; wake them
-all and they are all resident. Queue the job's WAKEs and wake a batch
-per round: the job takes each woken actor in its next runs. An event's
-WAKE (`job` is `None`) wakes its actor at once, and the job takes that
+**With most actors hibernated, wake the migration's actors a batch at a
+time.** The migration asks for every hibernated actor at once, early; wake them
+all and they are all resident. Queue the migration's WAKEs and wake a batch
+per round: the migration takes each woken actor in its next runs. An event's
+WAKE (`migration` is `None`) wakes its actor at once, and the migration takes that
 one too. Put actors back to sleep once they moved (one put back before
 is asked for again: work, not a stall).
 
 ```python
 asked = collections.deque()
 
-def wake(host, session, job):
-    if job is not None:
-        asked.append(session)             # the job's: a batch at a time
+def wake(host, session, migration):
+    if migration is not None:
+        asked.append(session)             # the migration's: a batch at a time
     else:
         host.wake(session, store.get(session))   # an event's: now
 
-job = host.migrate(on_done, wake=True)
+host = tinyactors.Host(config, wake=wake, migration_done=on_done)
+...
+migration = host.migrate(wake=True)
 while not done:
     for _ in range(min(256, len(asked))):
         session = asked.popleft()
@@ -303,7 +311,7 @@ while not done:
 `mise run migration` is the pattern at scale (`tools/migration.py`), on
 SQLite: 2,000,000 actors of a counter chart, at most 1000 resident, moved
 to version 2 while 200,000 events go to actors drawn at random; it
-checks every sampled actor's count and version, that the job left none
+checks every sampled actor's count and version, that the migration left none
 behind, that version 1's segment retired, and the resident bound after
 every eviction. Measured on 2026-10-15, x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, the gates' configs sized for their work ("Sizing the config"), one run:
 
@@ -312,11 +320,11 @@ every eviction. Measured on 2026-10-15, x86_64 Linux, 4 CPUs, CPython 3.13.16 wi
 | `"python"` | 59.9 s | 129.7 s (15,400 actors a second) | 2,218,199 | 473 MB (237 B per actor) | 230.9 MB, then 115.5 MB (58 B per actor) | 556 MB |
 | quickjs | 71.1 s | 153.3 s (13,000 actors a second) | 2,218,199 | 475 MB (238 B per actor) | 230.9 MB, then 115.5 MB | 756 MB |
 
-A run costs the job a quantum of actors however many it waits for, so
+A run costs the migration a quantum of actors however many it waits for, so
 the time grows with the population: 13.6 s at 500,000 on the
-`"python"` datamodel, against 74.9 s when the job went over everything
+`"python"` datamodel, against 74.9 s when the migration went over everything
 it waited for in every run. The peak is the migration's: both versions'
-regions until version 1 retires, and the job's map of the sessions it
+regions until version 1 retires, and the migration's map of the sessions it
 waits for (at most a quarter full after it is rebuilt).
 
 ## Snapshots
@@ -359,7 +367,7 @@ host = tinyactors.Host.restore(blob, config, log=log, wake=wake)
   same WAKE.
 - It needs a quiescent host: it is refused from a handler, with an
   effect or a typed method's reply not yet handled (run the host first),
-  and while a migration job runs (`TA_ERROR_STATE`); and when a
+  and while a migration runs (`TA_ERROR_STATE`); and when a
   `"python"` session or payload holds a value outside the value table
   (`TA_ERROR_UNSUPPORTED`). The host goes on either way. Values are
   written through the value table: two variables of one session that

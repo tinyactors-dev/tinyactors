@@ -89,7 +89,7 @@ Decided by the maintainer (2026-10-13); every item is in
   fallback.
 - **`tinyactors.Host(config, io_processors={type: handler}, log=handler,
   clock=None, peer=None, telemetry=None, wake=None, migrated=None,
-  services=None)`.**
+  services=None, migration_done=None)`.**
   Everything is per host: the config (a `dict`, written as CBOR into the
   call's arena for `ta_host_create`), the handlers and the clock. A host
   has no resolver ("The resolver"). No global configuration (no
@@ -243,9 +243,10 @@ Decided by the maintainer (2026-10-13); every item is in
   drain the batch of that output is acknowledged at once, from a handler
   it joins the open one, as `metrics()`), refused with `TA_ERROR_STATE`
   when the actor is not at a stable point; **`wake=handler(host,
-  session, job)`** gets each `TA_EFFECT_WAKE` (an event or a due delayed
-  send for a hibernated session, one effect per hibernation, `job`
-  `None`; or a migration job asking for it, `job` its id), and the handler
+  session, migration)`** gets each `TA_EFFECT_WAKE` (an event or a due
+  delayed send for a hibernated session, one effect per hibernation,
+  `migration` `None`; or a migration asking for it, `migration` its id),
+  and the handler
   calls **`host.wake(session, blob)`** (`ta_host_wake`), now or later (an
   `async def` handler runs as a task; refused under `with`). Without a
   `wake` handler the effect is dropped: the session stays hibernated and
@@ -258,19 +259,23 @@ Decided by the maintainer (2026-10-13); every item is in
   `bytes` fails on is woken back from the view before the ack. Where the
   blobs live, when to sweep and how many stay resident are the
   application's; `tools/stress.py` is the pattern, with SQLite.
-- **Migration** (bindings.md section 4, 2026-10-14): **`host.migrate(handler,
-  /, *, chart=None, session=None, wake=False, timeout=0) -> job`** is
+- **Migration** (bindings.md section 4, 2026-10-14; the handler made the
+  host's, and "migration" renamed migration, 2026-10-15): **`host.migrate(*,
+  chart=None, session=None, wake=False, timeout=0) -> migration`** is
   `ta_host_migrate` (every chart, a chart's name, or one session;
   `TA_HOST_MIGRATE_WAKE`; a timeout in host ticks, counted from the clock
-  advanced at the call); the job moves actors in later runs, so the call
-  schedules a turn. Its `JOB_DONE` calls `handler(host, result)` with
-  `{"job", "migrated", "failed", "pending"}`, the pending sessions read
-  with `ta_host_job_pending` at the dispatch (valid until the next run)
-  into a `bytes` the list is made from. The handlers wait in a dict on
-  the host keyed by core's job id, which is core's, not a handle of ours;
-  at the stop they are dropped, never called. **`migrated=handler(host,
-  migration)`** gets each `TA_HOST_EFFECT_MIGRATED` as a thin view
-  (`session`, `segment`, `chart`, `job`); without it nothing is read.
+  advanced at the call) and returns core's migration id; the migration
+  moves actors in later runs, so the call schedules a turn. Its
+  `MIGRATION_DONE` goes to the host's **`migration_done=handler(host,
+  result)`** with `{"migration", "migrated", "failed", "pending"}`, the
+  pending sessions read with `ta_host_migration_pending` at the dispatch
+  (valid until the next run) into a `bytes` the list is made from;
+  without the handler nothing is read. A handler of the host, not of the
+  call: nothing waits in a table of ours, and a restored host's
+  migrations reach the handler `Host.restore` was given.
+  **`migrated=handler(host, migrated)`** gets each
+  `TA_HOST_EFFECT_MIGRATED` as a thin `Migrated` view (`session`,
+  `segment`, `chart`, `migration`); without it nothing is read.
   `SEGMENT_FREED` is dropped: the host keeps the images. How to migrate a
   mostly hibernated population with a bound on what is resident is the
   application's (README, "Migration"; `tools/migration.py`).
@@ -290,7 +295,7 @@ Decided by the maintainer (2026-10-13); every item is in
   section 7), whatever the clock reads. The effective config's system id
   must be the pack's. Quiescent only, which core checks first, before the
   datamodels' state is built: from a handler (a batch is open), with an
-  effect or a reply pending, or during a migration job, `TA_ERROR_STATE`.
+  effect or a reply pending, or during a migration, `TA_ERROR_STATE`.
   The services the application runs are not in it: the restored host's
   first run announces each external invocation again (below, "Invoked
   services").

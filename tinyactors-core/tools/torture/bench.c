@@ -184,9 +184,9 @@ typedef struct bench_system {
     char **source_names, **source_texts;
     ta_system_config config;
     size_t memory_limit;
-    /* migration jobs: their onDone callbacks; totals */
-    struct bench_job *jobs;
-    uint32_t job_count, job_capacity;
+    /* migrations: their onDone callbacks; totals */
+    struct bench_migration *migrations;
+    uint32_t migration_count, migration_capacity;
     uint64_t migrated, migrate_pending, migrate_failed, retired;
     /* tracing (docs/adr/0006 in the repository root): what the bench does with
      * the records after every slice */
@@ -197,11 +197,11 @@ typedef struct bench_system {
 
 enum { TRACE_DISABLED, TRACE_RECORDS, TRACE_OTLP };
 
-typedef struct bench_job {
+typedef struct bench_migration {
     uint32_t id;
     int wake;
     JSValue callbacks; /* array of functions */
-} bench_job;
+} bench_migration;
 
 typedef struct bench_hibernate {
     uint64_t session; /* 0 = empty, UINT64_MAX = removed */
@@ -335,9 +335,9 @@ static void system_free(bench_system *system) {
         if (system->spawns[i].session && system->spawns[i].session != UINT64_MAX)
             free(system->spawns[i].sendid);
     free(system->spawns);
-    for (uint32_t i = 0; i < system->job_count; i++)
-        JS_FreeValue(B.context, system->jobs[i].callbacks);
-    free(system->jobs);
+    for (uint32_t i = 0; i < system->migration_count; i++)
+        JS_FreeValue(B.context, system->migrations[i].callbacks);
+    free(system->migrations);
     if (system->host)
         ta_host_free(system->host); /* before the runtime its datamodel instances live in */
     if (system->ecmascript) ta_datamodel_ecmascript_free(system->ecmascript);
@@ -1165,15 +1165,15 @@ static JSValue h_reload(JSContext *context, JSValueConst this_value, int argc, J
                         : JS_ThrowTypeError(context, "%s", message);
 }
 
-static bench_job *system_job(bench_system *system, uint32_t id) {
-    for (uint32_t i = 0; i < system->job_count; i++)
-        if (system->jobs[i].id == id) return &system->jobs[i];
+static bench_migration *system_migration(bench_system *system, uint32_t id) {
+    for (uint32_t i = 0; i < system->migration_count; i++)
+        if (system->migrations[i].id == id) return &system->migrations[i];
     return NULL;
 }
 
-static JSValue job_status(JSContext *context, bench_system *system) {
+static JSValue migration_status(JSContext *context, bench_system *system) {
     JSValue o = JS_NewObject(context);
-    JS_SetPropertyStr(context, o, "active", JS_NewBool(context, system->job_count > 0));
+    JS_SetPropertyStr(context, o, "active", JS_NewBool(context, system->migration_count > 0));
     JS_SetPropertyStr(context, o, "migrated", JS_NewFloat64(context, (double)system->migrated));
     JS_SetPropertyStr(context, o, "failed", JS_NewFloat64(context, (double)system->migrate_failed));
     JS_SetPropertyStr(context, o, "pending",
@@ -1182,7 +1182,7 @@ static JSValue job_status(JSContext *context, bench_system *system) {
 }
 
 /* migrate(system, { wake, timeoutMs, onDone }) -> status: a ta_host migration
- * job, advanced inside ta_host_run in bounded steps */
+ * migration, advanced inside ta_host_run in bounded steps */
 static JSValue h_migrate(JSContext *context, JSValueConst this_value, int argc,
                          JSValueConst *argv) {
     (void)this_value;
@@ -1214,36 +1214,36 @@ static JSValue h_migrate(JSContext *context, JSValueConst this_value, int argc,
         JS_FreeValue(context, callback);
         return JS_ThrowTypeError(context, "migrate failed (%d)", status);
     }
-    if (system->job_count == system->job_capacity) {
-        system->job_capacity = system->job_capacity ? system->job_capacity * 2 : 4;
-        system->jobs = (bench_job *)realloc(system->jobs, sizeof(bench_job) * system->job_capacity);
+    if (system->migration_count == system->migration_capacity) {
+        system->migration_capacity = system->migration_capacity ? system->migration_capacity * 2 : 4;
+        system->migrations = (bench_migration *)realloc(system->migrations, sizeof(bench_migration) * system->migration_capacity);
     }
-    bench_job *job = &system->jobs[system->job_count++];
-    job->id = id;
-    job->wake = wake;
-    job->callbacks = JS_NewArray(context);
+    bench_migration *migration = &system->migrations[system->migration_count++];
+    migration->id = id;
+    migration->wake = wake;
+    migration->callbacks = JS_NewArray(context);
     if (JS_IsFunction(context, callback))
-        JS_SetPropertyUint32(context, job->callbacks, 0, callback);
+        JS_SetPropertyUint32(context, migration->callbacks, 0, callback);
     else
         JS_FreeValue(context, callback);
     system->busy = 1;
-    return job_status(context, system);
+    return migration_status(context, system);
 }
 
-/* a job ended (TA_HOST_EFFECT_JOB_DONE): totals, onDone callbacks */
-static void job_done(bench_system *system, const ta_host_effect *effect) {
+/* a migration ended (TA_HOST_EFFECT_MIGRATION_DONE): totals, onDone callbacks */
+static void migration_done(bench_system *system, const ta_host_effect *effect) {
     system->migrated += effect->migrated;
     system->migrate_failed += effect->failed;
     system->migrate_pending = effect->pending;
-    bench_job *job = system_job(system, effect->job);
-    if (!job) return;
+    bench_migration *migration = system_migration(system, effect->migration);
+    if (!migration) return;
     JSValue stack_text = JS_NewObject(B.context);
     JS_SetPropertyStr(B.context, stack_text, "migrated",
                       JS_NewFloat64(B.context, effect->migrated));
     JS_SetPropertyStr(B.context, stack_text, "failed", JS_NewFloat64(B.context, effect->failed));
     JS_SetPropertyStr(B.context, stack_text, "pending", JS_NewFloat64(B.context, effect->pending));
-    JSValue cbs = job->callbacks;
-    *job = system->jobs[--system->job_count]; /* drop it before calling out (a callback may migrate
+    JSValue cbs = migration->callbacks;
+    *migration = system->migrations[--system->migration_count]; /* drop it before calling out (a callback may migrate
                                                  again) */
     int64_t n = 0;
     JS_GetLength(B.context, cbs, &n);
@@ -1265,7 +1265,7 @@ static JSValue h_migration(JSContext *context, JSValueConst this_value, int argc
     int32_t si = -1;
     if (argc) JS_ToInt32(context, &si, argv[0]);
     if (si < 0 || si >= MAX_SYSTEMS || !B.system[si].live) return JS_UNDEFINED;
-    return job_status(context, &B.system[si]);
+    return migration_status(context, &B.system[si]);
 }
 
 /* versions(system) -> [{ name, version, actors, current }] (versions alive now) */
@@ -1595,7 +1595,7 @@ enum {
     OPERATION_SYSTEM,
     OPERATION_DONE_SPAWN,
     OPERATION_WAKE,
-    OPERATION_JOB_DONE
+    OPERATION_MIGRATION_DONE
 };
 typedef struct bench_operation {
     int kind;
@@ -1603,7 +1603,7 @@ typedef struct bench_operation {
     uint64_t serial; /* OPERATION_DONE_SPAWN: the finished session */
     char *event, *target, *sendid, *json, *type;
     ta_payload payload; /* retained */
-    ta_host_effect job; /* OPERATION_JOB_DONE */
+    ta_host_effect migration; /* OPERATION_MIGRATION_DONE */
 } bench_operation;
 static bench_operation *ops;
 static int operation_count, cap_ops;
@@ -1917,8 +1917,8 @@ static void run_operation(int si, bench_operation *operation) {
     case OPERATION_WAKE:
         hib_wake(system, operation->actor);
         break;
-    case OPERATION_JOB_DONE:
-        job_done(system, &operation->job);
+    case OPERATION_MIGRATION_DONE:
+        migration_done(system, &operation->migration);
         break;
     }
 }
@@ -2017,7 +2017,7 @@ static uint32_t hib_sweep(bench_system *system, uint32_t max, uint32_t scan) {
 
 static void hib_wake(bench_system *system, uint64_t session) {
     bench_hibernate *hibernation = hib_find(system, session, 0);
-    if (!hibernation) return; /* woken already (a migration job and the system may both ask) */
+    if (!hibernation) return; /* woken already (a migration and the system may both ask) */
     if (hibernation->length > hibernation_buffer_capacity) {
         hibernation_buffer_capacity = hibernation->length * 2u;
         hibernation_buffer =
@@ -2138,9 +2138,9 @@ static void drain_effects(int si) {
             bench_log("error", system->name, m, strlen(m));
             break;
         }
-        case TA_HOST_EFFECT_JOB_DONE: {
-            bench_operation *operation = operation_push(OPERATION_JOB_DONE, 0);
-            operation->job = *effect;
+        case TA_HOST_EFFECT_MIGRATION_DONE: {
+            bench_operation *operation = operation_push(OPERATION_MIGRATION_DONE, 0);
+            operation->migration = *effect;
             break;
         }
         case TA_HOST_EFFECT_SEGMENT_FREED: { /* the host freed its copy of the image */

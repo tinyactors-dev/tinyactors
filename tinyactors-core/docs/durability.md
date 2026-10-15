@@ -93,7 +93,7 @@ Why the refusals:
   valid for the same build of the library only. They are the region bytes
   plus the datamodel's own snapshot; they need a drained outbox
   (`ta_system_snapshot`) or a quiescent host (effects
-  acknowledged, no migration job: `ta_host_snapshot`). Hibernation blobs stay
+  acknowledged, no migration: `ta_host_snapshot`). Hibernation blobs stay
   with the host and are not part of a snapshot. External invocations are
   kept with their type, src, invoke id and params, but the services the
   embedder runs are not in a snapshot: the restored host's first run

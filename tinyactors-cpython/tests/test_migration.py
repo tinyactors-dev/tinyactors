@@ -1,4 +1,4 @@
-"""Migration: Host.migrate, the migrated handler and the job's result, on both datamodels."""
+"""Migration: Host.migrate, the migrated handler and the migration_done handler, on both datamodels."""
 
 import unittest
 
@@ -25,21 +25,21 @@ class Migration(unittest.TestCase):
         logs, moved, done = Logs(), [], []
 
         def migrated(host, entry):
-            moved.append((entry.session, entry.segment, entry.chart, entry.job))
+            moved.append((entry.session, entry.segment, entry.chart, entry.migration))
 
-        with host_with([("counter.scxml", v1)], log=logs, migrated=migrated) as host:
+        with host_with([("counter.scxml", v1)], migration_done=lambda host, result: done.append(result), log=logs, migrated=migrated) as host:
             session = host.spawn(host.chart("counter"))
             host.send(session, "inc")
             host.send(session, "inc")
             host.run_until_idle()
             segment = add(host, v2)
-            job = host.migrate(lambda host, result: done.append(result))
+            migration = host.migrate()
             host.run_until_idle()
             host.send(session, "inc")
             host.send(session, "report")
             host.run_until_idle()
-        self.assertEqual(done, [{"job": job, "migrated": 1, "failed": 0, "pending": []}])
-        self.assertEqual(moved, [(session, segment, "counter", job)])
+        self.assertEqual(done, [{"migration": migration, "migrated": 1, "failed": 0, "pending": []}])
+        self.assertEqual(moved, [(session, segment, "counter", migration)])
         return logs.labelled("n")
 
     def test_a_python_actor_moves_with_its_bindings(self):
@@ -59,39 +59,39 @@ class Migration(unittest.TestCase):
                     host.send(session, "wait")
                     host.run_until_idle()
                     add(host, v2)
-                    host.migrate(None)
+                    host.migrate()
                     host.run_until_idle()
                     clock.increment(1000)
                 self.assertEqual(logs.labelled("later"), ["1"])
 
-    def test_a_hibernated_actor_is_asked_for_with_its_job(self):
+    def test_a_hibernated_actor_is_asked_for_with_its_migration(self):
         v1, v2 = versions("python")
         logs, blobs, asked, done = Logs(), {}, [], []
 
-        def wake(host, session, job):
-            asked.append((session, job))
+        def wake(host, session, migration):
+            asked.append((session, migration))
             host.wake(session, blobs.pop(session))
 
-        with host_with([("counter.scxml", v1)], log=logs, wake=wake) as host:
+        with host_with([("counter.scxml", v1)], migration_done=lambda host, result: done.append(result), log=logs, wake=wake) as host:
             session = host.spawn(host.chart("counter"))
             host.send(session, "inc")
             host.run_until_idle()
             blobs[session] = host.hibernate(session)
             add(host, v2)
-            job = host.migrate(lambda host, result: done.append(result), wake=True)
+            migration = host.migrate(wake=True)
             host.run_until_idle()
             host.send(session, "report")
             host.run_until_idle()
-        self.assertEqual(asked, [(session, job)])
+        self.assertEqual(asked, [(session, migration)])
         self.assertEqual(done[0]["migrated"], 1)
         self.assertEqual(logs.labelled("n"), ["1 2 ['n', 'other']"])
 
-    def test_an_events_wake_has_no_job(self):
+    def test_an_events_wake_names_no_migration(self):
         v1, _ = versions("python")
         blobs, asked = {}, []
 
-        def wake(host, session, job):
-            asked.append(job)
+        def wake(host, session, migration):
+            asked.append(migration)
             host.wake(session, blobs.pop(session))
 
         with host_with([("counter.scxml", v1)], wake=wake) as host:
@@ -102,17 +102,17 @@ class Migration(unittest.TestCase):
             host.run_until_idle()
         self.assertEqual(asked, [None])
 
-    def test_without_wake_or_timeout_a_hibernated_actor_holds_the_job(self):
-        """The job asks for a sleeping actor never (no wake) and so never
+    def test_without_wake_or_timeout_a_hibernated_actor_holds_the_migration(self):
+        """The migration asks for a sleeping actor never (no wake) and so never
         ends without a timeout: the README says so."""
         v1, v2 = versions("python")
         done, clock = [], tinyactors.SimulatedClock()
-        with host_with([("counter.scxml", v1)], clock=clock) as host:
+        with host_with([("counter.scxml", v1)], migration_done=lambda host, result: done.append(result), clock=clock) as host:
             asleep = host.spawn(host.chart("counter"))
             host.run_until_idle()
             host.hibernate(asleep)
             add(host, v2)
-            host.migrate(lambda host, result: done.append(result))
+            host.migrate()
             host.run_until_idle()
             clock.increment(60_000)
         self.assertEqual(done, [])
@@ -120,31 +120,31 @@ class Migration(unittest.TestCase):
     def test_without_wake_a_hibernated_actor_is_left_at_the_timeout(self):
         v1, v2 = versions("python")
         done, clock = [], tinyactors.SimulatedClock()
-        with host_with([("counter.scxml", v1)], clock=clock) as host:
+        with host_with([("counter.scxml", v1)], migration_done=lambda host, result: done.append(result), clock=clock) as host:
             asleep, awake = host.spawn(host.chart("counter")), host.spawn(host.chart("counter"))
             host.run_until_idle()
             host.hibernate(asleep)
             add(host, v2)
-            job = host.migrate(lambda host, result: done.append(result), timeout=500)
+            migration = host.migrate(timeout=500)
             host.run_until_idle()
             self.assertEqual(done, [])
             clock.increment(500)
-        self.assertEqual(done, [{"job": job, "migrated": 1, "failed": 0, "pending": [asleep]}])
+        self.assertEqual(done, [{"migration": migration, "migrated": 1, "failed": 0, "pending": [asleep]}])
         self.assertNotIn(awake, done[0]["pending"])
 
     def test_one_session_or_one_chart(self):
         v1, v2 = versions("python")
         other = fixture("test_migration/other.python.scxml")
         done = []
-        with host_with([("counter.scxml", v1), ("other.scxml", other)]) as host:
+        with host_with([("counter.scxml", v1), ("other.scxml", other)], migration_done=lambda host, result: done.append(result)) as host:
             a, b = host.spawn(host.chart("counter")), host.spawn(host.chart("counter"))
             host.run_until_idle()
             add(host, v2)
-            host.migrate(lambda host, result: done.append(result), session=a)
+            host.migrate(session=a)
             host.run_until_idle()
-            host.migrate(lambda host, result: done.append(result), chart="other")
+            host.migrate(chart="other")
             host.run_until_idle()
-            host.migrate(lambda host, result: done.append(result), chart="counter")
+            host.migrate(chart="counter")
             host.run_until_idle()
         self.assertEqual([result["migrated"] for result in done], [1, 0, 1])
         self.assertTrue(a and b)
@@ -152,12 +152,12 @@ class Migration(unittest.TestCase):
     def test_a_python_actor_with_a_value_outside_the_table_stays(self):
         v1, v2 = versions("python")
         done = []
-        with host_with([("counter.scxml", v1)]) as host:
+        with host_with([("counter.scxml", v1)], migration_done=lambda host, result: done.append(result)) as host:
             session = host.spawn(host.chart("counter"))
             host.send(session, "odd")
             host.run_until_idle()
             add(host, v2)
-            host.migrate(lambda host, result: done.append(result))
+            host.migrate()
             host.run_until_idle()
             host.send(session, "inc")  # still version 1, still running
             host.run_until_idle()
@@ -171,7 +171,7 @@ class Migration(unittest.TestCase):
             host.spawn(host.chart("counter"))
             host.run_until_idle()
             add(host, v2)
-            host.migrate(None)
+            host.migrate()
             host.run_until_idle()
             with self.assertRaises(tinyactors.TinyactorsError) as raised:
                 kept[0].session
@@ -181,38 +181,38 @@ class Migration(unittest.TestCase):
         v1, v2 = versions("python")
 
         def done(host, result):
-            raise ValueError("job handler")
+            raise ValueError("migration_done handler")
 
-        with host_with([("counter.scxml", v1)]) as host:
+        with host_with([("counter.scxml", v1)], migration_done=done) as host:
             host.spawn(host.chart("counter"))
             host.run_until_idle()
             add(host, v2)
-            host.migrate(done)
+            host.migrate()
             with self.assertRaises(ValueError):
                 host.run_until_idle()
 
-    def test_a_job_unfinished_at_close_never_calls_its_handler(self):
+    def test_a_migration_unfinished_at_close_never_reaches_its_handler(self):
         v1, v2 = versions("python")
         done = []
-        with host_with([("counter.scxml", v1)]) as host:
+        with host_with([("counter.scxml", v1)], migration_done=lambda host, result: done.append(result)) as host:
             asleep = host.spawn(host.chart("counter"))
             host.run_until_idle()
             host.hibernate(asleep)
             add(host, v2)
-            host.migrate(lambda host, result: done.append(result))
+            host.migrate()
             host.run_until_idle()
         self.assertEqual(done, [])
 
     def test_migrate_refuses_bad_arguments(self):
         with host_with([("counter.scxml", versions("python")[0])]) as host:
             with self.assertRaises(TypeError):
-                host.migrate(None, chart=3)
+                host.migrate(chart=3)
             with self.assertRaises(ValueError):
-                host.migrate(None, chart="")
+                host.migrate(chart="")
             with self.assertRaises(ValueError):
-                host.migrate(None, session=0)
+                host.migrate(session=0)
             with self.assertRaises(OverflowError):
-                host.migrate(None, timeout=-1)
+                host.migrate(timeout=-1)
             with self.assertRaises(TypeError):
                 host.migrate(3)
 

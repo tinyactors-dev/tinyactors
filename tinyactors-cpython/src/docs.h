@@ -148,7 +148,7 @@ static const char ta_python_doc_compiled_close[] =
     "a fallback.";
 
 static const char ta_python_doc_host[] =
-    "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None, services=None)\n"
+    "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
     "--\n"
     "\n"
     "A host: many actor systems run as one, the object that holds actors.\n"
@@ -165,9 +165,12 @@ static const char ta_python_doc_host[] =
     "  and the handler returns the service object (README, \"Invoked\n"
     "  services\").\n"
     "- log: handler(host, entry) for <log> lines (LogEntry).\n"
-    "- wake: handler(host, session, job) when a hibernated actor has work;\n"
-    "  answer with Host.wake(session, blob).\n"
-    "- migrated: handler(host, migration) for each actor a migration moved.\n"
+    "- wake: handler(host, session, migration) when a hibernated actor has\n"
+    "  work (migration: the id of the migration that asks, or None); answer\n"
+    "  with Host.wake(session, blob).\n"
+    "- migrated: handler(host, migrated) for each actor a migration moved.\n"
+    "- migration_done: handler(host, result) when a migration (Host.migrate)\n"
+    "  ends, with its counts and the sessions it left behind.\n"
     "- peer: handler(host, envelope) for an envelope to another host.\n"
     "- telemetry: handler(host, signal, data) with OTLP bytes, signal\n"
     "  \"traces\" or \"logs\".\n"
@@ -323,12 +326,12 @@ static const char ta_python_doc_host_snapshot[] =
     "\n"
     "The host must be quiescent: not from a handler, with no typed method's\n"
     "reply or other effect pending (run the host first), and not while a\n"
-    "migration job runs (TinyactorsError, TA_ERROR_STATE). The hibernated\n"
+    "migration runs (TinyactorsError, TA_ERROR_STATE). The hibernated\n"
     "actors' blobs are not in it: they stay in your store. The services you\n"
     "run are not in it either; Host.restore starts them again.";
 
 static const char ta_python_doc_host_restore[] =
-    "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None, services=None)\n"
+    "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
     "--\n"
     "\n"
     "A new Host running a snapshot of Host.snapshot.\n"
@@ -343,23 +346,23 @@ static const char ta_python_doc_host_restore[] =
     "of the store: it writes blobs too.";
 
 static const char ta_python_doc_host_migrate[] =
-    "migrate(handler, /, *, chart=None, session=None, wake=False, timeout=0)\n"
+    "migrate(*, chart=None, session=None, wake=False, timeout=0)\n"
     "--\n"
     "\n"
-    "Move running actors to the current version of their chart, in the next\n"
-    "runs, and return the job id.\n"
+    "Start a migration: move running actors to the current version of their\n"
+    "chart, in the next runs. Returns the migration's id (an int).\n"
     "\n"
     "Use it after add_image of a new version: all charts, the one named\n"
     "`chart`, or one `session`. Each actor moves at a stable point, keeping\n"
     "its session id, its states (matched by id) and its timers, and gets\n"
     "error.platform.upgrade with its old variables first. A busy actor is\n"
     "retried; a hibernated one waits until something wakes it, or, with\n"
-    "`wake`, is asked for through the wake handler (with this job's id).\n"
-    "`timeout` (in host ticks, 0 for none) ends the job anyway.\n"
+    "`wake`, is asked for through the wake handler (with this migration's\n"
+    "id). `timeout` (in host ticks, 0 for none) ends the migration anyway.\n"
     "\n"
-    "handler(host, result) runs when the job ends, with result {\"job\",\n"
-    "\"migrated\", \"failed\", \"pending\": [session, ...]}; the migrated handler\n"
-    "sees each actor that moved.";
+    "The host's migration_done handler gets its end, with result\n"
+    "{\"migration\", \"migrated\", \"failed\", \"pending\": [session, ...]}; the\n"
+    "migrated handler sees each actor that moved.";
 
 static const char ta_python_doc_host_run_until_idle[] =
     "run_until_idle()\n"
@@ -653,22 +656,22 @@ static const char ta_python_doc_envelope_error[] =
 static const char ta_python_doc_envelope_cbor[] =
     "The envelope as CBOR bytes, written on first read: what you transmit.";
 
-static const char ta_python_doc_migration[] =
+static const char ta_python_doc_migrated[] =
     "An actor that a migration moved to its chart's current version, given\n"
-    "to the migrated handler (Host.migrate). A thin view, valid until the\n"
+    "to the migrated handler (see Host.migrate). A thin view, valid until the\n"
     "batch's ack.";
 
-static const char ta_python_doc_migration_session[] =
+static const char ta_python_doc_migrated_session[] =
     "The actor's session id (int); it is the same after the move.";
 
-static const char ta_python_doc_migration_segment[] =
+static const char ta_python_doc_migrated_segment[] =
     "The segment it now runs in: the current version's.";
 
-static const char ta_python_doc_migration_chart[] =
+static const char ta_python_doc_migrated_chart[] =
     "The name of the chart it runs, the same before and after.";
 
-static const char ta_python_doc_migration_job[] =
-    "The job (Host.migrate's return value) that moved it.";
+static const char ta_python_doc_migrated_migration[] =
+    "The migration (Host.migrate's return value) that moved it.";
 
 static const char ta_python_doc_invocation[] =
     "A service your application runs, as one actor invoked it.\n"

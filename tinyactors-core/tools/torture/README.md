@@ -227,9 +227,9 @@ ECMAScript runtime with a session range of its own; new workers start in the
 newest one, sends between versions are routed inside the library, and a
 version is freed once its last worker finishes. `bench.migrate` moves the
 residents (export → translate states by id → adopt with the same session id)
-as a job of ~2 ms steps between the systems' runs, never in one blocking pass;
-before the first migration some residents are hibernated and the job wakes
-them (`wake: true`);
+as a migration of ~2 ms steps between the systems' runs, never in one blocking
+pass; before the first migration some residents are hibernated and the
+migration wakes them (`wake: true`);
 each receives `error.platform.upgrade` with its previous bindings, from which
 version 2 takes over its renamed counter. With `--param watch=1`, saving
 `charts/worker-next.scxml` loads it as the next version (CGI style) and

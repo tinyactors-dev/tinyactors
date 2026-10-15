@@ -551,8 +551,8 @@ static void request_run_host_stats(request *r, uint32_t map) {
     cbor_output_uint(&r->out, stats.hibernated);
     request_put_key(r, "runnable");
     cbor_output_uint(&r->out, stats.runnable);
-    request_put_key(r, "jobs");
-    cbor_output_uint(&r->out, stats.jobs);
+    request_put_key(r, "migrations");
+    cbor_output_uint(&r->out, stats.migrations);
     request_put_key(r, "regionBytes");
     cbor_output_uint(&r->out, stats.region_bytes);
     request_put_key(r, "delivered");

@@ -27,19 +27,19 @@
  *              as TA_HOST_EFFECT_PEER effects for the transport; undeliverable
  *              sends raise error.communication in the sender. Sends to host
  *              I/O processors come out as TA_EFFECT_SEND effects.
- *   migration  ta_host_migrate() starts a job that moves actors of older
+ *   migration  ta_host_migrate() starts a migration that moves actors of older
  *              versions to the current one at stable points (export ->
  *              translate -> adopt; error.platform.upgrade), advanced inside
  *              ta_host_run in bounded steps (a quantum of actors per run,
  *              however many it waits for): busy actors are retried,
  *              hibernated ones wait until ta_host_wake brings them back,
  *              asked for with TA_HOST_MIGRATE_WAKE (a TA_EFFECT_WAKE whose
- *              job is the job's id), again each time the job finds one
+ *              migration is the migration's id), again each time the migration finds one
  *              hibernated after a wake; an actor exported meanwhile leaves
- *              the job; actors with running invocations wait until those
+ *              the migration; actors with running invocations wait until those
  *              finish (a session tree moves unchanged, but is not
- *              translated); a timeout (system ticks) ends the job with the
- *              stragglers, and a job with an actor nobody wakes ends only
+ *              translated); a timeout (system ticks) ends the migration with the
+ *              stragglers, and a migration with an actor nobody wakes ends only
  *              there.
  *   hibernation ta_host_sweep() runs the CLOCK sweep over all segments;
  *              blobs and their storage stay with the host (ta_host_hibernate,
@@ -181,7 +181,7 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
  *     macrostep does not run).
  * Lookups answer as usual: ta_host_chart, ta_host_locate,
  * ta_host_actor_by_name, ta_host_segment_count, ta_host_segment_info_get,
- * ta_host_system, ta_host_peer_status, ta_host_job_pending, and the effect
+ * ta_host_system, ta_host_peer_status, ta_host_migration_pending, and the effect
  * accessors (which answer 0 or empty: no batch is open in a run).
  * ta_host_peer_round_trip_time is accepted too: it records a peer's
  * measured round trip and changes nothing a run uses. ta_host_free does
@@ -234,7 +234,7 @@ typedef struct ta_host_time {
  * run. */
 TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
 /* Run segments with work for up to `budget` fuel in total, deliver sends
- * between them, advance migration jobs, free retired segments.
+ * between them, advance migrations, free retired segments.
  * With an open effect batch, or from a guarded call, return TA_RUN_FAULT,
  * detail TA_ERROR_STATE, used 0 and next_deadline UINT64_MAX; nothing runs
  * or is released. Acknowledge every batch before calling run.
@@ -245,7 +245,7 @@ TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
  * TA_IO_PROCESSOR_SYNC processor, the last effect of its segment: answer it
  * — ta_host_send of events or of TA_EVENT_IN_ERROR_COMMUNICATION to the
  * sender — and run again; the sender goes on only then);
- * next_deadline: the earliest of the segments' timers, the migration jobs'
+ * next_deadline: the earliest of the segments' timers, the migrations'
  * timeouts, the expiry of envelopes queued for a peer that is down, the end
  * of a trace watch, and the encoder's flush (flush_interval after a request's
  * first record); UINT64_MAX for none. Arm one timer for it and call
@@ -254,8 +254,8 @@ TA_API ta_run ta_host_run(ta_host *h, uint32_t budget);
 
 enum {
     /* TA_EFFECT_SEND .. TA_EFFECT_WAKE (1..8) as in tinyactors/system.h, plus: */
-    TA_HOST_EFFECT_MIGRATED = 16, /* session moved to (segment, chart); job */
-    TA_HOST_EFFECT_JOB_DONE = 17, /* job ended: migrated, failed, pending (ta_host_job_pending) */
+    TA_HOST_EFFECT_MIGRATED = 16, /* session moved to (segment, chart); migration */
+    TA_HOST_EFFECT_MIGRATION_DONE = 17, /* migration ended: migrated, failed, pending (ta_host_migration_pending) */
     TA_HOST_EFFECT_SEGMENT_FREED = 18, /* segment retired (the host freed its image copy) */
     /* the router (docs/protocol.md): */
     TA_HOST_EFFECT_PEER = 19,      /* send an envelope to `peer`: target, event, sendid, payload,
@@ -285,15 +285,15 @@ typedef struct ta_host_effect {
     uint64_t root;         /* the session of its host-spawned ancestor (attribution) */
     uint32_t token;        /* request / invoke token (per segment) */
     uint32_t io_processor; /* TA_EFFECT_SEND: index in the config's ioProcessors */
-    /* (job: MIGRATED, JOB_DONE, and a WAKE a migration job asked for; 0 otherwise) */
+    /* (migration: MIGRATED, MIGRATION_DONE, and a WAKE a migration asked for; 0 otherwise) */
     uint32_t flags;        /* PEER: hops */
-    uint32_t job;
+    uint32_t migration;
     ta_string_view target, event, sendid, auxiliary; /* as in ta_effect; MIGRATED: event = chart
                                           name; PEER, PEER_ERR: aux = origin */
     ta_payload payload;                              /* borrowed */
     ta_time delay_hint;
     uint32_t chart;                     /* MIGRATED: chart index in `segment` */
-    uint32_t migrated, failed, pending; /* JOB_DONE */
+    uint32_t migrated, failed, pending; /* MIGRATION_DONE */
     uint32_t peer;                      /* PEER, PEER_ERR: the peer handle */
     uint32_t datamodel;                 /* PEER: datamodel index of payload (TA_NIL: none) */
     ta_string_view msgid;               /* PEER, PEER_ERR */
@@ -340,7 +340,7 @@ enum {
     TA_EFFECT_FIELD_TOKEN = 6,
     TA_EFFECT_FIELD_IO_PROCESSOR = 7, /* TA_NIL: a send to an invoked service */
     TA_EFFECT_FIELD_FLAGS = 8,
-    TA_EFFECT_FIELD_JOB = 9,
+    TA_EFFECT_FIELD_MIGRATION = 9,
     TA_EFFECT_FIELD_PAYLOAD = 10, /* the payload handle (ta_payload) */
     TA_EFFECT_FIELD_DATAMODEL = 11,
     TA_EFFECT_FIELD_DELAY_HINT = 12,
@@ -616,10 +616,10 @@ typedef struct ta_host_migration {
     uint32_t pad;
     ta_time timeout; /* system ticks from now (0 = none) */
 } ta_host_migration;
-TA_API ta_status ta_host_migrate(ta_host *h, const ta_host_migration *migration, uint32_t *job);
-/* The sessions a job waits for while it runs, in no order; those a finished
- * job left behind (valid until the next ta_host_run). */
-TA_API uint32_t ta_host_job_pending(const ta_host *h, uint32_t job, ta_uint64_array out);
+TA_API ta_status ta_host_migrate(ta_host *h, const ta_host_migration *request, uint32_t *migration);
+/* The sessions a migration waits for while it runs, in no order; those a finished
+ * migration left behind (valid until the next ta_host_run). */
+TA_API uint32_t ta_host_migration_pending(const ta_host *h, uint32_t migration, ta_uint64_array out);
 
 /* ---- hibernation (the host stores the blobs) ------------------------------------ */
 /* CLOCK sweep over all segments: up to `max_scan` slots, at most
@@ -662,7 +662,7 @@ TA_API ta_status ta_host_adopt(ta_host *h, const ta_host_adoption *adoption, uin
  * timers, continuations), the moved-session map, the clock — as one blob.
  * It is for inspection and for taking a host out of memory for a while, not
  * for durability or backups: it holds raw region memory (see below).
- * It needs a quiescent host: effects acknowledged and no migration job
+ * It needs a quiescent host: effects acknowledged and no migration
  * running (TA_ERROR_STATE otherwise). Written into `out` (ta_buffer).
  *
  * Datamodel state is not in it: regions refer to datamodel instances and

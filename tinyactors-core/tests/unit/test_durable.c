@@ -16,7 +16,7 @@
  *              export) -> system + datamodel snapshot -> restore into new
  *              regions and yet another new datamodel host;
  *   host       the same through ta_host: ta_host_hibernate / TA_EFFECT_WAKE /
- *              ta_host_wake, a migration job to a new version every third
+ *              ta_host_wake, a migration to a new version every third
  *              step, ta_host_snapshot -> ta_host_restore with a new
  *              datamodel host.
  *
@@ -973,7 +973,7 @@ static int host_run(world *w) {
         ta_host_stats stats;
         stats.size = sizeof stats;
         CHECK_EQUAL(host_stats_fill(w->host, &stats), TA_OK);
-        if (!n && result.status == TA_RUN_IDLE && !stats.jobs) return 1;
+        if (!n && result.status == TA_RUN_IDLE && !stats.migrations) return 1;
     }
     fprintf(stderr, "  %s: does not settle\n", w->label);
     return 0;
@@ -1003,7 +1003,7 @@ static int host_wake_all(world *w) {
     return host_run(w);
 }
 
-/* a new version (the other image) and a migration job to it */
+/* a new version (the other image) and a migration to it */
 static int host_migrate(world *w) {
     uint32_t segment;
     int k = w->segment_image[ta_host_segment_count(w->host) - 1] ^ 1;
@@ -1011,14 +1011,14 @@ static int host_migrate(world *w) {
         ta_host_add_image(w->host, ta_image_bytes(&test_images[k]), &segment) != TA_OK)
         return 0;
     w->segment_image[segment] = k;
-    /* one job per root without running invocations (a session tree waits for
-     * its invocations to finish: it would keep the job open) */
+    /* one migration per root without running invocations (a session tree waits for
+     * its invocations to finish: it would keep the migration open) */
     uint64_t cursor = 0, sessions[64];
     uint32_t n;
     while ((n = host_actors_page(w->host, &cursor, (ta_uint64_array){sessions, 64})) != 0)
         for (uint32_t i = 0; i < n; i++) {
             ta_host_location location;
-            uint32_t job;
+            uint32_t migration;
             ta_actor_info actor_info;
             actor_info.size = sizeof actor_info;
             if (ta_host_locate(w->host, sessions[i], &location) != TA_OK ||
@@ -1030,7 +1030,7 @@ static int host_migrate(world *w) {
             if (ta_host_migrate(w->host,
                                 &(ta_host_migration){(ta_string_view){0, 0}, sessions[i],
                                                      TA_HOST_MIGRATE_WAKE, 0, 0},
-                                &job) != TA_OK)
+                                &migration) != TA_OK)
                 return 0;
         }
     return host_run(w);

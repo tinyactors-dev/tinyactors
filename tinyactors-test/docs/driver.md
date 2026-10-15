@@ -157,7 +157,7 @@ named by its `name` in `documents` (`counter.scxml`); a chart by its
 | `{"hibernate": alias}` | `ta_host_hibernate`; the blob goes to the implementation's store |
 | `{"snapshot": name}` | `ta_host_snapshot_pack` with the datamodel's state, kept under `name` |
 | `{"restore": name}` | `ta_host_snapshot_unpack`, `ta_host_restore` with its images and the datamodel's state: the restored host replaces the running one (a restart) |
-| `{"migrate": {"wake"?: bool, "timeout"?: ticks}}` | `ta_host_migrate` of every chart (`TA_HOST_MIGRATE_WAKE` with `wake`), then the loop until its `JOB_DONE` |
+| `{"migrate": {"wake"?: bool, "timeout"?: ticks}}` | `ta_host_migrate` of every chart (`TA_HOST_MIGRATE_WAKE` with `wake`), then the loop until its `MIGRATION_DONE` |
 
 In `params` and `data`, a text `"@alias"` (at any depth) stands for that
 actor's address, `#_scxml_<session>` (`ta-conform`:
@@ -187,7 +187,7 @@ What the world does around a scenario, and nothing more (`ta-conform`:
   chart of the effect's segment's image; `ta_host_resume` with that chart's
   index + 1, or with `TA_ERROR_INVALID` when there is none, which the
   invoking chart sees as `error.execution` (`request_answer`).
-- **`JOB_DONE`** ends a `migrate` step.
+- **`MIGRATION_DONE`** ends a `migrate` step.
 - **`LOG`** with the label `Outcome` decides the outcome: the first one,
   `pass` or anything else (`fail`), from any session, and the scenario
   stops there, as for a W3C test (`conform_outcome`, `conform.c`).

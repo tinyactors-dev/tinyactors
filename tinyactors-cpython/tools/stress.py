@@ -97,7 +97,7 @@ def main():
     wakes = [0]
     counts = {}
 
-    def wake(host, session, job):
+    def wake(host, session, migration):
         host.wake(session, store.get(session))
         resident[session] = None
         wakes[0] += 1

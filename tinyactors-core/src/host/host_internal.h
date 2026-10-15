@@ -89,7 +89,7 @@ typedef struct retired_chart {
     ta_chart_stats totals;
 } retired_chart;
 
-typedef struct migration_job {
+typedef struct host_migration {
     uint32_t id;
     int active;
     char *name; /* name_length bytes, NULL when empty */
@@ -99,13 +99,13 @@ typedef struct migration_job {
     ta_time deadline;
     int walking;
     uint32_t walk_segment, cursor;
-    session_map members; /* the sessions it waits for: JOB_ASLEEP or JOB_RETRY (host.c) */
-    uint64_t *retry;     /* the JOB_RETRY members, tried round robin from retry_next */
+    session_map members; /* the sessions it waits for: MIGRATION_ASLEEP or MIGRATION_RETRY (host.c) */
+    uint64_t *retry;     /* the MIGRATION_RETRY members, tried round robin from retry_next */
     uint32_t retry_count, retry_capacity, retry_next;
     uint32_t migrated, failed;
     uint64_t *left; /* after it ended: stragglers (until the next run) */
     uint32_t left_count, left_capacity;
-} migration_job;
+} host_migration;
 
 /* target, event, sendid, aux, msgid, origintype, deduplication_key */
 #define EFFECT_STRINGS 8
@@ -191,9 +191,9 @@ struct ta_host {
     void *held[HELD_BLOCKS_MAX];
     size_t held_size[HELD_BLOCKS_MAX];
     uint32_t held_count;
-    /* jobs */
-    migration_job *jobs;
-    uint32_t job_count, job_capacity, job_sequence;
+    /* migrations */
+    host_migration *migrations;
+    uint32_t migration_count, migration_capacity, migration_sequence;
     /* sweep cursor */
     uint32_t sweep_segment, sweep_cursor;
     /* What the host writes for its caller: an envelope, traces, logs,

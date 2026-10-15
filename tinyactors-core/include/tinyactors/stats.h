@@ -76,7 +76,7 @@ typedef struct ta_chart_stats {
 typedef struct ta_host_stats {
     uint32_t size;
     uint32_t segments; /* live */
-    uint32_t actors, hibernated, runnable, jobs;
+    uint32_t actors, hibernated, runnable, migrations;
     uint64_t region_bytes, delivered, routed, migrated, retired;
     /* the fuel clock every segment's trace records are stamped with: note it,
      * with the wall clock, before and after each ta_host_run (tinyactors/otlp.h) */

@@ -2,7 +2,7 @@
  * environment"): a host of its own, the steps' calls in order, and after
  * each the loop until the host is idle at the current time, with the
  * effects a scenario needs answered: WAKE from the store, REQUEST from the
- * segment's image, JOB_DONE for a migration. The charts check what
+ * segment's image, MIGRATION_DONE for a migration. The charts check what
  * happened; the first Outcome log decides. */
 #include "conform.h"
 
@@ -36,7 +36,7 @@ typedef struct scenario {
     scenario_snapshot snapshots[8];
     uint32_t snapshot_count;
     ta_time now;
-    int job_done;
+    int migration_done;
     const char *outcome;
 } scenario;
 
@@ -157,8 +157,8 @@ static void settle(scenario *run) {
                 request->token = effect->token;
                 snprintf(request->source, sizeof request->source, "%.*s", (int)effect->auxiliary.length,
                          effect->auxiliary.pointer ? effect->auxiliary.pointer : "");
-            } else if (effect->kind == TA_HOST_EFFECT_JOB_DONE) {
-                run->job_done = 1;
+            } else if (effect->kind == TA_HOST_EFFECT_MIGRATION_DONE) {
+                run->migration_done = 1;
             }
         }
         ta_host_effects_ack(run->host);
@@ -371,19 +371,19 @@ static int step_migrate(scenario *run, const scenario_step *step) {
     if (document->tokens[step->value].kind != TA_CBOR_MAP) return malformed(run, step->index, "migrate takes a map");
     uint32_t wake_at = ta_cbor_member(document, step->value, ta_string("wake"));
     uint32_t timeout_at = ta_cbor_member(document, step->value, ta_string("timeout"));
-    ta_host_migration migration;
-    memset(&migration, 0, sizeof migration);
+    ta_host_migration request;
+    memset(&request, 0, sizeof request);
     if (wake_at != TA_NIL && document->tokens[wake_at].kind == TA_CBOR_SIMPLE &&
         document->tokens[wake_at].value == TA_CBOR_TRUE)
-        migration.flags = TA_HOST_MIGRATE_WAKE;
+        request.flags = TA_HOST_MIGRATE_WAKE;
     if (timeout_at != TA_NIL && document->tokens[timeout_at].kind == TA_CBOR_UINT)
-        migration.timeout = (ta_time)document->tokens[timeout_at].value;
-    uint32_t job;
-    run->job_done = 0;
-    if (ta_host_migrate(run->host, &migration, &job) != TA_OK) return refused(run, "ta_host_migrate refused");
-    for (int round = 0; round < 100 && !run->job_done && !run->outcome; round++)
+        request.timeout = (ta_time)document->tokens[timeout_at].value;
+    uint32_t migration;
+    run->migration_done = 0;
+    if (ta_host_migrate(run->host, &request, &migration) != TA_OK) return refused(run, "ta_host_migrate refused");
+    for (int round = 0; round < 100 && !run->migration_done && !run->outcome; round++)
         settle(run);
-    return run->job_done || run->outcome || refused(run, "the migration did not end");
+    return run->migration_done || run->outcome || refused(run, "the migration did not end");
 }
 
 typedef int (*step_function)(scenario *run, const scenario_step *step);
