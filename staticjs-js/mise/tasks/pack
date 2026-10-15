@@ -22,7 +22,7 @@ FileUtils.rm_rf(out)
 FileUtils.mkdir_p(out)
 StaticJSPackage.run('npm', 'pack', '--silent', '--pack-destination', out.to_s)
 tarball = Dir[out.join('*.tgz').to_s].fetch(0)
-listing = IO.popen(['tar', '-tzf', tarball], &:read).split.sort
+listing = Toolchain::Tool[:tar].run('-tzf', tarball).split.sort
 wanted = %w[CHANGELOG.md LICENSE README.md index.d.ts index.mjs package.json staticjs.wasm].map { |f| "package/#{f}" }
 abort "pack: the tarball holds #{listing.inspect}, not #{wanted.inspect}" unless listing == wanted
 
