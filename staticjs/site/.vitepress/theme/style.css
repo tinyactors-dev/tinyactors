@@ -423,3 +423,33 @@ body {
 .vp-doc > div > p:first-of-type code {
   font-size: 0.8em;
 }
+
+/* The tinyactors logo in the footer: the horizontal lockup, ink on light
+ * surfaces and parchment on dark ones, with a quarter of the symbol's
+ * height kept clear around it. */
+.VPFooter .tinyactors-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  color: var(--fg-2);
+  text-decoration: none;
+}
+.VPFooter .tinyactors-logo,
+.VPFooter .tinyactors-logo span {
+  text-decoration: none !important;
+}
+.VPFooter .tinyactors-logo img {
+  display: block;
+  height: 29px;
+  width: auto;
+  padding: 7px;
+  box-sizing: content-box;
+}
+.VPFooter .tinyactors-logo .on-dark,
+.dark .VPFooter .tinyactors-logo .on-light {
+  display: none;
+}
+.dark .VPFooter .tinyactors-logo .on-dark {
+  display: block;
+}

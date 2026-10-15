@@ -113,7 +113,12 @@ export default defineConfig({
     outline: { level: [2, 3], label: 'On this page' },
     footer: {
       message: 'Every page is also markdown: add <code>.md</code> to its path, or ask for <code>text/markdown</code>. Agents start at <a href="/llms.txt">/llms.txt</a>.',
-      copyright: 'staticjs · part of tinyactors',
+      copyright:
+        '<a class="tinyactors-logo" href="https://github.com/dhamidi/tinyactors" aria-label="staticjs is part of tinyactors">' +
+        '<span>staticjs is part of</span>' +
+        '<img class="on-light" src="/brand/tinyactors-horizontal-ink.svg" alt="tinyactors" width="112" height="29">' +
+        '<img class="on-dark" src="/brand/tinyactors-horizontal-parchment.svg" alt="tinyactors" width="112" height="29">' +
+        '</a>',
     },
     docFooter: { prev: 'Previous', next: 'Next' },
   },
