@@ -2,13 +2,15 @@
 layout: page
 sidebar: false
 title: staticjs
-description: "Run expressions and rules written by someone else, as JavaScript that always ends, reaches nothing of the host, and gives Node's value or a fault. A freestanding C library and a WebAssembly module."
+description: "A small, embeddable and fast JavaScript engine for a pure subset of JavaScript: every program ends, reaches only what you pass in, and returns Node's exact value or a fault. Freestanding C and WebAssembly."
 ---
 
 <!-- markdown
-**Let others write the rules. Every one of them ends.**
+**A small, embeddable and fast JavaScript engine**
 
-Guards, filters, pricing formulas, computed fields: code someone else writes and your application runs. staticjs runs it in a subset of JavaScript that has no loop to hang on, nothing of the host to reach and no clock of its own, and gives exactly the value Node gives, or a fault that says why. It is a freestanding C library, and a WebAssembly module that imports nothing.
+An engine for a pure subset of JavaScript, for code someone else writes. Every program ends, reaches only what you pass in, and returns Node's exact value or a fault that says why.
+
+One C file, no libc · Wasm module, no imports · 0.14 µs to evaluate a guard · Runs on fuel you push
 
 For example, this program, with its result:
 -->
@@ -35,39 +37,46 @@ For example, this program, with its result:
 </HomePage>
 
 <!-- markdown
-## What running someone else's code costs you, and what staticjs takes away
+## Small, embeddable, fast, and it always ends
 
-A sandbox around a JavaScript engine leaves you some of these problems, and a rule language of its own leaves you others. staticjs is built so that none of them can happen.
+staticjs runs a pure subset of JavaScript, so you can embed it to evaluate code someone else wrote.
 
-- **A rule that never finishes.** A timeout depends on the machine it runs on, and in Node's vm a promise callback outlives it. staticjs has no loops and no recursion: a program runs on fuel you push, pauses where it runs out, and resumes when you push more.
-- **A way out of the sandbox.** A sandbox around a whole engine must take away the network, the files, the globals and the prototypes, and every one it misses is an escape. A staticjs program starts with nothing: it reaches only what you pass in.
-- **Memory that grows until the process dies.** Every byte comes from your allocator, every construct has a limit, and nothing recurses, so no program can overflow the C stack. With a small stack, an evaluator holds about 41 KiB.
-- **A different answer on another machine.** Time limits depend on the machine, and engines disagree on the last bits of Math. staticjs gives the same value and spends the same fuel everywhere; the clock and Math.random's seed are yours.
-- **A new language for every author.** Rule languages are pure and end, but each has a syntax of its own to learn. staticjs is JavaScript: authors test a rule in a browser console, and their editor already knows it.
-- **A wrong value that looks right.** In JavaScript, `"5" * 2` is `10`. Where JavaScript would coerce, compare identities or look on a prototype, staticjs stops with a fault that says why. Every other value is the one Node gives, and the test suite checks it against Node.
+- **Small.** One C file and one header, no dependencies, no C library. The language is small too: no loops, recursion or classes. An evaluator with max_stack = 256 is about 41 KiB.
+- **Embeddable.** Freestanding C11 with a one-file amalgamation. Static and shared libraries for Linux and macOS (x86_64, arm64), and a WebAssembly module that imports nothing, for browsers and Node.
+- **Fast.** Evaluating a compiled guard from C takes about 0.14 µs; compiling one takes 6.4 µs. In WebAssembly in Chromium, staticjs was faster than QuickJS-NG on 7 of 8 programs.
+- **Total.** Every evaluation ends. A program runs on fuel the host pushes, one unit per instruction and per element a built-in walks. It pauses when the fuel runs out and resumes when more arrives.
+- **Exact.** A program staticjs accepts is valid JavaScript and gives the value Node gives, or a fault that says why. `"5" * 2` is a fault, not `10`. About 4,200 cases run in Node too and must match.
+- **Hermetic.** A program reaches only the values the host passes in: no file system, network, clock or randomness. Same program and inputs give the same value and the same fuel on every machine.
 
-## staticjs or QuickJS?
+## How staticjs compares
 
-QuickJS runs all of JavaScript, and if your users write whole programs, use it. staticjs gives up loops, classes and I/O, and in exchange guarantees what a host running someone else's rules needs.
+staticjs has CEL's guarantees with JavaScript syntax and functions users define. It is QuickJS's embeddability in a language that cannot run away, and Starlark's determinism for JavaScript.
 
-| | QuickJS-NG | staticjs |
-|---|---|---|
-| Language | All of modern JavaScript | Expressions and modules of pure JavaScript: no loops, recursion, classes, async or I/O |
-| A program that never ends | Stopped by an interrupt handler you write | Ends: each evaluation runs on the fuel you push, and pauses where it runs out |
-| Memory | A limit you set on the runtime | Your allocator, and a limit on every construct |
-| `"5" * 2` | `10`, as JavaScript gives | A fault that says why |
-| Time, both as WebAssembly | Measured live on the page, in the reader's browser | Measured live on the page, in the reader's browser |
-| Time, staticjs as a C library | 4.8 times staticjs's, over 33 evaluation cases | About 5 times faster than QuickJS-NG in WebAssembly |
+| | staticjs | QuickJS | CEL | Starlark |
+|---|---|---|---|---|
+| Syntax | JavaScript (a pure subset) | JavaScript (ES2025) | Its own C-like syntax | A dialect of Python |
+| Functions users write | Arrow functions, no recursion | All of JavaScript | No; macros and host functions | def functions, no recursion |
+| Loops | None; map, filter, reduce, find | All of JavaScript | None; map, filter, all, exists | for over finite collections |
+| Runaway programs | Cannot run away; host-pushed fuel | Host's interrupt handler stops it | Non-Turing complete | — |
+| Reaches | Only values the host passes in | — | Only data the host provides | No file system, network, clock |
+| Memory | Host allocator; limit per construct | Limit set on the runtime | — | — |
+| Same result everywhere | Same value and same fuel | — | — | Deterministic evaluation |
+| Coercion | Stops with a fault | — | — | — |
+| Embeds in | Freestanding C11, one file; wasm | A few C files, no dependency | Go, Java, C++ | Go, Java, Rust |
 
-Measured on one 4-core x86_64 machine, staticjs as a C library and QuickJS-NG compiled to WebAssembly and run by Node, on the same programs and inputs: proportions, not a promise. Node with its JIT is faster than both, taking 0.43 of staticjs's time; without its JIT, Node is about as fast as staticjs. See [Performance](/guide/performance#compared-with-other-engines).
+- Choose QuickJS when you need to run whole JavaScript programs: it passes nearly all of the ES2025 test suite.
+- Choose CEL when you need formal verification, or libraries for Go, Java or C++ with protobuf.
+- Choose Starlark when you want Python-style configuration, as Bazel uses it.
 
-## The same rules, run side by side
+The alternatives' facts come from their own pages. staticjs's speed is measured on the page, in the reader's browser, and on one machine in the [benchmark report](/guide/performance#compared-with-other-engines): proportions, not promises.
 
-On the page, staticjs and QuickJS-NG (the npm package quickjs-wasi), both compiled to WebAssembly, run the same eight programs in the reader's browser: a guard, a filter and map over 10,000 orders, a sort of 5,000 rows by a key, a group and count, a sum with reduce, string work, regular expressions and a JSON round trip. Each program builds its own data, both engines must give the same result before its time counts, and each figure is the median of five samples. The times depend on the browser and the machine, so this markdown does not quote them.
+## Run both engines in your browser
 
-## A fault, never a plausible wrong value
+On the page, eight programs run in staticjs and QuickJS-NG (the npm package quickjs-wasi), both compiled to WebAssembly, in the reader's browser: a guard, filter and map over 10,000 orders, a sort of 5,000 rows by a key, group and count over 10,000 numbers, a sum of 100,000 numbers with reduce, work on 2,000 strings, a regular expression over 2,000 addresses, and a JSON round trip of 1,000 records. A time counts only if both engines return the same result. Each figure is the median of five samples; each sample repeats the program for at least 40 ms. staticjs is called from JavaScript once per run, as a host calls its C API; QuickJS-NG loops inside the engine and is called once per sample, so it pays fewer crossings. The times depend on the browser and the machine, so this markdown does not quote them.
 
-Where JavaScript would coerce, compare identities or look on a prototype, staticjs stops and says why.
+## Where staticjs stops instead of guessing
+
+A mistake in someone else's rule becomes a fault with a line and column, not a plausible wrong value. Everything staticjs accepts gives exactly the value Node gives.
 
 | Program | JavaScript | staticjs |
 |---|---|---|
@@ -76,15 +85,19 @@ Where JavaScript would coerce, compare identities or look on a prototype, static
 | `({}).a.b` | TypeError | fault: cannot read a property of undefined |
 | `() => { for (;;) {} }` | never ends, if called | refused when compiled: staticjs has no loops |
 
-## The same library, wherever it runs
+[All faults and refusals](/guide/faults)
 
-No C library and no imports: one C file builds for Linux, macOS and WebAssembly from the same source.
+## Three ways in
 
-- **A C library** (any C11 compiler): `cc -std=c11 -Iinclude app.c lib/libstaticjs.a`. See [Getting started](/guide/getting-started).
-- **One C file** (clang): `clang -O2 -I. app.c staticjs.c`, the amalgamation.
-- **WebAssembly** (browsers and Node): `staticjs.wasm` imports nothing and brings its own allocator. See [Browser and Node](/guide/wasm).
+Use prebuilt libraries, one C file, or WebAssembly. Pick the one that fits your build.
 
-## Every stage is pushed, none recurses
+- **Prebuilt libraries.** Static and shared libraries for Linux and macOS, on x86_64 and arm64. Link them from any C11 compiler: `cc -std=c11 -Iinclude app.c lib/libstaticjs.a`. See [Getting started](/guide/getting-started).
+- **Amalgamation.** The whole library as one file, staticjs.c, plus staticjs.h. Add both to your project and build with clang: `clang -O2 -I. app.c staticjs.c`.
+- **WebAssembly.** staticjs.wasm imports nothing and brings its own allocator. It runs in browsers and Node: `await WebAssembly.instantiate(bytes, {})`. See [Browser and Node](/guide/wasm).
 
-Bytes into the parser, events into the compiler, fuel into the evaluator, buffer space into the writer. Nothing blocks or calls back for more input, so the host decides when each step happens. The [pipeline explorer](/explore/pipeline) shows a program travelling through them.
+## Watch a program go through the pipeline
+
+Pick an example or type a program and step through each stage: parser events pushed 1, 4 or 16 bytes at a time, compiled function shapes, the evaluator one unit of fuel at a time, and output in 16-byte pieces. It runs in the browser on staticjs.wasm: the [pipeline explorer](/explore/pipeline).
+
+Parser: bytes → events. Compiler: events → bytecode. Evaluator: bytecode → value. Writer: value → JS source.
 -->
