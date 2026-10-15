@@ -35040,8 +35040,12 @@ sjs_result sjs_vm_start(sjs_vm *vm, const sjs_run_params *params) {
     for (uint32_t i = 0; i < params->global_count; i++) {
         if (params->globals[i].internal != 0) return SJS_ERR_INVALID;
     }
+    /* The same program again, as a guard runs, keeps the reference the last
+     * evaluation took: reset releases nothing, and nothing is retained. */
+    bool same = vm->program == program;
+    if (same) vm->program = NULL;
     sjs_vm_reset(vm);
-    sjs_program_retain(program);
+    if (!same) sjs_program_retain(program);
     vm->program = program;
     vm->globals = params->globals;
     vm->global_count = params->global_count;
