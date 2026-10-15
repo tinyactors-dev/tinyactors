@@ -62,7 +62,7 @@ static void print(host *h, sjs_value value) {
 static sjs_program *compile(const sjs_compiler_config *config, const char *source) {
     sjs_program *program;
     sjs_error error = { 0 };
-    sjs_compile_params params = { *config, { source, (uint32_t)strlen(source) }, &error };
+    sjs_compile_params params = { *config, { source, (uint32_t)strlen(source) }, &error, NULL };
     if (sjs_compile(&params, &program) != SJS_OK) fail("compile", &error);
     return program;
 }

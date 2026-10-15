@@ -11250,7 +11250,23 @@ sjs_result sjs_compile(const sjs_compile_params *params, sjs_program **out) {
     if (r == SJS_OK) r = sjs_parser_finish(parser);
     if (r == SJS_OK) r = sjs_compiler_finish(compiler, out);
     if (r == SJS_ERR_PROGRAM && params->error != NULL) {
-        if (sjs_parser_error(parser, params->error) != SJS_OK) sjs_compiler_error(compiler, params->error);
+        sjs_error *error = params->error;
+        if (sjs_parser_error(parser, error) != SJS_OK) sjs_compiler_error(compiler, error);
+        /* The subject points into the stages destroyed below: copy it to
+         * the caller's buffer, or give none. */
+        sjs_buffer *keep = params->subject;
+        sjs_str subject = error->subject;
+        error->subject = (sjs_str){ "", 0 };
+        if (keep != NULL && keep->ptr != NULL && keep->length <= keep->capacity) {
+            uint32_t room = keep->capacity - keep->length;
+            uint32_t n = subject.length < room ? subject.length : room;
+            /* Cut between characters, never inside one. */
+            while (n > 0 && n < subject.length && ((uint8_t)subject.ptr[n] & 0xC0u) == 0x80u) n--;
+            uint8_t *to = keep->ptr + keep->length;
+            for (uint32_t i = 0; i < n; i++) to[i] = (uint8_t)subject.ptr[i];
+            keep->length += n;
+            error->subject = (sjs_str){ (const char *)to, n };
+        }
     }
     sjs_parser_destroy(parser);
     sjs_compiler_destroy(compiler);

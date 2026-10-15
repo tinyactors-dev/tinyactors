@@ -174,7 +174,7 @@ static int tagged(const char *source, sjs_goal goal) {
     sjs_context_config config = { { &c, &test_vtable }, SJS_LIMITS_DEFAULT };
     if (sjs_context_init(&context, &config) != SJS_OK) return -1;
     sjs_program *program;
-    sjs_compile_params params = { { context, goal, NULL, 0, { NULL, NULL }, false }, { source, (uint32_t)strlen(source) }, NULL };
+    sjs_compile_params params = { { context, goal, NULL, 0, { NULL, NULL }, false }, { source, (uint32_t)strlen(source) }, NULL, NULL };
     int n = -1;
     if (sjs_compile(&params, &program) == SJS_OK) {
         n = 0;

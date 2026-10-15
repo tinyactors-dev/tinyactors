@@ -640,6 +640,52 @@
         }
       }
     },
+    "sjs_buffer": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "ptr",
+          "type": "uint8_t *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "length",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "capacity": 8,
+            "length": 12
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "ptr": 0,
+            "capacity": 8,
+            "length": 12
+          }
+        },
+        "wasm32": {
+          "size": 12,
+          "align": 4,
+          "offsets": {
+            "ptr": 0,
+            "capacity": 4,
+            "length": 8
+          }
+        }
+      }
+    },
     "sjs_position": {
       "kind": "struct",
       "fields": [
@@ -1064,7 +1110,7 @@
         },
         {
           "name": "as",
-          "type": "union (unnamed at staticjs.h:233:5)"
+          "type": "union (unnamed at staticjs.h:241:5)"
         }
       ],
       "layout": {
@@ -1808,34 +1854,41 @@
         {
           "name": "error",
           "type": "sjs_error *"
+        },
+        {
+          "name": "subject",
+          "type": "sjs_buffer *"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "compiler": 0,
             "source": 56,
-            "error": 72
+            "error": 72,
+            "subject": 80
           }
         },
         "aarch64": {
-          "size": 80,
+          "size": 88,
           "align": 8,
           "offsets": {
             "compiler": 0,
             "source": 56,
-            "error": 72
+            "error": 72,
+            "subject": 80
           }
         },
         "wasm32": {
-          "size": 40,
+          "size": 44,
           "align": 4,
           "offsets": {
             "compiler": 0,
             "source": 28,
-            "error": 36
+            "error": 36,
+            "subject": 40
           }
         }
       }
@@ -2188,52 +2241,6 @@
             "context": 0,
             "value": 8,
             "function_text": 24
-          }
-        }
-      }
-    },
-    "sjs_buffer": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "ptr",
-          "type": "uint8_t *"
-        },
-        {
-          "name": "capacity",
-          "type": "uint32_t"
-        },
-        {
-          "name": "length",
-          "type": "uint32_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "ptr": 0,
-            "capacity": 8,
-            "length": 12
-          }
-        },
-        "aarch64": {
-          "size": 16,
-          "align": 8,
-          "offsets": {
-            "ptr": 0,
-            "capacity": 8,
-            "length": 12
-          }
-        },
-        "wasm32": {
-          "size": 12,
-          "align": 4,
-          "offsets": {
-            "ptr": 0,
-            "capacity": 4,
-            "length": 8
           }
         }
       }

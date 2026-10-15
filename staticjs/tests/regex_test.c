@@ -336,7 +336,7 @@ static sjs_program *compile_methods(sjs_context *context, const text *source) {
     static const sjs_str names[] = { { "s", 1 } };
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, names, 1, { NULL, NULL }, false },
-                                  { source->ptr, (uint32_t)source->length }, NULL };
+                                  { source->ptr, (uint32_t)source->length }, NULL, NULL };
     if (sjs_compile(&params, &program) != SJS_OK) return NULL;
     return program;
 }

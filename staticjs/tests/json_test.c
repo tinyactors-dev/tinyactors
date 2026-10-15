@@ -524,7 +524,7 @@ static void stringify_call(runner *r, const text *source, gave *out) {
     sjs_program *program;
     sjs_error error;
     sjs_compile_params params = { { r->context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source->ptr, (uint32_t)source->length }, &error };
+                                  { source->ptr, (uint32_t)source->length }, &error, NULL };
     if (sjs_compile(&params, &program) != SJS_OK) {
         fprintf(stderr, "json_test: does not compile: %s\n  %.*s\n", source->ptr, (int)error.message.length, error.message.ptr);
         exit(1);
@@ -539,7 +539,7 @@ static void runner_init(runner *r) {
     if (sjs_vm_init(&r->vm, &(sjs_vm_config){ r->context, false, false }) != SJS_OK) abort();
     static const sjs_str globals[] = { { "t", 1 } };
     sjs_compile_params params = { { r->context, SJS_GOAL_EXPRESSION, globals, 1, { NULL, NULL }, false },
-                                  SJS_STR("JSON.stringify(JSON.parse(t))"), NULL };
+                                  SJS_STR("JSON.stringify(JSON.parse(t))"), NULL, NULL };
     if (sjs_compile(&params, &r->round_trip) != SJS_OK) abort();
 }
 

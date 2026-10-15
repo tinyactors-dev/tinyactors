@@ -163,7 +163,7 @@ static void evaluate(runner *r, const text *source, bool deliberate) {
     sjs_program *program;
     sjs_error error;
     sjs_compile_params params = { { r->context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source->ptr, (uint32_t)source->length }, &error };
+                                  { source->ptr, (uint32_t)source->length }, &error, NULL };
     r->cases++;
     if (sjs_compile(&params, &program) != SJS_OK) {
         if (failures++ < 20) fprintf(stderr, "temporal_test: does not compile: %s\n  %.*s\n", source->ptr, (int)error.message.length, error.message.ptr);

@@ -58,14 +58,13 @@ typedef struct {
 
 static const char *const KINDS[] = { "", "syntax error", "unsupported", "name error", "limit", "out of memory", "fault" };
 
-/* "fault at 1:14: cannot read a property of undefined (c)". The subject is
- * read only while the stage that reported the error lives: the evaluator
- * here. sjs_compile has destroyed its parser and compiler when it returns,
- * so a compile error is reported without one. */
-static void report(const sjs_error *error, bool with_subject) {
+/* "fault at 1:14: cannot read a property of undefined (c)". A fault's
+ * subject is read while the evaluator lives; a compile error's was copied
+ * to a buffer of ours by sjs_compile. */
+static void report(const sjs_error *error) {
     fprintf(stderr, "%s at %u:%u: %.*s", KINDS[error->code], error->at.line, error->at.column,
             (int)error->message.length, error->message.ptr);
-    if (with_subject && error->subject.length > 0) {
+    if (error->subject.length > 0) {
         fprintf(stderr, " (%.*s)", (int)error->subject.length, error->subject.ptr);
     }
     fputc('\n', stderr);
@@ -116,7 +115,7 @@ static int run(sjs_context *context, sjs_program *program, const options *o) {
     } else if (status == SJS_RUN_FAULT) {
         sjs_error error;
         sjs_vm_error(vm, &error);
-        report(&error, true);
+        report(&error);
     } else {
         sjs_value value;
         sjs_vm_take_result(vm, &value);
@@ -156,10 +155,12 @@ int main(int argc, char **argv) {
     if (sjs_context_init(&context, &config) != SJS_OK) return 2;
     sjs_program *program;
     sjs_error error = { 0 };
+    uint8_t subject[64];
     sjs_compile_params compile = {
         .compiler = { .context = context, .goal = o.goal },
         .source = { input != NULL ? input : o.source, (uint32_t)length },
         .error = &error,
+        .subject = &(sjs_buffer){ subject, sizeof subject, 0 },
     };
     sjs_result compiled = sjs_compile(&compile, &program);
     int exit_status = 2;
@@ -167,7 +168,7 @@ int main(int argc, char **argv) {
         exit_status = run(context, program, &o);
         sjs_program_release(program);
     } else if (compiled == SJS_ERR_PROGRAM) {
-        report(&error, false);
+        report(&error);
         exit_status = 1;
     }
     sjs_context_destroy(context);

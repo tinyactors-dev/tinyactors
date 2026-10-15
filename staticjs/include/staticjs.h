@@ -66,6 +66,14 @@ enum {
 typedef struct { const char *ptr; uint32_t length; } sjs_str;
 typedef struct { const uint8_t *ptr; uint32_t length; } sjs_bytes;
 
+/* Room the caller owns, which a call fills from `length` on and leaves
+ * `length` at the end of what it wrote. */
+typedef struct {
+    uint8_t *ptr;
+    uint32_t capacity;
+    uint32_t length;
+} sjs_buffer;
+
 /* A string literal as an sjs_str. The trailing NUL is not part of the text. */
 #define SJS_STR(literal) ((sjs_str){ (literal), (uint32_t)(sizeof(literal) - 1u) })
 
@@ -635,6 +643,11 @@ typedef struct {
     sjs_compiler_config compiler;
     sjs_str source;
     sjs_error *error;      /* optional: filled when the result is SJS_ERR_PROGRAM */
+    /* Optional: where the error's subject is copied, from buffer->length on,
+     * cut to the buffer's capacity (64 bytes hold any subject). error->subject
+     * then points into it, so it outlives the call. Without it, error->subject
+     * is empty: the stages it pointed into are gone when sjs_compile returns. */
+    sjs_buffer *subject;
 } sjs_compile_params;
 
 SJS_API sjs_result sjs_compile(const sjs_compile_params *params, sjs_program **out);
@@ -841,12 +854,6 @@ typedef struct {
      * has no source to write. A log or a test can say "<function>". */
     sjs_str function_text;
 } sjs_writer_config;
-
-typedef struct {
-    uint8_t *ptr;
-    uint32_t capacity;
-    uint32_t length;       /* bytes the writer has put in, from 0 */
-} sjs_buffer;
 
 SJS_API sjs_result sjs_writer_init(sjs_writer **out, const sjs_writer_config *config);
 /* Fill `buffer` from buffer->length on. SJS_OK when the value is written,

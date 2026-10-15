@@ -88,7 +88,7 @@ static sjs_result evaluate(const env *e, const char *source, char *out) {
     sjs_program *program;
     sjs_error error = { 0 };
     sjs_compile_params params = { { e->context, e->goal, e->globals, e->count, e->modules, false },
-                                  { source, (uint32_t)strlen(source) }, &error };
+                                  { source, (uint32_t)strlen(source) }, &error, NULL };
     sjs_result r = sjs_compile(&params, &program);
     if (r == SJS_ERR_NOMEM) {
         snprintf(out, 256, "nomem");
@@ -292,7 +292,7 @@ static void test_natives_and_globals(void) {
 static sjs_value run_value(const env *e, const char *source) {
     sjs_program *program;
     sjs_compile_params params = { { e->context, e->goal, e->globals, e->count, e->modules, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { e->context, false, false };
@@ -312,6 +312,44 @@ static sjs_value run_value(const env *e, const char *source) {
  * later: from a program with other values for the same names, with fewer
  * globals, or none, and from a loop. It keeps them after the evaluation
  * that made it ends. */
+/* sjs_compile copies a compile error's subject to the caller's buffer, cut
+ * between characters, and gives none without a buffer. */
+static void test_compile_subject(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    struct { sjs_goal goal; const char *source; uint32_t capacity, start; const char *subject; } cases[] = {
+        { SJS_GOAL_EXPRESSION, "rows.map((r) => r.total)", 64, 0, "rows" },
+        { SJS_GOAL_EXPRESSION, "rows.map((r) => r.total)", 2, 0, "ro" },
+        { SJS_GOAL_EXPRESSION, "rows", 64, 3, "rows" },  /* after what the buffer holds */
+        /* é is two bytes: never cut in half */
+        { SJS_GOAL_MODULE, "import { a } from \"énorme\"; export const b = a;", 1, 0, "" },
+        { SJS_GOAL_MODULE, "import { a } from \"énorme\"; export const b = a;", 2, 0, "é" },
+        { SJS_GOAL_MODULE, "import { a } from \"énorme\"; export const b = a;", 3, 0, "én" },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        uint8_t text[64] = { 'x', 'y', 'z' };
+        sjs_buffer buffer = { text, cases[i].capacity, cases[i].start };
+        sjs_error error = { 0 };
+        sjs_program *program = NULL;
+        sjs_compile_params params = { { context, cases[i].goal, NULL, 0, { NULL, NULL }, false },
+                                      { cases[i].source, (uint32_t)strlen(cases[i].source) }, &error, &buffer };
+        CHECK(sjs_compile(&params, &program) == SJS_ERR_PROGRAM);
+        CHECK(error.code == SJS_ERROR_NAME);
+        CHECK(error.subject.length == strlen(cases[i].subject));
+        CHECK(memcmp(error.subject.ptr, cases[i].subject, error.subject.length) == 0);
+        CHECK(buffer.length == cases[i].start + error.subject.length);
+        CHECK(error.subject.length == 0 || error.subject.ptr == (const char *)text + cases[i].start);
+    }
+    sjs_error error = { 0 };
+    sjs_program *program = NULL;
+    sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
+                                  SJS_STR("rows"), &error, NULL };
+    CHECK(sjs_compile(&params, &program) == SJS_ERR_PROGRAM);
+    CHECK(error.subject.length == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 static void test_closure_globals(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
@@ -360,7 +398,7 @@ static void test_closure_globals(void) {
         sjs_program *program;
         sjs_str limit_name[1] = { SJS_STR("limit") };
         sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, limit_name, 1, { NULL, NULL }, false },
-                                      SJS_STR("[[1].map((x) => x + limit), (x) => x + limit]"), NULL };
+                                      SJS_STR("[[1].map((x) => x + limit), (x) => x + limit]"), NULL, NULL };
         CHECK(sjs_compile(&params, &program) == SJS_OK);
         sjs_vm *vm;
         sjs_vm_config config = { context, false, false };
@@ -461,7 +499,7 @@ static void test_modules(void) {
     const char *source = "export const inc = x => x + 1;\nexport const two = inc(1);\n";
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_MODULE, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -487,7 +525,7 @@ static void test_modules(void) {
 /* The value a program gives, compiled for `goal`. */
 static sjs_value result_of(sjs_context *context, sjs_goal goal, const char *source) {
     sjs_program *program;
-    sjs_compile_params params = { { context, goal, NULL, 0, { NULL, NULL }, false }, { source, (uint32_t)strlen(source) }, NULL };
+    sjs_compile_params params = { { context, goal, NULL, 0, { NULL, NULL }, false }, { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -617,7 +655,7 @@ static void test_compile_costs(void) {
         size_t before = c.bytes;
         c.peak = c.bytes;
         sjs_program *program;
-        sjs_compile_params params = { config, { source, (uint32_t)used }, NULL };
+        sjs_compile_params params = { config, { source, (uint32_t)used }, NULL, NULL };
         CHECK(sjs_compile(&params, &program) == SJS_OK);
         /* One module's keys, a few times over: not once per statement. */
         size_t held = c.peak - before;
@@ -999,7 +1037,7 @@ static void test_writer_resumes(void) {
     /* The same value, written a byte at a time. */
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -1042,7 +1080,7 @@ static void test_fuel_pinned(sjs_context *context) {
                          ".reduce((s, t) => s + t + Math.max(t.length, 3), '') + ((f) => f(f(2)))(y => y * 3)";
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -1069,7 +1107,7 @@ static void test_fuel_pinned(sjs_context *context) {
 static uint64_t fuel_of(sjs_context *context, const char *source) {
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -1126,7 +1164,7 @@ static void test_regex_fuel(sjs_context *context) {
     uint64_t whole = fuel_of(context, source);
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -1143,7 +1181,7 @@ static void test_regex_fuel(sjs_context *context) {
     sjs_program_release(program);
     /* An automaton past max_regex_states is a limit when it compiles. */
     sjs_error error;
-    sjs_compile_params limit = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false }, SJS_STR("/a{1000000}/"), &error };
+    sjs_compile_params limit = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false }, SJS_STR("/a{1000000}/"), &error, NULL };
     CHECK(sjs_compile(&limit, &program) == SJS_ERR_PROGRAM && error.code == SJS_ERROR_LIMIT);
 }
 
@@ -1166,7 +1204,7 @@ typedef struct {
 static void run_regex(sjs_context *context, const regex_run *r, regex_ran *out) {
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { r->source, (uint32_t)strlen(r->source) }, NULL };
+                                  { r->source, (uint32_t)strlen(r->source) }, NULL, NULL };
     memset(out, 0, sizeof *out);
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
@@ -1245,7 +1283,7 @@ static void test_set_fuel_linear(sjs_context *context) {
     const char *source = "[a.intersection(b).size, a.union(b).size, a.difference(b).size, a.has(1999)]";
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, names, 2, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_value sets[2];
     for (uint32_t s = 0; s < 2; s++) {
@@ -1309,7 +1347,7 @@ static void test_fuel_and_reset(void) {
     const char *source = "[1, 2, 3, 4, 5, 6, 7, 8].map(x => x * x).filter(x => x % 2 === 0).reduce((a, b) => a + b, 0)";
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -1407,7 +1445,7 @@ static void test_host_clock(void) {
     const char *source = "[1, 2, 3].map(x => x * 2)";
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_run_params run = { program, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
@@ -1562,7 +1600,7 @@ typedef struct {
 
 static bool loop_open(loop_run *l, sjs_context *context, const char *source) {
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     l->context = context;
     if (sjs_compile(&params, &l->program) != SJS_OK) return false;
     sjs_vm_config config = { context, false, false };
@@ -1895,7 +1933,7 @@ static void test_reuse_leaves_others_alone(void) {
     const char *source = "[{ ...g, b: 2 }, [...xs, 3], xs.concat(4), xs.with(0, 9), xs.toSorted((a, b) => b - a)]";
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, global_names, 2, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -1924,7 +1962,7 @@ static void test_reuse_leaves_others_alone(void) {
     env module_env = { context, NULL, NULL, 0, { NULL, NULL }, SJS_GOAL_MODULE };
     const char *module = "export const o = {a: 1};\nexport const xs = [1, 2];\n";
     sjs_compile_params module_params = { { context, SJS_GOAL_MODULE, NULL, 0, { NULL, NULL }, false },
-                                         { module, (uint32_t)strlen(module) }, NULL };
+                                         { module, (uint32_t)strlen(module) }, NULL, NULL };
     CHECK(sjs_compile(&module_params, &program) == SJS_OK);
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     sjs_run_params module_run = { program, NULL, 0 };
@@ -1972,7 +2010,7 @@ static compiled compile_counting(sjs_compiler_config config, const char *source)
     compiled result = { 0, "" };
     long before = c.allocations;
     sjs_program *program;
-    sjs_compile_params params = { config, { source, (uint32_t)strlen(source) }, NULL };
+    sjs_compile_params params = { config, { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     result.allocations = c.allocations - before;
     sjs_program_release(program);
@@ -2026,7 +2064,7 @@ static shaped_run run_shaped(shaped_source s) {
     sjs_context *context = new_context(&c, s.limits);
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, s.no_shapes },
-                                  { s.source, (uint32_t)strlen(s.source) }, NULL };
+                                  { s.source, (uint32_t)strlen(s.source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     loop_run l = { context, program, NULL };
     sjs_vm_config config = { context, false, false };
@@ -2652,7 +2690,7 @@ static void test_mutation_out_of_memory(void) {
 static size_t live_of(sjs_context *context, const char *source) {
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -3236,7 +3274,7 @@ static uint64_t map_lookup_fuel(sjs_context *context, sjs_value map) {
     const char *source = "[m.get(3), m.has(-1), m.get(\"3\")]";
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, names, 1, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     if (sjs_compile(&params, &program) != SJS_OK) return 0;
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
@@ -3444,7 +3482,7 @@ static void test_inspection(void) {
     const char *source = "[{ k: 1 }, { k: 2 }].map((x) => x.k).toSorted((a, b) => a - b)";
     sjs_program *program;
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { source, (uint32_t)strlen(source) }, NULL };
+                                  { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
     CHECK(sjs_program_function_count(program) == 3);
     sjs_function_summary fn;
@@ -3539,6 +3577,7 @@ int main(int argc, char **argv) {
     test_interned_keys();
     test_natives_and_globals();
     test_closure_globals();
+    test_compile_subject();
     test_unbound_where_it_never_runs();
     test_modules();
     test_frozen_values();

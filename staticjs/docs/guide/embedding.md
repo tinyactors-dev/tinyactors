@@ -132,10 +132,22 @@ English phrase owned by the library. `error.subject` names the token or
 name concerned, when there is one. It points into the stage that reported
 the error and is valid only until that stage is called again or
 destroyed. `sjs_compile` destroys its parser and compiler before it
-returns, so do not read `subject` from its error. To report it (`this name
-is not bound (rows)`), compile with the parser and the compiler yourself
-(see Streaming), and read `sjs_compiler_error` or `sjs_parser_error` before
-destroying them.
+returns, so it copies the subject into the buffer you give as
+`params.subject` (64 bytes hold any subject) and points `error.subject`
+there; without a buffer, `error.subject` is empty:
+
+```c
+uint8_t text[64];
+sjs_compile_params params = {
+    .compiler = { .context = context },
+    .source = SJS_STR("rows.map((r) => r.total)"),
+    .error = &error,
+    .subject = &(sjs_buffer){ text, sizeof text, 0 },
+};
+if (sjs_compile(&params, &program) == SJS_ERR_PROGRAM)
+    printf("%.*s (%.*s)\n", (int)error.message.length, error.message.ptr,
+           (int)error.subject.length, error.subject.ptr);   /* this name is not bound (rows) */
+```
 
 ## Evaluating, on fuel
 
