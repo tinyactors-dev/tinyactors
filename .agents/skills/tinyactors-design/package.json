@@ -1,0 +1,10 @@
+{
+  "name": "@tinyactors/design-system",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build-bundle.cjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

@@ -1,0 +1,31 @@
+<!-- @dsCard group="Brand" viewport="700x640" name="Wordmark & logo" subtitle="Lockups with clear space (dashed): ¼ symbol height, or ¾ cap-size for the wordmark alone" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../styles.css"><style>
+body{padding:16px}
+.g{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px}
+.t{display:flex;align-items:center;justify-content:center;min-width:0;overflow:hidden}
+.lk{display:flex;align-items:center;gap:calc(var(--mh) * .22);padding:var(--cs);outline:1px dashed color-mix(in srgb,var(--ink) 35%,transparent);outline-offset:0}
+.lk.v{flex-direction:column;gap:calc(var(--mh) * .14)}
+.w{font:500 var(--ws)/1 var(--font-mono);letter-spacing:-.04em;color:var(--ink);white-space:nowrap}
+.mk{display:block;height:var(--mh);width:auto;flex:none}
+.mk #background,.mk metadata{display:none}.mk [fill="#302A26"]{fill:var(--ink)}.mk [fill="#265E47"]{fill:var(--acc)}
+.light{--ink:#302A26;--acc:#265E47;background:var(--vellum-100);box-shadow:inset 0 0 0 1px var(--border-1)}
+.pine{--ink:#FFF8F0;--acc:var(--pine-100);background:var(--pine-500)}
+.dark{--ink:var(--parchment-100);--acc:var(--pine-400);background:var(--umber-950)}
+.lbl{font:var(--type-label);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--fg-4);padding:10px 0 6px}
+.h{--mh:40px;--ws:20px;--cs:10px}
+.s{--mh:68px;--ws:17px;--cs:17px}
+.o{--mh:56px;--cs:14px}
+.wo{--ws:22px;--cs:16.5px}
+</style></head><body>
+<div class="lbl">horizontal lockup</div>
+<div class="g" style="grid-auto-rows:112px"><div class="t light"><div class="lk h"><i data-mk></i><span class="w">tinyactors</span></div></div><div class="t pine"><div class="lk h"><i data-mk></i><span class="w">tinyactors</span></div></div><div class="t dark"><div class="lk h"><i data-mk></i><span class="w">tinyactors</span></div></div></div>
+<div class="lbl">stacked lockup</div>
+<div class="g" style="grid-auto-rows:172px"><div class="t light"><div class="lk v s"><i data-mk></i><span class="w">tinyactors</span></div></div><div class="t pine"><div class="lk v s"><i data-mk></i><span class="w">tinyactors</span></div></div><div class="t dark"><div class="lk v s"><i data-mk></i><span class="w">tinyactors</span></div></div></div>
+<div class="lbl">symbol</div>
+<div class="g" style="grid-auto-rows:112px"><div class="t light"><div class="lk o"><i data-mk></i></div></div><div class="t pine"><div class="lk o"><i data-mk></i></div></div><div class="t dark"><div class="lk o"><i data-mk></i></div></div></div>
+<div class="lbl">wordmark</div>
+<div class="g" style="grid-auto-rows:88px"><div class="t light"><div class="lk wo"><span class="w">tinyactors</span></div></div><div class="t pine"><div class="lk wo"><span class="w">tinyactors</span></div></div><div class="t dark"><div class="lk wo"><span class="w">tinyactors</span></div></div></div>
+<script>
+fetch('../assets/logo-mark.svg').then(r=>r.text()).then(t=>{document.querySelectorAll('[data-mk]').forEach(el=>{const d=document.createElement('div');d.innerHTML=t;const s=d.querySelector('svg');s.querySelectorAll('#background,metadata').forEach(n=>n.remove());s.classList.add('mk');s.removeAttribute('width');s.removeAttribute('height');s.setAttribute('aria-label','tinyactors');el.replaceWith(s);});});
+</script>
+</body></html>

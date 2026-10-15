@@ -34,6 +34,7 @@ module AcronymCase
     %r{(\A|/)build/},                      # build output
     %r{(\A|/)dist/},                       # release output
     %r{\A\.claude/},                       # agent worktrees and settings
+    %r{\A\.agents/skills/tinyactors-design/}, # the design system, copied from tinyactors-dev/website
     %r{(\A|/)docs/adr/},                   # ADRs are an append-only record
     %r{(\A|/)docs/research/},              # quotes other projects' names
     %r{\Amise/tasks/check-acronyms-test\z}, # the checker's own cases, wrong on purpose

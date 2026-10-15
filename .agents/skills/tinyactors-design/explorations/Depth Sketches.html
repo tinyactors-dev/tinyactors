@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Depth sketches · tinyactors</title>
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="depth-sketches.css">
+</head>
+<body>
+<div class="page">
+<div class="top">
+<div><div class="eyebrow">Exploration · depth</div><h1>Perspective, depth and layers</h1><p>Twelve sketches, from flat layering that fits the current drafting style to real perspective. Hover or click each one; most also run on their own.</p></div>
+<div class="ctrls"><button class="ta-btn ta-btn--secondary ta-btn--sm" id="bPause">Pause</button><button class="ta-btn ta-btn--secondary ta-btn--sm" id="bTheme">Dark</button></div>
+</div>
+<div class="sec">
+<div class="eyebrow">Group A</div>
+<h2>Layers without perspective</h2>
+<p>Depth from paper, not from light. These fit inside the existing system with no new rendering techniques.</p>
+<div class="grid">
+<section class="frame" id="d1" data-screen-label="1 Vellum overlay"><div class="fh"><span class="id">1</span><h3>Vellum overlays</h3></div><p class="fd">Live state on a sheet of tracing paper over the structure. Here the base is the buffer and the sheet carries the heads and the unread span. Hover to lift the sheet.</p><div class="stage"><div class="v1" id="v1"></div></div></section>
+<section class="frame" id="d2" data-screen-label="2 Registration offsets"><div class="fh"><span class="id">2</span><h3>Registration offsets</h3></div><p class="fd">Earlier generations sit behind the current sheet, offset a few pixels with crop marks, like an actor restarted twice. Hover to fan them out.</p><div class="stage"><div class="v2" id="v2"></div></div></section>
+<section class="frame" id="d3" data-screen-label="3 Paper levels"><div class="fh"><span class="id">3</span><h3>Paper levels</h3></div><p class="fd">Four fixed levels to replace ad-hoc shadows. Each step up is lighter and has a firmer edge; only the top level casts a shadow.</p><div class="stage"><div class="v3"><div class="lvl"><div class="pp l0"></div><span class="mono">0 desk</span><span class="sm">grid, dashed edge</span></div><div class="lvl"><div class="pp l1"></div><span class="mono">1 sheet</span><span class="sm">surface-1, hairline</span></div><div class="lvl"><div class="pp l2"></div><span class="mono">2 overlay</span><span class="sm">vellum, see-through</span></div><div class="lvl"><div class="pp l3"></div><span class="mono">3 loupe</span><span class="sm">ink edge, shadow-pop</span></div></div></div></section>
+</div>
+</div>
+<div class="sec">
+<div class="eyebrow">Group B</div>
+<h2>Depth as meaning</h2>
+<p>Distance stands for something real: latency, attention or interaction.</p>
+<div class="grid">
+<section class="frame" id="d4" data-screen-label="4 Memory hierarchy"><div class="fh"><span class="id">4</span><h3>Memory hierarchy as distance</h3></div><p class="fd">Each tier steps back in size and contrast as latency grows. A load probe travels down to where the data lives and back, timed on a log scale.</p><div class="stage"><div class="v4" id="v4"></div></div></section>
+<section class="frame" id="d5" data-screen-label="5 Depth of field"><div class="fh"><span class="id">5</span><h3>Focus and depth of field</h3></div><p class="fd">The actor that matters stays sharp and lifts slightly; the rest go soft. Focus moves to whichever actor just handled a message.</p><div class="stage"><div class="v5" id="v5"></div></div></section>
+<section class="frame" id="d6" data-screen-label="6 Lift"><div class="fh"><span class="id">6</span><h3>Lift on interaction</h3></div><p class="fd">Hover a block: it rises one paper level, leaves its footprint behind, and its traces stretch to follow.</p><div class="stage"><div class="v6" id="v6"></div></div></section>
+</div>
+</div>
+<div class="sec">
+<div class="eyebrow">Group C</div>
+<h2>Real perspective</h2>
+<p>Actual 3D projection. Strongest for teaching and the website; mostly too much for the inspector.</p>
+<div class="grid">
+<section class="frame" id="d7" data-screen-label="7 Exploded axonometric"><div class="fh"><span class="id">7</span><h3>Exploded axonometric</h3></div><p class="fd"><code>struct actor_hdr</code> split into header, payload and padding, stacked at an axonometric angle. Click to collapse and explode.</p><div class="stage"><div class="v7 ex" id="v7"></div></div></section>
+<section class="frame" id="d8" data-screen-label="8 Card stack"><div class="fh"><span class="id">8</span><h3>Mailbox as a stack</h3></div><p class="fd">Messages recede into depth by age. New ones arrive at the front; the oldest at the back is consumed and drops away.</p><div class="stage"><div class="v8"><div class="stk" id="v8"></div></div></div></section>
+<section class="frame" id="d9" data-screen-label="9 Tilted PCB"><div class="fh"><span class="id">9</span><h3>Tilted board</h3></div><p class="fd">The architecture drawing as a board seen at an angle, blocks extruded like chips. Hover to flatten it back to the plan view.</p><div class="stage"><div class="v9"><div class="board" id="v9"></div></div></div></section>
+<section class="frame" id="d10" data-screen-label="10 Orbit"><div class="fh"><span class="id">10</span><h3>Orbitable model</h3></div><p class="fd">The same struct as solid blocks, one per field, length by bytes. Drag to orbit. A production version would use a real 3D viewer with GLB export.</p><div class="stage"><div class="v10" id="v10"><div class="obj" id="obj"></div><span class="sm hint10">drag</span></div></div></section>
+</div>
+</div>
+<div class="sec">
+<div class="eyebrow">Group D</div>
+<h2>Motion and depth</h2>
+<p>Depth that only exists while something moves.</p>
+<div class="grid">
+<section class="frame" id="d11" data-screen-label="11 Parallax"><div class="fh"><span class="id">11</span><h3>Grid parallax</h3></div><p class="fd">The construction grid scrolls at half speed behind the sheets, so content reads as floating above the drafting table. Website only.</p><div class="v11" id="v11"><div class="ct"><div class="sh"><h4>Spawn</h4><p>An actor is a statechart with a mailbox.</p><code>ta_actor *a = ta_spawn(sys, &amp;chart);</code></div><div class="sh"><h4>Send</h4><p>Messages queue in a lock-free ring.</p><code>ta_send(a, "PAY", &amp;evt);</code></div><div class="sh"><h4>Snapshot</h4><p>State is a value you can inspect and replay.</p><code>ta_state s = ta_snapshot(a);</code></div><div class="sh"><h4>Supervise</h4><p>Crashes restart from the last good state.</p><code>ta_supervise(sys, a, TA_RESTART);</code></div></div></div></section>
+<section class="frame" id="d12" data-screen-label="12 Dive"><div class="fh"><span class="id">12</span><h3>Diving into a block</h3></div><p class="fd">Click <code>ingest</code> to zoom into its components; the system view falls back behind as context. Use the path to come back up.</p><div class="stage"><div class="v12" id="v12"></div></div></section>
+</div>
+</div>
+<div class="sec">
+<div class="eyebrow">Notes</div>
+<h2>Where each one fits</h2>
+<ul class="picks">
+<li><b>Inspector:</b> 3 everywhere, 1 and 5 for live state and focus, 6 on the architecture canvas, 12 for navigating system → container → component.</li>
+<li><b>Docs and website:</b> 4, 7 and 8 for teaching memory; 9, 10 and 11 for hero moments only.</li>
+<li><b>Reduced motion:</b> every sketch keeps its final state; only the transitions are dropped.</li>
+</ul>
+</div>
+</div>
+<script src="depth-sketches.js"></script>
+</body>
+</html>

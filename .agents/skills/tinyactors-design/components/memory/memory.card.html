@@ -1,0 +1,20 @@
+<!-- @dsCard group="Components" viewport="760x680" name="Memory" subtitle="MemoryLayout, RingBuffer — illustrative structs" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css"><script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script><style>body{padding:20px;background:var(--surface-1)}</style></head><body><div id="root"></div>
+<script type="text/babel">
+const { MemoryLayout, RingBuffer } = window.TinyactorsDesignSystem_2f489e;
+const naive = [
+{name:'alive',type:'bool',size:1,kind:'hot'},{name:'id',type:'uint64_t',size:8,kind:'cold'},{name:'state',type:'uint32_t',size:4,kind:'hot'},
+{name:'chart',type:'const ta_chart *',size:8,kind:'ptr'},{name:'paged',type:'bool',size:1,kind:'warm'},{name:'mailbox',type:'ta_ring *',size:8,kind:'ptr'},
+{name:'name',type:'char[40]',size:40,align:1,kind:'cold'},{name:'refs',type:'_Atomic uint32_t',size:4,kind:'atomic'}];
+const fixed = [
+{name:'state',type:'uint32_t',size:4,kind:'hot'},{name:'alive',type:'bool',size:1,kind:'hot'},{name:'paged',type:'bool',size:1,kind:'warm'},
+{name:'chart',type:'const ta_chart *',size:8,kind:'ptr'},{name:'mailbox',type:'ta_ring *',size:8,kind:'ptr'},{name:'id',type:'uint64_t',size:8,kind:'cold'},{name:'name',type:'char[32]',size:32,align:1,kind:'cold'}];
+ReactDOM.createRoot(root).render(<div style={{display:'flex',flexDirection:'column',gap:26}}>
+<MemoryLayout name="ta_actor  /* naive */" fields={naive} legend={false}/>
+<MemoryLayout name="ta_actor  /* reordered */" fields={fixed} bytesPerRow={32}/>
+<RingBuffer name="mailbox" mode="SPSC" capacity={8} head={2} tail={6} items={['OPEN','TICK','TICK','CLOSE']} slotSize="64 B" producer="ta_send" consumer="scheduler"/>
+</div>);
+</script></body></html>

@@ -1,0 +1,14 @@
+:root{
+--shadow-0:none;
+--shadow-pop:0 0 0 1px var(--border-2),0 8px 24px rgba(60,40,20,.12);
+--shadow-dialog:0 0 0 1px var(--border-2),0 24px 64px rgba(60,40,20,.2);
+--ring:0 0 0 2px var(--bg-app),0 0 0 4px var(--focus-ring);
+--ease-step:cubic-bezier(.2,0,0,1);/* @kind other */--ease-out:cubic-bezier(.16,1,.3,1);/* @kind other */
+--dur-instant:80ms;/* @kind other */--dur-fast:140ms;/* @kind other */--dur-base:220ms;/* @kind other */--dur-slow:360ms;/* @kind other */
+--ease-move:cubic-bezier(.45,0,.2,1);/* @kind other */--dur-move:700ms;/* @kind other */
+--paper-0:var(--bg-app);--paper-1:var(--surface-1);--paper-2:color-mix(in oklch,var(--surface-1) 68%,transparent);--paper-3:var(--surface-1);
+--edge-1:0 1px 0 var(--border-2);--edge-2:0 2px 0 var(--border-2);--edge-3:var(--shadow-pop);
+--vellum-blur:.6px;/* @kind other */--defocus-blur:1.6px;/* @kind other */--defocus-opacity:.42;/* @kind other */
+--bg-grid:linear-gradient(var(--grid-major) 1px,transparent 1px) -1px -1px/40px 40px,linear-gradient(90deg,var(--grid-major) 1px,transparent 1px) -1px -1px/40px 40px,linear-gradient(var(--grid-minor) 1px,transparent 1px) -1px -1px/8px 8px,linear-gradient(90deg,var(--grid-minor) 1px,transparent 1px) -1px -1px/8px 8px;/* @kind other */
+}
+[data-theme="dark"]{--shadow-pop:0 0 0 1px var(--border-2),0 8px 24px rgba(0,0,0,.5);--shadow-dialog:0 0 0 1px var(--border-2),0 24px 64px rgba(0,0,0,.6);}

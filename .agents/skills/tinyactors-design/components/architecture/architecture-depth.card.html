@@ -1,0 +1,26 @@
+<!-- @dsCard group="Components" viewport="760x700" name="Architecture · depth" subtitle="Click ingest to dive in. Tilted board (hover to flatten) is for website heroes" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css"><script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script><style>body{padding:12px}</style></head><body><div id="root"></div>
+<script type="text/babel">
+const { ArchDiagram, Sheet } = window.TinyactorsDesignSystem_2f489e;
+const inner={zones:[{x:16,y:16,w:658,h:228,label:'ingest'}],blocks:[
+{id:'acc',kind:'component',name:'accept',tech:'epoll loop',x:60,y:80,w:130,h:64,ports:[{id:'o',side:'right'}]},
+{id:'par',kind:'component',name:'parse',tech:'actor',x:270,y:80,w:130,h:64,ports:[{id:'i',side:'left'},{id:'o',side:'right'},{id:'d',side:'bottom'}]},
+{id:'ring',kind:'memory',name:'ring',tech:'SPSC · 4 KB',x:270,y:170,w:130,h:52,ports:[{id:'u',side:'top'}]},
+{id:'rt',kind:'component',name:'route',tech:'actor',x:480,y:80,w:130,h:64,ports:[{id:'i',side:'left'}]}],
+wires:[{from:'acc.o',to:'par.i',kind:'stream',hot:true},{from:'par.o',to:'rt.i',kind:'call'},{from:'par.d',to:'ring.u',kind:'shared'}]};
+const blocks=[
+{id:'cl',kind:'external',name:'clients',tech:'HTTP',x:30,y:96,w:130,h:68,ports:[{id:'o',side:'right'}]},
+{id:'in',kind:'container',name:'ingest',tech:'C',x:240,y:96,w:150,h:68,emphasis:'hot',inner,ports:[{id:'i',side:'left'},{id:'a',side:'right',at:.3},{id:'b',side:'right',at:.7}]},
+{id:'lg',kind:'container',name:'ledger',tech:'actor',x:480,y:40,w:150,h:64,ports:[{id:'i',side:'left'}]},
+{id:'ar',kind:'store',name:'archive',tech:'mmap',x:480,y:160,w:150,h:64,ports:[{id:'i',side:'left'}]}];
+const wires=[{from:'cl.o',to:'in.i',kind:'stream',hot:true},{from:'in.a',to:'lg.i',kind:'call'},{from:'in.b',to:'ar.i',kind:'copy'}];
+const tb=[{id:'gw',kind:'container',name:'gateway',tech:'C · epoll',x:20,y:30,w:130,h:60,ports:[{id:'o',side:'right'}]},{id:'rt',kind:'container',name:'router',tech:'actor',x:210,y:90,w:120,h:60,ports:[{id:'i',side:'left'},{id:'o',side:'right'},{id:'d',side:'bottom'}]},{id:'rg',kind:'memory',name:'ring',tech:'SPSC',x:210,y:180,w:120,h:44,ports:[{id:'u',side:'top'}]},{id:'lg',kind:'container',name:'ledger',tech:'actor',x:380,y:20,w:110,h:60,ports:[{id:'i',side:'left'}]}];
+const tw=[{from:'gw.o',to:'rt.i',kind:'stream',hot:true},{from:'rt.o',to:'lg.i',kind:'call'},{from:'rt.d',to:'rg.u',kind:'shared'}];
+ReactDOM.createRoot(root).render(<div style={{display:'flex',flexDirection:'column',gap:20}}>
+<Sheet grid bodyStyle={{padding:'8px 2px'}}><ArchDiagram width={690} height={260} grid={false} blocks={blocks} wires={wires}/></Sheet>
+<div style={{height:320,display:'grid',placeItems:'center',background:'var(--bg-app)'}}><ArchDiagram tilt width={510} height={250} blocks={tb} wires={tw}/></div>
+</div>);
+</script></body></html>

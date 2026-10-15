@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Memory sketches · tinyactors</title>
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet" href="memory-sketches.css">
+</head>
+<body>
+<div class="page">
+<div class="top">
+<div><div class="eyebrow">Exploration · memory</div><h1>Memory sketches</h1><p>Five new components for byte order, wire format, rings and cross-core access, alternate treatments of RingBuffer and MemoryLayout, and one motion language for read and write heads. All examples are illustrative.</p></div>
+<div class="ctrls"><button class="ta-btn ta-btn--secondary ta-btn--sm" id="bPause">Pause</button><button class="ta-btn ta-btn--secondary ta-btn--sm" id="bSpeed">Speed 1×</button><button class="ta-btn ta-btn--secondary ta-btn--sm" id="bTheme">Dark</button></div>
+</div>
+<div class="sec">
+<div class="eyebrow">Section 1</div>
+<h2>New components</h2>
+<p>Each is a separate component idea, not a variant of an existing one.</p>
+<div class="grid">
+<section class="frame" id="1a" data-screen-label="1a ByteOrder"><div class="fh"><span class="id">1a</span><h3>ByteOrder</h3></div><p class="fd">The same 32-bit value at ascending addresses. A load head reads bytes in address order and assembles the register, so you can see where each byte lands.</p><div class="code"><b>uint32_t</b> x = <b>0x0A0B0C0D</b>;   // &amp;x = 0x1000</div><div class="bo" id="bo"></div></section>
+<section class="frame" id="1b" data-screen-label="1b WireLayout"><div class="fh"><span class="id">1b</span><h3>WireLayout</h3></div><p class="fd">A protobuf message on the wire: tag bytes, varints and length-delimited payloads. A decode head walks the bytes and the panel explains each one.</p><div class="code"><b>message</b> Event { <b>uint32</b> id = 1; <b>string</b> type = 2; }
+// { id: 300, type: "PAY" } · 8 bytes</div><div id="pb"></div></section>
+<section class="frame" id="1c" data-screen-label="1c SpscRing"><div class="fh"><span class="id">1c</span><h3>SpscRing</h3></div><p class="fd">One writer, one reader, live. Sequence numbers only increase and the slot is <code>seq &amp; 7</code>. The writer comes in bursts, so the ring fills, blocks and drains.</p><div id="spsc"></div></section>
+<section class="frame" id="1d" data-screen-label="1d BroadcastRing"><div class="fh"><span class="id">1d</span><h3>BroadcastRing</h3></div><p class="fd">One writer, three readers with their own cursors. Pips show which readers have consumed a slot. A slot is freed only after the slowest reader passes it, so that reader gates the writer.</p><div id="bc"></div></section>
+<section class="frame wide" id="1e" data-screen-label="1e CacheLineAccess"><div class="fh"><span class="id">1e</span><h3>CacheLineAccess</h3></div><p class="fd">Which core owns which cache line, and what a write costs. With <code>tail</code> and <code>head</code> on one line, each write moves the line to the other core. On separate 64 B lines, each line stays with its core.</p><div id="fs"></div></section>
+</div>
+</div>
+<div class="sec">
+<div class="eyebrow">Section 2</div>
+<h2>Variations of existing components</h2>
+<p>2a–2c render the same live buffer as 1c, so you can compare views of one state. 2d–2f show the same <code>struct actor_hdr</code> as MemoryLayout.</p>
+<div class="grid">
+<section class="frame" id="2a" data-screen-label="2a RingBuffer dial"><div class="fh"><span class="id">2a</span><h3>RingBuffer · dial</h3></div><p class="fd">Drawn as a ring. Heads rotate by sequence number, so they always move clockwise and wrapping needs no special case.</p><div id="dial"></div></section>
+<section class="frame" id="2b" data-screen-label="2b RingBuffer sequence tape"><div class="fh"><span class="id">2b</span><h3>RingBuffer · sequence tape</h3></div><p class="fd">Unrolled into sequence space. The capacity-8 window slides along the tape, with the physical slot under each number. Wrapping shows up as modulo, not as a jump.</p><div id="seq"></div></section>
+<section class="frame" id="2c" data-screen-label="2c RingBuffer inline"><div class="fh"><span class="id">2c</span><h3>RingBuffer · inline meter</h3></div><p class="fd">A 30px row for the inspector's actor tree and mailbox columns. The dashed cell is the next write. The first row follows 1c.</p><div id="inl"></div></section>
+<section class="frame" id="2d" data-screen-label="2d MemoryLayout listing"><div class="fh"><span class="id">2d</span><h3>MemoryLayout · listing</h3></div><p class="fd">One row per field, like <code>pahole</code>, with a byte bar on a shared ruler. Suits long structs that get too wide as a grid.</p><div id="ph"></div></section>
+<section class="frame" id="2e" data-screen-label="2e MemoryLayout reorder"><div class="fh"><span class="id">2e</span><h3>MemoryLayout · reorder</h3></div><p class="fd">Before and after at the same scale, so the saving reads as length. Fields sorted by alignment; the holes disappear.</p><div id="ro"></div></section>
+<section class="frame" id="2f" data-screen-label="2f MemoryLayout hex map"><div class="fh"><span class="id">2f</span><h3>MemoryLayout · hex map</h3></div><p class="fd">One instance as raw bytes, 16 per row, tinted by field. Little-endian values read backwards, which ties it to 1a.</p><div id="hx"></div></section>
+</div>
+</div>
+<div class="sec">
+<div class="eyebrow">Section 3</div>
+<h2>Motion language: read and write heads</h2>
+<p>Seven primitives, each with its own duration and easing. These animations run on their own, without user input, so they use Material's longer ambient range. Heads use in-out easing because they stay visible the whole time. Things arriving decelerate, things leaving accelerate and finish sooner. Use Speed ¼× to inspect them.</p>
+<div class="prims" id="prims"></div>
+<div class="frame" style="margin-top:20px">
+<table class="spec"><thead><tr><th>Primitive</th><th>Duration</th><th>Easing</th><th>Means</th></tr></thead><tbody>
+<tr><td>step</td><td>420ms</td><td>in-out · .45 0 .2 1</td><td>A head advances one slot. It starts moving at 60% of the fill, so the two actions overlap instead of queueing.</td></tr>
+<tr><td>fill</td><td>480ms</td><td>decelerate · .05 .7 .1 1</td><td>Bytes are stored. The fill sweeps in address order and the value drops in from the head. Dashed pine border: reserved, not yet visible.</td></tr>
+<tr><td>publish</td><td>240ms in · 900ms out</td><td>decelerate in · accelerate out</td><td>Release store. The dashed border crossfades to a solid pine ring, which then trails off as follow-through.</td></tr>
+<tr><td>drain</td><td>360ms</td><td>accelerate · .3 0 .8 .15</td><td>The value drops 8px toward the read head and fades. Shorter than fill because exits need less attention.</td></tr>
+<tr><td>block</td><td>240ms, then held</td><td>in-out</td><td>The head and a dashed inset fade to ochre and hold until the slot frees.</td></tr>
+<tr><td>wrap</td><td>240ms exit · 240ms enter · 700ms pulse</td><td>in-out</td><td>The head runs past the last slot and fades out, then fades in at slot 0 while a pulse runs back along the wrap line.</td></tr>
+<tr><td>transfer</td><td>700ms</td><td>in-out</td><td>A cache line moves between cores. Madder dot on a dashed trace. Only used for coherence cost.</td></tr>
+</tbody></table>
+<ol class="rules">
+<li><b>Heads only move forward.</b> Wrapping is an exit and re-entry, never a head sliding back across the buffer.</li>
+<li><b>Overlap, don't queue.</b> Each action starts before the previous one has fully settled, so a write reads as one gesture.</li>
+<li><b>Nothing switches instantly.</b> Every state change, including reset and blocking, fades or moves. Highlights trail off rather than disappearing.</li>
+<li><b>Color carries role.</b> Write heads are pine, read heads graphite. Ochre only for blocking and back-pressure, madder only for coherence traffic.</li>
+<li><b>One clock.</b> All durations scale by a single factor, so slow motion stays consistent across components.</li>
+<li><b>Reduced motion keeps the information.</b> Durations drop to zero but every state change still renders.</li>
+</ol>
+</div>
+</div>
+</div>
+<script src="memory-sketches.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!-- @dsCard group="Components" viewport="760x570" name="Architecture" subtitle="ArchDiagram — illustrative, not the real Tinyactors architecture" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css"><script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script><style>body{padding:12px}</style></head><body><div id="root"></div>
+<script type="text/babel">
+const { ArchDiagram, Sheet } = window.TinyactorsDesignSystem_2f489e;
+const zones = [
+{x:170,y:16,w:380,h:310,label:'process · RAM',meta:'~100 ns'},
+{x:370,y:40,w:164,h:124,label:'core 0 · L1/L2',meta:'~1–4 ns'},
+{x:240,y:340,w:240,h:108,label:'disk',meta:'~100 µs'},
+];
+const blocks = [
+{id:'app',kind:'external',name:'host app',tech:'C / JS',x:20,y:68,w:120,h:72,ports:[{id:'send',side:'right'},{id:'bad',side:'bottom'}]},
+{id:'mb',kind:'memory',label:'SPSC ring',name:'mailbox',tech:'per actor',x:190,y:64,w:150,h:80,ports:[{id:'in',side:'left'},{id:'out',side:'right'}]},
+{id:'sch',kind:'container',name:'scheduler',tech:'1 thread / core',x:380,y:60,w:144,h:88,emphasis:'hot',ports:[{id:'in',side:'left'},{id:'mem',side:'bottom'},{id:'tr',side:'right'}]},
+{id:'arena',kind:'memory',label:'arena',name:'actor state',tech:'contiguous',x:250,y:236,w:220,h:72,ports:[{id:'w',side:'left'},{id:'s',side:'top',at:0.9182},{id:'pg',side:'bottom'}]},
+{id:'disk',kind:'store',name:'page store',tech:'mmap file',x:250,y:366,w:220,h:72,ports:[{id:'pg',side:'top'}]},
+{id:'otel',kind:'external',name:'OTel collector',tech:'OTLP',x:562,y:68,w:118,h:72,ports:[{id:'in',side:'left'}]},
+];
+const wires = [
+{from:'app.send',to:'mb.in',kind:'stream',label:'ta_send',hot:true},
+{from:'mb.out',to:'sch.in',kind:'stream',hot:true},
+{from:'sch.mem',to:'arena.s',kind:'shared',label:'in place'},
+{from:'arena.pg',to:'disk.pg',kind:'copy',label:'page out / in',both:true},
+{from:'sch.tr',to:'otel.in',kind:'stream',label:'spans'},
+{from:'app.bad',to:'arena.w',kind:'dont',label:'write state directly'},
+];
+ReactDOM.createRoot(root).render(<Sheet grid bodyStyle={{padding:'10px 2px 12px'}}><ArchDiagram width={690} height={456} grid={false} zones={zones} blocks={blocks} wires={wires} style={{padding:'0 6px'}}/></Sheet>);
+</script></body></html>

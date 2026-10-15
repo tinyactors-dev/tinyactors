@@ -1,0 +1,20 @@
+<!-- @dsCard group="Components" viewport="760x320" name="Observability" subtitle="SpanTree — OTel trace waterfall" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css"><script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script><style>body{padding:20px}</style></head><body><div id="root"></div>
+<script type="text/babel">
+const { SpanTree } = window.TinyactorsDesignSystem_2f489e;
+const spans = [
+{spanId:'1',name:'POST /checkout',service:'api',start:0,duration:48.2,kind:'server'},
+{spanId:'2',parentId:'1',name:'ta_spawn checkout.1',service:'tinyactors',start:1.1,duration:0.42},
+{spanId:'3',parentId:'1',name:'ta_send SUBMIT',service:'tinyactors',start:1.8,duration:44.6,events:[{name:'cart → paying',time:2.1},{name:'paying → paid',time:45.9}]},
+{spanId:'4',parentId:'3',name:'invoke payment',service:'tinyactors',start:2.3,duration:38.9},
+{spanId:'5',parentId:'4',name:'stripe.charge',service:'payments',start:3.0,duration:21.4,kind:'client',status:'error'},
+{spanId:'6',parentId:'4',name:'stripe.charge (retry)',service:'payments',start:25.1,duration:15.7,kind:'client'},
+{spanId:'7',parentId:'3',name:'ledger.write',service:'postgres',start:41.6,duration:3.9,kind:'client'},
+{spanId:'8',parentId:'1',name:'render receipt',service:'api',start:46.6,duration:1.4},
+];
+function Demo(){const [sel,setSel]=React.useState('5');return <SpanTree spans={spans} selectedId={sel} onSelect={setSel} treeWidth={300}/>;}
+ReactDOM.createRoot(root).render(<Demo/>);
+</script></body></html>

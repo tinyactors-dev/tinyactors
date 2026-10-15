@@ -1,0 +1,17 @@
+<!-- @dsCard group="Components" viewport="760x360" name="Memory · depth" subtitle="ExplodedLayout, MailboxStack. Click the struct to collapse it" -->
+<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css"><script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script><style>body{padding:16px;background:var(--surface-1)}</style></head><body><div id="root"></div>
+<script type="text/babel">
+const { ExplodedLayout, MailboxStack } = window.TinyactorsDesignSystem_2f489e;
+const layers=[
+{name:'header · 16 B',fields:[{name:'state',size:1,kind:'hot'},{size:7,kind:'pad'},{name:'id',size:8,kind:'cold'}]},
+{name:'payload · 16 B',fields:[{name:'flags',size:2,kind:'warm'},{size:6,kind:'pad'},{name:'mailbox',size:8,kind:'ptr'}]},
+{name:'tail · 8 B',fields:[{name:'refs',size:4,kind:'atomic'},{name:'prio',size:1},{size:3,kind:'pad'}]}];
+const T=['PAY','INC','SNAP','PING','ACK','OPEN'];
+function Live(){const [ms,setMs]=React.useState(()=>[5,4,3,2,1].map(i=>({id:i,type:T[i%6]})));const n=React.useRef(6);const k=React.useRef(0);
+React.useEffect(()=>{const t=setInterval(()=>{k.current++;setMs(m=>k.current%2?[{id:n.current,type:T[n.current++%6]},...m].slice(0,6):m.length>3?m.slice(0,-1):m);},1300);return()=>clearInterval(t);},[]);
+return <MailboxStack messages={ms} width={220} height={320}/>;}
+ReactDOM.createRoot(root).render(<div style={{display:'grid',gridTemplateColumns:'1.2fr 1fr',gap:16,alignItems:'center'}}><ExplodedLayout layers={layers} stageHeight={320}/><Live/></div>);
+</script></body></html>

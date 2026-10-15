@@ -1,0 +1,46 @@
+<!-- @dsCard group="Inspector" viewport="1280x760" name="Actor inspector" subtitle="Devtool: actor tree, live statechart, event log" -->
+<!doctype html><html><head><meta charset="utf-8"><title>tinyactors inspector</title><link rel="stylesheet" href="../../styles.css"><script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script><script src="data.js"></script><style>html,body,#root{height:100%}</style></head><body><div id="root"></div>
+<script type="text/babel" src="Toolbar.jsx"></script><script type="text/babel" src="ActorTree.jsx"></script><script type="text/babel" src="ChartView.jsx"></script><script type="text/babel" src="EventLog.jsx"></script>
+<script type="text/babel">
+(() => {
+const { Toast, Dialog, Button } = window.TinyactorsDesignSystem_2f489e;
+const SEED = [{ t: '0.000', ev: 'ta.init', from: '∅', to: 'cart', ok: true }, { t: '0.012', ev: 'ADD_ITEM', from: 'cart', to: 'cart', ok: true }, { t: '0.019', ev: 'ADD_ITEM', from: 'cart', to: 'cart', ok: true }, { t: '0.031', ev: 'CHECKOUT', from: 'cart', to: 'paying', ok: true }];
+function App() {
+  const [sel, setSel] = React.useState('checkout.1');
+  const [state, setState] = React.useState('paying');
+  const [log, setLog] = React.useState(SEED);
+  const [paused, setPaused] = React.useState(false);
+  const [toast, setToast] = React.useState(null);
+  const [confirm, setConfirm] = React.useState(false);
+  const tone = state === 'paid' ? 'done' : state === 'failed' ? 'error' : 'running';
+  const send = ev => {
+    const to = (window.INSPECTOR_CHART.on[state] || {})[ev];
+    const t = (parseFloat(log[log.length - 1].t) + 0.007 + Math.random() * 0.01).toFixed(3);
+    setLog(l => [...l, { t, ev, from: state, to, ok: !!to }]);
+    if (to) setState(to);
+    if (to === 'failed') setToast({ tone: 'error', title: sel + ' entered failed', msg: 'Supervisor policy: transient, 1/3 restarts used.' });
+    else if (to === 'paid') setToast({ tone: 'success', title: sel + ' reached final state', msg: 'done.state.checkout emitted to session.sup.' });
+    else if (!to) setToast({ tone: 'warning', title: ev + ' ignored', msg: 'No transition for this event in ' + state + '.' });
+  };
+  const reset = () => { setState('cart'); setLog([SEED[0]]); setConfirm(false); setToast(null); };
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Toolbar paused={paused} setPaused={setPaused} onReset={() => setConfirm(true)} step={log.length} />
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <ActorTree selected={sel} onSelect={setSel} tones={{ 'checkout.1': tone }} />
+        <ChartView actor={sel} state={state} onSend={send} />
+        <EventLog log={log} state={state} actor={sel} />
+      </div>
+      {toast && <div style={{ position: 'fixed', left: 276, bottom: 72 }}><Toast tone={toast.tone} title={toast.title} onClose={() => setToast(null)}>{toast.msg}</Toast></div>}
+      <Dialog open={confirm} title={'Reset ' + sel + '?'} onClose={() => setConfirm(false)} footer={<><Button onClick={() => setConfirm(false)}>Cancel</Button><Button variant="danger" onClick={reset}>Reset actor</Button></>}>
+        The actor exits its current configuration and re-enters <code>cart</code>. The event log is cleared.
+      </Dialog>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+})();
+</script></body></html>
