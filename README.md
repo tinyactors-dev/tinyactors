@@ -37,6 +37,9 @@ Under active development - breaking changes are made frequently to land on a goo
 
 ## Layers and responsibilities
 
+The words used here (host, system, segment, migration, job, ...) are
+defined in [GLOSSARY.md](GLOSSARY.md).
+
 Tinyactors is built in layers. Each has one job, and bytes and decisions do
 not pass through a layer that does not need them. The C layers are static
 libraries in `tinyactors-core/`, and each links only against the layers

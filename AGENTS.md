@@ -1,5 +1,9 @@
 # Working in this repo
 
+**Words.** [GLOSSARY.md](GLOSSARY.md) defines the terms (host, system,
+segment, version, migration, job, hibernation, snapshot, effect, ...).
+Use them as it does, and add a term there when you introduce one.
+
 **Layers.** Core decides what inputs mean and runs actors in one block of
 memory; the host layer runs many systems as one; a language binding
 owns values and their encoding; the application owns storage and policy. Before adding code, place it in the
