@@ -42,8 +42,16 @@ quickjs-wasi names none.
 For staticjs:
 - Say at most once on the front page what it is used for, after the
   description.
-- Name a real use, and only a true one: staticjs is being built as the
-  data model of tinyactors' statecharts, and says so only in those terms.
+- The uses the documentation names are two, both with a concrete program:
+  - **Plugins:** a function a user writes to transform their own records,
+    compiled once by the host and evaluated per record, with the host's
+    tables reached through native functions (`examples/host.c`, `rate()`).
+  - **Code mode:** a program an agent writes to call the host's tools,
+    which are native functions, instead of one tool call at a time. Tools
+    read; the program returns what should happen, and the host does it.
+- No statecharts, guards, SCXML or `In()` in user-facing pages or
+  examples. The internals keep their statechart workloads, because the
+  benchmarks measure them; the guide calls the same expression a filter.
 - Never put a use case in a heading or a lede. "Rules", "guards",
   "filters", "policies" and "formulas" are not the product.
 
@@ -169,7 +177,43 @@ limit, each with what happens:
 Say what staticjs does not do (the whole language, exceptions,
 asynchronous code), and point to the place that lists it.
 
-## 13. Sentences
+## 13. Positioning
+
+- **The category:** a JavaScript engine. The headline is fixed: "A small,
+  embeddable and fast JavaScript engine".
+- **The one-line comparison:** staticjs is basically CEL with JavaScript
+  syntax and user functions. It may appear once, in the comparison.
+- **The competitor:** QuickJS, the small embeddable engine that runs all
+  of JavaScript. The front page races the two, both as WebAssembly, live.
+- **The neighbors:** CEL and Starlark, compared as facts in a table, in
+  their own words.
+- **Claims never made:** that staticjs is faster than Node's JIT (Node
+  takes 0.43 of its time), or smaller than QuickJS in bytes (its wasm is
+  about 950 KiB, QuickJS's about 620 KiB).
+
+## 14. Diagrams come from the design system
+
+The site draws with components ported from the `tinyactors-design` skill
+(at the repository's root) into `.vitepress/theme/components/ds/`. Use one
+before drawing anything new, and port another from the skill the same way
+when none fits:
+
+| Component | Draws | Used for |
+|---|---|---|
+| `ArchDiagram` on a `Sheet` | blocks, zones and wires whose kind says what a hop is (stream, call, shared memory) | the pipeline: host, parser, compiler, program, evaluator, writer |
+| `SpanTree` | a waterfall of nested spans on an axis | the frames of a real evaluation, on an axis of fuel |
+| `MemoryLayout` | a struct's bytes, field by field | `sjs_value`'s 16 bytes |
+
+- A diagram shows a fact a reader could check in the code, and runs live
+  where it can (`EvaluationFrames` runs its program in the page).
+- Labels are in sentence case. The site leaves out the design system's
+  uppercase labels and eyebrows, and keeps labels few: a component says
+  what it is by what it draws.
+- A diagram gets a short caption that says how to read it, and a
+  paragraph or a table in the markdown version (`index.md`) that says the
+  same.
+
+## 15. Sentences
 
 - **Shape:** subject, verb, object. Vary the length; the neighbors mix
   four-word sentences ("Execution is finite.") with long ones.
@@ -183,7 +227,7 @@ asynchronous code), and point to the place that lists it.
 - **Quoting the project:** a plain fact may be quoted as it stands:
   "Starlark is indeed a very small language."
 
-## 14. What we kept getting wrong
+## 16. What we kept getting wrong
 
 These patterns made earlier drafts read as generated. Check every page
 for them.
@@ -199,19 +243,37 @@ for them.
 | A lede that restates the section | "Use prebuilt libraries, one C file, or WebAssembly. Pick the one that fits your build." |
 | Wordplay | "Every one of them *ends*." |
 | Every block in the same rhythm | label, fact, fact, number, six times |
+| A use the documentation no longer names | "a guard in a statechart", SCXML's `In()` as the native example |
+| The same fact in three sections | the four stages in the overview, the install section and How it works |
+| Eyebrows and labels on every block | a small capital label over each heading and card |
 
-## 15. A front page in this style
+## 17. The front page
 
-The order the neighbors follow:
+The order is fixed by the maintainer:
 
-1. The name and one sentence: what it is.
-2. Two or three short paragraphs:
+1. **Hero:** the headline and one sentence, what it is, beside the live,
+   editable sample.
+2. **Overview:**
    - what the language has, compared with JavaScript (rule 4);
    - what it leaves out (rule 5);
-   - its properties, each defined in one sentence (rule 6).
-3. A code example with its result (rule 7). On this site it is live.
-4. Install or get it: the three ways in, as commands.
-5. How it works, briefly (rule 11), with a link to the pipeline explorer.
-6. Performance: the measurements and the live comparison, with the method.
-7. Comparison with QuickJS, CEL and Starlark, as facts in a table.
-8. Limitations, and links: guide, language reference, C header.
+   - its properties, each defined in one sentence (rule 6);
+   - the four programs where it stops, with results (rule 7).
+3. **Install:** the three ways in, as commands.
+4. **Performance:** the measurements with their method, and the live race
+   against QuickJS.
+5. **Limitations:** one bullet per limit, with what happens.
+6. **Comparison:** QuickJS, CEL and Starlark, as facts in a table.
+7. **How it works:**
+   - the pipeline diagram;
+   - the frames of an evaluation;
+   - `sjs_value`'s layout;
+   - the link to the pipeline explorer.
+8. **Documentation:** links to the guide, the language and the C header.
+
+Each fact appears in one section only. `HomePage.vue` renders the page.
+`index.md` mirrors it as markdown, in the same order, for the `.md` routes
+and `llms.txt`. Change both together.
+
+How the copy is made and reviewed (fact sheet, roast, one writer per
+section, critique, editing pass) is the `site-copy` skill in
+`staticjs/.agents/skills/site-copy`.

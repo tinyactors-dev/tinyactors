@@ -98,6 +98,9 @@ Two sets, for two readers; keep them apart.
     `docs/guide/embedding.md`, and the examples that call it;
   - `examples/hello.c`: its copy in `docs/guide/getting-started.md` too
     (`mise run examples` fails while they differ).
+- **The site (`site/`) has its own copy**, written to `site/WRITING.md`.
+  To write or review it, use the `site-copy` skill
+  (`.agents/skills/site-copy`).
 - **`docs/internals/` is for contributors**: how to extend, test and measure
   staticjs, and a design note per part, which may keep its history.
   `docs/internals/README.md` lists them.
