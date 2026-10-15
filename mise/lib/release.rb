@@ -224,10 +224,18 @@ module Release
     end
   end
 
-  # Whether fnox has a non-empty PYPI_TOKEN (ADR 0001, decision 24), tested
+  # How a command gets PYPI_TOKEN: through fnox where it is installed (a
+  # maintainer's machine), else from the environment as it is (a cloud
+  # session whose environment holds it). Either way only the shell that
+  # runs the command sees it.
+  def pypi_secrets
+    system('sh', '-c', 'command -v fnox', out: File::NULL) ? %w[fnox exec --] : []
+  end
+
+  # Whether PYPI_TOKEN is set and not empty (ADR 0001, decision 24), tested
   # by the shell, never read here.
   def pypi_token?
-    system('fnox', 'exec', '--', 'sh', '-c', 'test -n "$PYPI_TOKEN"', out: File::NULL, err: File::NULL)
+    system(*pypi_secrets, 'sh', '-c', 'test -n "$PYPI_TOKEN"', out: File::NULL, err: File::NULL)
   end
 
   # Whether PyPI has `name` at `version`: false for a 404, which includes a
@@ -241,8 +249,8 @@ module Release
     fail!("PyPI answered #{response.code} for #{name} #{version}")
   end
 
-  # Uploads `files` to PyPI with `uv` (a path), the token passed from fnox's
-  # PYPI_TOKEN to uv's UV_PUBLISH_TOKEN inside the shell, so it never
+  # Uploads `files` to PyPI with `uv` (a path), the token passed from
+  # PYPI_TOKEN (pypi_secrets) to uv's UV_PUBLISH_TOKEN inside the shell, so it never
   # reaches this process, a file or a command line. --check-url skips the
   # files PyPI has already, so a publish that stopped half way runs again.
   # Answers whether it succeeded; PyPI never takes a file name back, so a
@@ -250,7 +258,7 @@ module Release
   def pypi_publish!(uv, files)
     puts "$ uv publish #{files.map { |file| File.basename(file) }.join(' ')}"
     script = 'UV_PUBLISH_TOKEN="$PYPI_TOKEN" exec "$0" publish --check-url https://pypi.org/simple/ "$@"'
-    system('fnox', 'exec', '--', 'sh', '-c', script, uv.to_s, *files.map(&:to_s), chdir: REPO.to_s)
+    system(*pypi_secrets, 'sh', '-c', script, uv.to_s, *files.map(&:to_s), chdir: REPO.to_s)
   end
 
   # Undoes commit_and_tag! when nothing was published: deletes the tag and

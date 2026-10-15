@@ -358,7 +358,9 @@ laid out how each library and the addon would ship. It was discussed on
 24. **The PyPI token is in fnox as `PYPI_TOKEN`** (2026-10-15), as decision
     12 for npm: the release passes it to `uv publish` as
     `UV_PUBLISH_TOKEN` inside a shell, so it never reaches the task's
-    process, a file or a command line. A release uploads to PyPI before it
+    process, a file or a command line; where fnox is not installed (a
+    cloud session whose environment holds `PYPI_TOKEN`), the variable is
+    passed from the environment the same way. A release uploads to PyPI before it
     pushes the tag: PyPI never takes a file name back, so only a failure
     before the upload undoes the local commit and tag (decision 22 for
     one after). A token, not trusted publishing, since releases are built

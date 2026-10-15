@@ -65,7 +65,7 @@ if resume
     tagged = Release.git('rev-parse', '--quiet', '--verify', "#{tag}^{commit}").to_s.strip
     fail!("the tag #{tag} is not on HEAD; --resume finishes a publish of HEAD") unless tagged == Release.git('rev-parse', 'HEAD').to_s.strip
   end
-  fail!('fnox has no PYPI_TOKEN (ADR 0001, decision 24)') unless Release.pypi_token?
+  fail!('PYPI_TOKEN is not set, in fnox or the environment (ADR 0001, decision 24)') unless Release.pypi_token?
   fail!('the upload to PyPI failed again; run --resume once more') unless Release.pypi_publish!(uv, wheels)
   if dev
     puts "release: published tinyactors #{version} to PyPI"
@@ -87,7 +87,7 @@ unless build_only
   tag = Release.check_version!(PREFIX, version) unless dev
   Release.check_changelog!(prefix: PREFIX, version: version) unless dev
   fail!("PyPI has tinyactors #{version} already (a publish that stopped half way: --resume)") if Release.pypi_published?('tinyactors', version)
-  fail!('fnox has no PYPI_TOKEN (ADR 0001, decision 24)') if publish && !Release.pypi_token?
+  fail!('PYPI_TOKEN is not set, in fnox or the environment (ADR 0001, decision 24)') if publish && !Release.pypi_token?
   Release.run('mise', 'run', 'test', chdir: CPython::ROOT) if tests
 end
 
