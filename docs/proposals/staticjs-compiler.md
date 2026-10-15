@@ -1,172 +1,255 @@
-# staticjs: register code from the streaming compiler
+# staticjs: the compiler and evaluator, from scratch
 
 **Status:** Sketch (2026-10-15). A design for discussion; nothing here is
 decided or scheduled.
-**Touches:** `staticjs/src/compiler.c` (what it emits; its streaming
-shape stays), `vm.c` (a register evaluator), `value.c` and `internal.h`
-(hot helpers), and [exceptions and async](staticjs-exceptions-and-async.md),
-whose move table this design answers.
+**Touches:** everything between the lexer and the values: `parser.c`'s
+output, `compiler.c`, `vm.c`, `matcher.c` and the shapes, the looping
+built-ins in `builtins.c`, the value representation in `value.c`, and the
+public API around them (the event sink, `sjs_value`). [Exceptions and
+async](staticjs-exceptions-and-async.md) is designed on top of this.
 **Not a plan:** ADRs and roadmaps win.
 
 ## Whom it serves, who pays, what is out
 
-- **First, the application developer and the operator:** faster guards and
-  callbacks.
-- **Then the maintainers:** moves decided in one place, by one walk,
-  instead of a deferral per feature. That place is ready for `try` and
-  `await`.
+- **First, the application developer and the operator:** guards and
+  callbacks that cost a fraction of what they do now (measured below).
+- **Then the maintainers:** fewer mechanisms. Today the pipeline is a
+  streaming compiler that patches its output, a matcher that rebuilds
+  trees from events, hand-written resumable state machines for every
+  built-in that calls back, and a stack evaluator. From scratch, it is a
+  parser, a resolver, a code generator, one walk for moves, and a
+  register evaluator.
 - **Who pays:**
-  - the evaluator's core is rewritten;
-  - what the compiler emits changes;
-  - the guide's documented fuel costs change once, as one register
-    instruction does what several stack instructions did.
+  - a rewrite;
+  - every documented fuel cost changes once;
+  - the public event sink and `sjs_value` change, and with them
+    `staticjs-js`.
 - **Out of scope:**
-  - an intermediate representation;
-  - a syntax tree;
-  - optimization passes;
-  - inlining callbacks;
-  - a JIT;
-  - changes to the parser, the events or the values.
+  - the language: what staticjs accepts, refuses and computes;
+  - the built-ins that do not call back: strings, numbers, JSON,
+    regular expressions, Temporal, the writer;
+  - a JIT.
 
-## What the compiler must do
+## What the design must give
 
-Turn events, which arrive in evaluation order (operands before their
-operator, every jump forward), into code for a virtual machine, and move
-each value at its last use. Nothing more.
+1. **The rule:** the same result as JavaScript, or a fault.
+2. **Pause anywhere on fuel**, deterministically: the same fuel on every
+   machine, and no C recursion.
+3. **Freestanding**: no C library, the embedder's allocator, wasm32 too.
+4. **Bytes are pushed**, in chunks of any size.
+5. **Owned mutation and moves:** a value changes only through a variable
+   that holds it alone, and a last read moves.
+6. **Every evaluation ends.**
+7. **Inspection:** frames name a function or a built-in and a position,
+   and an evaluation steps one unit at a time.
+8. **Coming:** `try`/`throw`, `async`/`await` with suspension to the
+   host.
 
 ## Where the time goes today
 
 Measured with callgrind, as instructions per evaluation. Start-up is
-excluded, and a review reproduced the figures.
+excluded, and a review reproduced the figures:
 
-| Program | Fuel | Instructions | Dispatch's share |
-|---|---|---|---|
-| `_event.name === "notify.ack"` | 5 | 802 | 19% |
-| `pending.has(_event.data.id) && _event.name === "notify.ack"` | 13 | 1,703 | 20% |
-| `xs.map(x => x * 2 + 1)`, per element | 7 | 663 | 27% |
+- `_event.name === "notify.ack"`: 802, for 5 units of fuel;
+- the bench's guard: 1,703, for 13;
+- `xs.map(x => x * 2 + 1)`: 663 per element.
 
-The rest of the cost:
+Where it goes:
 
-- **The operations' own work.** String `===` compares a byte at a time
-  (`sjs_str_equal`, `src/internal.h:21`). `.has()` goes through a call
-  protocol of about 150 instructions. Small helpers (`sjs_undefined`,
-  `sjs_truthy`, ...) are calls out of line in `value.c`.
-- **Starting an evaluation.** `sjs_vm_start` runs a full `sjs_vm_reset`
-  each time: about 28% of the small guard.
-- **The callback protocol:** about 200 instructions per element of `map`.
-- **Every value passes through `vm->stack`.** The run loop rereads its
-  state from memory before each instruction (`src/vm.c:1724`).
+- **The callback protocol** of a looping built-in: about 200 per element.
+- **Dispatch, with its state in memory:** 19% to 27% of the total.
+- **Starting an evaluation:** about 28% of the small guard.
+- **A built-in method call:** about 150 instructions for `.has()`.
+- **Strings compared a byte at a time**, and property reads that scan
+  keys.
 
-A prototype register loop, with its state in locals and the callback
-inlined, ran the `map` at 153 instructions per element (4.3x fewer). The
-inlining is not part of this design, so **what the register evaluator
-gains with a real call per element is unmeasured**. That is the first
-spike.
+A prototype register loop ran the map at 153 instructions per element.
 
 ## The design
 
-### 1. The compiler emits register code, still streaming
+### 1. Parse to a tree
 
-The compiler keeps its shape: one pass over the events, jumps patched
-when their construct ends. What changes is what an event emits.
+- The lexer is pushed bytes, as now.
+- The parser builds the program's syntax tree in an arena:
+  - nodes of 16 bytes, children by index;
+  - built with an explicit stack;
+  - complete when the last byte is pushed.
+- Sources are small (`max_source_bytes`, 1 MiB), so the tree is small too:
+  about 0.3 nodes per byte.
+- Tools that took the event stream walk the tree instead. The event sink
+  goes.
 
-- The compiler keeps a stack of **operand descriptions**, where a stack
-  compiler would have pushed code. Each says where an operand is: a
-  constant, a local's register, or a temporary.
-- **Reading a local emits nothing.** It pushes the local's register.
-- **An operator pops its operands' descriptions** and emits one
-  instruction that names them, writing its result into a temporary. It
-  pushes that.
-- So `x * 2 + 1` is two instructions (`MUL t, x, #2`, `ADD t, t, #1`)
-  where it was five, and no value passes through a push and a pop.
-- Temporaries are allocated and freed as a stack: the operand stack's
-  depth is the register.
+### 2. Resolve names on the tree
 
-Lua 5 compiles this way, in one pass from its parser to register
-bytecode (Ierusalimschy, de Figueiredo and Celes, "The Implementation of
-Lua 5.0", 2005). staticjs's events are postfix, which makes it simpler
-than Lua's recursive descent. Error order, compile memory and the sink
-API are unchanged.
+One walk with an explicit stack:
 
-### 2. Moves: one backward walk per function
+- scopes and slots;
+- captures;
+- use before declaration;
+- the ownership rules of `docs/internals/mutation.md`, which on a tree
+  are plain questions:
+  - is this variable captured anywhere in its function?
+  - was it copied, passed or stored before this mutation?
 
-When a function's code is complete, walk it from its last instruction to
-its first, keeping the set of locals still to be read:
+Errors come in source order, and every syntax error comes before any
+refusal, as JavaScript reports them.
 
-- Every jump goes forward, so a reverse walk has seen everything that can
-  run after each instruction. The set at a jump is its fall-through's
-  set together with its target's, which the walk recorded when it passed
-  there.
-- An operand that reads a local not read again gets the instruction's
-  **move bit** for that operand. A write removes the local from the set.
-  A `RETURN` clears the set. A closure's captures count as reads.
-- Temporaries are read once, so they always move.
-- **`try`**: the handler comes after the code it protects, so its set is
-  known when the walk enters that code. It is added at every instruction
-  that can throw. That one rule answers the whole move table of the
-  exceptions sketch.
-- **`await`**: an ordinary instruction to the walk. The frame's registers
-  go to the heap with it and come back.
+### 3. Generate register code
 
-This replaces the last-read machinery of today's compiler (parked reads,
-fences, cancels, the special cases of the append and of a `let`
-reassigned from itself, `src/compiler.c:795` to `:960`). The rest of the
-compiler's patches (a path's root, a mutating method) stay as they are:
-each is decided by the end of its own call. Liveness moves a few reads
-that today's rules copy (a read followed by a write of its local). Each
-such difference is a copy becoming a move, so the test is the spec corpus
-compiled both ways, every difference of that kind.
+One walk over each function's tree.
 
-### 3. A register evaluator with its state in locals
+- **The register frame.** Each function has a frame of registers:
+  parameters, then locals, then temporaries. An expression is compiled
+  into a target register, and temporaries are taken and released as a
+  stack, so their number is the expression's depth.
+- **Instructions:**
+  - fixed-width 32-bit words, as Lua's: an 8-bit opcode and operands
+    that name registers or constants;
+  - fixed width makes decoding free, and walking the code backwards
+    trivial;
+  - `x * 2 + 1` is `MUL t, x, K2` then `ADD t, t, K1`.
+- **Jumps go forward only in user code**, so every evaluation ends.
+- **Each function gets its own code array** and its own table of
+  positions.
 
-- **Frames:** a frame is a window of registers on the value stack:
-  parameters, locals, then temporaries.
-- **The run loop** keeps `pc`, the frame's base, the code pointer and the
-  fuel counter in C locals. It writes them back only when it leaves: a
-  call, a pause, a fault, a loop frame's step.
-- **Fuel is one unit per instruction, as now**, so pausing anywhere and
-  the "at most 2 units more" contract stay. Programs take fewer
-  instructions, so their costs in the guide go down once.
-- **Loop frames and callbacks** keep today's protocol, which is then the
-  next thing to make cheaper.
-- **Inspection** is unchanged: frames are still frames.
+### 4. Moves: one backward walk per function
 
-### Cheap fixes, first and independent
+Walk the function's code from its last instruction to its first, with
+the set of registers still to be read:
 
-These pay on today's evaluator and on the new one:
+- A read of a register not read again sets that operand's **move bit**.
+  The instruction then takes the value's reference instead of adding one.
+- Jumps go forward, so the walk has already seen every target. A jump's
+  set is its target's set together with the fall-through's.
+- A write removes the register from the set, and `RETURN` clears it.
+- For `try`, the handler is reached from every instruction that can throw
+  inside it.
 
-- the hot helpers inline;
-- strings compared a word at a time;
-- a fast start for an idle evaluator;
-- shapes' C paths stepping several elements per turn of the run loop.
+About a page of code, because instructions are fixed-width.
 
-## Options compared
+### 5. Values: 8 bytes, objects with shared layouts
 
-| | Verdict |
+- **A value is 8 bytes, NaN-boxed.**
+  - Numbers are themselves.
+  - Everything else is a tagged pointer in the NaN space: 48 bits on 64-bit
+    targets, 32 on wasm32.
+  - It halves the traffic of every register, element and argument.
+  - This replaces the public 16-byte `sjs_value`.
+- **Objects are a layout and values.**
+  - A layout is an immutable, shared list of keys.
+  - Objects made by the same literal, or read from JSON with the same
+    keys, share one layout (interned per context).
+  - `GET_FIELD r, obj, K"name"` caches the last layout it saw and the
+    index it found, so a guard's property read is a comparison and a
+    load.
+  - Today, staticjs scans keys, and remembers a position per instruction.
+- **Strings used as keys and literals are interned**, so `===` on two
+  interned strings is a pointer comparison. A string read from JSON
+  compares its hash and length first.
+
+### 6. A register evaluator with cheap calls
+
+- **The run loop keeps its state in C locals:** `pc`, the frame's base,
+  the code pointer, the fuel counter. It counts one unit of fuel per
+  instruction, and writes them back only when it leaves.
+- **A call, as in Lua.** The caller puts the callee and its arguments in
+  consecutive registers. The callee's frame starts there, so nothing is
+  copied, and the result is written into the caller's register. A frame
+  record holds the return `pc`, the base and the function: no more.
+- **Re-entry** ("a function cannot call itself") is a counter per
+  function in the evaluation, not a scan of the frames.
+- **Starting an evaluation** points the first frame at the globals, with
+  nothing to reset.
+
+### 7. Built-ins that call back are written in bytecode
+
+`map`, `filter`, `reduce`, `toSorted`, `some`, `find`, `flatMap`,
+`Array.from` with a function, `replace` with a function, the iterator
+helpers, `forEach` on maps and sets, and `then`.
+
+- **They are written once, in the same register bytecode,** using a few
+  instructions that only built-in code may use:
+  - read the length;
+  - read an element;
+  - append to an array the frame owns;
+  - a backward jump bounded by a length.
+- **A callback is an ordinary call** from that code, so:
+  - pausing inside a callback needs nothing of its own;
+  - a `throw` unwinds through it like any frame;
+  - `await` in a callback is an ordinary suspension;
+  - inspection sees a frame named `map`, as now.
+- **This removes the hand-written resumable state machines**
+  (`sjs_loop_step`, `sort_step` and their phases) and the callback
+  protocol, which is today's largest cost per element.
+- **What stays in C:** built-ins that do not call back. Long-running ones,
+  a regular expression's match, stay resumable C loops, as they are
+  today.
+- **The shapes matcher is not needed to start with:** its purpose was a C
+  path around the callback protocol. Whether a C comparator for `toSorted`
+  by a key still pays is measured after.
+
+### 8. Exceptions and async, on this
+
+- **`throw`** unwinds frames using a table per function: a `pc` range, a
+  handler, and the register to receive the value. Built-in frames are
+  bytecode frames, so nothing special unwinds.
+- **`finally`** is code that receives how the block ended (normal, return,
+  throw) in two registers.
+- **`await`** moves the frame's registers to the heap, and a job moves
+  them back.
+- The termination, promise and host rules are those of the exceptions
+  sketch.
+
+## What it replaces
+
+| Today | From scratch |
 |---|---|
-| Today's compiler, a deferral per feature | grows per feature; nothing for speed |
-| Today's compiler and stack bytecode, moves by a backward walk | the minimum if only `try` is wanted |
-| **Streaming register code and a backward walk for moves, register evaluator** | **recommended: two changes to the compiler, one to the evaluator** |
-| A tree per function, an IR, optimization passes, inlined callbacks | considered in an earlier draft. More parts than the problem needs: inlining brought loops into the IR and virtual frames into inspection |
-| Buffering each function's events before emitting | refuted: nested code inline, order of errors, memory |
-| A tree-walking interpreter | more dispatch, not less |
+| events in evaluation order, a streaming compiler that patches what it emitted | a tree, a resolver, a code generator |
+| last-read machinery (parked reads, fences, cancels, special cases) | one backward walk, move bits on operands |
+| a matcher rebuilding trees from events, the shapes' C paths | none to start with |
+| loop frames: a resumable C state machine per built-in that calls back | those built-ins in bytecode; a callback is a call |
+| stack bytecode of variable width; state in memory per instruction | fixed-width register code; state in locals |
+| 16-byte values; objects searched by key | 8-byte values; layouts with a cache per instruction |
+| re-entry by scanning frames | a counter per function |
+
+## Costs and risks
+
+- **Compile:** a tree held for the whole program, at about 16 bytes per
+  node and 0.3 nodes per byte: about 5 bytes per source byte, against a
+  peak of 23 to 50 today. Then three walks over it.
+- **Built-ins in bytecode** run their loop as instructions where C ran it.
+  Per element that is a few instructions plus a call, against about 200
+  for today's protocol. A built-in with no callback stays in C.
+  **Unverified:** sorting, whose comparator calls dominate, against
+  today's merge sort in C.
+- **8-byte values** change the public API and every binding. Pointers past
+  48 bits (some 64-bit systems with tagged pointers) would need a
+  different boxing. **Unverified** on the targets staticjs ships to.
+- **The guide's fuel costs** all change once, as instructions do more.
+- **Unverified overall:** the factor.
+
+  | Program | Today | Expected | Basis |
+  |---|---|---|---|
+  | `map`, per element | 663 | about 100 to 150 | the 153 measured inlined, against a cheaper call and loop |
+  | small guard | 802 | about 100 | a cached field read, an interned comparison, a start with nothing to reset |
 
 ## Order of work
 
-1. **The cheap fixes**, each with `bench-compare --quick`.
-2. **Spike:** the register loop of the review's prototype with a real call
-   per element, against 663 instructions per element, and the guard.
-   Settles whether step 3 pays.
-3. **The backward walk for moves on today's stack bytecode.** It pays
-   whatever step 4 becomes, and is what `try` needs.
-4. **Register code and the register evaluator**, behind a switch in
-   `sjs_compiler_config` and `sjs_vm_config`. The spec runs both ways
-   with `diff-node`, and the two may differ in fuel only.
-5. Switch the default, delete the stack evaluator, then `try`, `throw` and
-   `async`.
+1. **Spike the evaluator.** Hand-write the register code for the small
+   guard and for `map` (its bytecode loop and the callback), with 8-byte
+   values, a layout cache and the cheap call. Count with callgrind
+   against 802 and 663. This settles whether everything after it pays,
+   and which parts pay most.
+2. **The tree and the resolver**, checked against today's errors on the
+   spec corpus: same messages, and syntax before refusals.
+3. **The code generator and the backward walk.**
+4. **The evaluator, the values and the bytecode built-ins.** The spec
+   runs with `diff-node`; fuel is the only difference allowed.
+5. **The public API:** `sjs_value`, the tree for tools, `staticjs-js`.
+6. **`try`, `throw`, `async`.**
 
 ## Open questions
 
-- Whether a cheaper call (the callback protocol) closes most of the gap
-  before register code is needed.
-- Interning strings that are compared often, such as event names.
+- Whether tools need the event stream, or are served by walking the tree.
+- Whether `toSorted` by a key wants a C comparator after measurement.
+- The boxing on targets with pointers wider than 48 bits.
