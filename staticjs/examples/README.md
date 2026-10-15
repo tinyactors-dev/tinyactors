@@ -12,7 +12,7 @@ AddressSanitizer and UBSan, and checks that it prints what
 | [eval.c](eval.c) | a command-line evaluator: expressions and modules, error reports with positions, a fuel budget, the clock from the host, `Math.random`'s seed | `./eval '[3, 1, 2].toSorted((a, b) => a - b)'` |
 | [host.c](host.c) | a host that runs a plugin its users wrote: a library module, the plugin compiled once and evaluated per record, globals built through the API, a native `rate()`, a module imported by name, the clock pushed by the host | `./host` |
 | [stream.c](stream.c) | every stage pushed: source in 7-byte chunks, a sink of its own before the compiler, evaluation in slices of fuel, output through a 16-byte buffer | `./stream` |
-| [wasm/](wasm/) | `staticjs.wasm` from JavaScript: a wrapper (`staticjs.mjs`), a page (`index.html`) and a Node script (`node.mjs`) | `node wasm/node.mjs staticjs.wasm staticjs.api.json` |
+| [wasm/](wasm/) | `staticjs.wasm` from JavaScript: a wrapper (`staticjs.mjs`) with contexts, globals, results as values, JSON or source, and slices of fuel; a page (`index.html`) that evaluates in slices; and a Node script (`node.mjs`) | `node wasm/node.mjs staticjs.wasm staticjs.api.json` |
 
 ## Building them
 

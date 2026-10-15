@@ -17,7 +17,11 @@
   <textarea id="source" rows="6">[{ name: "ada", age: 36 }, { name: "grace", age: 85 }]
   .toSorted((a, b) => b.age - a.age)
   .map((p) => p.name)</textarea>
-  <p><label><input type="checkbox" id="module"> module</label> <button id="run">Evaluate</button></p>
+  <p>
+    <label><input type="checkbox" id="module"> module</label>
+    <label>output <select id="output-kind"><option>source</option><option>json</option></select></label>
+    <button id="run">Evaluate</button> <button id="stop" disabled>Stop</button>
+  </p>
   <pre id="output"></pre>
   <script type="module">
     import { load } from './staticjs.mjs';
@@ -27,14 +31,46 @@
       fetch('staticjs.api.json').then((r) => r.json()),
     ]);
     const staticjs = await load(wasm, api);
+    const context = staticjs.createContext();
     const output = document.getElementById('output');
-    document.getElementById('run').addEventListener('click', () => {
+    const run = document.getElementById('run');
+    const stop = document.getElementById('stop');
+    let evaluation = null;
+
+    // Run in slices of 100,000 units of fuel, and give the page back between
+    // them: it keeps painting and answering clicks, Stop included.
+    run.addEventListener('click', async () => {
+      evaluation?.cancel();
+      let program;
       try {
-        const module = document.getElementById('module').checked;
-        output.textContent = staticjs.evaluate(document.getElementById('source').value, { module });
+        program = context.compile(document.getElementById('source').value,
+          { module: document.getElementById('module').checked });
+        evaluation = program.start({}, { output: document.getElementById('output-kind').value });
       } catch (error) {
         output.textContent = error.message;
+        return;
+      } finally {
+        program?.release();
       }
+      const current = evaluation;
+      stop.disabled = false;
+      try {
+        while (current.run(100_000) === 'paused') {
+          output.textContent = `running: ${current.fuelUsed.toLocaleString()} units`;
+          await new Promise((resolve) => setTimeout(resolve));
+          if (current.state !== 'paused') return;   // stopped, or replaced by a newer run
+        }
+        output.textContent = `${current.result}\n\n${current.fuelUsed.toLocaleString()} units of fuel`;
+      } catch (error) {
+        output.textContent = error.message;
+      } finally {
+        if (evaluation === current) stop.disabled = true;
+      }
+    });
+    stop.addEventListener('click', () => {
+      evaluation?.cancel();
+      stop.disabled = true;
+      output.textContent = 'stopped';
     });
   </script>
 </body>

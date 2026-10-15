@@ -1,7 +1,17 @@
-[1,2,3]
-{"total":6}
-"2024-01-31T10:00:00.000Z"
+[ 1, 2, 3 ]
+Map(2) { 'ada' => 36n, 'grace' => 85n }
+{"when":"1970-01-01T00:00:00.000Z","sizes":{},"ratio":null}
+new Map([["ada",36n],["grace",85n]])
+{ total: 6 }
+'2024-01-31T10:00:00.000Z'
+8
+0
 fault at 1:14: cannot read a property of undefined (c)
 syntax error at 1:6: expected , or ]
 name error at 1:1: this name is not bound (a const is visible after its declaration)
 out of fuel: the evaluation used its 10000 units
+fault at 1:11: Array.from length is past the limit of an array
+5000
+a: 199990000 in 100014 units, b: 12497500 in 25014 units
+slices: a b a b a a a a a a a
+bytes held: 0
