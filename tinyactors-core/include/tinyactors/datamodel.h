@@ -42,6 +42,13 @@ typedef struct ta_event_view {
     uint32_t size;
     uint32_t type; /* TA_EVENT_TYPE_* */
     uint32_t name_id;
+    /* The receiving chart's <invoke> the event came from (its index among the chart's invokes),
+       TA_NIL when it came from none: the same for every session of the chart, so a datamodel can
+       keep the invoke's id once per chart (check its text: an id generated per execution varies). */
+    uint32_t invoke_slot;
+    /* origintype as an index into the session's I/O processors (the system variables'
+       io_processors: 0 is SCXML's, then the config's), TA_NIL when it is none of them. */
+    uint32_t origintype_id;
     uint32_t pad;
     ta_string_view name;
     ta_string_view sendid;     /* length 0 if absent */

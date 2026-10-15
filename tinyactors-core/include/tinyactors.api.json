@@ -4023,6 +4023,14 @@
           "type": "uint32_t"
         },
         {
+          "name": "invoke_slot",
+          "type": "uint32_t"
+        },
+        {
+          "name": "origintype_id",
+          "type": "uint32_t"
+        },
+        {
           "name": "pad",
           "type": "uint32_t"
         },
@@ -4057,54 +4065,60 @@
       ],
       "layout": {
         "x86_64": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "size": 0,
             "type": 4,
             "name_id": 8,
-            "pad": 12,
-            "name": 16,
-            "sendid": 32,
-            "origin": 48,
-            "origintype": 64,
-            "invokeid": 80,
-            "data": 96,
-            "raw": 104
+            "invoke_slot": 12,
+            "origintype_id": 16,
+            "pad": 20,
+            "name": 24,
+            "sendid": 40,
+            "origin": 56,
+            "origintype": 72,
+            "invokeid": 88,
+            "data": 104,
+            "raw": 112
           }
         },
         "aarch64": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "size": 0,
             "type": 4,
             "name_id": 8,
-            "pad": 12,
-            "name": 16,
-            "sendid": 32,
-            "origin": 48,
-            "origintype": 64,
-            "invokeid": 80,
-            "data": 96,
-            "raw": 104
+            "invoke_slot": 12,
+            "origintype_id": 16,
+            "pad": 20,
+            "name": 24,
+            "sendid": 40,
+            "origin": 56,
+            "origintype": 72,
+            "invokeid": 88,
+            "data": 104,
+            "raw": 112
           }
         },
         "wasm32": {
-          "size": 72,
+          "size": 80,
           "align": 8,
           "offsets": {
             "size": 0,
             "type": 4,
             "name_id": 8,
-            "pad": 12,
-            "name": 16,
-            "sendid": 24,
-            "origin": 32,
-            "origintype": 40,
-            "invokeid": 48,
-            "data": 56,
-            "raw": 64
+            "invoke_slot": 12,
+            "origintype_id": 16,
+            "pad": 20,
+            "name": 24,
+            "sendid": 32,
+            "origin": 40,
+            "origintype": 48,
+            "invokeid": 56,
+            "data": 64,
+            "raw": 72
           }
         }
       }

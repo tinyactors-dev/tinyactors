@@ -15,6 +15,8 @@
     "<param name='seed' expr='7'/></invoke>"                                                       \
     "<transition event='go'><log label='said' expr=\"'hello'\"/>"                                  \
     "<send target='#_svc' event='poke' id='p1'/></transition>"                                     \
+    "<transition event='news'><log label='origin' expr=\"_event.origin + ' ' + _event.origintype\"/>"   \
+    "</transition>"                                                                                \
     "<transition event='end' target='f'/></state><final id='f'/></scxml>"
 
 typedef struct world {
@@ -457,6 +459,28 @@ static void test_restore_skips_ended_invocations(void) {
     }
 }
 
+/* An event from a service names it as its origin, so a chart can <send> a
+ * reply: #_<invokeid>, through SCXML's I/O processor (SCXML 5.10.1). */
+static void test_an_event_from_a_service_names_its_origin(void) {
+    world w;
+    world_open(&w);
+    const ta_host_effect *effects;
+    uint32_t count = run_batch(&w, &effects);
+    uint32_t token = (uint32_t)ta_host_effect_number(w.host, find(w.host, count, TA_EFFECT_INVOKE),
+                                                     TA_EFFECT_FIELD_TOKEN);
+    ta_host_effects_ack(w.host);
+    CHECK_EQUAL(from_service(&w, token, TA_EVENT_IN_FROM_INVOKE), TA_OK);
+    count = run_batch(&w, &effects);
+    uint32_t log = find(w.host, count, TA_EFFECT_LOG);
+    CHECK(log != TA_NIL);
+    ta_string_view text = ta_host_effect_text(w.host, log, TA_EFFECT_FIELD_EVENT);
+    if (!text_is(text, "#_svc http://www.w3.org/TR/scxml/#SCXMLEventProcessor"))
+        fprintf(stderr, "  origin: %.*s\n", (int)text.length, text.pointer);
+    CHECK(text_is(text, "#_svc http://www.w3.org/TR/scxml/#SCXMLEventProcessor"));
+    ta_host_effects_ack(w.host);
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_take_freezes_batch_across_growth);
     RUN(test_run_refuses_open_batch);
@@ -465,5 +489,6 @@ int main(void) {
     RUN(test_traceparents_last_until_the_ack);
     RUN(test_restore_announces_external_invocations);
     RUN(test_restore_skips_ended_invocations);
+    RUN(test_an_event_from_a_service_names_its_origin);
     TEST_MAIN_END();
 }

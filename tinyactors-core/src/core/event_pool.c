@@ -145,6 +145,20 @@ ta_status ta_event_set_name(ta_core *core, ta_event *event, const char *name, ui
     return event->name == TA_NIL ? TA_ERROR_NO_MEMORY : TA_OK;
 }
 
+/* An origintype's index among the session's I/O processors (system variables): 0 for SCXML's,
+ * i + 1 for the config's processor i, TA_NIL for none of them. */
+static uint32_t io_processor_id(const ta_core *core, ta_string_view type) {
+    if (!type.length) return TA_NIL;
+    if (type.length == sizeof TA_SCXML_IO_PROCESSOR - 1 &&
+        ta_memcmp(type.pointer, TA_SCXML_IO_PROCESSOR, type.length) == 0)
+        return 0;
+    for (uint32_t i = 0; i < core->io_processor_count; i++) {
+        ta_string_view x = core->io_processors[i].type;
+        if (x.length == type.length && ta_memcmp(x.pointer, type.pointer, type.length) == 0) return i + 1;
+    }
+    return TA_NIL;
+}
+
 void ta_event_view_of(ta_core *core, uint32_t event_index, ta_event_view *view) {
     const ta_event *event = ta_event_at(core, event_index);
     ta_memset(view, 0, sizeof *view);
@@ -156,9 +170,26 @@ void ta_event_view_of(ta_core *core, uint32_t event_index, ta_event_view *view) 
     view->invokeid = ta_shared_string_get(core, event->invokeid);
     view->data = event->payload;
     view->raw = ta_shared_string_get(core, event->raw);
-    if (event->origin_string != TA_NIL) {
+    view->invoke_slot = event->invoke_slot == TA_EVENT_NO_SLOT ? TA_NIL : event->invoke_slot;
+    view->origintype_id = TA_NIL;
+    if (event->flags & TA_EVENT_FLAG_FROM_EXTERNAL_INVOKE) {
+        /* from a service the embedder runs: a reply goes to #_<invokeid>, through SCXML's
+           processor (SCXML 5.10.1: origin and origintype let the receiver <send> back) */
+        ta_string_view id = view->invokeid;
+        uint32_t n = 2;
+        core->scratch[0] = '#';
+        core->scratch[1] = '_';
+        for (uint32_t i = 0; i < id.length && n < sizeof core->scratch; i++)
+            core->scratch[n++] = id.pointer[i];
+        view->origin.pointer = core->scratch;
+        view->origin.length = n;
+        view->origintype.pointer = TA_SCXML_IO_PROCESSOR;
+        view->origintype.length = (uint32_t)sizeof TA_SCXML_IO_PROCESSOR - 1;
+        view->origintype_id = 0;
+    } else if (event->origin_string != TA_NIL) {
         view->origin = ta_shared_string_get(core, event->origin_string);
         view->origintype = ta_shared_string_get(core, event->origintype);
+        view->origintype_id = io_processor_id(core, view->origintype);
     } else if (event->origin && core->serial_of) {
         static const char pre[] = "#_scxml_";
         ta_memcpy(core->scratch, pre, sizeof pre - 1);
@@ -168,5 +199,6 @@ void ta_event_view_of(ta_core *core, uint32_t event_index, ta_event_view *view) 
         view->origin.length = n;
         view->origintype.pointer = TA_SCXML_IO_PROCESSOR;
         view->origintype.length = (uint32_t)sizeof TA_SCXML_IO_PROCESSOR - 1;
+        view->origintype_id = 0;
     }
 }
