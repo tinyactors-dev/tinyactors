@@ -11932,6 +11932,8 @@ sjs_result sjs_vm_frame(const sjs_vm *vm, uint32_t index, sjs_frame *out) {
     if (innermost && vm->status == VM_FAULT) pc = vm->op_pc;
     else if (!innermost && pc > 0) pc -= 1u;
     out->at = sjs_program_position(f->program, pc);
+    out->program = f->program;
+    out->function = f->function;
     return SJS_OK;
 }
 

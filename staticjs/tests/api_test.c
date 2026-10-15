@@ -3688,6 +3688,20 @@ static void test_inspection(void) {
     CHECK(str_is(frame.object, "Array") && str_is(frame.name, "from") && frame.length == 3);
     CHECK(sjs_vm_frame(vm, 3, &frame) == SJS_OK && str_is(frame.name, "filter"));
     CHECK(sjs_vm_frame(vm, 4, &frame) == SJS_OK && frame.kind == SJS_FRAME_FUNCTION);
+    /* Each code frame names its program and function: the program's own
+     * code, the (_, i) callback and the (y) callback, each body beginning
+     * where sjs_program_function says. */
+    const char *starts[] = { NULL, "[i]", "y.z.w" };
+    for (uint32_t i = 0; i < 5; i += 2) {
+        sjs_frame code;
+        CHECK(sjs_vm_frame(vm, i, &code) == SJS_OK && code.program == program);
+        sjs_function_summary summary;
+        CHECK(sjs_program_function(program, code.function, &summary) == SJS_OK);
+        if (i == 0) CHECK(code.function == 0);
+        else CHECK(summary.at.column == (uint32_t)(strstr(source, starts[i / 2]) - source) + 1u);
+    }
+    sjs_frame loop;
+    CHECK(sjs_vm_frame(vm, 3, &loop) == SJS_OK && loop.program == NULL && loop.function == 0);
     sjs_error error;
     CHECK(sjs_vm_error(vm, &error) == SJS_OK && error.at.line == frame.at.line && error.at.column == frame.at.column);
     sjs_vm_reset(vm);

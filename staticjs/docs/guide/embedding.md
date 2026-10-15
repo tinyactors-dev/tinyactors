@@ -521,7 +521,10 @@ for (uint32_t i = 0; i < sjs_vm_frame_count(vm); i++) {
   instruction it runs next, or of the call it waits on. A loop frame gives
   where its built-in was called, the built-in's name (`"map"`, or
   `"Array"` and `"from"`), and, for a loop that passes over its elements in
-  order, how many it has passed of how many.
+  order, how many it has passed of how many. A function frame also names
+  its `program` and its `function`, the index `sjs_program_function` gives:
+  a function one program made can run in another program's evaluation,
+  and its position belongs to the program it came from.
 - **Functions:** `sjs_program_function` gives each function of a program,
   its main code first: where its code begins, its parameters, and the shape
   the compiler tagged it with (`"PLUCK"` for `x => x.key`), or none. A

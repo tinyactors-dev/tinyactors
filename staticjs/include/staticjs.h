@@ -882,6 +882,14 @@ typedef struct {
      * function frame. */
     uint32_t index;
     uint32_t length;
+    /* Function frames: the program the code is in, and the function's index
+     * in it, as sjs_program_function numbers them (0, the program's own
+     * code). A function a program made may run in another program's
+     * evaluation, so this is the one to read its position against. The
+     * program is borrowed while the frame is: sjs_program_retain it to keep
+     * it. NULL and 0 for a loop frame. */
+    const sjs_program *program;
+    uint32_t function;
 } sjs_frame;
 
 /* The frames of a paused evaluation, or of a faulted one (where it faulted,

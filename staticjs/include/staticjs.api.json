@@ -2383,11 +2383,19 @@
         {
           "name": "length",
           "type": "uint32_t"
+        },
+        {
+          "name": "program",
+          "type": "const sjs_program *"
+        },
+        {
+          "name": "function",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 56,
+          "size": 72,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -2395,11 +2403,13 @@
             "object": 16,
             "name": 32,
             "index": 48,
-            "length": 52
+            "length": 52,
+            "program": 56,
+            "function": 64
           }
         },
         "aarch64": {
-          "size": 56,
+          "size": 72,
           "align": 8,
           "offsets": {
             "kind": 0,
@@ -2407,11 +2417,13 @@
             "object": 16,
             "name": 32,
             "index": 48,
-            "length": 52
+            "length": 52,
+            "program": 56,
+            "function": 64
           }
         },
         "wasm32": {
-          "size": 40,
+          "size": 48,
           "align": 4,
           "offsets": {
             "kind": 0,
@@ -2419,7 +2431,9 @@
             "object": 16,
             "name": 24,
             "index": 32,
-            "length": 36
+            "length": 36,
+            "program": 40,
+            "function": 44
           }
         }
       }
