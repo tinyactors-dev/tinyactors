@@ -217,6 +217,10 @@
       "value": 36
     },
     {
+      "name": "TA_EFFECT_FIELD_ORIGIN",
+      "value": 40
+    },
+    {
       "name": "TA_EFFECT_FIELD_ORIGINTYPE",
       "value": 38
     },
@@ -427,6 +431,10 @@
     {
       "name": "TA_HOST_REQUEST_TOKENS",
       "value": 256
+    },
+    {
+      "name": "TA_IO_PROCESSOR_REMOTE",
+      "value": 8
     },
     {
       "name": "TA_IO_PROCESSOR_SCXML_REMOTE",
@@ -10427,6 +10435,27 @@
         {
           "name": "message",
           "type": "ta_bytes"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_resolve",
+      "returns": "ta_status",
+      "params": [
+        {
+          "name": "h",
+          "type": "const ta_host *"
+        },
+        {
+          "name": "address",
+          "type": "ta_string_view"
+        },
+        {
+          "name": "session",
+          "type": "uint64_t *"
         }
       ],
       "public": true,

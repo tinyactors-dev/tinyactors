@@ -208,6 +208,7 @@ module Core
     unit('test_host_definitions', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_request', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_effects', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    unit('test_remote', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
     unit('test_trace', 'trace'),
     # The torture chamber's event loop.

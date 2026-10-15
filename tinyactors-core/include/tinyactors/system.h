@@ -55,7 +55,10 @@ typedef struct ta_io_processor_descriptor {
 enum {
     TA_IO_PROCESSOR_SYNC = 1u << 0,
     TA_IO_PROCESSOR_SCXML_REMOTE = 1u << 1,
-    TA_IO_PROCESSOR_SCXML_SHARED = 1u << 2
+    TA_IO_PROCESSOR_SCXML_SHARED = 1u << 2,
+    /* read by the host only: the processor that carries sends to other
+     * systems (host config "remote"; host.h, "Other systems") */
+    TA_IO_PROCESSOR_REMOTE = 1u << 3
 };
 
 /* Hard per-system limits (handles are 24-bit indices; actor handles lend one

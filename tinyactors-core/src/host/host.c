@@ -21,6 +21,8 @@
 #include "otlp/otlp_internal.h"
 #include "system/system_internal.h"
 
+
+#define SCXML_EVENT_PROCESSOR ((ta_string_view){"http://www.w3.org/TR/scxml/#SCXMLEventProcessor", 47})
 /* ---- memory ------------------------------------------------------------------------------ */
 
 void *host_alloc(ta_host *host, size_t size) {
@@ -374,6 +376,14 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     }
     host->config.io_processors = (const ta_io_processor_descriptor *)0; /* the config's: gone */
     host->io_processor_count = 1 + config->io_processor_count;
+    host->remote_processor = TA_NIL;
+    for (uint32_t i = 0; i < config->io_processor_count; i++)
+        if (host->io_processors[1 + i].flags & TA_IO_PROCESSOR_REMOTE) {
+            host->remote_processor = i;
+            /* the system stops after a send through the SCXML processor, which is
+             * where a send to another system is made: its sync is the remote one's */
+            host->io_processors[0].flags |= host->io_processors[1 + i].flags & TA_IO_PROCESSOR_SYNC;
+        }
     host->draining = TA_NIL;
     if (!resource_copy(host, &config->telemetry)) {
         ta_host_free(host);
@@ -482,6 +492,7 @@ void ta_host_free(ta_host *host) {
     host_free(host, host->effect_strings, sizeof(effect_strings) * host->effect_capacity);
     host_free(host, host->pool, host->pool_capacity);
     host_free(host, host->traceparents, (size_t)host->traceparent_capacity * TA_TRACEPARENT_LENGTH);
+    host_free(host, host->origins, (size_t)host->origin_capacity * HOST_ORIGIN_SLOT);
     ta_growable_arena_free(&host->outputs);
     ta_output_free(&host->blob);
     host_free(host, host->blob2, host->blob2_capacity);
@@ -723,6 +734,7 @@ ta_status host_send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_even
     host_segment *segment = &host->segments[si];
     ta_event_in event_in = *event;
     event_in.target = actor;
+    if (event_in.origin.length && !event_in.origintype.length) event_in.origintype = SCXML_EVENT_PROCESSOR;
     ta_status status;
     for (;;) {
         uint32_t was = host_guard(host); /* release (error.communication) */
@@ -732,6 +744,34 @@ ta_status host_send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_even
     }
     if (status == TA_OK) segment->busy = 1;
     return status;
+}
+
+int host_is_local(const ta_host *host, ta_string_view system) {
+    return system.length == host->config.system_id.length &&
+           !ta_memcmp(system.pointer, host->config.system_id.pointer, system.length);
+}
+
+/* The session a local address names: its id, or the live actor of its name
+ * (0: none). A name is decoded on the stack: one longer than any actor's
+ * name names none, and nothing is allocated (a lookup may come in a run). */
+uint64_t host_address_session(const ta_host *host, const ta_address *address) {
+    if (address->kind == TA_ADDRESS_SESSION) return address->session;
+    char name[HOST_NAME_MAX];
+    ta_buffer decoded = {name, sizeof name, 0};
+    if (ta_address_name_decode(address->name, &decoded) != TA_OK) return 0;
+    return ta_host_actor_by_name(host, (ta_string_view){name, (uint32_t)decoded.length});
+}
+
+ta_status ta_host_resolve(const ta_host *host, ta_string_view text, uint64_t *session) {
+    *session = 0;
+    ta_address address;
+    if (ta_address_parse(text, &address) != TA_OK || !host_is_local(host, address.system))
+        return TA_ERROR_INVALID;
+    uint64_t found = host_address_session(host, &address);
+    uint32_t si, actor;
+    if (!found || host_locate(host, found, &si, &actor) != TA_OK) return TA_ERROR_STALE;
+    *session = found;
+    return TA_OK;
 }
 
 ta_status ta_host_send(ta_host *host, const ta_event_in *event) {
@@ -757,6 +797,7 @@ uint32_t ta_host_send_many(ta_host *host, const ta_event_in *events, uint32_t n)
             if (!k) a2 = actor;
             batch[k] = events[done + k];
             batch[k].target = a2;
+            if (batch[k].origin.length && !batch[k].origintype.length) batch[k].origintype = SCXML_EVENT_PROCESSOR;
             k++;
         }
         host_segment *segment = &host->segments[si];
@@ -1143,6 +1184,28 @@ static ta_string_view effect_traceparent(ta_host *host, uint32_t index) {
     return (ta_string_view){slot, TA_TRACEPARENT_LENGTH};
 }
 
+/* The address of the session that sent effect `index` (a SEND), in its own
+ * slot until the ack, as effect_traceparent's. */
+static ta_string_view effect_origin(ta_host *host, uint32_t index) {
+    ta_string_view none = {"", 0};
+    const ta_host_effect *effect = &host->published_effects[index];
+    if (effect->kind != TA_EFFECT_SEND || !effect->session) return none;
+    if (host->origin_capacity < host->effects_ready) {
+        uint32_t c = host->origin_capacity ? host->origin_capacity : 8;
+        while (c < host->effects_ready)
+            c *= 2;
+        char *slots = (char *)host_alloc(host, (size_t)c * HOST_ORIGIN_SLOT);
+        if (!slots) return none;
+        host_free(host, host->origins, (size_t)host->origin_capacity * HOST_ORIGIN_SLOT);
+        host->origins = slots;
+        host->origin_capacity = c;
+    }
+    char *slot = host->origins + (size_t)index * HOST_ORIGIN_SLOT;
+    ta_buffer out = {slot, HOST_ORIGIN_SLOT, 0};
+    if (ta_address_format(host->config.system_id, effect->session, &out) != TA_OK) return none;
+    return (ta_string_view){slot, (uint32_t)out.length};
+}
+
 ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field) {
     ta_string_view none = {"", 0};
     if (index >= host->effects_ready) return none;
@@ -1156,6 +1219,7 @@ ta_string_view ta_host_effect_text(ta_host *host, uint32_t index, uint32_t field
     case TA_EFFECT_FIELD_ORIGINTYPE: return effect->origintype;
     case TA_EFFECT_FIELD_DEDUPLICATION_KEY: return effect->deduplication_key;
     case TA_EFFECT_FIELD_TRACEPARENT: return effect_traceparent(host, index);
+    case TA_EFFECT_FIELD_ORIGIN: return effect_origin(host, index);
     default: return none;
     }
 }
@@ -1211,6 +1275,54 @@ static ta_status errors_deliver(ta_host *host) {
     return status;
 }
 
+/* A send through the SCXML processor (io_processor 0) to a session of this
+ * host, in whichever segment holds it: delivered here, with the sender's
+ * address as origin. */
+static ta_status local_send(ta_host *host, uint32_t si, const ta_effect *effect, const ta_address *to) {
+    uint64_t session = host_address_session(host, to);
+    uint32_t ti, ta;
+    if (!session || host_locate(host, session, &ti, &ta) != TA_OK)
+        return host_communication_error(host, si, effect->actor, effect->sendid);
+    char origin[TA_ADDRESS_SESSION_MAX], traceparent[TA_TRACEPARENT_LENGTH];
+    ta_buffer origin_out = {origin, sizeof origin, 0}, traceparent_out = {traceparent, sizeof traceparent, 0};
+    ta_event_in event;
+    ta_memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.name = effect->event;
+    event.sendid = effect->sendid;
+    if (ta_address_format(host->config.system_id, effect->session, &origin_out) == TA_OK)
+        event.origin = (ta_string_view){origin, (uint32_t)origin_out.length};
+    event.origintype = SCXML_EVENT_PROCESSOR;
+    if (ta_traceparent_format(&effect->trace, &traceparent_out) == TA_OK) /* the trace goes on unbroken */
+        event.traceparent = (ta_string_view){traceparent, TA_TRACEPARENT_LENGTH};
+    event.trace_flags = effect->trace.flags & ~(uint32_t)0xFFu; /* and keeps its detail class */
+    const ta_datamodel_binding *datamodel =
+        effect->payload && effect->datamodel < host->config.datamodel_count ? &host->datamodels[effect->datamodel]
+                                                                            : (const ta_datamodel_binding *)0;
+    if (datamodel) { /* the effect's reference is released at its ack: the event takes one of its own */
+        event.data = effect->payload;
+        host_retain(host, datamodel, event.data);
+    }
+    ta_status status = host_send_to(host, ti, ta, &event);
+    if (status != TA_OK && datamodel) host_release(host, datamodel, event.data);
+    if (status == TA_ERROR_NO_MEMORY) return status;
+    if (status != TA_OK) return host_communication_error(host, si, effect->actor, effect->sendid);
+    host->routed++;
+    return TA_OK;
+}
+
+/* A send through the SCXML processor: to this host's system, delivered here;
+ * to another system, a SEND for the I/O processor the config marks remote
+ * (the application's transport); without one, error.communication. */
+static ta_status scxml_send(ta_host *host, uint32_t si, const ta_effect *effect) {
+    ta_address to;
+    if (ta_address_parse(effect->target, &to) != TA_OK)
+        return host_communication_error(host, si, effect->actor, effect->sendid);
+    if (host_is_local(host, to.system)) return local_send(host, si, effect, &to);
+    if (host->remote_processor != TA_NIL) return effect_copy(host, si, effect, host->remote_processor);
+    return ta_router_outbound(host, si, effect);
+}
+
 /* Drain a segment's effects: route, copy out, acknowledge. TA_ERROR_NO_MEMORY:
  * the effects from the first one the host could not take on are not
  * acknowledged (they come again with the next drain), or an error for a
@@ -1226,8 +1338,10 @@ static ta_status drain(ta_host *host, uint32_t si) {
         const ta_effect *effect_view = &effect[done];
         if (effect_view->kind == TA_EFFECT_CHANGED) { /* the host sets no watch (ta_actor_watch) */
             status = TA_OK;
-        } else if (effect_view->kind == TA_EFFECT_SEND && effect_view->io_processor == 0)
-            status = ta_router_outbound(host, si, effect_view);
+        } else if (effect_view->kind == TA_EFFECT_SEND &&
+                   (effect_view->io_processor == 0 ||
+                    (host->remote_processor != TA_NIL && effect_view->io_processor == host->remote_processor + 1)))
+            status = scxml_send(host, si, effect_view); /* the remote type named in a chart: the same decision */
         else if (effect_view->kind == TA_EFFECT_SEND)
             status = effect_copy(
                 host, si, effect_view,

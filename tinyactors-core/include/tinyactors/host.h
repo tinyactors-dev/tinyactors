@@ -21,11 +21,14 @@
  *              and that has no actors left is freed with its copy of the image
  *              (TA_HOST_EFFECT_SEGMENT_FREED says it retired).
  *   routing    SCXML sends between segments (same system id) are delivered
- *              inside the host layer — no host round trip. Sends to other
- *              systems go through the router (peers, routes, relaying,
- *              origin checks, policy, dedup; docs/protocol.md) and come out
- *              as TA_HOST_EFFECT_PEER effects for the transport; undeliverable
- *              sends raise error.communication in the sender. Sends to host
+ *              inside the host layer — no host round trip — with origin the
+ *              sender's address. Other systems: a send to an address whose
+ *              system id is not this host's is a TA_EFFECT_SEND for the I/O
+ *              processor the config marks "remote" (the application's
+ *              transport; TA_EFFECT_FIELD_ORIGIN is the sender's address), or
+ *              error.communication without one. What arrives from another
+ *              system is an input: ta_host_resolve its local address, then
+ *              ta_host_send with origin. Sends to host
  *              I/O processors come out as TA_EFFECT_SEND effects.
  *   migration  ta_host_migrate() starts a migration that moves actors of older
  *              versions to the current one at stable points (export ->
@@ -207,8 +210,16 @@ typedef struct ta_host_location {
     uint32_t actor;
 } ta_host_location;
 TA_API ta_status ta_host_locate(const ta_host *h, uint64_t session, ta_host_location *out);
-/* An event for the session event->session (event->target is ignored). */
+/* An event for the session event->session (event->target is ignored). An
+ * event with an origin and no origintype gets the SCXML event processor's
+ * (an address is an SCXML processor's, SCXML C.1). */
 TA_API ta_status ta_host_send(ta_host *h, const ta_event_in *event);
+/* The session a local address names: "tinyactors://<this system id>/#_scxml_<id>"
+ * or ".../@<name>" (the live actor of that name). How a transport delivers
+ * what another system sent: resolve the target, then ta_host_send. Another
+ * system's address, or text that is no address: TA_ERROR_INVALID; no such
+ * session or name: TA_ERROR_STALE. */
+TA_API ta_status ta_host_resolve(const ta_host *h, ta_string_view address, uint64_t *session);
 /* Batch (runs of events for the same segment go through ta_system_send_many):
  * sends in order and stops at the first failure, returning the length of the
  * accepted prefix; events[returned] failed and its payload stays the caller's. */
@@ -356,6 +367,7 @@ enum {
     TA_EFFECT_FIELD_TRACEPARENT = 37, /* W3C text of `trace`; empty when untraced */
     TA_EFFECT_FIELD_ORIGINTYPE = 38,
     TA_EFFECT_FIELD_DEDUPLICATION_KEY = 39,
+    TA_EFFECT_FIELD_ORIGIN = 40, /* SEND: the sender's address, tinyactors://<system id>/#_scxml_<session> */
     TA_EFFECT_FIELD_WIRE = 64 /* bytes (ta_host_effect_bytes). PEER: the relayed value's CBOR;
                                  REPLY, NOTIFICATION: the message's CBOR */
 };

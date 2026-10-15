@@ -6,6 +6,8 @@
  * reserves first (host_effects_reserve, moved_reserve, host_grow): after the
  * reservation the step cannot run out of memory. */
 #ifndef TINYACTORS_HOST_HOST_INTERNAL_H
+#define HOST_ORIGIN_SLOT TA_ADDRESS_SESSION_MAX
+#define HOST_NAME_MAX    256u /* the longest actor name an address may name (decoded) */
 #define TINYACTORS_HOST_HOST_INTERNAL_H
 
 #include <tinyactors/address.h>
@@ -164,6 +166,7 @@ struct ta_host {
     ta_io_processor_descriptor
         io_processors[17]; /* [0] the shared remote processor, then config.io_processors */
     uint32_t io_processor_count;
+    uint32_t remote_processor; /* the config's processor for other systems (TA_NIL: none) */
     host_segment *segments;
     uint32_t segment_count, segment_capacity, round_robin;
     chart_version *versions;
@@ -182,6 +185,10 @@ struct ta_host {
      * kept across batches, freed with the host. */
     char *traceparents;
     uint32_t traceparent_capacity; /* effects */
+    /* ta_host_effect_text's ORIGIN, the same way: HOST_ORIGIN_SLOT bytes per
+     * effect: the sender's address, written again (the same bytes) on each ask */
+    char *origins;
+    uint32_t origin_capacity; /* effects */
     char *pool;
     size_t pool_length, pool_capacity;
     /* A published batch (ta_host_effects, effects_ready > 0) is borrowed until
@@ -361,6 +368,8 @@ enum { HOST_DEFINITION_LINKED = 0, HOST_DEFINITION_RETIRED = 1, HOST_DEFINITION_
 void host_definitions_otlp(ta_host *h, uint32_t kind, uint32_t segment);
 
 ta_status ta_router_outbound(ta_host *h, uint32_t si, const ta_effect *f);
+int host_is_local(const ta_host *h, ta_string_view system);
+uint64_t host_address_session(const ta_host *h, const ta_address *address);
 void ta_router_time(ta_host *h);              /* expire queued envelopes */
 ta_time ta_router_deadline(const ta_host *h); /* the next expiry (UINT64_MAX: none) */
 void ta_router_free(ta_host *h);
