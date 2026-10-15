@@ -186,12 +186,29 @@ SJS_PRIVATE void sjs_mem_free(const sjs_allocator *allocator, void *ptr, size_t 
 SJS_PRIVATE void sjs_copy(void *to, const void *from, size_t length);
 SJS_PRIVATE void sjs_zero(void *to, size_t length);
 
+/* Eight bytes at `p`, at any alignment: one load (a fixed-size
+ * __builtin_memcpy calls no C library). */
+SJS_KEEP static inline uint64_t sjs_load64(const char *p) {
+    uint64_t w;
+    __builtin_memcpy(&w, p, sizeof w);
+    return w;
+}
+
+/* Equal bytes: eight at a time from eight on, the last eight overlapping
+ * the word before them, and a byte at a time below. */
 SJS_KEEP static inline bool sjs_str_equal(sjs_str a, sjs_str b) {
     if (a.length != b.length) return false;
-    for (uint32_t i = 0; i < a.length; i++) {
-        if (a.ptr[i] != b.ptr[i]) return false;
+    uint32_t n = a.length;
+    if (n < 8u) {
+        for (uint32_t i = 0; i < n; i++) {
+            if (a.ptr[i] != b.ptr[i]) return false;
+        }
+        return true;
     }
-    return true;
+    for (uint32_t i = 0; i + 8u < n; i += 8u) {
+        if (sjs_load64(a.ptr + i) != sjs_load64(b.ptr + i)) return false;
+    }
+    return sjs_load64(a.ptr + n - 8u) == sjs_load64(b.ptr + n - 8u);
 }
 
 /*
