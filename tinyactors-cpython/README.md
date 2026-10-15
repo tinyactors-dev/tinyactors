@@ -545,7 +545,8 @@ until the next):
 "Traced" is tracemalloc's: the sessions' Python objects and the
 binding's rows (it includes an 8 B array of the harness). After an event
 a `"python"` session keeps one more object, its `_event` (about 100 B;
-its name, origin type and invoke id are strings the datamodel shares).
+its name, invoke id, origin and origin type are strings its chart, or
+the host, holds once for every session, found by core's ids for them).
 With the pools sized, the region does not grow after the events; left
 at its default `maxEvents` (256), quickjs's grew to 12,440 B per actor,
 since a segment that grows doubles every pool.

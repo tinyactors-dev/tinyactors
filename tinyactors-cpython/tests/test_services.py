@@ -354,6 +354,29 @@ class Services(unittest.TestCase):
         self.assertEqual(logs.labelled("error"), ["communication", "communication"])
         self.assertEqual(stopped, [])  # dropped, not stopped
 
+    def test_an_event_from_a_service_names_it_as_its_origin(self):
+        """SCXML 5.10.1: an external event's origin and origintype let the
+        receiver <send> back; for a service, #_<invokeid> through SCXML's
+        processor, which reaches the service."""
+        for datamodel in ("python", "ecmascript"):
+            with self.subTest(datamodel=datamodel):
+                logs, received = Logs(), []
+
+                class Polite:
+                    def __init__(self, invocation):
+                        invocation.send_back("reply")
+
+                    def receive(self, host, send):
+                        received.append(send.event)
+
+                document = fixture("test_services/whoami.%s.scxml" % datamodel)
+                with host_with([("whoami.scxml", document)], log=logs, services={TYPE: lambda host, i: Polite(i)}) as host:
+                    for _ in range(2):
+                        host.spawn(host.chart("whoami"))
+                    host.run_until_idle()
+                self.assertEqual(logs.labelled("from"), ["#_echo http://www.w3.org/TR/scxml/#SCXMLEventProcessor echo"] * 2)
+                self.assertEqual(received, ["thanks", "thanks"])
+
     def test_services_must_be_a_dict(self):
         with self.assertRaises(TypeError):
             tinyactors.Host({"systemID": "t"}, services=[TYPE])

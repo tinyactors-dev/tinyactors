@@ -45,6 +45,8 @@ void ta_python_rows_free(ta_python_datamodel *datamodel) {
         ta_python_drop(datamodel, row->functions);
         ta_python_drop(datamodel, row->data);
         ta_python_drop(datamodel, row->names);
+        ta_python_drop(datamodel, row->invokeids);
+        ta_python_drop(datamodel, row->origins);
     }
     for (uint32_t slot = 0; slot < datamodel->sessions.capacity; slot++) {
         ta_python_session_row *row = ta_table_at(&datamodel->sessions, slot);
@@ -77,6 +79,8 @@ int ta_python_rows_traverse(ta_python_datamodel *datamodel, visitproc visit, voi
         Py_VISIT(row->functions);
         Py_VISIT(row->data);
         Py_VISIT(row->names);
+        Py_VISIT(row->invokeids);
+        Py_VISIT(row->origins);
     }
     for (uint32_t slot = 0; slot < datamodel->sessions.capacity; slot++) {
         ta_python_session_row *row = ta_table_at(&datamodel->sessions, slot);

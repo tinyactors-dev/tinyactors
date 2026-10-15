@@ -14,6 +14,9 @@
 typedef struct ta_python_event {
     PyObject_HEAD
     PyObject *name, *type, *sendid, *origin, *origintype, *invokeid, *data, *raw;
+    /* core's ids of its strings (ta_event_view): written into a blob with them, so a woken or
+       restored session's Event shares the chart's strings again */
+    uint32_t name_id, invoke_slot, origintype_id, pad;
 } ta_python_event;
 
 static PyMemberDef ta_python_event_members[] = {
@@ -83,8 +86,6 @@ int ta_python_datamodel_init(ta_python_datamodel *datamodel, ta_python_host *hos
     datamodel->host = host;
     datamodel->state = host->state;
     if (ta_python_rows_init(datamodel) < 0) return -1;
-    datamodel->strings = PyDict_New();
-    if (!datamodel->strings) return -1;
     return ta_python_namespace_init(datamodel);
 }
 
@@ -96,7 +97,7 @@ void ta_python_datamodel_free(ta_python_datamodel *datamodel) {
     Py_CLEAR(datamodel->namespace);
     Py_CLEAR(datamodel->raised);
     Py_CLEAR(datamodel->output);
-    Py_CLEAR(datamodel->strings);
+    Py_CLEAR(datamodel->origintypes);
     if (datamodel->wire.pointer) {
         const ta_allocator *allocator = &datamodel->host->allocator;
         allocator->free(allocator->context, datamodel->wire.pointer, datamodel->wire.capacity);
@@ -109,7 +110,7 @@ int ta_python_datamodel_traverse(ta_python_datamodel *datamodel, visitproc visit
     Py_VISIT(datamodel->namespace);
     Py_VISIT(datamodel->raised);
     Py_VISIT(datamodel->output);
-    Py_VISIT(datamodel->strings);
+    Py_VISIT(datamodel->origintypes);
     return datamodel->state ? ta_python_rows_traverse(datamodel, visit, arg) : 0;
 }
 
@@ -313,8 +314,23 @@ static PyObject *ta_python_instance(ta_python_datamodel *datamodel, const ta_pyt
     return instance;
 }
 
+/* The session's I/O processors' types, once per host (every session has the same ones): the
+ * origintypes an event names by index. */
+static void ta_python_keep_origintypes(ta_python_datamodel *datamodel, const ta_datamodel_system_variables *variables) {
+    if (datamodel->origintypes || !variables) return;
+    PyObject *types = PyTuple_New(variables->io_processor_count);
+    for (uint32_t i = 0; types && i < variables->io_processor_count; i++) {
+        PyObject *type = ta_python_view_str(variables->io_processors[i].type);
+        if (!type) Py_CLEAR(types);
+        else PyTuple_SetItem(types, i, type);
+    }
+    if (!types) PyErr_Clear(); /* the events make their own strs */
+    datamodel->origintypes = types;
+}
+
 static ta_status ta_python_create(void *self, const ta_datamodel_start *start, uint64_t *out) {
     ta_python_datamodel *datamodel = self;
+    ta_python_keep_origintypes(datamodel, start->system_variables);
     PyObject *init = start->init ? ta_python_payload_value(datamodel, start->init) : NULL;
     Py_XINCREF(init);
     ta_python_payload_release(datamodel, start->init); /* the init payload's reference is ours */
@@ -399,24 +415,60 @@ static PyObject *ta_python_optional_str(ta_string_view text) {
     return text.length ? ta_python_view_str(text) : Py_NewRef(Py_None);
 }
 
-/* The strings an Event keeps repeat across a population (an origintype
- * is a URL, an invokeid a state's): one str of each, shared through the
- * datamodel's dict. Bounded, since an invokeid may be new per invocation:
- * at the bound the dict is emptied, and the Events keep their strings. Not
- * interned: an interned str lives as long as the interpreter. */
-#define TA_PYTHON_SHARED_STRINGS 4096
+/* The str of `text` kept at `index` of a chart's list (its names, invoke ids
+ * or origins): the one there when its text is the same, else `made` (or a
+ * str of the text), kept there when the place was empty. The list belongs
+ * to the chart's row, so what it keeps lives as long as the chart. A text
+ * that differs (an id generated per execution) gets a str of its own. */
+typedef struct ta_python_kept_at {
+    PyObject *list;
+    uint32_t index;
+    int grow; /* the list grows to the index (invoke slots: bounded by the chart's invokes) */
+} ta_python_kept_at;
 
-static PyObject *ta_python_shared(ta_python_datamodel *datamodel, PyObject *text) {
-    if (!text || text == Py_None || !PyUnicode_CheckExact(text)) return text;
-    PyObject *shared = NULL;
-    if (PyDict_GetItemRef(datamodel->strings, text, &shared) > 0) {
-        Py_DECREF(text);
-        return shared;
-    }
+static PyObject *ta_python_kept(const ta_python_kept_at *at, ta_string_view text, PyObject *made) {
+    PyObject *list = at->list;
+    if (list && at->index != TA_NIL && at->grow)
+        while (PyList_Size(list) <= (Py_ssize_t)at->index && PyList_Append(list, Py_None) == 0) {}
     PyErr_Clear();
-    if (PyDict_Size(datamodel->strings) >= TA_PYTHON_SHARED_STRINGS) PyDict_Clear(datamodel->strings);
-    if (PyDict_SetItem(datamodel->strings, text, text) < 0) PyErr_Clear(); /* unshared, still right */
-    return text;
+    PyObject *kept = list && at->index != TA_NIL && (Py_ssize_t)at->index < PyList_Size(list)
+                         ? PyList_GetItem(list, at->index)
+                         : NULL;
+    if (kept && kept != Py_None) {
+        Py_ssize_t length = 0;
+        const char *chars = PyUnicode_AsUTF8AndSize(kept, &length);
+        if (chars && (size_t)length == text.length && !memcmp(chars, text.pointer, text.length)) {
+            Py_XDECREF(made);
+            return Py_NewRef(kept);
+        }
+        PyErr_Clear();
+    }
+    if (!made) made = ta_python_view_str(text);
+    if (made && kept == Py_None) PyList_SetItem(list, at->index, Py_NewRef(made)); /* the first: kept */
+    return made;
+}
+
+/* The str of an origintype: the session's I/O processor's type the id names,
+ * kept by the datamodel; else `made` (or a str of the text). */
+static PyObject *ta_python_origintype(ta_python_datamodel *datamodel, uint32_t id, ta_string_view text) {
+    PyObject *types = datamodel->origintypes;
+    if (!text.length) return Py_NewRef(Py_None);
+    if (types && id != TA_NIL && (Py_ssize_t)id < PyTuple_Size(types)) {
+        PyObject *type = PyTuple_GetItem(types, id);
+        Py_ssize_t length = 0;
+        const char *chars = PyUnicode_AsUTF8AndSize(type, &length);
+        if (chars && (size_t)length == text.length && !memcmp(chars, text.pointer, text.length)) return Py_NewRef(type);
+        PyErr_Clear();
+    }
+    return ta_python_view_str(text);
+}
+
+/* A str's own UTF-8, as a view for the call. */
+static ta_string_view ta_python_text_of(PyObject *text) {
+    Py_ssize_t length = 0;
+    const char *chars = text && PyUnicode_Check(text) ? PyUnicode_AsUTF8AndSize(text, &length) : NULL;
+    if (!chars) PyErr_Clear();
+    return (ta_string_view){chars, chars ? (uint32_t)length : 0};
 }
 
 static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_event_view *view) {
@@ -436,9 +488,15 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
         event->name = ta_python_event_name(datamodel, chart, view);
         event->type = Py_NewRef(PyTuple_GetItem(datamodel->state->event_kinds, view->type % 3));
         event->sendid = ta_python_optional_str(view->sendid);
-        event->origin = ta_python_optional_str(view->origin);
-        event->origintype = ta_python_shared(datamodel, ta_python_optional_str(view->origintype));
-        event->invokeid = ta_python_shared(datamodel, ta_python_optional_str(view->invokeid));
+        ta_python_chart_row *row_of_chart = ta_table_get(&datamodel->charts, chart);
+        ta_python_kept_at invokeid_at = {row_of_chart ? row_of_chart->invokeids : NULL, view->invoke_slot, 1};
+        ta_python_kept_at origin_at = {row_of_chart ? row_of_chart->origins : NULL, view->invoke_slot, 1};
+        event->origin = view->origin.length ? ta_python_kept(&origin_at, view->origin, NULL) : Py_NewRef(Py_None);
+        event->origintype = ta_python_origintype(datamodel, view->origintype_id, view->origintype);
+        event->invokeid = view->invokeid.length ? ta_python_kept(&invokeid_at, view->invokeid, NULL) : Py_NewRef(Py_None);
+        event->name_id = view->name_id;
+        event->invoke_slot = view->invoke_slot;
+        event->origintype_id = view->origintype_id;
         event->data = Py_NewRef(data ? data : Py_None); /* the payload's value itself (held by the Event) */
         event->raw = view->size >= sizeof *view ? ta_python_optional_str(view->raw) : Py_NewRef(Py_None);
         if (!event->name || !event->sendid || !event->origin || !event->origintype || !event->invokeid || !event->raw ||
@@ -662,10 +720,29 @@ static ta_status ta_python_wire(ta_python_datamodel *datamodel, PyObject *value,
 
 static const char *const ta_python_event_fields[] = {"name", "type", "sendid", "origin", "origintype", "invokeid", "data", "raw"};
 
+/* An Event as the list a blob or a snapshot holds: its eight fields, then core's ids of its
+ * name, its invoke and its origintype. */
+static PyObject *ta_python_event_list(PyObject *event) {
+    PyObject *fields = PyList_New(11);
+    for (int i = 0; fields && i < 8; i++) {
+        PyObject *field = PyObject_GetAttrString(event, ta_python_event_fields[i]);
+        if (!field) Py_CLEAR(fields);
+        else PyList_SetItem(fields, i, field);
+    }
+    ta_python_event *record = (ta_python_event *)event;
+    uint32_t ids[3] = {record->name_id, record->invoke_slot, record->origintype_id};
+    for (int i = 0; fields && i < 3; i++) {
+        PyObject *id = PyLong_FromUnsignedLong(ids[i]);
+        if (!id) Py_CLEAR(fields);
+        else PyList_SetItem(fields, 8 + i, id);
+    }
+    return fields;
+}
+
 /* Hibernation and export write the session's state into the blob: its
  * <data> values and its _event, as one CBOR map {"vars": {id: value},
- * "event": [name, type, sendid, origin, origintype, invokeid, data, raw]
- * or null}, through the value table (no format that runs code when read:
+ * "event": [name, type, sendid, origin, origintype, invokeid, data, raw,
+ * name_id, invoke_slot, origintype_id] or null}, through the value table (no format that runs code when read:
  * bindings.md section 8). Then destroy frees the instance: a hibernated
  * session costs nothing on the Python heap. A value outside the table
  * keeps the session resident (TA_ERROR_UNSUPPORTED). */
@@ -684,12 +761,7 @@ static ta_status ta_python_serialize(const ta_datamodel_call *call, ta_bytes *ou
     }
     if (status == 0) event = PyObject_GetAttr(instance, datamodel->state->event_key);
     if (event && event != Py_None) {
-        fields = PyList_New(8);
-        for (int i = 0; fields && i < 8; i++) {
-            PyObject *field = PyObject_GetAttrString(event, ta_python_event_fields[i]);
-            if (!field) Py_CLEAR(fields);
-            else PyList_SetItem(fields, i, field);
-        }
+        fields = ta_python_event_list(event);
     } else if (event) fields = Py_NewRef(Py_None);
     if (fields) state = Py_BuildValue("{s:O,s:O}", "vars", vars, "event", fields);
     ta_status result = state ? ta_python_wire(datamodel, state, out) : TA_ERROR_UNSUPPORTED; /* stays resident */
@@ -703,10 +775,12 @@ static ta_status ta_python_serialize(const ta_datamodel_call *call, ta_bytes *ou
     return result;
 }
 
-/* An Event again, from the eight fields serialize wrote. */
-static PyObject *ta_python_event_from(ta_python_datamodel *datamodel, PyObject *fields) {
+/* An Event again, from the list serialize or a snapshot wrote, for the chart its session runs
+ * now: its strings shared with the chart's (the name, the invoke's id and origin by core's ids,
+ * the type and origintype with the datamodel's) when their text is the same. */
+static PyObject *ta_python_event_from(ta_python_datamodel *datamodel, const ta_python_chart_row *chart, PyObject *fields) {
     if (fields == Py_None) return Py_NewRef(Py_None);
-    if (!PyList_Check(fields) || PyList_Size(fields) != 8) {
+    if (!PyList_Check(fields) || PyList_Size(fields) != 11) {
         PyErr_SetString(PyExc_ValueError, "not an event of a hibernation blob");
         return NULL;
     }
@@ -715,8 +789,39 @@ static PyObject *ta_python_event_from(ta_python_datamodel *datamodel, PyObject *
     PyObject **slots[8] = {&event->name, &event->type, &event->sendid, &event->origin,
                            &event->origintype, &event->invokeid, &event->data, &event->raw};
     for (int i = 0; i < 8; i++) *slots[i] = Py_NewRef(PyList_GetItem(fields, i));
-    for (int i = 0; i < 6; i++) /* the strings (name, type, sendid, origin, origintype, invokeid) repeat */
-        if (i != 2 && i != 3) *slots[i] = ta_python_shared(datamodel, *slots[i]);
+    uint32_t *ids[3] = {&event->name_id, &event->invoke_slot, &event->origintype_id};
+    for (int i = 0; i < 3; i++) {
+        unsigned long id = PyLong_AsUnsignedLong(PyList_GetItem(fields, 8 + i));
+        *ids[i] = PyErr_Occurred() ? TA_NIL : (uint32_t)id;
+    }
+    PyErr_Clear();
+    for (Py_ssize_t i = 0; i < PyTuple_Size(datamodel->state->event_kinds); i++) { /* one of three */
+        PyObject *kind = PyTuple_GetItem(datamodel->state->event_kinds, i);
+        if (PyObject_RichCompareBool(kind, event->type, Py_EQ) == 1) {
+            Py_DECREF(event->type);
+            event->type = Py_NewRef(kind);
+        }
+    }
+    PyErr_Clear();
+    ta_python_kept_at name_at = {chart->names, event->name_id, 0};
+    ta_python_kept_at invokeid_at = {chart->invokeids, event->invoke_slot, 1};
+    ta_python_kept_at origin_at = {chart->origins, event->invoke_slot, 1};
+    if (event->name != Py_None) event->name = ta_python_kept(&name_at, ta_python_text_of(event->name), event->name);
+    if (event->invokeid != Py_None)
+        event->invokeid = ta_python_kept(&invokeid_at, ta_python_text_of(event->invokeid), event->invokeid);
+    if (event->origin != Py_None) event->origin = ta_python_kept(&origin_at, ta_python_text_of(event->origin), event->origin);
+    if (event->origintype != Py_None) {
+        PyObject *shared = ta_python_origintype(datamodel, event->origintype_id, ta_python_text_of(event->origintype));
+        if (shared) {
+            Py_DECREF(event->origintype);
+            event->origintype = shared;
+        }
+        else PyErr_Clear();
+    }
+    if (!event->name || !event->invokeid || !event->origin) {
+        Py_DECREF(event);
+        return NULL;
+    }
     return (PyObject *)event;
 }
 
@@ -727,6 +832,7 @@ static PyObject *ta_python_event_from(ta_python_datamodel *datamodel, PyObject *
  * old bindings. */
 static ta_status ta_python_deserialize(void *self, const ta_datamodel_start *start, uint64_t *out) {
     ta_python_datamodel *datamodel = self;
+    ta_python_keep_origintypes(datamodel, start->system_variables);
     ta_python_chart_row *chart = ta_table_get(&datamodel->charts, (uint64_t)(uintptr_t)start->chart_context);
     PyObject *state = chart ? ta_python_value_read(datamodel->state, start->state) : NULL;
     PyObject *vars = NULL, *fields = NULL, *event = NULL, *instance = NULL;
@@ -736,7 +842,7 @@ static ta_status ta_python_deserialize(void *self, const ta_datamodel_start *sta
     }
     int status = vars && PyDict_Check(vars) && fields ? 0 : -1;
     if (status == 0) instance = ta_python_instance(datamodel, chart, start->system_variables);
-    if (status == 0 && instance) event = ta_python_event_from(datamodel, fields);
+    if (status == 0 && instance) event = ta_python_event_from(datamodel, chart, fields);
     if (!instance || !event || PyObject_SetAttr(instance, datamodel->state->event_key, event) < 0) status = -1;
     PyObject *data = chart ? Py_NewRef(chart->data) : NULL;
     for (Py_ssize_t i = 0; status == 0 && i < PyTuple_Size(data); i++) {
@@ -881,12 +987,7 @@ static PyObject *ta_python_session_entry(ta_python_datamodel *datamodel, uint32_
     }
     if (status == 0) event = PyObject_GetAttr(instance, datamodel->state->event_key);
     if (event && event != Py_None) {
-        fields = PyList_New(8);
-        for (int i = 0; fields && i < 8; i++) {
-            PyObject *field = PyObject_GetAttrString(event, ta_python_event_fields[i]);
-            if (!field) Py_CLEAR(fields);
-            else PyList_SetItem(fields, i, field);
-        }
+        fields = ta_python_event_list(event);
     } else if (event) fields = Py_NewRef(Py_None);
     PyObject *sys = fields ? PyObject_GetAttrString(instance, "_ta_sys") : NULL;
     if (sys) system = sys == Py_None ? Py_NewRef(Py_None) : PySequence_List(sys);
@@ -1036,7 +1137,7 @@ static int ta_python_session_restore(ta_python_datamodel *datamodel, const ta_py
     PyObject *extra = !fields ? NULL : extra_bytes == Py_None ? Py_NewRef(Py_None) : ta_python_bytes_value(datamodel, extra_bytes);
     PyObject *instance = extra && PyDict_Check(vars) ? PyObject_CallNoArgs(chart->chart) : NULL;
     PyObject *sys = !instance ? NULL : system == Py_None ? Py_NewRef(Py_None) : PySequence_Tuple(system);
-    PyObject *event = sys ? ta_python_event_from(datamodel, fields) : NULL;
+    PyObject *event = sys ? ta_python_event_from(datamodel, chart, fields) : NULL;
     int status = event && PyObject_SetAttrString(instance, "_ta_sys", sys) == 0 &&
                          PyObject_SetAttr(instance, datamodel->state->event_key, event) == 0
                      ? 0

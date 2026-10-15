@@ -180,6 +180,8 @@ int ta_python_chart_compile(ta_python_datamodel *datamodel, const ta_python_atta
     ta_image_get_info(image, &info);
     row->names = PyList_New(info.event_name_count);
     for (uint32_t i = 0; row->names && i < info.event_name_count; i++) PyList_SetItem(row->names, i, Py_NewRef(Py_None));
+    row->invokeids = PyList_New(0); /* grown to a slot at its first event */
+    row->origins = PyList_New(0);
     PyObject *reads = PyTuple_GetItem(made, 2);
     static const char *const names[] = {"_sessionid", "_name", "_ioprocessors"};
     for (uint32_t i = 0; i < 3; i++) {

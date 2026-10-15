@@ -655,12 +655,22 @@ Registered beside quickjs, first; matched by the chart's
   event until another is processed (5.10), so the `<onexit>` handlers of
   an actor terminated at rest read it (`core.c:1876-1878`) and
   `serialize` writes it. `detach_event` has nothing to drop.
+  Its strings are shared, by core's ids for them and with the lifetime
+  of their owner, never through a table of strings: the name by
+  `name_id` in the chart row's `names`, the invoke id and the origin by
+  `invoke_slot` in the chart row's `invokeids` and `origins` (the text is
+  checked: an id generated per execution gets a `str` of its own), the
+  origintype by `origintype_id` in the I/O processor types the datamodel
+  keeps from the system variables, the type among the module's three.
+  A blob or a snapshot keeps the three ids with the Event, so a woken or
+  restored session shares them again.
 - **Capture** (`<send>` data, `<donedata>`, invoke params) copies mutable
   values crossing to another actor and shares immutable ones; actors
   share no mutable value.
 - **Hibernation writes the session out.** `serialize` writes the
   session's declared variables and its `_event` as CBOR through the value
-  table (`{"vars": {id: value}, "event": [its eight fields] | null}`),
+  table (`{"vars": {id: value}, "event": [its eight fields and core's ids of
+  its name, invoke and origintype] | null}`),
   with the writer the datamodel keeps until its next call; core puts the
   bytes in the blob and calls `destroy`, which removes the row: a
   hibernated `"python"` session's instance, variables and `_event` are
