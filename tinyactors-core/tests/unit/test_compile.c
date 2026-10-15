@@ -748,6 +748,37 @@ static void test_durations(void) {
     CHECK(!ta_parse_duration_ns("1h", &ns));
 }
 
+/* <foreach>'s item and index are ITEM expressions, apart from an <assign>
+ * to the same name: a datamodel declares those variables (SCXML 4.6). */
+static void test_foreach_items(void) {
+    static const char document[] =
+        "<scxml initial='s' datamodel='ecmascript'><datamodel><data id='xs' expr='[1]'/></datamodel>"
+        "<state id='s'><onentry><foreach item='v' index='i' array='xs'/><assign location='v' expr='2'/>"
+        "</onentry></state></scxml>";
+    ta_compile_options options;
+    memset(&options, 0, sizeof options);
+    ta_source source = {{"items.scxml", 11}, {document, (uint32_t)strlen(document)}};
+    ta_compile_result *result = NULL;
+    CHECK_EQUAL(ta_compile_charts(&options, (ta_source_list){&source, 1}, &result), TA_OK);
+    ta_string_view bytes = ta_compile_image(result);
+    void *copy = aligned_alloc(8, (bytes.length + 7) & ~7u);
+    memcpy(copy, bytes.pointer, bytes.length);
+    ta_image image;
+    CHECK_EQUAL(ta_image_open((ta_bytes){copy, bytes.length}, &image), TA_OK);
+    uint32_t items = 0, locations = 0;
+    for (uint32_t e = 0; e < ta_image_expression_count(&image, 0); e++) {
+        ta_expression_info info;
+        CHECK_EQUAL(ta_image_expression(&image, (ta_chart_item){0, e}, &info), TA_OK);
+        if (info.kind == TA_EXPRESSION_ITEM)
+            items += info.source.length == 1 && (info.source.pointer[0] == 'v' || info.source.pointer[0] == 'i');
+        if (info.kind == TA_EXPRESSION_LOCATION) locations += info.source.length == 1 && info.source.pointer[0] == 'v';
+    }
+    CHECK_EQUAL(items, 2);
+    CHECK_EQUAL(locations, 1);
+    free(copy);
+    ta_compile_free(result);
+}
+
 static void test_manifest(void) {
     static const test_file files[] = {{"ping.scxml", "<scxml initial='s'><state id='s'/></scxml>"},
                                       {"pong.scxml", "<scxml initial='s'><state id='s'/></scxml>"},
@@ -927,6 +958,7 @@ int main(void) {
     RUN(test_error_positions);
     RUN(test_durations);
     RUN(test_manifest);
+    RUN(test_foreach_items);
     RUN(test_limits);
     RUN(test_deep_inline_documents);
     RUN(test_namespaces);

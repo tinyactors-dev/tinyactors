@@ -621,8 +621,8 @@ static void exec_el(chart_builder *builder, const ta_xml_node *node) {
         builder->nesting--;
     } else if (!strcmp(nm, "foreach")) {
         uint32_t arr = attribute_expression(builder, node, "array", TA_EXPRESSION_VALUE);
-        uint32_t item = attribute_expression(builder, node, "item", TA_EXPRESSION_LOCATION);
-        uint32_t index = attribute_expression(builder, node, "index", TA_EXPRESSION_LOCATION);
+        uint32_t item = attribute_expression(builder, node, "item", TA_EXPRESSION_ITEM);
+        uint32_t index = attribute_expression(builder, node, "index", TA_EXPRESSION_ITEM);
         if (arr == TA_NIL || item == TA_NIL) {
             compile_error(builder, node, (compile_message){"<foreach> requires 'array' and 'item'%s", NULL});
             return;

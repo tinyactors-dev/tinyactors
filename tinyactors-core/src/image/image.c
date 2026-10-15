@@ -256,7 +256,7 @@ static ta_status verify_chart(const ta_image_view *view, const ta_chart_record *
     for (uint32_t i = 0; i < chart->expression_count; i++) {
         const ta_expression_record *expression = &view->expressions[chart->first_expression + i];
         CHECK(expression->kind >= TA_EXPRESSION_CONDITION &&
-              expression->kind <= TA_EXPRESSION_CONTENT && str_ok(view, expression->source));
+              expression->kind <= TA_EXPRESSION_ITEM && str_ok(view, expression->source));
     }
     for (uint32_t i = 0; i < chart->send_count; i++) {
         const ta_send_record *s = &view->sends[chart->first_send + i];

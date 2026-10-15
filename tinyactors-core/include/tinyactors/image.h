@@ -104,7 +104,10 @@ enum {
     TA_EXPRESSION_LOCATION = 3,
     TA_EXPRESSION_SCRIPT = 4,
     TA_EXPRESSION_STRING = 5, /* *expr attributes: eventexpr, targetexpr, delayexpr, ... */
-    TA_EXPRESSION_CONTENT = 6
+    TA_EXPRESSION_CONTENT = 6,
+    /* <foreach item index>: a location the datamodel declares when the
+     * session has no such variable (SCXML 4.6) */
+    TA_EXPRESSION_ITEM = 7
 };
 TA_API uint32_t ta_image_expression_count(const ta_image *image, uint32_t chart);
 /* expression.index: the ta_expression */
