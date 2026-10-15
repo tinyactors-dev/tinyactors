@@ -22,7 +22,7 @@ static double date_nan(void) {
 
 /* TimeClip: NaN past 8.64e15 either way, else the number truncated, -0
  * made +0. */
-static double date_clip(double t) {
+double sjs_date_clip(double t) {
     if (!(t >= -DATE_TIME_LIMIT && t <= DATE_TIME_LIMIT)) return date_nan();
     return sjs_number_trunc(t) + 0.0;
 }
@@ -354,7 +354,7 @@ static sjs_result date_utc(sjs_vm *vm, sjs_leaf_call *call) {
     }
     double day = date_make_day(v[0], v[1], v[2]);
     double time = date_make_time(&v[3]);
-    call->result = sjs_num(date_clip(date_make_date(day, time)));
+    call->result = sjs_num(sjs_date_clip(date_make_date(day, time)));
     return SJS_OK;
 }
 
@@ -407,7 +407,7 @@ static sjs_result date_construct(sjs_vm *vm, sjs_leaf_call *call) {
         if (date_of_string(vm, v, &time) != SJS_OK) return SJS_ERR_PROGRAM;
     } else {
         if (sjs_vm_to_number(vm, v, &time) != SJS_OK) return SJS_ERR_PROGRAM;
-        time = date_clip(time);
+        time = sjs_date_clip(time);
     }
     return date_make(vm, time, &call->result);
 }
@@ -540,7 +540,7 @@ sjs_result sjs_date_set(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     if (id == SJS_METHOD_DATE_SET_TIME) {
         double v = date_nan();
         if (call->count > 0 && sjs_vm_to_number(vm, call->args[0], &v) != SJS_OK) return SJS_ERR_PROGRAM;
-        date->as.time = date_clip(v);
+        date->as.time = sjs_date_clip(v);
         call->result = sjs_num(date->as.time);
         return SJS_OK;
     }
@@ -577,7 +577,7 @@ sjs_result sjs_date_set(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *call) {
     } else {
         within = date_make_time(&v[DATE_HOUR]);
     }
-    date->as.time = date_clip(date_make_date(day, within));
+    date->as.time = sjs_date_clip(date_make_date(day, within));
     call->result = sjs_num(date->as.time);
     return SJS_OK;
 }

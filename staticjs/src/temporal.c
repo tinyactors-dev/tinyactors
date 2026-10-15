@@ -1549,10 +1549,6 @@ static const char *const DURATION_FIELDS[DURATION_FIELD_COUNT] = {
 /* Field i holds the unit UNIT_YEAR - i. */
 #define FIELD_OF_UNIT(unit) (UNIT_YEAR - (unit))
 
-static sjs_result outside_duration(sjs_vm *vm) {
-    return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration whose days and time reach 2^53 seconds");
-}
-
 static double field_magnitude(double x) {
     return x < 0 ? -x : x;
 }
@@ -1596,24 +1592,31 @@ static bool time_within_limits(wide ns) {
 
 /* IsValidDuration: finite integers of one sign, years, months and weeks
  * below 2^32, and the days and time below 2^53 seconds, exactly (as
- * temporal-polyfill computes them, in BigInts). */
-static sjs_result check_duration(sjs_vm *vm, const double f[DURATION_FIELD_COUNT]) {
+ * temporal-polyfill computes them, in BigInts). What is wrong, or NULL. */
+static const char *duration_refusal(const double f[DURATION_FIELD_COUNT]) {
+    static const char OUTSIDE[] = "JavaScript throws a RangeError for a Duration whose days and time reach 2^53 seconds";
     int sign = 0;
     for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) {
-        if (!sjs_number_is_finite(f[i])) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration field that is not finite");
+        if (!sjs_number_is_finite(f[i])) return "JavaScript throws a RangeError for a Duration field that is not finite";
+        if (f[i] != sjs_number_trunc(f[i])) return "JavaScript throws a RangeError for a Duration field that is not an integer";
         if (f[i] == 0) continue;
         int s = f[i] < 0 ? -1 : 1;
-        if (sign != 0 && s != sign) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration whose fields have different signs");
+        if (sign != 0 && s != sign) return "JavaScript throws a RangeError for a Duration whose fields have different signs";
         sign = s;
     }
     for (uint32_t i = 0; i < 3u; i++) {
-        if (field_magnitude(f[i]) >= 4294967296.0) return sjs_vm_fault(vm, "JavaScript throws a RangeError for a Duration's years, months or weeks of 2^32 or more");
+        if (field_magnitude(f[i]) >= 4294967296.0) return "JavaScript throws a RangeError for a Duration's years, months or weeks of 2^32 or more";
     }
     for (uint32_t i = 3u; i < DURATION_FIELD_COUNT; i++) {
         /* Far past the limit, which is below 10^25 ns: not added. */
-        if (field_magnitude(f[i]) * (double)UNIT_NANOSECONDS[UNIT_YEAR - i] >= 1e25) return outside_duration(vm);
+        if (field_magnitude(f[i]) * (double)UNIT_NANOSECONDS[UNIT_YEAR - i] >= 1e25) return OUTSIDE;
     }
-    return time_within_limits(duration_time(f, true)) ? SJS_OK : outside_duration(vm);
+    return time_within_limits(duration_time(f, true)) ? NULL : OUTSIDE;
+}
+
+static sjs_result check_duration(sjs_vm *vm, const double f[DURATION_FIELD_COUNT]) {
+    const char *refusal = duration_refusal(f);
+    return refusal == NULL ? SJS_OK : sjs_vm_fault(vm, refusal);
 }
 
 /* A Duration of `f`'s fields, checked; a zero field is +0. */
@@ -3547,4 +3550,104 @@ sjs_result sjs_temporal_method(sjs_vm *vm, sjs_builtin_id id, sjs_leaf_call *cal
     default:
         return sjs_vm_fault(vm, "staticjs does not have Temporal.PlainYearMonth or Temporal.PlainMonthDay");
     }
+}
+
+/* ------------------------------------------------------------------------
+ * Dates and Temporal values a host makes and reads (staticjs.h, sjs_time)
+ */
+
+_Static_assert(SJS_TIME_PLAIN_DATE == (int)SJS_TEMPORAL_PLAIN_DATE && SJS_TIME_PLAIN_TIME == (int)SJS_TEMPORAL_PLAIN_TIME
+                   && SJS_TIME_PLAIN_DATE_TIME == (int)SJS_TEMPORAL_PLAIN_DATE_TIME
+                   && SJS_TIME_INSTANT == (int)SJS_TEMPORAL_INSTANT && SJS_TIME_DURATION == (int)SJS_TEMPORAL_DURATION
+                   && SJS_TIME_DATE == (int)SJS_TEMPORAL_DATE,
+               "sjs_time_type and sjs_temporal_type number the types alike");
+
+/* A public date and time as the internal one: the same fields. */
+static sjs_iso_date_time iso_of(const sjs_date_time *d) {
+    return (sjs_iso_date_time){ d->year, d->month, d->day, d->hour, d->minute, d->second,
+                                d->millisecond, d->microsecond, d->nanosecond };
+}
+
+static bool date_valid(const sjs_iso_date_time *d) {
+    return d->year >= YEAR_MIN && d->year <= YEAR_MAX && d->month >= 1u && d->month <= 12u && d->day >= 1u
+        && d->day <= days_in_month(d->year, d->month);
+}
+
+static bool time_valid(const sjs_iso_date_time *d) {
+    return d->hour < 24u && d->minute < 60u && d->second < 60u && d->millisecond < 1000u && d->microsecond < 1000u
+        && d->nanosecond < 1000u;
+}
+
+/* The fields of `t` checked as its type's constructor checks its arguments,
+ * with the parts the type does not have zero. */
+static bool time_fields_valid(const sjs_time *t) {
+    sjs_iso_date_time d = iso_of(&t->date_time);
+    bool dated = d.year != 0 || d.month != 0 || d.day != 0;
+    switch (t->type) {
+    case SJS_TIME_PLAIN_DATE:
+        return date_valid(&d) && !after_midnight(&d) && within_limits(&d, false);
+    case SJS_TIME_PLAIN_TIME:
+        return !dated && time_valid(&d);
+    case SJS_TIME_PLAIN_DATE_TIME:
+        return date_valid(&d) && time_valid(&d) && within_limits(&d, true);
+    case SJS_TIME_INSTANT:
+        return t->instant.nanoseconds < 1000000000u
+            && epoch_within_limits(wide_add(wide_mul(wide_of(t->instant.seconds), NS_PER_SECOND),
+                                            wide_of((int64_t)t->instant.nanoseconds)));
+    case SJS_TIME_DURATION:
+        return duration_refusal(t->duration) == NULL;
+    case SJS_TIME_DATE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+sjs_result sjs_time_new(sjs_context *context, const sjs_time *time, sjs_value *out) {
+    if (context == NULL || time == NULL || out == NULL || !time_fields_valid(time)) return SJS_ERR_INVALID;
+    sjs_temporal *t;
+    sjs_result r = sjs_temporal_make(context, (sjs_temporal_type)time->type, &t);
+    if (r != SJS_OK) return r;
+    switch (time->type) {
+    case SJS_TIME_INSTANT:
+        t->as.instant.seconds = time->instant.seconds;
+        t->as.instant.nanoseconds = time->instant.nanoseconds;
+        break;
+    case SJS_TIME_DURATION:
+        for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) t->as.duration[i] = time->duration[i] + 0.0;
+        break;
+    case SJS_TIME_DATE:
+        t->as.time = sjs_date_clip(time->time);
+        break;
+    default:
+        t->as.iso = iso_of(&time->date_time);
+        break;
+    }
+    *out = sjs_heap_value(SJS_TEMPORAL, &t->h);
+    return SJS_OK;
+}
+
+sjs_result sjs_time_read(sjs_value value, sjs_time *out) {
+    if (value.kind != SJS_TEMPORAL || value.internal != 0 || out == NULL) return SJS_ERR_INVALID;
+    const sjs_temporal *t = SJS_AS_TEMPORAL(value);
+    *out = (sjs_time){ 0 };
+    out->type = (sjs_time_type)sjs_temporal_type_of(value);
+    switch (out->type) {
+    case SJS_TIME_INSTANT:
+        out->instant = (sjs_epoch){ t->as.instant.seconds, t->as.instant.nanoseconds };
+        break;
+    case SJS_TIME_DURATION:
+        for (uint32_t i = 0; i < DURATION_FIELD_COUNT; i++) out->duration[i] = t->as.duration[i];
+        break;
+    case SJS_TIME_DATE:
+        out->time = t->as.time;
+        break;
+    default: {
+        const sjs_iso_date_time *d = &t->as.iso;
+        out->date_time = (sjs_date_time){ d->year, d->month, d->day, d->hour, d->minute, d->second,
+                                          d->millisecond, d->microsecond, d->nanosecond };
+        break;
+    }
+    }
+    return SJS_OK;
 }

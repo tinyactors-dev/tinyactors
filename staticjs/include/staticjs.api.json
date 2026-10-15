@@ -537,6 +537,30 @@
       "value": 13
     },
     {
+      "name": "SJS_TIME_DATE",
+      "value": 6
+    },
+    {
+      "name": "SJS_TIME_DURATION",
+      "value": 5
+    },
+    {
+      "name": "SJS_TIME_INSTANT",
+      "value": 4
+    },
+    {
+      "name": "SJS_TIME_PLAIN_DATE",
+      "value": 1
+    },
+    {
+      "name": "SJS_TIME_PLAIN_DATE_TIME",
+      "value": 3
+    },
+    {
+      "name": "SJS_TIME_PLAIN_TIME",
+      "value": 2
+    },
+    {
       "name": "SJS_UNDEFINED",
       "value": 0
     },
@@ -2128,6 +2152,165 @@
         }
       }
     },
+    "sjs_time_type": {
+      "kind": "enum",
+      "constants": [
+        "SJS_TIME_PLAIN_DATE",
+        "SJS_TIME_PLAIN_TIME",
+        "SJS_TIME_PLAIN_DATE_TIME",
+        "SJS_TIME_INSTANT",
+        "SJS_TIME_DURATION",
+        "SJS_TIME_DATE"
+      ]
+    },
+    "sjs_date_time": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "year",
+          "type": "int32_t"
+        },
+        {
+          "name": "month",
+          "type": "uint8_t"
+        },
+        {
+          "name": "day",
+          "type": "uint8_t"
+        },
+        {
+          "name": "hour",
+          "type": "uint8_t"
+        },
+        {
+          "name": "minute",
+          "type": "uint8_t"
+        },
+        {
+          "name": "second",
+          "type": "uint8_t"
+        },
+        {
+          "name": "millisecond",
+          "type": "uint16_t"
+        },
+        {
+          "name": "microsecond",
+          "type": "uint16_t"
+        },
+        {
+          "name": "nanosecond",
+          "type": "uint16_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "year": 0,
+            "month": 4,
+            "day": 5,
+            "hour": 6,
+            "minute": 7,
+            "second": 8,
+            "millisecond": 10,
+            "microsecond": 12,
+            "nanosecond": 14
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "year": 0,
+            "month": 4,
+            "day": 5,
+            "hour": 6,
+            "minute": 7,
+            "second": 8,
+            "millisecond": 10,
+            "microsecond": 12,
+            "nanosecond": 14
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "year": 0,
+            "month": 4,
+            "day": 5,
+            "hour": 6,
+            "minute": 7,
+            "second": 8,
+            "millisecond": 10,
+            "microsecond": 12,
+            "nanosecond": 14
+          }
+        }
+      }
+    },
+    "sjs_time": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "type",
+          "type": "sjs_time_type"
+        },
+        {
+          "name": "date_time",
+          "type": "sjs_date_time"
+        },
+        {
+          "name": "instant",
+          "type": "sjs_epoch"
+        },
+        {
+          "name": "duration",
+          "type": "double[10]"
+        },
+        {
+          "name": "time",
+          "type": "double"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 128,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "date_time": 4,
+            "instant": 24,
+            "duration": 40,
+            "time": 120
+          }
+        },
+        "aarch64": {
+          "size": 128,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "date_time": 4,
+            "instant": 24,
+            "duration": 40,
+            "time": 120
+          }
+        },
+        "wasm32": {
+          "size": 128,
+          "align": 8,
+          "offsets": {
+            "type": 0,
+            "date_time": 4,
+            "instant": 24,
+            "duration": 40,
+            "time": 120
+          }
+        }
+      }
+    },
     "sjs_random": {
       "kind": "struct",
       "fields": [
@@ -3144,6 +3327,44 @@
         {
           "name": "string",
           "type": "sjs_value"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_time_new",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "time",
+          "type": "const sjs_time *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_time_read",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "value",
+          "type": "sjs_value"
+        },
+        {
+          "name": "out",
+          "type": "sjs_time *"
         }
       ],
       "public": true,

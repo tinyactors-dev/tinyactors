@@ -618,6 +618,78 @@ static void test_regexp_read(void) {
     CHECK(c.live == 0);
 }
 
+/* Dates and Temporal values made and read field by field. */
+static void test_time_values(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    sjs_time made[] = {
+        { .type = SJS_TIME_PLAIN_DATE, .date_time = { .year = 2024, .month = 2, .day = 29 } },
+        { .type = SJS_TIME_PLAIN_TIME, .date_time = { .hour = 23, .minute = 5, .second = 9, .millisecond = 1, .nanosecond = 7 } },
+        { .type = SJS_TIME_PLAIN_DATE_TIME, .date_time = { -271821, 4, 19, 0, 0, 0, 0, 0, 1 } },
+        { .type = SJS_TIME_INSTANT, .instant = { -1, 999999999 } },
+        { .type = SJS_TIME_DURATION, .duration = { 1, 0, 0, 2, 0, 0, 0, 0, 0, 3 } },
+        { .type = SJS_TIME_DATE, .time = 86400000 },
+    };
+    const char *text[] = {
+        "Temporal.PlainDate.from(\"2024-02-29\")",
+        "Temporal.PlainTime.from(\"23:05:09.001000007\")",
+        "Temporal.PlainDateTime.from(\"-271821-04-19T00:00:00.000000001\")",
+        "Temporal.Instant.from(\"1969-12-31T23:59:59.999999999Z\")",
+        "Temporal.Duration.from(\"P1Y2DT0.000000003S\")",
+        "new Date(\"1970-01-02T00:00:00.000Z\")",
+    };
+    for (size_t i = 0; i < sizeof made / sizeof made[0]; i++) {
+        sjs_value v;
+        CHECK(sjs_time_new(context, &made[i], &v) == SJS_OK);
+        char out[128];
+        write_text(context, v, out, sizeof out);
+        if (strcmp(out, text[i]) != 0) fprintf(stderr, "made %zu: %s\n", i, out);
+        CHECK(strcmp(out, text[i]) == 0);
+        sjs_time back;
+        CHECK(sjs_time_read(v, &back) == SJS_OK);
+        CHECK(memcmp(&back, &made[i], sizeof back) == 0);
+        sjs_release(context, v);
+    }
+    /* Read from what a program made. */
+    sjs_value d = result_of(context, SJS_GOAL_EXPRESSION, "Temporal.PlainDate.from(\"2024-01-31\").add({ months: 1 })");
+    sjs_time t;
+    CHECK(sjs_time_read(d, &t) == SJS_OK && t.type == SJS_TIME_PLAIN_DATE);
+    CHECK(t.date_time.year == 2024 && t.date_time.month == 2 && t.date_time.day == 29);
+    sjs_release(context, d);
+    /* A Date's time value is clipped as new Date(t) clips it. */
+    sjs_value v;
+    CHECK(sjs_time_new(context, &(sjs_time){ .type = SJS_TIME_DATE, .time = 1.9 }, &v) == SJS_OK);
+    CHECK(sjs_time_read(v, &t) == SJS_OK && t.time == 1);
+    sjs_release(context, v);
+    CHECK(sjs_time_new(context, &(sjs_time){ .type = SJS_TIME_DATE, .time = 9e15 }, &v) == SJS_OK);
+    CHECK(sjs_time_read(v, &t) == SJS_OK && t.time != t.time);
+    sjs_release(context, v);
+    /* Refused, as the constructors refuse them. */
+    sjs_time refused[] = {
+        { .type = SJS_TIME_PLAIN_DATE, .date_time = { .year = 2023, .month = 2, .day = 29 } },
+        { .type = SJS_TIME_PLAIN_DATE, .date_time = { .year = 2024, .month = 13, .day = 1 } },
+        { .type = SJS_TIME_PLAIN_DATE, .date_time = { .year = 2024, .month = 1, .day = 1, .hour = 1 } },
+        { .type = SJS_TIME_PLAIN_DATE, .date_time = { .year = 275761, .month = 1, .day = 1 } },
+        { .type = SJS_TIME_PLAIN_TIME, .date_time = { .hour = 24 } },
+        { .type = SJS_TIME_PLAIN_TIME, .date_time = { .day = 1 } },
+        { .type = SJS_TIME_PLAIN_DATE_TIME, .date_time = { .year = -271821, .month = 4, .day = 19 } },
+        { .type = SJS_TIME_INSTANT, .instant = { 0, 1000000000 } },
+        { .type = SJS_TIME_INSTANT, .instant = { 8640000000001, 0 } },
+        { .type = SJS_TIME_DURATION, .duration = { 1, -1 } },
+        { .type = SJS_TIME_DURATION, .duration = { 0.5 } },
+        { .type = SJS_TIME_DURATION, .duration = { 4294967296.0 } },
+        { .type = 0 },
+        { .type = 7 },
+    };
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        if (sjs_time_new(context, &refused[i], &v) != SJS_ERR_INVALID) fprintf(stderr, "refused %zu was not\n", i);
+        CHECK(sjs_time_new(context, &refused[i], &v) == SJS_ERR_INVALID);
+    }
+    CHECK(sjs_time_read(sjs_number(0), &t) == SJS_ERR_INVALID);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 static void test_frozen_values(void) {
     counting c = { 0 };
     sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
@@ -3656,6 +3728,7 @@ int main(int argc, char **argv) {
     test_compile_subject();
     test_iterators_read();
     test_regexp_read();
+    test_time_values();
     test_unbound_where_it_never_runs();
     test_modules();
     test_frozen_values();

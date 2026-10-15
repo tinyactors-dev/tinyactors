@@ -708,6 +708,9 @@ uint32_t sjs_temporal_text(const sjs_temporal *t, char *out);
 uint32_t sjs_date_iso_text(double time, char *out);
 /* The type's name, as in Temporal.PlainDate. */
 sjs_str sjs_temporal_type_name(sjs_temporal_type type);
+/* TimeClip (date.c): NaN past 8.64e15 either way, else the number
+ * truncated, -0 made +0. */
+double sjs_date_clip(double t);
 
 /* A getter of a Temporal value: the name's `field` in NAMES. Which types
  * have each is temporal.c's to say. */

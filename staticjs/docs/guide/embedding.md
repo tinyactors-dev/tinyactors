@@ -245,7 +245,7 @@ reference:
 
 | You get a value from | It is |
 |---|---|
-| `sjs_vm_take_result`, `sjs_string_new`, `sjs_bigint_new`, `sjs_array_new`, `sjs_object_new`, `sjs_set_new`, `sjs_map_new`, `sjs_function_native` | yours: `sjs_release` it |
+| `sjs_vm_take_result`, `sjs_string_new`, `sjs_bigint_new`, `sjs_array_new`, `sjs_object_new`, `sjs_set_new`, `sjs_map_new`, `sjs_time_new`, `sjs_function_native` | yours: `sjs_release` it |
 | `sjs_array_at`, `sjs_set_at`, `sjs_object_at`, `sjs_object_get`, `sjs_map_at`, `sjs_map_get`, `sjs_iterator_at` | borrowed, valid while its container is: `sjs_retain` it to keep it longer |
 | a native's `call->arguments` | borrowed for the call |
 
@@ -277,6 +277,18 @@ first. It refuses the key `__proto__` with `SJS_ERR_INVALID`. A set takes primit
 any primitive, compared as SameValueZero. `sjs_bigint_new` reads a BigInt's
 text as `BigInt(text)` does.
 
+A Date or a Temporal value (a `PlainDate`, `PlainTime`, `PlainDateTime`,
+`Instant` or `Duration`, in the ISO calendar) is made from its fields with
+`sjs_time_new`, which checks them as the type's constructor checks its
+arguments, and read with `sjs_time_read`:
+
+```c
+sjs_value due, at;
+sjs_time_new(context, &(sjs_time){ .type = SJS_TIME_PLAIN_DATE,
+                                   .date_time = { .year = 2024, .month = 1, .day = 31 } }, &due);
+sjs_time_new(context, &(sjs_time){ .type = SJS_TIME_DATE, .time = 1706659200000 }, &at);  /* new Date(1706659200000) */
+```
+
 **Reading values.** `sjs_length` gives the elements of an array, the
 properties of an object, the members of a set or the entries of a map.
 `sjs_array_at`, `sjs_object_at` (in property order), `sjs_object_get` (by
@@ -300,7 +312,8 @@ for (uint32_t i = 0; i < sjs_iterator_count(result); i++) {
 }
 ```
 
-`sjs_regexp_read` gives a regular expression's source and flags, as
+`sjs_time_read` gives a Date's or a Temporal value's fields, with its
+`type`. `sjs_regexp_read` gives a regular expression's source and flags, as
 `RegExp.prototype.source` and `.flags` give them: `/a+/gi` is `a+` and
 `gi`.
 

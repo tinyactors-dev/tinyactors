@@ -761,6 +761,54 @@ typedef struct {
 /* SJS_ERR_INVALID when the nanoseconds are past 999,999,999 or the instant
  * is past Temporal's limits; the clock is unchanged then. */
 SJS_API sjs_result sjs_vm_set_clock(sjs_vm *vm, const sjs_epoch *now);
+
+/*
+ * Dates and Temporal values (SJS_TEMPORAL) made and read by the host, field
+ * by field, without an evaluator: a Temporal.PlainDate, PlainTime,
+ * PlainDateTime, Instant or Duration in the ISO calendar, or a Date.
+ */
+typedef enum {
+    SJS_TIME_PLAIN_DATE = 1,
+    SJS_TIME_PLAIN_TIME,
+    SJS_TIME_PLAIN_DATE_TIME,
+    SJS_TIME_INSTANT,
+    SJS_TIME_DURATION,
+    SJS_TIME_DATE
+} sjs_time_type;
+
+typedef struct {
+    int32_t year;           /* -271821 to 275760 */
+    uint8_t month;          /* 1 to 12 */
+    uint8_t day;            /* 1 to the month's days */
+    uint8_t hour;           /* 0 to 23 */
+    uint8_t minute;         /* 0 to 59 */
+    uint8_t second;         /* 0 to 59 */
+    uint16_t millisecond;   /* 0 to 999, and so the next two */
+    uint16_t microsecond;
+    uint16_t nanosecond;
+} sjs_date_time;
+
+/* The fields of `type`; the others are zero. */
+typedef struct {
+    sjs_time_type type;
+    sjs_date_time date_time;  /* a PlainDate's date (its time zero), a PlainTime's
+                               * time (its date zero), a PlainDateTime's both */
+    sjs_epoch instant;        /* an Instant */
+    double duration[10];      /* a Duration: years, months, weeks, days, hours, minutes,
+                               * seconds, milliseconds, microseconds, nanoseconds */
+    double time;              /* a Date's time value: milliseconds since the epoch, NaN
+                               * for an invalid date */
+} sjs_time;
+
+/* A new value of time->type, its fields checked as the type's constructor
+ * checks its arguments: SJS_ERR_INVALID for a field out of range, a
+ * PlainDate with a time or a PlainTime with a date, or a Duration
+ * Temporal.Duration refuses. A Date's time value is clipped as new Date(t)
+ * clips it: truncated, and invalid past 8.64e15 either way. */
+SJS_API sjs_result sjs_time_new(sjs_context *context, const sjs_time *time, sjs_value *out);
+/* The fields of a Date or a Temporal value; SJS_ERR_INVALID for any other
+ * value. */
+SJS_API sjs_result sjs_time_read(sjs_value value, sjs_time *out);
 /* Move a set clock forward. SJS_ERR_INVALID, the clock unchanged, when it
  * was never set or would pass Temporal's limits. */
 SJS_API sjs_result sjs_vm_advance_clock(sjs_vm *vm, uint64_t nanoseconds);
