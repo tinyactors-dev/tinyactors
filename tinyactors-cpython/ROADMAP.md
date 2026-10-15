@@ -624,9 +624,15 @@ decisions 21 to 24): `mise run wheel` and `mise run release`, through
 `twine check --strict`, and are byte-identical when built again from the
 same commit; this machine's (x86_64 Linux, glibc 2.39) installs into
 fresh 3.13.16 and 3.14.8 environments, where the smoke test and all of
-`tests/` pass against the installed wheel. Not checked yet: the Linux
-container smoke tests (no Docker daemon in the session that built it),
-and the macOS wheels on a Mac (their symbols only, decision 14). Reviewed
+`tests/` pass against the installed wheel. The other Linux cases were
+run without the containers (no Docker daemon in that session), with
+python-build-standalone's 3.13.16 and `LD_BIND_NOW=1`: x86_64 on musl
+1.2.4 (pip installs the wheel; the smoke test and all of `tests/`
+pass), and aarch64 under qemu on glibc 2.39 and on musl (Alpine 3.20's
+loader), where the smoke test passes and 158 of the 161 tests (the
+other three start a child interpreter, which qemu without binfmt cannot
+run). Not checked yet: the container stage itself, and the macOS
+wheels on a Mac (their symbols only, decision 14). Reviewed
 against PyPA's specifications and PyPI's rules (2026-10-15): the wheels
 pass `twine check --strict` and `check-wheel-contents`, uv selects each
 on its platform, and the Linux file needs no library and no versioned
