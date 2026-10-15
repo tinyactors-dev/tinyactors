@@ -34,6 +34,7 @@ Every proposal starts with a status line:
 |---|---|---|
 | [The ring protocol](ring-proto/README.md) | Dropped: superseded by [ADR 0004](../adr/0004-replace-the-core-with-the-standalone-runtime.md) | tinyactors-core, tinyactors-host (deleted), tinyactors-napi, tinyactors-test |
 | [staticjs: a pure, total subset of JavaScript as a data model](staticjs.md) | Proposed; the language is in `staticjs/` | a new staticjs, a new tinyactors-staticjs |
+| [staticjs: exceptions, and async functions over host promises](staticjs-exceptions-and-async.md) | Sketch | staticjs (every stage), staticjs-js |
 | [A JavaScript API for staticjs.wasm](staticjs-js-api.md) | Adopted → [ADR 0013](../adr/0013-staticjs-javascript-package.md) | a new staticjs-js, staticjs's release packaging |
 | [SQLite host](sqlite-host.md) | Sketch | tinyactors-core, a new tinyactors-sqlite |
 | [PostgreSQL host](postgres-host.md) | Sketch | tinyactors-core, a new tinyactors-postgres |
