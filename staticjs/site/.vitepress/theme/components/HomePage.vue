@@ -5,12 +5,12 @@ import Icon from './Icon.vue';
 
 // The six properties, the first three backing the headline.
 const features = [
-  { title: 'Small', text: 'One C file and one header, no dependencies, no C library. The language is small too: no loops, recursion or classes. An evaluator with max_stack = 256 is about 41 KiB.' },
-  { title: 'Embeddable', text: 'Freestanding C11 with a one-file amalgamation. Static and shared libraries for Linux and macOS (x86_64, arm64), and a WebAssembly module that imports nothing, for browsers and Node.' },
-  { title: 'Fast', text: 'Evaluating a compiled guard from C takes about 0.14 µs; compiling one takes 6.4 µs. In WebAssembly in Chromium, staticjs was faster than QuickJS-NG on 7 of 8 programs.' },
-  { title: 'Total', text: 'Every evaluation ends. A program runs on fuel the host pushes, one unit per instruction and per element a built-in walks. It pauses when the fuel runs out and resumes when more arrives.' },
-  { title: 'Exact', text: 'A program staticjs accepts is valid JavaScript and gives the value Node gives, or a fault that says why. "5" * 2 is a fault, not 10. About 4,200 cases run in Node too and must match.' },
-  { title: 'Hermetic', text: 'A program reaches only the values the host passes in: no file system, network, clock or randomness. Same program and inputs give the same value and the same fuel on every machine.' },
+  { title: 'Small', text: 'One C file, one header, no dependencies, no libc. The language is small as well: no loops, recursion or classes. An evaluator at max_stack = 256 is about 41 KiB.' },
+  { title: 'Embeddable', text: 'Freestanding C11. Static and shared libraries for Linux and macOS on x86_64 and arm64, or one wasm module that imports nothing. Runs in browsers and Node.' },
+  { title: 'Fast', text: 'A compiled guard evaluates from C in about 0.14 µs. Compiling it takes 6.4 µs. Against QuickJS-NG, both as wasm in Chromium, staticjs won 7 of 8 programs.' },
+  { title: 'Total', text: 'Every evaluation ends. The host pushes fuel, one unit per instruction and per element a built-in walks. When it runs out the program pauses, and it resumes from any point once more arrives.' },
+  { title: 'Exact', text: 'A program staticjs accepts is valid JavaScript and gives the value Node gives, or a fault that says why. "5" * 2 faults instead of giving 10. About 4,200 test cases also run in Node and must match.' },
+  { title: 'Hermetic', text: 'A program sees only the values the host passes in. No file system, network, clock or randomness of its own; the host supplies the clock and Math.random’s seed. Same program and inputs give the same value and the same fuel on every machine.' },
 ];
 
 // staticjs among QuickJS, CEL and Starlark; "—" where their pages say nothing.
@@ -27,9 +27,9 @@ const compare = [
 ];
 
 const others = [
-  'Choose QuickJS when you need to run whole JavaScript programs: it passes nearly all of the ES2025 test suite.',
-  'Choose CEL when you need formal verification, or libraries for Go, Java or C++ with protobuf.',
-  'Choose Starlark when you want Python-style configuration, as Bazel uses it.',
+  'QuickJS if you need all of JavaScript. It passes nearly all of the ES2025 tests.',
+  'CEL if you need formal verification, or a library for Go, Java or C++.',
+  'Starlark if you want Python-style configuration, as Bazel uses it.',
 ];
 
 const stops = [
@@ -40,9 +40,9 @@ const stops = [
 ];
 
 const ways = [
-  { title: 'Prebuilt libraries', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries for Linux and macOS, on x86_64 and arm64. Link them from any C11 compiler.', link: '/guide/getting-started' },
-  { title: 'Amalgamation', code: 'clang -O2 -I. app.c staticjs.c', text: 'The whole library as one file, staticjs.c, plus staticjs.h. Add both to your project and build with clang.', link: '/guide/getting-started#_3-build-it' },
-  { title: 'WebAssembly', code: "await WebAssembly.instantiate(bytes, {})", text: 'staticjs.wasm imports nothing and brings its own allocator. It runs in browsers and Node.', link: '/guide/wasm' },
+  { title: 'Prebuilt libraries', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries for Linux and macOS, x86_64 and arm64. Link with any C11 compiler.', link: '/guide/getting-started' },
+  { title: 'Amalgamation', code: 'clang -O2 -I. app.c staticjs.c', text: 'staticjs.c and staticjs.h, the whole library. Add both to your project and build with clang.', link: '/guide/getting-started#_3-build-it' },
+  { title: 'WebAssembly', code: "await WebAssembly.instantiate(bytes, {})", text: 'staticjs.wasm imports nothing and brings its own allocator. Runs in browsers and Node.', link: '/guide/wasm' },
 ];
 </script>
 
@@ -52,8 +52,8 @@ const ways = [
       <div class="copy">
         <h1>A small, embeddable and fast JavaScript engine</h1>
         <p class="lede">
-          An engine for a pure subset of JavaScript, for code someone else writes. Every program ends, reaches only what
-          you pass in, and returns Node’s exact value or a fault that says why.
+          A pure subset of JavaScript, for running code your users write. Every program ends, sees only what you hand
+          it, and returns what Node returns or a fault with a line and column.
         </p>
         <div class="actions">
           <a class="sjs-button primary big" :href="withBase('/guide/getting-started')">Getting started</a>
@@ -68,13 +68,12 @@ const ways = [
       </div>
       <figure class="demo">
         <div class="vp-doc"><slot name="demo" /></div>
-        <figcaption>Edit the program. It runs here through staticjs.wasm and shows the fuel it used.</figcaption>
+        <figcaption>Edit it. It runs live in staticjs.wasm, and the result shows the fuel spent.</figcaption>
       </figure>
     </section>
 
     <section class="band">
-      <h2 class="section-title">Small, embeddable, fast, and it always ends</h2>
-      <p class="lede">staticjs runs a pure subset of JavaScript, so you can embed it to evaluate code someone else wrote.</p>
+      <h2 class="section-title">What you get</h2>
       <div class="pains">
         <article v-for="f in features" :key="f.title" class="card pain">
           <h3>{{ f.title }}</h3>
@@ -86,8 +85,8 @@ const ways = [
     <section id="compare" class="band">
       <h2 class="section-title">How staticjs compares</h2>
       <p class="lede">
-        staticjs has CEL’s guarantees with JavaScript syntax and functions users define. It is QuickJS’s embeddability in
-        a language that cannot run away, and Starlark’s determinism for JavaScript.
+        Basically CEL with JavaScript syntax and user functions. Next to QuickJS it can’t run away; next to Starlark it’s
+        JavaScript instead of a Python dialect.
       </p>
       <table class="compare">
         <thead>
@@ -107,8 +106,8 @@ const ways = [
         <li v-for="o in others" :key="o">{{ o }}</li>
       </ul>
       <p class="note">
-        The alternatives’ facts come from their own pages. staticjs’s speed is measured below, in your browser, and on one
-        machine in the benchmark report: proportions, not promises.
+        What we say about QuickJS, CEL and Starlark comes from their own pages. The race below runs in your browser; the
+        benchmark report has one machine’s numbers.
         <a :href="withBase('/guide/performance#compared-with-other-engines')">The benchmark report <Icon name="arrow-right" :size="14" /></a>
       </p>
     </section>
@@ -116,11 +115,8 @@ const ways = [
     <EngineRace />
 
     <section class="band">
-      <h2 class="section-title">Where staticjs stops instead of guessing</h2>
-      <p class="lede">
-        A mistake in someone else’s rule becomes a fault with a line and column, not a plausible wrong value. Everything
-        staticjs accepts gives exactly the value Node gives.
-      </p>
+      <h2 class="section-title">When a rule is wrong</h2>
+      <p class="lede">Mistakes in a rule come back as a fault with a line and column.</p>
       <table class="stops">
         <thead><tr><th scope="col">Program</th><th scope="col">JavaScript</th><th scope="col">staticjs</th></tr></thead>
         <tbody>
@@ -136,7 +132,6 @@ const ways = [
 
     <section class="band">
       <h2 class="section-title">Three ways in</h2>
-      <p class="lede">Use prebuilt libraries, one C file, or WebAssembly. Pick the one that fits your build.</p>
       <div class="two-up">
         <a v-for="w in ways" :key="w.title" class="card way" :href="withBase(w.link)">
           <h3>{{ w.title }}</h3>
@@ -148,11 +143,11 @@ const ways = [
 
     <section class="band pipeline-teaser">
       <div>
-        <h2 class="section-title">Watch a program go through the pipeline</h2>
+        <h2 class="section-title">Inside the pipeline</h2>
         <p class="lede">
-          Pick an example or type a program and step through each stage: parser events pushed 1, 4 or 16 bytes at a time,
-          compiled function shapes, the evaluator one unit of fuel at a time, and output in 16-byte pieces. It runs in
-          your browser on staticjs.wasm.
+          Step through the parser, compiler and evaluator on a program of your own. Push the parser 1, 4 or 16 bytes at a
+          time, look at the compiled function shapes, spend fuel one unit at a time, and read the output in 16-byte
+          pieces. Runs on staticjs.wasm.
         </p>
         <a class="sjs-button primary big" :href="withBase('/explore/pipeline')">Open the pipeline explorer</a>
       </div>

@@ -65,7 +65,7 @@ onBeforeUnmount(() => {
 });
 
 const finished = computed(() => raceCases.filter((c) => rows[c.id].times));
-const faster = computed(() => finished.value.filter((c) => rows[c.id].times!.quickjs.ns > rows[c.id].times!.staticjs.ns).length);
+const faster = computed(() => finished.value.filter((c) => rows[c.id].times!.quickjs.ns >= 1.05 * rows[c.id].times!.staticjs.ns).length);
 const status = computed(() => {
   if (phase.value === 'idle') return { kind: 'idle', text: 'Runs when this section scrolls into view.' };
   if (phase.value === 'loading') return { kind: 'busy', text: 'Loading both engines' };
@@ -82,6 +82,7 @@ function time(ns: number) {
 }
 function ratio(t: Times) {
   const r = t.quickjs.ns / t.staticjs.ns;
+  if (r > 0.95 && r < 1.05) return 'about even';
   return r >= 1 ? `${r.toFixed(1)}× faster` : `${(1 / r).toFixed(1)}× slower`;
 }
 function width(t: Times, engine: 'staticjs' | 'quickjs') {
@@ -94,10 +95,10 @@ const running = computed(() => phase.value === 'loading' || phase.value === 'run
   <section ref="root" class="band race" aria-labelledby="race-title">
     <div class="head">
       <div>
-        <h2 id="race-title" class="section-title">Run both engines in your browser</h2>
+        <h2 id="race-title" class="section-title">staticjs against QuickJS-NG</h2>
         <p class="lede">
-          Eight programs run in staticjs and QuickJS-NG, both compiled to WebAssembly, on your machine. A time counts only
-          if both engines return the same result.
+          Eight programs through staticjs and QuickJS-NG, both as wasm, on your machine. A row is timed only if both
+          return the same result.
         </p>
       </div>
       <button class="sjs-button big" :class="{ primary: phase !== 'done' }" type="button" :disabled="running" @click="start">
@@ -151,10 +152,9 @@ const running = computed(() => phase.value === 'loading' || phase.value === 'run
     </div>
 
     <p class="note">
-      Median of five samples; each sample repeats the program for at least 40 ms. staticjs is called from JavaScript
-      once per run, as a host calls its C API. QuickJS-NG (quickjs-wasi{{ startup ? ` ${startup.quickjs.version}` : '' }})
-      loops inside the engine and is called once per sample, so it pays fewer crossings. These numbers were measured in
-      this browser just now.
+      Median of five samples, each repeating the program for at least 40 ms. staticjs is called from JavaScript once
+      per run, the way a host calls its C API. QuickJS-NG (quickjs-wasi{{ startup ? ` ${startup.quickjs.version}` : '' }})
+      loops inside the engine and is called once per sample, so it crosses the boundary less.
       <template v-if="startup">
         A fresh engine from its compiled module took {{ startup.staticjs.ms.toFixed(2) }} ms for staticjs and
         {{ startup.quickjs.ms.toFixed(2) }} ms for QuickJS-NG.
