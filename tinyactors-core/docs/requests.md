@@ -366,7 +366,7 @@ These stay C calls:
   advance_time, resume, run, and the effects and their ack.
 - **Images:** `ta_host_add_image` takes the image's bytes and keeps a copy.
 - **Bytes that the host writes or takes:** `ta_host_traces`, `ta_host_logs`,
-  `ta_host_metrics`, hibernate, wake, export_actor, adopt, migrate, snapshot,
+  `ta_host_metrics`, hibernate, wake, migrate, snapshot,
   restore and `snapshot_pack`.
 - **Calls that need no host:** `ta_host_snapshot_unpack`, `_image` and
   `_segments` read a snapshot before a host exists.

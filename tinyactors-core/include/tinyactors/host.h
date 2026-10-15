@@ -35,8 +35,7 @@
  *              hibernated ones wait until ta_host_wake brings them back,
  *              asked for with TA_HOST_MIGRATE_WAKE (a TA_EFFECT_WAKE whose
  *              migration is the migration's id), again each time the migration finds one
- *              hibernated after a wake; an actor exported meanwhile leaves
- *              the migration; actors with running invocations wait until those
+ *              hibernated after a wake; actors with running invocations wait until those
  *              finish (a session tree moves unchanged, but is not
  *              translated); a timeout (system ticks) ends the migration with the
  *              stragglers, and a migration with an actor nobody wakes ends only
@@ -65,7 +64,7 @@
  * on failure. No callbacks besides the datamodel vtables.
  *
  * What the host writes for its caller — an envelope, traces, logs,
- * metrics, a hibernation or export blob — comes out as a
+ * metrics, a hibernation blob — comes out as a
  * ta_bytes view of memory the host owns, valid until ta_host_effects_ack or
  * ta_host_free, whatever calls come between (copy it to keep it past the
  * ack). Taken while a batch is open, it joins that batch; taken with none
@@ -136,7 +135,7 @@ TA_API ta_status ta_host_chart(const ta_host *h, ta_string_view name, ta_host_ch
 typedef struct ta_host_segment_info {
     uint32_t size;
     uint32_t live;    /* 0 once freed */
-    uint32_t actors;  /* actors in it (including adopted ones) */
+    uint32_t actors;  /* actors in it (including ones a migration moved in) */
     uint32_t current; /* charts of it that are the current version of their name */
     const ta_image *image; /* the host's copy (borrowed: valid while the segment is live);
                               NULL once the segment is freed */
@@ -192,7 +191,7 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
  *
  * Outside a run, the same rules hold while the host is inside a datamodel:
  * a posted message (actor.context), ta_host_envelope, ta_host_deliver,
- * hibernating, waking, exporting and adopting, the telemetry takes,
+ * hibernating, waking, the telemetry takes,
  * `release` in the ack and at the start of a run, and the like. A
  * datamodel's code that calls back into the host there can add inputs but
  * cannot change what the host is using (docs/adr/0010 in the repository
@@ -632,30 +631,6 @@ TA_API uint32_t ta_host_sweep(ta_host *h, uint32_t max_scan, ta_uint64_array out
  * once. TA_ERROR_NO_MEMORY: the allocator refused room, and the actor stays. */
 TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, ta_bytes *out);
 TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);
-
-/* ---- moving actors between hosts (another process, a restart) --------------------
- * ta_host_export_actor: ta_actor_export of the root actor `session` wherever it
- * lives in the host (with the sessions it invoked); it leaves the host. The blob
- * is a value when the datamodels implement payload_serialize (docs/durability.md).
- * ta_host_adopt: ta_system_adopt into `segment` (the blob's image: TA_ERROR_INVALID
- * otherwise), growing it as needed. Sessions keep their ids (and addresses, under
- * this host's system id); the host routes to them in `segment`, and segments of
- * their home range — existing or added later — never hand out their ids again.
- * TA_ERROR_STATE (nothing adopted) if any of its sessions exists in the host.
- * *session: the root's id.
- * Delayed sends keep their due times: for hosts with separate clocks, ta_blob_rebase
- * the blob first.
- * The export blob is in `out`, a view of the host's memory, valid until the
- * ack; it is written in one pass (serialize once per
- * session, payload_serialize once per delayed send). TA_ERROR_NO_MEMORY: the
- * allocator refused room, and the actor stays. */
-TA_API ta_status ta_host_export_actor(ta_host *h, uint64_t session, ta_bytes *out);
-typedef struct ta_host_adoption {
-    uint32_t segment;
-    uint32_t pad;
-    ta_bytes blob;
-} ta_host_adoption;
-TA_API ta_status ta_host_adopt(ta_host *h, const ta_host_adoption *adoption, uint64_t *session);
 
 /* ---- snapshot / restore -------------------------------------------------------------
  * A snapshot is the whole host — every segment's region (actors, queues,

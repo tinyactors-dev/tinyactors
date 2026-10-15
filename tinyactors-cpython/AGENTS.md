@@ -441,7 +441,7 @@ or read views; it never takes or acks.
 
 ADR 0012: **everything the host hands out about a batch lives until the
 ack** (effect fields, `TRACEPARENT`, envelopes, traces, logs, metrics,
-hibernation and export blobs), across any later call into the host. A
+hibernation blobs), across any later call into the host. A
 datamodel's outputs live until its next call. Snapshots and the refused
 config's error fill a `ta_buffer` the extension lends.
 
@@ -700,11 +700,11 @@ Registered beside quickjs, first; matched by the chart's
   (2026-10-13): with the handle, a hibernated session kept its instance
   on the Python heap, so hibernation freed the region but not the
   memory a population of millions needs to leave. The same `serialize`
-  serves export and a migration's export (`ta_host_migrate`), which reach
+  serves a migration's export (`ta_host_migrate`), which reaches
   it with no reason (`tinyactors-core/src/system/hibernate.c:329`), with
   `payload_serialize` for the payloads of pending delayed sends: an actor
   that holds a value outside the table, or has such a payload pending,
-  refuses those too (its migration fails and it stays on the old
+  refuses that too (its migration fails and it stays on the old
   version). Migration within the host (`tests/test_migration.py`, the
   suite's `migrate` scenario): `deserialize` with the new chart makes an
   instance of the new class and sets the variables both declare;

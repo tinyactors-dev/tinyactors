@@ -8581,52 +8581,6 @@
         }
       }
     },
-    "ta_host_adoption": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "segment",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        },
-        {
-          "name": "blob",
-          "type": "ta_bytes"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "segment": 0,
-            "pad": 4,
-            "blob": 8
-          }
-        },
-        "aarch64": {
-          "size": 24,
-          "align": 8,
-          "offsets": {
-            "segment": 0,
-            "pad": 4,
-            "blob": 8
-          }
-        },
-        "wasm32": {
-          "size": 16,
-          "align": 4,
-          "offsets": {
-            "segment": 0,
-            "pad": 4,
-            "blob": 8
-          }
-        }
-      }
-    },
     "ta_host_snapshot_input": {
       "kind": "struct",
       "fields": [
@@ -9232,27 +9186,6 @@
         {
           "name": "out",
           "type": "ta_buffer *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_blob_rebase",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "blob",
-          "type": "ta_memory"
-        },
-        {
-          "name": "from",
-          "type": "ta_time"
-        },
-        {
-          "name": "to",
-          "type": "ta_time"
         }
       ],
       "public": true,
@@ -9889,27 +9822,6 @@
       "implemented": true
     },
     {
-      "name": "ta_host_adopt",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "adoption",
-          "type": "const ta_host_adoption *"
-        },
-        {
-          "name": "session",
-          "type": "uint64_t *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
       "name": "ta_host_advance_time",
       "returns": "void",
       "params": [
@@ -10190,27 +10102,6 @@
         {
           "name": "rule",
           "type": "const ta_export_rule *"
-        }
-      ],
-      "public": true,
-      "static_inline": false,
-      "implemented": true
-    },
-    {
-      "name": "ta_host_export_actor",
-      "returns": "ta_status",
-      "params": [
-        {
-          "name": "h",
-          "type": "ta_host *"
-        },
-        {
-          "name": "session",
-          "type": "uint64_t"
-        },
-        {
-          "name": "out",
-          "type": "ta_bytes *"
         }
       ],
       "public": true,

@@ -1607,13 +1607,6 @@ static void migrations_woken(ta_host *host, uint64_t session) {
             migration_wait(&host->migrations[j], session, MIGRATION_RETRY);
 }
 
-/* A session that left the host (exported): no migration waits for it. */
-static void migrations_forget(ta_host *host, uint64_t session) {
-    for (uint32_t j = 0; j < host->migration_count; j++)
-        if (host->migrations[j].active && session_map_get(&host->migrations[j].members, session) == MIGRATION_ASLEEP)
-            session_map_put(&host->migrations[j].members, session, TA_NIL);
-}
-
 /* ---- running ------------------------------------------------------------------------- */
 
 static void watches_expire(ta_host *host);
@@ -1995,119 +1988,12 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
     return status;
 }
 
-/* ---- moving actors between hosts ------------------------------------------------------- */
-
-ta_status ta_host_export_actor(ta_host *host, uint64_t session, ta_bytes *out) {
-    *out = (ta_bytes){(const void *)0, 0};
-    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
-    uint32_t si, actor;
-    ta_status status = host_locate(host, session, &si, &actor);
-    if (status != TA_OK) return status;
-    /* one pass, as ta_host_hibernate: the host's output grows as it is
-     * written, outside a run (checked above), taken before the guard */
-    ta_output *output = host_output(host);
-    uint32_t was = host_guard(host); /* serialize, payload_serialize, destroy */
-    status = ta_actor_write_export(host->segments[si].system, actor, output);
-    host_unguard(host, was);
-    if (status == TA_OK) status = host_output_view(host, out);
-    if (status == TA_OK) {
-        if (host_moved_get(host, session) != TA_NIL) moved_put(host, session, TA_NIL);
-        host->segments[si].busy = 1;
-        migrations_forget(host, session);
-    }
-    return status;
-}
-
-/* An adopted session lives in segment si: routed there, and its id never handed
- * out by its home segment (one added later is set up past it, reserve_serials).
- * Needs moved_reserve first. */
-static void place_session(ta_host *host, uint32_t si, uint64_t serial) {
-    uint32_t home = (uint32_t)(serial >> SERIALS_SHIFT);
-    moved_put(host, serial, home == si ? TA_NIL : si);
-    host_segment *hs = segment_of(host, home);
-    if (hs) ta_system_set_next_serial(hs->system, serial); /* (already past it: unchanged) */
-}
-
-/* A new segment index: past the ids of sessions adopted elsewhere from its range. */
+/* A new segment index: past the ids of sessions a migration moved elsewhere
+ * from its range (a freed segment's index is used again). */
 static void reserve_serials(ta_host *host, uint32_t index) {
     uint64_t key;
     for (uint32_t cursor = 0; session_map_next(&host->moved, &cursor, &key) != TA_NIL;)
         if ((uint32_t)(key >> SERIALS_SHIFT) == index) ta_system_set_next_serial(host->segments[index].system, key);
-}
-
-/* A session id that lives in another segment than s (its home, or where it was moved). */
-static int lives_elsewhere(ta_host *host, const host_segment *segment, uint64_t serial) {
-    uint32_t m = host_moved_get(host, serial);
-    host_segment *o = segment_of(host, m != TA_NIL ? m : (uint32_t)(serial >> SERIALS_SHIFT));
-    return o && o != segment && ta_system_actor_by_session(o->system, serial);
-}
-
-/* The sessions of an adopted tree in segment si (root and the sessions it
- * invoked): check (1 if an id lives elsewhere; *count: how many there are)
- * or place them. */
-static int tree_pass(ta_host *host, uint32_t si, uint32_t root, uint64_t root_serial, int check,
-                     uint32_t *count) {
-    host_segment *segment = &host->segments[si];
-    if (check ? lives_elsewhere(host, segment, root_serial)
-              : (place_session(host, si, root_serial), 0))
-        return 1;
-    if (count) *count = 1;
-    uint32_t cursor = 0, list[64], n;
-    while ((n = ta_system_actors(segment->system, &cursor, (ta_uint32_array){list, 64})) != 0)
-        for (uint32_t k = 0; k < n; k++) {
-            ta_actor_info ci;
-            ci.size = sizeof ci;
-            if (list[k] == root || ta_actor_info_get(segment->system, list[k], &ci) != TA_OK)
-                continue;
-            uint64_t serial = ci.serial;
-            while (ci.parent && ci.parent != root &&
-                   ta_actor_info_get(segment->system, ci.parent, &ci) == TA_OK) {
-            }
-            if (ci.parent != root) continue;
-            if (check ? lives_elsewhere(host, segment, serial)
-                      : (place_session(host, si, serial), 0))
-                return 1;
-            if (count) ++*count;
-        }
-    return 0;
-}
-
-ta_status ta_host_adopt(ta_host *host, const ta_host_adoption *adoption, uint64_t *session) {
-    if (host->running) return TA_ERROR_STATE; /* not during a run (host.h) */
-    uint32_t segment = adoption->segment;
-    size_t length = adoption->blob.length;
-    host_segment *segment_record = segment_of(host, segment);
-    if (session) *session = 0;
-    if (!segment_record) return TA_ERROR_INVALID;
-    /* room to export it again if it cannot stay: a tree exports to the blob it came from */
-    if (!ta_output_reserve(blob_scratch(host), length)) return TA_ERROR_NO_MEMORY;
-    uint32_t root = 0;
-    ta_status status;
-    for (;;) {
-        uint32_t was = host_guard(host); /* deserialize, payload_deserialize, migrate */
-        status = ta_system_adopt(segment_record->system, adoption->blob, &root);
-        host_unguard(host, was);
-        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, segment_record) != TA_OK) break;
-    }
-    if (status != TA_OK) return status;
-    ta_actor_info actor_info;
-    actor_info.size = sizeof actor_info;
-    ta_actor_info_get(segment_record->system, root, &actor_info);
-    uint32_t count = 0;
-    int elsewhere = tree_pass(host, segment, root, actor_info.serial, 1, &count);
-    if (elsewhere || !moved_reserve(host, count)) {
-        /* one of its sessions lives in another segment, or no room to route
-         * to them: out again, nothing changed */
-        ta_output *scratch = blob_scratch(host); /* reserved above: room for the blob */
-        uint32_t was = host_guard(host);
-        ta_actor_write_export(segment_record->system, root, scratch);
-        host_unguard(host, was);
-        return elsewhere ? TA_ERROR_STATE : TA_ERROR_NO_MEMORY;
-    }
-    segment_record->busy = 1;
-    tree_pass(host, segment, root, actor_info.serial, 0, NULL);
-    if (session) *session = actor_info.serial;
-    return TA_OK;
 }
 
 /* ---- inspection ------------------------------------------------------------------------ */

@@ -542,11 +542,9 @@ actors share no mutable value.
 - **Nesting is limited to 64,** which stops cycles but not a value that
   shares subtrees (`a = [a, a]` sixty times): another reason charts are
   trusted code.
-- A `"python"` actor hibernates and migrates (and exports, once that is
-  in the API) only while its variables, and the data of its pending
-  delayed sends, are values of the value table; a `<foreach>`'s `item` and `index` must be declared
-  `<data>`.
-- Not in the API yet: export and adopt.
+- A `"python"` actor hibernates and migrates only while its variables,
+  and the data of its pending delayed sends, are values of the value
+  table.
 
 ## Memory
 

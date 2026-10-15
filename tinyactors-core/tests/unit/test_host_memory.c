@@ -7,7 +7,7 @@
  *                segments, a send between them, a relocation, a migration.
  *   refusals     a workload that reaches every allocating path of the host
  *                (segments, relocation, routing between segments, the
- *                router's queue, migration, hibernation, export and adoption,
+ *                router's queue, migration, hibernation,
  *                delivery from a peer, expiry, restore) runs with an
  *                allocator that refuses its n-th allocation once. Each
  *                refusal comes back as TA_ERROR_NO_MEMORY or TA_RUN_EXHAUSTED,
@@ -404,7 +404,7 @@ static void workload_run(workload *w) {
         ta_host_migrate(w->host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 0}, &migration));
     run_idle(w, w->host);
 
-    /* hibernation, export and adoption */
+    /* hibernation */
     m->phase = "hibernation";
     static unsigned char blob[1 << 16];
     size_t length = 0;
@@ -413,14 +413,6 @@ static void workload_run(workload *w) {
     length = output_copy(written, blob, sizeof blob);
     ta_host_effects_ack(w->host); /* the output is copied: its batch ends */
     RETRY(m, TA_OK, ta_host_wake(w->host, workers[1], (ta_bytes){blob, length}));
-    run_idle(w, w->host);
-    m->phase = "adoption";
-    RETRY(m, TA_OK, ta_host_export_actor(w->host, workers[2], &written));
-    length = output_copy(written, blob, sizeof blob);
-    ta_host_effects_ack(w->host); /* the output is copied: its batch ends */
-    uint64_t adopted = 0;
-    RETRY(m, TA_OK, ta_host_adopt(w->host, &(ta_host_adoption){2, 0, {blob, length}}, &adopted));
-    CHECK_EQUAL(adopted, workers[2]);
     run_idle(w, w->host);
     m->phase = "sweep";
     uint64_t cold[8];

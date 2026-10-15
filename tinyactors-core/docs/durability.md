@@ -59,7 +59,7 @@ Not session state, by design:
 ✓ = kept · — = not applicable · ✗ = refused (`TA_ERROR_STATE` /
 `TA_ERROR_UNSUPPORTED`): the path does not run, the session stays as it was.
 
-| # | hibernate → wake | export → adopt | + `ta_blob_migrate` | system / host snapshot |
+| # | hibernate → wake | export → adopt (inside a migration) | + `ta_blob_migrate` | system / host snapshot |
 |---|---|---|---|---|
 | 1, 2 | ✓ record stays | ✓ in the blob | ✓ | ✓ region |
 | 3 | ✓ same chart and image | ✓ same image hash | translated to the new chart by state id | ✓ same image hash |
@@ -117,13 +117,11 @@ Why the refusals:
 | null | nothing to keep (`_event` unobservable) | — (no payloads) | — |
 | ECMAScript (C, quickjs-ng) | `JS_WriteObject` (object graphs, cycles, Date/Map/Set/typed arrays) of: shared-realm sessions `[2, variables + _event, invoke params]`; isolated sessions (scripts declaring globals) their global properties, global `let`/`const`/`class` bindings, top-level function declarations (re-run on restore) and invoke params. Functions in data and classes ✗ (`ta_datamodel_ecmascript_last_error` names the variable) | values (`payload_serialize`) | `ta_datamodel_ecmascript_snapshot`: sessions, invoke params, payloads, `<foreach>` items, at their handles |
 
-A blob of the C ECMAScript datamodel is a value: another process, or the same
-one after a restart, can adopt it. A host that adopts one adds the segment
-it runs in if it has no identical one, rebases the delayed sends to its own
-clock (`ta_blob_rebase`: each keeps the time it had left) and adopts it
-through `ta_host_adopt`, which routes to the session in whatever segment
-took it and keeps the segments of its home id range from handing its id out
-again.
+Export and adoption are the steps of a migration inside one host
+(`ta_host_migrate`): the host exports a session from its old segment,
+translates the blob (`ta_blob_migrate`) and adopts it into the segment of
+the current version, routing to it there. No host call hands an export
+blob out.
 
 ## Blob formats
 

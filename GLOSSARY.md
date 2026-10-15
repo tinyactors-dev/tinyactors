@@ -149,9 +149,11 @@ group, the words build on each other.
 - **Pack.** The one-blob form of a snapshot (`ta_host_snapshot_pack`):
   the host's snapshot, the datamodels' state, the images and the system
   id.
-- **Export, adopt.** Moving an actor to another host: export writes it to
-  a blob and removes it, adopt makes it run in the other host with the
-  same session id.
+- **Export, adopt.** The steps a migration moves an actor with, inside
+  core: export writes the actor (and its timers) to a blob and removes
+  it from its old segment, adopt makes it run in the new one with the
+  same session id. Internal: no host call hands an export blob out, and
+  an actor does not move between hosts.
 - **Peer, envelope.** Another host this one exchanges events with, and
   the CBOR message that carries an event between them. Within one
   process the struct form is used and nothing is encoded.

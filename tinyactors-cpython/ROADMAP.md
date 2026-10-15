@@ -258,8 +258,8 @@ rules; what it found is fixed:
 Left for core (capacity planning, not the binding): a segment's region
 grows by doubling under a burst of events and is kept (12.4 KB per actor
 on quickjs after one event each at 10,000 actors).
-- **Not in the API yet** (8.5): export and adopt, a
-  `<foreach>` item that is not a declared `<data>`.
+- **Not in the API, by decision** (2026-10-15): export and adopt, which
+  are the internal steps of a migration and left core's public API.
 
 ### Telemetry (8.5's first item, 2026-10-14) — done
 

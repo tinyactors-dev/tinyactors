@@ -212,7 +212,6 @@ static void refused(world *w) {
     ta_bytes out;
     CHECK_EQUAL(ta_host_post(w->host, (ta_bytes){STATS, sizeof STATS - 1}), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_hibernate(w->host, w->other, &out), TA_ERROR_STATE);
-    CHECK_EQUAL(ta_host_export_actor(w->host, w->other, &out), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_snapshot(w->host, &room), TA_ERROR_STATE);
     CHECK_EQUAL(ta_host_traces(w->host, &out), TA_ERROR_STATE);
     ta_run nested = ta_host_run(w->host, 10);
@@ -409,9 +408,9 @@ static void test_each_output_once(void) {
     ta_host_effects_ack(w.host);
     serialize_calls = payload_serialize_calls = 0;
     ta_bytes out;
-    CHECK_EQUAL(ta_host_export_actor(w.host, w.session, &out), TA_OK);
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &out), TA_OK);
     CHECK_EQUAL(serialize_calls, 1);         /* the session's state */
-    CHECK_EQUAL(payload_serialize_calls, 1); /* the delayed send's value */
+    CHECK_EQUAL(payload_serialize_calls, 0); /* the delayed send stays in the host, its value with it */
     world_close(&w);
 }
 
@@ -479,13 +478,12 @@ static void test_outputs_last_until_the_ack(void) {
 
 /* ---- the host's outputs grow between runs only (tinyactors-core/AGENTS.md) -------------- */
 
-/* In a datamodel call inside a run: hibernate and export are refused before
+/* In a datamodel call inside a run: hibernate is refused before
  * anything is written, so the host's output does not grow. */
 static void in_a_run(world *w) {
     size_t before = allocations;
     ta_bytes out;
     CHECK_EQUAL(ta_host_hibernate(w->host, w->other, &out), TA_ERROR_STATE);
-    CHECK_EQUAL(ta_host_export_actor(w->host, w->other, &out), TA_ERROR_STATE);
     CHECK_EQUAL(allocations, before);
 }
 

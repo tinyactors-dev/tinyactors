@@ -602,7 +602,7 @@ earlier plan's M2 to M5 held: the W3C suite per datamodel (`skip-python.txt`;
 191 of 191 on ECMAScript), with sync sends in that gate; every effect
 (the 8.3 list) through the language's API, both drivers in Python and
 Node's liveness, graceful shutdown (`trace.end`, the last take, free);
-hibernation with a store, export and adopt, migration, snapshots,
+hibernation with a store, migration, snapshots,
 envelopes between hosts and across processes, a Python host and an
 ECMAScript host exchanging envelopes; the examples, release tasks and
 changelogs. The browser (below, "Decided later") after that.

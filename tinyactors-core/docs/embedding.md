@@ -188,7 +188,7 @@ actors a system image declares.
 - **Nothing grows during a run.** The host grows its blocks between runs;
   below the host, the system never allocates after `ta_system_init`.
 - **What the host hands out lives until the ack** (effects, their fields,
-  envelopes, traces, logs, metrics, hibernation and export blobs). The
+  envelopes, traces, logs, metrics, hibernation blobs). The
   host holds a batch's outputs until then, so acking often bounds what it
   holds. Copy what you keep past the ack.
 - **Snapshots and a refused config** are written into your `ta_buffer`;

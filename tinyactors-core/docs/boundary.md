@@ -47,7 +47,7 @@ A call's answer depends on where the caller is in the loop:
 | **I**, idle | between runs, no batch open | everything |
 | **D**, dispatch | between runs, a batch open: after a `ta_host_effects` that returned effects or an output call that handed out a view, until `ta_host_effects_ack` | everything but `ta_host_run` and snapshots; a take returns the open batch (none while it holds outputs alone) |
 | **R**, run | inside `ta_host_run`, from a datamodel entry | the inputs on their in-run paths and the lookups; everything else refused (`host.h:151-170`) |
-| **G**, guard | inside a datamodel entry core calls outside a run (a post, an envelope, deliver, hibernate, wake, export, adopt, the telemetry takes, `release` in the ack, `ta_host_free`) | as R (`host.h:172-179`; ADR 0010 decision 3; `host_guard`, `src/host/host_internal.h:242-247`) |
+| **G**, guard | inside a datamodel entry core calls outside a run (a post, an envelope, deliver, hibernate, wake, the telemetry takes, `release` in the ack, `ta_host_free`) | as R (`host.h:172-179`; ADR 0010 decision 3; `host_guard`, `src/host/host_internal.h:242-247`) |
 
 R and G hold one rule: the guard sets the flag a run sets
 (`host_internal.h:242-246`), so the checks below read "R/G".
@@ -105,8 +105,6 @@ marks a behaviour no test checks.
 | `ta_host_sweep` (:595) | I, D | sessions in the caller's array | R/G: 0 (`host.c:1962`) | none | `test_host.c`, `test_host_memory.c` |
 | `ta_host_hibernate` (:600) | I, D | the blob, a view of host memory until the ack | R/G `TA_ERROR_STATE` (`host.c:2014`); `TA_ERROR_NO_MEMORY`: the actor stays | `serialize`, `destroy` in G (`host.c:2022`) | `test_host.c` `test_hibernate_and_wake`; `test_host_guard.c` `test_hibernate`; blob after a later call: through the same output path as `test_outputs_last_until_the_ack` |
 | `ta_host_wake` (:601) | I, D | the actor back, and back on the retry list of a migration that waits for it; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2029`); `TA_ERROR_NO_MEMORY` (a migration's list could not grow, or the segment): the actor stays hibernated | `deserialize` in G (`host.c:2035`) | `test_host.c` `test_hibernate_and_wake` |
-| `ta_host_export_actor` (:619) | I, D | the blob, a view until the ack; the actor leaves, and leaves the migrations that wait for it | R/G `TA_ERROR_STATE` (`host.c:2048`); `TA_ERROR_NO_MEMORY`: it stays | `serialize`, `payload_serialize`, `destroy` in G (`host.c:2055`) | `test_host.c` `test_export_adopt_between_hosts`; `test_host_guard.c` `test_each_output_once` |
-| `ta_host_adopt` (:625) | I, D | a session id; the blob read during the call | R/G `TA_ERROR_STATE` (`host.c:2122`); `TA_ERROR_INVALID`, `TA_ERROR_STATE` (ids taken), `TA_ERROR_NO_MEMORY` | `deserialize`, `payload_deserialize`, `migrate` in G (`host.c:2133`); `serialize` when it exports the tree back (`host.c:2148`) | `test_host.c` `test_export_adopt_between_hosts`, `test_adopt_tree_collision` |
 | `ta_host_snapshot` (:642) | I with nothing pending | into the caller's `ta_buffer` | effects published or pending (`host.c:2470`), or a migration active: `TA_ERROR_STATE`; a batch opened only by an output view too; R/G too (`host.c:2469`); `TA_ERROR_NO_MEMORY`: `length` is what it needs | none | `test_host.c` `test_snapshot_restore` |
 | `ta_host_snapshot_segments` (:646) | no host | hashes in the caller's array | 0: not a snapshot | none | `test_host.c` |
 | `ta_host_restore` (:700) | no host | a new host; images copied as by `add_image`; its first `ta_host_run` (after the datamodels' state is restored) announces each external invocation that was running again, before any actor runs: a `TA_EFFECT_INVOKE` with `TA_EFFECT_FLAG_RESTORED`, its token, type, src, invoke id and params | `TA_ERROR_INVALID`, `NO_MEMORY` | `chart_attach` in G (`host.c:2669`) | `test_host.c` `test_snapshot_restore`, `test_host_effects.c` `test_restore_announces_external_invocations`, `test_restore_after_images_freed` |
@@ -127,10 +125,10 @@ keeps first (ADR 0010 decision 1).
 | `init_data`, `bind_event`, `detach_event`, `eval_condition`, `eval_string`, `assign`, `assign_string`, `script`, `log`, `foreach_*`, `capture`, `custom` | R | the system's run | the W3C suite through `ta-conform` |
 | `create` | R; G | `<invoke>` in a run; `ta_host_spawn` (`host.c:880`), `ta_host_boot` (`:2405`) | `test_host_inputs.c` |
 | `chart_attach` | G | `ta_host_add_image` (`host.c:588`), `ta_host_restore` (`:2669`) | `test_host.c` `test_image_copied` |
-| `destroy`, `chart_detach` | R; G | an actor exits in a run; retirement (`host.c:1807`), hibernate, export, migration (`host.c:1508`), `ta_host_free` | `test_host_guard.c` `test_free`, `test_outputs_grow_between_runs` |
+| `destroy`, `chart_detach` | R; G | an actor exits in a run; retirement (`host.c:1807`), hibernate, migration (`host.c:1508`), `ta_host_free` | `test_host_guard.c` `test_free`, `test_outputs_grow_between_runs` |
 | `retain`, `release` | R; G | effect copies (`host.c:1190`), the ack (`:1047`), the drain (`:1359`), resume (`:962`), sends that fail outside a run (`:900`, `:935`), the router's sends in a run's drain (`router.c:526`, `:530`), failed envelope queues (`router.c:333-364`, `:433-458`: `ta_host_advance_time`, `ta_host_peer_up`, `ta_host_peer_remove`), peer errors (`router.c:1070`), deliver, post (`request.c:747`), free | `test_host_guard.c` `test_envelope_and_ack` |
-| `serialize`, `deserialize` | G | hibernate (`host.c:2022`), wake (`:2035`), export (`:2055`), adopt (`:2133`), migration (`:1470`, `:1508`, `:1529`) | `test_host_guard.c` `test_hibernate`, `test_each_output_once` |
-| `payload_serialize`, `payload_deserialize`, `migrate` | G | export, adopt, migration (as above) | `test_durable.c`; `test_host_guard.c` `test_each_output_once` |
+| `serialize`, `deserialize` | G | hibernate (`host.c:2022`), wake (`:2035`), migration (`:1470`, `:1508`, `:1529`) | `test_host_guard.c` `test_hibernate`, `test_each_output_once` |
+| `payload_serialize`, `payload_deserialize`, `migrate` | G | migration (as above) | `test_durable.c`; `test_migrate.c` |
 | `to_wire` | G | `ta_host_envelope` (`router.c:1234`), `actor.context` (`request.c:701`), traced values when records are read (`telemetry.c:90`, at a run's start and at a take) | `test_host_guard.c` `test_each_output_once`, `test_traces` |
 | `from_wire` | G | `ta_host_deliver` at the target (`router.c:552`) | `test_router.c` `test_decode_at_target` |
 | `variable` | G | `actor.context` (`request.c:738`) | `test_host_request.c` `test_actor_context` |
@@ -374,20 +372,19 @@ needed new state-value machinery, a walk in place or scratch from the
 host's allocator, both dropped by the maintainer; and,
 before it, a truncated value with `"limit": true`, `null` past the limit,
 or no `value` (three shapes for one reader). For the end of a session:
-a list of every state as `exited` (a session exported to another host
-exits none) and a `null` member (a value, where the notification
+a list of every state as `exited` and a `null` member (a value, where the notification
 carries none).
 
 ## 7. Host outputs
 
 **Design.** `ta_host_envelope`, `ta_host_traces`, `ta_host_logs`,
-`ta_host_metrics`, `ta_host_hibernate`, `ta_host_export_actor`: views of
+`ta_host_metrics`, `ta_host_hibernate`: views of
 host memory valid until `ta_host_effects_ack` (ADR 0012, decision 1). An
 output taken with no batch open opens one. The host keeps a batch's
 outputs in memory it frees or reuses at the ack, and growing it never
 moves an output already handed out. `ta_host_snapshot`,
 `ta_host_snapshot_pack` and `environment->error` keep `ta_buffer` (size
-known up front; no host yet). Hibernate and export are written in one
+known up front; no host yet). A hibernation is written in one
 pass through the host's allocator, between runs only
 (tinyactors-core/AGENTS.md, "Region memory is fixed at ta_system_init").
 
@@ -433,7 +430,7 @@ Not the host handing a block's ownership to the binding, freed when the
 language's object is collected: a new core call, host memory outside the
 loop's lifetimes and the allocator called from finalizers, to save one
 copy of a few kilobytes (unmeasured; to be measured only if large
-hibernation or export blobs make the copy matter).
+hibernation blobs make the copy matter).
 
 **A batch of outputs alone.** An output taken with no effects published
 opens a batch (`outputs_lent`, `src/host/host_internal.h`): `ta_host_run`

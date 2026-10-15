@@ -295,7 +295,6 @@ static void refused(world *w) {
     }
     CHECK_EQUAL(ta_host_post(w->host, (ta_bytes){"\xa1\x62op\x65stats", 9}),
                 TA_ERROR_STATE);
-    CHECK_EQUAL(ta_host_export_actor(w->host, w->listener, &out), TA_ERROR_STATE);
     uint32_t segment;
     CHECK_EQUAL(ta_host_add_image(w->host, (ta_bytes){w->image_bytes, w->image_length}, &segment),
                 TA_ERROR_STATE);

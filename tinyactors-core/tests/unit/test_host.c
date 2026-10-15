@@ -608,10 +608,8 @@ static void test_migration_asks_again_and_takes_the_woken(void) {
     run(&e);
     CHECK_EQUAL(e.migrated_count, 1);
     CHECK_EQUAL(e.last_migration, 0u); /* y asleep */
-    CHECK_EQUAL(ta_host_wake(e.host, y, kept(&blob_y)), TA_OK); /* y leaves the host: woken, exported */
-    ta_bytes exported;
-    CHECK_EQUAL(ta_host_export_actor(e.host, y, &exported), TA_OK);
-    ta_host_effects_ack(e.host);
+    CHECK_EQUAL(ta_host_wake(e.host, y, kept(&blob_y)), TA_OK); /* y ends: woken, terminated */
+    CHECK_EQUAL(ta_host_terminate(e.host, y), TA_OK);
     run(&e);
     CHECK(e.last_migration == migration && e.last_done.migrated == 1 && e.last_done.pending == 0);
     world_close(&e);
@@ -941,139 +939,6 @@ static void test_snapshot_of_one_image_in_two_segments(void) {
     free(ds);
     world_close(&e);
 #undef TWICE
-}
-
-/* An actor moves to another host with its own datamodel (another process): its
- * delayed send's payload travels as a value, the blob is rebased to the new
- * host's clock, the session keeps its id and is routed to in whatever segment
- * adopted it, and no segment of its home range hands that id out again. */
-#define MOVER                                                                                      \
-    SC("mover",                                                                                    \
-       "initial='a'><datamodel><data id='n' expr='0'/></datamodel>"                                \
-       "<state id='a'><onentry><send event='tick' delay='100ms'>"                                  \
-       "<param name='v' expr='[41]'/></send></onentry>"                                            \
-       "<transition event='tick' target='b'><assign location='n' expr='_event.data.v[0] + 1'/>"    \
-       "<log expr=\"'tick:' + n\"/></transition></state>"                                          \
-       "<state id='b'><transition event='ping'><log expr=\"'ping:' + n\"/></transition>"           \
-       "</state>")
-
-static void test_export_adopt_between_hosts(void) {
-    host_world a, b;
-    world_open(&a, 8, NULL, 0);
-    world_open(&b, 8, NULL, 0);
-    world_add(&a, ECHO);
-    world_add(&a, MOVER); /* segment 1 in a, 0 in b */
-    world_add(&b, MOVER);
-    uint64_t s = spawn(&a, "mover");
-    CHECK_EQUAL(s, (1ull << 32) + 1);
-    run(&a); /* its delayed send is due at 100 */
-    ta_host_advance_time(a.host, (ta_host_time){30, 0});
-    run(&a);
-    ta_bytes written; /* the host's, until the ack */
-    CHECK_EQUAL(ta_host_export_actor(a.host, s, &written), TA_OK);
-    size_t capacity = 2 * written.length + 4096;
-    unsigned char *blob = (unsigned char *)malloc(capacity);
-    size_t length = output_copy(written, blob, capacity);
-    ta_host_effects_ack(a.host); /* the output is copied: its batch ends */
-    CHECK_EQUAL(ta_host_locate(a.host, s, &(ta_host_location){0, 0}), TA_ERROR_STALE); /* it left */
-    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, 7}}, NULL),
-                TA_ERROR_INVALID);
-    CHECK_EQUAL(ta_blob_rebase((ta_memory){blob, 9}, 0, 0), TA_ERROR_INVALID);
-    CHECK_EQUAL(ta_blob_rebase((ta_memory){blob, length}, 30, 1000),
-                TA_OK); /* 70 ms left, on b's clock */
-    ta_host_advance_time(b.host, (ta_host_time){1000, 0});
-    uint64_t got = 0;
-    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, length}}, &got), TA_OK);
-    CHECK_EQUAL(got, s);
-    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){0, 0, {blob, length}}, &got),
-                TA_ERROR_STATE); /* it is here already */
-    uint32_t segment = 9;
-    ta_host_location location;
-    CHECK_EQUAL(ta_host_locate(b.host, s, &location), TA_OK);
-    segment = location.segment;
-    CHECK_EQUAL(segment, 0);
-    ta_host_advance_time(b.host, (ta_host_time){1069, 0});
-    run(&b);
-    CHECK(strcmp(b.log, "") == 0);
-    ta_host_advance_time(b.host, (ta_host_time){1070, 0});
-    run(&b);
-    CHECK(strcmp(b.log, "tick:42;") == 0); /* the payload, as a value of b's datamodel */
-    CHECK_EQUAL(send(&b, s, "ping", NULL), TA_OK);
-    run(&b);
-    CHECK(strcmp(b.log, "tick:42;ping:42;") == 0);
-    /* its home range (segment 1) is added later: past its id */
-    CHECK_EQUAL(world_add(&b, ECHO), 1);
-    uint64_t fresh = spawn(&b, "echo");
-    CHECK(fresh > s && (fresh >> 32) == 1);
-    /* back to a, into its home segment, from a blob that is overdue there */
-    CHECK_EQUAL(ta_host_export_actor(b.host, s, &written), TA_OK);
-    length = output_copy(written, blob, capacity);
-    ta_host_effects_ack(b.host); /* the output is copied: its batch ends */
-    CHECK_EQUAL(ta_host_adopt(a.host, &(ta_host_adoption){1, 0, {blob, length}}, &got), TA_OK);
-    CHECK_EQUAL(ta_host_locate(a.host, s, &location), TA_OK);
-    segment = location.segment;
-    CHECK_EQUAL(segment, 1);
-    a.log[0] = 0;
-    CHECK_EQUAL(send(&a, s, "ping", NULL), TA_OK);
-    run(&a);
-    CHECK(strcmp(a.log, "ping:42;") == 0);
-    free(blob);
-    world_close(&a);
-    world_close(&b);
-}
-
-/* A session tree is refused whole when any of its sessions — not only the
- * root — already lives in another segment of the adopting host. */
-static void test_adopt_tree_collision(void) {
-    host_world a, b;
-    world_open(&a, 8, NULL, 0);
-    world_open(&b, 8, NULL, 0);
-    world_add(&a, P1); /* segment 0 in a, 1 in b */
-    world_add(&b, ECHO);
-    world_add(&b, P1);
-    uint64_t root = spawn(&a, "p");
-    run(&a);
-    uint64_t ids[4], cursor = 0;
-    CHECK_EQUAL(host_actors_page(a.host, &cursor, (ta_uint64_array){ids, 4}), 2u);
-    uint64_t kid = ids[0] == root ? ids[1] : ids[0];
-    CHECK_EQUAL(root, 1u);
-    CHECK_EQUAL(kid, 2u);
-    size_t capacity = 65536, length = 0;
-    unsigned char *blob = (unsigned char *)malloc(capacity);
-    ta_bytes written; /* the host's, until the ack */
-    CHECK_EQUAL(ta_host_export_actor(a.host, root, &written), TA_OK);
-    length = output_copy(written, blob, capacity);
-    ta_host_effects_ack(a.host); /* the output is copied: its batch ends */
-    /* b: session 2 lives in segment 0, session 1 does not */
-    CHECK_EQUAL(spawn(&b, "echo"), 1u);
-    CHECK_EQUAL(spawn(&b, "echo"), 2u);
-    run(&b);
-    CHECK_EQUAL(ta_host_export_actor(b.host, 1, &written), TA_OK);
-    ta_host_effects_ack(b.host); /* the blob is not needed: its batch ends */
-    uint64_t got = 9;
-    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){1, 0, {blob, length}}, &got),
-                TA_ERROR_STATE);
-    CHECK_EQUAL(got, 0u);
-    uint32_t segment = 9;
-    ta_host_location location;
-    CHECK_EQUAL(ta_host_locate(b.host, kid, &location), TA_OK);
-    segment = location.segment;
-    CHECK_EQUAL(segment, 0); /* still the echo */
-    CHECK_EQUAL(ta_host_locate(b.host, root, &(ta_host_location){0, 0}), TA_ERROR_STALE);
-    ta_host_stats stats;
-    stats.size = sizeof stats;
-    CHECK_EQUAL(host_stats_fill(b.host, &stats), TA_OK);
-    CHECK_EQUAL(stats.actors, 1u);
-    /* once session 2 has left b, the tree moves in */
-    CHECK_EQUAL(ta_host_export_actor(b.host, kid, &written), TA_OK);
-    CHECK_EQUAL(ta_host_adopt(b.host, &(ta_host_adoption){1, 0, {blob, length}}, &got), TA_OK);
-    CHECK_EQUAL(got, root);
-    CHECK_EQUAL(ta_host_locate(b.host, kid, &location), TA_OK);
-    segment = location.segment;
-    CHECK_EQUAL(segment, 1);
-    free(blob);
-    world_close(&a);
-    world_close(&b);
 }
 
 /* configurations as nested state values: atomic, compound, parallel regions
@@ -1460,8 +1325,6 @@ int main(void) {
     RUN(test_hibernate_and_wake);
     RUN(test_request_answered_with_an_error);
     RUN(test_state_value);
-    RUN(test_export_adopt_between_hosts);
-    RUN(test_adopt_tree_collision);
     RUN(test_snapshot_restore);
     RUN(test_snapshot_of_one_image_in_two_segments);
     RUN(test_bad_targets);

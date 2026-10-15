@@ -480,15 +480,7 @@ TA_API uint32_t ta_system_cold_actors(ta_system *system, ta_sweep *sweep, ta_uin
  * new <data> is initialized, and the platform event error.platform.upgrade
  * (SCXML 3.12.2 reserves error.platform for platform events) is placed in the
  * internal queue; its data are the previous <datamodel> bindings. The actor
- * becomes runnable to process it before any mailbox event.
- *
- * ta_blob_rebase: move an exported (possibly migrated) blob's delayed sends
- * from one clock to another, in place: each due time d becomes d - from + to
- * (one due before `from` is due at `to`). Due times are absolute ticks of the
- * clock the systems share; hosts whose clocks are not shared pass the
- * exporter's clock at export and the adopter's now, so every delayed send
- * keeps the time it had left. TA_ERROR_INVALID if the blob is malformed
- * (nothing changes then). */
+ * becomes runnable to process it before any mailbox event. */
 TA_API ta_status ta_actor_export(ta_system *system, uint32_t actor, ta_buffer *out);
 typedef struct ta_blob_migration {
     const ta_image *from_image, *to_image;
@@ -498,7 +490,6 @@ typedef struct ta_blob_migration {
 } ta_blob_migration;
 TA_API ta_status ta_blob_migrate(const ta_blob_migration *migration, ta_buffer *out);
 TA_API ta_status ta_system_adopt(ta_system *system, ta_bytes blob, uint32_t *actor);
-TA_API ta_status ta_blob_rebase(ta_memory blob, ta_time from, ta_time to);
 
 /* Sessions created from now on (spawns, invocations) get ids after `serial`.
  * For hosts that keep sessions outside the system and allocate their ids

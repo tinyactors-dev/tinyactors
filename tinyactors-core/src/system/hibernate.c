@@ -1095,41 +1095,6 @@ ta_status ta_system_adopt(ta_system *system, ta_bytes bytes, uint32_t *actor) {
     return TA_OK;
 }
 
-/* ---- another clock: shift the due times of a blob's delayed sends ---------------------- */
-
-ta_status ta_blob_rebase(ta_memory bytes, ta_time from, ta_time to) {
-    void *blob = bytes.pointer;
-    size_t length = bytes.length;
-    export_header th;
-    if (!blob || length < sizeof th) return TA_ERROR_INVALID;
-    ta_memcpy(&th, blob, sizeof th);
-    if (th.magic != EXPORT_MAGIC || th.version != EXPORT_VERSION || !th.session_count ||
-        th.session_count > (length - sizeof th) / sizeof(session_header))
-        return TA_ERROR_INVALID;
-    unsigned char *base = (unsigned char *)blob;
-    const unsigned char *end = base + length;
-    for (int pass = 0; pass < 2; pass++) { /* check everything, then write */
-        const unsigned char *q = base + sizeof th;
-        for (uint32_t k = 0; k < th.session_count; k++) {
-            blob_view view;
-            if (!next_session(&q, end, th.image_hash, &view)) return TA_ERROR_INVALID;
-            const unsigned char *t = view.timers, *te = t + view.timers_bytes;
-            for (uint32_t i = 0; i < view.timer_count; i++) {
-                const unsigned char *at = t;
-                blob_timer r;
-                const char *tx[4];
-                if (!timer_rec(&t, te, &r, tx)) return TA_ERROR_INVALID;
-                if (!pass) continue;
-                uint64_t left = r.due > from ? r.due - from : 0;
-                r.due = left > UINT64_MAX - to ? UINT64_MAX : to + left;
-                ta_memcpy(base + (at - base), &r, sizeof r);
-            }
-            if (t != te) return TA_ERROR_INVALID;
-        }
-    }
-    return TA_OK;
-}
-
 /* ---- migration: translate a blob to another version of its chart ----------------------- */
 
 typedef struct migration_context {
