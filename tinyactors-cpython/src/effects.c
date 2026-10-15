@@ -5,6 +5,7 @@
  * TA_ERROR_STALE. A record (an async def processor's send) holds every
  * field, made before the ack. */
 #include "extension.h"
+#include "docs.h"
 #include <string.h>
 
 /* ---- the fields of a view -------------------------------------------------------- */
@@ -296,27 +297,26 @@ static PyObject *ta_python_view_repr(PyObject *self) {
 }
 
 static PyGetSetDef ta_python_send_properties[] = {
-    {"session", ta_python_send_session, NULL, "The sending session (int).", NULL},
-    {"sendid", ta_python_send_sendid, NULL, "The send's sendid (str or None).", NULL},
-    {"event", ta_python_send_event, NULL, "The event's name.", NULL},
-    {"target", ta_python_send_target, NULL, "The send's target (str or None).", NULL},
-    {"data", ta_python_send_data, NULL, "The event's data: a \"python\" payload's value itself, or quickjs's decoded.", NULL},
-    {"traceparent", ta_python_send_traceparent, NULL, "The sending step's trace as W3C text, None when untraced.", NULL},
-    {"type", ta_python_send_type, NULL, "The I/O processor's type.", NULL},
+    {"session", ta_python_send_session, NULL, ta_python_doc_send_session, NULL},
+    {"sendid", ta_python_send_sendid, NULL, ta_python_doc_send_sendid, NULL},
+    {"event", ta_python_send_event, NULL, ta_python_doc_send_event, NULL},
+    {"target", ta_python_send_target, NULL, ta_python_doc_send_target, NULL},
+    {"data", ta_python_send_data, NULL, ta_python_doc_send_data, NULL},
+    {"traceparent", ta_python_send_traceparent, NULL, ta_python_doc_send_traceparent, NULL},
+    {"type", ta_python_send_type, NULL, ta_python_doc_send_type, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
 static PyMethodDef ta_python_send_methods[] = {
     {"answer", (PyCFunction)(void (*)(void))ta_python_send_answer, METH_VARARGS | METH_KEYWORDS,
-     "answer(event, data=None, *, traceparent=send.traceparent)\n--\n\nAn event for the sending session with this "
-     "send's sendid; it keeps the send's trace unless traceparent says otherwise."},
+     ta_python_doc_send_answer},
     {"fail", ta_python_send_fail, METH_NOARGS,
-     "fail()\n--\n\nerror.communication for the sending session, with this send's sendid and trace."},
+     ta_python_doc_send_fail},
     {NULL, NULL, 0, NULL}
 };
 
 static PyType_Slot ta_python_send_slots[] = {
-    {Py_tp_doc, "A send to an I/O processor: a thin view until the batch's ack, or a record for an async handler."},
+    {Py_tp_doc, (void *)ta_python_doc_send},
     {Py_tp_dealloc, ta_python_view_dealloc},
     {Py_tp_traverse, ta_python_view_traverse},
     {Py_tp_clear, ta_python_view_clear},
@@ -327,14 +327,14 @@ static PyType_Slot ta_python_send_slots[] = {
 };
 
 static PyGetSetDef ta_python_entry_properties[] = {
-    {"session", ta_python_entry_session, NULL, "The logging session (int).", NULL},
-    {"label", ta_python_entry_label, NULL, "The <log>'s label.", NULL},
-    {"text", ta_python_entry_text, NULL, "The <log>'s text.", NULL},
+    {"session", ta_python_entry_session, NULL, ta_python_doc_entry_session, NULL},
+    {"label", ta_python_entry_label, NULL, ta_python_doc_entry_label, NULL},
+    {"text", ta_python_entry_text, NULL, ta_python_doc_entry_text, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
 static PyType_Slot ta_python_entry_slots[] = {
-    {Py_tp_doc, "A <log> line: a thin view until the batch's ack."},
+    {Py_tp_doc, (void *)ta_python_doc_entry},
     {Py_tp_dealloc, ta_python_view_dealloc},
     {Py_tp_traverse, ta_python_view_traverse},
     {Py_tp_clear, ta_python_view_clear},
@@ -343,14 +343,14 @@ static PyType_Slot ta_python_entry_slots[] = {
 };
 
 static PyGetSetDef ta_python_envelope_properties[] = {
-    {"peer", ta_python_envelope_peer, NULL, "The peer it goes to (int).", NULL},
-    {"error", ta_python_envelope_error, NULL, "True for an error envelope.", NULL},
-    {"cbor", ta_python_envelope_cbor, NULL, "The envelope as CBOR bytes, written once.", NULL},
+    {"peer", ta_python_envelope_peer, NULL, ta_python_doc_envelope_peer, NULL},
+    {"error", ta_python_envelope_error, NULL, ta_python_doc_envelope_error, NULL},
+    {"cbor", ta_python_envelope_cbor, NULL, ta_python_doc_envelope_cbor, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
 static PyType_Slot ta_python_envelope_slots[] = {
-    {Py_tp_doc, "An envelope for another system: a thin view until the batch's ack."},
+    {Py_tp_doc, (void *)ta_python_doc_envelope},
     {Py_tp_dealloc, ta_python_view_dealloc},
     {Py_tp_traverse, ta_python_view_traverse},
     {Py_tp_clear, ta_python_view_clear},
@@ -359,15 +359,15 @@ static PyType_Slot ta_python_envelope_slots[] = {
 };
 
 static PyGetSetDef ta_python_migration_properties[] = {
-    {"session", ta_python_migration_session, NULL, "The session that moved (int; its id stays).", NULL},
-    {"segment", ta_python_migration_segment, NULL, "The segment it moved to (int).", NULL},
-    {"chart", ta_python_migration_chart, NULL, "The chart's name.", NULL},
-    {"job", ta_python_migration_job, NULL, "The migrate call's job (int).", NULL},
+    {"session", ta_python_migration_session, NULL, ta_python_doc_migration_session, NULL},
+    {"segment", ta_python_migration_segment, NULL, ta_python_doc_migration_segment, NULL},
+    {"chart", ta_python_migration_chart, NULL, ta_python_doc_migration_chart, NULL},
+    {"job", ta_python_migration_job, NULL, ta_python_doc_migration_job, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
 static PyType_Slot ta_python_migration_slots[] = {
-    {Py_tp_doc, "An actor moved to the current version of its chart: a thin view until the batch's ack."},
+    {Py_tp_doc, (void *)ta_python_doc_migration},
     {Py_tp_dealloc, ta_python_view_dealloc},
     {Py_tp_traverse, ta_python_view_traverse},
     {Py_tp_clear, ta_python_view_clear},
@@ -712,30 +712,27 @@ static void ta_python_invocation_dealloc(PyObject *self) {
 }
 
 static PyGetSetDef ta_python_invocation_properties[] = {
-    {"session", ta_python_invocation_session, NULL, "The invoking session (int).", NULL},
-    {"invokeid", ta_python_invocation_field, NULL, "The <invoke>'s id.", (void *)offsetof(ta_python_invocation, invokeid)},
-    {"type", ta_python_invocation_field, NULL, "The <invoke>'s type: the service's.", (void *)offsetof(ta_python_invocation, type)},
-    {"src", ta_python_invocation_field, NULL, "The <invoke>'s src (str or None).", (void *)offsetof(ta_python_invocation, src)},
-    {"data", ta_python_invocation_field, NULL, "The <invoke>'s params (or content), a value.", (void *)offsetof(ta_python_invocation, data)},
-    {"traceparent", ta_python_invocation_field, NULL, "The invoking step's trace as W3C text, or None.", (void *)offsetof(ta_python_invocation, traceparent)},
-    {"running", ta_python_invocation_running, NULL, "False once done, cancelled or failed.", NULL},
-    {"restored", ta_python_invocation_restored, NULL, "True when the host was restored from a snapshot with this "
-     "invocation running: the service is started again, with the same invokeid and params.", NULL},
+    {"session", ta_python_invocation_session, NULL, ta_python_doc_invocation_session, NULL},
+    {"invokeid", ta_python_invocation_field, NULL, ta_python_doc_invocation_invokeid, (void *)offsetof(ta_python_invocation, invokeid)},
+    {"type", ta_python_invocation_field, NULL, ta_python_doc_invocation_type, (void *)offsetof(ta_python_invocation, type)},
+    {"src", ta_python_invocation_field, NULL, ta_python_doc_invocation_src, (void *)offsetof(ta_python_invocation, src)},
+    {"data", ta_python_invocation_field, NULL, ta_python_doc_invocation_data, (void *)offsetof(ta_python_invocation, data)},
+    {"traceparent", ta_python_invocation_field, NULL, ta_python_doc_invocation_traceparent, (void *)offsetof(ta_python_invocation, traceparent)},
+    {"running", ta_python_invocation_running, NULL, ta_python_doc_invocation_running, NULL},
+    {"restored", ta_python_invocation_restored, NULL, ta_python_doc_invocation_restored, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
 static PyMethodDef ta_python_invocation_methods[] = {
     {"send_back", (PyCFunction)(void (*)(void))ta_python_invocation_send_back, METH_VARARGS | METH_KEYWORDS,
-     "send_back(event, data=None, *, traceparent=invocation.traceparent)\n--\n\nAn event from the service to its "
-     "invoker (its invokeid, from the invoked child)."},
+     ta_python_doc_invocation_send_back},
     {"done", (PyCFunction)(void (*)(void))ta_python_invocation_done, METH_VARARGS | METH_KEYWORDS,
-     "done(data=None, *, traceparent=invocation.traceparent)\n--\n\nThe service ended: done.invoke.<invokeid> with "
-     "`data` for the invoker. The invocation's answers end here."},
+     ta_python_doc_invocation_done},
     {NULL, NULL, 0, NULL}
 };
 
 static PyType_Slot ta_python_invocation_slots[] = {
-    {Py_tp_doc, "An invoked service's invocation: a record, valid while it runs."},
+    {Py_tp_doc, (void *)ta_python_doc_invocation},
     {Py_tp_dealloc, ta_python_invocation_dealloc},
     {Py_tp_traverse, ta_python_invocation_traverse},
     {Py_tp_clear, ta_python_invocation_clear},

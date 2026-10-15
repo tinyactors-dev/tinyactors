@@ -11,10 +11,18 @@ import copy
 
 
 class TinyactorsError(Exception):
-    """An error core reported: a reply's error, a refusal at a call, a
-    fault, a stale view. `status` is ta_status_name's text of a bare
-    status (e.g. "TA_ERROR_STALE"); `code`, `reason`, `path` and
-    `message` are a reply's error as core wrote it."""
+    """An error the core reported, the one exception type the host raises
+    for its own reasons.
+
+    It comes from a call the host refused (a full pool, a closed host, a
+    session that does not exist), from a thin view read after its batch was
+    acknowledged, from a fault of a run, or as a typed method's error
+    (given to on_error, or raised by the driver without one). Branch on
+    `status`, the core's name for a bare status ("TA_ERROR_STALE",
+    "TA_ERROR_STATE", ...); a typed method's error also has `code`,
+    `reason`, `path` and `message` as the host's reply wrote them.
+    MemoryError is raised instead when the host ran out of a pool its
+    config sized."""
 
     def __init__(self, message="", code=None, reason=None, path=None, status=None):
         super().__init__(message)
@@ -26,8 +34,12 @@ class TinyactorsError(Exception):
 
 
 class CompileError(TinyactorsError):
-    """compile_charts refused the documents: `diagnostics` holds every
-    diagnostic of the compilation, errors, warnings and notes."""
+    """compile_charts found an error in the documents.
+
+    `diagnostics` is every Diagnostic of the compilation (errors, warnings
+    and notes, each with its file, line and column), so a tool can show
+    them all at once; str() of the error names the first. Nothing was
+    compiled: fix the documents and call compile_charts again."""
 
     def __init__(self, message, diagnostics):
         super().__init__(message, status="TA_ERROR_INVALID")
@@ -35,8 +47,14 @@ class CompileError(TinyactorsError):
 
 
 class ResolveError(TinyactorsError):
-    """Raised by a resolver's resolve(base, source) to refuse a document:
-    the compiler reports `message` at `line` and `column` of it."""
+    """Raise it from a resolver's resolve(base, source) to refuse a
+    document a chart references with src= (not found, not allowed, not
+    valid).
+
+    The compiler reports `message` as a diagnostic of that document, at
+    `line` and `column` when given, and compile_charts raises
+    CompileError with it among the others. Any other exception a resolver
+    raises is a bug in the resolver and propagates from compile_charts."""
 
     def __init__(self, message, line=None, column=None):
         super().__init__(message, status="TA_ERROR_INVALID")
@@ -45,9 +63,23 @@ class ResolveError(TinyactorsError):
 
 
 class Diagnostic:
-    """One diagnostic of a compilation (ta_diagnostic), converted once."""
+    """One message of the compiler about a document: in
+    Compiled.diagnostics (warnings and notes of a compilation that
+    succeeded) and CompileError.diagnostics.
 
-    __slots__ = ("severity", "code", "file", "line", "column", "message")
+    `severity` is "error", "warning" or "note", `code` the compiler's
+    code for the kind of problem, `file`, `line` and `column` where it is
+    (the source's name as given to compile_charts), `message` the text.
+    repr() reads like a compiler's output line."""
+
+    __slots__ = {
+        "severity": "\"error\", \"warning\" or \"note\".",
+        "code": "The compiler's code for the kind of problem (stable across releases).",
+        "file": "The document's name, as given to compile_charts or returned by a resolver.",
+        "line": "The line in that document, from 1.",
+        "column": "The column in that line, from 1.",
+        "message": "What the compiler says, in one sentence.",
+    }
 
     def __init__(self, severity, code, file, line, column, message):
         self.severity = severity

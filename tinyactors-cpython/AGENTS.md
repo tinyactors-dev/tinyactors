@@ -946,7 +946,9 @@ README.md, CHANGELOG.md, mise.toml, pyproject.toml, sgconfig.yml
 ROADMAP.md           the work in progress: plan, progress, how it runs, requests to core
 docs/api-map.md      each API item → ta_* function, method or effect (checked)
 docs/values.md       the Python side of the value table
-src/                 extension.h, module.c, host.c (Host, inputs, the arena's marks),
+src/                 extension.h, docs.h (every public docstring: when and how to use an item,
+                     where it fits; tests/test_docs.py checks each item has one),
+                     module.c, host.c (Host, inputs, the arena's marks),
                      loop.c (drain, turn, both drivers), effects.c (dispatch, thin views,
                      records), methods.c (typed methods, the pending table), values.c,
                      compile.c (compile_charts, Compiled, the resolver protocol, ResolveError),

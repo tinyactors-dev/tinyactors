@@ -6,6 +6,7 @@
  * TA_ERROR_EXECUTION; a BaseException that is not an Exception is kept
  * and raised again after the run. */
 #include "datamodel.h"
+#include "../docs.h"
 #include <string.h>
 
 /* ---- the Event of _event ------------------------------------------------------------ */
@@ -16,14 +17,14 @@ typedef struct ta_python_event {
 } ta_python_event;
 
 static PyMemberDef ta_python_event_members[] = {
-    {"name", Py_T_OBJECT_EX, offsetof(ta_python_event, name), Py_READONLY, "the event's name"},
-    {"type", Py_T_OBJECT_EX, offsetof(ta_python_event, type), Py_READONLY, "\"platform\", \"internal\" or \"external\""},
-    {"sendid", Py_T_OBJECT_EX, offsetof(ta_python_event, sendid), Py_READONLY, "the sendid, or None"},
-    {"origin", Py_T_OBJECT_EX, offsetof(ta_python_event, origin), Py_READONLY, "the sender's address, or None"},
-    {"origintype", Py_T_OBJECT_EX, offsetof(ta_python_event, origintype), Py_READONLY, "the origin's type, or None"},
-    {"invokeid", Py_T_OBJECT_EX, offsetof(ta_python_event, invokeid), Py_READONLY, "the invocation's id, or None"},
-    {"data", Py_T_OBJECT_EX, offsetof(ta_python_event, data), Py_READONLY, "the event's data, or None"},
-    {"raw", Py_T_OBJECT_EX, offsetof(ta_python_event, raw), Py_READONLY, "the I/O processor's raw message, or None"},
+    {"name", Py_T_OBJECT_EX, offsetof(ta_python_event, name), Py_READONLY, ta_python_doc_event_name},
+    {"type", Py_T_OBJECT_EX, offsetof(ta_python_event, type), Py_READONLY, ta_python_doc_event_type},
+    {"sendid", Py_T_OBJECT_EX, offsetof(ta_python_event, sendid), Py_READONLY, ta_python_doc_event_sendid},
+    {"origin", Py_T_OBJECT_EX, offsetof(ta_python_event, origin), Py_READONLY, ta_python_doc_event_origin},
+    {"origintype", Py_T_OBJECT_EX, offsetof(ta_python_event, origintype), Py_READONLY, ta_python_doc_event_origintype},
+    {"invokeid", Py_T_OBJECT_EX, offsetof(ta_python_event, invokeid), Py_READONLY, ta_python_doc_event_invokeid},
+    {"data", Py_T_OBJECT_EX, offsetof(ta_python_event, data), Py_READONLY, ta_python_doc_event_data},
+    {"raw", Py_T_OBJECT_EX, offsetof(ta_python_event, raw), Py_READONLY, ta_python_doc_event_raw},
     {NULL, 0, 0, 0, NULL}
 };
 
@@ -57,7 +58,7 @@ static void ta_python_event_dealloc(PyObject *self) {
 }
 
 static PyType_Slot ta_python_event_slots[] = {
-    {Py_tp_doc, "The current event of a \"python\" chart (_event), immutable."},
+    {Py_tp_doc, (void *)ta_python_doc_event},
     {Py_tp_members, ta_python_event_members},
     {Py_tp_dealloc, ta_python_event_dealloc},
     {Py_tp_traverse, ta_python_event_traverse},

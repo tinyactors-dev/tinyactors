@@ -3,6 +3,7 @@
  * (resolve(base, source) -> str) is its ta_compile_options.resolve, the
  * only place a resolver is given: it lives at compile time only. */
 #include "extension.h"
+#include "docs.h"
 #include <string.h>
 
 ta_status ta_python_compile(ta_compile_options *options, ta_source_list charts, ta_compile_result **out);
@@ -298,20 +299,20 @@ static void ta_python_compiled_dealloc(PyObject *self) {
 }
 
 static PyGetSetDef ta_python_compiled_properties[] = {
-    {"image", ta_python_compiled_image, NULL, "The image's bytes: a read-only memoryview, valid until close().", NULL},
-    {"diagnostics", ta_python_compiled_diagnostics, NULL, "The warnings and notes of the compilation.", NULL},
+    {"image", ta_python_compiled_image, NULL, ta_python_doc_compiled_image, NULL},
+    {"diagnostics", ta_python_compiled_diagnostics, NULL, ta_python_doc_compiled_diagnostics, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
 static PyMethodDef ta_python_compiled_methods[] = {
-    {"close", ta_python_compiled_close, METH_NOARGS, "close()\n--\n\nFree the compile result (ta_compile_free)."},
-    {"__enter__", ta_python_compiled_enter, METH_NOARGS, NULL},
-    {"__exit__", ta_python_compiled_exit, METH_VARARGS, NULL},
+    {"close", ta_python_compiled_close, METH_NOARGS, ta_python_doc_compiled_close},
+    {"__enter__", ta_python_compiled_enter, METH_NOARGS, ta_python_doc_compiled_enter},
+    {"__exit__", ta_python_compiled_exit, METH_VARARGS, ta_python_doc_compiled_exit},
     {NULL, NULL, 0, NULL}
 };
 
 static PyType_Slot ta_python_compiled_slots[] = {
-    {Py_tp_doc, "A compile result (compile_charts): its image and diagnostics, until close()."},
+    {Py_tp_doc, (void *)ta_python_doc_compiled},
     {Py_tp_dealloc, ta_python_compiled_dealloc},
     {Py_tp_getset, ta_python_compiled_properties},
     {Py_tp_methods, ta_python_compiled_methods},

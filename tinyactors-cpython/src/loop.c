@@ -4,6 +4,7 @@
  * (idle). The one timer lives here: the synchronous driver's sleep, or one
  * asyncio TimerHandle (tools/lint/rules/one-timer-in-loop.yml). */
 #include "extension.h"
+#include "docs.h"
 #include <string.h>
 
 /* Fuel per ta_host_run: a turn is bounded, and the drivers let the rest
@@ -475,17 +476,17 @@ static void ta_python_clock_dealloc(PyObject *self) {
 
 static PyMethodDef ta_python_clock_methods[] = {
     {"increment", ta_python_clock_increment, METH_O,
-     "increment(ms, /)\n--\n\nMove the clock on by ms milliseconds and turn every host made with it until idle."},
+     ta_python_doc_clock_increment},
     {NULL, NULL, 0, NULL}
 };
 
 static PyGetSetDef ta_python_clock_properties[] = {
-    {"now", ta_python_clock_milliseconds, NULL, "The simulated time, in milliseconds (it starts at 0).", NULL},
+    {"now", ta_python_clock_milliseconds, NULL, ta_python_doc_clock_now, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
 static PyType_Slot ta_python_clock_slots[] = {
-    {Py_tp_doc, "SimulatedClock()\n--\n\nA clock that moves only with increment(ms), for tests and simulations."},
+    {Py_tp_doc, (void *)ta_python_doc_clock},
     {Py_tp_new, ta_python_clock_new},
     {Py_tp_dealloc, ta_python_clock_dealloc},
     {Py_tp_traverse, ta_python_clock_traverse},

@@ -5,6 +5,7 @@
  * allocation-in-tables-and-host.yml). The loop is loop.c, the effects
  * effects.c, the typed methods methods.c. */
 #include "extension.h"
+#include "docs.h"
 #include <string.h>
 
 /* ---- the host's allocator ------------------------------------------------------ */
@@ -231,8 +232,8 @@ typedef struct ta_python_chart_ref {
 } ta_python_chart_ref;
 
 static PyMemberDef ta_python_chart_members[] = {
-    {"segment", Py_T_UINT, offsetof(ta_python_chart_ref, segment), Py_READONLY, "the segment that runs it"},
-    {"chart", Py_T_UINT, offsetof(ta_python_chart_ref, chart), Py_READONLY, "its index in the segment's image"},
+    {"segment", Py_T_UINT, offsetof(ta_python_chart_ref, segment), Py_READONLY, ta_python_doc_chart_ref_segment},
+    {"chart", Py_T_UINT, offsetof(ta_python_chart_ref, chart), Py_READONLY, ta_python_doc_chart_ref_chart},
     {NULL, 0, 0, 0, NULL}
 };
 
@@ -249,7 +250,7 @@ static void ta_python_simple_dealloc(PyObject *self) {
 }
 
 static PyType_Slot ta_python_chart_slots[] = {
-    {Py_tp_doc, "A chart in a host (Host.chart): its segment and index, for Host.spawn."},
+    {Py_tp_doc, (void *)ta_python_doc_chart_ref},
     {Py_tp_members, ta_python_chart_members},
     {Py_tp_repr, ta_python_chart_repr},
     {Py_tp_dealloc, ta_python_simple_dealloc},
@@ -1396,8 +1397,8 @@ static PyObject *ta_python_host_ticks(PyObject *self, void *closure) {
 }
 
 static PyGetSetDef ta_python_host_properties[] = {
-    {"closed", ta_python_host_closed, NULL, "True once the host was freed.", NULL},
-    {"ticks_per_second", ta_python_host_ticks, NULL, "host.config's system.ticksPerSecond, read at creation.", NULL},
+    {"closed", ta_python_host_closed, NULL, ta_python_doc_host_closed, NULL},
+    {"ticks_per_second", ta_python_host_ticks, NULL, ta_python_doc_host_ticks, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
@@ -1413,77 +1414,60 @@ PyObject *ta_python_method_trace_unwatch(PyObject *self, PyObject *arguments, Py
 PyObject *ta_python_method_trace_end(PyObject *self, PyObject *arguments, PyObject *keywords);
 PyObject *ta_python_method_trace_spans_decode(PyObject *self, PyObject *arguments, PyObject *keywords);
 
-#define TA_PYTHON_TYPED(name, method)                                                                          \
-    {name, (PyCFunction)(void (*)(void))method, METH_VARARGS | METH_KEYWORDS,                                  \
-     name "(handler, on_error=None, /, **params)\n--\n\nThe typed method over the posted message of the same "  \
-     "name (docs/requests.md): params passed through as given; handler(host, result) or on_error(host, error) "\
-     "runs at a later drain."}
+#define TA_PYTHON_TYPED(name, method) \
+    {#name, (PyCFunction)(void (*)(void))method, METH_VARARGS | METH_KEYWORDS, ta_python_doc_typed_##name}
 
 static PyMethodDef ta_python_host_methods[] = {
     {"add_image", ta_python_host_add_image, METH_O,
-     "add_image(image, /)\n--\n\nA new segment running the image (any buffer: Compiled.image, the bytes of a .tai); "
-     "the host copies it. Returns the segment."},
-    {"chart", ta_python_host_chart, METH_O, "chart(name, /)\n--\n\nThe current version of chart `name`: a ChartRef."},
+     ta_python_doc_host_add_image},
+    {"chart", ta_python_host_chart, METH_O, ta_python_doc_host_chart},
     {"spawn", (PyCFunction)(void (*)(void))ta_python_host_spawn, METH_VARARGS | METH_KEYWORDS,
-     "spawn(ref, name=None, params=None, traceparent=None)\n--\n\nA root actor of the chart; returns its session."},
+     ta_python_doc_host_spawn},
     {"send", (PyCFunction)(void (*)(void))ta_python_host_send, METH_VARARGS | METH_KEYWORDS,
-     "send(session, event, data=None, *, traceparent=None)\n--\n\nAn event for the session, applied at the call."},
+     ta_python_doc_host_send},
     {"send_many", ta_python_host_send_many, METH_O,
-     "send_many(items, /)\n--\n\nEvents in order, each (session, event[, data[, traceparent]]); returns the length "
-     "of the accepted prefix."},
-    {"terminate", ta_python_host_terminate, METH_O, "terminate(session, /)\n--\n\nEnd a root actor."},
+     ta_python_doc_host_send_many},
+    {"terminate", ta_python_host_terminate, METH_O, ta_python_doc_host_terminate},
     {"peer_add", (PyCFunction)(void (*)(void))ta_python_host_peer_add, METH_VARARGS | METH_KEYWORDS,
-     "peer_add(id, *, trusted=False)\n--\n\nAnother system through one connection; returns its peer handle."},
+     ta_python_doc_host_peer_add},
     {"deliver", ta_python_host_deliver, METH_VARARGS,
-     "deliver(peer, envelope, /)\n--\n\nAn envelope's bytes from `peer` (0: this host's code); returns the route "
-     "outcome (0 delivered, 1 relayed, 2 duplicate, 3 refused)."},
+     ta_python_doc_host_deliver},
     {"metrics", ta_python_host_metrics, METH_NOARGS,
-     "metrics()\n--\n\nThe host's counters as an OTLP ExportMetricsServiceRequest (protobuf bytes, for "
-     "/v1/metrics); TinyactorsError TA_ERROR_STATE without telemetry in the config."},
+     ta_python_doc_host_metrics},
     {"sweep", ta_python_host_sweep, METH_VARARGS,
-     "sweep(max_scan, limit, /)\n--\n\nAt most `limit` sessions that did not run since the previous sweep and can be "
-     "hibernated now (the CLOCK sweep), scanning at most `max_scan` slots."},
+     ta_python_doc_host_sweep},
     {"hibernate", ta_python_host_hibernate, METH_O,
-     "hibernate(session, /)\n--\n\nTake an idle actor out of memory: its blob, as bytes, to store until wake. "
-     "TA_ERROR_STATE when it is not at a stable point."},
+     ta_python_doc_host_hibernate},
     {"wake", ta_python_host_wake, METH_VARARGS,
-     "wake(session, blob, /)\n--\n\nBring a hibernated actor back from its blob; its waiting events run next turn."},
+     ta_python_doc_host_wake},
     {"snapshot", ta_python_host_snapshot, METH_NOARGS,
-     "snapshot()\n--\n\nThe whole host as bytes (ta_host_snapshot_pack): every segment's region, both datamodels' "
-     "state, the images. Quiescent only: not from a handler, not with a typed method's reply or another effect "
-     "pending (run the host first), nor while a migration job runs. For the same build of the library."},
+     ta_python_doc_host_snapshot},
     {"restore", (PyCFunction)(void (*)(void))ta_python_host_restore, METH_CLASS | METH_VARARGS | METH_KEYWORDS,
-     "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, "
-     "migrated=None, services=None)\n--\n\nA new Host running a snapshot, with the config it was taken with and the handlers "
-     "Host() takes; its clock goes on from the snapshot's time. Each invocation of a service that was running "
-     "is started again with services= (invocation.restored), or its invoker gets error.communication."},
+     ta_python_doc_host_restore},
     {"migrate", (PyCFunction)(void (*)(void))ta_python_host_migrate, METH_VARARGS | METH_KEYWORDS,
-     "migrate(handler, /, *, chart=None, session=None, wake=False, timeout=0)\n--\n\nMove actors of older versions to "
-     "the current version of their chart (all charts, `chart`, or one `session`) in the next runs, waking hibernated "
-     "ones with `wake`, until `timeout` ticks (0: none). Returns the job; handler(host, result) runs when it ends, "
-     "with result {'job', 'migrated', 'failed', 'pending': [session, ...]}."},
+     ta_python_doc_host_migrate},
     {"run_until_idle", ta_python_host_run_until_idle, METH_NOARGS,
-     "run_until_idle()\n--\n\nTurn until the host is idle at the current time."},
+     ta_python_doc_host_run_until_idle},
     {"run", ta_python_host_run_forever, METH_NOARGS,
-     "run()\n--\n\nTurn, sleeping to each deadline, until the host is idle with no deadline left."},
-    {"idle", ta_python_host_idle, METH_NOARGS, "idle()\n--\n\nasyncio: a future done when the host is idle."},
+     ta_python_doc_host_run},
+    {"idle", ta_python_host_idle, METH_NOARGS, ta_python_doc_host_idle},
     {"close", ta_python_host_close_method, METH_NOARGS,
-     "close()\n--\n\nFree the host: trace.end, the last take, ta_host_free; pending handlers are dropped."},
-    {"__enter__", ta_python_host_enter_with, METH_NOARGS, NULL},
-    {"__exit__", ta_python_host_exit_with, METH_VARARGS, NULL},
-    {"__aenter__", ta_python_host_enter_async, METH_NOARGS, NULL},
-    {"__aexit__", ta_python_host_exit_async, METH_VARARGS, NULL},
-    TA_PYTHON_TYPED("actor_state", ta_python_method_actor_state),
-    TA_PYTHON_TYPED("actor_context", ta_python_method_actor_context),
-    TA_PYTHON_TYPED("actor_list", ta_python_method_actor_list),
-    TA_PYTHON_TYPED("actor_get", ta_python_method_actor_get),
-    TA_PYTHON_TYPED("host_stats", ta_python_method_host_stats),
-    TA_PYTHON_TYPED("host_config", ta_python_method_host_config),
-    TA_PYTHON_TYPED("trace_configure", ta_python_method_trace_configure),
-    TA_PYTHON_TYPED("trace_watch", ta_python_method_trace_watch),
-    TA_PYTHON_TYPED("trace_unwatch", ta_python_method_trace_unwatch),
-    TA_PYTHON_TYPED("trace_end", ta_python_method_trace_end),
-    TA_PYTHON_TYPED("trace_spans_decode", ta_python_method_trace_spans_decode),
+     ta_python_doc_host_close},
+    {"__enter__", ta_python_host_enter_with, METH_NOARGS, ta_python_doc_host_enter},
+    {"__exit__", ta_python_host_exit_with, METH_VARARGS, ta_python_doc_host_exit},
+    {"__aenter__", ta_python_host_enter_async, METH_NOARGS, ta_python_doc_host_aenter},
+    {"__aexit__", ta_python_host_exit_async, METH_VARARGS, ta_python_doc_host_aexit},
+    TA_PYTHON_TYPED(actor_state, ta_python_method_actor_state),
+    TA_PYTHON_TYPED(actor_context, ta_python_method_actor_context),
+    TA_PYTHON_TYPED(actor_list, ta_python_method_actor_list),
+    TA_PYTHON_TYPED(actor_get, ta_python_method_actor_get),
+    TA_PYTHON_TYPED(host_stats, ta_python_method_host_stats),
+    TA_PYTHON_TYPED(host_config, ta_python_method_host_config),
+    TA_PYTHON_TYPED(trace_configure, ta_python_method_trace_configure),
+    TA_PYTHON_TYPED(trace_watch, ta_python_method_trace_watch),
+    TA_PYTHON_TYPED(trace_unwatch, ta_python_method_trace_unwatch),
+    TA_PYTHON_TYPED(trace_end, ta_python_method_trace_end),
+    TA_PYTHON_TYPED(trace_spans_decode, ta_python_method_trace_spans_decode),
     {NULL, NULL, 0, NULL}
 };
 
@@ -1496,8 +1480,7 @@ static PyMemberDef ta_python_host_members[] = {
 
 static PyType_Slot ta_python_host_slots[] = {
     {Py_tp_members, ta_python_host_members},
-    {Py_tp_doc, "Host(config, io_processors=None, *, log=None, clock=None, peer=None, telemetry=None, wake=None, migrated=None, services=None)\n--\n\n"
-                "A host (ta_host): many actor systems as one, with the \"python\" datamodel and quickjs."},
+    {Py_tp_doc, (void *)ta_python_doc_host},
     {Py_tp_new, ta_python_host_create},
     {Py_tp_dealloc, ta_python_host_dealloc},
     {Py_tp_traverse, ta_python_host_traverse},

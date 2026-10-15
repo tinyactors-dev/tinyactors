@@ -9,6 +9,7 @@
  * and retained in module state. CPython's registration tables are read-only
  * from the extension's perspective; they contain no runtime identities. */
 #include "extension.h"
+#include "docs.h"
 
 /* Visit both edges of an Address: its immutable text and its heap type.
  * CPython calls this while finding cycles, including type -> module -> type.
@@ -104,16 +105,12 @@ static PyObject *ta_python_address_compare(PyObject *left, PyObject *right, int 
 }
 
 static PyGetSetDef ta_python_address_properties[] = {
-    {"text", (getter)ta_python_address_text, NULL, "The exact address text (read-only).", NULL},
+    {"text", (getter)ta_python_address_text, NULL, ta_python_doc_address_text, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
 static PyType_Slot ta_python_address_slots[] = {
-    {Py_tp_doc, "Address(text, /)\n--\n\nAn immutable actor reference encoded as CBOR tag 32.\n\n"
-                "text must be an exact str with valid UTF-8. Use .text or str(value)\n"
-                "to extract it. No URI parsing or routing occurs at construction.\n"
-                "Equality and hashing use the text among Address values only.\n"
-                "Use ordinary str keys for CBOR maps; subclasses are refused."},
+    {Py_tp_doc, (void *)ta_python_doc_address},
     {Py_tp_new, ta_python_address_new},
     {Py_tp_dealloc, ta_python_address_dealloc},
     {Py_tp_traverse, ta_python_address_traverse},
@@ -164,7 +161,7 @@ static PyObject *ta_python_undefined_repr(PyObject *self) {
 }
 
 static PyType_Slot ta_python_undefined_slots[] = {
-    {Py_tp_doc, "The module's unique CBOR undefined value; use UNDEFINED directly."},
+    {Py_tp_doc, (void *)ta_python_doc_undefined},
     {Py_tp_new, ta_python_undefined_new},
     {Py_tp_dealloc, ta_python_undefined_dealloc},
     {Py_tp_traverse, ta_python_undefined_traverse},

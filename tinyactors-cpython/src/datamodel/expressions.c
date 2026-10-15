@@ -7,6 +7,7 @@
  * compiled function of the session. In() is C, over the evaluation's
  * environment. */
 #include "datamodel.h"
+#include "../docs.h"
 
 static const char ta_python_support_source[] =
 #include "support.inc"
@@ -109,7 +110,7 @@ static PyObject *ta_python_in(PyObject *self, PyObject *name) {
     return PyBool_FromLong(state != TA_NIL && ta_datamodel_environment_in(environment, state));
 }
 
-static PyMethodDef ta_python_in_def = {"In", ta_python_in, METH_O, "In(state, /)\n--\n\nWhether the session is in the state."};
+static PyMethodDef ta_python_in_def = {"In", ta_python_in, METH_O, ta_python_doc_in};
 
 /* The globals of a host's chart code: the allowed builtins and In().
  * In() reaches the datamodel through a capsule that holds no reference to
