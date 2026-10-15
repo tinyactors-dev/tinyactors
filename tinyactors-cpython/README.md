@@ -226,15 +226,14 @@ config = {"systemID": "big", "system": {
 `mise run stress` is the pattern at scale (`tools/stress.py`): two
 million actors of a counter chart, at most 1000 resident, the rest in
 SQLite; 200,000 events to actors drawn at random, so nearly every event
-wakes one from the store and the sweep sends another back. Measured on
-x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, one run:
+wakes one from the store and the sweep sends another back. Measured on 2026-10-15, x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, the gates' configs sized for their work ("Sizing the config"), one run:
 
 | datamodel | populate (spawn and hibernate 2,000,000) | 200,000 events (woken, swept back) | peak resident | core's region | SQLite file |
 |---|---|---|---|---|---|
-| `"python"` | 8.1 s (246,000 a second) | 9.3 s (21,400 a second; 199,869 wakes) | 170 MB (85 B per actor) | 121 MB (60 B per actor) | 355 MB |
-| quickjs | 14.2 s (141,000 a second) | 11.9 s (16,800 a second; 199,869 wakes) | 172 MB (86 B per actor) | 121 MB (60 B per actor) | 409 MB |
+| `"python"` | 15.8 s (126,000 a second) | 14.7 s (13,600 a second; 199,869 wakes) | 164 MB (82 B per actor) | 115 MB (58 B per actor) | 355 MB |
+| quickjs | 25.9 s (77,000 a second) | 17.3 s (11,500 a second; 199,869 wakes) | 165 MB (82 B per actor) | 115 MB (58 B per actor) | 409 MB |
 
-The region is core's (about 60 B per actor, hibernated or not); the
+The region is core's (about 58 B per actor, hibernated or not); the
 store is SQLite's file. Every actor's count matched the events it was
 sent, and after every eviction at most 1000 actors were resident.
 
@@ -306,13 +305,12 @@ SQLite: 2,000,000 actors of a counter chart, at most 1000 resident, moved
 to version 2 while 200,000 events go to actors drawn at random; it
 checks every sampled actor's count and version, that the job left none
 behind, that version 1's segment retired, and the resident bound after
-every eviction. Measured on x86_64 Linux, 4 CPUs, CPython 3.13.16 with
-the GIL, one run:
+every eviction. Measured on 2026-10-15, x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, the gates' configs sized for their work ("Sizing the config"), one run:
 
 | datamodel | populate (2,000,000, 200,000 events) | migrate, live (200,000 events meanwhile) | woken from SQLite | peak resident | core's region (both versions, then after) | SQLite file |
 |---|---|---|---|---|---|---|
-| `"python"` | 37.9 s | 89.7 s (22,300 actors a second) | 2,218,199 | 487 MB (244 B per actor) | 243.6 MB, then 121.8 MB (61 B per actor) | 556 MB |
-| quickjs | 39.2 s | 102.2 s (19,600 actors a second) | 2,218,199 | 488 MB (244 B per actor) | 243.6 MB, then 121.8 MB | 756 MB |
+| `"python"` | 59.9 s | 129.7 s (15,400 actors a second) | 2,218,199 | 473 MB (237 B per actor) | 230.9 MB, then 115.5 MB (58 B per actor) | 556 MB |
+| quickjs | 71.1 s | 153.3 s (13,000 actors a second) | 2,218,199 | 475 MB (238 B per actor) | 230.9 MB, then 115.5 MB | 756 MB |
 
 A run costs the job a quantum of actors however many it waits for, so
 the time grows with the population: 13.6 s at 500,000 on the
@@ -381,17 +379,18 @@ with 200,000 events meanwhile, while the live host goes on with 200,000
 events of its own. Both hosts' sampled actors must hold every count,
 delayed send and payment, the copy's on version 2 and declined, the
 live host's on version 1 and still paying, and the copy must never reach
-the real service. Measured on x86_64 Linux, 4 CPUs, CPython 3.13.16 with
-the GIL, one run each, both hosts in one process:
+the real service. Measured on 2026-10-15, x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, the gates' configs sized for their work ("Sizing the config"), one run each, both hosts in one process:
 
 | datamodel | actors | resident | snapshot | snapshot time | restore time | migrating the copy | peak resident, both hosts | every actor right |
 |---|---|---|---|---|---|---|---|---|
-| `"python"` | 2,000,000 | 1000 | 124.6 MB (62 B per actor) | 0.16 s | 1.06 s | 131 s | 642 MB | yes |
-| quickjs | 2,000,000 | 1000 | 124.7 MB | 0.15 s | 0.38 s | 158 s | 643 MB | yes |
-| `"python"` | 100,000 | all | 372.0 MB (3720 B per actor) | 0.95 s | 0.73 s | 21.4 s | 1761 MB | yes |
-| quickjs | 100,000 | all | 379.5 MB (3795 B per actor) | 2.82 s | 1.49 s | 21.6 s | 1988 MB | yes |
+| `"python"` | 2,000,000 | 1000 | 116.1 MB (58 B per actor) | 0.14 s | 0.12 s | 145 s | 652 MB | yes |
+| quickjs | 2,000,000 | 1000 | 116.2 MB | 0.14 s | 0.13 s | 172 s | 654 MB | yes |
+| `"python"` | 100,000 | all | 56.6 MB (566 B per actor) | 0.66 s | 0.53 s | 22.3 s | 427 MB | yes |
+| quickjs | 100,000 | all | 64.0 MB (640 B per actor) | 3.43 s | 1.29 s | 21.6 s | 684 MB | yes |
 
-A snapshot is mostly the region, as the config sized it. Migrating 2,000,000
+A snapshot is mostly the region, as the config sized it: the same 100,000
+resident actors made a 372 MB snapshot and a 1761 MB peak before the
+gate's config was sized for the work. Migrating 2,000,000
 mostly hibernated actors is the store's work: each is woken, moved and
 hibernated again (2,018,332 wakes, events included).
 
@@ -459,13 +458,20 @@ host = tinyactors.Host(config, services={"urn:example:counter": lambda host, inv
 (actor, service, actor), then a third finish with done data, a third are
 cancelled and the rest keep theirs; it checks every pong, every done
 datum, that every cancelled service was stopped once and no other, and
-that the host holds only the services still running. Measured on x86_64
-Linux, 4 CPUs, CPython 3.13.16 with the GIL, one run:
+that the host holds only the services still running. Measured on 2026-10-15, x86_64 Linux, 4 CPUs, CPython 3.13.16 with the GIL, the gates' configs sized for their work ("Sizing the config"), one run:
 
 | datamodel | start 200,000 invocations | 1,000,000 round trips | end (done, cancel) | peak resident | core's region |
 |---|---|---|---|---|---|
-| `"python"` | 3.3 s (61,000 a second) | 18.2 s (55,000 a second) | 2.0 s | 671 MB (3353 B per actor and service) | 269 MB (1346 B per actor) |
-| quickjs | 3.0 s (66,000 a second) | 24.1 s (41,000 a second) | 2.7 s | 945 MB (4727 B per actor and service) | 269 MB |
+| `"python"` | 3.1 s (64,000 a second) | 38.3 s (26,000 a second) | 4.5 s | 408 MB (2041 B per actor and service) | 50 MB (251 B per actor) |
+| quickjs | 5.0 s (40,000 a second) | 62.6 s (16,000 a second) | 5.9 s | 711 MB (3553 B per actor and service) | 62 MB (309 B per actor) |
+
+This machine ran slower than the one of 2026-10-14's numbers: the same
+build (the services commit) does 28,000 round trips a second here
+against 55,000 there. Side by side on this machine, five runs each
+alternating, today's build does 25,900 a second against that build's
+28,700: about 10 percent slower, within each one's spread of 15
+percent; the likely cost is the params each running invocation now keeps
+for a restore (unverified).
 
 An invocation is a request of core's: size `system.maxRequests` for the
 invocations that run at once. quickjs keeps each actor's last event in
@@ -525,22 +531,48 @@ actors share no mutable value.
 
 ## Memory
 
-Measured with `mise run measure` (x86_64 Linux, 4 CPUs, CPython 3.13.16
-with the GIL; 10,000 actors of one chart with three `<data>`, resident
-and idle; then once more after one event to each actor, which keeps its
-`_event` until the next):
+Measured with `mise run measure` (2026-10-15, x86_64 Linux, 4 CPUs,
+CPython 3.13.16 with the GIL; 10,000 actors of one chart with three
+`<data>`, resident and idle, every pool sized for them and tracing off;
+then once more after one event to each actor, which keeps its `_event`
+until the next):
 
 | datamodel | resident per actor | traced per actor | core's region per actor | resident after one event | region after one event |
 |---|---|---|---|---|---|
-| `"python"` | 433 B | 201 B | 204 B | 814 B | 398 B |
-| quickjs | 1104 B | — | 204 B | 13777 B | 12440 B |
+| `"python"` | 387 B | 188 B | 268 B | 571 B | 268 B |
+| quickjs | 1066 B | — | 268 B | 1500 B | 268 B |
 
 "Traced" is tracemalloc's: the sessions' Python objects and the
 binding's rows (it includes an 8 B array of the harness). After an event
 a `"python"` session keeps one more object, its `_event` (about 100 B;
-the event's name is a `str` the chart shares). The region's growth after
-the events is core's (it grows its event pools by doubling and keeps
-them), and much larger on quickjs.
+its name, origin type and invoke id are strings the datamodel shares).
+With the pools sized, the region does not grow after the events; left
+at its default `maxEvents` (256), quickjs's grew to 12,440 B per actor,
+since a segment that grows doubles every pool.
+
+### Sizing the config
+
+Most of a host's memory is what its config reserves, not what its actors
+use: core sets its pools up front and never allocates after that. The
+gates' first configs reserved four to sixteen times what they used; sized
+for the work, the 100,000 resident actors of the snapshot gate went from
+362 MB of region to 47 MB, and the services gate's 200,000 actors from
+269 MB to 50 MB. What a config should say (the core's host-config
+documentation has every key):
+
+- `maxActors`: every actor, resident or hibernated (a hibernated one costs
+  about 58 B of region), with some room.
+- `instanceBytes` and `stringBytes`: for the resident actors only, at
+  what their charts use (128 B and 16 B per actor for the gates' charts);
+  left out, they are derived from `maxActors`, which counts the
+  hibernated ones too.
+- `maxEvents`: the events in flight at once, and on quickjs one more per
+  resident actor (it keeps each actor's last event).
+- `maxRequests`: the invocations of services that run at once.
+- `tracing`: on by default; it takes 512 B of journal and a context per
+  `maxEvents` slot. Turn it off where nobody exports traces.
+- Size, do not let it grow: a segment that runs out of any pool doubles
+  every pool at once.
 
 ## Building
 
