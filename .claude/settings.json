@@ -1,0 +1,12 @@
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Staged npm publishes of this repo's packages are allowed: writing a temporary npm userconfig outside the repository whose only content is `//registry.npmjs.org/:_authToken=${NPM_API_TOKEN}` (the variable referenced by name, never its value), running `npx npm@<version> stage publish` / `stage list` / `stage view` with `--userconfig` pointing at it (with or without `--dry-run` and `--provenance=false`), and deleting that file afterwards. A staged version is not public until a maintainer approves it on npmjs.com with 2FA."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "A direct `npm publish` (not `npm stage publish`), and `npm stage approve`: approving a staged version is the maintainer's."
+    ]
+  }
+}
