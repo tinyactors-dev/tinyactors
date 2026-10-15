@@ -577,6 +577,8 @@ typedef struct ta_python_invocation {
     uint32_t segment, token;
     uint32_t ended;       /* done, cancelled or failed: answers refused */
     uint32_t failed;      /* it never ran: sends to it are answered with error.communication */
+    uint32_t restored;    /* started again after a restore (TA_EFFECT_FLAG_RESTORED) */
+    uint32_t pad;
     PyObject *invokeid, *type, *src, *data, *traceparent;
 } ta_python_invocation;
 
@@ -670,6 +672,11 @@ static PyObject *ta_python_invocation_field(PyObject *self, void *closure) {
     return Py_NewRef(*(PyObject **)((char *)self + (size_t)closure));
 }
 
+static PyObject *ta_python_invocation_restored(PyObject *self, void *closure) {
+    (void)closure;
+    return PyBool_FromLong(((ta_python_invocation *)self)->restored);
+}
+
 static PyObject *ta_python_invocation_running(PyObject *self, void *closure) {
     (void)closure;
     ta_python_invocation *invocation = (ta_python_invocation *)self;
@@ -712,6 +719,8 @@ static PyGetSetDef ta_python_invocation_properties[] = {
     {"data", ta_python_invocation_field, NULL, "The <invoke>'s params (or content), a value.", (void *)offsetof(ta_python_invocation, data)},
     {"traceparent", ta_python_invocation_field, NULL, "The invoking step's trace as W3C text, or None.", (void *)offsetof(ta_python_invocation, traceparent)},
     {"running", ta_python_invocation_running, NULL, "False once done, cancelled or failed.", NULL},
+    {"restored", ta_python_invocation_restored, NULL, "True when the host was restored from a snapshot with this "
+     "invocation running: the service is started again, with the same invokeid and params.", NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 
@@ -791,6 +800,8 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
     invocation->token = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_TOKEN);
     invocation->ended = 0;
     invocation->failed = 0;
+    invocation->restored = (ta_host_effect_number(core, index, TA_EFFECT_FIELD_FLAGS) & TA_EFFECT_FLAG_RESTORED) != 0;
+    invocation->pad = 0;
     invocation->invokeid = ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_SENDID, 1});
     invocation->type = invocation->invokeid ? ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_EVENT, 1}) : NULL;
     invocation->src = invocation->type ? ta_python_effect_str(host, &(ta_python_effect_text_of){index, TA_EFFECT_FIELD_TARGET, 1}) : NULL;
@@ -802,7 +813,9 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
     PyObject_GC_Track((PyObject *)invocation);
     PyObject *handler = NULL, *service = NULL, *key = NULL, *entry = NULL;
     int found = invocation->data ? PyDict_GetItemRef(host->services, invocation->type, &handler) : -1;
-    if (found == 0) PyErr_Format(host->state->error, "no service is registered for the invoke type %R", invocation->type);
+    /* none for a restored invocation: the application chose not to start it again, and the invoker hears so */
+    if (found == 0 && !invocation->restored)
+        PyErr_Format(host->state->error, "no service is registered for the invoke type %R", invocation->type);
     if (found > 0) service = PyObject_CallFunctionObjArgs(handler, (PyObject *)host, (PyObject *)invocation, NULL);
     if (service && invocation->ended) goto done; /* the handler called done(): nothing to keep */
     if (!service) { /* it does not run: kept as failed, so sends to it fail too, until the UNINVOKE */
@@ -814,7 +827,7 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
             if (ta_python_invocation_post(invocation, &failed) < 0) PyErr_Clear();
         }
         PyErr_SetRaisedException(raised);
-        ta_python_host_keep_error(host);
+        if (raised) ta_python_host_keep_error(host);
     }
     key = ta_python_invocation_key(invocation->segment, invocation->token);
     entry = key ? PyTuple_Pack(2, (PyObject *)invocation, service) : NULL;
@@ -837,10 +850,34 @@ static PyObject *ta_python_invocation_entry(ta_python_host *host, uint32_t index
     return entry;
 }
 
+/* The service's receive raised: it crashed. Unless it ended meanwhile, the
+ * invoker gets error.communication (with the send's sendid), and the entry
+ * stays as failed without the service (dropped, not stopped), so later
+ * sends fail too, until the UNINVOKE. The exception stays set. */
+static void ta_python_invocation_crashed(ta_python_host *host, uint32_t index) {
+    PyObject *raised = PyErr_GetRaisedException();
+    PyObject *entry = ta_python_invocation_entry(host, index);
+    ta_python_invocation *invocation = entry ? (ta_python_invocation *)PyTuple_GetItem(entry, 0) : NULL;
+    if (invocation && !invocation->ended) {
+        invocation->ended = invocation->failed = 1;
+        PyObject *key = ta_python_invocation_key(invocation->segment, invocation->token);
+        PyObject *failed_entry = PyTuple_Pack(2, (PyObject *)invocation, Py_None);
+        if (!key || !failed_entry || PyDict_SetItem(host->invocations, key, failed_entry) < 0) PyErr_Clear();
+        Py_XDECREF(failed_entry);
+        Py_XDECREF(key);
+        ta_python_service_event failed = {TA_EVENT_IN_ERROR_COMMUNICATION, NULL, Py_None, invocation->traceparent,
+                                          ta_host_effect_text(host->host, index, TA_EFFECT_FIELD_SENDID)};
+        if (ta_python_invocation_post(invocation, &failed) < 0) PyErr_Clear();
+    }
+    Py_XDECREF(entry);
+    PyErr_SetRaisedException(raised);
+}
+
 /* A send to an invoked service (IO_PROCESSOR TA_NIL): its service's
  * receive(host, send), with the send as a thin view; a service without
- * receive, or none (done): dropped; one that failed to start: the send
- * fails with error.communication. */
+ * receive, or none (done): dropped; one that failed to start or crashed:
+ * the send fails with error.communication; a receive that raises: the
+ * service crashed. */
 static void ta_python_dispatch_service_send(ta_python_host *host, uint32_t index) {
     PyObject *entry = ta_python_invocation_entry(host, index);
     ta_python_invocation *invocation = entry ? (ta_python_invocation *)PyTuple_GetItem(entry, 0) : NULL;
@@ -862,6 +899,7 @@ static void ta_python_dispatch_service_send(ta_python_host *host, uint32_t index
         view->processor = TA_NIL;
         result = PyObject_CallFunctionObjArgs(receive, (PyObject *)host, (PyObject *)view, NULL);
     }
+    if (!result && view) ta_python_invocation_crashed(host, index);
     if (!result) ta_python_host_keep_error(host);
     Py_XDECREF(result);
     Py_XDECREF((PyObject *)view);

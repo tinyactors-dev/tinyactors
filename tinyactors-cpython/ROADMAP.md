@@ -538,6 +538,22 @@ stopped; a send to a service that failed to start fails; a failure to
 start an invocation cancelled in the same run is not reported; a
 snapshot with a running service is refused.
 
+### Snapshots with invoked services (2026-10-15) — done
+
+Snapshots were refused while an invoked service ran, which an
+application cannot tell in advance. Decided with the maintainer: a
+snapshot is for a copy of the whole application (every chart version at
+once, which only the host level has): rehearse a deploy, capture a host
+for a developer, prepare a test world; and for taking a host out of the
+process. On a copy the real services must not be reached, and a
+rehearsal wants stand-ins, so a restore starts each running invocation
+again through `Host.restore`'s `services=`: the real handlers go on,
+stand-ins make a sandbox, no handler gives its invokers
+`error.communication` (SCXML 5.10.3: errors "such as those arising from
+<send> and <invoke>"; a crashing `receive` gives the same). The request
+to core below was answered in core by this session at the maintainer's
+request. The binding keeps no table of its own: core holds the facts.
+
 ## How the work runs
 
 The root ROADMAP.md, step 8, "Rules for the work", sets these for every
@@ -580,7 +596,43 @@ Gaps in core or in the suite this session finds. Each says what is
 missing, why, and which suite case or test shows it; the coordinator moves
 it into the root ROADMAP.md's "Requests to core" and answers there.
 
-None open. Answered 2026-10-14, in core's host layer (`src/host/host.c`,
+- **Open, a known limit: no snapshot while a migration job runs.** What:
+  `ta_host_snapshot` refuses with `TA_ERROR_STATE` while a job is active
+  (`src/host/host.c`, `ta_host_snapshot`), and a rollout that wakes a
+  mostly hibernated population can run for hours, so a host cannot be
+  captured during it. Why it is not technical: a job is plain data in
+  host memory (`migration_job`, `src/host/host_internal.h`: id, flags,
+  deadline, a walk cursor into a segment's actors, the sessions it waits
+  for, a retry list, counters), all valid after a restore, which puts
+  every region back as it was; the snapshot just does not write it. The
+  binding's side: the job's completion handler is a Python callable, so
+  `Host.restore` would need to take the handlers of restored jobs. No
+  test shows it yet; the snapshot gate snapshots before migrating.
+
+Answered 2026-10-15, in core, by this session at the maintainer's
+request:
+
+- **A restored host lost its external invocations' services without a
+  word.** What: core kept an external invocation's actor, slot and
+  invoke id, not its type, src or params, so after `ta_host_restore`
+  nobody could start the service again, and the invoker waited forever
+  (the binding refused snapshots with a service running instead). Now the
+  invocation's request keeps its type and src (two shared strings) and
+  its params (one retained payload of the invoker's datamodel) while it
+  runs, and the restored host's first `ta_host_run` announces each one
+  again, before any actor runs: a `TA_EFFECT_INVOKE` flagged
+  `TA_EFFECT_FLAG_RESTORED`, with its token, so the embedder starts its
+  service again, a stand-in, or answers `TA_EVENT_IN_ERROR_COMMUNICATION`.
+  At the first run, not at the restore (retaining the params needs the
+  datamodels' state back) nor at a take (the binding takes a batch for
+  `host.config` while it builds the host). Who pays: 8 B per request slot
+  of the region (`ta_request` 32 to 40 B; `ta_system` version 4 refuses
+  older snapshots), two string references and one payload per running
+  external invocation, nothing per event. Test: `test_host_effects.c`
+  `test_restore_announces_external_invocations`; the binding's
+  `tests/test_services.py`.
+
+Answered 2026-10-14, in core's host layer (`src/host/host.c`,
 `src/host/session_map.c`), by this session at the maintainer's request:
 
 - **A waking migration was quadratic in the hibernated actors**

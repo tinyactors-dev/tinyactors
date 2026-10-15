@@ -342,16 +342,26 @@ host = tinyactors.Host.restore(blob, config, log=log, wake=wake)
 ```
 
 - **A snapshot is for the same build of the library, not a backup.** It
-  holds raw region memory: take a host out of memory for a while, restart
-  it, inspect it. Durability is your database's.
+  holds raw region memory. It is for a copy of the whole application,
+  every chart version at once: rehearse a deploy on it (add the new
+  image, migrate, run the clock ahead, look), capture a host when
+  something goes wrong and step through it on the same build, start
+  every test from one prepared world; and for taking a host out of the
+  process for a while. Durability is your database's; to keep actors out
+  of memory in a running process, hibernate them.
+- **Invoked services are started again.** The services you run are not
+  in a snapshot. The restored host's first run announces each invocation
+  that was running, and the handler you pass as `services=` to
+  `Host.restore` gets it, with `invocation.restored` true and the same
+  `invokeid`, `src` and params: pass your real handlers to go on, stand-ins
+  for a copy that must not reach the real services, or none for a type,
+  and its invokers get `error.communication`.
 - **The hibernated actors stay in your store.** The snapshot holds their
   records, not their blobs; the restored host asks for them with the
   same WAKE.
 - It needs a quiescent host: it is refused from a handler, with an
   effect or a typed method's reply not yet handled (run the host first),
-  while a migration job runs, and while an invoked service of the
-  application runs (`TA_ERROR_STATE`: the service is not in the
-  snapshot, so its invoker would wait for it forever); and when a
+  and while a migration job runs (`TA_ERROR_STATE`); and when a
   `"python"` session or payload holds a value outside the value table
   (`TA_ERROR_UNSUPPORTED`). The host goes on either way. Values are
   written through the value table: two variables of one session that
@@ -412,7 +422,8 @@ host = tinyactors.Host(config, services={"urn:example:counter": lambda host, inv
 ```
 
 - `invocation`: `session` (the invoker), `invokeid`, `type`, `src`,
-  `data` (the params, or the content), `traceparent`, `running`; and
+  `data` (the params, or the content), `traceparent`, `running`,
+  `restored` (started again after `Host.restore`, "Snapshots"); and
   `send_back(event, data=None)` (an event from the invoked child, its
   `invokeid` set) and `done(data=None)` (`done.invoke.<invokeid>`). It is
   a record: keep it and answer later, as long as it runs; after `done`
@@ -422,12 +433,15 @@ host = tinyactors.Host(config, services={"urn:example:counter": lambda host, inv
   its `stop(host)` the cancel; both are optional. A service that ended
   with `done` is not stopped, nor kept: a handler may call `done` and
   return.
-- No handler for the type, or a handler that raises: the invoker gets
-  `error.communication` (unless it cancelled the invocation in the same
-  run), each send to the invocation gets one too until the invoker
-  leaves the state, and the driver raises the exception after the turn.
-- `Host.snapshot()` is refused while a service runs (`TA_ERROR_STATE`).
-  Leaving the `Host` drops the running services without stopping
+- A service that fails is `error.communication` for its chart, whatever
+  failed: no handler for the type, a handler that raises, a `receive`
+  that raises (the service crashed: it is dropped, not stopped), or no
+  handler for a restored invocation. The invoker gets it (unless it
+  cancelled the invocation in the same run), and each send to the
+  invocation gets one too until the invoker leaves the state. The driver
+  raises the exception after the turn; a restored invocation with no
+  handler raises nothing (starting it again was yours to decline).
+- Leaving the `Host` drops the running services without stopping
   them.
 
 `mise run services` is the pattern at scale (`tools/services.py`):

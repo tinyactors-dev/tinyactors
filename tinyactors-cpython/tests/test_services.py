@@ -241,17 +241,93 @@ class Services(unittest.TestCase):
             host.run_until_idle()
         self.assertEqual(logs.labelled("error"), [])
 
-    def test_a_snapshot_with_a_running_service_is_refused(self):
+    def snapshot_with_a_service(self, datamodel):
         record = []
-        with host_with([("client.scxml", CLIENT["python"])], services={TYPE: lambda host, i: Echo(record, i)}) as host:
+        with host_with([("client.scxml", CLIENT[datamodel])], services={TYPE: lambda host, i: Echo(record, i)}) as host:
             session = host.spawn(host.chart("client"))
             host.run_until_idle()
-            with self.assertRaises(tinyactors.TinyactorsError) as raised:
-                host.snapshot()
-            self.assertEqual(raised.exception.status, "TA_ERROR_STATE")
-            host.send(session, "ask", "finish")
+            host.send(session, "ask", "before")
             host.run_until_idle()
-            host.snapshot()
+            return session, host.snapshot()
+
+    def restore(self, blob, **options):
+        config = {"systemID": "t", "system": {"ticksPerSecond": 1000}, "ioProcessors": [{"type": "app", "sync": False}]}
+        options.setdefault("clock", tinyactors.SimulatedClock())
+        return tinyactors.Host.restore(blob, config, **options)
+
+    def test_a_restore_starts_each_running_service_again(self):
+        for datamodel in ("python", "ecmascript"):
+            with self.subTest(datamodel=datamodel):
+                session, blob = self.snapshot_with_a_service(datamodel)
+                logs, record, invocations = Logs(), [], []
+
+                def start(host, invocation):
+                    invocations.append(invocation)
+                    return Echo(record, invocation)
+
+                with self.restore(blob, log=logs, services={TYPE: start}) as host:
+                    host.run_until_idle()
+                    host.send(session, "ask", "after")
+                    host.run_until_idle()
+                    host.send(session, "ask", "finish")
+                    host.run_until_idle()
+                self.assertEqual(len(invocations), 1)
+                self.assertTrue(invocations[0].restored)
+                self.assertEqual(record[0], ("start", session, "echo", TYPE, "echo://here", {"hello": "world"}))
+                self.assertEqual(record[1][:3], ("receive", "question", "after"))
+                self.assertEqual(len(logs.labelled("answer")), 1)
+                self.assertEqual(len(logs.labelled("done")), 1)
+
+    def test_a_restore_with_a_stand_in_service(self):
+        session, blob = self.snapshot_with_a_service("python")
+        logs = Logs()
+
+        class StandIn:  # a copy must not reach the real service
+            def __init__(self, invocation):
+                self.invocation = invocation
+
+            def receive(self, host, send):
+                self.invocation.send_back("answer", "stand-in")
+
+        with self.restore(blob, log=logs, services={TYPE: lambda host, i: StandIn(i)}) as host:
+            host.send(session, "ask", "after")
+            host.run_until_idle()
+        self.assertEqual(logs.labelled("answer"), ["stand-in echo"])
+
+    def test_a_restore_without_the_service_tells_the_invoker(self):
+        for datamodel in ("python", "ecmascript"):
+            with self.subTest(datamodel=datamodel):
+                session, blob = self.snapshot_with_a_service(datamodel)
+                logs = Logs()
+                with self.restore(blob, log=logs) as host:
+                    host.run_until_idle()  # no exception: not starting it is the application's choice
+                    host.send(session, "ask", "anyone")
+                    host.run_until_idle()
+                self.assertEqual(logs.labelled("error"), ["communication", "communication"])
+
+    def test_a_service_that_crashes_tells_the_invoker(self):
+        logs, stopped = Logs(), []
+
+        class Crashing:
+            def receive(self, host, send):
+                raise ValueError("crashed")
+
+            def stop(self, host):
+                stopped.append(True)
+
+        with host_with([("client.scxml", CLIENT["python"])], log=logs, services={TYPE: lambda host, i: Crashing()}) as host:
+            session = host.spawn(host.chart("client"))
+            host.run_until_idle()
+            host.send(session, "ask", "first")
+            with self.assertRaises(ValueError):
+                host.run_until_idle()
+            host.run_until_idle()
+            host.send(session, "ask", "second")
+            host.run_until_idle()
+            host.send(session, "leave")
+            host.run_until_idle()
+        self.assertEqual(logs.labelled("error"), ["communication", "communication"])
+        self.assertEqual(stopped, [])  # dropped, not stopped
 
     def test_services_must_be_a_dict(self):
         with self.assertRaises(TypeError):
