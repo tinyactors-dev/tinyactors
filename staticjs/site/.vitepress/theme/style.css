@@ -453,3 +453,15 @@ body {
 .dark .VPFooter .tinyactors-logo .on-dark {
   display: block;
 }
+
+/* The staticjs logo in the nav: the mark and the wordmark, so VitePress's
+ * text title is off. */
+.VPNavBarTitle .logo {
+  height: 36px;
+  width: auto;
+}
+@media (max-width: 767px) {
+  .VPNavBarTitle .logo {
+    height: 30px;
+  }
+}

@@ -92,7 +92,8 @@ export default defineConfig({
     },
   },
   themeConfig: {
-    logo: { src: '/mark.svg', width: 24, height: 24 },
+    logo: { light: '/brand/staticjs-logo-light.svg', dark: '/brand/staticjs-logo-dark.svg', alt: 'staticjs' },
+    siteTitle: false,
     nav: [
       { text: 'Guide', link: '/guide/getting-started', activeMatch: '/guide/' },
       { text: 'Pipeline', link: '/explore/pipeline', activeMatch: '/explore/' },
