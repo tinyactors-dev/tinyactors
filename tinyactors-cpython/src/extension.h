@@ -119,6 +119,8 @@ typedef struct ta_python_datamodel {
     PyObject *drops;            /* values whose last reference was dropped (a list) */
     PyObject *raised;           /* a BaseException an evaluation raised, raised after it */
     PyObject *output;           /* the str eval_string and log answered */
+    PyObject *strings;          /* an _event's repeating strings (origintype, invokeid, a restored name),
+                                   shared: a dict of each to itself, emptied when it reaches its bound */
     ta_buffer wire;             /* what to_wire, serialize and payload_serialize wrote, from the host's allocator */
 } ta_python_datamodel;
 

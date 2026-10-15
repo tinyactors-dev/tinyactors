@@ -145,13 +145,16 @@ def main():
         return stats
 
     # Capacity planning: an actor slot for every actor (a hibernated one is
-    # its record and session entry, about 70 B), but instance and string
-    # memory for the resident ones only. Left to grow, a segment doubles
-    # every pool together, instance memory derived from maxActors.
+    # its record and session entry, about 60 B), but instance and string
+    # memory for the resident ones only: the counter's instance fits in 128 B,
+    # its strings in 16. Tracing off: nobody exports the traces here, and on it
+    # takes 512 B of journal and a context per maxEvents. Left to grow, a
+    # segment doubles every pool together, instance memory derived from
+    # maxActors: size the pools, do not let it grow.
     resident_room = options.resident + 2 * BATCH
-    config = {"systemID": "stress", "system": {"maxActors": options.actors + resident_room, "maxEvents": 4096,
-                                               "instanceBytes": 2048 * resident_room,
-                                               "stringBytes": 16384 + 64 * resident_room}}
+    config = {"systemID": "stress", "system": {"maxActors": options.actors + 4 * BATCH, "maxEvents": 4096,
+                                               "instanceBytes": 128 * resident_room,
+                                               "stringBytes": 16384 + 16 * resident_room, "tracing": False}}
     host = tinyactors.Host(config, wake=wake, log=log)
     with tinyactors.compile_charts([("counter.scxml", read_chart("counter", options.datamodel))]) as compiled:
         host.add_image(compiled.image)

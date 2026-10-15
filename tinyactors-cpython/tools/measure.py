@@ -67,7 +67,10 @@ def region(host):
 
 
 def measure(datamodel, actors):
-    config = {"systemID": "measure", "system": {"maxActors": actors + 16}}
+    # every pool sized for the population, so nothing grows: a segment that grows doubles every
+    # pool (quickjs keeps each actor's last event, so maxEvents counts the actors); tracing off
+    config = {"systemID": "measure", "system": {"maxActors": actors + 16, "maxEvents": actors + 4096,
+                                                "tracing": False}}
     with tinyactors.Host(config) as host:
         with tinyactors.compile_charts([("fit.scxml", read_chart("fit", datamodel))]) as compiled:
             host.add_image(compiled.image)

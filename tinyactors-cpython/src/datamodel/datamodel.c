@@ -83,6 +83,8 @@ int ta_python_datamodel_init(ta_python_datamodel *datamodel, ta_python_host *hos
     datamodel->host = host;
     datamodel->state = host->state;
     if (ta_python_rows_init(datamodel) < 0) return -1;
+    datamodel->strings = PyDict_New();
+    if (!datamodel->strings) return -1;
     return ta_python_namespace_init(datamodel);
 }
 
@@ -94,6 +96,7 @@ void ta_python_datamodel_free(ta_python_datamodel *datamodel) {
     Py_CLEAR(datamodel->namespace);
     Py_CLEAR(datamodel->raised);
     Py_CLEAR(datamodel->output);
+    Py_CLEAR(datamodel->strings);
     if (datamodel->wire.pointer) {
         const ta_allocator *allocator = &datamodel->host->allocator;
         allocator->free(allocator->context, datamodel->wire.pointer, datamodel->wire.capacity);
@@ -106,6 +109,7 @@ int ta_python_datamodel_traverse(ta_python_datamodel *datamodel, visitproc visit
     Py_VISIT(datamodel->namespace);
     Py_VISIT(datamodel->raised);
     Py_VISIT(datamodel->output);
+    Py_VISIT(datamodel->strings);
     return datamodel->state ? ta_python_rows_traverse(datamodel, visit, arg) : 0;
 }
 
@@ -395,6 +399,26 @@ static PyObject *ta_python_optional_str(ta_string_view text) {
     return text.length ? ta_python_view_str(text) : Py_NewRef(Py_None);
 }
 
+/* The strings an Event keeps repeat across a population (an origintype
+ * is a URL, an invokeid a state's): one str of each, shared through the
+ * datamodel's dict. Bounded, since an invokeid may be new per invocation:
+ * at the bound the dict is emptied, and the Events keep their strings. Not
+ * interned: an interned str lives as long as the interpreter. */
+#define TA_PYTHON_SHARED_STRINGS 4096
+
+static PyObject *ta_python_shared(ta_python_datamodel *datamodel, PyObject *text) {
+    if (!text || text == Py_None || !PyUnicode_CheckExact(text)) return text;
+    PyObject *shared = NULL;
+    if (PyDict_GetItemRef(datamodel->strings, text, &shared) > 0) {
+        Py_DECREF(text);
+        return shared;
+    }
+    PyErr_Clear();
+    if (PyDict_Size(datamodel->strings) >= TA_PYTHON_SHARED_STRINGS) PyDict_Clear(datamodel->strings);
+    if (PyDict_SetItem(datamodel->strings, text, text) < 0) PyErr_Clear(); /* unshared, still right */
+    return text;
+}
+
 static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_event_view *view) {
     ta_python_datamodel *datamodel = call->datamodel;
     ta_python_session_row *row = ta_table_get(&datamodel->sessions, call->instance);
@@ -413,8 +437,8 @@ static ta_status ta_python_bind_event(const ta_datamodel_call *call, const ta_ev
         event->type = Py_NewRef(PyTuple_GetItem(datamodel->state->event_kinds, view->type % 3));
         event->sendid = ta_python_optional_str(view->sendid);
         event->origin = ta_python_optional_str(view->origin);
-        event->origintype = ta_python_optional_str(view->origintype);
-        event->invokeid = ta_python_optional_str(view->invokeid);
+        event->origintype = ta_python_shared(datamodel, ta_python_optional_str(view->origintype));
+        event->invokeid = ta_python_shared(datamodel, ta_python_optional_str(view->invokeid));
         event->data = Py_NewRef(data ? data : Py_None); /* the payload's value itself (held by the Event) */
         event->raw = view->size >= sizeof *view ? ta_python_optional_str(view->raw) : Py_NewRef(Py_None);
         if (!event->name || !event->sendid || !event->origin || !event->origintype || !event->invokeid || !event->raw ||
@@ -691,6 +715,8 @@ static PyObject *ta_python_event_from(ta_python_datamodel *datamodel, PyObject *
     PyObject **slots[8] = {&event->name, &event->type, &event->sendid, &event->origin,
                            &event->origintype, &event->invokeid, &event->data, &event->raw};
     for (int i = 0; i < 8; i++) *slots[i] = Py_NewRef(PyList_GetItem(fields, i));
+    for (int i = 0; i < 6; i++) /* the strings (name, type, sendid, origin, origintype, invokeid) repeat */
+        if (i != 2 && i != 3) *slots[i] = ta_python_shared(datamodel, *slots[i]);
     return (PyObject *)event;
 }
 

@@ -44,6 +44,7 @@ the sizes, the process's peak memory and the hosts' regions per actor.
 """
 
 import argparse
+import hashlib
 import array
 import collections
 import os
@@ -188,12 +189,15 @@ def main():
     v1, v2 = (read_chart(version, options.datamodel) for version in ("order-v1", "order-v2"))
 
     resident_room = min(options.resident, options.actors) + 4 * BATCH
+    # sized as tools/stress.py's (instance 128 B and strings 16 B per resident actor, tracing off);
+    # events: a delayed send per resident actor, and after the restore the stand-in's declines
+    # (quickjs keeps each actor's last event too)
     config = {"systemID": "orders", "system": {"ticksPerSecond": 1000,
-                                               "maxActors": options.actors + resident_room,
-                                               "maxEvents": 4096 + 2 * resident_room, "maxTimers": resident_room,
+                                               "maxActors": options.actors + 4 * BATCH,
+                                               "maxEvents": 4096 + 3 * resident_room, "maxTimers": resident_room,
                                                "maxRequests": resident_room,
-                                               "instanceBytes": 2048 * resident_room,
-                                               "stringBytes": 16384 + 64 * resident_room}}
+                                               "instanceBytes": 128 * resident_room,
+                                               "stringBytes": 16384 + 16 * resident_room, "tracing": False}}
     live_store = Store(os.path.join(directory.name, "live.db"))
     live = Population("live", live_store, options, failures)
     real = Payments(decline=False)
@@ -264,6 +268,7 @@ def main():
     live_store.db.backup(copy_store.db)
     print("snapshot: %.1f MB in %.2f s (%.0f B an actor); the store copied" % (
         len(blob) / 1e6, taken, len(blob) / options.actors), flush=True)
+    digest = hashlib.sha256(blob).digest()  # the copy's snapshot is compared with it: one snapshot in memory at a time
     del blob
 
     # 3. restore the copy, with stand-ins; its snapshot before it runs is the same bytes
@@ -276,11 +281,11 @@ def main():
     rehearsal = tinyactors.Host.restore(blob, config, wake=copy.wake, log=copy.log, migrated=copy.migrated,
                                         clock=copy_clock, services={PAYMENT: stand_in.start})
     restored = time.perf_counter() - started
+    del blob
     again = rehearsal.snapshot()
-    if again != blob:
-        failures.append("the copy's snapshot differs from the one it was restored from (%d and %d bytes)" % (
-            len(again), len(blob)))
-    del again, blob
+    if hashlib.sha256(again).digest() != digest:
+        failures.append("the copy's snapshot differs from the one it was restored from")
+    del again
     copy.resident.update((s, None) for s in in_memory)
     rehearsal.run_until_idle()  # the payments in flight, announced again: the stand-in declines them
     if stand_in.started != {s: 1 for s in payers} or stand_in.restored != len(payers):

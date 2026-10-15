@@ -132,9 +132,10 @@ def main():
         return stats
 
     resident_room = options.resident + 4 * BATCH
-    config = {"systemID": "migration", "system": {"maxActors": options.actors + resident_room, "maxEvents": 4096,
-                                                  "instanceBytes": 2048 * resident_room,
-                                                  "stringBytes": 16384 + 64 * resident_room}}
+    # sized as tools/stress.py's (instance 128 B and strings 16 B per resident actor, tracing off)
+    config = {"systemID": "migration", "system": {"maxActors": options.actors + 4 * BATCH, "maxEvents": 4096,
+                                                  "instanceBytes": 128 * resident_room,
+                                                  "stringBytes": 16384 + 16 * resident_room, "tracing": False}}
     host = tinyactors.Host(config, wake=wake, log=log, migrated=migrated)
     v1, v2 = (read_chart(version, options.datamodel) for version in ("counter-v1", "counter-v2"))
     with tinyactors.compile_charts([("counter.scxml", v1)]) as compiled:

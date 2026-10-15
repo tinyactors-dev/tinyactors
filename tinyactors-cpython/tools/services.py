@@ -109,10 +109,13 @@ def main():
     world = World()
     room = options.actors + 4 * BATCH
     # Capacity planning: an invocation is a request of core's (maxRequests); quickjs keeps each
-    # actor's last event in core's pool (its datamodel does not detach _event), so maxEvents counts
-    # the actors too.
-    config = {"systemID": "services", "system": {"maxActors": room, "maxRequests": room, "maxEvents": room + 16384,
-                                                 "instanceBytes": 512 * room, "stringBytes": 16384 + 64 * room}}
+    # actor's last event in core's pool (its datamodel does not detach _event), so on quickjs
+    # maxEvents counts the actors too; the "python" datamodel lets its events go. The counter's
+    # instance fits in 128 B, its strings in 16; tracing off (nobody exports the traces here).
+    events = 16384 + (room if options.datamodel == "ecmascript" else 0)
+    config = {"systemID": "services", "system": {"maxActors": room, "maxRequests": room, "maxEvents": events,
+                                                 "instanceBytes": 128 * room, "stringBytes": 16384 + 16 * room,
+                                                 "tracing": False}}
     host = tinyactors.Host(config, log=world.log, services={COUNTER: world.start})
     with tinyactors.compile_charts([("client.scxml", read_chart("client", options.datamodel))]) as compiled:
         host.add_image(compiled.image)
