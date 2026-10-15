@@ -299,6 +299,9 @@ h1 em {
 }
 .prose-p a,
 .docs a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-link);
   font-weight: 500;
   text-decoration: none;
