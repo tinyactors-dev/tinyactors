@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test staticjs: the shapes tables, the amalgamation and the API description current, the shapes generator, three parameters at most, no recursion, freestanding for wasm32, the release's wasm module and the browser example in Node, the examples, the tests under the sanitizers, every test program, and the spec against Node"
-#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "examples/**/*", "bench/*.c", "bench/modules/**/*", "mise/**/*", "mise.toml", "../tinyxml/mise/lib/c_scan.rb", "../mise/lib/**/*", "../mise.toml"]
+#MISE sources=["include/**/*", "src/**/*", "tests/**/*", "examples/**/*", "bench/*.c", "bench/modules/**/*", "mise/**/*", "mise.toml", "../tinyxml/mise/lib/c_scan.rb", "../mise/lib/**/*", "../mise.toml", "../tinyactors-test/suites/protocol/values.txt"]
 #MISE outputs={auto=true}
 #MISE depends=["build"]
 #USAGE flag "--full" help="Also fail every allocation of every spec case"

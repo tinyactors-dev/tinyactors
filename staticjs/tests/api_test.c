@@ -66,7 +66,7 @@ static sjs_context *new_context(counting *c, sjs_limits limits) {
 
 static void write_text(sjs_context *context, sjs_value value, char *out, size_t capacity) {
     sjs_writer *writer;
-    sjs_writer_config config = { context, value, { "<function>", 10 } };
+    sjs_writer_config config = { context, value, { "<function>", 10 }, SJS_FORMAT_SOURCE, NULL };
     out[0] = '\0';
     if (sjs_writer_init(&writer, &config) != SJS_OK) return;
     sjs_buffer buffer = { (uint8_t *)out, (uint32_t)capacity - 1u, 0 };
@@ -486,6 +486,81 @@ static void test_value_read_json(void) {
     CHECK(sjs_value_read(context, &(sjs_read_params){ SJS_FORMAT_JSON, { (const uint8_t *)long_text, sizeof long_text }, NULL, NULL }, &v) == SJS_ERR_LIMIT);
     CHECK(sjs_value_read(context, &(sjs_read_params){ 0 }, &v) == SJS_ERR_INVALID);
     CHECK(sjs_value_read(context, &(sjs_read_params){ SJS_FORMAT_JSON, { NULL, 1 }, NULL, NULL }, &v) == SJS_ERR_INVALID);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+static sjs_value result_of(sjs_context *context, sjs_goal goal, const char *source);
+
+/* The value written in `format` through a buffer of `piece` bytes at a
+ * time, into out; the writer's result. */
+typedef struct {
+    sjs_format format;
+    uint32_t piece;
+    sjs_error *error;
+} write_as;
+
+static sjs_result write_format(sjs_context *context, sjs_value v, write_as as, sjs_buffer *out) {
+    sjs_writer *w;
+    sjs_writer_config config = { context, v, { "", 0 }, as.format, as.error };
+    sjs_result r = sjs_writer_init(&w, &config);
+    if (r != SJS_OK) return r;
+    do {
+        uint32_t room = out->capacity - out->length;
+        sjs_buffer piece = { out->ptr + out->length, room < as.piece ? room : as.piece, 0 };
+        r = sjs_writer_write(w, &piece);
+        out->length += piece.length;
+        if (r == SJS_NEED_SPACE && piece.capacity == 0) break;
+    } while (r == SJS_NEED_SPACE);
+    sjs_writer_destroy(w);
+    return r;
+}
+
+/* JSON written by the writer is what JSON.stringify gives in a program,
+ * piece by piece through a buffer of any size; what has no JSON is refused. */
+static void test_writer_json(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    const char *sources[] = {
+        "({ a: [1, -0, NaN, Infinity, undefined, (x) => x, \"\\u2028\\n\\\"\"], b: undefined, f: (x) => x, c: null })",
+        "[new Map([[1, 2]]), new Set([1]), /a/g, [1, 2].values(), new Date(0), new Date(NaN)]",
+        "({ t: Temporal.PlainDate.from(\"2024-01-31\"), d: Temporal.Duration.from(\"PT1H\"), 2: true, 1: [] })",
+        "\"a1b\".match(/\\d/)",
+        "[[[[]]], {}, \"é😀\", 1e21, 0.1, -1.5e-7]",
+        "\"\"",
+        "true",
+    };
+    for (size_t i = 0; i < sizeof sources / sizeof sources[0]; i++) {
+        char program[512];
+        snprintf(program, sizeof program, "JSON.stringify(%s)", sources[i]);
+        sjs_value want = result_of(context, SJS_GOAL_EXPRESSION, program);
+        CHECK(want.kind == SJS_STRING);
+        sjs_str text = sjs_string_text(want);
+        sjs_value v = result_of(context, SJS_GOAL_EXPRESSION, sources[i]);
+        for (uint32_t piece = 1; piece <= 4096; piece *= 64) {
+            uint8_t bytes[512];
+            sjs_buffer out = { bytes, sizeof bytes, 0 };
+            CHECK(write_format(context, v, (write_as){ SJS_FORMAT_JSON, piece, NULL }, &out) == SJS_OK);
+            if (out.length != text.length || memcmp(bytes, text.ptr, text.length) != 0)
+                fprintf(stderr, "JSON of %s: %.*s, want %.*s\n", sources[i], (int)out.length, bytes, (int)text.length, text.ptr);
+            CHECK(out.length == text.length && memcmp(bytes, text.ptr, text.length) == 0);
+        }
+        sjs_release(context, v);
+        sjs_release(context, want);
+    }
+    const char *refused[] = { "1n", "[1n]", "undefined", "(x) => x" };
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) {
+        sjs_value v = result_of(context, SJS_GOAL_EXPRESSION, refused[i]);
+        uint8_t bytes[64];
+        sjs_buffer out = { bytes, sizeof bytes, 0 };
+        sjs_error error = { 0 };
+        CHECK(write_format(context, v, (write_as){ SJS_FORMAT_JSON, 64, &error }, &out) == SJS_ERR_PROGRAM);
+        CHECK(error.code == SJS_ERROR_UNSUPPORTED && error.message.length > 0);
+        sjs_release(context, v);
+    }
+    sjs_writer *w;
+    CHECK(sjs_writer_init(&w, &(sjs_writer_config){ .context = context, .value = sjs_null(), .format = 9 }) == SJS_ERR_INVALID);
     CHECK(sjs_context_live_bytes(context) == 0);
     sjs_context_destroy(context);
     CHECK(c.live == 0);
@@ -1375,7 +1450,7 @@ static void test_writer_resumes(void) {
     sjs_value v;
     CHECK(sjs_vm_take_result(vm, &v) == SJS_OK);
     sjs_writer *writer;
-    sjs_writer_config wc = { context, v, { "", 0 } };
+    sjs_writer_config wc = { context, v, { "", 0 }, SJS_FORMAT_SOURCE, NULL };
     CHECK(sjs_writer_init(&writer, &wc) == SJS_OK);
     char text[4096];
     size_t length = 0;
@@ -3534,7 +3609,7 @@ static void test_bigint_api(void) {
     CHECK(strcmp(out, "-123456789012345678901234567890n") == 0);
     /* The writer resumes a BigInt's digits a byte at a time. */
     sjs_writer *w;
-    CHECK(sjs_writer_init(&w, &(sjs_writer_config){ context, v, { 0 } }) == SJS_OK);
+    CHECK(sjs_writer_init(&w, &(sjs_writer_config){ .context = context, .value = v }) == SJS_OK);
     char one[64];
     uint32_t got = 0;
     sjs_result r;
@@ -3922,6 +3997,7 @@ int main(int argc, char **argv) {
     test_native_release();
     test_call_function();
     test_value_read_json();
+    test_writer_json();
     test_iterators_read();
     test_regexp_read();
     test_time_values();

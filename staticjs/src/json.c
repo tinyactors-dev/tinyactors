@@ -524,29 +524,45 @@ static sjs_position json_position(sjs_str text, uint32_t offset) {
     return at;
 }
 
-sjs_result sjs_value_read(sjs_context *context, const sjs_read_params *params, sjs_value *out) {
-    if (context == NULL || params == NULL || out == NULL || params->format != SJS_FORMAT_JSON ||
-        (params->bytes.ptr == NULL && params->bytes.length != 0)) {
-        return SJS_ERR_INVALID;
-    }
-    if (params->bytes.length > context->limits.max_string_bytes) return SJS_ERR_LIMIT;
+/* JSON whole, as JSON.parse reads it, from bytes that must be UTF-8. */
+static sjs_result json_read_bytes(const sjs_read_input *in, sjs_value *out) {
     json_reader r = { 0 };
-    r.context = context;
-    r.text = (sjs_str){ (const char *)params->bytes.ptr, params->bytes.length };
-    sjs_result result;
+    r.context = in->context;
+    r.text = (sjs_str){ (const char *)in->bytes.ptr, in->bytes.length };
     uint32_t valid = sjs_utf8_valid_length(r.text);
+    sjs_result result;
     if (valid != r.text.length) {
         r.at = valid;
         result = json_syntax(&r, "the bytes are not UTF-8");
     } else {
         result = json_read_all(&r);
     }
+    if (result == SJS_OK) *out = r.result;
+    else *in->problem = (sjs_read_problem){ r.problem, r.message, r.subject, r.problem_at };
+    return result;
+}
+
+sjs_result sjs_value_read(sjs_context *context, const sjs_read_params *params, sjs_value *out) {
+    if (context == NULL || params == NULL || out == NULL ||
+        (params->format != SJS_FORMAT_JSON && params->format != SJS_FORMAT_CBOR) ||
+        (params->bytes.ptr == NULL && params->bytes.length != 0)) {
+        return SJS_ERR_INVALID;
+    }
+    if (params->bytes.length > context->limits.max_string_bytes) return SJS_ERR_LIMIT;
+    sjs_read_problem problem = { 0 };
+    sjs_value v;
+    bool json = params->format == SJS_FORMAT_JSON;
+    sjs_read_input in = { context, params->bytes, &problem };
+    sjs_result result = json ? json_read_bytes(&in, &v) : sjs_cbor_read(&in, &v);
     if (result == SJS_OK) {
-        *out = r.result;
+        *out = v;
         return SJS_OK;
     }
     if (params->error != NULL) {
-        *params->error = (sjs_error){ r.problem, json_position(r.text, r.problem_at), sjs_cstr(r.message), r.subject };
+        /* JSON is text, with lines; CBOR is one line of bytes. */
+        sjs_position at = json ? json_position((sjs_str){ (const char *)params->bytes.ptr, params->bytes.length }, problem.at)
+                               : (sjs_position){ problem.at, 1, problem.at + 1u };
+        *params->error = (sjs_error){ problem.code, at, sjs_cstr(problem.message), problem.subject };
         sjs_error_keep_subject(params->error, params->subject);
     }
     return SJS_ERR_PROGRAM;

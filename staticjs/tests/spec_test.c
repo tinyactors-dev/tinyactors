@@ -233,7 +233,7 @@ static const char *code_name(sjs_error_code code) {
 
 static sjs_result write_value(sjs_context *context, sjs_value value, char *out, size_t capacity) {
     sjs_writer *writer;
-    sjs_writer_config config = { context, value, { "<function>", 10 } };
+    sjs_writer_config config = { context, value, { "<function>", 10 }, SJS_FORMAT_SOURCE, NULL };
     sjs_result r = sjs_writer_init(&writer, &config);
     if (r != SJS_OK) return r;
     sjs_buffer buffer = { (uint8_t *)out, (uint32_t)capacity - 1u, 0 };

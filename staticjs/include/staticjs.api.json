@@ -365,6 +365,10 @@
       "value": 52
     },
     {
+      "name": "SJS_FORMAT_CBOR",
+      "value": 2
+    },
+    {
       "name": "SJS_FORMAT_JSON",
       "value": 1
     },
@@ -2524,6 +2528,14 @@
       "kind": "opaque",
       "fields": []
     },
+    "sjs_format": {
+      "kind": "enum",
+      "constants": [
+        "SJS_FORMAT_SOURCE",
+        "SJS_FORMAT_JSON",
+        "SJS_FORMAT_CBOR"
+      ]
+    },
     "sjs_writer_config": {
       "kind": "struct",
       "fields": [
@@ -2538,44 +2550,51 @@
         {
           "name": "function_text",
           "type": "sjs_str"
+        },
+        {
+          "name": "format",
+          "type": "sjs_format"
+        },
+        {
+          "name": "error",
+          "type": "sjs_error *"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 40,
+          "size": 56,
           "align": 8,
           "offsets": {
             "context": 0,
             "value": 8,
-            "function_text": 24
+            "function_text": 24,
+            "format": 40,
+            "error": 48
           }
         },
         "aarch64": {
+          "size": 56,
+          "align": 8,
+          "offsets": {
+            "context": 0,
+            "value": 8,
+            "function_text": 24,
+            "format": 40,
+            "error": 48
+          }
+        },
+        "wasm32": {
           "size": 40,
           "align": 8,
           "offsets": {
             "context": 0,
             "value": 8,
-            "function_text": 24
-          }
-        },
-        "wasm32": {
-          "size": 32,
-          "align": 8,
-          "offsets": {
-            "context": 0,
-            "value": 8,
-            "function_text": 24
+            "function_text": 24,
+            "format": 32,
+            "error": 36
           }
         }
       }
-    },
-    "sjs_format": {
-      "kind": "enum",
-      "constants": [
-        "SJS_FORMAT_SOURCE",
-        "SJS_FORMAT_JSON"
-      ]
     },
     "sjs_read_params": {
       "kind": "struct",

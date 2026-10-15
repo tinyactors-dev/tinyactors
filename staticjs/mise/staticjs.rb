@@ -27,6 +27,8 @@ module StaticJS
   TESTS = {
     'number_test' => { source: 'tests/number_test.c', fast: [], full: [] },
     'json_test' => { source: 'tests/json_test.c', fast: [], full: [] },
+    'cbor_test' => { source: 'tests/cbor_test.c', fast: ['../tinyactors-test/suites/protocol/values.txt'],
+                     full: ['../tinyactors-test/suites/protocol/values.txt'] },
     'regex_test' => { source: 'tests/regex_test.c', fast: [], full: [] },
     'temporal_test' => { source: 'tests/temporal_test.c', fast: [], full: [] },
     'names_test' => { source: 'tests/names_test.c', fast: [], full: [] },

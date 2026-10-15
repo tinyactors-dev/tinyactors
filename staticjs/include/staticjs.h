@@ -936,30 +936,57 @@ SJS_API sjs_result sjs_program_function(const sjs_program *program, uint32_t ind
 /* ========================================================================
  * Writer
  *
- * Writes a value as JavaScript source that evaluates to an equal value:
- * JSON where JSON can say it, and `undefined`, `NaN`, `Infinity`, `-0`, a
- * BigInt's `10n`, `new Set([...])`, `new Map([[key, value], ...])`, an
- * iterator's `[...].values()`, an iterator that yields the same values, and
- * a Temporal value's `Temporal.PlainDate.from("2024-01-31")`, a Date's
+ * Writes a value in a format (sjs_format), into a buffer of any size,
+ * resuming when the buffer is full; a BigInt's digits are made first,
+ * through the context. As source, it writes JavaScript that evaluates to
+ * an equal value: JSON where JSON can say it, and `undefined`, `NaN`,
+ * `Infinity`, `-0`, a BigInt's `10n`, `new Set([...])`,
+ * `new Map([[key, value], ...])`, an iterator's `[...].values()`, a
+ * Temporal value's `Temporal.PlainDate.from("2024-01-31")`, a Date's
  * `new Date("2024-01-31T00:00:00.000Z")` (or `new Date(NaN)`), where it
- * cannot. Resumes when the buffer
- * is full; a BigInt's digits are made first, through the context.
+ * cannot. As JSON or CBOR, it writes what JSON.stringify keeps.
  */
 
 typedef struct sjs_writer sjs_writer;
 
+/* What the writer writes, and what sjs_value_read reads (below). */
+typedef enum {
+    /* JavaScript source that evaluates to an equal value; written only. */
+    SJS_FORMAT_SOURCE = 0,
+    /* JSON text: written as JSON.stringify writes it, which keeps less
+     * than the value (a Date as its string, a Map as {}, no undefined
+     * member, -0 as 0); read as JSON.parse reads it. */
+    SJS_FORMAT_JSON,
+    /* One CBOR item, a neutral value (tinyactors-core/docs/protocol.md,
+     * "Values"), read and written as the ECMAScript data model does:
+     * written, what JSON.stringify keeps with numbers and BigInts exact;
+     * read, an integer within +-(2^53 - 1) as a number and any other as a
+     * BigInt, a reference (tag 32) as its address. */
+    SJS_FORMAT_CBOR
+} sjs_format;
+
 typedef struct {
     sjs_context *context;
     sjs_value value;       /* borrowed until the writer is done */
-    /* Written for a function. Empty: a function is SJS_ERR_INVALID, as it
-     * has no source to write. A log or a test can say "<function>". */
+    /* Written for a function in source. Empty: a function is
+     * SJS_ERR_INVALID, as it has no source to write. A log or a test can say
+     * "<function>". JSON and CBOR leave functions out, as JSON.stringify does. */
     sjs_str function_text;
+    sjs_format format;     /* zero: source */
+    /* Optional, for JSON and CBOR: why a value has no text in the format,
+     * when sjs_writer_write returns SJS_ERR_PROGRAM (SJS_ERROR_UNSUPPORTED):
+     * a BigInt in JSON, undefined or a function as the whole value in JSON,
+     * in CBOR a BigInt outside -2^64 .. 2^64 - 1 or a value nested deeper
+     * than 64 (a Date or a Temporal value counts as a level). What was
+     * written before the refusal is not a whole value: throw it away. */
+    sjs_error *error;
 } sjs_writer_config;
 
 SJS_API sjs_result sjs_writer_init(sjs_writer **out, const sjs_writer_config *config);
 /* Fill `buffer` from buffer->length on. SJS_OK when the value is written,
- * SJS_NEED_SPACE when the buffer is full, SJS_ERR_INVALID for a function
- * when the config gives no function_text. */
+ * SJS_NEED_SPACE when the buffer is full, SJS_ERR_INVALID for a function in
+ * source when the config gives no function_text, SJS_ERR_PROGRAM for a
+ * value JSON or CBOR has no text for (the config's error says which). */
 SJS_API sjs_result sjs_writer_write(sjs_writer *writer, sjs_buffer *buffer);
 SJS_API void sjs_writer_destroy(sjs_writer *writer);
 
@@ -991,13 +1018,8 @@ SJS_API sjs_result sjs_bigint_text(sjs_context *context, sjs_value bigint, sjs_b
  * compile and no copy of the bytes into a string.
  */
 
-typedef enum {
-    SJS_FORMAT_SOURCE = 0,  /* JavaScript source: the writer's, never read */
-    SJS_FORMAT_JSON         /* JSON text, read as JSON.parse reads it */
-} sjs_format;
-
 typedef struct {
-    sjs_format format;      /* SJS_FORMAT_JSON; a zeroed struct is SJS_ERR_INVALID */
+    sjs_format format;      /* SJS_FORMAT_JSON or SJS_FORMAT_CBOR; a zeroed struct is SJS_ERR_INVALID */
     sjs_bytes bytes;        /* the whole value; borrowed for the call */
     sjs_error *error;       /* optional: filled when the result is SJS_ERR_PROGRAM */
     sjs_buffer *subject;    /* optional: where the error's subject is copied,
@@ -1007,10 +1029,14 @@ typedef struct {
 /*
  * The value in `bytes`, which the caller owns. SJS_ERR_PROGRAM when the
  * bytes are not a value staticjs has, with `error`: SJS_ERROR_SYNTAX for
- * bytes that are not the format (not UTF-8, or not JSON), at the byte
- * offset, line and column (in bytes) where reading stopped;
- * SJS_ERROR_UNSUPPORTED for a value the format has and staticjs does not (a
- * "__proto__" key, a lone surrogate); SJS_ERROR_LIMIT past a limit (subject
+ * bytes that are not the format (JSON that is not UTF-8 or not JSON; CBOR
+ * that is not one neutral value: another tag, another simple value, an
+ * indefinite length, a key that is not text, text that is not UTF-8, a
+ * value nested deeper than 64, bytes after the item), at the byte offset,
+ * and for JSON the line and column (in bytes) where reading stopped (CBOR:
+ * line 1, the column the offset plus one); SJS_ERROR_UNSUPPORTED for a
+ * value the format has and staticjs does not (a "__proto__" key, a lone
+ * surrogate, CBOR's bytes); SJS_ERROR_LIMIT past a limit (subject
  * "max_nesting" past the nesting), SJS_ERROR_MEMORY when the allocator
  * refused. Bytes longer than max_string_bytes are SJS_ERR_LIMIT before
  * anything is read.

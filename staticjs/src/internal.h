@@ -1351,4 +1351,25 @@ void sjs_error_subject(sjs_error_slot *slot, sjs_str subject);
  * into `keep` from keep->length on, cut between characters to fit, and point
  * error->subject there; with no buffer, the subject is empty. */
 void sjs_error_keep_subject(sjs_error *error, sjs_buffer *keep);
+
+/* Why bytes read as a value (sjs_value_read) were refused, and at which
+ * byte: SJS_ERROR_SYNTAX, SJS_ERROR_UNSUPPORTED, SJS_ERROR_LIMIT (with the
+ * limit's name as the subject, or none) or SJS_ERROR_MEMORY. */
+typedef struct {
+    sjs_error_code code;
+    const char *message;
+    sjs_str subject;
+    uint32_t at;
+} sjs_read_problem;
+
+/* Bytes to read as a value, and where to say why they were refused. */
+typedef struct {
+    sjs_context *context;
+    sjs_bytes bytes;
+    sjs_read_problem *problem;
+} sjs_read_input;
+
+/* A CBOR neutral value (cbor.c), whole: SJS_OK with *out, which the caller
+ * owns, or SJS_ERR_PROGRAM with *in->problem. */
+sjs_result sjs_cbor_read(const sjs_read_input *in, sjs_value *out);
 sjs_str sjs_cstr(const char *text);

@@ -120,7 +120,7 @@ static int run(sjs_context *context, sjs_program *program, const options *o) {
         sjs_value value;
         sjs_vm_take_result(vm, &value);
         sjs_writer *writer;
-        sjs_writer_config config = { context, value, SJS_STR("<function>") };
+        sjs_writer_config config = { context, value, SJS_STR("<function>"), SJS_FORMAT_SOURCE, NULL };
         if (sjs_writer_init(&writer, &config) == SJS_OK) {
             uint8_t bytes[4096];
             sjs_result written;

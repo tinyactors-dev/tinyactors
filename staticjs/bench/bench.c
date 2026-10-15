@@ -933,7 +933,7 @@ static bool evaluate_source(bench_run *run, const bench_source *source, sjs_valu
 /* The value as sjs_writer writes it, with "<function>" for a function. */
 static bool write_value(bench_run *run, sjs_value value, bench_text *out) {
     sjs_writer *writer;
-    sjs_writer_config config = { run->context, value, { "<function>", 10 } };
+    sjs_writer_config config = { run->context, value, { "<function>", 10 }, SJS_FORMAT_SOURCE, NULL };
     if (sjs_writer_init(&writer, &config) != SJS_OK) return fail(run, "sjs_writer_init failed");
     uint8_t chunk[4096];
     sjs_buffer buffer = { chunk, sizeof chunk, 0 };
@@ -1510,7 +1510,7 @@ static bool op_vm_reset(bench_run *run) {
  * whenever the writer asks for space. */
 static bool op_write(bench_run *run) {
     sjs_writer *writer;
-    sjs_writer_config config = { run->context, run->globals[0], { "<function>", 10 } };
+    sjs_writer_config config = { run->context, run->globals[0], { "<function>", 10 }, SJS_FORMAT_SOURCE, NULL };
     if (sjs_writer_init(&writer, &config) != SJS_OK) return fail(run, "sjs_writer_init failed");
     sjs_buffer buffer = { run->buffer, run->c->buffer, 0 };
     uint64_t written = 0;

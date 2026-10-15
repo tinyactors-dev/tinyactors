@@ -69,7 +69,7 @@ int main(void) {
     if (sjs_vm_take_result(vm, &result) != SJS_OK) return fail("no result");
     char text[256];
     sjs_writer *writer = NULL;
-    sjs_writer_config writer_config = { context, result, { NULL, 0 } };
+    sjs_writer_config writer_config = { context, result, { NULL, 0 }, SJS_FORMAT_SOURCE, NULL };
     sjs_buffer buffer = { (uint8_t *)text, (uint32_t)sizeof text - 1u, 0 };
     if (sjs_writer_init(&writer, &writer_config) != SJS_OK || sjs_writer_write(writer, &buffer) != SJS_OK) {
         return fail("the result cannot be written");

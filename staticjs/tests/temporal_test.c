@@ -180,7 +180,7 @@ static void evaluate(runner *r, const text *source, bool deliberate) {
         sjs_value result;
         if (run != SJS_RUN_DONE || sjs_vm_take_result(r->vm, &result) != SJS_OK) abort();
         sjs_writer *writer;
-        sjs_writer_config config = { r->context, result, { "<function>", 10 } };
+        sjs_writer_config config = { r->context, result, { "<function>", 10 }, SJS_FORMAT_SOURCE, NULL };
         if (sjs_writer_init(&writer, &config) != SJS_OK) abort();
         uint8_t room[4096];
         sjs_buffer buffer = { room, sizeof room, 0 };

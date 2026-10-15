@@ -63,7 +63,9 @@ The tests are `tests/spec/*.spec` (read by `tests/spec_test.c`, which runs
 each case with the source pushed whole, a byte at a time and in chunks, on
 different amounts of fuel, and once more with shapes off, which must give
 the same program but for its tags, the same outcome and no less fuel),
-`tests/api_test.c`, `tests/matcher_test.c` (the shape matcher on every
+`tests/api_test.c`, `tests/cbor_test.c` (the conformance suite's neutral
+values, `tinyactors-test/suites/protocol/values.txt`, read from CBOR and
+written back, evaluated and written, or refused), `tests/matcher_test.c` (the shape matcher on every
 spec source, the deepest and widest programs, unreadable streams and
 running out of memory), `tests/number_test.c`, `tests/json_test.c`
 (random JSON read and written back, and mutated JSON read or refused),

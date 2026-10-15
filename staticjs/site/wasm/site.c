@@ -267,7 +267,7 @@ SJS_SITE int32_t sjs_site_write(sjs_site *s, uint32_t piece) {
     s->pieces = 0;
     if (!s->has_result) return SJS_ERR_INVALID;
     sjs_writer *writer;
-    sjs_writer_config config = { s->context, s->result, SJS_STR("<function>") };
+    sjs_writer_config config = { s->context, s->result, SJS_STR("<function>"), SJS_FORMAT_SOURCE, NULL };
     sjs_result r = sjs_writer_init(&writer, &config);
     if (r != SJS_OK) return r;
     if (piece == 0u) piece = 4096u;
@@ -328,7 +328,7 @@ static uint32_t children(sjs_value v) { return v.kind == SJS_MAP ? 2u * sjs_map_
 /* The writer's text for `value`, appended to `to`. */
 static sjs_result append_written(sjs_site *s, sjs_value value, site_bytes *to) {
     sjs_writer *writer;
-    sjs_writer_config config = { s->context, value, SJS_STR("<function>") };
+    sjs_writer_config config = { s->context, value, SJS_STR("<function>"), SJS_FORMAT_SOURCE, NULL };
     sjs_result r = sjs_writer_init(&writer, &config);
     if (r != SJS_OK) return r;
     do {

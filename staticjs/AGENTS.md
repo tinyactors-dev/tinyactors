@@ -67,6 +67,9 @@ JavaScript does, or a fault. Never a different value.
 - `tests/number_test.c`: number formatting, remainder and rounding.
 - `tests/json_test.c`: `JSON.parse` and `JSON.stringify` on random inputs;
   `--print` gives `diff-node` the same inputs to compare with Node.
+- `tests/cbor_test.c`: CBOR read and written (`sjs_value_read`, the
+  writer's `SJS_FORMAT_CBOR`) against the conformance suite's neutral
+  values (`tinyactors-test/suites/protocol/values.txt`).
 - `tests/temporal_test.c`: Temporal values on fixed lists of inputs;
   `--print` gives `diff-node` expressions to compare with the vendored
   temporal-polyfill (`docs/internals/temporal.md`).

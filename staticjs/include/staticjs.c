@@ -1519,6 +1519,27 @@ SJS_PRIVATE void sjs_error_subject(sjs_error_slot *slot, sjs_str subject);
  * into `keep` from keep->length on, cut between characters to fit, and point
  * error->subject there; with no buffer, the subject is empty. */
 SJS_PRIVATE void sjs_error_keep_subject(sjs_error *error, sjs_buffer *keep);
+
+/* Why bytes read as a value (sjs_value_read) were refused, and at which
+ * byte: SJS_ERROR_SYNTAX, SJS_ERROR_UNSUPPORTED, SJS_ERROR_LIMIT (with the
+ * limit's name as the subject, or none) or SJS_ERROR_MEMORY. */
+typedef struct {
+    sjs_error_code code;
+    const char *message;
+    sjs_str subject;
+    uint32_t at;
+} sjs_read_problem;
+
+/* Bytes to read as a value, and where to say why they were refused. */
+typedef struct {
+    sjs_context *context;
+    sjs_bytes bytes;
+    sjs_read_problem *problem;
+} sjs_read_input;
+
+/* A CBOR neutral value (cbor.c), whole: SJS_OK with *out, which the caller
+ * owns, or SJS_ERR_PROGRAM with *in->problem. */
+SJS_PRIVATE sjs_result sjs_cbor_read(const sjs_read_input *in, sjs_value *out);
 SJS_PRIVATE sjs_str sjs_cstr(const char *text);
 
 /* ------------------------------------------------------------------------
@@ -7563,6 +7584,358 @@ __attribute__((noinline)) static sjs_result array_flat(sjs_vm *vm, sjs_leaf_call
     return r == SJS_OK ? SJS_OK : sjs_vm_fail(vm, r);
 }
 
+/* ---- src/cbor.c ---- */
+/*
+ * A value read from CBOR: one neutral value (tinyactors-core/docs/protocol.md,
+ * "Values"), as the ECMAScript data model reads one. An integer within
+ * +-(2^53 - 1) is a number and any other a BigInt; a float is a number; a
+ * map with text keys is an object; a reference (tag 32 on text) is its
+ * address. Nothing else is a neutral value: another tag, another simple
+ * value, an indefinite length, a key that is not text, a value nested
+ * deeper than 64, or bytes after the item. staticjs has no bytes, so a
+ * byte string is a neutral value it does not have. The containers open are
+ * an explicit stack, as everything in staticjs keeps one.
+ */
+
+/* The deepest a neutral value nests (tinyactors-core's codec). */
+#define CBOR_READ_DEPTH 64u
+
+/* A container being filled: owned until it is full and put into the one
+ * around it, or becomes the result. */
+typedef struct {
+    sjs_value container;   /* an array or an object */
+    uint32_t left;         /* items still to come; an object's entries */
+    sjs_string *key;       /* an object's key, read, whose value comes next; or NULL */
+} cbor_level;
+
+typedef struct {
+    sjs_context *context;
+    sjs_bytes bytes;
+    uint32_t at;
+    sjs_buf levels;        /* cbor_level */
+    sjs_value result;
+    sjs_read_problem *problem;
+} cbor_reader;
+
+static sjs_result cbor_problem(cbor_reader *r, sjs_error_code code, const char *message) {
+    *r->problem = (sjs_read_problem){ code, message, { "", 0 }, r->at };
+    return SJS_ERR_PROGRAM;
+}
+
+static sjs_result cbor_malformed(cbor_reader *r, const char *message) {
+    return cbor_problem(r, SJS_ERROR_SYNTAX, message);
+}
+
+static sjs_result cbor_fail(cbor_reader *r, sjs_result e) {
+    return e == SJS_ERR_LIMIT ? cbor_problem(r, SJS_ERROR_LIMIT, "a value is larger than the limits allow")
+                              : cbor_problem(r, SJS_ERROR_MEMORY, "out of memory");
+}
+
+static cbor_level *cbor_top(cbor_reader *r) {
+    uint32_t n = SJS_BUF_COUNT(r->levels, cbor_level);
+    return n == 0 ? NULL : &SJS_BUF_AT(r->levels, cbor_level, n - 1u);
+}
+
+static uint32_t cbor_left(const cbor_reader *r) {
+    return r->bytes.length - r->at;
+}
+
+/* An item's head: its major type and its argument, at r->at. */
+typedef struct {
+    uint8_t major;
+    uint8_t info;          /* the low five bits */
+    uint64_t argument;
+} cbor_head;
+
+static sjs_result cbor_read_head(cbor_reader *r, cbor_head *out) {
+    if (cbor_left(r) == 0) return cbor_malformed(r, "the CBOR ends inside an item");
+    uint8_t first = r->bytes.ptr[r->at];
+    out->major = (uint8_t)(first >> 5);
+    out->info = (uint8_t)(first & 31u);
+    if (out->info >= 28u) {
+        return cbor_malformed(r, out->info == 31u ? "an indefinite length is not a neutral value" : "a CBOR head that is not defined");
+    }
+    uint32_t size = out->info < 24u ? 0u : 1u << (out->info - 24u);
+    if (cbor_left(r) - 1u < size) return cbor_malformed(r, "the CBOR ends inside an item");
+    r->at++;
+    out->argument = out->info < 24u ? out->info : 0u;
+    for (uint32_t i = 0; i < size; i++) out->argument = out->argument << 8 | r->bytes.ptr[r->at++];
+    return SJS_OK;
+}
+
+/* 2^n for n within a double's exponents, made exactly. */
+static double cbor_power_of_two(int32_t n) {
+    double v = 1.0;
+    double step = n < 0 ? 0.5 : 2.0;
+    for (int32_t i = n < 0 ? -n : n; i > 0; i--) v *= step;
+    return v;
+}
+
+static double cbor_half(uint16_t h) {
+    int32_t exponent = (h >> 10) & 31;
+    double mantissa = (double)(h & 0x3FFu);
+    double v = exponent == 0 ? mantissa * cbor_power_of_two(-24)
+             : exponent == 31 ? (mantissa == 0 ? 1.0 / 0.0 : 0.0 / 0.0)
+                              : (1024.0 + mantissa) * cbor_power_of_two(exponent - 25);
+    return (h & 0x8000u) != 0 ? -v : v;
+}
+
+typedef union {
+    uint32_t u;
+    float f;
+} cbor_float_bits;
+
+typedef union {
+    uint64_t u;
+    double d;
+} cbor_double_bits;
+
+/* An integer as the ECMAScript data model reads one: a number within
+ * +-(2^53 - 1), else a BigInt. `negative` reads -1 - n. */
+static sjs_result cbor_integer(cbor_reader *r, const cbor_head *head, sjs_value *out) {
+    uint64_t n = head->argument;
+    bool negative = head->major == 1u;
+    const uint64_t safe = UINT64_C(9007199254740991);
+    if (!negative && n <= safe) {
+        *out = sjs_num((double)n);
+        return SJS_OK;
+    }
+    if (negative && n < safe) {
+        *out = sjs_num(-(double)n - 1.0);
+        return SJS_OK;
+    }
+    /* The magnitude in hexadecimal: n, or n + 1 for a negative one, which
+     * reaches 2^64. */
+    char hex[17];
+    uint32_t length = 0;
+    bool carry = negative && n == UINT64_MAX;
+    uint64_t magnitude = negative ? (carry ? 0u : n + 1u) : n;
+    char digits[16];
+    uint32_t count = 0;
+    do {
+        digits[count++] = "0123456789abcdef"[magnitude & 15u];
+        magnitude >>= 4;
+    } while (magnitude != 0);
+    if (carry) {
+        hex[length++] = '1';
+        for (uint32_t i = 0; i < 16u; i++) hex[length++] = '0';
+    } else {
+        while (count > 0) hex[length++] = digits[--count];
+    }
+    sjs_result e = sjs_bigint_from_digits(r->context, (sjs_bigint_digits){ { hex, length }, 16u, negative }, out);
+    return e == SJS_OK ? SJS_OK : cbor_fail(r, e);
+}
+
+/* Text of `length` bytes at r->at: well-formed UTF-8, which leaves out an
+ * encoded surrogate (CESU-8). */
+static sjs_result cbor_text(cbor_reader *r, uint64_t length, sjs_str *out) {
+    if (length > cbor_left(r)) return cbor_malformed(r, "the CBOR ends inside an item");
+    sjs_str text = { (const char *)r->bytes.ptr + r->at, (uint32_t)length };
+    uint32_t valid = sjs_utf8_valid_length(text);
+    if (valid != text.length) {
+        r->at += valid;
+        return cbor_malformed(r, "text that is not UTF-8");
+    }
+    r->at += (uint32_t)length;
+    *out = text;
+    return SJS_OK;
+}
+
+/* A value read: the result, or an item of the container open, which is put
+ * into the one around it once it is full. Takes over `v`. */
+static sjs_result cbor_deliver(cbor_reader *r, sjs_value v) {
+    for (;;) {
+        cbor_level *l = cbor_top(r);
+        if (l == NULL) {
+            r->result = v;
+            return SJS_OK;
+        }
+        if (l->container.kind == SJS_ARRAY) {
+            sjs_array *a = SJS_AS_ARRAY(l->container);
+            a->items[a->length++] = v;   /* made with room for every item */
+        } else {
+            sjs_object *o = SJS_AS_OBJECT(l->container);
+            sjs_string *key = l->key;
+            l->key = NULL;
+            sjs_result e = sjs_object_put_key(r->context, &o, (sjs_put){ key, v });
+            l->container.as.heap = &o->h;
+            if (e != SJS_OK) {
+                sjs_unref(r->context, sjs_heap_value(SJS_STRING, &key->h));
+                sjs_unref(r->context, v);
+                return cbor_fail(r, e);
+            }
+        }
+        if (--l->left != 0) return SJS_OK;
+        v = l->container;
+        r->levels.length -= (uint32_t)sizeof(cbor_level);
+    }
+}
+
+/* An array or a map of `count` items. */
+static sjs_result cbor_open(cbor_reader *r, uint8_t major, uint64_t count) {
+    /* Every item takes a byte at least, and a map's entry two. */
+    if (count > cbor_left(r) / (major == 5u ? 2u : 1u)) return cbor_malformed(r, "the CBOR ends inside an item");
+    uint32_t depth = SJS_BUF_COUNT(r->levels, cbor_level) + 1u;
+    if (depth > CBOR_READ_DEPTH) return cbor_malformed(r, "a value nested deeper than 64 is not a neutral value");
+    if (depth > r->context->limits.max_nesting) {
+        cbor_fail(r, SJS_ERR_LIMIT);
+        r->problem->subject = SJS_STR("max_nesting");
+        return SJS_ERR_PROGRAM;
+    }
+    cbor_level l = { sjs_undefined(), (uint32_t)count, NULL };
+    sjs_result e;
+    if (major == 4u) {
+        sjs_array *a;
+        e = sjs_array_make(r->context, (uint32_t)count, &a);
+        if (e == SJS_OK) l.container = sjs_heap_value(SJS_ARRAY, &a->h);
+    } else {
+        sjs_object *o;
+        e = sjs_object_make(r->context, (uint32_t)count, &o);
+        if (e == SJS_OK) l.container = sjs_heap_value(SJS_OBJECT, &o->h);
+    }
+    if (e != SJS_OK) return cbor_fail(r, e);
+    if (count == 0) return cbor_deliver(r, l.container);
+    e = sjs_buf_append(&r->context->counting, &r->levels, (sjs_bytes){ (const uint8_t *)&l, sizeof l });
+    if (e != SJS_OK) {
+        sjs_unref(r->context, l.container);
+        return cbor_fail(r, e);
+    }
+    return SJS_OK;
+}
+
+/* A map's key: text, of which "__proto__" is one staticjs objects do not
+ * have. */
+static sjs_result cbor_key(cbor_reader *r, cbor_level *l) {
+    uint32_t at = r->at;
+    cbor_head head;
+    if (cbor_read_head(r, &head) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (head.major != 3u) {
+        r->at = at;
+        return cbor_malformed(r, "a map's key that is not text is not a neutral value");
+    }
+    sjs_str text;
+    if (cbor_text(r, head.argument, &text) != SJS_OK) return SJS_ERR_PROGRAM;
+    if (sjs_str_equal(text, SJS_STR("__proto__"))) {
+        r->at = at;
+        return cbor_problem(r, SJS_ERROR_UNSUPPORTED, "an object with the key __proto__: staticjs objects have no prototype");
+    }
+    sjs_result e = sjs_string_intern(r->context, text, &l->key);
+    return e == SJS_OK ? SJS_OK : cbor_fail(r, e);
+}
+
+/* The item at r->at, delivered. */
+static sjs_result cbor_item(cbor_reader *r) {
+    uint32_t at = r->at;
+    cbor_head head;
+    if (cbor_read_head(r, &head) != SJS_OK) return SJS_ERR_PROGRAM;
+    sjs_value v;
+    switch (head.major) {
+    case 0:
+    case 1:
+        if (cbor_integer(r, &head, &v) != SJS_OK) return SJS_ERR_PROGRAM;
+        return cbor_deliver(r, v);
+    case 2:
+        r->at = at;
+        return cbor_problem(r, SJS_ERROR_UNSUPPORTED, "bytes: staticjs has no byte string");
+    case 3:
+    text: {
+        sjs_str text;
+        if (cbor_text(r, head.argument, &text) != SJS_OK) return SJS_ERR_PROGRAM;
+        sjs_string *s;
+        sjs_result e = sjs_string_make(r->context, text, &s);
+        if (e != SJS_OK) return cbor_fail(r, e);
+        return cbor_deliver(r, sjs_heap_value(SJS_STRING, &s->h));
+    }
+    case 4:
+    case 5:
+        return cbor_open(r, head.major, head.argument);
+    case 6:
+        /* A reference: tag 32 on its address, which is text. */
+        if (head.argument != 32u) {
+            r->at = at;
+            return cbor_malformed(r, "a tag other than 32 is not a neutral value");
+        }
+        at = r->at;
+        if (cbor_read_head(r, &head) != SJS_OK) return SJS_ERR_PROGRAM;
+        if (head.major != 3u) {
+            r->at = at;
+            return cbor_malformed(r, "tag 32 is on text, an address");
+        }
+        goto text;
+    default:
+        break;
+    }
+    /* Major type 7: false, true, null, undefined and floats. */
+    switch (head.info) {
+    case 20:
+        v = sjs_boolean(false);
+        break;
+    case 21:
+        v = sjs_boolean(true);
+        break;
+    case 22:
+        v = sjs_null();
+        break;
+    case 23:
+        v = sjs_undefined();
+        break;
+    case 25:
+        v = sjs_num(cbor_half((uint16_t)head.argument));
+        break;
+    case 26: {
+        cbor_float_bits b;
+        b.u = (uint32_t)head.argument;
+        v = sjs_num((double)b.f);
+        break;
+    }
+    case 27: {
+        cbor_double_bits b;
+        b.u = head.argument;
+        v = sjs_num(b.d);
+        break;
+    }
+    default:
+        r->at = at;
+        return cbor_malformed(r, "a simple value other than false, true, null and undefined is not a neutral value");
+    }
+    return cbor_deliver(r, v);
+}
+
+SJS_PRIVATE sjs_result sjs_cbor_read(const sjs_read_input *in, sjs_value *out) {
+    sjs_context *context = in->context;
+    sjs_bytes bytes = in->bytes;
+    cbor_reader r = { 0 };
+    r.context = context;
+    r.bytes = bytes;
+    r.result = sjs_undefined();
+    r.problem = in->problem;
+    sjs_result result = SJS_OK;
+    bool done = false;
+    while (result == SJS_OK && !done) {
+        cbor_level *l = cbor_top(&r);
+        if (l != NULL && l->container.kind == SJS_OBJECT && l->key == NULL) {
+            result = cbor_key(&r, l);
+            continue;
+        }
+        result = cbor_item(&r);
+        done = cbor_top(&r) == NULL;
+    }
+    if (result == SJS_OK && r.at != bytes.length) result = cbor_malformed(&r, "bytes after the item");
+    uint32_t n = SJS_BUF_COUNT(r.levels, cbor_level);
+    for (uint32_t i = 0; i < n; i++) {
+        cbor_level *l = &SJS_BUF_AT(r.levels, cbor_level, i);
+        sjs_unref(context, l->container);
+        if (l->key != NULL) sjs_unref(context, sjs_heap_value(SJS_STRING, &l->key->h));
+    }
+    sjs_buf_free(&context->counting, &r.levels);
+    if (result != SJS_OK) {
+        sjs_unref(context, r.result);
+        return result;
+    }
+    *out = r.result;
+    return SJS_OK;
+}
+
 /* ---- src/compiler.c ---- */
 /*
  * The compiler: a sink of syntax events that emits bytecode as each event
@@ -12473,29 +12846,45 @@ static sjs_position json_position(sjs_str text, uint32_t offset) {
     return at;
 }
 
-sjs_result sjs_value_read(sjs_context *context, const sjs_read_params *params, sjs_value *out) {
-    if (context == NULL || params == NULL || out == NULL || params->format != SJS_FORMAT_JSON ||
-        (params->bytes.ptr == NULL && params->bytes.length != 0)) {
-        return SJS_ERR_INVALID;
-    }
-    if (params->bytes.length > context->limits.max_string_bytes) return SJS_ERR_LIMIT;
+/* JSON whole, as JSON.parse reads it, from bytes that must be UTF-8. */
+static sjs_result json_read_bytes(const sjs_read_input *in, sjs_value *out) {
     json_reader r = { 0 };
-    r.context = context;
-    r.text = (sjs_str){ (const char *)params->bytes.ptr, params->bytes.length };
-    sjs_result result;
+    r.context = in->context;
+    r.text = (sjs_str){ (const char *)in->bytes.ptr, in->bytes.length };
     uint32_t valid = sjs_utf8_valid_length(r.text);
+    sjs_result result;
     if (valid != r.text.length) {
         r.at = valid;
         result = json_syntax(&r, "the bytes are not UTF-8");
     } else {
         result = json_read_all(&r);
     }
+    if (result == SJS_OK) *out = r.result;
+    else *in->problem = (sjs_read_problem){ r.problem, r.message, r.subject, r.problem_at };
+    return result;
+}
+
+sjs_result sjs_value_read(sjs_context *context, const sjs_read_params *params, sjs_value *out) {
+    if (context == NULL || params == NULL || out == NULL ||
+        (params->format != SJS_FORMAT_JSON && params->format != SJS_FORMAT_CBOR) ||
+        (params->bytes.ptr == NULL && params->bytes.length != 0)) {
+        return SJS_ERR_INVALID;
+    }
+    if (params->bytes.length > context->limits.max_string_bytes) return SJS_ERR_LIMIT;
+    sjs_read_problem problem = { 0 };
+    sjs_value v;
+    bool json = params->format == SJS_FORMAT_JSON;
+    sjs_read_input in = { context, params->bytes, &problem };
+    sjs_result result = json ? json_read_bytes(&in, &v) : sjs_cbor_read(&in, &v);
     if (result == SJS_OK) {
-        *out = r.result;
+        *out = v;
         return SJS_OK;
     }
     if (params->error != NULL) {
-        *params->error = (sjs_error){ r.problem, json_position(r.text, r.problem_at), sjs_cstr(r.message), r.subject };
+        /* JSON is text, with lines; CBOR is one line of bytes. */
+        sjs_position at = json ? json_position((sjs_str){ (const char *)params->bytes.ptr, params->bytes.length }, problem.at)
+                               : (sjs_position){ problem.at, 1, problem.at + 1u };
+        *params->error = (sjs_error){ problem.code, at, sjs_cstr(problem.message), problem.subject };
         sjs_error_keep_subject(params->error, params->subject);
     }
     return SJS_ERR_PROGRAM;
@@ -35977,10 +36366,11 @@ SJS_PRIVATE bool sjs_assign_allowed(sjs_vm *vm, sjs_value target, sjs_values sou
 
 /* ---- src/writer.c ---- */
 /*
- * The writer: a value to JavaScript source, into a caller's buffer, resuming
- * where it stopped when the buffer fills. Nested values are walked with an
- * explicit stack. The text is JSON where JSON can say it, and is always a
- * JavaScript expression that evaluates to an equal value.
+ * The writer: a value in a format, into a caller's buffer, resuming where it
+ * stopped when the buffer fills. Nested values are walked with an explicit
+ * stack. As source, the text is JSON where JSON can say it, and is always a
+ * JavaScript expression that evaluates to an equal value. As JSON or CBOR
+ * (next_data), it is what JSON.stringify keeps of the value.
  */
 
 /* Where a container is: its opening is written, and then each item. A
@@ -35991,6 +36381,7 @@ enum { W_START = 0, W_ITEM, W_ITEM_VALUE, W_KEY_COLON, W_VALUE, W_ENTRY_VALUE, W
 typedef struct {
     sjs_value value;
     uint32_t index;
+    uint32_t written;     /* JSON and CBOR: the items written, which members left out do not count */
     uint8_t phase;
 } wframe;
 
@@ -36006,21 +36397,31 @@ struct sjs_writer {
     uint32_t string_at;
     sjs_buf digits;        /* a BigInt's, while they are written; its `n` follows */
     sjs_buf literal;       /* a regular expression's or a Temporal value's, while it is written */
+    /* A second piece, written after `pending`: CBOR's text after its head. */
+    const uint8_t *then;
+    uint32_t then_length;
+    sjs_format format;
+    sjs_error *error;
     bool failed;
 };
 
 static sjs_result push(sjs_writer *w, sjs_value value) {
-    wframe f = { value, 0, W_START };
+    wframe f = { value, 0, 0, W_START };
     return sjs_buf_append(&w->context->counting, &w->stack, (sjs_bytes){ (const uint8_t *)&f, sizeof f });
 }
 
 sjs_result sjs_writer_init(sjs_writer **out, const sjs_writer_config *config) {
-    if (out == NULL || config == NULL || config->context == NULL || config->value.internal != 0) return SJS_ERR_INVALID;
+    if (out == NULL || config == NULL || config->context == NULL || config->value.internal != 0 ||
+        config->format > SJS_FORMAT_CBOR) {
+        return SJS_ERR_INVALID;
+    }
     sjs_writer *w = sjs_mem_alloc(&config->context->counting, sizeof *w);
     if (w == NULL) return SJS_ERR_NOMEM;
     sjs_zero(w, sizeof *w);
     w->context = config->context;
     w->function_text = config->function_text;
+    w->format = config->format;
+    w->error = config->error;
     if (push(w, config->value) != SJS_OK) {
         sjs_writer_destroy(w);
         return SJS_ERR_NOMEM;
@@ -36279,6 +36680,300 @@ static sjs_result next(sjs_writer *w, bool *more) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * JSON and CBOR: what JSON.stringify keeps (docs/guide/embedding.md, "Writing
+ * values"), in JSON's text or as a CBOR neutral value
+ */
+
+/* How JSON.stringify sees a value: left out (undefined, a function), {} (a
+ * map, a set, an iterator, a regular expression: no own enumerable
+ * property), an array, an object, or one item. */
+enum { D_LEFT_OUT, D_EMPTY, D_ARRAY, D_OBJECT, D_ITEM };
+
+static int writer_data_kind(sjs_value v) {
+    switch (v.kind) {
+    case SJS_UNDEFINED:
+    case SJS_FUNCTION:
+        return D_LEFT_OUT;
+    case SJS_SET:
+    case SJS_MAP:
+    case SJS_ITERATOR:
+    case SJS_REGEXP:
+        return D_EMPTY;
+    case SJS_ARRAY:
+        return D_ARRAY;
+    case SJS_OBJECT:
+        return D_OBJECT;
+    default:
+        return D_ITEM;
+    }
+}
+
+/* The deepest a CBOR neutral value nests, as tinyactors-core's codec reads it. */
+#define WRITER_CBOR_DEPTH 64u
+
+static sjs_result writer_refuse(sjs_writer *w, const char *message) {
+    if (w->error != NULL) {
+        *w->error = (sjs_error){ SJS_ERROR_UNSUPPORTED, { 0, 0, 0 }, sjs_cstr(message), { "", 0 } };
+    }
+    return SJS_ERR_PROGRAM;
+}
+
+/* A CBOR head: the major type and its argument, shortest, into `out` (room
+ * for 9): its length. */
+static uint32_t write_cbor_head(uint8_t major, uint64_t n, uint8_t *out) {
+    uint8_t m = (uint8_t)(major << 5);
+    if (n < 24u) {
+        out[0] = (uint8_t)(m | n);
+        return 1;
+    }
+    uint32_t bytes = n <= 0xFFu ? 1u : n <= 0xFFFFu ? 2u : n <= 0xFFFFFFFFu ? 4u : 8u;
+    out[0] = (uint8_t)(m | (bytes == 1u ? 24u : bytes == 2u ? 25u : bytes == 4u ? 26u : 27u));
+    for (uint32_t i = 0; i < bytes; i++) out[1u + i] = (uint8_t)(n >> (8u * (bytes - 1u - i)));
+    return 1u + bytes;
+}
+
+static void say_cbor_head(sjs_writer *w, uint8_t major, uint64_t n) {
+    say_scratch(w, write_cbor_head(major, n, w->scratch));
+}
+
+/* A head, then `bytes`: CBOR's text. */
+static void say_cbor_text(sjs_writer *w, sjs_str text) {
+    say_cbor_head(w, 3, text.length);
+    w->then = (const uint8_t *)text.ptr;
+    w->then_length = text.length;
+}
+
+typedef union {
+    double d;
+    uint64_t u;
+} writer_double_bits;
+
+typedef union {
+    float f;
+    uint32_t u;
+} writer_float_bits;
+
+/* `d` as a half-precision float, when one holds it exactly. */
+static bool writer_half_of(double d, uint16_t *out) {
+    writer_float_bits b;
+    b.f = (float)d;
+    if ((double)b.f != d) return false;
+    uint32_t sign = (b.u >> 16) & 0x8000u;
+    int32_t exponent = (int32_t)((b.u >> 23) & 0xFFu) - 127;
+    uint32_t mantissa = b.u & 0x7FFFFFu;
+    if (((b.u >> 23) & 0xFFu) == 0xFFu) {           /* an infinity (NaN is written on its own) */
+        *out = (uint16_t)(sign | 0x7C00u);
+        return mantissa == 0;
+    }
+    if ((b.u & 0x7FFFFFFFu) == 0) {                  /* zero, either sign */
+        *out = (uint16_t)sign;
+        return true;
+    }
+    if (exponent >= -14 && exponent <= 15) {        /* a normal half: 10 bits of mantissa */
+        if ((mantissa & 0x1FFFu) != 0) return false;
+        *out = (uint16_t)(sign | (uint32_t)(exponent + 15) << 10 | mantissa >> 13);
+        return true;
+    }
+    if (exponent < -24 || exponent >= -14) return false;
+    /* A subnormal half: the value is m * 2^-24 with m below 1024. */
+    uint32_t full = mantissa | 0x800000u;           /* 24 bits, the point after the first */
+    uint32_t shift = (uint32_t)(-14 - exponent) + 13u;
+    if ((full & ((1u << shift) - 1u)) != 0) return false;
+    *out = (uint16_t)(sign | full >> shift);
+    return true;
+}
+
+/* A number as the ECMAScript data model writes it: an integer within
+ * +-(2^53 - 1) as one, NaN as f9 7e00, any other number as the shortest
+ * float that holds it. */
+static void say_cbor_number(sjs_writer *w, double d) {
+    uint8_t *o = w->scratch;
+    if (d == sjs_number_trunc(d) && d <= 9007199254740991.0 && d >= -9007199254740991.0 &&
+        !sjs_number_is_negative_zero(d)) {
+        if (d >= 0) say_cbor_head(w, 0, (uint64_t)d);
+        else say_cbor_head(w, 1, (uint64_t)(-d) - 1u);
+        return;
+    }
+    uint16_t half;
+    if (d != d) {
+        o[0] = 0xF9;
+        o[1] = 0x7E;
+        o[2] = 0x00;
+        say_scratch(w, 3);
+        return;
+    }
+    if (writer_half_of(d, &half)) {
+        o[0] = 0xF9;
+        o[1] = (uint8_t)(half >> 8);
+        o[2] = (uint8_t)half;
+        say_scratch(w, 3);
+        return;
+    }
+    writer_float_bits f;
+    f.f = (float)d;
+    if ((double)f.f == d) {
+        o[0] = 0xFA;
+        for (uint32_t i = 0; i < 4u; i++) o[1u + i] = (uint8_t)(f.u >> (8u * (3u - i)));
+        say_scratch(w, 5);
+        return;
+    }
+    writer_double_bits b;
+    b.d = d;
+    o[0] = 0xFB;
+    for (uint32_t i = 0; i < 8u; i++) o[1u + i] = (uint8_t)(b.u >> (8u * (7u - i)));
+    say_scratch(w, 9);
+}
+
+/* A BigInt as an integer: within -2^64 .. 2^64 - 1, or refused. */
+static sjs_result say_cbor_bigint(sjs_writer *w, const sjs_bigint *b) {
+    bool negative = sjs_bigint_negative(b);
+    uint64_t magnitude = 0;
+    if (b->length == 3u && negative && b->limbs[0] == 0 && b->limbs[1] == 0 && b->limbs[2] == 1u) {
+        say_cbor_head(w, 1, UINT64_MAX);                 /* -2^64 */
+        return SJS_OK;
+    }
+    if (b->length > 2u) return writer_refuse(w, "a BigInt outside -2^64 to 2^64 - 1 is not a CBOR neutral value");
+    for (uint32_t i = b->length; i-- > 0;) magnitude = magnitude << 32 | b->limbs[i];
+    if (negative) say_cbor_head(w, 1, magnitude - 1u);
+    else say_cbor_head(w, 0, magnitude);
+    return SJS_OK;
+}
+
+/* One item: null, a boolean, a number, a string, a BigInt, a Date or a
+ * Temporal value (as its toJSON gives it). */
+static sjs_result say_item(sjs_writer *w, sjs_value v) {
+    bool cbor = w->format == SJS_FORMAT_CBOR;
+    switch (v.kind) {
+    case SJS_NULL:
+        say(w, cbor ? "\xF6" : "null");
+        return SJS_OK;
+    case SJS_BOOLEAN:
+        say(w, cbor ? (v.boolean ? "\xF5" : "\xF4") : (v.boolean ? "true" : "false"));
+        return SJS_OK;
+    case SJS_NUMBER: {
+        double d = v.as.number;
+        if (cbor) say_cbor_number(w, d);
+        else if (!sjs_number_is_finite(d)) say(w, "null");
+        else say_scratch(w, sjs_number_format(d + 0.0, (char *)w->scratch));   /* -0 is "0" */
+        return SJS_OK;
+    }
+    case SJS_STRING: {
+        sjs_str text = sjs_string_view(SJS_AS_STRING(v));
+        if (cbor) say_cbor_text(w, text);
+        else begin_string(w, text);
+        return SJS_OK;
+    }
+    case SJS_BIGINT:
+        if (!cbor) return writer_refuse(w, "JSON has no BigInt: JSON.stringify throws a TypeError for one");
+        return say_cbor_bigint(w, SJS_AS_BIGINT(v));
+    default: { /* SJS_TEMPORAL: its toJSON, a string; an invalid Date's is null */
+        char text[SJS_TEMPORAL_TEXT_MAX];
+        uint32_t n = sjs_temporal_text(SJS_AS_TEMPORAL(v), text);
+        if (n == 0) {
+            say(w, cbor ? "\xF6" : "null");
+            return SJS_OK;
+        }
+        sjs_result r = sjs_buf_append(&w->context->counting, &w->literal, (sjs_bytes){ (const uint8_t *)text, n });
+        if (r != SJS_OK) return r;
+        sjs_str kept = { (const char *)w->literal.ptr, w->literal.length };
+        if (cbor) say_cbor_text(w, kept);
+        else begin_string(w, kept);
+        return SJS_OK;
+    }
+    }
+}
+
+/* The members of an object JSON.stringify keeps: those whose value it does
+ * not leave out. */
+static uint32_t writer_kept_members(const sjs_object *o) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < o->count; i++) n += writer_data_kind(o->entries[i].value) != D_LEFT_OUT;
+    return n;
+}
+
+static sjs_result next_data(sjs_writer *w, bool *more) {
+    uint32_t n = SJS_BUF_COUNT(w->stack, wframe);
+    if (n == 0) {
+        *more = false;
+        return SJS_OK;
+    }
+    *more = true;
+    bool cbor = w->format == SJS_FORMAT_CBOR;
+    wframe *f = &SJS_BUF_AT(w->stack, wframe, n - 1);
+    sjs_value v = f->value;
+    int kind = writer_data_kind(v);
+    if (f->phase == W_START) {
+        /* Each frame on the stack is a container around this one. */
+        if (cbor && n > WRITER_CBOR_DEPTH && (kind != D_ITEM || v.kind == SJS_TEMPORAL)) {
+            return writer_refuse(w, "a value nested deeper than 64 is not a CBOR neutral value");
+        }
+        switch (kind) {
+        case D_LEFT_OUT:
+            /* Only the whole value: an array writes null for one, and an
+             * object leaves its member out. */
+            if (!cbor) return writer_refuse(w, "JSON.stringify gives undefined for this value, which is no JSON text");
+            say(w, "\xF6");
+            break;
+        case D_EMPTY:
+            say(w, cbor ? "\xA0" : "{}");
+            break;
+        case D_ARRAY:
+            if (cbor) say_cbor_head(w, 4, sjs_length(v));
+            else say(w, "[");
+            f->phase = W_ITEM;
+            return SJS_OK;
+        case D_OBJECT:
+            if (cbor) say_cbor_head(w, 5, writer_kept_members(SJS_AS_OBJECT(v)));
+            else say(w, "{");
+            f->phase = W_ITEM;
+            return SJS_OK;
+        default: {
+            sjs_result r = say_item(w, v);
+            if (r != SJS_OK) return r;
+            break;
+        }
+        }
+        w->stack.length -= (uint32_t)sizeof(wframe);
+        return SJS_OK;
+    }
+    switch (f->phase) {
+    case W_ITEM:
+        if (kind == D_OBJECT) {
+            const sjs_object *o = SJS_AS_OBJECT(v);
+            while (f->index < o->count && writer_data_kind(o->entries[f->index].value) == D_LEFT_OUT) f->index++;
+        }
+        if (f->index == sjs_length(v)) {
+            if (!cbor) say(w, kind == D_ARRAY ? "]" : "}");
+            w->stack.length -= (uint32_t)sizeof(wframe);
+            return SJS_OK;
+        }
+        f->phase = W_ITEM_VALUE;
+        if (!cbor && f->written > 0) say(w, ",");
+        return SJS_OK;
+    case W_ITEM_VALUE:
+        f->written++;
+        if (kind == D_ARRAY) {
+            sjs_value item = SJS_AS_ARRAY(v)->items[f->index++];
+            f->phase = W_ITEM;
+            return push(w, writer_data_kind(item) == D_LEFT_OUT ? sjs_null() : item);
+        }
+        f->phase = W_KEY_COLON;
+        if (cbor) say_cbor_text(w, sjs_string_view(SJS_AS_OBJECT(v)->entries[f->index].key));
+        else begin_string(w, sjs_string_view(SJS_AS_OBJECT(v)->entries[f->index].key));
+        return SJS_OK;
+    case W_KEY_COLON:
+        f->phase = W_VALUE;
+        if (!cbor) say(w, ":");
+        return SJS_OK;
+    default: { /* W_VALUE */
+        f->phase = W_ITEM;
+        sjs_value item = SJS_AS_OBJECT(v)->entries[f->index++].value;
+        return push(w, item);
+    }
+    }
+}
+
 sjs_result sjs_writer_write(sjs_writer *writer, sjs_buffer *buffer) {
     if (writer == NULL || buffer == NULL || (buffer->ptr == NULL && buffer->capacity != 0) || buffer->length > buffer->capacity) {
         return SJS_ERR_INVALID;
@@ -36299,6 +36994,12 @@ sjs_result sjs_writer_write(sjs_writer *writer, sjs_buffer *buffer) {
             string_piece(w);
             continue;
         }
+        if (w->then_length > 0) {
+            w->pending = w->then;
+            w->pending_length = w->then_length;
+            w->then_length = 0;
+            continue;
+        }
         if (w->digits.ptr != NULL) {
             sjs_buf_free(&w->context->counting, &w->digits);
             say(w, "n");
@@ -36306,10 +37007,10 @@ sjs_result sjs_writer_write(sjs_writer *writer, sjs_buffer *buffer) {
         }
         if (w->literal.ptr != NULL) sjs_buf_free(&w->context->counting, &w->literal);
         bool more;
-        sjs_result r = next(w, &more);
+        sjs_result r = w->format == SJS_FORMAT_SOURCE ? next(w, &more) : next_data(w, &more);
         if (r != SJS_OK) {
             w->failed = true;
-            return r == SJS_ERR_INVALID ? SJS_ERR_INVALID : SJS_ERR_NOMEM;
+            return r == SJS_ERR_INVALID || r == SJS_ERR_PROGRAM ? r : SJS_ERR_NOMEM;
         }
         if (!more) return SJS_OK;
     }

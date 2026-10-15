@@ -250,7 +250,7 @@ reference:
 
 | You get a value from | It is |
 |---|---|
-| `sjs_vm_take_result`, `sjs_string_new`, `sjs_bigint_new`, `sjs_array_new`, `sjs_object_new`, `sjs_set_new`, `sjs_map_new`, `sjs_time_new`, `sjs_function_native` | yours: `sjs_release` it |
+| `sjs_vm_take_result`, `sjs_string_new`, `sjs_bigint_new`, `sjs_array_new`, `sjs_object_new`, `sjs_set_new`, `sjs_map_new`, `sjs_time_new`, `sjs_value_read`, `sjs_function_native` | yours: `sjs_release` it |
 | `sjs_array_at`, `sjs_set_at`, `sjs_object_at`, `sjs_object_get`, `sjs_map_at`, `sjs_map_get`, `sjs_iterator_at` | borrowed, valid while its container is: `sjs_retain` it to keep it longer |
 | a native's `call->arguments` | borrowed for the call |
 
@@ -348,6 +348,47 @@ sjs_writer_destroy(writer);
 
 A function has no source to write: without `function_text`, the writer
 refuses one with `SJS_ERR_INVALID`.
+
+## JSON and CBOR
+
+A value is also written, and read, as JSON or as CBOR, for a host that
+sends it on or receives it in one of them. Give the writer a `format`:
+
+| `format` | Writes |
+|---|---|
+| `SJS_FORMAT_SOURCE` (zero) | JavaScript source, as above |
+| `SJS_FORMAT_JSON` | what `JSON.stringify` gives in staticjs: a Date as its string, a Map, a Set or a regular expression as `{}`, an `undefined` or function member left out (and `null` in an array), `-0` as `0`, `NaN` as `null` |
+| `SJS_FORMAT_CBOR` | one CBOR neutral value, as tinyactors' ECMAScript data model writes one: what `JSON.stringify` keeps, with numbers exact (an integer within ±(2^53 - 1) as an integer, any other number as the shortest float that holds it, `NaN` as `f9 7e00`), BigInts as integers, `undefined` at the top as `null` |
+
+A value with no text in the format makes `sjs_writer_write` return
+`SJS_ERR_PROGRAM`, with the reason in the config's `error`
+(`SJS_ERROR_UNSUPPORTED`): in JSON a BigInt, or `undefined` or a function
+as the whole value; in CBOR a BigInt outside -2^64 to 2^64 - 1, or a value
+nested deeper than 64. What was written before is not a whole value.
+
+`sjs_value_read` reads a value from JSON or CBOR bytes, with no evaluator,
+so it can run while an evaluation is paused:
+
+```c
+sjs_value event;
+sjs_error error;
+uint8_t subject[64];
+sjs_read_params read = { .format = SJS_FORMAT_JSON, .bytes = { body, body_length },
+                         .error = &error, .subject = &(sjs_buffer){ subject, sizeof subject, 0 } };
+if (sjs_value_read(context, &read, &event) == SJS_ERR_PROGRAM)
+    printf("%u:%u %.*s\n", error.at.line, error.at.column, (int)error.message.length, error.message.ptr);
+```
+
+JSON is read as `JSON.parse` reads it. CBOR is read as one neutral value:
+an integer within ±(2^53 - 1) as a number and any other as a BigInt, a
+float as a number, a map with text keys as an object, a reference (tag 32)
+as its address. `SJS_ERR_PROGRAM` refuses the bytes: `SJS_ERROR_SYNTAX`
+when they are not the format (for CBOR: another tag, another simple value,
+an indefinite length, a key that is not text, a value nested deeper than
+64, bytes after the item), at the byte offset in `error.at`;
+`SJS_ERROR_UNSUPPORTED` for what staticjs does not have (a `"__proto__"`
+key, a lone surrogate, CBOR's bytes); `SJS_ERROR_LIMIT` past a limit. Bytes
+longer than `max_string_bytes` are `SJS_ERR_LIMIT`.
 
 ## Globals
 

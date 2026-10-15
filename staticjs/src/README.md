@@ -30,7 +30,8 @@ Implementation modules. Headers here are private; the public API is
                 and `map` and `toSorted` run a callback the matcher tagged in C;
                 the methods that change a variable the function owns
                 (../docs/internals/mutation.md)
-- `json.c`      JSON.parse and JSON.stringify: leaves, each over an explicit stack
+- `json.c`      JSON.parse and JSON.stringify: leaves, each over an explicit stack; its reader also reads JSON bytes for `sjs_value_read`
+- `cbor.c`      a CBOR neutral value read for `sjs_value_read`, over an explicit stack
 - `temporal.c`  Temporal values (../docs/internals/temporal.md): the ISO calendar, ISO 8601
                 strings, the constructors, from, compare, getters and methods of
                 the plain types, Duration and Instant, and the tables of which
@@ -47,5 +48,5 @@ Implementation modules. Headers here are private; the public API is
                 matches them, and their methods, each a leaf that hands a long
                 match to a loop frame (SJS_LEAF_LOOP); match results, arrays
                 with extra properties (SJS_ARRAY_EXTRA)
-- `writer.c`    a value to JavaScript source, into a buffer of any size; JSON's
+- `writer.c`    a value as JavaScript source, JSON or CBOR, into a buffer of any size; JSON's
                 string escapes, which JSON.stringify shares
