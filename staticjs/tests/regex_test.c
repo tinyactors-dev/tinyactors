@@ -307,7 +307,7 @@ static void run(const runner *r, const text *s, ran *out) {
     if (sjs_vm_init(&vm, &config) != SJS_OK) abort();
     sjs_value global;
     if (sjs_string_new(r->context, (sjs_str){ s->ptr == NULL ? "" : s->ptr, (uint32_t)s->length }, &global) != SJS_OK) abort();
-    sjs_run_params params = { r->program, &global, 1 };
+    sjs_run_params params = { r->program, &global, 1, { 0 }, NULL, 0 };
     if (sjs_vm_start(vm, &params) != SJS_OK) abort();
     sjs_run state;
     out->pauses = 14695981039346656037ull;

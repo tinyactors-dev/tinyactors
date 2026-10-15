@@ -363,7 +363,7 @@ sjs_compile_params params = {
 };
 /* ... for each event: */
 sjs_value values[] = { event, sjs_number(25) };
-sjs_vm_start(vm, &(sjs_run_params){ program, values, 2 });
+sjs_vm_start(vm, &(sjs_run_params){ .program = program, .globals = values, .global_count = 2 });
 ```
 
 A global is a value like any other. A program cannot change it: a method
@@ -398,11 +398,16 @@ static sjs_result rate(void *self, sjs_native_call *call) {
     call->fault = SJS_STR("rate() takes a currency the host has a rate for");
     return SJS_ERR_PROGRAM;                      /* faults the evaluation */
 }
-static const sjs_native_vtable rate_vtable = { rate };
+static const sjs_native_vtable rate_vtable = { rate, NULL };   /* NULL: nothing to release */
 
 sjs_value rate_fn;
 sjs_function_native(context, (sjs_native){ (void *)rates, &rate_vtable }, &rate_fn);
 ```
+
+When `self` is the native's own (allocated for one session, say), give
+the vtable a `release(self)`: staticjs calls it once, when the function
+value is freed, wherever its last reference goes. That can be inside
+`sjs_vm_run` or `sjs_release`, so `release` must not call the library.
 
 A native is called synchronously and must return quickly: fuel does not
 count its time. It must not change anything a program can see. The library
@@ -436,10 +441,24 @@ in any order: the compiler sorts it into a namespace. The exports must be
 an object, and one with an array-index key or a `__proto__` key is refused
 as unsupported. Any result of `find` other than `SJS_OK`, `SJS_ERR_NOMEM`
 included, refuses the import as a name error ("there is no module of this
-name"). A namespace is a value. To call a function a module exports, read
-it from the namespace (`sjs_object_get`) and pass it to an expression as a
-global (`celsius(event.data.f) > limit`). There is no call from C into a
-staticjs function: a program calls it.
+name"). A namespace is a value.
+
+To call a function a module exports, read it from the namespace
+(`sjs_object_get`) and start the evaluator on it, with no program:
+
+```c
+sjs_value net;
+sjs_object_get(exports, SJS_STR("net"), &net);             /* borrowed from the namespace */
+sjs_value args[2] = { rows, sjs_number(0.5) };
+sjs_vm_start(vm, &(sjs_run_params){ .function = net, .arguments = args, .argument_count = 2 });
+while (sjs_vm_run(vm, 1000) == SJS_RUN_PAUSED) { /* other work */ }
+```
+
+The call runs on fuel and pauses as a program does, its frame 0 is the
+function, and the function reads the globals of the evaluation that made
+it. Its arguments are borrowed until the evaluation ends. The evaluator
+calls only a function a program made: a native or a built-in is
+`SJS_ERR_INVALID`.
 
 ## The clock and the random seed
 

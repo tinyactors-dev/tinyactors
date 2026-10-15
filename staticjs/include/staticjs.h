@@ -57,8 +57,9 @@ enum {
     SJS_ERR_LIMIT = -3,
     /* The name, key or index does not exist. */
     SJS_ERR_NOT_FOUND = -4,
-    /* The program is not staticjs, or its evaluation faulted. Read the
-     * sjs_error of the stage that returned it. */
+    /* The program, or bytes read as a value (sjs_value_read), are not
+     * staticjs, or the evaluation faulted. Read the sjs_error of the call or
+     * the stage that returned it. */
     SJS_ERR_PROGRAM = -5
 };
 
@@ -364,6 +365,11 @@ typedef struct {
 typedef struct sjs_native_vtable {
     /* SJS_OK with `result` set, or SJS_ERR_PROGRAM with `fault` set. */
     sjs_result (*call)(void *self, sjs_native_call *call);
+    /* Optional: called once, when the function value is freed, so `self`
+     * can be freed with it. It may be called from inside sjs_vm_run or
+     * sjs_release, wherever the last reference goes, so it must not call the
+     * library. */
+    void (*release)(void *self);
 } sjs_native_vtable;
 
 typedef struct { void *self; const sjs_native_vtable *v; } sjs_native;
@@ -718,6 +724,15 @@ typedef struct {
      * evaluation ends. */
     const sjs_value *globals;
     uint32_t global_count;
+    /* Or, with `program` NULL and no globals: call `function`, a function a
+     * program made (a module's export, a closure in a result), with
+     * `arguments`, borrowed until the evaluation ends. The call runs on fuel
+     * and pauses like a program; its frame 0 is the function's, and it reads
+     * the globals of the evaluation that made it. A native or a built-in is
+     * SJS_ERR_INVALID: call the host's own code, or the program's. */
+    sjs_value function;
+    const sjs_value *arguments;
+    uint32_t argument_count;
 } sjs_run_params;
 
 typedef enum {
@@ -896,7 +911,7 @@ typedef struct {
  * until the next sjs_vm_start or sjs_vm_reset); 0 for none, or one that is
  * done. */
 SJS_API uint32_t sjs_vm_frame_count(const sjs_vm *vm);
-/* Frame `index`, 0 the outermost (the program), sjs_vm_frame_count() - 1
+/* Frame `index`, 0 the outermost (the program, or the function called), sjs_vm_frame_count() - 1
  * the innermost. SJS_ERR_NOT_FOUND past the last. */
 SJS_API sjs_result sjs_vm_frame(const sjs_vm *vm, uint32_t index, sjs_frame *out);
 
@@ -967,6 +982,40 @@ SJS_API uint32_t sjs_bigint_text_bound(sjs_value bigint);
  * nothing, when it does not fit; sjs_bigint_text_bound() bytes always do.
  * Converting allocates scratch from the context. */
 SJS_API sjs_result sjs_bigint_text(sjs_context *context, sjs_value bigint, sjs_buffer *buffer);
+
+/* ========================================================================
+ * Values read from bytes
+ *
+ * A value from a format a host receives it in, without an evaluator: so a
+ * host can read one while an evaluation is paused, with no program to
+ * compile and no copy of the bytes into a string.
+ */
+
+typedef enum {
+    SJS_FORMAT_SOURCE = 0,  /* JavaScript source: the writer's, never read */
+    SJS_FORMAT_JSON         /* JSON text, read as JSON.parse reads it */
+} sjs_format;
+
+typedef struct {
+    sjs_format format;      /* SJS_FORMAT_JSON; a zeroed struct is SJS_ERR_INVALID */
+    sjs_bytes bytes;        /* the whole value; borrowed for the call */
+    sjs_error *error;       /* optional: filled when the result is SJS_ERR_PROGRAM */
+    sjs_buffer *subject;    /* optional: where the error's subject is copied,
+                             * as sjs_compile_params.subject */
+} sjs_read_params;
+
+/*
+ * The value in `bytes`, which the caller owns. SJS_ERR_PROGRAM when the
+ * bytes are not a value staticjs has, with `error`: SJS_ERROR_SYNTAX for
+ * bytes that are not the format (not UTF-8, or not JSON), at the byte
+ * offset, line and column (in bytes) where reading stopped;
+ * SJS_ERROR_UNSUPPORTED for a value the format has and staticjs does not (a
+ * "__proto__" key, a lone surrogate); SJS_ERROR_LIMIT past a limit (subject
+ * "max_nesting" past the nesting), SJS_ERROR_MEMORY when the allocator
+ * refused. Bytes longer than max_string_bytes are SJS_ERR_LIMIT before
+ * anything is read.
+ */
+SJS_API sjs_result sjs_value_read(sjs_context *context, const sjs_read_params *params, sjs_value *out);
 
 #ifdef __cplusplus
 }

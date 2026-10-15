@@ -488,7 +488,7 @@ static void run_program(runner *r, sjs_program *program, const sjs_value *global
     out->kind = GAVE_OTHER;
     out->text.length = 0;
     out->message[0] = '\0';
-    sjs_run_params params = { program, globals, globals == NULL ? 0u : 1u };
+    sjs_run_params params = { program, globals, globals == NULL ? 0u : 1u, { 0 }, NULL, 0 };
     if (sjs_vm_start(r->vm, &params) != SJS_OK) abort();
     sjs_run run = sjs_vm_run(r->vm, UINT64_MAX);
     if (run == SJS_RUN_FAULT) {

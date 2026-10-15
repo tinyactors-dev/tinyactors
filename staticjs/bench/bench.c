@@ -924,7 +924,7 @@ static bool evaluate(bench_run *run, const sjs_run_params *params, sjs_value *ou
 static bool evaluate_source(bench_run *run, const bench_source *source, sjs_value *out) {
     sjs_program *program;
     if (!compile_source(run, source, &program)) return false;
-    sjs_run_params params = { program, NULL, 0 };
+    sjs_run_params params = { program, NULL, 0, { 0 }, NULL, 0 };
     bool ok = evaluate(run, &params, out);
     sjs_program_release(program);
     return ok;
@@ -1450,7 +1450,7 @@ static bool op_compile(bench_run *run) {
     if (run->verifying && c->op == OP_PARSE && run->events == 0) ok = fail(run, "the parser sent no events");
     if (run->verifying && program != NULL) {
         sjs_value result;
-        sjs_run_params params = { program, run->globals, run->global_count };
+        sjs_run_params params = { program, run->globals, run->global_count, { 0 }, NULL, 0 };
         ok = evaluate(run, &params, &result);
         if (ok) {
             ok = verify_value(run, result);
@@ -1463,7 +1463,7 @@ static bool op_compile(bench_run *run) {
 
 /* Start, run on the case's fuel, take the result, hold and release it. */
 static bool run_vm(bench_run *run, sjs_vm *vm) {
-    sjs_run_params params = { run->program, run->globals, run->global_count };
+    sjs_run_params params = { run->program, run->globals, run->global_count, { 0 }, NULL, 0 };
     if (sjs_vm_start(vm, &params) != SJS_OK) return fail(run, "sjs_vm_start refused");
     uint64_t fuel = run->c->fuel == 0 ? UINT64_MAX : run->c->fuel;
     uint64_t slices = 0;
@@ -1498,7 +1498,7 @@ static bool op_vm_fresh(bench_run *run) {
 }
 
 static bool op_vm_reset(bench_run *run) {
-    sjs_run_params params = { run->program, run->globals, run->global_count };
+    sjs_run_params params = { run->program, run->globals, run->global_count, { 0 }, NULL, 0 };
     if (sjs_vm_start(run->vm, &params) != SJS_OK) return fail(run, "sjs_vm_start refused");
     bench_hold(run, sjs_undefined());
     sjs_vm_reset(run->vm);

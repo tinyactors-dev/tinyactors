@@ -193,7 +193,7 @@ static int dump_values(const char *name, uint32_t n) {
     }
     putchar('}');
     if (ok && c->op == OP_EVAL) {
-        sjs_run_params params = { run.program, run.globals, run.global_count };
+        sjs_run_params params = { run.program, run.globals, run.global_count, { 0 }, NULL, 0 };
         sjs_value result;
         ok = evaluate(&run, &params, &result);
         if (ok) {

@@ -68,6 +68,8 @@ struct sjs_context {
  * there are not well-formed UTF-8. */
 int32_t sjs_utf8_next(sjs_str text, uint32_t *index);
 bool sjs_utf8_valid(sjs_str text);
+/* The bytes of `text` before its first that is not well-formed UTF-8. */
+uint32_t sjs_utf8_valid_length(sjs_str text);
 /* Bytes of the UTF-8 encoding of `point` written to `out` (room for 4). */
 uint32_t sjs_utf8_encode(uint32_t point, uint8_t *out);
 /* JavaScript's view: UTF-16 code units. */
@@ -1344,4 +1346,9 @@ typedef struct {
 
 void sjs_error_set(sjs_error_slot *slot, sjs_position at, sjs_problem problem);
 void sjs_error_subject(sjs_error_slot *slot, sjs_str subject);
+/* For a call that returns an error whose subject points into what the call
+ * frees before it returns (sjs_compile, sjs_value_read): copy the subject
+ * into `keep` from keep->length on, cut between characters to fit, and point
+ * error->subject there; with no buffer, the subject is empty. */
+void sjs_error_keep_subject(sjs_error *error, sjs_buffer *keep);
 sjs_str sjs_cstr(const char *text);

@@ -102,6 +102,11 @@ static void drain(sjs_context *context, sjs_heap *work) {
             drop(context, &work, it->items);
             break;
         }
+        case SJS_HEAP_NATIVE: {
+            const sjs_native *native = &((sjs_native_function *)(void *)h)->native;
+            if (native->v->release != NULL) native->v->release(native->self);
+            break;
+        }
         case SJS_HEAP_CLOSURE: {
             sjs_closure *c = (sjs_closure *)(void *)h;
             for (uint32_t i = 0; i < c->count; i++) drop(context, &work, c->captures[i]);

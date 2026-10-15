@@ -241,7 +241,7 @@ SJS_SITE int32_t sjs_site_start(sjs_site *s) {
     if (s->has_result) sjs_release(s->context, s->result);
     s->has_result = false;
     clear_error(s);
-    sjs_run_params run = { s->program, NULL, 0 };
+    sjs_run_params run = { s->program, NULL, 0, { 0 }, NULL, 0 };
     return sjs_vm_start(s->vm, &run);
 }
 

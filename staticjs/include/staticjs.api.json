@@ -365,6 +365,14 @@
       "value": 52
     },
     {
+      "name": "SJS_FORMAT_JSON",
+      "value": 1
+    },
+    {
+      "name": "SJS_FORMAT_SOURCE",
+      "value": 0
+    },
+    {
       "name": "SJS_FRAME_FUNCTION",
       "value": 1
     },
@@ -1134,7 +1142,7 @@
         },
         {
           "name": "as",
-          "type": "union (unnamed at staticjs.h:241:5)"
+          "type": "union (unnamed at staticjs.h:242:5)"
         }
       ],
       "layout": {
@@ -1409,28 +1417,35 @@
         {
           "name": "call",
           "type": "sjs_result (*)(void *, sjs_native_call *)"
+        },
+        {
+          "name": "release",
+          "type": "void (*)(void *)"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 8,
+          "size": 16,
           "align": 8,
           "offsets": {
-            "call": 0
+            "call": 0,
+            "release": 8
           }
         },
         "aarch64": {
-          "size": 8,
+          "size": 16,
           "align": 8,
           "offsets": {
-            "call": 0
+            "call": 0,
+            "release": 8
           }
         },
         "wasm32": {
-          "size": 4,
+          "size": 8,
           "align": 4,
           "offsets": {
-            "call": 0
+            "call": 0,
+            "release": 4
           }
         }
       }
@@ -2073,34 +2088,55 @@
         {
           "name": "global_count",
           "type": "uint32_t"
+        },
+        {
+          "name": "function",
+          "type": "sjs_value"
+        },
+        {
+          "name": "arguments",
+          "type": "const sjs_value *"
+        },
+        {
+          "name": "argument_count",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 24,
+          "size": 56,
           "align": 8,
           "offsets": {
             "program": 0,
             "globals": 8,
-            "global_count": 16
+            "global_count": 16,
+            "function": 24,
+            "arguments": 40,
+            "argument_count": 48
           }
         },
         "aarch64": {
-          "size": 24,
+          "size": 56,
           "align": 8,
           "offsets": {
             "program": 0,
             "globals": 8,
-            "global_count": 16
+            "global_count": 16,
+            "function": 24,
+            "arguments": 40,
+            "argument_count": 48
           }
         },
         "wasm32": {
-          "size": 12,
-          "align": 4,
+          "size": 40,
+          "align": 8,
           "offsets": {
             "program": 0,
             "globals": 4,
-            "global_count": 8
+            "global_count": 8,
+            "function": 16,
+            "arguments": 32,
+            "argument_count": 36
           }
         }
       }
@@ -2530,6 +2566,66 @@
             "context": 0,
             "value": 8,
             "function_text": 24
+          }
+        }
+      }
+    },
+    "sjs_format": {
+      "kind": "enum",
+      "constants": [
+        "SJS_FORMAT_SOURCE",
+        "SJS_FORMAT_JSON"
+      ]
+    },
+    "sjs_read_params": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "format",
+          "type": "sjs_format"
+        },
+        {
+          "name": "bytes",
+          "type": "sjs_bytes"
+        },
+        {
+          "name": "error",
+          "type": "sjs_error *"
+        },
+        {
+          "name": "subject",
+          "type": "sjs_buffer *"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "format": 0,
+            "bytes": 8,
+            "error": 24,
+            "subject": 32
+          }
+        },
+        "aarch64": {
+          "size": 40,
+          "align": 8,
+          "offsets": {
+            "format": 0,
+            "bytes": 8,
+            "error": 24,
+            "subject": 32
+          }
+        },
+        "wasm32": {
+          "size": 20,
+          "align": 4,
+          "offsets": {
+            "format": 0,
+            "bytes": 4,
+            "error": 12,
+            "subject": 16
           }
         }
       }
@@ -3389,6 +3485,27 @@
       "name": "sjs_undefined",
       "returns": "sjs_value",
       "params": [],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "sjs_value_read",
+      "returns": "sjs_result",
+      "params": [
+        {
+          "name": "context",
+          "type": "sjs_context *"
+        },
+        {
+          "name": "params",
+          "type": "const sjs_read_params *"
+        },
+        {
+          "name": "out",
+          "type": "sjs_value *"
+        }
+      ],
       "public": true,
       "static_inline": false,
       "implemented": true

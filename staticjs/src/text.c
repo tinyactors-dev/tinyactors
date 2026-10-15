@@ -37,12 +37,17 @@ int32_t sjs_utf8_next(sjs_str text, uint32_t *index) {
     return (int32_t)point;
 }
 
-bool sjs_utf8_valid(sjs_str text) {
+uint32_t sjs_utf8_valid_length(sjs_str text) {
     uint32_t i = 0;
     while (i < text.length) {
-        if (sjs_utf8_next(text, &i) < 0) return false;
+        uint32_t at = i;
+        if (sjs_utf8_next(text, &i) < 0) return at;
     }
-    return true;
+    return text.length;
+}
+
+bool sjs_utf8_valid(sjs_str text) {
+    return sjs_utf8_valid_length(text) == text.length;
 }
 
 uint32_t sjs_utf8_encode(uint32_t point, uint8_t *out) {

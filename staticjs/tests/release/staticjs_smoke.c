@@ -45,7 +45,7 @@ int main(void) {
     sjs_program *program = NULL;
     sjs_error error = { 0 };
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
-                                  { SOURCE, (uint32_t)(sizeof SOURCE - 1u) }, &error };
+                                  { SOURCE, (uint32_t)(sizeof SOURCE - 1u) }, &error, NULL };
     if (sjs_compile(&params, &program) != SJS_OK) {
         fprintf(stderr, "staticjs smoke: does not compile: %.*s\n", (int)error.message.length, error.message.ptr);
         return 1;
@@ -53,7 +53,7 @@ int main(void) {
 
     sjs_vm *vm = NULL;
     sjs_vm_config vm_config = { context, false, false };
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     if (sjs_vm_init(&vm, &vm_config) != SJS_OK || sjs_vm_start(vm, &run) != SJS_OK) return fail("no evaluator");
     unsigned pauses = 0;
     sjs_run status = SJS_RUN_PAUSED;

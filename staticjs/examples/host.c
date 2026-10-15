@@ -106,7 +106,7 @@ static sjs_result rate(void *self, sjs_native_call *call) {
     return SJS_ERR_PROGRAM;
 }
 
-static const sjs_native_vtable rate_vtable = { rate };
+static const sjs_native_vtable rate_vtable = { rate, NULL };
 
 /* The modules adapter: one module, "money", whose exports the host holds. */
 static sjs_result find_module(void *self, sjs_str name, sjs_value *exports) {
@@ -163,7 +163,7 @@ int main(void) {
     for (int i = 0; i < 3; i++) {
         sjs_value values[] = { rate_fn, cents, record(&h, &orders[i]) };
         sjs_value result;
-        if (evaluate(&h, &(sjs_run_params){ plugin, values, 3 }, &result) == SJS_OK) {
+        if (evaluate(&h, &(sjs_run_params){ .program = plugin, .globals = values, .global_count = 3 }, &result) == SJS_OK) {
             print(&h, result);
             sjs_release(h.context, result);
         }
@@ -177,7 +177,7 @@ int main(void) {
                                                           .globals = names, .global_count = 1 },
                                   "rate(\"JPY\")");
     sjs_value result;
-    if (evaluate(&h, &(sjs_run_params){ misuse, &rate_fn, 1 }, &result) == SJS_OK) sjs_release(h.context, result);
+    if (evaluate(&h, &(sjs_run_params){ .program = misuse, .globals = &rate_fn, .global_count = 1 }, &result) == SJS_OK) sjs_release(h.context, result);
     sjs_program_release(misuse);
     sjs_release(h.context, rate_fn);
 

@@ -111,6 +111,20 @@ void sjs_error_set(sjs_error_slot *slot, sjs_position at, sjs_problem problem) {
     slot->error.subject = (sjs_str){ slot->subject, 0 };
 }
 
+void sjs_error_keep_subject(sjs_error *error, sjs_buffer *keep) {
+    sjs_str subject = error->subject;
+    error->subject = (sjs_str){ "", 0 };
+    if (keep == NULL || keep->ptr == NULL || keep->length > keep->capacity) return;
+    uint32_t room = keep->capacity - keep->length;
+    uint32_t n = subject.length < room ? subject.length : room;
+    /* Cut between characters, never inside one. */
+    while (n > 0 && n < subject.length && ((uint8_t)subject.ptr[n] & 0xC0u) == 0x80u) n--;
+    uint8_t *to = keep->ptr + keep->length;
+    sjs_copy((char *)to, subject.ptr, n);
+    keep->length += n;
+    error->subject = (sjs_str){ (const char *)to, n };
+}
+
 void sjs_error_subject(sjs_error_slot *slot, sjs_str subject) {
     uint32_t length = subject.length < SJS_SUBJECT_CAPACITY ? subject.length : SJS_SUBJECT_CAPACITY;
     /* Never cut a UTF-8 sequence in two. */

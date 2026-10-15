@@ -106,7 +106,7 @@ static sjs_result evaluate(const env *e, const char *source, char *out) {
         snprintf(out, 256, "vm %d", r);
         return r;
     }
-    sjs_run_params run = { program, e->values, e->count };
+    sjs_run_params run = { program, e->values, e->count, { 0 }, NULL, 0 };
     r = sjs_vm_start(vm, &run);
     if (r == SJS_OK) {
         sjs_run status = sjs_vm_run(vm, UINT64_MAX);
@@ -267,7 +267,7 @@ static sjs_result in_state(void *self, sjs_native_call *call) {
     return SJS_OK;
 }
 
-static const sjs_native_vtable in_vtable = { in_state };
+static const sjs_native_vtable in_vtable = { in_state, NULL };
 
 static void test_natives_and_globals(void) {
     counting c = { 0 };
@@ -297,7 +297,7 @@ static sjs_value run_value(const env *e, const char *source) {
     sjs_vm *vm;
     sjs_vm_config config = { e->context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, e->values, e->count };
+    sjs_run_params run = { program, e->values, e->count, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     sjs_value v = sjs_undefined();
@@ -312,6 +312,185 @@ static sjs_value run_value(const env *e, const char *source) {
  * later: from a program with other values for the same names, with fewer
  * globals, or none, and from a loop. It keeps them after the evaluation
  * that made it ends. */
+/* A native's release hook runs once, when the function value is freed:
+ * here after the result a program put it in is released. */
+static int native_releases;
+static sjs_result answer(void *self, sjs_native_call *call) {
+    call->result = sjs_number(*(const double *)self);
+    return SJS_OK;
+}
+static void forget(void *self) {
+    CHECK(*(const double *)self == 42);
+    native_releases++;
+}
+static const sjs_native_vtable answer_vtable = { answer, forget };
+
+static void test_native_release(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    static const double value = 42;
+    sjs_value f;
+    CHECK(sjs_function_native(context, (sjs_native){ (void *)&value, &answer_vtable }, &f) == SJS_OK);
+    sjs_str names[1] = { SJS_STR("f") };
+    env e = { context, names, &f, 1, { NULL, NULL }, SJS_GOAL_EXPRESSION };
+    sjs_value kept = run_value(&e, "[f(), f]");
+    native_releases = 0;
+    sjs_release(context, f);
+    CHECK(native_releases == 0);      /* the result still holds it */
+    sjs_release(context, kept);
+    CHECK(native_releases == 1);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* A function a program made, called from C: a module's export, run on
+ * slices of fuel, reading the globals of the evaluation that made it. */
+static void test_call_function(void) {
+    counting c = { 0 };
+    sjs_context *context = new_context(&c, SJS_LIMITS_DEFAULT);
+    sjs_str names[1] = { SJS_STR("limit") };
+    sjs_value limit = sjs_number(100);
+    env e = { context, names, &limit, 1, { NULL, NULL }, SJS_GOAL_MODULE };
+    sjs_value exports = run_value(&e,
+        "export const net = (rows, rate) => rows.map((r) => ({ id: r.id, net: r.total * rate + limit }));"
+        "export const two = (a, b) => [a, b];"
+        "export const wrap = (a) => ({ a });");
+    sjs_value net, two;
+    CHECK(sjs_object_get(exports, SJS_STR("net"), &net) == SJS_OK && net.kind == SJS_FUNCTION);
+    CHECK(sjs_object_get(exports, SJS_STR("two"), &two) == SJS_OK);
+
+    sjs_value rows, row;
+    CHECK(sjs_array_new(context, 2, &rows) == SJS_OK);
+    for (int i = 1; i <= 2; i++) {
+        CHECK(sjs_object_new(context, 2, &row) == SJS_OK);
+        CHECK(sjs_object_put(context, &row, &(sjs_property){ SJS_STR("id"), sjs_number(i) }) == SJS_OK);
+        CHECK(sjs_object_put(context, &row, &(sjs_property){ SJS_STR("total"), sjs_number(10 * i) }) == SJS_OK);
+        CHECK(sjs_array_append(context, &rows, row) == SJS_OK);
+    }
+    sjs_value args[2] = { rows, sjs_number(0.5) };
+    sjs_vm *vm;
+    sjs_vm_config config = { context, false, false };
+    CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
+    sjs_run_params call = { NULL, NULL, 0, net, args, 2 };
+    CHECK(sjs_vm_start(vm, &call) == SJS_OK);
+    sjs_frame frame;
+    CHECK(sjs_vm_frame_count(vm) == 1 && sjs_vm_frame(vm, 0, &frame) == SJS_OK && frame.function != 0);
+    uint32_t pauses = 0;
+    sjs_run status;
+    while ((status = sjs_vm_run(vm, 3)) == SJS_RUN_PAUSED) pauses++;
+    CHECK(status == SJS_RUN_DONE && pauses > 3);
+    sjs_value result;
+    CHECK(sjs_vm_take_result(vm, &result) == SJS_OK);
+    char out[256];
+    write_text(context, result, out, sizeof out);
+    CHECK(strcmp(out, "[{\"id\":1,\"net\":105},{\"id\":2,\"net\":110}]") == 0);
+    sjs_release(context, result);
+
+    /* A module's function's object is not a namespace: not sealed. */
+    sjs_value wrap;
+    CHECK(sjs_object_get(exports, SJS_STR("wrap"), &wrap) == SJS_OK);
+    call = (sjs_run_params){ NULL, NULL, 0, wrap, args + 1, 1 };
+    CHECK(sjs_vm_start(vm, &call) == SJS_OK && sjs_vm_run(vm, 1000) == SJS_RUN_DONE);
+    CHECK(sjs_vm_take_result(vm, &result) == SJS_OK && result.kind == SJS_OBJECT);
+    CHECK(sjs_object_put(context, &result, &(sjs_property){ SJS_STR("x"), sjs_null() }) == SJS_OK);
+    sjs_release(context, result);
+
+    /* Fewer arguments than parameters: undefined, as in JavaScript. */
+    call = (sjs_run_params){ NULL, NULL, 0, two, args + 1, 1 };
+    CHECK(sjs_vm_start(vm, &call) == SJS_OK && sjs_vm_run(vm, 1000) == SJS_RUN_DONE);
+    CHECK(sjs_vm_take_result(vm, &result) == SJS_OK);
+    write_text(context, result, out, sizeof out);
+    CHECK(strcmp(out, "[0.5,undefined]") == 0);
+    sjs_release(context, result);
+
+    /* A fault in the call keeps its frames, as a program's does. */
+    sjs_value bad[2] = { sjs_number(1), sjs_number(1) };
+    call = (sjs_run_params){ NULL, NULL, 0, net, bad, 2 };
+    CHECK(sjs_vm_start(vm, &call) == SJS_OK && sjs_vm_run(vm, 1000) == SJS_RUN_FAULT);
+    CHECK(sjs_vm_frame_count(vm) >= 1);
+    sjs_vm_reset(vm);
+
+    /* Refused: a native, a value that is not a function, globals beside
+     * the function, and a program's main code is not a function to call. */
+    sjs_value in;
+    CHECK(sjs_function_native(context, (sjs_native){ (void *)"x", &in_vtable }, &in) == SJS_OK);
+    sjs_run_params refused[] = {
+        { NULL, NULL, 0, in, NULL, 0 },
+        { NULL, NULL, 0, sjs_number(1), NULL, 0 },
+        { NULL, &limit, 1, net, NULL, 0 },
+        { NULL, NULL, 0, net, NULL, 1 },
+    };
+    for (size_t i = 0; i < sizeof refused / sizeof refused[0]; i++) CHECK(sjs_vm_start(vm, &refused[i]) == SJS_ERR_INVALID);
+    sjs_release(context, in);
+    sjs_vm_destroy(vm);
+    sjs_release(context, rows);
+    sjs_release(context, exports);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
+/* Values read from JSON bytes without an evaluator, and the bytes it
+ * refuses, each with where and why. */
+static void test_value_read_json(void) {
+    counting c = { 0 };
+    sjs_limits limits = SJS_LIMITS_DEFAULT;
+    limits.max_nesting = 8;
+    limits.max_string_bytes = 64;
+    sjs_context *context = new_context(&c, limits);
+    struct { const char *bytes; const char *text; } good[] = {
+        { "{\"a\":[1,2.5,\"x\\u00e9\"],\"b\":null,\"2\":true}", "{\"2\":true,\"a\":[1,2.5,\"xé\"],\"b\":null}" },
+        { " [] ", "[]" },
+        { "-0", "-0" },
+        { "\"\\ud83d\\ude00\"", "\"😀\"" },
+    };
+    for (size_t i = 0; i < sizeof good / sizeof good[0]; i++) {
+        sjs_value v;
+        sjs_read_params read = { SJS_FORMAT_JSON, { (const uint8_t *)good[i].bytes, (uint32_t)strlen(good[i].bytes) }, NULL, NULL };
+        CHECK(sjs_value_read(context, &read, &v) == SJS_OK);
+        char out[128];
+        write_text(context, v, out, sizeof out);
+        if (strcmp(out, good[i].text) != 0) fprintf(stderr, "read %s: %s\n", good[i].bytes, out);
+        CHECK(strcmp(out, good[i].text) == 0);
+        sjs_release(context, v);
+    }
+    struct { const char *bytes; sjs_error_code code; uint32_t offset, line, column; const char *subject; } bad[] = {
+        { "[1,", SJS_ERROR_SYNTAX, 3, 1, 4, "" },
+        { "{\n  \"a\": tru}", SJS_ERROR_SYNTAX, 12, 2, 11, "" },
+        { "\"\xff\"", SJS_ERROR_SYNTAX, 1, 1, 2, "" },
+        { "1 2", SJS_ERROR_SYNTAX, 2, 1, 3, "" },
+        { "{\"__proto__\":1}", SJS_ERROR_UNSUPPORTED, 0, 0, 0, "" },
+        { "\"\\ud800\"", SJS_ERROR_UNSUPPORTED, 0, 0, 0, "" },
+        { "[[[[[[[[[[]]]]]]]]]]", SJS_ERROR_LIMIT, 0, 0, 0, "max_nesting" },
+    };
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        sjs_value v = sjs_number(7);
+        sjs_error error = { 0 };
+        uint8_t text[64];
+        sjs_buffer subject = { text, sizeof text, 0 };
+        sjs_read_params read = { SJS_FORMAT_JSON, { (const uint8_t *)bad[i].bytes, (uint32_t)strlen(bad[i].bytes) }, &error, &subject };
+        CHECK(sjs_value_read(context, &read, &v) == SJS_ERR_PROGRAM);
+        CHECK(v.kind == SJS_NUMBER);   /* untouched */
+        if (error.code != bad[i].code || (bad[i].line != 0 && (error.at.offset != bad[i].offset || error.at.line != bad[i].line || error.at.column != bad[i].column)))
+            fprintf(stderr, "refused %s: code %d at %u %u:%u\n", bad[i].bytes, (int)error.code, error.at.offset, error.at.line, error.at.column);
+        CHECK(error.code == bad[i].code);
+        if (bad[i].line != 0) CHECK(error.at.offset == bad[i].offset && error.at.line == bad[i].line && error.at.column == bad[i].column);
+        CHECK(error.message.length > 0);
+        CHECK(error.subject.length == strlen(bad[i].subject) && memcmp(error.subject.ptr, bad[i].subject, error.subject.length) == 0);
+    }
+    sjs_value v;
+    char long_text[80];
+    memset(long_text, ' ', sizeof long_text);
+    long_text[0] = '1';
+    CHECK(sjs_value_read(context, &(sjs_read_params){ SJS_FORMAT_JSON, { (const uint8_t *)long_text, sizeof long_text }, NULL, NULL }, &v) == SJS_ERR_LIMIT);
+    CHECK(sjs_value_read(context, &(sjs_read_params){ 0 }, &v) == SJS_ERR_INVALID);
+    CHECK(sjs_value_read(context, &(sjs_read_params){ SJS_FORMAT_JSON, { NULL, 1 }, NULL, NULL }, &v) == SJS_ERR_INVALID);
+    CHECK(sjs_context_live_bytes(context) == 0);
+    sjs_context_destroy(context);
+    CHECK(c.live == 0);
+}
+
 /* sjs_compile copies a compile error's subject to the caller's buffer, cut
  * between characters, and gives none without a buffer. */
 static void test_compile_subject(void) {
@@ -406,7 +585,7 @@ static void test_closure_globals(void) {
         sjs_value kept[3];
         for (uint32_t i = 0; i < 3; i++) {
             sjs_value limit[1] = { sjs_number(100 * (i + 1)) };
-            sjs_run_params run = { program, limit, 1 };
+            sjs_run_params run = { program, limit, 1, { 0 }, NULL, 0 };
             CHECK(sjs_vm_start(vm, &run) == SJS_OK);
             CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
             CHECK(sjs_vm_take_result(vm, &kept[i]) == SJS_OK);
@@ -504,7 +683,7 @@ static void test_modules(void) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     one_module m;
@@ -530,7 +709,7 @@ static sjs_value result_of(sjs_context *context, sjs_goal goal, const char *sour
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     sjs_value v;
@@ -1190,7 +1369,7 @@ static void test_writer_resumes(void) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     sjs_value v;
@@ -1233,7 +1412,7 @@ static void test_fuel_pinned(sjs_context *context) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     CHECK(sjs_vm_fuel_used(vm) == 194);
@@ -1260,7 +1439,7 @@ static uint64_t fuel_of(sjs_context *context, const char *source) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     uint64_t used = sjs_vm_fuel_used(vm);
@@ -1317,7 +1496,7 @@ static void test_regex_fuel(sjs_context *context) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     sjs_run status;
     uint64_t pauses = 0;
@@ -1358,7 +1537,7 @@ static void run_regex(sjs_context *context, const regex_run *r, regex_ran *out) 
     sjs_vm *vm;
     sjs_vm_config config = { context, false, r->no_dfa };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     sjs_run status;
     out->pauses = 14695981039346656037ull;
@@ -1441,7 +1620,7 @@ static void test_set_fuel_linear(sjs_context *context) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, sets, 2 };
+    sjs_run_params run = { program, sets, 2, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     /* Three combinations of 2,000 by 2,000 members: 4,000 lookups each. */
@@ -1500,7 +1679,7 @@ static void test_fuel_and_reset(void) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, 10) == SJS_RUN_PAUSED);
     CHECK(sjs_vm_fuel_used(vm) == 10);
@@ -1595,7 +1774,7 @@ static void test_host_clock(void) {
     sjs_compile_params params = { { context, SJS_GOAL_EXPRESSION, NULL, 0, { NULL, NULL }, false },
                                   { source, (uint32_t)strlen(source) }, NULL, NULL };
     CHECK(sjs_compile(&params, &program) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, 2) == SJS_RUN_PAUSED);
     CHECK(sjs_vm_set_clock(vm, &(sjs_epoch){ -86400, 1 }) == SJS_OK);
@@ -1763,7 +1942,7 @@ static void loop_close(loop_run *l) {
 /* Run to the end, `per_run` units at a time; the result's text or the
  * fault's position as "fault LINE:COLUMN message". */
 static sjs_run loop_finish(loop_run *l, uint64_t per_run, char *out) {
-    sjs_run_params run = { l->program, NULL, 0 };
+    sjs_run_params run = { l->program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(l->vm, &run) == SJS_OK);
     sjs_run status;
     while ((status = sjs_vm_run(l->vm, per_run)) == SJS_RUN_PAUSED) continue;
@@ -1784,7 +1963,7 @@ static sjs_run loop_finish(loop_run *l, uint64_t per_run, char *out) {
  * run, the same at every read with no call between them, the clock as
  * moved at a pause after it; never set, a fault. */
 static void now_reads(loop_run *l, uint64_t advance, long long out[2]) {
-    sjs_run_params run = { l->program, NULL, 0 };
+    sjs_run_params run = { l->program, NULL, 0, { 0 }, NULL, 0 };
     char text[4096];
     CHECK(sjs_vm_start(l->vm, &run) == SJS_OK);
     sjs_run status;
@@ -1876,7 +2055,7 @@ static void test_host_seed(void) {
     /* Set again, the sequence starts over. Reset after the first draw keeps
      * it drawn. */
     CHECK(sjs_vm_set_seed(two.vm, 42) == SJS_OK);
-    sjs_run_params run = { two.program, NULL, 0 };
+    sjs_run_params run = { two.program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(two.vm, &run) == SJS_OK);
     while (sjs_vm_random(two.vm, &r) == SJS_OK && r.left == 0) CHECK(sjs_vm_run(two.vm, 1) == SJS_RUN_PAUSED);
     CHECK(r.left == 63);
@@ -1939,7 +2118,7 @@ static void test_loop_callbacks(void) {
     uint64_t total = sjs_vm_fuel_used(l.vm);
     CHECK(loop_finish(&l, 1, again) == SJS_RUN_DONE);
     CHECK(strcmp(again, out) == 0 && sjs_vm_fuel_used(l.vm) == total);
-    sjs_run_params run = { l.program, NULL, 0 };
+    sjs_run_params run = { l.program, NULL, 0, { 0 }, NULL, 0 };
     for (uint64_t stop = 1; stop < total; stop++) {
         CHECK(sjs_vm_start(l.vm, &run) == SJS_OK);
         CHECK(sjs_vm_run(l.vm, stop) == SJS_RUN_PAUSED);
@@ -2023,8 +2202,8 @@ static sjs_result held_value(void *self, sjs_native_call *call) {
     return SJS_OK;
 }
 
-static const sjs_native_vtable keep_vtable = { keep_value };
-static const sjs_native_vtable held_vtable = { held_value };
+static const sjs_native_vtable keep_vtable = { keep_value, NULL };
+static const sjs_native_vtable held_vtable = { held_value, NULL };
 
 static sjs_value number_array(sjs_context *context, const double *numbers, int count) {
     sjs_value a;
@@ -2086,7 +2265,7 @@ static void test_reuse_leaves_others_alone(void) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, globals, 2 };
+    sjs_run_params run = { program, globals, 2, { 0 }, NULL, 0 };
     for (int i = 0; i < 2; i++) {
         CHECK(sjs_vm_start(vm, &run) == SJS_OK);
         CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
@@ -2113,7 +2292,7 @@ static void test_reuse_leaves_others_alone(void) {
                                          { module, (uint32_t)strlen(module) }, NULL, NULL };
     CHECK(sjs_compile(&module_params, &program) == SJS_OK);
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params module_run = { program, NULL, 0 };
+    sjs_run_params module_run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &module_run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     CHECK(sjs_vm_take_result(vm, &m.exports) == SJS_OK);
@@ -2221,7 +2400,7 @@ static shaped_run run_shaped(shaped_source s) {
     result.fuel = sjs_vm_fuel_used(l.vm);
     /* Paused after every unit: the same answer for the same fuel. */
     char again[4096];
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(l.vm, &run) == SJS_OK);
     sjs_run status;
     while ((status = sjs_vm_run(l.vm, 1)) == SJS_RUN_PAUSED) result.pauses++;
@@ -2588,7 +2767,7 @@ static sjs_result fresh_value(void *self, sjs_native_call *call) {
     return sjs_array_new(call->context, 2, &call->result);
 }
 
-static const sjs_native_vtable fresh_vtable = { fresh_value };
+static const sjs_native_vtable fresh_vtable = { fresh_value, NULL };
 
 /* A value a native gives and still holds, or keeps, is never changed: the
  * mutation faults when it runs, or, for one the function passed to it
@@ -2843,7 +3022,7 @@ static size_t live_of(sjs_context *context, const char *source) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     sjs_value v;
@@ -3266,7 +3445,7 @@ static sjs_result interned_key_object(void *self, sjs_native_call *call) {
     return r == SJS_OK ? sjs_object_put(call->context, &call->result, &p) : r;
 }
 
-static const sjs_native_vtable interned_key_vtable = { interned_key_object };
+static const sjs_native_vtable interned_key_vtable = { interned_key_object, NULL };
 
 /* STRING_APPEND: an interned string is found by its text, so one that
  * nothing else holds is copied, not extended: here a key put through the
@@ -3427,7 +3606,7 @@ static uint64_t map_lookup_fuel(sjs_context *context, sjs_value map) {
     sjs_vm *vm;
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
-    sjs_run_params run = { program, &map, 1 };
+    sjs_run_params run = { program, &map, 1, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_run(vm, UINT64_MAX) == SJS_RUN_DONE);
     uint64_t used = sjs_vm_fuel_used(vm);
@@ -3651,7 +3830,7 @@ static void test_inspection(void) {
     sjs_vm_config config = { context, false, false };
     CHECK(sjs_vm_init(&vm, &config) == SJS_OK);
     CHECK(sjs_vm_frame_count(vm) == 0);
-    sjs_run_params run = { program, NULL, 0 };
+    sjs_run_params run = { program, NULL, 0, { 0 }, NULL, 0 };
     CHECK(sjs_vm_start(vm, &run) == SJS_OK);
     CHECK(sjs_vm_frame_count(vm) == 1);
     sjs_frame frame;
@@ -3740,6 +3919,9 @@ int main(int argc, char **argv) {
     test_natives_and_globals();
     test_closure_globals();
     test_compile_subject();
+    test_native_release();
+    test_call_function();
+    test_value_read_json();
     test_iterators_read();
     test_regexp_read();
     test_time_values();

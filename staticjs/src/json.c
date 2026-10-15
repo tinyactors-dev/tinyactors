@@ -33,27 +33,43 @@ typedef struct {
     sjs_string *key;       /* an object's key, read, whose value comes next; or NULL */
 } json_level;
 
+/* The reader needs no evaluator: JSON.parse runs it for a program, and
+ * sjs_value_read for the host. Each says what went wrong its own way. */
 typedef struct {
-    sjs_vm *vm;
-    sjs_leaf_call *call;   /* the value read whole goes to call->result */
+    sjs_context *context;
     sjs_str text;
     uint32_t at;
     uint8_t state;
     sjs_buf levels;        /* json_level */
     sjs_buf scratch;       /* the text of a string with escapes */
     uint64_t cost;         /* a unit per value made, and per entry an index key moves */
+    sjs_value result;      /* the value read whole */
+    /* What went wrong, when reading returns SJS_ERR_PROGRAM: text that is
+     * not JSON (SJS_ERROR_SYNTAX, at `problem_at`), JSON whose value
+     * staticjs does not have (SJS_ERROR_UNSUPPORTED), a limit (with
+     * `subject` naming it, or empty) or memory. */
+    sjs_error_code problem;
+    const char *message;
+    sjs_str subject;
+    uint32_t problem_at;
 } json_reader;
 
-/* A SyntaxError in JavaScript: a fault naming where, in UTF-16 code units,
- * as JavaScript counts a position. */
-static sjs_result json_syntax(json_reader *r, const char *message) {
-    char subject[48];
-    uint32_t length = sjs_cstr("at position ").length;
-    sjs_copy(subject, "at position ", length);
-    length += sjs_number_format((double)sjs_utf16_length((sjs_str){ r->text.ptr, r->at }), subject + length);
-    sjs_vm_fault(r->vm, message);
-    sjs_error_subject(&r->vm->error, (sjs_str){ subject, length });
+static sjs_result json_problem(json_reader *r, sjs_error_code problem, const char *message) {
+    r->problem = problem;
+    r->message = message;
+    r->problem_at = r->at;
     return SJS_ERR_PROGRAM;
+}
+
+/* A SyntaxError in JavaScript. */
+static sjs_result json_syntax(json_reader *r, const char *message) {
+    return json_problem(r, SJS_ERROR_SYNTAX, message);
+}
+
+/* What the context's allocator or its limits refused. */
+static sjs_result json_fail(json_reader *r, sjs_result e) {
+    return e == SJS_ERR_LIMIT ? json_problem(r, SJS_ERROR_LIMIT, "a value is larger than the limits allow")
+                              : json_problem(r, SJS_ERROR_MEMORY, "out of memory");
 }
 
 static sjs_result json_syntax_end(json_reader *r) {
@@ -91,8 +107,8 @@ static int32_t json_hex4(sjs_str t, uint32_t at) {
 }
 
 static sjs_result json_scratch(json_reader *r, sjs_str bytes) {
-    sjs_result e = sjs_buf_append(&r->vm->context->counting, &r->scratch, (sjs_bytes){ (const uint8_t *)bytes.ptr, bytes.length });
-    return e == SJS_OK ? SJS_OK : sjs_vm_fail(r->vm, e);
+    sjs_result e = sjs_buf_append(&r->context->counting, &r->scratch, (sjs_bytes){ (const uint8_t *)bytes.ptr, bytes.length });
+    return e == SJS_OK ? SJS_OK : json_fail(r, e);
 }
 
 /* `\uXXXX` at r->at, and a second one when the first is a high surrogate:
@@ -121,7 +137,7 @@ static sjs_result json_unicode(json_reader *r) {
                 paired = true;
             }
         }
-        if (!paired) return sjs_vm_fault(r->vm, "JSON.parse would make a string with a lone surrogate, which a staticjs string cannot hold");
+        if (!paired) return json_problem(r, SJS_ERROR_UNSUPPORTED, "JSON.parse would make a string with a lone surrogate, which a staticjs string cannot hold");
     }
     uint8_t bytes[4];
     uint32_t n = sjs_utf8_encode(point, bytes);
@@ -249,11 +265,11 @@ static json_level *json_top(json_reader *r) {
 /* A value read: the result, or an item of the container open. Takes over
  * `v`. */
 static sjs_result json_deliver(json_reader *r, sjs_value v) {
-    sjs_context *context = r->vm->context;
+    sjs_context *context = r->context;
     json_level *l = json_top(r);
     r->cost++;
     if (l == NULL) {
-        r->call->result = v;
+        r->result = v;
         r->state = JSON_END;
         return SJS_OK;
     }
@@ -264,7 +280,7 @@ static sjs_result json_deliver(json_reader *r, sjs_value v) {
         l->container.as.heap = &a->h;
         if (e != SJS_OK) {
             sjs_unref(context, v);
-            return sjs_vm_fail(r->vm, e);
+            return json_fail(r, e);
         }
         a->items[a->length++] = v;
         return SJS_OK;
@@ -281,7 +297,7 @@ static sjs_result json_deliver(json_reader *r, sjs_value v) {
     if (e != SJS_OK) {
         sjs_unref(context, sjs_heap_value(SJS_STRING, &key->h));
         sjs_unref(context, v);
-        return sjs_vm_fail(r->vm, e);
+        return json_fail(r, e);
     }
     if (o->count != before && (key->h.flags & SJS_STRING_INDEX) != 0) {
         const sjs_entry *at = sjs_object_find(o, sjs_string_view(key));
@@ -292,27 +308,27 @@ static sjs_result json_deliver(json_reader *r, sjs_value v) {
 }
 
 static sjs_result json_open(json_reader *r, uint8_t kind) {
-    sjs_vm *vm = r->vm;
-    if (SJS_BUF_COUNT(r->levels, json_level) >= vm->context->limits.max_nesting) {
-        sjs_vm_fail(vm, SJS_ERR_LIMIT);
-        sjs_error_subject(&vm->error, SJS_STR("max_nesting"));
+    sjs_context *context = r->context;
+    if (SJS_BUF_COUNT(r->levels, json_level) >= context->limits.max_nesting) {
+        json_fail(r, SJS_ERR_LIMIT);
+        r->subject = SJS_STR("max_nesting");
         return SJS_ERR_PROGRAM;
     }
     json_level l = { sjs_undefined(), NULL };
     sjs_result e;
     if (kind == SJS_ARRAY) {
         sjs_array *a;
-        e = sjs_array_make(vm->context, 4, &a);
+        e = sjs_array_make(context, 4, &a);
         if (e == SJS_OK) l.container = sjs_heap_value(SJS_ARRAY, &a->h);
     } else {
         sjs_object *o;
-        e = sjs_object_make(vm->context, 4, &o);
+        e = sjs_object_make(context, 4, &o);
         if (e == SJS_OK) l.container = sjs_heap_value(SJS_OBJECT, &o->h);
     }
-    if (e == SJS_OK) e = sjs_buf_append(&vm->context->counting, &r->levels, (sjs_bytes){ (const uint8_t *)&l, sizeof l });
+    if (e == SJS_OK) e = sjs_buf_append(&context->counting, &r->levels, (sjs_bytes){ (const uint8_t *)&l, sizeof l });
     if (e != SJS_OK) {
-        sjs_unref(vm->context, l.container);
-        return sjs_vm_fail(vm, e);
+        sjs_unref(context, l.container);
+        return json_fail(r, e);
     }
     r->state = kind == SJS_ARRAY ? JSON_FIRST_ITEM : JSON_FIRST_KEY;
     return SJS_OK;
@@ -327,17 +343,16 @@ static sjs_result json_close(json_reader *r) {
 
 /* A key, its colon after it. */
 static sjs_result json_key(json_reader *r) {
-    sjs_vm *vm = r->vm;
     if (r->text.ptr[r->at] != '"') return json_syntax(r, "JSON.parse: a key must be a string (a SyntaxError in JavaScript)");
     r->at++;
     sjs_str text;
     if (json_string_text(r, &text) != SJS_OK) return SJS_ERR_PROGRAM;
     if (sjs_str_equal(text, SJS_STR("__proto__"))) {
-        return sjs_vm_fault(vm, "JSON.parse would make an object with the key __proto__: staticjs objects have no prototype");
+        return json_problem(r, SJS_ERROR_UNSUPPORTED, "JSON.parse would make an object with the key __proto__: staticjs objects have no prototype");
     }
     sjs_string *key;
-    sjs_result e = sjs_string_intern(vm->context, text, &key);
-    if (e != SJS_OK) return sjs_vm_fail(vm, e);
+    sjs_result e = sjs_string_intern(r->context, text, &key);
+    if (e != SJS_OK) return json_fail(r, e);
     json_top(r)->key = key;
     json_skip_space(r);
     if (r->at == r->text.length) return json_syntax_end(r);
@@ -348,7 +363,6 @@ static sjs_result json_key(json_reader *r) {
 }
 
 static sjs_result json_value(json_reader *r) {
-    sjs_vm *vm = r->vm;
     char c = r->text.ptr[r->at];
     switch (c) {
     case '{':
@@ -362,8 +376,8 @@ static sjs_result json_value(json_reader *r) {
         sjs_str text;
         if (json_string_text(r, &text) != SJS_OK) return SJS_ERR_PROGRAM;
         sjs_string *s;
-        sjs_result e = sjs_string_make(vm->context, text, &s);
-        if (e != SJS_OK) return sjs_vm_fail(vm, e);
+        sjs_result e = sjs_string_make(r->context, text, &s);
+        if (e != SJS_OK) return json_fail(r, e);
         return json_deliver(r, sjs_heap_value(SJS_STRING, &s->h));
     }
     case 't':
@@ -431,6 +445,27 @@ static sjs_result json_read(json_reader *r) {
     }
 }
 
+/* Read r->text whole into r->result, and free what reading held; on an
+ * error, what was made is released. */
+static sjs_result json_read_all(json_reader *r) {
+    r->state = JSON_VALUE;
+    r->result = sjs_undefined();
+    sjs_result result = json_read(r);
+    uint32_t n = SJS_BUF_COUNT(r->levels, json_level);
+    for (uint32_t i = 0; i < n; i++) {
+        json_level *l = &SJS_BUF_AT(r->levels, json_level, i);
+        sjs_unref(r->context, l->container);
+        if (l->key != NULL) sjs_unref(r->context, sjs_heap_value(SJS_STRING, &l->key->h));
+    }
+    sjs_buf_free(&r->context->counting, &r->levels);
+    sjs_buf_free(&r->context->counting, &r->scratch);
+    if (result != SJS_OK) {
+        sjs_unref(r->context, r->result);
+        r->result = sjs_undefined();
+    }
+    return result;
+}
+
 /* JSON.parse(text): ToString of a primitive, as JavaScript reads one. A
  * fuel unit per 16 bytes of text and per value made, and per entry moved
  * when an index key comes before index keys already in its object. */
@@ -445,21 +480,76 @@ sjs_result sjs_json_parse(sjs_vm *vm, sjs_leaf_call *call) {
     }
     char room[32];
     json_reader r = { 0 };
-    r.vm = vm;
-    r.call = call;
+    r.context = vm->context;
     r.text = sjs_primitive_text(text, room);
-    r.state = JSON_VALUE;
-    sjs_result result = json_read(&r);
-    uint32_t n = SJS_BUF_COUNT(r.levels, json_level);
-    for (uint32_t i = 0; i < n; i++) {
-        json_level *l = &SJS_BUF_AT(r.levels, json_level, i);
-        sjs_unref(vm->context, l->container);
-        if (l->key != NULL) sjs_unref(vm->context, sjs_heap_value(SJS_STRING, &l->key->h));
-    }
-    sjs_buf_free(&vm->context->counting, &r.levels);
-    sjs_buf_free(&vm->context->counting, &r.scratch);
+    sjs_result result = json_read_all(&r);
     call->cost = r.cost + r.text.length / 16u;
-    return result;
+    if (result == SJS_OK) {
+        call->result = r.result;
+        return SJS_OK;
+    }
+    switch (r.problem) {
+    case SJS_ERROR_SYNTAX: {
+        /* A fault naming where, in UTF-16 code units, as JavaScript counts
+         * a position. */
+        char subject[48];
+        uint32_t length = sjs_cstr("at position ").length;
+        sjs_copy(subject, "at position ", length);
+        length += sjs_number_format((double)sjs_utf16_length((sjs_str){ r.text.ptr, r.problem_at }), subject + length);
+        sjs_vm_fault(vm, r.message);
+        sjs_error_subject(&vm->error, (sjs_str){ subject, length });
+        return SJS_ERR_PROGRAM;
+    }
+    case SJS_ERROR_UNSUPPORTED:
+        return sjs_vm_fault(vm, r.message);
+    default:
+        sjs_vm_fail(vm, r.problem == SJS_ERROR_LIMIT ? SJS_ERR_LIMIT : SJS_ERR_NOMEM);
+        if (r.subject.length > 0) sjs_error_subject(&vm->error, r.subject);
+        return SJS_ERR_PROGRAM;
+    }
+}
+
+/* Where reading stopped, as a position: lines and columns count from 1,
+ * columns in bytes. */
+static sjs_position json_position(sjs_str text, uint32_t offset) {
+    sjs_position at = { offset, 1, 1 };
+    for (uint32_t i = 0; i < offset; i++) {
+        if (text.ptr[i] == '\n') {
+            at.line++;
+            at.column = 1;
+        } else {
+            at.column++;
+        }
+    }
+    return at;
+}
+
+sjs_result sjs_value_read(sjs_context *context, const sjs_read_params *params, sjs_value *out) {
+    if (context == NULL || params == NULL || out == NULL || params->format != SJS_FORMAT_JSON ||
+        (params->bytes.ptr == NULL && params->bytes.length != 0)) {
+        return SJS_ERR_INVALID;
+    }
+    if (params->bytes.length > context->limits.max_string_bytes) return SJS_ERR_LIMIT;
+    json_reader r = { 0 };
+    r.context = context;
+    r.text = (sjs_str){ (const char *)params->bytes.ptr, params->bytes.length };
+    sjs_result result;
+    uint32_t valid = sjs_utf8_valid_length(r.text);
+    if (valid != r.text.length) {
+        r.at = valid;
+        result = json_syntax(&r, "the bytes are not UTF-8");
+    } else {
+        result = json_read_all(&r);
+    }
+    if (result == SJS_OK) {
+        *out = r.result;
+        return SJS_OK;
+    }
+    if (params->error != NULL) {
+        *params->error = (sjs_error){ r.problem, json_position(r.text, r.problem_at), sjs_cstr(r.message), r.subject };
+        sjs_error_keep_subject(params->error, params->subject);
+    }
+    return SJS_ERR_PROGRAM;
 }
 
 /* ------------------------------------------------------------------------

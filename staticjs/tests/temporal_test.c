@@ -169,7 +169,7 @@ static void evaluate(runner *r, const text *source, bool deliberate) {
         if (failures++ < 20) fprintf(stderr, "temporal_test: does not compile: %s\n  %.*s\n", source->ptr, (int)error.message.length, error.message.ptr);
         return;
     }
-    sjs_run_params run_params = { program, NULL, 0 };
+    sjs_run_params run_params = { program, NULL, 0, { 0 }, NULL, 0 };
     if (sjs_vm_start(r->vm, &run_params) != SJS_OK) abort();
     sjs_run run = sjs_vm_run(r->vm, UINT64_MAX);
     if (run == SJS_RUN_FAULT) {

@@ -108,6 +108,9 @@ struct sjs_vm {
      * filled by the first of them (empty until then); undefined until an
      * evaluation first needs one, or after a closure kept the last. */
     sjs_value held_globals;
+    /* The evaluation calls a function (sjs_run_params.function) rather
+     * than running a program: its result is not a module's namespace. */
+    bool calling;
     uint64_t fuel_used;
     uint8_t status;
     uint32_t op_pc;       /* where the instruction running started */

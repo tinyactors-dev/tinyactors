@@ -485,7 +485,7 @@ static sjs_result evaluate(const environment *env, sjs_program *program, uint64_
         sjs_vm_destroy(vm);
         return SJS_ERR_INVALID;
     }
-    sjs_run_params params = { program, env->globals, env->global_count };
+    sjs_run_params params = { program, env->globals, env->global_count, { 0 }, NULL, 0 };
     sjs_result r = sjs_vm_start(vm, &params);
     last_pauses = 14695981039346656037ull;
     if (r == SJS_OK) {
