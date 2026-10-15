@@ -5,8 +5,8 @@ import Icon from './Icon.vue';
 
 const properties = [
   { name: 'Total', text: 'Every evaluation ends: the evaluator runs on fuel the host pushes, and when the fuel runs out it pauses and resumes from where it stopped, inside a callback included.' },
-  { name: 'Exact', text: 'A program staticjs accepts is valid JavaScript and evaluates to the value Node gives, or to a fault with a line, a column and a fixed message.' },
-  { name: 'Hermetic', text: 'A program reads only the values the host passes in and imports only modules the host provides, with no file system, network, clock or randomness of its own.' },
+  { name: 'Exact', text: 'A program staticjs accepts is valid JavaScript. Where JavaScript would coerce, compare objects by identity or look on a prototype, it faults with a line, a column and a fixed message.' },
+  { name: 'Hermetic', text: 'A program reads only the globals the host passes in by name, calls only the native C functions it adds and imports only the modules it provides. It has no file system, network, clock or randomness of its own.' },
   { name: 'Deterministic', text: 'The same program with the same inputs gives the same value and uses the same fuel on every machine.' },
   { name: 'Bounded', text: 'Every byte comes from the allocator the host gives, and every construct has a limit set by the host.' },
 ];
@@ -19,8 +19,8 @@ const faults = [
 ].join('\n');
 
 const ways = [
-  { title: 'Prebuilt libraries', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries with staticjs.h, for Linux and macOS on x86_64 and arm64. Link with any C11 compiler.', link: '/guide/getting-started' },
-  { title: 'Amalgamation', code: 'clang -O2 -I. app.c staticjs.c', text: 'staticjs.c and staticjs.h, two files to add to a C project. They build with clang and need no C library.', link: '/guide/getting-started#_3-build-it' },
+  { title: 'Prebuilt libraries', code: 'cc -std=c11 -Iinclude app.c lib/libstaticjs.a', text: 'Static and shared libraries for Linux and macOS on x86_64 and arm64. Link with any C11 compiler.', link: '/guide/getting-started' },
+  { title: 'Amalgamation', code: 'clang -O2 -I. app.c staticjs.c', text: 'staticjs.c and staticjs.h, two files to add to a C project. They build with clang.', link: '/guide/getting-started#_3-build-it' },
   { title: 'staticjs.wasm', code: 'await WebAssembly.instantiate(bytes, {})', text: 'A WebAssembly module for browsers and Node. It imports nothing and brings its own allocator.', link: '/guide/wasm' },
 ];
 
@@ -37,21 +37,18 @@ const compare = [
 ];
 
 const others = [
-  'QuickJS runs all of JavaScript, ES2025 included.',
-  'CEL has type checking and formal verification.',
-  'Starlark has def functions and runs threads in parallel over frozen shared data.',
-];
+  'CEL also has type checking and formal verification.',
+  'Starlark also runs threads in parallel over frozen shared data.',
+]
 
 const limits = [
-  'staticjs runs a subset of JavaScript. The language leaves out what the overview lists, so a program written for Node usually needs rewriting with map, filter and reduce before staticjs accepts it.',
-  'Some valid JavaScript faults. Where JavaScript would coerce or compare objects by identity, staticjs stops with a fault: "5" * 2 and [1, 2] === [1, 2] both fault, and each fault carries a line, a column and a fixed English message.',
-  'JavaScript that staticjs leaves out is refused when the program is compiled, as an unsupported error. It never reaches the evaluator.',
-  'Temporal supports the ISO calendar with UTC and fixed offsets. IANA time zones are not available.',
-  'Date is UTC only.',
+  'A program written for Node usually needs rewriting with map, filter and reduce. What the overview lists as left out is refused when the program is compiled, as an unsupported error.',
+  'Valid JavaScript that coerces or compares objects by identity faults instead of running, as the examples in the overview show.',
+  'Temporal supports the ISO calendar with UTC and fixed offsets. IANA time zones are not available. Date is UTC only.',
   'Regular expressions run in linear time, without backtracking. Lookahead, lookbehind, backreferences, \\p{...} and the v flag are not supported.',
+  'The WebAssembly module (about 950 KiB) is larger than QuickJS’s (about 620 KiB).',
   'staticjs is at version 0.9.0, and the API may change.',
-  'staticjs is not faster than Node’s JIT, and its WebAssembly module (about 950 KiB) is larger than QuickJS’s (about 620 KiB).',
-];
+]
 
 const header = 'https://github.com/dhamidi/tinyactors/blob/main/staticjs/include/staticjs.h';
 const docs = [
@@ -91,16 +88,12 @@ const docs = [
           Like JavaScript, staticjs has numbers, BigInt, strings, template literals, arrays, objects, Set, Map, Temporal
           and Date, arrow functions, destructuring with defaults and rest, spread, optional chaining and the usual
           operators. A program is one expression, or a module of imports, const declarations and exports. Unlike
-          JavaScript, it has no loops and no recursion, and every evaluation ends.
+          JavaScript, it has no loops and no recursion.
         </p>
         <p>
           staticjs leaves out loops (for, while, do), recursion, classes, async/await and promises, generators,
           try/catch/throw, var, labels, switch, eval, this, prototypes, getters and setters, and I/O. A function may
           change only a value it owns, such as an array it made; shared values never change.
-        </p>
-        <p>
-          The host passes in the program’s globals by name, adds native functions written in C, and provides the
-          modules a program can import.
         </p>
       </div>
       <dl class="properties">
@@ -109,10 +102,7 @@ const docs = [
           <dd>{{ p.text }}</dd>
         </div>
       </dl>
-      <p class="code-intro">
-        Where JavaScript would coerce, compare by identity or look on a prototype, staticjs faults; a loop is refused
-        when the program is compiled.
-      </p>
+      <p class="code-intro">What staticjs gives for four valid JavaScript programs:</p>
       <pre class="faults"><code>{{ faults }}</code></pre>
     </section>
 
@@ -129,6 +119,48 @@ const docs = [
           <code>{{ w.code }}</code>
         </a>
       </div>
+    </section>
+
+    <section class="band">
+      <h2 class="section-title">Performance</h2>
+      <p class="prose-p">
+        On a 4-core x86_64 machine, evaluating a compiled small expression from C takes about 0.14 µs, and compiling it
+        takes 6.4 µs. Node’s vm.Script.runInContext takes 1.4 µs for the same expression, and creating a fresh V8
+        context takes 330 µs. Over 33 evaluation cases, Node with its JIT takes 0.43 of staticjs’s time, so Node’s JIT is
+        faster. Node with --jitless takes about as long as staticjs, and QuickJS-NG compiled to WebAssembly takes 4.8
+        times as long.
+        <a :href="withBase('/guide/performance#compared-with-other-engines')">Benchmark report <Icon name="arrow-right" :size="14" /></a>
+      </p>
+      <EngineRace />
+    </section>
+
+    <section class="band">
+      <h2 class="section-title">Limitations</h2>
+      <ul class="limits">
+        <li v-for="l in limits" :key="l">{{ l }}</li>
+      </ul>
+    </section>
+
+    <section class="band">
+      <h2 class="section-title">Comparison</h2>
+      <p class="lede">staticjs is basically CEL with JavaScript syntax and user functions.</p>
+      <table class="compare">
+        <thead>
+          <tr><th scope="col"></th><th scope="col">staticjs</th><th scope="col">QuickJS</th><th scope="col">CEL</th><th scope="col">Starlark</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="v in compare" :key="v.what">
+            <th scope="row">{{ v.what }}</th>
+            <td data-label="staticjs">{{ v.sjs }}</td>
+            <td class="other" data-label="QuickJS">{{ v.quickjs }}</td>
+            <td class="other" data-label="CEL">{{ v.cel }}</td>
+            <td class="other" data-label="Starlark">{{ v.starlark }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <ul class="choose">
+        <li v-for="o in others" :key="o">{{ o }}</li>
+      </ul>
     </section>
 
     <section class="band pipeline-teaser">
@@ -164,47 +196,8 @@ const docs = [
       </ol>
     </section>
 
-    <section class="band">
-      <h2 class="section-title">Performance</h2>
-      <p class="prose-p">
-        On a 4-core x86_64 machine, evaluating a compiled small expression from C takes about 0.14 µs, and compiling it
-        takes 6.4 µs. Node’s vm.Script.runInContext takes 1.4 µs for the same expression, and creating a fresh V8
-        context takes 330 µs. Over 33 evaluation cases, Node with its JIT takes 0.43 of staticjs’s time, so Node’s JIT is
-        faster. Node with --jitless takes about as long as staticjs, and QuickJS-NG compiled to WebAssembly takes 4.8
-        times as long.
-        <a :href="withBase('/guide/performance#compared-with-other-engines')">Benchmark report <Icon name="arrow-right" :size="14" /></a>
-      </p>
-      <EngineRace />
-    </section>
-
-    <section class="band">
-      <h2 class="section-title">Comparison</h2>
-      <p class="lede">staticjs is basically CEL with JavaScript syntax and user functions.</p>
-      <table class="compare">
-        <thead>
-          <tr><th scope="col"></th><th scope="col">staticjs</th><th scope="col">QuickJS</th><th scope="col">CEL</th><th scope="col">Starlark</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="v in compare" :key="v.what">
-            <th scope="row">{{ v.what }}</th>
-            <td data-label="staticjs">{{ v.sjs }}</td>
-            <td class="other" data-label="QuickJS">{{ v.quickjs }}</td>
-            <td class="other" data-label="CEL">{{ v.cel }}</td>
-            <td class="other" data-label="Starlark">{{ v.starlark }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <ul class="choose">
-        <li v-for="o in others" :key="o">{{ o }}</li>
-      </ul>
-    </section>
-
-    <section class="band">
-      <h2 class="section-title">Limitations</h2>
-      <ul class="limits">
-        <li v-for="l in limits" :key="l">{{ l }}</li>
-      </ul>
-      <h3 class="minor-title">Documentation</h3>
+    <section class="band docs-band">
+      <h2 class="section-title">Documentation</h2>
       <ul class="docs">
         <li v-for="d in docs" :key="d.label"><a :href="d.href">{{ d.label }} <Icon name="arrow-right" :size="14" /></a></li>
       </ul>

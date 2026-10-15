@@ -95,7 +95,7 @@ const running = computed(() => phase.value === 'loading' || phase.value === 'run
   <div ref="root" class="race" aria-labelledby="race-title">
     <div class="head">
       <div>
-        <h3 id="race-title" class="race-title">Comparison with QuickJS-NG</h3>
+        <h3 id="race-title" class="race-title">Live measurement</h3>
         <p class="lede">
           staticjs and QuickJS-NG, both compiled to WebAssembly, run eight programs in a web worker, and a row is timed
           only when both engines return the same result.
