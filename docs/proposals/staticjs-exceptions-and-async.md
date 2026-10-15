@@ -162,6 +162,12 @@ An audit of every place in `vm.c` and `builtins.c` that writes
 receiver taken by a method, `Object.assign`'s target and a path's store
 empty nothing a program can read while code runs.
 
+[Rethinking the compiler](staticjs-compiler.md) replaces the compiler's
+rows of this table with one rule: moves decided by liveness over each
+function's bytecode, with the handler as a successor of the protected
+region. The evaluator's rows (the sort's restore, the helpers' fault)
+stay.
+
 The rule of thumb for each window: close it in the compiler when the order
 cannot be seen, otherwise give the unwinder a restore. Every case gets a
 spec case in `mutation.spec` that throws inside it and reads the variable
