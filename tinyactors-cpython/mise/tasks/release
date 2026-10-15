@@ -7,12 +7,14 @@
 #USAGE flag "--skip-containers" help="Leave out the Linux container smoke tests (no Docker)"
 #USAGE flag "--skip-tests" help="Leave this project's test task out of the checks, for a commit whose tests passed already; the wheels' builds, symbol checks and smoke tests still run"
 #USAGE flag "--build-only" help="Only build, verify and smoke-test (no checks, no version set, nothing committed): a look at the packaging before a release"
+#USAGE flag "--resume" help="Finish a publish that stopped during the upload, the push or the GitHub release: upload exactly the files built in build/release/<version>/ (checked against their SHA256SUMS; PyPI skips the ones it has), then push and create the GitHub release; nothing is built again"
 # vim:ft=ruby
 
 # mise run release -- 0.1.0                    check, version, build, verify, smoke-test; publishes nothing
 # mise run release -- 0.1.0 --publish          the same, then tag, upload to PyPI, push, GitHub release
 # mise run release -- --dev --publish          HEAD to PyPI as a prerelease (pip install --pre tinyactors)
 # mise run release -- 0.1.0 --build-only       only the wheels and their checks
+# mise run release -- 0.1.0 --resume           finish a publish that stopped after the upload began
 #
 # docs/adr/0001, decisions 21 to 24, for what is shipped and why; the
 # stages are in mise/wheel.rb. The assets (the wheels and SHA256SUMS) land
@@ -34,6 +36,7 @@ dev = flag.call('dev')
 containers = !flag.call('skip-containers')
 tests = !flag.call('skip-tests')
 build_only = flag.call('build-only')
+resume = flag.call('resume')
 argv = argv.uniq
 fail!('--build-only publishes nothing; leave out --publish') if build_only && publish
 fail!('usage: mise run release -- <version> [--publish | --build-only] | --dev [--publish]') unless argv.size == (dev ? 0 : 1)
@@ -41,10 +44,41 @@ version = dev ? CPython::Wheel.dev_version(PREFIX) : argv.first
 if !dev && Release.parse_version(version)[3]
   fail!("#{version} is a prerelease; a PyPI release is MAJOR.MINOR.PATCH (development builds: --dev)")
 end
+out = CPython::BUILD.join('release', version)
+uv = CPython.pinned('uv')
+
+# A publish that stopped after its upload began: PyPI may have some of
+# the files, and it never takes a file name back, so the rest must be
+# these same bytes, never a new build (the release commit, its time and
+# the README links are in them).
+if resume
+  sums = out.join('SHA256SUMS')
+  fail!("#{sums.relative_path_from(Release::REPO)} is missing: nothing to resume") unless sums.file?
+  wheels = sums.readlines.map do |line|
+    digest, name = line.split
+    file = out.join(name)
+    fail!("#{name} does not match SHA256SUMS: build/release/#{version}/ changed") unless file.file? && Digest::SHA256.file(file).hexdigest == digest
+    file
+  end
+  tag = "#{PREFIX}v#{version}"
+  unless dev
+    tagged = Release.git('rev-parse', '--quiet', '--verify', "#{tag}^{commit}").to_s.strip
+    fail!("the tag #{tag} is not on HEAD; --resume finishes a publish of HEAD") unless tagged == Release.git('rev-parse', 'HEAD').to_s.strip
+  end
+  fail!('fnox has no PYPI_TOKEN (ADR 0001, decision 24)') unless Release.pypi_token?
+  fail!('the upload to PyPI failed again; run --resume once more') unless Release.pypi_publish!(uv, wheels)
+  if dev
+    puts "release: published tinyactors #{version} to PyPI"
+  else
+    Release.push_and_release!(tag: tag, title: TITLE.call(version), notes_file: out.join('notes.md'), assets: [*wheels, sums])
+    puts "release: published tinyactors #{version} to PyPI and GitHub, tagged #{tag}"
+  end
+  exit
+end
+
 if containers && !system('sh', '-c', 'docker info', out: File::NULL, err: File::NULL)
   fail!('docker is not running; it runs the Linux smoke tests (or pass --skip-containers)')
 end
-uv = CPython.pinned('uv')
 
 # 1. Check.
 tag = nil
@@ -52,18 +86,17 @@ unless build_only
   Release.check_tree!(scope: ['tinyactors-cpython', 'tinyactors-core', 'mise']) # the wheel holds core's code
   tag = Release.check_version!(PREFIX, version) unless dev
   Release.check_changelog!(prefix: PREFIX, version: version) unless dev
-  fail!("PyPI has tinyactors #{version} already") if Release.pypi_published?('tinyactors', version)
+  fail!("PyPI has tinyactors #{version} already (a publish that stopped half way: --resume)") if Release.pypi_published?('tinyactors', version)
   fail!('fnox has no PYPI_TOKEN (ADR 0001, decision 24)') if publish && !Release.pypi_token?
   Release.run('mise', 'run', 'test', chdir: CPython::ROOT) if tests
 end
 
-out = CPython::BUILD.join('release', version)
 FileUtils.rm_rf(out)
 FileUtils.mkdir_p(out)
 subject = "release(tinyactors-cpython): v#{version}"
 committed = false
-uploaded = false
-pushed = false
+uploading = false # from the first byte sent to PyPI, nothing is undone
+finished = false
 begin
   # 2. Version: a release commits pyproject.toml's version and tags it
   # before building, so the wheels are built from the tagged commit.
@@ -98,23 +131,25 @@ begin
 
   # 6. Publish: PyPI first, since it never takes a file name back, then
   # the push and the GitHub release.
-  fail!('the upload to PyPI failed; run the release again: files PyPI has are skipped') unless Release.pypi_publish!(uv, wheels.values)
-  uploaded = true
+  uploading = true
+  fail!('the upload to PyPI stopped') unless Release.pypi_publish!(uv, wheels.values)
   if dev
-    puts "release: published tinyactors #{version} to PyPI (a prerelease: pip install --pre tinyactors)"
+    finished = true
+    puts "release: published tinyactors #{version} to PyPI (a development release)"
     exit
   end
   Release.push_and_release!(tag: tag, title: TITLE.call(version), notes_file: out.join('notes.md'), assets: assets)
-  pushed = true
+  finished = true
   puts "release: published tinyactors #{version} to PyPI and GitHub, tagged #{tag}"
 rescue Toolchain::Error => e
   fail!(e.message)
 ensure
-  if committed && !uploaded
+  if committed && !uploading
     Release.undo_commit_and_tag!(subject: subject, tag: tag)
     warn "release: undid the local commit and tag #{tag}; nothing was uploaded or pushed"
-  elsif committed && !pushed
-    warn "release: PyPI has #{version}, but the push or the GitHub release failed: " \
-         "push main and #{tag}, then `gh release create #{tag}` with the files in #{out}"
+  elsif uploading && !finished
+    warn "release: stopped after the upload to PyPI began; #{committed ? "the commit and tag #{tag} and " : ''}" \
+         "the files in #{out.relative_path_from(Release::REPO)} stay. Finish with: " \
+         "mise run //tinyactors-cpython:release -- #{dev ? '--dev' : version} --resume"
   end
 end

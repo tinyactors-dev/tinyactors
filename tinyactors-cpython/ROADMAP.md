@@ -626,9 +626,15 @@ same commit; this machine's (x86_64 Linux, glibc 2.39) installs into
 fresh 3.13.16 and 3.14.8 environments, where the smoke test and all of
 `tests/` pass against the installed wheel. Not checked yet: the Linux
 container smoke tests (no Docker daemon in the session that built it),
-and the macOS wheels on a Mac (their symbols only, decision 14). The
-first release needs its changelog section (the release-changelog skill)
-and `PYPI_TOKEN` in fnox.
+and the macOS wheels on a Mac (their symbols only, decision 14). Reviewed
+against PyPA's specifications and PyPI's rules (2026-10-15): the wheels
+pass `twine check --strict` and `check-wheel-contents`, uv selects each
+on its platform, and the Linux file needs no library and no versioned
+symbol; the review's fixes are in (`--resume` for a stopped upload,
+`LD_BIND_NOW` in the smoke tests, the dev-release wording, the dev
+number's bound, classifiers). The first release needs its changelog
+section (the release-changelog skill) and `PYPI_TOKEN` in fnox, and
+comes before the first dev build.
 
 ## How the work runs
 

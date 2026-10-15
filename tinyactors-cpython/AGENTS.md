@@ -964,8 +964,12 @@ build for) and uv; the C toolchain is the root's.
   wheel, the smoke tests here (with `tests/` against the installed
   wheel) and in glibc and musl containers of each Linux architecture,
   `SHA256SUMS`; with `--publish`, `uv publish` with fnox's `PYPI_TOKEN`,
-  then the push and the GitHub release. A new C library function the
-  extension calls fails the build until `Wheel::LIBC` lists it.
+  then the push and the GitHub release; a publish that stopped after its
+  upload began keeps its commit, tag and files, and `--resume` uploads
+  exactly those (PyPI refuses new bytes under a name it has) and pushes.
+  The smoke tests load the extension with `LD_BIND_NOW=1`. A new C
+  library function the extension calls fails the build until
+  `Wheel::LIBC` lists it.
 
 Put the built extension on the adapter's import path in the conform task
 (`PYTHONPATH`), never in the adapter: its lint refuses `sys.path`.

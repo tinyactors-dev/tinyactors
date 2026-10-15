@@ -53,8 +53,9 @@ macOS 11 or later on Apple silicon and Intel, and Linux on x86-64 and
 arm64 with glibc 2.17 or later or musl 1.1 or later (one file serves
 both). There is no source distribution, so other platforms, and the
 free-threaded interpreters (3.13t, 3.14t), have no install yet.
-Development builds of `main` are prereleases: `pip install --pre
-tinyactors`.
+Development builds of `main` are published as dev releases: once a
+release is out, `pip install --pre tinyactors` asks for the newest of
+them.
 
 ## The API
 

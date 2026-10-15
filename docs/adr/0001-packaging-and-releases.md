@@ -318,8 +318,15 @@ laid out how each library and the addon would ship. It was discussed on
       links no C library and loads no shared library: its C library
       functions and the C API bind to the interpreter's process. So the
       wheel carries both `manylinux_2_17_<arch>` and `musllinux_1_1_<arch>`
-      in its compressed tag set. The math functions it calls are in glibc's
-      libm, which the interpreter links. macOS wheels are
+      in its compressed tag set (PEP 425's compressed tag sets; PEP 600 and
+      656 accept a wheel that meets the policy "by any method", so
+      auditwheel is not run, and cannot read the wheel either: it finds no
+      libc to classify, so a downstream `auditwheel repair` fails). The math
+      functions it calls are in glibc's libm, which CPython's interpreter
+      and libpython link, so they are in the process's global scope; the
+      smoke tests load the extension with `LD_BIND_NOW=1`, so a function
+      the process lacks fails the import. An embedder that loads libpython
+      privately without libm is not covered (unverified). macOS wheels are
       `macosx_11_0_<arch>`.
     - **No free-threaded wheel** until the stable ABI covers it (abi3t,
       3.15).
@@ -334,19 +341,31 @@ laid out how each library and the addon would ship. It was discussed on
     wheel into fresh environments for 3.13 and 3.14, runs a smoke test
     there and the binding's tests against it, and smoke-tests each Linux
     wheel with pip in a glibc and a musl container of its architecture.
+    A publish that stops once its upload began keeps its commit, tag and
+    built files, and `--resume` uploads exactly those files (checked
+    against `SHA256SUMS`; PyPI skips the ones it has) and pushes: PyPI
+    refuses different bytes under a file name it has, and a new build
+    would differ (the commit's time and the README links are in it).
 23. **Development builds are PEP 440 dev releases** (2026-10-15), as
     decision 15 for npm: `mise run //tinyactors-cpython:release -- --dev
     --publish` uploads HEAD as `<next minor>.dev<YYYYMMDD><N, five
-    digits>`, which pip installs only with `--pre`, with no commit, tag or
-    GitHub release. PyPI refuses local versions, so the commit is not in
-    the version.
+    digits>`, with no commit, tag or GitHub release. PyPI refuses local
+    versions, so the commit is not in the version. Once a release is on
+    PyPI, pip and uv pick a dev release only when asked (`--pre`); while
+    only dev releases exist, they pick the newest, so the first release
+    comes before the first dev build. More than 99,999 commits since a
+    release fail the dev number (a sixth digit would sort wrongly).
 24. **The PyPI token is in fnox as `PYPI_TOKEN`** (2026-10-15), as decision
     12 for npm: the release passes it to `uv publish` as
     `UV_PUBLISH_TOKEN` inside a shell, so it never reaches the task's
     process, a file or a command line. A release uploads to PyPI before it
-    pushes the tag: PyPI never takes a file name back, so a failed upload
-    undoes the local commit and tag, and a failed push after an upload
-    leaves them for the maintainer to push.
+    pushes the tag: PyPI never takes a file name back, so only a failure
+    before the upload undoes the local commit and tag (decision 22 for
+    one after). A token, not trusted publishing, since releases are built
+    on the maintainer's machine (decision 1) and trusted publishing needs
+    a CI's identity; so the wheels carry no PEP 740 attestations. The
+    first upload needs an account-wide token, replaced afterwards by one
+    scoped to the project.
 
 ## Still open
 

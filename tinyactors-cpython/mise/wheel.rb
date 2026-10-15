@@ -148,6 +148,7 @@ module CPython
       lines = ['Metadata-Version: 2.4', "Name: #{project.fetch('name')}", "Version: #{version}",
                "Summary: #{project.fetch('description')}",
                "Keywords: #{project.fetch('keywords', []).join(',')}",
+               *project.fetch('classifiers', []).map { |classifier| "Classifier: #{classifier}" },
                *urls.map { |label, url| "Project-URL: #{label}, #{url}" },
                "License-Expression: #{project.fetch('license')}", 'License-File: LICENSE',
                "Requires-Python: #{project.fetch('requires-python')}",
@@ -183,10 +184,13 @@ module CPython
     # Release.dev_version's <next minor>-dev.<date>.<N>.g<sha> becomes
     # <next minor>.dev<date><N, five digits>, which sorts the same way on
     # linear main; PyPI takes no local version, so the sha is left out.
-    # pip installs it only when asked for a prerelease (--pre).
+    # Once a release is on PyPI, pip and uv pick a dev release only when
+    # asked (--pre); while there is none, they pick the newest dev release.
     def dev_version(prefix)
       semver = Release.dev_version(prefix)
       match = /\A(\d+\.\d+\.\d+)-dev\.(\d{8})\.(\d+)\.g\h+\z/.match(semver) or fail!("cannot read #{semver}")
+      # six digits would sort a later commit of the same day before an earlier one
+      fail!("#{match[3]} commits since the last release do not fit a dev number: release first") if match[3].to_i >= 100_000
       format('%<base>s.dev%<date>s%<count>05d', base: match[1], date: match[2], count: match[3].to_i)
     end
 
@@ -222,14 +226,20 @@ module CPython
           CPython.run(uv, 'venv', '--quiet', '--python', request, venv)
           python = File.join(venv, 'bin', 'python')
           CPython.run(uv, 'pip', 'install', '--quiet', '--python', python, '--no-deps', wheel.to_s)
-          CPython.run(python, '-I', ROOT.join('tools/smoke.py').to_s)
+          CPython.run(python, '-I', ROOT.join('tools/smoke.py').to_s, env: BIND_NOW)
           next unless tests && index.zero?
 
           puts "wheel: tests/ against the installed wheel, Python #{request}"
-          CPython.run(python, '-m', 'unittest', 'discover', '-q', '-s', 'tests', '-t', 'tests')
+          CPython.run(python, '-m', 'unittest', 'discover', '-q', '-s', 'tests', '-t', 'tests', env: BIND_NOW)
         end
       end
     end
+
+    # The smoke tests resolve every symbol when the extension is loaded,
+    # not when a function is first called: a C library function the
+    # interpreter's process lacks (glibc's libm, if an interpreter did not
+    # load it) fails the import, not a later run. macOS's dyld ignores it.
+    BIND_NOW = { 'LD_BIND_NOW' => '1' }.freeze
 
     # The images a Linux wheel is smoke-tested in, one per C library.
     CONTAINERS = { 'glibc' => 'python:3.13-slim', 'musl' => 'python:3.13-alpine' }.freeze
@@ -242,7 +252,7 @@ module CPython
         CONTAINERS.each do |libc, image|
           script = 'pip install --quiet --no-index --no-deps /w/"$0" && python -I /t/smoke.py'
           CPython.run('docker', 'run', '--rm', '--platform', platform,
-                      '-e', 'PIP_ROOT_USER_ACTION=ignore', '-e', 'PIP_DISABLE_PIP_VERSION_CHECK=1',
+                      '-e', 'PIP_ROOT_USER_ACTION=ignore', '-e', 'PIP_DISABLE_PIP_VERSION_CHECK=1', '-e', 'LD_BIND_NOW=1',
                       '-v', "#{wheel.dirname}:/w:ro", '-v', "#{ROOT.join('tools')}:/t:ro",
                       image, 'sh', '-c', script, wheel.basename.to_s)
           puts "wheel: #{name} on #{libc} (#{image}, #{platform}): ok"
