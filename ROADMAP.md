@@ -967,10 +967,15 @@ In staticjs, ADR 0013 (the JavaScript package, `@tinyactors/staticjs`):
 2. `staticjs-js/`: done for a first release: its `AGENTS.md`,
    `docs/api-map.md`, the C layer, the conversions and their tests, `load`
    for Node and browsers with a Chromium test, and packing checked by
-   installing the tarball. Left: its first changelog section, at release.
-3. `staticjs/examples/wasm/` and the wasm guide give way to the package.
+   installing the tarball. Released as 0.9.0 (a staged publish), with its
+   changelog section.
+3. `staticjs/examples/wasm/` and the wasm guide give way to the package:
+   done.
 4. One full `bench-compare` of the batch (the commit before R6 against
-   the last), last of all (staticjs `AGENTS.md`, "Benchmarks").
+   the last): done. It flagged `vm.reuse` (-13.6% in every run), which an
+   instruction count bisected to R1 and its fix brought back within 3
+   instructions an evaluation; the writer's 24 bytes more per writer are
+   its format and error fields. The other flagged rows were noisy.
 
 ## Deferred
 

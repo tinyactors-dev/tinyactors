@@ -34987,7 +34987,7 @@ void sjs_vm_reset(sjs_vm *vm) {
 
 /* sjs_vm_start without a program: call params->function with
  * params->arguments, as the program's frame 0. */
-static sjs_result start_call(sjs_vm *vm, const sjs_run_params *params) {
+__attribute__((noinline, cold)) static sjs_result start_call(sjs_vm *vm, const sjs_run_params *params) {
     sjs_value function = params->function;
     if (function.kind != SJS_FUNCTION || function.internal != 0 || function.as.heap->type != SJS_HEAP_CLOSURE ||
         params->global_count != 0 || (params->arguments == NULL && params->argument_count != 0)) {
@@ -35075,7 +35075,7 @@ sjs_result sjs_vm_take_result(sjs_vm *vm, sjs_value *out) {
     if (vm == NULL || out == NULL || vm->status != VM_DONE) return SJS_ERR_INVALID;
     /* A module's value is its namespace, which JavaScript seals: it takes
      * no new key and loses none (Object.isSealed). */
-    if (!vm->calling && vm->program->goal == SJS_GOAL_MODULE && vm->result.kind == SJS_OBJECT) {
+    if (vm->result.kind == SJS_OBJECT && !vm->calling && vm->program->goal == SJS_GOAL_MODULE) {
         vm->result.as.heap->flags |= SJS_INTEGRITY_SEALED;
     }
     *out = vm->result;
