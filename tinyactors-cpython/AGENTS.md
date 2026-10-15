@@ -951,8 +951,21 @@ build for) and uv; the C toolchain is the root's.
   named by `MILESTONE` in `mise/cpython.rb` once the adapter exists. Its
   `#MISE sources` list this project's files, core's and the suite's. An
   exhaustive test goes behind `--full` (root `AGENTS.md`).
-- `mise run wheel`: one abi3 wheel per platform; it aborts until
-  packaging is built.
+- `mise run wheel [target...]`: one abi3 wheel per native release target
+  (`mise/wheel.rb`; root `docs/adr/0001`, decisions 21 to 24), built with
+  the root's zig against the target's own CPython 3.13 headers, checked
+  by its symbols (exports `PyInit_tinyactors` only, loads no library,
+  leaves undefined only the C API and `Wheel::LIBC`), zipped
+  reproducibly into `build/wheels/`; this machine's is installed into
+  fresh 3.13 and 3.14 environments and smoke-tested (`tools/smoke.py`).
+- `mise run release -- <version> [--publish] | --dev [--publish]`: the
+  checks (a clean tree, the version, the changelog, PyPI, the test task),
+  the version committed and tagged `tinyactors-cpython/v<version>`, every
+  wheel, the smoke tests here (with `tests/` against the installed
+  wheel) and in glibc and musl containers of each Linux architecture,
+  `SHA256SUMS`; with `--publish`, `uv publish` with fnox's `PYPI_TOKEN`,
+  then the push and the GitHub release. A new C library function the
+  extension calls fails the build until `Wheel::LIBC` lists it.
 
 Put the built extension on the adapter's import path in the conform task
 (`PYTHONPATH`), never in the adapter: its lint refuses `sys.path`.
@@ -1003,6 +1016,7 @@ conform/             the suite's adapter, python -m conform; not in the wheel
 tests/               what the suite cannot see: threads, GC, asyncio, refusals, stale views
 tools/lint/          rules/, tests/, utils/ (ast-grep)
 mise/cpython.rb      what the tasks share
-mise/tasks/          build, test, conform, lint, wheel
+mise/wheel.rb        the wheel: the release build per target, its checks, the zip, the smoke tests
+mise/tasks/          build, test, conform, lint, wheel, release
 build/               core's amalgamation and the extension (not in git)
 ```

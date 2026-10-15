@@ -44,6 +44,18 @@ when the reply is drained, so a script drives the host once more to read
 it (above: one `run_until_idle()` for the event, one for the reply).
 Under asyncio, `await host.idle()` does the same.
 
+## Installing
+
+    pip install tinyactors
+
+One wheel per platform, for CPython 3.13 and later (the stable ABI):
+macOS 11 or later on Apple silicon and Intel, and Linux on x86-64 and
+arm64 with glibc 2.17 or later or musl 1.1 or later (one file serves
+both). There is no source distribution, so other platforms, and the
+free-threaded interpreters (3.13t, 3.14t), have no install yet.
+Development builds of `main` are prereleases: `pip install --pre
+tinyactors`.
+
 ## The API
 
 - `compile_charts(sources, resolver=None) -> Compiled`: `(name, text)`
@@ -665,6 +677,14 @@ documentation has every key):
 free-threaded test interpreter; `mise run test` lints, runs `tests/` on
 both, and runs the conformance suite's milestone set against the adapter
 (`python -m conform`) on both datamodels.
+
+`mise run wheel` builds the wheels, one per platform, with zig from any
+machine, into `build/wheels/`, and smoke-tests this machine's in fresh
+environments for 3.13 and 3.14. `mise run release -- <version>` checks,
+builds, verifies and smoke-tests a release, in Linux containers too
+(Docker; `--skip-containers` leaves them out); `--publish` tags it,
+uploads it to PyPI and creates the GitHub release, and `--dev --publish`
+uploads `main` as a prerelease.
 
 ## License
 

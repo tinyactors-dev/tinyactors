@@ -8,7 +8,7 @@ require 'tmpdir'
 
 # What every project's release task shares (docs/adr/0001-packaging-and-releases.md):
 # the checks before a release, versions and tags, release notes from the
-# Conventional Commits, SHA256SUMS, the npm credentials and the GitHub
+# Conventional Commits, SHA256SUMS, the npm and PyPI credentials and the GitHub
 # release. A project's task says what to build and publish; this module
 # knows nothing about any one project.
 module Release
@@ -222,6 +222,35 @@ module Release
     with_npm_userconfig do |userconfig|
       system('fnox', 'exec', '--', 'npm', 'whoami', '--userconfig', userconfig, out: File::NULL, err: File::NULL)
     end
+  end
+
+  # Whether fnox has a non-empty PYPI_TOKEN (ADR 0001, decision 24), tested
+  # by the shell, never read here.
+  def pypi_token?
+    system('fnox', 'exec', '--', 'sh', '-c', 'test -n "$PYPI_TOKEN"', out: File::NULL, err: File::NULL)
+  end
+
+  # Whether PyPI has `name` at `version`: false for a 404, which includes a
+  # project that was never published.
+  def pypi_published?(name, version)
+    require 'net/http'
+    response = Net::HTTP.get_response(URI("https://pypi.org/pypi/#{name}/#{version}/json"))
+    return true if response.is_a?(Net::HTTPSuccess)
+    return false if response.code == '404'
+
+    fail!("PyPI answered #{response.code} for #{name} #{version}")
+  end
+
+  # Uploads `files` to PyPI with `uv` (a path), the token passed from fnox's
+  # PYPI_TOKEN to uv's UV_PUBLISH_TOKEN inside the shell, so it never
+  # reaches this process, a file or a command line. --check-url skips the
+  # files PyPI has already, so a publish that stopped half way runs again.
+  # Answers whether it succeeded; PyPI never takes a file name back, so a
+  # failure is not undone.
+  def pypi_publish!(uv, files)
+    puts "$ uv publish #{files.map { |file| File.basename(file) }.join(' ')}"
+    script = 'UV_PUBLISH_TOKEN="$PYPI_TOKEN" exec "$0" publish --check-url https://pypi.org/simple/ "$@"'
+    system('fnox', 'exec', '--', 'sh', '-c', script, uv.to_s, *files.map(&:to_s), chdir: REPO.to_s)
   end
 
   # Undoes commit_and_tag! when nothing was published: deletes the tag and

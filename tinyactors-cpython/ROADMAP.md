@@ -2,7 +2,9 @@
 
 **Step 8.4 is implemented and measured (2026-10-14), most of step 8.5
 is done, and the API review is applied (2026-10-15; below, "The API
-review"); next: packaging, the examples and the release tasks.** The first binding (M1 of the
+review"), and packaging is built (2026-10-15: `mise run wheel`, `mise
+run release`; below, "Packaging"); next: the first release, and the
+examples.** The first binding (M1 of the
 earlier plan, 2026-10-12) was removed (`6426816a`); the rewrite follows
 the design of [AGENTS.md](AGENTS.md), with the changes below ("Decided in
 8.4, for the API review"). The design (2026-10-13) is in [AGENTS.md](AGENTS.md) ("The API",
@@ -613,6 +615,20 @@ Then, to complete the surface against core's public headers:
 `ta_host_segment_count` (`host_stats` has `segments`) and
 `ta_host_snapshot_segments` (`Host.restore` reads the images from the
 pack).
+
+### Packaging (2026-10-15) — built, not yet released
+
+One abi3 wheel per native release target (root `docs/adr/0001`,
+decisions 21 to 24): `mise run wheel` and `mise run release`, through
+`mise/wheel.rb`. Checked here: all four wheels build from Linux, pass
+`twine check --strict`, and are byte-identical when built again from the
+same commit; this machine's (x86_64 Linux, glibc 2.39) installs into
+fresh 3.13.16 and 3.14.8 environments, where the smoke test and all of
+`tests/` pass against the installed wheel. Not checked yet: the Linux
+container smoke tests (no Docker daemon in the session that built it),
+and the macOS wheels on a Mac (their symbols only, decision 14). The
+first release needs its changelog section (the release-changelog skill)
+and `PYPI_TOKEN` in fnox.
 
 ## How the work runs
 

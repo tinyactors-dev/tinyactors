@@ -301,6 +301,53 @@ laid out how each library and the addon would ship. It was discussed on
       `fd_close` import is defined there by its linker name; the release's
       import check catches a zig upgrade that adds another.)
 
+21. **The Python package is one abi3 wheel per native target** (2026-10-15).
+    `tinyactors` on PyPI ships `cp313-abi3` wheels for the four native
+    release targets, built by `mise run //tinyactors-cpython:release` with
+    zig like every other binary (decision 5), and nothing else:
+    - **No source distribution.** The extension builds from core's
+      amalgamation with the repository's toolchain; an sdist would need a
+      `[build-system]` that compiles C on the user's machine, which this
+      repository does not support. A platform without a wheel gets no
+      install.
+    - **Headers per target.** The extension compiles against the target's
+      own CPython 3.13 headers (python-build-standalone's build for that
+      platform, installed by uv without its executables): `pyconfig.h`
+      differs between macOS and Linux in sizes and alignments.
+    - **One Linux file for glibc and musl.** As the addon (decision 10), it
+      links no C library and loads no shared library: its C library
+      functions and the C API bind to the interpreter's process. So the
+      wheel carries both `manylinux_2_17_<arch>` and `musllinux_1_1_<arch>`
+      in its compressed tag set. The math functions it calls are in glibc's
+      libm, which the interpreter links. macOS wheels are
+      `macosx_11_0_<arch>`.
+    - **No free-threaded wheel** until the stable ABI covers it (abi3t,
+      3.15).
+22. **The wheel is written by the release, not a build backend**
+    (2026-10-15): a reproducible zip (fixed order, the commit's time) of
+    the extension, `METADATA` (2.4, from `pyproject.toml`, the README as
+    its description with links to the repository at the commit),
+    `WHEEL`, the license and `RECORD`, in `tinyactors-cpython/mise/wheel.rb`.
+    The release checks each extension by its symbols (it exports only
+    `PyInit_tinyactors`, loads no library, leaves undefined only the C API
+    and a listed set of C library functions), installs this machine's
+    wheel into fresh environments for 3.13 and 3.14, runs a smoke test
+    there and the binding's tests against it, and smoke-tests each Linux
+    wheel with pip in a glibc and a musl container of its architecture.
+23. **Development builds are PEP 440 dev releases** (2026-10-15), as
+    decision 15 for npm: `mise run //tinyactors-cpython:release -- --dev
+    --publish` uploads HEAD as `<next minor>.dev<YYYYMMDD><N, five
+    digits>`, which pip installs only with `--pre`, with no commit, tag or
+    GitHub release. PyPI refuses local versions, so the commit is not in
+    the version.
+24. **The PyPI token is in fnox as `PYPI_TOKEN`** (2026-10-15), as decision
+    12 for npm: the release passes it to `uv publish` as
+    `UV_PUBLISH_TOKEN` inside a shell, so it never reaches the task's
+    process, a file or a command line. A release uploads to PyPI before it
+    pushes the tag: PyPI never takes a file name back, so a failed upload
+    undoes the local commit and tag, and a failed push after an upload
+    leaves them for the maintainer to push.
+
 ## Still open
 
 - **A signature on `SHA256SUMS`**, for example `ssh-keygen -Y sign` with
