@@ -2,337 +2,281 @@
 
 **Status:** Sketch (2026-10-15). A design for discussion; nothing here is
 decided or scheduled.
-**Touches:** `staticjs/src/compiler.c` and `vm.c` (replaced),
-`matcher.c` (retargeted from events to the IR), the loop frames in
-`builtins.c`, the documented fuel costs, and [exceptions and
-async](staticjs-exceptions-and-async.md), which this design absorbs. The
-parser, its events and the values stay.
+**Touches:** `staticjs/src/compiler.c` and `vm.c` (replaced in the end),
+`value.c` and `internal.h` (hot helpers), the loop frames in
+`builtins.c`, `matcher.c` (retargeted to the IR), the inspection API,
+and [exceptions and async](staticjs-exceptions-and-async.md), which this
+design absorbs. The parser, its events and the values stay.
 **Not a plan:** ADRs and roadmaps win.
 
 ## History of this document
 
-A first draft proposed buffering each function's events before emitting.
-A review refuted it against the code. A second draft kept the streaming
-compiler and decided moves by liveness over its bytecode, which is the
-cheapest fix for moves. This third draft starts from what staticjs needs
-and from where evaluation time goes, with a rewrite allowed. Measured,
-the cost is in the evaluator's execution model, not in the compiler's
-decisions. So the two are designed as one.
+- **First draft:** buffer each function's events before emitting.
+  Refuted against the code.
+- **Second draft:** keep the streaming compiler, and decide moves by
+  liveness over its bytecode. That is the cheapest fix for moves.
+- **Third draft:** with a rewrite allowed, start from what staticjs needs
+  and where evaluation time goes. A review then measured prototypes
+  against it. This version keeps what survived:
+  - the time per bytecode is mostly the operations' own work, not
+    dispatch;
+  - the register evaluator's gain is real but smaller than the third
+    draft implied: about 4 times on callbacks, about 2 on guards;
+  - fuel per block is not worth its broken contracts;
+  - inlined callbacks need loops in the IR and frames for inspection.
 
 ## Whom it serves, who pays, what is out
 
 - **First, the application developer and the operator:** guards and
-  callbacks that cost a fraction of what they cost now. The measurements
-  below locate the cost.
-- **Then the maintainers:** one place, an IR, where moves, ownership,
-  shapes, `try`, `finally` and `await` are decided by the same analyses,
-  instead of a deferral per feature.
+  callbacks that cost a fraction of what they cost now.
+- **Then the maintainers:** one IR where moves, ownership, shapes, `try`,
+  `finally` and `await` are decided by the same analyses, instead of a
+  deferral per feature.
 - **Who pays:**
-  - a rewrite of the compiler's back half and of the evaluator;
-  - every documented fuel cost changes, as fuel would count blocks of new
-    instructions (determinism stays);
-  - compile memory for one function's tree at a time.
-- **Out of scope:** the parser and the language (what staticjs accepts and
-  refuses); a JIT; a garbage collector; loops in the language (the design
-  could compile them, the language does not have them). NaN-boxing values
-  is listed as a separate question: it changes the public `sjs_value`.
+  - the work in stages: helpers first, then the evaluator, then the
+    compiler;
+  - fuel costs change where the compiler fuses instructions;
+  - compile memory for one function's tree at a time;
+  - code size, where a callback is inlined and also kept as a function.
+- **Out of scope:** the parser and the language; a JIT; a garbage
+  collector; loops in the language. NaN-boxed values are a separate
+  question.
 
 ## Requirements, from the repository
 
-1. **Push, never pull** (`staticjs/AGENTS.md`). The parser is pushed bytes
-   and pushes events to a sink. The compiler is a sink. It may hold what it
-   has received; it never asks for more.
-2. **No recursion, no C library, at most three parameters**
-   (`staticjs/AGENTS.md`). Every tree walk uses an explicit stack.
-3. **Fuel is deterministic, and an evaluation pauses and resumes anywhere**
-   (`docs/guide/embedding.md`, "Evaluating, on fuel"). The same program on
-   the same inputs uses the same fuel on every machine.
-4. **The rule:** the same result as JavaScript, or a fault. `diff-node`
-   checks it.
-5. **Ownership:** values are never changed once shared. A function changes
-   a value only through a variable of its own that holds it alone. A last
-   read moves (`docs/internals/mutation.md`).
-6. **Every evaluation ends:** forward jumps, no re-entry. With async, also
-   the lineage rule of the exceptions sketch.
-7. **Errors:** a syntax error only where JavaScript refuses, "unsupported"
-   otherwise, the first error found.
-8. **Public surface:** the event sink, function indices in source order
-   (`include/staticjs.h:930`), frames for inspection, `sjs_value`.
-9. **Coming:** `try`/`finally`, `throw`, `async`/`await` with suspension to
-   the host ([exceptions and async](staticjs-exceptions-and-async.md)).
+1. **Push, never pull** (`staticjs/AGENTS.md`). The compiler is a sink. It
+   may hold what it received; it never asks for more.
+2. **No recursion, no C library, at most three parameters.**
+3. **Fuel is deterministic**, an evaluation pauses and resumes anywhere,
+   and a run uses at most 2 units more than it was given
+   (`include/staticjs.h:699`, `docs/guide/embedding.md`).
+4. **Inspection:** a callback of `map` is a frame, stepped one unit at a
+   time (`include/staticjs.h:697`, `embedding.md:639`, `api_test.c:3901`).
+5. **The rule:** the same result as JavaScript, or a fault.
+6. **Ownership:** values never change once shared, and the last read
+   moves (`docs/internals/mutation.md`).
+7. **Every evaluation ends.**
+8. **Shapes:** `no_shapes` gives the same program but for the tags, and
+   never less fuel (`include/staticjs.h:659`, `tests/spec_test.c:15`).
+9. **Errors:** a syntax error only where JavaScript refuses, the first
+   error found.
+10. **Coming:** `try`, `throw`, `async`, `await`.
 
 ## Where the time goes today
 
-Machine instructions per evaluation, counted with callgrind. The driver
-compiled once and ran each program 2,000 or 20,000 times; the counts are
-differences between runs, so start-up is excluded. Built with clang 18
-`-O2` on x86_64.
+Measured with callgrind. A driver compiled the program once and ran it
+2,000 or 20,000 times; the counts are differences between runs, so they
+exclude start-up. Built with clang 18 `-O2` on x86_64, and reproduced by
+the review.
 
-| Program | Fuel | Instructions | Per fuel unit |
+| Program | Fuel | Instructions | Dispatch and fuel | Start, reset, take |
+|---|---|---|---|---|
+| `_event.name === "notify.ack"` | 5 | 802 | about 154 (19%) | about 225 (28%) |
+| `pending.has(_event.data.id) && _event.name === "notify.ack"` | 13 | 1,703 | 343 (20%) | about 225 |
+| `xs.map(x => x * 2 + 1)`, per element | 7 | 663 | 180 (27%) | none |
+
+What the rest is:
+
+- **The operations' own work.**
+  - `===` on two strings costs about 150. `sjs_str_equal`
+    (`src/internal.h:21`) compares a byte at a time, and
+    `sjs_is_primitive` and `sjs_boolean` are calls out of line.
+  - `pending.has(...)` costs 331 inclusive: the call protocol about 150,
+    `method()` 74, `sjs_builtin_call` 57, `sjs_set_contains` 106.
+  - `sjs_undefined`, `sjs_boolean`, `sjs_is_primitive` and `sjs_truthy`
+    are functions in `value.c`, not inline. About 40 instructions per
+    guard.
+- **Starting an evaluation.**
+  - `sjs_vm_start` runs `sjs_vm_reset` every time. Reset releases the
+    program, and start retains it again; reset also cuts the stack and
+    releases the held globals.
+  - Start then checks each global and initialises the frame.
+- **The loop protocol of a callback**, per element: about 180 in
+  `sjs_loop_step` and `sjs_vm_call_back`, and about 26 for the loop
+  frame's own turn of the run loop.
+- **Shapes' C paths go around the run loop once per element.** The
+  reduce-sum shape costs 136 per element, about 64 of it that
+  turnaround; the filter shape costs 232.
+
+## What each change buys, measured or estimated
+
+Per element of `xs.map(x => x * 2 + 1)` (663 today) and per evaluation
+of the bench's guard (1,703 today):
+
+| Change | map | guard | How known |
 |---|---|---|---|
-| `_event.name === "notify.ack"` | 5 per evaluation | 802 per evaluation | 160 |
-| `pending.has(_event.data.id) && _event.name === "notify.ack"` (the bench's guard) | 13 per evaluation | 1,703 per evaluation | 131 |
-| `xs.map(x => x * 2 + 1)` | 7 per element | 663 per element | 95 |
+| Hot helpers inline, strings compared a word at a time, a fast start for an idle evaluator | small | about 150 to 250 less | estimated from the profile |
+| Shapes step several elements in one turn of the run loop | shaped callbacks about half | none | estimated |
+| Run-loop state in locals, today's stack bytecode | at most about 140 less | at most about 340 less | upper bound: all of dispatch's share |
+| Callbacks inlined into a loop, today's bytecode | about 420 (1.6x) | none | estimated |
+| Both of the above | about 300 (2.2x) | | estimated |
+| **Register bytecode, state in locals, inlined loop** | **153 (4.3x)** | **about 790 to 950 (1.8x to 2.2x)** | **prototypes** (map: real `sjs_value`s and arrays; guard: reads borrowed, `set_contains` direct) |
+| Fuel per block instead of per instruction | 8 less (5%) | | prototype |
 
-Where it goes:
+So:
 
-- **The small guard**, per evaluation:
-  - `sjs_vm_run` takes 596 instructions for five bytecodes;
-  - `sjs_vm_start` takes 166;
-  - `sjs_vm_reset` and `sjs_vm_take_result` take about 60.
-- **`map`**, per element:
-  - the loop protocol takes about 245: `sjs_loop_step` 177 inclusive and
-    `sjs_vm_call_back` 68;
-  - the callback's six bytecodes (`LOCAL`, `NUMBER`, `MULTIPLY`, `NUMBER`,
-    `ADD`, `RETURN`) and their frame take about 420, about 70 per
-    bytecode.
-
-**Why each bytecode costs 70 to 100 instructions.** The dispatch loop
-keeps its state in memory, not in registers (`src/vm.c:1724` to `:1741`,
-`:1144` to `:1149`). Every instruction:
-
-- reads `vm->status`, `vm->fuel_used`, `vm->frame_count` and
-  `vm->frames`;
-- tests the frame's kind;
-- reloads `f->program->code` and `f->pc`;
-- stores `vm->op_pc` and `f->pc`;
-- pushes and pops 16-byte values through `vm->stack` with a capacity
-  check.
-
-The hottest lines of the `map` run are the frame fetch (8.5 M of 134 M
-instructions), the `switch` (7.3 M), the status, fuel and kind checks,
-and `cut`'s release loop. Every value passes through memory between
-instructions.
-
-**What this says about the compiler.** No compiler can fix this while it
-targets this evaluator: a perfect move analysis saves reference counts,
-which are a small part of these numbers. The compiler's real job is to
-produce code that an evaluator with its state in registers runs in fewer,
-larger instructions, and to remove the per-element call protocol where it
-can.
+- The first three rows are cheap, independent of any new compiler, and
+  worth doing first.
+- The register evaluator with inlined loops is the only change that
+  reaches 4 times on callbacks. On guards it does about what the cheap
+  rows do together.
+- Fuel per block is not worth its broken contracts.
 
 ## The architecture
 
 ```
-bytes ─push─▶ parser ─events─▶ front end ─tree per function─▶ middle end (IR passes) ─▶ back end ─▶ program
-                 │                (names, early errors,          (ownership, moves,        (register
-                 └─events─▶ other sinks   constants)              shapes, liveness,         bytecode,
-                                                                   allocation)              tables)
+bytes ─push─▶ parser ─events─▶ front end ─tree per function─▶ middle end (IR) ─▶ back end ─▶ program
+                 └─events─▶ other sinks   (names, early errors)    (ownership, shapes,    (register
+                                                                    inlining, liveness,    bytecode, tables)
+                                                                    allocation)
 ```
 
-### Front end: a tree per function, built from the events
+### Front end: a tree per function
 
-The compiler stays a sink. It builds each function's syntax tree in an
-arena: nodes of 16 bytes, children as indices, positions as byte
-offsets, with a line table for errors. It also does what must stay in
-event order:
+The compiler stays a sink.
 
-- **Names and early errors, as the events arrive.** Every name is
-  declared before it is used, or the program is refused, so names
-  resolve in one forward pass. The first syntax or name error still stops
-  the parser at the event that shows it (requirement 7).
-- **Function indices** are taken when a function begins, in source order
-  (requirement 8).
-- **Literals of constants fold as they close.** `[1, 2, 3]` becomes one
-  constant, rather than `ARRAY_NEW` and a push per element as now
-  (`src/compiler.c:3110`). It costs less at run time and in the tree. A
-  literal bound to a variable that a mutation reaches must be a new value
-  nothing else holds. The ownership pass marks it, and the back end
-  emits a copy of the constant for it, made once per evaluation.
+- **It builds each function's syntax tree in an arena:** 16-byte nodes,
+  children as indices, byte offsets and a line table.
+- **Names and early errors stream:** a name must be declared before it is
+  used, so names resolve as the events arrive, and the first syntax or
+  name error still stops the parser where it shows (requirement 9).
+- **Function indices are taken in source order**, when a function begins.
+- **Each function is compiled to its own code when it ends**, with a
+  lookup of positions per function. The public API exposes positions
+  only (`sjs_program_position`), so this is internal.
+- **A module's top level is compiled at its end**, where its exports and
+  last reads are known, as now.
+- **Refusals for ownership** are decided at a function's end, so a later
+  syntax error in the same function now wins over them. That is the
+  order JavaScript reports.
+- **Literals of constants are not folded in general.** A folded literal
+  is held by the program too, so every run-time uniqueness check fails:
+  - `Object.freeze({a: 1})`;
+  - `[1, 2].reduce((acc, x) => { acc.push(x); return acc; }, [])`;
+  - `g([1])`, where `g` pushes onto its parameter;
+  - a literal returned from an exported function.
 
-The tree, unlike the events, gives each node its children. That removes
-what made the first draft fail:
+  A literal folds only when every use in its function only reads it
+  (`[1, 2, 3].includes(x)`).
 
-- a path's root is found from the node, not by event order;
-- a call knows its callee;
-- `ends_in_return` and `assign_callee` become questions about a node
-  rather than about code already emitted.
+### Middle end: ANF with join points, loops structured
 
-Each function is compiled to its own code array when it ends, so a nested
-function's code no longer sits inline in its parent's code behind a
-`JUMP`. The parent's tree keeps one node for the nested function, with
-its index and its captures.
+- **The IR.** A small first-order IR in A-normal form, with join points
+  (second-class continuations that compile to jumps; Kennedy, ICFP 2007).
+- **Structured loops.** The language's control flow is a DAG, but inlined
+  callbacks bring loops into the IR. Their accumulators, reduce's first,
+  are carried from one iteration to the next. So the IR has structured
+  loops with loop-carried values (φ at the loop's head), and liveness
+  takes a fixed point over each loop: two walks of its body, as loops
+  are structured and do not nest more deeply than the callbacks do.
+- **`try`** gives every call and throw inside it a second edge, to the
+  handler's join point. **`finally`** is a join point that takes a
+  completion record. **`await`** ends a block.
 
-A module's top level holds declarations only. It is compiled once, at the
-module's end. That is the point where its exports and its last reads are
-known; today's compiler decides them there too.
+The passes, in this order, because ownership must see the inlined code:
 
-### Middle end: an IR with join points, ownership made explicit
+1. **Shapes and inlining** (the iburg matcher, on the IR's trees):
+   - It tags a callback with its shape, as now.
+   - It inlines a callback literal into the loop of `map`, `filter`,
+     `reduce`, `some`, `every`, `find` and their kin. The loop runs when
+     the receiver is an array at run time, arrays with extra properties
+     included (`"ab".match(/a/).map(...)` works today); otherwise it
+     falls back to the call.
+   - The inlined body binds every parameter the callback declares, per
+     element: the element, the index, the array, rest parameters.
+   - Inlining is a rewrite, not a shape: `no_shapes` keeps it, so the two
+     builds stay the same program but for tags (requirement 8).
+2. **Ownership (Perceus;** Reinking et al., PLDI 2021, and Lean 4's IR,
+   Ullrich and de Moura, IFL 2019**):**
+   - Liveness, with exceptional edges and loop fixed points. A use after
+     which a value is dead moves it.
+   - Inlined parameters borrow from the array. A move of one takes a
+     reference first, as `sjs_vm_call_back` does today (`src/vm.c:919`).
+   - The rules of `mutation.md` become checks on the graph, and what it
+     cannot prove stays a run-time check.
+   - Every row of the exceptions sketch's move table is the one rule "a
+     handler is a successor".
+3. **Reuse:** a dropped value of the right size feeds a new one.
+4. **Register allocation:** linear scan with loop-extended intervals.
+   It records the live registers at each `await` (what an activation
+   saves) and at each handler.
 
-Each function lowers to a small first-order IR in A-normal form:
+### Back end and evaluator
 
-- Every intermediate value has a name.
-- Control is blocks joined by **join points**: second-class continuations,
-  which compile to jumps, as in Kennedy, "Compiling with continuations,
-  continued" (ICFP 2007), and Guile's CPS soup.
-- Every jump goes forward, so the graph is a DAG, and SSA form comes for
-  free: a `let` assigned in two branches gets a φ at the join (Braun et
-  al., "Simple and efficient construction of static single assignment
-  form", CC 2013, with every block sealed at once).
-- `try` gives every call and throw inside it a second edge, to the
-  handler's join point. `finally` is a join point that receives a
-  completion record (`tinyjs.md`, layer 1, designs the same).
-- `await` is an instruction that ends its block. Its successor block is
-  the resumption.
-
-Passes, each a walk with an explicit stack, in order:
-
-1. **Ownership (Perceus).** Reinking, Xie, de Moura and Leijen, PLDI
-   2021, as `docs/proposals/staticjs.md`, stage 3, already cites.
-   - Liveness over the DAG, exception edges included, in one backward
-     walk. A use where the value is dead after it consumes the
-     reference: a move. Every other use borrows or duplicates.
-   - The ownership rules of `mutation.md` become checks on this graph:
-     - "Captured before or after" means the value flows into a closure's
-       captures anywhere in the function.
-     - "Copied, passed, stored before" means another live reference to
-       it exists at the mutation.
-     - What the compiler cannot prove stays a run-time uniqueness check,
-       as now.
-   - Every row of the exceptions sketch's move table is this one rule: a
-     handler is a successor.
-   - Lean 4's IR does the same for its compiled code (Ullrich and de
-     Moura, "Counting immutable beans", IFL 2019): explicit reference
-     counting, borrow inference for parameters, and reuse of a cell
-     nothing else holds.
-2. **Reuse.** A dropped value of the right size feeds a new one: `{...acc,
-   [k]: v}` in a reduce, a `concat` onto a moved array. Today's take-overs
-   in the built-ins become one analysis.
-3. **Shapes, as tree rewriting on the IR.**
-   - The iburg matcher is a tree matcher; it was adapted to the event
-     stream (`docs/internals/matcher.md`). On the IR it matches trees
-     directly.
-   - It does two things:
-     - tags a callback with its shape, for the C paths, as now;
-     - **inlines a callback literal into its loop** (below).
-4. **Liveness and register allocation.** A DAG has no back-edges, so
-   linear scan over the blocks in order allocates registers directly.
-   The same liveness records:
-   - the live registers at each `await`, which is what an activation
-     saves;
-   - the live registers at each handler.
-
-### Back end: register bytecode, and loops the compiler emits
-
-- **Registers, not a stack.**
-  - A frame is a window of registers on the value stack, as in Lua 5:
-    parameters, `let` and `const` slots, and temporaries.
-  - An instruction names its operands. A bit on an operand marks a move:
-    the last use, from pass 1.
-  - So `x * 2 + 1` is one or two instructions, not five, and nothing
-    passes through a push and a pop.
-  - Shi, Gregg, Beatty and Ertl, "Virtual machine showdown: stack versus
-    registers" (VEE 2005; Shi, Casey, Ertl and Gregg, TACO 2008),
-    translating Java bytecode to a register form, report close to half
-    the instructions dispatched and about a third less run time, with
-    about a quarter more code (figures quoted from memory, to check
-    against the papers). **Unverified here:** the ratio for staticjs's
-    instruction mix.
-- **An internal loop instruction for callbacks inlined by the compiler.**
-  - `xs.map(x => x * 2 + 1)` becomes, when `xs` is an array at run time
-    (a guard on the kind, falling back to the call): a loop over the
-    elements that runs the callback's code in the caller's frame, its
-    parameter in a register, with no frame pushed and no call made.
-  - The loop is over a collection that already exists, so every
-    evaluation still ends.
-  - This removes the 245 instructions of loop protocol per element for
-    the common case. Shapes stay for the cases the C paths do better
-    (sorting by a key).
-- **Fuel per block.**
-  - Each block's instruction count is charged when the block is entered,
-    and an evaluation pauses at a block boundary.
-  - The total per evaluation stays deterministic and depends only on the
-    program and its inputs. The check is per block, not per instruction.
-  - A block that does not fit in what is left of the fuel pauses before
-    it, unless nothing has run yet in this run; then it runs whole, and
-    the overrun is at most one block.
-  - Built-ins charge per element as now.
-- **Evaluator state in registers.**
-  - `pc`, the frame's base and the code pointer live in locals of the
-    run loop.
-  - They are written back only when the loop leaves: a call, a pause, a
-    fault, or a step of a loop frame.
-- **Tables per function:**
-  - handlers (`pc` ranges to a handler and its live registers);
-  - suspension points (a resume `pc` and its live registers);
-  - lines.
+- **Register bytecode.**
+  - A frame is a window of registers on the value stack, as in Lua 5.
+  - Operands name registers, and a bit marks a move.
+- **The run loop keeps `pc`, the frame's base, the code pointer and the
+  fuel counter in locals.** It writes them back when it leaves: a call, a
+  pause, a fault, a loop step.
+- **Fuel per instruction, as now**, counted in a local; the overrun
+  contract stays.
+  - Fusing instructions changes fuel. The guide's documented costs change
+    once.
+  - A fused instruction may cost the units of the instructions it
+    replaces, if those numbers should stay. This is an open question.
+- **Inspection of inlined loops.** A table per function maps `pc` ranges
+  of an inlined loop to a virtual frame: the built-in's name, the call's
+  position, the registers that hold the index and the length, and the
+  callback's function index. The inspection API reports a loop frame and
+  the callback's frame from it, as today (requirement 4). `max_frames`
+  counts them as today, so the limit faults where it does now.
+- **Tables per function:** handlers, suspension points with their live
+  registers, positions, and virtual frames.
 
 ### How each feature lands
 
 | Feature | Where it is decided | Cost when unused |
 |---|---|---|
-| moves | pass 1, an operand bit | none |
-| owned mutation | pass 1 proves or leaves a run-time check | none |
-| `try` / `throw` | an exceptional edge in the IR; a handler table in the back end | none: tables are read only on a throw |
-| `finally` | a join point taking a completion record (two registers) | none |
-| `await` | a block end; an activation saves only the live registers | none |
-| shapes | pass 3 on the IR | none |
-| callbacks over arrays | pass 3 inlines, the back end emits the loop | a kind guard per call site |
-| termination | forward-only jumps, no re-entry, the lineage rule for jobs | as now |
-
-## Costs
-
-- **Compile memory:** the tree of each open function, 16-byte nodes. The
-  events run at 0.25 to 1 per source byte (refutation spike), so about 4
-  to 16 bytes per source byte for the largest function open. Folding
-  literals keeps data out of it. A nested function's tree is freed when
-  it is compiled. The module top level is held until its end, as its
-  decisions are made there. **Unverified:** whether today's peak (23 to
-  50 bytes per source byte) goes down, as code is no longer kept inline
-  and literals become constants.
-- **Compile time:** several passes over trees the compiler just built.
-  **Unverified:** today's compile time is about the parse's, and a
-  guard's compile cost matters where charts are loaded often.
-- **Run time:** the purpose. **Unverified:** the factor, until the spike.
-  The numbers above are the baseline.
-- **Fuel:** every documented cost changes once (the guide's "5 units" for
-  a filter, `docs/guide/performance.md`). Determinism holds.
-- **Code:** a new compiler back half and a new evaluator core. The
-  built-ins' leaf calls, values, regular expressions, JSON, Temporal and
-  the writer keep their interfaces.
+| moves | ownership pass, an operand bit | none |
+| owned mutation | ownership pass, or a run-time check | none |
+| `try` / `throw` | an exceptional edge; a handler table | none |
+| `finally` | a join point with a completion record | none |
+| `await` | a block end; only live registers saved | none |
+| callbacks over arrays | inlined into a loop; virtual frames for inspection | a kind check per call site |
+| shapes | tags on the IR, C paths stepping several elements per turn | none |
+| termination | forward jumps in user code; inlined loops over existing collections; no re-entry; the lineage rule for jobs | as now |
 
 ## Options compared
 
-| | Representation | What it solves | Verdict |
-|---|---|---|---|
-| A | streaming, a deferral per feature | features, one at a time | the cost grows per feature, and the evaluator is untouched |
-| E | streaming, liveness over stack bytecode | moves, `try` | the best fix within today's evaluator; leaves the 70 to 100 instructions per bytecode |
-| B | events buffered per function, today's emitter | moves | refuted (nested code inline, order of errors, memory) |
-| **This** | tree per function, ANF with join points, register bytecode | moves, ownership, `try`, `await`, shapes, inlined callbacks, dispatch cost | recommended, subject to the spike |
-| Full SSA with a general CFG | same as this, plus loops' fixed points | nothing more without loops; ANF on a DAG already is SSA |
-| CPS with heap continuations | suspension anywhere | the evaluator already pauses anywhere; heap continuations are slower sequentially (Farvardin and Reppy, PLDI 2020, in `docs/research/tinyjs.md`) |
-| Tree interpreter (CEK) | the syntax tree | suspension, simplicity | more dispatch per node than bytecode; the opposite of what the measurements ask for |
+| | What | Verdict |
+|---|---|---|
+| Cheap fixes only (helpers, start, strings, shapes' stepping) | about 10 to 15% on guards, about half on shaped callbacks | do first, whatever else is chosen |
+| E: streaming compiler, moves by liveness over stack bytecode | moves and `try`, nothing for speed | the minimum for exceptions if nothing else is built |
+| Today's stack evaluator with state in locals and inlined callbacks | about 2.2 times on map (estimated) | half the gain, without try and async getting an IR |
+| **This: a tree per function, ANF with join points and structured loops, register bytecode** | about 4.3 times on map, about 2 on guards (prototypes), and one place for moves, ownership, `try` and `await` | recommended |
+| Full SSA on a general CFG | the same as this; structured loops suffice | no gain over this |
+| CPS with heap continuations | suspension anywhere, which the evaluator already has | slower sequentially (Farvardin and Reppy, PLDI 2020) |
+| Tree interpreter (CEK) | simplicity | more dispatch per node; the opposite of what the measurements ask for |
+| B: buffered events, today's emitter | | refuted |
 
-## Order of work, with spikes first
+## Order of work
 
-1. **Spike: the evaluator.**
-   - Hand-write the register code for `xs.map(x => x * 2 + 1)` (an
-     inlined loop) and for the small guard.
-   - Run them in a prototype run loop that keeps its state in locals and
-     charges fuel per block.
-   - Count with callgrind against the table above. This settles the
-     factor, and whether the rewrite pays.
-2. **Spike: the front end.** Build trees from the events for the spec
-   corpus and the bench modules. Measure the memory and time, and check
-   that names and early errors keep today's messages and order.
-3. If both pay, build the new compiler and evaluator behind
-   `sjs_compiler_config` and `sjs_vm_config` switches. Run the spec, both
-   ways, with `diff-node`. The two may differ in fuel only, and in which
-   unsupported error wins where a later syntax error exists: there the
-   new order is closer to JavaScript's, which reports the syntax error.
-4. Switch the default. Delete the old compiler and evaluator. Then
+1. **Cheap fixes, now, on today's code**, each with `bench-compare
+   --quick`:
+   - hot helpers inline;
+   - string equality a word at a time;
+   - a fast start for an idle evaluator;
+   - shapes' C paths stepping several elements per turn of the run loop,
+     fuel checked per element.
+2. **Spike: the front end.** Trees from the events for the spec corpus and
+   the bench modules: memory, time, and today's error messages and order.
+3. **The new compiler and evaluator, behind `sjs_compiler_config` and
+   `sjs_vm_config` switches.**
+   - Run the spec both ways, with `diff-node`.
+   - They may differ in fuel and in which error wins where a later syntax
+     error exists.
+   - The inspection tests stay as they are.
+4. **Switch the default**, delete the old compiler and evaluator, then
    `try`, `throw` and `async` on the new one.
 
 ## Open questions
 
-- **NaN-boxed 8-byte values** instead of 16-byte `sjs_value`s. They halve
-  the memory traffic of every register and element. They change the
-  public value type and every binding's handling of it. This is a
-  separate decision, measured after step 1.
-- **Inlining callbacks other than literals.** A `const f = x => ...`
-  passed by name could be inlined, and so could a module's exported
-  function.
-- **Superinstructions** chosen from the shape rules (a member read and a
-  comparison, as guards do).
-- **Whether fuel per block** should keep a per-instruction count for
-  inspection (`sjs_vm` frames, the debugger's stepping).
+- Whether fused instructions should keep the old fuel units, so that the
+  guide's costs stay.
+- NaN-boxed 8-byte values: they halve memory traffic, but change the
+  public `sjs_value` and every binding.
+- Inlining named callbacks (`const f = x => ...; xs.map(f)`), and calls of
+  small functions generally.
+- Interning strings that are compared often (event names), so `===` is a
+  pointer comparison.
