@@ -607,4 +607,4 @@ separate threads with no locking.
 | `examples/eval.c` | a command-line evaluator: error reports, fuel, the clock, the seed |
 | `examples/host.c` | a library module, a user's plugin compiled once and run per record, globals, a native, a module imported by name, the clock |
 | `examples/stream.c` | chunks pushed to the parser, a sink before the compiler, slices of fuel, a small output buffer |
-| `examples/wasm/` | the same from JavaScript, through `staticjs.wasm` |
+| `staticjs-js/` (the package `@tinyactors/staticjs`) | the same from JavaScript, through its own wasm module |

@@ -17,7 +17,7 @@ come back to [Quick reference](./reference.md) once you write your own.
   <a class="card" href="./language"><strong>The language</strong><span>Syntax, modules and every built-in.</span></a>
   <a class="card" href="./faults"><strong>Faults and refusals</strong><span>Where staticjs stops instead of following JavaScript.</span></a>
   <a class="card" href="./performance"><strong>Performance</strong><span>Fuel, memory, and other engines.</span></a>
-  <a class="card" href="./wasm"><strong>Browser and Node</strong><span>staticjs.wasm from JavaScript.</span></a>
+  <a class="card" href="./wasm"><strong>Browser and Node</strong><span>@tinyactors/staticjs, in Node and browsers.</span></a>
   <a class="card" href="./examples"><strong>Examples</strong><span>Whole programs, built and checked by the tests.</span></a>
 </div>
 <!-- /html -->

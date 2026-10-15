@@ -8,10 +8,8 @@
 # in the test task); its interface is checked (no imports; the API, the wasm
 # functions and memory exported), and tests/wasm/release_test.mjs is run
 # against it. The release's verify stage runs the same test on the module it
-# packs. Then the browser example's wrapper (examples/wasm/staticjs.mjs) is
-# tested against the same module (tests/wasm/example_test.mjs), and its Node
-# program evaluates its programs through it, printing what
-# examples/expected/wasm.txt says.
+# packs. JavaScript's own way in is the package @tinyactors/staticjs
+# (staticjs-js/), whose module is built and tested there.
 
 require_relative '../staticjs'
 require 'c_release'
@@ -24,7 +22,3 @@ begin
 rescue Toolchain::Error => e
   abort "wasm-test: #{e.message}"
 end
-StaticJS.run('node', StaticJS::ROOT.join('tests/wasm/example_test.mjs'), built[:wasm], project.api, project.header)
-StaticJS.expect_output!([['node', StaticJS::ROOT.join('examples/wasm/node.mjs'), built[:wasm], project.api]],
-                        StaticJS::ROOT.join('examples/expected/wasm.txt'))
-puts 'wasm-test: examples/wasm/node.mjs prints what examples/expected/wasm.txt says'
