@@ -19,22 +19,25 @@ static const char ta_python_doc_module[] =
     "  or `await host.idle()`, and leave it with `with` / `async with` or\n"
     "  close().\n"
     "- Charts are SCXML state machines. compile_charts() turns documents into\n"
-    "  an image (Compiled.image), and Host.add_image() runs an image as a new\n"
+    "  an image (Compiled.image); compile_system() does it for a <system>\n"
+    "  manifest that also names the actors an application starts with, which\n"
+    "  Host.boot() spawns. Host.add_image() runs an image as a new\n"
     "  segment of the host: one actor system, with its own memory. Adding an\n"
     "  image with a chart of a name the host already runs is a deploy: the new\n"
     "  segment holds the chart's current version, and Host.migrate() moves the\n"
     "  running actors over (they get error.platform.upgrade).\n"
     "- Actors are running instances of a chart: Host.chart(name) gives the\n"
     "  current version as a ChartRef, Host.spawn() starts an actor and returns\n"
-    "  its session id, Host.send() and send_many() give it events. A chart's\n"
+    "  its session id (Host.actor_by_name() finds a named one again),\n"
+    "  Host.send() and send_many() give it events. A chart's\n"
     "  datamodel is \"python\" (expressions in a restricted Python, values are\n"
     "  Python objects, _event is an Event) or \"ecmascript\" (quickjs).\n"
     "- What actors ask of the world reaches your handlers, which you pass to\n"
     "  Host(...): io_processors for <send> to a transport (each gets a Send),\n"
     "  services for <invoke> of a service you run (each gets an Invocation),\n"
     "  log for <log> (a LogEntry), wake for a hibernated actor that has work\n"
-    "  (Host.wake answers it), migrated (a Migration) and telemetry (OTLP\n"
-    "  bytes). Other systems (another thread's host, a browser) are reached\n"
+    "  (Host.wake answers it), migrated (a Migrated) and\n"
+    "  migration_done for migrations, and telemetry (OTLP bytes). Other systems (another thread's host, a browser) are reached\n"
     "  through the I/O processor the config marks \"remote\": its handler\n"
     "  carries a Send to the other side, where Host.send(address, ...,\n"
     "  origin=send.origin) delivers it. A handler that is a plain\n"
@@ -85,17 +88,20 @@ static const char ta_python_doc_compile_system[] =
     "--\n"
     "\n"
     "Compile a system manifest into one image: its charts and the actors it\n"
-    "boots.\n"
+    "starts with.\n"
     "\n"
     "`manifest` is a (name, text) pair whose text is a <system> document:\n"
     "<chart name=\"worker\" src=\"worker.scxml\"/> for each chart, read through\n"
     "`resolver` (as for compile_charts), and <actor name=\"first\"\n"
-    "chart=\"worker\"/> for each actor Host.boot spawns, under that name. Use\n"
-    "it when the image should say which actors an application starts with;\n"
-    "compile_charts when your program spawns them itself.\n"
+    "chart=\"worker\"/> for each actor Host.boot spawns, under that name.\n"
     "\n"
-    "Returns a Compiled, as compile_charts does; an error raises\n"
-    "CompileError with every diagnostic.";
+    "Use it when an application is a fixed set of long-lived actors (a\n"
+    "router, a scheduler, a few workers): the manifest says what runs, so a\n"
+    "deploy is one image to add and boot, and your program finds each actor\n"
+    "by name (Host.actor_by_name, or the address .../@first). Use\n"
+    "compile_charts when your program spawns its actors itself, one per\n"
+    "order or user. Returns a Compiled, as compile_charts does; an error\n"
+    "raises CompileError with every diagnostic.";
 
 static const char ta_python_doc_encode[] =
     "encode($module, value, /)\n"
@@ -135,12 +141,14 @@ static const char ta_python_doc_decode[] =
     "failure.";
 
 static const char ta_python_doc_compiled[] =
-    "The result of compile_charts: an image and the compilation's notes.\n"
+    "The result of compile_charts or compile_system: an image and the\n"
+    "compilation's notes.\n"
     "\n"
     "Hold it only as long as you need the image: Host.add_image copies the\n"
     "bytes, so close it right after adding (a `with` block does), or keep it\n"
-    "to add the same image to several hosts. Write `bytes(compiled.image)`\n"
-    "to a .tai file to add it later without compiling again.";
+    "to add the same image to several hosts. To compile once and run many\n"
+    "times (at build time, in CI), write `bytes(compiled.image)` to a .tai\n"
+    "file and give its bytes to add_image later: no compiler at run time.";
 
 static const char ta_python_doc_compiled_image[] =
     "The image's bytes, as a read-only memoryview over the compile result.\n"
@@ -202,6 +210,10 @@ static const char ta_python_doc_host[] =
     "driver (`async with`). A handler's exception is raised by the driver\n"
     "after the turn.\n"
     "\n"
+    "A typical program: compile_charts() the charts, add_image() the image,\n"
+    "spawn(host.chart(\"order\")) an actor, send() it events, and let the\n"
+    "host turn; your handlers do the I/O the actors ask for.\n"
+    "\n"
     "Drive the host with run_until_idle() (until nothing is runnable now),\n"
     "run() (sleeping to each timer), or `await host.idle()` under asyncio.\n"
     "Inputs (spawn, send, terminate, ...) apply at the call; their effects\n"
@@ -241,29 +253,41 @@ static const char ta_python_doc_host_chart[] =
     "\n"
     "The current version of the chart `name`, as a ChartRef for spawn.\n"
     "\n"
-    "Ask again after add_image: a reference names one version.";
+    "Spawning goes through a ChartRef rather than a name because a host can\n"
+    "run several versions of a chart at once (one per add_image of an image\n"
+    "that has it): the reference pins the version that was current when you\n"
+    "asked. Ask again after add_image of a new version, so new actors start\n"
+    "on it; actors already running stay where they are until Host.migrate.\n"
+    "Raises TinyactorsError when no image added has a chart of that name.";
 
 static const char ta_python_doc_host_actor_by_name[] =
     "actor_by_name(name, /)\n"
     "--\n"
     "\n"
-    "The session of the live actor spawned with `name` (boot actors carry\n"
-    "their manifest name), newest segment first; None when there is none.\n"
+    "The session of the live actor spawned with `name`, newest segment first;\n"
+    "None when there is none.\n"
     "\n"
-    "Use it to find an actor you named, for terminate or an input by\n"
-    "session; send also takes the address tinyactors://<systemID>/@<name>.";
+    "Names are how an application finds its long-lived actors again without\n"
+    "keeping their session ids: spawn(ref, name=\"orders\") registers one, and\n"
+    "Host.boot registers each actor a <system> manifest declares under its\n"
+    "name. Use it to terminate or inspect such an actor, or to give it an\n"
+    "input by session; to send it an event you can also skip the lookup and\n"
+    "send to the address tinyactors://<systemID>/@<name>, as charts do.";
 
 static const char ta_python_doc_host_spawn[] =
     "spawn(ref, name=None, params=None, traceparent=None)\n"
     "--\n"
     "\n"
-    "Start an actor of the chart `ref` (a ChartRef) and return its session\n"
-    "id, an int unique in the host.\n"
+    "Start an actor of the chart `ref` (a ChartRef from Host.chart) and\n"
+    "return its session id, an int unique in the host.\n"
     "\n"
-    "`name` registers it under a name other actors can send to, `params`\n"
-    "(a dict) sets its <datamodel>'s data of the same ids, `traceparent`\n"
-    "(W3C text) makes its first steps part of your trace. It runs in the\n"
-    "next turn.";
+    "This is how your program creates actors one at a time: one per order,\n"
+    "per user, per device. `name` registers it so it can be found again\n"
+    "(Host.actor_by_name, the address tinyactors://<systemID>/@<name>);\n"
+    "`params` (a dict) sets its <datamodel>'s data of the same ids, the way\n"
+    "an <invoke>'s params do; `traceparent` (W3C text) makes its first steps\n"
+    "part of your caller's trace. The actor enters its initial states in the\n"
+    "next turn. To start the actors an image declares, use Host.boot.";
 
 static const char ta_python_doc_host_send[] =
     "send(target, event, data=None, *, traceparent=None, origin=None)\n"
@@ -287,17 +311,27 @@ static const char ta_python_doc_host_send_many[] =
     "send_many(items, /)\n"
     "--\n"
     "\n"
-    "Give events to actors in order: each item is (session, event[, data[,\n"
-    "traceparent]]). Cheaper than send per item for batches. Returns how many\n"
-    "were accepted, a prefix of `items`: on a refusal (a full host) the rest\n"
-    "were not sent, so run the host and send them again.";
+    "Give events to actors in order, one call for many: each item is\n"
+    "(target, event[, data[, traceparent]]), as send takes them.\n"
+    "\n"
+    "Use it when events arrive in batches (a queue consumer, a replay, a\n"
+    "load test): one call into the host for the batch instead of one per\n"
+    "event. Returns how many were accepted, a prefix of `items`: on a refusal\n"
+    "(a full host) the rest were not sent, so run the host to make room and\n"
+    "send the rest again.";
 
 static const char ta_python_doc_host_terminate[] =
     "terminate(session, /)\n"
     "--\n"
     "\n"
-    "End the actor `session` (one you spawned): it leaves its states,\n"
-    "cancelling its invocations, and is gone after the next turn.";
+    "End the actor `session` from outside: it leaves its states (their\n"
+    "<onexit> runs), its invocations are cancelled, and it is gone after the\n"
+    "next turn.\n"
+    "\n"
+    "An actor whose chart reaches a top-level <final> ends by itself; use\n"
+    "terminate when your program decides an actor's work is over (a user\n"
+    "deleted, an order cancelled from an admin tool) or to clean up after a\n"
+    "boot that failed part way.";
 
 static const char ta_python_doc_host_boot[] =
     "boot(segment, /)\n"
@@ -315,9 +349,14 @@ static const char ta_python_doc_host_metrics[] =
     "--\n"
     "\n"
     "The host's counters now, as OTLP protobuf bytes (an\n"
-    "ExportMetricsServiceRequest, for a collector's /v1/metrics). Pull it\n"
-    "when your exporter scrapes. Raises TinyactorsError (TA_ERROR_STATE)\n"
-    "when the config has no telemetry.";
+    "ExportMetricsServiceRequest, for a collector's /v1/metrics).\n"
+    "\n"
+    "Telemetry has two directions: traces and logs are pushed to your\n"
+    "telemetry handler as the host records them, and metrics are pulled by\n"
+    "you, on your schedule. Call it when your exporter scrapes or on a timer,\n"
+    "and post the bytes as you post the handler's. host_stats answers with\n"
+    "the counters as Python values instead. Raises TinyactorsError\n"
+    "(TA_ERROR_STATE) when the config has no telemetry.";
 
 static const char ta_python_doc_host_sweep[] =
     "sweep(max_scan, limit, /)\n"
@@ -325,8 +364,15 @@ static const char ta_python_doc_host_sweep[] =
     "\n"
     "The sessions to hibernate now: at most `limit` actors that did not run\n"
     "since the previous sweep and are at rest (the CLOCK sweep), looking at\n"
-    "most at `max_scan` slots. Call it when you want fewer actors resident,\n"
-    "then hibernate the sessions it returns.";
+    "most at `max_scan` slots.\n"
+    "\n"
+    "Hibernation keeps a large population in a small memory: most actors\n"
+    "wait most of the time. The cycle is yours to run: when host_stats shows\n"
+    "more actors resident than you want, sweep, hibernate() each session it\n"
+    "returns and store the blobs; when an event comes for one, the wake\n"
+    "handler asks for it and Host.wake brings it back. Calling sweep\n"
+    "regularly is what makes \"did not run since the previous sweep\" mean\n"
+    "cold.";
 
 static const char ta_python_doc_host_hibernate[] =
     "hibernate(session, /)\n"
@@ -409,26 +455,39 @@ static const char ta_python_doc_host_run_until_idle[] =
     "--\n"
     "\n"
     "Turn until no actor is runnable at the current time: the synchronous\n"
-    "driver's step. Handlers run inside it; a handler's exception, or a\n"
-    "failure of the host, is raised after the turn it happened in. Timers\n"
-    "due later stay pending (see run(), or SimulatedClock.increment).";
+    "driver's step.\n"
+    "\n"
+    "Use it in scripts, tests and programs that run the host between other\n"
+    "work: give inputs, then run_until_idle() to let the actors react and\n"
+    "your handlers run. Handlers run inside it; a handler's exception, or a\n"
+    "failure of the host, is raised after the turn it happened in. Timers due\n"
+    "later stay pending: run() sleeps until them, and with a SimulatedClock,\n"
+    "increment() moves to them.";
 
 static const char ta_python_doc_host_run[] =
     "run()\n"
     "--\n"
     "\n"
-    "Turn and sleep to each timer until the host is idle with no timer left:\n"
-    "the synchronous driver for a program that is the host. Ctrl-C raises\n"
-    "KeyboardInterrupt between turns.";
+    "Turn, and sleep to each timer, until the host is idle with no timer\n"
+    "left.\n"
+    "\n"
+    "The synchronous driver for a program that is the host, such as a worker\n"
+    "whose actors only answer their own timers and the events your handlers\n"
+    "add. A program that also serves other I/O uses asyncio instead\n"
+    "(`async with Host(...)`), where the host turns on the event loop. Ctrl-C\n"
+    "raises KeyboardInterrupt between turns.";
 
 static const char ta_python_doc_host_idle[] =
     "idle()\n"
     "--\n"
     "\n"
-    "asyncio: a future that completes when the host is idle. Inside\n"
-    "`async with Host(...)` the host turns on the event loop by itself,\n"
-    "after each input and at each timer; await idle() to wait for the\n"
-    "effects of your inputs.";
+    "asyncio: a future that completes when the host is idle.\n"
+    "\n"
+    "Inside `async with Host(...)` the host turns on the event loop by itself,\n"
+    "after each input and at each timer, beside your other tasks (a web\n"
+    "server, a queue consumer). Await idle() when you need the effects of\n"
+    "your inputs before going on: in a test, or before reading an answer a\n"
+    "typed method's handler stored.";
 
 static const char ta_python_doc_host_close[] =
     "close()\n"
@@ -451,170 +510,174 @@ static const char ta_python_doc_host_aenter[] =
 static const char ta_python_doc_host_aexit[] =
     "Leave the asyncio driver: awaits the handlers' tasks, then closes the host.";
 
+/* How every typed method works, the second half of each one's docstring. */
+#define TA_PYTHON_DOC_TYPED_TAIL                                                      \
+    "\n"                                                                              \
+    "How it works, as for every typed method (Host.actor_state, host_stats,\n"        \
+    "trace_watch, ...): pass the params as keywords; core checks them. The call\n"   \
+    "returns None at once and handler(host, result) runs at a later drain with\n"    \
+    "the result as Python values, so a script drives the host once more\n"           \
+    "(run_until_idle()) and asyncio code awaits host.idle(). An error goes to\n"     \
+    "on_error(host, error), given second or as on_error=, as a TinyactorsError\n"    \
+    "whose code, reason and path say what was wrong; without on_error the driver\n"  \
+    "raises it after the turn. A closed or full host refuses at the call."
+
 static const char ta_python_doc_typed_actor_state[] =
-    "actor_state(handler, on_error=None, /, **params)\n"
+    "actor_state(handler, on_error=None, /, *, session)\n"
     "--\n"
     "\n"
-    "Ask the host for an actor's state configuration and datamodel (params: session).\n"
+    "Ask which states the actor `session` is in now.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The result is {\"value\": <state value>} in xstate's shape: an atomic state\n"
+    "is its id (\"idle\"), a compound state {<its id>: <its active child>}, a\n"
+    "parallel state {<its id>: {<region id>: ..., ...}}. Use it to show\n"
+    "an actor in a debugger or dashboard, or in a test to assert where a chart\n"
+    "went after some events. Inside a chart, In(state) asks the same\n"
+    "question.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_actor_context[] =
-    "actor_context(handler, on_error=None, /, **params)\n"
+    "actor_context(handler, on_error=None, /, *, session)\n"
     "--\n"
     "\n"
-    "Ask the host for an actor's context: its chart, version, parent, mailbox (params: session).\n"
+    "Ask for the actor `session`'s variables: each <data> of its chart.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The result is {\"variables\": {<data id>: <value>, ...}}, in the order the\n"
+    "chart declares them, as values of the value table (what cannot be shown\n"
+    "that way is None or UNDEFINED). Use it to inspect an actor's data from\n"
+    "outside, in a debugger, an admin page or a test, without the chart\n"
+    "sending it anywhere. A hibernated actor is refused (reason \"state\"):\n"
+    "wake it first.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_actor_list[] =
-    "actor_list(handler, on_error=None, /, **params)\n"
+    "actor_list(handler, on_error=None, /, *, limit=256, cursor=0)\n"
     "--\n"
     "\n"
-    "Ask the host for the actors of the host, a page at a time (params: chart, limit, cursor).\n"
+    "Ask for the sessions of the host, a page at a time.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The result is {\"sessions\": [session, ...], \"cursor\": int or None}: pass\n"
+    "the cursor back for the next page; None means every session was listed.\n"
+    "`limit` is 1 to 512. Use it to enumerate actors for an admin page, a\n"
+    "health check or a cleanup, then ask actor_get, actor_state or\n"
+    "actor_context about each one.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_actor_get[] =
-    "actor_get(handler, on_error=None, /, **params)\n"
+    "actor_get(handler, on_error=None, /, *, session)\n"
     "--\n"
     "\n"
-    "Ask the host for an actor's summary by session or registered name.\n"
+    "Ask for the summary of the actor `session`: where it runs and how busy\n"
+    "it is.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The result is {\"session\", \"segment\", \"chart\" (its name), \"parent\" (the\n"
+    "session that invoked it, or None for an actor you spawned), \"mailbox\"\n"
+    "(events waiting), \"invocations\" (services it runs)}. Use it to find\n"
+    "which version an actor runs (its segment), to walk from a child to its\n"
+    "parent, or to spot an actor whose mailbox grows.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_host_stats[] =
-    "host_stats(handler, on_error=None, /, **params)\n"
+    "host_stats(handler, on_error=None, /)\n"
     "--\n"
     "\n"
-    "Ask the host for the host's counters: actors, hibernated, segments, regionBytes, routed, ....\n"
+    "Ask for the host's counters, and each chart's.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The result is {\"host\": {...}, \"charts\": [...]}. The host's: segments,\n"
+    "actors, hibernated, runnable, migrations, regionBytes (core's memory for\n"
+    "the live segments), delivered, routed, migrated, retired, fuelClock.\n"
+    "Each chart's, summed over its versions: name, actors, hibernated,\n"
+    "spawned, ended, turns, macrosteps, fuel, errorsExecution,\n"
+    "errorsCommunication, errorsPlatform, faults. Use it for a dashboard or a\n"
+    "health check, to decide when to sweep and hibernate, or in a test to\n"
+    "count what happened; Host.metrics gives the host's counters as OTLP for\n"
+    "a collector.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_host_config[] =
-    "host_config(handler, on_error=None, /, **params)\n"
+    "host_config(handler, on_error=None, /)\n"
     "--\n"
     "\n"
-    "Ask the host for the effective configuration, defaults filled in.\n"
+    "Ask for the configuration the host runs with: the config you gave\n"
+    "Host(...), with every default filled in.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The result is a dict in the config's own shape (systemID, system,\n"
+    "ioProcessors, migrateQuantum, telemetry), so a host made from it answers\n"
+    "the same. Use it to log or show what a host was really given, or to make\n"
+    "a second host like the first (a copy for Host.restore needs the same\n"
+    "system id).\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_configure[] =
-    "trace_configure(handler, on_error=None, /, **params)\n"
+    "trace_configure(handler, on_error=None, /, *, detail=\"summary\", values=False, sample=1, records=True, rules=[])\n"
     "--\n"
     "\n"
-    "Ask the host for the trace policy: what core records, and in how much detail.\n"
+    "Set what the host traces, for every segment and the ones added later.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "`detail` is \"summary\", \"decisions\", \"full\" or \"off\"; `values` puts data\n"
+    "values in the spans; `sample` (0 to 1) is the share of new traces kept;\n"
+    "`records` False keeps traceparents flowing but writes no spans; `rules`\n"
+    "(at most 32) pick details per chart, actor, event or source (the core's requests\n"
+    "documentation has their form). The result is {}. It replaces the last\n"
+    "configuration; watches stay. Use it at startup to set the policy, and\n"
+    "again to turn tracing up or down while the host runs; trace_watch is for\n"
+    "a closer look for a while. Refused (reason \"state\") when the config has\n"
+    "no telemetry.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_watch[] =
-    "trace_watch(handler, on_error=None, /, **params)\n"
+    "trace_watch(handler, on_error=None, /, *, rules, seconds=900)\n"
     "--\n"
     "\n"
-    "Ask the host for start recording an actor's steps in detail until a time or an unwatch.\n"
+    "Trace something in more detail for a while: rules put in front of the\n"
+    "configured ones until `seconds` of the host's clock pass (None: until\n"
+    "trace_unwatch).\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "Each rule picks actors (by chart, actor name, event, session or source) and a detail, e.g.\n"
+    "{\"chart\": \"checkout\", \"sample\": \"sample\", \"detail\": \"full\"}. The result\n"
+    "is {\"id\": int}, the watch's id for trace_unwatch. Use it to debug one\n"
+    "chart or one kind of event in production without raising the detail for\n"
+    "the whole host.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_unwatch[] =
-    "trace_unwatch(handler, on_error=None, /, **params)\n"
+    "trace_unwatch(handler, on_error=None, /, *, id)\n"
     "--\n"
     "\n"
-    "Ask the host for stop a trace_watch.\n"
+    "End the watch `id` (from trace_watch's result) before its time is up.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The result is {}. A watch that already ended, or never was, is an error\n"
+    "with reason \"stale\". Use it when the closer look is done, so tracing\n"
+    "falls back to the configured policy.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_end[] =
-    "trace_end(handler, on_error=None, /, **params)\n"
+    "trace_end(handler, on_error=None, /)\n"
     "--\n"
     "\n"
-    "Ask the host for end the host's traces now, so the telemetry handler gets what was recorded.\n"
+    "End every open span now and hand what was recorded to the telemetry\n"
+    "handler, before the reply.\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The spans end at the last clock the host saw, marked incomplete. The\n"
+    "result is {}. close() calls it for you; call it yourself to end the\n"
+    "spans at a moment you choose, when your shutdown does other work before\n"
+    "it closes the host. Refused (reason \"state\") when the config has no\n"
+    "telemetry.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_spans_decode[] =
-    "trace_spans_decode(handler, on_error=None, /, **params)\n"
+    "trace_spans_decode(handler, on_error=None, /, *, traces)\n"
     "--\n"
     "\n"
-    "Ask the host for decode a span blob core wrote into its records.\n"
+    "Read the spans out of OTLP trace bytes, such as the data the telemetry\n"
+    "handler got with signal \"traces\".\n"
     "\n"
-    "A typed method over the control plane message of the same name\n"
-    "(the core's requests documentation lists its params and its\n"
-    "result): pass the params as keywords; core checks them. Returns\n"
-    "None at once; handler(host, result) runs at a later drain with the\n"
-    "result as Python values, or on_error(host, error) with a\n"
-    "TinyactorsError (without on_error the driver raises it; pass it\n"
-    "second or as on_error=, never a param of core's). A refusal\n"
-    "at the call (a full host, a closed one) raises at once.";
+    "The result is {\"spans\": [...]}, each span a dict: trace and span ids as\n"
+    "hex, parent (None for a root), name, kind, start and end (nanoseconds\n"
+    "since the epoch), status, statusMessage, attributes and events. It reads\n"
+    "only the bytes, not the host. Use it in tests and tools that check what\n"
+    "an actor's steps traced without a collector or an OTLP library.\n"
+    TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_chart_ref[] =
     "A chart in a host, from Host.chart(name): the segment that runs its\n"
@@ -623,10 +686,12 @@ static const char ta_python_doc_chart_ref[] =
     "Host.chart again.";
 
 static const char ta_python_doc_chart_ref_segment[] =
-    "The segment (one actor system of the host) that runs this version.";
+    "The segment (one actor system of the host) that runs this version:\n"
+    "the int add_image returned for its image.";
 
 static const char ta_python_doc_chart_ref_chart[] =
-    "The chart's index in that segment's image.";
+    "The chart's index in that segment's image; with the segment, it names\n"
+    "one version of one chart.";
 
 static const char ta_python_doc_send[] =
     "A <send> to one of your I/O processors, given to its handler.\n"
@@ -690,8 +755,12 @@ static const char ta_python_doc_send_fail[] =
     "before answering is failed this way for you.";
 
 static const char ta_python_doc_entry[] =
-    "A <log> line, given to the log handler: session, label and text. A thin\n"
-    "view, valid until the batch's ack; copy what you keep.";
+    "A <log> line of an actor, given to the log handler.\n"
+    "\n"
+    "A chart's <log label=\"...\" expr=\"...\"/> is how it reports what it does;\n"
+    "the handler decides where that goes: Python's logging module, stdout, a\n"
+    "test's list. Read session, label and text inside the handler: it is a\n"
+    "thin view, valid until the batch's ack.";
 
 static const char ta_python_doc_entry_session[] =
     "The logging actor's session id (int).";
@@ -704,8 +773,12 @@ static const char ta_python_doc_entry_text[] =
 
 static const char ta_python_doc_migrated[] =
     "An actor that a migration moved to its chart's current version, given\n"
-    "to the migrated handler (see Host.migrate). A thin view, valid until the\n"
-    "batch's ack.";
+    "to the migrated handler.\n"
+    "\n"
+    "Use the handler to follow a deploy actor by actor (a progress count, a\n"
+    "log of who moved) or to update what your application keeps about an\n"
+    "actor's version; migration_done reports the whole migration's end. A\n"
+    "thin view, valid until the batch's ack (see Host.migrate).";
 
 static const char ta_python_doc_migrated_session[] =
     "The actor's session id (int); it is the same after the move.";
@@ -778,10 +851,14 @@ static const char ta_python_doc_clock[] =
     "SimulatedClock()\n"
     "--\n"
     "\n"
-    "A clock that moves only when told: pass it as Host(..., clock=...) to\n"
-    "make time deterministic in tests and simulations. Delayed sends and\n"
-    "migration timeouts fall due when increment() moves past them; a host\n"
-    "on a simulated clock never sleeps.";
+    "A clock that moves only when told, for tests and simulations.\n"
+    "\n"
+    "Pass it as Host(..., clock=clock). Delayed sends (<send delay>), watch\n"
+    "ends and migration timeouts fall due when increment() moves past them,\n"
+    "so a test of a 30-day timeout takes no time and gives the same result\n"
+    "every run; a host on a simulated clock never sleeps. To jump to the next\n"
+    "thing that happens: clock.increment(host.next_deadline). One clock can\n"
+    "drive several hosts, which then share its time.";
 
 static const char ta_python_doc_clock_increment[] =
     "increment(seconds, /)\n"
@@ -798,13 +875,15 @@ static const char ta_python_doc_address[] =
     "Address(text, /)\n"
     "--\n"
     "\n"
-    "An actor reference in the value table (CBOR tag 32), e.g. an actor's\n"
-    "address passed as data so another program keeps it apart from text.\n"
+    "An actor's address as a value (CBOR tag 32), kept apart from plain text.\n"
     "\n"
-    "`text` must be an exact str of valid UTF-8; it is not parsed or routed\n"
-    "at construction. Use .text or str(value) to read it. Equality and\n"
-    "hashing use the text, among Address values only; subclasses are\n"
-    "refused.";
+    "Charts and other programs pass addresses as data (a reply-to, a\n"
+    "subscriber list); when such a value comes from an ECMAScript chart or\n"
+    "another process it arrives as an Address, and an Address you put in data\n"
+    "reaches them as one. To send to an address, give its text to Host.send.\n"
+    "`text` must be an exact str of valid UTF-8; it is not parsed or checked\n"
+    "here. Use .text or str(value) to read it. Equality and hashing use the\n"
+    "text, among Address values only; subclasses are refused.";
 
 static const char ta_python_doc_address_text[] =
     "The address text (read-only).";
@@ -815,9 +894,11 @@ static const char ta_python_doc_undefined[] =
     "There is one, tinyactors.UNDEFINED; compare with `is`.";
 
 static const char ta_python_doc_event[] =
-    "_event in a \"python\" chart: the event being processed, immutable. It\n"
-    "stays bound until the next event, as SCXML requires. Fields that do not\n"
-    "apply are None.";
+    "_event in a \"python\" chart: the event being processed.\n"
+    "\n"
+    "Conditions and actions read it: cond=\"_event.data['amount'] > 100\",\n"
+    "expr=\"_event.origin\" to reply. It is immutable and stays bound until the\n"
+    "next event, as SCXML requires. Fields that do not apply are None.";
 
 static const char ta_python_doc_event_name[] =
     "The event's name, e.g. \"order.paid\" or \"done.invoke.payment\".";
@@ -826,13 +907,16 @@ static const char ta_python_doc_event_type[] =
     "\"platform\" (errors, done events), \"internal\" (<raise>) or \"external\".";
 
 static const char ta_python_doc_event_sendid[] =
-    "The sendid of the <send> that produced it, or None.";
+    "The id of the <send> that produced it (str), or None: what an answer or\n"
+    "an error.communication carries back to match the request it is about.";
 
 static const char ta_python_doc_event_origin[] =
-    "The sender's address, to <send target> a reply, or None.";
+    "The sender's address, or None: <send target=\"...\" targetexpr=\"_event.origin\">\n"
+    "replies to it, in this host or in another system.";
 
 static const char ta_python_doc_event_origintype[] =
-    "The I/O processor type of the origin, or None.";
+    "The I/O processor type of the origin, or None: the type a reply uses\n"
+    "to go back the way the event came.";
 
 static const char ta_python_doc_event_invokeid[] =
     "The invokeid when the event came from an invoked child or service, or None.";
@@ -841,7 +925,8 @@ static const char ta_python_doc_event_data[] =
     "The event's data as a Python value, or None.";
 
 static const char ta_python_doc_event_raw[] =
-    "The I/O processor's raw message, or None.";
+    "The message as the I/O processor read it (an HTTP request, say), or\n"
+    "None: for a chart that needs more than the event's data.";
 
 static const char ta_python_doc_in[] =
     "In(state, /)\n"

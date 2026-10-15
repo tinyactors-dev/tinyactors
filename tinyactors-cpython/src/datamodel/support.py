@@ -34,12 +34,15 @@ class TinyactorsError(Exception):
 
 
 class CompileError(TinyactorsError):
-    """compile_charts found an error in the documents.
+    """compile_charts or compile_system found an error in the documents.
 
     `diagnostics` is every Diagnostic of the compilation (errors, warnings
-    and notes, each with its file, line and column), so a tool can show
-    them all at once; str() of the error names the first. Nothing was
-    compiled: fix the documents and call compile_charts again."""
+    and notes, each with its file, line and column), so an editor
+    integration, a build step or a test can show them all at once; str()
+    of the error names the first. Nothing was compiled: fix the documents
+    and compile again. Catch it where charts are compiled (at startup, in
+    a build or deploy step), not around the host, which never raises
+    it."""
 
     def __init__(self, message, diagnostics):
         super().__init__(message, status="TA_ERROR_INVALID")
@@ -47,14 +50,18 @@ class CompileError(TinyactorsError):
 
 
 class ResolveError(TinyactorsError):
-    """Raise it from a resolver's resolve(base, source) to refuse a
-    document a chart references with src= (not found, not allowed, not
-    valid).
+    """Raise it from a resolver, resolver(base, source), to refuse a
+    document a chart references with src=: not found, not allowed (a path
+    outside the directory your charts live in), not valid.
 
-    The compiler reports `message` as a diagnostic of that document, at
-    `line` and `column` when given, and compile_charts raises
-    CompileError with it among the others. Any other exception a resolver
-    raises is a bug in the resolver and propagates from compile_charts."""
+    A resolver is how charts that are split over files get compiled: the
+    compiler calls it for each static src= it does not have among the
+    sources. Raising ResolveError makes the refusal a diagnostic like any
+    other, at `line` and `column` when given (a resolver that checks a
+    file's content knows where it is wrong), so compile_charts or
+    compile_system raises CompileError with it among the others. Any other
+    exception a resolver raises is a bug in the resolver and propagates
+    from the compile call."""
 
     def __init__(self, message, line=None, column=None):
         super().__init__(message, status="TA_ERROR_INVALID")
@@ -65,7 +72,9 @@ class ResolveError(TinyactorsError):
 class Diagnostic:
     """One message of the compiler about a document: in
     Compiled.diagnostics (warnings and notes of a compilation that
-    succeeded) and CompileError.diagnostics.
+    succeeded) and CompileError.diagnostics. Show them where a person
+    edits charts (a terminal, an editor, a CI log) or assert on them in a
+    test.
 
     `severity` is "error", "warning" or "note", `code` the compiler's
     code for the kind of problem, `file`, `line` and `column` where it is
@@ -74,7 +83,7 @@ class Diagnostic:
 
     __slots__ = {
         "severity": "\"error\", \"warning\" or \"note\".",
-        "code": "The compiler's code for the kind of problem (stable across releases).",
+        "code": "The compiler's code for the kind of problem: match on it rather than on the message.",
         "file": "The document's name, as given to compile_charts or returned by a resolver.",
         "line": "The line in that document, from 1.",
         "column": "The column in that line, from 1.",

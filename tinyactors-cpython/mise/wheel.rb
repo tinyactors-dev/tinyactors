@@ -218,7 +218,7 @@ module CPython
           venv = File.join(dir, request)
           # installed first: with only the free-threaded build of a release
           # on the machine, uv would pick it, and abi3 cannot load there
-          CPython.run(uv, 'python', 'install', '--quiet', request)
+          CPython.run(uv, 'python', 'install', '--quiet', '--no-bin', request)
           CPython.run(uv, 'venv', '--quiet', '--python', request, venv)
           python = File.join(venv, 'bin', 'python')
           CPython.run(uv, 'pip', 'install', '--quiet', '--python', python, '--no-deps', wheel.to_s)
