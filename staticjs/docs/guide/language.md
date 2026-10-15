@@ -450,7 +450,7 @@ pair as one character, numbers by JSON's grammar read exactly (to the
 nearest double, ties to even: `1e400` is Infinity, `-0` is -0), objects in
 JavaScript's key order (integer-like keys first, ascending), a duplicate key's
 last value in its first place. A text that is not JSON faults, as JavaScript
-throws a SyntaxError, naming the position in UTF-16 code units. A number, a
+throws a SyntaxError, naming the position in UTF-16 code units. A program cannot catch that fault: staticjs has no `try` or `catch`. [Faults and refusals](faults.md#no-exceptions) shows how to parse with a host function that returns `undefined` for text that is not JSON, or to handle the fault in the host. A number, a
 boolean, null or undefined as the text is read as its string, as JavaScript
 reads it (`JSON.parse(1)` is 1). It faults where JavaScript would make what
 staticjs cannot hold: a lone surrogate (`"\uD800"`), or an object with the

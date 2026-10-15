@@ -44,6 +44,79 @@ Try them: each sample below stops where JavaScript would go on.
 JSON.parse('{"a": 1}', (key, value) => value)
 ```
 
+## No exceptions
+
+staticjs has no `try`, `catch`, `finally` or `throw`: a program that uses one is refused when compiled, as unsupported, with "staticjs has no exceptions". A fault ends the evaluation: nothing in the program runs after it. The host gets the fault (`SJS_RUN_FAULT` in C, a `StaticJSError` with `kind` "fault" from `run.step` in the npm package) with its position and message. `JSON.parse("{oops")` faults this way: "JSON.parse: a key must be a string (a SyntaxError in JavaScript)".
+
+### Test before the operation
+
+Where the language can tell, test first. `Array.isArray(x)`, `Number.isFinite(n)`, `typeof s === "string"`, `"a" in o`, optional chaining and `??` avoid the faults JavaScript would throw for a missing property or a wrong type:
+
+```js
+order?.items?.length ?? 0    // 0 for {}
+```
+
+No test tells whether a string is JSON. For that, use one of the next three.
+
+### A host function that cannot fail
+
+The host passes a global `tryParse(text)` that returns the value, or `undefined` when the text is not JSON. The program reads the result with `?.` and `??`:
+
+```js
+texts.map((t) => tryParse(t)?.a ?? "invalid")    // [1, "invalid"] for ['{"a": 1}', '{oops']
+```
+
+In the npm package ([Browser and Node](./wasm.md)) the function is a `try` and `catch` in JavaScript, on the host's side:
+
+```js
+const program = context.compile('texts.map((t) => tryParse(t)?.a ?? "invalid")', { globals: ['texts', 'tryParse'] });
+const run = program.start({
+  texts: ['{"a": 1}', '{oops'],
+  tryParse: (text) => { try { return JSON.parse(text); } catch { return undefined; } },
+});
+run.step(100_000);
+run.result();   // [1, "invalid"]
+```
+
+In C ([Embedding](./embedding.md)) it is a native that reads the text with `sjs_value_read` and leaves `undefined` as the result when that fails:
+
+```c
+/* tryParse(text): the value, or undefined when the text is not JSON. */
+static sjs_result try_parse(void *self, sjs_native_call *call) {
+    (void)self;
+    call->result = sjs_undefined();
+    if (call->count < 1 || call->arguments[0].kind != SJS_STRING) return SJS_OK;
+    sjs_str text = sjs_string_text(call->arguments[0]);
+    sjs_read_params params = { .format = SJS_FORMAT_JSON, .bytes = { (const uint8_t *)text.ptr, text.length } };
+    sjs_value value;
+    if (sjs_value_read(call->context, &params, &value) == SJS_OK) call->result = value;
+    return SJS_OK;
+}
+static const sjs_native_vtable try_parse_vtable = { try_parse, NULL };
+```
+
+It is passed as a global made with `sjs_function_native(context, (sjs_native){ NULL, &try_parse_vtable }, &global)`.
+
+### Read the JSON before the run
+
+When the text is known before the program starts, the host reads it and passes a value, or `undefined`, as a global. In the npm package `context.fromJSON(text)` throws a `StaticJSError` for text that is not JSON; in C `sjs_value_read` returns `SJS_ERR_PROGRAM` with the error.
+
+### Handle the fault in the host
+
+The host catches the `StaticJSError` from `run.step`, or sees `SJS_RUN_FAULT` from `sjs_vm_run`, and uses a default value or runs another program:
+
+```js
+let limit;
+try {
+  const run = program.start({ text });
+  run.step(100_000);
+  limit = run.result();
+} catch (error) {
+  if (!(error instanceof StaticJSError)) throw error;
+  limit = 10;   // the program faulted: the default
+}
+```
+
 ## Where it faults instead of following JavaScript
 
 These follow from the rule: staticjs stops where JavaScript would coerce,
