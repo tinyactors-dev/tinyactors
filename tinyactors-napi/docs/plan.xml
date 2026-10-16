@@ -104,11 +104,11 @@
       <python>Compiled.image (memoryview), .diagnostics, close(), with</python>
       <core>ta_compile_image, ta_compile_free</core>
     </item>
-    <item id="a-resolver" status="proposed">
+    <item id="a-resolver" status="decided">
       <node>resolver: (base, source) =&gt; string; throw new ResolveError(message, {line, column})</node>
       <python>resolver(base, source) -&gt; str; ResolveError(message, line=None, column=None)</python>
       <core>ta_compile_charts (ta_compile_options.resolve), ta_compile_diagnostics</core>
-      <note>Any callable, as Python's API review decided (2026-10-15); bindings.md section 1 and tinyactors-napi/AGENTS.md still say "an object with resolve(base, source)" (change c-resolver). A <code>SyntaxError</code> thrown by the resolver is not converted: JavaScript sources are not compiled at resolve time.</note>
+      <note>Any callable, decided by the maintainer for both bindings (2026-10-16: "any callable makes more sense because it's just a single function"), as Python's API review had (2026-10-15); bindings.md section 1 and tinyactors-napi/AGENTS.md now say so. A <code>SyntaxError</code> thrown by the resolver is not converted: JavaScript sources are not compiled at resolve time.</note>
     </item>
     <item id="a-host" status="proposed" decision="d-datamodel">
       <node>new Host(config, {ioProcessors, log, clock, telemetry, wake, migrated, services, migrationDone, transport, datamodel})</node>
@@ -279,7 +279,7 @@
       <question>Which ECMAScript datamodel does a host run, since both are named "ecmascript" and a host can hold only one?</question>
       <option id="native-default">A Host option, <code>datamodel: "native" | "quickjs"</code>, default <code>"native"</code>: the environment's datamodel list holds that one.</option>
       <option id="native-only">Only the native one in the API; quickjs only in the adapter.</option>
-      <recommendation option="native-default">Decided by the maintainer (2026-10-16): quickjs is the sandboxed ECMAScript datamodel; the native datamodel uses the application's JavaScript objects directly in its own engine, as the "python" datamodel uses Python's. Both pass the same suite. The option names an environment entry, which is core's (<code>environment-&gt;datamodels</code>). Still the maintainer's: whether "native" may be the default, since the rulebook forbids defaults of the binding's own (napi AGENTS.md, "What not to build"; bindings.md section 2); the alternative is a required option. quickjs as a sandbox needs its limits passed through (<code>max_ops</code>, <code>memory_limit</code>, the realm: <code>ta_datamodel_ecmascript_config</code>), which Python does not expose (its host.c creates quickjs with a zeroed config).</recommendation>
+      <recommendation option="native-default">Decided by the maintainer (2026-10-16): quickjs is the sandboxed ECMAScript datamodel; the native datamodel uses the application's JavaScript objects directly in its own engine, as the "python" datamodel uses Python's. Both pass the same suite. The option names an environment entry, which is core's (<code>environment-&gt;datamodels</code>). The default is "native", decided by the maintainer as an exception to "no defaults of our own" (2026-10-16: "Native may be the default. Actually, it's what most people will expect."). quickjs as a sandbox needs its limits passed through (<code>max_ops</code>, <code>memory_limit</code>, the realm: <code>ta_datamodel_ecmascript_config</code>), which Python does not expose (its host.c creates quickjs with a zeroed config).</recommendation>
       <evidence kind="repo">tinyactors-test/docs/driver.md:72-82; tinyactors-core/include/tinyactors/datamodel_ecmascript.h (max_ops, memory_limit, realms).</evidence>
     </decision>
     <decision id="d-async" status="recommended" owner="api-review">
@@ -598,7 +598,7 @@
     </change>
     <change id="c-resolver" file="tinyactors-napi/AGENTS.md" section="Layers and the resolver">
       <now>"A resolver is an object with resolve(base, source) returning the text".</now>
-      <becomes>A resolver is any callable (base, source) =&gt; text, as Python's API review decided; tinyactors-core/docs/bindings.md section 1 says the same once the coordinator updates it.</becomes>
+      <becomes>A resolver is any callable (base, source) =&gt; text. Applied 2026-10-16, with bindings.md section 1.</becomes>
       <evidence kind="repo">tinyactors-cpython/ROADMAP.md, "The API review": "The resolver is any callable".</evidence>
     </change>
     <change id="c-vm" file="tinyactors-napi/AGENTS.md" section="C rules (Layers) and The binding's memory">

@@ -51,8 +51,9 @@ API"). Node's names and shapes are decided in step 8.5:
   built now: it calls only the addon's API and adds shapes, not
   behaviour (images from a name→text mapping, spawning by chart name, a
   chart builder).
-- **A resolver is an object** with `resolve(base, source)` returning the
-  text, given to the compile call only (a static `src`, at compile time;
+- **A resolver is any callable** `(base, source) => text` (a function,
+  an arrow, a bound method; decided 2026-10-16, as Python's API review
+  did), given to the compile call only (a static `src`, at compile time;
   a refusal reported as a diagnostic at its line and column, the message
   in the compilation's scratch arena,
   `tinyactors-core/docs/boundary.md` section 12). **The resolver lives
