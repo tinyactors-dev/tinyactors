@@ -143,11 +143,11 @@
       <python>io_processors={type: handler}; the Send view; answer; fail</python>
       <core>TA_EFFECT_SEND, ta_host_effect_number, ta_host_effect_text, TA_EFFECT_FIELD_TRACEPARENT, TA_EFFECT_FIELD_ORIGIN, ta_host_send, TA_EVENT_IN_ERROR_COMMUNICATION</core>
     </item>
-    <item id="a-transport" status="open" decision="d-address">
-      <node>transport: (host, send) =&gt; void | Promise; send.message; host.send(message); host.fail(target, sendid)</node>
-      <python>transport=handler(host, send); send.message; Host.send(message); Host.fail(target, sendid=None)</python>
-      <core>TA_EFFECT_SEND, ta_host_send, ta_host_resolve, ta_address_parse, TA_EVENT_IN_ERROR_COMMUNICATION</core>
-      <note>The transport's sends have <code>io_processor</code> 0. Their <code>target</code> and <code>origin</code> are the language's address value: what that is in JavaScript is decision d-address.</note>
+    <item id="a-transport" status="decided" decision="d-address">
+      <node>transport: (host, send) =&gt; void | Promise; send.message; host.send(message); host.fail(target, sendid); Address (text, system, session, name)</node>
+      <python>transport=handler(host, send); send.message; Host.send(message); Host.fail(target, sendid=None); Address</python>
+      <core>TA_EFFECT_SEND, ta_host_send, ta_host_resolve, ta_address_parse, ta_address_name_decode, TA_EVENT_IN_ERROR_COMMUNICATION</core>
+      <note>The transport's sends have <code>io_processor</code> 0; their <code>target</code> and <code>origin</code> are <code>Address</code> values (decision d-address).</note>
     </item>
     <item id="a-log" status="proposed">
       <node>log: (host, entry) =&gt; void; entry.session, .label, .text</node>
@@ -190,11 +190,11 @@
       <python>bytes copied once</python>
       <core>ta_host_traces, ta_host_logs, ta_host_metrics, ta_host_hibernate, ta_host_snapshot_pack</core>
       <note>Decided for both bindings (boundary.md section 7): never a view of host memory handed to the application.</note>
-    </item><item id="a-values" status="open" decision="d-address">
+    </item><item id="a-values" status="decided" decision="d-address">
       <node>encode(value) → Uint8Array; decode(bytes) → value</node>
       <python>tinyactors.encode, tinyactors.decode</python>
       <core>ta_cbor_writer_init, ta_cbor_reader_init, ta_cbor_read, ta_cbor_writer_bytes, ta_cbor_writer_free</core>
-      <note><code>undefined</code> and <code>null</code> stay distinct; integers beyond 2^53 are <code>bigint</code>. Tag 32 is read as its address string and never written (decided 2026-10-12, 20189bdc), which the guide's address value (f53ae02) now questions: decision d-address.</note>
+      <note><code>undefined</code> and <code>null</code> stay distinct; integers beyond 2^53 are <code>bigint</code>. Inside values, tag 32 is read as its address string and never written (Node's datamodels have no reference type); the API's address fields are <code>Address</code> values (decision d-address).</note>
     </item>
     <item id="a-error" status="proposed">
       <node>TinyactorsError {message, code, reason, path, status}</node>
@@ -279,7 +279,7 @@
       <question>Which ECMAScript datamodel does a host run, since both are named "ecmascript" and a host can hold only one?</question>
       <option id="native-default">A Host option, <code>datamodel: "native" | "quickjs"</code>, default <code>"native"</code>: the environment's datamodel list holds that one.</option>
       <option id="native-only">Only the native one in the API; quickjs only in the adapter.</option>
-      <recommendation option="native-default">Decided by the maintainer (2026-10-16): quickjs is the sandboxed ECMAScript datamodel; the native datamodel uses the application's JavaScript objects directly in its own engine, as the "python" datamodel uses Python's. Both pass the same suite. The option names an environment entry, which is core's (<code>environment-&gt;datamodels</code>). The default is "native", decided by the maintainer as an exception to "no defaults of our own" (2026-10-16: "Native may be the default. Actually, it's what most people will expect."). quickjs as a sandbox needs its limits passed through (<code>max_ops</code>, <code>memory_limit</code>, the realm: <code>ta_datamodel_ecmascript_config</code>), which Python does not expose (its host.c creates quickjs with a zeroed config).</recommendation>
+      <recommendation option="native-default">Decided by the maintainer (2026-10-16): quickjs is the sandboxed ECMAScript datamodel; the native datamodel uses the application's JavaScript objects directly in its own engine, as the "python" datamodel uses Python's, and a host that names no datamodel gets the native one ("Native may be the default. Actually, it's what most people will expect.", an exception the maintainer makes to "no defaults of our own"). Both pass the same suite. The option names an environment entry, which is core's (<code>environment-&gt;datamodels</code>). quickjs as a sandbox needs its limits passed through (<code>ta_datamodel_ecmascript_config</code>: <code>max_ops</code>, <code>memory_limit</code>, the realm), which Python does not expose.</recommendation>
       <evidence kind="repo">tinyactors-test/docs/driver.md:72-82; tinyactors-core/include/tinyactors/datamodel_ecmascript.h (max_ops, memory_limit, realms).</evidence>
     </decision>
     <decision id="d-async" status="recommended" owner="api-review">
@@ -325,11 +325,11 @@
       <recommendation option="dispose"><code>Symbol.dispose</code> and <code>Symbol.asyncDispose</code> exist in node 22 and bun, so the methods work and <code>using</code> works wherever the runtime parses it: bun 1.4 does, node 22 does not (spike s-js, corrected). The README promises <code>close()</code> and the symbols, not <code>using</code>, on the oldest Node the package claims.</recommendation>
       <evidence kind="spike">s-js (corrected): both symbols exist in both runtimes; node v22.22.0 and v22.23.3 answer "SyntaxError: Unexpected identifier 'x'" for a using declaration, bun parses it.</evidence>
     </decision>
-    <decision id="d-declarations" status="recommended" owner="maintainer">
+    <decision id="d-declarations" status="decided" owner="maintainer">
       <question>Where does the native datamodel evaluate a chart, and what does it do with a <code>&lt;script&gt;</code>'s top-level declarations (<code>var</code>, <code>function</code>, <code>let</code>, <code>const</code>, <code>class</code>), which SCXML makes the session's global variables (W3C 452)?</question>
       <option id="vm-contexts">Contexts of <code>node:vm</code> (through <code>process.getBuiltinModule</code>), never the application's realm: one shared context for the charts that declare nothing, each session a scope object inside it; a context per session only for a chart whose scripts declare top-level names, where a script runs as global code and closures work. Whether a chart declares is asked of the engine at <code>chart_attach</code> (the script after <code>throw 0;</code> in a scratch context: the global's new names, and a second run's redeclaration error for <code>let</code>, <code>const</code> and <code>class</code>); the addon parses no JavaScript.</option>
       <option id="refuse">Refuse top-level declarations on the native datamodel, and skip W3C 452 there.</option>
-      <recommendation option="vm-contexts">Decided in outline by the maintainer (2026-10-16): "we can just pass Node.js VM objects if we really need to, a different global context, but probably we can share that per chart type or something. I want to avoid having to parse JavaScript at runtime if possible." The shared context keeps the application's globals clean and costs once; the per-session context is paid only by charts that need one (143 KB on node, 60 KB on bun, spike s-vm), so a chart's author chooses it by writing <code>var</code> in a script. Pre-declaring names and copying bindings out stays rejected (closures). Open for the maintainer: one shared context per host's datamodel or one per chart (144 KB and 0.9 ms each on node); per host is cheaper and keeps every chart's values in one realm, which matters below.</recommendation>
+      <recommendation option="vm-contexts">Decided by the maintainer (2026-10-16): "we can just pass Node.js VM objects if we really need to, a different global context ... I want to avoid having to parse JavaScript at runtime if possible", and "sharing per host is okay": one shared context per host's native datamodel, so every chart's values are of one realm, and a context per session only for a chart whose scripts declare top-level names (143 KB on node, 60 KB on bun, spike s-vm), which a chart's author chooses by writing <code>var</code> in a script. Pre-declaring names and copying bindings out stays rejected (closures).</recommendation>
       <evidence kind="spike">s-vm: declarations found by the engine in both runtimes (count and inc; b, c, D in their temporal dead zone); a shared context evaluates a session's scope; a per-session context keeps a closure over its var (count 2); the application's globalThis untouched; an application array inside a chart's context is not instanceof Array (Array.isArray is true).</evidence>
       <evidence kind="repo">datamodel_ecmascript.h:16-27 (quickjs's own rule, shared realm and isolated sessions, which this mirrors in Node's engine without sharing code with it).</evidence>
     </decision>
@@ -340,11 +340,11 @@
       <recommendation option="txml">Decided by the maintainer (2026-10-16): the quickjs and native datamodels are completely separate, and the bindings may use the project's XML library where the runtime has no XML. The request r-dom is withdrawn. The addon's layer lint lets src/datamodel/ call <code>txml_*</code>; the build compiles txml's amalgamation; the test task's sources list tinyxml's.</recommendation>
       <evidence kind="repo">tinyxml/README.md ("freestanding XML reader and writer in C ... no C library, allocates only through an embedder-supplied allocator"); tinyxml/include/txml.c, txml.h.</evidence>
     </decision>
-    <decision id="d-errors" status="recommended" owner="maintainer">
+    <decision id="d-errors" status="decided" owner="maintainer">
       <question>Where does an error go that the event loop's turn raises (a handler threw, a reply's error had no onError, a fault, an exhausted pool), or that a handler's promise rejects after its turn, when no <code>idle()</code> waits?</question>
       <option id="keep">Keep it for the next <code>idle()</code>, as Python's asyncio driver does.</option>
       <option id="throw">Reject every waiting <code>idle()</code>; with none waiting, throw it from the turn's callback (after the timer is armed again, or the host stalls), and let a late rejection stay unhandled, so the runtime reports it as any uncaught error or unhandled rejection.</option>
-      <recommendation option="throw">There is no driver call to raise an error from (d-drive, decided), so a kept error would wait for an <code>idle()</code> many programs never call. It departs from the Python binding's decided rule, so it is the maintainer's, and the README must say that a handler's bug ends the process by default in Node (an unhandled rejection since Node 15; Bun's default unverified).</recommendation>
+      <recommendation option="throw">Decided by the maintainer (2026-10-16: "you can raise errors"). There is no driver call to raise an error from (d-drive), so the turn rejects every waiting <code>idle()</code> and, with none waiting, throws from its callback after re-arming the timer; a late rejection stays unhandled. The README says that a handler's bug ends the process by default in Node unless the application handles <code>uncaughtException</code> or <code>unhandledRejection</code> (Bun's default unverified).</recommendation>
       <evidence kind="repo">tinyactors-cpython/src/loop.c:328-356 (ta_python_loop_settle: "nobody waits: the next idle() raises it"), :369-382 (the timer re-armed before the settle).</evidence>
     </decision>
     <decision id="d-clock" status="decided" owner="maintainer">
@@ -354,17 +354,23 @@
       <recommendation option="schedule">The decided rule (d-drive) has one driver, the event loop; a synchronous turn inside increment would be a second one, and would run handlers (and their promises' first steps) inside the caller's stack. The cost is one await in a test: <code>clock.increment(1000); await host.idle()</code>. Decided by the maintainer (2026-10-16): "Your clock proposal makes sense."</recommendation>
       <evidence kind="repo">bindings.md section 3, "A caller's own clock"; tinyactors-cpython/src/loop.c, ta_python_clock_increment.</evidence>
     </decision>
-    <decision id="d-address" status="open" owner="maintainer">
-      <question>What is an address in JavaScript, now that the guide asks every binding for an address value with its system, session and name (f53ae02), while Node decided on 2026-10-12 that an actor reference is its string?</question>
-      <option id="string">Keep the string everywhere; give the parts with a function over <code>ta_address_parse</code> (<code>parseAddress(text) → {system, session, name}</code>).</option>
-      <option id="value">An <code>Address</code> class for <code>send.target</code> and <code>send.origin</code> of the transport's sends only (Python's rule since f53ae02), while values inside event data stay strings.</option>
-      <recommendation option="string">The 2026-10-12 spike measured a class at 393/257 ns and 64 B more per value against 155/123 ns for a string, and the string compares with <code>===</code>, keys a Map and is what <code>send</code> takes; a function over core's parser gives the parts without a type. The guide's sentence is written for Python's datamodel, which has a reference type; Node's datamodels have none.</recommendation>
-      <evidence kind="repo">root ROADMAP.md, "Pitfalls each binding handles", "an actor reference is a string"; tinyactors-core/docs/bindings.md section 9 (the address value, f53ae02).</evidence>
+    <decision id="d-address" status="decided" owner="maintainer">
+      <question>What is an address in JavaScript, now that the guide asks every binding for an address value with its system, session and name (f53ae02)?</question>
+      <option id="python">Python's shape (tinyactors-cpython/src/value_types.c): an immutable <code>Address</code> whose parts are read by core's parser on each access, <code>.text</code>, <code>.system</code>, <code>.session</code> (a bigint), <code>.name</code> (<code>ta_address_parse</code>, <code>ta_address_name_decode</code>), <code>undefined</code> for a part the text lacks; it is <code>send.origin</code>, the transport's <code>send.target</code> and their fields in <code>send.message</code>; <code>host.send</code> and <code>host.fail</code> take an <code>Address</code> or a string. <code>toString()</code> gives the text, so it prints and joins strings as the address.</option>
+      <option id="string">Strings everywhere, with a function over the same parser.</option>
+      <recommendation option="python">Decided by the maintainer (2026-10-16: "check what Python is doing"): the value is core's parser behind a JavaScript type, so no application or binding parses the grammar, and the two bindings have the same API. Inside event data an actor reference stays its address string: Node's datamodels are both ECMAScript, which has no reference type (values.txt, "ECMAScript: an actor reference is its address"; decided 2026-10-12), so tag 32 is still read as text there and never written.</recommendation>
+      <evidence kind="repo">tinyactors-cpython/src/value_types.c:80-123; tinyactors-cpython/docs/api-map.md, rows Address.system, send.message; tinyactors-core/include/tinyactors/address.h; bindings.md section 9.</evidence>
     </decision>
     <decision id="d-separate" status="decided" owner="maintainer">
       <question>May the native datamodel share code or text with quickjs's?</question>
       <option id="separate">No: the two ECMAScript datamodels are completely separate; they meet only in the suite they both pass.</option>
       <recommendation option="separate">Decided by the maintainer (2026-10-16): "the QuickJS model and the Node.js model, they have to be completely separate." So no request to core for quickjs's internals (r-declarations and r-dom withdrawn); the native datamodel asks its own engine and uses txml.</recommendation>
+    </decision>
+    <decision id="d-layers" status="decided" owner="maintainer">
+      <question>How is the package layered?</question>
+      <option id="two-layers">As Python's: the addon is the direct layer and mirrors core's API more or less one to one (compileCharts is ta_compile_charts, chart is ta_host_chart, spawn takes the reference chart returns, addImage returns the segment), every item a row of docs/api-map.md; a convenience layer in JavaScript (an image from a name-to-text mapping, spawn by chart name, a chart builder over ta_xml_writer, a directory resolver) comes later, calls only the direct layer, and adds shapes, never behaviour. index.mjs loads the addon and re-exports it, nothing else, until then.</option>
+      <recommendation option="two-layers">Decided for both bindings (2026-10-13; bindings.md section 1, "Two layers"; tinyactors-napi/AGENTS.md, "Layers and the resolver"), confirmed by the maintainer for this plan (2026-10-16). The direct layer's completeness is checked, not assumed: step p0-inventory goes through every public header, as bindings.md section 2 asks, and the API review then reads the inventory as Python's did (it added compile_system and actor_by_name, and left ta_host_segment_count out).</recommendation>
+      <evidence kind="repo">tinyactors-cpython/AGENTS.md, "Layers"; tinyactors-cpython/ROADMAP.md, "The API review" (the surface completed against core's headers).</evidence>
     </decision>
   </decisions>
 
@@ -377,13 +383,18 @@
         <done-when>Every change of section rulebook is in AGENTS.md and ROADMAP.md's "Done means" agrees.</done-when>
         <files>tinyactors-napi/AGENTS.md, tinyactors-napi/ROADMAP.md</files>
       </step>
-      <step id="p0-map" status="todo" after="p0-rulebook">
+      <step id="p0-map" status="todo" after="p0-rulebook p0-inventory">
         <title>The mapping table, planned rows</title>
         <does>Write every row of section api into docs/api-map.md marked planned, with the core names api_map.rb checks, and the list of core functions used internally or not exposed (as Python's).</does>
         <done-when><code>mise run lint</code> passes the mapping check with every row planned.</done-when>
         <files>tinyactors-napi/docs/api-map.md</files>
       </step>
-      <gate>lint passes; the maintainer has seen the decisions marked open.</gate>
+      <step id="p0-inventory" status="todo" after="p0-rulebook" decision="d-layers">
+        <title>The inventory of core's public headers</title>
+        <does>Every TA_API function of tinyactors-core/include/tinyactors/*.h, header by header, put in one of three lists in docs/api-map.md: behind an API item; used internally (where: the loop, values.c, the datamodel, the tables, the arena); not exposed (why: below the host, the system layer the host drives; the freestanding runtime; wasm; the OTLP encoder's internals). The candidates a first scan (2026-10-16) found with no row in this plan, for the API review to decide: ta_address_format and ta_address_format_name (an Address made from a system and a session or name), ta_datamodel_ecmascript_set_memory_limit, _heap_bytes and _last_error (quickjs's limits and why a hibernation was refused), ta_host_segment_count and ta_host_snapshot_segments (Python left them out, with a reason), ta_http_encode_post and ta_http_parse_request (BasicHTTP, for the W3C adapter and an application's HTTP processor), and ta_xml_writer_* (the convenience layer's chart builder).</does>
+        <done-when>Every public function is in one list with its reason; the mapping check passes; the same scan is offered to the Python binding, whose map lists only a few functions as used internally.</done-when>
+        <files>tinyactors-napi/docs/api-map.md</files>
+      </step><gate>lint passes; the maintainer has seen the decisions marked open.</gate>
     </phase>
 
     <phase id="p1" title="Step 8.5's done means: M1 on both runtimes and both datamodels">
@@ -522,6 +533,12 @@
       <scenario>W3C 457 checks <code>instanceof Array</code> on a foreach collection; an application sends <code>[1, 2]</code> as event data and a chart tests <code>_event.data instanceof Array</code>.</scenario>
       <evidence kind="spike">s-vm: [false, true] for instanceof Array and Array.isArray.</evidence>
       <action>Capture and inputs already copy mutable values (actors share no mutable value): make the copy with the receiving context's constructors, so a payload is of the datamodel's shared realm; a session of its own context gets its copy at bind_event. One shared context per host's datamodel (d-declarations) keeps that copy to the isolated charts. Settled by W3C 457 and a test with application data.</action>
+    </finding>
+    <finding id="x-layers" verdict="confirmed">
+      <claim>The plan's API mirrored Python's, not core's headers: nothing checked that every public function of core is exposed, used internally or left out with a reason.</claim>
+      <scenario>A scan of the public headers (2026-10-16) against the plan's api section found core functions an application could want and no row names: address formatting, quickjs's memory limit and last error, BasicHTTP's encoder and parser.</scenario>
+      <evidence kind="repo">tinyactors-core/docs/bindings.md section 2 ("inventory the public headers it drives and write the mapping table ... A core function with no item is used internally (say where) or not exposed (say why)"); root AGENTS.md, "Bindings expose the core, nothing else".</evidence>
+      <action>Step p0-inventory and decision d-layers. Raised by the maintainer (2026-10-16).</action>
     </finding></findings>
 
   <spikes>
@@ -573,7 +590,7 @@
   <rulebook>
     <change id="c-transport" file="tinyactors-napi/AGENTS.md" section="What reaches the application">
       <now>"PEER versus PEER_ERROR in the API is deferred: carrying envelopes is the application's"; envelopes listed among what lives until the ack.</now>
-      <becomes>The transport handler for sends with <code>io_processor</code> 0, failed without one; <code>send.message</code> as the outgoing half, <code>host.send(message)</code> the incoming one, <code>host.fail(target, sendid)</code> a failure; the address value as decision d-address decides; no peers or envelopes.</becomes>
+      <becomes>The transport handler for sends with <code>io_processor</code> 0, failed without one; <code>send.message</code> as the outgoing half, <code>host.send(message)</code> the incoming one, <code>host.fail(target, sendid)</code> a failure; <code>Address</code> values for the address fields, backed by ta_address_parse (decision d-address); no peers or envelopes.</becomes>
       <evidence kind="repo">commits f4c2819, bf0b8a1, f53ae02; tinyactors-core/docs/bindings.md section 9; tinyactors-cpython/AGENTS.md, "Other systems".</evidence>
     </change>
     <change id="c-sync" file="tinyactors-napi/ROADMAP.md" section="Done means">
