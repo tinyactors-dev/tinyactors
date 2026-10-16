@@ -460,7 +460,7 @@
         <done-when>The numbers are in AGENTS.md beside Python's 433 B and quickjs's 1104 B, each from the same machine and run.</done-when>
         <files>tools/measure.mjs, mise/tasks/measure</files>
       </step>
-      <step id="p1-rules" status="todo" after="p1-conform">
+      <step id="p1-rules" status="done" after="p1-conform" commit="e98b970">
         <title>The rules the suite cannot see</title>
         <does>A test for each rule of AGENTS.md's list: deferred release, stale handles, stale views, nested marks, one handle scope per entry, the scope's refusals, type tags, one drain at a time, pending handlers dropped, a Host posted to a worker (it arrives as a plain object, spike s-worker, and the type tag refuses it), lone surrogates, int64 saturation.</does>
         <done-when>Each rule names its test in AGENTS.md.</done-when>
