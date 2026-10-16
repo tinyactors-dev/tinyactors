@@ -211,11 +211,11 @@
     <evidence>tinyactors-napi/src/loop.c ta_napi_take, ta_napi_end_traces, ta_napi_loop_stop; src/host.c ta_napi_host_close_now</evidence>
     <resolution>the telemetry step hands each take to the handler (a Buffer copy) and asyncDispose awaits its promises</resolution>
   </entry>
-  <entry id="l-p1-compile-unreachable-statuses" date="2026-10-16" step="p1-compile" kind="note" status="open">
+  <entry id="l-p1-compile-unreachable-statuses" date="2026-10-16" step="p1-compile" kind="note" status="resolved">
     <what>Two run statuses stay untested: TA_RUN_EXHAUSTED (core grows a full pool itself between runs; it answers EXHAUSTED only when the host's allocator refuses) and TA_RUN_FAULT (a run with a batch open, which the drain before every run rules out). A handler's error thrown from the turn's callback and close() from a handler deferred to the turn's end need a handler that runs JavaScript in a turn (the log handler, an I/O processor), which p1-effects builds.</what>
     <why>No input of the public API reaches them, and the rulebook adds no test hook of our own (no allocator that fails on demand).</why>
     <evidence>tinyactors-core/docs/host-config.md (every capacity doubles when it fills); tinyactors-core/include/tinyactors/host.h:243-256; tinyactors-napi/test/loop.test.mjs (header)</evidence>
-    <resolution>p1-effects added to test/loop.test.mjs: a handler's error with no idle() waiting thrown from the turn's callback (a child process, its uncaughtException), the host going on, and close() from a handler deferred to the end of the turn. TA_RUN_EXHAUSTED and TA_RUN_FAULT stay untested (status open).</resolution>
+    <resolution>p1-effects added to test/loop.test.mjs: a handler's error with no idle() waiting thrown from the turn's callback (a child process, its uncaughtException), the host going on, and close() from a handler deferred to the end of the turn. TA_RUN_EXHAUSTED and TA_RUN_FAULT stay untested (status open). p1-rules: logged as unreachable through the public API, with the reasons in AGENTS.md ('Refusals no input reaches'): TA_RUN_EXHAUSTED needs the host's allocator to refuse a pool's growth (malloc under overcommit does not refuse; a child under ulimit -v was not tried as a test: unverified); TA_RUN_FAULT needs a run with a batch open, which the drain before every run rules out, or a segment past core's limits (8388606 actors). The addon adds no allocator that fails on demand.</resolution>
   </entry>
   <entry id="l-p1-compile-input-options" date="2026-10-16" step="p1-compile" kind="decision" status="for-maintainer">
     <what>spawn's and send's options objects refuse a key they do not know (TypeError, as new Host does: l-p1-host-unknown-options); send(message) ignores unknown keys, as the rulebook says. undefined and null are 'none' for name, sendid, origin and traceparent; data undefined is no payload, null is a payload of null. send(target, ...) takes the message shape only when called with one object argument.</what>
@@ -354,10 +354,11 @@
     <why>The rulebook says ids are always bigints, and the value table says safe integers are numbers; a reply is a value.</why>
     <evidence>tinyactors-napi/docs/values.md; test/methods.test.mjs first case (actorList)</evidence>
   </entry>
-  <entry id="l-p1-methods-refusals-untested" date="2026-10-16" step="p1-methods" kind="note" status="open">
+  <entry id="l-p1-methods-refusals-untested" date="2026-10-16" step="p1-methods" kind="note" status="resolved">
     <what>ta_host_post's refusals at the call (TA_ERROR_STATE during a run or inside a datamodel, TA_ERROR_NO_MEMORY) remove the row and throw, but no test reaches them: no JavaScript runs inside a run on quickjs, and the allocator cannot be made to refuse from a test. The native datamodel (p1-datamodel) runs JavaScript inside a run: a chart's script calling host.hostStats should then be refused with TA_ERROR_STATE, worth a test there.</what>
     <why>The brief lists those refusals; the path exists in code only.</why>
     <evidence>tinyactors-napi/src/methods.c ta_napi_typed (posting.status)</evidence>
+    <resolution>p1-rules: unreachable through the public API, said in AGENTS.md ('Refusals no input reaches'): TA_ERROR_STATE at the post needs application JavaScript inside ta_host_run, which no chart reaches on the native datamodel (no application object crosses: l-p1-datamodel-typed-method) and quickjs never runs; TA_ERROR_NO_MEMORY needs an allocator that refuses. The path stays code only (ta_napi_typed removes the row and throws).</resolution>
   </entry>
   <entry id="l-p1-datamodel-realm-script" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
     <what>What must be made with a context's own constructors is made by a script that runs once in every node:vm context the native datamodel makes, src/datamodel/realm.js (embedded as a C string by mise/napi.rb, as Python embeds support.py): its kit copies values crossing between actors, makes a chart's scope constructor, a session's system variables, _event and XML nodes, and parses JSON content. C calls the kit's functions; the expressions themselves are each a vm.Script compiled at their first evaluation.</what>
@@ -478,5 +479,36 @@
     <what>An event string longer than a slab page (4096 bytes) makes ta_host_send grow the segment without bound: host.send(session, 'x'.repeat(8000)) never returns and the process is killed at about 6 GB resident.</what>
     <why>ta_system_send answers TA_ERROR_NO_MEMORY for a string no slab class holds (src/base/slab.h: max object size TA_SLAB_PAGE), and host_send_to retries after segment_grow for as long as the growth succeeds; the same retry is in spawn (host.c:713), adopt (:1481, :1530) and wake (:2083), and a run's EXHAUSTED grows between runs too (unverified for a chart's long eventexpr). Any input carrying text reaches it, a transport's message from the network included. The addon works around nothing (AGENTS.md, 'Gaps in core'); written under ROADMAP.md, 'Requests to core'.</why>
     <evidence>gdb on node 22.23.3: ta_napi_host_send -&gt; ta_host_send -&gt; segment_grow -&gt; ta_system_relocate -&gt; place (memset); 4000 bytes pass, 6000 and 8000 hang; tinyactors-core/src/host/host.c:724-737</evidence>
+  </entry>
+  <entry id="l-p1-rules-session-zero" date="2026-10-16" step="p1-rules" kind="decision" status="for-maintainer">
+    <what>A session 0n is refused as a TypeError by send, fail, terminate and send(message), as the message 'a session is a bigint from 1 to 2^64-1' said; it used to reach core, which refused it with another status.</what>
+    <why>0 is core's 'no session' (ta_host_actor_by_name), never an id; one refusal for every value that is not a session.</why>
+    <evidence>tinyactors-napi/src/host.c ta_napi_session_of; test/host.test.mjs 'send refuses what it cannot take, and keeps nothing of it'; test/rules.test.mjs 'sessions are bigints from 1 to 2^64-1, never a number that saturates'</evidence>
+  </entry>
+  <entry id="l-p1-rules-handle-scope" date="2026-10-16" step="p1-rules" kind="note" status="for-maintainer">
+    <what>'One handle scope per vtable entry' has no test: a missing scope changes nothing JavaScript can read. AGENTS.md says so and names the code that shows it.</what>
+    <why>Handles live outside the engine's heap (not in memoryUsage, not in v8.getHeapStatistics), and neither runtime bounds them in one native call, so a run without scopes neither fails nor shows a counter.</why>
+    <evidence>src/datamodel/datamodel.c ta_napi_frame_open / ta_napi_enter_entry in every entry that makes a value; rows.c ta_napi_native_drop opens its own; effects.c ta_napi_dispatch one per effect; compile.c ta_napi_resolve one per call</evidence>
+  </entry>
+  <entry id="l-p1-rules-deferral" date="2026-10-16" step="p1-rules" kind="note" status="for-maintainer">
+    <what>The deferred last drop of a payload is tested by its effect (the value is collected after the flush), not by the deferral: neither runtime runs JavaScript when a napi_ref is deleted.</what>
+    <why>A FinalizationRegistry callback is a task of its own, after the collection; so the drops list is a guard for the rule of bindings.md section 8 that no test can trip on node or bun.</why>
+    <evidence>test/rules.test.mjs 'a payload whose last reference goes is let go after the call: its value is collected' (native only: quickjs's payloads are quickjs's)</evidence>
+  </entry>
+  <entry id="l-p1-rules-receiver-check" date="2026-10-16" step="p1-rules" kind="note" status="for-maintainer">
+    <what>Node refuses a Host prototype method called on another object before the addon's type tag is read (V8's receiver check: TypeError 'Illegal invocation'); Bun reaches the tag ('not a Host'). Both give a TypeError, which is what the tests check.</what>
+    <why>Node-API's napi_define_class gives prototype methods a signature in Node; Bun's does not.</why>
+    <evidence>spike in a worker, node 22.23.3 and bun 1.4.1 (test/rules.test.mjs 'a Host posted to a worker arrives as a plain object, which every method refuses')</evidence>
+  </entry>
+  <entry id="l-p1-rules-view-state" date="2026-10-16" step="p1-rules" kind="uncertainty" status="for-maintainer">
+    <what>A thin view's state (host, ack count, index, flags, cached fields) is an array under the instance's view symbol, which Object.getOwnPropertySymbols reveals on a real view: code that rewrites it (the RECORD flag, the ack count) can read another effect of the same host, or answer a send after its ack. It cannot read memory: core bounds every index and payloads are generation-checked handles.</what>
+    <why>Views are not wrapped (the addon allocates nothing per effect) and Node-API has no private symbols. Tampering is the application's own code against its own host; type-tagging views would refuse a copied state but not a rewritten one. Left as is; said in AGENTS.md.</why>
+    <evidence>src/effects.c ta_napi_view_new, ta_napi_view_construct; tinyactors-core/src/host/host.c:1120-1121, :1203-1205</evidence>
+  </entry>
+  <entry id="l-p1-rules-readme" date="2026-10-16" step="p1-rules" kind="decision" status="resolved">
+    <what>README.md now says the four things the rulebook asks it to (chart code is trusted, a pending deadline keeps the process alive, a handler's error ends the process by default, using needs a runtime that parses it), in a section 'Before you use it'; a test checks each.</what>
+    <why>The rule is in the list of rules each with a test of its own, and the README had only its status line.</why>
+    <evidence>README.md; test/rules.test.mjs 'the README says what no test can show: charts are trusted, deadlines keep a process alive, errors end it, using'</evidence>
+    <resolution>Written in p1-rules; the README's usage sections come with the convenience layer.</resolution>
   </entry>
 </log>

@@ -480,42 +480,145 @@ d-dom, d-separate):
 
 ## Rules the suite cannot see, each with a test of its own
 
+Each rule names the test that shows it (`file: 'case'`); every file runs
+under node and bun, on both datamodels. Where a rule cannot be shown
+through the public API, it says why. `test/rules.test.mjs: 'every rule in
+AGENTS.md names tests that exist'` checks each name below against its
+file.
+
 - **Dropping a payload's last reference can run JavaScript** (a
   finalizer), and core calls `release` outside a run too (the ack,
   `ta_host_free`, posts, deliver), where it holds the run's rules. Defer
   the last drop to a list emptied after the outer call into core returns
-  (bindings.md, section 8).
+  (bindings.md, section 8). Tests: `test/rules.test.mjs: 'a payload whose
+  last reference goes is let go after the call: its value is collected'`
+  (native; quickjs's payloads are quickjs's). The deferral itself cannot
+  be seen: neither runtime runs JavaScript when a reference is deleted (a
+  `FinalizationRegistry` callback is a task of its own), so the test shows
+  that what the drops hold goes at the flush.
 - **Handles are `ta_table` handles** with a generation: a stale one is
-  refused, never a pointer.
+  refused, never a pointer. Tests: `test/rules.test.mjs: 'rows are
+  handles: a slot reused under a new generation gives each session and
+  payload its own'`; `test/methods.test.mjs: 'a typed method answers its
+  own handle: a second method from onResult is answered too'` (a pending
+  row's slot reused); `test/host.test.mjs: 'terminate ends an actor; a
+  session that is gone is refused'`. A stale id in a reply cannot be made
+  through the API (the addon posts every id), so its refusal is code
+  only (`ta_napi_reply`: `ta_table_get`, NULL dropped).
 - **Expressions are compiled once, lazily, as a strict function inside
   `with (scope)`**, so an undeclared assignment throws and a syntax error
   waits for its evaluation; `assign` checks the location as SCXML asks.
+  Tests: `test/datamodel.test.mjs: 'the scope refuses an undeclared
+  assignment, a system variable and _event'` and `'a syntax error is its
+  own evaluation's error.execution: the chart's other expressions run'`.
 - **One handle scope per vtable entry:** a run is one native call, so
   handles opened by the entries would pile up until it returns
-  (`napi_open_handle_scope` around each entry).
+  (`napi_open_handle_scope` around each entry). No test: handles live
+  outside the engine's heap and neither runtime bounds them, so a missing
+  scope changes nothing JavaScript can read (no failure, no counter). The
+  code shows it: every entry that makes a value opens a frame
+  (`ta_napi_frame_open`, through `ta_napi_enter_entry` in
+  `src/datamodel/datamodel.c`), the entries that only drop a row go
+  through `ta_napi_native_drop`, which opens its own, and the drain opens
+  one per effect (`ta_napi_dispatch`), the resolver one per call.
 - **Reference counts live in the row,** one `napi_ref` per payload row,
   deleted at zero (`napi_delete_reference` takes a `node_api_basic_env`:
   Node.js 22's `include/node/js_native_api.h:339, 355`), so the host's
   finalizer and the environment's teardown free a host with basic-env
-  calls only, and skip the last take.
+  calls only, and skip the last take. Tests: `test/rules.test.mjs: 'a
+  dropped host with rows (charts, sessions, payloads) is collected and
+  frees them in its finalizer'` and `'a worker that ends with its hosts
+  open frees them at its teardown, with no call of JavaScript'`;
+  `test/compile.test.mjs: 'a compile result never closed is freed by its
+  finalizer'`.
 - **Handler closures make cycles:** handlers are kept reachable from the
   `Host`'s own JavaScript object (a property under a private symbol), not
   by strong `napi_ref`s, so a dropped host whose handlers close over it is
-  still collected.
+  still collected. Tests: `test/host.test.mjs: 'a dropped host whose
+  handlers close over it is collected and frees its memory'` and `'the
+  handlers are the wrapper's, under a symbol, and go at close'`.
 - **`napi_type_tag_object` on every wrapped object,** so a method called
-  on the wrong object is refused rather than misread.
+  on the wrong object is refused rather than misread. Node refuses a
+  prototype method on another receiver itself (V8's signature check,
+  "Illegal invocation"), Bun leaves it to the tag ("not a Host"): a
+  `TypeError` on both. Tests: `test/host.test.mjs: 'a method on another
+  object is refused by the type tag'`; `test/loop.test.mjs: 'idle() on
+  another object is refused by the type tag'`; `test/rules.test.mjs: 'a
+  SimulatedClock's methods on another object are refused by its type
+  tag'`; `test/effects.test.mjs: 'views are made by the host only'`;
+  `test/address.test.mjs: 'refusals: not a string, not called with new, a
+  getter on another object'`; `test/compile.test.mjs: 'a compile result is
+  made by the compile calls only'`. A thin view (a `Send`, a `LogEntry`) is
+  not wrapped: its state is an array under the instance's `view` symbol,
+  which another object lacks, so its getters and methods refuse it. Code
+  that takes that symbol off a real view (`Object.getOwnPropertySymbols`)
+  and rewrites the state can misread an effect of the host's but never
+  memory: core bounds every index (`ta_host_effect_number`, `_text`) and
+  payloads are handles with a generation.
+- **A `Host` posted to a worker arrives as a plain object** (a
+  structured clone: the wrap and the tag do not cross), which every
+  method refuses; the environment the host records is then an assertion
+  no input reaches. Test: `test/rules.test.mjs: 'a Host posted to a worker
+  arrives as a plain object, which every method refuses'`.
 - **One drain at a time and an ack before every run:** a test that a
   handler's typed method is answered in the next take, and that outputs
   read in a handler stay valid after later calls in the same batch.
-- **A thin view read after its ack throws** `TA_ERROR_STALE`; marks nest
-  (a nested call leaves the outer call's arena memory intact); pending
-  handlers are dropped at `ta_host_free`.
+  Tests: `test/methods.test.mjs: 'a typed method called from a handler is
+  answered in a later take, after the ack'`; `test/rules.test.mjs:
+  'outputs read in a handler stay valid across the later calls of its
+  batch'`; `test/effects.test.mjs: 'a send view: each field read on first
+  access and cached, valid until the ack'`.
+- **A thin view read after its ack throws** `TA_ERROR_STALE`. Tests:
+  `test/effects.test.mjs: 'a view read after its ack throws
+  TA_ERROR_STALE; what was read stays'`, `'a view kept and used from a
+  bare timer is stale there'` and `'a log entry not read in its handler
+  is stale after the ack'`; `test/compile.test.mjs: 'a first read of the
+  image after close() throws TA_ERROR_STALE'`.
+- **Marks nest** (a nested call leaves the outer call's arena memory
+  intact). Tests: `test/rules.test.mjs: 'marks nest in the host's arena:
+  an input whose data's getter calls the host keeps its own texts'`;
+  `test/values.test.mjs: 'marks nest: a getter that encodes leaves the
+  outer value intact'` (the module's arena) and `'a getter that throws:
+  its error, the arena released'`; `test/methods.test.mjs: 'a getter of
+  params may call the host again: both methods are answered'`.
+- **Pending handlers are dropped at `ta_host_free`**, never called.
+  Tests: `test/methods.test.mjs: 'pending handlers are never called after
+  close; a method on a closed host throws'`; `test/rules.test.mjs: 'a
+  worker that ends with its hosts open frees them at its teardown, with
+  no call of JavaScript'` (a pending method at the teardown).
+- **Text is valid UTF-8: a lone surrogate is refused, never replaced.**
+  Tests: `test/values.test.mjs: 'text: U+FFFD itself is text, a pair is
+  text, a lone surrogate is not'`; `test/host.test.mjs: 'send refuses
+  what it cannot take, and keeps nothing of it'` (an event's name).
+- **Sessions are bigints from 1 to 2^64-1** (`napi_get_value_int64`
+  saturates silently; a number loses bits past 2^53): a number, 0n, a
+  negative or a bigint past 64 bits is a `TypeError`, and a value's
+  bigint past 64 bits `TA_ERROR_INVALID`. Tests: `test/rules.test.mjs:
+  'sessions are bigints from 1 to 2^64-1, never a number that saturates'`
+  (a value's bigints too); `test/values.test.mjs: 'integers: numbers to
+  2^53-1, bigints beyond, both ways'`.
+- **Refusals no input reaches.** `TA_RUN_EXHAUSTED` comes only when the
+  host's allocator refuses a pool's growth and `TA_RUN_FAULT` only from a
+  run with a batch open (which the drain before every run rules out) or a
+  segment that cannot grow past core's limits (millions of actors); a
+  typed method's `TA_ERROR_STATE` at the post needs JavaScript inside a
+  run, which no chart reaches (it gets no application object), and
+  `TA_ERROR_NO_MEMORY` an allocator that refuses. The addon adds no test
+  hook (no allocator that fails on demand), so these paths are code only
+  (`ta_napi_turn_error` in `src/loop.c`, `ta_napi_typed` in
+  `src/methods.c`).
 - **The README says** chart code is trusted (a `vm` context is not a
   security boundary; untrusted charts belong on quickjs), that a pending
   deadline keeps the process alive while the host is open (bindings.md,
   section 11), that a handler's error ends the process by default, and
   that `using` needs a runtime that parses it (bun 1.4 does, node 22 does
-  not).
+  not). Tests: `test/rules.test.mjs: 'the README says what no test can
+  show: charts are trusted, deadlines keep a process alive, errors end
+  it, using'`; `test/liveness.test.mjs: 'a pending deadline keeps the
+  process alive until it comes'` and `'close() lets a process with a
+  pending deadline exit'`; `test/loop.test.mjs: 'a handler's error, with
+  no idle() waiting, is thrown from the turn's callback; the host goes
+  on'`.
 
 ## What not to build
 
