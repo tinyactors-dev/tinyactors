@@ -396,7 +396,7 @@
         <done-when><code>mise run lint</code> passes the mapping check with every row planned.</done-when>
         <files>tinyactors-napi/docs/api-map.md</files>
       </step>
-      <step id="p0-inventory" status="todo" after="p0-rulebook" decision="d-layers">
+      <step id="p0-inventory" status="done" after="p0-rulebook" decision="d-layers" commit="6bcf4a5">
         <title>The inventory of core's public headers</title>
         <does>Every TA_API function of tinyactors-core/include/tinyactors/*.h, header by header, put in one of three lists in docs/api-map.md: behind an API item; used internally (where: the loop, values.c, the datamodel, the tables, the arena); not exposed (why: below the host, the system layer the host drives; the freestanding runtime; wasm; the OTLP encoder's internals). The candidates a first scan (2026-10-16) found with no row in this plan, for the API review to decide: ta_address_format and ta_address_format_name (an Address made from a system and a session or name), ta_datamodel_ecmascript_set_memory_limit, _heap_bytes and _last_error (quickjs's limits and why a hibernation was refused), ta_host_segment_count and ta_host_snapshot_segments (Python left them out, with a reason), ta_http_encode_post and ta_http_parse_request (BasicHTTP, for the W3C adapter and an application's HTTP processor), and ta_xml_writer_* (the convenience layer's chart builder).</does>
         <done-when>Every public function is in one list with its reason; the mapping check passes; the same scan is offered to the Python binding, whose map lists only a few functions as used internally.</done-when>
