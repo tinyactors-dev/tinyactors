@@ -30,12 +30,13 @@
 /* 2^53 - 1, Number.MAX_SAFE_INTEGER. */
 #define TA_NAPI_SAFE_INTEGER 9007199254740991.0
 
-/* One encode: the writer, the environment's instance, and the first
- * refusal. `thrown` when a JavaScript exception is pending instead (a
+/* One encode: the environment's instance, the arena of the call's text,
+ * the writer, and the first refusal. `thrown` when a JavaScript exception is pending instead (a
  * getter threw, or Node-API failed and set one). */
 typedef struct ta_napi_encoder {
     napi_env env;
     ta_napi_instance *instance;
+    ta_growable_arena *arena;
     ta_cbor_writer *writer;
     ta_napi_refusal refusal;
     bool thrown;
@@ -84,7 +85,7 @@ static bool ta_napi_text(ta_napi_encoder *encoder, napi_value value, ta_string_v
     size_t length = 0;
     TA_NAPI_CHECK(encoder, napi_get_value_string_utf8(env, value, NULL, 0, &length));
     if (length > UINT32_MAX) return ta_napi_refuse(encoder, TA_ERROR_INVALID, "a string longer than 2^32-1 bytes");
-    char *text = (char *)ta_growable_arena_alloc(&encoder->instance->arena, length + 1, 1);
+    char *text = (char *)ta_growable_arena_alloc(encoder->arena, length + 1, 1);
     if (text == NULL) return ta_napi_refuse(encoder, TA_ERROR_NO_MEMORY, "no memory for a string");
     size_t written = 0;
     TA_NAPI_CHECK(encoder, napi_get_value_string_utf8(env, value, text, length + 1, &written));
@@ -92,7 +93,7 @@ static bool ta_napi_text(ta_napi_encoder *encoder, napi_value value, ta_string_v
         if (text + written - at < 3 || (unsigned char)at[1] != 0xBF || (unsigned char)at[2] != 0xBD) continue;
         size_t units = 0;
         TA_NAPI_CHECK(encoder, napi_get_value_string_utf16(env, value, NULL, 0, &units));
-        char16_t *wide = (char16_t *)ta_growable_arena_alloc(&encoder->instance->arena, (units + 1) * sizeof *wide, 2);
+        char16_t *wide = (char16_t *)ta_growable_arena_alloc(encoder->arena, (units + 1) * sizeof *wide, 2);
         if (wide == NULL) return ta_napi_refuse(encoder, TA_ERROR_NO_MEMORY, "no memory for a string");
         size_t read = 0;
         TA_NAPI_CHECK(encoder, napi_get_value_string_utf16(env, value, wide, units + 1, &read));
@@ -251,10 +252,10 @@ static bool ta_napi_write(ta_napi_encoder *encoder, napi_value value, uint32_t d
     return true;
 }
 
-bool ta_napi_value_write(napi_env env, napi_value value, ta_cbor_writer *writer) {
+bool ta_napi_value_write(napi_env env, napi_value value, const ta_napi_writing *writing) {
     ta_napi_instance *instance = ta_napi_instance_of(env);
     if (instance == NULL) return false;
-    ta_napi_encoder encoder = {env, instance, writer, {TA_OK, NULL}, false};
+    ta_napi_encoder encoder = {env, instance, writing->arena, writing->writer, {TA_OK, NULL}, false};
     if (ta_napi_write(&encoder, value, 0)) return true;
     if (!encoder.thrown) ta_napi_throw(env, &encoder.refusal);
     return false;
@@ -273,7 +274,7 @@ napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
     ta_allocator scratch = ta_growable_arena_allocator(&instance->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &scratch);
-    if (ta_napi_value_write(env, argument, &writer)) {
+    if (ta_napi_value_write(env, argument, &(ta_napi_writing){&writer, &instance->arena})) {
         ta_bytes bytes;
         ta_status status = ta_cbor_writer_bytes(&writer, &bytes);
         void *data = NULL;

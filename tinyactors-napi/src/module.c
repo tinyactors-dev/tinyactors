@@ -1,7 +1,7 @@
 /* The module @tinyactors/node: its instance per environment (the main
  * thread and each worker; napi_set_instance_data), the allocator, the class
  * TinyactorsError and the exports. Everything a Host does is host.c and
- * the files beside it (later steps). */
+ * the files beside it. */
 #include "addon.h"
 
 #include <assert.h>
@@ -10,25 +10,29 @@
 /* ---- the allocator (AGENTS.md, "The host's allocator") ------------------ */
 
 /* malloc, reported to the engine so its collector sees the memory. `align`
- * is at most 8 (allocator.h:9) and malloc gives at least 8. */
+ * is at most 8 (allocator.h:9) and malloc gives at least 8. The context is
+ * the environment: napi_adjust_external_memory is a basic-env call, so a
+ * finalizer may free through it. */
 static void *ta_napi_allocator_alloc(void *context, size_t size, size_t align) {
-    ta_napi_instance *instance = (ta_napi_instance *)context;
     assert(align <= 8);
     (void)align;
     void *block = malloc(size);
     if (block != NULL) {
         int64_t total;
-        napi_adjust_external_memory(instance->env, (int64_t)size, &total);
+        napi_adjust_external_memory((napi_env)context, (int64_t)size, &total);
     }
     return block;
 }
 
 static void ta_napi_allocator_free(void *context, void *ptr, size_t size) {
-    ta_napi_instance *instance = (ta_napi_instance *)context;
     if (ptr == NULL) return;
     free(ptr);
     int64_t total;
-    napi_adjust_external_memory(instance->env, -(int64_t)size, &total);
+    napi_adjust_external_memory((napi_env)context, -(int64_t)size, &total);
+}
+
+ta_allocator ta_napi_allocator(napi_env env) {
+    return (ta_allocator){env, ta_napi_allocator_alloc, ta_napi_allocator_free};
 }
 
 /* ---- TinyactorsError ------------------------------------------------------ */
@@ -89,6 +93,40 @@ napi_value ta_napi_throw(napi_env env, const ta_napi_refusal *refusal) {
     return NULL;
 }
 
+napi_value ta_napi_throw_core_error(napi_env env, const ta_napi_core_error *core) {
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    if (instance == NULL) return NULL;
+    const char *name = ta_status_name(core->status);
+    napi_value class, arguments[2], status, error, data, value;
+    napi_valuetype type = napi_undefined;
+    if (core->error != NULL && napi_typeof(env, core->error, &type) != napi_ok) return NULL;
+    bool map = type == napi_object;
+    if (napi_get_reference_value(env, instance->error, &class) != napi_ok ||
+        napi_create_object(env, &arguments[1]) != napi_ok ||
+        napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &status) != napi_ok ||
+        napi_set_named_property(env, arguments[1], "status", status) != napi_ok)
+        return NULL;
+    if (map) {
+        if (napi_get_named_property(env, core->error, "message", &arguments[0]) != napi_ok ||
+            napi_get_named_property(env, core->error, "code", &value) != napi_ok ||
+            napi_set_named_property(env, arguments[1], "code", value) != napi_ok ||
+            napi_get_named_property(env, core->error, "data", &data) != napi_ok ||
+            napi_typeof(env, data, &type) != napi_ok)
+            return NULL;
+        if (type == napi_object) {
+            if (napi_get_named_property(env, data, "reason", &value) != napi_ok ||
+                napi_set_named_property(env, arguments[1], "reason", value) != napi_ok ||
+                napi_get_named_property(env, data, "path", &value) != napi_ok ||
+                napi_set_named_property(env, arguments[1], "path", value) != napi_ok)
+                return NULL;
+        }
+    } else if (napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &arguments[0]) != napi_ok)
+        return NULL;
+    if (napi_new_instance(env, class, 2, arguments, &error) != napi_ok) return NULL;
+    napi_throw(env, error);
+    return NULL;
+}
+
 /* ---- the instance --------------------------------------------------------- */
 
 /* At the environment's teardown: the references, the arena's chunks and
@@ -98,6 +136,7 @@ static void ta_napi_instance_finalize(napi_env env, void *data, void *hint) {
     (void)hint;
     if (instance->error != NULL) napi_delete_reference(env, instance->error);
     if (instance->object != NULL) napi_delete_reference(env, instance->object);
+    if (instance->keys != NULL) napi_delete_reference(env, instance->keys);
     ta_growable_arena_free(&instance->arena);
     free(instance);
 }
@@ -111,7 +150,7 @@ static ta_napi_instance *ta_napi_instance_new(napi_env env) {
         return NULL;
     }
     instance->env = env;
-    instance->allocator = (ta_allocator){instance, ta_napi_allocator_alloc, ta_napi_allocator_free};
+    instance->allocator = ta_napi_allocator(env);
     ta_growable_arena_config config = {sizeof config, 0, 0, &instance->allocator};
     ta_growable_arena_init(&instance->arena, &config);
     if (napi_set_instance_data(env, instance, ta_napi_instance_finalize, NULL) != napi_ok) {
@@ -119,13 +158,18 @@ static ta_napi_instance *ta_napi_instance_new(napi_env env) {
         napi_throw_error(env, NULL, "@tinyactors/node: napi_set_instance_data failed");
         return NULL;
     }
-    napi_value class, global, object, prototype;
+    napi_value class, global, object, prototype, keys, handlers;
     if (ta_napi_error_class(env, &class) != napi_ok ||
         napi_create_reference(env, class, 1, &instance->error) != napi_ok ||
         napi_get_global(env, &global) != napi_ok ||
         napi_get_named_property(env, global, "Object", &object) != napi_ok ||
         napi_get_named_property(env, object, "prototype", &prototype) != napi_ok ||
-        napi_create_reference(env, prototype, 1, &instance->object) != napi_ok) {
+        napi_create_reference(env, prototype, 1, &instance->object) != napi_ok ||
+        napi_create_object(env, &keys) != napi_ok ||
+        napi_create_string_utf8(env, "tinyactors.handlers", NAPI_AUTO_LENGTH, &handlers) != napi_ok ||
+        napi_create_symbol(env, handlers, &handlers) != napi_ok ||
+        napi_set_named_property(env, keys, "handlers", handlers) != napi_ok ||
+        napi_create_reference(env, keys, 1, &instance->keys) != napi_ok) {
         bool pending = false;
         napi_is_exception_pending(env, &pending);
         if (!pending) napi_throw_error(env, NULL, "@tinyactors/node: module init failed");
@@ -144,7 +188,8 @@ static napi_value ta_napi_module_init(napi_env env, napi_value exports) {
         {"decode", NULL, ta_napi_decode, NULL, NULL, NULL, napi_enumerable, NULL},
         {"TinyactorsError", NULL, NULL, NULL, NULL, class, napi_enumerable, NULL},
     };
-    if (napi_define_properties(env, exports, sizeof properties / sizeof properties[0], properties) != napi_ok)
+    if (napi_define_properties(env, exports, sizeof properties / sizeof properties[0], properties) != napi_ok ||
+        ta_napi_host_define(env, exports) != napi_ok)
         return NULL;
     return exports;
 }

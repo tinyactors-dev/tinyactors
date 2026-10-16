@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 #include "tinyactors.h"
+#include "tinyactors_datamodel_ecmascript.h"
 
 /* What one environment holds, made at module init and freed at the
  * environment's teardown (napi_set_instance_data's finalizer).
@@ -27,18 +28,33 @@
  *              kept, so a warmed call allocates nothing;
  *   error      the class TinyactorsError, exported;
  *   object     Object.prototype of this environment's realm: a plain
- *              object's prototype (or null). */
+ *              object's prototype (or null);
+ *   keys       an object holding the symbols the addon keys its own
+ *              properties with, which no export reaches: `handlers`, the
+ *              key of a Host's handlers on its wrapper (host.c). Node-API
+ *              has no private symbols, so a plain Symbol held here is the
+ *              key; a reference to an object, not to the symbol, since
+ *              references to symbols need Node-API 10. */
 typedef struct ta_napi_instance {
     napi_env env;
     ta_allocator allocator;
     ta_growable_arena arena;
     napi_ref error;
     napi_ref object;
+    napi_ref keys;
 } ta_napi_instance;
 
 /* The environment's instance, or NULL (and an exception pending) before
  * module init finished. */
 ta_napi_instance *ta_napi_instance_of(napi_env env);
+
+/* The allocator every host and the module's arena grow through: malloc
+ * and free, each block reported to `env`'s engine with
+ * napi_adjust_external_memory, a basic-env call, so it may run in a
+ * finalizer. Its context is `env` itself and nothing else, so a host's
+ * finalizer frees through it whatever the instance's state at the
+ * environment's teardown. */
+ta_allocator ta_napi_allocator(napi_env env);
 
 /* A refusal: the message and the status core names (ta_status_name). */
 typedef struct ta_napi_refusal {
@@ -51,14 +67,32 @@ typedef struct ta_napi_refusal {
  * return. */
 napi_value ta_napi_throw(napi_env env, const ta_napi_refusal *refusal);
 
+/* An error core wrote, {"code", "message", "data": {"reason", "path"}}
+ * (a refused config's, a reply's), and the status the call gave. */
+typedef struct ta_napi_core_error {
+    napi_value error; /* the decoded map; anything else: no code, reason, path */
+    ta_status status;
+} ta_napi_core_error;
+
+/* Throws a TinyactorsError with the error's message, `code`, `reason` and
+ * `path`, and `status` ta_status_name(status); returns NULL. */
+napi_value ta_napi_throw_core_error(napi_env env, const ta_napi_core_error *error);
+
 /* ---- values.c: the value table (docs/values.md) ------------------------- */
 
-/* Writes `value` into `writer` as the value table's CBOR. On a refusal a
- * TinyactorsError is thrown (or the exception a getter threw stays
- * pending) and the result is false; the writer is then the caller's to
- * free, its contents partial. Allocates the call's text in the instance's
- * arena: the caller holds a mark around the call. */
-bool ta_napi_value_write(napi_env env, napi_value value, ta_cbor_writer *writer);
+/* Where a value is written: the CBOR writer, and the arena the call's
+ * text goes to (the module's for encode, the host's for a host's call). */
+typedef struct ta_napi_writing {
+    ta_cbor_writer *writer;
+    ta_growable_arena *arena;
+} ta_napi_writing;
+
+/* Writes `value` into writing->writer as the value table's CBOR. On a
+ * refusal a TinyactorsError is thrown (or the exception a getter threw
+ * stays pending) and the result is false; the writer is then the caller's
+ * to free, its contents partial. Allocates the call's text in
+ * writing->arena: the caller holds a mark around the call. */
+bool ta_napi_value_write(napi_env env, napi_value value, const ta_napi_writing *writing);
 
 /* The value of one CBOR item filling `cbor`, or NULL with a TinyactorsError
  * thrown. The bytes are read during the call only. */
@@ -67,5 +101,134 @@ napi_value ta_napi_value_read(napi_env env, ta_bytes cbor);
 /* The exports encode(value) and decode(bytes). */
 napi_value ta_napi_encode(napi_env env, napi_callback_info info);
 napi_value ta_napi_decode(napi_env env, napi_callback_info info);
+
+/* ---- host.c: the Host (AGENTS.md, "The binding's memory") ------------- */
+
+/* The rows of the host's tables (ta_table, tinyactors/table.h): handles
+ * are kept, never row pointers across an add. Each holds at most one
+ * napi_ref, deleted before its row is removed and when the tables are
+ * freed with the host (napi_delete_reference is a basic-env call). The
+ * native datamodel (p1-datamodel) and the typed methods (p1-methods) fill
+ * them; the host makes and frees the tables.
+ *
+ *   chart    a chart the native datamodel attached: its compiled
+ *            functions, made lazily;
+ *   session  a session's scope (or its context), and its chart's row;
+ *   payload  a value crossing between actors: its reference and count;
+ *   loop     a <foreach> in progress: the items it walks;
+ *   pending  a typed method's message: its handlers are kept on the
+ *            wrapper (never by a strong napi_ref, which would keep a host
+ *            whose handlers close over it from the collector); `slot` is
+ *            their place there. */
+typedef struct ta_napi_chart_row {
+    napi_ref functions;
+} ta_napi_chart_row;
+
+typedef struct ta_napi_session_row {
+    napi_ref scope;
+    uint64_t chart;
+} ta_napi_session_row;
+
+typedef struct ta_napi_payload_row {
+    napi_ref value;
+    uint32_t count;
+} ta_napi_payload_row;
+
+typedef struct ta_napi_loop_row {
+    napi_ref items;
+} ta_napi_loop_row;
+
+typedef struct ta_napi_pending_row {
+    uint32_t slot;
+} ta_napi_pending_row;
+
+/* The datamodels a host can hold: one of the two "ecmascript" ones
+ * (AGENTS.md, "The native "ecmascript" datamodel"). */
+typedef enum ta_napi_datamodel_kind {
+    TA_NAPI_DATAMODEL_NATIVE = 0,
+    TA_NAPI_DATAMODEL_QUICKJS = 1,
+} ta_napi_datamodel_kind;
+
+/* One Host, wrapped by its JavaScript object (napi_wrap, type-tagged).
+ * Made with the host's allocator, freed by the wrapper's finalizer; the
+ * core host inside is freed by close() or, as a fallback, by the
+ * finalizer.
+ *
+ *   env         the environment that made it: every call checks it;
+ *   self        a weak reference to the wrapper, whose own property under
+ *               the instance's `handlers` symbol holds the handlers;
+ *   allocator   ta_napi_allocator(env), the context of every block;
+ *   host        core's host; NULL once freed (`closed`);
+ *   datamodels  the environment's one datamodel (core reads the list for
+ *               the host's life);
+ *   arena       the scratch of the host's calls, a mark per call;
+ *   depth       calls of the Host on the stack (ta_napi_enter, _leave);
+ *   turning     a turn is running (p1-loop): close() waits for its end;
+ *   closing     close() was asked while a call or a turn ran;
+ *   acks        acks so far, bumped right after each ta_host_effects_ack:
+ *               a thin view made at another count is stale;
+ *   ticks_per_second  system.ticksPerSecond, read once at creation;
+ *   encoder     the effective config has `telemetry`;
+ *   processors  the effective config's ioProcessors, numbered from 1 as
+ *               the effects' IO_PROCESSOR numbers them (0: the SCXML
+ *               processor, the transport's). */
+typedef struct ta_napi_host {
+    napi_env env;
+    napi_ref self;
+    ta_allocator allocator;
+    ta_host *host;
+    ta_napi_datamodel_kind datamodel;
+    ta_datamodel_ecmascript *quickjs;
+    ta_datamodel_binding datamodels[1];
+    ta_growable_arena arena;
+    ta_allocator arena_allocator;
+    ta_table charts, sessions, payloads, loops, pending;
+    uint32_t depth;
+    bool turning, closing;
+    uint64_t acks;
+    uint64_t ticks_per_second;
+    bool encoder;
+    uint32_t processors;
+} ta_napi_host;
+
+/* A call of the Host: the host and its arena's mark at entry. */
+typedef struct ta_napi_call {
+    ta_napi_host *host;
+    ta_growable_arena_mark mark;
+} ta_napi_call;
+
+/* The Host `self` stands for, checked: its type tag (a method called on
+ * another object is refused, never misread), the environment that made
+ * it, and, with `open`, that it is not closed. NULL with an exception
+ * pending. */
+typedef struct ta_napi_host_check {
+    napi_value self;
+    bool open;
+} ta_napi_host_check;
+ta_napi_host *ta_napi_host_of(napi_env env, const ta_napi_host_check *check);
+
+/* Enters a call of an open host (its arena's mark, depth); false with an
+ * exception pending. Every enter is matched by a leave on every path. */
+bool ta_napi_enter(napi_env env, napi_value self, ta_napi_call *call);
+/* Releases the arena to the call's mark; the outermost call does a close
+ * asked meanwhile. */
+void ta_napi_leave(ta_napi_call *call);
+
+/* Defines the class Host on `exports`. */
+napi_status ta_napi_host_define(napi_env env, napi_value exports);
+
+/* ---- loop.c: the loop (AGENTS.md, "The loop") ----------------------------- */
+
+/* What a drain hands each effect to. `reply` is set while the host is
+ * made: the WIRE of the host.config REPLY, read before the ack. */
+typedef struct ta_napi_drain_state {
+    ta_napi_host *host;
+    napi_value reply; /* out: the last REPLY's decoded WIRE, or NULL */
+} ta_napi_drain_state;
+
+/* One drain: take, handle every effect of the batch, ack (acks bumped
+ * right after), and take again until a take is empty. Never nested; a
+ * handler never takes or acks. False with an exception pending. */
+bool ta_napi_drain(napi_env env, ta_napi_drain_state *state);
 
 #endif /* TA_NAPI_ADDON_H */

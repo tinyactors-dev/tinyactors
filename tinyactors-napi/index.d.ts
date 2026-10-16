@@ -312,7 +312,8 @@ export interface HostOptions {
   /** The handler of each `<invoke>` type the application runs. */
   services?: { [type: string]: (host: Host, invocation: Invocation) => Service | void };
   /** The ECMAScript datamodel: the application's engine (default) or the
-   * quickjs sandbox. */
+   * quickjs sandbox. Until the native datamodel is built, a native host
+   * throws `TA_ERROR_UNSUPPORTED`. */
   datamodel?: 'native' | 'quickjs';
   /** The sandbox's limits, with `datamodel: "quickjs"` only. */
   quickjs?: QuickJSOptions;
