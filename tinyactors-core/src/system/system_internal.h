@@ -16,8 +16,9 @@
  * (docs/adr/0006 in the repository root), 3 with the charts' counts, 4 since
  * an external invocation's request keeps its type and params, 5 with the queue
  * of parked spawns, 6 with the index of actor names, 7 with each actor's count
- * of requests; a snapshot of another is refused. */
-#define TA_SYSTEM_VERSION      7u
+ * of requests, 8 with the wake queue linked both ways; a snapshot of another
+ * is refused. */
+#define TA_SYSTEM_VERSION      8u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -58,10 +59,15 @@ TA_STATIC_ASSERT(sizeof(ta_actor) == 48, actor_record_is_48_bytes);
 /* What an actor is linked into besides its record, in an array beside the
  * actor pool (actor_links, indexed like it): the ring of the live actors of
  * its name, in the order they came (the index of names holds the oldest),
- * and how many requests it made that are live. */
+ * and how many requests it made that are live, or, in the wake queue, the
+ * actor before it there (the queue's forward link is the record's `next`). */
 typedef struct ta_actor_links {
     uint32_t name_prev, name_next; /* actor indices; an actor alone with its name links itself */
-    uint32_t requests; /* live ta_requests whose `actor` is this one (ta_system_request_*) */
+    union {
+        uint32_t requests;  /* live ta_requests whose `actor` is this one (ta_system_request_*) */
+        uint32_t wake_prev; /* in the wake queue (hibernated: no request is live, so `requests`
+                               is 0, and it is 0 again once the actor leaves the queue) */
+    };
 } ta_actor_links;
 
 typedef struct ta_timer {
@@ -200,6 +206,8 @@ void ta_system_reclaim(ta_system *s, uint32_t index, uint32_t how);
 void ta_system_make_runnable(ta_system *s, uint32_t index);
 void ta_system_mailbox_push(ta_system *s, uint32_t index, uint32_t event);
 void ta_system_wake_request(ta_system *s, uint32_t index); /* hibernated actor has work */
+/* Take actor `index` (ACTOR_FLAG_IN_WAKE_QUEUE) out of the wake queue: O(1). */
+void ta_system_wake_unlink(ta_system *s, uint32_t index);
 /* System variables for a session (sessionid, name, _ioprocessors). */
 typedef struct ta_system_variables_buffer {
     char session_id[24], location[256];
@@ -291,6 +299,7 @@ uint32_t ta_system_request_alloc(ta_system *s, uint32_t index);
 void ta_system_request_free(ta_system *s, uint32_t ri);
 /* the live requests actor `index` made */
 uint32_t ta_system_actor_requests(const ta_system *s, uint32_t index);
+ta_actor_links *ta_system_actor_links(const ta_system *s);
 /* Retry spawns parked by pool exhaustion; returns TA_POOL_* still exhausted. */
 uint32_t ta_system_retry_pending(ta_system *s);
 

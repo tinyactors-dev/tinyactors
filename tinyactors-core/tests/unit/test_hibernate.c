@@ -689,6 +689,86 @@ static void test_stable_point_counts_own_requests(void) {
     ecmascript_close(&x);
 }
 
+/* ---- the wake queue ---- */
+
+/* The wake queue's actors, checked both ways (each one's wake_prev is the
+ * one before it, the tail the last): how many. */
+static uint32_t wake_queue_length(const ta_system *system) {
+    const ta_actor_links *links = ta_system_actor_links(system);
+    uint32_t n = 0, prev = TA_NIL;
+    for (uint32_t i = system->wake_queue.head; i != TA_NIL; i = ta_actor_at(system, i)->next) {
+        CHECK_EQUAL(links[i].wake_prev, prev);
+        CHECK(ta_actor_at(system, i)->flags & ACTOR_FLAG_IN_WAKE_QUEUE);
+        prev = i;
+        n++;
+    }
+    CHECK_EQUAL(system->wake_queue.tail, prev);
+    return n;
+}
+
+#define QUEUED 40u
+
+/* Hibernated actors with an event waiting queue for a TA_EFFECT_WAKE while
+ * the outbox is full; one woken before its effect leaves the queue in O(1)
+ * (the queue is linked both ways), from anywhere in it, and the others keep
+ * their order. */
+static void test_wake_queue_unlinks(void) {
+    test_system t;
+    ta_system_config config = test_system_config();
+    config.outbox = 4;
+    CHECK(tsys_init(&t,
+                    NULLSC("initial='a'><state id='a'><transition event='ping'>"
+                           "<log expr=\"'pong'\"/></transition></state>"),
+                    NULL, &config));
+    static uint32_t actor[QUEUED];
+    static unsigned char blobs[QUEUED][4096];
+    static size_t lengths[QUEUED];
+    for (uint32_t i = 0; i < QUEUED; i++) {
+        ta_spawn spawn;
+        memset(&spawn, 0, sizeof spawn);
+        CHECK_EQUAL(ta_system_spawn(t.system, &spawn, &actor[i]), TA_OK);
+        run_all(&t);
+    }
+    for (uint32_t i = 0; i < QUEUED; i++) {
+        ta_status status;
+        lengths[i] = hibernate(&t, actor[i], &status);
+        CHECK_EQUAL(status, TA_OK);
+        CHECK(lengths[i] <= sizeof blobs[i]);
+        memcpy(blobs[i], blob, lengths[i]);
+    }
+    /* four wakes fit the outbox; the other 36 wait in the queue */
+    for (uint32_t i = 0; i < QUEUED; i++)
+        CHECK_EQUAL(tsys_send(&t, actor[i], "ping", NULL), TA_OK);
+    CHECK_EQUAL(wake_queue_length(t.system), QUEUED - 4);
+    /* woken from the queue's middle, head and tail, scattered */
+    static const uint32_t order[] = {20, 4, 39, 5, 38, 11, 27};
+    uint32_t woken = 0;
+    for (uint32_t k = 0; k < sizeof order / sizeof order[0]; k++) {
+        uint32_t i = order[k];
+        CHECK_EQUAL(ta_actor_wake(t.system, actor[i], (ta_bytes){blobs[i], lengths[i]}), TA_OK);
+        uint32_t index = ta_system_resolve_actor(t.system, actor[i]);
+        CHECK(!(ta_actor_at(t.system, index)->flags & ACTOR_FLAG_IN_WAKE_QUEUE));
+        CHECK_EQUAL(ta_system_actor_requests(t.system, index), 0u); /* the word is a count again */
+        CHECK_EQUAL(wake_queue_length(t.system), QUEUED - 4 - ++woken);
+    }
+    /* the first four's effects, then the rest's in the order they queued */
+    wakes_seen = 0;
+    run_all(&t);
+    CHECK_EQUAL(wake_queue_length(t.system), 0u);
+    uint32_t expected = 0;
+    for (uint32_t i = 0; i < QUEUED; i++) {
+        int skipped = 0;
+        for (uint32_t k = 0; k < sizeof order / sizeof order[0]; k++)
+            skipped |= order[k] == i;
+        if (skipped) continue;
+        CHECK(expected < (uint32_t)wakes_seen);
+        if (expected < (uint32_t)wakes_seen) CHECK_EQUAL(wakes[expected], actor[i]);
+        expected++;
+    }
+    CHECK_EQUAL((uint32_t)wakes_seen, expected);
+    tsys_free(&t);
+}
+
 int main(void) {
     RUN(test_roundtrip_and_single_wake);
     RUN(test_watch_ends_with_hibernation);
@@ -698,6 +778,7 @@ int main(void) {
     RUN(test_cold_sweep);
     RUN(test_names_index);
     RUN(test_stable_point_counts_own_requests);
+    RUN(test_wake_queue_unlinks);
     RUN(test_ecmascript_state_survives);
     RUN(test_ecmascript_unsupported);
     TEST_MAIN_END();

@@ -764,18 +764,8 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes bytes) {
     if (status != TA_OK) return status;
     ta_instance *instance = (ta_instance *)ta_slab_pointer(&system->slab, off);
     actor_record->instance = off;
-    if (actor_record->flags & ACTOR_FLAG_IN_WAKE_QUEUE) { /* woken before the request was emitted */
-        uint32_t prev = TA_NIL, cur = system->wake_queue.head;
-        while (cur != index) {
-            prev = cur;
-            cur = ta_actor_at(system, cur)->next;
-        }
-        if (prev == TA_NIL)
-            system->wake_queue.head = actor_record->next;
-        else
-            ta_actor_at(system, prev)->next = actor_record->next;
-        if (system->wake_queue.tail == index) system->wake_queue.tail = prev;
-    }
+    if (actor_record->flags & ACTOR_FLAG_IN_WAKE_QUEUE) /* woken before the request was emitted */
+        ta_system_wake_unlink(system, index);
     if (actor_record->flags & ACTOR_FLAG_WAKE_SENT) system->pending_wake_count--;
     actor_record->flags =
         (uint8_t)((actor_record->flags & ~(ACTOR_FLAG_IN_WAKE_QUEUE | ACTOR_FLAG_WAKE_SENT)) |
@@ -1403,25 +1393,50 @@ ta_status ta_blob_migrate(const ta_blob_migration *request, ta_buffer *destinati
     return TA_OK;
 }
 
+/* The wake queue, oldest first: forward through the record's `next`, back
+ * through the links' `wake_prev`, so an actor woken (or reclaimed) before
+ * its TA_EFFECT_WAKE was emitted leaves it in O(1), whatever its length. */
+static void wake_push(ta_system *system, uint32_t index) {
+    TA_ASSERT(ta_system_actor_links(system)[index].requests == 0); /* hibernated */
+    ta_system_actor_links(system)[index].wake_prev = system->wake_queue.tail;
+    ta_index_queue_push(&system->wake_queue, &system->actors, 0, index);
+}
+
+void ta_system_wake_unlink(ta_system *system, uint32_t index) {
+    ta_actor_links *links = ta_system_actor_links(system);
+    uint32_t prev = links[index].wake_prev, next = ta_actor_at(system, index)->next;
+    if (prev == TA_NIL)
+        system->wake_queue.head = next;
+    else
+        ta_actor_at(system, prev)->next = next;
+    if (next == TA_NIL)
+        system->wake_queue.tail = prev;
+    else
+        links[next].wake_prev = prev;
+    ta_actor_at(system, index)->next = TA_NIL;
+    links[index].requests = 0; /* the word is its count of requests again */
+}
+
 void ta_system_wake_request(ta_system *system, uint32_t index) {
     ta_actor *actor = ta_actor_at(system, index);
     if (actor->flags & (ACTOR_FLAG_IN_WAKE_QUEUE | ACTOR_FLAG_WAKE_SENT))
         return; /* one request per hibernation */
     actor->flags |= ACTOR_FLAG_IN_WAKE_QUEUE;
-    ta_index_queue_push(&system->wake_queue, &system->actors, 0, index);
+    wake_push(system, index);
     ta_system_emit_wakes(system);
 }
 
 void ta_system_emit_wakes(ta_system *system) {
     while (!ta_index_queue_empty(&system->wake_queue) && !ta_system_effect_full(system)) {
-        uint32_t index = ta_index_queue_pop(&system->wake_queue, &system->actors, 0);
+        uint32_t index = system->wake_queue.head;
+        ta_system_wake_unlink(system, index);
         ta_actor *actor = ta_actor_at(system, index);
         actor->flags &= (uint8_t)~ACTOR_FLAG_IN_WAKE_QUEUE;
         if (actor->state != TA_ACTOR_HIBERNATED) continue;
         if (!ta_system_effect_push(system, TA_EFFECT_WAKE,
                                    index)) { /* cannot happen: room was checked */
             actor->flags |= ACTOR_FLAG_IN_WAKE_QUEUE;
-            ta_index_queue_push(&system->wake_queue, &system->actors, 0, index);
+            wake_push(system, index);
             return;
         }
         actor->flags |= ACTOR_FLAG_WAKE_SENT;

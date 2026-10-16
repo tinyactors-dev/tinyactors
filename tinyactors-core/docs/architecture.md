@@ -302,7 +302,8 @@ typedef struct ta_actor {
 Actor (48 B) + instance (~64 B) ≈ **112 bytes per idle actor**, plus
 whatever the datamodel keeps. Beside the actor pool, per actor of
 `max_actors`: its links (12 B: its place in the ring of actors of its
-name, and how many of its requests are live) and the index of names (a
+name, and how many of its requests are live, a word that holds the actor
+before it in the wake queue while it is hibernated there) and the index of names (a
 slot per name, 4 B, at most 4/5 full: 5–10 B). The index answers
 `ta_system_actor_by_name` with the oldest live actor of a name in O(1)
 expected; the count of requests lets hibernation and export check a stable
@@ -927,7 +928,8 @@ without changing SCXML semantics. The host owns the policy and the storage.
 - Anything that needs a hibernated actor — an event from an actor, a timer, the
   host, a `<cancel>`led invocation, `ta_system_terminate` — leaves the work where
   it already lives (mailbox, flags) and puts the actor on an intrusive **wake
-  queue**; `ta_system_run` turns it into one `TA_EFFECT_WAKE` effect (one per
+  queue**, linked both ways (an actor woken or reclaimed before its effect
+  leaves it in O(1)); `ta_system_run` turns it into one `TA_EFFECT_WAKE` effect (one per
   hibernation; the queue survives a full outbox). The host loads the blob and
   calls `ta_actor_wake`; the actor then processes its mailbox in order. A
   host-reported `error.communication` (`TA_EVENT_IN_ERROR_COMMUNICATION`) for a hibernated

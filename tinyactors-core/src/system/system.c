@@ -538,6 +538,10 @@ uint32_t ta_system_actor_requests(const ta_system *system, uint32_t index) {
     return names_links(system)[index].requests;
 }
 
+ta_actor_links *ta_system_actor_links(const ta_system *system) {
+    return names_links(system);
+}
+
 /* ---- actors -------------------------------------------------------------------------------- */
 
 uint32_t ta_system_resolve_actor(const ta_system *system, uint32_t handle) {
@@ -736,7 +740,7 @@ void ta_system_reclaim(ta_system *system, uint32_t index, uint32_t how) {
     if (actor->state == TA_ACTOR_WAIT_WORKSPACE) unqueue(system, &system->workspace_queue, index);
     int hibernated = actor->state == TA_ACTOR_HIBERNATED;
     if (hibernated) {
-        if (actor->flags & ACTOR_FLAG_IN_WAKE_QUEUE) unqueue(system, &system->wake_queue, index);
+        if (actor->flags & ACTOR_FLAG_IN_WAKE_QUEUE) ta_system_wake_unlink(system, index);
         if (actor->flags & ACTOR_FLAG_WAKE_SENT) system->pending_wake_count--;
         system->hibernated_count--;
     }
