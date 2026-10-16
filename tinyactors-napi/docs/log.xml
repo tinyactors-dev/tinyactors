@@ -160,4 +160,52 @@
     <why>The brief asks for the tables now; their contents are p1-datamodel's and p1-methods', which may change the rows (the release in ta_napi_host_release assumes the reference first).</why>
     <evidence>tinyactors-napi/src/addon.h (ta_napi_*_row); src/host.c (ta_napi_rows_release)</evidence>
   </entry>
+  <entry id="l-p1-loop-statuses-untested" date="2026-10-16" step="p1-loop" kind="note" status="open">
+    <what>The loop's code paths for TA_RUN_YIELDED, TA_RUN_EFFECTS, TA_RUN_EFFECTS_FULL, TA_RUN_EXHAUSTED and TA_RUN_FAULT, the turn's bound yielding to I/O, the one setTimeout at a deadline (replaced each idle turn, cleared at close), 'no timer with a SimulatedClock', a handler's error thrown from the turn's callback, close() from a handler deferred to the end of the turn, and 'a send with no other call runs its actor' are written but not yet tested: each needs an actor, and images, spawn and send come with p1-compile (typed methods, whose trace.watch would give a deadline, with p1-methods). Only TA_RUN_IDLE, idle(), close() with a waiting idle(), SimulatedClock and liveness without a deadline are tested now.</what>
+    <why>The done-when lists them; nothing in the addon can make an actor yet, and no test hook is added (nothing of our own).</why>
+    <evidence>tinyactors-napi/test/loop.test.mjs (header); src/loop.c ta_napi_turn, ta_napi_loop_turn</evidence>
+    <resolution>p1-compile (or the first step with spawn and send) adds these cases to test/loop.test.mjs</resolution>
+  </entry>
+  <entry id="l-p1-loop-liveness-deadline" date="2026-10-16" step="p1-loop" kind="note" status="open">
+    <what>test/liveness.test.mjs checks that a process exits with an open host that has nothing to do (never turned, idle, on a simulated clock, closed while idle() waits). That a pending deadline keeps the process alive until it fires or close() is not tested yet: it needs an actor with &lt;send delay&gt;.</what>
+    <why>No spawn or images before p1-compile.</why>
+    <evidence>tinyactors-napi/test/liveness.test.mjs (header)</evidence>
+    <resolution>add the case with p1-compile: a child with a delayed send stays alive past an idle turn and exits at the deadline, and at once on close()</resolution>
+  </entry>
+  <entry id="l-p1-loop-idle-one-promise" date="2026-10-16" step="p1-loop" kind="decision" status="for-maintainer">
+    <what>idle() returns one promise per pending idle turn, the same to every caller until it settles (one napi_deferred on the host, no list), and schedules a turn when none is pending; on a closed host it throws TinyactorsError TA_ERROR_STATE; close() rejects a waiting idle() with TinyactorsError TA_ERROR_STATE ('the Host was closed before it was idle'), as Python's close cancels its futures.</what>
+    <why>Every waiter settles at the same turn with the same outcome, so one promise is the same to them and costs no allocation; a rejection at close is the nearest to asyncio's cancel (resolving would tell a waiter the host went idle when it did not).</why>
+    <evidence>tinyactors-cpython/src/loop.c ta_python_loop_stop (cancel), ta_python_host_idle; tinyactors-napi/src/loop.c ta_napi_host_idle, ta_napi_loop_stop; test/loop.test.mjs 'close() rejects a waiting idle()'</evidence>
+  </entry>
+  <entry id="l-p1-loop-clock-state" date="2026-10-16" step="p1-loop" kind="decision" status="resolved">
+    <what>A SimulatedClock keeps its state in JavaScript, not in C: an object under the instance's Symbol('tinyactors.clock') holding `time`, an ArrayBuffer of one uint64 of nanoseconds (exact; now and increment are milliseconds at the API), and `hosts`, an array of WeakRefs pruned of collected and closed hosts at each increment. A host made with it holds a strong napi_ref to the ArrayBuffer and reads it at each advance (napi_get_arraybuffer_info, length checked). The clock is type-tagged. A simulated clock's time is the host's wall clock too, as Python's.</what>
+    <why>No allocation of the addon's own (AGENTS.md, 'Where the allocator is called'); the clock never holds a host strongly, so a host whose clock lives is still collected.</why>
+    <evidence>tinyactors-napi/src/loop.c (ta_napi_clock_new, ta_napi_clock_attach, ta_napi_now); test/loop.test.mjs 'a clock holds its hosts weakly'</evidence>
+  </entry>
+  <entry id="l-p1-loop-pool-names" date="2026-10-16" step="p1-loop" kind="decision" status="for-maintainer">
+    <what>An exhausted pool is reported as TinyactorsError TA_ERROR_NO_MEMORY whose message names the pool by core's enum name (TA_POOL_EVENTS, TA_POOL_SLAB, TA_POOL_TIMERS, TA_POOL_ACTORS, TA_POOL_REQUESTS, TA_POOL_NONE for the host's own) from a const table of six messages in loop.c; Python's MemoryError gives the number only.</what>
+    <why>The brief asks that the error name the pool and core has no function naming a TA_POOL_*.</why>
+    <evidence>tinyactors-core/include/tinyactors/system.h:203-210; tinyactors-napi/src/loop.c ta_napi_pools</evidence>
+  </entry>
+  <entry id="l-p1-loop-request-pool-name" date="2026-10-16" step="p1-loop" kind="request-to-core" status="open">
+    <what>A ta_pool_name(detail) beside ta_status_name, so a binding names the pool of a TA_RUN_EXHAUSTED without a table of its own.</what>
+    <why>Bindings may not keep status tables of their own; the pools are the same kind of enum and Node's addon now carries six messages for them (l-p1-loop-pool-names).</why>
+    <evidence>tinyactors-core/include/tinyactors/system.h:203-210 (TA_POOL_*, no name function); tinyactors-napi/src/loop.c ta_napi_pools</evidence>
+  </entry>
+  <entry id="l-p1-loop-timer-details" date="2026-10-16" step="p1-loop" kind="decision" status="resolved">
+    <what>The event loop calls one turn function per environment (made at module init, referenced from the instance), with the Host as its argument and a second naming the handle (setImmediate(turn, host, 0), setTimeout(turn, ms, host, 1)), so scheduling makes no function and a pending handle holds the Host. The global timer functions are looked up at each call, so an application's fake timers apply. A delay is milliseconds rounded by double arithmetic and clamped to 2^31-1 (setTimeout fires at once beyond it); an early fire is an idle turn that arms the rest. The handles are strong napi_refs on the host, cleared and deleted at close; EXHAUSTED and FAULT schedule no next turn (the next input or idle() does), as Python's asyncio driver.</what>
+    <why>Node-API callbacks need a function value; one per environment is the cheapest. Node and Bun both warn and use 1 ms for a delay over 2^31-1.</why>
+    <evidence>tinyactors-napi/src/loop.c (ta_napi_arm, TA_NAPI_TIMEOUT_MAX, ta_napi_loop_turn); tinyactors-cpython/src/loop.c ta_python_loop_turn</evidence>
+  </entry>
+  <entry id="l-p1-loop-wall-clock" date="2026-10-16" step="p1-loop" kind="decision" status="resolved">
+    <what>The real clocks are ta_runtime_now_ns (monotonic, as Python's) and Date.now() in nanoseconds for the wall clock, which the addon keeps from going back (the larger of it and the last given), since host.h says neither clock goes back and Date.now() follows the system clock.</what>
+    <why>No C library clock is in the lint's list; Date.now() is the runtime's own wall clock, through Node-API.</why>
+    <evidence>tinyactors-core/include/tinyactors/host.h:230-237; tinyactors-napi/src/loop.c ta_napi_now, ta_napi_wall_ns</evidence>
+  </entry>
+  <entry id="l-p1-loop-last-take" date="2026-10-16" step="p1-loop" kind="deviation" status="open">
+    <what>close() now clears the timers, rejects a waiting idle() and, when the effective config has telemetry and a telemetry handler was given (as Python's gate), posts trace.end and makes the last take of traces and logs (64 batches of at most 64 takes each), dropping what it takes until the telemetry step calls the handler; the drain likewise takes and drops TA_HOST_EFFECT_TRACES and _LOGS so the encoder goes on, retrying a take the allocator refused at the next turn. asyncDispose still resolves at once (no handler promises to wait for yet). A last take's error is thrown by close() or by the turn whose leave ran a deferred close.</what>
+    <why>The telemetry handler is p2's (the brief); the take must happen now or core gives no second effect of the kind.</why>
+    <evidence>tinyactors-napi/src/loop.c ta_napi_take, ta_napi_end_traces, ta_napi_loop_stop; src/host.c ta_napi_host_close_now</evidence>
+    <resolution>the telemetry step hands each take to the handler (a Buffer copy) and asyncDispose awaits its promises</resolution>
+  </entry>
 </log>

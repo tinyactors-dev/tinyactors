@@ -31,10 +31,14 @@
  *              object's prototype (or null);
  *   keys       an object holding the symbols the addon keys its own
  *              properties with, which no export reaches: `handlers`, the
- *              key of a Host's handlers on its wrapper (host.c). Node-API
+ *              key of a Host's handlers on its wrapper (host.c), and
+ *              `clock`, the key of a SimulatedClock's state (loop.c). Node-API
  *              has no private symbols, so a plain Symbol held here is the
  *              key; a reference to an object, not to the symbol, since
- *              references to symbols need Node-API 10. */
+ *              references to symbols need Node-API 10;
+ *   turn       the function the event loop calls for a turn of a host
+ *              (loop.c), given the Host as its argument: one per
+ *              environment, so scheduling a turn makes no function. */
 typedef struct ta_napi_instance {
     napi_env env;
     ta_allocator allocator;
@@ -42,6 +46,7 @@ typedef struct ta_napi_instance {
     napi_ref error;
     napi_ref object;
     napi_ref keys;
+    napi_ref turn;
 } ta_napi_instance;
 
 /* The environment's instance, or NULL (and an exception pending) before
@@ -163,12 +168,31 @@ typedef enum ta_napi_datamodel_kind {
  *               the host's life);
  *   arena       the scratch of the host's calls, a mark per call;
  *   depth       calls of the Host on the stack (ta_napi_enter, _leave);
- *   turning     a turn is running (p1-loop): close() waits for its end;
+ *   turning     a turn is running: close() waits for its end;
  *   closing     close() was asked while a call or a turn ran;
+ *   batch       a take is open, from it to its ack: an output taken then
+ *               joins it, one taken without opens a batch of its own;
+ *   inputs      an input came since the turn's last run: turn again;
+ *   retake      a take of traces (1) or logs (2) the allocator refused:
+ *               retried at the next turn (core gives no second effect);
  *   acks        acks so far, bumped right after each ta_host_effects_ack:
  *               a thin view made at another count is stale;
  *   ticks_per_second  system.ticksPerSecond, read once at creation;
+ *   deadline    the last idle run's next_deadline (UINT64_MAX: none);
+ *   wall        the last wall time given to core: it never goes back;
+ *   pool, fault the detail of the last TA_RUN_EXHAUSTED, TA_RUN_FAULT;
+ *   clock       a SimulatedClock's time (an ArrayBuffer of one uint64 of
+ *               nanoseconds), or NULL: the runtime's clocks;
+ *   immediate, timer  the handles of the one pending setImmediate and the
+ *               one setTimeout at the deadline, or NULL; each holds the
+ *               Host as its callback's argument, so a pending timer keeps
+ *               it from the collector;
+ *   idle        the deferred of the promise idle() returns until the next
+ *               idle turn (`idle_promise`, the same to every caller);
+ *   error       the turn's first error (a handler threw), reported after
+ *               the turn;
  *   encoder     the effective config has `telemetry`;
+ *   telemetry   a telemetry handler was given (the last take goes to it);
  *   processors  the effective config's ioProcessors, numbered from 1 as
  *               the effects' IO_PROCESSOR numbers them (0: the SCXML
  *               processor, the transport's). */
@@ -184,10 +208,16 @@ typedef struct ta_napi_host {
     ta_allocator arena_allocator;
     ta_table charts, sessions, payloads, loops, pending;
     uint32_t depth;
-    bool turning, closing;
+    bool turning, closing, batch, inputs;
+    uint8_t retake;
     uint64_t acks;
     uint64_t ticks_per_second;
-    bool encoder;
+    uint64_t deadline, wall;
+    uint32_t pool;
+    ta_status fault;
+    napi_ref clock, immediate, timer, idle_promise, error;
+    napi_deferred idle;
+    bool encoder, telemetry;
     uint32_t processors;
 } ta_napi_host;
 
@@ -224,11 +254,45 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports);
 typedef struct ta_napi_drain_state {
     ta_napi_host *host;
     napi_value reply; /* out: the last REPLY's decoded WIRE, or NULL */
+    bool bounded;     /* out: it stopped at its bound of batches */
 } ta_napi_drain_state;
 
 /* One drain: take, handle every effect of the batch, ack (acks bumped
- * right after), and take again until a take is empty. Never nested; a
- * handler never takes or acks. False with an exception pending. */
-bool ta_napi_drain(napi_env env, ta_napi_drain_state *state);
+ * right after), and take again until a take is empty or the bound of
+ * batches is reached, checked before a take. Never nested; a handler
+ * never takes or acks. A handler's error is kept on the host (`error`). */
+void ta_napi_drain(napi_env env, ta_napi_drain_state *state);
+
+/* Keeps the pending exception as the host's error, unless one is kept
+ * already (the first is reported); the exception is cleared. */
+void ta_napi_keep_error(napi_env env, ta_napi_host *host);
+/* Throws the kept error, cleared; false when none was kept. */
+bool ta_napi_throw_kept(napi_env env, ta_napi_host *host);
+
+/* Both clocks, converted with ticksPerSecond: before an input that
+ * depends on them and at creation (a turn does it before every run). */
+void ta_napi_advance(napi_env env, ta_napi_host *host);
+
+/* An input from outside a turn schedules one turn (setImmediate, one
+ * pending at a time); from a turn's handler it makes the turn go on. */
+void ta_napi_schedule(napi_env env, ta_napi_host *host);
+
+/* The host made with options.clock (a SimulatedClock, or undefined):
+ * its time read from then on, the host held weakly by the clock. False
+ * with a TypeError thrown for anything else. After the wrap. */
+bool ta_napi_clock_attach(napi_env env, ta_napi_host *host, napi_value clock);
+
+/* close()'s loop side, before the host is freed: the timers cleared, a
+ * waiting idle() rejected, and with a telemetry handler trace.end and the
+ * last take of traces and logs (bounded). */
+void ta_napi_loop_stop(napi_env env, ta_napi_host *host);
+
+/* host.idle() and host.nextDeadline. */
+napi_value ta_napi_host_idle(napi_env env, napi_callback_info info);
+napi_value ta_napi_host_next_deadline(napi_env env, napi_callback_info info);
+
+/* The turn function in the instance, the clock's symbol, and the class
+ * SimulatedClock on `exports`. */
+napi_status ta_napi_loop_define(napi_env env, napi_value exports);
 
 #endif /* TA_NAPI_ADDON_H */

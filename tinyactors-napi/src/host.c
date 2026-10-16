@@ -66,6 +66,14 @@ static void ta_napi_tables_init(ta_napi_host *host) {
 static void ta_napi_host_release(napi_env env, ta_napi_host *host) {
     if (host->host != NULL) ta_host_free(host->host);
     host->host = NULL;
+    /* the loop's references: a timer's handle is cleared by close() first
+     * (ta_napi_loop_stop); a finalizer finds none, since a pending one holds
+     * the wrapper */
+    napi_ref *references[] = {&host->clock, &host->immediate, &host->timer, &host->idle_promise, &host->error};
+    for (size_t i = 0; i < sizeof references / sizeof references[0]; i++) {
+        if (*references[i] != NULL) napi_delete_reference(env, *references[i]);
+        *references[i] = NULL;
+    }
     const ta_napi_rows rows[] = {
         {&host->charts, true}, {&host->sessions, true}, {&host->payloads, true},
         {&host->loops, true},  {&host->pending, false},
@@ -128,9 +136,10 @@ bool ta_napi_enter(napi_env env, napi_value self, ta_napi_call *call) {
     return true;
 }
 
-/* close()'s work: the timer (p1-loop) and the last take of telemetry
- * (the telemetry step) join it with the loop and the encoder; until then,
- * the host is freed and the handlers dropped. */
+/* close()'s work: the loop's timers cleared and a waiting idle()
+ * rejected, the last take of telemetry (ta_napi_loop_stop), then the host
+ * freed and the handlers dropped. An error of the last take stays kept on
+ * the host, for close() or the turn to throw. */
 static void ta_napi_host_close_now(napi_env env, ta_napi_host *host);
 
 void ta_napi_leave(ta_napi_call *call) {
@@ -144,7 +153,11 @@ void ta_napi_leave(ta_napi_call *call) {
 
 static void ta_napi_host_close_now(napi_env env, ta_napi_host *host) {
     host->closing = false;
+    ta_napi_loop_stop(env, host);
+    napi_value kept = NULL;
+    if (host->error != NULL) napi_get_reference_value(env, host->error, &kept); /* outlives the release */
     ta_napi_host_release(env, host);
+    if (kept != NULL) napi_create_reference(env, kept, 1, &host->error);
     napi_value self, undefined, key, keys;
     ta_napi_instance *instance = ta_napi_instance_of(env);
     /* the handlers go with the host: nothing a closed host holds keeps them */
@@ -328,9 +341,6 @@ static bool ta_napi_handlers_read(napi_env env, const ta_napi_options *options, 
         }
         if (napi_set_named_property(env, handlers, maps[i], value) != napi_ok) return false;
     }
-    napi_value clock = ta_napi_option(env, options, "clock"); /* checked by the loop (p1-loop) */
-    if (!ta_napi_is(env, clock, napi_undefined) && napi_set_named_property(env, handlers, "clock", clock) != napi_ok)
-        return false;
     return true;
 }
 
@@ -353,8 +363,9 @@ static napi_value ta_napi_host_config(napi_env env, ta_napi_host *host) {
     if (status == TA_OK) status = ta_host_post(host->host, message);
     ta_cbor_writer_free(&writer);
     if (status != TA_OK) return ta_napi_throw(env, &(ta_napi_refusal){status, "host.config was refused"});
-    ta_napi_drain_state drain = {host, NULL};
-    if (!ta_napi_drain(env, &drain)) return NULL;
+    ta_napi_drain_state drain = {host, NULL, false};
+    ta_napi_drain(env, &drain);
+    if (ta_napi_throw_kept(env, host)) return NULL;
     napi_value result = NULL;
     if (drain.reply == NULL || !ta_napi_is(env, drain.reply, napi_object) ||
         napi_get_named_property(env, drain.reply, "result", &result) != napi_ok || !ta_napi_is(env, result, napi_object))
@@ -541,6 +552,8 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     memset(host, 0, sizeof *host);
     host->env = env;
     host->allocator = allocator;
+    host->deadline = UINT64_MAX;
+    host->telemetry = !ta_napi_is(env, ta_napi_option(env, &options, "telemetry"), napi_undefined);
     ta_growable_arena_config arena = {sizeof arena, 0, 16384, &host->allocator};
     ta_growable_arena_init(&host->arena, &arena);
     host->arena_allocator = ta_growable_arena_allocator(&host->arena);
@@ -564,8 +577,10 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     }
     /* wrapped: from here the finalizer frees it */
     if (napi_type_tag_object(env, self, &ta_napi_host_tag) != napi_ok ||
-        napi_create_reference(env, self, 0, &host->self) != napi_ok)
+        napi_create_reference(env, self, 0, &host->self) != napi_ok ||
+        !ta_napi_clock_attach(env, host, ta_napi_option(env, &options, "clock")))
         return NULL;
+    ta_napi_advance(env, host); /* the host's clock starts now, not at 0 */
     return self;
 }
 
@@ -578,8 +593,10 @@ static napi_value ta_napi_this(napi_env env, napi_callback_info info) {
     return self;
 }
 
-/* close(): frees the host; again, nothing. From a handler (a call or a
- * turn on the stack) it is done when the outermost one returns. */
+/* close(): clears the timers, rejects a waiting idle(), gives the last
+ * take to the telemetry handler and frees the host; again, nothing. From a
+ * handler (a call or a turn on the stack) it is done when the outermost
+ * one returns. */
 static napi_value ta_napi_host_close(napi_env env, napi_callback_info info) {
     ta_napi_host *host = ta_napi_host_of(env, &(ta_napi_host_check){ta_napi_this(env, info), false});
     if (host == NULL) return NULL;
@@ -588,6 +605,7 @@ static napi_value ta_napi_host_close(napi_env env, napi_callback_info info) {
     if (host->host == NULL) return undefined;
     if (host->depth > 0 || host->turning) host->closing = true;
     else ta_napi_host_close_now(env, host);
+    if (host->host == NULL && ta_napi_throw_kept(env, host)) return NULL; /* the last take's error */
     return undefined;
 }
 
@@ -636,12 +654,14 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"close", NULL, ta_napi_host_close, NULL, NULL, NULL, napi_default_method, NULL},
         {"closed", NULL, NULL, ta_napi_host_closed, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
         {"ticksPerSecond", NULL, NULL, ta_napi_host_ticks, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
+        {"nextDeadline", NULL, NULL, ta_napi_host_next_deadline, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
+        {"idle", NULL, ta_napi_host_idle, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, dispose, ta_napi_host_close, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, async_dispose, ta_napi_host_async_dispose, NULL, NULL, NULL, napi_default_method, NULL},
     };
     size_t count = sizeof properties / sizeof properties[0];
     if (async_dispose == NULL) count--; /* a runtime without the symbols: close() only */
-    if (dispose == NULL) count = 3;
+    if (dispose == NULL) count = 5;
     napi_value class;
     napi_status status = napi_define_class(env, "Host", NAPI_AUTO_LENGTH, ta_napi_host_new, NULL, count, properties, &class);
     if (status == napi_ok) status = napi_set_named_property(env, exports, "Host", class);

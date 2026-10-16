@@ -382,7 +382,9 @@ export class Host implements Disposable, AsyncDisposable {
   terminate(session: bigint): void;
   actorByName(name: string): bigint | undefined;
 
-  /** Settles at the next idle turn; rejects with the turn's first error. */
+  /** Settles at the next idle turn (the same promise to every caller until
+   * then); rejects with the turn's first error, or `TA_ERROR_STATE` when the
+   * host is closed first. It observes the turns; the event loop drives them. */
   idle(): Promise<void>;
 
   actorState(params: Params, onResult: OnResult, onError?: OnError): void;
