@@ -29,14 +29,10 @@ module NodeAPI
   RUNTIMES = %w[node bun].freeze
   # What of that set `mise run test` runs now: the suites (`--suite`) and
   # the datamodels (the differential run). It grows with the work
-  # (ROADMAP.md, M1, "Plan and progress"): M1 is done when it is every
-  # suite of the set on both datamodels, native and quickjs, and both
-  # pass. No suite yet: the runner fails a suite that passes nothing
-  # ("proves nothing") and a binding that does not offer every method of
-  # its kind (tinyactors-test/lib/runner.rb, `summary`), so the gate holds
-  # a suite once the adapter offers them all (docs/plan.xml, p1-conform);
-  # log entries l-p1-values-gate-empty, l-p1-host-gate.
-  GATE = { suites: %w[], datamodels: %w[native quickjs] }.freeze
+  # (ROADMAP.md, M1, "Plan and progress"): M1 is every suite of the set,
+  # protocol and scenarios, on both datamodels, native and quickjs, and
+  # both pass under node and bun (docs/plan.xml, p1-conform).
+  GATE = { suites: %w[protocol scenarios], datamodels: %w[native quickjs] }.freeze
   # The datamodels `mise run conform` runs the suite on: both, unless
   # TA_NAPI_DATAMODELS names some (the test task's gate does).
   DATAMODELS = %w[native quickjs].freeze
