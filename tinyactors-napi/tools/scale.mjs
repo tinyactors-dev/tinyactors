@@ -26,7 +26,8 @@
 //
 // How a cost is measured: an operation runs in batches (64 calls, say,
 // then the turn that answers them); batches add up to a sample of at least
-// --min-ms milliseconds; the cost is the median of --samples samples. What
+// --min-ms milliseconds; the cost is the median of --samples samples (for
+// an operation on the whole population, the least of three). What
 // a batch needs first or leaves behind (actors to wake, put back to sleep,
 // spawned to be terminated) is done outside the timed part. When an
 // operation exceeds the factor and is not a known gap in core (KNOWN), the
@@ -222,8 +223,11 @@ class Clock {
     this.record(name, unit, costs, calls);
   }
 
+  // per call: the median of the samples; per actor (a whole population
+  // at a time, a few samples of seconds each, where the first pays for
+  // room the later ones reuse and gigabytes of pages fault in): the least
   record(name, unit, costs, calls) {
-    const cost = median(costs);
+    const cost = unit === 'per actor' ? Math.min(...costs) : median(costs);
     this.results[name] = { unit, cost, costs, calls };
     console.log(`  ${name}: ${cost.toFixed(3)} µs ${unit} (${calls} ${unit === 'per actor' ? 'actors' : 'calls'}, ` +
       `samples ${costs.map((c) => c.toFixed(3)).join(' ')})`);
@@ -677,8 +681,9 @@ async function hibernated(o, results, failures) {
 /** The end of a scenario: snapshot (per actor), then restore with its
  * first turn (per actor) and the restored host's close (per actor), again
  * and again. The host is closed before the first restore, so that at most
- * one population is in memory at a time. */
-async function snapshots(host, config, handlers, clock, total, o) {
+ * one population is in memory at a time. With `then`, the last restored
+ * host is handed to it before its close is timed. */
+async function snapshots(host, config, handlers, clock, total, o, then) {
   const closes = [];
   let blob;
   await clock.time('snapshot', 'per actor', async () => {
@@ -689,12 +694,17 @@ async function snapshots(host, config, handlers, clock, total, o) {
   }, { batches: 1, samples: Math.min(3, o.samples) });
   host.close(); // a host after every operation: the restored ones' closes are timed, each a population as large
   const samples = Math.min(3, o.samples);
+  let round = 0;
   await clock.time('restore (and its first turn)', 'per actor', async () => {
     let restored;
     const t = await elapsed(async () => {
       restored = Host.restore(blob, config, { ...handlers, clock: new SimulatedClock() });
       await restored.idle();
     });
+    if (++round === samples && then) {
+      blob = undefined;
+      await then(restored);
+    }
     closes.push((await elapsed(() => restored.close())) * 1000 / total);
     return { ms: t, calls: total };
   }, { batches: 1, samples });
@@ -851,20 +861,20 @@ async function residentScenario(o, results, failures) {
   });
 
 
-  // every actor moved to version 2, per actor
-  {
+  // snapshot and restore, then every actor of the last restored host moved
+  // to version 2 (per actor): one population in memory at a time
+  await snapshots(host, config, handlers, clock, total, o, async (restored) => {
     const v2 = compileCharts([{ name: 'counter.scxml', text: COUNTER(2) }]);
-    host.addImage(v2.image);
+    restored.addImage(v2.image);
     v2.close();
-  }
-  const moving = await elapsed(async () => {
-    host.migrate({ chart: 'counter' });
-    for (let turns = 0; migrationsDone.count === 0 && turns < 1e6; turns++) await host.idle();
+    const moving = await elapsed(async () => {
+      restored.migrate({ chart: 'counter' });
+      for (let turns = 0; migrationsDone.count === 0 && turns < 1e6; turns++) await restored.idle();
+    });
+    if (migrationsDone.failed || migrationsDone.migrated !== total)
+      failures.push(`migrate: ${migrationsDone.migrated} of ${total} moved, ${migrationsDone.failed} failed`);
+    clock.record('migrate (a chart, every actor)', 'per actor', [(moving * 1000) / total], total);
   });
-  if (migrationsDone.failed || migrationsDone.migrated !== total)
-    failures.push(`migrate: ${migrationsDone.migrated} of ${total} moved, ${migrationsDone.failed} failed`);
-  clock.record('migrate (a chart, every actor)', 'per actor', [(moving * 1000) / total], total);
-  await snapshots(host, config, handlers, clock, total, o);
 }
 
 // ---- one process: one scenario at one size ----------------------------------

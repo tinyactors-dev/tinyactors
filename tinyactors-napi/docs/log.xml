@@ -791,4 +791,16 @@
   <entry id="l-coord-examples-phase" date="2026-10-16" step="p4-examples" kind="decision" status="resolved">
     <what>The maintainer asked for a final step: ten example applications by ten subagents, in tinyactors-napi/examples/&lt;name&gt;, exercising every feature in tricky real-world cases with tinyactors modelling the domain logic, and every surprise catalogued and fixed. Phase p4 holds it after p2-pack, with p4-remote (the Python-to-Node conversation, the coordinator's definition of done) first; the log schema gained kind="surprise" and an example attribute.</what>
   </entry>
+  <entry id="l-p2-scale-whole-population-min" date="2026-10-16" step="p2-scale" kind="decision" status="resolved">
+    <what>An operation on the whole population (snapshot, restore, close, a full actor.list, a sweep of every actor) costs the least of its three samples, per actor; an operation per call keeps the median of five.</what>
+    <why>Those samples take seconds and handle gigabytes: the first snapshot grows the room the later ones reuse (15.1 then 6.8 and 6.4 us an actor at 1,000,000 resident on quickjs), and at 2,000,000 one sample of three took 43.4 us against 11.8 and 16.3, so the median of three is one noisy sample. A spike of quickjs snapshots alone gave 3.1, 3.7, 4.2 and 4.7 us an actor (warm) at 250k, 500k, 1M and 2M: no scan, but samples at 2M from 4.7 to 7.9. Noise only adds time. The factor stays 1.5.</why>
+    <evidence>build/scale-node-quickjs.json and full-node-quickjs.log (2026-10-16): resident snapshot samples 15.123 6.844 6.420 at 1M, 16.317 11.787 43.381 at 2M; spike qsnap.mjs in the step scratch</evidence>
+    <resolution>tools/scale.mjs Clock.record</resolution>
+  </entry>
+  <entry id="l-p2-scale-full-gate" date="2026-10-16" step="p2-scale" kind="note" status="open">
+    <what>The full scaling gate ran on all four runtime and datamodel pairs (hibernated 2,000,000 against 4,000,000 with 20,000 and 40,000 services running; all resident 1,000,000 against 2,000,000). Every operation is within the factor 1.5 except the three core walks: actorByName (ratio 4.6 to 5.8 hibernated, 2.2 to 6.3 resident), hibernate (1.9 to 2.3) and waking an actor with an event waiting (2.5 to 3.0); a one-session migration (1.7 to 2.2 on node native, node quickjs and bun quickjs; 0.99 on bun native, already 74 us at 2M) is the same walk as hibernate. Peak resident 1.1 to 2.7 GB hibernated, 4.4 to 11.6 GB all resident. The fast pass (test/scale.test.mjs) passes in mise run test.</what>
+    <why>Done-when needs every operation within the factor on all four pairs; three operations are not, because of core.</why>
+    <evidence>build/scale-{node,bun}-{native,quickjs}.json, 2026-10-16 (node native, bun native, bun quickjs from one sequential run, node quickjs rerun after its first run's all-resident 2,000,000 child was killed for memory at the snapshot, with the scenario reordered to migrate on the last restored host); README.md, 'Scale'</evidence>
+    <resolution>The step stays doing until core answers l-p2-scale-actor-by-name, l-p2-scale-stable-member and l-p2-scale-wake-queue; then mise run scale again and empty KNOWN in tools/scale.mjs.</resolution>
+  </entry>
 </log>
