@@ -495,15 +495,8 @@ napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
 
 /* ---- reading -------------------------------------------------------------- */
 
-/* One decode: the reader over borrowed bytes. No JavaScript runs while it
- * reads (values are made, properties defined, never set), so the bytes
- * cannot change under it. */
-typedef struct ta_napi_decoder {
-    napi_env env;
-    ta_cbor_reader reader;
-    ta_napi_refusal refusal;
-    bool thrown;
-} ta_napi_decoder;
+/* One decode (ta_napi_decoder, addon.h): the reader over borrowed bytes.
+ * No JavaScript runs while it reads, so the bytes cannot change under it. */
 
 static napi_value ta_napi_reject(ta_napi_decoder *decoder, ta_status status, const char *message) {
     decoder->refusal = (ta_napi_refusal){status, message};
@@ -619,9 +612,23 @@ static napi_value ta_napi_read(ta_napi_decoder *decoder) {
     }
 }
 
+void ta_napi_decoder_init(ta_napi_decoder *decoder, napi_env env, ta_bytes cbor) {
+    *decoder = (ta_napi_decoder){.env = env};
+    ta_cbor_reader_init(&decoder->reader, cbor);
+}
+
+napi_value ta_napi_decoder_next(ta_napi_decoder *decoder) {
+    napi_value value = ta_napi_read(decoder);
+    if (value == NULL && !decoder->thrown) {
+        ta_napi_throw(decoder->env, &decoder->refusal);
+        decoder->thrown = true;
+    }
+    return value;
+}
+
 napi_value ta_napi_value_read(napi_env env, ta_bytes cbor) {
-    ta_napi_decoder decoder = {.env = env};
-    ta_cbor_reader_init(&decoder.reader, cbor);
+    ta_napi_decoder decoder;
+    ta_napi_decoder_init(&decoder, env, cbor);
     napi_value value = ta_napi_read(&decoder);
     if (value != NULL) {
         ta_cbor_item extra;

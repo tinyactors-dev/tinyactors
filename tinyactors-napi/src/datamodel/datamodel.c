@@ -1489,6 +1489,19 @@ static bool ta_napi_restore_other(ta_napi_native *native, const ta_napi_other_in
     return true;
 }
 
+/* The name of the snapshot's next member, in the order
+ * ta_napi_native_snapshot writes them. */
+static bool ta_napi_restore_key(ta_napi_decoder *decoder, ta_string_view name) {
+    ta_cbor_item item;
+    return ta_cbor_read(&decoder->reader, &item) == 1 && item.kind == TA_CBOR_TEXT && item.bytes.length == name.length &&
+           memcmp(item.bytes.pointer, name.pointer, name.length) == 0;
+}
+
+/* The state goes into JavaScript a row at a time: the decoder reads the
+ * map's heads itself and makes one row's value, then the next, so a
+ * population of sessions is never one value in the engine's heap (as one
+ * value, a million rows made each restore's collections slower than the
+ * last: tools/scale.mjs, "restore"). */
 bool ta_napi_native_restore(ta_napi_native *native, ta_bytes bytes) {
     ta_napi_host *host = native->host;
     napi_env env = host->env;
@@ -1498,42 +1511,35 @@ bool ta_napi_native_restore(ta_napi_native *native, ta_bytes bytes) {
     }
     napi_handle_scope scope;
     if (napi_open_handle_scope(env, &scope) != napi_ok) return false;
-    static const char *const names[] = {"sessions", "payloads", "loops", "rows", "values", "items"};
+    static const ta_string_view names[] = {{"sessions", 8}, {"payloads", 8}, {"loops", 5},
+                                           {"rows", 4},     {"values", 6},   {"items", 5}};
     ta_table *tables[] = {&host->sessions, &host->payloads, &host->loops};
-    napi_value state = ta_napi_value_read(env, bytes), parts[6];
-    napi_valuetype type = napi_undefined;
-    bool ok = state != NULL && napi_typeof(env, state, &type) == napi_ok && type == napi_object;
-    for (uint32_t i = 0; ok && i < 6; i++) {
-        bool array = false;
-        ok = napi_get_named_property(env, state, names[i], &parts[i]) == napi_ok &&
-             (i < 3 || (napi_is_array(env, parts[i], &array) == napi_ok && array));
+    ta_napi_decoder decoder;
+    ta_napi_decoder_init(&decoder, env, bytes);
+    ta_cbor_item item;
+    bool ok = ta_cbor_read(&decoder.reader, &item) == 1 && item.kind == TA_CBOR_MAP && item.count == 6;
+    for (uint32_t i = 0; ok && i < 3; i++) {
+        napi_value layout;
+        ok = ta_napi_restore_key(&decoder, names[i]) && (layout = ta_napi_decoder_next(&decoder)) != NULL &&
+             ta_napi_restore_layout(env, tables[i], layout);
     }
-    if (!ok) ta_napi_restore_refuse(env, "not a snapshot of the native datamodel");
-    for (uint32_t i = 0; ok && i < 3; i++) ok = ta_napi_restore_layout(env, tables[i], parts[i]);
-    uint32_t lengths[3] = {0, 0, 0};
-    for (uint32_t i = 0; ok && i < 3; i++) /* every live handle has its row, once */
-        ok = napi_get_array_length(env, parts[3 + i], &lengths[i]) == napi_ok && lengths[i] == tables[i]->count;
-    if (!ok) ta_napi_restore_refuse(env, "the snapshot's rows do not match its tables");
     ta_napi_attachment attachment = {0, 0, 0};
-    for (uint32_t i = 0; ok && i < lengths[0]; i++) {
-        napi_handle_scope row;
-        napi_value entry;
-        ok = napi_open_handle_scope(env, &row) == napi_ok;
-        if (!ok) break;
-        ok = napi_get_element(env, parts[3], i, &entry) == napi_ok &&
-             ta_napi_restore_session(native, &(ta_napi_session_in){entry, &attachment});
-        napi_close_handle_scope(env, row);
-    }
-    for (uint32_t k = 1; k < 3; k++)
-        for (uint32_t i = 0; ok && i < lengths[k]; i++) {
+    for (uint32_t k = 0; ok && k < 3; k++) {
+        /* every live handle has its row, once */
+        ok = ta_napi_restore_key(&decoder, names[3 + k]) && ta_cbor_read(&decoder.reader, &item) == 1 &&
+             item.kind == TA_CBOR_ARRAY && item.count == tables[k]->count;
+        for (uint32_t i = 0, rows = ok ? item.count : 0; ok && i < rows; i++) {
             napi_handle_scope row;
             napi_value entry;
             ok = napi_open_handle_scope(env, &row) == napi_ok;
             if (!ok) break;
-            ok = napi_get_element(env, parts[3 + k], i, &entry) == napi_ok &&
-                 ta_napi_restore_other(native, &(ta_napi_other_in){entry, k == 1});
+            ok = (entry = ta_napi_decoder_next(&decoder)) != NULL &&
+                 (k == 0 ? ta_napi_restore_session(native, &(ta_napi_session_in){entry, &attachment})
+                         : ta_napi_restore_other(native, &(ta_napi_other_in){entry, k == 1}));
             napi_close_handle_scope(env, row);
         }
+    }
+    ok = ok && ta_cbor_read(&decoder.reader, &item) == 0; /* nothing after the map */
     if (!ok) ta_napi_restore_refuse(env, "not a snapshot of the native datamodel");
     napi_close_handle_scope(env, scope); /* the exception, if any, stays pending */
     return ok; /* on failure the host is freed: the rows filled so far go with it */

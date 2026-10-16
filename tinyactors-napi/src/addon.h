@@ -143,6 +143,25 @@ bool ta_napi_value_write(napi_env env, napi_value value, const ta_napi_writing *
  * thrown. The bytes are read during the call only. */
 napi_value ta_napi_value_read(napi_env env, ta_bytes cbor);
 
+/* A decode that goes item by item through bytes the caller keeps for its
+ * whole length: a caller reads a container's head with ta_cbor_read on
+ * `reader` and the values inside it with ta_napi_decoder_next, so a large
+ * document (a snapshot's rows) is never one JavaScript value. No
+ * JavaScript runs while it reads (values are made, properties defined,
+ * never set). */
+typedef struct ta_napi_decoder {
+    napi_env env;
+    ta_cbor_reader reader;
+    ta_napi_refusal refusal;
+    bool thrown;
+} ta_napi_decoder;
+
+void ta_napi_decoder_init(ta_napi_decoder *decoder, napi_env env, ta_bytes cbor);
+
+/* The value of the next item of the decoder's bytes, or NULL with a
+ * TinyactorsError thrown. */
+napi_value ta_napi_decoder_next(ta_napi_decoder *decoder);
+
 /* A string as UTF-8 in text->arena (the copy Node-API forces), a lone
  * surrogate refused: text->view. A value that is not a string throws a
  * TypeError saying text->what; a refusal a TinyactorsError. The caller
