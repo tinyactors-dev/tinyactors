@@ -588,6 +588,30 @@ static void ta_napi_dispatch_log(napi_env env, ta_napi_host *host, uint32_t inde
     if (napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) != napi_ok) ta_napi_keep_error(env, host);
 }
 
+/* A WAKE: a hibernated session has work (an event, a due delayed send:
+ * `migration` undefined) or a migration asks for it (`migration` its id);
+ * the wake handler gets the host, the session and the migration, and calls
+ * host.wake with the blob, now or later. Without one the effect is
+ * dropped: the session stays hibernated and its events wait. A promise it
+ * returns is not followed: its rejection is an unhandled rejection. */
+static void ta_napi_dispatch_wake(napi_env env, ta_napi_host *host, uint32_t index) {
+    napi_value wrapper = ta_napi_self(env, host), handler = NULL, argv[3], result;
+    if (wrapper == NULL) return;
+    handler = ta_napi_handler_of(env, wrapper, &(ta_napi_handler_at){"wake", UINT32_MAX});
+    if (handler == NULL) {
+        ta_napi_keep_error(env, host);
+        return;
+    }
+    if (!ta_napi_is(env, handler, napi_function)) return;
+    uint64_t migration = ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_MIGRATION); /* 0: none asked */
+    argv[0] = wrapper;
+    argv[2] = ta_napi_undefined(env);
+    if (napi_create_bigint_uint64(env, ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SESSION), &argv[1]) != napi_ok ||
+        (migration != 0 && napi_create_double(env, (double)migration, &argv[2]) != napi_ok) ||
+        napi_call_function(env, ta_napi_undefined(env), handler, 3, argv, &result) != napi_ok)
+        ta_napi_keep_error(env, host);
+}
+
 /* The application's exporter gets the request as a Buffer it keeps (one
  * copy, boundary.md section 7), in a handle scope of its own; posting it,
  * retrying and capping what waits are the application's. Without a handler
@@ -642,6 +666,7 @@ void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index) 
     switch (batch->effects[index].kind) {
     case TA_EFFECT_SEND: ta_napi_dispatch_send(env, host, index); break;
     case TA_EFFECT_LOG: ta_napi_dispatch_log(env, host, index); break;
+    case TA_EFFECT_WAKE: ta_napi_dispatch_wake(env, host, index); break;
     case TA_EFFECT_REQUEST: {
         /* a fetch at run time: refused in C until it is built (AGENTS.md,
          * "Layers and the resolver"); the requester gets error.execution */

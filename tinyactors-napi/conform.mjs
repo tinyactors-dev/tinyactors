@@ -336,6 +336,11 @@ class Scenario {
     this.aliases = new Map();
     this.judge = new Judge();
     this.clock = new SimulatedClock();
+    this.blobs = new Map(); // the implementation's store (driver.md): hibernated actors' blobs
+    this.wake = (host, session) => {
+      host.wake(session, this.blobs.get(session)); // WAKE: the actor's blob from the store
+      this.blobs.delete(session);
+    };
     this.host = null;
   }
 
@@ -352,7 +357,7 @@ class Scenario {
   }
 
   async run(steps) {
-    this.host = new Host(Scenario.CONFIG, { ...this.options, log: this.judge.log, clock: this.clock });
+    this.host = new Host(Scenario.CONFIG, { ...this.options, log: this.judge.log, clock: this.clock, wake: this.wake });
     try {
       for (const step of steps) {
         try {
@@ -395,6 +400,9 @@ class Scenario {
       if (host.sendMany(items) !== items.length) throw new Refused('sendMany took fewer events');
     } else if ('advance' in step) {
       this.clock.increment(Number(step.advance)); // ticksPerSecond 1000: ticks are milliseconds
+    } else if ('hibernate' in step) {
+      const session = this.session(step.hibernate);
+      this.blobs.set(session, host.hibernate(session));
     } else {
       throw new Refused(`not in the binding's API yet: ${Object.keys(step).join(', ')}`);
     }

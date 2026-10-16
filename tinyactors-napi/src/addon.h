@@ -119,6 +119,7 @@ typedef struct ta_napi_writing {
     ta_cbor_writer *writer;
     ta_growable_arena *arena;
     bool wire; /* the native datamodel's to_wire: values.txt's ECMAScript rules (values.c) */
+    ta_status *refused; /* out, when not NULL: the refusal's status (TA_ERROR_EXECUTION: an exception) */
 } ta_napi_writing;
 
 /* Writes `value` into writing->writer as the value table's CBOR. On a
@@ -190,9 +191,14 @@ typedef struct ta_napi_chart_row {
     uint32_t flags;       /* TA_NAPI_CHART_* */
 } ta_napi_chart_row;
 
+/* A session's row: its scope, its chart's row, and core's ids of its
+ * _event's strings (the name, the invoke's slot, the origintype: TA_NIL for
+ * none), which a hibernation blob carries so a woken session shares the
+ * chart's strings again. */
 typedef struct ta_napi_session_row {
     napi_ref scope;
     uint64_t chart;
+    uint32_t name_id, invoke_slot, origintype_id;
 } ta_napi_session_row;
 
 typedef struct ta_napi_payload_row {
@@ -219,8 +225,11 @@ typedef struct ta_napi_pending_row {
  *   strings      ["platform", "internal", "external", the I/O processors'
  *                types...]: _event's strings by core's ids;
  *   environment  the evaluating entry's (In() reads it);
- *   output       the datamodel's last output (eval_string, log, to_wire),
- *                valid until its next call;
+ *   output       the datamodel's last output (eval_string, log, to_wire,
+ *                serialize, payload_serialize), valid until its next call;
+ *   reason       why the last serialize refused (TA_ERROR_UNSUPPORTED: which
+ *                variable, and why), "" after a success: host.hibernate's
+ *                message;
  *   freeing      the host is being freed: rows go with basic-env calls
  *                only (a finalizer may be freeing it). */
 struct ta_napi_host;
@@ -229,6 +238,7 @@ typedef struct ta_napi_native {
     napi_ref shared, drops, strings;
     ta_datamodel_environment *environment;
     ta_buffer output;
+    char reason[256];
     bool freeing;
 } ta_napi_native;
 
@@ -370,15 +380,28 @@ void ta_napi_native_flush(ta_napi_native *native);
  * basic-env calls only. */
 void ta_napi_native_free(ta_napi_native *native);
 
-/* to_wire's CBOR of `value` in `room` (values.c's wire mode), the call's
- * text in `arena` under a mark of its own; false with an exception
- * pending. */
-typedef struct ta_napi_wiring {
-    ta_napi_room room;
+/* A CBOR document the native datamodel writes into its last output
+ * (to_wire, serialize, payload_serialize): opened, its values written with
+ * the value table (`wire`: to_wire's mode) and its own items with
+ * ta_cbor_write_*, then closed. The values' text goes into `arena` under a
+ * mark the document takes at open and releases at close. */
+typedef struct ta_napi_document {
+    ta_napi_room room;        /* the datamodel's output, where the bytes end up */
     ta_growable_arena *arena;
-    ta_bytes out; /* out: a view of the room */
-} ta_napi_wiring;
-bool ta_napi_value_wire(napi_env env, napi_value value, ta_napi_wiring *wiring);
+    bool wire;
+    ta_cbor_writer writer;    /* between open and close */
+    ta_growable_arena_mark mark;
+    ta_status refused;        /* out: the last refused value's status (TA_ERROR_EXECUTION: an exception) */
+    ta_bytes out;             /* out, after a close that keeps: a view of the room */
+} ta_napi_document;
+void ta_napi_document_open(ta_napi_document *document);
+/* One value appended; false with the exception pending (a TinyactorsError
+ * of document->refused, or what a getter threw). */
+bool ta_napi_document_value(napi_env env, napi_value value, ta_napi_document *document);
+/* Closes it: with `keep`, its bytes in the room (document->out), false when
+ * the writer failed (document->refused its status); without, its bytes
+ * dropped. The arena is released to the document's mark either way. */
+bool ta_napi_document_close(ta_napi_document *document, bool keep);
 
 /* ---- address.c: Address (AGENTS.md, "Other systems") -------------------- */
 

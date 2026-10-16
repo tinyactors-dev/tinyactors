@@ -19,6 +19,11 @@
   const source = Function.prototype.toString;
   const isArray = Array.isArray;
   const isView = ArrayBuffer.isView;
+  const names = Object.getOwnPropertyNames;
+  // The global's own names before any chart's: what a context starts with,
+  // and the system variables a declaring session's context gets (declare).
+  const baseline = new Set(names(globalThis));
+  const systemNames = new Set(['_sessionid', '_name', '_ioprocessors', 'In', '_event']);
 
   // The errors copy throws for a value that cannot cross, by status: an
   // input refused with them throws a TinyactorsError of that status.
@@ -225,6 +230,44 @@
     return freeze(made);
   }
 
+  // A session's variables, what hibernation writes: [names, values]. A
+  // shared chart's scope: its own names but _event. A declaring session's
+  // global: the names its chart and scripts put there (var, function, an
+  // implicit global); one in `remade` (a function declaration of the
+  // chart's scripts) is left out while it holds a function, since the
+  // wake makes it again from the scripts.
+  function stored(target, remade) {
+    const found = [];
+    const values = [];
+    const global = target === globalThis;
+    for (const name of global ? names(target) : keys(target)) {
+      if (name === '_event' || (global && (baseline.has(name) || systemNames.has(name)))) continue;
+      const value = target[name];
+      if (global && typeof value === 'function' && remade.includes(name)) continue;
+      found.push(name);
+      values.push(value);
+    }
+    return [found, values];
+  }
+
+  // A woken session's variables, `vars` of a hibernation blob (made in
+  // another realm), copied into this context: a shared scope keeps the
+  // names its chart declares; a declaring session's global takes them all.
+  function restore(target, vars) {
+    for (const name of keys(vars)) {
+      if (hasOwn(target, name)) target[name] = copy(vars[name], 0);
+      else if (target === globalThis) own(target, name, copy(vars[name], 0));
+    }
+  }
+
+  // In a scratch context after a chart's scripts were instantiated: the
+  // names they declared as functions.
+  function functions() {
+    const found = [];
+    for (const name of names(globalThis)) if (!baseline.has(name) && typeof globalThis[name] === 'function') found.push(name);
+    return found;
+  }
+
   function record(names, values) {
     const made = {};
     for (let i = 0; i < names.length; i++) own(made, names[i], copy(values[i], 1));
@@ -242,6 +285,9 @@
     declare,
     event,
     record,
+    stored,
+    restore,
+    functions,
     dom,
     parse: (text) => JSON.parse(text),
   });

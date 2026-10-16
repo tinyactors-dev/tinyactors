@@ -313,7 +313,11 @@ export interface HostOptions {
    * returns in the last take at close are awaited by
    * `[Symbol.asyncDispose]`. */
   telemetry?: (host: Host, signal: 'traces' | 'logs', data: Uint8Array) => Handled;
-  /** A hibernated session is wanted: load its blob, call `host.wake`. */
+  /** A hibernated session has work: an event or a due delayed send
+   * (`migration` undefined), or a migration asks for it (its id). Load its
+   * blob and call `host.wake`, now or later (a promise is not awaited).
+   * Called once per hibernation; without it the session stays hibernated
+   * and its events wait until `host.wake`. */
   wake?: (host: Host, session: bigint, migration: number | undefined) => Handled;
   migrated?: (host: Host, migrated: Migrated) => void;
   migrationDone?: (host: Host, result: MigrationResult) => void;
@@ -416,8 +420,18 @@ export class Host implements Disposable, AsyncDisposable {
    * collector's `/v1/metrics`); TA_ERROR_STATE without telemetry in the
    * config. From a handler it joins the open batch. */
   metrics(): Uint8Array;
+  /** The CLOCK sweep: at most `limit` sessions that did not run since the
+   * previous sweep and can be hibernated now, scanning at most `maxScan`
+   * slots (each an integer from 0 to 2^32-1). */
   sweep(maxScan: number, limit: number): bigint[];
+  /** Takes the actor out of memory: its blob, a Buffer copied once, for the
+   * application's store. TA_ERROR_STATE when it is not at rest,
+   * TA_ERROR_UNSUPPORTED when a variable holds what the datamodel cannot
+   * store (the message names it); it stays resident then. From a handler it
+   * joins the open batch. */
   hibernate(session: bigint): Uint8Array;
+  /** Back into memory from the blob `hibernate` gave; its waiting events run
+   * at the next turn. */
   wake(session: bigint, blob: Uint8Array | ArrayBuffer): void;
   /** Core's migration id. */
   migrate(options?: MigrateOptions): number;

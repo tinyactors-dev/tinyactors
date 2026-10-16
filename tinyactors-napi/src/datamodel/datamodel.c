@@ -165,7 +165,7 @@ static napi_value ta_napi_chart_names(napi_env env, const ta_datamodel_chart *ch
  * context (none for a declaring chart), its caches, its names. */
 typedef struct ta_napi_record_of {
     const ta_datamodel_chart *chart;
-    bool declares;
+    const ta_napi_chart_of *declaring;
     napi_value names;
 } ta_napi_record_of;
 
@@ -173,17 +173,22 @@ static napi_value ta_napi_chart_record(ta_napi_native *native, const ta_napi_rec
     napi_env env = native->host->env;
     napi_value record, slot, shape, shared, kit;
     if (napi_create_array_with_length(env, TA_NAPI_CHART_RECORD, &record) != napi_ok) return NULL;
+    bool declares = of->declaring->declares;
     if (napi_get_undefined(env, &shape) != napi_ok) return NULL;
-    if (!of->declares) {
+    if (!declares) {
         if ((shared = ta_napi_realm_shared(native)) == NULL || napi_get_element(env, shared, TA_NAPI_REALM_KIT, &kit) != napi_ok ||
             (shape = ta_napi_kit(env, kit, &(ta_napi_kit_call){"shape", 1, {of->names}})) == NULL)
             return NULL;
     }
     if (napi_set_element(env, record, TA_NAPI_CHART_SHAPE, shape) != napi_ok) return NULL;
-    for (uint32_t i = TA_NAPI_CHART_GETTERS; i < TA_NAPI_CHART_RECORD; i++)
+    for (uint32_t i = TA_NAPI_CHART_GETTERS; i < TA_NAPI_CHART_HOISTS; i++)
         if (napi_create_array(env, &slot) != napi_ok || napi_set_element(env, record, i, slot) != napi_ok) return NULL;
-    /* a declaring chart's names, for each session's context: kept as the shape */
-    if (of->declares && napi_set_element(env, record, TA_NAPI_CHART_SHAPE, of->names) != napi_ok) return NULL;
+    /* a declaring chart's names, for each session's context: kept as the
+     * shape; its scripts' declarations, made again in a woken session's */
+    if (declares && (napi_set_element(env, record, TA_NAPI_CHART_SHAPE, of->names) != napi_ok ||
+                     napi_set_element(env, record, TA_NAPI_CHART_HOISTS, of->declaring->hoists) != napi_ok ||
+                     napi_set_element(env, record, TA_NAPI_CHART_FUNCTIONS, of->declaring->functions) != napi_ok))
+        return NULL;
     return record;
 }
 
@@ -193,11 +198,11 @@ static ta_status ta_napi_chart_attach(void *datamodel, const ta_datamodel_chart 
     ta_napi_frame frame;
     if (!ta_napi_frame_open(native, NULL, &frame)) return TA_ERROR_INVALID;
     ta_status status = TA_OK;
-    ta_napi_chart_of declaring = {chart->image, chart->chart, false};
+    ta_napi_chart_of declaring = {chart->image, chart->chart, false, false, NULL, NULL};
     napi_value names = NULL, record = NULL;
     napi_ref reference = NULL;
     if (!ta_napi_realm_declares(native, &declaring) || (names = ta_napi_chart_names(env, chart)) == NULL ||
-        (record = ta_napi_chart_record(native, &(ta_napi_record_of){chart, declaring.declares, names})) == NULL ||
+        (record = ta_napi_chart_record(native, &(ta_napi_record_of){chart, &declaring, names})) == NULL ||
         napi_create_reference(env, record, 1, &reference) != napi_ok)
         status = (ta_napi_failed(env), TA_ERROR_INVALID); /* a chart this datamodel cannot run */
     uint64_t handle = 0;
@@ -207,7 +212,8 @@ static ta_status ta_napi_chart_attach(void *datamodel, const ta_datamodel_chart 
         status = TA_ERROR_NO_MEMORY;
     }
     if (row != NULL) {
-        *row = (ta_napi_chart_row){reference, chart->image, chart->chart, declaring.declares ? TA_NAPI_CHART_DECLARES : 0u};
+        uint32_t flags = (declaring.declares ? TA_NAPI_CHART_DECLARES : 0u) | (declaring.lexical ? TA_NAPI_CHART_LEXICAL : 0u);
+        *row = (ta_napi_chart_row){reference, chart->image, chart->chart, flags};
         *context = (void *)(uintptr_t)handle; /* the row's handle, never a pointer */
     }
     ta_napi_frame_close(&frame);
@@ -329,7 +335,7 @@ static ta_status ta_napi_create(void *datamodel, const ta_datamodel_start *start
         status = TA_ERROR_NO_MEMORY;
     }
     if (row != NULL) {
-        *row = (ta_napi_session_row){reference, chart_handle};
+        *row = (ta_napi_session_row){reference, chart_handle, TA_NIL, TA_NIL, TA_NIL};
         *instance = handle;
     }
     ta_napi_frame_close(&frame);
@@ -462,6 +468,12 @@ static ta_status ta_napi_bind_event(const ta_datamodel_call *call, const ta_even
     ok = ok && napi_define_properties(env, evaluation->scope, 1, &property) == napi_ok;
     /* an event has come: the params were read by init_data */
     if (ok && (link = ta_napi_link(evaluation)) != NULL) napi_set_named_property(env, link, "init", undefined);
+    ta_napi_session_row *row = ok ? (ta_napi_session_row *)ta_table_get(&native->host->sessions, call->instance) : NULL;
+    if (row != NULL) { /* core's ids of the strings, for a blob */
+        row->name_id = view->name_id;
+        row->invoke_slot = view->invoke_slot;
+        row->origintype_id = view->origintype_id;
+    }
     ta_status status = ok ? TA_OK : ta_napi_failed(env);
     ta_napi_frame_close(&entry.frame);
     return status;
@@ -669,19 +681,269 @@ static ta_status ta_napi_custom(const ta_datamodel_call *call, uint32_t definiti
     return TA_ERROR_UNSUPPORTED;
 }
 
-/* ---- hibernation, migration: not yet (docs/plan.xml, p2) ---------------------------- */
+/* ---- hibernation ----------------------------------------------------------------------- */
 
-static ta_status ta_napi_serialize(const ta_datamodel_call *call, ta_bytes *out) {
-    (void)call;
-    *out = (ta_bytes){NULL, 0};
-    return TA_ERROR_UNSUPPORTED;
+/* Appends `text` to the reason, truncated, NUL-terminated. */
+static void ta_napi_reason_add(ta_napi_native *native, const char *text) {
+    size_t at = strlen(native->reason);
+    for (; *text != '\0' && at + 1 < sizeof native->reason; text++) native->reason[at++] = *text;
+    native->reason[at] = '\0';
 }
 
+/* Why a value could not be stored: `what` ("variable 'name'", "_event"),
+ * then the message of the pending exception, which is cleared. */
+static void ta_napi_reason(ta_napi_native *native, const char *what, napi_value name) {
+    napi_env env = native->host->env;
+    napi_value error = NULL, message;
+    napi_get_and_clear_last_exception(env, &error);
+    native->reason[0] = '\0';
+    ta_napi_reason_add(native, what);
+    size_t at = strlen(native->reason), length = 0;
+    if (name != NULL && at + 2 < sizeof native->reason &&
+        napi_get_value_string_utf8(env, name, native->reason + at, sizeof native->reason - at - 1, &length) == napi_ok)
+        native->reason[at + length] = '\0';
+    ta_napi_reason_add(native, name != NULL ? "' cannot be stored: " : " cannot be stored: ");
+    at = strlen(native->reason);
+    napi_valuetype type = napi_undefined;
+    if (error != NULL && napi_typeof(env, error, &type) == napi_ok && type == napi_object &&
+        napi_get_named_property(env, error, "message", &message) == napi_ok && napi_typeof(env, message, &type) == napi_ok &&
+        type == napi_string && at + 1 < sizeof native->reason &&
+        napi_get_value_string_utf8(env, message, native->reason + at, sizeof native->reason - at, &length) == napi_ok)
+        return;
+    napi_get_and_clear_last_exception(env, &error);
+    ta_napi_reason_add(native, "it is not a value of the value table");
+}
+
+/* What a refused document answers core: no memory, or a state that cannot
+ * be stored. */
+static ta_status ta_napi_unstored(const ta_napi_document *document) {
+    return document->refused == TA_ERROR_NO_MEMORY ? TA_ERROR_NO_MEMORY : TA_ERROR_UNSUPPORTED;
+}
+
+static const char *const ta_napi_event_fields[] = {"name", "type", "sendid", "origin", "origintype", "invokeid", "data", "raw"};
+
+/* _event as a blob holds it: its eight fields, then core's ids of its
+ * name, its invoke and its origintype; null when no event came yet. */
+typedef struct ta_napi_event_out {
+    napi_value event;
+    const ta_napi_session_row *row;
+} ta_napi_event_out;
+
+static bool ta_napi_event_write(ta_napi_native *native, const ta_napi_event_out *event, ta_napi_document *document) {
+    napi_env env = native->host->env;
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, event->event, &type) != napi_ok) return false;
+    if (type != napi_object) {
+        ta_cbor_write_simple(&document->writer, TA_CBOR_NULL);
+        return true;
+    }
+    ta_cbor_write_array(&document->writer, 11);
+    for (uint32_t i = 0; i < 8; i++) {
+        napi_value field;
+        if (napi_get_named_property(env, event->event, ta_napi_event_fields[i], &field) != napi_ok ||
+            !ta_napi_document_value(env, field, document)) {
+            ta_napi_reason(native, "_event", NULL);
+            return false;
+        }
+    }
+    ta_cbor_write_uint(&document->writer, event->row->name_id);
+    ta_cbor_write_uint(&document->writer, event->row->invoke_slot);
+    ta_cbor_write_uint(&document->writer, event->row->origintype_id);
+    return true;
+}
+
+/* A session's state written into the datamodel's output: its variables
+ * and its _event as one CBOR map {"vars": {name: value}, "event": [...] |
+ * null}, through the value table (no format that runs code when read:
+ * bindings.md section 8). Then core calls destroy, which removes the row:
+ * a hibernated session holds nothing in the engine. A value outside the
+ * table keeps it resident (TA_ERROR_UNSUPPORTED, `reason` says which), and
+ * so does a chart whose scripts declare with let, const or class, which a
+ * new context cannot be given again. A declaring session's function
+ * declarations are not written: the wake makes them again from the
+ * chart's scripts. */
+static ta_status ta_napi_serialize(const ta_datamodel_call *call, ta_bytes *out) {
+    ta_napi_native *native = (ta_napi_native *)call->datamodel;
+    *out = (ta_bytes){NULL, 0};
+    native->reason[0] = '\0';
+    ta_napi_session_row *found = (ta_napi_session_row *)ta_table_get(&native->host->sessions, call->instance);
+    if (found == NULL) return TA_ERROR_INVALID;
+    ta_napi_session_row row = *found; /* a copy: JavaScript runs below */
+    ta_napi_entry entry;
+    if (!ta_napi_enter_entry(call, &entry)) return TA_ERROR_INVALID;
+    ta_napi_evaluation *evaluation = &entry.evaluation;
+    napi_env env = evaluation->env;
+    if (evaluation->row.flags & TA_NAPI_CHART_LEXICAL) {
+        ta_napi_reason_add(native, "the chart's scripts declare with let, const or class at their top level: "
+                                   "a new context cannot be given those bindings again, so its sessions stay resident");
+        ta_napi_frame_close(&entry.frame);
+        return TA_ERROR_UNSUPPORTED;
+    }
+    napi_value remade = NULL, variables = NULL, names, values, name, value, event;
+    napi_valuetype type = napi_undefined;
+    uint32_t count = 0;
+    bool ok = napi_get_element(env, evaluation->record, TA_NAPI_CHART_FUNCTIONS, &remade) == napi_ok &&
+              napi_typeof(env, remade, &type) == napi_ok && (type == napi_object || napi_create_array(env, &remade) == napi_ok) &&
+              (variables = ta_napi_kit(env, evaluation->kit, &(ta_napi_kit_call){"stored", 2, {evaluation->scope, remade}})) != NULL &&
+              napi_get_element(env, variables, 0, &names) == napi_ok && napi_get_element(env, variables, 1, &values) == napi_ok &&
+              napi_get_array_length(env, names, &count) == napi_ok &&
+              napi_get_named_property(env, evaluation->scope, "_event", &event) == napi_ok;
+    if (!ok) {
+        ta_napi_reason(native, "the session", NULL);
+        ta_napi_frame_close(&entry.frame);
+        return TA_ERROR_UNSUPPORTED;
+    }
+    ta_napi_document document;
+    memset(&document, 0, sizeof document);
+    document.room = (ta_napi_room){&native->output, &native->host->allocator, {NULL, 0}};
+    document.arena = &native->host->arena;
+    ta_napi_document_open(&document);
+    ta_cbor_write_map(&document.writer, 2);
+    ta_cbor_write_text(&document.writer, (ta_string_view){"vars", 4});
+    ta_cbor_write_map(&document.writer, count);
+    for (uint32_t i = 0; ok && i < count; i++) {
+        ok = napi_get_element(env, names, i, &name) == napi_ok && napi_get_element(env, values, i, &value) == napi_ok &&
+             ta_napi_document_value(env, name, &document);
+        if (ok && !ta_napi_document_value(env, value, &document)) {
+            ta_napi_reason(native, "variable '", name);
+            ok = false;
+        }
+    }
+    if (ok) {
+        ta_cbor_write_text(&document.writer, (ta_string_view){"event", 5});
+        ok = ta_napi_event_write(native, &(ta_napi_event_out){event, &row}, &document);
+    }
+    if (!ok && document.refused == TA_OK) document.refused = TA_ERROR_EXECUTION;
+    bool kept = ta_napi_document_close(&document, ok);
+    ta_status status = kept ? TA_OK : ta_napi_unstored(&document);
+    if (kept) *out = document.out;
+    else if (native->reason[0] == '\0') ta_napi_reason(native, "the session", NULL);
+    napi_value ignored;
+    napi_get_and_clear_last_exception(env, &ignored);
+    ta_napi_frame_close(&entry.frame);
+    return status;
+}
+
+/* `text` as the string kept at `index` of a chart's list, when its text is
+ * the same (a string of the blob's is kept there when the place is empty). */
+static napi_value ta_napi_kept_string(napi_env env, const ta_napi_kept_at *at, napi_value text) {
+    napi_value kept;
+    napi_valuetype type = napi_undefined, mine = napi_undefined;
+    bool same = false;
+    if (napi_typeof(env, text, &mine) != napi_ok || mine != napi_string || at->list == NULL || at->index == TA_NIL ||
+        napi_get_element(env, at->list, at->index, &kept) != napi_ok || napi_typeof(env, kept, &type) != napi_ok)
+        return text;
+    if (type == napi_string && napi_strict_equals(env, kept, text, &same) == napi_ok && same) return kept;
+    if (type == napi_undefined) napi_set_element(env, at->list, at->index, text);
+    return text;
+}
+
+/* An id of a blob's event (a number), TA_NIL for anything else. */
+static uint32_t ta_napi_blob_id(napi_env env, napi_value fields, uint32_t index) {
+    napi_value value;
+    napi_valuetype type = napi_undefined;
+    uint32_t id = TA_NIL;
+    if (napi_get_element(env, fields, index, &value) != napi_ok || napi_typeof(env, value, &type) != napi_ok ||
+        type != napi_number || napi_get_value_uint32(env, value, &id) != napi_ok)
+        return TA_NIL;
+    return id;
+}
+
+/* A woken session's _event from the fields a blob holds, its strings
+ * shared with the chart's (by core's ids, when the text is the same) and
+ * the datamodel's, its data copied into the session's context. The ids go
+ * to `row`. */
+typedef struct ta_napi_event_in {
+    napi_value fields; /* the blob's array of 11 */
+    napi_value kit, record;
+    ta_napi_session_row *row; /* out: the ids */
+} ta_napi_event_in;
+
+static napi_value ta_napi_event_from(ta_napi_native *native, const ta_napi_event_in *in) {
+    napi_env env = native->host->env;
+    napi_value fields, field, names, invokeids, origins, strings = ta_napi_native_get(native, native->strings), made[8];
+    uint32_t length = 0;
+    bool array = false;
+    if (napi_is_array(env, in->fields, &array) != napi_ok || !array || napi_get_array_length(env, in->fields, &length) != napi_ok ||
+        length != 11 || strings == NULL || napi_get_element(env, in->record, TA_NAPI_CHART_NAMES, &names) != napi_ok ||
+        napi_get_element(env, in->record, TA_NAPI_CHART_INVOKEIDS, &invokeids) != napi_ok ||
+        napi_get_element(env, in->record, TA_NAPI_CHART_ORIGINS, &origins) != napi_ok)
+        return NULL;
+    for (uint32_t i = 0; i < 8; i++)
+        if (napi_get_element(env, in->fields, i, &made[i]) != napi_ok) return NULL;
+    in->row->name_id = ta_napi_blob_id(env, in->fields, 8);
+    in->row->invoke_slot = ta_napi_blob_id(env, in->fields, 9);
+    in->row->origintype_id = ta_napi_blob_id(env, in->fields, 10);
+    made[0] = ta_napi_kept_string(env, &(ta_napi_kept_at){names, in->row->name_id}, made[0]);
+    for (uint32_t i = 0; i < 3; i++) { /* the type: one of the datamodel's three */
+        bool same = false;
+        if (napi_get_element(env, strings, i, &field) == napi_ok && napi_strict_equals(env, field, made[1], &same) == napi_ok && same)
+            made[1] = field;
+    }
+    made[3] = ta_napi_kept_string(env, &(ta_napi_kept_at){origins, in->row->invoke_slot}, made[3]);
+    uint32_t origintype = in->row->origintype_id < TA_NIL - 3 ? 3 + in->row->origintype_id : TA_NIL;
+    made[4] = ta_napi_kept_string(env, &(ta_napi_kept_at){strings, origintype}, made[4]);
+    made[5] = ta_napi_kept_string(env, &(ta_napi_kept_at){invokeids, in->row->invoke_slot}, made[5]);
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, made[6], &type) != napi_ok ||
+        (type != napi_undefined && (made[6] = ta_napi_kit(env, in->kit, &(ta_napi_kit_call){"copy", 1, {made[6]}})) == NULL) ||
+        napi_create_array_with_length(env, 8, &fields) != napi_ok)
+        return NULL;
+    for (uint32_t i = 0; i < 8; i++)
+        if (napi_set_element(env, fields, i, made[i]) != napi_ok) return NULL;
+    return ta_napi_kit(env, in->kit, &(ta_napi_kit_call){"event", 1, {fields}});
+}
+
+/* A session from a blob serialize wrote, for its chart now: a new scope
+ * (or, for a declaring chart, a new context, its scripts' declarations
+ * made again), the variables of the blob its chart declares (all of them
+ * on a declaring session's global), and its _event. */
 static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *start, uint64_t *instance) {
-    (void)datamodel;
-    (void)start;
-    (void)instance;
-    return TA_ERROR_UNSUPPORTED;
+    ta_napi_native *native = (ta_napi_native *)datamodel;
+    napi_env env = native->host->env;
+    ta_napi_frame frame;
+    if (!ta_napi_frame_open(native, NULL, &frame)) return TA_ERROR_NO_MEMORY;
+    uint64_t chart_handle = (uint64_t)(uintptr_t)start->chart_context;
+    ta_napi_chart_row *found = (ta_napi_chart_row *)ta_table_get(&native->host->charts, chart_handle);
+    ta_napi_chart_row chart = found != NULL ? *found : (ta_napi_chart_row){NULL, NULL, 0, 0};
+    ta_napi_session_row row = {NULL, chart_handle, TA_NIL, TA_NIL, TA_NIL};
+    napi_value state = NULL, vars = NULL, fields = NULL, made = NULL, record, kit, target, context, shared, undefined, event;
+    napi_valuetype type = napi_undefined;
+    bool ok = found != NULL && napi_get_undefined(env, &undefined) == napi_ok && ta_napi_keep_strings(native, start->system_variables) &&
+              (record = ta_napi_native_get(native, chart.functions)) != NULL &&
+              (state = ta_napi_value_read(env, start->state)) != NULL && napi_typeof(env, state, &type) == napi_ok &&
+              type == napi_object && napi_get_named_property(env, state, "vars", &vars) == napi_ok &&
+              napi_typeof(env, vars, &type) == napi_ok && type == napi_object &&
+              napi_get_named_property(env, state, "event", &fields) == napi_ok &&
+              (made = ta_napi_session_new(native, &(ta_napi_start_of){&chart, start->system_variables, undefined})) != NULL;
+    if (ok && (chart.flags & TA_NAPI_CHART_DECLARES)) /* its own context: the declarations again, then the values */
+        ok = napi_get_element(env, made, TA_NAPI_OWN_KIT, &kit) == napi_ok &&
+             napi_get_element(env, made, TA_NAPI_OWN_CONTEXT, &context) == napi_ok &&
+             napi_get_named_property(env, kit, "global", &target) == napi_ok && ta_napi_realm_hoist(native, record, context);
+    else if (ok)
+        ok = (shared = ta_napi_realm_shared(native)) != NULL && napi_get_element(env, shared, TA_NAPI_REALM_KIT, &kit) == napi_ok &&
+             (target = made) != NULL;
+    ok = ok && ta_napi_kit(env, kit, &(ta_napi_kit_call){"restore", 2, {target, vars}}) != NULL &&
+         napi_typeof(env, fields, &type) == napi_ok;
+    if (ok && type != napi_null && type != napi_undefined) {
+        event = ta_napi_event_from(native, &(ta_napi_event_in){fields, kit, record, &row});
+        napi_property_descriptor property = {"_event", NULL, NULL, NULL, NULL, event, napi_enumerable | napi_configurable, NULL};
+        ok = event != NULL && napi_define_properties(env, target, 1, &property) == napi_ok;
+    }
+    ta_status status = TA_OK;
+    if (!ok || napi_create_reference(env, made, 1, &row.scope) != napi_ok) status = (ta_napi_failed(env), TA_ERROR_INVALID);
+    uint64_t handle = 0;
+    ta_napi_session_row *added = status == TA_OK ? (ta_napi_session_row *)ta_table_add(&native->host->sessions, &handle) : NULL;
+    if (status == TA_OK && added == NULL) {
+        napi_delete_reference(env, row.scope);
+        status = TA_ERROR_NO_MEMORY;
+    }
+    if (added != NULL) {
+        *added = row;
+        *instance = handle;
+    }
+    ta_napi_frame_close(&frame);
+    return status;
 }
 
 static ta_status ta_napi_migrate(const ta_datamodel_call *call, ta_payload *bindings) {
@@ -690,39 +952,48 @@ static ta_status ta_napi_migrate(const ta_datamodel_call *call, ta_payload *bind
     return TA_ERROR_UNSUPPORTED;
 }
 
-static ta_status ta_napi_payload_serialize(void *datamodel, ta_payload payload, ta_bytes *out) {
-    (void)datamodel;
-    (void)payload;
-    *out = (ta_bytes){NULL, 0};
-    return TA_ERROR_UNSUPPORTED;
-}
-
-static ta_status ta_napi_payload_deserialize(void *datamodel, ta_bytes blob, ta_payload *out) {
-    (void)datamodel;
-    (void)blob;
-    *out = 0;
-    return TA_ERROR_UNSUPPORTED;
-}
-
 /* ---- neutral values ------------------------------------------------------------------ */
+
+/* A payload as one CBOR document in the output: to_wire's (`wire`), or the
+ * value table's for payload_serialize; the document's refusal, or NULL
+ * row's TA_ERROR_INVALID. */
+typedef struct ta_napi_payload_out {
+    ta_payload payload;
+    bool wire;
+    ta_bytes *out;
+} ta_napi_payload_out;
+
+static ta_status ta_napi_payload_document(ta_napi_native *native, const ta_napi_payload_out *payload) {
+    napi_env env = native->host->env;
+    ta_napi_frame frame;
+    *payload->out = (ta_bytes){NULL, 0};
+    if (ta_table_get(&native->host->payloads, payload->payload) == NULL) return TA_ERROR_INVALID;
+    if (!ta_napi_frame_open(native, native->environment, &frame)) return TA_ERROR_NO_MEMORY;
+    ta_napi_document document;
+    memset(&document, 0, sizeof document);
+    document.room = (ta_napi_room){&native->output, &native->host->allocator, {NULL, 0}};
+    document.arena = &native->host->arena;
+    document.wire = payload->wire;
+    ta_napi_document_open(&document);
+    bool ok = ta_napi_document_value(env, ta_napi_native_value(native, payload->payload), &document);
+    if (!ok) ta_napi_failed(env);
+    ta_status status = ta_napi_document_close(&document, ok) ? TA_OK : ta_napi_unstored(&document);
+    if (status == TA_OK) *payload->out = document.out;
+    ta_napi_frame_close(&frame);
+    return status;
+}
 
 /* A payload as CBOR (values.txt's ECMAScript to_wire), in the output:
  * TA_ERROR_INVALID when it cannot be a neutral value. */
 static ta_status ta_napi_to_wire(void *datamodel, ta_payload payload, ta_bytes *out) {
-    ta_napi_native *native = (ta_napi_native *)datamodel;
-    napi_env env = native->host->env;
-    ta_napi_frame frame;
-    *out = (ta_bytes){NULL, 0};
-    if (ta_table_get(&native->host->payloads, payload) == NULL) return TA_ERROR_INVALID;
-    if (!ta_napi_frame_open(native, native->environment, &frame)) return TA_ERROR_NO_MEMORY;
-    ta_napi_wiring wiring = {{&native->output, &native->host->allocator, {NULL, 0}}, &native->host->arena, {NULL, 0}};
-    ta_status status = TA_OK;
-    if (!ta_napi_value_wire(env, ta_napi_native_value(native, payload), &wiring)) {
-        ta_napi_failed(env);
-        status = TA_ERROR_INVALID;
-    } else *out = wiring.out;
-    ta_napi_frame_close(&frame);
-    return status;
+    ta_status status = ta_napi_payload_document((ta_napi_native *)datamodel, &(ta_napi_payload_out){payload, true, out});
+    return status == TA_ERROR_UNSUPPORTED ? TA_ERROR_INVALID : status;
+}
+
+/* A payload as the value table's CBOR (a delayed send's in an export blob):
+ * TA_ERROR_UNSUPPORTED for a value outside the table. */
+static ta_status ta_napi_payload_serialize(void *datamodel, ta_payload payload, ta_bytes *out) {
+    return ta_napi_payload_document((ta_napi_native *)datamodel, &(ta_napi_payload_out){payload, false, out});
 }
 
 /* A payload from CBOR: read, then copied into the shared context. */
@@ -794,7 +1065,7 @@ static const ta_datamodel_vtable ta_napi_vtable = {
     .to_wire = ta_napi_to_wire,
     .from_wire = ta_napi_from_wire,
     .payload_serialize = ta_napi_payload_serialize,
-    .payload_deserialize = ta_napi_payload_deserialize,
+    .payload_deserialize = ta_napi_from_wire, /* the same CBOR: one reference, copied into the shared context */
     .variable = ta_napi_variable,
 };
 

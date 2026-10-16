@@ -235,11 +235,12 @@ static bool ta_napi_probe(ta_napi_native *native, napi_value script, napi_value 
 
 bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart) {
     napi_env env = native->host->env;
-    chart->declares = false;
+    chart->declares = chart->lexical = false;
+    chart->hoists = chart->functions = NULL;
     uint32_t count = ta_image_expression_count(chart->image, chart->chart);
-    napi_value scratch, context = NULL;
+    napi_value scratch = NULL, context = NULL, kit = NULL, hoists = NULL;
     uint32_t before = 0, after = 0;
-    for (uint32_t e = 0; e < count && !chart->declares; e++) {
+    for (uint32_t e = 0; e < count; e++) {
         ta_expression_info info;
         if (ta_image_expression(chart->image, (ta_chart_item){chart->chart, e}, &info) != TA_OK ||
             info.kind != TA_EXPRESSION_SCRIPT)
@@ -247,7 +248,8 @@ bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart) {
         if (context == NULL) { /* a scratch context, once per chart that has a script */
             if ((scratch = ta_napi_realm_new(native)) == NULL ||
                 napi_get_element(env, scratch, TA_NAPI_REALM_CONTEXT, &context) != napi_ok ||
-                !ta_napi_global_names(native, context, &before))
+                napi_get_element(env, scratch, TA_NAPI_REALM_KIT, &kit) != napi_ok ||
+                napi_create_array(env, &hoists) != napi_ok || !ta_napi_global_names(native, context, &before))
                 return false;
         }
         static const char ahead[] = "throw 0;\n";
@@ -257,14 +259,40 @@ bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart) {
             napi_get_and_clear_last_exception(env, &ignored);
             continue;
         }
+        if (napi_set_element(env, hoists, e, script) != napi_ok) return false;
         if (!ta_napi_probe(native, script, context)) {
-            chart->declares = true; /* its declarations clash with the global's */
-            break;
+            chart->declares = chart->lexical = true; /* its declarations clash with the global's */
+            continue;
         }
         if (!ta_napi_global_names(native, context, &after)) return false;
         /* var and function names are the global's now; let, const and class
          * ones are refused when instantiated again */
-        chart->declares = after != before || !ta_napi_probe(native, script, context);
+        bool again = ta_napi_probe(native, script, context);
+        chart->declares = chart->declares || after != before || !again;
+        chart->lexical = chart->lexical || !again;
+        before = after;
+    }
+    if (!chart->declares) return true;
+    chart->hoists = hoists;
+    chart->functions = ta_napi_kit(env, kit, &(ta_napi_kit_call){"functions", 0, {NULL}});
+    return chart->functions != NULL;
+}
+
+bool ta_napi_realm_hoist(ta_napi_native *native, napi_value record, napi_value context) {
+    napi_env env = native->host->env;
+    napi_value hoists, script;
+    uint32_t length = 0;
+    if (napi_get_element(env, record, TA_NAPI_CHART_HOISTS, &hoists) != napi_ok || napi_get_array_length(env, hoists, &length) != napi_ok)
+        return false;
+    for (uint32_t e = 0; e < length; e++) {
+        bool has = false;
+        if (napi_has_element(env, hoists, e, &has) != napi_ok) return false;
+        if (!has) continue;
+        if (napi_get_element(env, hoists, e, &script) != napi_ok) return false;
+        if (!ta_napi_probe(native, script, context)) {
+            napi_throw_error(env, NULL, "a script's declarations could not be made again");
+            return false;
+        }
     }
     return true;
 }

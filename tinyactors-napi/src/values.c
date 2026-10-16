@@ -406,6 +406,7 @@ bool ta_napi_value_write(napi_env env, napi_value value, const ta_napi_writing *
         if (!written && !encoder.thrown && encoder.refusal.status != TA_ERROR_NO_MEMORY)
             encoder.refusal.status = TA_ERROR_INVALID;
     } else written = ta_napi_write(&encoder, value, 0);
+    if (writing->refused != NULL) *writing->refused = written ? TA_OK : encoder.thrown ? TA_ERROR_EXECUTION : encoder.refusal.status;
     if (written) return true;
     if (!encoder.thrown) ta_napi_throw(env, &encoder.refusal);
     return false;
@@ -475,7 +476,7 @@ napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
     ta_allocator scratch = ta_growable_arena_allocator(&instance->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &scratch);
-    if (ta_napi_value_write(env, argument, &(ta_napi_writing){&writer, &instance->arena, false})) {
+    if (ta_napi_value_write(env, argument, &(ta_napi_writing){&writer, &instance->arena, false, NULL})) {
         ta_bytes bytes;
         ta_status status = ta_cbor_writer_bytes(&writer, &bytes);
         void *data = NULL;
@@ -654,24 +655,33 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
     return ta_napi_value_read(env, (ta_bytes){data, length});
 }
 
-bool ta_napi_value_wire(napi_env env, napi_value value, ta_napi_wiring *wiring) {
-    ta_napi_room *room = &wiring->room;
+/* ---- the native datamodel's documents ---------------------------------------- */
+
+void ta_napi_document_open(ta_napi_document *document) {
+    ta_buffer *buffer = document->room.buffer;
+    document->mark = ta_growable_arena_position(document->arena);
+    document->refused = TA_OK;
+    document->out = (ta_bytes){NULL, 0};
+    ta_cbor_writer_init(&document->writer, (ta_buffer){buffer->pointer, buffer->capacity, 0}, document->room.allocator);
+}
+
+bool ta_napi_document_value(napi_env env, napi_value value, ta_napi_document *document) {
+    return ta_napi_value_write(env, value, &(ta_napi_writing){&document->writer, document->arena, document->wire, &document->refused});
+}
+
+bool ta_napi_document_close(ta_napi_document *document, bool keep) {
+    ta_napi_room *room = &document->room;
     ta_buffer *buffer = room->buffer;
-    ta_growable_arena_mark mark = ta_growable_arena_position(wiring->arena);
-    ta_cbor_writer writer;
-    ta_cbor_writer_init(&writer, (ta_buffer){buffer->pointer, buffer->capacity, 0}, room->allocator);
-    bool ok = ta_napi_value_write(env, value, &(ta_napi_writing){&writer, wiring->arena, true});
-    ta_status status = ok ? ta_cbor_writer_bytes(&writer, &wiring->out) : TA_OK;
-    if (ok && status != TA_OK) {
-        ta_napi_throw(env, &(ta_napi_refusal){status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID,
-                                              "the value could not be written"});
-        ok = false;
-    }
-    if (ok && writer.bytes != (unsigned char *)buffer->pointer) { /* it grew: its block is the room now */
+    ta_status status = keep ? ta_cbor_writer_bytes(&document->writer, &document->out) : TA_OK;
+    bool kept = keep && status == TA_OK;
+    if (keep && status != TA_OK) document->refused = status;
+    if (kept && document->writer.bytes != (unsigned char *)buffer->pointer) { /* it grew: its block is the room now */
         if (buffer->pointer != NULL) room->allocator->free(room->allocator->context, buffer->pointer, buffer->capacity);
-        *buffer = (ta_buffer){writer.bytes, writer.capacity, 0};
-    } else if (!ok)
-        ta_cbor_writer_free(&writer); /* a block it grew, never the room */
-    ta_growable_arena_release(wiring->arena, mark);
-    return ok;
+        *buffer = (ta_buffer){document->writer.bytes, document->writer.capacity, 0};
+    } else if (!kept) {
+        ta_cbor_writer_free(&document->writer); /* a block it grew, never the room */
+        document->out = (ta_bytes){NULL, 0};
+    }
+    ta_growable_arena_release(document->arena, document->mark);
+    return kept;
 }

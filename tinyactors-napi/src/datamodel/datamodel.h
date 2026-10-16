@@ -32,7 +32,14 @@
  *   [2] per location: the same for its setter;
  *   [3] the strings of its events' names, by the image's name id;
  *   [4], [5] the invoke ids and origins of the events from its invokes, by
- *       the invoke's slot. */
+ *       the invoke's slot;
+ *   [6] a declaring chart's scripts as the engine instantiates them without
+ *       running a statement (`throw 0;` ahead), by expression: run in a
+ *       woken session's new context, they make its function declarations
+ *       again (undefined for a shared chart);
+ *   [7] the names those scripts declare as functions (an array; undefined
+ *       for a shared chart): hibernation leaves them out while they hold a
+ *       function, since the wake makes them again. */
 enum {
     TA_NAPI_CHART_SHAPE,
     TA_NAPI_CHART_GETTERS,
@@ -40,6 +47,8 @@ enum {
     TA_NAPI_CHART_NAMES,
     TA_NAPI_CHART_INVOKEIDS,
     TA_NAPI_CHART_ORIGINS,
+    TA_NAPI_CHART_HOISTS,
+    TA_NAPI_CHART_FUNCTIONS,
     TA_NAPI_CHART_RECORD
 };
 
@@ -48,8 +57,10 @@ enum {
  * A shared chart's session row references its scope itself. */
 enum { TA_NAPI_OWN_CONTEXT, TA_NAPI_OWN_KIT, TA_NAPI_OWN_GETTERS, TA_NAPI_OWN_SETTERS, TA_NAPI_OWN_RECORD };
 
-/* A chart row's flags. */
-enum { TA_NAPI_CHART_DECLARES = 1u };
+/* A chart row's flags: its scripts declare top-level names (a context per
+ * session); some of them with let, const or class, which a new context
+ * cannot be given again, so its sessions stay resident (serialize refuses). */
+enum { TA_NAPI_CHART_DECLARES = 1u, TA_NAPI_CHART_LEXICAL = 2u };
 
 /* ---- rows.c ------------------------------------------------------------------- */
 
@@ -95,13 +106,23 @@ napi_value ta_napi_script(ta_napi_native *native, const ta_napi_script_of *of);
 napi_value ta_napi_run_in(napi_env env, napi_value script, napi_value context);
 /* Whether a chart's scripts declare top-level names, asked of the engine
  * in a scratch context; false with an exception pending when it could not
- * be asked. */
+ * be asked. For a declaring chart also: whether a declaration is lexical
+ * (let, const, class: instantiating the script twice is a redeclaration),
+ * the scripts that instantiate its declarations (`throw 0;` ahead, by
+ * expression index), and the names they declare as functions. */
 typedef struct ta_napi_chart_of {
     const ta_image *image;
     uint32_t chart;
-    bool declares; /* out */
+    bool declares, lexical; /* out */
+    napi_value hoists;      /* out: an array, or NULL */
+    napi_value functions;   /* out: an array of names, or NULL */
 } ta_napi_chart_of;
 bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart);
+/* A declaring chart's declarations made in `context`, a woken session's
+ * new one: each script of the chart's record (TA_NAPI_CHART_HOISTS) run
+ * there, which instantiates it and runs no statement. False with an
+ * exception pending when one did more. */
+bool ta_napi_realm_hoist(ta_napi_native *native, napi_value record, napi_value context);
 
 /* ---- expressions.c ------------------------------------------------------------- */
 

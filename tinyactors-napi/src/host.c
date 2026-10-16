@@ -457,7 +457,7 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
     ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
-    bool ok = ta_napi_value_write(env, config, &(ta_napi_writing){&writer, &host->arena, false});
+    bool ok = ta_napi_value_write(env, config, &(ta_napi_writing){&writer, &host->arena, false, NULL});
     ta_bytes cbor = {NULL, 0};
     ta_status status = ok ? ta_cbor_writer_bytes(&writer, &cbor) : TA_OK;
     if (ok && status != TA_OK) {
@@ -737,7 +737,7 @@ bool ta_napi_host_payload(napi_env env, ta_napi_host *host, ta_napi_payload_for 
     if (host->datamodel == TA_NAPI_DATAMODEL_NATIVE) return ta_napi_native_payload(&host->native, target->value, &target->payload);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
-    bool ok = ta_napi_value_write(env, target->value, &(ta_napi_writing){&writer, &host->arena, false});
+    bool ok = ta_napi_value_write(env, target->value, &(ta_napi_writing){&writer, &host->arena, false, NULL});
     if (ok) {
         ta_bytes cbor;
         ta_status status = ta_cbor_writer_bytes(&writer, &cbor);
@@ -888,14 +888,25 @@ static napi_value ta_napi_host_actor_by_name(napi_env env, napi_callback_info in
     return result;
 }
 
-/* An output was taken (metrics, a hibernation blob), copied once into a
- * Buffer: with no batch open it opened a batch of this output alone,
- * acknowledged here; with one open (a handler's call) it joined that
- * batch, which the drain acks (host->batch, from a take to its ack, never
- * guessed from the depth). NULL with an exception pending. */
-static napi_value ta_napi_host_output(napi_env env, ta_napi_host *host, ta_bytes taken) {
+/* An output the host handed out (metrics, a hibernation blob): the host's
+ * view of its bytes, until the ack, and, for a blob, its session. */
+typedef struct ta_napi_output {
+    ta_bytes taken;
+    uint64_t session; /* a blob's: woken back from the view when the copy fails; 0 none */
+} ta_napi_output;
+
+/* An output was taken, copied once into a Buffer: with no batch open it
+ * opened a batch of this output alone, acknowledged here; with one open (a
+ * handler's call) it joined that batch, which the drain acks (host->batch,
+ * from a take to its ack, never guessed from the depth). A blob whose copy
+ * fails is woken back from the view first, still valid, or the actor would
+ * have no blob anywhere. NULL with an exception pending. */
+static napi_value ta_napi_host_output(napi_env env, ta_napi_host *host, const ta_napi_output *output) {
     napi_value result = NULL;
-    if (napi_create_buffer_copy(env, taken.length, taken.pointer, NULL, &result) != napi_ok) result = NULL;
+    if (napi_create_buffer_copy(env, output->taken.length, output->taken.pointer, NULL, &result) != napi_ok) {
+        result = NULL;
+        if (output->session != 0) ta_host_wake(host->host, output->session, output->taken);
+    }
     if (!host->batch) {
         ta_host_effects_ack(host->host);
         host->acks++;
@@ -911,9 +922,101 @@ static napi_value ta_napi_host_metrics(napi_env env, napi_callback_info info) {
     if (!ta_napi_enter(env, ta_napi_this(env, info), &call)) return NULL;
     ta_bytes taken;
     ta_status status = ta_host_metrics(call.host->host, &taken);
-    napi_value result = status == TA_OK ? ta_napi_host_output(env, call.host, taken)
+    napi_value result = status == TA_OK ? ta_napi_host_output(env, call.host, &(ta_napi_output){taken, 0})
                                         : ta_napi_throw(env, &(ta_napi_refusal){status, "metrics were refused (TA_ERROR_STATE: "
                                                                                         "the config has no telemetry)"});
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* ---- hibernation: the application keeps the blobs ---------------------------------- */
+
+/* host.sweep(maxScan, limit) -> bigint[]: the CLOCK sweep (ta_host_sweep),
+ * at most `limit` sessions that did not run since the previous sweep and
+ * can be hibernated now, scanning at most `maxScan` slots; each a count
+ * from 0 to 2^32-1, anything else a TypeError (never wrapped). */
+static napi_value ta_napi_host_sweep(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {2, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value result = NULL, session;
+    ta_napi_count scan = {"sweep's maxScan is an integer from 0 to 2^32-1", 4294967295.0, 0};
+    ta_napi_count limit = {"sweep's limit is an integer from 0 to 2^32-1", 4294967295.0, 0};
+    if (ta_napi_count_of(env, arguments.argv[0], &scan) && ta_napi_count_of(env, arguments.argv[1], &limit)) {
+        /* it answers at most one session a slot scanned */
+        uint32_t room = (uint32_t)(limit.value < scan.value ? limit.value : scan.value);
+        uint64_t *sessions = room ? (uint64_t *)ta_growable_arena_alloc(&call.host->arena, sizeof(uint64_t) * room, 8) : NULL;
+        if (room && sessions == NULL) ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the sweep's sessions"});
+        else {
+            uint32_t found = ta_host_sweep(call.host->host, (uint32_t)scan.value, (ta_uint64_array){sessions, room});
+            bool ok = napi_create_array_with_length(env, found, &result) == napi_ok;
+            for (uint32_t i = 0; ok && i < found; i++)
+                ok = napi_create_bigint_uint64(env, sessions[i], &session) == napi_ok && napi_set_element(env, result, i, session) == napi_ok;
+            if (!ok) result = NULL;
+        }
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* host.hibernate(session) -> Buffer: ta_host_hibernate, the blob copied
+ * once, the application's to store until it gives it to wake.
+ * TA_ERROR_STATE: the actor is not at a stable point; TA_ERROR_UNSUPPORTED:
+ * its datamodel cannot store its state, and the message says why. */
+static napi_value ta_napi_host_hibernate(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    ta_napi_host *host = call.host;
+    napi_value result = NULL;
+    uint64_t session = 0;
+    if (ta_napi_session_of(env, arguments.argv[0], &session)) {
+        ta_bytes taken;
+        ta_status status = ta_host_hibernate(host->host, session, &taken);
+        if (status == TA_OK) result = ta_napi_host_output(env, host, &(ta_napi_output){taken, session});
+        else {
+            const char *message = status == TA_ERROR_STATE ? "the actor is not at a stable point now (events waiting, in a "
+                                                             "macrostep, an invoked child), or not resident"
+                                                           : "the hibernation was refused";
+            if (status == TA_ERROR_UNSUPPORTED) {
+                const char *reason = host->quickjs != NULL ? ta_datamodel_ecmascript_last_error(host->quickjs) : host->native.reason;
+                if (reason != NULL && reason[0] != '\0') message = reason;
+            }
+            ta_napi_throw(env, &(ta_napi_refusal){status, message});
+        }
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* host.wake(session, blob): ta_host_wake with the blob hibernate gave (a
+ * Uint8Array, a Buffer too, or an ArrayBuffer), read during the call; the
+ * actor's waiting events run at the next turn. */
+static napi_value ta_napi_host_wake(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {2, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value blob = arguments.argv[1], result = NULL;
+    uint64_t session = 0;
+    void *data = NULL;
+    size_t length = 0;
+    bool is = false;
+    if (ta_napi_session_of(env, arguments.argv[0], &session)) {
+        if (napi_is_typedarray(env, blob, &is) == napi_ok && is) {
+            napi_typedarray_type type;
+            if (napi_get_typedarray_info(env, blob, &type, &length, &data, NULL, NULL) != napi_ok) is = false;
+            else is = type == napi_uint8_array;
+        } else if (napi_is_arraybuffer(env, blob, &is) == napi_ok && is) {
+            if (napi_get_arraybuffer_info(env, blob, &data, &length) != napi_ok) is = false;
+        }
+        if (!is) napi_throw_type_error(env, NULL, "wake takes the blob hibernate gave: a Uint8Array or an ArrayBuffer");
+        else {
+            ta_status status = ta_host_wake(call.host->host, session, (ta_bytes){data, length});
+            if (status == TA_OK) ta_napi_schedule(env, call.host); /* its mailbox runs at the next turn */
+            result = ta_napi_input_status(env, &(ta_napi_refusal){status, "the wake was refused (TA_ERROR_STATE: the session "
+                                                                          "is not hibernated; TA_ERROR_INVALID: not its blob)"});
+        }
+    }
     ta_napi_leave(&call);
     return result;
 }
@@ -1215,6 +1318,9 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"terminate", NULL, ta_napi_host_terminate, NULL, NULL, NULL, napi_default_method, NULL},
         {"actorByName", NULL, ta_napi_host_actor_by_name, NULL, NULL, NULL, napi_default_method, NULL},
         {"metrics", NULL, ta_napi_host_metrics, NULL, NULL, NULL, napi_default_method, NULL},
+        {"sweep", NULL, ta_napi_host_sweep, NULL, NULL, NULL, napi_default_method, NULL},
+        {"hibernate", NULL, ta_napi_host_hibernate, NULL, NULL, NULL, napi_default_method, NULL},
+        {"wake", NULL, ta_napi_host_wake, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, dispose, ta_napi_host_close, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, async_dispose, ta_napi_host_async_dispose, NULL, NULL, NULL, napi_default_method, NULL},
     };

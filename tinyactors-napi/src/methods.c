@@ -104,7 +104,7 @@ static bool ta_napi_post(napi_env env, const ta_napi_message *message, ta_napi_p
     bool ok = true;
     if (with_params) {
         ta_cbor_write_text(&writer, ta_string("params"));
-        ok = ta_napi_value_write(env, message->params, &(ta_napi_writing){&writer, &host->arena, false});
+        ok = ta_napi_value_write(env, message->params, &(ta_napi_writing){&writer, &host->arena, false, NULL});
     }
     posting->status = TA_OK;
     if (ok) {
