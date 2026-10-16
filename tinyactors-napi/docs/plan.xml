@@ -274,11 +274,11 @@
   </lifetimes>
 
   <decisions>
-    <decision id="d-datamodel" status="recommended" owner="api-review">
+    <decision id="d-datamodel" status="decided" owner="maintainer">
       <question>Which ECMAScript datamodel does a host run, since both are named "ecmascript" and a host can hold only one?</question>
       <option id="native-default">A Host option, <code>datamodel: "native" | "quickjs"</code>, default <code>"native"</code>: the environment's datamodel list holds that one.</option>
       <option id="native-only">Only the native one in the API; quickjs only in the adapter.</option>
-      <recommendation option="native-default">quickjs is what bounds a chart (<code>max_ops</code>, its own heap) and what isolates one; an application with untrusted or runaway charts needs it, and the suite must run on it through the public API (the adapter imports only the package). The option names an environment entry, which is core's (<code>environment-&gt;datamodels</code>).</recommendation>
+      <recommendation option="native-default">Decided by the maintainer (2026-10-16): quickjs is the sandboxed ECMAScript datamodel, for charts that are not trusted (<code>max_ops</code>, a bounded heap of its own, isolated realms); the native datamodel uses the application's JavaScript objects directly in its own engine, as the "python" datamodel uses Python's. Both pass the same suite. The option names an environment entry, which is core's (<code>environment-&gt;datamodels</code>); the native one is the default, as bindings.md section 8 puts the native datamodel first.</recommendation>
       <evidence kind="repo">tinyactors-test/docs/driver.md:72-82; tinyactors-core/include/tinyactors/datamodel_ecmascript.h (max_ops, memory_limit, realms).</evidence>
     </decision>
     <decision id="d-async" status="recommended" owner="api-review">
@@ -347,11 +347,11 @@
       <recommendation option="throw">There is no driver call to raise an error from (d-drive, decided): every turn runs from an event-loop callback, so a kept error would wait for an <code>idle()</code> many programs never call. An uncaught error is how Node and Bun report a callback's failure, and the application's own handler decides what to do.</recommendation>
       <evidence kind="repo">tinyactors-cpython/src/loop.c, ta_python_loop_settle ("nobody waits: the next idle() raises it").</evidence>
     </decision>
-    <decision id="d-clock" status="recommended" owner="api-review">
+    <decision id="d-clock" status="decided" owner="maintainer">
       <question>What does <code>SimulatedClock.increment(ms)</code> do, now that there is no synchronous driver?</question>
       <option id="schedule">It moves the clock and schedules a turn on every host made with it, like any input; a test awaits <code>host.idle()</code> to see what ran.</option>
       <option id="sync">It turns every such host until idle before it returns, as xstate's and Python's do.</option>
-      <recommendation option="schedule">The decided rule (d-drive) has one driver, the event loop; a synchronous turn inside increment would be a second one, and would run handlers (and their promises' first steps) inside the caller's stack. The cost is one await in a test: <code>clock.increment(1000); await host.idle()</code>.</recommendation>
+      <recommendation option="schedule">The decided rule (d-drive) has one driver, the event loop; a synchronous turn inside increment would be a second one, and would run handlers (and their promises' first steps) inside the caller's stack. The cost is one await in a test: <code>clock.increment(1000); await host.idle()</code>. Decided by the maintainer (2026-10-16): "Your clock proposal makes sense."</recommendation>
       <evidence kind="repo">bindings.md section 3, "A caller's own clock"; tinyactors-cpython/src/loop.c, ta_python_clock_increment.</evidence>
     </decision>
   </decisions>
