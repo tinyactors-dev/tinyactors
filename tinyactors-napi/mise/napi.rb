@@ -111,6 +111,20 @@ module NodeAPI
     end
   end
 
+  # The invoked services gate (README.md, "Invoked services"):
+  # tools/services.mjs, N actors each invoking a service the application
+  # runs, E round trips to it, then a third done, a third cancelled; every
+  # pong, done datum, stop and collected service checked, on both
+  # datamodels under both runtimes, each run a process of its own.
+  def services(actors:, events:)
+    RUNTIMES.each do |runtime|
+      DATAMODELS.each do |datamodel|
+        puts "services: #{runtime} #{datamodel}, #{actors} actors, #{events} round trips"
+        run(pinned(runtime), 'tools/services.mjs', '--datamodel', datamodel, '--actors', actors.to_s, '--events', events.to_s)
+      end
+    end
+  end
+
   # The binding's own tests: each a program that exits 1 when a case fails
   # (test/harness.mjs), run under every runtime.
   def tests = ROOT.glob('test/*.test.mjs').sort

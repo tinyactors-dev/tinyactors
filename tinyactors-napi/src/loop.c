@@ -89,7 +89,7 @@ static napi_value ta_napi_error_of(napi_env env, const ta_napi_refusal *refusal)
 
 void ta_napi_drain(napi_env env, ta_napi_drain_state *state) {
     ta_napi_host *host = state->host;
-    ta_napi_batch batch = {state, NULL};
+    ta_napi_batch batch = {state, NULL, 0};
     uint32_t count;
     state->bounded = false;
     for (uint32_t batches = 0;; batches++) {
@@ -102,6 +102,7 @@ void ta_napi_drain(napi_env env, ta_napi_drain_state *state) {
             return;
         }
         if ((count = ta_host_effects(host->host, &batch.effects)) == 0) return;
+        batch.count = count;
         host->batch = true;
         for (uint32_t i = 0; i < count; i++) ta_napi_dispatch(env, &batch, i); /* handlers may call the host:
                                                                                   inputs apply now, effects

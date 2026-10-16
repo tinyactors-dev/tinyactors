@@ -316,7 +316,8 @@ static bool ta_napi_quickjs_config(napi_env env, napi_value given, ta_datamodel_
 
 /* The handlers given as options, checked: each a function or absent;
  * ioProcessors and services objects of functions. Kept by name in
- * `handlers`, the object the wrapper holds. */
+ * `handlers`, the object the wrapper holds, with the Map of the invoked
+ * services that run (`invocations`). */
 static bool ta_napi_handlers_read(napi_env env, const ta_napi_options *options, napi_value handlers) {
     static const char *const functions[] = {"log", "transport", "telemetry", "wake", "migrated", "migrationDone"};
     static const char *const maps[] = {"ioProcessors", "services"};
@@ -348,7 +349,13 @@ static bool ta_napi_handlers_read(napi_env env, const ta_napi_options *options, 
         }
         if (napi_set_named_property(env, handlers, maps[i], value) != napi_ok) return false;
     }
-    return true;
+    /* the invoked services that run, by core's (segment, token), and the
+     * last invocation's strings, shared with the next (effects.c) */
+    napi_value global, map_class, map, last;
+    return napi_get_global(env, &global) == napi_ok && napi_get_named_property(env, global, "Map", &map_class) == napi_ok &&
+           napi_new_instance(env, map_class, 0, NULL, &map) == napi_ok &&
+           napi_set_named_property(env, handlers, "invocations", map) == napi_ok &&
+           napi_create_array_with_length(env, 3, &last) == napi_ok && napi_set_named_property(env, handlers, "last", last) == napi_ok;
 }
 
 /* ---- creation ------------------------------------------------------------------------ */

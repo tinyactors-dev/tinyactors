@@ -274,15 +274,21 @@ export interface Invocation {
   readonly traceparent: string | undefined;
   /** A restored host's announcement of an invocation that was running. */
   readonly restored: boolean;
+  /** False once it ended (done, cancelled, failed) or the host closed. */
+  readonly running: boolean;
   /** An event to the invoker; `TA_ERROR_STALE` once the invocation ended. */
   sendBack(event: string, data?: Value, options?: { traceparent?: string | null }): void;
   /** `done.invoke.<invokeid>` for the invoker; the service is dropped. */
   done(data?: Value, options?: { traceparent?: string | null }): void;
 }
 
-/** What a service handler returns: kept until the invocation ends. */
+/** What a service handler returns: kept until the invocation ends, then
+ * dropped; at close dropped, not stopped. Its methods are called on it. */
 export interface Service {
-  receive?(host: Host, send: Send): void;
+  /** A send of the invoker to the service (`type` undefined); a throw, or a
+   * promise that rejects, is a crash: the invoker gets error.communication. */
+  receive?(host: Host, send: Send): void | Promise<void>;
+  /** The invoker cancelled the invocation. */
   stop?(host: Host): void;
 }
 
@@ -323,7 +329,8 @@ export interface HostOptions {
   wake?: (host: Host, session: bigint, migration: number | undefined) => Handled;
   migrated?: (host: Host, migrated: Migrated) => void;
   migrationDone?: (host: Host, result: MigrationResult) => void;
-  /** The handler of each `<invoke>` type the application runs. */
+  /** The handler of each `<invoke>` type the application runs: it returns
+   * the service now, not a promise. */
   services?: { [type: string]: (host: Host, invocation: Invocation) => Service | void };
   /** The ECMAScript datamodel: the application's engine (`"native"`, the
    * default: charts run in `node:vm` contexts of their own, trusted code)

@@ -1,6 +1,7 @@
 // Snapshots under load: a deploy rehearsed on a copy of a live host, most
-// of whose actors sleep in SQLite (docs/plan.xml, p2-snapshot; translated
-// from tinyactors-cpython/tools/snapshot.py).
+// of whose actors sleep in SQLite and some of whose payments are in flight
+// (docs/plan.xml, p2-snapshot and p2-services; translated from
+// tinyactors-cpython/tools/snapshot.py).
 //
 //     node tools/snapshot.mjs [--actors N] [--resident R] [--events E] [--datamodel native|quickjs]
 //                             [--sample S] [--seed K]
@@ -11,30 +12,34 @@
 //
 // 1. live: N order actors of version 1, at most R resident, the rest
 //    hibernated into SQLite (tools/store.mjs); E events to actors drawn at
-//    random; every resident actor gets a delayed send due in 10 s;
+//    random; every resident actor gets a delayed send due in 10 s, and half
+//    of them start paying: each invokes the payment service (<invoke
+//    type="urn:example:payment">, its amount as a param), which the live
+//    host runs and which has not answered yet;
 // 2. snapshot: host.snapshot() of the live host, written to a file, and a
 //    copy of its store (a copy writes blobs too: it must not write the live
 //    one). The live host is not stopped;
 // 3. restore: Host.restore makes the copy from the file, with its own
-//    store, clock and handlers. A snapshot of the copy before it runs must
-//    be the same bytes;
+//    store, clock and handlers, and a stand-in payment service: a copy must
+//    never reach the real one. A snapshot of the copy before it runs must
+//    be the same bytes. At its first run the copy announces each payment
+//    that was in flight; the stand-in gets each (invocation.restored, the
+//    same amount) and declines it;
 // 4. rehearse: the copy adds version 2 and migrates every actor to it
 //    (host.migrate, waking the hibernated ones a batch at a time from the
 //    copy's store, as tools/migration.mjs does), with E more events, then
 //    runs its clock past the delayed sends;
 // 5. verify the copy: the migration migrated every actor, none failed; a
 //    sample (all up to 25,000) reports its count (every event, before and
-//    after the snapshot), its delayed send and version 2;
+//    after the snapshot), its delayed send, its payment (declined for the
+//    payers) and version 2; each payment in flight reached the stand-in
+//    once, with its amount, and was cancelled after its decline (stop);
 // 6. verify the live host: it goes on with E events of its own; its sample
-//    reports version 1 and its own counts, and every blob in the live store
-//    is the last one the live host wrote for its session (the copy wrote
-//    into its own). After every eviction, on both hosts, at most R actors
-//    are resident (plus two batches while migrating).
-//
-// Python's gate also has half the resident actors paying through an
-// invoked service when the snapshot is taken, which the copy restarts on a
-// stand-in; this addon has no services yet (docs/plan.xml, p2-services),
-// so the charts keep their payment states and nothing pays.
+//    reports version 1, its own counts, payments still in flight; the real
+//    service was started once per payer and never stopped, and every blob
+//    in the live store is the last one the live host wrote for its session
+//    (the copy wrote into its own). After every eviction, on both hosts, at
+//    most R actors are resident (plus two batches while migrating).
 //
 // With R = N every actor stays resident, so the datamodel's own state is
 // most of the snapshot. Exits with status 1 when a check fails. Prints the
@@ -124,6 +129,41 @@ function fingerprint(blob) {
   return (hash >>> 0) + 1;
 }
 
+const PAYMENT = 'urn:example:payment';
+
+// A payment service: the live host's real one, which has not answered yet,
+// or the copy's stand-in, which declines what it is given. Each invocation
+// gets a payment object, the service the host keeps, whose stop() is its
+// cancel (the payer left paying).
+class Payments {
+  constructor(decline) {
+    this.decline = decline;
+    this.started = new Map(); // session -> times started
+    this.amounts = new Map();
+    this.stopped = new Set();
+    this.twice = 0; // stopped more than once
+    this.restored = 0;
+    this.start = (host, invocation) => {
+      const session = invocation.session;
+      this.started.set(session, (this.started.get(session) ?? 0) + 1);
+      this.amounts.set(session, invocation.data.amount);
+      if (invocation.restored) this.restored++;
+      if (this.decline) invocation.sendBack('declined');
+      return {
+        stop: () => {
+          if (this.stopped.has(session)) this.twice++;
+          this.stopped.add(session);
+        },
+      };
+    };
+  }
+
+  // Started exactly once for each of `payers`, and for no one else.
+  onceFor(payers) {
+    return this.started.size === payers.length && payers.every((s) => this.started.get(s) === 1);
+  }
+}
+
 const index = (session) => Number(BigInt(session) & 0xffffffffn) - 1; // segment 0 numbers its sessions 1, 2, ...
 
 // One host's actors: its store, the resident ones (least recently used
@@ -200,12 +240,9 @@ class Population {
       for (const session of cold) went += this.hibernate(host, session) ? 1 : 0;
       if (!went) break;
     }
-    let over = this.resident.size - this.o.resident;
-    for (const session of [...this.resident.keys()]) {
-      if (over <= 0) break;
-      if (!may(session)) continue;
-      over--;
-      this.hibernate(host, session);
+    for (const session of [...this.resident.keys()]) { // payers stay (an invocation keeps an actor in memory)
+      if (this.resident.size <= this.o.resident) break;
+      if (may(session)) this.hibernate(host, session);
     }
   }
 
@@ -245,8 +282,9 @@ async function main() {
   };
   const liveStore = await Store.open(path.join(directory, 'live.db'));
   const live = new Population('live', liveStore, o, failures);
+  const real = new Payments(false);
   const liveClock = new SimulatedClock();
-  const host = new Host(config, { datamodel: o.datamodel, wake: live.wake, log: live.log, clock: liveClock });
+  const host = new Host(config, { datamodel: o.datamodel, wake: live.wake, log: live.log, clock: liveClock, services: { [PAYMENT]: real.start } });
   add(host, ORDER(1));
   const chart = host.chart('order');
   const sessions = new BigUint64Array(o.actors);
@@ -275,7 +313,7 @@ async function main() {
     }
   };
 
-  // 1. live: populate, events, delayed sends
+  // 1. live: populate, events, delayed sends, payments in flight
   let started = performance.now();
   for (let i = 0; i < o.actors; i++) {
     const session = host.spawn(chart);
@@ -293,14 +331,19 @@ async function main() {
     failures.push('the sessions are not numbered 1..N in segment 0: index() is wrong');
   await traffic(live, host, sent, o.events);
   const waiting = [...live.resident.keys()];
+  const payers = waiting.filter((_, i) => i % 2 === 0);
   for (let first = 0; first < waiting.length; first += BATCH) {
-    host.sendMany(waiting.slice(first, first + BATCH).map((target) => ({ target, event: 'wait' })));
+    const batch = waiting.slice(first, first + BATCH);
+    host.sendMany(batch.map((target) => ({ target, event: 'wait' })));
+    host.sendMany(batch.filter((_, i) => i % 2 === 0).map((target) => ({ target, event: 'pay' })));
     await host.idle();
   }
   liveStore.flush();
   let stats = await live.checkResident(host);
+  if (real.started.size !== payers.length) failures.push(`live: ${real.started.size} payments started for ${payers.length} payers`);
+  const amounts = new Map(payers.map((s) => [s, sent[index(s)]]));
   console.log(`live: ${o.actors} actors and ${o.events} events in ${seconds(started)} s; ${waiting.length} resident ` +
-    `with a delayed send; ${stats.hibernated} hibernated`);
+    `with a delayed send, ${payers.length} of them paying; ${stats.hibernated} hibernated`);
 
   // 2. snapshot, to a file; a copy of the store; the live host goes on
   started = performance.now();
@@ -317,9 +360,10 @@ async function main() {
   const digest = createHash('sha256').update(blob).digest('hex'); // one snapshot in memory at a time
   blob = undefined;
 
-  // 3. restore the copy; its snapshot before it runs is the same bytes
+  // 3. restore the copy, with a stand-in; its snapshot before it runs is the same bytes
   blob = readFileSync(file);
   const copy = new Population('copy', copyStore, o, failures);
+  const standIn = new Payments(true);
   const copyClock = new SimulatedClock(); // a clock of its own: the copy's time is not the live host's
   started = performance.now();
   const rehearsal = Host.restore(blob, config, {
@@ -329,6 +373,7 @@ async function main() {
     migrated: copy.migrated,
     migrationDone: copy.migrationDone,
     clock: copyClock,
+    services: { [PAYMENT]: standIn.start },
   });
   const restored = seconds(started);
   blob = undefined;
@@ -337,8 +382,12 @@ async function main() {
     failures.push("the copy's snapshot differs from the one it was restored from");
   again = undefined;
   for (const session of inMemory) copy.resident.set(session, true);
-  await rehearsal.idle();
-  console.log(`restore: in ${restored} s; the copy's snapshot compared`);
+  await rehearsal.idle(); // the payments in flight, announced again: the stand-in declines them
+  if (!standIn.onceFor(payers) || standIn.restored !== payers.length)
+    failures.push(`copy: the stand-in started ${standIn.started.size} payments (${standIn.restored} restored) for ${payers.length} payers`);
+  if (payers.some((s) => standIn.amounts.get(s) !== amounts.get(s))) failures.push('copy: a restored payment lost its amount');
+  console.log(`restore: in ${restored} s; the copy's snapshot compared; ${standIn.restored} payments in flight started again ` +
+    'on the stand-in');
 
   // 4. rehearse the deploy: version 2, migrate everyone with events meanwhile
   started = performance.now();
@@ -390,12 +439,14 @@ async function main() {
   let sample;
   if (o.actors <= o.sample) sample = Array.from({ length: o.actors }, (_, i) => i);
   else {
-    const chosen = new Set(waiting.slice(0, 50).map(index));
+    const chosen = new Set([...payers.slice(0, 50), ...waiting.filter((_, i) => i % 2 === 1).slice(0, 50)].map(index));
     while (chosen.size < o.sample) chosen.add(Math.floor(draw() * o.actors));
     sample = [...chosen].sort((a, b) => a - b);
   }
   const late = new Uint8Array(o.actors);
   for (const session of waiting) late[index(session)] = 1;
+  const paying = new Uint8Array(o.actors);
+  for (const session of payers) paying[index(session)] = 1;
   const report = async (population, h) => {
     population.reports.clear();
     for (let chunk = 0; chunk < sample.length; chunk += BATCH) {
@@ -413,23 +464,29 @@ async function main() {
     return wrong.length;
   };
 
-  // 5. the copy: the clock past the delayed sends, then every count, send and version
+  // 5. the copy: the clock past the delayed sends, then every count, send, payment and version
   started = performance.now();
   copyClock.increment(10_000);
   await rehearsal.idle();
   copy.evict(rehearsal);
   const copyRegion = Number((await copy.checkResident(rehearsal)).regionBytes);
   await report(copy, rehearsal);
-  const wrongCopy = verify(copy, (i) => `${sent[i] + sentCopy[i]} ${late[i]} -1 2`);
+  const wrongCopy = verify(copy, (i) => `${sent[i] + sentCopy[i]} ${late[i]} ${paying[i] ? 0 : -1} 2`);
   rehearsal.close();
 
-  // 6. the live host goes on: its own events, the clock past its delayed sends
+  // 6. the live host goes on: its own events, the clock past its delayed sends; payments still in flight
   await traffic(live, host, sentLive, o.events);
   liveClock.increment(10_000);
   await host.idle();
   live.evict(host);
   await report(live, host);
   const wrongLive = verify(live, (i) => `${sent[i] + sentLive[i]} ${late[i]} -1 1`);
+  if (!real.onceFor(payers) || real.restored || real.stopped.size)
+    failures.push(`live: the real payment service was started ${[...real.started.values()].reduce((a, b) => a + b, 0)} times ` +
+      `for ${payers.length} payers (${real.restored} restored), stopped ${real.stopped.size} times`);
+  if (standIn.stopped.size !== payers.length || standIn.twice || payers.some((s) => !standIn.stopped.has(s)))
+    failures.push(`copy: ${standIn.stopped.size} stand-in payments cancelled after their decline (${standIn.twice} twice), ` +
+      `${payers.length} payers`);
   const liveRegion = Number((await live.checkResident(host)).regionBytes);
   host.close();
   let foreign = 0;

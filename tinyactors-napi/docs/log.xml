@@ -684,11 +684,11 @@
     <evidence>spike, bun 1.4.1: vm.runInContext('var total = 0; function bump(k) { total += k }'); bump(2); bump(3): ctx.total and globalThis.total 2, runInContext('total') 5; node gives 5 for each. test/hibernation.test.mjs: 'a chart whose scripts declare: its var and function come back after the wake' fails on bun without the fix</evidence>
     <resolution>fixed in a381c81: realm.js stored() reads a declaring session's globals by name with the context's indirect eval. actor.context's variable() still reads the global's property: it reads only &lt;data&gt; ids, which declare() defines before the scripts run, and a test writing one from a function (with and without a script var of the same name) read the right value on bun without the fix, so it was left as is.</resolution>
   </entry>
-  <entry id="l-p2-snapshot-no-services" date="2026-10-16" step="p2-snapshot" kind="deviation" status="open">
+  <entry id="l-p2-snapshot-no-services" date="2026-10-16" step="p2-snapshot" kind="deviation" status="resolved">
     <what>tools/snapshot.mjs is Python's tools/snapshot.py without its payments: no actor pays through an invoked service when the snapshot is taken, so the copy starts no restored invocation on a stand-in and the live host's real service is not checked. The order charts keep their payment states.</what>
     <why>The addon has no services yet: TA_EFFECT_INVOKE is dropped until p2-services builds them.</why>
     <evidence>tools/snapshot.mjs (its header); docs/plan.xml p2-services</evidence>
-    <resolution>p2-services adds the payments to tools/snapshot.mjs (pay half the resident actors, a stand-in that declines each restored invocation once, the live service never stopped) and a test that a restored host announces each running invocation again</resolution>
+    <resolution>p2-services added the payments to tools/snapshot.mjs: half the resident actors pay through urn:example:payment at the snapshot; the copy restarts each on a stand-in that declines it once (checked: restored, the same amount, stopped after the decline), and the live host's real service is started once per payer and never stopped. test/services.test.mjs adds a restored host announcing each running invocation again, with a stand-in.</resolution>
   </entry>
   <entry id="l-p2-snapshot-m4" date="2026-10-16" step="p2-snapshot" kind="note" status="resolved">
     <what>mise run conform -- --milestone M4 passes by hand under node and bun on native and quickjs: protocol 90 pass 50 skip, scenarios 8 of 8 (hibernate, migrate, snapshot, invoke included), w3c 191 of 191. GATE and MILESTONE stay M1's in mise/napi.rb: p2-w3c raises them.</what>
@@ -704,5 +704,35 @@
     <what>The full snapshot gate ran once: mise run snapshot (2,000,000 actors, 1000 resident, 200,000 events) and --actors 100000 --resident 100000 --events 100000, on all four runtime and datamodel pairs: every run passed (the copy's snapshot the same bytes, every actor migrated on the copy, 0 of 25,000 sampled wrong on either host, the live store only the live host's). Snapshot 116 MB at two million (58 B an actor), 61 to 66 MB at 100,000 resident; restore 0.07 to 3.42 s; numbers in the README, 'Snapshots'.</what>
     <evidence>mise run snapshot, 2026-10-16, x86_64 Linux 6.18, 4 CPUs: exit 0 (873.97 s); the 100,000 run exit 0</evidence>
     <resolution>numbers in README.md</resolution>
+  </entry>
+  <entry id="l-p2-services-promise" date="2026-10-16" step="p2-services" kind="decision" status="for-maintainer">
+    <what>A service handler that returns a thenable (an async function, a plain function returning a promise) is refused: TypeError "a service handler returns the service, not a promise ...", the invocation kept as failed and the invoker given error.communication, the error reported after the turn. The promise is not awaited and its later rejection stays unhandled.</what>
+    <why>The plan asked to decide whether to await it. Python's handlers are synchronous. Awaiting would leave the service missing while sends to it arrive: they would be dropped or need a queue the addon does not have (no tables of its own). The Invocation is a record that outlives the ack, so a plain handler can return the service at once and answer later. Refusing shows the mistake at once and loses no message without a trace.</why>
+    <evidence>tinyactors-napi/src/effects.c ta_napi_dispatch_invoke; test/services.test.mjs: 'a handler that returns a promise is refused: the service is what it returns'</evidence>
+    <resolution>Built. The maintainer may prefer to await the promise and treat sends before it settles as failed</resolution>
+  </entry>
+  <entry id="l-p2-services-receive-async" date="2026-10-16" step="p2-services" kind="decision" status="resolved">
+    <what>A receive that returns a thenable has its Send view filled before the ack, as an I/O processor's view is (d-async). Its rejection is a crash: if the invocation has not ended, the invoker gets error.communication with the send's sendid and the entry stays failed without the service (dropped, not stopped). The rejection goes on, unhandled. This uses a function bound to the invocation and the view (instance-&gt;crashed). stop() is called; what it returns is not followed.</what>
+    <why>Python has no async receive. In JavaScript an async receive (await fetch, then sendBack) is the common shape, and it must read send.data after an await. A rejection is the async form of a receive that throws, which Python treats as a crash.</why>
+    <evidence>src/effects.c ta_napi_dispatch_service_send, ta_napi_service_crashed; test/services.test.mjs: 'an async receive reads its send after the ack; its rejection is a crash'</evidence>
+  </entry>
+  <entry id="l-p2-services-map" date="2026-10-16" step="p2-services" kind="decision" status="resolved">
+    <what>The running services are kept as [invocation, service] in a Map on the handlers object the wrapper holds (handlers.invocations), keyed by one bigint: segment &lt;&lt; 32 | token. handlers.last holds the last invocation's invokeid, type and src strings, and a new invocation reuses each one that is strictly equal. The Invocation's state is an array under the instance's `invocation` symbol, as a view's state is: the wrapper, segment, token, flags (ended, failed, restored), then the fields.</what>
+    <why>The cycle rule says no strong napi_ref. The handlers are already dropped at close, so the services go with them (dropped, not stopped), and a host dropped with running services is collected. A Map is the engine's memory, so the addon allocates nothing per invocation. Python interns its strings. In JavaScript the comparison with the last string is what realm.js does for _name.</why>
+    <evidence>src/host.c ta_napi_handlers_read; src/effects.c ta_napi_services, ta_napi_invocation_text; test/services.test.mjs: 'a dropped host whose running services close over it is collected', 'the invocation\'s strings are shared across a population; its traceparent is the invoke\'s'</evidence>
+  </entry>
+  <entry id="l-p2-services-details" date="2026-10-16" step="p2-services" kind="decision" status="resolved">
+    <what>Details not settled by the plan: (1) Invocation also has `running`, as Python's does (false once ended or the host closed); (2) "no service is registered for the invoke type \"t\"" is a TinyactorsError with TA_ERROR_UNSUPPORTED (Python's TinyactorsError carries no status, Node's always does); (3) receive and stop are called with the service as `this`, as a Python bound method is; (4) a service handler is looked up as an own property of the services object, so a type such as "toString" does not reach Object.prototype; (5) sendBack and done take {traceparent} only (another key is a TypeError), null for a new trace; (6) ta_napi_batch carries the take's count, so that the check for an UNINVOKE of the same token later in the batch does not take again; (7) the Invocation class, like the views, is not exported (index.d.ts declares an interface).</what>
+    <evidence>src/effects.c, src/addon.h ta_napi_batch, src/loop.c ta_napi_drain; index.d.ts Invocation</evidence>
+  </entry>
+  <entry id="l-p2-services-type-nil" date="2026-10-16" step="p2-services" kind="issue" status="resolved">
+    <what>Send.type for a send to a service (IO_PROCESSOR TA_NIL) returned the whole types array. ta_napi_handler_of treats index UINT32_MAX (= TA_NIL) as "the handler itself". Found by the first services test before any release; type is now undefined for TA_NIL.</what>
+    <evidence>src/effects.c ta_napi_send_field TA_NAPI_SEND_TYPE; test/services.test.mjs: 'an actor talks to its service and gets its done data'</evidence>
+    <resolution>fixed in this step's commit</resolution>
+  </entry>
+  <entry id="l-p2-services-snapshot-evict" date="2026-10-16" step="p2-services" kind="issue" status="resolved">
+    <what>With payers in the snapshot gate, tools/snapshot.mjs failed "live: 150 actors resident, more than 100". Its LRU eviction counted a refused hibernation (a paying actor, held in memory by its invocation) toward the actors to evict, so it stopped early. It now loops while more than R are resident and skips actors that refuse, as Python's evict does.</what>
+    <evidence>tools/snapshot.mjs Population.evict; tinyactors-cpython/tools/snapshot.py Population.evict</evidence>
+    <resolution>fixed in this step's commit</resolution>
   </entry>
 </log>

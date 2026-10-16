@@ -262,6 +262,14 @@ host = Host.restore(blob, config, { log, wake });
   clock ahead, look), to capture a host when something goes wrong and
   step through it on the same build, to start every test from one
   prepared world, or to take a host out of the process for a while.
+- **Invoked services are started again.** The services you run are not
+  in the snapshot. The restored host's first turn announces each
+  invocation that was running to the `services` handler you pass to
+  `Host.restore`, with `invocation.restored` true and the same
+  `invokeid`, `src` and params. Pass your real handlers to go on, or
+  stand-ins for a copy that must not reach the real services. A type with
+  no handler gives its invokers `error.communication`, and nothing is
+  thrown.
 - **Hibernated actors stay in your store.** The snapshot holds their
   records, not their blobs, and the restored host asks for them through
   `wake` as before. A copy that hibernates actors needs its own copy of
@@ -279,11 +287,15 @@ host = Host.restore(blob, config, { log, wake });
 
 `tools/snapshot.mjs` (`mise run snapshot`) rehearses a deploy on a copy:
 a live host of two million actors, at most 1000 resident and the rest in
-SQLite, a delayed send pending for each resident one; its snapshot
-written to a file and its store copied; the copy restored with its own
-store and clock, whose own snapshot is the same bytes, then migrated to a
-new version while events come, its clock run past the delayed sends,
-while the live host goes on with events of its own.
+SQLite, a delayed send pending for each resident one, and half of those
+paying through an invoked payment service that has not answered; its
+snapshot written to a file and its store copied; the copy restored with
+its own store and clock and a stand-in payment service, which gets every
+payment in flight again (`restored`, with its amount) and declines it,
+and whose own snapshot is the same bytes, then migrated to a new version
+while events come, its clock run past the delayed sends, while the live
+host goes on with events of its own and its payments still in flight. The
+copy never reaches the real service.
 
 One run of it (`mise run snapshot`, and again with `--actors 100000
 --resident 100000 --events 100000`, 2026-10-16, x86_64 Linux 6.18, Intel
@@ -311,3 +323,86 @@ at most R actors were resident.
 Core's region is 58 B an actor with most of them hibernated and 469 B
 all resident; the native datamodel's rows take about 50 B an actor more
 than quickjs's state in a snapshot of resident actors.
+
+## Invoked services
+
+A chart can `<invoke>` a service that your program runs, such as a
+connection, a subprocess or a long computation. Register a handler per
+type: `new Host(config, { services: { [type]: handler } })`. When an
+invocation starts, the handler receives the host and an `Invocation` and
+returns the service, any object. The host keeps the service until the
+invocation ends.
+
+```xml
+<state id="talking">
+  <invoke id="counter" type="urn:example:counter" src="counter://local">
+    <param name="seed" expr="seed"/>
+  </invoke>
+  <transition event="go"><send target="#_counter" event="ping"/></transition>
+  <transition event="pong">...</transition>
+  <transition event="done.invoke.counter" target="finished"/>
+</state>
+```
+
+```js
+class Counter {
+  constructor(invocation) {
+    this.invocation = invocation;
+    this.count = 0;
+  }
+  receive(host, send) {                 // a <send target="#_counter">, or autoforwarded
+    this.count++;
+    if (send.event === 'finish') this.invocation.done({ total: this.count }); // done.invoke.counter
+    else this.invocation.sendBack('pong', { n: this.count });
+  }
+  stop(host) {}                         // the invoker cancelled it (left the state, ended)
+}
+
+const host = new Host(config, {
+  services: { 'urn:example:counter': (host, invocation) => new Counter(invocation) },
+});
+```
+
+- **The invocation** has `session` (the invoker, a `bigint`),
+  `invokeid`, `type`, `src`, `data` (the params, or the content),
+  `traceparent`, `running` and `restored` ("Snapshots"). `sendBack(event,
+  data?)` gives the invoker an event with its `invokeid` set.
+  `done(data?)` ends the service with `done.invoke.<invokeid>`. Both keep
+  the invoke's trace unless given `{traceparent}` (`null` for a new
+  one). The invocation is a record, so you can keep it and answer while
+  the service runs, from a timer or a promise. After `done`, a cancel or
+  `close()`, these calls throw `TinyactorsError` with `TA_ERROR_STALE`.
+- **The service** may have `receive(host, send)`, which gets each send to
+  it as a thin view (`type` is `undefined`), and `stop(host)`, which gets
+  the cancel; both are called on the service, and both are optional. A
+  `receive` that returns a promise has its send filled before the batch
+  ends, so it may read it after an `await`. A service that ended with
+  `done` is neither stopped nor kept, so a handler may call `done` and
+  return at once.
+- **The handler returns the service, not a promise.** An `async` handler
+  is refused with a `TypeError` and the invoker gets
+  `error.communication`: start the work in a plain handler, return the
+  service at once, and answer with `sendBack` and `done` when the work is
+  ready.
+- **A failure** of any kind gives the invoker `error.communication`: no
+  handler for the type, a handler that throws, a `receive` that throws or
+  whose promise rejects (the service crashed and is dropped, not
+  stopped), or no handler for a restored invocation. Each later send to
+  that invocation gets one too, until the invoker leaves the state. The
+  invoker gets none when it cancelled the invocation in the same run. The
+  error is reported after the turn, as any handler's ("Before you use
+  it"); a restored invocation with no handler throws nothing, since
+  declining to start it again was your choice.
+- **`close()`** drops the running services without calling `stop`. The
+  host keeps them on its own object, so a dropped host whose services
+  close over it is still collected.
+
+An invocation uses one of core's requests, so `system.maxRequests` must
+cover the invocations that run at once.
+
+`tools/services.mjs` (`mise run services`) runs a population of actors
+that each invoke a counter service: pings and pongs to actors drawn at
+random, then a third finish with done data, a third leave the invoking
+state (the service is stopped), the rest keep theirs; every pong is
+counted once, every done datum is right, every cancelled service was
+stopped once and no other, and the ended services are collected.

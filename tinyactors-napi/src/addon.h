@@ -49,6 +49,11 @@
  *   rejected   the function a handler's promise calls when it rejects
  *              (effects.c), bound to its view: it fails an unanswered send
  *              and throws the rejection on;
+ *   invocation the class of the record a service handler gets, an
+ *              Invocation (effects.c), made only by the drain;
+ *   crashed    the function a service's receive promise calls when it
+ *              rejects (effects.c), bound to its invocation and its send:
+ *              the service crashed, and the rejection goes on;
  *   vm, realm  node:vm (process.getBuiltinModule) and the vm.Script of
  *              the realm's script every context of the native datamodel
  *              runs (datamodel/realms.c), made on first use;
@@ -75,6 +80,7 @@ typedef struct ta_napi_instance {
     napi_ref address;
     napi_ref send, entry, migrated;
     napi_ref rejected;
+    napi_ref invocation, crashed;
     napi_ref vm, realm, realms, in, stringify;
     struct ta_napi_native *evaluating;
     struct ta_napi_restoring *restoring;
@@ -471,6 +477,7 @@ typedef struct ta_napi_drain_state {
 typedef struct ta_napi_batch {
     ta_napi_drain_state *state;
     const ta_host_effect *effects;
+    uint32_t count;
 } ta_napi_batch;
 
 /* The Host's wrapper; NULL when it is gone. */

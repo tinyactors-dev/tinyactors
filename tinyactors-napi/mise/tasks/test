@@ -2,7 +2,7 @@
 #MISE description="Test tinyactors-napi: lint (rules, the addon's C, the adapter, the mapping table, the build scripts, acronyms), the build, the runtimes, and the conformance set named by MILESTONE against the adapter under node and bun on both datamodels"
 #MISE sources=["src/**/*", "conform.mjs", "index.mjs", "index.d.ts", "test/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyxml/include/**/*", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
-#USAGE flag "--full" help="the hibernation, migration and snapshot gates at 2,000,000 actors, 1000 resident, and snapshots of 100,000 resident actors (tools/stress.mjs, tools/migration.mjs, tools/snapshot.mjs)"
+#USAGE flag "--full" help="the hibernation, migration and snapshot gates at 2,000,000 actors, 1000 resident, snapshots of 100,000 resident actors, and the services gate at 200,000 actors and 1,000,000 round trips (tools/stress.mjs, tools/migration.mjs, tools/snapshot.mjs, tools/services.mjs)"
 # vim:ft=ruby
 
 # The sources are this project's files and those it builds and tests
@@ -27,7 +27,9 @@
 # --full (root AGENTS.md, "Where a new test goes"), on both datamodels under
 # both runtimes; the snapshot gate again with every actor resident (5,000,
 # --full 100,000), so that the datamodel's own state is most of the
-# snapshot.
+# snapshot; then the services gate (tools/services.mjs, `mise run
+# services`): 10,000 actors and 50,000 round trips, --full 200,000 and
+# 1,000,000.
 
 require_relative '../napi'
 
@@ -69,4 +71,9 @@ if full
   NodeAPI.stress(actors: 100_000, resident: 100_000, events: 100_000, tool: 'snapshot')
 else
   NodeAPI.stress(actors: 5000, resident: 5000, events: 5000, tool: 'snapshot')
+end
+if full
+  NodeAPI.services(actors: 200_000, events: 1_000_000)
+else
+  NodeAPI.services(actors: 10_000, events: 50_000)
 end

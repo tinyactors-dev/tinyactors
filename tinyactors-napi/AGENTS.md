@@ -229,6 +229,41 @@ The rules the Python binding follows hold here too (bindings.md, sections
   id, and pending handlers are dropped, never called, at `ta_host_free`.
 - **No notification is defined;** the addon drops a
   `TA_HOST_EFFECT_NOTIFICATION` whose method it does not know.
+- **Invoked services** (decided 2026-10-16, as Python's "Invoked
+  services"; docs/plan.xml, p2-services): `services: {[type]: (host,
+  invocation) => service}`. At a `TA_EFFECT_INVOKE` the handler of its
+  type (`EVENT`) gets an **`Invocation`**, a record made before the ack (a
+  service outlives it): `session` (a `bigint`), `invokeid` (`SENDID`),
+  `type`, `src` (`TARGET`), `data` (the payload's value), `traceparent`,
+  `restored` (`TA_EFFECT_FLAG_RESTORED`) and `running`; its type, src and
+  invokeid are the last invocation's strings when the text is the same,
+  so a population shares them. What the handler returns is the service,
+  kept with its record as `[invocation, service]` in a `Map` keyed by
+  core's (`SEGMENT`, `TOKEN`) as one `bigint`, on the handlers object the
+  wrapper holds: no `napi_ref`, no table of invoke ids, and gone with the
+  handlers at close (dropped, not stopped).
+  **`invocation.sendBack(event, data?, {traceparent}?)`** is `ta_host_send`
+  with `TA_EVENT_IN_FROM_INVOKE` and the token, **`invocation.done(data?,
+  {traceparent}?)`** with `TA_EVENT_IN_INVOKE_DONE` (the entry goes); both
+  keep the invoke's trace unless given one (`null`: a new trace) and throw
+  `TA_ERROR_STALE` once it ended or the host closed. A `TA_EFFECT_SEND`
+  with `IO_PROCESSOR` `TA_NIL` goes to the service's **`receive(host,
+  send)`**, called on the service, with a thin `Send` whose `type` is
+  `undefined`; a `TA_EFFECT_UNINVOKE` to its **`stop(host)`**, then the
+  entry goes; both optional. No handler, a handler that throws, or one
+  that returns a thenable (a `TypeError`: the service is what it returns,
+  decided 2026-10-16, as Python's handlers are synchronous): `ta_host_send`
+  with `TA_EVENT_IN_ERROR_COMMUNICATION | TA_EVENT_IN_FROM_INVOKE` to the
+  invoker and the error reported as "The loop" says; none when an
+  UNINVOKE of the same token follows in the open batch. A failed start
+  stays as an entry marked failed, so each send to it gets
+  `error.communication` with its sendid, until the UNINVOKE (no `stop`).
+  A `receive` that throws, or whose promise rejects (its view filled
+  before the ack, as an I/O processor's), is a crash: the invoker gets
+  `error.communication` with the send's sendid, and the entry stays failed
+  without the service (dropped, not stopped). A restored host's first run
+  announces each invocation that was running; a type with no handler
+  gives `error.communication` and throws nothing.
 - **Other systems** (ADR 0014; ADR 0017, decisions 4 and 5;
   bindings.md section 9): the `transport` handler gets every send to
   another system's address (`io_processor` 0; core decides local or not),
@@ -694,6 +729,21 @@ file.
   with its label kept; no API call makes one, so that refusal is code
   only (`ta_napi_restore_session`, `ta_napi_restore_other` in
   `src/datamodel/datamodel.c`).
+- **Invoked services are the wrapper's and outlive the ack.** The
+  running services are kept in a `Map` on the handlers object the wrapper
+  holds, so a dropped host whose services close over it is collected, and
+  at close they are dropped, not stopped; an `Invocation` is a record that
+  answers after the ack until the invocation ends. Tests:
+  `test/services.test.mjs: 'a dropped host whose running services close
+  over it is collected'`, `'services left at close are dropped, not
+  stopped, and collected'`, `'a service done in its handler is neither
+  kept nor stopped'` and `'an async receive reads its send after the ack;
+  its rejection is a crash'`; failures that reach the invoker:
+  `test/services.test.mjs: 'a handler that throws is a communication
+  error; a send to it fails too, until the UNINVOKE'`, `'a failure to
+  start an invocation cancelled in the same run is not reported to the
+  invoker'` and `'a restore without the service tells the invoker, and
+  throws nothing'`.
 - **Sweep and wake refuse numbers out of range**, never wrapped. Test:
   `test/hibernation.test.mjs: 'sweep, hibernate and wake refuse numbers out
   of range'`.
@@ -812,8 +862,18 @@ manages its development dependencies; the C toolchain is the root's.
   events, its clock run past the delayed sends; the live host goes on
   with E events of its own; every sampled count, delayed send and version
   checked on both hosts, and the live store holding only the live host's
-  blobs. `mise run test` runs it at `stress`'s sizes and with 5,000 actors
-  all resident; `--full` two million with 1000 and 100,000 all resident.
+  blobs; half the resident actors pay through an invoked service at the
+  snapshot, which the copy starts again on a stand-in that declines each
+  payment while the live host's real service is never stopped. `mise run
+  test` runs it at `stress`'s sizes and with 5,000 actors all resident;
+  `--full` two million with 1000 and 100,000 all resident.
+- `mise run services [--actors N] [--events E]`: the services gate
+  (`tools/services.mjs`): N actors each invoking a counter service the
+  application runs, E round trips to actors drawn at random, then a third
+  done with done data, a third cancelled (stopped), the rest kept; every
+  pong, done datum, stop and collected service checked, on both
+  datamodels under both runtimes. `mise run test` runs 10,000 actors and
+  50,000 round trips; `--full` 200,000 and 1,000,000.
 - `mise run pack`: one prebuilt addon per platform package; it aborts
   until packaging is built.
 
@@ -869,8 +929,9 @@ tools/measure.mjs    bytes per actor, node and bun, native and quickjs (mise run
 tools/stress.mjs     hibernation under load, the rest in SQLite (mise run stress)
 tools/migration.mjs  live migration under load, the rest in SQLite (mise run migration)
 tools/snapshot.mjs   a deploy rehearsed on a restored copy of a live host (mise run snapshot)
+tools/services.mjs   invoked services under load (mise run services)
 tools/store.mjs      what the gates share: the SQLite store, a seeded generator
 mise/napi.rb         what the tasks share
-mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, pack
+mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, pack
 build/               core's amalgamation and the addon (not in git)
 ```
