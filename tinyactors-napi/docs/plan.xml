@@ -390,7 +390,7 @@
         <done-when>Every change of section rulebook is in AGENTS.md and ROADMAP.md's "Done means" agrees.</done-when>
         <files>tinyactors-napi/AGENTS.md, tinyactors-napi/ROADMAP.md</files>
       </step>
-      <step id="p0-map" status="todo" after="p0-rulebook p0-inventory">
+      <step id="p0-map" status="done" after="p0-rulebook p0-inventory" commit="847c370">
         <title>The mapping table, planned rows</title>
         <does>Write every row of section api into docs/api-map.md marked planned, with the core names api_map.rb checks, and the list of core functions used internally or not exposed (as Python's).</does>
         <done-when><code>mise run lint</code> passes the mapping check with every row planned.</done-when>
