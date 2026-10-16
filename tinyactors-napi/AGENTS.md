@@ -31,26 +31,35 @@ method over a posted message, or the handling of an effect
 The addon is the binding: it defines the classes, runs the loop,
 dispatches effects, converts values and implements the native datamodel
 in C. `index.mjs` loads the platform's `.node` file and re-exports it,
-nothing else: there is no JavaScript above the addon in the first
-milestone.
+nothing else, until the direct layer has passed M1; then the convenience
+layer joins it ("Layers and the resolver"). The plan of step 8.5, with
+every decision below and its evidence, is [docs/plan.xml](docs/plan.xml).
 
 ## Layers and the resolver
 
 Shared with the Python binding (decided 2026-10-13; bindings.md section
 1, "Two layers"; `tinyactors-cpython/AGENTS.md`, "Layers" and "The
-API"). Node's names and shapes are decided in step 8.5:
+API"). Node's names and shapes (decided 2026-10-16, docs/plan.xml):
 
 - **The addon is the direct layer, and mirrors the C API** more or less
   one to one: a compile call over `ta_compile_charts` that throws with
-  every diagnostic and returns an object whose image is a view until its
-  close (`ta_compile_free`); `addImage(image)` returning the segment
+  every diagnostic and returns an object whose `image` is a `Buffer`
+  copied once on first read (a first read after `close()`, which calls
+  `ta_compile_free`, throws `TA_ERROR_STALE`; not a view: a detached
+  external buffer is still read after the free, `boundary.md` section 7);
+  `addImage(image)` returning the segment
   (`ta_host_add_image` copies the bytes); `chart(name)` over
   `ta_host_chart`; `spawn(ref, ...)` over `ta_host_spawn`, taking that
   reference.
-- **A convenience layer in JavaScript above it is later work,** not
-  built now: it calls only the addon's API and adds shapes, not
-  behaviour (images from a name→text mapping, spawning by chart name, a
-  chart builder).
+- **A convenience layer in JavaScript above it comes after M1:** it
+  calls only the addon's exports and adds shapes, not behaviour. First
+  the typed methods as promises (`await host.actorState({session})`,
+  resolving from the response handler, rejecting from the error handler;
+  decided 2026-10-16: the direct layer keeps ADR 0012's response
+  handlers, and a promise is what a JavaScript programmer would write over
+  them anyway); then what the maintainer picks (images from a name→text
+  mapping, spawning by chart name, a resolver reading files under a root,
+  a chart builder).
 - **A resolver is any callable** `(base, source) => text` (a function,
   an arrow, a bound method; decided 2026-10-16, as Python's API review
   did), given to the compile call only (a static `src`, at compile time;
@@ -77,8 +86,8 @@ API"). Node's names and shapes are decided in step 8.5:
   parsed by core (`ta_traceparent_parse`). Out: a send's traceparent is
   read through `TA_EFFECT_FIELD_TRACEPARENT` on first access (the effect
   holds the binary `ta_trace_context`), absent when untraced; an answer
-  and a failure keep the send's trace unless the caller passes none.
-  Node's names for these are decided in step 8.5.
+  and a failure keep the send's trace unless the caller passes none
+  (`traceparent` in an options object, `undefined` when untraced).
 
 ## Names
 
@@ -107,28 +116,52 @@ the ack.
   is no nested drain: JavaScript a handler runs (an I/O processor's
   callback) may call the `Host` to add inputs, post, or read outputs; it
   never takes or acks.
-- **Every run status** of bindings.md section 3; one timer, the global
-  `setTimeout`, ref'd while a deadline is pending (Bun has no
-  `uv_timer_*`: oven-sh/bun#18546); both clocks before every run,
-  converted with `system.ticksPerSecond`, which the addon reads from
-  `host.config` at creation.
+- **The event loop drives every host, transparently** (decided
+  2026-10-16: Python has a choice between an event loop and none; Node
+  does not). There is no synchronous driver in the API. An input from
+  outside a turn schedules one turn with `setImmediate` (one pending at a
+  time; not a microtask, so I/O runs between turns); a turn that reaches
+  its bound (64 runs, a drain of 64 batches) yields the same way; an idle
+  turn arms one timer, the global `setTimeout`, at the deadline, ref'd
+  while it is pending and replaced on the next idle turn (Bun has no
+  `uv_timer_*`: oven-sh/bun#18546). So an open host with a pending
+  deadline keeps the process alive until it or `close()`, which the README
+  says. **`await host.idle()`** is a promise that settles at the next idle
+  turn: it observes, it drives nothing.
+- **Every run status** of bindings.md section 3; both clocks before every
+  run and every input that depends on them, converted with
+  `system.ticksPerSecond`, which the addon reads from `host.config` at
+  creation, and after each run when an encoder is configured.
+- **Time in the API is milliseconds** (decided 2026-10-16: what
+  JavaScript programmers expect; Python's is seconds): `nextDeadline`,
+  `migrate`'s `timeout`, `SimulatedClock.increment(ms)` and `.now`. Ticks
+  stay inside the addon.
 - **A simulated clock**, `SimulatedClock` with `increment(ms)` (xstate's
-  shape, our meaning): a host created with one arms no timer.
-- **Whatever a handler threw:** ack anyway, finish the turn, then throw
-  the first error.
+  shape, our meaning): it moves the clock and schedules a turn on each
+  host made with it, like any input, and turns nothing itself (decided
+  2026-10-16); a test writes `clock.increment(1000); await host.idle()`.
+  A host made with one arms no timer.
+- **Whatever a handler threw:** ack anyway, finish the turn, re-arm the
+  timer, then report the first error: it rejects every waiting `idle()`,
+  and with none waiting it is thrown from the turn's callback, an
+  uncaught error the runtime reports (decided 2026-10-16). A handler's
+  promise that rejects after its turn stays an unhandled rejection. The
+  README says that either ends the process by default unless the
+  application handles `uncaughtException` and `unhandledRejection`.
+- **No turn inside another call:** `close()` from a handler is deferred
+  to the end of the turn; a finalizer never turns or takes.
 
 ## Lifetimes and thin views
 
 ADR 0012: **everything the host hands out about a batch lives until the
-ack.** Effect fields (`TRACEPARENT` included), envelopes, traces, logs,
-metrics, hibernation and export blobs read while handling stay valid
+ack.** Effect fields (`TRACEPARENT` included), traces, logs,
+metrics and hibernation blobs read while handling stay valid
 across any later call into the host, until the ack. A datamodel's outputs
 live until its next call. Snapshots and the refused config's error fill a
 `ta_buffer` the addon lends.
 
 The rules the Python binding follows hold here too (bindings.md, sections
-3 and 6; `tinyactors-cpython/AGENTS.md`, "Lifetimes and thin views");
-Node's API shape is decided in step 8.5, not here:
+3 and 6; `tinyactors-cpython/AGENTS.md`, "Lifetimes and thin views"):
 
 - **Thin views, not eager conversion.** Wherever a C value is exposed to
   JavaScript, the addon hands out a view that holds the host, the ack
@@ -140,9 +173,23 @@ Node's API shape is decided in step 8.5, not here:
   right after `ta_host_effects_ack` in its drain; core keeps no batch
   counter); a read with another count throws with
   `ta_status_name(TA_ERROR_STALE)`.
-- **Materialize what outlives the ack, before the ack:** a handler that
-  runs later (an async function's continuation, a promise callback) gets
-  a record of the language's values made before it is scheduled.
+- **Materialize what outlives the ack, before the ack, when the handler
+  returns a promise** (decided 2026-10-16). Every handler gets a thin
+  view. When it returns a thenable (an async function, or a plain function
+  returning a promise, which a check at registration would miss), the
+  addon fills that view with every field before the ack, and its
+  `answer()` and `fail()` then work any time while the host lives. The
+  view records whether it was answered or failed: a promise that rejects
+  before an answer fails the send (`error.communication` for the sender)
+  and stays an unhandled rejection; one that rejects after an answer
+  fails nothing. A view kept and used from a callback the handler did not
+  return (a bare `setTimeout`) is stale there, as in Python. Since ADR 0017
+  the sender waits for the ack: an answer given in the handler is what it
+  sees when it goes on; one given later arrives as an ordinary event.
+- **Host outputs are copied once** into a `Buffer`
+  (`napi_create_buffer_copy`) before the ack: telemetry data, `metrics()`,
+  `hibernate()`, `snapshot()`; never a view of host memory (boundary.md
+  section 7).
 - **A reply's `result` is converted once**, at its dispatch, for its
   response handler.
 
@@ -156,27 +203,45 @@ Node's API shape is decided in step 8.5, not here:
 | inspection and trace control | typed methods, each taking a response handler the drain calls when its `REPLY` is dispatched | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
 | `<log>` | a log handler configured per host, given each line as a thin view; none: discarded; no console default | `TA_EFFECT_LOG` |
 | telemetry | an exporter the application configures | `TRACES`, `LOGS`, `ta_host_metrics` |
+| another system | the host's `transport` handler, given each send to another system's address as a thin view; without one, each such send is failed | `TA_EFFECT_SEND` with `io_processor` 0 |
 
 - **Everything is per host:** handlers, the log handler and the clock are
   given to the `Host`; no global configuration.
 - **`DONE` and `ERROR` are internal:** the addon releases its rows for the
   session; no application callback.
-- **An I/O processor's handler that throws before answering** (a plain
-  function, or an async one whose promise rejects) has its send failed,
-  as ADR 0009 has a runtime that cannot do what an effect asks answer
-  with a failed completion (`error.communication` for the sender), and
-  the error is thrown after the turn (the Python binding's rule, decided
-  2026-10-13; Node's shape is settled in step 8.5).
+- **An I/O processor's handler that throws before answering** (or whose
+  promise rejects before an answer) has its send failed, as ADR 0009 has
+  a runtime that cannot do what an effect asks answer with a failed
+  completion (`error.communication` for the sender), and the error is
+  reported as "The loop" says.
 - **A log entry is `(session, label, text)`**, no chart.
 - **No synchronous request and no raw `post`** (ADR 0012, decision 3): one typed method per method of
-  `tinyactors-core/docs/requests.md`, with a response handler. The
+  `tinyactors-core/docs/requests.md` but `actor.send` (which is
+  `host.send`), shaped `method(params, onResult, onError)` (decided
+  2026-10-16): `params` an object passed to core as given (`undefined`
+  for none), `onResult(host, result)` at the `REPLY`'s dispatch,
+  `onError(host, error)` optional and never a param for core; it returns
+  nothing. Its promise form is the convenience layer's. The
   message id is the handle of a row in a pending `ta_table` holding the
   handlers; the drain finds it in O(1), the generation refusing a stale
   id, and pending handlers are dropped, never called, at `ta_host_free`.
 - **No notification is defined;** the addon drops a
   `TA_HOST_EFFECT_NOTIFICATION` whose method it does not know.
-- **`PEER` versus `PEER_ERROR` in the API is deferred**: carrying
-  envelopes is the application's, and its API shape waits for a decision.
+- **Other systems** (ADR 0014; ADR 0017, decisions 4 and 5;
+  bindings.md section 9): the `transport` handler gets every send to
+  another system's address (`io_processor` 0; core decides local or not),
+  and `send.message` is its outgoing half, an object of `ta_event_in`'s
+  fields (`target`, `event`, `data`, `sendid`, `origin`, `traceparent`);
+  the other side passes it unchanged to **`host.send(message)`**, which
+  ignores keys it does not know, and a send the application believes
+  failed is **`host.fail(target, sendid)`**
+  (`TA_EVENT_IN_ERROR_COMMUNICATION`). The address fields are **`Address`**
+  values, as Python's (decided 2026-10-16): immutable, `.text`, and
+  `.system`, `.session` (a `bigint`) and `.name` read by core's parser on
+  each access (`ta_address_parse`, `ta_address_name_decode`), `undefined`
+  for a part the text lacks, `toString()` the text; `host.send` and
+  `host.fail` take an `Address` or a string. No peers, envelopes or
+  routes: the transport and the wire encoding are the application's.
 
 ## The host's allocator
 
@@ -240,7 +305,8 @@ The addon allocates almost nothing (bindings.md, section 6):
   next call: the one buffer kept between calls, because Node-API gives no
   view of a string.
 - **Payloads are copied, not encoded,** between the API and the native
-  datamodel; CBOR only toward quickjs and in envelopes.
+  datamodel; CBOR only toward quickjs and for bytes that leave the
+  process.
 - **Statuses are named by core:** a bare status in a message is
   `ta_status_name(status)` (`"TA_ERROR_STATE"`), never a table of ours.
 - **Where the allocator is called:** in the host's create, free and
@@ -283,9 +349,11 @@ The addon allocates almost nothing (bindings.md, section 6):
   - `datamodel-calls-environment-and-node-api`: `src/datamodel/` calls of
     core only `ta_datamodel_environment_*`, `ta_image_*` (the chart's
     expressions, read at `chart_attach`), `ta_cbor_*` (`to_wire`,
-    `from_wire`) and `ta_table_*`, and our own `ta_napi_*`; never the host
-    or the system (`datamodel.h`: "they must never call ta_system_*
-    functions").
+    `from_wire`) and `ta_table_*`, txml's `txml_*` (XML content, "The
+    native datamodel"), and our own `ta_napi_*`; never the host or the
+    system (`datamodel.h`: "they must never call ta_system_*
+    functions"). It reaches `node:vm` through `process.getBuiltinModule`,
+    a JavaScript call made with Node-API, not V8's C++ API.
   - `one-timer-in-loop`: the global timers (`setTimeout`, `setInterval`,
     `setImmediate` and their clear functions) appear in `src/loop.c`
     only.
@@ -299,7 +367,10 @@ The addon allocates almost nothing (bindings.md, section 6):
   mutable pointer). Arrays of `napi_property_descriptor`, the tables
   `napi_define_class` takes, are exempt by type.
 - **One thread per host:** a host belongs to the environment (main thread
-  or worker) that made it; record it and refuse calls from others.
+  or worker) that made it; record it and refuse calls from others. A
+  `Host` posted to a worker arrives as a plain structured clone, which the
+  type tag refuses (spike, 2026-10-16), so the recorded environment is an
+  assertion.
 
 ## Values
 
@@ -308,9 +379,11 @@ The addon allocates almost nothing (bindings.md, section 6):
   `Number.isSafeInteger` and `BigInt` beyond (ids are always `BigInt`:
   `napi_get_value_int64` saturates silently), strings as valid UTF-8 (a
   lone surrogate refused, never replaced), `Uint8Array`, arrays, plain
-  objects, `true`, `false`, `null`, `undefined`; **an actor reference is
-  its address string** (decided 2026-10-12, commit `20189bdc`): tag 32 is
-  read as its text and never written, as quickjs does.
+  objects, `true`, `false`, `null`, `undefined`; **inside a value an
+  actor reference is its address string** (decided 2026-10-12, commit
+  `20189bdc`): tag 32 is read as its text and never written, as quickjs
+  does, since neither of Node's datamodels has a reference type. The
+  API's own address fields are `Address` values ("Other systems").
 - **`encode(value) -> Uint8Array`** and **`decode(bytes) -> value`**
   expose the one conversion the API uses (`src/values.c`, streaming with
   `ta_cbor_writer` and `ta_cbor_reader`), each with its row in
@@ -322,6 +395,51 @@ The addon allocates almost nothing (bindings.md, section 6):
 - **Nesting is limited to 64**, which stops cycles but not a value that
   shares subtrees; the README says charts are trusted code.
 
+## The native "ecmascript" datamodel
+
+Decided 2026-10-16 (docs/plan.xml, decisions d-datamodel, d-declarations,
+d-dom, d-separate):
+
+- **Two ECMAScript datamodels, completely separate.** The native one uses
+  the application's JavaScript objects in its own engine, as the
+  `"python"` datamodel uses Python's; quickjs is the sandbox, for charts
+  that are not trusted (`max_ops`, a bounded heap, its realms, passed
+  through from the Host's option). They share no code or text and meet
+  only in the suite they both pass. Both are named `"ecmascript"`, so a
+  host holds one: `new Host(config, {datamodel: "native" | "quickjs"})`,
+  and a host that names none gets `"native"`, the maintainer's exception
+  to "no defaults of our own" ("it's what most people will expect").
+- **Charts evaluate in `node:vm` contexts, never the application's
+  realm.** One shared context per host's native datamodel holds the
+  charts that declare nothing at the top of their scripts; each of their
+  sessions is a scope object inside it. A chart whose scripts declare
+  top-level names (`var`, `function`, `let`, `const`, `class`) gets a
+  context per session, where a script runs as global code and closures
+  work (about 143 KB a session on node, 60 KB on bun). Which charts
+  declare is asked of the engine at `chart_attach` (the script after
+  `throw 0;` in a scratch context: the global's new names, and a
+  redeclaration error for lexical ones): the addon parses no JavaScript.
+  Pre-declaring names on a scope and copying bindings out is refused: a
+  script's functions close over its own `var`s.
+- **A scope is shaped once per chart:** a per-chart constructor whose
+  properties are, from the start, the `<data>` ids, the names a
+  `<foreach>`'s item and index and a script's assignments bind, the
+  session's link and `_event`, over a frozen prototype of null prototype
+  holding the system variables as read-only accessors (V8 makes an
+  `Object.create(null)` object a dictionary: 280 B against 56 to 64 B).
+  `_event` is a non-writable data property redefined at each
+  `bind_event`.
+- **Expressions compile one at a time, lazily,** at their first
+  evaluation, in the context's shape sloppy outer `with (scope)`, strict
+  inner function, so an undeclared assignment throws and a syntax error
+  is that evaluation's `error.execution`, not the chart's.
+- **Values cross by copy, made with the receiving context's
+  constructors** (an application's array is not `instanceof Array` in
+  another realm); immutable values are shared.
+- **XML content becomes a DOM through txml** (`tinyxml/include/txml.c`,
+  compiled into the addon), built as JavaScript objects; Node and Bun have
+  no `DOMParser`.
+
 ## Rules the suite cannot see, each with a test of its own
 
 - **Dropping a payload's last reference can run JavaScript** (a
@@ -331,18 +449,21 @@ The addon allocates almost nothing (bindings.md, section 6):
   (bindings.md, section 8).
 - **Handles are `ta_table` handles** with a generation: a stale one is
   refused, never a pointer.
-- **Expressions are compiled once as a strict-mode function inside
-  `with (scope)`**, as the quickjs datamodel does, so an undeclared
-  assignment throws (`tinyactors-core/src/datamodel_ecmascript/datamodel_ecmascript.c`);
-  `assign` keeps quickjs's check of the location.
+- **Expressions are compiled once, lazily, as a strict function inside
+  `with (scope)`**, so an undeclared assignment throws and a syntax error
+  waits for its evaluation; `assign` checks the location as SCXML asks.
 - **One handle scope per vtable entry:** a run is one native call, so
   handles opened by the entries would pile up until it returns
   (`napi_open_handle_scope` around each entry).
 - **Reference counts live in the row,** one `napi_ref` per payload row,
-  deleted at zero: a finalizer may call only basic-env functions, and
-  `napi_reference_unref` is not one (it takes a `napi_env`;
-  `napi_delete_reference` takes a `node_api_basic_env`: Node.js 22's
-  `include/node/js_native_api.h:339, 355`).
+  deleted at zero (`napi_delete_reference` takes a `node_api_basic_env`:
+  Node.js 22's `include/node/js_native_api.h:339, 355`), so the host's
+  finalizer and the environment's teardown free a host with basic-env
+  calls only, and skip the last take.
+- **Handler closures make cycles:** handlers are kept reachable from the
+  `Host`'s own JavaScript object (a property under a private symbol), not
+  by strong `napi_ref`s, so a dropped host whose handlers close over it is
+  still collected.
 - **`napi_type_tag_object` on every wrapped object,** so a method called
   on the wrong object is refused rather than misread.
 - **One drain at a time and an ack before every run:** a test that a
@@ -351,14 +472,17 @@ The addon allocates almost nothing (bindings.md, section 6):
 - **A thin view read after its ack throws** `TA_ERROR_STALE`; marks nest
   (a nested call leaves the outer call's arena memory intact); pending
   handlers are dropped at `ta_host_free`.
-- **The README says** chart code is trusted (it runs in the application's
-  realm, and Node-API cannot make another), and whether a pending timer
-  keeps the process alive (bindings.md, section 11).
+- **The README says** chart code is trusted (a `vm` context is not a
+  security boundary; untrusted charts belong on quickjs), that a pending
+  deadline keeps the process alive while the host is open (bindings.md,
+  section 11), that a handler's error ends the process by default, and
+  that `using` needs a runtime that parses it (bun 1.4 does, node 22 does
+  not).
 
 ## What not to build
 
 - No synchronous request, no raw `post`, no request facade: typed methods
-  take response handlers.
+  take response handlers in the direct layer; no synchronous driver.
 - No eager conversion of an effect: a thin view, and a record only where
   a value must outlive the ack. No global configuration.
 - No re-reading `ta_host_effects` until stable, no consumed marks, no
@@ -368,12 +492,14 @@ The addon allocates almost nothing (bindings.md, section 6):
   (`ta_table`, `ta_status_name`, `ta_growable_arena`, `ta_host_add_image`
   copies).
 - No application callback for `DONE` or `ERROR`; no subscription.
-- No defaults, limits, methods, events or messages of our own; nothing C
+- No defaults, limits, methods, events or messages of our own (the one
+  exception, the maintainer's: a host that names no datamodel gets the
+  native one); nothing C
   does done again in JavaScript (bindings.md section 2); no JavaScript
   above the addon until the convenience layer is taken up ("Layers and
   the resolver").
 - No serialization on the hot path, no struct layout read from
-  JavaScript, no libuv, no V8.
+  JavaScript, no libuv, no V8's C++ API, no JavaScript parser of our own.
 
 ## Tasks
 

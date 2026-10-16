@@ -384,7 +384,7 @@
   <phases>
     <phase id="p0" title="The rulebook and the map">
       <goal>Bring the Node rulebook up to the core of today and write the API's mapping table before any item, so the API review sees the whole surface first.</goal>
-      <step id="p0-rulebook" status="todo">
+      <step id="p0-rulebook" status="done">
         <title>AGENTS.md up to date</title>
         <does>Apply section rulebook (transport and messages, sends that wait, the asynchronous handler rule, the loop, the image, the resolver); nothing else changes.</does>
         <done-when>Every change of section rulebook is in AGENTS.md and ROADMAP.md's "Done means" agrees.</done-when>

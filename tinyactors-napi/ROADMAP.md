@@ -19,9 +19,11 @@ before changing this copy.
 
 - **Scope:** the package's `Host`; `ta_host_create` from JavaScript
   options (the addon reads `host.config` itself); images, boot, spawn,
-  send, terminate; the loop, one drain at a time, on the event loop with
-  one `setTimeout`, and `SimulatedClock.increment(ms)`; I/O processors as
-  the application's output channel, asynchronous and synchronous;
+  send, terminate; the loop, one drain at a time, driven by the event
+  loop alone (`setImmediate`, one `setTimeout`), and
+  `SimulatedClock.increment(ms)`; I/O processors as the application's
+  output channel, whose senders wait for the batch's ack, and the host's
+  transport;
   typed methods over post with response handlers called at a later
   drain; `LOG` to a log handler per host; `DONE` and `ERROR` internal;
   rows in `ta_table`; one `ta_growable_arena` per host with a mark per
