@@ -73,6 +73,15 @@ static PyObject *ta_python_processor_row(ta_python_host *host, uint32_t processo
                : NULL;
 }
 
+/* An address the effect gives as text, as an Address (None stays None):
+ * the transport's target, and every send's origin. */
+static PyObject *ta_python_address_of(ta_python_view *view, PyObject *text) {
+    if (!text || text == Py_None) return text;
+    PyObject *address = ta_python_address_from_text(view->host->state, text);
+    Py_DECREF(text);
+    return address;
+}
+
 static PyObject *ta_python_send_read(ta_python_view *view, int which) {
     if (view->fields[which]) return Py_NewRef(view->fields[which]);
     if (ta_python_view_live(view) < 0) return NULL;
@@ -83,13 +92,16 @@ static PyObject *ta_python_send_read(ta_python_view *view, int which) {
         break;
     case TA_PYTHON_SEND_SENDID: value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_SENDID, 1}); break;
     case TA_PYTHON_SEND_EVENT: value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_EVENT, 0}); break;
-    case TA_PYTHON_SEND_TARGET: value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_TARGET, 1}); break;
+    case TA_PYTHON_SEND_TARGET: /* another system's address for the transport (0), else the processor's text */
+        value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_TARGET, 1});
+        if (view->processor == 0) value = ta_python_address_of(view, value);
+        break;
     case TA_PYTHON_SEND_DATA: value = ta_python_effect_payload(view); break;
     case TA_PYTHON_SEND_TRACEPARENT: /* formatted by core on first ask; empty when untraced */
         value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_TRACEPARENT, 1});
         break;
     case TA_PYTHON_SEND_ORIGIN: /* the sender's address, formatted by core on first ask */
-        value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_ORIGIN, 1});
+        value = ta_python_address_of(view, ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_ORIGIN, 1}));
         break;
     default: { /* the I/O processor's type; None for the transport or an invoked service */
         PyObject *row = ta_python_processor_row(view->host, view->processor);
@@ -173,6 +185,22 @@ TA_PYTHON_GETTER(send, target, TA_PYTHON_SEND_TARGET)
 TA_PYTHON_GETTER(send, data, TA_PYTHON_SEND_DATA)
 TA_PYTHON_GETTER(send, traceparent, TA_PYTHON_SEND_TRACEPARENT)
 TA_PYTHON_GETTER(send, type, TA_PYTHON_SEND_TYPE)
+
+/* send.message: the outgoing half of a send between systems, the value
+ * Host.send takes on the other side (the fields of ta_event_in). */
+static PyObject *ta_python_send_message(PyObject *self, void *closure) {
+    (void)closure;
+    static const char *const keys[] = {"target", "event", "data", "sendid", "origin", "traceparent"};
+    static const int fields[] = {TA_PYTHON_SEND_TARGET, TA_PYTHON_SEND_EVENT,  TA_PYTHON_SEND_DATA,
+                                 TA_PYTHON_SEND_SENDID, TA_PYTHON_SEND_ORIGIN, TA_PYTHON_SEND_TRACEPARENT};
+    PyObject *message = PyDict_New();
+    for (int i = 0; message && i < 6; i++) {
+        PyObject *value = ta_python_send_read((ta_python_view *)self, fields[i]);
+        if (!value || PyDict_SetItemString(message, keys[i], value) < 0) Py_CLEAR(message);
+        Py_XDECREF(value);
+    }
+    return message;
+}
 TA_PYTHON_GETTER(send, origin, TA_PYTHON_SEND_ORIGIN)
 TA_PYTHON_GETTER(entry, session, TA_PYTHON_ENTRY_SESSION)
 TA_PYTHON_GETTER(entry, label, TA_PYTHON_ENTRY_LABEL)
@@ -292,6 +320,7 @@ static PyGetSetDef ta_python_send_properties[] = {
     {"traceparent", ta_python_send_traceparent, NULL, ta_python_doc_send_traceparent, NULL},
     {"type", ta_python_send_type, NULL, ta_python_doc_send_type, NULL},
     {"origin", ta_python_send_origin, NULL, ta_python_doc_send_origin, NULL},
+    {"message", ta_python_send_message, NULL, ta_python_doc_send_message, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 

@@ -77,6 +77,58 @@ static PyObject *ta_python_address_text(ta_python_address *self, void *closure) 
     return Py_NewRef(self->text);
 }
 
+/* The address's parts, read by core's parser (ta_address_parse): 1 parsed,
+ * 0 not a tinyactors address, -1 with an exception. */
+static int ta_python_address_parts(ta_python_address *self, ta_address *out) {
+    Py_ssize_t size = 0;
+    const char *text = PyUnicode_AsUTF8AndSize(self->text, &size);
+    if (text == NULL) return -1;
+    return ta_address_parse((ta_string_view){text, (uint32_t)size}, out) == TA_OK;
+}
+
+/* .system: the system id; None when the text is no address. */
+static PyObject *ta_python_address_system(ta_python_address *self, void *closure) {
+    (void)closure;
+    ta_address parts;
+    int parsed = ta_python_address_parts(self, &parts);
+    if (parsed < 0) return NULL;
+    return parsed ? PyUnicode_FromStringAndSize(parts.system.pointer, (Py_ssize_t)parts.system.length)
+                  : Py_NewRef(Py_None);
+}
+
+/* .session: the session id of a #_scxml_<id> address; None otherwise. */
+static PyObject *ta_python_address_session(ta_python_address *self, void *closure) {
+    (void)closure;
+    ta_address parts;
+    int parsed = ta_python_address_parts(self, &parts);
+    if (parsed < 0) return NULL;
+    return parsed && parts.kind == TA_ADDRESS_SESSION ? PyLong_FromUnsignedLongLong(parts.session)
+                                                      : Py_NewRef(Py_None);
+}
+
+/* .name: the decoded name of an @<name> address; None otherwise. The name
+ * decodes in place of a bytes object of its encoded length (a decoded
+ * name is never longer), then as UTF-8. */
+static PyObject *ta_python_address_name(ta_python_address *self, void *closure) {
+    (void)closure;
+    ta_address parts;
+    int parsed = ta_python_address_parts(self, &parts);
+    if (parsed < 0) return NULL;
+    if (!parsed || parts.kind != TA_ADDRESS_NAME) return Py_NewRef(Py_None);
+    PyObject *bytes = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)parts.name.length);
+    char *room = bytes ? PyBytes_AsString(bytes) : NULL;
+    PyObject *name = NULL;
+    if (room) {
+        ta_buffer out = {room, parts.name.length, 0};
+        if (ta_address_name_decode(parts.name, &out) == TA_OK)
+            name = PyUnicode_DecodeUTF8(room, (Py_ssize_t)out.length, "strict");
+        else
+            PyErr_SetString(PyExc_ValueError, "the address's name does not decode");
+    }
+    Py_XDECREF(bytes);
+    return name;
+}
+
 /* str(Address) is for displaying or explicitly extracting its address.
  * It does not change the value's tagged encoding. */
 static PyObject *ta_python_address_str(ta_python_address *self) {
@@ -106,6 +158,9 @@ static PyObject *ta_python_address_compare(PyObject *left, PyObject *right, int 
 
 static PyGetSetDef ta_python_address_properties[] = {
     {"text", (getter)ta_python_address_text, NULL, ta_python_doc_address_text, NULL},
+    {"system", (getter)ta_python_address_system, NULL, ta_python_doc_address_system, NULL},
+    {"session", (getter)ta_python_address_session, NULL, ta_python_doc_address_session, NULL},
+    {"name", (getter)ta_python_address_name, NULL, ta_python_doc_address_name, NULL},
     {NULL, NULL, NULL, NULL, NULL}
 };
 

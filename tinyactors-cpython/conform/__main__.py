@@ -87,7 +87,7 @@ class Adapter:
     def transport(self, host, send):
         """A send to another system: kept for host.run, its data written
         with the binding's own codec (no data reads as None, null's CBOR)."""
-        self.sends.append({"target": send.target, "event": send.event, "origin": send.origin,
+        self.sends.append({"target": send.target.text, "event": send.event, "origin": send.origin.text,
                            "data": tinyactors.encode(send.data)})
 
     def need_host(self):

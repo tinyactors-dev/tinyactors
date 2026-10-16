@@ -363,23 +363,61 @@ class OtherSystems(unittest.TestCase):
             session = host.spawn(host.chart("talker"), name="talker")
             host.send(session, "call")
             host.run_until_idle()
-            self.assertEqual(sends, [("tinyactors://b/#_scxml_5", "hello", "tinyactors://a/#_scxml_%d" % session,
-                                      {"n": 41}, None)])
+            self.assertEqual(sends, [(tinyactors.Address("tinyactors://b/#_scxml_5"), "hello",
+                                      tinyactors.Address("tinyactors://a/#_scxml_%d" % session), {"n": 41}, None)])
             sends.clear()
             host.send("tinyactors://a/@talker", "hello", [1], origin="tinyactors://b/#_scxml_5")
             host.run_until_idle()
             self.assertEqual(logs.labelled("got"), ["tinyactors://b/#_scxml_5 %s [1]" % self.SCXML])
-            self.assertEqual([(target, event) for target, event, *_ in sends], [("tinyactors://b/#_scxml_5", "thanks")])
+            self.assertEqual([(target.text, event) for target, event, *_ in sends], [("tinyactors://b/#_scxml_5", "thanks")])
             host.send("tinyactors://a/#_scxml_%d" % session, "hello", origin="tinyactors://c/@x")
             host.run_until_idle()
             self.assertEqual(logs.labelled("got")[-1], "tinyactors://c/@x %s None" % self.SCXML)
+
+    def test_a_message_crosses_whole_and_a_failure_is_reported_by_fail(self):
+        """send.message is what Host.send takes on the other side: every
+        field, the sendid included; a failure comes back through Host.fail."""
+        messages, logs = [], Logs()
+
+        def transport(host, send):
+            messages.append(tinyactors.decode(tinyactors.encode(send.message)))  # through a wire
+
+        config = {"systemID": "a", "system": {"ticksPerSecond": 1000}}
+        with tinyactors.Host(config, log=logs, clock=tinyactors.SimulatedClock(), transport=transport) as host:
+            with tinyactors.compile_charts([("remote.scxml", fixture("test_host/remote.python.scxml"))]) as compiled:
+                host.add_image(compiled.image)
+            session = host.spawn(host.chart("talker"), name="talker")
+            host.send(session, "call")
+            host.run_until_idle()
+            (message,) = messages
+            self.assertEqual(set(message), {"target", "event", "data", "sendid", "origin", "traceparent"})
+            self.assertEqual((message["target"].system, message["target"].session), ("b", 5))
+            self.assertEqual(message["origin"], tinyactors.Address("tinyactors://a/#_scxml_%d" % session))
+            self.assertEqual(message["sendid"], "h1")
+            # the other side's answer, as a message to our talker: unknown keys are ignored
+            host.send({"target": message["origin"], "event": "hello", "data": [2], "sendid": "r1",
+                       "origin": message["target"], "a later key": True})
+            host.run_until_idle()
+            self.assertEqual(logs.labelled("got")[-1], "tinyactors://b/#_scxml_5 %s [2]" % self.SCXML)
+            host.fail(message["origin"], message["sendid"])
+            host.run_until_idle()
+            self.assertEqual(logs.labelled("failed"), ["error.communication h1"])
+
+    def test_an_address_has_parts(self):
+        Address = tinyactors.Address
+        self.assertEqual((Address("tinyactors://b/#_scxml_5").system, Address("tinyactors://b/#_scxml_5").session,
+                          Address("tinyactors://b/#_scxml_5").name), ("b", 5, None))
+        self.assertEqual((Address("tinyactors://tab-7f3/@p%C3%B6ng").session,
+                          Address("tinyactors://tab-7f3/@p%C3%B6ng").name), (None, "pöng"))
+        self.assertEqual((Address("http://x/").system, Address("http://x/").session, Address("http://x/").name),
+                         (None, None, None))
 
     def test_without_a_transport_the_sender_is_told(self):
         logs = Logs()
         with self.host([], logs, transport=False) as host:
             host.send(host.spawn(host.chart("talker"), name="talker"), "call")
             host.run_until_idle()
-            self.assertEqual(logs.labelled("failed"), ["error.communication"])
+            self.assertEqual(logs.labelled("failed"), ["error.communication h1"])
 
     def test_an_async_transport_needs_async_with(self):
         async def transport(host, send):

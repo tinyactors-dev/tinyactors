@@ -681,29 +681,54 @@ browser, HTTP) is your program's choice. A chart addresses another system
 with an ordinary SCXML target, `tinyactors://<systemID>/#_scxml_<n>` or
 `tinyactors://<systemID>/@<name>`. The host delivers a target in its own
 system itself. Every other target goes to the host's transport, a
-handler you pass as `transport=`; it needs nothing in the config:
+handler you pass as `transport=`; it needs nothing in the config.
+
+A send between systems is one message in two halves. The sending host
+hands your transport the outgoing half as `send.message`, a dict of the
+target, event, data, sendid, origin and traceparent. The receiving host
+takes the same dict as its incoming half, `host.send(message)`. Your code
+only moves the dict:
 
 ```python
-def transport(host, send):       # every send to another system
-    queue_for(send.target).put((send.target, send.event, send.data, send.origin))
+links = {}                                   # system id -> a connection of yours
+
+def transport(host, send):                   # the outgoing half
+    link = links.get(send.target.system)
+    if link is None:
+        send.fail()                          # no connection: error.communication
+    else:
+        link.write(tinyactors.encode(send.message))
 
 host = tinyactors.Host({"systemID": "a"}, transport=transport)
+
+def on_frame(link, frame):                   # the incoming half, on the other side
+    message = tinyactors.decode(frame)
+    if message["origin"].system != link.system:   # trust is yours: who may claim what
+        return
+    try:
+        host.send(message)                   # every field arrives, the sendid included
+    except tinyactors.TinyactorsError:       # no such actor here: tell the sender
+        link.write(tinyactors.encode({"failed": message["origin"], "sendid": message["sendid"]}))
 ```
 
-The other side delivers it as an input, by address, with the sender's
-address as `origin`, so a chart's reply to `_event.origin` goes back the
-same way:
+A chart's reply to `_event.origin` goes back the same way. `send.target`
+and `send.origin` are `Address` values: `.system`, `.session` and `.name`
+give their parts, so neither you nor the binding parses an address.
+`host.send(message)` ignores keys it does not know, so a newer peer can
+add one.
 
-```python
-target, event, data, origin = queue.get()
-other.send(target, event, data, origin=origin)   # _event.origintype is SCXML's
-```
+A failure is never part of a message. When the other side reports one,
+and you decide to believe it, call `host.fail(address, sendid)`: the
+sending actor gets `error.communication` with that sendid. A peer whose
+reports you accept without checking can give your actors any error, so
+take failures only from the connection the send went out on. A send
+the transport accepted needs no answer, and inside the handler
+`send.fail()` reports a failure directly.
 
-A send the transport accepted needs no answer. One it cannot deliver
-calls `send.fail()`, and the sender gets `error.communication`. The data
-is a Python value; encode it for the wire as you like, for example with
-`tinyactors.encode`. Without a transport, each send to another system
-fails, and its sender gets `error.communication`.
+The data is a Python value; encode the message for the wire as you like.
+`tinyactors.encode` gives the value table's CBOR, which every binding
+reads, `Address` values included. Without a transport, each send to
+another system fails, and its sender gets `error.communication`.
 
 ## Values
 
@@ -879,7 +904,8 @@ how to use it.
 | `Host(config, io_processors=None, *, log, clock, telemetry, wake, migrated, services, migration_done, transport)` | a host, with its handlers (`transport`: every send to another system); a context manager for `with` and `async with` |
 | `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs an image; the current version of a chart |
 | `spawn(ref, name=None, params=None, traceparent=None) -> session` | starts an actor |
-| `send(target, event, data=None, *, traceparent=None, origin=None)` | gives an actor an event; `target` is a session or a local address |
+| `send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)`, `send(message)` | gives an actor an event; `target` is a session or a local address; a message is another system's `send.message` |
+| `fail(target, sendid=None)` | reports a send that could not be delivered: `error.communication` for its sender |
 | `send_many([(target, event, data, traceparent), ...]) -> accepted` | many sends in one call; returns how many were accepted |
 | `terminate(session)`, `boot(segment)`, `actor_by_name(name)` | ends an actor; spawns an image's boot actors; finds a named actor (`None` when there is none) |
 | `run_until_idle()`, `run()`, `await idle()`, `next_deadline` | the drivers (above, "Drivers and time") |

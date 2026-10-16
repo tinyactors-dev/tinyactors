@@ -116,7 +116,9 @@ Decided by the maintainer (2026-10-13); every item is in
   segment and the chart index.
 - **`host.spawn(ref, name=None, params=None, traceparent=None) -> int`**
   (`ta_host_spawn`, `ta_spawn`), **`host.send(session, event, data=None,
-  *, traceparent=None)`** (`ta_host_send`), **`host.send_many(items) ->
+  *, sendid=None, traceparent=None, origin=None)`** (`ta_host_send`; or
+  `host.send(message)`, below, "Other systems"), **`host.fail(target,
+  sendid=None)`**, **`host.send_many(items) ->
   int`** (`ta_host_send_many`: each item carries the arguments of `send`,
   `traceparent` included; it returns the length of the accepted prefix,
   `host.h:192-195`), **`host.terminate(session)`**
@@ -353,13 +355,23 @@ Decided by the maintainer (2026-10-13); every item is in
   `IO_PROCESSOR` 0 (the SCXML processor), as a `Send` view (`type` `None`;
   an `async def` handler is refused under `with`); it needs no config,
   and without a handler the binding fails each such send. Its
-  `send.origin` is `TA_EFFECT_FIELD_ORIGIN`, the sender's address. The
-  other side calls **`host.send(target, event, data, origin=...)`**, where
-  `target` may be a local address (`str`) that core resolves
+  `send.origin` is `TA_EFFECT_FIELD_ORIGIN`, the sender's address. A send
+  between systems is one message in two halves (ADR 0017, decision 4,
+  2026-10-16): **`send.message`** is the outgoing half, a dict of the
+  fields of `ta_event_in` (`target`, `event`, `data`, `sendid`, `origin`,
+  `traceparent`), and the other side's **`host.send(message)`** the
+  incoming half, which ignores keys it does not know; `host.send(target,
+  event, data, *, sendid, traceparent, origin)` is the same call with the
+  fields spelled out, `target` a session or a local address core resolves
   (`ta_host_resolve`) before the payload is made in the target session's
-  datamodel. Success needs no answer; `send.fail()` gives the sender
-  `error.communication`. No peers, envelopes or routes: the transport and
-  the wire encoding are the application's.
+  datamodel. A failure is never a key of a message: **`host.fail(target,
+  sendid)`** (`TA_EVENT_IN_ERROR_COMMUNICATION`) is the application's
+  explicit call, when it believes the other side; `send.fail()` does it
+  inside the handler. `send.origin`, and the transport's `send.target`,
+  are `Address` values, whose **`.system`, `.session`, `.name`** core's
+  parser reads (`ta_address_parse`; decision 5), so neither the binding
+  nor the application parses the grammar. No peers, envelopes or routes:
+  the transport, the wire encoding and trust are the application's.
 - **`log=handler(host, entry)`** gets this host's `<log>` lines
   (`TA_EFFECT_LOG`) as thin views of `(session, label, text)`, no chart
   (decided 2026-10-13). Without a handler, the lines are discarded.

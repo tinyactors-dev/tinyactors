@@ -1,8 +1,7 @@
 # ADR 0017: A host has one way out to other systems, and a sender waits for its send
 
-**Status:** Proposed (2026-10-16). Decisions 1 to 3 were decided by the
-maintainer on 2026-10-16 and are implemented; decisions 4 and 5 wait for
-the maintainer.
+**Status:** Accepted (2026-10-16). Every decision was decided by the
+maintainer on 2026-10-16 and is implemented.
 Amends [ADR 0014](0014-other-systems-are-an-io-processor.md) (decision 1's
 `"remote": true` processor) and replaces `TA_IO_PROCESSOR_SYNC`.
 **Date:** 2026-10-16
@@ -100,8 +99,7 @@ processor but its own unit test (`tests/unit/test_remote.c:43`, `:164`).
    flags and the descriptor's `flags` go (an I/O processor is a type and a
    location, `ta_io_processor_entry`), so it leaves `_ioprocessors` and
    stops working as a type.
-4. **A message between systems has one shape in every binding**
-   (proposed). The outgoing half, `send.message`, is a value of the value
+4. **A message between systems has one shape in every binding.** The outgoing half, `send.message`, is a value of the value
    table with the fields of `ta_event_in` (target, event, data, sendid,
    origin, traceparent); the incoming half, `host.send(message)`, takes
    that value and ignores keys it does not know, so keys are only ever
@@ -111,11 +109,12 @@ processor but its own unit test (`tests/unit/test_remote.c:43`, `:164`).
    `error.communication`. The shape is a value, not bytes: core writes
    nothing for another system (ADR 0014, decision 6), and the encoding is
    the application's.
-5. **An address has parts** (proposed): a binding's `Address` gives
+5. **An address has parts:** a binding's `Address` gives
    `.system`, `.session` and `.name`, read by `ta_address_parse`
    (`include/tinyactors/address.h`), so neither a binding nor an
    application parses the grammar; `send.target` and `send.origin` are
-   addresses.
+   addresses (`send.target` for the transport: an I/O processor's target
+   is whatever text the chart wrote, so it stays text).
 
 ## Consequences
 

@@ -855,14 +855,21 @@ static PyObject *ta_python_host_spawn(PyObject *self, PyObject *arguments, PyObj
 
 /* An event of send or send_many: fills `event` and its payload. */
 typedef struct ta_python_send_item {
-    PyObject *target, *name, *data, *traceparent, *origin;
+    PyObject *target, *name, *data, *traceparent, *origin, *sendid;
     uint32_t datamodel; /* out: the payload's */
 } ta_python_send_item;
+
+/* An Address given where core takes an address's text: its text. */
+static PyObject *ta_python_unwrap_address(ta_python_host *host, PyObject *value) {
+    return value && Py_IS_TYPE(value, (PyTypeObject *)host->state->address_type) ? ((ta_python_address *)value)->text
+                                                                                    : value;
+}
 
 /* A send's target: a session, or a local address core resolves to one
  * (ta_host_resolve), before the payload is made in that session's
  * datamodel. */
 static int ta_python_target(ta_python_host *host, PyObject *target, uint64_t *session) {
+    target = ta_python_unwrap_address(host, target);
     if (!PyUnicode_Check(target)) return ta_python_session(target, session);
     ta_string_view address;
     if (ta_python_text(target, &address) < 0) return -1;
@@ -879,7 +886,9 @@ static int ta_python_event(ta_python_host *host, ta_python_send_item *item, ta_e
     event->size = sizeof *event;
     item->datamodel = TA_NIL;
     if (ta_python_target(host, item->target, &event->session) < 0 ||
-        ta_python_text(item->traceparent, &event->traceparent) < 0 || ta_python_text(item->origin, &event->origin) < 0)
+        ta_python_text(item->traceparent, &event->traceparent) < 0 ||
+        ta_python_text(ta_python_unwrap_address(host, item->origin), &event->origin) < 0 ||
+        ta_python_text(item->sendid, &event->sendid) < 0)
         return -1;
     if (!PyUnicode_Check(item->name)) {
         PyErr_SetString(PyExc_TypeError, "an event's name is a str");
@@ -893,21 +902,69 @@ static int ta_python_event(ta_python_host *host, ta_python_send_item *item, ta_e
     return 0;
 }
 
+/* A message from another system, the dict send.message gives: its known
+ * keys into `item`, each a reference in `held` (released by the caller), the
+ * others ignored, so a newer sender's keys do not break an older host. */
+#define TA_PYTHON_MESSAGE_KEYS 6
+static int ta_python_message_item(PyObject *message, ta_python_send_item *item, PyObject **held) {
+    static const char *const keys[] = {"target", "event", "data", "sendid", "origin", "traceparent"};
+    PyObject **slots[] = {&item->target, &item->name, &item->data, &item->sendid, &item->origin, &item->traceparent};
+    for (int i = 0; i < TA_PYTHON_MESSAGE_KEYS; i++) {
+        if (PyDict_GetItemStringRef(message, keys[i], &held[i]) < 0) return -1;
+        if (held[i]) *slots[i] = held[i];
+    }
+    if (!item->target || !item->name) {
+        PyErr_SetString(PyExc_TypeError, "a message has a target and an event");
+        return -1;
+    }
+    return 0;
+}
+
 static PyObject *ta_python_host_send(PyObject *self, PyObject *arguments, PyObject *keywords) {
-    static char *const names[] = {"target", "event", "data", "traceparent", "origin", NULL};
+    static char *const names[] = {"target", "event", "data", "sendid", "traceparent", "origin", NULL};
     ta_python_host *host = (ta_python_host *)self;
-    ta_python_send_item item = {NULL, NULL, Py_None, Py_None, Py_None, TA_NIL};
-    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "OO|O$OO:send", names, &item.target, &item.name, &item.data,
-                                     &item.traceparent, &item.origin))
-        return NULL;
+    ta_python_send_item item = {NULL, NULL, Py_None, Py_None, Py_None, Py_None, TA_NIL};
+    PyObject *held[TA_PYTHON_MESSAGE_KEYS] = {NULL};
+    PyObject *result = NULL;
+    int parsed = PyTuple_Size(arguments) == 1 && (!keywords || !PyDict_Size(keywords)) &&
+                         PyDict_Check(PyTuple_GetItem(arguments, 0)) /* send(message) */
+                     ? ta_python_message_item(PyTuple_GetItem(arguments, 0), &item, held) == 0
+                     : PyArg_ParseTupleAndKeywords(arguments, keywords, "OO|O$OOO:send", names, &item.target,
+                                                   &item.name, &item.data, &item.sendid, &item.traceparent,
+                                                   &item.origin);
+    ta_python_call call;
+    if (parsed && ta_python_enter(host, &call) == 0) {
+        ta_event_in event;
+        if (ta_python_event(host, &item, &event) == 0) {
+            ta_status status = ta_host_send(host->host, &event);
+            if (status != TA_OK) ta_python_host_payload_release(host, event.data, item.datamodel);
+            else ta_python_loop_schedule(host);
+            result = ta_python_host_status(host, status);
+        }
+        ta_python_leave(&call);
+    }
+    for (int i = 0; i < TA_PYTHON_MESSAGE_KEYS; i++) Py_XDECREF(held[i]);
+    return result;
+}
+
+/* fail(target, sendid=None): a send the application's transport could not
+ * deliver, reported to its sender (error.communication with the sendid),
+ * when the application decides to believe the other side. */
+static PyObject *ta_python_host_fail(PyObject *self, PyObject *arguments, PyObject *keywords) {
+    static char *const names[] = {"target", "sendid", NULL};
+    ta_python_host *host = (ta_python_host *)self;
+    PyObject *target, *sendid = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(arguments, keywords, "O|O:fail", names, &target, &sendid)) return NULL;
     ta_python_call call;
     if (ta_python_enter(host, &call) < 0) return NULL;
     PyObject *result = NULL;
     ta_event_in event;
-    if (ta_python_event(host, &item, &event) == 0) {
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
+    if (ta_python_target(host, target, &event.session) == 0 && ta_python_text(sendid, &event.sendid) == 0) {
         ta_status status = ta_host_send(host->host, &event);
-        if (status != TA_OK) ta_python_host_payload_release(host, event.data, item.datamodel);
-        else ta_python_loop_schedule(host);
+        if (status == TA_OK) ta_python_loop_schedule(host);
         result = ta_python_host_status(host, status);
     }
     ta_python_leave(&call);
@@ -943,7 +1000,7 @@ static Py_ssize_t ta_python_send_slice(ta_python_host *host, const ta_python_sli
             }
             ta_python_send_item item = {PyTuple_GetItem(entry, 0), PyTuple_GetItem(entry, 1),
                                         size > 2 ? PyTuple_GetItem(entry, 2) : Py_None,
-                                        size > 3 ? PyTuple_GetItem(entry, 3) : Py_None, Py_None, TA_NIL};
+                                        size > 3 ? PyTuple_GetItem(entry, 3) : Py_None, Py_None, Py_None, TA_NIL};
             if (ta_python_event(host, &item, &events[made]) < 0) break;
             datamodels[made] = item.datamodel;
         }
@@ -1457,6 +1514,8 @@ static PyMethodDef ta_python_host_methods[] = {
      ta_python_doc_host_spawn},
     {"send", (PyCFunction)(void (*)(void))ta_python_host_send, METH_VARARGS | METH_KEYWORDS,
      ta_python_doc_host_send},
+    {"fail", (PyCFunction)(void (*)(void))ta_python_host_fail, METH_VARARGS | METH_KEYWORDS,
+     ta_python_doc_host_fail},
     {"send_many", ta_python_host_send_many, METH_O,
      ta_python_doc_host_send_many},
     {"terminate", ta_python_host_terminate, METH_O, ta_python_doc_host_terminate},

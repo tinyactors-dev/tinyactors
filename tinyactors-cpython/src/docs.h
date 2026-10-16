@@ -280,22 +280,42 @@ static const char ta_python_doc_host_spawn[] =
     "next turn. To start the actors an image declares, use Host.boot.";
 
 static const char ta_python_doc_host_send[] =
-    "send(target, event, data=None, *, traceparent=None, origin=None)\n"
+    "send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)\n"
     "--\n"
     "\n"
     "Give an actor the external event `event` with optional `data` (a value\n"
     "of the value table, as a Python object). `target` is its session (an\n"
-    "int), or a local address (a str, tinyactors://<this systemID>/#_scxml_<n>\n"
-    "or .../@<name>), which the host resolves.\n"
+    "int), or a local address (an Address, or a str: tinyactors://<this\n"
+    "systemID>/#_scxml_<n> or .../@<name>), which the host resolves.\n"
+    "\n"
+    "send(message) takes a message from another system, the dict the other\n"
+    "side's send.message gave (decoded from your wire): its target, event,\n"
+    "data, sendid, origin and traceparent; keys it does not know are\n"
+    "ignored. A failure is never part of a message: see Host.fail.\n"
     "\n"
     "Applied at the call: the event waits in the actor's mailbox and runs in\n"
     "the next turn; a hibernated actor's wake handler is called first.\n"
+    "`sendid` becomes _event.sendid (the sender's <send id>).\n"
     "`traceparent` continues your caller's trace. `origin` is the sender's\n"
     "address when the event comes from another system (what its transport\n"
     "handed over as send.origin): it becomes _event.origin, a\n"
     "chart's reply goes back there, and _event.origintype is SCXML's. Refused\n"
     "with TinyactorsError when the target does not exist (TA_ERROR_STALE),\n"
     "is another system's address (TA_ERROR_INVALID) or the host is full.";
+
+static const char ta_python_doc_host_fail[] =
+    "fail(target, sendid=None)\n"
+    "--\n"
+    "\n"
+    "Report that a send could not be delivered: the sending actor `target`\n"
+    "(a session, or its local address, such as a message's origin) gets\n"
+    "error.communication with `sendid`.\n"
+    "\n"
+    "Use it when the other side of your transport says a send failed (the\n"
+    "target did not exist, the connection broke), and only for failures you\n"
+    "decide to believe: a peer that can make you call it can give your\n"
+    "actors any error. Inside a transport or I/O processor handler,\n"
+    "send.fail() does the same for that send.";
 
 static const char ta_python_doc_host_send_many[] =
     "send_many(items, /)\n"
@@ -707,7 +727,9 @@ static const char ta_python_doc_send_event[] =
     "The event's name (str).";
 
 static const char ta_python_doc_send_target[] =
-    "The <send>'s target (str or None): an address for your transport.";
+    "The <send>'s target: for the transport, another system's Address (its\n"
+    ".system names the connection to use); for an I/O processor, the text\n"
+    "the chart wrote (str or None).";
 
 static const char ta_python_doc_send_data[] =
     "The event's data as a Python value: for a \"python\" chart the value\n"
@@ -721,9 +743,17 @@ static const char ta_python_doc_send_type[] =
     "The I/O processor's type from the config (None for the transport or an invoked service).";
 
 static const char ta_python_doc_send_origin[] =
-    "The sending actor's address, tinyactors://<systemID>/#_scxml_<session>: what\n"
-    "a transport hands the other system, whose Host.send takes it\n"
-    "as origin so a reply finds its way back.";
+    "The sending actor's Address, tinyactors://<systemID>/#_scxml_<session>:\n"
+    "what a transport hands the other system, whose Host.send takes it as\n"
+    "origin so a reply finds its way back.";
+
+static const char ta_python_doc_send_message[] =
+    "The outgoing half of a send to another system, as a dict: target,\n"
+    "event, data, sendid, origin and traceparent. Encode it for your wire\n"
+    "(tinyactors.encode, or your own) and give it to the other host's\n"
+    "Host.send(message) unchanged: no field is lost on the way, and the\n"
+    "keys are the same in every binding. Read it inside the handler: a\n"
+    "thin view's fields end at the batch's ack, the dict does not.";
 
 static const char ta_python_doc_send_answer[] =
     "answer(event, data=None, *, traceparent=send.traceparent, origin=None,\n"
@@ -872,13 +902,24 @@ static const char ta_python_doc_address[] =
     "Charts and other programs pass addresses as data (a reply-to, a\n"
     "subscriber list); when such a value comes from an ECMAScript chart or\n"
     "another process it arrives as an Address, and an Address you put in data\n"
-    "reaches them as one. To send to an address, give its text to Host.send.\n"
-    "`text` must be an exact str of valid UTF-8; it is not parsed or checked\n"
-    "here. Use .text or str(value) to read it. Equality and hashing use the\n"
-    "text, among Address values only; subclasses are refused.";
+    "reaches them as one. Host.send and Host.fail take one as a target.\n"
+    "`text` must be an exact str of valid UTF-8; the constructor does not\n"
+    "check it. Use .text or str(value) to read it, and .system, .session and\n"
+    ".name for its parts, which core's address parser reads. Equality and\n"
+    "hashing use the text, among Address values only; subclasses are refused.";
 
 static const char ta_python_doc_address_text[] =
     "The address text (read-only).";
+
+static const char ta_python_doc_address_system[] =
+    "The system id of tinyactors://<system>/...: which system, so which\n"
+    "connection of your transport (None when the text is no address).";
+
+static const char ta_python_doc_address_session[] =
+    "The session id of a .../#_scxml_<id> address (an int), or None.";
+
+static const char ta_python_doc_address_name[] =
+    "The decoded name of a .../@<name> address (a str), or None.";
 
 static const char ta_python_doc_undefined[] =
     "The value table's undefined, distinct from None (null): what an\n"
