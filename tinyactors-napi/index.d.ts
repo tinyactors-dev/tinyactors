@@ -88,7 +88,8 @@ export interface Diagnostic {
   readonly message: string;
 }
 
-/** A compilation found an error; nothing was compiled. */
+/** A compilation found an error; nothing was compiled. Its message is the
+ * first error as a compiler prints it: `file:line:column: error: message`. */
 export class CompileError extends TinyactorsError {
   /** Every diagnostic of the compilation: errors, warnings and notes. */
   readonly diagnostics: readonly Diagnostic[];

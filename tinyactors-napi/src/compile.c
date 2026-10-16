@@ -94,10 +94,12 @@ static napi_value ta_napi_diagnostic(napi_env env, const ta_diagnostic *diagnost
     return object;
 }
 
-/* "file:line:column: message" of a diagnostic, in `arena`; NULL when the
- * arena refused. */
+/* "file:line:column: error: message" of an error, as a compiler prints it
+ * (and as Python's CompileError reads), in `arena`; NULL when the arena
+ * refused. */
 static napi_value ta_napi_located(napi_env env, const ta_diagnostic *first, ta_growable_arena *arena) {
-    size_t length = first->file.length + first->message.length + 2 * 10 + 4;
+    static const char severity[] = " error: ";
+    size_t length = first->file.length + first->message.length + 2 * 10 + 2 + sizeof severity;
     char *text = (char *)ta_growable_arena_alloc(arena, length, 1);
     if (text == NULL) return NULL;
     size_t at = 0;
@@ -113,7 +115,8 @@ static napi_value ta_napi_located(napi_env env, const ta_diagnostic *first, ta_g
         while (count > 0) text[at++] = digits[--count];
     }
     text[at++] = ':';
-    text[at++] = ' ';
+    memcpy(text + at, severity, sizeof severity - 1);
+    at += sizeof severity - 1;
     if (first->message.length) memcpy(text + at, first->message.pointer, first->message.length);
     at += first->message.length;
     napi_value message;

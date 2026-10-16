@@ -46,7 +46,7 @@ test('an error throws CompileError with every diagnostic', () => {
     equal(diagnostic.line, 3, 'line');
     for (const key of ['code', 'column']) equal(typeof diagnostic[key], 'number', key);
     if (!diagnostic.message.includes('nowhere')) throw new Error(`message: ${diagnostic.message}`);
-    equal(error.message, `bad.scxml:3:${diagnostic.column}: ${diagnostic.message}`, 'the message, as a compiler prints it');
+    equal(error.message, `bad.scxml:3:${diagnostic.column}: error: ${diagnostic.message}`, 'the message, as a compiler prints it (and as Python reads)');
   }, 'a chart with an unknown target');
 });
 
