@@ -1021,6 +1021,89 @@ static napi_value ta_napi_host_wake(napi_env env, napi_callback_info info) {
     return result;
 }
 
+/* ---- migration: actors move to the current version of their chart ----------------- */
+
+/* migrate's options (`given`, an object or undefined), read for `host`. */
+typedef struct ta_napi_migrate_in {
+    ta_napi_host *host;
+    napi_value given;
+} ta_napi_migrate_in;
+
+/* migrate's options read into `request`; false with an exception thrown. */
+static bool ta_napi_migration_of(napi_env env, const ta_napi_migrate_in *call, ta_host_migration *request) {
+    static const char *const names[] = {"chart", "session", "wake", "timeout"};
+    napi_value given = call->given;
+    memset(request, 0, sizeof *request);
+    if (ta_napi_is(env, given, napi_undefined)) return true;
+    if (!ta_napi_is(env, given, napi_object)) {
+        napi_throw_type_error(env, NULL, "migrate takes an object of chart, session, wake, timeout, or nothing");
+        return false;
+    }
+    if (!ta_napi_only_known(env, given, &(ta_napi_known){"migrate option", names, 4})) return false;
+    ta_napi_options options = {given};
+    napi_value chart = ta_napi_option(env, &options, "chart"), session = ta_napi_option(env, &options, "session");
+    napi_value wake = ta_napi_option(env, &options, "wake"), timeout = ta_napi_option(env, &options, "timeout");
+    if (!ta_napi_is(env, chart, napi_undefined)) {
+        ta_napi_text name = {&call->host->arena, "migrate's chart is a chart's name, a string", {NULL, 0}};
+        if (!ta_napi_text_of(env, chart, &name)) return false;
+        if (name.view.length == 0) { /* core reads an empty name as every chart */
+            napi_throw_range_error(env, NULL, "migrate's chart is a chart's name; leave it out for every chart");
+            return false;
+        }
+        request->name = name.view;
+    }
+    if (!ta_napi_is(env, session, napi_undefined) && !ta_napi_session_of(env, session, &request->session)) return false;
+    if (!ta_napi_is(env, wake, napi_undefined)) {
+        bool on = false;
+        if (!ta_napi_is(env, wake, napi_boolean) || napi_get_value_bool(env, wake, &on) != napi_ok) {
+            napi_throw_type_error(env, NULL, "migrate's wake is a boolean");
+            return false;
+        }
+        request->flags = on ? TA_HOST_MIGRATE_WAKE : 0;
+    }
+    if (!ta_napi_is(env, timeout, napi_undefined)) {
+        double milliseconds = -1;
+        if (!ta_napi_is(env, timeout, napi_number) || napi_get_value_double(env, timeout, &milliseconds) != napi_ok) {
+            napi_throw_type_error(env, NULL, "migrate's timeout is a number of milliseconds");
+            return false;
+        }
+        double nanoseconds = milliseconds * 1e6 + 0.5;
+        if (!(milliseconds >= 0) || !(nanoseconds < 18446744073709551616.0)) { /* NaN, negative, 2^64 and infinity */
+            napi_throw_range_error(env, NULL, "migrate's timeout is milliseconds, not negative, below 2^64 nanoseconds");
+            return false;
+        }
+        request->timeout = ta_napi_ticks_after(call->host, (uint64_t)nanoseconds);
+    }
+    return true;
+}
+
+/* host.migrate({chart, session, wake, timeout}?) -> migration:
+ * ta_host_migrate of every chart (or `chart`, or one `session`), asking
+ * the wake handler for hibernated actors with `wake`
+ * (TA_HOST_MIGRATE_WAKE: a WAKE each), ending after `timeout` milliseconds
+ * of the host's clock, as ticks rounded up and counted from the clock
+ * advanced now (0: none). The migration moves actors in later runs, so a
+ * turn is scheduled; the host's migrationDone handler gets its end. */
+static napi_value ta_napi_host_migrate(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value result = NULL;
+    ta_host_migration request;
+    if (ta_napi_migration_of(env, &(ta_napi_migrate_in){call.host, arguments.argv[0]}, &request)) {
+        ta_napi_advance(env, call.host); /* the timeout counts from the host's clock now */
+        uint32_t migration = 0;
+        ta_status status = ta_host_migrate(call.host->host, &request, &migration);
+        if (status != TA_OK) ta_napi_throw(env, &(ta_napi_refusal){status, "the migration was refused"});
+        else {
+            ta_napi_schedule(env, call.host); /* the migration moves actors in the next runs */
+            napi_create_uint32(env, migration, &result);
+        }
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
 /* The options of spawn and send: an object of `names` or undefined. */
 static bool ta_napi_input_options(napi_env env, napi_value value, const ta_napi_known *known) {
     if (ta_napi_is(env, value, napi_undefined)) return true;
@@ -1321,6 +1404,7 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"sweep", NULL, ta_napi_host_sweep, NULL, NULL, NULL, napi_default_method, NULL},
         {"hibernate", NULL, ta_napi_host_hibernate, NULL, NULL, NULL, napi_default_method, NULL},
         {"wake", NULL, ta_napi_host_wake, NULL, NULL, NULL, napi_default_method, NULL},
+        {"migrate", NULL, ta_napi_host_migrate, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, dispose, ta_napi_host_close, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, async_dispose, ta_napi_host_async_dispose, NULL, NULL, NULL, napi_default_method, NULL},
     };

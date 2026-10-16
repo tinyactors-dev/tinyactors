@@ -337,6 +337,8 @@ class Scenario {
     this.judge = new Judge();
     this.clock = new SimulatedClock();
     this.blobs = new Map(); // the implementation's store (driver.md): hibernated actors' blobs
+    this.migrationsDone = []; // the results migrationDone got
+    this.migrationDone = (host, result) => this.migrationsDone.push(result);
     this.wake = (host, session) => {
       host.wake(session, this.blobs.get(session)); // WAKE: the actor's blob from the store
       this.blobs.delete(session);
@@ -357,11 +359,17 @@ class Scenario {
   }
 
   async run(steps) {
-    this.host = new Host(Scenario.CONFIG, { ...this.options, log: this.judge.log, clock: this.clock, wake: this.wake });
+    this.host = new Host(Scenario.CONFIG, {
+      ...this.options,
+      log: this.judge.log,
+      clock: this.clock,
+      wake: this.wake,
+      migrationDone: this.migrationDone,
+    });
     try {
       for (const step of steps) {
         try {
-          this.step(this.host, step);
+          await this.step(this.host, step);
           if (this.judge.outcome === undefined) await this.host.idle();
         } catch (error) {
           if (error instanceof CompileError) {
@@ -380,7 +388,7 @@ class Scenario {
     return this.judge.outcome ?? 'timeout';
   }
 
-  step(host, step) {
+  async step(host, step) {
     if ('image' in step) {
       const named = new Map(this.documents.map((document) => [document.name, document]));
       const missing = step.image.filter((name) => !named.has(name));
@@ -403,6 +411,12 @@ class Scenario {
     } else if ('hibernate' in step) {
       const session = this.session(step.hibernate);
       this.blobs.set(session, host.hibernate(session));
+    } else if ('migrate' in step) {
+      const ended = this.migrationsDone.length;
+      // ticksPerSecond 1000: the step's ticks are milliseconds
+      host.migrate({ wake: Boolean(step.migrate.wake), timeout: Number(step.migrate.timeout ?? 0) });
+      for (let i = 0; i < 100 && this.migrationsDone.length === ended; i++) await host.idle(); // until its MIGRATION_DONE, bounded as ta-conform's settles
+      if (this.migrationsDone.length === ended) throw new Refused('the migration did not end');
     } else {
       throw new Refused(`not in the binding's API yet: ${Object.keys(step).join(', ')}`);
     }

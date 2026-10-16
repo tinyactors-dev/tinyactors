@@ -476,6 +476,21 @@ d-dom, d-separate):
   stay in the payload table. `payload_serialize` writes the value table's
   CBOR (`TA_ERROR_UNSUPPORTED` outside it; `to_wire` keeps
   `TA_ERROR_INVALID`), and `payload_deserialize` reads as `from_wire`.
+- **Migration writes the session out too** (decided 2026-10-16, as the
+  Python binding's; docs/plan.xml, p2-migrate). A migration's export is
+  `serialize`, with `payload_serialize` for the payloads of the actor's
+  pending delayed sends, so what hibernation refuses a migration refuses
+  (the actor fails and stays on its version). `deserialize` keeps every
+  variable of the blob in the session's link as its `init`, where a
+  spawn's params wait, until the first event or `migrate` takes it, as
+  Python's `row->extra` holds them (no field in the session's row: the
+  link is the session's already). `migrate` answers them, exactly the old
+  chart's variables, as one payload copied into the shared context; on a
+  declaring session's global it also deletes the names the blob added
+  that the new chart's declarations did not make (`restore` keeps them on
+  the link as `added`). The new chart's scripts are instantiated in the
+  new context, not run: a `var` they declare is there, `undefined`, and
+  core initializes the new chart's added `<data>`.
 - **Measured cost per session** (`mise run measure`, 2026-10-16: x86_64
   Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3 with V8
   12.4, bun 1.4.1; 10,000 actors of a chart with three `<data>`, one of
@@ -601,8 +616,9 @@ file.
   `test/effects.test.mjs: 'a view read after its ack throws
   TA_ERROR_STALE; what was read stays'`, `'a view kept and used from a
   bare timer is stale there'` and `'a log entry not read in its handler
-  is stale after the ack'`; `test/compile.test.mjs: 'a first read of the
-  image after close() throws TA_ERROR_STALE'`.
+  is stale after the ack'`; `test/migration.test.mjs: 'the Migrated view:
+  fields on first read, stale after the ack'`; `test/compile.test.mjs: 'a
+  first read of the image after close() throws TA_ERROR_STALE'`.
 - **Marks nest** (a nested call leaves the outer call's arena memory
   intact). Tests: `test/rules.test.mjs: 'marks nest in the host's arena:
   an input whose data's getter calls the host keeps its own texts'`;
@@ -730,6 +746,13 @@ manages its development dependencies; the C toolchain is the root's.
   counts checked, on both datamodels under both runtimes. `mise run test`
   runs 20,000 actors with 100 resident; `mise run test --full` two million
   with 1000.
+- `mise run migration [--actors N] [--resident R] [--events E]`: the
+  migration gate (`tools/migration.mjs`): the same population of a
+  counter's version 1, at most R resident, moved to version 2 with
+  `migrate({wake: true})` while E events come, the migration's WAKEs woken
+  a batch at a time; every sampled count and version checked, none left
+  behind, version 1's segment retired. `mise run test` runs it as
+  `stress`'s fast and full sizes.
 - `mise run pack`: one prebuilt addon per platform package; it aborts
   until packaging is built.
 
@@ -783,7 +806,9 @@ test/                what the suite cannot see: liveness, workers, GC, refusals
 tools/lint/          rules/, tests/, utils/ (ast-grep)
 tools/measure.mjs    bytes per actor, node and bun, native and quickjs (mise run measure)
 tools/stress.mjs     hibernation under load, the rest in SQLite (mise run stress)
+tools/migration.mjs  live migration under load, the rest in SQLite (mise run migration)
+tools/store.mjs      what the two gates share: the SQLite store, a seeded generator
 mise/napi.rb         what the tasks share
-mise/tasks/          build, test, conform, lint, measure, stress, pack
+mise/tasks/          build, test, conform, lint, measure, stress, migration, pack
 build/               core's amalgamation and the addon (not in git)
 ```

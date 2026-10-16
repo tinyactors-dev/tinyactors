@@ -2,7 +2,7 @@
  * tinyactors-cpython/src/effects.c): dispatch of one effect of the open
  * batch, and the objects JavaScript sees of them.
  *
- * A thin view (a Send, a LogEntry) is a small object whose state is an
+ * A thin view (a Send, a LogEntry, a Migrated) is a small object whose state is an
  * array under the instance's `view` symbol: the Host's wrapper, the ack
  * count of its batch, the effect's index, the send's I/O processor, its
  * flags (record, answered, failed), then one slot per field, a hole until
@@ -46,8 +46,13 @@ enum {
 /* A LogEntry's fields. */
 enum { TA_NAPI_ENTRY_SESSION, TA_NAPI_ENTRY_LABEL, TA_NAPI_ENTRY_TEXT, TA_NAPI_ENTRY_COUNT };
 
+/* A Migrated's fields: the session, the segment and the chart (its name)
+ * it moved to, its migration. */
+enum { TA_NAPI_MIGRATED_SESSION, TA_NAPI_MIGRATED_SEGMENT, TA_NAPI_MIGRATED_CHART, TA_NAPI_MIGRATED_MIGRATION,
+       TA_NAPI_MIGRATED_COUNT };
+
 /* What a getter reads, its descriptor's data: the view's kind and field. */
-enum { TA_NAPI_KIND_SEND = 0, TA_NAPI_KIND_ENTRY = 1 };
+enum { TA_NAPI_KIND_SEND = 0, TA_NAPI_KIND_ENTRY = 1, TA_NAPI_KIND_MIGRATED = 2 };
 #define TA_NAPI_GETTER(kind, field) ((void *)(uintptr_t)(((kind) << 8) | (field)))
 
 /* A view as C reads it, for one call. */
@@ -233,6 +238,17 @@ static napi_value ta_napi_entry_field(napi_env env, const ta_napi_view *view, ui
     return ta_napi_effect_text(env, view, &(ta_napi_text_field){which, false});
 }
 
+/* A MIGRATED effect's field: the chart is EVENT's text, the numbers its
+ * own fields. */
+static napi_value ta_napi_migrated_field(napi_env env, const ta_napi_view *view, uint32_t field) {
+    napi_value result = NULL;
+    if (field == TA_NAPI_MIGRATED_SESSION) return ta_napi_effect_session(env, view);
+    if (field == TA_NAPI_MIGRATED_CHART) return ta_napi_effect_text(env, view, &(ta_napi_text_field){TA_EFFECT_FIELD_EVENT, false});
+    uint32_t which = field == TA_NAPI_MIGRATED_SEGMENT ? TA_EFFECT_FIELD_SEGMENT : TA_EFFECT_FIELD_MIGRATION;
+    napi_create_uint32(env, (uint32_t)ta_host_effect_number(view->host->host, view->index, which), &result);
+    return result;
+}
+
 /* A field of a view, by kind: cached, or converted now and cached. */
 typedef struct ta_napi_field {
     uint32_t kind, field;
@@ -245,13 +261,14 @@ static napi_value ta_napi_view_read(napi_env env, const ta_napi_view *view, cons
     if (napi_has_element(env, view->state, slot, &cached) != napi_ok) return NULL;
     if (cached) return napi_get_element(env, view->state, slot, &value) == napi_ok ? value : NULL;
     if (!ta_napi_view_live(env, view)) return NULL;
-    value = field->kind == TA_NAPI_KIND_SEND ? ta_napi_send_field(env, view, field->field)
-                                             : ta_napi_entry_field(env, view, field->field);
+    value = field->kind == TA_NAPI_KIND_SEND    ? ta_napi_send_field(env, view, field->field)
+            : field->kind == TA_NAPI_KIND_ENTRY ? ta_napi_entry_field(env, view, field->field)
+                                                : ta_napi_migrated_field(env, view, field->field);
     if (value == NULL || napi_set_element(env, view->state, slot, value) != napi_ok) return NULL;
     return value;
 }
 
-/* A getter of a Send or a LogEntry. */
+/* A getter of a Send, a LogEntry or a Migrated. */
 static napi_value ta_napi_view_get(napi_env env, napi_callback_info info) {
     size_t argc = 0;
     napi_value self = NULL;
@@ -588,6 +605,75 @@ static void ta_napi_dispatch_log(napi_env env, ta_napi_host *host, uint32_t inde
     if (napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) != napi_ok) ta_napi_keep_error(env, host);
 }
 
+/* A MIGRATED: an actor moved; the migrated handler gets the host and a
+ * thin Migrated view; without one nothing is read. */
+static void ta_napi_dispatch_migrated(napi_env env, ta_napi_host *host, uint32_t index) {
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    napi_value wrapper = ta_napi_self(env, host), handler = NULL, result;
+    if (instance == NULL || wrapper == NULL) return;
+    handler = ta_napi_handler_of(env, wrapper, &(ta_napi_handler_at){"migrated", UINT32_MAX});
+    if (handler == NULL) {
+        ta_napi_keep_error(env, host);
+        return;
+    }
+    if (!ta_napi_is(env, handler, napi_function)) return;
+    ta_napi_view view;
+    if (!ta_napi_view_new(env, &(ta_napi_view_spec){host, instance->migrated, index, 0, TA_NAPI_MIGRATED_COUNT}, &view)) {
+        ta_napi_keep_error(env, host);
+        return;
+    }
+    napi_value argv[2] = {wrapper, view.self};
+    if (napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) != napi_ok) ta_napi_keep_error(env, host);
+}
+
+/* The result of a MIGRATION_DONE: {migration, migrated, failed, pending},
+ * the sessions it left behind read now (ta_host_migration_pending: valid
+ * until the next run) into the host's arena, under a mark of its own. */
+static napi_value ta_napi_migration_result(napi_env env, ta_napi_host *host, uint32_t index) {
+    static const char *const names[] = {"migration", "migrated", "failed"};
+    static const uint32_t fields[] = {TA_EFFECT_FIELD_MIGRATION, TA_EFFECT_FIELD_MIGRATED, TA_EFFECT_FIELD_FAILED};
+    uint32_t id = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_MIGRATION);
+    uint32_t count = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_PENDING);
+    napi_value result, number, pending, session;
+    if (napi_create_object(env, &result) != napi_ok) return NULL;
+    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+        if (napi_create_uint32(env, (uint32_t)ta_host_effect_number(host->host, index, fields[i]), &number) != napi_ok ||
+            napi_set_named_property(env, result, names[i], number) != napi_ok)
+            return NULL;
+    ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
+    uint64_t *left = count ? (uint64_t *)ta_growable_arena_alloc(&host->arena, sizeof(uint64_t) * count, 8) : NULL;
+    uint32_t got = left != NULL ? ta_host_migration_pending(host->host, id, (ta_uint64_array){left, count}) : 0;
+    if (got > count) got = count;
+    bool ok = (count == 0 || left != NULL) && napi_create_array_with_length(env, got, &pending) == napi_ok;
+    for (uint32_t i = 0; ok && i < got; i++)
+        ok = napi_create_bigint_uint64(env, left[i], &session) == napi_ok && napi_set_element(env, pending, i, session) == napi_ok;
+    ta_growable_arena_release(&host->arena, mark);
+    if (!ok) {
+        if (count != 0 && left == NULL) ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the migration's pending sessions"});
+        return NULL;
+    }
+    return napi_set_named_property(env, result, "pending", pending) == napi_ok && napi_object_freeze(env, pending) == napi_ok
+               ? result
+               : NULL;
+}
+
+/* A MIGRATION_DONE: the host's migrationDone handler gets the host and the
+ * result; without one nothing is read. */
+static void ta_napi_dispatch_migration_done(napi_env env, ta_napi_host *host, uint32_t index) {
+    napi_value wrapper = ta_napi_self(env, host), handler = NULL, argv[2], result;
+    if (wrapper == NULL) return;
+    handler = ta_napi_handler_of(env, wrapper, &(ta_napi_handler_at){"migrationDone", UINT32_MAX});
+    if (handler == NULL) {
+        ta_napi_keep_error(env, host);
+        return;
+    }
+    if (!ta_napi_is(env, handler, napi_function)) return;
+    argv[0] = wrapper;
+    if ((argv[1] = ta_napi_migration_result(env, host, index)) == NULL ||
+        napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) != napi_ok)
+        ta_napi_keep_error(env, host);
+}
+
 /* A WAKE: a hibernated session has work (an event, a due delayed send:
  * `migration` undefined) or a migration asks for it (`migration` its id);
  * the wake handler gets the host, the session and the migration, and calls
@@ -667,6 +753,8 @@ void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index) 
     case TA_EFFECT_SEND: ta_napi_dispatch_send(env, host, index); break;
     case TA_EFFECT_LOG: ta_napi_dispatch_log(env, host, index); break;
     case TA_EFFECT_WAKE: ta_napi_dispatch_wake(env, host, index); break;
+    case TA_HOST_EFFECT_MIGRATED: ta_napi_dispatch_migrated(env, host, index); break;
+    case TA_HOST_EFFECT_MIGRATION_DONE: ta_napi_dispatch_migration_done(env, host, index); break;
     case TA_EFFECT_REQUEST: {
         /* a fetch at run time: refused in C until it is built (AGENTS.md,
          * "Layers and the resolver"); the requester gets error.execution */
@@ -683,9 +771,9 @@ void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index) 
     }
     case TA_HOST_EFFECT_TRACES: ta_napi_take(env, host, true); break;
     case TA_HOST_EFFECT_LOGS: ta_napi_take(env, host, false); break;
-    default: /* DONE, ERROR: no application callback; SEGMENT_FREED: the host keeps the images, the
-                addon none; a NOTIFICATION it does not know (none is defined); the rest has no
-                API yet */
+    default: /* DONE, ERROR: no application callback; SEGMENT_FREED: dropped, the host keeps the
+                images, the addon none; a NOTIFICATION it does not know (none is defined); the
+                rest has no API yet */
         break;
     }
     napi_close_escapable_handle_scope(env, scope);
@@ -715,7 +803,16 @@ napi_status ta_napi_effects_define(napi_env env, napi_value exports) {
         {"label", NULL, NULL, ta_napi_view_get, NULL, NULL, getter, TA_NAPI_GETTER(TA_NAPI_KIND_ENTRY, TA_NAPI_ENTRY_LABEL)},
         {"text", NULL, NULL, ta_napi_view_get, NULL, NULL, getter, TA_NAPI_GETTER(TA_NAPI_KIND_ENTRY, TA_NAPI_ENTRY_TEXT)},
     };
-    napi_value send_class, entry_class, rejected, keys, description, symbol;
+    napi_property_descriptor migrated[] = {
+        {"session", NULL, NULL, ta_napi_view_get, NULL, NULL, getter,
+         TA_NAPI_GETTER(TA_NAPI_KIND_MIGRATED, TA_NAPI_MIGRATED_SESSION)},
+        {"segment", NULL, NULL, ta_napi_view_get, NULL, NULL, getter,
+         TA_NAPI_GETTER(TA_NAPI_KIND_MIGRATED, TA_NAPI_MIGRATED_SEGMENT)},
+        {"chart", NULL, NULL, ta_napi_view_get, NULL, NULL, getter, TA_NAPI_GETTER(TA_NAPI_KIND_MIGRATED, TA_NAPI_MIGRATED_CHART)},
+        {"migration", NULL, NULL, ta_napi_view_get, NULL, NULL, getter,
+         TA_NAPI_GETTER(TA_NAPI_KIND_MIGRATED, TA_NAPI_MIGRATED_MIGRATION)},
+    };
+    napi_value send_class, entry_class, migrated_class, rejected, keys, description, symbol;
     napi_status status = napi_define_class(env, "Send", NAPI_AUTO_LENGTH, ta_napi_view_construct, NULL,
                                            sizeof send / sizeof send[0], send, &send_class);
     if (status == napi_ok) status = napi_create_reference(env, send_class, 1, &instance->send);
@@ -723,6 +820,10 @@ napi_status ta_napi_effects_define(napi_env env, napi_value exports) {
         status = napi_define_class(env, "LogEntry", NAPI_AUTO_LENGTH, ta_napi_view_construct, NULL,
                                    sizeof entry / sizeof entry[0], entry, &entry_class);
     if (status == napi_ok) status = napi_create_reference(env, entry_class, 1, &instance->entry);
+    if (status == napi_ok)
+        status = napi_define_class(env, "Migrated", NAPI_AUTO_LENGTH, ta_napi_view_construct, NULL,
+                                   sizeof migrated / sizeof migrated[0], migrated, &migrated_class);
+    if (status == napi_ok) status = napi_create_reference(env, migrated_class, 1, &instance->migrated);
     if (status == napi_ok)
         status = napi_create_function(env, "rejected", NAPI_AUTO_LENGTH, ta_napi_send_rejected, NULL, &rejected);
     if (status == napi_ok) status = napi_create_reference(env, rejected, 1, &instance->rejected);

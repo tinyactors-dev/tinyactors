@@ -121,6 +121,13 @@ static uint64_t ta_napi_ticks(const ta_napi_host *host, uint64_t nanoseconds) {
     return seconds * host->ticks_per_second + rest * host->ticks_per_second / ta_napi_billion;
 }
 
+uint64_t ta_napi_ticks_after(const ta_napi_host *host, uint64_t nanoseconds) {
+    uint64_t ticks = ta_napi_ticks(host, nanoseconds);
+    uint64_t back = ticks / host->ticks_per_second * ta_napi_billion +
+                    ticks % host->ticks_per_second * ta_napi_billion / host->ticks_per_second;
+    return back < nanoseconds ? ticks + 1 : ticks;
+}
+
 /* Ticks as milliseconds. */
 static double ta_napi_milliseconds(const ta_napi_host *host, uint64_t ticks) {
     return (double)ticks * 1000.0 / (double)host->ticks_per_second;

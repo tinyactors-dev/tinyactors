@@ -140,3 +140,79 @@ count matched the events it was sent, and after every eviction at most
 | node, quickjs | 17.1 s (116,900 a second) | 11.9 s (16,900 a second) | 262 MB (131 B per actor) | 115 MB (58 B per actor) | 409 MB |
 | bun, native | 19.5 s (102,600 a second) | 12.9 s (15,500 a second) | 236 MB (118 B per actor) | 115 MB (58 B per actor) | 378 MB |
 | bun, quickjs | 14.0 s (143,000 a second) | 11.9 s (16,900 a second) | 221 MB (111 B per actor) | 115 MB (58 B per actor) | 409 MB |
+
+## Migration
+
+A new version of a chart (an image added with a chart of the same
+`name`) runs the actors spawned from then on. `host.migrate` moves the
+running actors to it, each at a stable point, during the next turns. A
+moved actor keeps its session id, its state configuration (states are
+matched by id) and its delayed sends with their data. It first gets
+`error.platform.upgrade`, whose data is the old version's `<datamodel>`
+bindings, and the new version takes what it keeps from there:
+
+```xml
+<transition event="error.platform.upgrade">
+  <assign location="n" expr="_event.data.n"/>
+</transition>
+```
+
+- **`host.migrate({chart, session, wake, timeout}?) → number`** starts a
+  migration of every chart, of one `chart` by name, or of one `session`,
+  and returns its id. `timeout` is in milliseconds of the host's clock,
+  rounded up to its next tick; 0 or none means no timeout.
+- **`migrationDone: (host, result) => ...`** gets the end of each
+  migration, `{migration, migrated, failed, pending}`, `pending` the
+  sessions (bigints) its timeout left behind. It is a handler of the
+  host, not of the call.
+- **`migrated: (host, migrated) => ...`** gets each actor moved, as a thin
+  `Migrated` view of `session`, `segment`, `chart` (its name) and
+  `migration`, valid until the handler's batch is acknowledged.
+
+**When a migration ends.** A migration ends when every actor it looks at
+has moved, or at its `timeout`. A hibernated actor moves once it is
+woken. With `wake: true` the migration asks for it through the `wake`
+handler, with the migration's id, and asks again if it finds the actor
+hibernated after a wake. Without `wake`, a hibernated actor that nobody
+wakes holds the migration until its timeout, or forever without one, and
+`migrationDone` is never called: give such a migration a `timeout`. A
+migration still running when the host is closed never reaches
+`migrationDone`.
+
+**Actors that do not move.** An actor that cannot be written out stays
+on its version and counts as failed: on the native datamodel, one whose
+variables hold a value outside the value table (a function, a `Map`, a
+`Date`, ...), or whose chart's scripts declare with `let`, `const` or
+`class`. An actor that is running an invocation waits until the
+invocation ends. On the native datamodel the old bindings are exactly the
+old version's variables; a chart whose scripts declare top-level names
+gets its new version's declarations (its scripts are instantiated, not
+run), and the old names the new version does not declare are gone.
+
+**With most actors hibernated, wake them a batch at a time.** A migration
+with `wake: true` asks for every hibernated actor early. Wake them all and
+they are all resident at once. Instead, queue the migration's requests
+and wake a batch per round; the migration takes each woken actor in its
+next runs. An event's request (`migration` is `undefined`) still wakes its
+actor at once, and the migration takes that one too. Put actors back to
+sleep once they have moved. One put back before it moved is asked for
+again, which costs work but does not stall the migration.
+
+```js
+const asked = [];
+const wake = (host, session, migration) => {
+  if (migration !== undefined) asked.push(session);    // the migration's: a batch at a time
+  else host.wake(session, get.get(session).blob);      // an event's: now
+};
+const host = new Host(config, { wake, migrationDone: (host, result) => (done = result) });
+// ...
+host.migrate({ wake: true });
+while (done === undefined) {
+  for (const session of asked.splice(0, 256)) host.wake(session, get.get(session).blob);
+  await host.idle();
+  evictMoved(host);                                    // the moved actors at rest go back to the store
+}
+```
+
+`tools/migration.mjs` (`mise run migration`) is this pattern at scale:
+two million actors, at most 1000 resident, the rest in SQLite.

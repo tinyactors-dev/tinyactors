@@ -254,6 +254,8 @@ export interface Migrated {
   readonly migration: number;
 }
 
+/** A migration's end: the actors it moved, those that failed (they stay
+ * on their version), and the sessions its timeout left behind. */
 export interface MigrationResult {
   readonly migration: number;
   readonly migrated: number;
@@ -359,7 +361,8 @@ export interface MigrateOptions {
   session?: bigint;
   /** Ask the application to wake hibernated actors. */
   wake?: boolean;
-  /** Milliseconds of the host's clock; 0: none. */
+  /** Milliseconds of the host's clock from now, rounded up to its next
+   * tick; 0 or none: no timeout. */
   timeout?: number;
 }
 
@@ -433,7 +436,10 @@ export class Host implements Disposable, AsyncDisposable {
   /** Back into memory from the blob `hibernate` gave; its waiting events run
    * at the next turn. */
   wake(session: bigint, blob: Uint8Array | ArrayBuffer): void;
-  /** Core's migration id. */
+  /** Starts a migration of the running actors (every chart's, `chart`'s or
+   * one `session`) to the current version of their chart, in later runs;
+   * returns core's migration id, which `migrated` and `migrationDone` (and
+   * the wake handler, for the actors it asks for) name. */
   migrate(options?: MigrateOptions): number;
   snapshot(): Uint8Array;
 

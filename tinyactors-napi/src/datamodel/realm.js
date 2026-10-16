@@ -252,12 +252,34 @@
 
   // A woken session's variables, `vars` of a hibernation blob (made in
   // another realm), copied into this context: a shared scope keeps the
-  // names its chart declares; a declaring session's global takes them all.
+  // names its chart declares; a declaring session's global takes them all,
+  // and its link keeps the names its chart did not declare, which upgrade
+  // drops should the blob be of another version.
   function restore(target, vars) {
+    const added = [];
     for (const name of keys(vars)) {
       if (hasOwn(target, name)) target[name] = copy(vars[name], 0);
-      else if (target === globalThis) own(target, name, copy(vars[name], 0));
+      else if (target === globalThis) {
+        own(target, name, copy(vars[name], 0));
+        added.push(name);
+      }
     }
+    if (added.length) target[LINK].added = added;
+  }
+
+  // A woken session migrated to a new version of its chart: the old
+  // bindings, the blob's variables its link kept since the wake, taken
+  // from it; on a declaring session's global the names the new chart did
+  // not declare go.
+  function upgrade(target) {
+    const link = target[LINK];
+    const old = link.init;
+    link.init = undefined;
+    if (link.added !== undefined) {
+      for (const name of link.added) delete target[name];
+      link.added = undefined;
+    }
+    return old;
   }
 
   // In a scratch context after a chart's scripts were instantiated: the
@@ -287,6 +309,7 @@
     record,
     stored,
     restore,
+    upgrade,
     functions,
     dom,
     parse: (text) => JSON.parse(text),

@@ -29,6 +29,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { compileCharts, Host, TinyactorsError } from '@tinyactors/node';
+import { BATCH, random, Store } from './store.mjs';
 
 // The counter of tinyactors-cpython/tools/charts/counter.ecmascript.scxml.
 const COUNTER = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="counter" initial="s">
@@ -48,8 +49,6 @@ const COUNTER = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" da
 </scxml>
 `;
 
-const BATCH = 256;
-
 function options(argv) {
   const given = { actors: 2_000_000, resident: 1000, events: 200_000, sample: 10_000, datamodel: 'native', seed: 1 };
   for (let i = 0; i < argv.length; i += 2) {
@@ -59,65 +58,6 @@ function options(argv) {
   }
   if (!['native', 'quickjs'].includes(given.datamodel)) throw new Error('--datamodel is native or quickjs');
   return given;
-}
-
-// A seeded generator (mulberry32), so a run is the same run again.
-function random(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// The hibernated actors' blobs: one SQLite row per session, written in
-// transactions of 4096.
-class Store {
-  static async open(file) {
-    if (globalThis.Bun) {
-      const { Database } = await import('bun:sqlite');
-      const db = new Database(file);
-      return new Store({ exec: (sql) => db.run(sql), prepare: (sql) => db.prepare(sql) });
-    }
-    const { DatabaseSync } = await import('node:sqlite');
-    const db = new DatabaseSync(file);
-    return new Store({ exec: (sql) => db.exec(sql), prepare: (sql) => db.prepare(sql) });
-  }
-
-  constructor(db) {
-    this.db = db;
-    db.exec('PRAGMA journal_mode=WAL');
-    db.exec('PRAGMA synchronous=OFF');
-    db.exec('CREATE TABLE blobs (session INTEGER PRIMARY KEY, blob BLOB NOT NULL)');
-    this.insert = db.prepare('INSERT OR REPLACE INTO blobs VALUES (?, ?)');
-    this.select = db.prepare('SELECT blob FROM blobs WHERE session = ?');
-    this.pending = [];
-    this.puts = 0;
-    this.gets = 0;
-  }
-
-  put(session, blob) {
-    this.pending.push([session, blob]);
-    this.puts++;
-    if (this.pending.length >= 4096) this.flush();
-  }
-
-  flush() {
-    if (this.pending.length === 0) return;
-    this.db.exec('BEGIN');
-    for (const [session, blob] of this.pending) this.insert.run(session, blob);
-    this.db.exec('COMMIT');
-    this.pending.length = 0;
-  }
-
-  get(session) {
-    this.flush(); // a wake can come before a put settled: read your own writes
-    this.gets++;
-    return this.select.get(session).blob;
-  }
 }
 
 async function main() {

@@ -897,7 +897,10 @@ static napi_value ta_napi_event_from(ta_napi_native *native, const ta_napi_event
 /* A session from a blob serialize wrote, for its chart now: a new scope
  * (or, for a declaring chart, a new context, its scripts' declarations
  * made again), the variables of the blob its chart declares (all of them
- * on a declaring session's global), and its _event. */
+ * on a declaring session's global), and its _event. Every variable of the
+ * blob is kept in the session's link as its `init` until the first event
+ * or migrate takes it, as a spawn's params are: when the blob is of an
+ * older version of the chart, migrate answers them as the old bindings. */
 static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *start, uint64_t *instance) {
     ta_napi_native *native = (ta_napi_native *)datamodel;
     napi_env env = native->host->env;
@@ -915,7 +918,7 @@ static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *
               type == napi_object && napi_get_named_property(env, state, "vars", &vars) == napi_ok &&
               napi_typeof(env, vars, &type) == napi_ok && type == napi_object &&
               napi_get_named_property(env, state, "event", &fields) == napi_ok &&
-              (made = ta_napi_session_new(native, &(ta_napi_start_of){&chart, start->system_variables, undefined})) != NULL;
+              (made = ta_napi_session_new(native, &(ta_napi_start_of){&chart, start->system_variables, vars})) != NULL;
     if (ok && (chart.flags & TA_NAPI_CHART_DECLARES)) /* its own context: the declarations again, then the values */
         ok = napi_get_element(env, made, TA_NAPI_OWN_KIT, &kit) == napi_ok &&
              napi_get_element(env, made, TA_NAPI_OWN_CONTEXT, &context) == napi_ok &&
@@ -946,10 +949,29 @@ static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *
     return status;
 }
 
+/* After deserialize, when the blob was written for an older version of
+ * the chart: the old bindings, exactly the old chart's variables as the
+ * blob held them, as one payload (an object of name -> value), taken from
+ * the link; on a declaring session's global the old variables the new
+ * chart does not declare are dropped. Core then initializes the new
+ * chart's added <data> and raises error.platform.upgrade with it. */
 static ta_status ta_napi_migrate(const ta_datamodel_call *call, ta_payload *bindings) {
-    (void)call;
     *bindings = 0;
-    return TA_ERROR_UNSUPPORTED;
+    ta_napi_entry entry;
+    if (!ta_napi_enter_entry(call, &entry)) return TA_ERROR_INVALID;
+    ta_napi_evaluation *evaluation = &entry.evaluation;
+    napi_env env = evaluation->env;
+    napi_value old = ta_napi_kit(env, evaluation->kit, &(ta_napi_kit_call){"upgrade", 1, {evaluation->scope}});
+    napi_valuetype type = napi_undefined;
+    ta_status status = TA_OK;
+    if (old == NULL || napi_typeof(env, old, &type) != napi_ok) status = ta_napi_failed(env);
+    else if (type == napi_object && !ta_napi_native_payload(evaluation->native, old, bindings)) {
+        napi_value error = NULL;
+        napi_get_and_clear_last_exception(env, &error);
+        status = TA_ERROR_NO_MEMORY; /* the blob's values are the value table's: only memory refuses them */
+    }
+    ta_napi_frame_close(&entry.frame);
+    return status;
 }
 
 /* ---- neutral values ------------------------------------------------------------------ */

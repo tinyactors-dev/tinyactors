@@ -70,7 +70,7 @@ typedef struct ta_napi_instance {
     napi_ref compile_error;
     napi_ref resolve_error;
     napi_ref address;
-    napi_ref send, entry;
+    napi_ref send, entry, migrated;
     napi_ref rejected;
     napi_ref vm, realm, realms, in, stringify;
     struct ta_napi_native *evaluating;
@@ -458,6 +458,9 @@ bool ta_napi_throw_kept(napi_env env, ta_napi_host *host);
 /* Both clocks, converted with ticksPerSecond: before an input that
  * depends on them and at creation (a turn does it before every run). */
 void ta_napi_advance(napi_env env, ta_napi_host *host);
+/* A duration in nanoseconds as the host's ticks, rounded up (migrate's
+ * timeout: never sooner than asked). */
+uint64_t ta_napi_ticks_after(const ta_napi_host *host, uint64_t nanoseconds);
 
 /* An input from outside a turn schedules one turn (setImmediate, one
  * pending at a time); from a turn's handler it makes the turn go on. */
@@ -477,7 +480,9 @@ void ta_napi_loop_stop(napi_env env, ta_napi_host *host);
 
 /* One effect of the open batch, in a handle scope of its own: a SEND to
  * its I/O processor's handler (or the transport's) as a thin Send view, a
- * LOG to the log handler as a LogEntry view, a REQUEST answered in C,
+ * LOG to the log handler as a LogEntry view, a MIGRATED to the migrated
+ * handler as a Migrated view, a MIGRATION_DONE to migrationDone with its
+ * result, a REQUEST answered in C,
  * TRACES and LOGS taken, a REPLY's WIRE kept for the caller; the rest
  * dropped. A handler's error is kept on the host (ta_napi_keep_error). */
 void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index);
@@ -498,7 +503,7 @@ void ta_napi_telemetry(napi_env env, ta_napi_host *host, const ta_napi_export *e
  * (host->retake). */
 void ta_napi_take(napi_env env, ta_napi_host *host, bool traces);
 
-/* The classes Send and LogEntry and the rejection function, in the
+/* The classes Send, LogEntry and Migrated and the rejection function, in the
  * instance; nothing is exported (index.d.ts declares them as interfaces). */
 napi_status ta_napi_effects_define(napi_env env, napi_value exports);
 
