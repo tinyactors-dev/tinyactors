@@ -8,8 +8,9 @@ choice, which tinyactors does not make.
 
 - **system** — a set of actors sharing one address authority: a `ta_host`
   (one or more `ta_system` segments) with its `systemID`.
-- **remote I/O processor** — the I/O processor the host config marks
-  `"remote": true`; the application's transport to other systems.
+- **transport** — the host's way out to other systems: every send to
+  another system's address is a `TA_EFFECT_SEND` for `TA_HOST_TRANSPORT`,
+  which the application serves; it needs no config.
 
 ## Addresses
 
@@ -56,11 +57,12 @@ host's.
   SCXML event processor (`http://www.w3.org/TR/scxml/#SCXMLEventProcessor`).
   A session or name that does not exist is `error.communication` for the
   sender.
-- **Another system's address** is a `TA_EFFECT_SEND` for the remote I/O
-  processor, with the full target, the event, the sendid, the payload, the
-  trace, and `TA_EFFECT_FIELD_ORIGIN`, the sender's address. Without a
-  remote processor the sender gets `error.communication`. A chart that names
-  the remote processor's type gets the same decision.
+- **Another system's address** is a `TA_EFFECT_SEND` for the host's
+  transport (`io_processor` `TA_HOST_TRANSPORT`), with the full target, the
+  event, the sendid, the payload, the trace, and `TA_EFFECT_FIELD_ORIGIN`,
+  the sender's address. Its sender waits until the batch is acknowledged;
+  an embedder with no transport fails it (`TA_EVENT_IN_ERROR_COMMUNICATION`),
+  and the sender gets `error.communication`.
 - **What arrives from another system** is an input: the transport resolves
   the local target with `ta_host_resolve` (another system's address is
   `TA_ERROR_INVALID`, one that names nothing `TA_ERROR_STALE`) and calls
@@ -123,7 +125,7 @@ writes a value as text, for logs and traces.
 - `tinyactors-test/suites/protocol/values.txt` — neutral value vectors,
   CBOR in hex with its diagnostic notation; run in C
   (`tests/unit/test_datamodel_ecmascript.c`) and by the suite, through the
-  echo setup and the remote I/O processor.
-- `tests/unit/test_remote.c` — the remote I/O processor: a send to another
+  echo setup and the host's transport.
+- `tests/unit/test_remote.c` — the host's transport: a send to another
   system, an input by address, the reply to its origin, the sender waiting
   for its send, refusals.

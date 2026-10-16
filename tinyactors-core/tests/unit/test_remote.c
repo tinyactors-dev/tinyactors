@@ -1,8 +1,8 @@
-/* Other systems through the I/O processor the config marks remote (host.h,
- * "Other systems"): a send to another system's address is a SEND for it,
- * with the sender's address as ORIGIN; an input names its target by a local
- * address; a reply to _event.origin goes back the same way; without a remote
- * processor the sender gets error.communication. */
+/* Other systems through the host's transport (host.h, "Other systems"): a
+ * send to another system's address is a SEND for TA_HOST_TRANSPORT, with the
+ * sender's address as ORIGIN, and needs no config; an input names its target
+ * by a local address; a reply to _event.origin goes back the same way; a
+ * send the embedder fails gives its sender error.communication. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
 #include "../support/host_config.h"
@@ -18,10 +18,8 @@
     "<transition event='hello'><log label='got' expr=\"_event.origin + ' ' + _event.origintype + "   \
     "' ' + typeof _event.data\"/><send targetexpr='_event.origin' event='thanks'/></transition>"        \
     "<transition event='error.communication'><log label='failed' expr='_event.sendid'/>"          \
-    "</transition><transition event='direct'><send type='urn:test:remote' "                       \
-    "target='tinyactors://a/@talker' event='hello'/></transition></state></scxml>"
+    "</transition></state></scxml>"
 
-#define REMOTE_TYPE "urn:test:remote"
 #define SCXML_TYPE  "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
 
 typedef struct world {
@@ -33,15 +31,11 @@ typedef struct world {
     char log[512];
 } world;
 
-static void world_open(world *w, int remote) {
+static void world_open(world *w) {
     memset(w, 0, sizeof *w);
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
-    ta_io_processor_descriptor processors[2] = {
-        {{"urn:test:other", 14}, {"", 0}, 0, 0},
-        {{REMOTE_TYPE, sizeof REMOTE_TYPE - 1}, {"", 0},
-         TA_IO_PROCESSOR_REMOTE, 0},
-    };
+    ta_io_processor_descriptor processors[1] = {{{"urn:test:other", 14}, {"", 0}, 0, 0}};
     test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
@@ -51,7 +45,7 @@ static void world_open(world *w, int remote) {
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
     config.io_processors = processors;
-    config.io_processor_count = remote ? 2 : 1;
+    config.io_processor_count = 1;
     config.allocator = ta_runtime_malloc();
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
@@ -112,9 +106,9 @@ static ta_status input(world *w, const char *address, const char *name, const ch
     return ta_host_send(w->host, &event);
 }
 
-static void test_a_send_to_another_system_is_a_send_for_the_remote_processor(void) {
+static void test_a_send_to_another_system_is_a_send_for_the_transport(void) {
     world w;
-    world_open(&w, 1);
+    world_open(&w);
     run(&w);
     ta_event_in call;
     memset(&call, 0, sizeof call);
@@ -125,7 +119,7 @@ static void test_a_send_to_another_system_is_a_send_for_the_remote_processor(voi
     uint32_t count = run(&w);
     uint32_t send = find_send(&w, count);
     CHECK(send != TA_NIL);
-    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_IO_PROCESSOR), 1u); /* the config's index */
+    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_IO_PROCESSOR), TA_HOST_TRANSPORT);
     CHECK(text_is(ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_TARGET), "tinyactors://b/#_scxml_5"));
     CHECK(text_is(ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_EVENT), "hello"));
     CHECK(text_is(ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_SENDID), "h1"));
@@ -137,7 +131,7 @@ static void test_a_send_to_another_system_is_a_send_for_the_remote_processor(voi
 
 static void test_an_input_by_address_and_the_reply_to_its_origin(void) {
     world w;
-    world_open(&w, 1);
+    world_open(&w);
     run(&w);
     /* the transport delivers what system b sent: by session address and by name */
     CHECK_EQUAL(input(&w, "tinyactors://a/#_scxml_1", "hello", "tinyactors://b/#_scxml_5"), TA_OK);
@@ -163,7 +157,7 @@ static void test_an_input_by_address_and_the_reply_to_its_origin(void) {
  * acked, so the transport can fail it within the sender's macrostep. */
 static void test_a_sender_waits_for_the_transport(void) {
     world w;
-    world_open(&w, 1);
+    world_open(&w);
     run(&w);
     ta_host_effects_ack(w.host);
     ta_event_in call;
@@ -177,27 +171,11 @@ static void test_a_sender_waits_for_the_transport(void) {
     world_close(&w);
 }
 
-/* A chart that names the remote processor's type gets the same decision: a
- * local target is delivered here, not handed to the transport. */
-static void test_the_remote_type_in_a_chart_is_decided_the_same_way(void) {
+/* The embedder fails a send it cannot carry: the sender gets
+ * error.communication with its sendid, before it goes on. */
+static void test_a_send_the_transport_fails(void) {
     world w;
-    world_open(&w, 1);
-    run(&w);
-    ta_event_in direct;
-    memset(&direct, 0, sizeof direct);
-    direct.size = sizeof direct;
-    direct.session = w.session;
-    direct.name = (ta_string_view){"direct", 6};
-    CHECK_EQUAL(ta_host_send(w.host, &direct), TA_OK);
-    run(&w);
-    run(&w);
-    CHECK(strcmp(w.log, "got:tinyactors://a/#_scxml_1 " SCXML_TYPE " undefined;") == 0);
-    world_close(&w);
-}
-
-static void test_without_a_remote_processor_the_sender_is_told(void) {
-    world w;
-    world_open(&w, 0);
+    world_open(&w);
     run(&w);
     ta_event_in call;
     memset(&call, 0, sizeof call);
@@ -206,41 +184,24 @@ static void test_without_a_remote_processor_the_sender_is_told(void) {
     call.name = (ta_string_view){"call", 4};
     CHECK_EQUAL(ta_host_send(w.host, &call), TA_OK);
     uint32_t count = run(&w);
-    CHECK_EQUAL(find_send(&w, count), TA_NIL);
+    uint32_t send = find_send(&w, count);
+    CHECK(send != TA_NIL);
+    ta_event_in failed;
+    memset(&failed, 0, sizeof failed);
+    failed.size = sizeof failed;
+    failed.session = w.session;
+    failed.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
+    failed.sendid = ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_SENDID);
+    CHECK_EQUAL(ta_host_send(w.host, &failed), TA_OK);
     run(&w);
     CHECK(strcmp(w.log, "failed:h1;") == 0);
     world_close(&w);
 }
 
-static void test_at_most_one_remote_processor(void) {
-    ta_datamodel_ecmascript *ecmascript = ta_datamodel_ecmascript_new(NULL);
-    ta_datamodel_binding binding = ta_datamodel_ecmascript_binding(ecmascript);
-    ta_io_processor_descriptor processors[2] = {
-        {{"urn:a", 5}, {"", 0}, TA_IO_PROCESSOR_REMOTE, 0},
-        {{"urn:b", 5}, {"", 0}, TA_IO_PROCESSOR_REMOTE, 0},
-    };
-    test_host_config config;
-    memset(&config, 0, sizeof config);
-    config.size = sizeof config;
-    config.system_id = (ta_string_view){"a", 1};
-    config.system.size = sizeof config.system;
-    config.datamodels = &binding;
-    config.datamodel_count = 1;
-    config.io_processors = processors;
-    config.io_processor_count = 2;
-    config.allocator = ta_runtime_malloc();
-    ta_host *host = NULL;
-    CHECK(test_host_new(&config, &host) != TA_OK);
-    CHECK(host == NULL);
-    ta_datamodel_ecmascript_free(ecmascript);
-}
-
 int main(void) {
-    RUN(test_a_send_to_another_system_is_a_send_for_the_remote_processor);
+    RUN(test_a_send_to_another_system_is_a_send_for_the_transport);
     RUN(test_an_input_by_address_and_the_reply_to_its_origin);
     RUN(test_a_sender_waits_for_the_transport);
-    RUN(test_the_remote_type_in_a_chart_is_decided_the_same_way);
-    RUN(test_without_a_remote_processor_the_sender_is_told);
-    RUN(test_at_most_one_remote_processor);
+    RUN(test_a_send_the_transport_fails);
     TEST_MAIN_END();
 }

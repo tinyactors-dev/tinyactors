@@ -90,13 +90,11 @@ BENCH_UNUSED static int bench_host_config_cbor(const bench_host_config *c, bench
         ta_cbor_write_array(w, c->io_processor_count);
         for (uint32_t i = 0; i < c->io_processor_count; i++) {
             const ta_io_processor_descriptor *d = &c->io_processors[i];
-            ta_cbor_write_map(w, 3);
+            ta_cbor_write_map(w, 2);
             ta_cbor_write_text(w, ta_string("type"));
             ta_cbor_write_text(w, d->type);
             ta_cbor_write_text(w, ta_string("location"));
             ta_cbor_write_text(w, d->location);
-            ta_cbor_write_text(w, ta_string("remote"));
-            ta_cbor_write_simple(w, d->flags & TA_IO_PROCESSOR_REMOTE ? TA_CBOR_TRUE : TA_CBOR_FALSE);
         }
     }
     bench_host_number(w, "migrateQuantum", c->migrate_quantum);

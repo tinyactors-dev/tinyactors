@@ -57,10 +57,10 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
 - **Systems** are independent `ta_system`s, each with its own quickjs-ng
   datamodel runtime (like separate processes). Charts may also use the null
   datamodel.
-- **Cross-system addressing** goes through each host's remote I/O processor
-  (`TA_IO_PROCESSOR_REMOTE`, the config's `"remote": true`): a chart sends to
+- **Cross-system addressing** goes through each host's transport
+  (`TA_HOST_TRANSPORT`, no config): a chart sends to
   `tinyactors://<system>/#_scxml_<session>` (or `.../@<name>`), the host hands
-  the bench a `TA_EFFECT_SEND` for that processor, and the bench's in-process
+  the bench a `TA_EFFECT_SEND` for the transport, and the bench's in-process
   transport finds the system the address names, resolves the target there
   (`ta_host_resolve`) and sends the event in (`ta_host_send`) with the sender's
   address (`TA_EFFECT_FIELD_ORIGIN`) as origin and the sendid, the payload

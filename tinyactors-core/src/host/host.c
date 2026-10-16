@@ -1,9 +1,9 @@
 /* host.c — many systems as one actor system (see include/tinyactors/host.h).
  *
  * Segments are ta_systems sharing a base URI with TA_IO_PROCESSOR_SCXML_SHARED
- * on their remote processor (index 0), so sends to a session of another
- * segment come out as TA_EFFECT_SEND effects, which this layer delivers
- * itself. Effects that leave the host are copied (strings into a pool,
+ * on their SCXML processor for other systems (index 0), so sends to a
+ * session of another segment come out as TA_EFFECT_SEND effects, which this
+ * layer delivers itself; a send to another system goes to the transport. Effects that leave the host are copied (strings into a pool,
  * payloads retained) so segments can be acknowledged right away and keep
  * running; the copies live until ta_host_effects_ack or ta_host_free.
  *
@@ -376,9 +376,6 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     }
     host->config.io_processors = (const ta_io_processor_descriptor *)0; /* the config's: gone */
     host->io_processor_count = 1 + config->io_processor_count;
-    host->remote_processor = TA_NIL;
-    for (uint32_t i = 0; i < config->io_processor_count; i++)
-        if (host->io_processors[1 + i].flags & TA_IO_PROCESSOR_REMOTE) host->remote_processor = i;
     host->draining = TA_NIL;
     if (!resource_copy(host, &config->telemetry)) {
         ta_host_free(host);
@@ -1309,15 +1306,13 @@ static ta_status local_send(ta_host *host, uint32_t si, const ta_effect *effect,
 }
 
 /* A send through the SCXML processor: to this host's system, delivered here;
- * to another system, a SEND for the I/O processor the config marks remote
- * (the application's transport); without one, error.communication. */
+ * to another system, a SEND for the host's transport (TA_HOST_TRANSPORT). */
 static ta_status scxml_send(ta_host *host, uint32_t si, const ta_effect *effect) {
     ta_address to;
     if (ta_address_parse(effect->target, &to) != TA_OK)
         return host_communication_error(host, si, effect->actor, effect->sendid);
     if (host_is_local(host, to.system)) return local_send(host, si, effect, &to);
-    if (host->remote_processor != TA_NIL) return effect_copy(host, si, effect, host->remote_processor);
-    return host_communication_error(host, si, effect->actor, effect->sendid);
+    return effect_copy(host, si, effect, TA_HOST_TRANSPORT);
 }
 
 /* Drain a segment's effects: route, copy out, acknowledge. TA_ERROR_NO_MEMORY:
@@ -1335,11 +1330,9 @@ static ta_status drain(ta_host *host, uint32_t si) {
         const ta_effect *effect_view = &effect[done];
         if (effect_view->kind == TA_EFFECT_CHANGED) { /* the host sets no watch (ta_actor_watch) */
             status = TA_OK;
-        } else if (effect_view->kind == TA_EFFECT_SEND &&
-                   (effect_view->io_processor == 0 ||
-                    (host->remote_processor != TA_NIL && effect_view->io_processor == host->remote_processor + 1))) {
+        } else if (effect_view->kind == TA_EFFECT_SEND && effect_view->io_processor == 0) {
             uint32_t copied = host->effect_count;
-            status = scxml_send(host, si, effect_view); /* the remote type named in a chart: the same decision */
+            status = scxml_send(host, si, effect_view);
             /* delivered here, or failed: decided, so its sender goes on (handed out: at the ack) */
             if (status == TA_OK && host->effect_count == copied && (effect_view->flags & TA_EFFECT_FLAG_WAITING)) {
                 ta_system_sender_resume(host->segments[si].system, effect_view->actor, effect_view->session);

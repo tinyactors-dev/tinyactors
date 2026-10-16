@@ -342,18 +342,17 @@ class Inputs(unittest.TestCase):
 
 
 class OtherSystems(unittest.TestCase):
-    """The I/O processor the config marks remote carries sends to other
-    systems; what arrives from one is Host.send by address with its origin."""
+    """The host's transport carries sends to other systems, with no config;
+    what arrives from one is Host.send by address with its origin."""
 
-    REMOTE = "urn:test:remote"
     SCXML = "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
 
-    def host(self, sends, logs):
-        config = {"systemID": "a", "system": {"ticksPerSecond": 1000},
-                  "ioProcessors": [{"type": self.REMOTE, "remote": True}]}
-        host = tinyactors.Host(config, {self.REMOTE: lambda host, send: sends.append(
-            (send.target, send.event, send.origin, send.data, send.type))}, log=logs,
-            clock=tinyactors.SimulatedClock())
+    def host(self, sends, logs, transport=True):
+        config = {"systemID": "a", "system": {"ticksPerSecond": 1000}}
+        def handler(host, send):
+            sends.append((send.target, send.event, send.origin, send.data, send.type))
+        host = tinyactors.Host(config, log=logs, clock=tinyactors.SimulatedClock(),
+                               transport=handler if transport else None)
         with tinyactors.compile_charts([("remote.scxml", fixture("test_host/remote.python.scxml"))]) as compiled:
             host.add_image(compiled.image)
         return host
@@ -365,7 +364,7 @@ class OtherSystems(unittest.TestCase):
             host.send(session, "call")
             host.run_until_idle()
             self.assertEqual(sends, [("tinyactors://b/#_scxml_5", "hello", "tinyactors://a/#_scxml_%d" % session,
-                                      {"n": 41}, self.REMOTE)])
+                                      {"n": 41}, None)])
             sends.clear()
             host.send("tinyactors://a/@talker", "hello", [1], origin="tinyactors://b/#_scxml_5")
             host.run_until_idle()
@@ -374,6 +373,22 @@ class OtherSystems(unittest.TestCase):
             host.send("tinyactors://a/#_scxml_%d" % session, "hello", origin="tinyactors://c/@x")
             host.run_until_idle()
             self.assertEqual(logs.labelled("got")[-1], "tinyactors://c/@x %s None" % self.SCXML)
+
+    def test_without_a_transport_the_sender_is_told(self):
+        logs = Logs()
+        with self.host([], logs, transport=False) as host:
+            host.send(host.spawn(host.chart("talker"), name="talker"), "call")
+            host.run_until_idle()
+            self.assertEqual(logs.labelled("failed"), ["error.communication"])
+
+    def test_an_async_transport_needs_async_with(self):
+        async def transport(host, send):
+            pass
+
+        host = tinyactors.Host({"systemID": "a"}, transport=transport)
+        with self.assertRaises(TypeError):
+            host.__enter__()
+        host.close()
 
     def test_send_is_the_way_in_and_actor_send_is_not_offered(self):
         """A program sends with Host.send; actor.send is for a client outside

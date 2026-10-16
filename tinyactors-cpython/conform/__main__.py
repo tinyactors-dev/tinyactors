@@ -7,8 +7,8 @@ path. Frames are a four-byte big-endian length and one CBOR message, read
 and written with tinyactors.decode and tinyactors.encode. Each driver
 method is the binding's own calls, as an application makes them: a host
 is a tinyactors.Host, a control message is the typed method of its name,
-and what goes to another system leaves through the I/O processor the
-config marks remote. Standard output holds frames only; diagnostics go to
+and what goes to another system leaves through the host's transport.
+Standard output holds frames only; diagnostics go to
 standard error.
 """
 
@@ -84,7 +84,7 @@ class Adapter:
         self.clock = None
         self.sends = []
 
-    def remote(self, host, send):
+    def transport(self, host, send):
         """A send to another system: kept for host.run, its data written
         with the binding's own codec (no data reads as None, null's CBOR)."""
         self.sends.append({"target": send.target, "event": send.event, "origin": send.origin,
@@ -106,11 +106,8 @@ class Adapter:
         config = tinyactors.decode(params["config"])
         self.clock = tinyactors.SimulatedClock()
         self.sends = []
-        processors = config.get("ioProcessors") if isinstance(config, dict) else None
-        remote = {processor["type"]: self.remote for processor in processors
-                  if isinstance(processor, dict) and processor.get("remote")} if isinstance(processors, list) else {}
         try:
-            self.host = tinyactors.Host(config, remote, clock=self.clock)
+            self.host = tinyactors.Host(config, clock=self.clock, transport=self.transport)
         except tinyactors.TinyactorsError as error:
             result = {"status": status_of(error)}
             if error.code is not None:
@@ -446,7 +443,7 @@ def read_exactly(stream, size):
 def answer(adapter, call):
     method = call.get("method")
     function = getattr(adapter, method.replace(".", "_"), None) if isinstance(method, str) else None
-    if function is None or method.startswith("_") or method in ("need.host", "remote"):
+    if function is None or method.startswith("_") or method in ("need.host", "transport"):
         return {"id": call["id"], "error": {"code": -32601, "message": "%s is not offered" % method,
                                              "data": {"reason": "unknown", "path": "method"}}}
     try:

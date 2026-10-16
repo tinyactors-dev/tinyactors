@@ -63,6 +63,13 @@ static PyObject *ta_python_effect_payload(ta_python_view *view) {
 }
 
 /* A send's field `which`, converted on first read and cached. */
+/* The (type, handler, async) row of a SEND's processor: an I/O processor of
+ * the config's, or the host's transport (TA_HOST_TRANSPORT); NULL otherwise. */
+static PyObject *ta_python_processor_row(ta_python_host *host, uint32_t processor) {
+    if (processor == TA_HOST_TRANSPORT) return host->transport;
+    return processor < (uint32_t)PyList_Size(host->processors) ? PyList_GetItem(host->processors, processor) : NULL;
+}
+
 static PyObject *ta_python_send_read(ta_python_view *view, int which) {
     if (view->fields[which]) return Py_NewRef(view->fields[which]);
     if (ta_python_view_live(view) < 0) return NULL;
@@ -81,10 +88,8 @@ static PyObject *ta_python_send_read(ta_python_view *view, int which) {
     case TA_PYTHON_SEND_ORIGIN: /* the sender's address, formatted by core on first ask */
         value = ta_python_effect_text(view, (ta_python_text_field){TA_EFFECT_FIELD_ORIGIN, 1});
         break;
-    default: { /* the I/O processor's type; None for a send to an invoked service */
-        PyObject *row = view->processor < (uint32_t)PyList_Size(view->host->processors)
-                            ? PyList_GetItem(view->host->processors, view->processor)
-                            : NULL;
+    default: { /* the I/O processor's type; None for the transport or an invoked service */
+        PyObject *row = ta_python_processor_row(view->host, view->processor);
         value = Py_NewRef(row ? PyTuple_GetItem(row, 0) : Py_None);
     }
     }
@@ -470,7 +475,7 @@ static void ta_python_dispatch_send(ta_python_host *host, uint32_t index) {
         ta_python_dispatch_service_send(host, index);
         return;
     }
-    PyObject *row = processor < (uint32_t)PyList_Size(host->processors) ? PyList_GetItem(host->processors, processor) : NULL;
+    PyObject *row = ta_python_processor_row(host, processor); /* the transport's too: TA_HOST_TRANSPORT */
     if (!row) return;
     ta_python_view *view = ta_python_view_new(host, host->state->send_type, index);
     if (!view) {

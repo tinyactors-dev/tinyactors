@@ -115,7 +115,7 @@ and let them address each other:
 
 - An actor's address is `tinyactors://<system>/#_scxml_<id>` (or
   `.../@<name>`). A send to another system is a `TA_EFFECT_SEND` for the
-  I/O processor the config marks `"remote"`, your transport (a queue
+  host's transport (`TA_HOST_TRANSPORT`), yours (a queue
   between threads, a socket, a `postMessage`), which delivers it on the
   other side with `ta_host_resolve` and `ta_host_send`, the sender's
   address as origin. Replies use `_event.origin`. See
@@ -137,13 +137,13 @@ hot reload and growth, not a parallelism mechanism.
 
 Inside one system, SCXML's rules hold exactly. Between systems there is no
 shared clock, no shared lock and no shared transaction, so the guarantees
-are those of the transport the application runs as its remote I/O
-processor; core makes none of its own:
+are those of the transport the application runs; core makes none of its
+own:
 
 | between | order | duplicates | loss | errors back |
 |---|---|---|---|---|
 | segments of one `ta_host` | per sender and receiver | never | never | `error.communication` at once |
-| systems through the remote I/O processor | the transport's | the transport's | the transport's | the transport fails the send: `error.communication` with the `sendid` |
+| systems through the host's transport | the transport's | the transport's | the transport's | the transport fails the send: `error.communication` with the `sendid` |
 
 What this means for you:
 

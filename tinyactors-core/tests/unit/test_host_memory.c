@@ -7,7 +7,7 @@
  *                segments, a send between them, a relocation, a migration.
  *   refusals     a workload that reaches every allocating path of the host
  *                (segments, relocation, routing between segments, sends to
- *                another system through the remote I/O processor, the
+ *                another system through the host's transport, the
  *                transport failing them back, inputs by address, migration,
  *                hibernation, restore) runs with an allocator that refuses
  *                its n-th allocation once. Each refusal comes back as
@@ -287,10 +287,7 @@ static test_host_config workload_config(workload *w) {
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
     config.migrate_quantum = 2;
-    static const ta_io_processor_descriptor remote = {
-        {"urn:test:remote", 15}, {"", 0}, TA_IO_PROCESSOR_REMOTE, 0};
-    config.io_processors = &remote; /* the sends to system "far" */
-    config.io_processor_count = 1;
+    /* the sends to system "far": the host's transport, no I/O processor */
     config.allocator = memory_allocator(w->memory);
     return config;
 }
@@ -341,7 +338,7 @@ static void workload_run(workload *w) {
     RETRY(m, TA_OK, send_event(w, workers[0], "ask", nobody));
     run_idle(w, w->host);
 
-    /* another system: a SEND for the remote I/O processor each (more than
+    /* another system: a SEND for the host's transport each (more than
      * the effect array holds at first) */
     m->phase = "remote";
     for (int k = 0; k < 20; k++) {

@@ -164,9 +164,8 @@ struct ta_host {
     uint32_t base_length;
     ta_datamodel_binding datamodels[8];
     ta_io_processor_descriptor
-        io_processors[17]; /* [0] the shared remote processor, then config.io_processors */
+        io_processors[17]; /* [0] the SCXML processor to other segments and systems, then config.io_processors */
     uint32_t io_processor_count;
-    uint32_t remote_processor; /* the config's processor for other systems (TA_NIL: none) */
     host_segment *segments;
     uint32_t segment_count, segment_capacity, round_robin;
     chart_version *versions;

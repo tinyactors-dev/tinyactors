@@ -215,7 +215,7 @@ static void clock_advance(conform *state, conform_call *call, conform_result *re
     ta_host_advance_time(host, (ta_host_time){(ta_time)monotonic, (uint64_t)wall});
 }
 
-/* The sends to the remote I/O processor of the batch ta_host_effects
+/* The sends to the host's transport of the batch ta_host_effects
  * publishes, each kept (its data written by the sender's datamodel), and
  * its NOTIFICATIONs; then the batch is acknowledged. */
 static ta_string_view text_of(ta_bytes bytes) {
@@ -232,9 +232,9 @@ static void batch_take(conform *state, send_list *sends, kept_list *notification
     const ta_host_effect *effects;
     uint32_t effect_count = ta_host_effects(host, &effects);
     for (uint32_t i = 0; i < effect_count; i++) {
-        if (effects[i].kind != TA_EFFECT_SEND || effects[i].io_processor != 0 ||
+        if (effects[i].kind != TA_EFFECT_SEND || effects[i].io_processor != TA_HOST_TRANSPORT ||
             sends->count == sizeof sends->items / sizeof sends->items[0])
-            continue; /* the vectors' configs have one I/O processor, the remote one */
+            continue;
         conform_send *send = &sends->items[sends->count++];
         send->target = text_of(conform_keep(state, (ta_bytes){effects[i].target.pointer, effects[i].target.length}));
         send->event = text_of(conform_keep(state, (ta_bytes){effects[i].event.pointer, effects[i].event.length}));

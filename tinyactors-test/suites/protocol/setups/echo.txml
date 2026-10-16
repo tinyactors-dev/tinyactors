@@ -3,7 +3,7 @@
 from another system is sent back to its origin as "back", with the event's
 data as its content. values.txt's roundtrip and malformed cases give
 their value to it as an event's data and compare the data of the send it
-makes back, through the remote I/O processor. In the conf: notation, so every language's stylesheet
+makes back, through the host's transport. In the conf: notation, so every language's stylesheet
 translates it (lib/w3c.rb, `setups`). -->
 <scxml initial="s" conf:datamodel="" version="1.0" name="echo"
        xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">

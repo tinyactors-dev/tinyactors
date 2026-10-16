@@ -14,7 +14,7 @@
 #include "../support/host_config.h"
 
 /* `a` and `b` are variables for actor.context; `out` sends a value to
- * another system (a SEND for the remote I/O processor); `self` sends a value
+ * another system (a SEND for the host's transport); `self` sends a value
  * to itself (a traced value). */
 #define CHART                                                                                      \
     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='guarded' "        \
@@ -122,8 +122,8 @@ static ta_run run_once(world *w) {
     return result;
 }
 
-/* A host with the guarded chart, two actors of it and a remote I/O
- * processor, which takes the sends to system b. */
+/* A host with the guarded chart and two actors of it; its transport takes
+ * the sends to system b. */
 static void world_open(world *w, int telemetry) {
     memset(w, 0, sizeof *w);
     current = w;
@@ -154,10 +154,6 @@ static void world_open(world *w, int telemetry) {
     }
     config.datamodels = &w->binding;
     config.datamodel_count = 1;
-    static const ta_io_processor_descriptor remote = {
-        {"urn:test:remote", 15}, {"", 0}, TA_IO_PROCESSOR_REMOTE, 0};
-    config.io_processors = &remote;
-    config.io_processor_count = 1;
     config.allocator = (ta_allocator){NULL, counting_alloc, counting_free};
     CHECK_EQUAL(test_host_new(&config, &w->host), TA_OK);
     size_t length;
@@ -259,7 +255,7 @@ static void test_request(void) {
     world_close(&w);
 }
 
-/* ---- a SEND for the remote I/O processor: release in the ack ------------------------- */
+/* ---- a SEND for the host's transport: release in the ack ------------------------- */
 
 static void test_send_and_ack(void) {
     world w;
@@ -378,7 +374,7 @@ static void test_each_output_once(void) {
     world_open(&w, 0);
     to_wire_calls = 0;
     send_event(&w, w.session, "later"); /* a delayed send with a value */
-    send_event(&w, w.other, "out");     /* a SEND for the remote processor with a value */
+    send_event(&w, w.other, "out");     /* a SEND for the transport with a value */
     ta_host_run(w.host, 100000);
     const ta_host_effect *effects;
     uint32_t n = ta_host_effects(w.host, &effects), send = n;

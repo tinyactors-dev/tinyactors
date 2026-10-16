@@ -430,12 +430,14 @@ static ta_status ta_python_host_restore_core(ta_python_host *host, ta_python_res
 
 static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build *build) {
     static char *const names[] = {"config", "io_processors", "log", "clock", "telemetry", "wake", "migrated",
-                                  "services", "migration_done", NULL};
+                                  "services", "migration_done", "transport", NULL};
     PyObject *config, *handlers = Py_None, *log = Py_None, *clock = Py_None, *telemetry = Py_None;
     PyObject *wake = Py_None, *migrated = Py_None, *services = Py_None, *migration_done = Py_None;
-    if (!PyArg_ParseTupleAndKeywords(build->arguments, build->keywords, build->pack ? "O|O$OOOOOOO:restore" : "O|O$OOOOOOO:Host",
-                                     names, &config, &handlers, &log, &clock, &telemetry, &wake, &migrated, &services,
-                                     &migration_done))
+    PyObject *transport = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(build->arguments, build->keywords,
+                                     build->pack ? "O|O$OOOOOOOO:restore" : "O|O$OOOOOOOO:Host", names, &config,
+                                     &handlers, &log, &clock, &telemetry, &wake, &migrated, &services,
+                                     &migration_done, &transport))
         return NULL;
     ta_time restored_time = 0;
     ta_string_view restored_id = {NULL, 0};
@@ -480,6 +482,16 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
         if (host->telemetry_async < 0) goto fail;
         if (host->telemetry_async) host->has_async = 1;
     }
+    int transport_async = 0; /* the transport: a row as an I/O processor's, with no type */
+    if (transport != Py_None) {
+        PyObject *answer = PyObject_CallFunctionObjArgs(state->coroutine_function, transport, NULL);
+        transport_async = answer ? PyObject_IsTrue(answer) : -1;
+        Py_XDECREF(answer);
+        if (transport_async < 0) goto fail;
+        if (transport_async) host->has_async = 1;
+    }
+    host->transport = Py_BuildValue("(OOO)", Py_None, transport, transport_async ? Py_True : Py_False);
+    if (!host->transport) goto fail;
     host->clock = Py_NewRef(clock);
     host->loop = Py_NewRef(Py_None);
     host->timer = Py_NewRef(Py_None);
@@ -671,6 +683,7 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
     ta_python_host *host = (ta_python_host *)self;
     Py_VISIT(Py_TYPE(self));
     Py_VISIT(host->processors);
+    Py_VISIT(host->transport);
     Py_VISIT(host->log);
     Py_VISIT(host->telemetry);
     Py_VISIT(host->wake);
@@ -701,6 +714,7 @@ static int ta_python_host_clear(PyObject *self) {
     ta_python_host *host = (ta_python_host *)self;
     if (host->host && host->depth == 0 && !host->turning) ta_python_host_close(host, 1);
     Py_CLEAR(host->processors);
+    Py_CLEAR(host->transport);
     Py_CLEAR(host->log);
     Py_CLEAR(host->telemetry);
     Py_CLEAR(host->wake);
@@ -1311,6 +1325,11 @@ static PyObject *ta_python_host_enter_with(PyObject *self, PyObject *unused) {
                              PyTuple_GetItem(row, 0));
                 return NULL;
             }
+        }
+        if (PyTuple_GetItem(host->transport, 2) == Py_True) {
+            PyErr_SetString(PyExc_TypeError,
+                            "the transport is an async def: use async with, the synchronous driver runs no event loop");
+            return NULL;
         }
         if (host->wake_async || host->telemetry_async) {
             PyErr_Format(PyExc_TypeError, "the %s handler is an async def: use async with, the synchronous driver runs no "

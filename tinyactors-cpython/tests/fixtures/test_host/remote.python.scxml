@@ -9,5 +9,8 @@
       <log label="got" expr="f'{_event.origin} {_event.origintype} {_event.data}'" />
       <send targetexpr="_event.origin" event="thanks" />
     </transition>
+    <transition event="error.communication">
+      <log label="failed" expr="_event.name" />
+    </transition>
   </state>
 </scxml>

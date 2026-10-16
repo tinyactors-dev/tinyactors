@@ -98,5 +98,5 @@ value itself, or quickjs's payload decoded on first read. A `"python"`
 chart's `<send>` data, `<donedata>` and invoke params are copied the same
 way when they are captured, so actors share no mutable value; a value
 outside the table (a tuple, a set, an object) fails the capture with
-`error.execution`. Toward another system the value is the remote I/O
-processor's to encode; `tinyactors.encode` gives the value table's CBOR.
+`error.execution`. Toward another system the value is the transport's
+to encode; `tinyactors.encode` gives the value table's CBOR.

@@ -80,13 +80,11 @@
  * stops a session. Unknown charts/sessions raise error.communication. */
 #define SYSTEM_TYPE  "http://tinyactors.dev/torture/#SystemEventProcessor"
 #define SYSTEM_SHORT "system"
-/* host I/O processors of every system (the config's ioProcessors; TA_EFFECT_SEND.io_processor):
- * SCXML sends to other systems come out as TA_EFFECT_SEND for the remote one */
-#define REMOTE_TYPE "http://tinyactors.dev/torture/#RemoteEventProcessor"
+/* host I/O processors of every system (the config's ioProcessors; TA_EFFECT_SEND.io_processor);
+ * SCXML sends to other systems come out as TA_EFFECT_SEND for TA_HOST_TRANSPORT */
 #define IO_BENCH  0
 #define IO_SYSTEM 1 /* and 2 (short form) */
-#define IO_REMOTE 3 /* "remote": the in-process transport to the other systems */
-#define IO_HOST   4 /* first scenario-defined host processor */
+#define IO_HOST   3 /* first scenario-defined host processor */
 #define MAX_IO    16
 #define ID_SHIFT  281474976710656.0 /* 2^48: script actor id = system * 2^48 + session */
 
@@ -426,9 +424,6 @@ static int system_create(const char *name, ta_source *source, uint32_t n,
     system->io_processors[IO_SYSTEM + 1].type =
         (ta_string_view){SYSTEM_SHORT, (uint32_t)strlen(SYSTEM_SHORT)};
     system->io_processors[IO_SYSTEM + 1].location = (ta_string_view){"#_system", 8};
-    system->io_processors[IO_REMOTE].type =
-        (ta_string_view){REMOTE_TYPE, (uint32_t)strlen(REMOTE_TYPE)};
-    system->io_processors[IO_REMOTE].flags = TA_IO_PROCESSOR_REMOTE;
     system->io_processor_count = IO_HOST;
     for (uint32_t i = 0; i < host_io_count && system->io_processor_count < MAX_IO - 1;
          i++, system->io_processor_count++) {
@@ -1703,8 +1698,8 @@ static int spawn_take(bench_system *system, uint64_t session, bench_spawn *out) 
     return 0;
 }
 
-/* The in-process transport: each system's remote I/O processor. A send to
- * another system's address (TA_EFFECT_SEND for IO_REMOTE) goes to the live
+/* The in-process transport: each system's host transport. A send to
+ * another system's address (TA_EFFECT_SEND for TA_HOST_TRANSPORT) goes to the live
  * system its address names: the target resolved there (ta_host_resolve), then
  * an input with the sender's address as origin (TA_EFFECT_FIELD_ORIGIN) and
  * the sendid. Payloads cross as neutral values, CBOR: the systems have
@@ -2043,7 +2038,7 @@ static void drain_effects(int si) {
             trace_flush(system);
             break;
         case TA_EFFECT_SEND:
-            if (effect->io_processor == IO_REMOTE) {
+            if (effect->io_processor == TA_HOST_TRANSPORT) {
                 deliver_remote(system, i, effect);
             } else if (effect->io_processor == IO_BENCH) {
                 system->to_bench++;

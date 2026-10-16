@@ -3,7 +3,7 @@
 # runs them on the datamodel under test: a roundtrip or malformed value is
 # given to the echo setup (README.md, "Setups") as the data of an event
 # from another system, whose chart sends the event's data back to its
-# origin through the remote I/O processor, and that data is compared; encode and invalid
+# origin through the host's transport, and that data is compared; encode and invalid
 # cases are value.encode's (docs/driver.md), on ECMAScript datamodels. Core's
 # tests/unit/test_datamodel_ecmascript.c runs them against the vtable of
 # the ECMAScript datamodel (quickjs-ng) too. A datamodel in another language

@@ -21,10 +21,8 @@ class Runner
   INVALID = -3
   NO_MEMORY = -4
 
-  # The echo setup's sender in another system, and its remote I/O processor
-  # (suites/protocol/README.md, "Setups").
+  # The echo setup's sender in another system (suites/protocol/README.md, "Setups").
   ECHO_ORIGIN = 'tinyactors://p/#_scxml_9'
-  REMOTE = 'urn:tinyactors:test:remote'
 
   # The wall clock a setup's runs see (suites/protocol/README.md, "Setups").
   WALL_NS = 1_700_000_000_000_000_000
@@ -205,7 +203,7 @@ class Runner
   # "ECMAScript: ..." only on an ECMAScript one, those named "not
   # ECMAScript: ..." only on another (values.txt, its header).
   def values_case(vector)
-    created = create(config('h', remote: true), @datamodel)
+    created = create(config('h'), @datamodel)
     status!(created, OK, 'ta_host_create')
     ecmascript = created['datamodel'] == 'ecmascript'
     case vector.kind
@@ -232,8 +230,8 @@ class Runner
   # The value of a roundtrip or malformed case, given to the echo setup's
   # session as the data of an event from another system (actor.send with
   # `cbor` and `origin`): the target's datamodel reads it, the echo sends it
-  # back to its origin, and that send leaves through the remote I/O
-  # processor (host.run's `sends`), its data written by the implementation.
+  # back to its origin, and that send leaves through the host's transport
+  # (host.run's `sends`), its data written by the implementation.
   # A malformed value is refused at the input (TA_ERROR_INVALID).
   def echoed!(vector)
     sent = call('actor.send', 'session' => @echo, 'event' => 'v', 'origin' => ECHO_ORIGIN,
@@ -242,7 +240,7 @@ class Runner
 
     status!(sent, OK, 'ta_host_send')
     sends = run_host.fetch('sends', [])
-    raise Failed, "#{sends.size} sends to the remote processor, expected 1" unless sends.size == 1
+    raise Failed, "#{sends.size} sends to the transport, expected 1" unless sends.size == 1
 
     back = sends.first
     unless back['target'] == ECHO_ORIGIN && back['event'] == 'back'
@@ -364,10 +362,8 @@ class Runner
 
   # ---- setups (suites/protocol/README.md) -----------------------------------------
 
-  def config(system, remote: false)
-    config = { 'systemID' => system, 'system' => { 'maxActors' => 8, 'ticksPerSecond' => 1000, 'traceSeed' => 1 } }
-    config['ioProcessors'] = [{ 'type' => REMOTE, 'remote' => true }] if remote
-    CBOR.encode(config)
+  def config(system)
+    CBOR.encode({ 'systemID' => system, 'system' => { 'maxActors' => 8, 'ticksPerSecond' => 1000, 'traceSeed' => 1 } })
   end
 
   def create(config, datamodel)
@@ -391,7 +387,7 @@ class Runner
     end
   end
 
-  # The echo setup on a host created with the remote I/O processor: the
+  # The echo setup: the
   # echo chart in the datamodel's language and one session of it.
   def echo(language)
     unless W3C.stylesheets.key?(language)

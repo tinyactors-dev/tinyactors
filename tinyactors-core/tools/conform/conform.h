@@ -126,7 +126,7 @@ typedef struct conform_bytes_list {
     const ta_bytes *pointer;
     uint32_t count;
 } conform_bytes_list;
-/* A send to the remote I/O processor, as host.run answers it (driver.md);
+/* A send to the host's transport, as host.run answers it (driver.md);
  * data.pointer NULL: no data. */
 typedef struct conform_send {
     ta_string_view target, event, origin;

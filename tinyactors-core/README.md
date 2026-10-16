@@ -14,7 +14,7 @@ drain tagged effects.
 - [docs/durability.md](docs/durability.md) — what a session is when it is not running:
   hibernation, export, migration and snapshots (none of them is persistence)
 - [docs/protocol.md](docs/protocol.md) — actors in different systems: addresses, values
-  as CBOR, and other systems through the remote I/O processor
+  as CBOR, and other systems through the host's transport
 - [docs/scenarios.md](docs/scenarios.md) — twelve execution walkthroughs
 - [docs/layout.md](docs/layout.md) — file tree, tooling, tasks
 - [docs/distribution.md](docs/distribution.md) — what is released (the C libraries), the

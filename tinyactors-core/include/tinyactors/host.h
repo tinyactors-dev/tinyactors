@@ -23,10 +23,11 @@
  *   routing    SCXML sends between segments (same system id) are delivered
  *              inside the host layer — no host round trip — with origin the
  *              sender's address. Other systems: a send to an address whose
- *              system id is not this host's is a TA_EFFECT_SEND for the I/O
- *              processor the config marks "remote" (the application's
- *              transport; TA_EFFECT_FIELD_ORIGIN is the sender's address), or
- *              error.communication without one. What arrives from another
+ *              system id is not this host's is a TA_EFFECT_SEND for the
+ *              host's transport (io_processor TA_HOST_TRANSPORT; the
+ *              application's, which needs no config; TA_EFFECT_FIELD_ORIGIN
+ *              is the sender's address). An embedder with no transport fails
+ *              each one (TA_EVENT_IN_ERROR_COMMUNICATION). What arrives from another
  *              system is an input: ta_host_resolve its local address, then
  *              ta_host_send with origin. Sends to host
  *              I/O processors come out as TA_EFFECT_SEND effects.
@@ -275,6 +276,9 @@ enum {
                                         defined yet (docs/requests.md, "Notifications"): drop a
                                         method you do not know. */
 };
+/* TA_EFFECT_SEND's io_processor for a send to another system: the host's
+ * transport, which the application serves (no I/O processor of the config) */
+#define TA_HOST_TRANSPORT UINT32_C(0xFFFFFFFE)
 typedef struct ta_host_effect {
     uint32_t size;
     uint32_t kind;
@@ -283,7 +287,8 @@ typedef struct ta_host_effect {
     uint64_t session;      /* the actor's session id (0: none) */
     uint64_t root;         /* the session of its host-spawned ancestor (attribution) */
     uint32_t token;        /* request / invoke token (per segment) */
-    uint32_t io_processor; /* TA_EFFECT_SEND: index in the config's ioProcessors */
+    uint32_t io_processor; /* TA_EFFECT_SEND: index in the config's ioProcessors, TA_HOST_TRANSPORT
+                              (another system) or TA_NIL (an invoked service) */
     /* (migration: MIGRATED, MIGRATION_DONE, and a WAKE a migration asked for; 0 otherwise) */
     uint32_t flags;        /* TA_EFFECT_FLAG_* (system.h) */
     uint32_t migration;

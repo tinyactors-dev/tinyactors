@@ -1,7 +1,10 @@
 # ADR 0017: A host has one way out to other systems, and a sender waits for its send
 
 **Status:** Proposed (2026-10-16). Decisions 1 and 2 were decided by the
-maintainer on 2026-10-16; decisions 3 to 5 wait for the maintainer.
+maintainer on 2026-10-16 and are implemented; decisions 3 to 5 wait for the
+maintainer. Decision 1 marks the transport's sends with
+`TA_HOST_TRANSPORT`, a value of their own beside `TA_NIL`, so it needs no
+renumbering of the effects; decision 3 decides whether to renumber anyway.
 Amends [ADR 0014](0014-other-systems-are-an-io-processor.md) (decision 1's
 `"remote": true` processor) and replaces `TA_IO_PROCESSOR_SYNC`.
 **Date:** 2026-10-16

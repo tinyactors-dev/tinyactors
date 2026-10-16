@@ -316,15 +316,14 @@ static void test_routing_between_segments(void) {
     CHECK_EQUAL(host_stats_fill(e.host, &stats), TA_OK);
     CHECK(stats.routed == 2 && stats.segments == 2 && stats.actors == 2);
 
-    /* nobody has that session: error.communication; another system, with no
-     * remote I/O processor: error.communication too */
+    /* nobody has that session: error.communication; another system: a SEND
+     * for the host's transport (test_remote.c), which this one ignores */
     e.log[0] = 0;
     CHECK_EQUAL(send(&e, w, "ask", "{\"to\": \"" BASE "#_scxml_999\"}"), TA_OK);
     CHECK_EQUAL(send(&e, w, "ask", "{\"to\": \"tinyactors://elsewhere/#_scxml_1\"}"), TA_OK);
     run(&e);
-    CHECK(strcmp(e.log, "comm;comm;") == 0);
-    CHECK_EQUAL(e.routed_out_count, 0);
-    /* (with a remote I/O processor it leaves as a SEND: test_remote.c) */
+    CHECK(strcmp(e.log, "comm;") == 0);
+    CHECK_EQUAL(e.routed_out_count, 1);
 
     /* growth: more actors than the configured 8, spawned and messaged */
 
@@ -706,7 +705,7 @@ static void test_fair_segments(void) {
     world_close(&e);
 }
 
-/* with a remote processor, a target that is no absolute URI is still invalid
+/* a target that is no absolute URI is invalid
  * (error.execution), and a malformed session id of our own base fails at once
  * (error.communication in the internal queue, before external events) */
 static void test_bad_targets(void) {

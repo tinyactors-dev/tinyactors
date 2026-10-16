@@ -515,8 +515,7 @@ handler may answer it. State: `actor.state`, a typed method. Inspection:
 typed methods over post with response handlers. `<log>`: a log handler
 configured per host, no global configuration. `DONE` and `ERROR`: the
 binding's own lifecycle (release its rows), not callbacks. Other systems:
-the I/O processor the config marks remote, an ordinary I/O processor of
-the application's (ADR 0014).
+the host's transport, a handler of the application's.
 
 ## 11. Base APIs for embedders and bindings
 

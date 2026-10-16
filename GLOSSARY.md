@@ -152,10 +152,11 @@ group, the words build on each other.
   it from its old segment, adopt makes it run in the new one with the
   same session id. Internal: no host call hands an export blob out, and
   an actor does not move between hosts.
-- **Other system, remote I/O processor.** A system with another system
+- **Other system, transport.** A system with another system
   id: another thread's host, another process, a browser. A send to its
-  address is a `SEND` for the I/O processor the config marks `"remote"`,
-  the application's transport, with the sender's address as *origin*;
+  address is a `SEND` for the host's *transport* (`TA_HOST_TRANSPORT`),
+  which the application serves and which needs no config, with the
+  sender's address as *origin*;
   what arrives is an input by address (`ta_host_resolve`) with that
   origin. Transports, encodings and delivery guarantees are the
   application's.

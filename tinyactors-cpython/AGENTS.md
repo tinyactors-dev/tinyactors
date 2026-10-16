@@ -95,7 +95,7 @@ Decided by the maintainer (2026-10-13); every item is in
   fallback.
 - **`tinyactors.Host(config, io_processors={type: handler}, log=handler,
   clock=None, telemetry=None, wake=None, migrated=None,
-  services=None, migration_done=None)`.**
+  services=None, migration_done=None, transport=None)`.**
   Everything is per host: the config (a `dict`, written as CBOR into the
   call's arena for `ta_host_create`), the handlers and the clock. A host
   has no resolver ("The resolver"). No global configuration (no
@@ -347,9 +347,12 @@ Decided by the maintainer (2026-10-13); every item is in
   a type with no handler gives `ERROR_COMMUNICATION` without raising.
   At the stop the services are dropped, not
   stopped, as pending handlers are. `tools/services.py` is the pattern.
-- **Other systems** (ADR 0014, 2026-10-15): the config's I/O processor
-  marked `"remote"` is an ordinary I/O processor handler that gets every
-  send to another system's address (core decides local or not); its
+- **Other systems** (ADR 0014, 2026-10-15; ADR 0017, 2026-10-16): the
+  host's **`transport=handler(host, send)`** gets every send to another
+  system's address (core decides local or not), a `TA_EFFECT_SEND` with
+  `IO_PROCESSOR` `TA_HOST_TRANSPORT`, as a `Send` view (`type` `None`;
+  an `async def` handler is refused under `with`); it needs no config,
+  and without a handler the binding fails each such send. Its
   `send.origin` is `TA_EFFECT_FIELD_ORIGIN`, the sender's address. The
   other side calls **`host.send(target, event, data, origin=...)`**, where
   `target` may be a local address (`str`) that core resolves

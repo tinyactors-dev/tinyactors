@@ -33,8 +33,8 @@ static const char ta_python_doc_module[] =
     "  wake for a hibernated actor that has work, migrated and migration_done\n"
     "  for migrations, and telemetry for OTLP bytes. A plain function handler\n"
     "  gets a thin view, valid until its batch is acknowledged; an async def\n"
-    "  handler gets a record it can keep. The I/O processor the config marks\n"
-    "  \"remote\" carries the sends to other systems.\n"
+    "  handler gets a record it can keep. transport gets every send to\n"
+    "  another system, as a Send: your transport, with no config.\n"
     "- Questions. Typed methods (actor_state, host_stats, trace_watch, ...)\n"
     "  take a handler that runs at a later turn with the answer.\n"
     "- Memory. Host.sweep() finds cold actors, Host.hibernate() writes one to\n"
@@ -163,7 +163,7 @@ static const char ta_python_doc_compiled_close[] =
     "a fallback.";
 
 static const char ta_python_doc_host[] =
-    "Host(config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
+    "Host(config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None, transport=None)\n"
     "--\n"
     "\n"
     "A host: the object that holds actors and runs their charts, many actor\n"
@@ -175,9 +175,11 @@ static const char ta_python_doc_host[] =
     "host, all optional:\n"
     "\n"
     "- io_processors: {type: handler(host, send)} for each I/O processor the\n"
-    "  config declares; an actor's <send type=...> reaches it as a Send. The\n"
-    "  one the config marks \"remote\" gets every send to another system's\n"
-    "  address (tinyactors://<other systemID>/...): your transport.\n"
+    "  config declares; an actor's <send type=...> reaches it as a Send.\n"
+    "- transport: handler(host, send) for every send to another system's\n"
+    "  address (tinyactors://<other systemID>/...), as a Send: your transport,\n"
+    "  which needs no config. Without one, each such send fails\n"
+    "  (error.communication).\n"
     "- services: {type: handler(host, invocation)} for the services your\n"
     "  application runs; an <invoke type=...> starts one with an Invocation,\n"
     "  and the handler returns the service object (see Invocation).\n"
@@ -289,8 +291,8 @@ static const char ta_python_doc_host_send[] =
     "Applied at the call: the event waits in the actor's mailbox and runs in\n"
     "the next turn; a hibernated actor's wake handler is called first.\n"
     "`traceparent` continues your caller's trace. `origin` is the sender's\n"
-    "address when the event comes from another system (what its remote I/O\n"
-    "processor handed over as send.origin): it becomes _event.origin, a\n"
+    "address when the event comes from another system (what its transport\n"
+    "handed over as send.origin): it becomes _event.origin, a\n"
     "chart's reply goes back there, and _event.origintype is SCXML's. Refused\n"
     "with TinyactorsError when the target does not exist (TA_ERROR_STALE),\n"
     "is another system's address (TA_ERROR_INVALID) or the host is full.";
@@ -404,7 +406,7 @@ static const char ta_python_doc_host_snapshot[] =
     "run are not in it either; Host.restore starts them again.";
 
 static const char ta_python_doc_host_restore[] =
-    "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
+    "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None, transport=None)\n"
     "--\n"
     "\n"
     "A new Host running a snapshot of Host.snapshot.\n"
@@ -716,11 +718,11 @@ static const char ta_python_doc_send_traceparent[] =
     "your outgoing request's traceparent header to continue the trace.";
 
 static const char ta_python_doc_send_type[] =
-    "The I/O processor's type from the config (None for a send to an invoked service).";
+    "The I/O processor's type from the config (None for the transport or an invoked service).";
 
 static const char ta_python_doc_send_origin[] =
     "The sending actor's address, tinyactors://<systemID>/#_scxml_<session>: what\n"
-    "a remote I/O processor hands the other system, whose Host.send takes it\n"
+    "a transport hands the other system, whose Host.send takes it\n"
     "as origin so a reply finds its way back.";
 
 static const char ta_python_doc_send_answer[] =

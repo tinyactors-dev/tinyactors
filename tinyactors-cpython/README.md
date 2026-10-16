@@ -680,16 +680,14 @@ How systems talk to each other (threads and a queue, a WebSocket to a
 browser, HTTP) is your program's choice. A chart addresses another system
 with an ordinary SCXML target, `tinyactors://<systemID>/#_scxml_<n>` or
 `tinyactors://<systemID>/@<name>`. The host delivers a target in its own
-system itself. Every other target goes to the I/O processor that the
-config marks `"remote"` (at most one):
+system itself. Every other target goes to the host's transport, a
+handler you pass as `transport=`; it needs nothing in the config:
 
 ```python
-config = {"systemID": "a", "ioProcessors": [{"type": "urn:app:mesh", "remote": True}]}
-
-def mesh(host, send):            # every send to another system
+def transport(host, send):       # every send to another system
     queue_for(send.target).put((send.target, send.event, send.data, send.origin))
 
-host = tinyactors.Host(config, {"urn:app:mesh": mesh})
+host = tinyactors.Host({"systemID": "a"}, transport=transport)
 ```
 
 The other side delivers it as an input, by address, with the sender's
@@ -704,8 +702,8 @@ other.send(target, event, data, origin=origin)   # _event.origintype is SCXML's
 A send the transport accepted needs no answer. One it cannot deliver
 calls `send.fail()`, and the sender gets `error.communication`. The data
 is a Python value; encode it for the wire as you like, for example with
-`tinyactors.encode`. Without a remote processor, a send to another system
-is `error.communication`.
+`tinyactors.encode`. Without a transport, each send to another system
+fails, and its sender gets `error.communication`.
 
 ## Values
 
@@ -878,7 +876,7 @@ how to use it.
 | `compile_charts(sources, resolver=None) -> Compiled` | compiles `(name, text)` pairs into one image; raises `CompileError` |
 | `compile_system(manifest, resolver=None) -> Compiled` | compiles a `<system>` manifest of charts and boot actors |
 | `Compiled.image`, `.diagnostics`, `.close()` | the image as a read-only buffer, valid until `close()`; the warnings and notes; a context manager |
-| `Host(config, io_processors=None, *, log, clock, telemetry, wake, migrated, services, migration_done)` | a host, with its handlers; a context manager for `with` and `async with` |
+| `Host(config, io_processors=None, *, log, clock, telemetry, wake, migrated, services, migration_done, transport)` | a host, with its handlers (`transport`: every send to another system); a context manager for `with` and `async with` |
 | `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs an image; the current version of a chart |
 | `spawn(ref, name=None, params=None, traceparent=None) -> session` | starts an actor |
 | `send(target, event, data=None, *, traceparent=None, origin=None)` | gives an actor an event; `target` is a session or a local address |

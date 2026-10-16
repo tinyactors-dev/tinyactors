@@ -61,7 +61,7 @@ Every method names the core calls behind it; header references are to
 | `actor.spawn` | `chart` (its name); `params` (value) | `status`; `session` | `ta_host_chart`, `ta_host_spawn` |
 | `actor.send` | `session`, `event`; `data` (value), or `cbor` (bytes: the data as the value table's CBOR, read by the target session's datamodel: quickjs `ta_datamodel_ecmascript_payload_from_cbor`, a binding its own reader; data it cannot read is `TA_ERROR_INVALID`); `origin` (text: the sender's address in another system) | `status` | `ta_host_send` (an origin without an origintype gets the SCXML event processor's) |
 | `clock.advance` | `monotonic` (ticks), `wallNs` | `{}` | `ta_host_advance_time` |
-| `host.run` | — | `status` of the last run; `sends`: array of `{"target", "event", "origin", "data"}`; `notifications`: array of bytes | First any pending batch: `ta_host_effects`, handled as below, then `ta_host_effects_ack`. Then `ta_host_run`, again while it answers `TA_RUN_YIELDED` or `TA_RUN_EFFECTS_FULL` (`system.h`), at most 1,000 times, acknowledging the effects after each run. For each `TA_EFFECT_SEND` to the I/O processor the config marks `remote`, in order: its target, event, origin (`TA_EFFECT_FIELD_ORIGIN`) and, when it has data, `data` (bytes: the value table's CBOR the sender's datamodel writes, `to_wire`, or a binding its own writer); for each `NOTIFICATION` no `host.post` answered, its WIRE. No other effect is handled |
+| `host.run` | — | `status` of the last run; `sends`: array of `{"target", "event", "origin", "data"}`; `notifications`: array of bytes | First any pending batch: `ta_host_effects`, handled as below, then `ta_host_effects_ack`. Then `ta_host_run`, again while it answers `TA_RUN_YIELDED` or `TA_RUN_EFFECTS_FULL` (`system.h`), at most 1,000 times, acknowledging the effects after each run. For each `TA_EFFECT_SEND` for the host's transport (`io_processor` `TA_HOST_TRANSPORT`), in order: its target, event, origin (`TA_EFFECT_FIELD_ORIGIN`) and, when it has data, `data` (bytes: the value table's CBOR the sender's datamodel writes, `to_wire`, or a binding its own writer); for each `NOTIFICATION` no `host.post` answered, its WIRE. No other effect is handled |
 | `value.encode` | `expression` (text, ECMAScript) | `status`; `cbor` (bytes) | ECMAScript datamodels only: the expression's value, then `to_wire` (quickjs: `ta_datamodel_ecmascript_payload_eval`); an expression that throws is `TA_ERROR_EXECUTION`, another datamodel `TA_ERROR_UNSUPPORTED` |
 
 **Datamodels.** `datamodel` names one the implementation offers:
@@ -114,7 +114,7 @@ binding's API evaluates no expression outside a chart (`value.encode`).
 A value's round trip goes through the public path instead: `values.txt`
 gives it to the echo setup as the data of an event from another system
 (`actor.send` with `cbor` and `origin`), whose chart sends it back to its
-origin, out through the remote I/O processor (`host.run`'s `sends`). A
+origin, out through the host's transport (`host.run`'s `sends`). A
 binding may offer `value.encode`; the runner skips its cases when it does
 not.
 

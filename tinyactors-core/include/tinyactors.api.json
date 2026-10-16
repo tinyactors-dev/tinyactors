@@ -413,8 +413,8 @@
       "value": 256
     },
     {
-      "name": "TA_IO_PROCESSOR_REMOTE",
-      "value": 8
+      "name": "TA_HOST_TRANSPORT",
+      "value": 4294967294
     },
     {
       "name": "TA_IO_PROCESSOR_SCXML_REMOTE",

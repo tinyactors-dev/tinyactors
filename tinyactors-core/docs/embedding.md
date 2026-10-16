@@ -108,7 +108,7 @@ handle, string, `WIRE` byte and `TRACEPARENT` text is valid until
 
 | Effect | What you do | Answer with |
 |---|---|---|
-| `TA_EFFECT_SEND` | an I/O processor's send: index `IO_PROCESSOR` in the config's `ioProcessors`; `TA_NIL` is a send to a service you run, keyed by (`SEGMENT`, `TOKEN`) | its reply events (`ta_host_send`), or `TA_EVENT_IN_ERROR_COMMUNICATION` with the `sendid`; its sender waits until the ack, so what you give before it comes first |
+| `TA_EFFECT_SEND` | an I/O processor's send: index `IO_PROCESSOR` in the config's `ioProcessors`; `TA_HOST_TRANSPORT` is a send to another system, for your transport; `TA_NIL` is a send to a service you run, keyed by (`SEGMENT`, `TOKEN`) | its reply events (`ta_host_send`), or `TA_EVENT_IN_ERROR_COMMUNICATION` with the `sendid`; its sender waits until the ack, so what you give before it comes first |
 | `TA_EFFECT_INVOKE`, `TA_EFFECT_UNINVOKE` | start or stop the service of type `EVENT` with src `TARGET`, keyed by (`SEGMENT`, `TOKEN`); an `INVOKE` flagged `TA_EFFECT_FLAG_RESTORED` comes from a restored host's first run, for an invocation that was running at the snapshot: start the service again, or a stand-in | events with `TA_EVENT_IN_FROM_INVOKE` and the token; `TA_EVENT_IN_INVOKE_DONE` at its end; its failure (it cannot start, it crashed) `TA_EVENT_IN_FROM_INVOKE \| TA_EVENT_IN_ERROR_COMMUNICATION`: the invoker gets `error.communication`, and the token's later events are refused |
 | `TA_EFFECT_REQUEST` | a fetch at run time (it stays, 2026-10-13): an `<invoke srcexpr>` whose name (`AUXILIARY`) core normalized and found no chart for in the requesting segment's image. The fetching is built out later (boundary.md section 12; `ROADMAP.md`, "Decided later"). Not the control plane | `ta_host_resume` with `TA_ERROR_INVALID` until then (the parent gets `error.execution`): a resume names only a chart of that image, where core has already looked |
 | `TA_EFFECT_WAKE` | load the session's hibernation blob: an event or a timer came for it (`MIGRATION` 0), or a migration asks for it (`MIGRATION` its id), again when it finds the actor hibernated after a wake | `ta_host_wake` |
@@ -219,8 +219,9 @@ actors a system image declares.
 
 A host is used from the thread that made it, and only from there. It
 starts no thread and takes no lock. Parallelism is shared-nothing:
-several hosts, one per thread, each with an I/O processor its config
-marks `"remote"`: a `TA_EFFECT_SEND` to another system's address goes
+several hosts, one per thread, each with a transport of yours: a
+`TA_EFFECT_SEND` to another system's address (`io_processor`
+`TA_HOST_TRANSPORT`; fail it when you have no transport) goes
 through your own queue to the thread that owns that system, which
 resolves the target (`ta_host_resolve`) and calls `ta_host_send` with the
 data made a payload of its datamodel and the origin

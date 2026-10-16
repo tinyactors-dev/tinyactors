@@ -191,6 +191,7 @@ struct ta_python_host {
     int has_async;                     /* an async def I/O processor */
     int inputs;                        /* an input was made since the last run */
     PyObject *processors;              /* per ioProcessors index: (type, handler, async) */
+    PyObject *transport;               /* (None, handler or None, async): sends to other systems */
     PyObject *log;                     /* log handler or None */
     PyObject *telemetry;               /* telemetry handler(host, signal, data) or None */
     PyObject *wake;                    /* wake handler(host, session, migration) or None */

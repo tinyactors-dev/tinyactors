@@ -951,8 +951,8 @@ A chart version is a new image, so a new version of a system is a new
 ```
 
 - **Addresses survive versions.** `ta_system_config.first_serial` gives each
-  version its own session range; with `TA_IO_PROCESSOR_SCXML_SHARED` on the remote
-  processor a send to an own-base session that is not here becomes a
+  version its own session range; with `TA_IO_PROCESSOR_SCXML_SHARED` on the SCXML
+  processor for other systems a send to an own-base session that is not here becomes a
   `TA_EFFECT_SEND` (full URI) instead of `error.communication`. The host knows
   which version has it, or reports `TA_EVENT_IN_ERROR_COMMUNICATION` — SCXML semantics are
   unchanged.
