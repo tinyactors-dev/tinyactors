@@ -98,7 +98,28 @@ Gaps in core or in the suite this session finds. Each says what is
 missing, why, and which suite case or test shows it; the coordinator moves
 it into the root ROADMAP.md's "Requests to core" and answers there.
 
-None open. The first addon's two requests were answered on 2026-10-12
+- **An event string longer than a slab page grows a segment without
+  bound** (2026-10-16, p1-rules; log entry `l-p1-rules-long-string`).
+  `host.send(session, 'x'.repeat(8000))` never returns: `ta_system_send`
+  answers `TA_ERROR_NO_MEMORY` for a string that no slab size class holds
+  (`src/base/slab.h`: "Max object size is TA_SLAB_PAGE", 4096 bytes), and
+  `host_send_to` (`src/host/host.c:724-737`) grows the segment and tries
+  again for as long as the growth succeeds: each doubling is allocated and
+  `ta_system_relocate`d (a `memset` of the new block), so the process
+  reaches 6 GB resident in four seconds and the kernel kills it. Seen
+  under node 22.23.3 on both datamodels (gdb: `ta_napi_host_send` →
+  `ta_host_send` → `segment_grow` → `ta_system_relocate` → `place`); 4000
+  bytes pass, 6000 and 8000 do not. Any input that carries text (an event
+  name, a sendid, an origin; an I/O processor's answer; a transport
+  passing a message from the network) reaches it, so an application input
+  can exhaust the machine. Asked: a refusal the caller can see (a status
+  for text longer than core keeps, or strings past a page kept another
+  way), and growth that stops when it cannot help; the same loop is at
+  `host.c:713`, `:1481`, `:1530` and `:2083`. The addon works around
+  nothing: its tests keep each text under 4096 bytes
+  (`test/rules.test.mjs`, "marks nest in the host's arena").
+
+The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
 tick rate through `host.config`, `9bd33f03`); their text is in this file's
 history before `70434bee`.
