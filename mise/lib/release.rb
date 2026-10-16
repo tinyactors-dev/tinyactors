@@ -384,14 +384,19 @@ module Release
   # tree, nothing is pushed, and with another tree it fails. A version not
   # above the release repository's latest is refused, so its main only
   # moves forward.
-  def push_snapshot!(tag)
+  #
+  # `source` is the directory the snapshot is taken from, when the project
+  # lived elsewhere at that tag (tinyactors-napi/v0.2.0 in
+  # tinyactors-core/bindings/node).
+  def push_snapshot!(tag, source: nil)
     directory, version = split_tag(tag)
+    source ||= directory
     repository = release_repository(directory)
     release_tag = "v#{version}"
     commit = git('rev-parse', '--verify', '--quiet', "#{tag}^{commit}").to_s.strip
     fail!("there is no tag #{tag}") if commit.empty?
-    tree = git('rev-parse', '--verify', '--quiet', "#{commit}:#{directory}").to_s.strip
-    fail!("#{tag} has no directory #{directory}/") if tree.empty?
+    tree = git('rev-parse', '--verify', '--quiet', "#{commit}:#{source}").to_s.strip
+    fail!("#{tag} has no directory #{source}/ (where was the project then? --directory)") if tree.empty?
 
     ensure_release_repository!(repository, directory)
     url = repository_url(repository)
@@ -399,9 +404,9 @@ module Release
     if (existing = tags[release_tag])
       run('git', 'fetch', '--quiet', '--no-tags', url, "refs/tags/#{release_tag}")
       unless git('rev-parse', "#{existing}^{tree}").to_s.strip == tree
-        fail!("#{repository} has #{release_tag} with a tree other than #{directory}/ at #{tag}")
+        fail!("#{repository} has #{release_tag} with a tree other than #{source}/ at #{tag}")
       end
-      puts "release: #{repository} has #{release_tag} already, with #{directory}/ at #{tag}"
+      puts "release: #{repository} has #{release_tag} already, with #{source}/ at #{tag}"
       return [repository, release_tag]
     end
     released = tags.keys.filter_map { |name| name[1..] if name.start_with?('v') && VERSION.match?(name[1..]) }
@@ -419,7 +424,7 @@ module Release
                  parent
                else
                  commit_tree!(tree: tree, parent: parent, from: commit,
-                              message: "#{directory} #{version}\n\n#{directory}/ at #{tag} in #{MONOREPO} (#{commit}).\n")
+                              message: "#{directory} #{version}\n\n#{source}/ at #{tag} in #{MONOREPO} (#{commit}).\n")
                end
     run('git', 'push', '--atomic', url, "#{snapshot}:refs/heads/main", "#{snapshot}:refs/tags/#{release_tag}")
     [repository, release_tag]

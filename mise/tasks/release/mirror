@@ -2,6 +2,7 @@
 #MISE description="Publish a release tag of this repository as a GitHub release of its component's release repository: push the directory's snapshot, then create the release with the tag's notes and the given assets"
 #USAGE arg "<tag>" help="The release tag here, <directory>/v<version> (tinyxml/v0.1.0)"
 #USAGE flag "--assets <dir>" help="The release's files (with their SHA256SUMS), as a release task left them in build/release/; without it, the assets of this repository's own GitHub release of the tag"
+#USAGE flag "--directory <dir>" help="Where the project's files were at the tag, when not in its directory (tinyactors-napi/v0.2.0: tinyactors-core/bindings/node)"
 # vim:ft=ruby
 
 # Two uses (docs/adr/0016-a-release-repository-per-component.md):
@@ -23,7 +24,9 @@ require 'release'
 tag = ENV['usage_tag'] || ARGV[0]
 assets_dir = ENV['usage_assets'].to_s.empty? ? nil : ENV['usage_assets']
 assets_dir ||= ARGV[ARGV.index('--assets') + 1] if ARGV.include?('--assets')
-Release.fail!('usage: mise run release:mirror -- <directory>/v<version> [--assets <dir>]') unless tag
+source = ENV['usage_directory'].to_s.empty? ? nil : ENV['usage_directory']
+source ||= ARGV[ARGV.index('--directory') + 1] if ARGV.include?('--directory')
+Release.fail!('usage: mise run release:mirror -- <directory>/v<version> [--assets <dir>] [--directory <dir>]') unless tag
 directory, version = Release.split_tag(tag)
 
 unless Release::REPO.join(directory).directory?
@@ -32,7 +35,7 @@ end
 Release.git('fetch', '--quiet', '--tags', 'origin') or Release.fail!('git fetch origin failed')
 Release.fail!("origin has no tag #{tag}; a release is pushed before it is published") unless Release.pushed?(tag)
 
-repository, release_tag = Release.push_snapshot!(tag)
+repository, release_tag = Release.push_snapshot!(tag, source: source)
 if Release.released?(repository, release_tag)
   puts "release:mirror: #{repository} has the release #{release_tag} already; left as it is"
   exit
