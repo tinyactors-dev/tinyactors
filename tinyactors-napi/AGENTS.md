@@ -188,8 +188,10 @@ The rules the Python binding follows hold here too (bindings.md, sections
   sees when it goes on; one given later arrives as an ordinary event.
 - **Host outputs are copied once** into a `Buffer`
   (`napi_create_buffer_copy`) before the ack: telemetry data, `metrics()`,
-  `hibernate()`, `snapshot()`; never a view of host memory (boundary.md
-  section 7).
+  `hibernate()`; never a view of host memory (boundary.md section 7).
+  `snapshot()` fills a `ta_buffer` the addon lends: `ta_host_snapshot_pack`
+  writes the pack once, straight into a `Buffer` of the size its probe
+  gave (`napi_create_buffer`).
 - **A reply's `result` is converted once**, at its dispatch, for its
   response handler.
 
@@ -491,6 +493,42 @@ d-dom, d-separate):
   the link as `added`). The new chart's scripts are instantiated in the
   new context, not run: a `var` they declare is there, `undefined`, and
   core initializes the new chart's added `<data>`.
+- **Snapshots write every row out** (decided 2026-10-16, as the Python
+  binding's "Snapshots of the datamodel"; docs/plan.xml, p2-snapshot).
+  `host.snapshot()` checks quiescence first (`ta_host_snapshot` with an
+  empty buffer: `TA_ERROR_STATE` from a handler, with an effect or a reply
+  pending, or during a migration, before any state is built), then packs
+  (`ta_host_snapshot_pack`, labelled `tinyactors-napi`) one CBOR map of
+  the host's one datamodel: `{"quickjs": bytes}`
+  (`ta_datamodel_ecmascript_snapshot`, written into room for the last
+  state's length and a quarter more) or `{"native": {...}}`, the session,
+  payload and loop tables' handle namespaces (`ta_table_snapshot`) and
+  every row: a session's chart by its attachment's segment and index
+  (`ta_datamodel_chart.segment`, kept in the chart's row: two segments may
+  run one image), its variables as hibernation writes them, its `_event`
+  with core's ids, its link's `_sessionid`, `_name` and processors, its
+  params and the names a wake added, a payload's value and references, a
+  `<foreach>`'s items, each value as CBOR bytes of its own so a value
+  nests as deep as in a send. What hibernation refuses the snapshot
+  refuses (`TA_ERROR_UNSUPPORTED`, the message naming the variable), and
+  the host goes on. `Host.restore` is a static method that makes the host
+  through the constructor (the instance's `restoring`, taken at the
+  constructor's entry), with `ta_host_snapshot_unpack`,
+  `ta_host_snapshot_image` and `ta_host_restore` in place of
+  `ta_host_create`; it reads the snapshot's bytes only after the config
+  is written (a getter may run JavaScript) and copies them when they are
+  not 8-aligned. Then, before anything runs, the datamodel: quickjs's
+  `ta_datamodel_ecmascript_restore`, or the native tables' namespaces
+  back (`ta_table_restore`) and every row filled at its handle, a row
+  twice or one the tables do not hold refused, sessions made again as a
+  wake makes them. The options' datamodel must be the snapshot's, and the
+  effective config's `systemID` the pack's (`TA_ERROR_INVALID`). The
+  clock goes on from the snapshot's time: the ticks it reads carry an
+  offset (`ticks_offset`, mod 2^64) set at the restore, whatever clock
+  reads them. A declaring session's globals are read by their names
+  (`(0, eval)(name)` in its context), for hibernation, migration and
+  snapshots alike: bun's vm context leaves a global's property stale after
+  a function writes its `var` (spike, bun 1.4.1, 2026-10-16).
 - **Measured cost per session** (`mise run measure`, 2026-10-16: x86_64
   Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3 with V8
   12.4, bun 1.4.1; 10,000 actors of a chart with three `<data>`, one of
@@ -644,6 +682,18 @@ file.
   class instance, a Date or an XML document in a variable keeps the actor
   resident'` and `'a value outside the table keeps the actor resident, and
   the error names the variable'`.
+- **A snapshot is refused before any state is built when the host is not
+  quiescent, and a restored host's snapshot is the same bytes.** Tests:
+  `test/snapshot.test.mjs: 'a snapshot from a handler is refused'`, `'a
+  snapshot with a reply pending is refused'`, `'a snapshot during a
+  migration is refused'` and `'the snapshot of a restored host is the
+  same bytes'`; a restore refuses what is not its own:
+  `test/snapshot.test.mjs: 'restore refuses another system's config,
+  another datamodel, another program's pack'`. A row twice or one the
+  tables do not hold needs a pack whose datamodel state was rewritten
+  with its label kept; no API call makes one, so that refusal is code
+  only (`ta_napi_restore_session`, `ta_napi_restore_other` in
+  `src/datamodel/datamodel.c`).
 - **Sweep and wake refuse numbers out of range**, never wrapped. Test:
   `test/hibernation.test.mjs: 'sweep, hibernate and wake refuse numbers out
   of range'`.
@@ -753,6 +803,17 @@ manages its development dependencies; the C toolchain is the root's.
   a batch at a time; every sampled count and version checked, none left
   behind, version 1's segment retired. `mise run test` runs it as
   `stress`'s fast and full sizes.
+- `mise run snapshot [--actors N] [--resident R] [--events E]`: the
+  snapshot gate (`tools/snapshot.mjs`): the same population of an order
+  chart, at most R resident, E events and a delayed send for every
+  resident actor; the snapshot to a file and the store copied (`VACUUM
+  INTO`); a copy restored with its own store and clock, whose own
+  snapshot must be the same bytes, migrated to version 2 with E more
+  events, its clock run past the delayed sends; the live host goes on
+  with E events of its own; every sampled count, delayed send and version
+  checked on both hosts, and the live store holding only the live host's
+  blobs. `mise run test` runs it at `stress`'s sizes and with 5,000 actors
+  all resident; `--full` two million with 1000 and 100,000 all resident.
 - `mise run pack`: one prebuilt addon per platform package; it aborts
   until packaging is built.
 
@@ -807,8 +868,9 @@ tools/lint/          rules/, tests/, utils/ (ast-grep)
 tools/measure.mjs    bytes per actor, node and bun, native and quickjs (mise run measure)
 tools/stress.mjs     hibernation under load, the rest in SQLite (mise run stress)
 tools/migration.mjs  live migration under load, the rest in SQLite (mise run migration)
-tools/store.mjs      what the two gates share: the SQLite store, a seeded generator
+tools/snapshot.mjs   a deploy rehearsed on a restored copy of a live host (mise run snapshot)
+tools/store.mjs      what the gates share: the SQLite store, a seeded generator
 mise/napi.rb         what the tasks share
-mise/tasks/          build, test, conform, lint, measure, stress, migration, pack
+mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, pack
 build/               core's amalgamation and the addon (not in git)
 ```

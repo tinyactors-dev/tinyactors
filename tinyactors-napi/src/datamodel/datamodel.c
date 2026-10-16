@@ -213,7 +213,7 @@ static ta_status ta_napi_chart_attach(void *datamodel, const ta_datamodel_chart 
     }
     if (row != NULL) {
         uint32_t flags = (declaring.declares ? TA_NAPI_CHART_DECLARES : 0u) | (declaring.lexical ? TA_NAPI_CHART_LEXICAL : 0u);
-        *row = (ta_napi_chart_row){reference, chart->image, chart->chart, flags};
+        *row = (ta_napi_chart_row){reference, chart->image, chart->chart, flags, chart->segment};
         *context = (void *)(uintptr_t)handle; /* the row's handle, never a pointer */
     }
     ta_napi_frame_close(&frame);
@@ -279,8 +279,19 @@ static bool ta_napi_keep_strings(ta_napi_native *native, const ta_datamodel_syst
 typedef struct ta_napi_start_of {
     const ta_napi_chart_row *chart;
     const ta_datamodel_system_variables *variables;
-    napi_value init; /* the params' value (of the shared context), or undefined */
+    napi_value init;   /* the params' value (of the shared context), or undefined */
+    napi_value system; /* a snapshot's [sessionid, name, processors] in place of `variables`, or NULL */
 } ta_napi_start_of;
+
+/* The session's link, made in `kit`'s context: from core's system
+ * variables, or from what a snapshot holds of them. */
+static napi_value ta_napi_link_new(napi_env env, napi_value kit, const ta_napi_start_of *start) {
+    if (start->system == NULL) return ta_napi_system(env, kit, start->variables);
+    napi_value parts[3];
+    for (uint32_t i = 0; i < 3; i++)
+        if (napi_get_element(env, start->system, i, &parts[i]) != napi_ok) return NULL;
+    return ta_napi_kit(env, kit, &(ta_napi_kit_call){"system", 3, {parts[0], parts[1], parts[2]}});
+}
 
 static napi_value ta_napi_session_new(ta_napi_native *native, const ta_napi_start_of *start) {
     napi_env env = native->host->env;
@@ -289,14 +300,14 @@ static napi_value ta_napi_session_new(ta_napi_native *native, const ta_napi_star
     if (!(start->chart->flags & TA_NAPI_CHART_DECLARES)) {
         napi_value shared = ta_napi_realm_shared(native);
         if (shared == NULL || napi_get_element(env, shared, TA_NAPI_REALM_KIT, &kit) != napi_ok ||
-            (link = ta_napi_system(env, kit, start->variables)) == NULL ||
+            (link = ta_napi_link_new(env, kit, start)) == NULL ||
             napi_set_named_property(env, link, "init", init) != napi_ok || napi_new_instance(env, shape, 1, &link, &made) != napi_ok)
             return NULL;
         return made;
     }
     napi_value own = ta_napi_realm_new(native), slot, global;
     if (own == NULL || napi_get_element(env, own, TA_NAPI_REALM_KIT, &kit) != napi_ok ||
-        (link = ta_napi_system(env, kit, start->variables)) == NULL)
+        (link = ta_napi_link_new(env, kit, start)) == NULL)
         return NULL;
     napi_valuetype type = napi_undefined;
     if (napi_typeof(env, init, &type) != napi_ok) return NULL;
@@ -325,7 +336,7 @@ static ta_status ta_napi_create(void *datamodel, const ta_datamodel_start *start
     napi_value made = NULL;
     napi_ref reference = NULL;
     if (chart == NULL || !ta_napi_keep_strings(native, start->system_variables) ||
-        (made = ta_napi_session_new(native, &(ta_napi_start_of){chart, start->system_variables, init})) == NULL ||
+        (made = ta_napi_session_new(native, &(ta_napi_start_of){chart, start->system_variables, init, NULL})) == NULL ||
         napi_create_reference(env, made, 1, &reference) != napi_ok)
         status = ta_napi_failed(env);
     uint64_t handle = 0;
@@ -908,7 +919,7 @@ static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *
     if (!ta_napi_frame_open(native, NULL, &frame)) return TA_ERROR_NO_MEMORY;
     uint64_t chart_handle = (uint64_t)(uintptr_t)start->chart_context;
     ta_napi_chart_row *found = (ta_napi_chart_row *)ta_table_get(&native->host->charts, chart_handle);
-    ta_napi_chart_row chart = found != NULL ? *found : (ta_napi_chart_row){NULL, NULL, 0, 0};
+    ta_napi_chart_row chart = found != NULL ? *found : (ta_napi_chart_row){NULL, NULL, 0, 0, 0};
     ta_napi_session_row row = {NULL, chart_handle, TA_NIL, TA_NIL, TA_NIL};
     napi_value state = NULL, vars = NULL, fields = NULL, made = NULL, record, kit, target, context, shared, undefined, event;
     napi_valuetype type = napi_undefined;
@@ -918,7 +929,7 @@ static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *
               type == napi_object && napi_get_named_property(env, state, "vars", &vars) == napi_ok &&
               napi_typeof(env, vars, &type) == napi_ok && type == napi_object &&
               napi_get_named_property(env, state, "event", &fields) == napi_ok &&
-              (made = ta_napi_session_new(native, &(ta_napi_start_of){&chart, start->system_variables, vars})) != NULL;
+              (made = ta_napi_session_new(native, &(ta_napi_start_of){&chart, start->system_variables, vars, NULL})) != NULL;
     if (ok && (chart.flags & TA_NAPI_CHART_DECLARES)) /* its own context: the declarations again, then the values */
         ok = napi_get_element(env, made, TA_NAPI_OWN_KIT, &kit) == napi_ok &&
              napi_get_element(env, made, TA_NAPI_OWN_CONTEXT, &context) == napi_ok &&
@@ -1055,6 +1066,477 @@ static ta_status ta_napi_variable(const ta_datamodel_call *call, ta_string_view 
     if (status != TA_OK) ta_napi_failed(env);
     ta_napi_frame_close(&entry.frame);
     return status;
+}
+
+/* ---- snapshots: the tables' namespaces and every row's values ------------------ */
+
+/* Where a snapshot's state goes: the outer writer, which grows through the
+ * host's allocator. */
+typedef struct ta_napi_snapshot_out {
+    ta_napi_native *native;
+    ta_cbor_writer *writer;
+} ta_napi_snapshot_out;
+
+/* One value as CBOR bytes of its own, appended to the writer, so a value
+ * nests as deep in a snapshot as in a send: TA_OK, or the refusal's status
+ * (TA_ERROR_EXECUTION: an exception) with the exception pending. */
+static ta_status ta_napi_snapshot_value(const ta_napi_snapshot_out *out, napi_value value) {
+    ta_napi_native *native = out->native;
+    napi_env env = native->host->env;
+    ta_napi_document document;
+    memset(&document, 0, sizeof document);
+    document.room = (ta_napi_room){&native->output, &native->host->allocator, {NULL, 0}};
+    document.arena = &native->host->arena;
+    ta_napi_document_open(&document);
+    bool ok = ta_napi_document_value(env, value, &document);
+    if (!ok && document.refused == TA_OK) document.refused = TA_ERROR_EXECUTION;
+    if (!ta_napi_document_close(&document, ok)) {
+        if (ok) ta_napi_throw(env, &(ta_napi_refusal){document.refused, "no memory for the snapshot"});
+        return document.refused == TA_OK ? TA_ERROR_NO_MEMORY : document.refused;
+    }
+    ta_cbor_write_bytes(out->writer, document.out);
+    return TA_OK;
+}
+
+/* A refusal of the snapshot because of a session's value: the pending
+ * exception becomes the reason (which variable, and why), thrown as
+ * TA_ERROR_UNSUPPORTED; no memory stays itself. */
+typedef struct ta_napi_unstorable {
+    const char *what; /* "variable '", "_event", "the params" */
+    napi_value name;  /* the variable's, or NULL */
+    ta_status status; /* the value's refusal */
+} ta_napi_unstorable;
+
+static bool ta_napi_snapshot_refuse(ta_napi_native *native, const ta_napi_unstorable *unstorable) {
+    napi_env env = native->host->env;
+    if (unstorable->status == TA_ERROR_NO_MEMORY) {
+        napi_value ignored;
+        napi_get_and_clear_last_exception(env, &ignored);
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the snapshot"});
+        return false;
+    }
+    if (unstorable->what != NULL) ta_napi_reason(native, unstorable->what, unstorable->name);
+    ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_UNSUPPORTED, native->reason});
+    return false;
+}
+
+/* A table's handle namespace (ta_table_snapshot) as bytes, written in the
+ * datamodel's output first. */
+static bool ta_napi_snapshot_layout(const ta_napi_snapshot_out *out, const ta_table *table) {
+    ta_napi_native *native = out->native;
+    ta_buffer probe = {NULL, 0, 0};
+    ta_table_snapshot(table, &probe); /* TA_ERROR_NO_MEMORY: probe.length is the room */
+    ta_napi_room room = {&native->output, &native->host->allocator, {NULL, 0}};
+    bool ok = ta_napi_room_grow(&room, probe.length > 0 ? probe.length : 1);
+    ta_buffer layout = {native->output.pointer, native->output.capacity, 0};
+    ok = ok && ta_table_snapshot(table, &layout) == TA_OK;
+    if (ok) ta_cbor_write_bytes(out->writer, (ta_bytes){layout.pointer, layout.length});
+    else ta_napi_throw(native->host->env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the snapshot"});
+    return ok;
+}
+
+/* One session row: [handle, segment, chart index, {name: bytes}, _event's
+ * fields as bytes (null when no event came), the link's [sessionid, name,
+ * processors] as bytes, its init as bytes or null, the names a restore
+ * added as bytes]. Its variables are what hibernation writes. */
+static bool ta_napi_snapshot_session(const ta_napi_snapshot_out *out, uint32_t slot) {
+    ta_napi_native *native = out->native;
+    ta_napi_host *host = native->host;
+    napi_env env = host->env;
+    uint64_t handle = ta_table_handle(&host->sessions, slot);
+    ta_napi_session_row row = *(ta_napi_session_row *)ta_table_at(&host->sessions, slot);
+    ta_datamodel_call call = {native, handle, NULL};
+    ta_napi_entry entry;
+    if (!ta_napi_enter_entry(&call, &entry)) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_INVALID, "a session without its chart"});
+        return false;
+    }
+    ta_napi_evaluation *evaluation = &entry.evaluation;
+    native->reason[0] = '\0';
+    bool ok = true;
+    if (evaluation->row.flags & TA_NAPI_CHART_LEXICAL) {
+        ta_napi_reason_add(native, "a session of a chart whose scripts declare with let, const or class at their top "
+                                   "level: a new context cannot be given those bindings again");
+        ok = ta_napi_snapshot_refuse(native, &(ta_napi_unstorable){NULL, NULL, TA_ERROR_UNSUPPORTED});
+    }
+    napi_value remade = NULL, variables = NULL, names = NULL, values = NULL, event = NULL, link = NULL, name, value, part;
+    napi_valuetype type = napi_undefined;
+    uint32_t count = 0;
+    ok = ok && napi_get_element(env, evaluation->record, TA_NAPI_CHART_FUNCTIONS, &remade) == napi_ok &&
+         napi_typeof(env, remade, &type) == napi_ok && (type == napi_object || napi_create_array(env, &remade) == napi_ok) &&
+         (variables = ta_napi_kit(env, evaluation->kit, &(ta_napi_kit_call){"stored", 2, {evaluation->scope, remade}})) != NULL &&
+         napi_get_element(env, variables, 0, &names) == napi_ok && napi_get_element(env, variables, 1, &values) == napi_ok &&
+         napi_get_array_length(env, names, &count) == napi_ok &&
+         napi_get_named_property(env, evaluation->scope, "_event", &event) == napi_ok &&
+         (link = ta_napi_kit(env, evaluation->kit, &(ta_napi_kit_call){"linked", 1, {evaluation->scope}})) != NULL;
+    ta_cbor_writer *writer = out->writer;
+    ta_napi_room room = {&native->output, &host->allocator, {NULL, 0}};
+    if (ok) {
+        ta_cbor_write_array(writer, 8);
+        ta_cbor_write_uint(writer, handle);
+        ta_cbor_write_uint(writer, evaluation->row.segment);
+        ta_cbor_write_uint(writer, evaluation->row.chart);
+        ta_cbor_write_map(writer, count);
+    }
+    for (uint32_t i = 0; ok && i < count; i++) {
+        ok = napi_get_element(env, names, i, &name) == napi_ok && napi_get_element(env, values, i, &value) == napi_ok &&
+             ta_napi_text_kept(env, name, &room); /* the name's UTF-8 in the output, copied into the writer */
+        if (ok) ta_cbor_write_text(writer, room.view);
+        ta_status status = ok ? ta_napi_snapshot_value(out, value) : TA_OK;
+        if (status != TA_OK) ok = ta_napi_snapshot_refuse(native, &(ta_napi_unstorable){"variable '", name, status});
+    }
+    if (ok) { /* _event, as a blob holds it */
+        ta_napi_document document;
+        memset(&document, 0, sizeof document);
+        document.room = (ta_napi_room){&native->output, &host->allocator, {NULL, 0}};
+        document.arena = &host->arena;
+        ta_napi_document_open(&document);
+        bool written = ta_napi_event_write(native, &(ta_napi_event_out){event, &row}, &document);
+        if (ta_napi_document_close(&document, written)) ta_cbor_write_bytes(writer, document.out);
+        else ok = ta_napi_snapshot_refuse(native, &(ta_napi_unstorable){NULL, NULL,
+                                                                       written ? TA_ERROR_NO_MEMORY : TA_ERROR_UNSUPPORTED});
+    }
+    /* the link: [sessionid, name, processors], then init and added */
+    napi_value system = NULL, init = NULL, added = NULL;
+    ok = ok && napi_create_array_with_length(env, 3, &system) == napi_ok;
+    for (uint32_t i = 0; ok && i < 3; i++)
+        ok = napi_get_element(env, link, i, &part) == napi_ok && napi_set_element(env, system, i, part) == napi_ok;
+    ok = ok && napi_get_element(env, link, 3, &init) == napi_ok && napi_get_element(env, link, 4, &added) == napi_ok;
+    if (ok) {
+        ta_status status = ta_napi_snapshot_value(out, system);
+        if (status != TA_OK) ok = ta_napi_snapshot_refuse(native, &(ta_napi_unstorable){"the system variables", NULL, status});
+    }
+    if (ok && napi_typeof(env, init, &type) == napi_ok && type == napi_undefined) ta_cbor_write_simple(writer, TA_CBOR_NULL);
+    else if (ok) {
+        ta_status status = ta_napi_snapshot_value(out, init);
+        if (status != TA_OK) ok = ta_napi_snapshot_refuse(native, &(ta_napi_unstorable){"the params", NULL, status});
+    }
+    if (ok) {
+        ta_status status = ta_napi_snapshot_value(out, added);
+        if (status != TA_OK) ok = ta_napi_snapshot_refuse(native, &(ta_napi_unstorable){"the session", NULL, status});
+    }
+    ta_napi_frame_close(&entry.frame);
+    return ok;
+}
+
+/* A payload row [handle, references, bytes] or a <foreach>'s [handle,
+ * bytes], in a handle scope of its own. */
+typedef struct ta_napi_snapshot_row {
+    ta_table *table;
+    uint32_t slot;
+    bool payload;
+} ta_napi_snapshot_row;
+
+static bool ta_napi_snapshot_other(const ta_napi_snapshot_out *out, const ta_napi_snapshot_row *row) {
+    ta_napi_native *native = out->native;
+    napi_env env = native->host->env;
+    napi_handle_scope scope;
+    if (napi_open_handle_scope(env, &scope) != napi_ok) return false;
+    uint64_t handle = ta_table_handle(row->table, row->slot);
+    napi_value value;
+    if (row->payload) {
+        ta_napi_payload_row *payload = (ta_napi_payload_row *)ta_table_at(row->table, row->slot);
+        ta_cbor_write_array(out->writer, 3);
+        ta_cbor_write_uint(out->writer, handle);
+        ta_cbor_write_uint(out->writer, payload->count);
+        value = ta_napi_native_value(native, handle);
+    } else {
+        ta_napi_loop_row *loop = (ta_napi_loop_row *)ta_table_at(row->table, row->slot);
+        ta_cbor_write_array(out->writer, 2);
+        ta_cbor_write_uint(out->writer, handle);
+        value = ta_napi_native_get(native, loop->items);
+        if (value == NULL) napi_get_undefined(env, &value);
+    }
+    native->reason[0] = '\0';
+    ta_status status = ta_napi_snapshot_value(out, value);
+    bool ok = status == TA_OK ||
+              ta_napi_snapshot_refuse(native, &(ta_napi_unstorable){row->payload ? "a payload" : "a <foreach>'s items", NULL, status});
+    napi_close_handle_scope(env, scope);
+    return ok;
+}
+
+bool ta_napi_native_snapshot(ta_napi_native *native, ta_cbor_writer *writer) {
+    ta_napi_host *host = native->host;
+    ta_napi_snapshot_out out = {native, writer};
+    ta_cbor_write_map(writer, 6);
+    ta_table *tables[] = {&host->sessions, &host->payloads, &host->loops};
+    static const ta_string_view layouts[] = {{"sessions", 8}, {"payloads", 8}, {"loops", 5}};
+    bool ok = true;
+    for (uint32_t i = 0; ok && i < 3; i++) {
+        ta_cbor_write_text(writer, layouts[i]);
+        ok = ta_napi_snapshot_layout(&out, tables[i]);
+    }
+    if (ok) {
+        ta_cbor_write_text(writer, (ta_string_view){"rows", 4});
+        ta_cbor_write_array(writer, host->sessions.count);
+    }
+    for (uint32_t slot = 0; ok && slot < host->sessions.capacity; slot++)
+        if (ta_table_at(&host->sessions, slot) != NULL) ok = ta_napi_snapshot_session(&out, slot);
+    if (ok) {
+        ta_cbor_write_text(writer, (ta_string_view){"values", 6});
+        ta_cbor_write_array(writer, host->payloads.count);
+    }
+    for (uint32_t slot = 0; ok && slot < host->payloads.capacity; slot++)
+        if (ta_table_at(&host->payloads, slot) != NULL)
+            ok = ta_napi_snapshot_other(&out, &(ta_napi_snapshot_row){&host->payloads, slot, true});
+    if (ok) {
+        ta_cbor_write_text(writer, (ta_string_view){"items", 5});
+        ta_cbor_write_array(writer, host->loops.count);
+    }
+    for (uint32_t slot = 0; ok && slot < host->loops.capacity; slot++)
+        if (ta_table_at(&host->loops, slot) != NULL)
+            ok = ta_napi_snapshot_other(&out, &(ta_napi_snapshot_row){&host->loops, slot, false});
+    return ok;
+}
+
+/* ---- restore ----------------------------------------------------------------------- */
+
+static bool ta_napi_restore_refuse(napi_env env, const char *message) {
+    bool pending = false;
+    if (napi_is_exception_pending(env, &pending) == napi_ok && pending) return false; /* the first error says more */
+    ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_INVALID, message});
+    return false;
+}
+
+/* An unsigned integer of the snapshot (a number, or a bigint past 2^53). */
+static bool ta_napi_restore_uint(napi_env env, napi_value value, uint64_t *out) {
+    napi_valuetype type = napi_undefined;
+    double number = -1;
+    bool lossless = false;
+    if (value == NULL || napi_typeof(env, value, &type) != napi_ok) return false;
+    if (type == napi_bigint) return napi_get_value_bigint_uint64(env, value, out, &lossless) == napi_ok && lossless;
+    if (type != napi_number || napi_get_value_double(env, value, &number) != napi_ok || !(number >= 0) ||
+        number > 9007199254740991.0 || number != (double)(uint64_t)number)
+        return false;
+    *out = (uint64_t)number;
+    return true;
+}
+
+/* The value of a snapshot's bytes (a Uint8Array), made in the application's
+ * realm; NULL with an exception pending. */
+static napi_value ta_napi_restore_value(napi_env env, napi_value bytes) {
+    ta_napi_bytes view = {"not a snapshot of the native datamodel", {NULL, 0}};
+    if (!ta_napi_bytes_of(env, bytes, &view)) return NULL;
+    return ta_napi_value_read(env, view.view);
+}
+
+/* A table's namespace back from its bytes. */
+static bool ta_napi_restore_layout(napi_env env, ta_table *table, napi_value layout) {
+    ta_napi_bytes view = {"not a snapshot of the native datamodel", {NULL, 0}};
+    if (!ta_napi_bytes_of(env, layout, &view)) return false;
+    ta_status status = ta_table_restore(table, view.view);
+    if (status == TA_OK) return true;
+    ta_napi_throw(env, &(ta_napi_refusal){status, status == TA_ERROR_NO_MEMORY ? "no memory for the restore"
+                                                                               : "a table of the snapshot does not restore"});
+    return false;
+}
+
+/* The strings of _event (ta_napi_keep_strings) from a restored session's
+ * processors, [type, location] pairs: every session of a host has the same. */
+static bool ta_napi_restore_strings(ta_napi_native *native, napi_value processors) {
+    if (native->strings != NULL) return true;
+    napi_env env = native->host->env;
+    static const char *const types[] = {"platform", "internal", "external"};
+    napi_value strings, string, pair;
+    uint32_t count = 0;
+    if (napi_create_array(env, &strings) != napi_ok || napi_get_array_length(env, processors, &count) != napi_ok) return false;
+    for (uint32_t i = 0; i < 3; i++)
+        if (napi_create_string_utf8(env, types[i], NAPI_AUTO_LENGTH, &string) != napi_ok ||
+            napi_set_element(env, strings, i, string) != napi_ok)
+            return false;
+    for (uint32_t i = 0; i < count; i++)
+        if (napi_get_element(env, processors, i, &pair) != napi_ok || napi_get_element(env, pair, 0, &string) != napi_ok ||
+            napi_set_element(env, strings, 3 + i, string) != napi_ok)
+            return false;
+    return napi_create_reference(env, strings, 1, &native->strings) == napi_ok;
+}
+
+/* The chart row of a session's attachment, by its segment and index (the
+ * restore attached the charts again under new handles); 0 for none. The
+ * last found is tried first: a population mostly shares a chart. */
+typedef struct ta_napi_attachment {
+    uint32_t segment, chart;
+    uint64_t found; /* in: the last one found; out: this one's */
+} ta_napi_attachment;
+
+static void ta_napi_restore_chart(ta_napi_native *native, ta_napi_attachment *attachment) {
+    ta_table *charts = &native->host->charts;
+    ta_napi_chart_row *last = attachment->found ? (ta_napi_chart_row *)ta_table_get(charts, attachment->found) : NULL;
+    if (last != NULL && last->segment == attachment->segment && last->chart == attachment->chart) return;
+    attachment->found = 0;
+    for (uint32_t slot = 0; slot < charts->capacity && attachment->found == 0; slot++) {
+        ta_napi_chart_row *row = (ta_napi_chart_row *)ta_table_at(charts, slot);
+        if (row != NULL && row->segment == attachment->segment && row->chart == attachment->chart)
+            attachment->found = ta_table_handle(charts, slot);
+    }
+}
+
+/* One session back at its handle: a new scope (or a new context, its
+ * scripts' declarations made again), its link from the snapshot's, its
+ * variables, its _event. */
+typedef struct ta_napi_session_in {
+    napi_value entry;
+    ta_napi_attachment *attachment;
+} ta_napi_session_in;
+
+static bool ta_napi_restore_session(ta_napi_native *native, const ta_napi_session_in *in) {
+    napi_env env = native->host->env;
+    napi_value parts[8], system, processors, init, vars, given, keys, name, value, event_fields, added, record, kit, target, context,
+        shared, made, undefined;
+    uint32_t length = 0;
+    bool array = false;
+    if (napi_is_array(env, in->entry, &array) != napi_ok || !array || napi_get_array_length(env, in->entry, &length) != napi_ok ||
+        length != 8)
+        return ta_napi_restore_refuse(env, "not a session of a snapshot");
+    for (uint32_t i = 0; i < 8; i++)
+        if (napi_get_element(env, in->entry, i, &parts[i]) != napi_ok) return false;
+    uint64_t handle = 0, segment = 0, index = 0;
+    if (!ta_napi_restore_uint(env, parts[0], &handle) || !ta_napi_restore_uint(env, parts[1], &segment) ||
+        !ta_napi_restore_uint(env, parts[2], &index) || segment > UINT32_MAX || index > UINT32_MAX)
+        return ta_napi_restore_refuse(env, "not a session of a snapshot");
+    in->attachment->segment = (uint32_t)segment;
+    in->attachment->chart = (uint32_t)index;
+    ta_napi_restore_chart(native, in->attachment);
+    ta_napi_chart_row *found = (ta_napi_chart_row *)ta_table_get(&native->host->charts, in->attachment->found);
+    ta_napi_session_row *slot = (ta_napi_session_row *)ta_table_get(&native->host->sessions, handle);
+    if (found == NULL) return ta_napi_restore_refuse(env, "a session whose chart the restored host does not have");
+    if (slot == NULL || slot->scope != NULL) return ta_napi_restore_refuse(env, "a session the snapshot's tables do not hold, or twice");
+    ta_napi_chart_row chart = *found;
+    ta_napi_session_row row = {NULL, in->attachment->found, TA_NIL, TA_NIL, TA_NIL};
+    napi_valuetype type = napi_undefined;
+    uint32_t count = 0;
+    bool ok = napi_get_undefined(env, &undefined) == napi_ok && (record = ta_napi_native_get(native, chart.functions)) != NULL &&
+              (system = ta_napi_restore_value(env, parts[5])) != NULL && napi_is_array(env, system, &array) == napi_ok && array &&
+              napi_get_element(env, system, 2, &processors) == napi_ok && napi_is_array(env, processors, &array) == napi_ok &&
+              array && ta_napi_restore_strings(native, processors) && (shared = ta_napi_realm_shared(native)) != NULL &&
+              napi_get_element(env, shared, TA_NAPI_REALM_KIT, &kit) == napi_ok && napi_typeof(env, parts[6], &type) == napi_ok;
+    init = undefined;
+    if (ok && type != napi_null) /* the params, in the shared context as a spawn's are */
+        ok = (init = ta_napi_restore_value(env, parts[6])) != NULL &&
+             (init = ta_napi_kit(env, kit, &(ta_napi_kit_call){"copy", 1, {init}})) != NULL;
+    /* the variables, each from its own bytes */
+    given = parts[3];
+    ok = ok && napi_typeof(env, given, &type) == napi_ok && type == napi_object && napi_create_object(env, &vars) == napi_ok &&
+         napi_get_property_names(env, given, &keys) == napi_ok && napi_get_array_length(env, keys, &count) == napi_ok;
+    for (uint32_t i = 0; ok && i < count; i++)
+        ok = napi_get_element(env, keys, i, &name) == napi_ok && napi_get_property(env, given, name, &value) == napi_ok &&
+             (value = ta_napi_restore_value(env, value)) != NULL && napi_set_property(env, vars, name, value) == napi_ok;
+    ok = ok && (made = ta_napi_session_new(native, &(ta_napi_start_of){&chart, NULL, init, system})) != NULL;
+    if (ok && (chart.flags & TA_NAPI_CHART_DECLARES)) /* its own context: the declarations again, then the values */
+        ok = napi_get_element(env, made, TA_NAPI_OWN_KIT, &kit) == napi_ok &&
+             napi_get_element(env, made, TA_NAPI_OWN_CONTEXT, &context) == napi_ok &&
+             napi_get_named_property(env, kit, "global", &target) == napi_ok && ta_napi_realm_hoist(native, record, context);
+    else if (ok) target = made;
+    ok = ok && ta_napi_kit(env, kit, &(ta_napi_kit_call){"restore", 2, {target, vars}}) != NULL &&
+         (added = ta_napi_restore_value(env, parts[7])) != NULL &&
+         ta_napi_kit(env, kit, &(ta_napi_kit_call){"relink", 2, {target, added}}) != NULL &&
+         (event_fields = ta_napi_restore_value(env, parts[4])) != NULL && napi_typeof(env, event_fields, &type) == napi_ok;
+    if (ok && type != napi_null && type != napi_undefined) {
+        napi_value event = ta_napi_event_from(native, &(ta_napi_event_in){event_fields, kit, record, &row});
+        napi_property_descriptor property = {"_event", NULL, NULL, NULL, NULL, event, napi_enumerable | napi_configurable, NULL};
+        ok = event != NULL && napi_define_properties(env, target, 1, &property) == napi_ok;
+    }
+    if (!ok) return ta_napi_restore_refuse(env, "not a session of a snapshot");
+    if (napi_create_reference(env, made, 1, &row.scope) != napi_ok) return false;
+    slot = (ta_napi_session_row *)ta_table_get(&native->host->sessions, handle); /* JavaScript ran: get it again */
+    *slot = row;
+    return true;
+}
+
+/* A payload's or a <foreach>'s row back at its handle, its value copied
+ * into the shared context. */
+typedef struct ta_napi_other_in {
+    napi_value entry;
+    bool payload;
+} ta_napi_other_in;
+
+static bool ta_napi_restore_other(ta_napi_native *native, const ta_napi_other_in *in) {
+    napi_env env = native->host->env;
+    napi_value parts[3], shared, kit, value, held;
+    uint32_t length = 0, want = in->payload ? 3 : 2;
+    bool array = false;
+    uint64_t handle = 0, references = 1;
+    const char *what = in->payload ? "a payload the snapshot's tables do not hold, or twice"
+                                   : "a <foreach> the snapshot's tables do not hold, or twice";
+    if (napi_is_array(env, in->entry, &array) != napi_ok || !array || napi_get_array_length(env, in->entry, &length) != napi_ok ||
+        length != want)
+        return ta_napi_restore_refuse(env, what);
+    for (uint32_t i = 0; i < want; i++)
+        if (napi_get_element(env, in->entry, i, &parts[i]) != napi_ok) return false;
+    if (!ta_napi_restore_uint(env, parts[0], &handle) || (in->payload && (!ta_napi_restore_uint(env, parts[1], &references) ||
+                                                                          references == 0 || references > UINT32_MAX)))
+        return ta_napi_restore_refuse(env, what);
+    ta_table *table = in->payload ? &native->host->payloads : &native->host->loops;
+    napi_ref *slot = (napi_ref *)ta_table_get(table, handle); /* each row holds its reference first */
+    if (slot == NULL || *slot != NULL) return ta_napi_restore_refuse(env, what);
+    if ((shared = ta_napi_realm_shared(native)) == NULL || napi_get_element(env, shared, TA_NAPI_REALM_KIT, &kit) != napi_ok ||
+        (value = ta_napi_restore_value(env, parts[want - 1])) == NULL ||
+        (value = ta_napi_kit(env, kit, &(ta_napi_kit_call){"copy", 1, {value}})) == NULL)
+        return ta_napi_restore_refuse(env, what);
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, value, &type) != napi_ok) return false;
+    if (!in->payload && type != napi_object) return ta_napi_restore_refuse(env, "a <foreach>'s items are not an array");
+    bool boxed = type != napi_object && type != napi_function; /* as ta_napi_native_add holds a primitive */
+    held = value;
+    if (boxed && (napi_create_array_with_length(env, 1, &held) != napi_ok || napi_set_element(env, held, 0, value) != napi_ok))
+        return false;
+    napi_ref reference;
+    if (napi_create_reference(env, held, 1, &reference) != napi_ok) return false;
+    if (in->payload) {
+        ta_napi_payload_row *row = (ta_napi_payload_row *)ta_table_get(table, handle);
+        *row = (ta_napi_payload_row){reference, (uint32_t)references, boxed};
+    } else ((ta_napi_loop_row *)ta_table_get(table, handle))->items = reference;
+    return true;
+}
+
+bool ta_napi_native_restore(ta_napi_native *native, ta_bytes bytes) {
+    ta_napi_host *host = native->host;
+    napi_env env = host->env;
+    if (host->sessions.count || host->payloads.count || host->loops.count) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_STATE, "the native datamodel is not a fresh one"});
+        return false;
+    }
+    napi_handle_scope scope;
+    if (napi_open_handle_scope(env, &scope) != napi_ok) return false;
+    static const char *const names[] = {"sessions", "payloads", "loops", "rows", "values", "items"};
+    ta_table *tables[] = {&host->sessions, &host->payloads, &host->loops};
+    napi_value state = ta_napi_value_read(env, bytes), parts[6];
+    napi_valuetype type = napi_undefined;
+    bool ok = state != NULL && napi_typeof(env, state, &type) == napi_ok && type == napi_object;
+    for (uint32_t i = 0; ok && i < 6; i++) {
+        bool array = false;
+        ok = napi_get_named_property(env, state, names[i], &parts[i]) == napi_ok &&
+             (i < 3 || (napi_is_array(env, parts[i], &array) == napi_ok && array));
+    }
+    if (!ok) ta_napi_restore_refuse(env, "not a snapshot of the native datamodel");
+    for (uint32_t i = 0; ok && i < 3; i++) ok = ta_napi_restore_layout(env, tables[i], parts[i]);
+    uint32_t lengths[3] = {0, 0, 0};
+    for (uint32_t i = 0; ok && i < 3; i++) /* every live handle has its row, once */
+        ok = napi_get_array_length(env, parts[3 + i], &lengths[i]) == napi_ok && lengths[i] == tables[i]->count;
+    if (!ok) ta_napi_restore_refuse(env, "the snapshot's rows do not match its tables");
+    ta_napi_attachment attachment = {0, 0, 0};
+    for (uint32_t i = 0; ok && i < lengths[0]; i++) {
+        napi_handle_scope row;
+        napi_value entry;
+        ok = napi_open_handle_scope(env, &row) == napi_ok;
+        if (!ok) break;
+        ok = napi_get_element(env, parts[3], i, &entry) == napi_ok &&
+             ta_napi_restore_session(native, &(ta_napi_session_in){entry, &attachment});
+        napi_close_handle_scope(env, row);
+    }
+    for (uint32_t k = 1; k < 3; k++)
+        for (uint32_t i = 0; ok && i < lengths[k]; i++) {
+            napi_handle_scope row;
+            napi_value entry;
+            ok = napi_open_handle_scope(env, &row) == napi_ok;
+            if (!ok) break;
+            ok = napi_get_element(env, parts[3 + k], i, &entry) == napi_ok &&
+                 ta_napi_restore_other(native, &(ta_napi_other_in){entry, k == 1});
+            napi_close_handle_scope(env, row);
+        }
+    if (!ok) ta_napi_restore_refuse(env, "not a snapshot of the native datamodel");
+    napi_close_handle_scope(env, scope); /* the exception, if any, stays pending */
+    return ok; /* on failure the host is freed: the rows filled so far go with it */
 }
 
 static const ta_datamodel_vtable ta_napi_vtable = {

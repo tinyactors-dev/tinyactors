@@ -451,6 +451,27 @@ static bool ta_napi_host_read_config(napi_env env, ta_napi_host *host, const ta_
            napi_set_named_property(env, effective->handlers, "types", types) == napi_ok;
 }
 
+/* A refused config (ta_host_create, ta_host_restore): core's error, read
+ * from the room it wrote, thrown. */
+typedef struct ta_napi_refused_config {
+    ta_buffer refusal;
+    ta_status status;
+} ta_napi_refused_config;
+
+static void ta_napi_host_refused(napi_env env, const ta_napi_refused_config *refused) {
+    napi_value reply = NULL, error = NULL;
+    const ta_buffer *refusal = &refused->refusal;
+    if (refusal->length > 0 && refusal->length <= refusal->capacity) {
+        reply = ta_napi_value_read(env, (ta_bytes){refusal->pointer, refusal->length});
+        if (reply == NULL) {
+            napi_value ignored;
+            napi_get_and_clear_last_exception(env, &ignored);
+        } else if (!ta_napi_is(env, reply, napi_object) || napi_get_named_property(env, reply, "error", &error) != napi_ok)
+            error = NULL;
+    }
+    ta_napi_throw_core_error(env, &(ta_napi_core_error){error, refused->status});
+}
+
 /* ta_host_create with the config as CBOR in the call's arena and the
  * environment's one datamodel; a refused config throws core's error. */
 static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value config) {
@@ -471,23 +492,177 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
         status = ta_host_create(cbor, &environment, &host->host);
         if (status != TA_OK) {
             host->host = NULL;
-            napi_value reply = NULL, error = NULL;
-            if (refusal.length > 0 && refusal.length <= refusal.capacity) {
-                reply = ta_napi_value_read(env, (ta_bytes){refusal.pointer, refusal.length});
-                if (reply == NULL) {
-                    napi_value ignored;
-                    napi_get_and_clear_last_exception(env, &ignored);
-                } else if (!ta_napi_is(env, reply, napi_object) ||
-                           napi_get_named_property(env, reply, "error", &error) != napi_ok)
-                    error = NULL;
-            }
-            ta_napi_throw_core_error(env, &(ta_napi_core_error){error, status});
+            ta_napi_host_refused(env, &(ta_napi_refused_config){refusal, status});
             ok = false;
         }
     }
     ta_cbor_writer_free(&writer);
     ta_growable_arena_release(&host->arena, mark);
     return ok;
+}
+
+/* ---- a restore: a snapshot's pack instead of an empty host -------------------------- */
+
+/* The label of the datamodel state this addon packs: a pack another
+ * program wrote holds state that is not ours. */
+static const char ta_napi_snapshot_label[] = "tinyactors-napi";
+
+/* The keys of the datamodel state: the one datamodel a host holds. */
+static const char *const ta_napi_state_keys[] = {"native", "quickjs"};
+
+/* Host.restore's construction of a Host (the instance's `restoring`):
+ * what the static method passes the constructor, and what the restore
+ * gives back for the checks after the host is made.
+ *
+ *   snapshot   the argument, read after the config was written (a getter
+ *              of the config may run JavaScript), and then not again;
+ *   config     the constructor's first argument; `effective` the
+ *              restored host's effective config;
+ *   copy       an 8-aligned copy of an unaligned pack, the method's to
+ *              free (through `allocator`);
+ *   time       the host's time when it was packed;
+ *   system_id  the pack's system id, copied (the pack is not read after
+ *              the restore), the method's to free. */
+typedef struct ta_napi_restoring {
+    napi_value snapshot, config;
+    napi_value effective; /* the restored host's effective config, for the system id's check */
+    ta_allocator allocator;
+    ta_buffer copy;
+    ta_time time;
+    ta_buffer system_id;
+} ta_napi_restoring;
+
+/* The datamodel's state back: {"native": its map} or {"quickjs": its
+ * bytes}, the key the host's datamodel; false with an exception pending. */
+static bool ta_napi_host_restore_state(napi_env env, ta_napi_host *host, ta_bytes state) {
+    ta_cbor_reader reader;
+    ta_cbor_item map, key, value;
+    ta_cbor_reader_init(&reader, state);
+    const char *mine = ta_napi_state_keys[host->datamodel];
+    if (ta_cbor_read(&reader, &map) != 1 || map.kind != TA_CBOR_MAP || map.count != 1 || ta_cbor_read(&reader, &key) != 1 ||
+        key.kind != TA_CBOR_TEXT) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_INVALID, "not a snapshot of a Host"});
+        return false;
+    }
+    if (key.bytes.length != strlen(mine) || memcmp(key.bytes.pointer, mine, key.bytes.length) != 0) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_INVALID, host->datamodel == TA_NAPI_DATAMODEL_NATIVE
+                                                                    ? "the snapshot is of a host on quickjs: restore it with "
+                                                                      "datamodel \"quickjs\""
+                                                                    : "the snapshot is of a host on the native datamodel: "
+                                                                      "restore it with datamodel \"native\""});
+        return false;
+    }
+    if (host->datamodel == TA_NAPI_DATAMODEL_NATIVE)
+        return ta_napi_native_restore(&host->native, (ta_bytes){(const char *)state.pointer + reader.at, state.length - reader.at});
+    ta_status status = ta_cbor_read(&reader, &value) == 1 && value.kind == TA_CBOR_BYTES
+                           ? ta_datamodel_ecmascript_restore(host->quickjs, value.bytes)
+                           : TA_ERROR_INVALID;
+    if (status != TA_OK) ta_napi_throw(env, &(ta_napi_refusal){status, "the quickjs datamodel's state does not restore"});
+    return status == TA_OK;
+}
+
+/* ta_host_restore of the snapshot (ta_host_snapshot_unpack, its images),
+ * with the config as CBOR in the call's arena as for ta_host_create, then
+ * the datamodel's state back before any run. A refused config throws
+ * core's error; a pack another program labelled, or bytes that are no
+ * pack, TA_ERROR_INVALID. */
+static bool ta_napi_host_restore_core(napi_env env, ta_napi_host *host, ta_napi_restoring *restoring) {
+    ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
+    bool ok = ta_napi_value_write(env, restoring->config, &(ta_napi_writing){&writer, &host->arena, false, NULL});
+    ta_bytes cbor = {NULL, 0};
+    ta_status status = ok ? ta_cbor_writer_bytes(&writer, &cbor) : TA_OK;
+    if (ok && status != TA_OK) {
+        ta_napi_throw(env, &(ta_napi_refusal){status, "the config could not be written"});
+        ok = false;
+    }
+    /* the pack, read now that no getter runs before the restore ends */
+    ta_napi_bytes snapshot = {"restore takes the snapshot's bytes: a Uint8Array or an ArrayBuffer", {NULL, 0}};
+    ok = ok && ta_napi_bytes_of(env, restoring->snapshot, &snapshot);
+    ta_bytes pack = snapshot.view;
+    if (ok && ((uintptr_t)pack.pointer & 7u) != 0) { /* the pack's parts are 8-aligned when the pack is */
+        restoring->copy = (ta_buffer){restoring->allocator.alloc(restoring->allocator.context, pack.length, 8), pack.length, 0};
+        if (restoring->copy.pointer == NULL) {
+            ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for an aligned copy of the snapshot"});
+            ok = false;
+        } else {
+            memcpy(restoring->copy.pointer, pack.pointer, pack.length);
+            pack = (ta_bytes){restoring->copy.pointer, pack.length};
+        }
+    }
+    ta_host_snapshot_contents contents;
+    memset(&contents, 0, sizeof contents);
+    contents.size = sizeof contents;
+    if (ok) {
+        status = ta_host_snapshot_unpack(pack, &contents);
+        if (status == TA_OK && (contents.datamodel.length != sizeof ta_napi_snapshot_label - 1 ||
+                                memcmp(contents.datamodel.pointer, ta_napi_snapshot_label, contents.datamodel.length) != 0))
+            status = TA_ERROR_INVALID; /* a pack another program wrote: its datamodel's state is not ours */
+        if (status != TA_OK) {
+            ta_napi_throw(env, &(ta_napi_refusal){status, "not a snapshot of a Host of @tinyactors/node"});
+            ok = false;
+        }
+    }
+    ta_bytes *images = ok && contents.image_count ? ta_growable_arena_alloc(&host->arena, sizeof(ta_bytes) * contents.image_count, 8)
+                                                  : NULL;
+    if (ok && contents.image_count && images == NULL) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the snapshot's images"});
+        ok = false;
+    }
+    for (uint32_t i = 0; ok && i < contents.image_count; i++) images[i] = ta_host_snapshot_image(pack, i);
+    if (ok) {
+        ta_buffer refusal = {ta_growable_arena_alloc(&host->arena, TA_NAPI_CONFIG_ERROR, 8), TA_NAPI_CONFIG_ERROR, 0};
+        ta_host_environment environment = {sizeof environment, 1, host->datamodels, host->allocator, NULL,
+                                           refusal.pointer != NULL ? &refusal : NULL};
+        ta_host_snapshot_input input = {cbor, {contents.host, contents.host_length}, images, contents.image_count, 0};
+        status = ta_host_restore(&environment, &input, &host->host);
+        if (status != TA_OK) {
+            host->host = NULL;
+            ta_napi_host_refused(env, &(ta_napi_refused_config){refusal, status});
+            ok = false;
+        }
+    }
+    if (ok) { /* what is checked once the host is made */
+        restoring->time = contents.time;
+        size_t length = contents.system_id.length;
+        restoring->system_id = (ta_buffer){restoring->allocator.alloc(restoring->allocator.context, length + 1, 8), length + 1, length};
+        if (restoring->system_id.pointer == NULL) {
+            ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the snapshot's system id"});
+            ok = false;
+        } else {
+            if (length > 0) memcpy(restoring->system_id.pointer, contents.system_id.pointer, length);
+            ((char *)restoring->system_id.pointer)[length] = '\0';
+        }
+    }
+    /* the datamodel's handles valid again before the first run */
+    ok = ok && ta_napi_host_restore_state(env, host, (ta_bytes){contents.state, contents.state_length});
+    ta_cbor_writer_free(&writer);
+    ta_growable_arena_release(&host->arena, mark);
+    return ok;
+}
+
+/* Whether the effective config's systemID is the snapshot's (its I/O
+ * processors and tick rate come from the config too, not from the pack);
+ * its text in the host's arena, under the caller's mark. */
+static bool ta_napi_host_same_system(napi_env env, ta_napi_host *host, const ta_napi_restoring *restoring) {
+    const ta_buffer *mine = &restoring->system_id;
+    napi_value id;
+    ta_napi_text text = {&host->arena, "systemID is a string", {NULL, 0}};
+    if (napi_get_named_property(env, restoring->effective, "systemID", &id) == napi_ok && ta_napi_is(env, id, napi_string) &&
+        ta_napi_text_of(env, id, &text) && text.view.length == mine->length &&
+        memcmp(text.view.pointer, mine->pointer, mine->length) == 0)
+        return true;
+    napi_value ignored;
+    napi_get_and_clear_last_exception(env, &ignored);
+    char said[384];
+    const char *parts[] = {"the snapshot is of system ", (const char *)mine->pointer, ": restore it with the config it was taken with"};
+    size_t at = 0;
+    for (size_t p = 0; p < 3; p++)
+        for (const char *c = parts[p]; *c != '\0' && at + 1 < sizeof said; c++) said[at++] = *c;
+    said[at] = '\0';
+    ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_INVALID, said});
+    return false;
 }
 
 /* The datamodel option: "native" (the default) or "quickjs", the one
@@ -539,6 +714,11 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
                                         "migrated", "migrationDone", "services", "datamodel", "quickjs"};
     size_t argc = 2;
     napi_value argv[2] = {NULL, NULL}, self, target, handlers, undefined;
+    /* Host.restore's snapshot, taken before any JavaScript runs: a Host made
+     * meanwhile (a getter's) restores nothing */
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    ta_napi_restoring *restoring = instance != NULL ? instance->restoring : NULL;
+    if (instance != NULL) instance->restoring = NULL;
     if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || napi_get_new_target(env, info, &target) != napi_ok)
         return NULL;
     if (target == NULL) {
@@ -574,13 +754,17 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     ta_napi_tables_init(host);
 
     napi_value effective = NULL;
-    bool ok = ta_napi_host_datamodel(env, host, &options) && ta_napi_host_create(env, host, argv[0]);
+    if (restoring != NULL) restoring->config = argv[0];
+    bool ok = ta_napi_host_datamodel(env, host, &options) &&
+              (restoring != NULL ? ta_napi_host_restore_core(env, host, restoring) : ta_napi_host_create(env, host, argv[0]));
     if (ok) {
         /* the config read in a call's frame: a mark, so its scratch goes */
         ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
         effective = ta_napi_host_config(env, host);
+        if (restoring != NULL) restoring->effective = effective;
         ok = effective != NULL &&
-             ta_napi_host_read_config(env, host, &(ta_napi_effective){effective, handlers});
+             ta_napi_host_read_config(env, host, &(ta_napi_effective){effective, handlers}) &&
+             (restoring == NULL || ta_napi_host_same_system(env, host, restoring));
         ta_growable_arena_release(&host->arena, mark);
     }
     ok = ok && ta_napi_host_keep(env, self, handlers) &&
@@ -594,6 +778,7 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
         napi_create_reference(env, self, 0, &host->self) != napi_ok ||
         !ta_napi_clock_attach(env, host, ta_napi_option(env, &options, "clock")))
         return NULL;
+    if (restoring != NULL) ta_napi_clock_resume(env, host, restoring->time); /* on from the snapshot's time */
     ta_napi_advance(env, host); /* the host's clock starts now, not at 0 */
     return self;
 }
@@ -809,21 +994,11 @@ static napi_value ta_napi_host_add_image(napi_env env, napi_callback_info info) 
     ta_napi_arguments arguments = {1, {NULL}, NULL};
     ta_napi_call call;
     if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
-    napi_value image = arguments.argv[0], result = NULL;
-    void *data = NULL;
-    size_t length = 0;
-    bool is = false;
-    if (napi_is_typedarray(env, image, &is) == napi_ok && is) {
-        napi_typedarray_type type;
-        if (napi_get_typedarray_info(env, image, &type, &length, &data, NULL, NULL) != napi_ok) is = false;
-        else is = type == napi_uint8_array;
-    } else if (napi_is_arraybuffer(env, image, &is) == napi_ok && is) {
-        if (napi_get_arraybuffer_info(env, image, &data, &length) != napi_ok) is = false;
-    }
-    if (!is) napi_throw_type_error(env, NULL, "addImage takes the image's bytes: a Uint8Array or an ArrayBuffer");
-    else {
+    napi_value result = NULL;
+    ta_napi_bytes image = {"addImage takes the image's bytes: a Uint8Array or an ArrayBuffer", {NULL, 0}};
+    if (ta_napi_bytes_of(env, arguments.argv[0], &image)) {
         uint32_t segment = 0;
-        ta_status status = ta_host_add_image(call.host->host, (ta_bytes){data, length}, &segment);
+        ta_status status = ta_host_add_image(call.host->host, image.view, &segment);
         if (status != TA_OK) ta_napi_throw(env, &(ta_napi_refusal){status, "the image was refused"});
         else napi_create_uint32(env, segment, &result);
     }
@@ -996,22 +1171,12 @@ static napi_value ta_napi_host_wake(napi_env env, napi_callback_info info) {
     ta_napi_arguments arguments = {2, {NULL}, NULL};
     ta_napi_call call;
     if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
-    napi_value blob = arguments.argv[1], result = NULL;
+    napi_value result = NULL;
     uint64_t session = 0;
-    void *data = NULL;
-    size_t length = 0;
-    bool is = false;
+    ta_napi_bytes blob = {"wake takes the blob hibernate gave: a Uint8Array or an ArrayBuffer", {NULL, 0}};
     if (ta_napi_session_of(env, arguments.argv[0], &session)) {
-        if (napi_is_typedarray(env, blob, &is) == napi_ok && is) {
-            napi_typedarray_type type;
-            if (napi_get_typedarray_info(env, blob, &type, &length, &data, NULL, NULL) != napi_ok) is = false;
-            else is = type == napi_uint8_array;
-        } else if (napi_is_arraybuffer(env, blob, &is) == napi_ok && is) {
-            if (napi_get_arraybuffer_info(env, blob, &data, &length) != napi_ok) is = false;
-        }
-        if (!is) napi_throw_type_error(env, NULL, "wake takes the blob hibernate gave: a Uint8Array or an ArrayBuffer");
-        else {
-            ta_status status = ta_host_wake(call.host->host, session, (ta_bytes){data, length});
+        if (ta_napi_bytes_of(env, arguments.argv[1], &blob)) {
+            ta_status status = ta_host_wake(call.host->host, session, blob.view);
             if (status == TA_OK) ta_napi_schedule(env, call.host); /* its mailbox runs at the next turn */
             result = ta_napi_input_status(env, &(ta_napi_refusal){status, "the wake was refused (TA_ERROR_STATE: the session "
                                                                           "is not hibernated; TA_ERROR_INVALID: not its blob)"});
@@ -1374,6 +1539,120 @@ static napi_value ta_napi_host_terminate(napi_env env, napi_callback_info info) 
     return result;
 }
 
+/* ---- snapshots: the whole host to bytes and back --------------------------------- */
+
+/* quickjs's state (ta_datamodel_ecmascript_snapshot) as bytes in `writer`:
+ * written into room for the last state's length and a quarter more, once
+ * more only when it outgrew that (each call writes the whole state). */
+static bool ta_napi_quickjs_state(napi_env env, ta_napi_host *host, ta_cbor_writer *writer) {
+    ta_allocator *allocator = &host->allocator;
+    size_t room = host->quickjs_room + host->quickjs_room / 4 + 4096;
+    ta_buffer out = {allocator->alloc(allocator->context, room, 8), room, 0};
+    ta_status status = out.pointer != NULL ? ta_datamodel_ecmascript_snapshot(host->quickjs, &out) : TA_ERROR_NO_MEMORY;
+    if (out.pointer != NULL && status == TA_ERROR_NO_MEMORY && out.length > room) { /* it outgrew the guess */
+        allocator->free(allocator->context, out.pointer, room);
+        room = out.length;
+        out = (ta_buffer){allocator->alloc(allocator->context, room, 8), room, 0};
+        status = out.pointer != NULL ? ta_datamodel_ecmascript_snapshot(host->quickjs, &out) : TA_ERROR_NO_MEMORY;
+    }
+    if (status == TA_OK) {
+        host->quickjs_room = out.length;
+        ta_cbor_write_bytes(writer, (ta_bytes){out.pointer, out.length});
+    } else {
+        const char *reason = ta_datamodel_ecmascript_last_error(host->quickjs);
+        ta_napi_throw(env, &(ta_napi_refusal){status, status == TA_ERROR_UNSUPPORTED && reason != NULL && reason[0] != '\0'
+                                                          ? reason
+                                                          : "the quickjs datamodel's state could not be written"});
+    }
+    if (out.pointer != NULL) allocator->free(allocator->context, out.pointer, room);
+    return status == TA_OK;
+}
+
+/* host.snapshot() -> Buffer: ta_host_snapshot_pack of the whole host, with
+ * the datamodel's state ({"native": its map} or {"quickjs": its bytes},
+ * labelled tinyactors-napi), the images, the system id and the host's
+ * time, written once into the Buffer. A quiescent host only: from a
+ * handler (a batch is open), with an effect or a reply pending, or during
+ * a migration, TA_ERROR_STATE, checked by core before the datamodel's
+ * state is built; a value outside the value table TA_ERROR_UNSUPPORTED. */
+static napi_value ta_napi_host_snapshot(napi_env env, napi_callback_info info) {
+    ta_napi_call call;
+    if (!ta_napi_enter(env, ta_napi_this(env, info), &call)) return NULL;
+    ta_napi_host *host = call.host;
+    napi_value result = NULL;
+    ta_buffer quiet = {NULL, 0, 0};
+    ta_status ready = ta_host_snapshot(host->host, &quiet); /* quiescent first: TA_ERROR_NO_MEMORY is its room */
+    if (ready != TA_OK && ready != TA_ERROR_NO_MEMORY) {
+        ta_napi_throw(env, &(ta_napi_refusal){ready, "a snapshot needs a quiescent host (TA_ERROR_STATE: from a handler, "
+                                                     "with an effect or a reply pending, or during a migration)"});
+        ta_napi_leave(&call);
+        return NULL;
+    }
+    ta_cbor_writer writer; /* through the host's allocator: a snapshot's size is no call's scratch */
+    ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->allocator);
+    const char *key = ta_napi_state_keys[host->datamodel];
+    ta_cbor_write_map(&writer, 1);
+    ta_cbor_write_text(&writer, (ta_string_view){key, strlen(key)});
+    bool ok = host->datamodel == TA_NAPI_DATAMODEL_NATIVE ? ta_napi_native_snapshot(&host->native, &writer)
+                                                          : ta_napi_quickjs_state(env, host, &writer);
+    ta_bytes state = {NULL, 0};
+    ta_status status = ok ? ta_cbor_writer_bytes(&writer, &state) : TA_OK;
+    if (ok && status != TA_OK) {
+        ta_napi_throw(env, &(ta_napi_refusal){status, "no memory for the datamodel's state"});
+        ok = false;
+    }
+    if (ok) {
+        ta_datamodel_state packed = {{ta_napi_snapshot_label, sizeof ta_napi_snapshot_label - 1}, state};
+        ta_buffer probe = {NULL, 0, 0};
+        void *data = NULL;
+        status = ta_host_snapshot_pack(host->host, &packed, &probe);
+        if (status == TA_ERROR_NO_MEMORY) {
+            if (napi_create_buffer(env, probe.length, &data, &result) != napi_ok) result = NULL;
+            ta_buffer out = {data, probe.length, 0};
+            status = result != NULL ? ta_host_snapshot_pack(host->host, &packed, &out) : TA_OK;
+        }
+        if (status != TA_OK) {
+            result = NULL;
+            ta_napi_throw(env, &(ta_napi_refusal){status, "the snapshot was refused"});
+        }
+    }
+    ta_cbor_writer_free(&writer);
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* Host.restore(snapshot, config, options) -> Host: a new Host running the
+ * snapshot snapshot() gave (a Uint8Array, a Buffer too, or an
+ * ArrayBuffer), made by the constructor with the config and options as
+ * `new Host` takes them; the datamodel must be the snapshot's. */
+static napi_value ta_napi_host_restore(napi_env env, napi_callback_info info) {
+    size_t argc = 3;
+    napi_value argv[3] = {NULL, NULL, NULL}, self = NULL, result = NULL, undefined;
+    if (napi_get_cb_info(env, info, &argc, argv, &self, NULL) != napi_ok || napi_get_undefined(env, &undefined) != napi_ok)
+        return NULL;
+    ta_napi_bytes check = {"restore takes the snapshot's bytes first: a Uint8Array or an ArrayBuffer", {NULL, 0}};
+    if (!ta_napi_bytes_of(env, argc >= 1 ? argv[0] : NULL, &check)) return NULL;
+    if (self == NULL || !ta_napi_is(env, self, napi_function)) {
+        napi_throw_type_error(env, NULL, "restore is called on Host: Host.restore(snapshot, config, options)");
+        return NULL;
+    }
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    if (instance == NULL) return NULL;
+    ta_napi_restoring restoring;
+    memset(&restoring, 0, sizeof restoring);
+    restoring.snapshot = argv[0];
+    restoring.allocator = ta_napi_allocator(env);
+    napi_value arguments[2] = {argc >= 2 ? argv[1] : undefined, argc >= 3 ? argv[2] : undefined};
+    ta_napi_restoring *outer = instance->restoring;
+    instance->restoring = &restoring;
+    if (napi_new_instance(env, self, 2, arguments, &result) != napi_ok) result = NULL;
+    instance->restoring = outer;
+    ta_buffer *owned[] = {&restoring.copy, &restoring.system_id};
+    for (size_t i = 0; i < 2; i++)
+        if (owned[i]->pointer != NULL) restoring.allocator.free(restoring.allocator.context, owned[i]->pointer, owned[i]->capacity);
+    return result;
+}
+
 /* Symbol.<name> of this realm, or NULL when it has none. */
 static napi_value ta_napi_well_known(napi_env env, const char *name) {
     napi_value global, symbol, value;
@@ -1405,6 +1684,8 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"hibernate", NULL, ta_napi_host_hibernate, NULL, NULL, NULL, napi_default_method, NULL},
         {"wake", NULL, ta_napi_host_wake, NULL, NULL, NULL, napi_default_method, NULL},
         {"migrate", NULL, ta_napi_host_migrate, NULL, NULL, NULL, napi_default_method, NULL},
+        {"snapshot", NULL, ta_napi_host_snapshot, NULL, NULL, NULL, napi_default_method, NULL},
+        {"restore", NULL, ta_napi_host_restore, NULL, NULL, NULL, napi_static | napi_writable | napi_configurable, NULL},
         {NULL, dispose, ta_napi_host_close, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, async_dispose, ta_napi_host_async_dispose, NULL, NULL, NULL, napi_default_method, NULL},
     };

@@ -288,6 +288,37 @@
     return old;
   }
 
+  // A session's link as a host snapshot holds it: [sessionid, name, its I/O
+  // processors as [type, location] pairs, init, added]. The processors are
+  // the template's with this session's id, the pairs the link kept, or,
+  // once _ioprocessors was read, its entries (an alias, `scxml` or
+  // `basichttp`, is the same frozen entry as the type before it).
+  function linked(target) {
+    const link = target[LINK];
+    let processors = link.io;
+    if (processors === undefined) {
+      processors = template[1].slice();
+      processors[0] = [processors[0][0], template[0] + link.sessionid];
+    } else if (!isArray(processors)) {
+      const seen = new Set();
+      const pairs = [];
+      for (const type of keys(processors)) {
+        const entry = processors[type];
+        if (seen.has(entry)) continue;
+        seen.add(entry);
+        pairs.push([type, entry.location]);
+      }
+      processors = pairs;
+    }
+    return [link.sessionid, link.name, processors, link.init, link.added];
+  }
+
+  // A restored session's link gets the names a snapshot recorded as added
+  // (restore computed its own), or none.
+  function relink(target, added) {
+    target[LINK].added = isArray(added) ? added.slice() : undefined;
+  }
+
   // In a scratch context after a chart's scripts were instantiated: the
   // names they declared as functions.
   function functions() {
@@ -316,6 +347,8 @@
     stored,
     restore,
     upgrade,
+    linked,
+    relink,
     functions,
     dom,
     parse: (text) => JSON.parse(text),

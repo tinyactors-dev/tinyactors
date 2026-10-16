@@ -374,7 +374,10 @@ export type OnError = (host: Host, error: TinyactorsError) => void;
 /** Many systems run as one, driven by the runtime's event loop. */
 export class Host implements Disposable, AsyncDisposable {
   constructor(config: HostConfig, options?: HostOptions);
-  /** A new host running a snapshot `snapshot()` gave. */
+  /** A new host running a snapshot `snapshot()` gave: the config it was
+   * taken with (its systemID is checked) and the options `new Host` takes,
+   * with the snapshot's datamodel. Its clock goes on from the snapshot's
+   * time, whatever clock reads it. */
   static restore(snapshot: Uint8Array | ArrayBuffer, config: HostConfig, options?: HostOptions): Host;
 
   readonly ticksPerSecond: number;
@@ -441,7 +444,12 @@ export class Host implements Disposable, AsyncDisposable {
    * returns core's migration id, which `migrated` and `migrationDone` (and
    * the wake handler, for the actors it asks for) name. */
   migrate(options?: MigrateOptions): number;
-  snapshot(): Uint8Array;
+  /** The whole host as one blob (a Buffer): every segment, the images, the
+   * system id, the host's time and the datamodel's state. A quiescent host
+   * only: not from a handler, with an effect or a reply pending, or during a
+   * migration (`TA_ERROR_STATE`); `TA_ERROR_UNSUPPORTED` for a value outside
+   * the value table. For the same build of the addon only. */
+  snapshot(): Buffer;
 
   close(): void;
   [Symbol.dispose](): void;

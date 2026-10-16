@@ -1,4 +1,5 @@
-// What the gates share (tools/stress.mjs, tools/migration.mjs; as
+// What the gates share (tools/stress.mjs, tools/migration.mjs,
+// tools/snapshot.mjs; as
 // tinyactors-cpython/tools/stress.py shares its Store with migration.py):
 // the batch size, a seeded generator and the store of hibernated actors'
 // blobs, each runtime's own SQLite.
@@ -18,7 +19,7 @@ export function random(seed) {
 }
 
 // The hibernated actors' blobs: one SQLite row per session, written in
-// transactions of 4096.
+// transactions of 4096. A store opened on a copy's file finds its rows.
 export class Store {
   static async open(file) {
     if (globalThis.Bun) {
@@ -35,7 +36,7 @@ export class Store {
     this.db = db;
     db.exec('PRAGMA journal_mode=WAL');
     db.exec('PRAGMA synchronous=OFF');
-    db.exec('CREATE TABLE blobs (session INTEGER PRIMARY KEY, blob BLOB NOT NULL)');
+    db.exec('CREATE TABLE IF NOT EXISTS blobs (session INTEGER PRIMARY KEY, blob BLOB NOT NULL)');
     this.insert = db.prepare('INSERT OR REPLACE INTO blobs VALUES (?, ?)');
     this.select = db.prepare('SELECT blob FROM blobs WHERE session = ?');
     this.pending = [];
@@ -55,6 +56,18 @@ export class Store {
     for (const [session, blob] of this.pending) this.insert.run(session, blob);
     this.db.exec('COMMIT');
     this.pending.length = 0;
+  }
+
+  // A copy of every row in `file` (VACUUM INTO), for another host's store.
+  copyTo(file) {
+    this.flush();
+    this.db.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`);
+  }
+
+  // Every row, [session, blob], one at a time.
+  *rows() {
+    this.flush();
+    for (const row of this.db.prepare('SELECT session, blob FROM blobs').iterate()) yield [row.session, row.blob];
   }
 
   get(session) {

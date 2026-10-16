@@ -2,7 +2,7 @@
 #MISE description="Test tinyactors-napi: lint (rules, the addon's C, the adapter, the mapping table, the build scripts, acronyms), the build, the runtimes, and the conformance set named by MILESTONE against the adapter under node and bun on both datamodels"
 #MISE sources=["src/**/*", "conform.mjs", "index.mjs", "index.d.ts", "test/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyxml/include/**/*", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
-#USAGE flag "--full" help="the hibernation and migration gates at 2,000,000 actors, 1000 resident (tools/stress.mjs, tools/migration.mjs)"
+#USAGE flag "--full" help="the hibernation, migration and snapshot gates at 2,000,000 actors, 1000 resident, and snapshots of 100,000 resident actors (tools/stress.mjs, tools/migration.mjs, tools/snapshot.mjs)"
 # vim:ft=ruby
 
 # The sources are this project's files and those it builds and tests
@@ -20,11 +20,14 @@
 # gate's datamodels). `mise run conform` on its own runs the whole suite on
 # both datamodels, and fails without the adapter.
 #
-# Then the hibernation stress gate (tools/stress.mjs, `mise run stress`)
-# and the migration gate (tools/migration.mjs, `mise run migration`):
-# 20,000 actors with 100 resident in the fast pass, 2,000,000 with 1000
-# resident under --full (root AGENTS.md, "Where a new test goes"), on both
-# datamodels under both runtimes.
+# Then the hibernation stress gate (tools/stress.mjs, `mise run stress`),
+# the migration gate (tools/migration.mjs, `mise run migration`) and the
+# snapshot gate (tools/snapshot.mjs, `mise run snapshot`): 20,000 actors
+# with 100 resident in the fast pass, 2,000,000 with 1000 resident under
+# --full (root AGENTS.md, "Where a new test goes"), on both datamodels under
+# both runtimes; the snapshot gate again with every actor resident (5,000,
+# --full 100,000), so that the datamodel's own state is most of the
+# snapshot.
 
 require_relative '../napi'
 
@@ -55,10 +58,15 @@ else
 end
 
 full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
-%w[stress migration].each do |tool|
+%w[stress migration snapshot].each do |tool|
   if full
     NodeAPI.stress(actors: 2_000_000, resident: 1000, events: 200_000, tool: tool)
   else
     NodeAPI.stress(actors: 20_000, resident: 100, events: 20_000, tool: tool)
   end
+end
+if full
+  NodeAPI.stress(actors: 100_000, resident: 100_000, events: 100_000, tool: 'snapshot')
+else
+  NodeAPI.stress(actors: 5000, resident: 5000, events: 5000, tool: 'snapshot')
 end

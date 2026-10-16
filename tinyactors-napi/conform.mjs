@@ -337,6 +337,7 @@ class Scenario {
     this.judge = new Judge();
     this.clock = new SimulatedClock();
     this.blobs = new Map(); // the implementation's store (driver.md): hibernated actors' blobs
+    this.snapshots = new Map(); // the snapshots the steps took, by name
     this.migrationsDone = []; // the results migrationDone got
     this.migrationDone = (host, result) => this.migrationsDone.push(result);
     this.wake = (host, session) => {
@@ -358,14 +359,13 @@ class Scenario {
     return value;
   }
 
+  // The host's options: the datamodel asked for, and the scenario's handlers.
+  hostOptions() {
+    return { ...this.options, log: this.judge.log, clock: this.clock, wake: this.wake, migrationDone: this.migrationDone };
+  }
+
   async run(steps) {
-    this.host = new Host(Scenario.CONFIG, {
-      ...this.options,
-      log: this.judge.log,
-      clock: this.clock,
-      wake: this.wake,
-      migrationDone: this.migrationDone,
-    });
+    this.host = new Host(Scenario.CONFIG, this.hostOptions());
     try {
       for (const step of steps) {
         try {
@@ -411,6 +411,13 @@ class Scenario {
     } else if ('hibernate' in step) {
       const session = this.session(step.hibernate);
       this.blobs.set(session, host.hibernate(session));
+    } else if ('snapshot' in step) {
+      this.snapshots.set(step.snapshot, host.snapshot());
+    } else if ('restore' in step) {
+      if (!this.snapshots.has(step.restore)) throw new Refused(`a restore of a snapshot no step took: ${step.restore}`);
+      const restored = Host.restore(this.snapshots.get(step.restore), Scenario.CONFIG, this.hostOptions());
+      host.close();
+      this.host = restored; // a restart: the restored host replaces the running one
     } else if ('migrate' in step) {
       const ended = this.migrationsDone.length;
       // ticksPerSecond 1000: the step's ticks are milliseconds

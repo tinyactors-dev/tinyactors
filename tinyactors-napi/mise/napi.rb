@@ -90,14 +90,17 @@ module NodeAPI
   # Node.js the package claims, so the addon uses nothing newer.
   def node_headers = Pathname.new(pinned('node')).dirname.parent.join('include/node')
 
-  # A gate over the application's store (README.md, "Hibernation" and
-  # "Migration"): tools/stress.mjs, the hibernation gate (N actors of a
-  # counter, at most R resident, the rest in each runtime's SQLite,
-  # node:sqlite or bun:sqlite), or tools/migration.mjs, the migration gate
-  # (the same population moved to a new chart version while events come),
-  # on both datamodels under both runtimes, each run a process of its own.
-  # A failed check (a count or version wrong, more than R resident after an
-  # eviction, an actor left behind) ends the task.
+  # A gate over the application's store (README.md, "Hibernation",
+  # "Migration" and "Snapshots"): tools/stress.mjs, the hibernation gate (N
+  # actors of a counter, at most R resident, the rest in each runtime's
+  # SQLite, node:sqlite or bun:sqlite), tools/migration.mjs, the migration
+  # gate (the same population moved to a new chart version while events
+  # come), or tools/snapshot.mjs, the snapshot gate (a copy of a live host
+  # restored from its snapshot and migrated while the live one goes on), on
+  # both datamodels under both runtimes, each run a process of its own. A
+  # failed check (a count or version wrong, more than R resident after an
+  # eviction, an actor left behind, a restored host's snapshot not the same
+  # bytes) ends the task.
   def stress(actors:, resident:, events:, tool: 'stress')
     RUNTIMES.each do |runtime|
       DATAMODELS.each do |datamodel|

@@ -57,7 +57,10 @@
  *   in         In(), the function every context's scopes hold: it reads
  *              `evaluating`, the native datamodel whose entry runs now
  *              (NULL outside one), so it holds no pointer of its own;
- *   stringify  JSON.stringify, for <log> of an object. */
+ *   stringify  JSON.stringify, for <log> of an object;
+ *   restoring  during Host.restore's construction of a Host (host.c), the
+ *              snapshot it restores, taken by the constructor at its
+ *              entry; NULL otherwise, so `new Host` restores nothing. */
 typedef struct ta_napi_instance {
     napi_env env;
     ta_allocator allocator;
@@ -74,6 +77,7 @@ typedef struct ta_napi_instance {
     napi_ref rejected;
     napi_ref vm, realm, realms, in, stringify;
     struct ta_napi_native *evaluating;
+    struct ta_napi_restoring *restoring;
 } ta_napi_instance;
 
 /* The environment's instance, or NULL (and an exception pending) before
@@ -162,6 +166,15 @@ bool ta_napi_text_kept(napi_env env, napi_value value, ta_napi_room *room);
  * UTF-8 in text->arena, anything else a TypeError saying text->what. */
 bool ta_napi_optional_text(napi_env env, napi_value value, ta_napi_text *text);
 
+/* The bytes of a Uint8Array (a Buffer too) or an ArrayBuffer, for the call
+ * (bytes->view); false with a TypeError saying bytes->what for anything
+ * else, NULL included. */
+typedef struct ta_napi_bytes {
+    const char *what;
+    ta_bytes view; /* out */
+} ta_napi_bytes;
+bool ta_napi_bytes_of(napi_env env, napi_value value, ta_napi_bytes *bytes);
+
 /* The exports encode(value) and decode(bytes). */
 napi_value ta_napi_encode(napi_env env, napi_callback_info info);
 napi_value ta_napi_decode(napi_env env, napi_callback_info info);
@@ -189,6 +202,9 @@ typedef struct ta_napi_chart_row {
     const ta_image *image; /* the image it is attached from, until chart_detach */
     uint32_t chart;       /* its index in the image */
     uint32_t flags;       /* TA_NAPI_CHART_* */
+    uint32_t segment;     /* the segment that attached it (ta_datamodel_chart.segment): with
+                             `chart`, what names a session's chart in a snapshot, since two
+                             segments may run one image */
 } ta_napi_chart_row;
 
 /* A session's row: its scope, its chart's row, and core's ids of its
@@ -321,6 +337,9 @@ typedef struct ta_napi_host {
     bool encoder, telemetry;
     napi_value endings;
     uint32_t processors;
+    uint64_t ticks_offset; /* added to the clock's ticks (mod 2^64): a restored host goes on
+                              from its snapshot's time (0 for a new host) */
+    size_t quickjs_room;   /* the last quickjs state's length: the next snapshot's guess */
 } ta_napi_host;
 
 /* A call of the Host: the host and its arena's mark at entry. */
@@ -379,6 +398,20 @@ void ta_napi_native_flush(ta_napi_native *native);
 /* After ta_host_free: the datamodel's own references and output, with
  * basic-env calls only. */
 void ta_napi_native_free(ta_napi_native *native);
+/* The datamodel's state for a host snapshot, appended to `writer` as one
+ * CBOR map: the session, payload and loop tables' handle namespaces
+ * (ta_table_snapshot) and every row, each value as CBOR bytes of its own
+ * (the value table's), a session's chart named by its segment and index.
+ * False with an exception pending: a TinyactorsError TA_ERROR_UNSUPPORTED
+ * for a value outside the value table (`reason` says which) or a chart
+ * whose scripts declare with let, const or class, TA_ERROR_NO_MEMORY. */
+bool ta_napi_native_snapshot(ta_napi_native *native, ta_cbor_writer *writer);
+/* That state back into the fresh datamodel of a restored host, whose
+ * charts ta_host_restore attached: the namespaces restored, every row
+ * filled at its handle. A row twice, a row the tables do not hold, or a
+ * session whose chart the host lacks is refused (TinyactorsError
+ * TA_ERROR_INVALID); false with the exception pending. */
+bool ta_napi_native_restore(ta_napi_native *native, ta_bytes state);
 
 /* A CBOR document the native datamodel writes into its last output
  * (to_wire, serialize, payload_serialize): opened, its values written with
@@ -461,6 +494,10 @@ void ta_napi_advance(napi_env env, ta_napi_host *host);
 /* A duration in nanoseconds as the host's ticks, rounded up (migrate's
  * timeout: never sooner than asked). */
 uint64_t ta_napi_ticks_after(const ta_napi_host *host, uint64_t nanoseconds);
+
+/* A restored host's clock goes on from `time`, its snapshot's: the ticks
+ * the clock reads are offset to read `time` now, whatever the clock. */
+void ta_napi_clock_resume(napi_env env, ta_napi_host *host, uint64_t time);
 
 /* An input from outside a turn schedules one turn (setImmediate, one
  * pending at a time); from a turn's handler it makes the turn go on. */

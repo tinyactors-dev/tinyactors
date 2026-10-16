@@ -176,7 +176,15 @@ static ta_host_time ta_napi_now(napi_env env, ta_napi_host *host) {
     }
     if (wall < host->wall) wall = host->wall;
     host->wall = wall;
-    return (ta_host_time){ta_napi_ticks(host, nanoseconds), wall};
+    return (ta_host_time){ta_napi_ticks(host, nanoseconds) + host->ticks_offset, wall};
+}
+
+/* The offset makes the ticks the clock reads now `time` (unsigned, so an
+ * offset "down" wraps and adds up right): a new SimulatedClock, or the
+ * runtime's clock in another process or after a reboot. */
+void ta_napi_clock_resume(napi_env env, ta_napi_host *host, uint64_t time) {
+    host->ticks_offset = 0;
+    host->ticks_offset = time - ta_napi_now(env, host).monotonic;
 }
 
 void ta_napi_advance(napi_env env, ta_napi_host *host) {

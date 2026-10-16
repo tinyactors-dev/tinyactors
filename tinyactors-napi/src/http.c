@@ -8,32 +8,6 @@
 
 #include <string.h>
 
-/* The bytes of a Uint8Array (a Buffer too) or an ArrayBuffer, for the call;
- * false with a TypeError saying `what` for anything else. */
-typedef struct ta_napi_http_bytes {
-    const char *what;
-    ta_bytes view; /* out */
-} ta_napi_http_bytes;
-
-static bool ta_napi_http_bytes_of(napi_env env, napi_value value, ta_napi_http_bytes *bytes) {
-    bool is = false;
-    void *data = NULL;
-    size_t length = 0;
-    if (value != NULL && napi_is_typedarray(env, value, &is) == napi_ok && is) {
-        napi_typedarray_type type;
-        if (napi_get_typedarray_info(env, value, &type, &length, &data, NULL, NULL) != napi_ok) is = false;
-        else is = type == napi_uint8_array;
-    } else if (value != NULL && napi_is_arraybuffer(env, value, &is) == napi_ok && is) {
-        if (napi_get_arraybuffer_info(env, value, &data, &length) != napi_ok) is = false;
-    }
-    if (!is) {
-        napi_throw_type_error(env, NULL, bytes->what);
-        return false;
-    }
-    bytes->view = (ta_bytes){data, length};
-    return true;
-}
-
 /* A property of `object` (undefined when absent). */
 static napi_value ta_napi_http_property(napi_env env, napi_value object, const char *name) {
     napi_value value = NULL;
@@ -196,8 +170,8 @@ static napi_value ta_napi_http_parse(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value message = NULL, result = NULL;
     if (instance == NULL || napi_get_cb_info(env, info, &argc, &message, NULL, NULL) != napi_ok) return NULL;
-    ta_napi_http_bytes bytes = {"parseHTTPRequest takes the message's bytes: a Uint8Array or an ArrayBuffer", {NULL, 0}};
-    if (!ta_napi_http_bytes_of(env, argc < 1 ? NULL : message, &bytes)) return NULL;
+    ta_napi_bytes bytes = {"parseHTTPRequest takes the message's bytes: a Uint8Array or an ArrayBuffer", {NULL, 0}};
+    if (!ta_napi_bytes_of(env, argc < 1 ? NULL : message, &bytes)) return NULL;
     ta_growable_arena *arena = &instance->arena;
     ta_growable_arena_mark mark = ta_growable_arena_position(arena);
     size_t length = bytes.view.length;

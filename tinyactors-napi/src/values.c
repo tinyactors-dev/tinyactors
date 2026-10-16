@@ -638,21 +638,28 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value argument = NULL;
     if (napi_get_cb_info(env, info, &argc, &argument, NULL, NULL) != napi_ok) return NULL;
+    ta_napi_bytes bytes = {"decode takes a Uint8Array or an ArrayBuffer", {NULL, 0}};
+    if (!ta_napi_bytes_of(env, argc < 1 ? NULL : argument, &bytes)) return NULL;
+    return ta_napi_value_read(env, bytes.view);
+}
+
+bool ta_napi_bytes_of(napi_env env, napi_value value, ta_napi_bytes *bytes) {
     bool is = false;
     void *data = NULL;
     size_t length = 0;
-    if (argc >= 1 && napi_is_typedarray(env, argument, &is) == napi_ok && is) {
+    if (value != NULL && napi_is_typedarray(env, value, &is) == napi_ok && is) {
         napi_typedarray_type type;
-        if (napi_get_typedarray_info(env, argument, &type, &length, &data, NULL, NULL) != napi_ok) return NULL;
-        is = type == napi_uint8_array;
-    } else if (argc >= 1 && napi_is_arraybuffer(env, argument, &is) == napi_ok && is) {
-        if (napi_get_arraybuffer_info(env, argument, &data, &length) != napi_ok) return NULL;
+        if (napi_get_typedarray_info(env, value, &type, &length, &data, NULL, NULL) != napi_ok) is = false;
+        else is = type == napi_uint8_array;
+    } else if (value != NULL && napi_is_arraybuffer(env, value, &is) == napi_ok && is) {
+        if (napi_get_arraybuffer_info(env, value, &data, &length) != napi_ok) is = false;
     }
     if (!is) {
-        napi_throw_type_error(env, NULL, "decode takes a Uint8Array or an ArrayBuffer");
-        return NULL;
+        napi_throw_type_error(env, NULL, bytes->what);
+        return false;
     }
-    return ta_napi_value_read(env, (ta_bytes){data, length});
+    bytes->view = (ta_bytes){data, length};
+    return true;
 }
 
 /* ---- the native datamodel's documents ---------------------------------------- */

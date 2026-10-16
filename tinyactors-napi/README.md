@@ -233,3 +233,54 @@ resident (plus two batches while the migration moved them).
 | node, quickjs | 42.0 s | 108.7 s (18,390 a second) | 657 MB (329 B per actor) | 231 MB / 115 MB (58 B per actor) | 756 MB |
 | bun, native | 50.5 s | 131.2 s (15,240 a second) | 680 MB (340 B per actor) | 231 MB / 115 MB (58 B per actor) | 576 MB |
 | bun, quickjs | 41.0 s | 109.5 s (18,270 a second) | 605 MB (303 B per actor) | 231 MB / 115 MB (58 B per actor) | 756 MB |
+
+## Snapshots
+
+`host.snapshot()` copies the whole host into one `Buffer`: every
+segment's memory (actors, queues, timers, the hibernated actors'
+records), the datamodel's sessions and payloads, the images, the system
+id and the host's time. `Host.restore(snapshot, config, options)` makes a
+new host running it. Pass the config the snapshot was taken with (its
+`systemID` is checked; its I/O processors and tick rate are not in the
+snapshot), the snapshot's `datamodel`, and the handlers `new Host` takes.
+Every session id stays the same, and the host's clock goes on from the
+snapshot's time, whatever clock reads it: a new `SimulatedClock`, or the
+runtime's clock in another process or on another machine.
+
+```js
+const blob = host.snapshot();             // quiescent: not from a handler
+host.close();
+// ...
+host = Host.restore(blob, config, { log, wake });
+```
+
+- **A snapshot is valid only for the same build of the addon.** It holds
+  raw memory, so it is not a backup; durability is your database's job,
+  and hibernation is how a running process keeps actors out of memory. A
+  snapshot is a copy of the whole application, every chart version at
+  once. Use one to rehearse a deploy (add the new image, migrate, run the
+  clock ahead, look), to capture a host when something goes wrong and
+  step through it on the same build, to start every test from one
+  prepared world, or to take a host out of the process for a while.
+- **Hibernated actors stay in your store.** The snapshot holds their
+  records, not their blobs, and the restored host asks for them through
+  `wake` as before. A copy that hibernates actors needs its own copy of
+  the store, since it writes blobs too.
+- **The host must be quiescent.** A snapshot is refused with
+  `TA_ERROR_STATE` from a handler, while an effect or a typed method's
+  reply has not been handled (`await host.idle()` first), and while a
+  migration runs. It is refused with `TA_ERROR_UNSUPPORTED` when a
+  session or payload holds what hibernation cannot store (on the native
+  datamodel a function, a `Map`, a `Date`, ..., or a session of a chart
+  whose scripts declare with `let`, `const` or `class`); the message names
+  the variable. The host goes on either way.
+- **Values are written through the value table**, so two variables of
+  one session that share an object no longer share it after a restore.
+
+`tools/snapshot.mjs` (`mise run snapshot`) rehearses a deploy on a copy:
+a live host of two million actors, at most 1000 resident and the rest in
+SQLite, a delayed send pending for each resident one; its snapshot
+written to a file and its store copied; the copy restored with its own
+store and clock, whose own snapshot is the same bytes, then migrated to a
+new version while events come, its clock run past the delayed sends,
+while the live host goes on with events of its own.
