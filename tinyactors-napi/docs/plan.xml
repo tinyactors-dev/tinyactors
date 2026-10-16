@@ -476,7 +476,7 @@
         <does>telemetry handler, metrics(), the stop's trace.end and bounded last take; a take the allocator refused retried next turn.</does>
         <done-when>Python's test_telemetry cases in Node, spans decoded back with traceSpansDecode.</done-when>
       </step>
-      <step id="p2-hibernate" status="todo" after="p2-telemetry">
+      <step id="p2-hibernate" status="done" after="p2-telemetry" commit="4b11981">
         <title>Hibernation with the application's store</title>
         <does>sweep, hibernate, wake and the wake handler; serialize writes a native session's variables and _event as CBOR through the value table (a function or an object outside the table refuses with TA_ERROR_UNSUPPORTED; payload_serialize answers TA_ERROR_UNSUPPORTED where to_wire keeps TA_ERROR_INVALID); destroy removes the row; a blob whose copy into a Buffer fails is woken back from the view before the ack; sweep and wake refuse numbers out of range.</does>
         <done-when>tools/stress.mjs with a store (node:sqlite under node, bun:sqlite under bun, or a Map) passes 20,000 actors with 100 resident; --full two million with 1000.</done-when>
