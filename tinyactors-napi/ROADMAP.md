@@ -128,6 +128,28 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   Tests: `tinyactors-core/tests/unit/test_host_strings.c`. The addon
   needs no change; a test of the refusal is its own to add.
 
+- **Every run scans every live request: a population of invocations
+  makes each run O(invocations)** (2026-10-16, p2-services; log entry
+  `l-p2-services-retry-pending`). `ta_system_run` calls
+  `ta_system_retry_pending` (`src/system/schedule.c:254`). That function
+  walks `system->requests` from 0 to its high-water mark
+  (`src/system/route.c:326-368`), only to find the
+  `REQUEST_PENDING_SPAWN`s. An external invocation holds a request for
+  as long as it runs, so with 200,000 running services each run scans
+  200,000 slots, however little it does. `tools/services.mjs` makes
+  50,000 round trips at 33,000 to 42,000 a second with 10,000 actors,
+  but only 4,000 to 4,600 a second with 200,000 (`mise run services`,
+  2026-10-16, all four runtime and datamodel pairs). gdb sampled the
+  200,000-actor traffic six times; five samples were in
+  `ta_system_retry_pending` under `ta_host_run`. The Python binding built
+  on today's core shows the same: `tools/services.py --actors 200000
+  --events 50000`, 4,525 round trips a second, where its README measured
+  26,000 a second on 2026-10-14. The suite cannot see this (it is a rate,
+  not a result). Asked: a run finds the pending spawns without walking
+  every request, for example a list or a count of them so that no
+  pending spawn means no scan. The addon works around nothing; the gate
+  passes, only slower.
+
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
 tick rate through `host.config`, `9bd33f03`); their text is in this file's

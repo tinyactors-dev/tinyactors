@@ -735,4 +735,10 @@
     <evidence>tools/snapshot.mjs Population.evict; tinyactors-cpython/tools/snapshot.py Population.evict</evidence>
     <resolution>fixed in this step's commit</resolution>
   </entry>
+  <entry id="l-p2-services-retry-pending" date="2026-10-16" step="p2-services" kind="request-to-core" status="open">
+    <what>Each ta_host_run scans every live request: ta_system_retry_pending (tinyactors-core/src/system/route.c:326-368, called from schedule.c:254) walks the requests pool up to its high-water mark to find pending spawns. Each running external invocation holds a request. With 200,000 services running, a round trip costs about 10 times what it costs with 10,000: 4,000 to 4,600 a second against 33,000 to 42,000.</what>
+    <why>The services gate at its full size (200,000 actors, 1,000,000 round trips) passes but takes about 4 minutes of traffic per runtime and datamodel. The Python binding on today's core is as slow (4,525 a second; its README has 26,000 from 2026-10-14), so this is core's, not either binding's.</why>
+    <evidence>gdb, 6 samples during node native traffic at 200,000 actors: 5 in ta_system_retry_pending &lt;- ta_system_run &lt;- ta_host_run &lt;- ta_napi_turn; mise run services 2026-10-16; PYTHONPATH=build/abi3 python tools/services.py --actors 200000 --events 50000</evidence>
+    <resolution>Written under "Requests to core" in tinyactors-napi/ROADMAP.md. The addon waits; the README gives the numbers as measured.</resolution>
+  </entry>
 </log>
