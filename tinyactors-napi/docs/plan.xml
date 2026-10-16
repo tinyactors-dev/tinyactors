@@ -419,7 +419,7 @@
         <files>src/host.c, src/module.c, tools/lint/rules/allocation-in-tables-and-host.yml</files>
       </step>
       <step id="p1-loop" status="todo" after="p1-host" decision="d-drive d-time d-errors d-clock">
-        <title>The loop and both drivers</title>
+        <title>The loop on the event loop</title>
         <does>src/loop.c: drain with the batch flag and its bound before a take, turn with the bound of 64 runs, every run status as Python's table has it, run only from the event loop (decision d-drive): setImmediate for a yield and for an input outside a turn (one pending at a time), one setTimeout at the deadline, ref'd while pending, replaced on each idle turn; await idle() settling its waiters at the next idle turn, and errors as decision d-errors says; SimulatedClock holding its hosts weakly (WeakRef), increment as decision d-clock says; both clocks before every run and every input that depends on them, and after each run when an encoder is configured.</does>
         <done-when>The loop's tests: every status; a send with no other call runs its actor (no driver called); the bound yields to I/O; one timer; no timer with a SimulatedClock; a process exits when no deadline is pending and stays while one is.</done-when>
         <files>src/loop.c, test/loop.test.mjs, test/liveness.test.mjs</files>
