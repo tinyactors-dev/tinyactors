@@ -417,12 +417,10 @@ services still running.
 
 | runtime, datamodel | start 200,000 invocations | 1,000,000 round trips | end (done, cancel) | peak resident | core's region |
 |---|---|---|---|---|---|
-| node, native | 5.5 s (36,000 a second) | 250.2 s (4,000 a second) | 17.1 s | 441 MB (2207 B per actor and service) | 50.3 MB (251 B per actor) |
-| node, quickjs | 5.0 s (40,000 a second) | 237.3 s (4,200 a second) | 17.8 s | 669 MB (3345 B per actor and service) | 61.8 MB (309 B per actor) |
-| bun, native | 4.7 s (43,000 a second) | 226.2 s (4,400 a second) | 14.8 s | 648 MB (3239 B per actor and service) | 50.3 MB (251 B per actor) |
-| bun, quickjs | 4.0 s (50,000 a second) | 216.3 s (4,600 a second) | 15.5 s | 753 MB (3766 B per actor and service) | 61.8 MB (309 B per actor) |
+| node, native | 5.0 s (40,000 a second) | 27.2 s (37,000 a second) | 2.1 s | 575 MB (2875 B per actor and service) | 50.3 MB (251 B per actor) |
+| node, quickjs | 4.0 s (50,000 a second) | 22.4 s (45,000 a second) | 2.3 s | 698 MB (3491 B per actor and service) | 61.8 MB (309 B per actor) |
+| bun, native | 3.9 s (52,000 a second) | 20.7 s (48,000 a second) | 1.9 s | 843 MB (4214 B per actor and service) | 50.3 MB (251 B per actor) |
+| bun, quickjs | 3.1 s (64,000 a second) | 19.0 s (53,000 a second) | 1.6 s | 766 MB (3830 B per actor and service) | 61.8 MB (309 B per actor) |
 
-The round trips are slow at this size because of core, not the
-services: each run scans every live request, and each running invocation
-holds one. With 10,000 actors the same round trips run at 33,000 to
-42,000 a second. The request to core is in ROADMAP.md.
+A round trip costs about what it costs with 10,000 actors: a run's work
+does not grow with the number of running invocations.

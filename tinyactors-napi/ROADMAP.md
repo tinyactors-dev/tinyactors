@@ -149,6 +149,15 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   every request, for example a list or a count of them so that no
   pending spawn means no scan. The addon works around nothing; the gate
   passes, only slower.
+  **Answered 2026-10-16 (`dd29558e`):** the parked spawns are a queue in
+  the system header, so a run retries only them (O(parked), nothing when
+  none), whatever the number of live requests. The slowdown came with
+  `d7db9ada` (a sender waits for its send), which made a round trip take
+  more runs, each of them walking the requests: the Python services gate
+  ran 52,332 round trips a second before it and 4,654 after (200,000
+  actors, 50,000 round trips). Now `mise run services` makes 37,000 to
+  53,000 a second at 200,000 actors (README, "Invoked services"); the
+  Python gate 144,544. The addon needs no change.
 
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
