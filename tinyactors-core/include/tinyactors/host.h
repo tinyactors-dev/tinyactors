@@ -168,7 +168,8 @@ TA_API ta_system *ta_host_system(ta_host *h, uint32_t segment);
  * or free the host. TA_ERROR_STATE during a run. */
 TA_API ta_status ta_host_boot(ta_host *h, uint32_t segment);
 /* The session of a live actor spawned with `name` (boot actors carry their
- * manifest name), newest segment first; 0 if none. */
+ * manifest name), newest segment first, and in a segment the oldest such
+ * actor (ta_system_actor_by_name); 0 if none. O(segments), not O(actors). */
 TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
 
 /* ---- actors (by session id, host-wide) -------------------------------------- */

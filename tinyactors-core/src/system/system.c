@@ -84,8 +84,8 @@ typedef struct carved {
         request_slots, request_generations;
     size_t slab_pages, slab_metadata, effects, effect_views, sessions, chart_datamodels,
         chart_contexts, chart_stats, trace_storage, context_slots, context_generations, rules,
-        chart_points;
-    uint32_t workspace_size, page_count, session_capacity;
+        chart_points, actor_links, names;
+    uint32_t workspace_size, page_count, session_capacity, name_capacity;
 } carved;
 
 static void carve(ta_arena *arena, const ta_image_view *view, const ta_system_config *config,
@@ -101,10 +101,17 @@ static void carve(ta_arena *arena, const ta_image_view *view, const ta_system_co
     o->session_capacity = 16;
     while (o->session_capacity < config->max_actors * 2)
         o->session_capacity <<= 1;
+    /* at most one name per actor: a load of at most 4/5 */
+    o->name_capacity = 16;
+    while (o->name_capacity < config->max_actors + config->max_actors / 4)
+        o->name_capacity <<= 1;
     o->header = ta_arena_alloc(arena, sizeof(ta_system), TA_ALIGN_MAX);
     o->actor_slots = ta_arena_alloc(
         arena, ta_pool_slots_bytes(sizeof(ta_actor), config->max_actors), TA_ALIGN_MAX);
     o->actor_generations = ta_arena_alloc(arena, config->max_actors, 1);
+    o->actor_links =
+        ta_arena_alloc(arena, sizeof(ta_actor_links) * (size_t)config->max_actors, TA_ALIGN_MAX);
+    o->names = ta_arena_alloc(arena, sizeof(uint32_t) * (size_t)o->name_capacity, 4);
     o->event_slots = ta_arena_alloc(
         arena, ta_pool_slots_bytes(sizeof(ta_event), config->max_events), TA_ALIGN_MAX);
     o->event_generations = ta_arena_alloc(arena, config->max_events, 1);
@@ -291,7 +298,12 @@ static void set_rels(ta_system *system, ta_arena *arena, const carved *o) {
         (int64_t)((intptr_t)ta_arena_pointer(arena, o->rules) - (intptr_t)system);
     system->chart_points_relative =
         (int64_t)((intptr_t)ta_arena_pointer(arena, o->chart_points) - (intptr_t)system);
+    system->actor_links_relative =
+        (int64_t)((intptr_t)ta_arena_pointer(arena, o->actor_links) - (intptr_t)system);
+    system->names_relative =
+        (int64_t)((intptr_t)ta_arena_pointer(arena, o->names) - (intptr_t)system);
     system->session_capacity = o->session_capacity;
+    system->name_capacity = o->name_capacity;
 }
 
 ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
@@ -363,6 +375,9 @@ ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
     uint32_t *session = SYSTEM_POINTER(system, sessions_relative, uint32_t);
     for (uint32_t i = 0; i < system->session_capacity; i++)
         session[i] = TA_NIL;
+    uint32_t *names = SYSTEM_POINTER(system, names_relative, uint32_t);
+    for (uint32_t i = 0; i < system->name_capacity; i++)
+        names[i] = TA_NIL;
     ta_status status = bind_datamodels(system, image, datamodels, datamodel_count);
     if (status != TA_OK) return status;
     rebind(system, image);
@@ -418,6 +433,85 @@ static void session_remove(ta_system *system, uint32_t index) {
             system->session_count--;
             return;
         }
+}
+
+/* ---- the index of names ------------------------------------------------------------------- */
+
+/* Each distinct name of a live actor has one slot, which holds the oldest
+ * actor of that name; the others follow it in a ring (actor_links), in the
+ * order they came. A lookup, an insertion and a removal cost O(1) expected:
+ * a hash of the name and a few probes, whatever the population. */
+
+static ta_actor_links *names_links(const ta_system *system) {
+    return SYSTEM_POINTER(system, actor_links_relative, ta_actor_links);
+}
+
+static uint32_t names_hash(ta_string_view name, uint32_t capacity) {
+    uint32_t h = 2166136261u; /* FNV-1a */
+    for (uint32_t i = 0; i < name.length; i++)
+        h = (h ^ (unsigned char)name.pointer[i]) * 16777619u;
+    return (h ^ (h >> 16)) & (capacity - 1);
+}
+
+static ta_string_view names_actor_name(const ta_system *system, uint32_t index) {
+    return ta_shared_string_get(&system->core, ta_actor_at(system, index)->name);
+}
+
+static int names_equal(ta_string_view a, ta_string_view b) {
+    return a.length == b.length && (!a.length || ta_memcmp(a.pointer, b.pointer, a.length) == 0);
+}
+
+/* The slot of `name`, or the empty slot where it would go. */
+static uint32_t names_slot(const ta_system *system, ta_string_view name) {
+    const uint32_t *t = SYSTEM_POINTER(system, names_relative, uint32_t);
+    uint32_t mask = system->name_capacity - 1, i = names_hash(name, system->name_capacity);
+    while (t[i] != TA_NIL && !names_equal(names_actor_name(system, t[i]), name))
+        i = (i + 1) & mask;
+    return i;
+}
+
+void ta_system_name_insert(ta_system *system, uint32_t index) {
+    uint32_t *t = SYSTEM_POINTER(system, names_relative, uint32_t);
+    ta_actor_links *links = names_links(system);
+    uint32_t i = names_slot(system, names_actor_name(system, index));
+    if (t[i] == TA_NIL) {
+        t[i] = index;
+        links[index].name_prev = links[index].name_next = index;
+        system->name_count++;
+        return;
+    }
+    uint32_t head = t[i], tail = links[head].name_prev; /* the newest goes last */
+    links[index].name_prev = tail;
+    links[index].name_next = head;
+    links[tail].name_next = index;
+    links[head].name_prev = index;
+}
+
+static void names_remove(ta_system *system, uint32_t index) {
+    uint32_t *t = SYSTEM_POINTER(system, names_relative, uint32_t);
+    ta_actor_links *links = names_links(system);
+    uint32_t mask = system->name_capacity - 1;
+    uint32_t i = names_slot(system, names_actor_name(system, index));
+    TA_ASSERT(t[i] != TA_NIL);
+    uint32_t prev = links[index].name_prev, next = links[index].name_next;
+    links[index].name_prev = links[index].name_next = TA_NIL;
+    if (next != index) { /* others keep the name: unlink, the next oldest heads it */
+        links[prev].name_next = next;
+        links[next].name_prev = prev;
+        if (t[i] == index) t[i] = next;
+        return;
+    }
+    /* the last of its name: empty the slot, and move back each later one of
+     * its cluster whose probe would no longer reach it */
+    system->name_count--;
+    for (uint32_t j = (i + 1) & mask; t[j] != TA_NIL; j = (j + 1) & mask) {
+        uint32_t home = names_hash(names_actor_name(system, t[j]), system->name_capacity);
+        if (((j - home) & mask) >= ((j - i) & mask)) {
+            t[i] = t[j];
+            i = j;
+        }
+    }
+    t[i] = TA_NIL;
 }
 
 /* ---- actors -------------------------------------------------------------------------------- */
@@ -562,6 +656,7 @@ uint32_t ta_system_spawn_actor(ta_system *system, uint32_t chart, ta_string_view
         return TA_NIL;
     }
     ta_system_session_insert(system, index);
+    ta_system_name_insert(system, index);
     core->chart_stats[chart].actors++;
     core->chart_stats[chart].spawned++;
     trace_spawn(system, index, ta_actor_instance(system, actor), parent, traceparent);
@@ -633,6 +728,7 @@ void ta_system_reclaim(ta_system *system, uint32_t index, uint32_t how) {
         ta_core_instance_deinit(core, ta_actor_instance(system, actor));
         ta_slab_free(&system->slab, actor->instance);
     }
+    names_remove(system, index);
     ta_shared_string_release(core, actor->name);
     session_remove(system, index);
     actor->state = TA_ACTOR_FREE;
@@ -762,14 +858,9 @@ uint32_t ta_system_actors(const ta_system *system, uint32_t *cursor, ta_uint32_a
 }
 
 uint32_t ta_system_actor_by_name(const ta_system *system, ta_string_view name) {
-    for (uint32_t i = 0; i < system->actors.high_water_mark; i++) {
-        if (!ta_pool_live(&system->actors, i)) continue;
-        ta_string_view n = ta_shared_string_get(&system->core, ta_actor_at(system, i)->name);
-        if (n.length == name.length &&
-            (n.length == 0 || ta_memcmp(n.pointer, name.pointer, n.length) == 0))
-            return ta_pool_handle(&system->actors, i);
-    }
-    return 0;
+    if (name.length > TA_SYSTEM_MAX_STRING) return 0; /* no actor has such a name */
+    uint32_t index = SYSTEM_POINTER(system, names_relative, const uint32_t)[names_slot(system, name)];
+    return index == TA_NIL ? 0 : ta_pool_handle(&system->actors, index);
 }
 
 void ta_system_deinit(ta_system *system) {
@@ -970,7 +1061,18 @@ ta_status ta_system_relocate(ta_system **relocated, ta_memory memory,
     for (uint32_t i = 0; i < new_system->session_capacity; i++)
         session[i] = TA_NIL;
     new_system->session_count = 0;
+    /* the rings move as they are (actor indices stay); each name's oldest
+     * actor takes its slot in the new index */
+    ta_memcpy(names_links(new_system), names_links(system),
+              sizeof(ta_actor_links) * (size_t)system->actors.high_water_mark);
+    uint32_t *names = SYSTEM_POINTER(new_system, names_relative, uint32_t);
+    for (uint32_t i = 0; i < new_system->name_capacity; i++)
+        names[i] = TA_NIL;
     rebind(new_system, system->core.image);
+    const uint32_t *old_names = SYSTEM_POINTER(system, names_relative, const uint32_t);
+    for (uint32_t i = 0; i < system->name_capacity; i++)
+        if (old_names[i] != TA_NIL)
+            names[names_slot(new_system, names_actor_name(new_system, old_names[i]))] = old_names[i];
     for (uint32_t i = 0; i < new_system->actors.high_water_mark; i++)
         if (ta_pool_live(&new_system->actors, i)) ta_system_session_insert(new_system, i);
     system->magic = 0; /* the old region is dead */

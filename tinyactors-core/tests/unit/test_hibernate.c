@@ -454,6 +454,135 @@ static void test_ecmascript_unsupported(void) {
     ecmascript_close(&x);
 }
 
+/* ---- the index of names ---- */
+
+static uint32_t spawn_named(test_system *t, const char *name) {
+    ta_spawn spawn;
+    memset(&spawn, 0, sizeof spawn);
+    spawn.name = (ta_string_view){name, (uint32_t)strlen(name)};
+    uint32_t actor = 0;
+    CHECK_EQUAL(ta_system_spawn(t->system, &spawn, &actor), TA_OK);
+    return actor;
+}
+
+static uint32_t by_name(test_system *t, const char *name) {
+    return ta_system_actor_by_name(t->system, (ta_string_view){name, (uint32_t)strlen(name)});
+}
+
+/* The longest run of occupied slots in the index: a lookup probes at most
+ * that many, whatever the population. */
+static uint32_t longest_cluster(const ta_system *system) {
+    const uint32_t *names = SYSTEM_POINTER(system, names_relative, const uint32_t);
+    uint32_t longest = 0, run = 0;
+    for (uint32_t i = 0; i < 2 * system->name_capacity; i++) {
+        run = names[i & (system->name_capacity - 1)] == TA_NIL ? 0 : run + 1;
+        if (run > longest) longest = run;
+    }
+    return longest;
+}
+
+#define NAMED 2000u
+
+/* ta_system_actor_by_name answers from an index of names, not by walking
+ * the actors: each distinct name has one slot, holding its oldest live
+ * actor, so a lookup costs a hash and a few probes. The answer is the
+ * oldest live actor of the name (hibernated ones count), across
+ * terminations, hibernation, relocation and a snapshot. */
+static void test_names_index(void) {
+    test_system t;
+    ta_system_config config = test_system_config();
+    config.max_actors = 4096;
+    config.max_events = 4096;
+    CHECK(tsys_init(&t,
+                    NULLSC("initial='a'><state id='a'><transition event='quit' target='end'/>"
+                           "</state><final id='end'/>"),
+                    NULL, &config));
+    static uint32_t named[NAMED];
+    char text[32];
+    uint32_t first = spawn_named(&t, ""); /* the chart's name */
+    for (uint32_t i = 0; i < NAMED; i++) {
+        snprintf(text, sizeof text, "a%u", i);
+        named[i] = spawn_named(&t, text);
+    }
+    uint32_t second = spawn_named(&t, "main.scxml"); /* the chart's name, given */
+    uint32_t dup[3] = {spawn_named(&t, "dup"), spawn_named(&t, "dup"), spawn_named(&t, "dup")};
+    run_all(&t);
+    CHECK_EQUAL(t.system->name_count, NAMED + 2);
+    CHECK(longest_cluster(t.system) <= 64); /* load 2002/8192 */
+    for (uint32_t i = 0; i < NAMED; i++) {
+        snprintf(text, sizeof text, "a%u", i);
+        CHECK_EQUAL(by_name(&t, text), named[i]);
+    }
+    CHECK_EQUAL(by_name(&t, "main.scxml"), first); /* the oldest */
+    CHECK_EQUAL(by_name(&t, "dup"), dup[0]);
+    CHECK_EQUAL(by_name(&t, "nobody"), 0u);
+    CHECK_EQUAL(by_name(&t, ""), 0u);
+    /* the oldest ends: the next oldest answers; the middle one ends: the order stays */
+    CHECK_EQUAL(ta_system_terminate(t.system, first), TA_OK);
+    CHECK_EQUAL(ta_system_terminate(t.system, dup[1]), TA_OK);
+    /* every other named actor ends: the slots left behind are filled by
+     * moving the later ones of their clusters back, so each is still found */
+    for (uint32_t i = 0; i < NAMED; i += 2)
+        CHECK_EQUAL(ta_system_terminate(t.system, named[i]), TA_OK);
+    run_all(&t);
+    CHECK_EQUAL(t.system->name_count, NAMED / 2 + 2);
+    CHECK_EQUAL(by_name(&t, "main.scxml"), second);
+    CHECK_EQUAL(by_name(&t, "dup"), dup[0]);
+    for (uint32_t i = 0; i < NAMED; i++) {
+        snprintf(text, sizeof text, "a%u", i);
+        CHECK_EQUAL(by_name(&t, text), i % 2 ? named[i] : 0u);
+    }
+    /* a hibernated actor keeps its name */
+    ta_status status;
+    size_t blob_length = hibernate(&t, dup[0], &status);
+    CHECK_EQUAL(status, TA_OK);
+    CHECK_EQUAL(by_name(&t, "dup"), dup[0]);
+    CHECK_EQUAL(ta_system_terminate(t.system, dup[0]), TA_OK); /* applied at its wake */
+    run_all(&t);
+    /* the index and the rings move with the region, to a larger index */
+    ta_system_config big = config;
+    big.max_actors = 3 * config.max_actors;
+    size_t need;
+    CHECK_EQUAL(ta_system_layout(&t.image, &big, &need), TA_OK);
+    void *memory = malloc(need);
+    ta_system *moved = t.system;
+    CHECK_EQUAL(ta_system_relocate(&moved, (ta_memory){memory, need}, &big), TA_OK);
+    free(t.memory);
+    t.memory = memory;
+    t.system = moved;
+    CHECK(t.system->name_capacity > 8192u);
+    CHECK_EQUAL(by_name(&t, "dup"), dup[0]); /* hibernated, terminated when woken */
+    CHECK_EQUAL(by_name(&t, "main.scxml"), second);
+    for (uint32_t i = 1; i < NAMED; i += 2) {
+        snprintf(text, sizeof text, "a%u", i);
+        CHECK_EQUAL(by_name(&t, text), named[i]);
+    }
+    uint32_t dup3 = spawn_named(&t, "dup");
+    CHECK_EQUAL(ta_actor_wake(t.system, dup[0], (ta_bytes){blob, blob_length}), TA_OK);
+    run_all(&t);
+    CHECK_EQUAL(by_name(&t, "dup"), dup[2]); /* dup[0] ended at its wake; dup[2] came before dup3 */
+    CHECK_EQUAL(ta_system_terminate(t.system, dup[2]), TA_OK);
+    run_all(&t);
+    CHECK_EQUAL(by_name(&t, "dup"), dup3);
+    /* a snapshot holds the index as it is */
+    ta_buffer out = {NULL, 0, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_ERROR_NO_MEMORY);
+    void *snap = malloc(out.length);
+    out = (ta_buffer){snap, out.length, 0};
+    CHECK_EQUAL(ta_system_snapshot(t.system, &out), TA_OK);
+    void *memory2 = malloc(out.length);
+    ta_system *restored;
+    CHECK_EQUAL(ta_system_restore(&(ta_system_setup){{memory2, out.length}, &t.image, NULL,
+                                                      &t.binding, 1, 0},
+                                  (ta_bytes){snap, out.length}, &restored),
+                TA_OK);
+    CHECK_EQUAL(ta_system_actor_by_name(restored, (ta_string_view){"dup", 3}), dup3);
+    CHECK_EQUAL(ta_system_actor_by_name(restored, (ta_string_view){"a1999", 5}), named[1999]);
+    free(memory2); /* its datamodel handles alias the original's: no deinit */
+    free(snap);
+    tsys_free(&t);
+}
+
 int main(void) {
     RUN(test_roundtrip_and_single_wake);
     RUN(test_watch_ends_with_hibernation);
@@ -461,6 +590,7 @@ int main(void) {
     RUN(test_children_cancel_terminate);
     RUN(test_error_communication_order);
     RUN(test_cold_sweep);
+    RUN(test_names_index);
     RUN(test_ecmascript_state_survives);
     RUN(test_ecmascript_unsupported);
     TEST_MAIN_END();

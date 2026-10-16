@@ -300,7 +300,11 @@ typedef struct ta_actor {
 ```
 
 Actor (48 B) + instance (~64 B) ≈ **112 bytes per idle actor**, plus
-whatever the datamodel keeps.
+whatever the datamodel keeps. Beside the actor pool, per actor of
+`max_actors`: its links in the ring of actors of its name (8 B) and the
+index of names (a slot per name, 4 B, at most 4/5 full: 5–10 B), which
+answers `ta_system_actor_by_name` with the oldest live actor of a name in
+O(1) expected.
 
 ### 4.3 Workspace (pooled, held only inside a microstep)
 

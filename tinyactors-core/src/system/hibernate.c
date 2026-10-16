@@ -965,6 +965,7 @@ static ta_status adopt_member(ta_system *system, const blob_view *view, uint64_t
         return status;
     }
     ta_system_session_insert(system, index);
+    ta_system_name_insert(system, index);
     core->chart_stats[chart].actors++;
     actor->flags |= ACTOR_FLAG_TOUCHED;
     trace_residency(system, index, TA_TRACE_LOADED, ta_actor_instance(system, actor)->macrostep);

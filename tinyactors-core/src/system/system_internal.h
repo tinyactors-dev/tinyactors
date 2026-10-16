@@ -15,8 +15,9 @@
 /* The region's layout: 2 since the step counters and trace references
  * (docs/adr/0006 in the repository root), 3 with the charts' counts, 4 since
  * an external invocation's request keeps its type and params, 5 with the queue
- * of parked spawns; a snapshot of another is refused. */
-#define TA_SYSTEM_VERSION      5u
+ * of parked spawns, 6 with the index of actor names; a snapshot of another is
+ * refused. */
+#define TA_SYSTEM_VERSION      6u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -53,6 +54,13 @@ typedef struct ta_actor {
     uint64_t serial; /* _sessionid is decimal(serial), formatted on demand */
 } ta_actor;
 TA_STATIC_ASSERT(sizeof(ta_actor) == 48, actor_record_is_48_bytes);
+
+/* What an actor is linked into besides its record, in an array beside the
+ * actor pool (actor_links, indexed like it): the ring of the live actors of
+ * its name, in the order they came (the index of names holds the oldest). */
+typedef struct ta_actor_links {
+    uint32_t name_prev, name_next; /* actor indices; an actor alone with its name links itself */
+} ta_actor_links;
 
 typedef struct ta_timer {
     uint32_t owner_next;
@@ -112,6 +120,11 @@ struct ta_system {
     uint64_t stats_hibernations, stats_wakes;
     int64_t effects_relative, effect_views_relative, sessions_relative, chart_datamodels_relative,
         chart_contexts_relative, chart_stats_relative;
+    /* the index of names: open addressing (linear probing, deletion by
+     * backward shift) of name_capacity slots, each TA_NIL or the oldest live
+     * actor of a name, the others in its ring (actor_links) */
+    int64_t actor_links_relative, names_relative;
+    uint32_t name_capacity, name_count; /* name_count: distinct names indexed */
     uint32_t effects_head, effects_length, effects_capacity;
     uint32_t session_capacity, session_count;
     uint32_t chart_count, datamodel_count;
@@ -194,6 +207,9 @@ void ta_system_actor_variables(ta_system *s, const ta_actor *a, ta_system_variab
                                ta_datamodel_system_variables *sv);
 uint32_t ta_system_session_lookup(const ta_system *s, uint64_t serial);
 void ta_system_session_insert(ta_system *s, uint32_t index);
+/* The index of names: an actor enters it when it is created (spawned or
+ * adopted) and leaves it when it is reclaimed; hibernation keeps it there. */
+void ta_system_name_insert(ta_system *s, uint32_t index);
 
 /* trace.c (system): starting traces, lifecycle records */
 /* What a host starts (an input, a spawn, a timer of an untraced send) runs

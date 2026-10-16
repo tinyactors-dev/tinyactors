@@ -142,6 +142,8 @@ typedef struct ta_spawn {
  * microstep boundary). Every other call during a run is TA_ERROR_STATE. */
 TA_API ta_status ta_system_spawn(ta_system *system, const ta_spawn *spawn, uint32_t *actor);
 TA_API ta_status ta_system_terminate(ta_system *system, uint32_t actor);
+/* The oldest live actor (hibernated ones included) whose name is `name`; 0 if
+ * none. An index of names answers it in O(1) expected. */
 TA_API uint32_t ta_system_actor_by_name(const ta_system *system, ta_string_view name);
 TA_API uint32_t ta_system_actor_by_session(const ta_system *system,
                                            uint64_t sessionid); /* 0 if none */
