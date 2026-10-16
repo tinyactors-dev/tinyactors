@@ -316,4 +316,44 @@
     <why>A log line has nothing to answer or fail, so nothing outlives the ack.</why>
     <evidence>tinyactors-napi/src/effects.c ta_napi_dispatch_log</evidence>
   </entry>
+  <entry id="l-p1-methods-list" date="2026-10-16" step="p1-methods" kind="note" status="resolved">
+    <what>requests.md lists eleven methods; all but actor.send have a typed method, the same eleven docs/api-map.md planned (actorState, actorContext, actorList, actorGet, hostStats, hostConfig, traceConfigure, traceWatch, traceUnwatch, traceEnd, traceSpansDecode): no difference.</what>
+    <why>The brief asks to log any difference between requests.md and the mapping table.</why>
+    <evidence>tinyactors-core/docs/requests.md "## Methods"; tinyactors-napi/docs/api-map.md rows host.actorState..host.traceSpansDecode</evidence>
+  </entry>
+  <entry id="l-p1-methods-handlers" date="2026-10-16" step="p1-methods" kind="decision" status="resolved">
+    <what>A pending method's handlers are handlers.pending[2 * slot] (onResult) and [2 * slot + 1] (onError), slot the row's handle's slot (handle &amp; 0xffffffff, minus 1), the array made on first use on the wrapper's handlers object; the row holds the slot. Both are cleared before the row is removed, at the reply or at a refusal; close() drops the whole handlers object, and the table is freed with the host.</what>
+    <why>l-p1-host-handlers-symbol: no strong napi_ref holds a handler; a flat array by slot reuses ta_table slots and allocates nothing of ours.</why>
+    <evidence>tinyactors-napi/src/methods.c ta_napi_pending_list, ta_napi_pending_set</evidence>
+  </entry>
+  <entry id="l-p1-methods-reply-id" date="2026-10-16" step="p1-methods" kind="decision" status="resolved">
+    <what>The reply's id is read in C with ta_cbor_reader (the map's first key, "id", an unsigned integer); id 0 is the creation's host.config (0 is never a ta_table handle) and is returned decoded to its caller as before; an id that names no live row, or is not an unsigned integer, is dropped; the reply is then decoded once with the value table.</what>
+    <why>Decision d-typed; requests.md: a reply's keys come in order, id first.</why>
+    <evidence>tinyactors-napi/src/methods.c ta_napi_reply_id, ta_napi_reply; tinyactors-core/docs/requests.md "The envelope"</evidence>
+  </entry>
+  <entry id="l-p1-methods-error-status" date="2026-10-16" step="p1-methods" kind="decision" status="for-maintainer">
+    <what>A reply's error is a TinyactorsError with code, reason, path and message and no status (undefined): ta_napi_throw_core_error now leaves status unset for TA_OK. index.d.ts says a typed method's error has code, reason and path instead of status.</what>
+    <why>The error is no call's refusal, so no ta_status names it; Python sets no status either (ta_python_error_from_reply).</why>
+    <evidence>tinyactors-napi/src/module.c ta_napi_throw_core_error; tinyactors-cpython/src/host.c:72; test/methods.test.mjs "an error goes to onError ..."</evidence>
+  </entry>
+  <entry id="l-p1-methods-arguments" date="2026-10-16" step="p1-methods" kind="decision" status="for-maintainer">
+    <what>onResult must be a function and onError a function, undefined or null (null: none, as Python's None), else TypeError. params are written as given whenever they are not undefined: {} is posted as an empty params map (Python omits an empty dict), null and non-objects are core's to refuse (-32600 type, path params); a value the value table cannot write throws at the call and leaves no row.</what>
+    <why>Decision d-typed: params passed as given; core checks them.</why>
+    <evidence>tinyactors-napi/src/methods.c ta_napi_typed, ta_napi_post; test/methods.test.mjs "params pass to core as given", "the arguments are checked at the call"</evidence>
+  </entry>
+  <entry id="l-p1-methods-close-in-turn" date="2026-10-16" step="p1-methods" kind="note" status="resolved">
+    <what>close() from a handler is deferred to the end of the turn (p1-host), so a typed method posted in that turn is still answered when the turn's drain takes its reply; what is pending when the host is actually freed is never called. trace.end at close (ta_napi_end_traces) dispatches nothing, so no reply is answered there.</what>
+    <why>The done-when says pending handlers are never called after close; the deferral decides what "after" means.</why>
+    <evidence>tinyactors-napi/src/loop.c ta_napi_end_traces; test/methods.test.mjs "close from a handler waits for the end of the turn ..."</evidence>
+  </entry>
+  <entry id="l-p1-methods-result-ids" date="2026-10-16" step="p1-methods" kind="uncertainty" status="for-maintainer">
+    <what>Sessions inside a reply's result (actor.list's sessions, actor.get's session) are numbers, as the value table decodes integers to 2^53-1, while the API's own ids are bigints; params take either, but host.send and host.terminate take only a bigint, so a caller converts with BigInt().</what>
+    <why>The rulebook says ids are always bigints, and the value table says safe integers are numbers; a reply is a value.</why>
+    <evidence>tinyactors-napi/docs/values.md; test/methods.test.mjs first case (actorList)</evidence>
+  </entry>
+  <entry id="l-p1-methods-refusals-untested" date="2026-10-16" step="p1-methods" kind="note" status="open">
+    <what>ta_host_post's refusals at the call (TA_ERROR_STATE during a run or inside a datamodel, TA_ERROR_NO_MEMORY) remove the row and throw, but no test reaches them: no JavaScript runs inside a run on quickjs, and the allocator cannot be made to refuse from a test. The native datamodel (p1-datamodel) runs JavaScript inside a run: a chart's script calling host.hostStats should then be refused with TA_ERROR_STATE, worth a test there.</what>
+    <why>The brief lists those refusals; the path exists in code only.</why>
+    <evidence>tinyactors-napi/src/methods.c ta_napi_typed (posting.status)</evidence>
+  </entry>
 </log>

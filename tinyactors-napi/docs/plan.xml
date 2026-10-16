@@ -436,7 +436,7 @@
         <done-when>Tests: a view read after its ack throws TA_ERROR_STALE; a promise-returning handler answers after the ack; a throwing one gives error.communication and its error is thrown after the turn.</done-when>
         <files>src/effects.c, test/effects.test.mjs</files>
       </step>
-      <step id="p1-methods" status="todo" after="p1-effects" decision="d-typed">
+      <step id="p1-methods" status="done" after="p1-effects" decision="d-typed" commit="d5e050b">
         <title>Typed methods</title>
         <does>src/methods.c: one function per method of requests.md but actor.send, params through as given, the pending row's handle as the id, the result decoded once, onError or the turn's error; rows dropped at free.</does>
         <done-when>A typed method from a handler is answered in a later take; pending handlers are never called after close.</done-when>
