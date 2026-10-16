@@ -141,6 +141,9 @@ static void ta_napi_instance_finalize(napi_env env, void *data, void *hint) {
     if (instance->compiled != NULL) napi_delete_reference(env, instance->compiled);
     if (instance->compile_error != NULL) napi_delete_reference(env, instance->compile_error);
     if (instance->resolve_error != NULL) napi_delete_reference(env, instance->resolve_error);
+    napi_ref references[] = {instance->address, instance->send, instance->entry, instance->rejected};
+    for (size_t i = 0; i < sizeof references / sizeof references[0]; i++)
+        if (references[i] != NULL) napi_delete_reference(env, references[i]);
     ta_growable_arena_free(&instance->arena);
     free(instance);
 }
@@ -194,7 +197,8 @@ static napi_value ta_napi_module_init(napi_env env, napi_value exports) {
     };
     if (napi_define_properties(env, exports, sizeof properties / sizeof properties[0], properties) != napi_ok ||
         ta_napi_host_define(env, exports) != napi_ok || ta_napi_loop_define(env, exports) != napi_ok ||
-        ta_napi_compile_define(env, exports) != napi_ok)
+        ta_napi_compile_define(env, exports) != napi_ok || ta_napi_address_define(env, exports) != napi_ok ||
+        ta_napi_effects_define(env, exports) != napi_ok)
         return NULL;
     return exports;
 }

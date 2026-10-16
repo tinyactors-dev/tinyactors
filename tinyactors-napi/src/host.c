@@ -376,7 +376,8 @@ static napi_value ta_napi_host_config(napi_env env, ta_napi_host *host) {
 
 /* What the effective config tells the addon, read once: the tick rate,
  * whether an encoder runs, and the I/O processors, each type's handler at
- * its number (`processors[i + 1]` for ioProcessors[i]; 0 the transport).
+ * its number (`processors[i + 1]` for ioProcessors[i]; 0 the transport)
+ * and its type (`types[i + 1]`, a Send's `type`; 0 undefined).
  * A type options.ioProcessors names that the config lacks is refused. */
 typedef struct ta_napi_effective {
     napi_value config;   /* the effective config */
@@ -384,7 +385,7 @@ typedef struct ta_napi_effective {
 } ta_napi_effective;
 
 static bool ta_napi_host_read_config(napi_env env, ta_napi_host *host, const ta_napi_effective *effective) {
-    napi_value system, rate, entries, processors, transport, given, type, handler;
+    napi_value system, rate, entries, processors, types, transport, given, type, handler, undefined;
     double ticks = 0;
     bool has = false;
     if (napi_get_named_property(env, effective->config, "system", &system) != napi_ok || !ta_napi_is(env, system, napi_object) ||
@@ -404,16 +405,22 @@ static bool ta_napi_host_read_config(napi_env env, ta_napi_host *host, const ta_
     if (napi_get_named_property(env, effective->handlers, "ioProcessors", &given) != napi_ok ||
         napi_get_named_property(env, effective->handlers, "transport", &transport) != napi_ok ||
         napi_create_array_with_length(env, (size_t)count + 1, &processors) != napi_ok ||
-        napi_set_element(env, processors, 0, transport) != napi_ok)
+        napi_create_array_with_length(env, (size_t)count + 1, &types) != napi_ok ||
+        napi_get_undefined(env, &undefined) != napi_ok || napi_set_element(env, processors, 0, transport) != napi_ok ||
+        napi_set_element(env, types, 0, undefined) != napi_ok)
         return false;
     bool handlers = ta_napi_is(env, given, napi_object);
     uint32_t found = 0;
     for (uint32_t i = 0; i < count; i++) {
         napi_value entry;
         if (napi_get_element(env, entries, i, &entry) != napi_ok) return false;
-        if (napi_get_undefined(env, &handler) != napi_ok) return false;
-        if (handlers && ta_napi_is(env, entry, napi_object) &&
-            napi_get_named_property(env, entry, "type", &type) == napi_ok && ta_napi_is(env, type, napi_string)) {
+        handler = undefined;
+        type = undefined;
+        if (ta_napi_is(env, entry, napi_object) && napi_get_named_property(env, entry, "type", &type) != napi_ok)
+            return false;
+        bool typed = ta_napi_is(env, type, napi_string);
+        if (napi_set_element(env, types, i + 1, typed ? type : undefined) != napi_ok) return false;
+        if (handlers && typed) {
             bool own = false;
             if (napi_has_own_property(env, given, type, &own) != napi_ok) return false;
             if (own) {
@@ -434,7 +441,8 @@ static bool ta_napi_host_read_config(napi_env env, ta_napi_host *host, const ta_
         }
     }
     host->processors = count;
-    return napi_set_named_property(env, effective->handlers, "processors", processors) == napi_ok;
+    return napi_set_named_property(env, effective->handlers, "processors", processors) == napi_ok &&
+           napi_set_named_property(env, effective->handlers, "types", types) == napi_ok;
 }
 
 /* ta_host_create with the config as CBOR in the call's arena and the
@@ -741,9 +749,7 @@ static bool ta_napi_session_of(napi_env env, napi_value value, uint64_t *session
     return true;
 }
 
-/* Optional text: undefined or null is none (an empty view), a string its
- * UTF-8 in the host's arena, anything else a TypeError saying text->what. */
-static bool ta_napi_optional_text(napi_env env, napi_value value, ta_napi_text *text) {
+bool ta_napi_optional_text(napi_env env, napi_value value, ta_napi_text *text) {
     text->view = (ta_string_view){NULL, 0};
     if (ta_napi_is(env, value, napi_undefined) || ta_napi_is(env, value, napi_null)) return true;
     return ta_napi_text_of(env, value, text);
@@ -902,16 +908,15 @@ typedef struct ta_napi_event {
     ta_event_in in; /* out */
 } ta_napi_event;
 
-/* An event's target: a session (a bigint), or a local address (a string)
- * core resolves to one (ta_host_resolve) before the payload is made in
- * that session's datamodel: event->in.session. Address values come with
- * the effects step. */
+/* An event's target: a session (a bigint), or a local address (a string
+ * or an Address) core resolves to one (ta_host_resolve) before the payload
+ * is made in that session's datamodel: event->in.session. */
 static bool ta_napi_target_of(napi_env env, const ta_napi_call *call, ta_napi_event *event) {
-    napi_value value = event->target;
+    napi_value value = ta_napi_address_text(env, event->target);
     uint64_t *session = &event->in.session;
     if (!ta_napi_is(env, value, napi_string)) {
         if (ta_napi_is(env, value, napi_bigint)) return ta_napi_session_of(env, value, session);
-        napi_throw_type_error(env, NULL, "a target is a session (a bigint) or a local address (a string)");
+        napi_throw_type_error(env, NULL, "a target is a session (a bigint) or a local address (a string or an Address)");
         return false;
     }
     ta_napi_text address = {&call->host->arena, "an address is a string", {NULL, 0}};
@@ -932,11 +937,11 @@ static bool ta_napi_event_of(napi_env env, const ta_napi_call *call, ta_napi_eve
     in->size = sizeof *in;
     ta_napi_text name = {&host->arena, "an event's name is a string", {NULL, 0}};
     ta_napi_text sendid = {&host->arena, "a sendid is a string", {NULL, 0}};
-    ta_napi_text origin = {&host->arena, "an origin is an address, a string", {NULL, 0}};
+    ta_napi_text origin = {&host->arena, "an origin is an address, a string or an Address", {NULL, 0}};
     ta_napi_text traceparent = {&host->arena, "a traceparent is W3C text, a string", {NULL, 0}};
     if (!ta_napi_target_of(env, call, event) ||
         (event->name != NULL && !ta_napi_text_of(env, event->name, &name)) ||
-        !ta_napi_optional_text(env, event->sendid, &sendid) || !ta_napi_optional_text(env, event->origin, &origin) ||
+        !ta_napi_optional_text(env, event->sendid, &sendid) || !ta_napi_optional_text(env, ta_napi_address_text(env, event->origin), &origin) ||
         !ta_napi_optional_text(env, event->traceparent, &traceparent))
         return false;
     in->name = name.view;

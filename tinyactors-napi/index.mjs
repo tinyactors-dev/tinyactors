@@ -18,4 +18,5 @@ export const {
   compileSystem,
   Host,
   SimulatedClock,
+  Address,
 } = addon;

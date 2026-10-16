@@ -4,9 +4,13 @@
 // with actors (p1-compile): a send that runs its actor with no driver
 // called, the statuses TA_RUN_EFFECTS, TA_RUN_EFFECTS_FULL and
 // TA_RUN_YIELDED, the bound that yields to I/O, one timer at a deadline,
-// and none on a simulated clock. TA_RUN_EXHAUSTED and TA_RUN_FAULT need an
-// allocator that refuses or a run core refuses, which no input of the
-// public API makes (log entry l-p1-compile-unreachable-statuses).
+// and none on a simulated clock; with handlers (p1-effects): a handler's
+// error thrown from the turn's callback when no idle() waits, the host
+// going on, and close() from a handler deferred to the end of the turn.
+// TA_RUN_EXHAUSTED and TA_RUN_FAULT need an allocator that refuses or a
+// run core refuses, which no input of the public API makes (log entry
+// l-p1-compile-unreachable-statuses).
+import { spawnSync } from 'node:child_process';
 import { Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
 import { ENDER, hostWith, scxml, sleep } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
@@ -269,6 +273,53 @@ test('a host on a simulated clock arms no timer', async () => {
   await host.idle();
   equal(host.actorByName('later'), undefined, 'due: the actor ran');
   host.close();
+});
+
+// ---- with handlers ---------------------------------------------------------
+
+const LOGGER = scxml('logger', `
+  <state id="s"><onentry><log label="a" expr="'first'"/><log label="b" expr="'second'"/></onentry></state>`);
+
+test('close() from a handler is deferred to the end of the turn', async () => {
+  const seen = [];
+  const host = hostWith({ logger: LOGGER }, {
+    log: (h, entry) => {
+      if (entry.label === 'a') h.close();
+      seen.push([entry.text, h.closed, typeof h.actorByName('nobody')]);
+    },
+  });
+  host.spawn(host.chart('logger'));
+  await host.idle();
+  equal(JSON.stringify(seen), '[["first",false,"undefined"],["second",false,"undefined"]]', 'the turn went on, the host open');
+  equal(host.closed, true, 'closed at the end of the turn');
+});
+
+test('a handler\'s error, with no idle() waiting, is thrown from the turn\'s callback; the host goes on', () => {
+  const index = new URL('../index.mjs', import.meta.url).href;
+  const code = `import(${JSON.stringify(index)}).then(async (m) => {
+    process.on('uncaughtException', (error) => console.log('uncaught', error.message));
+    const charts = [
+      { name: 'logger.scxml', text: ${JSON.stringify(LOGGER)} },
+      { name: 'ender.scxml', text: ${JSON.stringify(ENDER)} },
+    ];
+    const compiled = m.compileCharts(charts);
+    const host = new m.Host({ systemID: 't' }, { datamodel: 'quickjs', log: (h, entry) => { throw new Error('from ' + entry.label); } });
+    host.addImage(compiled.image);
+    compiled.close();
+    host.spawn(host.chart('logger'));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const ender = host.spawn(host.chart('ender'), { name: 'e' });
+    host.send(ender, 'go');
+    await host.idle();
+    console.log('ended', host.actorByName('e') === undefined);
+    host.close();
+  });`;
+  const result = spawnSync(process.execPath, ['-e', code], { encoding: 'utf8', timeout: 20000 });
+  const output = `${result.stdout}${result.stderr}`;
+  equal(result.status, 0, `exit status (${output})`);
+  equal((output.match(/uncaught /g) ?? []).length, 1, `one uncaught error, the first (${output})`);
+  if (!output.includes('uncaught from a')) throw new Error(`the first handler's error: ${output}`);
+  if (!output.includes('ended true')) throw new Error(`the host went on: ${output}`);
 });
 
 /** The runtime's pending Timeout handles (node's process.getActiveResourcesInfo);

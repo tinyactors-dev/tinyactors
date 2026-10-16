@@ -81,62 +81,6 @@ static napi_value ta_napi_error_of(napi_env env, const ta_napi_refusal *refusal)
 
 /* ---- one drain at a time -------------------------------------------------------- */
 
-/* A take of traces or logs, handed to the telemetry handler (the telemetry
- * step, p2) or dropped without one, so the encoder goes on: core gives no
- * second effect of the kind until a take. One the allocator refused is
- * reported once and retried at the next turn. */
-static void ta_napi_take(napi_env env, ta_napi_host *host, bool traces) {
-    ta_bytes taken; /* the host's view, until the ack */
-    ta_status status = traces ? ta_host_traces(host->host, &taken) : ta_host_logs(host->host, &taken);
-    uint8_t bit = traces ? 1u : 2u;
-    if (status == TA_OK) {
-        host->retake &= (uint8_t)~bit;
-        return; /* no telemetry handler yet: dropped */
-    }
-    if (status == TA_ERROR_NO_MEMORY && !(host->retake & bit)) {
-        host->retake |= bit;
-        ta_napi_throw(env, &(ta_napi_refusal){status, traces ? "the take of traces was refused"
-                                                             : "the take of logs was refused"});
-        ta_napi_keep_error(env, host);
-    }
-}
-
-/* A take: the drain's state and the take's records, until the ack. */
-typedef struct ta_napi_batch {
-    ta_napi_drain_state *state;
-    const ta_host_effect *effects;
-} ta_napi_batch;
-
-/* One effect of the batch. A REPLY's WIRE is kept for the caller (the
- * creation's host.config), read before the ack: the bytes end there.
- * Traces and logs are taken; a REQUEST is answered in C. The other
- * effects are dispatched by the effects step (p1-effects); until then
- * they are acknowledged unread. */
-static void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index) {
-    ta_napi_drain_state *state = batch->state;
-    ta_napi_host *host = state->host;
-    switch (batch->effects[index].kind) {
-    case TA_HOST_EFFECT_REPLY: {
-        napi_value reply = ta_napi_value_read(env, ta_host_effect_bytes(host->host, index, TA_EFFECT_FIELD_WIRE));
-        if (reply == NULL) ta_napi_keep_error(env, host);
-        else state->reply = reply;
-        break;
-    }
-    case TA_EFFECT_REQUEST: {
-        /* a fetch at run time: refused in C until it is built (AGENTS.md,
-         * "Layers and the resolver"); the requester gets error.execution */
-        ta_resume resume = {(uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_SEGMENT),
-                            (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_TOKEN), TA_ERROR_INVALID, 0, 0};
-        ta_host_resume(host->host, &resume);
-        ta_napi_schedule(env, host); /* an input: the turn runs it */
-        break;
-    }
-    case TA_HOST_EFFECT_TRACES: ta_napi_take(env, host, true); break;
-    case TA_HOST_EFFECT_LOGS: ta_napi_take(env, host, false); break;
-    default: break;
-    }
-}
-
 void ta_napi_drain(napi_env env, ta_napi_drain_state *state) {
     ta_napi_host *host = state->host;
     ta_napi_batch batch = {state, NULL};
@@ -338,8 +282,7 @@ static void ta_napi_clear(napi_env env, const ta_napi_handle *handle) {
     napi_delete_reference(env, reference);
 }
 
-/* The Host's wrapper, for the turn's argument; NULL when it is gone. */
-static napi_value ta_napi_self(napi_env env, const ta_napi_host *host) {
+napi_value ta_napi_self(napi_env env, const ta_napi_host *host) {
     napi_value self = NULL;
     if (host->self == NULL || napi_get_reference_value(env, host->self, &self) != napi_ok) return NULL;
     return self;

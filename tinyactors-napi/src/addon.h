@@ -42,7 +42,13 @@
  *   compiled   the class of a compile result (compile.c), made only by
  *              the compile calls;
  *   compile_error, resolve_error  the classes CompileError and
- *              ResolveError, subclasses of TinyactorsError, exported. */
+ *              ResolveError, subclasses of TinyactorsError, exported;
+ *   address    the class Address, exported (address.c);
+ *   send, entry  the classes of the thin views a handler gets, a Send and a
+ *              LogEntry (effects.c), made only by the drain;
+ *   rejected   the function a handler's promise calls when it rejects
+ *              (effects.c), bound to its view: it fails an unanswered send
+ *              and throws the rejection on. */
 typedef struct ta_napi_instance {
     napi_env env;
     ta_allocator allocator;
@@ -54,6 +60,9 @@ typedef struct ta_napi_instance {
     napi_ref compiled;
     napi_ref compile_error;
     napi_ref resolve_error;
+    napi_ref address;
+    napi_ref send, entry;
+    napi_ref rejected;
 } ta_napi_instance;
 
 /* The environment's instance, or NULL (and an exception pending) before
@@ -120,6 +129,10 @@ typedef struct ta_napi_text {
     ta_string_view view; /* out */
 } ta_napi_text;
 bool ta_napi_text_of(napi_env env, napi_value value, ta_napi_text *text);
+
+/* Optional text: undefined or null is none (an empty view), a string its
+ * UTF-8 in text->arena, anything else a TypeError saying text->what. */
+bool ta_napi_optional_text(napi_env env, napi_value value, ta_napi_text *text);
 
 /* The exports encode(value) and decode(bytes). */
 napi_value ta_napi_encode(napi_env env, napi_callback_info info);
@@ -282,6 +295,16 @@ void ta_napi_host_payload_release(ta_napi_host *host, ta_payload payload);
 /* Defines the class Host on `exports`. */
 napi_status ta_napi_host_define(napi_env env, napi_value exports);
 
+/* ---- address.c: Address (AGENTS.md, "Other systems") -------------------- */
+
+/* An Address of `text` (UTF-8), or NULL with an exception pending. */
+napi_value ta_napi_address_new(napi_env env, ta_string_view text);
+/* `value`'s text when it is an Address, else `value` itself: what an input
+ * that takes an address or a string reads. */
+napi_value ta_napi_address_text(napi_env env, napi_value value);
+/* Defines the class Address on `exports`. */
+napi_status ta_napi_address_define(napi_env env, napi_value exports);
+
 /* ---- compile.c: the compiler ------------------------------------------- */
 
 /* compileCharts, compileSystem, CompileError and ResolveError on
@@ -297,6 +320,15 @@ typedef struct ta_napi_drain_state {
     napi_value reply; /* out: the last REPLY's decoded WIRE, or NULL */
     bool bounded;     /* out: it stopped at its bound of batches */
 } ta_napi_drain_state;
+
+/* A take: the drain's state and the take's records, until the ack. */
+typedef struct ta_napi_batch {
+    ta_napi_drain_state *state;
+    const ta_host_effect *effects;
+} ta_napi_batch;
+
+/* The Host's wrapper; NULL when it is gone. */
+napi_value ta_napi_self(napi_env env, const ta_napi_host *host);
 
 /* One drain: take, handle every effect of the batch, ack (acks bumped
  * right after), and take again until a take is empty or the bound of
@@ -327,6 +359,24 @@ bool ta_napi_clock_attach(napi_env env, ta_napi_host *host, napi_value clock);
  * waiting idle() rejected, and with a telemetry handler trace.end and the
  * last take of traces and logs (bounded). */
 void ta_napi_loop_stop(napi_env env, ta_napi_host *host);
+
+/* ---- effects.c: the effects (AGENTS.md, "Lifetimes and thin views") ------ */
+
+/* One effect of the open batch, in a handle scope of its own: a SEND to
+ * its I/O processor's handler (or the transport's) as a thin Send view, a
+ * LOG to the log handler as a LogEntry view, a REQUEST answered in C,
+ * TRACES and LOGS taken, a REPLY's WIRE kept for the caller; the rest
+ * dropped. A handler's error is kept on the host (ta_napi_keep_error). */
+void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index);
+
+/* A take of traces (`traces`) or logs, dropped until the telemetry step;
+ * one the allocator refused is reported once and retried at the next turn
+ * (host->retake). */
+void ta_napi_take(napi_env env, ta_napi_host *host, bool traces);
+
+/* The classes Send and LogEntry and the rejection function, in the
+ * instance; nothing is exported (index.d.ts declares them as interfaces). */
+napi_status ta_napi_effects_define(napi_env env, napi_value exports);
 
 /* host.idle() and host.nextDeadline. */
 napi_value ta_napi_host_idle(napi_env env, napi_callback_info info);

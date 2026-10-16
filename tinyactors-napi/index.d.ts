@@ -201,9 +201,10 @@ export class SimulatedClock {
 export interface Send {
   readonly session: bigint;
   readonly event: string;
-  /** An `Address` for the transport's sends. */
-  readonly target: string | Address;
-  readonly sendid: string;
+  /** An `Address` for the transport's sends; `undefined` when empty. */
+  readonly target: string | Address | undefined;
+  /** `undefined` when the send has none. */
+  readonly sendid: string | undefined;
   readonly data: Value;
   /** The I/O processor's type; `undefined` for the transport and a service. */
   readonly type: string | undefined;
@@ -213,7 +214,8 @@ export interface Send {
   /** The outgoing half, as `host.send(message)` takes it on the other side. */
   readonly message: SendMessage;
   /** An event back to the sender with this send's sendid and, unless
-   * `traceparent` is given (`null`: a new trace), its trace. */
+   * `traceparent` is given (`null`: a new trace), its trace. Once: a second
+   * answer, or one after `fail()`, throws `TA_ERROR_STATE`. */
   answer(event: string, data?: Value, options?: AnswerOptions): void;
   /** `error.communication` for the sender. */
   fail(): void;
