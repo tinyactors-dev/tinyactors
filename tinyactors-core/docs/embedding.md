@@ -91,6 +91,18 @@ traceparents) before it returns. A payload handle in an input moves to
 the host on success and stays yours on failure. Batching means
 deferring the run: several inputs, then one `ta_host_run`.
 
+Each text core keeps is at most `TA_SYSTEM_MAX_STRING` bytes (4087,
+`system.h`): an event's name, sendid, origin, origintype and raw
+message, and a spawned actor's name. A longer one is refused with
+`TA_ERROR_INVALID` before anything is allocated, and no growth of the
+segment makes room for it; a traceparent is parsed, not kept, so it has
+no limit. A transport that passes text from the network either checks
+the length or reports the refusal as any other. A chart's expression
+that gives a longer string where core keeps it (`<send>`'s `eventexpr`
+and `targetexpr`, `<cancel>`'s `sendidexpr`, `<invoke>`'s `typeexpr`
+and `srcexpr`) raises `error.execution`. Data is not text: a payload
+belongs to the datamodel and has no such limit.
+
 During a run, a datamodel's code may call spawn, send, send_many and
 terminate (`host.h:151-170`): they take the paths of an internal
 `<invoke>`, `<send>` and cancel, nothing grows, and a full pool is

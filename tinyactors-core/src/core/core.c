@@ -406,6 +406,8 @@ static ta_status datamodel_string(kernel_context *kernel, uint32_t e, ta_string_
                   e, out)
             : TA_ERROR_EXECUTION;
     charge(kernel);
+    /* longer than the system keeps: no growth makes room for it */
+    if (status == TA_OK && out->length > TA_SYSTEM_MAX_STRING) status = TA_ERROR_EXECUTION;
     return status;
 }
 

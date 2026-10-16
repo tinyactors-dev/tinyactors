@@ -202,6 +202,8 @@ module Core
     unit('test_journal', 'base'),
     unit('test_cbor', 'base'),
     unit('test_host_inputs', 'host', 'runtime', 'compile', *ECMASCRIPT),
+    # Strings past TA_SYSTEM_MAX_STRING: refused at the input, error.execution in a chart.
+    unit('test_host_strings', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_guard', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_telemetry', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_host_definitions', 'host', 'runtime', 'compile', *ECMASCRIPT),

@@ -515,7 +515,7 @@ uint32_t ta_system_spawn_actor(ta_system *system, uint32_t chart, ta_string_view
                                ta_string_view traceparent, ta_status *status) {
     ta_core *core = &system->core;
     *status = TA_OK;
-    if (chart >= system->chart_count) {
+    if (chart >= system->chart_count || name.length > TA_SYSTEM_MAX_STRING) {
         *status = TA_ERROR_INVALID;
         return TA_NIL;
     }

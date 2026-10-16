@@ -155,23 +155,32 @@ uint32_t host_moved_get(const ta_host *host, uint64_t key) {
  * refused it; TA_ERROR_INVALID if it cannot grow (the segment unchanged). */
 static ta_status segment_grow(ta_host *host, host_segment *segment) {
     if (host->running) return TA_ERROR_NO_MEMORY; /* nothing grows during a run */
-    ta_system_config config = segment->config;
-    config.max_actors =
-        config.max_actors * 2 > TA_SYSTEM_MAX_ACTORS ? TA_SYSTEM_MAX_ACTORS : config.max_actors * 2;
-    config.max_events =
-        config.max_events * 2 > TA_SYSTEM_MAX_POOL ? TA_SYSTEM_MAX_POOL : config.max_events * 2;
-    config.max_timers =
-        config.max_timers * 2 > TA_SYSTEM_MAX_POOL ? TA_SYSTEM_MAX_POOL : config.max_timers * 2;
-    config.max_requests = config.max_requests * 2;
-    config.workspaces = config.workspaces * 2;
-    config.instance_bytes = 0; /* derived from max_actors */
-    config.string_bytes = config.string_bytes * 2;
+    /* each capacity doubled up to its hard limit (ta_system_config_normalize
+     * clamps them; the slab's bytes saturate before they would wrap) */
+    ta_system_config wanted = segment->config, config;
+    wanted.max_actors *= 2;
+    wanted.max_events *= 2;
+    wanted.max_timers *= 2;
+    wanted.max_requests *= 2;
+    wanted.workspaces *= 2;
+    wanted.instance_bytes = 0; /* derived from max_actors */
+    wanted.string_bytes =
+        wanted.string_bytes > TA_SLAB_MAX_BYTES / 2 ? TA_SLAB_MAX_BYTES : wanted.string_bytes * 2;
     /* the trace contexts and the journal keep up with the events, as their
-     * defaults do (ta_system_config_normalize clamps the journal) */
-    config.trace_contexts = config.trace_contexts * 2 > TA_SYSTEM_MAX_POOL
-                                ? TA_SYSTEM_MAX_POOL
-                                : config.trace_contexts * 2;
-    config.trace_bytes = config.trace_bytes * 2;
+     * defaults do */
+    wanted.trace_contexts *= 2;
+    wanted.trace_bytes *= 2;
+    ta_system_config_normalize(&segment->system->core.image_view, &wanted, &config);
+    /* every capacity at its hard limit: a retry would fail the same way, so
+     * the caller's loop stops (TA_ERROR_INVALID: the limits refused, not the
+     * allocator) */
+    const ta_system_config *now = &segment->system->config;
+    if (config.max_actors <= now->max_actors && config.max_events <= now->max_events &&
+        config.max_timers <= now->max_timers && config.max_requests <= now->max_requests &&
+        config.workspaces <= now->workspaces && config.string_bytes <= now->string_bytes &&
+        config.instance_bytes <= now->instance_bytes &&
+        config.trace_contexts <= now->trace_contexts && config.trace_bytes <= now->trace_bytes)
+        return TA_ERROR_INVALID;
     size_t need;
     if (ta_system_layout(segment->image, &config, &need) != TA_OK) return TA_ERROR_INVALID;
     void *memory = host_alloc(host, need);

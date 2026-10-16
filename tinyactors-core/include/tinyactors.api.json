@@ -681,6 +681,10 @@
       "value": 16777214
     },
     {
+      "name": "TA_SYSTEM_MAX_STRING",
+      "value": 4087
+    },
+    {
       "name": "TA_SYSTEM_SHARED_BASE",
       "value": 1
     },

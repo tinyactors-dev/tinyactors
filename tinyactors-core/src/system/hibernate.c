@@ -717,7 +717,8 @@ static ta_status restore(ta_system *system, uint32_t index, uint32_t chart, cons
         }
         ta_memcpy(&slot, q, 4);
         ta_memcpy(&n, q + 4, 4);
-        if (slot >= chart_record->invoke_count || n > (uint32_t)(qe - q - 8)) {
+        if (slot >= chart_record->invoke_count || n > (uint32_t)(qe - q - 8) ||
+            n > TA_SYSTEM_MAX_STRING) {
             status = TA_ERROR_INVALID;
             break;
         }
@@ -831,7 +832,7 @@ static int timer_rec(const unsigned char **q, const unsigned char *qe, blob_time
     for (int i = 0; i < 4; i++) {
         texts[i] = (const char *)*q;
         if (lens[i] == TA_NIL) continue;
-        if (lens[i] > (uint32_t)(qe - *q) || text_bytes(lens[i]) > (uint32_t)(qe - *q)) return 0;
+        if ((i < 3 && lens[i] > TA_SYSTEM_MAX_STRING) || lens[i] > (uint32_t)(qe - *q) || text_bytes(lens[i]) > (uint32_t)(qe - *q)) return 0;
         *q += text_bytes(lens[i]);
     }
     return r->name_length != TA_NIL;
@@ -944,8 +945,9 @@ static ta_status adopt_member(ta_system *system, const blob_view *view, uint64_t
     actor->name = same ? core->image_view.charts[chart].name
                        : ta_shared_string_new(core, (const char *)view->name, view->name_length);
     uint32_t offset = TA_NIL;
-    ta_status status =
-        actor->name == TA_NIL ? TA_ERROR_NO_MEMORY : restore(system, index, chart, view, &offset);
+    ta_status status = actor->name != TA_NIL ? restore(system, index, chart, view, &offset)
+                       : view->name_length > TA_SYSTEM_MAX_STRING ? TA_ERROR_INVALID /* malformed */
+                                                                  : TA_ERROR_NO_MEMORY;
     if (status == TA_OK) {
         actor->instance = offset;
         actor->state = TA_ACTOR_IDLE;

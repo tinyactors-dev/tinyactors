@@ -44,6 +44,16 @@ typedef struct ta_system ta_system;
  * SCXML addressing, ta_system_config.base). */
 #define TA_SYSTEM_MAX_ACTORS 8388606u  /* 2^23 - 2 */
 #define TA_SYSTEM_MAX_POOL   16777214u /* events, timers, workspaces: 2^24 - 2 */
+/* The longest string a system keeps, in bytes: each text of an input (an
+ * event's name, sendid, origin, origintype and raw message; a spawned
+ * actor's name) and each string a chart's expression gives where the system
+ * keeps it (<send>'s eventexpr and targetexpr, <cancel>'s sendidexpr,
+ * <invoke>'s typeexpr, srcexpr and the document's text). A longer input is
+ * TA_ERROR_INVALID, with nothing allocated or changed (a payload stays the
+ * caller's); a longer expression is error.execution. No growth makes room
+ * for one: it is one slab object (a page, less its header). A traceparent is
+ * parsed, not kept, and is not limited. */
+#define TA_SYSTEM_MAX_STRING 4087u
 
 typedef struct ta_trace_policy ta_trace_policy;
 

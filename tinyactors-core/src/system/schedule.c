@@ -343,6 +343,13 @@ ta_status ta_system_send(ta_system *system, const ta_event_in *event_in) {
     if (index == TA_NIL) return TA_ERROR_STALE;
     ta_actor *actor = ta_actor_at(system, index);
     if (actor->state == TA_ACTOR_DONE) return TA_ERROR_STALE;
+    /* a text longer than the system keeps: no growth makes room for it */
+    if (event_in->name.length > TA_SYSTEM_MAX_STRING ||
+        event_in->sendid.length > TA_SYSTEM_MAX_STRING ||
+        event_in->origin.length > TA_SYSTEM_MAX_STRING ||
+        event_in->origintype.length > TA_SYSTEM_MAX_STRING ||
+        (event_in->size >= sizeof *event_in && event_in->raw.length > TA_SYSTEM_MAX_STRING))
+        return TA_ERROR_INVALID; /* the payload stays the caller's */
     /* the macrostep the event starts runs under its traceparent, or in a new trace */
     ta_string_view traceparent = {(const char *)0, 0};
     if (event_in->size >= offsetof(ta_event_in, traceparent) + sizeof event_in->traceparent)

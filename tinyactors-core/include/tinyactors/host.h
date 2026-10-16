@@ -48,7 +48,12 @@
  *              blobs and their storage stay with the host (ta_host_hibernate,
  *              TA_EFFECT_WAKE, ta_host_wake).
  *   growth     segments are relocated into bigger blocks when a run or a call
- *              needs it (TA_RUN_EXHAUSTED / TA_ERROR_NO_MEMORY).
+ *              needs it (TA_RUN_EXHAUSTED / TA_ERROR_NO_MEMORY), each capacity
+ *              doubled up to its hard limit (TA_SYSTEM_MAX_*). A segment
+ *              whose capacities are all at their limits does not grow: the
+ *              call returns the system's status, a run TA_RUN_FAULT. Nothing
+ *              is grown for what no growth can hold (a text past
+ *              TA_SYSTEM_MAX_STRING is TA_ERROR_INVALID at the input).
  *   memory     every block comes from environment->allocator and goes back to it
  *              (ta_host_free returns all of them). When it refuses one, a
  *              call returns TA_ERROR_NO_MEMORY and leaves the host as it
@@ -200,7 +205,8 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
  * too. */
 
 /* Spawn in (spawn->segment, spawn->chart) — usually the current version
- * (ta_host_chart). */
+ * (ta_host_chart). A name longer than TA_SYSTEM_MAX_STRING (system.h) is
+ * TA_ERROR_INVALID: nothing is allocated and no segment grows for it. */
 TA_API ta_status ta_host_spawn(ta_host *h, const ta_spawn *spawn, uint64_t *session);
 /* Where a session lives now: its segment and its actor handle there. */
 typedef struct ta_host_location {
@@ -210,7 +216,9 @@ typedef struct ta_host_location {
 TA_API ta_status ta_host_locate(const ta_host *h, uint64_t session, ta_host_location *out);
 /* An event for the session event->session (event->target is ignored). An
  * event with an origin and no origintype gets the SCXML event processor's
- * (an address is an SCXML processor's, SCXML C.1). */
+ * (an address is an SCXML processor's, SCXML C.1). A name, sendid, origin,
+ * origintype or raw longer than TA_SYSTEM_MAX_STRING (system.h) is
+ * TA_ERROR_INVALID, the payload the caller's: no growth makes room for it. */
 TA_API ta_status ta_host_send(ta_host *h, const ta_event_in *event);
 /* The session a local address names: "tinyactors://<this system id>/#_scxml_<id>"
  * or ".../@<name>" (the live actor of that name). How a transport delivers

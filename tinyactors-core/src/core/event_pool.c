@@ -13,8 +13,11 @@ static sstr *sstr_at(const ta_core *core, uint32_t string_ref) {
     return (sstr *)ta_slab_pointer(core->slab, (string_ref & ~TA_STRING_REF_SLAB) << 3);
 }
 
+/* the longest string is one slab object: its header, its bytes and a terminator */
+TA_STATIC_ASSERT(TA_SYSTEM_MAX_STRING + sizeof(sstr) + 1 == TA_SLAB_PAGE, max_string_is_a_page);
+
 uint32_t ta_shared_string_new(ta_core *core, const char *p, uint32_t length) {
-    if (length > TA_SLAB_PAGE - sizeof(sstr) - 1) return TA_NIL;
+    if (length > TA_SYSTEM_MAX_STRING) return TA_NIL;
     uint32_t offset = ta_slab_alloc(core->slab, (uint32_t)sizeof(sstr) + length + 1);
     if (offset == TA_NIL) return TA_NIL;
     sstr *s = (sstr *)ta_slab_pointer(core->slab, offset);
