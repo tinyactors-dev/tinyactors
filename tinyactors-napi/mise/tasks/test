@@ -2,7 +2,7 @@
 #MISE description="Test tinyactors-napi: lint (rules, the addon's C, the adapter, the mapping table, the build scripts, acronyms), the build, the runtimes, and the conformance set named by MILESTONE against the adapter under node and bun on both datamodels"
 #MISE sources=["src/**/*", "conform.mjs", "index.mjs", "index.d.ts", "test/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyxml/include/**/*", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
-#USAGE flag "--full" help="the hibernation, migration and snapshot gates at 2,000,000 actors, 1000 resident, snapshots of 100,000 resident actors, and the services gate at 200,000 actors and 1,000,000 round trips (tools/stress.mjs, tools/migration.mjs, tools/snapshot.mjs, tools/services.mjs)"
+#USAGE flag "--full" help="the hibernation, migration and snapshot gates at 2,000,000 actors, 1000 resident, snapshots of 100,000 resident actors, the services gate at 200,000 actors and 1,000,000 round trips, and the scaling gate at 2,000,000 and 4,000,000 actors, 1,000,000 and 2,000,000 all resident (tools/stress.mjs, tools/migration.mjs, tools/snapshot.mjs, tools/services.mjs, tools/scale.mjs)"
 # vim:ft=ruby
 
 # The sources are this project's files and those it builds and tests
@@ -29,7 +29,9 @@
 # --full 100,000), so that the datamodel's own state is most of the
 # snapshot; then the services gate (tools/services.mjs, `mise run
 # services`): 10,000 actors and 50,000 round trips, --full 200,000 and
-# 1,000,000.
+# 1,000,000; with --full, the scaling gate (tools/scale.mjs, `mise run
+# scale`) at 2,000,000 and 4,000,000 actors, whose fast pass,
+# test/scale.test.mjs, runs with the other tests (20,000 and 40,000).
 
 require_relative '../napi'
 
@@ -77,3 +79,5 @@ if full
 else
   NodeAPI.services(actors: 10_000, events: 50_000)
 end
+# the scaling gate: its fast pass is test/scale.test.mjs, above
+NodeAPI.scale(actors: 2_000_000, resident: 1_000_000) if full

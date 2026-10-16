@@ -125,6 +125,25 @@ module NodeAPI
     end
   end
 
+  # The scaling gate (tools/scale.mjs): every operation of the API on hosts
+  # of N and 2N actors (most hibernated in SQLite, then all resident; the
+  # resident scenario at `resident` and 2 * `resident` when it is not 0),
+  # its cost per call or per actor at 2N within the tool's FACTOR of its
+  # cost at N, on both datamodels under both runtimes, each size a process
+  # of its own; it writes build/scale-<runtime>-<datamodel>.json. An
+  # operation over the factor that is not a known gap in core ends the task.
+  def scale(actors:, resident: 0)
+    RUNTIMES.each do |runtime|
+      DATAMODELS.each do |datamodel|
+        puts "scale: #{runtime} #{datamodel}, #{actors} and #{2 * Integer(actors)} actors"
+        flags = Integer(resident).positive? ? ['--resident-actors', resident.to_s] : []
+        run(pinned(runtime), *(runtime == 'node' ? ['--disable-warning=ExperimentalWarning'] : []), 'tools/scale.mjs',
+            '--datamodel', datamodel, '--actors', actors.to_s, *flags,
+            '--json', BUILD.join("scale-#{runtime}-#{datamodel}.json").to_s)
+      end
+    end
+  end
+
   # The binding's own tests: each a program that exits 1 when a case fails
   # (test/harness.mjs), run under every runtime.
   def tests = ROOT.glob('test/*.test.mjs').sort

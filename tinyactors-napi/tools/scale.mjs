@@ -1,0 +1,983 @@
+// Every operation at two population sizes: a gate against accidentally
+// quadratic work (docs/plan.xml, p2-scale).
+//
+//     node tools/scale.mjs [--actors N] [--datamodel native|quickjs] [--scenario hibernated|resident|all]
+//                          [--samples S] [--min-ms M] [--attempts A] [--json FILE]
+//
+// Each operation of the API is timed on a host holding N actors and on one
+// holding 2N, each host in a process of its own (this file again, with
+// --child), and the cost at 2N must be within FACTOR of the cost at N:
+// per call for an operation on one actor (spawn, send, a typed method, a
+// round trip), per actor for an operation on the whole population
+// (populate, a full actor.list, a sweep of every actor, migrating a
+// chart, snapshot, restore, close). A cost that grows with the population
+// shows as a ratio near 2: a scan per call.
+//
+// Two scenarios, each a host of its own:
+//
+// - hibernated: N actors of a counter, at most RESIDENT of them in memory,
+//   the rest hibernated in the runtime's SQLite (tools/store.mjs, as
+//   tools/stress.mjs keeps them), and N/100 actors each running an invoked
+//   service, so that core's requests grow with the population too. Every
+//   operation of the API runs here.
+// - resident: N actors of the counter, all in memory, the segment grown
+//   from its default size (so a spawn pays its share of the relocations):
+//   the operations whose cost could depend on the resident population.
+//
+// How a cost is measured: an operation runs in batches (64 calls, say,
+// then the turn that answers them); batches add up to a sample of at least
+// --min-ms milliseconds; the cost is the median of --samples samples. What
+// a batch needs first or leaves behind (actors to wake, put back to sleep,
+// spawned to be terminated) is done outside the timed part. When an
+// operation exceeds the factor and is not a known gap in core (KNOWN), the
+// two sizes are measured again, up to --attempts times, and each size keeps
+// each operation's lowest cost: noise only adds time and does not repeat,
+// a scan does.
+//
+// Prints a table per scenario with the machine's signature and exits 1 when
+// an operation exceeds the factor and is not KNOWN. --json writes the
+// numbers.
+
+import { spawn as spawnChild } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Address, compileCharts, compileSystem, Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
+import { BATCH, random, Store } from './store.mjs';
+
+/** The most the cost at 2N may be of the cost at N. */
+export const FACTOR = 1.5;
+/** Actors in memory at most in the hibernated scenario, besides the invokers. */
+const RESIDENT = 1000;
+
+/** Operations whose cost grows with the population because of core, each
+ * with the request to core that says so (docs/log.xml): reported as
+ * failing, never as passing, and not retried. */
+export const KNOWN = {
+  actorByName: 'l-p2-scale-actor-by-name', // ta_system_actor_by_name walks every actor
+  hibernate: 'l-p2-scale-stable-member', // stable_member walks every request
+  'migrate (one session)': 'l-p2-scale-stable-member', // the export checks the actor with stable_member too
+  'wake (an event waiting)': 'l-p2-scale-wake-queue', // ta_actor_wake walks the wake queue
+};
+
+const COUNTER = (version) => `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="counter" initial="s">
+  <datamodel>
+    <data id="n" expr="0" />
+    <data id="v" expr="${version}" />
+  </datamodel>
+  <state id="s">${version === 2 ? `
+    <transition event="error.platform.upgrade">
+      <assign location="n" expr="_event.data.n" />
+    </transition>` : ''}
+    <transition event="inc">
+      <assign location="n" expr="n + 1" />
+    </transition>
+    <transition event="ask">
+      <send type="urn:scale:echo" target="echo" event="ask" />
+    </transition>
+    <transition event="answer">
+      <assign location="n" expr="n + 1" />
+    </transition>
+    <transition event="arm">
+      <send event="tick" delay="10ms" />
+    </transition>
+    <transition event="tick">
+      <assign location="n" expr="n + 1" />
+    </transition>
+    <transition event="call">
+      <send event="ping" targetexpr="_event.data.to" />
+    </transition>
+    <transition event="pong">
+      <assign location="n" expr="n + 1" />
+    </transition>
+  </state>
+</scxml>
+`;
+
+const INVOKER = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="invoker" initial="s">
+  <datamodel>
+    <data id="n" expr="0" />
+  </datamodel>
+  <state id="s">
+    <invoke id="svc" type="urn:scale:service" src="service://local" />
+    <transition event="go">
+      <send target="#_svc" event="ping" />
+    </transition>
+    <transition event="pong">
+      <assign location="n" expr="n + 1" />
+    </transition>
+  </state>
+</scxml>
+`;
+
+// The boot actor: it ends as soon as it starts, so booting again and again
+// leaves the population as it was.
+const BLIP = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="blip" initial="f">
+  <final id="f" />
+</scxml>
+`;
+
+const SYSTEM = `<system>
+  <chart name="counter" src="counter.scxml" />
+  <chart name="invoker" src="invoker.scxml" />
+  <chart name="blip" src="blip.scxml" />
+  <actor name="booted" chart="blip" />
+</system>
+`;
+
+// The other system of the transport round trip: it answers each ping to
+// where it came from.
+const ECHO = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="echo" initial="s">
+  <state id="s">
+    <transition event="ping">
+      <send event="pong" targetexpr="_event.origin" />
+    </transition>
+  </state>
+</scxml>
+`;
+
+const FILES = { 'counter.scxml': COUNTER(1), 'invoker.scxml': INVOKER, 'blip.scxml': BLIP };
+
+function options(argv) {
+  const given = {
+    actors: 2_000_000, 'resident-actors': 0, datamodel: 'native', scenario: 'all', samples: 5, 'min-ms': 200, attempts: 2,
+    json: '', child: '', seed: 1,
+  };
+  for (let i = 0; i < argv.length; i += 2) {
+    const name = argv[i].replace(/^--/, '');
+    if (!(name in given) || i + 1 >= argv.length) throw new Error(`unknown option ${argv[i]}`);
+    given[name] = typeof given[name] === 'number' ? Number(argv[i + 1]) : argv[i + 1];
+  }
+  if (!['native', 'quickjs'].includes(given.datamodel)) throw new Error('--datamodel is native or quickjs');
+  if (!['hibernated', 'resident', 'all'].includes(given.scenario)) throw new Error('--scenario is hibernated, resident or all');
+  return given;
+}
+
+const median = (values) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+/** Distinct members of a dense set, drawn at random. */
+class IndexSet {
+  constructor(capacity) {
+    this.items = new Int32Array(capacity);
+    this.position = new Int32Array(capacity).fill(-1);
+    this.size = 0;
+  }
+
+  has(i) {
+    return this.position[i] >= 0;
+  }
+
+  add(i) {
+    if (this.position[i] >= 0) return;
+    this.position[i] = this.size;
+    this.items[this.size++] = i;
+  }
+
+  delete(i) {
+    const at = this.position[i];
+    if (at < 0) return;
+    const last = this.items[--this.size];
+    this.items[at] = last;
+    this.position[last] = at;
+    this.position[i] = -1;
+  }
+
+  /** `k` distinct members drawn at random (all of them when there are fewer). */
+  pick(k, draw) {
+    const chosen = new Set();
+    k = Math.min(k, this.size);
+    while (chosen.size < k) chosen.add(this.items[Math.floor(draw() * this.size)]);
+    return [...chosen];
+  }
+}
+
+/** Times the operations of one host: each one's batches, its samples, its median. */
+class Clock {
+  constructor(o, results) {
+    this.o = o;
+    this.results = results;
+  }
+
+  /** `batch()` runs one batch and returns {ms, calls} of its timed part; at
+   * most `batches` of them make a sample. */
+  async time(name, unit, batch, { batches = Infinity, samples = this.o.samples } = {}) {
+    const costs = [];
+    let calls = 0;
+    for (let s = 0; s < samples; s++) {
+      let ms = 0;
+      let n = 0;
+      for (let b = 0; b < batches && (b === 0 || ms < this.o['min-ms']); b++) {
+        const got = await batch();
+        ms += got.ms;
+        n += got.calls;
+      }
+      costs.push((ms * 1000) / n); // microseconds per call or per actor
+      calls += n;
+    }
+    this.record(name, unit, costs, calls);
+  }
+
+  record(name, unit, costs, calls) {
+    const cost = median(costs);
+    this.results[name] = { unit, cost, costs, calls };
+    console.log(`  ${name}: ${cost.toFixed(3)} µs ${unit} (${calls} ${unit === 'per actor' ? 'actors' : 'calls'}, ` +
+      `samples ${costs.map((c) => c.toFixed(3)).join(' ')})`);
+  }
+}
+
+/** The actors `host` holds, resident and hibernated (host.stats). */
+async function actorsOf(host) {
+  let got;
+  host.hostStats(undefined, (h, result) => (got = Number(result.host.actors)), (h, error) => { throw error; });
+  await host.idle();
+  return got;
+}
+
+/** The milliseconds `body` takes. */
+async function elapsed(body) {
+  const t0 = performance.now();
+  await body();
+  return performance.now() - t0;
+}
+
+/** The answers to `count` calls of a typed method, made by `call(i, onResult, onError)`. */
+function answering(count) {
+  const answers = { results: [], errors: [] };
+  answers.onResult = (h, result) => answers.results.push(result);
+  answers.onError = (h, error) => answers.errors.push(error);
+  answers.all = () => answers.results.length + answers.errors.length === count;
+  return answers;
+}
+
+// ---- the hibernated scenario ----------------------------------------------
+
+async function hibernated(o, results, failures) {
+  const draw = random(o.seed);
+  const clock = new Clock(o, results);
+  const N = o.actors;
+  const I = Math.max(64, Math.floor(N / 100)); // invokers, each with a running service
+  const Q = Math.max(64, Math.floor(N / 100)); // hibernated actors woken with an event waiting
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'tinyactors-scale-'));
+  const store = await Store.open(path.join(directory, 'actors.db'));
+
+  // the counters are indexes 0..N-1; their sessions are numbered from `base`
+  const HIBERNATED = 0;
+  const RESIDENT_ = 1;
+  const GONE = 2;
+  const DYING = 3; // terminated while hibernated: ends when woken
+  const state = new Uint8Array(N);
+  const sessions = new BigUint64Array(N);
+  const resident = new IndexSet(N);
+  let base = 0n;
+  const index = (session) => {
+    const i = Number(session - base);
+    return i >= 0 && i < N && sessions[i] === session ? i : -1;
+  };
+  const wake = (host, session) => {
+    const i = index(session);
+    if (i < 0 || (state[i] !== HIBERNATED && state[i] !== DYING)) return; // woken already (by the gate itself)
+    host.wake(session, store.get(session));
+    if (state[i] === DYING) {
+      state[i] = GONE;
+      return;
+    }
+    state[i] = RESIDENT_;
+    resident.add(i);
+  };
+  const putBack = (host, list) => { // hibernate again, into the store
+    for (const i of list) {
+      if (state[i] !== RESIDENT_) continue;
+      try {
+        store.put(sessions[i], host.hibernate(sessions[i]));
+      } catch (error) {
+        if (!(error instanceof TinyactorsError) || error.status !== 'TA_ERROR_STATE') throw error;
+        continue;
+      }
+      state[i] = HIBERNATED;
+      resident.delete(i);
+    }
+  };
+  const pickHibernated = (k) => {
+    const chosen = new Set();
+    while (chosen.size < k) {
+      const i = Math.floor(draw() * N);
+      if (state[i] === HIBERNATED) chosen.add(i);
+    }
+    return [...chosen];
+  };
+
+  // services: one per invoker, answering each ping with a pong
+  const services = { started: 0, pings: 0 };
+  const startService = (host, invocation) => {
+    services.started++;
+    return {
+      receive(h, send) {
+        services.pings++;
+        invocation.sendBack('pong');
+      },
+    };
+  };
+  const ioProcessed = { count: 0 };
+  const migrationsDone = { count: 0, failed: 0 };
+
+  const room = RESIDENT + 2 * I + Q + 16 * BATCH;
+  const events = 16384 + Q + (o.datamodel === 'quickjs' ? room : 0);
+  const config = {
+    systemID: 'scale',
+    ioProcessors: [{ type: 'urn:scale:echo' }],
+    telemetry: {}, // metrics(), and trace.end with something to end
+    system: {
+      maxActors: N + room, maxEvents: events, maxRequests: I + 4096, maxTimers: 4096,
+      instanceBytes: 256 * room, stringBytes: 16384 + 64 * room, tracing: false,
+    },
+  };
+  // the other system of the transport round trip
+  let host;
+  let returned = 0;
+  const other = new Host({ systemID: 'other' }, {
+    datamodel: o.datamodel,
+    transport: (h, send) => {
+      host.send(send.message);
+      returned++;
+    },
+  });
+  {
+    const compiled = compileCharts([{ name: 'echo.scxml', text: ECHO }]);
+    other.addImage(compiled.image);
+    compiled.close();
+  }
+  const echo = Address.fromSession('other', other.spawn(other.chart('echo'))).text;
+  await other.idle();
+
+  const simulated = new SimulatedClock();
+  const handlers = {
+    datamodel: o.datamodel,
+    clock: simulated,
+    telemetry: () => {}, // exported nowhere
+    wake,
+    services: { 'urn:scale:service': startService },
+    ioProcessors: { 'urn:scale:echo': (h, send) => { ioProcessed.count++; send.answer('answer'); } },
+    transport: (h, send) => other.send(send.message),
+    migrationDone: (h, result) => { migrationsDone.count++; migrationsDone.failed += result.failed; },
+  };
+  host = new Host(config, handlers);
+  const compiled = compileSystem({ name: 'system.xml', text: SYSTEM }, (b, source) => FILES[source]);
+  const segment = host.addImage(compiled.image);
+  compiled.close();
+  const counter = host.chart('counter');
+
+  // populate: N counters, RESIDENT at most in memory, the rest in the store
+  console.log(`hibernated: ${N} actors, ${RESIDENT} resident, ${I} invokers, the rest in SQLite`);
+  let ms = await elapsed(async () => {
+    let oldest = 0;
+    for (let i = 0; i < N; i++) {
+      sessions[i] = host.spawn(counter);
+      state[i] = RESIDENT_;
+      if (i - oldest + 1 >= RESIDENT + BATCH) {
+        await host.idle();
+        for (const end = oldest + BATCH; oldest < end; oldest++) {
+          store.put(sessions[oldest], host.hibernate(sessions[oldest]));
+          state[oldest] = HIBERNATED;
+        }
+      }
+    }
+    await host.idle();
+    for (let i = oldest; i < N; i++) resident.add(i);
+    store.flush();
+  });
+  base = sessions[0];
+  if (N > 1 && sessions[N - 1] !== base + BigInt(N - 1)) failures.push('the counters\' sessions are not consecutive');
+  clock.record('populate (spawn and hibernate)', 'per actor', [(ms * 1000) / N], N);
+
+  // the invokers, each running a service; a named actor at the end of the table
+  const invokers = [];
+  for (let i = 0; i < I; i++) {
+    invokers.push(host.spawn(host.chart('invoker')));
+    if (i % BATCH === BATCH - 1) await host.idle();
+  }
+  const probe = host.spawn(counter, { name: 'probe' });
+  await host.idle();
+  if (services.started !== I) failures.push(`${services.started} services started for ${I} invokers`);
+  let total = N + I + 1; // the actors the host holds, counted again before the whole-population operations
+
+  // one actor each: spawn, send, terminate, wake, hibernate
+  await clock.time('spawn', 'per call', async () => {
+    const spawned = [];
+    const t = await elapsed(async () => {
+      for (let k = 0; k < 64; k++) spawned.push(host.spawn(counter));
+      await host.idle();
+    });
+    for (const s of spawned) host.terminate(s);
+    await host.idle();
+    return { ms: t, calls: 64 };
+  });
+  await clock.time('terminate', 'per call', async () => {
+    const spawned = [];
+    for (let k = 0; k < 64; k++) spawned.push(host.spawn(counter));
+    await host.idle();
+    const t = await elapsed(async () => {
+      for (const s of spawned) host.terminate(s);
+      await host.idle();
+    });
+    return { ms: t, calls: 64 };
+  });
+  await clock.time('send', 'per call', async () => {
+    const targets = resident.pick(64, draw).map((i) => sessions[i]);
+    const t = await elapsed(async () => {
+      for (const s of targets) host.send(s, 'inc');
+      await host.idle();
+    });
+    return { ms: t, calls: targets.length };
+  });
+  await clock.time('sendMany', 'per event', async () => {
+    const items = [];
+    for (let k = 0; k < BATCH; k++) items.push({ target: sessions[resident.items[Math.floor(draw() * resident.size)]], event: 'inc' });
+    const t = await elapsed(async () => {
+      if (host.sendMany(items) !== items.length) failures.push('sendMany refused events');
+      await host.idle();
+    });
+    return { ms: t, calls: items.length };
+  });
+  await clock.time('send (hibernated: woken from the store)', 'per call', async () => {
+    const chosen = pickHibernated(32);
+    const t = await elapsed(async () => {
+      for (const i of chosen) host.send(sessions[i], 'inc');
+      await host.idle();
+    });
+    if (chosen.some((i) => state[i] !== RESIDENT_)) failures.push('an event did not wake its actor');
+    putBack(host, chosen);
+    return { ms: t, calls: chosen.length };
+  });
+  await clock.time('hibernate', 'per call', async () => {
+    const chosen = resident.pick(32, draw);
+    const blobs = [];
+    const t = await elapsed(() => {
+      for (const i of chosen) blobs.push(host.hibernate(sessions[i]));
+    });
+    chosen.forEach((i, k) => host.wake(sessions[i], blobs[k]));
+    await host.idle();
+    return { ms: t, calls: chosen.length };
+  });
+  await clock.time('wake', 'per call', async () => {
+    const chosen = pickHibernated(32);
+    const blobs = chosen.map((i) => store.get(sessions[i]));
+    const t = await elapsed(async () => {
+      chosen.forEach((i, k) => host.wake(sessions[i], blobs[k]));
+      await host.idle();
+    });
+    for (const i of chosen) {
+      state[i] = RESIDENT_;
+      resident.add(i);
+    }
+    putBack(host, chosen);
+    return { ms: t, calls: chosen.length };
+  });
+  // Q hibernated actors get an event each, so each waits in core's queue of
+  // wakes; the last 128 sent are woken (or terminated) by the application
+  // before core asks for them
+  const queued = async (act) => {
+    const chosen = pickHibernated(Q);
+    for (let first = 0; first < chosen.length; first += BATCH)
+      host.sendMany(chosen.slice(first, first + BATCH).map((i) => ({ target: sessions[i], event: 'inc' })));
+    const last = chosen.slice(-Math.min(128, chosen.length >> 1));
+    const blobs = last.map((i) => store.get(sessions[i]));
+    const t = await elapsed(() => act(last, blobs));
+    await host.idle(); // the rest: asked for, woken from the store
+    putBack(host, chosen);
+    return { ms: t, calls: last.length };
+  };
+  await clock.time('wake (an event waiting)', 'per call', () => queued((last, blobs) => {
+    last.forEach((i, k) => {
+      host.wake(sessions[i], blobs[k]);
+      state[i] = RESIDENT_;
+      resident.add(i);
+    });
+  }), { batches: 1 });
+  await clock.time('terminate (hibernated, an event waiting)', 'per call', () => queued((last) => {
+    for (const i of last) {
+      host.terminate(sessions[i]);
+      state[i] = DYING;
+    }
+  }), { batches: 8 }); // its calls are short: a few rounds make a sample
+  await clock.time('terminate (hibernated)', 'per call', async () => {
+    const chosen = pickHibernated(64);
+    const t = await elapsed(async () => {
+      for (const i of chosen) {
+        state[i] = DYING; // its WAKE comes in this turn: woken, it ends
+        host.terminate(sessions[i]);
+      }
+      await host.idle();
+    });
+    if (chosen.some((i) => state[i] !== GONE)) failures.push('a terminated hibernated actor was not asked for');
+    return { ms: t, calls: chosen.length };
+  }, { batches: 4 }); // each batch ends 64 actors
+  await clock.time('actorByName', 'per call', async () => {
+    let found;
+    let missing;
+    const t = await elapsed(() => {
+      found = host.actorByName('probe');
+      missing = host.actorByName('nobody');
+    });
+    if (found !== probe || missing !== undefined) failures.push(`actorByName: ${found}, ${missing}`);
+    return { ms: t, calls: 2 };
+  });
+  await clock.time('boot', 'per call', async () => {
+    const t = await elapsed(async () => {
+      for (let k = 0; k < 16; k++) host.boot(segment);
+      await host.idle();
+    });
+    return { ms: t, calls: 16 };
+  });
+
+  // the typed methods, each answered at the turn after the call
+  const method = (name, params, count = 64) => async () => {
+    const answers = answering(count);
+    const list = Array.from({ length: count }, () => params());
+    const t = await elapsed(async () => {
+      for (const p of list) host[name](p, answers.onResult, answers.onError);
+      await host.idle();
+    });
+    if (!answers.all()) failures.push(`${name}: ${answers.results.length + answers.errors.length} answers of ${count}`);
+    return { ms: t, calls: count, answers };
+  };
+  const someone = () => ({ session: sessions[resident.items[Math.floor(draw() * resident.size)]] });
+  await clock.time('actorState', 'per call', method('actorState', someone));
+  await clock.time('actorContext', 'per call', method('actorContext', someone));
+  await clock.time('actorGet', 'per call', method('actorGet', someone));
+  await clock.time('hostStats', 'per call', method('hostStats', () => undefined));
+  await clock.time('hostConfig', 'per call', method('hostConfig', () => ({})));
+  await clock.time('actorList (a page)', 'per call', method('actorList', () => ({ limit: 256 }), 16));
+  await clock.time('traceConfigure', 'per call', method('traceConfigure', () => ({ detail: 'summary' })));
+  await clock.time('traceWatch', 'per call', async () => {
+    const got = await method('traceWatch', () => ({ rules: [{ chart: 'counter' }], seconds: 60 }))();
+    for (const result of got.answers.results) host.traceUnwatch({ id: result.id }, () => {}, () => {});
+    await host.idle();
+    return got;
+  });
+  await clock.time('traceUnwatch', 'per call', async () => {
+    const watches = answering(64);
+    for (let k = 0; k < 64; k++) host.traceWatch({ rules: [{ chart: 'counter' }], seconds: 60 }, watches.onResult, watches.onError);
+    await host.idle();
+    const ids = watches.results.map((result) => result.id);
+    while (ids.length < 64) ids.push(99); // tracing refused the watch: an unknown id, answered stale
+    return method('traceUnwatch', () => ({ id: ids.pop() }))();
+  });
+  await clock.time('traceEnd', 'per call', method('traceEnd', () => undefined));
+  await clock.time('traceSpansDecode', 'per call', method('traceSpansDecode', () => ({ traces: new Uint8Array() })));
+  await clock.time('metrics', 'per call', async () => {
+    const t = await elapsed(() => {
+      for (let k = 0; k < 64; k++) host.metrics();
+    });
+    return { ms: t, calls: 64 };
+  });
+
+  // round trips
+  await clock.time('I/O processor round trip', 'per call', async () => {
+    const targets = resident.pick(64, draw).map((i) => sessions[i]);
+    const before = ioProcessed.count;
+    const t = await elapsed(async () => {
+      for (const s of targets) host.send(s, 'ask');
+      await host.idle();
+    });
+    if (ioProcessed.count - before !== targets.length) failures.push(`I/O processor: ${ioProcessed.count - before} of ${targets.length}`);
+    return { ms: t, calls: targets.length };
+  });
+  await clock.time('transport round trip', 'per call', async () => {
+    const targets = resident.pick(32, draw).map((i) => sessions[i]);
+    const before = returned;
+    const t = await elapsed(async () => {
+      for (const s of targets) host.send(s, 'call', { to: echo });
+      for (let turns = 0; returned - before < targets.length && turns < 1000; turns++) {
+        await host.idle();
+        await other.idle();
+      }
+      await host.idle();
+    });
+    if (returned - before !== targets.length) failures.push(`transport: ${returned - before} pongs of ${targets.length}`);
+    return { ms: t, calls: targets.length };
+  });
+  await clock.time('delayed send and its timer', 'per call', async () => {
+    const targets = resident.pick(64, draw).map((i) => sessions[i]);
+    const t = await elapsed(async () => {
+      for (const s of targets) host.send(s, 'arm');
+      await host.idle();
+      simulated.increment(20);
+      await host.idle();
+    });
+    if (host.nextDeadline !== undefined) failures.push('a delayed send did not fire');
+    return { ms: t, calls: targets.length };
+  });
+  await clock.time('invoked service round trip', 'per call', async () => {
+    const targets = [];
+    for (let k = 0; k < 64; k++) targets.push(invokers[Math.floor(draw() * invokers.length)]);
+    const before = services.pings;
+    const t = await elapsed(async () => {
+      for (const s of targets) host.send(s, 'go');
+      await host.idle();
+    });
+    if (services.pings - before !== targets.length) failures.push(`service: ${services.pings - before} pings of ${targets.length}`);
+    return { ms: t, calls: targets.length };
+  });
+
+  // the whole population: a full listing, a sweep of every actor
+  total = await actorsOf(host);
+  await clock.time('actorList (every actor)', 'per actor', async () => {
+    let listed = 0;
+    const t = await elapsed(async () => {
+      let cursor = 0;
+      while (cursor !== null) {
+        let page;
+        host.actorList({ limit: 512, cursor }, (h, result) => (page = result), (h, error) => { throw error; });
+        await host.idle();
+        listed += page.sessions.length;
+        cursor = page.cursor;
+      }
+    });
+    if (listed !== total) failures.push(`actorList: ${listed} sessions of ${total}`);
+    return { ms: t, calls: listed };
+  }, { batches: 1, samples: Math.min(3, o.samples) });
+  await clock.time('sweep (every actor)', 'per actor', async () => {
+    const t = await elapsed(() => host.sweep(total + 1024, 1 << 20));
+    return { ms: t, calls: total };
+  }, { batches: 1 });
+
+  // migration of one session at a time, to version 2
+  {
+    const v2 = compileCharts([{ name: 'counter.scxml', text: COUNTER(2) }]);
+    host.addImage(v2.image);
+    v2.close();
+  }
+  const moved = new Uint8Array(N);
+  await clock.time('migrate (one session)', 'per call', async () => {
+    const chosen = resident.pick(resident.size, draw).filter((i) => !moved[i]).slice(0, 16);
+    const before = migrationsDone.count;
+    const t = await elapsed(async () => {
+      for (const i of chosen) host.migrate({ session: sessions[i] });
+      for (let turns = 0; migrationsDone.count - before < chosen.length && turns < 1000; turns++) await host.idle();
+    });
+    if (migrationsDone.count - before !== chosen.length) failures.push(`migrate: ${migrationsDone.count - before} done of ${chosen.length}`);
+    for (const i of chosen) moved[i] = 1;
+    return { ms: t, calls: chosen.length };
+  }, { batches: 8 }); // each batch moves 16 of the resident actors for good
+  if (migrationsDone.failed) failures.push(`${migrationsDone.failed} sessions failed to migrate`);
+
+  // snapshot, restore, close: per actor
+  total = await actorsOf(host);
+  store.flush();
+  await snapshots(host, config, { ...handlers, wake: () => {}, services: { 'urn:scale:service': () => ({}) } }, clock, total, o);
+  other.close();
+  rmSync(directory, { recursive: true, force: true });
+}
+
+/** The end of a scenario: snapshot (per actor), then restore with its
+ * first turn (per actor) and the restored host's close (per actor), again
+ * and again. The host is closed before the first restore, so that at most
+ * one population is in memory at a time. */
+async function snapshots(host, config, handlers, clock, total, o) {
+  const closes = [];
+  let blob;
+  await clock.time('snapshot', 'per actor', async () => {
+    const t = await elapsed(() => {
+      blob = host.snapshot();
+    });
+    return { ms: t, calls: total };
+  }, { batches: 1, samples: Math.min(3, o.samples) });
+  host.close(); // a host after every operation: the restored ones' closes are timed, each a population as large
+  const samples = Math.min(3, o.samples);
+  await clock.time('restore (and its first turn)', 'per actor', async () => {
+    let restored;
+    const t = await elapsed(async () => {
+      restored = Host.restore(blob, config, { ...handlers, clock: new SimulatedClock() });
+      await restored.idle();
+    });
+    closes.push((await elapsed(() => restored.close())) * 1000 / total);
+    return { ms: t, calls: total };
+  }, { batches: 1, samples });
+  blob = undefined;
+  clock.record('close', 'per actor', closes, closes.length * total);
+}
+
+// ---- the resident scenario ------------------------------------------------
+
+async function residentScenario(o, results, failures) {
+  const draw = random(o.seed);
+  const clock = new Clock(o, results);
+  const N = o.actors;
+  const migrationsDone = { count: 0, failed: 0, migrated: 0 };
+  const handlers = {
+    datamodel: o.datamodel,
+    clock: new SimulatedClock(),
+    migrationDone: (h, result) => { migrationsDone.count++; migrationsDone.failed += result.failed; migrationsDone.migrated += result.migrated; },
+  };
+  // no pools sized: the segment grows from core's defaults as the actors come
+  const config = { systemID: 'scale', system: { tracing: false } };
+  const host = new Host(config, handlers);
+  const compiled = compileSystem({ name: 'system.xml', text: SYSTEM }, (b, source) => FILES[source]);
+  host.addImage(compiled.image);
+  compiled.close();
+  const counter = host.chart('counter');
+  const sessions = new BigUint64Array(N);
+  const live = new IndexSet(N);
+
+  console.log(`resident: ${N} actors, all in memory`);
+  const ms = await elapsed(async () => {
+    for (let i = 0; i < N; i++) {
+      sessions[i] = host.spawn(counter);
+      live.add(i);
+      if (i % 4096 === 4095) await host.idle();
+    }
+    await host.idle();
+  });
+  clock.record('populate (spawn, the segment growing)', 'per actor', [(ms * 1000) / N], N);
+  const probe = host.spawn(counter, { name: 'probe' });
+  await host.idle();
+  let total = N + 1;
+
+  await clock.time('spawn', 'per call', async () => {
+    const spawned = [];
+    const t = await elapsed(async () => {
+      for (let k = 0; k < 64; k++) spawned.push(host.spawn(counter));
+      await host.idle();
+    });
+    for (const s of spawned) host.terminate(s);
+    await host.idle();
+    return { ms: t, calls: 64 };
+  });
+  await clock.time('send', 'per call', async () => {
+    const targets = live.pick(64, draw).map((i) => sessions[i]);
+    const t = await elapsed(async () => {
+      for (const s of targets) host.send(s, 'inc');
+      await host.idle();
+    });
+    return { ms: t, calls: targets.length };
+  });
+  await clock.time('sendMany', 'per event', async () => {
+    const items = [];
+    for (let k = 0; k < BATCH; k++) items.push({ target: sessions[live.items[Math.floor(draw() * live.size)]], event: 'inc' });
+    const t = await elapsed(async () => {
+      if (host.sendMany(items) !== items.length) failures.push('sendMany refused events');
+      await host.idle();
+    });
+    return { ms: t, calls: items.length };
+  });
+  await clock.time('terminate', 'per call', async () => {
+    const chosen = live.pick(64, draw);
+    const t = await elapsed(async () => {
+      for (const i of chosen) host.terminate(sessions[i]);
+      await host.idle();
+    });
+    for (const i of chosen) sessions[i] = host.spawn(counter); // the population stays as large
+    await host.idle();
+    return { ms: t, calls: chosen.length };
+  });
+  // N/10 actors runnable, each with an event waiting; the last 256 of them
+  // terminated before the run
+  await clock.time('terminate (runnable)', 'per call', async () => {
+    const Q = Math.max(512, Math.floor(N / 10));
+    const chosen = live.pick(Q, draw);
+    for (let first = 0; first < chosen.length; first += BATCH) {
+      const items = chosen.slice(first, first + BATCH).map((i) => ({ target: sessions[i], event: 'inc' }));
+      for (let sent = 0; sent < items.length;) sent += host.sendMany(items.slice(sent)) || (await host.idle(), 0);
+    }
+    const last = chosen.slice(-256);
+    const t = await elapsed(() => {
+      for (const i of last) host.terminate(sessions[i]);
+    });
+    await host.idle();
+    for (const i of last) live.delete(i);
+    total -= last.length;
+    return { ms: t, calls: last.length };
+  }, { batches: 1 });
+  await clock.time('actorByName', 'per call', async () => {
+    let found;
+    let missing;
+    const t = await elapsed(() => {
+      found = host.actorByName('probe');
+      missing = host.actorByName('nobody');
+    });
+    if (found !== probe || missing !== undefined) failures.push(`actorByName: ${found}, ${missing}`);
+    return { ms: t, calls: 2 };
+  });
+  await clock.time('hostStats', 'per call', async () => {
+    const answers = answering(64);
+    const t = await elapsed(async () => {
+      for (let k = 0; k < 64; k++) host.hostStats(undefined, answers.onResult, answers.onError);
+      await host.idle();
+    });
+    return { ms: t, calls: 64 };
+  });
+  await clock.time('actorList (every actor)', 'per actor', async () => {
+    let listed = 0;
+    const t = await elapsed(async () => {
+      let cursor = 0;
+      while (cursor !== null) {
+        let page;
+        host.actorList({ limit: 512, cursor }, (h, result) => (page = result), (h, error) => { throw error; });
+        await host.idle();
+        listed += page.sessions.length;
+        cursor = page.cursor;
+      }
+    });
+    if (listed !== total) failures.push(`actorList: ${listed} sessions of ${total}`);
+    return { ms: t, calls: listed };
+  }, { batches: 1, samples: Math.min(3, o.samples) });
+  await clock.time('sweep (every actor)', 'per actor', async () => {
+    const t = await elapsed(() => host.sweep(total + 1024, 1 << 20));
+    return { ms: t, calls: total };
+  }, { batches: 1 });
+  await clock.time('hibernate', 'per call', async () => {
+    const chosen = live.pick(32, draw);
+    const blobs = [];
+    const t = await elapsed(() => {
+      for (const i of chosen) blobs.push(host.hibernate(sessions[i]));
+    });
+    chosen.forEach((i, k) => host.wake(sessions[i], blobs[k]));
+    await host.idle();
+    return { ms: t, calls: chosen.length };
+  });
+  await clock.time('wake', 'per call', async () => {
+    const chosen = live.pick(32, draw);
+    const blobs = chosen.map((i) => host.hibernate(sessions[i]));
+    const t = await elapsed(async () => {
+      chosen.forEach((i, k) => host.wake(sessions[i], blobs[k]));
+      await host.idle();
+    });
+    return { ms: t, calls: chosen.length };
+  });
+
+
+  // every actor moved to version 2, per actor
+  {
+    const v2 = compileCharts([{ name: 'counter.scxml', text: COUNTER(2) }]);
+    host.addImage(v2.image);
+    v2.close();
+  }
+  const moving = await elapsed(async () => {
+    host.migrate({ chart: 'counter' });
+    for (let turns = 0; migrationsDone.count === 0 && turns < 1e6; turns++) await host.idle();
+  });
+  if (migrationsDone.failed || migrationsDone.migrated !== total)
+    failures.push(`migrate: ${migrationsDone.migrated} of ${total} moved, ${migrationsDone.failed} failed`);
+  clock.record('migrate (a chart, every actor)', 'per actor', [(moving * 1000) / total], total);
+  await snapshots(host, config, handlers, clock, total, o);
+}
+
+// ---- one process: one scenario at one size ----------------------------------
+
+async function child(o) {
+  const results = {};
+  const failures = [];
+  if (o.child === 'hibernated') await hibernated(o, results, failures);
+  else await residentScenario(o, results, failures);
+  const peak = process.resourceUsage().maxRSS * 1024;
+  process.stdout.write(`RESULT ${JSON.stringify({ results, failures, peak })}\n`);
+}
+
+/** Runs one scenario at one size in a process of its own; its result. */
+function measure(scenario, actors, o) {
+  const args = [...(globalThis.Bun ? [] : ['--disable-warning=ExperimentalWarning']), fileURLToPath(import.meta.url),
+    '--child', scenario, '--actors', String(actors), '--datamodel', o.datamodel, '--samples', String(o.samples),
+    '--min-ms', String(o['min-ms']), '--seed', String(o.seed)];
+  return new Promise((resolve, reject) => {
+    const process_ = spawnChild(process.execPath, args, { stdio: ['ignore', 'pipe', 'inherit'] });
+    let buffered = '';
+    let result;
+    process_.stdout.setEncoding('utf8');
+    process_.stdout.on('data', (chunk) => {
+      buffered += chunk;
+      let newline;
+      while ((newline = buffered.indexOf('\n')) >= 0) {
+        const line = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + 1);
+        if (line.startsWith('RESULT ')) result = JSON.parse(line.slice(7));
+        else if (o.verbose) console.log(`  [${scenario} ${actors}] ${line.trim()}`);
+      }
+    });
+    process_.on('error', reject);
+    process_.on('close', (code, signal) => {
+      if (code === 0 && result) resolve(result);
+      else reject(new Error(`scale: ${scenario} at ${actors} actors exited with ${signal ?? code}`));
+    });
+  });
+}
+
+export function signature() {
+  const cpus = os.cpus();
+  const runtime = globalThis.Bun ? `bun ${globalThis.Bun.version}` : `node ${process.versions.node}`;
+  return `${cpus[0]?.model ?? 'unknown'}, ${cpus.length} CPUs, ${os.arch()}, ${os.type()} ${os.release()}, ` +
+    `${Math.round(os.totalmem() / 2 ** 30)} GiB; ${runtime}`;
+}
+
+/** The gate: every operation of each scenario at `actors` and twice that;
+ * {scenarios: {name: {small, large, ratios}}, failures, known}. */
+export async function gate(given = {}) {
+  const o = { ...options([]), attempts: 3, ...given };
+  const scenarios = o.scenario === 'all' ? ['hibernated', 'resident'] : [o.scenario];
+  const report = { machine: signature(), datamodel: o.datamodel, actors: o.actors, factor: FACTOR, scenarios: {}, failures: [], known: [] };
+  for (const scenario of scenarios) {
+    const sizes = scenario === 'resident' && o['resident-actors'] ? o['resident-actors'] : o.actors;
+    let best;
+    for (let attempt = 1; attempt <= o.attempts; attempt++) {
+      const small = await measure(scenario, sizes, o);
+      const large = await measure(scenario, 2 * sizes, o);
+      for (const failure of [...small.failures, ...large.failures]) report.failures.push(`${scenario}: ${failure}`);
+      // each size keeps each operation's lowest cost of every attempt: noise
+      // only ever adds time, so a slow process does not fail the gate
+      if (!best) best = { small, large, ratios: {}, attempts: attempt };
+      else {
+        best.attempts = attempt;
+        best.small.peak = Math.max(best.small.peak, small.peak);
+        best.large.peak = Math.max(best.large.peak, large.peak);
+        for (const [at, now] of [[best.small, small], [best.large, large]])
+          for (const [name, result] of Object.entries(now.results))
+            if (!at.results[name] || result.cost < at.results[name].cost) at.results[name] = result;
+      }
+      for (const [name, at] of Object.entries(best.small.results))
+        if (best.large.results[name]) best.ratios[name] = best.large.results[name].cost / at.cost;
+      const over = Object.entries(best.ratios).filter(([name, ratio]) => ratio > FACTOR && !KNOWN[name]);
+      if (!over.length) break;
+      if (attempt < o.attempts) console.log(`scale: ${scenario}: ${over.map(([n, r]) => `${n} ${r.toFixed(2)}`).join(', ')} over ${FACTOR}: measuring again`);
+    }
+    report.scenarios[scenario] = { actors: sizes, ...best };
+    print(scenario, sizes, best, o);
+    for (const [name, ratio] of Object.entries(best.ratios)) {
+      if (ratio <= FACTOR) continue;
+      if (KNOWN[name]) report.known.push(`${scenario}: ${name} ${ratio.toFixed(2)} (${KNOWN[name]})`);
+      else report.failures.push(`${scenario}: ${name}: ${ratio.toFixed(2)} times the cost at twice the actors`);
+    }
+  }
+  return report;
+}
+
+function print(scenario, actors, best, o) {
+  const us = (value) => (value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(2) : value.toFixed(3));
+  console.log(`scale: ${scenario}, ${o.datamodel}, ${actors} and ${2 * actors} actors (${best.attempts} attempts); ${signature()}`);
+  console.log(`  ${'operation'.padEnd(44)}${'unit'.padEnd(11)}${`at ${actors}`.padStart(14)}${`at ${2 * actors}`.padStart(14)}${'ratio'.padStart(8)}`);
+  for (const [name, ratio] of Object.entries(best.ratios)) {
+    const verdict = ratio <= FACTOR ? 'ok' : KNOWN[name] ? `FAIL (known: ${KNOWN[name]})` : 'FAIL';
+    const { unit } = best.small.results[name];
+    console.log(`  ${name.padEnd(44)}${unit.padEnd(11)}${`${us(best.small.results[name].cost)} µs`.padStart(14)}` +
+      `${`${us(best.large.results[name].cost)} µs`.padStart(14)}${ratio.toFixed(2).padStart(8)}  ${verdict}`);
+  }
+  console.log(`  peak resident: ${Math.round(best.small.peak / 1e6)} MB at ${actors}, ${Math.round(best.large.peak / 1e6)} MB at ${2 * actors}`);
+}
+
+async function main() {
+  const o = options(process.argv.slice(2));
+  if (o.child) {
+    await child(o);
+    return;
+  }
+  const report = await gate({ ...o, verbose: true });
+  if (o.json) writeFileSync(o.json, `${JSON.stringify(report, null, 2)}\n`);
+  for (const known of report.known) console.log(`KNOWN ${known}`);
+  for (const failure of report.failures) console.log(`FAIL ${failure}`);
+  process.exitCode = report.failures.length ? 1 : 0;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();

@@ -874,6 +874,21 @@ manages its development dependencies; the C toolchain is the root's.
   pong, done datum, stop and collected service checked, on both
   datamodels under both runtimes. `mise run test` runs 10,000 actors and
   50,000 round trips; `--full` 200,000 and 1,000,000.
+- `mise run scale [--actors N] [--resident-actors R]`: the scaling gate
+  (`tools/scale.mjs`) against accidentally quadratic work: every
+  operation of the API timed on a host of N actors and on one of 2N, each
+  in a process of its own, with most of the actors hibernated in the
+  runtime's SQLite (and N/100 of them running an invoked service, so
+  core's requests grow too), then with every actor resident (R and 2R when
+  given). An operation's cost at 2N, per call or per actor for the
+  operations on the whole population, must be within `FACTOR` (1.5) of
+  its cost at N, the median of five samples of at least 200 ms each, an
+  operation over it measured again before it fails; an operation in
+  `KNOWN` grows because of core and names its request to core, reported
+  as failing and not failing the task. `mise run test` runs it as
+  `test/scale.test.mjs` at 20,000 and 40,000 actors (all resident: 40,000 and 80,000; samples of 20 ms,
+  three attempts); `--full` and `mise run scale` at two and four million.
+  Its numbers are in README.md, "Scale".
 - `mise run pack`: one prebuilt addon per platform package; it aborts
   until packaging is built.
 
@@ -930,8 +945,9 @@ tools/stress.mjs     hibernation under load, the rest in SQLite (mise run stress
 tools/migration.mjs  live migration under load, the rest in SQLite (mise run migration)
 tools/snapshot.mjs   a deploy rehearsed on a restored copy of a live host (mise run snapshot)
 tools/services.mjs   invoked services under load (mise run services)
+tools/scale.mjs      every operation at N and 2N actors, its cost within a factor (mise run scale)
 tools/store.mjs      what the gates share: the SQLite store, a seeded generator
 mise/napi.rb         what the tasks share
-mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, pack
+mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, scale, pack
 build/               core's amalgamation and the addon (not in git)
 ```

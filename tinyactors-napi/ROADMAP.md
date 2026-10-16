@@ -159,6 +159,38 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   53,000 a second at 200,000 actors (README, "Invoked services"); the
   Python gate 144,544. The addon needs no change.
 
+- **Three whole-table walks per call: `host.actorByName`, the hibernate
+  and migration check, and waking a queued actor** (2026-10-16, p2-scale;
+  log entries `l-p2-scale-actor-by-name`, `l-p2-scale-stable-member`,
+  `l-p2-scale-wake-queue`). The scaling gate (`tools/scale.mjs`, `mise run
+  scale`) times every operation at 2,000,000 and 4,000,000 actors; these
+  cost twice as much per call at twice the actors (the gate allows 1.5):
+  - `ta_system_actor_by_name` (`src/system/system.c:764`) walks every
+    actor slot, hibernated ones included: 14.9 ms a lookup at 2M, 29.1 ms
+    at 4M (gdb: 5 of 6 samples in `ta_host_actor_by_name`, the walk
+    inlined). Asked: an index from name to actor.
+  - `stable_member` (`src/system/hibernate.c:149-152`) walks every request
+    of the segment on each hibernate, each migration export and each sweep
+    candidate. With N/100 actors running an invoked service: a hibernate
+    costs 23.7 us at 2M and 52 to 67 us at 4M; a migration of one session
+    46 us and 80 to 95 us (20 to 37 us at both sizes with no services
+    running); gdb: 5 of 6 samples in `stable_member` under
+    `ta_host_hibernate`. Asked: the requests an actor holds found without
+    walking the pool (a per-actor count or list).
+  - `ta_actor_wake` (`src/system/hibernate.c:767-778`) unlinks a woken
+    actor from the singly linked wake queue by walking from its head: with
+    N/100 hibernated actors each sent an event before the run, waking the
+    last of them ahead of core's WAKE costs 1.1 ms a call at 2M and 2.7 to
+    3.1 ms at 4M. `ta_system_reclaim`'s `unqueue` (`system.c:614-619`) is
+    the same walk for the run, workspace and wake queues, reached when a
+    runnable actor leaves (an export); terminating one does not walk (it
+    is reclaimed after the run pops it). Asked: O(1) removal from the
+    queues.
+
+  The addon works around nothing: `tools/scale.mjs` lists the three
+  operations in `KNOWN`, the README's "Scale" table records them as
+  failing, and the step stays open until they pass.
+
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
 tick rate through `host.config`, `9bd33f03`); their text is in this file's
