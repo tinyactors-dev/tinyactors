@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<log>
+  <entry id="l-start" date="2026-10-16" step="coordination" kind="decision" status="resolved">
+    <what>The maintainer handed the build-out to a coordinating session: one subagent per step of docs/plan.xml, in order, committing and pushing to main, until a Python host and a Node host talk to each other through their transports.</what>
+    <why>The maintainer cannot supervise; issues and uncertainties are logged here for later review.</why>
+  </entry>
+  <entry id="l-tools" date="2026-10-16" step="coordination" kind="note" status="resolved">
+    <what>tools/planxml.py edits docs/plan.xml (Plan) and docs/log.xml (Log), each validated against its schema before it is written.</what>
+  </entry>
+</log>
