@@ -11,7 +11,7 @@
 #     1272);
 #   - ta_cbor_*: the token lists of to_wire and from_wire (the same file,
 #     2883 and 2995);
-#   - the addon's own ta_napi_* (values.c's conversion, handles.c).
+#   - the addon's own ta_napi_* (values.c's conversion, rows.c).
 #
 # Never the host, the system or the compiler (ta_host_*, ta_system_*,
 # ta_compile_*, ...). Everything else it calls is Node-API and the C

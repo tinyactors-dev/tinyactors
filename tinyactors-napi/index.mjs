@@ -1,3 +1,11 @@
-// @tinyactors/node is being rewritten from core's redesigned API
-// (ROADMAP.md): the addon this module loads is removed until then.
-throw new Error('@tinyactors/node is being rewritten');
+// @tinyactors/node: loads the addon and re-exports it, nothing else
+// (AGENTS.md, "Layers and the resolver"). The addon is build/tinyactors.node,
+// which `mise run build` makes; when packaging is built (`mise run pack`,
+// ROADMAP.md), the platform's package comes first and build/ stays the
+// development build.
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const addon = require('./build/tinyactors.node');
+
+export const { encode, decode, TinyactorsError } = addon;

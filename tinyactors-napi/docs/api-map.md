@@ -24,8 +24,8 @@ A core function no item uses is listed below the table: used internally
 A row marked *planned* is an item the plan (`docs/plan.xml`, section
 api) calls for, written ahead so its core is checked and the API review
 sees it; the commit that adds the item removes the mark. `index.d.ts`
-declares every row, planned or not; `index.mjs` exports nothing until
-the first item is built. Names the plan left open were picked when the
+declares every row, planned or not; `index.mjs` exports the items
+built so far. Names the plan left open were picked when the
 rows were written (log entries `l-p0-map-*`, for the maintainer).
 
 | API item | Core | Notes |
@@ -89,8 +89,8 @@ rows were written (log entries `l-p0-map-*`, for the maintainer).
 | `invocation.restored` | `TA_EFFECT_FIELD_FLAGS`, `TA_EFFECT_FLAG_RESTORED` | *planned*; the INVOKE is a restored host's announcement of an invocation that was running at the snapshot; no handler for its type: `TA_EVENT_IN_ERROR_COMMUNICATION` to the invoker, nothing thrown |
 | `service.receive(host, send)` | `TA_EFFECT_SEND`, `TA_EFFECT_FIELD_IO_PROCESSOR`, `TA_NIL` | *planned*; the handling of an effect: a send with `IO_PROCESSOR` `TA_NIL` for the service of (`SEGMENT`, `TOKEN`), as a thin `Send` view whose `type` is `undefined`; to a service that failed or crashed, or one whose `receive` throws: `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION` and the send's sendid |
 | `service.stop(host)` | `TA_EFFECT_UNINVOKE` | *planned*; the handling of an effect: the invoker cancelled the invocation; the service is dropped |
-| `TinyactorsError` (`message`, `code`, `reason`, `path`, `status`) | `ta_host_post`, `TA_HOST_EFFECT_REPLY`, `ta_status_name` | *planned*; a reply's error (`code`, `reason`, `path`, `message` as core wrote them), a refusal at a call, a fault, a stale view; `status` a bare status named by `ta_status_name` (`"TA_ERROR_STALE"`) |
-| `encode(value) → Uint8Array`, `decode(bytes) → value` | `ta_cbor_writer_init`, `ta_cbor_reader_init`, `ta_cbor_read`, `ta_cbor_writer_bytes`, `ta_cbor_writer_free` | *planned*; the one conversion the API uses, streaming, in the call's arena; `undefined` and `null` distinct, integers beyond 2^53 `bigint`; tag 32 read as its address string and never written; what it cannot read or write throws (docs/values.md) |
+| `TinyactorsError` (`message`, `code`, `reason`, `path`, `status`) | `ta_host_post`, `TA_HOST_EFFECT_REPLY`, `ta_status_name` | an `Error` subclass, `new TinyactorsError(message, {code, reason, path, status}?)`, each field read-only and `undefined` when not given; a reply's error (`code`, `reason`, `path`, `message` as core wrote them), a refusal at a call, a fault, a stale view; `status` a bare status named by `ta_status_name` (`"TA_ERROR_STALE"`) |
+| `encode(value) → Uint8Array`, `decode(bytes) → value` | `ta_cbor_writer_init`, `ta_cbor_reader_init`, `ta_cbor_read`, `ta_cbor_writer_bytes`, `ta_cbor_writer_free` | the one conversion the API uses, streaming, the writer and the call's text in an arena of the environment's instance, a mark per call; `undefined` and `null` distinct, integers beyond 2^53 `bigint`; tag 32 read as its address string and never written; what it cannot read or write throws a `TinyactorsError` (`TA_ERROR_UNSUPPORTED` for a value outside the table, `TA_ERROR_INVALID` for one it cannot hold or malformed CBOR); `decode` takes a `Uint8Array` or an `ArrayBuffer`, anything else a `TypeError` (docs/values.md) |
 | `new Address(text)`, `address.text`, `address.toString()`, `address.system`, `address.session`, `address.name` | `ta_address_parse`, `ta_address_name_decode` | *planned*; immutable; the parts read by core's parser on each access, `session` a `bigint`, `name` decoded; `undefined` for a part the text lacks, or when the text is no address; `toString()` the text |
 | `Address.fromSession(system, session)`, `Address.fromName(system, name)` | `ta_address_format`, `ta_address_format_name` | *planned*; an `Address` made from its parts by core's formatter (the name percent-encoded); a system id or name core refuses throws `TinyactorsError` with `TA_ERROR_INVALID` |
 | `encodeHTTPPost({url, event, fields, body}) → Buffer` | `ta_http_encode_post` | *planned*; SCXML's BasicHTTP (C.2.1): the POST request of a send, `fields` an array of `{name, value}` (or `body` when there are none), written into the call's arena and copied once; a URL that is not `http://host[:port]/path` throws `TA_ERROR_INVALID` |
@@ -184,7 +184,8 @@ function decided here for the API review is marked so; its decision is in
   the `TinyactorsError` that `hibernate()`, `snapshot()` or a migration's
   failure gives on quickjs with `TA_ERROR_UNSUPPORTED` (which variable
   could not be stored; log `l-p0-inventory-quickjs-limits`).
-- **The arena** (`src/host.c`, a mark per call): `ta_growable_arena_init`,
+- **The arena** (`src/host.c` per host, `src/module.c` per environment for
+  the module's own calls, a mark per call): `ta_growable_arena_init`,
   `ta_growable_arena_alloc`, `ta_growable_arena_position`,
   `ta_growable_arena_release`, `ta_growable_arena_allocator` (the CBOR
   writer's allocator), `ta_growable_arena_free`.

@@ -2,7 +2,7 @@
 // core's C API (AGENTS.md, "Layers and the resolver"). Every declaration
 // here is a row of docs/api-map.md, which names the core behind it; a row
 // still marked *planned* there is declared ahead of its implementation, and
-// index.mjs throws until the first item is built (docs/plan.xml, p1-values).
+// index.mjs exports only the items built so far (docs/plan.xml).
 //
 // Time is milliseconds; sessions are bigints; bytes the host hands out are
 // Buffers (a Uint8Array subclass) copied once, never views of host memory.
@@ -23,13 +23,17 @@ export type Value =
   | Value[]
   | { [key: string]: Value };
 
-/** CBOR of a value, written by core's streaming writer. Throws for what the
- * value table has no row for (a function, a symbol, a lone surrogate, a
- * cycle or nesting deeper than 64). */
+/** CBOR of a value, written by core's streaming writer. Throws a
+ * `TinyactorsError`: `TA_ERROR_UNSUPPORTED` for what the value table has no
+ * row for (a function, a symbol, a Date, a class's instance, a typed array
+ * other than Uint8Array), `TA_ERROR_INVALID` for what it cannot hold (a
+ * lone surrogate, a bigint past 64 bits, a cycle or nesting deeper than
+ * 64). A getter's exception passes through. */
 export function encode(value: Value): Uint8Array;
 
-/** The value of a CBOR document, read by core's streaming reader. Throws
- * for what it cannot read. */
+/** The value of one CBOR item filling `bytes`, read by core's streaming
+ * reader. Throws a `TinyactorsError` for what it cannot read, a
+ * `TypeError` for an argument that is not bytes. */
 export function decode(bytes: Uint8Array | ArrayBuffer): Value;
 
 // ---- errors -------------------------------------------------------------

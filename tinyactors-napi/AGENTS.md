@@ -309,14 +309,15 @@ The addon allocates almost nothing (bindings.md, section 6):
   process.
 - **Statuses are named by core:** a bare status in a message is
   `ta_status_name(status)` (`"TA_ERROR_STATE"`), never a table of ours.
-- **Where the allocator is called:** in the host's create, free and
-  allocator (with `napi_adjust_external_memory`), and through core
+- **Where the allocator is called:** in the host's create and free, in
+  the allocator (`src/module.c`, with `napi_adjust_external_memory`) and
+  the environment's instance that holds it, and through core
   (`ta_table`, `ta_growable_arena` while it grows, the compiler's
   options); nowhere else, nothing
   per event or per evaluation. The lint rule `allocation-in-tables-and-host`
-  checks it; it names files of the removed addon
-  (`src/datamodel/handles.c`) and changes with the first commit of the
-  rewrite.
+  checks it. The module's own calls (`encode`) have no host: they use an
+  arena of the environment's instance, a mark per call, as a host's
+  calls use the host's.
 
 ## C rules
 

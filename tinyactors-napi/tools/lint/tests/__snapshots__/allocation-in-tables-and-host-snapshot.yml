@@ -10,6 +10,16 @@ snapshots:
       style: secondary
       start: 90
       end: 97
+  napi_value ta_napi_encode(napi_env env, napi_callback_info info) { void *copy = malloc(16); return NULL; }:
+    labels:
+    - source: malloc(16)
+      style: primary
+      start: 80
+      end: 90
+    - source: malloc
+      style: secondary
+      start: 80
+      end: 86
   static char *ta_napi_grow(char *text, size_t length) { return (char *)realloc(text, length); }:
     labels:
     - source: realloc(text, length)
