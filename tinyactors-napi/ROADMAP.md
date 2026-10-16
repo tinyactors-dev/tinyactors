@@ -46,8 +46,12 @@ before changing this copy.
 
 ### Plan and progress
 
-The session writes its plan here as a list of steps, each with the commit
-that finished it, when 8.5 starts. `GATE` in `mise/napi.rb` names what of
+The plan is [docs/plan.xml](docs/plan.xml) (schema `docs/plan.rng`):
+the frame, the API against Python's and core, the decisions, the phases
+and steps (each step's `commit` attribute is the commit that finished
+it), the spikes and the findings of its refutation. Edit it with XML
+tools and validate it (`xmllint --noout --relaxng docs/plan.rng
+docs/plan.xml`). `GATE` in `mise/napi.rb` names what of
 the set `mise run test` runs so far, and grows with the work.
 
 ## How the work runs
