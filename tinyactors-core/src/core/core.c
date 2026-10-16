@@ -1012,7 +1012,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
         }
         if (io_processor_index != TA_NIL) {
             route = TA_ROUTE_EXTERNAL;
-            arg = io_processor_index;
+            arg = io_processor_index + 1; /* 0 is SCXML's (system.h) */
         } else if (kind == TA_SEND_TARGET_NONE) {
             route = TA_ROUTE_SELF;
         } else if (kind == TA_SEND_TARGET_INTERNAL ||
@@ -1039,14 +1039,11 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
                                        kernel->instance_layout.invoke_children)[slot];
             }
         } else {
-            /* another system's session, through a TA_IO_PROCESSOR_SCXML_REMOTE host processor */
-            uint32_t r = TA_NIL;
-            for (uint32_t i = 0; i < core->io_processor_count && r == TA_NIL; i++)
-                if (core->io_processors[i].flags & TA_IO_PROCESSOR_SCXML_REMOTE) r = i;
-            if (r == TA_NIL || !is_absolute_uri(tstr)) {
+            /* another system's session: out through the SCXML processor (the system's base) */
+            if (!core->base.length || !is_absolute_uri(tstr)) {
                 status = SEND_ERROR_EXECUTION; /* unsupported or invalid target (SCXML 6.2.4) */
             } else {
-                ta_string_view base = core->io_processors[r].location;
+                ta_string_view base = core->base;
                 ta_string_view rest = {tstr.pointer + base.length, tstr.length - base.length};
                 if (tstr.length > base.length &&
                     ta_memcmp(tstr.pointer, base.pointer, base.length) == 0 &&
@@ -1058,7 +1055,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
                     if (target == TA_NIL) status = SEND_NOMEM;
                 } else {
                     route = TA_ROUTE_EXTERNAL;
-                    arg = r;
+                    arg = 0; /* the SCXML processor */
                 }
             }
         }

@@ -63,11 +63,14 @@ static PyObject *ta_python_effect_payload(ta_python_view *view) {
 }
 
 /* A send's field `which`, converted on first read and cached. */
-/* The (type, handler, async) row of a SEND's processor: an I/O processor of
- * the config's, or the host's transport (TA_HOST_TRANSPORT); NULL otherwise. */
+/* The (type, handler, async) row of a SEND's processor, numbered as
+ * _ioprocessors: 0 the SCXML processor, so the host's transport; i + 1 the
+ * config's processor i; NULL otherwise (TA_NIL: an invoked service). */
 static PyObject *ta_python_processor_row(ta_python_host *host, uint32_t processor) {
-    if (processor == TA_HOST_TRANSPORT) return host->transport;
-    return processor < (uint32_t)PyList_Size(host->processors) ? PyList_GetItem(host->processors, processor) : NULL;
+    if (processor == 0) return host->transport;
+    return processor != TA_NIL && processor - 1 < (uint32_t)PyList_Size(host->processors)
+               ? PyList_GetItem(host->processors, processor - 1)
+               : NULL;
 }
 
 static PyObject *ta_python_send_read(ta_python_view *view, int which) {
@@ -475,7 +478,7 @@ static void ta_python_dispatch_send(ta_python_host *host, uint32_t index) {
         ta_python_dispatch_service_send(host, index);
         return;
     }
-    PyObject *row = ta_python_processor_row(host, processor); /* the transport's too: TA_HOST_TRANSPORT */
+    PyObject *row = ta_python_processor_row(host, processor); /* the transport's too: 0 */
     if (!row) return;
     ta_python_view *view = ta_python_view_new(host, host->state->send_type, index);
     if (!view) {

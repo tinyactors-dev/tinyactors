@@ -413,18 +413,6 @@
       "value": 256
     },
     {
-      "name": "TA_HOST_TRANSPORT",
-      "value": 4294967294
-    },
-    {
-      "name": "TA_IO_PROCESSOR_SCXML_REMOTE",
-      "value": 2
-    },
-    {
-      "name": "TA_IO_PROCESSOR_SCXML_SHARED",
-      "value": 4
-    },
-    {
       "name": "TA_NIL",
       "value": 4294967295
     },
@@ -691,6 +679,10 @@
     {
       "name": "TA_SYSTEM_MAX_POOL",
       "value": 16777214
+    },
+    {
+      "name": "TA_SYSTEM_SHARED_BASE",
+      "value": 1
     },
     {
       "name": "TA_TRACEPARENT_LENGTH",
@@ -4677,59 +4669,6 @@
       "kind": "opaque",
       "fields": []
     },
-    "ta_io_processor_descriptor": {
-      "kind": "struct",
-      "fields": [
-        {
-          "name": "type",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "location",
-          "type": "ta_string_view"
-        },
-        {
-          "name": "flags",
-          "type": "uint32_t"
-        },
-        {
-          "name": "pad",
-          "type": "uint32_t"
-        }
-      ],
-      "layout": {
-        "x86_64": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "type": 0,
-            "location": 16,
-            "flags": 32,
-            "pad": 36
-          }
-        },
-        "aarch64": {
-          "size": 40,
-          "align": 8,
-          "offsets": {
-            "type": 0,
-            "location": 16,
-            "flags": 32,
-            "pad": 36
-          }
-        },
-        "wasm32": {
-          "size": 24,
-          "align": 4,
-          "offsets": {
-            "type": 0,
-            "location": 8,
-            "flags": 16,
-            "pad": 20
-          }
-        }
-      }
-    },
     "ta_trace_policy": {
       "kind": "struct",
       "fields": [
@@ -4845,7 +4784,7 @@
           "type": "uint32_t"
         },
         {
-          "name": "pad",
+          "name": "flags",
           "type": "uint32_t"
         },
         {
@@ -4854,7 +4793,7 @@
         },
         {
           "name": "io_processors",
-          "type": "const ta_io_processor_descriptor *"
+          "type": "const ta_io_processor_entry *"
         },
         {
           "name": "first_serial",
@@ -4883,11 +4822,15 @@
         {
           "name": "trace_seed",
           "type": "uint64_t"
+        },
+        {
+          "name": "base",
+          "type": "ta_string_view"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 104,
+          "size": 120,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4901,7 +4844,7 @@
             "instance_bytes": 32,
             "string_bytes": 36,
             "io_processor_count": 40,
-            "pad": 44,
+            "flags": 44,
             "ticks_per_second": 48,
             "io_processors": 56,
             "first_serial": 64,
@@ -4910,11 +4853,12 @@
             "trace_contexts": 80,
             "trace_rules": 84,
             "trace_policy": 88,
-            "trace_seed": 96
+            "trace_seed": 96,
+            "base": 104
           }
         },
         "aarch64": {
-          "size": 104,
+          "size": 120,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4928,7 +4872,7 @@
             "instance_bytes": 32,
             "string_bytes": 36,
             "io_processor_count": 40,
-            "pad": 44,
+            "flags": 44,
             "ticks_per_second": 48,
             "io_processors": 56,
             "first_serial": 64,
@@ -4937,11 +4881,12 @@
             "trace_contexts": 80,
             "trace_rules": 84,
             "trace_policy": 88,
-            "trace_seed": 96
+            "trace_seed": 96,
+            "base": 104
           }
         },
         "wasm32": {
-          "size": 104,
+          "size": 112,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4955,7 +4900,7 @@
             "instance_bytes": 32,
             "string_bytes": 36,
             "io_processor_count": 40,
-            "pad": 44,
+            "flags": 44,
             "ticks_per_second": 48,
             "io_processors": 56,
             "first_serial": 64,
@@ -4964,7 +4909,8 @@
             "trace_contexts": 80,
             "trace_rules": 84,
             "trace_policy": 88,
-            "trace_seed": 96
+            "trace_seed": 96,
+            "base": 104
           }
         }
       }

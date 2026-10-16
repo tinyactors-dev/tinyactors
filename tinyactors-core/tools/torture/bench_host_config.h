@@ -29,7 +29,7 @@ typedef struct bench_host_config {
     ta_string_view system_id;
     ta_system_config system; /* capacities, tracing; trace_policy goes to the environment */
     const ta_datamodel_binding *datamodels;
-    const ta_io_processor_descriptor *io_processors;
+    const ta_io_processor_entry *io_processors;
     uint32_t io_processor_count;
     uint32_t migrate_quantum;
     ta_allocator allocator;
@@ -89,7 +89,7 @@ BENCH_UNUSED static int bench_host_config_cbor(const bench_host_config *c, bench
         ta_cbor_write_text(w, ta_string("ioProcessors"));
         ta_cbor_write_array(w, c->io_processor_count);
         for (uint32_t i = 0; i < c->io_processor_count; i++) {
-            const ta_io_processor_descriptor *d = &c->io_processors[i];
+            const ta_io_processor_entry *d = &c->io_processors[i];
             ta_cbor_write_map(w, 2);
             ta_cbor_write_text(w, ta_string("type"));
             ta_cbor_write_text(w, d->type);

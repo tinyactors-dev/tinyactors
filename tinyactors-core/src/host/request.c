@@ -1209,9 +1209,9 @@ static void request_run_host_config(request *r, uint32_t map) {
                        &config->system);
     request_put_key(r, "tracing");
     request_put_bool(r, config->system.tracing != TA_TRACING_DISABLED);
-    request_put_key(r, "ioProcessors"); /* [0] is the host's own SCXML processor */
-    cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, host->io_processor_count - 1u);
-    for (uint32_t i = 1; i < host->io_processor_count; i++) {
+    request_put_key(r, "ioProcessors");
+    cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, host->io_processor_count);
+    for (uint32_t i = 0; i < host->io_processor_count; i++) {
         cbor_output_head(&r->out, CBOR_MAJOR_MAP, 2);
         request_put_key(r, "type");
         cbor_output_text(&r->out, host->io_processors[i].type);
@@ -1274,7 +1274,7 @@ static int config_read_system(request *r, uint32_t map, ta_system_config *system
     return 1;
 }
 
-static int config_read_io_processors(request *r, uint32_t list, ta_io_processor_descriptor *out,
+static int config_read_io_processors(request *r, uint32_t list, ta_io_processor_entry *out,
                                      uint32_t *count) {
     static const char *const fields[] = {"type", "location", NULL};
     *count = 0;
@@ -1290,7 +1290,7 @@ static int config_read_io_processors(request *r, uint32_t list, ta_io_processor_
     }
     uint32_t at = list + 1;
     for (uint32_t i = 0; i < request_token(r, list)->count; i++, at = ta_cbor_next(r->document, at)) {
-        ta_io_processor_descriptor *d = &out[i];
+        ta_io_processor_entry *d = &out[i];
         ta_memset(d, 0, sizeof *d);
         request_path_set(r, "ioProcessors", i, "");
         if (request_token(r, at)->kind != TA_CBOR_MAP) {

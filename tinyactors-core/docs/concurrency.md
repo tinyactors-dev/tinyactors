@@ -115,7 +115,7 @@ and let them address each other:
 
 - An actor's address is `tinyactors://<system>/#_scxml_<id>` (or
   `.../@<name>`). A send to another system is a `TA_EFFECT_SEND` for the
-  host's transport (`TA_HOST_TRANSPORT`), yours (a queue
+  host's transport (`io_processor` 0), yours (a queue
   between threads, a socket, a `postMessage`), which delivers it on the
   other side with `ta_host_resolve` and `ta_host_send`, the sender's
   address as origin. Replies use `_event.origin`. See

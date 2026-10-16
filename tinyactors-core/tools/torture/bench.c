@@ -2,7 +2,7 @@
  *
  * One thread drives several ta_systems (each with its own ECMAScript
  * datamodel runtime, like separate processes), routes SCXML-to-SCXML events
- * between them through a TA_IO_PROCESSOR_SCXML_REMOTE processor
+ * between them through each host's transport
  * ("tinyactors://<system>/#_scxml_<id>"), runs scenario scripts in a separate
  * quickjs context (prelude.js + the scenario's scripts; their only I/O is
  * reading files of the scenario directory), samples system statistics as a
@@ -16,7 +16,7 @@
  * Hot reload: bench.reload(system, charts) compiles a new version of a system
  * into a new ta_system (the version) that shares the family's base URI, its
  * ECMAScript runtime and a session range of its own (first_serial = version
- * << 32, TA_IO_PROCESSOR_SCXML_SHARED); new actors start in the newest version,
+ * << 32, TA_SYSTEM_SHARED_BASE); new actors start in the newest version,
  * remote sends find a session in whichever version holds it, and versions
  * without actors are freed. bench.migrate(system) moves running actors to the
  * newest version (ta_actor_export -> ta_blob_migrate -> ta_system_adopt).
@@ -80,8 +80,8 @@
  * stops a session. Unknown charts/sessions raise error.communication. */
 #define SYSTEM_TYPE  "http://tinyactors.dev/torture/#SystemEventProcessor"
 #define SYSTEM_SHORT "system"
-/* host I/O processors of every system (the config's ioProcessors; TA_EFFECT_SEND.io_processor);
- * SCXML sends to other systems come out as TA_EFFECT_SEND for TA_HOST_TRANSPORT */
+/* host I/O processors of every system: their index in the config's ioProcessors (a
+ * TA_EFFECT_SEND's io_processor is that + 1; 0 is the SCXML processor, the transport) */
 #define IO_BENCH  0
 #define IO_SYSTEM 1 /* and 2 (short form) */
 #define IO_HOST   3 /* first scenario-defined host processor */
@@ -153,7 +153,7 @@ typedef struct bench_system {
     char base[TA_ADDRESS_SYSTEM_MAX + 16];
     ta_datamodel_ecmascript *ecmascript;
     ta_host *host;
-    ta_io_processor_descriptor io_processors[MAX_IO];
+    ta_io_processor_entry io_processors[MAX_IO];
     char io_names[MAX_IO][48];
     uint32_t io_processor_count;
     /* actors started by the system processor: session -> spawner (open addressing) */
@@ -1699,7 +1699,7 @@ static int spawn_take(bench_system *system, uint64_t session, bench_spawn *out) 
 }
 
 /* The in-process transport: each system's host transport. A send to
- * another system's address (TA_EFFECT_SEND for TA_HOST_TRANSPORT) goes to the live
+ * another system's address (TA_EFFECT_SEND for io_processor 0) goes to the live
  * system its address names: the target resolved there (ta_host_resolve), then
  * an input with the sender's address as origin (TA_EFFECT_FIELD_ORIGIN) and
  * the sendid. Payloads cross as neutral values, CBOR: the systems have
@@ -2021,6 +2021,7 @@ static void drain_effects(int si) {
     operation_count = 0;
     for (uint32_t i = 0; i < n; i++) {
         const ta_host_effect *effect = &effects[i];
+        uint32_t io = effect->io_processor - 1; /* SEND: the config's index (0 is the transport) */
         switch (effect->kind) {
         case TA_EFFECT_LOG:
             system->logs++;
@@ -2038,25 +2039,24 @@ static void drain_effects(int si) {
             trace_flush(system);
             break;
         case TA_EFFECT_SEND:
-            if (effect->io_processor == TA_HOST_TRANSPORT) {
+            if (effect->io_processor == 0) {
                 deliver_remote(system, i, effect);
-            } else if (effect->io_processor == IO_BENCH) {
+            } else if (io == IO_BENCH) {
                 system->to_bench++;
                 bench_operation *operation = operation_push(OPERATION_TO_BENCH, effect->session);
                 operation->event = dup_str(effect->event);
                 operation->json = payload_json(system->ecmascript, effect->payload);
-            } else if (effect->io_processor == IO_SYSTEM || effect->io_processor == IO_SYSTEM + 1) {
+            } else if (io == IO_SYSTEM || io == IO_SYSTEM + 1) {
                 bench_operation *operation = operation_push(OPERATION_SYSTEM, effect->session);
                 operation->event = dup_str(effect->event);
                 operation->target = dup_str(effect->target);
                 operation->sendid = effect->sendid.length ? dup_str(effect->sendid) : NULL;
                 operation->payload = effect->payload;
                 retain(system, effect->payload);
-            } else if (effect->io_processor >= IO_HOST &&
-                       effect->io_processor < system->io_processor_count) {
+            } else if (io >= IO_HOST && io < system->io_processor_count) {
                 system->host_io++;
                 bench_operation *operation = operation_push(OPERATION_HOST_IO, effect->session);
-                operation->type = strdup(system->io_names[effect->io_processor]);
+                operation->type = strdup(system->io_names[io]);
                 operation->event = dup_str(effect->event);
                 operation->target = dup_str(effect->target);
                 operation->sendid = effect->sendid.length ? dup_str(effect->sendid) : NULL;

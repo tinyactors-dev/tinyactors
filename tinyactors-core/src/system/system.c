@@ -180,6 +180,7 @@ static void rebind(ta_system *system, const ta_image *image) {
     core->chart_context = SYSTEM_POINTER(system, chart_contexts_relative, void *);
     core->io_processors = system->config.io_processors;
     core->io_processor_count = system->config.io_processor_count;
+    core->base = system->config.base;
     core->serial_of = serial_of;
     core->name_of = name_of;
     core->system = system;
@@ -455,14 +456,10 @@ void ta_system_actor_variables(ta_system *system, const ta_actor *actor,
                                ta_datamodel_system_variables *variables) {
     uint32_t sl = ta_format_u64(buffer->session_id, actor->serial);
     uint32_t ll = 0;
-    for (uint32_t i = 0; i < system->config.io_processor_count;
-         i++) /* remote-addressable base URI */
-        if ((system->config.io_processors[i].flags & TA_IO_PROCESSOR_SCXML_REMOTE) &&
-            system->config.io_processors[i].location.length < sizeof buffer->location - 40) {
-            ll = system->config.io_processors[i].location.length;
-            ta_memcpy(buffer->location, system->config.io_processors[i].location.pointer, ll);
-            break;
-        }
+    if (system->config.base.length < sizeof buffer->location - 40) { /* the address base */
+        ll = system->config.base.length;
+        ta_memcpy(buffer->location, system->config.base.pointer, ll);
+    }
     ta_memcpy(buffer->location + ll, "#_scxml_", 8);
     ll += 8;
     ll += ta_format_u64(buffer->location + ll, actor->serial);
@@ -899,6 +896,7 @@ ta_status ta_system_relocate(ta_system **relocated, ta_memory memory,
     ta_system_config_normalize(view, &wanted, &config);
     config.io_processors = system->config.io_processors;
     config.io_processor_count = system->config.io_processor_count;
+    config.base = system->config.base;
     config.trace_policy = (const ta_trace_policy *)0; /* the system keeps its own */
     if (config.trace_contexts < system->contexts.high_water_mark ||
         config.trace_bytes < system->journal.used || config.trace_rules < system->rule_count)
@@ -1006,7 +1004,8 @@ ta_status ta_system_snapshot(const ta_system *system, ta_buffer *out) {
     core->overrun = overrun;
     core->contexts_dropped = contexts_dropped;
     ta_memset(t->datamodels, 0, sizeof t->datamodels); /* host pointers; re-bound on restore */
-    t->config.io_processors = (const ta_io_processor_descriptor *)0;
+    t->config.io_processors = (const ta_io_processor_entry *)0;
+    t->config.base = (ta_string_view){0, 0};
     ta_memset((unsigned char *)buffer + t->chart_contexts_relative, 0,
               sizeof(void *) * t->chart_count);
     return TA_OK;
@@ -1033,8 +1032,9 @@ ta_status ta_system_restore(const ta_system_setup *setup, ta_bytes snapshot, ta_
     ta_system *system = (ta_system *)memory;
     ta_memset(system->datamodels, 0, sizeof system->datamodels);
     system->config.io_processors =
-        host ? host->io_processors : (const ta_io_processor_descriptor *)0;
+        host ? host->io_processors : (const ta_io_processor_entry *)0;
     system->config.io_processor_count = host ? host->io_processor_count : 0;
+    system->config.base = host ? host->base : (ta_string_view){0, 0};
     ta_status status = bind_datamodels(system, image, setup->datamodels, setup->datamodel_count);
     if (status != TA_OK) return status;
     rebind(system, image);

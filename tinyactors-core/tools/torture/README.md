@@ -58,7 +58,7 @@ torture-bench [SCENARIO_DIR] [--scenarios DIR] [--duration S] [--interval MS] [-
   datamodel runtime (like separate processes). Charts may also use the null
   datamodel.
 - **Cross-system addressing** goes through each host's transport
-  (`TA_HOST_TRANSPORT`, no config): a chart sends to
+  (`io_processor` 0, no config): a chart sends to
   `tinyactors://<system>/#_scxml_<session>` (or `.../@<name>`), the host hands
   the bench a `TA_EFFECT_SEND` for the transport, and the bench's in-process
   transport finds the system the address names, resolves the target there

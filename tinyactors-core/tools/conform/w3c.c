@@ -192,7 +192,7 @@ static const char *test_run(w3c_test *test) {
         test->post_count = 0;
         for (uint32_t i = 0; i < count; i++) {
             if (!outcome) outcome = conform_outcome(&effects[i]);
-            if (effects[i].kind == TA_EFFECT_SEND && effects[i].io_processor == 0) post_write(test, &effects[i]);
+            if (effects[i].kind == TA_EFFECT_SEND && effects[i].io_processor == 1) post_write(test, &effects[i]);
         }
         ta_host_effects_ack(test->host);
         for (uint32_t i = 0; i < test->post_count; i++)

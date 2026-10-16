@@ -397,8 +397,8 @@ static void test_full_pool(void) {
 /* The trace an I/O processor gets: a SEND effect names the sending
  * microstep's span, so a traceparent made from it continues the trace. */
 static void test_effects(void) {
-    static const ta_io_processor_descriptor processors[] = {
-        {{"http://example.com/out", 22}, {"", 0}, 0, 0}};
+    static const ta_io_processor_entry processors[] = {
+        {{"http://example.com/out", 22}, {"", 0}}};
     test_system t;
     ta_system_config config = test_system_config();
     config.io_processors = processors;
@@ -681,8 +681,8 @@ static void test_export_adopt(void) {
  * and writes that class's kinds; the class is in a record's flags and in an
  * effect's context, never in traceparent text. */
 static void test_detail_classes(void) {
-    static const ta_io_processor_descriptor processors[] = {
-        {{"http://example.com/out", 22}, {"", 0}, 0, 0}};
+    static const ta_io_processor_entry processors[] = {
+        {{"http://example.com/out", 22}, {"", 0}}};
     ta_trace_policy policy;
     ta_trace_policy_default(&policy);
     policy.kinds[TA_TRACE_DETAIL_SAMPLED] = TA_TRACE_SUMMARY; /* no microsteps, no sends */
@@ -748,8 +748,8 @@ static void test_detail_classes(void) {
  * carries it with the sampled flag clear, so a service downstream continues
  * the caller's decision. */
 static void test_unsampled_propagates(void) {
-    static const ta_io_processor_descriptor processors[] = {
-        {{"http://example.com/out", 22}, {"", 0}, 0, 0}};
+    static const ta_io_processor_entry processors[] = {
+        {{"http://example.com/out", 22}, {"", 0}}};
     test_system t;
     ta_system_config config = test_system_config();
     config.io_processors = processors;

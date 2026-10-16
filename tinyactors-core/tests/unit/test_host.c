@@ -52,7 +52,7 @@ static void refusable_free(void *context, void *pointer, size_t size) {
     c.free(c.context, pointer, size);
 }
 
-static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor_descriptor *io,
+static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor_entry *io,
                        uint32_t io_count) {
     memset(e, 0, sizeof *e);
     e->ecmascript = ta_datamodel_ecmascript_new(NULL);
@@ -736,7 +736,7 @@ static void test_bad_targets(void) {
  * BasicHTTP cases of W3C 577 and 201 */
 #define IO_TYPE "http://example.com/io"
 static void test_a_sender_waits_for_its_send(void) {
-    ta_io_processor_descriptor io = {{IO_TYPE, (uint32_t)strlen(IO_TYPE)}, {"http://example.com/", 19}, 0, 0};
+    ta_io_processor_entry io = {{IO_TYPE, (uint32_t)strlen(IO_TYPE)}, {"http://example.com/", 19}};
     for (int answer = 0; answer < 2; answer++) { /* 0: error.communication, 1: an event back */
         host_world e;
         world_open(&e, 16, &io, 1);
@@ -761,7 +761,7 @@ static void test_a_sender_waits_for_its_send(void) {
         for (uint32_t i = 0; i < n; i++) {
             if (effects[i].kind == TA_EFFECT_SEND) {
                 sends++;
-                CHECK_EQUAL(effects[i].io_processor, 0);
+                CHECK_EQUAL(effects[i].io_processor, 1); /* the config's first */
                 CHECK_EQUAL(effects[i].session, session);
                 CHECK(effects[i].flags & TA_EFFECT_FLAG_WAITING);
             }

@@ -176,7 +176,7 @@ Decided by the maintainer (2026-10-13); every item is in
   unknown name is a `CompileError` at its line in `reader.py`, at compile
   time.
 - **I/O processors: `handler(host, send)`**, called once per
-  `TA_EFFECT_SEND` whose `IO_PROCESSOR` is that type's index in the
+  `TA_EFFECT_SEND` whose `IO_PROCESSOR` is 1 + that type's index in the
   config's `ioProcessors`. Actor output to the application goes through
   them, and nothing else (ADR 0012, decision 6).
   - `send.traceparent`: the sending step's trace as W3C text, or `None`
@@ -350,7 +350,7 @@ Decided by the maintainer (2026-10-13); every item is in
 - **Other systems** (ADR 0014, 2026-10-15; ADR 0017, 2026-10-16): the
   host's **`transport=handler(host, send)`** gets every send to another
   system's address (core decides local or not), a `TA_EFFECT_SEND` with
-  `IO_PROCESSOR` `TA_HOST_TRANSPORT`, as a `Send` view (`type` `None`;
+  `IO_PROCESSOR` 0 (the SCXML processor), as a `Send` view (`type` `None`;
   an `async def` handler is refused under `with`); it needs no config,
   and without a handler the binding fails each such send. Its
   `send.origin` is `TA_EFFECT_FIELD_ORIGIN`, the sender's address. The

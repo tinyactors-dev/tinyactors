@@ -1,6 +1,6 @@
 /* Live migration and moving actors between systems (hot reload):
  * ta_actor_export -> ta_blob_migrate -> ta_system_adopt, sessions addressable
- * across systems sharing one base URI (TA_IO_PROCESSOR_SCXML_SHARED), and the
+ * across systems sharing one base URI (TA_SYSTEM_SHARED_BASE), and the
  * error.platform.upgrade event carrying the previous bindings. */
 #include "../harness/harness.h"
 #include "system/system_internal.h"
@@ -32,26 +32,22 @@ typedef struct world {
     ta_datamodel_binding binding;
     void *memory[2];
     ta_system *system[2];
-    ta_io_processor_descriptor io_processors;
     char log[8192];
     ta_time now;
     int communication_errors;
 } world;
 
-static ta_system_config config_for(world *w, uint64_t first_serial, uint32_t max_timers) {
+static ta_system_config config_for(uint64_t first_serial, uint32_t max_timers) {
     ta_system_config config = test_system_config();
     config.first_serial = first_serial;
     config.max_timers = max_timers;
-    config.io_processor_count = 1;
-    config.io_processors = &w->io_processors;
+    config.base = (ta_string_view){BASE, (uint32_t)strlen(BASE)};
+    config.flags = TA_SYSTEM_SHARED_BASE;
     return config;
 }
 
 static int world_open(world *w, const char *v1, const char *v2, int ecmascript, uint32_t timers2) {
     memset(w, 0, sizeof *w);
-    w->io_processors.type = (ta_string_view){"tinyactors", 10};
-    w->io_processors.location = (ta_string_view){BASE, (uint32_t)strlen(BASE)};
-    w->io_processors.flags = TA_IO_PROCESSOR_SCXML_REMOTE | TA_IO_PROCESSOR_SCXML_SHARED;
     if (ecmascript) {
         w->ecmascript = ta_datamodel_ecmascript_new(NULL);
         w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
@@ -64,7 +60,7 @@ static int world_open(world *w, const char *v1, const char *v2, int ecmascript, 
         size_t length;
         w->bytes[i] = compile_chart("w.scxml", sources[i], NULL, &length, 0);
         if (!w->bytes[i] || ta_image_open((ta_bytes){w->bytes[i], length}, &w->image[i]) != TA_OK) return 0;
-        ta_system_config config = config_for(w, (uint64_t)i << 32, i ? timers2 : 0);
+        ta_system_config config = config_for((uint64_t)i << 32, i ? timers2 : 0);
         size_t ml;
         if (ta_system_layout(&w->image[i], &config, &ml) != TA_OK) return 0;
         w->memory[i] = malloc(ml);
@@ -620,7 +616,7 @@ static void test_session_tree_rollback(void) {
     vtable.deserialize = failing_deserialize;
     ta_datamodel_binding fb = {&vtable, w.binding.datamodel};
     for (int k = 1; k <= 4; k++) { /* fail at the root, the kid, the grandchild; then succeed */
-        ta_system_config config = config_for(&w, 1u << 20, 8);
+        ta_system_config config = config_for(1u << 20, 8);
         size_t need;
         CHECK_EQUAL(ta_system_layout(&w.image[1], &config, &need), TA_OK);
         void *memory = malloc(need);

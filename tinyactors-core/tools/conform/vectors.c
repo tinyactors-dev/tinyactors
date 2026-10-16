@@ -232,7 +232,7 @@ static void batch_take(conform *state, send_list *sends, kept_list *notification
     const ta_host_effect *effects;
     uint32_t effect_count = ta_host_effects(host, &effects);
     for (uint32_t i = 0; i < effect_count; i++) {
-        if (effects[i].kind != TA_EFFECT_SEND || effects[i].io_processor != TA_HOST_TRANSPORT ||
+        if (effects[i].kind != TA_EFFECT_SEND || effects[i].io_processor != 0 ||
             sends->count == sizeof sends->items / sizeof sends->items[0])
             continue;
         conform_send *send = &sends->items[sends->count++];

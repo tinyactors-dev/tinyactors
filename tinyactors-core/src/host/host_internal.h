@@ -41,7 +41,7 @@ typedef struct host_config {
                                 (the effective config, host.config); io_processors
                                 and first_serial are set by the host layer */
     const ta_datamodel_binding *datamodels;
-    const ta_io_processor_descriptor *io_processors;
+    const ta_io_processor_entry *io_processors;
     uint32_t migrate_quantum;   /* default 256 */
     ta_allocator allocator;
     host_telemetry telemetry;
@@ -57,7 +57,7 @@ typedef struct host_config_input {
     ta_bytes cbor;
     ta_buffer *error;
     ta_otlp_attribute *resource;              /* HOST_CONFIG_RESOURCE */
-    ta_io_processor_descriptor *io_processors; /* HOST_CONFIG_IO_PROCESSORS */
+    ta_io_processor_entry *io_processors; /* HOST_CONFIG_IO_PROCESSORS */
 } host_config_input;
 ta_status host_config_read(const host_config_input *input, host_config *config);
 
@@ -163,8 +163,7 @@ struct ta_host {
     char base[TA_ADDRESS_SYSTEM_MAX + 16]; /* tinyactors://<system_id>/ */
     uint32_t base_length;
     ta_datamodel_binding datamodels[8];
-    ta_io_processor_descriptor
-        io_processors[17]; /* [0] the SCXML processor to other segments and systems, then config.io_processors */
+    ta_io_processor_entry io_processors[HOST_CONFIG_IO_PROCESSORS]; /* the config's */
     uint32_t io_processor_count;
     host_segment *segments;
     uint32_t segment_count, segment_capacity, round_robin;

@@ -1,10 +1,8 @@
 # ADR 0017: A host has one way out to other systems, and a sender waits for its send
 
-**Status:** Proposed (2026-10-16). Decisions 1 and 2 were decided by the
-maintainer on 2026-10-16 and are implemented; decisions 3 to 5 wait for the
-maintainer. Decision 1 marks the transport's sends with
-`TA_HOST_TRANSPORT`, a value of their own beside `TA_NIL`, so it needs no
-renumbering of the effects; decision 3 decides whether to renumber anyway.
+**Status:** Proposed (2026-10-16). Decisions 1 to 3 were decided by the
+maintainer on 2026-10-16 and are implemented; decisions 4 and 5 wait for
+the maintainer.
 Amends [ADR 0014](0014-other-systems-are-an-io-processor.md) (decision 1's
 `"remote": true` processor) and replaces `TA_IO_PROCESSOR_SYNC`.
 **Date:** 2026-10-16
@@ -92,10 +90,16 @@ processor but its own unit test (`tests/unit/test_remote.c:43`, `:164`).
    wait for it as for any busy actor, and a snapshot is refused while its
    batch is open, as today; if the scheduler needs it, the snapshot and
    hibernation contracts may change instead.
-3. **Effects number processors as the system does** (proposed): 0 is the
-   SCXML processor, so the transport; config entry `i` is `i + 1`;
-   `TA_NIL` stays an invoked service. The `"tinyactors"` entry leaves
-   `_ioprocessors` and stops working as a type.
+3. **One numbering of processors in every layer**, the one
+   `_ioprocessors` and `origintype_id` already use: 0 is the SCXML
+   processor, so the transport; config entry `i` is `i + 1`; `TA_NIL` is an
+   invoked service, in a system's effects and the host's alike. The
+   system's address base and its sharing are properties of the system
+   (`ta_system_config.base`, `TA_SYSTEM_SHARED_BASE`), not an I/O processor
+   entry: the host's `"tinyactors"` entry, its `TA_IO_PROCESSOR_SCXML_*`
+   flags and the descriptor's `flags` go (an I/O processor is a type and a
+   location, `ta_io_processor_entry`), so it leaves `_ioprocessors` and
+   stops working as a type.
 4. **A message between systems has one shape in every binding**
    (proposed). The outgoing half, `send.message`, is a value of the value
    table with the fields of `ta_event_in` (target, event, data, sendid,

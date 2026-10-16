@@ -154,7 +154,7 @@ group, the words build on each other.
   an actor does not move between hosts.
 - **Other system, transport.** A system with another system
   id: another thread's host, another process, a browser. A send to its
-  address is a `SEND` for the host's *transport* (`TA_HOST_TRANSPORT`),
+  address is a `SEND` for the host's *transport* (`io_processor` 0, the SCXML processor),
   which the application serves and which needs no config, with the
   sender's address as *origin*;
   what arrives is an input by address (`ta_host_resolve`) with that

@@ -56,7 +56,7 @@ diagnostic notation.
 |---|---|---|---|
 | `systemID` | text | required | this system's id: its addresses are `tinyactors://<systemID>/...` (docs/protocol.md, Addresses) |
 | `system` | map | `{}` | the capacities of each new segment, below |
-| `ioProcessors` | list of maps, at most 16 | `[]` | the host's I/O processors: `type` (text, required) and `location` (text). Sends to other systems need none: they go to the host's transport (`TA_HOST_TRANSPORT`) |
+| `ioProcessors` | list of maps, at most 16 | `[]` | the host's I/O processors: `type` (text, required) and `location` (text). Sends to other systems need none: they go to the host's transport (a `TA_EFFECT_SEND` with `io_processor` 0). A send effect numbers the processors as `_ioprocessors`: 0 is the SCXML processor, entry `i` is `i + 1` |
 | `migrateQuantum` | uint | `256` | actors a migration looks at per run |
 | `telemetry` | map | absent: no encoder | the OTLP encoder, below |
 

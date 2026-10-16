@@ -1,9 +1,10 @@
 /* host.c — many systems as one actor system (see include/tinyactors/host.h).
  *
- * Segments are ta_systems sharing a base URI with TA_IO_PROCESSOR_SCXML_SHARED
- * on their SCXML processor for other systems (index 0), so sends to a
- * session of another segment come out as TA_EFFECT_SEND effects, which this
- * layer delivers itself; a send to another system goes to the transport. Effects that leave the host are copied (strings into a pool,
+ * Segments are ta_systems sharing one base URI (TA_SYSTEM_SHARED_BASE), so
+ * sends to a session of another segment come out as TA_EFFECT_SEND effects
+ * for the SCXML processor (io_processor 0), which this layer delivers
+ * itself; a send to another system goes to the transport, as io_processor 0
+ * too. Effects that leave the host are copied (strings into a pool,
  * payloads retained) so segments can be acknowledged right away and keep
  * running; the copies live until ta_host_effects_ack or ta_host_free.
  *
@@ -348,9 +349,6 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     for (uint32_t i = 0; i < config->datamodel_count; i++)
         host->datamodels[i] = config->datamodels[i];
     host->config.datamodels = host->datamodels;
-    host->io_processors[0].type = (ta_string_view){"tinyactors", 10};
-    host->io_processors[0].location = (ta_string_view){host->base, host->base_length};
-    host->io_processors[0].flags = TA_IO_PROCESSOR_SCXML_REMOTE | TA_IO_PROCESSOR_SCXML_SHARED;
     /* the processors' strings: one block, kept until ta_host_free */
     size_t text = 0;
     for (uint32_t i = 0; i < config->io_processor_count; i++)
@@ -365,7 +363,7 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     }
     char *at = host->io_processor_text;
     for (uint32_t i = 0; i < config->io_processor_count; i++) {
-        ta_io_processor_descriptor *d = &host->io_processors[1 + i];
+        ta_io_processor_entry *d = &host->io_processors[i];
         *d = config->io_processors[i];
         ta_memcpy(at, d->type.pointer, d->type.length);
         d->type.pointer = at;
@@ -374,8 +372,8 @@ static ta_status host_new(const host_config *config, ta_host **out) {
         d->location.pointer = at;
         at += d->location.length;
     }
-    host->config.io_processors = (const ta_io_processor_descriptor *)0; /* the config's: gone */
-    host->io_processor_count = 1 + config->io_processor_count;
+    host->config.io_processors = (const ta_io_processor_entry *)0; /* the config's: gone */
+    host->io_processor_count = config->io_processor_count;
     host->draining = TA_NIL;
     if (!resource_copy(host, &config->telemetry)) {
         ta_host_free(host);
@@ -408,7 +406,7 @@ static ta_status host_config_of(ta_bytes cbor, const ta_host_environment *enviro
 
 ta_status ta_host_create(ta_bytes cbor, const ta_host_environment *environment, ta_host **out) {
     ta_otlp_attribute resource[HOST_CONFIG_RESOURCE];
-    ta_io_processor_descriptor processors[HOST_CONFIG_IO_PROCESSORS];
+    ta_io_processor_entry processors[HOST_CONFIG_IO_PROCESSORS];
     host_config_input storage = {{0, 0}, (ta_buffer *)0, resource, processors};
     host_config config;
     *out = NULL;
@@ -525,6 +523,8 @@ ta_status ta_host_add_image(ta_host *host, ta_bytes bytes, uint32_t *segment) {
     segment_record->config = host->config.system; /* the effective config (host_new) */
     segment_record->config.io_processors = host->io_processors;
     segment_record->config.io_processor_count = host->io_processor_count;
+    segment_record->config.base = (ta_string_view){host->base, host->base_length};
+    segment_record->config.flags = TA_SYSTEM_SHARED_BASE;
     segment_record->config.first_serial = (uint64_t)index << SERIALS_SHIFT;
     /* segments draw different trace IDs from one seed */
     segment_record->config.trace_seed =
@@ -1306,13 +1306,13 @@ static ta_status local_send(ta_host *host, uint32_t si, const ta_effect *effect,
 }
 
 /* A send through the SCXML processor: to this host's system, delivered here;
- * to another system, a SEND for the host's transport (TA_HOST_TRANSPORT). */
+ * to another system, a SEND for the host's transport (io_processor 0). */
 static ta_status scxml_send(ta_host *host, uint32_t si, const ta_effect *effect) {
     ta_address to;
     if (ta_address_parse(effect->target, &to) != TA_OK)
         return host_communication_error(host, si, effect->actor, effect->sendid);
     if (host_is_local(host, to.system)) return local_send(host, si, effect, &to);
-    return effect_copy(host, si, effect, TA_HOST_TRANSPORT);
+    return effect_copy(host, si, effect, 0);
 }
 
 /* Drain a segment's effects: route, copy out, acknowledge. TA_ERROR_NO_MEMORY:
@@ -1339,9 +1339,7 @@ static ta_status drain(ta_host *host, uint32_t si) {
                 host->segments[si].busy = 1;
             }
         } else if (effect_view->kind == TA_EFFECT_SEND)
-            status = effect_copy(
-                host, si, effect_view,
-                effect_view->io_processor == TA_NIL ? TA_NIL : effect_view->io_processor - 1);
+            status = effect_copy(host, si, effect_view, effect_view->io_processor); /* as the system numbers them */
         else
             status = effect_copy(host, si, effect_view, TA_NIL);
         if (status == TA_OK &&
@@ -2462,6 +2460,7 @@ ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
             ss.region_length = rl;
             ss.config = segment->config;
             ss.config.io_processors = NULL;
+            ss.config.base = (ta_string_view){NULL, 0};
             ss.config.trace_policy = NULL; /* the region keeps the segment's policy */
         }
         ta_memcpy(p, &ss, sizeof ss);
@@ -2557,7 +2556,7 @@ ta_status ta_host_restore(const ta_host_environment *environment,
     const snapshot_header *hd = snap_check(snap, length);
     if (!hd || image_count < hd->segment_count) return TA_ERROR_INVALID;
     ta_otlp_attribute resource[HOST_CONFIG_RESOURCE];
-    ta_io_processor_descriptor processors[HOST_CONFIG_IO_PROCESSORS];
+    ta_io_processor_entry processors[HOST_CONFIG_IO_PROCESSORS];
     host_config_input storage = {{0, 0}, (ta_buffer *)0, resource, processors};
     host_config config;
     ta_status status = host_config_of(input->config, environment, &storage, &config);
@@ -2590,6 +2589,7 @@ ta_status ta_host_restore(const ta_host_environment *environment,
         segment->config = ss->config;
         segment->config.io_processors = host->io_processors;
         segment->config.io_processor_count = host->io_processor_count;
+        segment->config.base = (ta_string_view){host->base, host->base_length};
         segment->config.trace_policy = &host->trace_policy;
         segment->memory = host_alloc(host, (size_t)ss->region_length);
         if (!segment->memory) return restore_failed(host, TA_ERROR_NO_MEMORY);

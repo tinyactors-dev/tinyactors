@@ -126,8 +126,8 @@ static void test_external_io(void) {
            "<state id='b'><transition event='error.communication' target='c'/></state>"
            "<state id='c'/>"),
         NULL));
-    ta_io_processor_descriptor io_processor = {
-        {"http://example.com/io", 21}, {"http://me/", 10}, 0, 0};
+    ta_io_processor_entry io_processor = {
+        {"http://example.com/io", 21}, {"http://me/", 10}};
     ta_system_config config = test_system_config();
     config.io_processors = &io_processor;
     config.io_processor_count = 1;
@@ -139,7 +139,7 @@ static void test_external_io(void) {
     const ta_effect *effect;
     CHECK_EQUAL(ta_system_effects(t.system, &effect), 1);
     CHECK_EQUAL(effect[0].kind, TA_EFFECT_SEND);
-    CHECK_EQUAL(effect[0].io_processor, 0);
+    CHECK_EQUAL(effect[0].io_processor, 1); /* the config's processor 0; 0 is SCXML's */
     CHECK(effect[0].target.length == 10 && memcmp(effect[0].target.pointer, "http://x/y", 10) == 0);
     CHECK(effect[0].event.length == 3 && memcmp(effect[0].event.pointer, "out", 3) == 0);
     CHECK(strcmp(datamodel_test_payload_string(t.datamodel, effect[0].payload),
@@ -186,7 +186,7 @@ static void test_no_spawn_by_send(void) {
     tsys_free(&t);
     /* a host that provides "system" gets a plain send effect, nothing more */
     CHECK(tsys_open_image(&t, "m.scxml", chart, NULL));
-    ta_io_processor_descriptor io_processor = {{"system", 6}, {"system:", 7}, 0, 0};
+    ta_io_processor_entry io_processor = {{"system", 6}, {"system:", 7}};
     config = test_system_config();
     config.io_processors = &io_processor;
     config.io_processor_count = 1;
@@ -484,8 +484,8 @@ static void test_terminate_and_determinism(void) {
     }
 }
 
-/* Two systems: SCXML sends to another system's session go through the host's
- * TA_IO_PROCESSOR_SCXML_REMOTE processor; replies use _event.origin; a system's
+/* Two systems: SCXML sends to another system's session leave as SENDs for the
+ * SCXML processor (each system's base); replies use _event.origin; a system's
  * own base URI short-circuits to local delivery. */
 static void forward(test_system *from, const char *from_base, test_system *to,
                     const char *to_base) {
@@ -536,15 +536,9 @@ static void test_cross_system(void) {
                            "<send event='ack' targetexpr='_event.origin'/></transition></state>"
                            "<state id='w2'/>"),
                         NULL));
-    ta_io_processor_descriptor ioa = {
-        {"tinyactors", 10}, {"tinyactors://a/", 15}, TA_IO_PROCESSOR_SCXML_REMOTE, 0};
-    ta_io_processor_descriptor iob = {
-        {"tinyactors", 10}, {"tinyactors://b/", 15}, TA_IO_PROCESSOR_SCXML_REMOTE, 0};
     ta_system_config config_a = test_system_config(), config_b = test_system_config();
-    config_a.io_processors = &ioa;
-    config_a.io_processor_count = 1;
-    config_b.io_processors = &iob;
-    config_b.io_processor_count = 1;
+    config_a.base = (ta_string_view){"tinyactors://a/", 15};
+    config_b.base = (ta_string_view){"tinyactors://b/", 15};
     CHECK(tsys_create(&a, &config_a));
     CHECK(tsys_create(&b, &config_b));
     ta_system_boot(a.system);

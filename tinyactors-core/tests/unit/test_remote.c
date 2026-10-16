@@ -1,5 +1,6 @@
 /* Other systems through the host's transport (host.h, "Other systems"): a
- * send to another system's address is a SEND for TA_HOST_TRANSPORT, with the
+ * send to another system's address is a SEND for the SCXML processor
+ * (io_processor 0), with the
  * sender's address as ORIGIN, and needs no config; an input names its target
  * by a local address; a reply to _event.origin goes back the same way; a
  * send the embedder fails gives its sender error.communication. */
@@ -18,6 +19,9 @@
     "<transition event='hello'><log label='got' expr=\"_event.origin + ' ' + _event.origintype + "   \
     "' ' + typeof _event.data\"/><send targetexpr='_event.origin' event='thanks'/></transition>"        \
     "<transition event='error.communication'><log label='failed' expr='_event.sendid'/>"          \
+    "</transition><transition event='list'><log label='io' "                                        \
+    "expr=\"Object.keys(_ioprocessors).join(' ')\"/><send type='tinyactors' target='x' event='y'/>" \
+    "</transition><transition event='error.execution'><log label='exec' expr='_event.name'/>"     \
     "</transition></state></scxml>"
 
 #define SCXML_TYPE  "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
@@ -35,7 +39,7 @@ static void world_open(world *w) {
     memset(w, 0, sizeof *w);
     w->ecmascript = ta_datamodel_ecmascript_new(NULL);
     w->binding = ta_datamodel_ecmascript_binding(w->ecmascript);
-    ta_io_processor_descriptor processors[1] = {{{"urn:test:other", 14}, {"", 0}, 0, 0}};
+    ta_io_processor_entry processors[1] = {{{"urn:test:other", 14}, {"", 0}}};
     test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
@@ -119,7 +123,7 @@ static void test_a_send_to_another_system_is_a_send_for_the_transport(void) {
     uint32_t count = run(&w);
     uint32_t send = find_send(&w, count);
     CHECK(send != TA_NIL);
-    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_IO_PROCESSOR), TA_HOST_TRANSPORT);
+    CHECK_EQUAL(ta_host_effect_number(w.host, send, TA_EFFECT_FIELD_IO_PROCESSOR), 0u); /* the SCXML processor */
     CHECK(text_is(ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_TARGET), "tinyactors://b/#_scxml_5"));
     CHECK(text_is(ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_EVENT), "hello"));
     CHECK(text_is(ta_host_effect_text(w.host, send, TA_EFFECT_FIELD_SENDID), "h1"));
@@ -198,10 +202,28 @@ static void test_a_send_the_transport_fails(void) {
     world_close(&w);
 }
 
+/* _ioprocessors holds the SCXML processor and the config's, and nothing of
+ * the host's own: a type the config does not name is unsupported. */
+static void test_the_io_processors_a_chart_sees(void) {
+    world w;
+    world_open(&w);
+    run(&w);
+    ta_event_in list;
+    memset(&list, 0, sizeof list);
+    list.size = sizeof list;
+    list.session = w.session;
+    list.name = (ta_string_view){"list", 4};
+    CHECK_EQUAL(ta_host_send(w.host, &list), TA_OK);
+    run(&w);
+    CHECK(strcmp(w.log, "io:" SCXML_TYPE " scxml urn:test:other;exec:error.execution;") == 0);
+    world_close(&w);
+}
+
 int main(void) {
     RUN(test_a_send_to_another_system_is_a_send_for_the_transport);
     RUN(test_an_input_by_address_and_the_reply_to_its_origin);
     RUN(test_a_sender_waits_for_the_transport);
     RUN(test_a_send_the_transport_fails);
+    RUN(test_the_io_processors_a_chart_sees);
     TEST_MAIN_END();
 }

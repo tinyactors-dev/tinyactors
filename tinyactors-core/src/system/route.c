@@ -53,21 +53,16 @@ static uint64_t session_id(ta_string_view t) {
                : 0;
 }
 
-/* A session of our shared base that is not here (TA_IO_PROCESSOR_SCXML_SHARED):
- * hand the send to the host with the full URI. Returns 1 if it took the event
- * and the target string reference. */
+/* A session of our shared base that is not here (TA_SYSTEM_SHARED_BASE):
+ * hand the send to the caller with the full URI, through the SCXML
+ * processor. Returns 1 if it took the event and the target string reference. */
 static int forward_shared(ta_system *system, uint32_t sender, uint32_t event_index,
                           uint32_t target) {
     ta_core *core = &system->core;
-    uint32_t r = 0;
-    while (r < system->config.io_processor_count &&
-           (system->config.io_processors[r].flags &
-            (TA_IO_PROCESSOR_SCXML_REMOTE | TA_IO_PROCESSOR_SCXML_SHARED)) !=
-               (TA_IO_PROCESSOR_SCXML_REMOTE | TA_IO_PROCESSOR_SCXML_SHARED))
-        r++;
-    if (r == system->config.io_processor_count || ta_system_effect_full(system)) return 0;
-    ta_string_view base = system->config.io_processors[r].location,
-                   local = ta_shared_string_get(core, target);
+    if (!(system->config.flags & TA_SYSTEM_SHARED_BASE) || !system->config.base.length ||
+        ta_system_effect_full(system))
+        return 0;
+    ta_string_view base = system->config.base, local = ta_shared_string_get(core, target);
     if ((uint64_t)base.length + local.length > sizeof core->scratch) return 0;
     ta_memcpy(core->scratch, base.pointer, base.length);
     ta_memcpy(core->scratch + base.length, local.pointer, local.length);
@@ -75,7 +70,7 @@ static int forward_shared(ta_system *system, uint32_t sender, uint32_t event_ind
     if (uri == TA_NIL) return 0;
     ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_SEND, sender);
     ta_event *event = ta_event_at(core, event_index);
-    effect->io_processor = r;
+    effect->io_processor = 0; /* the SCXML processor */
     effect->target = uri;
     effect->event_name = event->name;
     ta_shared_string_retain(core, event->name);

@@ -9,7 +9,7 @@ choice, which tinyactors does not make.
 - **system** — a set of actors sharing one address authority: a `ta_host`
   (one or more `ta_system` segments) with its `systemID`.
 - **transport** — the host's way out to other systems: every send to
-  another system's address is a `TA_EFFECT_SEND` for `TA_HOST_TRANSPORT`,
+  another system's address is a `TA_EFFECT_SEND` for the SCXML processor (`io_processor` 0),
   which the application serves; it needs no config.
 
 ## Addresses
@@ -58,7 +58,7 @@ host's.
   A session or name that does not exist is `error.communication` for the
   sender.
 - **Another system's address** is a `TA_EFFECT_SEND` for the host's
-  transport (`io_processor` `TA_HOST_TRANSPORT`), with the full target, the
+  transport (`io_processor` 0, the SCXML processor), with the full target, the
   event, the sendid, the payload, the trace, and `TA_EFFECT_FIELD_ORIGIN`,
   the sender's address. Its sender waits until the batch is acknowledged;
   an embedder with no transport fails it (`TA_EVENT_IN_ERROR_COMMUNICATION`),

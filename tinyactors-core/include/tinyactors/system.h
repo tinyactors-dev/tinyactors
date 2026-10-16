@@ -27,39 +27,21 @@ extern "C" {
 
 typedef struct ta_system ta_system;
 
-/* Host-provided (external) I/O processor types, advertised in _ioprocessors. */
-typedef struct ta_io_processor_descriptor {
-    ta_string_view type;     /* e.g. "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor" */
-    ta_string_view location; /* base location; system appends nothing */
-    uint32_t flags;          /* TA_IO_PROCESSOR_* */
-    uint32_t pad;
-} ta_io_processor_descriptor;
-/* A send to an I/O processor (without a delay) parks its sender until the
+/* The I/O processors a system's charts send to (ta_system_config.io_processors):
+ * each a type and a location (ta_io_processor_entry, datamodel.h), advertised
+ * in _ioprocessors after the SCXML Event I/O Processor's own entry. Every
+ * layer numbers them as _ioprocessors does: 0 is the SCXML processor, i + 1
+ * the config's processor i. A TA_EFFECT_SEND names its processor so: 0 for an
+ * SCXML send that leaves the system (an address of another system, or of
+ * another system that shares the base: ta_system_config.base), i + 1 for a
+ * <send type> of processor i, TA_NIL for a send to an external invocation.
+ * A send that leaves the system without a delay parks its sender until the
  * send is decided (TA_EFFECT_FLAG_WAITING), so the outcome (e.g.
  * error.communication) is part of the sender's macrostep, as SCXML has it. */
-/* TA_IO_PROCESSOR_SCXML_REMOTE: carries SCXML-to-SCXML events to sessions of
- * *other* systems (another ta_system in this process, another process, ...).
- * `location` is this system's base URI, e.g. "tinyactors://a/". Sessions then
- * advertise "<location>#_scxml_<id>" as their SCXML processor location;
- * SCXML sends to "<location>#_scxml_<id>" are delivered locally, and other
- * non-"#" SCXML targets become TA_EFFECT_SEND effects for this processor (target =
- * the URI). The host delivers them to the other system with origintype set
- * to the SCXML processor and origin = "<sender base>#_scxml_<sender id>". */
-/* TA_IO_PROCESSOR_SCXML_SHARED (with TA_IO_PROCESSOR_SCXML_REMOTE): the base URI is
- * shared by several systems (e.g. the versions of a hot-reloaded system,
- * see ta_system_adopt), each creating sessions from its own range
- * (ta_system_config.first_serial). A send to "<location>#_scxml_<id>" whose
- * session is not here is then not error.communication but a TA_EFFECT_SEND for
- * this processor (target = the full URI): the host knows which system has
- * that session now, or reports failure with TA_EVENT_IN_ERROR_COMMUNICATION. */
-enum {
-    TA_IO_PROCESSOR_SCXML_REMOTE = 1u << 1,
-    TA_IO_PROCESSOR_SCXML_SHARED = 1u << 2
-};
 
 /* Hard per-system limits (handles are 24-bit indices; actor handles lend one
  * bit to external invoke tokens). More actors = more systems (cross-system
- * SCXML addressing, TA_IO_PROCESSOR_SCXML_REMOTE). */
+ * SCXML addressing, ta_system_config.base). */
 #define TA_SYSTEM_MAX_ACTORS 8388606u  /* 2^23 - 2 */
 #define TA_SYSTEM_MAX_POOL   16777214u /* events, timers, workspaces: 2^24 - 2 */
 
@@ -77,9 +59,9 @@ typedef struct ta_system_config {
     uint32_t instance_bytes; /* slab for chart-dependent instances; 0 = derive from max_actors */
     uint32_t string_bytes;   /* slab for dynamic strings */
     uint32_t io_processor_count;
-    uint32_t pad;
+    uint32_t flags; /* TA_SYSTEM_SHARED_BASE */
     uint64_t ticks_per_second;
-    const ta_io_processor_descriptor *io_processors;
+    const ta_io_processor_entry *io_processors; /* borrowed for the system's life */
     uint64_t first_serial; /* session ids start after this (default 0: 1, 2, ...) */
     /* Tracing (docs/adr/0006 in the repository root): on by default, at full
      * detail. TA_TRACING_DISABLED carves nothing for it. */
@@ -91,7 +73,20 @@ typedef struct ta_system_config {
      * init (NULL: ta_trace_policy_default) */
     const ta_trace_policy *trace_policy;
     uint64_t trace_seed; /* the trace ID generator's seed: the same seed, the same IDs */
+    /* The system's address base, "tinyactors://<id>/" (empty: none), borrowed
+     * as io_processors is. Its sessions' SCXML location is the base +
+     * "#_scxml_<id>"; a send to an absolute URI outside it is a
+     * TA_EFFECT_SEND for the SCXML processor (io_processor 0, the target the
+     * full URI); without a base it is error.execution. */
+    ta_string_view base;
 } ta_system_config;
+/* TA_SYSTEM_SHARED_BASE: the base is shared by several systems (the
+ * segments of a host, ta_system_adopt), each creating sessions from its own
+ * range (first_serial). A send to "<base>#_scxml_<id>" whose session is not
+ * here is then a TA_EFFECT_SEND for the SCXML processor (the target the full
+ * URI): the caller knows which system has that session now, or fails the
+ * send (TA_EVENT_IN_ERROR_COMMUNICATION). */
+enum { TA_SYSTEM_SHARED_BASE = 1u << 0 };
 enum { TA_TRACING_ENABLED = 0, TA_TRACING_DISABLED = 1 };
 /* The default and the smallest journal (TA_TRACE_*_BYTES), and its default
  * share per event of max_events. */

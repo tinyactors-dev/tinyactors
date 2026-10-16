@@ -111,7 +111,8 @@ struct ta_core {
     const uint8_t *chart_datamodel; /* per chart: datamodel binding index */
     void *const *chart_context;     /* per chart: datamodel chart context */
     ta_chart_stats *chart_stats;    /* per chart: what its actors did (tinyactors/stats.h) */
-    const ta_io_processor_descriptor *io_processors;
+    const ta_io_processor_entry *io_processors;
+    ta_string_view base; /* the system's address base (ta_system_config.base) */
     uint32_t io_processor_count;
     uint32_t dropped_errors;
     /* Fuel overrun: when fuel runs out inside a microstep, finish it on up to
