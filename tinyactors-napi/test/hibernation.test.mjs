@@ -260,11 +260,12 @@ test('a chart whose scripts declare: its var and function come back after the wa
   const host = hostWith({ declares: chart }, { log: logs.handler, wake: store.handler });
   const session = host.spawn(host.chart('declares'));
   host.send(session, 'tick');
+  host.send(session, 'tick'); // the var written by the function twice: its last value goes (bun's global is stale)
   await host.idle();
   store.blobs.set(session, host.hibernate(session));
   host.send(session, 'report');
   await host.idle();
-  equal(logs.labelled('count').join('|'), '12', 'the var kept, the function made again');
+  equal(logs.labelled('count').join('|'), '13', 'the var kept, the function made again');
   host.close();
 });
 

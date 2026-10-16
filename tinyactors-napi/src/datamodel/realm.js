@@ -24,6 +24,8 @@
   // and the system variables a declaring session's context gets (declare).
   const baseline = new Set(names(globalThis));
   const systemNames = new Set(['_sessionid', '_name', '_ioprocessors', 'In', '_event']);
+  const indirect = eval; // global code of this context, whatever a chart puts on its global
+  const identifier = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
   // The errors copy throws for a value that cannot cross, by status: an
   // input refused with them throws a TinyactorsError of that status.
@@ -236,13 +238,17 @@
   // implicit global); one in `remade` (a function declaration of the
   // chart's scripts) is left out while it holds a function, since the
   // wake makes it again from the scripts.
+  // A global's binding is read by its name, not as the global object's
+  // property: bun's vm context leaves that property stale after a function
+  // writes the var (spike, bun 1.4.1, 2026-10-16: `total += k` in a
+  // function, globalThis.total still the old value, `total` the new one).
   function stored(target, remade) {
     const found = [];
     const values = [];
     const global = target === globalThis;
     for (const name of global ? names(target) : keys(target)) {
       if (name === '_event' || (global && (baseline.has(name) || systemNames.has(name)))) continue;
-      const value = target[name];
+      const value = global && identifier.test(name) ? indirect(name) : target[name];
       if (global && typeof value === 'function' && remade.includes(name)) continue;
       found.push(name);
       values.push(value);
