@@ -46,7 +46,8 @@ what is out of scope. A proposal or ADR states this near its start.
   default branch, and a Claude Code cloud session's instruction to develop
   on a `claude/...` branch. In a cloud session, `.claude/hooks/session-start.sh`
   moves the checkout to `main`, and `.claude/hooks/no-feature-branches.py`
-  asks before a command creates a branch or pushes to one other than `main`.
+  asks before a command creates a branch, pushes to one other than `main` or
+  deletes a remote ref; pushing tags needs no confirmation.
 - **Integrate frequently.** Commit each small, working increment as you reach
   it, rather than accumulating a large change and landing it at the end. A
   commit is expected to build and pass the tests of the projects it
