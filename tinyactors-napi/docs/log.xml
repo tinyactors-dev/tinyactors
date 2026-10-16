@@ -95,10 +95,11 @@
     <why>A native datamodel's state is the addon's own CBOR, which another binding cannot read.</why>
     <evidence>tinyactors-cpython/AGENTS.md, 'Snapshots'; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
   </entry>
-  <entry id="l-p1-values-gate-empty" date="2026-10-16" step="p1-values" kind="deviation" status="for-maintainer">
+  <entry id="l-p1-values-gate-empty" date="2026-10-16" step="p1-values" kind="deviation" status="resolved">
     <what>GATE in mise/napi.rb holds no suite (suites: []), so mise run test skips the conformance run; it was protocol and scenarios before any adapter existed.</what>
     <why>With conform.mjs present the test task runs the gate, and an adapter that answers -32601 to everything passes no case: the runner fails a suite that passes nothing ('proves nothing') and a binding that does not offer host.create. The brief allowed emptying it; the next step (p1-host) raises it again as host.create and the protocol vectors' methods land.</why>
     <evidence>tinyactors-test/lib/runner.rb:347-359 (summary, REQUIRED); mise run conform -- --milestone M1 --suite protocol: 'protocol: 0 pass, 0 fail, 140 skip ... FAIL no case passed in protocol ... FAIL not offered, but a binding must offer: host.create'</evidence>
+    <resolution>p1-conform raised GATE to protocol and scenarios on both datamodels, as before the adapter existed.</resolution>
   </entry>
   <entry id="l-p1-values-module-arena" date="2026-10-16" step="p1-values" kind="decision" status="for-maintainer">
     <what>encode has no host, so its writer and its strings live in a ta_growable_arena of the environment's instance (module.c), a mark per call, released on every path; the allocator (malloc and free with napi_adjust_external_memory) lives in module.c too, with the instance as its context, for every host to share. The allocation lint names module.c's ta_napi_allocator_alloc/_free and ta_napi_instance_new/_finalize, and host.c's ta_napi_host_new/_finalize, instead of the removed handles.c and host.c's own allocator.</what>
@@ -141,10 +142,11 @@
     <why>The done-when asks that a dropped host frees its memory under both runtimes; on node it is shown only by the counter Node-API returns.</why>
     <evidence>spike (scratchpad p1-host, a fprintf in ta_napi_allocator_alloc/_free, not committed): "adj 10992 ... adj 221568 created ... free 10648 collected"; test/host.test.mjs, the last case</evidence>
   </entry>
-  <entry id="l-p1-host-gate" date="2026-10-16" step="p1-host" kind="note" status="open">
+  <entry id="l-p1-host-gate" date="2026-10-16" step="p1-host" kind="note" status="resolved">
     <what>GATE stays empty: the adapter still offers no method. host.create alone cannot pass a suite, since the runner fails a binding kind that does not offer every method but value.encode (host.post, image.add, host.run, actor.spawn, scenario.run, w3c.run ...), so the gate is raised in p1-conform, when the adapter offers them all.</what>
     <why>The previous step expected p1-host to raise it.</why>
     <evidence>tinyactors-test/lib/runner.rb:37-40 (METHODS, REQUIRED), :357-359; tinyactors-napi/mise/napi.rb (GATE comment)</evidence>
+    <resolution>p1-conform: the adapter offers every method of a binding, and GATE holds protocol and scenarios (M1) on native and quickjs; mise run test passes them under node and bun.</resolution>
   </entry>
   <entry id="l-p1-host-close-scope" date="2026-10-16" step="p1-host" kind="deviation" status="open">
     <what>close() frees the host, its tables (each row's napi_ref deleted first), quickjs and the arena, and drops the handlers; from inside a call (ta_napi_enter/_leave depth) or a turn it is deferred to the outermost leave. Not yet: trace.end and the last take of telemetry (with the encoder's step), clearing the timer and the deferral at the end of a turn (p1-loop sets host-&gt;turning), and the asyncDispose wait for the last take's promises: asyncDispose resolves at once. ta_napi_enter and ta_napi_leave exist for the next steps' calls; no method of p1-host enters (close and the getters touch no arena).</what>
@@ -419,5 +421,30 @@
     <what>The suite's adapter does not exist yet (p1-conform), so its scenarios were run by hand: a scratch W3C runner over tinyactors-test/build/w3c/ecmascript (converted with lib/w3c.rb) with a simulated clock and a BasicHTTP loopback that does not encode HTTP passes 184/191 on the native datamodel under node and under bun, quickjs 185/191; the misses are the loopback's (509, 518, 519, 520, 531, 534 need the POST encoded) and none is the datamodel's after 530 (a document's text) was fixed. The basics scenario, driven by hand, passes on both datamodels under both runtimes.</what>
     <why>The step's done-when names the suite's scenarios; p1-conform runs them for real and raises the gate.</why>
     <evidence>scratchpad p1-datamodel/w3c.mjs and basics.mjs (not in git)</evidence>
+  </entry>
+  <entry id="l-p1-conform-wire" date="2026-10-16" step="p1-conform" kind="decision" status="for-maintainer">
+    <what>The adapter's transport writes a send's data for host.run with ECMAScript's wire rules in JavaScript (undefined is null at the top and in arrays, dropped from objects, as JSON writes it), then encode; encode keeps its value-table mode and no wire mode was added to the API.</what>
+    <why>ADR 0014: the transport and the wire encoding are the application's, and the adapter is the application. encode(send.data) of a native payload holding undefined writes f7 where values.txt's 'ECMAScript: undefined at the top is null' expects f6 (l-p1-values-encode-not-to-wire); a wire option on encode would be API of our own that no core function stands behind.</why>
+    <evidence>tinyactors-napi/conform.mjs wire(); tinyactors-test/suites/protocol/values.txt:82-85; mise run conform -- --milestone M1: protocol 90 pass on native and quickjs under node and bun</evidence>
+  </entry>
+  <entry id="l-p1-conform-settle" date="2026-10-16" step="p1-conform" kind="decision" status="resolved">
+    <what>Each driver method that makes an input (actor.spawn, actor.send, clock.advance, host.post) awaits host.idle() before answering and keeps a turn's error for the next host.run, which reports it as TA_RUN_EXHAUSTED (TA_ERROR_NO_MEMORY) or TA_RUN_FAULT.</what>
+    <why>The event loop drives every host: the turn an input schedules runs before the runner's next call arrives, and a turn's error with no idle() waiting is thrown from the turn's callback, which would crash the adapter (AGENTS.md, 'The loop').</why>
+    <evidence>tinyactors-napi/conform.mjs Adapter.settle, 'host.run'</evidence>
+  </entry>
+  <entry id="l-p1-conform-realm-buffers" date="2026-10-16" step="p1-conform" kind="note" status="resolved">
+    <what>A native payload's Uint8Array is made in the shared vm context, so instanceof Uint8Array is false in the application's realm; the adapter tests bytes with ArrayBuffer.isView. An application walking send.data meets the same.</what>
+    <why>The values bytes, empty bytes and bytes in data failed on native until then (an object of indices came back).</why>
+    <evidence>tinyactors-napi/conform.mjs wire(), Scenario.value, form(); AGENTS.md, 'Values cross by copy, made with the receiving context's constructors'</evidence>
+  </entry>
+  <entry id="l-p1-conform-http" date="2026-10-16" step="p1-conform" kind="decision" status="for-maintainer">
+    <what>encodeHTTPPost and parseHTTPRequest are built (src/http.c, test/http.test.mjs): the post object's keys other than url, event, fields and body are ignored (as host.send(message) ignores them), not refused as an options object's are; a parsed request is frozen, its fields an array of frozen {name, value}; a decoded field that is not UTF-8 is TA_ERROR_INVALID, never replaced. The adapter writes the W3C loopback's POST with encodeHTTPPost and reads it with parseHTTPRequest, the raw message as its text; the form's values that are not text are written in diagnostic notation by a JavaScript function of the adapter, as Python's adapter does (core's ta_cbor_diagnostic is not in the API).</what>
+    <why>The inventory decided to expose core's BasicHTTP codec (api-map rows); the W3C environment writes a real POST (driver.md, 'The W3C environment').</why>
+    <evidence>tinyactors-napi/src/http.c; tinyactors-napi/docs/api-map.md rows encodeHTTPPost, parseHTTPRequest; tinyactors-core/tools/conform/w3c.c:62-120</evidence>
+  </entry>
+  <entry id="l-p1-conform-full-suite" date="2026-10-16" step="p1-conform" kind="note" status="open">
+    <what>The whole suite (mise run conform, no milestone): W3C 191 pass, 0 fail on native and on quickjs, under node and under bun (the scratch runner's six BasicHTTP misses of l-p1-datamodel-suite pass with the real POST). Scenarios: 5 pass, 3 fail on each of the four: hibernate, migrate and snapshot, whose steps the adapter refuses ('not in the binding's API yet') until host.hibernate, wake, snapshot, Host.restore and migrate are built; invoke passes. Protocol 90 pass, 50 skip (reference only, refuse, value.encode). For p2-w3c: the W3C suite already passes, so M2 (w3c) can join GATE and MILESTONE there.</what>
+    <why>The step asks for the whole suite's result per datamodel and runtime.</why>
+    <evidence>mise run //tinyactors-test:run -- --kind binding --datamodel {native,quickjs} {node,bun} conform.mjs: 'w3c: 191 pass, 0 fail, 0 skip', 'scenarios: 5 pass, 3 fail, 0 skip' (fail scenarios hibernate, migrate, snapshot)</evidence>
   </entry>
 </log>

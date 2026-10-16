@@ -448,7 +448,7 @@
         <done-when>The suite's scenarios pass on the native datamodel; the scope refuses an undeclared assignment, a write to a system variable and to _event; p1-measure reports the scope as built, not the spike's.</done-when>
         <files>src/datamodel/datamodel.c, src/datamodel/rows.c, src/datamodel/expressions.c, src/datamodel/realms.c, src/datamodel/dom.c, mise/napi.rb (txml's amalgamation), tools/lint/rules/datamodel-calls-environment-and-node-api.yml (txml_*), mise/tasks/test (tinyxml's sources), test/datamodel.test.mjs</files>
       </step>
-      <step id="p1-conform" status="todo" after="p1-datamodel">
+      <step id="p1-conform" status="done" after="p1-datamodel" commit="0e3d148">
         <title>The adapter and M1</title>
         <does>conform.mjs over the public API only: host.create with the one datamodel asked for, scenario.run, the protocol vectors through typed methods, host.run with the transport's sends.</does>
         <done-when><code>mise run conform -- --milestone M1</code> passes under node and bun on native and quickjs; GATE in mise/napi.rb says so.</done-when>
