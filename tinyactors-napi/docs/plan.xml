@@ -325,20 +325,20 @@
       <recommendation option="dispose"><code>Symbol.dispose</code> and <code>Symbol.asyncDispose</code> exist in node 22 and bun, so the methods work and <code>using</code> works wherever the runtime parses it: bun 1.4 does, node 22 does not (spike s-js, corrected). The README promises <code>close()</code> and the symbols, not <code>using</code>, on the oldest Node the package claims.</recommendation>
       <evidence kind="spike">s-js (corrected): both symbols exist in both runtimes; node v22.22.0 and v22.23.3 answer "SyntaxError: Unexpected identifier 'x'" for a using declaration, bun parses it.</evidence>
     </decision>
-    <decision id="d-declarations" status="open" owner="maintainer">
-      <question>What does the native datamodel do with a <code>&lt;script&gt;</code>'s top-level declarations (<code>var</code>, <code>function</code>, <code>let</code>, <code>const</code>, <code>class</code>), which SCXML makes the session's global variables (W3C 452), when sessions share the application's realm?</question>
-      <option id="refuse">Refuse them on the native datamodel: a chart whose script declares top-level names gets a compile error at its first evaluation naming the name, and is pointed to <code>&lt;data&gt;</code> plus assignments, or to quickjs; 452 goes on a skip list for the native datamodel with that reason.</option>
-      <option id="isolate">Give such charts a context of their own per session through <code>node:vm</code>, as quickjs isolates them: measured by the refutation at 165 KB and 747 µs per session on node, 94 KB on bun, and a reach outside Node-API (a runtime module called from C).</option>
-      <recommendation option="refuse">Pre-declaring the names and copying bindings out (the draft's plan) is unsound: a function declared in the script closes over the script's own <code>var</code>s, not the scope's, and a <code>var</code> inside <code>with</code> does not write the scope at all (spike s-js, corrected). Isolation costs about 300 times a shared scope per session, which defeats the point of the native datamodel. Refusing is honest and cheap; helpers belong in <code>&lt;data&gt;</code> as function values or in quickjs. No request to core is needed for either option.</recommendation>
-      <evidence kind="spike">s-js (corrected): <code>var z = 5</code> inside <code>with(scope)</code> leaves <code>scope.z</code> undefined on both runtimes; the refutation's closure spike: <code>var count=0; function inc(){count++}</code> copied out, then <code>inc(); inc()</code>, and <code>count == 2</code> sees 0.</evidence>
-      <evidence kind="repo">datamodel_ecmascript.h:25-27 (quickjs keeps such charts isolated, it does not copy out).</evidence>
+    <decision id="d-declarations" status="recommended" owner="maintainer">
+      <question>Where does the native datamodel evaluate a chart, and what does it do with a <code>&lt;script&gt;</code>'s top-level declarations (<code>var</code>, <code>function</code>, <code>let</code>, <code>const</code>, <code>class</code>), which SCXML makes the session's global variables (W3C 452)?</question>
+      <option id="vm-contexts">Contexts of <code>node:vm</code> (through <code>process.getBuiltinModule</code>), never the application's realm: one shared context for the charts that declare nothing, each session a scope object inside it; a context per session only for a chart whose scripts declare top-level names, where a script runs as global code and closures work. Whether a chart declares is asked of the engine at <code>chart_attach</code> (the script after <code>throw 0;</code> in a scratch context: the global's new names, and a second run's redeclaration error for <code>let</code>, <code>const</code> and <code>class</code>); the addon parses no JavaScript.</option>
+      <option id="refuse">Refuse top-level declarations on the native datamodel, and skip W3C 452 there.</option>
+      <recommendation option="vm-contexts">Decided in outline by the maintainer (2026-10-16): "we can just pass Node.js VM objects if we really need to, a different global context, but probably we can share that per chart type or something. I want to avoid having to parse JavaScript at runtime if possible." The shared context keeps the application's globals clean and costs once; the per-session context is paid only by charts that need one (143 KB on node, 60 KB on bun, spike s-vm), so a chart's author chooses it by writing <code>var</code> in a script. Pre-declaring names and copying bindings out stays rejected (closures). Open for the maintainer: one shared context per host's datamodel or one per chart (144 KB and 0.9 ms each on node); per host is cheaper and keeps every chart's values in one realm, which matters below.</recommendation>
+      <evidence kind="spike">s-vm: declarations found by the engine in both runtimes (count and inc; b, c, D in their temporal dead zone); a shared context evaluates a session's scope; a per-session context keeps a closure over its var (count 2); the application's globalThis untouched; an application array inside a chart's context is not instanceof Array (Array.isArray is true).</evidence>
+      <evidence kind="repo">datamodel_ecmascript.h:16-27 (quickjs's own rule, shared realm and isolated sessions, which this mirrors in Node's engine without sharing code with it).</evidence>
     </decision>
-    <decision id="d-dom" status="open" owner="maintainer">
-      <question>Where does the native datamodel's minimal XML DOM for B.2 content (W3C 557, 561) come from?</question>
-      <option id="own-prelude">The addon embeds its own JavaScript prelude, as the Python binding embeds support.py.</option>
-      <option id="core-prelude">A request to core: the prelude quickjs uses, exported as text from the ECMAScript datamodel's library, so both ECMAScript datamodels build the same DOM.</option>
-      <recommendation option="core-prelude">One DOM for both ECMAScript datamodels keeps the differential run honest; a second copy would drift. The request must ask for a form that installs nothing on <code>globalThis</code> (today's prelude defines <code>__ta_xml</code> there, :275-321), such as a function expression the datamodel calls with the text; and the native capture must copy a DOM value, which W3C 561 sends as event data.</recommendation>
-      <evidence kind="repo">datamodel_ecmascript.c:273-321 (XML_PRELUDE, static).</evidence>
+    <decision id="d-dom" status="decided" owner="maintainer">
+      <question>Where does the native datamodel's XML DOM for B.2 content (W3C 557, 561) come from, Node and Bun having no DOMParser?</question>
+      <option id="txml">The project's XML library, txml (<code>tinyxml/include/txml.c</code>, freestanding, allocating through the allocator it is given), compiled into the addon: the content parsed in C and the DOM built as JavaScript objects with Node-API (nodeType, nodeName, childNodes, attributes, textContent, getElementsByTagName), the methods on one shared prototype in the datamodel's context.</option>
+      <option id="core-prelude">A request to core for quickjs's prelude.</option>
+      <recommendation option="txml">Decided by the maintainer (2026-10-16): the quickjs and native datamodels are completely separate, and the bindings may use the project's XML library where the runtime has no XML. The request r-dom is withdrawn. The addon's layer lint lets src/datamodel/ call <code>txml_*</code>; the build compiles txml's amalgamation; the test task's sources list tinyxml's.</recommendation>
+      <evidence kind="repo">tinyxml/README.md ("freestanding XML reader and writer in C ... no C library, allocates only through an embedder-supplied allocator"); tinyxml/include/txml.c, txml.h.</evidence>
     </decision>
     <decision id="d-errors" status="recommended" owner="maintainer">
       <question>Where does an error go that the event loop's turn raises (a handler threw, a reply's error had no onError, a fault, an exhausted pool), or that a handler's promise rejects after its turn, when no <code>idle()</code> waits?</question>
@@ -360,6 +360,11 @@
       <option id="value">An <code>Address</code> class for <code>send.target</code> and <code>send.origin</code> of the transport's sends only (Python's rule since f53ae02), while values inside event data stay strings.</option>
       <recommendation option="string">The 2026-10-12 spike measured a class at 393/257 ns and 64 B more per value against 155/123 ns for a string, and the string compares with <code>===</code>, keys a Map and is what <code>send</code> takes; a function over core's parser gives the parts without a type. The guide's sentence is written for Python's datamodel, which has a reference type; Node's datamodels have none.</recommendation>
       <evidence kind="repo">root ROADMAP.md, "Pitfalls each binding handles", "an actor reference is a string"; tinyactors-core/docs/bindings.md section 9 (the address value, f53ae02).</evidence>
+    </decision>
+    <decision id="d-separate" status="decided" owner="maintainer">
+      <question>May the native datamodel share code or text with quickjs's?</question>
+      <option id="separate">No: the two ECMAScript datamodels are completely separate; they meet only in the suite they both pass.</option>
+      <recommendation option="separate">Decided by the maintainer (2026-10-16): "the QuickJS model and the Node.js model, they have to be completely separate." So no request to core for quickjs's internals (r-declarations and r-dom withdrawn); the native datamodel asks its own engine and uses txml.</recommendation>
     </decision>
   </decisions>
 
@@ -419,11 +424,11 @@
         <done-when>A typed method from a handler is answered in a later take; pending handlers are never called after close.</done-when>
         <files>src/methods.c, test/methods.test.mjs</files>
       </step>
-      <step id="p1-datamodel" status="todo" after="p1-methods" decision="d-datamodel d-declarations d-dom">
+      <step id="p1-datamodel" status="todo" after="p1-methods" decision="d-datamodel d-declarations d-dom d-separate">
         <title>The native "ecmascript" datamodel</title>
-        <does>src/datamodel/: each expression compiled on its own with napi_run_script in quickjs's shape (sloppy outer with, strict inner), lazily at its first evaluation as quickjs does, so a syntax error is that evaluation's TA_ERROR_EXECUTION and unused branches cost nothing; one scope per session made by a per-chart constructor whose shape holds, from the start, the &lt;data&gt; ids, the names a &lt;foreach&gt;'s item and index and a script's assignments bind (W3C 150, 151, 302, 304, 525), the session's link for the system variables and _event, with a frozen prototype of null prototype holding the system variables as read-only accessors; _event a non-writable data property redefined at each bind_event (W3C 329), as quickjs does; event names and ids shared strings per chart, not one per event; In() through ta_datamodel_environment_in; capture copying mutable values (plain objects, arrays, Uint8Array, the B.2 DOM) and sharing immutable ones; payload rows with one napi_ref and a count, the last drop deferred; &lt;foreach&gt; rows; one handle scope per vtable entry; an expression that throws is TA_ERROR_EXECUTION; to_wire, from_wire and variable through values.c; the B.2 content rules; script declarations as decision d-declarations decides; quickjs beside it with its limits, chosen by the Host option.</does>
+        <does>src/datamodel/: no code or text shared with quickjs's datamodel (d-separate). Charts evaluate in node:vm contexts, never the application's realm: one shared context for charts that declare nothing at the top of their scripts, a context per session for those that do, as the engine says at chart_attach (d-declarations). Each expression compiled on its own in its context in the shape sloppy outer with, strict inner, lazily at its first evaluation, so a syntax error is that evaluation's TA_ERROR_EXECUTION; a shared-context session is a scope made by a per-chart constructor whose shape holds, from the start, the &lt;data&gt; ids, the names a &lt;foreach&gt;'s item and index and a script's assignments bind (W3C 150, 151, 302, 304, 525), the session's link for the system variables and _event, with a frozen prototype of null prototype holding the system variables as read-only accessors; _event a non-writable data property redefined at each bind_event (W3C 329); event names and ids shared strings per chart; In() through ta_datamodel_environment_in; capture copying mutable values (plain objects, arrays, Uint8Array, the DOM) with the receiving context's constructors and sharing immutable ones; payload rows with one napi_ref and a count, the last drop deferred; &lt;foreach&gt; rows; one handle scope per vtable entry; an expression that throws is TA_ERROR_EXECUTION; to_wire, from_wire and variable through values.c; the B.2 content rules, XML content parsed with txml into a DOM (d-dom); quickjs beside it with its limits, chosen by the Host option.</does>
         <done-when>The suite's scenarios pass on the native datamodel; the scope refuses an undeclared assignment, a write to a system variable and to _event; p1-measure reports the scope as built, not the spike's.</done-when>
-        <files>src/datamodel/datamodel.c, src/datamodel/rows.c, src/datamodel/expressions.c, test/datamodel.test.mjs</files>
+        <files>src/datamodel/datamodel.c, src/datamodel/rows.c, src/datamodel/expressions.c, src/datamodel/realms.c, src/datamodel/dom.c, mise/napi.rb (txml's amalgamation), tools/lint/rules/datamodel-calls-environment-and-node-api.yml (txml_*), mise/tasks/test (tinyxml's sources), test/datamodel.test.mjs</files>
       </step>
       <step id="p1-conform" status="todo" after="p1-datamodel">
         <title>The adapter and M1</title>
@@ -476,7 +481,7 @@
       <step id="p2-w3c" status="todo" after="p2-services" decision="d-declarations d-dom">
         <title>The W3C suite, M2</title>
         <does>w3c.run in the adapter with BasicHTTP as an I/O processor answered in its handler and a SimulatedClock moved to the next deadline.</does>
-        <done-when>191 of 191 on quickjs and on the native datamodel under node and bun, less the native skip list decision d-declarations leaves (452 if refused).</done-when>
+        <done-when>191 of 191 on quickjs and on the native datamodel, under node and bun.</done-when>
       </step>
       <step id="p2-pack" status="todo" after="p2-w3c">
         <title>Packaging and the first release</title>
@@ -504,14 +509,20 @@
   <refutation>Confirmed, corrected: quickjs compiles each expression lazily at its first evaluation, not at chart_attach (datamodel_ecmascript.c:222-250); p1-datamodel says so.</refutation></finding>
     <finding id="x-declarations" verdict="dropped"><claim>The native datamodel cannot find a script's top-level declarations from its engine through Node-API, and quickjs's analysis, linked into the addon anyway, can.</claim><scenario>W3C 452: <code>&lt;script&gt;function testobject() {...}&lt;/script&gt;</code> and <code>expr="new testobject();"</code> on the native datamodel.</scenario><evidence kind="repo">datamodel_ecmascript.c:887-933 (throw 0 in a fresh context); tinyactors-napi/mise/napi.rb, CORE_SOURCES (the ECMAScript datamodel is linked).</evidence><evidence kind="spike">s-js: pre-declare and copy out works in both engines.</evidence><action>Decision d-declarations; request r-declarations once the maintainer agrees.</action>
   <refutation>Refuted: the engine can be asked (node:vm with quickjs's throw 0 trick), and the names would not help, since copy-out breaks closures and var does not write the scope. Replaced by decision d-declarations (refuse, or isolate at a measured cost); r-declarations withdrawn.</refutation></finding>
-    <finding id="x-dom" verdict="plausible"><claim>The native datamodel needs B.2's XML DOM, which today exists only as a static string inside quickjs's datamodel.</claim><scenario>W3C 557 and 561 on the native datamodel.</scenario><evidence kind="repo">datamodel_ecmascript.c:273-321.</evidence><action>Decision d-dom; request r-dom if the maintainer agrees.</action>
+    <finding id="x-dom" verdict="plausible"><claim>The native datamodel needs B.2's XML DOM, which today exists only as a static string inside quickjs's datamodel.</claim><scenario>W3C 557 and 561 on the native datamodel.</scenario><evidence kind="repo">datamodel_ecmascript.c:273-321.</evidence><action>Decided: the DOM is built from txml in the addon (d-dom); the native capture copies a DOM value (W3C 561).</action>
   <refutation>Plausible: today's prelude installs __ta_xml on globalThis, so r-dom asks for a form that installs nothing; the native capture must copy the DOM (W3C 561). Settled when core states the exported form.</refutation></finding>
     <finding id="x-datamodel" verdict="confirmed"><claim>The application must be able to choose quickjs for a host, through the public API.</claim><scenario>The suite's quickjs runs go through conform.mjs, which imports only the package (its lint); and an application running charts it does not trust needs max_ops and a bounded heap.</scenario><evidence kind="repo">tinyactors-napi/AGENTS.md, "Tasks" (the adapter imports only @tinyactors/node); driver.md:72-82; datamodel_ecmascript.h (max_ops, memory_limit).</evidence><action>Decision d-datamodel.</action>
   <refutation>Confirmed for the suite (system.c:224-230: the first name match wins); the sandbox reason holds only if the option passes quickjs's limits, which Python does not: now in d-datamodel, with the default left to the maintainer.</refutation></finding>
     <finding id="x-rulebook" verdict="confirmed"><claim>The Node rulebook predates ADR 0014 and ADR 0017: it still speaks of envelopes, PEER and synchronous I/O processors.</claim><scenario>A session building from tinyactors-napi/AGENTS.md as it stands would design a peer API core no longer has.</scenario><evidence kind="repo">tinyactors-napi/AGENTS.md, "What reaches the application" and "Lifetimes and thin views"; tinyactors-napi/ROADMAP.md, "Done means"; commits d7db9ad, f4c2819.</evidence><action>Phase p0-rulebook, section rulebook.</action>
   <refutation>Confirmed, and the replacement was already stale: bf0b8a1 removed TA_HOST_TRANSPORT (the transport is io_processor 0) and f53ae02 added messages, host.fail and address parts; c-transport, c-image and c-resolver now say so.</refutation></finding>
     <finding id="x-drive" verdict="confirmed"><claim>Node needs no attach step before the event loop drives a host.</claim><scenario>A server calls host.send from an HTTP handler and never calls idle(); with Python's rule no turn would run until something drove the host.</scenario><evidence kind="repo">tinyactors-cpython/src/loop.c, ta_python_loop_schedule.</evidence><action>Decided by the maintainer (2026-10-16): decision d-drive, transparent; no synchronous driver; d-clock follows from it.</action>
-  <refutation>Confirmed; decided by the maintainer. The refutation's costs (a pending deadline keeps a script alive, the timer holds the Host) are in d-drive for the README.</refutation></finding></findings>
+  <refutation>Confirmed; decided by the maintainer. The refutation's costs (a pending deadline keeps a script alive, the timer holds the Host) are in d-drive for the README.</refutation></finding>
+    <finding id="x-realm" verdict="plausible">
+      <claim>Values that cross between realms fail <code>instanceof</code>: an array from the application, or from a session of another context, is not <code>instanceof Array</code> in a chart's context.</claim>
+      <scenario>W3C 457 checks <code>instanceof Array</code> on a foreach collection; an application sends <code>[1, 2]</code> as event data and a chart tests <code>_event.data instanceof Array</code>.</scenario>
+      <evidence kind="spike">s-vm: [false, true] for instanceof Array and Array.isArray.</evidence>
+      <action>Capture and inputs already copy mutable values (actors share no mutable value): make the copy with the receiving context's constructors, so a payload is of the datamodel's shared realm; a session of its own context gets its copy at bind_event. One shared context per host's datamodel (d-declarations) keeps that copy to the isolated charts. Settled by W3C 457 and a test with application data.</action>
+    </finding></findings>
 
   <spikes>
     <spike id="s-napi" ran="2026-10-16">
@@ -539,6 +550,11 @@
       <setup>A napi_wrap'ped object passed as workerData to a node:worker_threads Worker, under node and bun. Run on node v22.22.0 and bun 1.4.2, then again on the pins (node v22.23.3, bun 1.4.1) with the same results.</setup>
       <result>Both: the worker receives a structured clone, a plain object with the own enumerable properties ({"x":1}) and Object's prototype; the wrap and the type tag do not cross.</result>
     </spike>
+    <spike id="s-vm" ran="2026-10-16">
+      <question>Can node:vm give the native datamodel a realm of its own per chart or per session, and tell which charts need one, without a parser of ours?</question>
+      <setup>process.getBuiltinModule('node:vm') on node v22.23.3 and bun 1.4.1 (the pins): 50 contexts made and measured; the script <code>var count = 0; function inc(){ count++ } let b = 1; const c = 2; class D {}</code> after <code>throw 0;</code> in a scratch context; a shared context evaluating a session's scope through the with shape; 200 per-session contexts running the script; an application array tested inside a context.</setup>
+      <result>A context: 144 KB and 898 µs on node, 54 KB and 397 µs on bun; per session with the script: 143 KB on node, 60 KB on bun. The global's new names after the throw: count and inc on both; b, c and D answer ReferenceError (temporal dead zone). The shared context reads the scope (2); the per-session closure counts to 2; the application's globalThis has no inc. An application array inside the context: instanceof Array false, Array.isArray true.</result>
+    </spike>
   </spikes>
 
   <requests>
@@ -547,10 +563,10 @@
       <why>Decision d-declarations: W3C 452 and charts that define helper functions in a &lt;script&gt;. quickjs asks its engine by evaluating <code>throw 0;</code> before the script in a fresh context and reading the global object's own names (datamodel_ecmascript.c:887-933); Node-API cannot make a fresh realm, and the same trick in the application's realm would hoist the chart's names onto its <code>globalThis</code>.</why>
       <shown-by>Withdrawn after the refutation: pre-declaring and copying out is unsound (closures over the script's vars), so the names alone would not help; decision d-declarations needs nothing of core.</shown-by>
     </request>
-    <request id="r-dom" status="candidate">
+    <request id="r-dom" status="withdrawn">
       <what>The XML DOM quickjs uses for B.2 content, exported as text in a form that installs nothing on the global object (a function expression called with the content), so both ECMAScript datamodels build the same DOM.</what>
       <why>Decision d-dom: one DOM for both ECMAScript datamodels.</why>
-      <shown-by>W3C 557 and 561 on the native datamodel.</shown-by>
+      <shown-by>Withdrawn: decision d-dom (txml) and d-separate.</shown-by>
     </request>
   </requests>
 
@@ -584,6 +600,11 @@
       <now>"A resolver is an object with resolve(base, source) returning the text".</now>
       <becomes>A resolver is any callable (base, source) =&gt; text, as Python's API review decided; tinyactors-core/docs/bindings.md section 1 says the same once the coordinator updates it.</becomes>
       <evidence kind="repo">tinyactors-cpython/ROADMAP.md, "The API review": "The resolver is any callable".</evidence>
+    </change>
+    <change id="c-vm" file="tinyactors-napi/AGENTS.md" section="C rules (Layers) and The binding's memory">
+      <now>"src/ calls core, Node-API and a short list of C library functions, nothing else"; "the README says chart code is trusted (it runs in the application's realm, and Node-API cannot make another)".</now>
+      <becomes>The native datamodel evaluates charts in node:vm contexts reached through process.getBuiltinModule (a JavaScript call from C, not V8's API), one shared, one per session for charts that declare top-level names; src/datamodel/ may call txml_* for XML content; charts are still trusted code (a vm context is not a security boundary), and the README says so.</becomes>
+      <evidence kind="repo">decisions d-declarations, d-dom, d-separate (the maintainer, 2026-10-16).</evidence>
     </change>
   </rulebook>
 </plan>
