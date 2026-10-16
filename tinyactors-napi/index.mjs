@@ -8,4 +8,14 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const addon = require('./build/tinyactors.node');
 
-export const { encode, decode, TinyactorsError, Host, SimulatedClock } = addon;
+export const {
+  encode,
+  decode,
+  TinyactorsError,
+  CompileError,
+  ResolveError,
+  compileCharts,
+  compileSystem,
+  Host,
+  SimulatedClock,
+} = addon;

@@ -138,6 +138,9 @@ static void ta_napi_instance_finalize(napi_env env, void *data, void *hint) {
     if (instance->object != NULL) napi_delete_reference(env, instance->object);
     if (instance->keys != NULL) napi_delete_reference(env, instance->keys);
     if (instance->turn != NULL) napi_delete_reference(env, instance->turn);
+    if (instance->compiled != NULL) napi_delete_reference(env, instance->compiled);
+    if (instance->compile_error != NULL) napi_delete_reference(env, instance->compile_error);
+    if (instance->resolve_error != NULL) napi_delete_reference(env, instance->resolve_error);
     ta_growable_arena_free(&instance->arena);
     free(instance);
 }
@@ -190,7 +193,8 @@ static napi_value ta_napi_module_init(napi_env env, napi_value exports) {
         {"TinyactorsError", NULL, NULL, NULL, NULL, class, napi_enumerable, NULL},
     };
     if (napi_define_properties(env, exports, sizeof properties / sizeof properties[0], properties) != napi_ok ||
-        ta_napi_host_define(env, exports) != napi_ok || ta_napi_loop_define(env, exports) != napi_ok)
+        ta_napi_host_define(env, exports) != napi_ok || ta_napi_loop_define(env, exports) != napi_ok ||
+        ta_napi_compile_define(env, exports) != napi_ok)
         return NULL;
     return exports;
 }

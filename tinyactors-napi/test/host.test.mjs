@@ -1,8 +1,11 @@
 // The Host and its memory (docs/plan.xml, p1-host): creation from a config
 // and options, a refused config as core's error, close twice, the dispose
 // symbols, the type tag, and a dropped host whose handlers close over it
-// collected with its memory freed.
+// collected with its memory freed. The inputs (p1-compile): addImage,
+// chart, spawn, send in both shapes, fail, sendMany, terminate,
+// actorByName, each with its refusals, and TA_EFFECT_REQUEST answered in C.
 import { Host, TinyactorsError } from '@tinyactors/node';
+import { ENDER, WAITER, hostWith, image, scxml, status, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 const QUICKJS = { datamodel: 'quickjs' };
@@ -149,6 +152,195 @@ test('a dropped host whose handlers close over it is collected and frees its mem
       throw new Error(`external memory: ${before} before, ${during} with the hosts, ${after} after`);
     }
   }
+});
+
+// ---- inputs ----------------------------------------------------------------
+
+const typeError = (error) => {
+  if (!(error instanceof TypeError)) throw error;
+};
+const gone = (host, name) => until(() => host.actorByName(name) === undefined);
+
+test('addImage takes a Uint8Array, a Buffer or an ArrayBuffer, and returns the segment', () => {
+  const bytes = image({ waiter: WAITER });
+  const host = new Host({ systemID: 't' }, QUICKJS);
+  equal(host.addImage(bytes), 0, 'a Buffer');
+  equal(host.addImage(new Uint8Array(bytes)), 1, 'a Uint8Array');
+  const buffer = new ArrayBuffer(bytes.length);
+  new Uint8Array(buffer).set(bytes);
+  equal(host.addImage(buffer), 2, 'an ArrayBuffer');
+  bytes.fill(0); // the host copied them
+  equal(host.chart('waiter').segment, 2, 'the newest segment runs the chart');
+  throws(() => host.addImage(new Uint8Array([1, 2, 3])), status('TA_ERROR_INVALID'), 'bytes that are no image');
+  for (const value of [undefined, 'image', [1, 2], new Uint16Array(4), new DataView(buffer)]) {
+    throws(() => host.addImage(value), typeError, `addImage(${Object.prototype.toString.call(value)})`);
+  }
+  host.close();
+});
+
+test('chart gives a frozen reference; an unknown name is refused', () => {
+  const host = hostWith({ waiter: WAITER, ender: ENDER });
+  const ref = host.chart('ender');
+  equal(Object.isFrozen(ref), true, 'frozen');
+  equal(ref.segment, 0, 'segment');
+  equal(ref.chart, 1, 'chart');
+  throws(() => host.chart('missing'), (error) => {
+    if (!(error instanceof TinyactorsError)) throw error;
+  }, 'an unknown chart');
+  throws(() => host.chart(1), typeError, 'a name that is not a string');
+  host.close();
+});
+
+test('spawn: a session, its name, its params, its options', async () => {
+  const counter = scxml('counter', `
+    <datamodel><data id="x"/></datamodel>
+    <state id="s"><transition event="go" cond="x === 7" target="done"/></state>
+    <final id="done"/>`);
+  const host = hostWith({ counter, waiter: WAITER });
+  const session = host.spawn(host.chart('counter'), { name: 'a', params: { x: 7 }, traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01' });
+  equal(typeof session, 'bigint', 'a bigint');
+  equal(host.actorByName('a'), session, 'by name');
+  host.send(session, 'go');
+  if (!(await gone(host, 'a'))) throw new Error('the params did not reach the actor');
+  const other = host.spawn(host.chart('waiter'), { traceparent: 'not w3c' }); // a new trace
+  if (other <= session) throw new Error('sessions grow');
+  host.spawn(host.chart('waiter'));
+  host.spawn(host.chart('waiter'), {});
+  throws(() => host.spawn(host.chart('waiter'), { nam: 'a' }), typeError, 'an unknown option');
+  throws(() => host.spawn(host.chart('waiter'), 'a'), typeError, 'options that are not an object');
+  throws(() => host.spawn(host.chart('waiter'), { name: 1 }), typeError, 'a name that is not a string');
+  throws(() => host.spawn(host.chart('waiter'), { params: () => 1 }), status('TA_ERROR_UNSUPPORTED'), 'params outside the value table');
+  for (const ref of [undefined, 'waiter', {}, { segment: 0 }, { segment: -1, chart: 0 }, { segment: 0, chart: 0.5 }]) {
+    throws(() => host.spawn(ref), typeError, `spawn(${JSON.stringify(ref)})`);
+  }
+  throws(() => host.spawn({ segment: 0, chart: 9 }), (error) => {
+    if (!(error instanceof TinyactorsError)) throw error;
+  }, 'a chart the segment does not have');
+  host.close();
+});
+
+test('params for a chart whose datamodel takes no data are refused', () => {
+  const host = hostWith({ empty: scxml('empty', '<state id="s"/>', { datamodel: 'null' }) });
+  host.spawn(host.chart('empty'));
+  throws(() => host.spawn(host.chart('empty'), { params: { x: 1 } }), typeError, 'params for the null datamodel');
+  host.close();
+});
+
+test('send: a session or a local address, data, options, and the message shape', async () => {
+  const host = hostWith({ waiter: WAITER });
+  const ref = host.chart('waiter');
+  const first = host.spawn(ref, { name: 'first' });
+  host.send(first, 'go', { n: 1 }, { sendid: 'id-1', traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01' });
+  if (!(await gone(host, 'first'))) throw new Error('a send to a session');
+  const second = host.spawn(ref, { name: 'second' });
+  host.send(`tinyactors://t/#_scxml_${second}`, 'go', { n: 1 });
+  if (!(await gone(host, 'second'))) throw new Error('a send to a session\'s address');
+  host.spawn(ref, { name: 'third' });
+  host.send('tinyactors://t/@third', 'go', { n: 1 }, { origin: 'tinyactors://other/@x' });
+  if (!(await gone(host, 'third'))) throw new Error('a send to a name\'s address');
+  const fourth = host.spawn(ref, { name: 'fourth' });
+  host.send({ target: fourth, event: 'go', data: { n: 1 }, sendid: 's', origin: undefined, traceparent: undefined, later: 1 });
+  if (!(await gone(host, 'fourth'))) throw new Error('send(message)');
+  host.close();
+});
+
+test('send refuses what it cannot take, and keeps nothing of it', () => {
+  const host = hostWith({ waiter: WAITER });
+  const session = host.spawn(host.chart('waiter'), { name: 'w' });
+  throws(() => host.send(Number(session), 'go'), typeError, 'a session as a number');
+  throws(() => host.send(-1n, 'go'), typeError, 'a negative session');
+  throws(() => host.send(1n << 64n, 'go'), typeError, 'a session past 64 bits');
+  throws(() => host.send(session, 1), typeError, 'an event that is not a string');
+  throws(() => host.send(session, 'go', undefined, { sendID: 'x' }), typeError, 'an unknown option');
+  throws(() => host.send(session, 'go', undefined, { sendid: 1 }), typeError, 'a sendid that is not a string');
+  throws(() => host.send(session, 'go', new Date()), status('TA_ERROR_UNSUPPORTED'), 'data outside the value table');
+  throws(() => host.send(session, '\uD800'), status('TA_ERROR_INVALID'), 'a lone surrogate');
+  throws(() => host.send(session + 100n, 'go', { n: 1 }), status('TA_ERROR_STALE'), 'data for no session');
+  throws(() => host.send(session + 100n, 'go'), (error) => {
+    if (!(error instanceof TinyactorsError)) throw error;
+  }, 'no session');
+  throws(() => host.send('tinyactors://t/@nobody', 'go'), (error) => {
+    if (!(error instanceof TinyactorsError)) throw error;
+  }, 'an address of no actor');
+  throws(() => host.send({ event: 'go' }), typeError, 'a message without a target');
+  throws(() => host.send({ target: session }), typeError, 'a message without an event');
+  equal(host.actorByName('w'), session, 'the actor waits on');
+  host.close();
+});
+
+test('fail gives the sender error.communication', async () => {
+  const sender = scxml('sender', `
+    <state id="s"><transition event="error.communication" cond="_event.sendid === 'out-1'" target="done"/></state>
+    <final id="done"/>`);
+  const host = hostWith({ sender });
+  const session = host.spawn(host.chart('sender'), { name: 'sender' });
+  host.fail(session, 'out-1');
+  if (!(await gone(host, 'sender'))) throw new Error('error.communication with the sendid');
+  host.spawn(host.chart('sender'), { name: 'again' });
+  host.fail('tinyactors://t/@again'); // no sendid: the condition does not hold
+  host.fail('tinyactors://t/@again', 'out-1');
+  if (!(await gone(host, 'again'))) throw new Error('fail by address');
+  throws(() => host.fail(1, 'x'), typeError, 'a target that is not a session');
+  host.close();
+});
+
+test('sendMany returns the accepted prefix, in slices', async () => {
+  const host = hostWith({ waiter: WAITER });
+  const ref = host.chart('waiter');
+  const sessions = [];
+  for (let i = 0; i < 300; i++) sessions.push(host.spawn(ref, { name: `w${i}` }));
+  const accepted = host.sendMany(sessions.map((target) => ({ target, event: 'go', data: { n: 1 } })));
+  if (!Number.isInteger(accepted) || accepted < 1 || accepted > 300) throw new Error(`accepted ${accepted}`);
+  if (!(await until(() => host.actorByName(`w${accepted - 1}`) === undefined))) throw new Error('the accepted ones did not run');
+  equal(host.sendMany([]), 0, 'none');
+  throws(() => host.sendMany({ target: sessions[0], event: 'go' }), typeError, 'not an array');
+  throws(() => host.sendMany([{ target: sessions[0], event: 'go' }, { event: 'go' }]), typeError, 'an item without a target');
+  throws(() => host.sendMany([1]), typeError, 'an item that is not a message');
+  host.close();
+});
+
+test('terminate ends an actor; a session that is gone is refused', async () => {
+  const host = hostWith({ waiter: WAITER });
+  const session = host.spawn(host.chart('waiter'), { name: 'w' });
+  host.terminate(session);
+  if (!(await gone(host, 'w'))) throw new Error('terminated');
+  throws(() => host.terminate(session), (error) => {
+    if (!(error instanceof TinyactorsError)) throw error;
+  }, 'terminate again');
+  throws(() => host.terminate(1), typeError, 'a session that is not a bigint');
+  equal(host.actorByName('nobody'), undefined, 'no actor of that name');
+  throws(() => host.actorByName(1n), typeError, 'a name that is not a string');
+  host.close();
+});
+
+test('every input of a closed host is refused', () => {
+  const host = hostWith({ waiter: WAITER });
+  const ref = host.chart('waiter');
+  host.close();
+  for (const [name, call] of Object.entries({
+    addImage: () => host.addImage(new Uint8Array(1)),
+    chart: () => host.chart('waiter'),
+    boot: () => host.boot(0),
+    spawn: () => host.spawn(ref),
+    send: () => host.send(1n, 'go'),
+    fail: () => host.fail(1n),
+    sendMany: () => host.sendMany([]),
+    terminate: () => host.terminate(1n),
+    actorByName: () => host.actorByName('w'),
+  })) throws(call, status('TA_ERROR_STATE'), name);
+});
+
+test('a run-time fetch (TA_EFFECT_REQUEST) is answered in C: the parent gets error.execution', async () => {
+  const parent = scxml('parent', `
+    <state id="s">
+      <invoke type="scxml" srcexpr="'missing.scxml'"/>
+      <transition event="error.execution" target="done"/>
+    </state>
+    <final id="done"/>`);
+  const host = hostWith({ parent });
+  host.spawn(host.chart('parent'), { name: 'parent' });
+  if (!(await gone(host, 'parent'))) throw new Error('no error.execution for the fetch');
+  host.close();
 });
 
 await run();

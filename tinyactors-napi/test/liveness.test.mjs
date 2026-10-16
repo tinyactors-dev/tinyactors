@@ -1,10 +1,9 @@
 // What keeps the process alive (docs/plan.xml, p1-loop; AGENTS.md, "The
 // loop"): a host keeps it alive only while a turn or a timer at a deadline
 // is pending, so a process whose hosts have nothing to do exits, open or
-// not. Each case runs a child process of this runtime. That an open host
-// with a pending deadline keeps it alive until the deadline or close()
-// needs an actor with a delayed send, which comes with images
-// (p1-compile): log entry l-p1-loop-liveness-deadline.
+// not, and an open host with a pending deadline keeps it alive until the
+// deadline, or until close(). Each case runs a child process of this
+// runtime.
 import { spawnSync } from 'node:child_process';
 import { run, test } from './harness.mjs';
 
@@ -52,6 +51,39 @@ test('a process exits when a waiting idle() is rejected by close()', () => {
     host.close();
     await waiting.catch((error) => console.log('rejected', error.status));`, 'a host closed while idle() waits');
   if (!output.includes('rejected TA_ERROR_STATE')) throw new Error(`the child said: ${output}`);
+});
+
+// A child whose actor ends `ms` after it starts (a delayed send to itself);
+// it prints how long the process lived.
+function delayed(ms, after) {
+  return `
+    const chart = '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="later" initial="s">'
+      + '<state id="s"><onentry><send event="later" delay="${ms}ms"/></onentry><transition event="later" target="done"/></state>'
+      + '<final id="done"/></scxml>';
+    const started = Date.now();
+    process.on('exit', () => console.log('lived', Date.now() - started));
+    const compiled = m.compileCharts([{ name: 'later.scxml', text: chart }]);
+    globalThis.host = new m.Host({ systemID: 't' }, { datamodel: 'quickjs' });
+    host.addImage(compiled.image);
+    compiled.close();
+    host.spawn(host.chart('later'), { name: 'later' });
+    await host.idle();
+    console.log('deadline', host.nextDeadline > 0);
+    ${after}`;
+}
+
+const lived = (output) => Number(/lived (\d+)/.exec(output)?.[1]);
+
+test('a pending deadline keeps the process alive until it comes', () => {
+  const output = exits(delayed(400, ''), 'a host with a deadline');
+  if (!output.includes('deadline true')) throw new Error(`the child said: ${output}`);
+  if (!(lived(output) >= 350)) throw new Error(`the process exited before the deadline: ${output}`);
+});
+
+test('close() lets a process with a pending deadline exit', () => {
+  const output = exits(delayed(5000, 'host.close();'), 'a host closed with a deadline pending');
+  if (!output.includes('deadline true')) throw new Error(`the child said: ${output}`);
+  if (!(lived(output) < 4000)) throw new Error(`the process waited for the deadline: ${output}`);
 });
 
 await run();

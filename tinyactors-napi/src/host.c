@@ -1,8 +1,9 @@
 /* The Host (AGENTS.md, "The binding's memory"; docs/api-map.md): the class,
  * `new Host(config, options)` over ta_host_create, the host's arena with a
  * mark per call, its tables, `close()`, the dispose symbols, and the
- * finalizer. The inputs, the loop, the effects and the typed methods are
- * the files beside it.
+ * finalizer; the inputs (addImage, chart, boot, spawn, send, fail,
+ * sendMany, terminate, actorByName) and the payloads they make. The loop,
+ * the effects and the typed methods are the files beside it.
  *
  * Who holds what (AGENTS.md, "Rules the suite cannot see"):
  *   - the wrapper (the Host's JavaScript object) holds the ta_napi_host
@@ -639,6 +640,472 @@ static napi_value ta_napi_host_ticks(napi_env env, napi_callback_info info) {
     return result;
 }
 
+/* ---- payloads: a value for a session's datamodel ----------------------------------- */
+
+/* The datamodel name of a chart in the host: its image's. */
+static ta_string_view ta_napi_chart_datamodel(const ta_napi_host *host, ta_host_chart_ref chart) {
+    ta_host_segment_info info;
+    memset(&info, 0, sizeof info);
+    info.size = sizeof info;
+    if (ta_host_segment_info_get(host->host, chart.segment, &info) != TA_OK || info.image == NULL)
+        return (ta_string_view){NULL, 0};
+    return ta_image_chart_datamodel(info.image, chart.chart);
+}
+
+/* The chart of a live session; false when there is none. */
+static bool ta_napi_session_chart(ta_napi_host *host, uint64_t session, ta_host_chart_ref *chart) {
+    ta_host_location location;
+    if (ta_host_locate(host->host, session, &location) != TA_OK) return false;
+    ta_system *system = ta_host_system(host->host, location.segment);
+    ta_actor_info info;
+    memset(&info, 0, sizeof info);
+    info.size = sizeof info;
+    if (system == NULL || ta_actor_info_get(system, location.actor, &info) != TA_OK) return false;
+    *chart = (ta_host_chart_ref){location.segment, info.chart};
+    return true;
+}
+
+bool ta_napi_host_payload(napi_env env, ta_napi_host *host, ta_napi_payload_for *target) {
+    target->payload = 0;
+    if (target->value == NULL || ta_napi_is(env, target->value, napi_undefined)) return true;
+    ta_host_chart_ref chart = target->chart;
+    if (target->session != 0 && !ta_napi_session_chart(host, target->session, &chart)) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_STALE, "no live session takes this data"});
+        return false;
+    }
+    ta_string_view datamodel = ta_napi_chart_datamodel(host, chart);
+    if (datamodel.length != 10 || memcmp(datamodel.pointer, "ecmascript", 10) != 0) {
+        napi_throw_type_error(env, NULL, "the chart's datamodel takes no data");
+        return false;
+    }
+    /* quickjs: CBOR in the call's arena (AGENTS.md, "The binding's memory");
+     * the native datamodel copies the value (p1-datamodel) */
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
+    bool ok = ta_napi_value_write(env, target->value, &(ta_napi_writing){&writer, &host->arena});
+    if (ok) {
+        ta_bytes cbor;
+        ta_status status = ta_cbor_writer_bytes(&writer, &cbor);
+        if (status == TA_OK) status = ta_datamodel_ecmascript_payload_from_cbor(host->quickjs, cbor, &target->payload);
+        if (status != TA_OK) {
+            ta_napi_throw(env, &(ta_napi_refusal){status, "the value could not be made a payload"});
+            ok = false;
+        }
+    }
+    ta_cbor_writer_free(&writer);
+    return ok;
+}
+
+void ta_napi_host_payload_release(ta_napi_host *host, ta_payload payload) {
+    if (payload == 0 || host->host == NULL) return;
+    host->datamodels[0].vtable->release(host->datamodels[0].datamodel, payload);
+}
+
+/* ---- inputs ------------------------------------------------------------------------- */
+
+/* A call's arguments: `argc` of them read into `argv`, the rest undefined. */
+typedef struct ta_napi_arguments {
+    size_t argc;
+    napi_value argv[4];
+    napi_value self;
+} ta_napi_arguments;
+
+static bool ta_napi_arguments_of(napi_env env, napi_callback_info info, ta_napi_arguments *arguments) {
+    size_t given = arguments->argc;
+    napi_value undefined;
+    if (napi_get_cb_info(env, info, &given, arguments->argv, &arguments->self, NULL) != napi_ok ||
+        napi_get_undefined(env, &undefined) != napi_ok)
+        return false;
+    for (size_t i = given; i < arguments->argc; i++) arguments->argv[i] = undefined;
+    if (given < arguments->argc) arguments->argc = given;
+    return true;
+}
+
+/* A status of an input: undefined, or a TinyactorsError naming it. */
+static napi_value ta_napi_input_status(napi_env env, const ta_napi_refusal *refusal) {
+    napi_value undefined = NULL;
+    if (refusal->status != TA_OK) return ta_napi_throw(env, refusal);
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
+/* A session: a bigint from 1 to 2^64-1 (ids are always bigints: a number
+ * would lose bits past 2^53). */
+static bool ta_napi_session_of(napi_env env, napi_value value, uint64_t *session) {
+    bool lossless = false;
+    if (!ta_napi_is(env, value, napi_bigint) || napi_get_value_bigint_uint64(env, value, session, &lossless) != napi_ok ||
+        !lossless) {
+        napi_throw_type_error(env, NULL, "a session is a bigint from 1 to 2^64-1");
+        return false;
+    }
+    return true;
+}
+
+/* Optional text: undefined or null is none (an empty view), a string its
+ * UTF-8 in the host's arena, anything else a TypeError saying text->what. */
+static bool ta_napi_optional_text(napi_env env, napi_value value, ta_napi_text *text) {
+    text->view = (ta_string_view){NULL, 0};
+    if (ta_napi_is(env, value, napi_undefined) || ta_napi_is(env, value, napi_null)) return true;
+    return ta_napi_text_of(env, value, text);
+}
+
+
+/* host.addImage(image) -> segment: a Uint8Array (a Buffer too) or an
+ * ArrayBuffer, copied by the host during the call. */
+static napi_value ta_napi_host_add_image(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value image = arguments.argv[0], result = NULL;
+    void *data = NULL;
+    size_t length = 0;
+    bool is = false;
+    if (napi_is_typedarray(env, image, &is) == napi_ok && is) {
+        napi_typedarray_type type;
+        if (napi_get_typedarray_info(env, image, &type, &length, &data, NULL, NULL) != napi_ok) is = false;
+        else is = type == napi_uint8_array;
+    } else if (napi_is_arraybuffer(env, image, &is) == napi_ok && is) {
+        if (napi_get_arraybuffer_info(env, image, &data, &length) != napi_ok) is = false;
+    }
+    if (!is) napi_throw_type_error(env, NULL, "addImage takes the image's bytes: a Uint8Array or an ArrayBuffer");
+    else {
+        uint32_t segment = 0;
+        ta_status status = ta_host_add_image(call.host->host, (ta_bytes){data, length}, &segment);
+        if (status != TA_OK) ta_napi_throw(env, &(ta_napi_refusal){status, "the image was refused"});
+        else napi_create_uint32(env, segment, &result);
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* host.chart(name) -> {segment, chart}: the current version of the chart,
+ * a frozen object for spawn. */
+static napi_value ta_napi_host_chart(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value result = NULL, segment, chart;
+    ta_napi_text name = {&call.host->arena, "chart takes the chart's name, a string", {NULL, 0}};
+    ta_host_chart_ref ref;
+    if (ta_napi_text_of(env, arguments.argv[0], &name)) {
+        ta_status status = ta_host_chart(call.host->host, name.view, &ref);
+        if (status != TA_OK) ta_napi_throw(env, &(ta_napi_refusal){status, "the host has no chart of that name"});
+        else if (napi_create_object(env, &result) != napi_ok || napi_create_uint32(env, ref.segment, &segment) != napi_ok ||
+                 napi_create_uint32(env, ref.chart, &chart) != napi_ok ||
+                 napi_set_named_property(env, result, "segment", segment) != napi_ok ||
+                 napi_set_named_property(env, result, "chart", chart) != napi_ok || napi_object_freeze(env, result) != napi_ok)
+            result = NULL;
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* host.boot(segment): the segment's boot actors (ta_host_boot), each under
+ * its name. */
+static napi_value ta_napi_host_boot(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value result = NULL;
+    ta_napi_count segment = {"boot takes a segment, the number addImage returned", 4294967295.0, 0};
+    if (ta_napi_count_of(env, arguments.argv[0], &segment)) {
+        ta_napi_advance(env, call.host);
+        ta_status status = ta_host_boot(call.host->host, (uint32_t)segment.value);
+        if (status == TA_OK) ta_napi_schedule(env, call.host);
+        result = ta_napi_input_status(env, &(ta_napi_refusal){status, "the segment's boot was refused"});
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* host.actorByName(name) -> bigint | undefined: the live actor spawned
+ * with `name`, newest segment first. */
+static napi_value ta_napi_host_actor_by_name(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value result = NULL;
+    ta_napi_text name = {&call.host->arena, "actorByName takes the actor's name, a string", {NULL, 0}};
+    if (ta_napi_text_of(env, arguments.argv[0], &name)) {
+        uint64_t session = ta_host_actor_by_name(call.host->host, name.view);
+        if (session == 0) napi_get_undefined(env, &result);
+        else napi_create_bigint_uint64(env, session, &result);
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* The options of spawn and send: an object of `names` or undefined. */
+static bool ta_napi_input_options(napi_env env, napi_value value, const ta_napi_known *known) {
+    if (ta_napi_is(env, value, napi_undefined)) return true;
+    if (!ta_napi_is(env, value, napi_object)) {
+        napi_throw_type_error(env, NULL, "options are an object");
+        return false;
+    }
+    return ta_napi_only_known(env, value, known);
+}
+
+/* host.spawn(ref, {name, params, traceparent}?) -> bigint */
+static napi_value ta_napi_host_spawn(napi_env env, napi_callback_info info) {
+    static const char *const known[] = {"name", "params", "traceparent"};
+    ta_napi_arguments arguments = {2, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    ta_napi_host *host = call.host;
+    napi_value ref = arguments.argv[0], result = NULL, value;
+    ta_napi_options options = {ta_napi_is(env, arguments.argv[1], napi_object) ? arguments.argv[1] : NULL};
+    ta_napi_count segment = {"spawn takes a chart reference, {segment, chart}, from host.chart", 4294967295.0, 0};
+    ta_napi_count chart = segment;
+    ta_spawn spawn;
+    memset(&spawn, 0, sizeof spawn);
+    ta_napi_text name = {&host->arena, "spawn's name is a string", {NULL, 0}};
+    ta_napi_text traceparent = {&host->arena, "a traceparent is W3C text, a string", {NULL, 0}};
+    bool ok = ta_napi_input_options(env, arguments.argv[1], &(ta_napi_known){"spawn option", known, 3});
+    if (ok && !ta_napi_is(env, ref, napi_object)) {
+        napi_throw_type_error(env, NULL, segment.what);
+        ok = false;
+    }
+    ok = ok && napi_get_named_property(env, ref, "segment", &value) == napi_ok && ta_napi_count_of(env, value, &segment) &&
+         napi_get_named_property(env, ref, "chart", &value) == napi_ok && ta_napi_count_of(env, value, &chart) &&
+         ta_napi_optional_text(env, ta_napi_option(env, &options, "name"), &name) &&
+         ta_napi_optional_text(env, ta_napi_option(env, &options, "traceparent"), &traceparent);
+    if (ok) {
+        spawn.segment = (uint32_t)segment.value;
+        spawn.chart = (uint32_t)chart.value;
+        spawn.name = name.view;
+        spawn.traceparent = traceparent.view;
+        ta_napi_payload_for params = {0, {spawn.segment, spawn.chart}, ta_napi_option(env, &options, "params"), 0};
+        if (ta_napi_host_payload(env, host, &params)) {
+            uint64_t session = 0;
+            spawn.params = params.payload; /* moved to core on success */
+            ta_napi_advance(env, host);
+            ta_status status = ta_host_spawn(host->host, &spawn, &session);
+            if (status != TA_OK) {
+                ta_napi_host_payload_release(host, params.payload); /* still ours */
+                ta_napi_throw(env, &(ta_napi_refusal){status, "the spawn was refused"});
+            } else {
+                ta_napi_schedule(env, host);
+                napi_create_bigint_uint64(env, session, &result);
+            }
+        }
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* An event of send, sendMany and fail: the fields as JavaScript values,
+ * and the ta_event_in made from them (texts in the host's arena, the data
+ * a payload of the target session's datamodel, made last, so nothing
+ * needs releasing when an earlier field is refused). */
+typedef struct ta_napi_event {
+    napi_value target, name, data, sendid, origin, traceparent;
+    ta_event_in in; /* out */
+} ta_napi_event;
+
+/* An event's target: a session (a bigint), or a local address (a string)
+ * core resolves to one (ta_host_resolve) before the payload is made in
+ * that session's datamodel: event->in.session. Address values come with
+ * the effects step. */
+static bool ta_napi_target_of(napi_env env, const ta_napi_call *call, ta_napi_event *event) {
+    napi_value value = event->target;
+    uint64_t *session = &event->in.session;
+    if (!ta_napi_is(env, value, napi_string)) {
+        if (ta_napi_is(env, value, napi_bigint)) return ta_napi_session_of(env, value, session);
+        napi_throw_type_error(env, NULL, "a target is a session (a bigint) or a local address (a string)");
+        return false;
+    }
+    ta_napi_text address = {&call->host->arena, "an address is a string", {NULL, 0}};
+    if (!ta_napi_text_of(env, value, &address)) return false;
+    ta_status status = ta_host_resolve(call->host->host, address.view, session);
+    if (status != TA_OK) {
+        ta_napi_throw(env, &(ta_napi_refusal){status, "the address names no local session"});
+        return false;
+    }
+    return true;
+}
+
+
+static bool ta_napi_event_of(napi_env env, const ta_napi_call *call, ta_napi_event *event) {
+    ta_napi_host *host = call->host;
+    ta_event_in *in = &event->in;
+    memset(in, 0, sizeof *in);
+    in->size = sizeof *in;
+    ta_napi_text name = {&host->arena, "an event's name is a string", {NULL, 0}};
+    ta_napi_text sendid = {&host->arena, "a sendid is a string", {NULL, 0}};
+    ta_napi_text origin = {&host->arena, "an origin is an address, a string", {NULL, 0}};
+    ta_napi_text traceparent = {&host->arena, "a traceparent is W3C text, a string", {NULL, 0}};
+    if (!ta_napi_target_of(env, call, event) ||
+        (event->name != NULL && !ta_napi_text_of(env, event->name, &name)) ||
+        !ta_napi_optional_text(env, event->sendid, &sendid) || !ta_napi_optional_text(env, event->origin, &origin) ||
+        !ta_napi_optional_text(env, event->traceparent, &traceparent))
+        return false;
+    in->name = name.view;
+    in->sendid = sendid.view;
+    in->origin = origin.view;
+    in->traceparent = traceparent.view;
+    ta_napi_payload_for payload = {in->session, {0, 0}, event->data, 0};
+    if (!ta_napi_host_payload(env, host, &payload)) return false;
+    in->data = payload.payload;
+    return true;
+}
+
+/* A message, the object send.message gives: its known keys, the others
+ * ignored, so a newer sender's keys do not break an older host. */
+static bool ta_napi_message_of(napi_env env, napi_value message, ta_napi_event *event) {
+    if (!ta_napi_is(env, message, napi_object) || napi_get_named_property(env, message, "target", &event->target) != napi_ok ||
+        napi_get_named_property(env, message, "event", &event->name) != napi_ok ||
+        napi_get_named_property(env, message, "data", &event->data) != napi_ok ||
+        napi_get_named_property(env, message, "sendid", &event->sendid) != napi_ok ||
+        napi_get_named_property(env, message, "origin", &event->origin) != napi_ok ||
+        napi_get_named_property(env, message, "traceparent", &event->traceparent) != napi_ok) {
+        bool pending = false;
+        napi_is_exception_pending(env, &pending);
+        if (!pending) napi_throw_type_error(env, NULL, "a message is an object of target, event, data, sendid, origin, traceparent");
+        return false;
+    }
+    if (ta_napi_is(env, event->target, napi_undefined) || ta_napi_is(env, event->name, napi_undefined)) {
+        napi_throw_type_error(env, NULL, "a message has a target and an event");
+        return false;
+    }
+    return true;
+}
+
+/* host.send(target, event, data?, {sendid, traceparent, origin}?) or
+ * host.send(message): an input, applied at the call. */
+static napi_value ta_napi_host_send(napi_env env, napi_callback_info info) {
+    static const char *const known[] = {"sendid", "traceparent", "origin"};
+    ta_napi_arguments arguments = {4, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value *argv = arguments.argv, result = NULL;
+    ta_napi_event event;
+    memset(&event, 0, sizeof event);
+    bool ok;
+    if (arguments.argc == 1 && ta_napi_is(env, argv[0], napi_object)) ok = ta_napi_message_of(env, argv[0], &event);
+    else {
+        ta_napi_options options = {ta_napi_is(env, argv[3], napi_object) ? argv[3] : NULL};
+        ok = ta_napi_input_options(env, argv[3], &(ta_napi_known){"send option", known, 3});
+        event.target = argv[0];
+        event.name = argv[1];
+        event.data = argv[2];
+        event.sendid = ta_napi_option(env, &options, "sendid");
+        event.origin = ta_napi_option(env, &options, "origin");
+        event.traceparent = ta_napi_option(env, &options, "traceparent");
+    }
+    if (ok && ta_napi_event_of(env, &call, &event)) {
+        ta_status status = ta_host_send(call.host->host, &event.in);
+        if (status != TA_OK) ta_napi_host_payload_release(call.host, event.in.data); /* still ours */
+        else ta_napi_schedule(env, call.host);
+        result = ta_napi_input_status(env, &(ta_napi_refusal){status, "the send was refused"});
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* host.fail(target, sendid?): a send the application's transport could not
+ * deliver, reported to its sender (error.communication with the sendid). */
+static napi_value ta_napi_host_fail(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {2, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value result = NULL, undefined;
+    ta_napi_event event;
+    memset(&event, 0, sizeof event);
+    napi_get_undefined(env, &undefined);
+    event.target = arguments.argv[0];
+    event.sendid = arguments.argv[1];
+    event.data = event.origin = event.traceparent = undefined;
+    if (ta_napi_event_of(env, &call, &event)) {
+        event.in.flags = TA_EVENT_IN_ERROR_COMMUNICATION;
+        ta_status status = ta_host_send(call.host->host, &event.in);
+        if (status == TA_OK) ta_napi_schedule(env, call.host);
+        result = ta_napi_input_status(env, &(ta_napi_refusal){status, "the failure was refused"});
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* Events a sendMany converts and hands core at once: the arena holds a
+ * slice, not the whole array, so one large call leaves no large chunk kept
+ * for the host's life. */
+#define TA_NAPI_SLICE 256u
+
+/* One slice of sendMany, items [first, first + count): the accepted prefix
+ * of the slice, or -1 with an exception pending (nothing of the slice
+ * taken). The payloads core did not take are released: still ours. */
+typedef struct ta_napi_slice {
+    napi_value items;
+    uint32_t first, count;
+} ta_napi_slice;
+
+static int64_t ta_napi_send_slice(napi_env env, const ta_napi_call *call, const ta_napi_slice *slice) {
+    ta_napi_host *host = call->host;
+    ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
+    ta_event_in *events = (ta_event_in *)ta_growable_arena_alloc(&host->arena, sizeof(ta_event_in) * TA_NAPI_SLICE, 8);
+    uint32_t made = 0;
+    int64_t taken = -1;
+    if (events == NULL) ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the events"});
+    else {
+        for (; made < slice->count; made++) {
+            napi_value item;
+            ta_napi_event event;
+            memset(&event, 0, sizeof event);
+            if (napi_get_element(env, slice->items, slice->first + made, &item) != napi_ok ||
+                !ta_napi_message_of(env, item, &event) || !ta_napi_event_of(env, call, &event))
+                break;
+            events[made] = event.in;
+        }
+        if (made == slice->count) taken = ta_host_send_many(host->host, events, made);
+        for (uint32_t i = taken < 0 ? 0 : (uint32_t)taken; i < made; i++) ta_napi_host_payload_release(host, events[i].data);
+    }
+    ta_growable_arena_release(&host->arena, mark);
+    return taken;
+}
+
+/* host.sendMany(items) -> number: each item a message (host.send(message)'s
+ * fields), handed to core in slices (ta_host_send_many); the length of the
+ * accepted prefix. An item that cannot be converted throws, and the slices
+ * before its own were sent. */
+static napi_value ta_napi_host_send_many(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value items = arguments.argv[0], result = NULL;
+    bool array = false, failed = false;
+    uint32_t count = 0, accepted = 0;
+    if (napi_is_array(env, items, &array) != napi_ok || !array || napi_get_array_length(env, items, &count) != napi_ok) {
+        napi_throw_type_error(env, NULL, "sendMany takes an array of messages");
+        failed = true;
+    }
+    for (uint32_t first = 0; !failed && first < count; first += TA_NAPI_SLICE) {
+        ta_napi_slice slice = {items, first, count - first < TA_NAPI_SLICE ? count - first : TA_NAPI_SLICE};
+        int64_t taken = ta_napi_send_slice(env, &call, &slice);
+        if (taken < 0) failed = true;
+        else accepted += (uint32_t)taken;
+        if (taken != (int64_t)slice.count) break; /* refused at an event: the rest is not sent */
+    }
+    if (accepted) ta_napi_schedule(env, call.host);
+    if (!failed) napi_create_uint32(env, accepted, &result);
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* host.terminate(session) */
+static napi_value ta_napi_host_terminate(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_enter(env, arguments.self, &call)) return NULL;
+    napi_value result = NULL;
+    uint64_t session = 0;
+    if (ta_napi_session_of(env, arguments.argv[0], &session)) {
+        ta_status status = ta_host_terminate(call.host->host, session);
+        if (status == TA_OK) ta_napi_schedule(env, call.host);
+        result = ta_napi_input_status(env, &(ta_napi_refusal){status, "the terminate was refused"});
+    }
+    ta_napi_leave(&call);
+    return result;
+}
+
 /* Symbol.<name> of this realm, or NULL when it has none. */
 static napi_value ta_napi_well_known(napi_env env, const char *name) {
     napi_value global, symbol, value;
@@ -656,12 +1123,22 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"ticksPerSecond", NULL, NULL, ta_napi_host_ticks, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
         {"nextDeadline", NULL, NULL, ta_napi_host_next_deadline, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
         {"idle", NULL, ta_napi_host_idle, NULL, NULL, NULL, napi_default_method, NULL},
+        {"addImage", NULL, ta_napi_host_add_image, NULL, NULL, NULL, napi_default_method, NULL},
+        {"chart", NULL, ta_napi_host_chart, NULL, NULL, NULL, napi_default_method, NULL},
+        {"boot", NULL, ta_napi_host_boot, NULL, NULL, NULL, napi_default_method, NULL},
+        {"spawn", NULL, ta_napi_host_spawn, NULL, NULL, NULL, napi_default_method, NULL},
+        {"send", NULL, ta_napi_host_send, NULL, NULL, NULL, napi_default_method, NULL},
+        {"fail", NULL, ta_napi_host_fail, NULL, NULL, NULL, napi_default_method, NULL},
+        {"sendMany", NULL, ta_napi_host_send_many, NULL, NULL, NULL, napi_default_method, NULL},
+        {"terminate", NULL, ta_napi_host_terminate, NULL, NULL, NULL, napi_default_method, NULL},
+        {"actorByName", NULL, ta_napi_host_actor_by_name, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, dispose, ta_napi_host_close, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, async_dispose, ta_napi_host_async_dispose, NULL, NULL, NULL, napi_default_method, NULL},
     };
     size_t count = sizeof properties / sizeof properties[0];
-    if (async_dispose == NULL) count--; /* a runtime without the symbols: close() only */
-    if (dispose == NULL) count = 5;
+    /* a runtime without the symbols: close() only (they are the last two) */
+    if (dispose == NULL) count -= 2;
+    else if (async_dispose == NULL) count--;
     napi_value class;
     napi_status status = napi_define_class(env, "Host", NAPI_AUTO_LENGTH, ta_napi_host_new, NULL, count, properties, &class);
     if (status == napi_ok) status = napi_set_named_property(env, exports, "Host", class);

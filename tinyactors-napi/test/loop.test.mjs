@@ -1,10 +1,14 @@
 // The loop on the event loop (docs/plan.xml, p1-loop): idle() as a
 // promise of the next idle turn, nextDeadline, close() with a waiting
-// idle(), SimulatedClock in milliseconds and the hosts it holds weakly.
-// The run statuses other than idle, the bound that yields to I/O and the
-// one timer at a deadline need actors, which come with images
-// (p1-compile): log entry l-p1-loop-statuses-untested.
+// idle(), SimulatedClock in milliseconds and the hosts it holds weakly;
+// with actors (p1-compile): a send that runs its actor with no driver
+// called, the statuses TA_RUN_EFFECTS, TA_RUN_EFFECTS_FULL and
+// TA_RUN_YIELDED, the bound that yields to I/O, one timer at a deadline,
+// and none on a simulated clock. TA_RUN_EXHAUSTED and TA_RUN_FAULT need an
+// allocator that refuses or a run core refuses, which no input of the
+// public API makes (log entry l-p1-compile-unreachable-statuses).
 import { Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
+import { ENDER, hostWith, scxml, sleep } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 const QUICKJS = { datamodel: 'quickjs' };
@@ -135,5 +139,143 @@ test('a clock holds its hosts weakly', async () => {
   clock.increment(1000); // their WeakRefs are empty: nothing to schedule
   equal(clock.now, 1000, 'the clock goes on');
 });
+
+// ---- with actors -----------------------------------------------------------
+
+/** Polls `done` every 5 ms for at most `ms`: for what a timer brings. */
+async function within(ms, done) {
+  for (const end = Date.now() + ms; !done() && Date.now() < end;) await sleep(5);
+  return done();
+}
+
+test('a send runs its actor with no driver called', async () => {
+  const host = hostWith({ ender: ENDER });
+  const session = host.spawn(host.chart('ender'), { name: 'e' });
+  host.send(session, 'go');
+  // only the event loop turns: no idle(), no call of the host
+  for (let i = 0; i < 5; i++) await tick();
+  equal(host.actorByName('e'), undefined, 'the actor ended');
+  host.close();
+});
+
+// A send to an I/O processor leaves the system: its sender waits for the
+// batch's ack (TA_RUN_EFFECTS), then goes on.
+const SENDER = scxml('sender', `
+  <state id="s">
+    <onentry><send type="urn:out" target="somewhere" event="out"/></onentry>
+    <transition target="done"/>
+  </state>
+  <final id="done"/>`);
+
+test('TA_RUN_EFFECTS: a sender goes on after the drain acknowledged its send', async () => {
+  const host = hostWith({ sender: SENDER }, { config: { systemID: 't', ioProcessors: [{ type: 'urn:out' }] } });
+  host.spawn(host.chart('sender'), { name: 'sender' });
+  await host.idle();
+  equal(host.actorByName('sender'), undefined, 'the sender ended');
+  host.close();
+});
+
+test('TA_RUN_EFFECTS_FULL: an outbox of one is drained and run again', async () => {
+  const host = hostWith({ sender: SENDER }, {
+    config: { systemID: 't', ioProcessors: [{ type: 'urn:out' }], system: { outbox: 1 } },
+  });
+  for (let i = 0; i < 8; i++) host.spawn(host.chart('sender'), { name: `sender${i}` });
+  await host.idle();
+  for (let i = 0; i < 8; i++) equal(host.actorByName(`sender${i}`), undefined, `sender${i} ended`);
+  host.close();
+});
+
+// An actor that never rests: each macrostep raises the next event.
+const SPINNER = scxml('spinner', `
+  <state id="s">
+    <onentry><raise event="again"/></onentry>
+    <transition event="again" target="s"/>
+  </state>`);
+
+test('TA_RUN_YIELDED and the turn\'s bound: the event loop runs between turns', async () => {
+  const host = hostWith({ spinner: SPINNER });
+  const session = host.spawn(host.chart('spinner'), { name: 'spin' });
+  let timers = 0;
+  let io = 0;
+  const started = Date.now();
+  // a timer and I/O get their turns while the actor spins
+  await new Promise((resolve) => setTimeout(() => { timers++; resolve(); }, 1));
+  await new Promise((resolve) => setImmediate(() => { io++; resolve(); }));
+  await sleep(20);
+  equal(timers, 1, 'the timer ran');
+  equal(io, 1, 'the immediate ran');
+  equal(host.actorByName('spin'), session, 'the actor still spins');
+  let settled = false;
+  host.idle().then(() => { settled = true; }, () => { settled = true; });
+  await sleep(10);
+  equal(settled, false, 'never idle while it spins');
+  host.terminate(session);
+  await host.idle();
+  equal(host.actorByName('spin'), undefined, 'terminated');
+  if (Date.now() - started > 10000) throw new Error('the turns starved the event loop');
+  host.close();
+});
+
+// An actor that ends `ms` after it starts, by a delayed send to itself.
+const delayed = (ms) => scxml('later', `
+  <state id="s">
+    <onentry><send event="later" delay="${ms}ms"/></onentry>
+    <transition event="later" target="done"/>
+  </state>
+  <final id="done"/>`);
+
+test('one timer at the deadline: the actor runs when it comes', async () => {
+  const host = hostWith({ later: delayed(60) });
+  const before = timeouts();
+  host.spawn(host.chart('later'), { name: 'later' });
+  await host.idle();
+  const deadline = host.nextDeadline;
+  if (!(deadline > 0 && deadline <= 60)) throw new Error(`nextDeadline ${deadline}`);
+  if (before !== undefined) equal(timeouts() - before, 1, 'one timer armed');
+  host.spawn(host.chart('later'), { name: 'second' }); // a second deadline: the timer is replaced
+  await host.idle();
+  if (before !== undefined) equal(timeouts() - before, 1, 'still one timer');
+  if (!(await within(5000, () => host.actorByName('second') === undefined))) throw new Error('the deadline never ran the actor');
+  equal(host.actorByName('later'), undefined, 'the first deadline ran too');
+  await host.idle();
+  equal(host.nextDeadline, undefined, 'nothing due');
+  if (before !== undefined) equal(timeouts() - before, 0, 'no timer left');
+  host.close();
+});
+
+test('close() clears the timer at a deadline', async () => {
+  const host = hostWith({ later: delayed(10000) });
+  const before = timeouts();
+  host.spawn(host.chart('later'));
+  await host.idle();
+  if (before !== undefined) equal(timeouts() - before, 1, 'one timer armed');
+  host.close();
+  if (before !== undefined) equal(timeouts() - before, 0, 'cleared');
+});
+
+test('a host on a simulated clock arms no timer', async () => {
+  const clock = new SimulatedClock();
+  const host = hostWith({ later: delayed(1000) }, { clock });
+  const before = timeouts();
+  host.spawn(host.chart('later'), { name: 'later' });
+  await host.idle();
+  equal(host.nextDeadline, 1000, 'the deadline, in the clock\'s milliseconds');
+  if (before !== undefined) equal(timeouts() - before, 0, 'no timer');
+  await sleep(20);
+  clock.increment(999);
+  await host.idle();
+  equal(typeof host.actorByName('later'), 'bigint', 'not yet due');
+  clock.increment(1);
+  await host.idle();
+  equal(host.actorByName('later'), undefined, 'due: the actor ran');
+  host.close();
+});
+
+/** The runtime's pending Timeout handles (node's process.getActiveResourcesInfo);
+ * undefined on a runtime that does not list them. */
+function timeouts() {
+  if (globalThis.Bun || typeof process.getActiveResourcesInfo !== 'function') return undefined;
+  return process.getActiveResourcesInfo().filter((kind) => kind === 'Timeout').length;
+}
 
 await run();

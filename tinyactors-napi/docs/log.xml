@@ -160,17 +160,17 @@
     <why>The brief asks for the tables now; their contents are p1-datamodel's and p1-methods', which may change the rows (the release in ta_napi_host_release assumes the reference first).</why>
     <evidence>tinyactors-napi/src/addon.h (ta_napi_*_row); src/host.c (ta_napi_rows_release)</evidence>
   </entry>
-  <entry id="l-p1-loop-statuses-untested" date="2026-10-16" step="p1-loop" kind="note" status="open">
+  <entry id="l-p1-loop-statuses-untested" date="2026-10-16" step="p1-loop" kind="note" status="resolved">
     <what>The loop's code paths for TA_RUN_YIELDED, TA_RUN_EFFECTS, TA_RUN_EFFECTS_FULL, TA_RUN_EXHAUSTED and TA_RUN_FAULT, the turn's bound yielding to I/O, the one setTimeout at a deadline (replaced each idle turn, cleared at close), 'no timer with a SimulatedClock', a handler's error thrown from the turn's callback, close() from a handler deferred to the end of the turn, and 'a send with no other call runs its actor' are written but not yet tested: each needs an actor, and images, spawn and send come with p1-compile (typed methods, whose trace.watch would give a deadline, with p1-methods). Only TA_RUN_IDLE, idle(), close() with a waiting idle(), SimulatedClock and liveness without a deadline are tested now.</what>
     <why>The done-when lists them; nothing in the addon can make an actor yet, and no test hook is added (nothing of our own).</why>
     <evidence>tinyactors-napi/test/loop.test.mjs (header); src/loop.c ta_napi_turn, ta_napi_loop_turn</evidence>
-    <resolution>p1-compile (or the first step with spawn and send) adds these cases to test/loop.test.mjs</resolution>
+    <resolution>p1-compile added to test/loop.test.mjs: a send runs its actor with no driver called; TA_RUN_EFFECTS (a send to an I/O processor); TA_RUN_EFFECTS_FULL (outbox 1, eight senders); TA_RUN_YIELDED and the bound (a spinning actor while a timer and an immediate run); one timer at a deadline, replaced and cleared (counted with process.getActiveResourcesInfo on node; bun lists none); none on a SimulatedClock. What stays: l-p1-compile-unreachable-statuses.</resolution>
   </entry>
-  <entry id="l-p1-loop-liveness-deadline" date="2026-10-16" step="p1-loop" kind="note" status="open">
+  <entry id="l-p1-loop-liveness-deadline" date="2026-10-16" step="p1-loop" kind="note" status="resolved">
     <what>test/liveness.test.mjs checks that a process exits with an open host that has nothing to do (never turned, idle, on a simulated clock, closed while idle() waits). That a pending deadline keeps the process alive until it fires or close() is not tested yet: it needs an actor with &lt;send delay&gt;.</what>
     <why>No spawn or images before p1-compile.</why>
     <evidence>tinyactors-napi/test/liveness.test.mjs (header)</evidence>
-    <resolution>add the case with p1-compile: a child with a delayed send stays alive past an idle turn and exits at the deadline, and at once on close()</resolution>
+    <resolution>p1-compile added both cases to test/liveness.test.mjs: a child with a 400 ms delayed send lives past the deadline, one with a 5 s deadline exits at close().</resolution>
   </entry>
   <entry id="l-p1-loop-idle-one-promise" date="2026-10-16" step="p1-loop" kind="decision" status="for-maintainer">
     <what>idle() returns one promise per pending idle turn, the same to every caller until it settles (one napi_deferred on the host, no list), and schedules a turn when none is pending; on a closed host it throws TinyactorsError TA_ERROR_STATE; close() rejects a waiting idle() with TinyactorsError TA_ERROR_STATE ('the Host was closed before it was idle'), as Python's close cancels its futures.</what>
@@ -207,5 +207,63 @@
     <why>The telemetry handler is p2's (the brief); the take must happen now or core gives no second effect of the kind.</why>
     <evidence>tinyactors-napi/src/loop.c ta_napi_take, ta_napi_end_traces, ta_napi_loop_stop; src/host.c ta_napi_host_close_now</evidence>
     <resolution>the telemetry step hands each take to the handler (a Buffer copy) and asyncDispose awaits its promises</resolution>
+  </entry>
+  <entry id="l-p1-compile-unreachable-statuses" date="2026-10-16" step="p1-compile" kind="note" status="open">
+    <what>Two run statuses stay untested: TA_RUN_EXHAUSTED (core grows a full pool itself between runs; it answers EXHAUSTED only when the host's allocator refuses) and TA_RUN_FAULT (a run with a batch open, which the drain before every run rules out). A handler's error thrown from the turn's callback and close() from a handler deferred to the turn's end need a handler that runs JavaScript in a turn (the log handler, an I/O processor), which p1-effects builds.</what>
+    <why>No input of the public API reaches them, and the rulebook adds no test hook of our own (no allocator that fails on demand).</why>
+    <evidence>tinyactors-core/docs/host-config.md (every capacity doubles when it fills); tinyactors-core/include/tinyactors/host.h:243-256; tinyactors-napi/test/loop.test.mjs (header)</evidence>
+    <resolution>p1-effects adds the handler cases to test/loop.test.mjs</resolution>
+  </entry>
+  <entry id="l-p1-compile-input-options" date="2026-10-16" step="p1-compile" kind="decision" status="for-maintainer">
+    <what>spawn's and send's options objects refuse a key they do not know (TypeError, as new Host does: l-p1-host-unknown-options); send(message) ignores unknown keys, as the rulebook says. undefined and null are 'none' for name, sendid, origin and traceparent; data undefined is no payload, null is a payload of null. send(target, ...) takes the message shape only when called with one object argument.</what>
+    <why>A misspelled option (sendID) would otherwise be dropped silently; a message from another system may carry keys a newer sender added.</why>
+    <evidence>tinyactors-napi/src/host.c (ta_napi_input_options, ta_napi_message_of, ta_napi_optional_text); test/host.test.mjs 'send refuses what it cannot take'</evidence>
+  </entry>
+  <entry id="l-p1-compile-session-bigint" date="2026-10-16" step="p1-compile" kind="decision" status="resolved">
+    <what>A session given to send, fail, terminate (and a send target) is a bigint from 1 to 2^64-1; a number throws TypeError (Python takes any int). spawn and actorByName return bigints.</what>
+    <why>The rulebook: ids are always BigInt, napi_get_value_int64 saturates silently; napi_get_value_bigint_uint64's lossless flag refuses a negative or a 65-bit one.</why>
+    <evidence>tinyactors-napi/src/host.c ta_napi_session_of; test/host.test.mjs</evidence>
+  </entry>
+  <entry id="l-p1-compile-address-strings" date="2026-10-16" step="p1-compile" kind="deviation" status="open">
+    <what>Address does not exist yet: send's and fail's target and send's origin take a string address (or a bigint session); an Address object is a TypeError until it is built.</what>
+    <why>The brief: accept strings now; Address belongs with the transport's views (send.origin, send.target).</why>
+    <evidence>tinyactors-napi/src/host.c ta_napi_target_of; docs/api-map.md rows host.send, host.fail (Address marked planned)</evidence>
+    <resolution>the step that builds Address unwraps it to its text in ta_napi_target_of and for origin</resolution>
+  </entry>
+  <entry id="l-p1-compile-host-fail" date="2026-10-16" step="p1-compile" kind="deviation" status="resolved">
+    <what>host.fail(target, sendid?) is built in this step, though the step's list does not name it: it is ta_host_send with TA_EVENT_IN_ERROR_COMMUNICATION through the same event conversion as send.</what>
+    <why>It is an input of the same shape (api-map row), and no other step lists it.</why>
+    <evidence>tinyactors-napi/src/host.c ta_napi_host_fail; test/host.test.mjs 'fail gives the sender error.communication'</evidence>
+  </entry>
+  <entry id="l-p1-compile-compiled" date="2026-10-16" step="p1-compile" kind="decision" status="resolved">
+    <what>A compile result is an instance of an unexported class Compiled that wraps the ta_compile_result itself (no struct of ours): close() frees it and removes the wrap (a closed result is one whose unwrap fails), the finalizer frees one never closed. The image Buffer is kept on the object under the instance's Symbol('tinyactors.image'), so a read after close() returns the copy made before; only a first read after close() throws TA_ERROR_STALE. new Compiled() from JavaScript is a TypeError (the constructor takes the result as an external). The compiler allocates through ta_napi_allocator, so the result's memory is reported to the engine; the call's sources are views in the module's arena under a mark.</what>
+    <why>Decision d-image; no allocation of the addon's own (AGENTS.md, 'Where the allocator is called').</why>
+    <evidence>tinyactors-napi/src/compile.c; test/compile.test.mjs</evidence>
+  </entry>
+  <entry id="l-p1-compile-errors" date="2026-10-16" step="p1-compile" kind="decision" status="for-maintainer">
+    <what>CompileError(message, {diagnostics, status}) has status TA_ERROR_INVALID (or core's status when it gave another), frozen diagnostics, and the first error as its message, 'file:line:column: message', formatted before the result is freed; TA_ERROR_NO_MEMORY from the compiler is a plain TinyactorsError. ResolveError(message, {line, column}) has status TA_ERROR_INVALID; a line or column that is not an integer from 1 is unspecified (0). A resolver's other exception, a result that is not a string (a TypeError) or one with a lone surrogate (TinyactorsError TA_ERROR_INVALID) is thrown from the compile call after the result is freed, the first of them if several. A SyntaxError is not converted (Python converts it: a .py file is compiled at resolve time, and no JavaScript is).</what>
+    <why>Python's CompileError takes the first error's repr as its message; a compiler's 'file:line:column: message' is what a JavaScript programmer reads in a stack trace.</why>
+    <evidence>tinyactors-napi/src/compile.c ta_napi_located, ta_napi_resolve_refused; tinyactors-cpython/src/compile.c ta_python_refusal</evidence>
+  </entry>
+  <entry id="l-p1-compile-request-in-loop" date="2026-10-16" step="p1-compile" kind="note" status="open">
+    <what>TA_EFFECT_REQUEST is answered (ta_host_resume with TA_ERROR_INVALID, then a turn scheduled) in loop.c's ta_napi_dispatch, where the drain's dispatch lives until src/effects.c exists.</what>
+    <why>p1-effects writes effects.c; the brief puts the answer in the drain's dispatch now.</why>
+    <evidence>tinyactors-napi/src/loop.c ta_napi_dispatch; test/host.test.mjs 'a run-time fetch'</evidence>
+    <resolution>p1-effects moves the case into effects.c's dispatch</resolution>
+  </entry>
+  <entry id="l-p1-compile-payloads" date="2026-10-16" step="p1-compile" kind="decision" status="resolved">
+    <what>Data and params become a payload of the target's datamodel: the chart's datamodel name from its image (ta_image_chart_datamodel; a session's chart through ta_host_locate, ta_host_system, ta_actor_info_get), 'ecmascript' the host's one ECMAScript datamodel (quickjs: encode's CBOR in the host's arena, ta_datamodel_ecmascript_payload_from_cbor); any other datamodel takes no data (TypeError); data for a session that is not live is TA_ERROR_STALE, as Python. The payload is made after every other field, released through the datamodel's vtable when core refuses the input. spawn and boot advance the clocks first; send, fail and terminate do not (as Python).</what>
+    <why>tinyactors-cpython/src/host.c ta_python_host_payload; root AGENTS.md (no serialization on the hot path: CBOR only toward quickjs).</why>
+    <evidence>tinyactors-napi/src/host.c ta_napi_host_payload, ta_napi_host_payload_release</evidence>
+  </entry>
+  <entry id="l-p1-compile-send-many" date="2026-10-16" step="p1-compile" kind="decision" status="resolved">
+    <what>sendMany(items) takes an array of message objects (host.send(message)'s fields, unknown keys ignored), not Python's tuples, converted and handed to core in slices of 256 ta_event_in in the host's arena under a mark each; it returns the accepted prefix; an item that cannot be converted throws after the slices before its own were sent; payloads core did not take are released.</what>
+    <why>docs/api-map.md row host.sendMany; tinyactors-cpython/src/host.c ta_python_send_slice.</why>
+    <evidence>tinyactors-napi/src/host.c ta_napi_send_slice; test/host.test.mjs 'sendMany returns the accepted prefix, in slices'</evidence>
+  </entry>
+  <entry id="l-p1-compile-text" date="2026-10-16" step="p1-compile" kind="note" status="resolved">
+    <what>values.c exports ta_napi_text_of(env, value, {arena, what, view}): a string's UTF-8 in a given arena with a lone surrogate refused, the conversion the inputs and the resolver use (into the host's arena, the module's, or the compilation's scratch); the static helper it wraps is renamed ta_napi_utf8.</what>
+    <why>One conversion of text for every call; the resolver's text must live in request-&gt;scratch.</why>
+    <evidence>tinyactors-napi/src/values.c, src/addon.h</evidence>
   </entry>
 </log>

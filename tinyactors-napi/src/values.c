@@ -80,7 +80,7 @@ static bool ta_napi_lone_surrogate(ta_bytes utf16) {
  * forces), into *out. Node-API writes a lone surrogate as U+FFFD (EF BF
  * BD), so when those bytes appear the string is read again as UTF-16 and
  * checked: a lone surrogate is refused, never replaced. */
-static bool ta_napi_text(ta_napi_encoder *encoder, napi_value value, ta_string_view *out) {
+static bool ta_napi_utf8(ta_napi_encoder *encoder, napi_value value, ta_string_view *out) {
     napi_env env = encoder->env;
     size_t length = 0;
     TA_NAPI_CHECK(encoder, napi_get_value_string_utf8(env, value, NULL, 0, &length));
@@ -103,6 +103,21 @@ static bool ta_napi_text(ta_napi_encoder *encoder, napi_value value, ta_string_v
     }
     *out = (ta_string_view){text, (uint32_t)written};
     return true;
+}
+
+bool ta_napi_text_of(napi_env env, napi_value value, ta_napi_text *text) {
+    napi_valuetype type = napi_undefined;
+    if (napi_typeof(env, value, &type) != napi_ok) return false;
+    if (type != napi_string) {
+        napi_throw_type_error(env, NULL, text->what);
+        return false;
+    }
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    if (instance == NULL) return false;
+    ta_napi_encoder encoder = {env, instance, text->arena, NULL, {TA_OK, NULL}, false};
+    if (ta_napi_utf8(&encoder, value, &text->view)) return true;
+    if (!encoder.thrown) ta_napi_throw(env, &encoder.refusal);
+    return false;
 }
 
 /* A number: an integer when Number.isSafeInteger(value) and not -0, else a
@@ -178,7 +193,7 @@ static bool ta_napi_write_object(ta_napi_encoder *encoder, napi_value object, ui
         napi_value key, item;
         ta_string_view text;
         TA_NAPI_CHECK(encoder, napi_get_element(env, keys, i, &key));
-        if (!ta_napi_text(encoder, key, &text)) return false;
+        if (!ta_napi_utf8(encoder, key, &text)) return false;
         ta_cbor_write_text(encoder->writer, text);
         TA_NAPI_CHECK(encoder, napi_get_property(env, object, key, &item));
         if (!ta_napi_write(encoder, item, depth + 1)) return false;
@@ -213,7 +228,7 @@ static bool ta_napi_write(ta_napi_encoder *encoder, napi_value value, uint32_t d
         break;
     case napi_string: {
         ta_string_view text;
-        if (!ta_napi_text(encoder, value, &text)) return false;
+        if (!ta_napi_utf8(encoder, value, &text)) return false;
         ta_cbor_write_text(writer, text);
         break;
     }

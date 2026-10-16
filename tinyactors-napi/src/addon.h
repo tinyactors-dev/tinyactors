@@ -38,7 +38,11 @@
  *              references to symbols need Node-API 10;
  *   turn       the function the event loop calls for a turn of a host
  *              (loop.c), given the Host as its argument: one per
- *              environment, so scheduling a turn makes no function. */
+ *              environment, so scheduling a turn makes no function;
+ *   compiled   the class of a compile result (compile.c), made only by
+ *              the compile calls;
+ *   compile_error, resolve_error  the classes CompileError and
+ *              ResolveError, subclasses of TinyactorsError, exported. */
 typedef struct ta_napi_instance {
     napi_env env;
     ta_allocator allocator;
@@ -47,6 +51,9 @@ typedef struct ta_napi_instance {
     napi_ref object;
     napi_ref keys;
     napi_ref turn;
+    napi_ref compiled;
+    napi_ref compile_error;
+    napi_ref resolve_error;
 } ta_napi_instance;
 
 /* The environment's instance, or NULL (and an exception pending) before
@@ -102,6 +109,17 @@ bool ta_napi_value_write(napi_env env, napi_value value, const ta_napi_writing *
 /* The value of one CBOR item filling `cbor`, or NULL with a TinyactorsError
  * thrown. The bytes are read during the call only. */
 napi_value ta_napi_value_read(napi_env env, ta_bytes cbor);
+
+/* A string as UTF-8 in text->arena (the copy Node-API forces), a lone
+ * surrogate refused: text->view. A value that is not a string throws a
+ * TypeError saying text->what; a refusal a TinyactorsError. The caller
+ * holds a mark around the call. */
+typedef struct ta_napi_text {
+    ta_growable_arena *arena;
+    const char *what;
+    ta_string_view view; /* out */
+} ta_napi_text;
+bool ta_napi_text_of(napi_env env, napi_value value, ta_napi_text *text);
 
 /* The exports encode(value) and decode(bytes). */
 napi_value ta_napi_encode(napi_env env, napi_callback_info info);
@@ -244,8 +262,31 @@ bool ta_napi_enter(napi_env env, napi_value self, ta_napi_call *call);
  * asked meanwhile. */
 void ta_napi_leave(ta_napi_call *call);
 
+/* A value for a session's datamodel (AGENTS.md, "The binding's memory"):
+ * `value` made a payload of the datamodel of `session`'s chart, or, with
+ * session 0, of `chart`'s. Undefined is no payload (0). On a quickjs host
+ * it is the value's CBOR in the host's arena, read by
+ * ta_datamodel_ecmascript_payload_from_cbor. False with an exception
+ * pending (a session that is not there: TA_ERROR_STALE; a chart whose
+ * datamodel takes no data: TypeError). */
+typedef struct ta_napi_payload_for {
+    uint64_t session;
+    ta_host_chart_ref chart;
+    napi_value value;
+    ta_payload payload; /* out */
+} ta_napi_payload_for;
+bool ta_napi_host_payload(napi_env env, ta_napi_host *host, ta_napi_payload_for *target);
+/* A payload the host refused, released: it is still ours. */
+void ta_napi_host_payload_release(ta_napi_host *host, ta_payload payload);
+
 /* Defines the class Host on `exports`. */
 napi_status ta_napi_host_define(napi_env env, napi_value exports);
+
+/* ---- compile.c: the compiler ------------------------------------------- */
+
+/* compileCharts, compileSystem, CompileError and ResolveError on
+ * `exports`; the class of a compile result in the instance. */
+napi_status ta_napi_compile_define(napi_env env, napi_value exports);
 
 /* ---- loop.c: the loop (AGENTS.md, "The loop") ----------------------------- */
 
