@@ -132,11 +132,11 @@
       <core>ta_host_spawn, ta_host_resolve, ta_host_send, ta_host_send_many, ta_host_terminate, ta_host_actor_by_name</core>
       <note>Sessions are always <code>bigint</code> (<code>napi_get_value_int64</code> saturates silently, spike s-napi); a target is a <code>bigint</code> or a local address string.</note>
     </item>
-    <item id="a-drivers" status="open" decision="d-drive d-time">
-      <node>host.runUntilIdle(); await host.idle(); host.nextDeadline; new SimulatedClock(), clock.increment(ms), clock.now</node>
+    <item id="a-drivers" status="decided" decision="d-drive d-time d-clock">
+      <node>no driver: the event loop runs every host; await host.idle(); host.nextDeadline; new SimulatedClock(), clock.increment(ms), clock.now</node>
       <python>run_until_idle(), run(), await idle(), next_deadline, SimulatedClock.increment(seconds), .now</python>
       <core>ta_host_effects, ta_host_effects_ack, ta_host_advance_time, ta_host_run, TA_RUN_IDLE, TA_RUN_YIELDED, TA_RUN_EFFECTS, TA_RUN_EFFECTS_FULL, TA_RUN_EXHAUSTED, TA_RUN_FAULT</core>
-      <note>No <code>run()</code> that sleeps: a synchronous sleep would block the event loop the host lives on; the event-loop driver is what runs forever.</note>
+      <note>Python's <code>run_until_idle()</code> and <code>run()</code> have no counterpart (decision d-drive, the maintainer's): the turn runs from <code>setImmediate</code> and <code>setTimeout</code> callbacks only, and <code>idle()</code> is a promise, not a driver.</note>
     </item>
     <item id="a-io" status="open" decision="d-async">
       <node>ioProcessors: {[type]: (host, send) =&gt; void | Promise}; send.session, .event, .target, .sendid, .data, .type, .origin, .traceparent; send.answer(event, data?, {traceparent, origin, raw}); send.fail()</node>
@@ -296,12 +296,12 @@
       <recommendation option="ms">Python's review chose the language's unit (<code>time.sleep</code> takes seconds); JavaScript's is the millisecond. Ticks stay inside the addon either way.</recommendation>
       <evidence kind="repo">tinyactors-cpython/ROADMAP.md, "The API review": "Seconds at every boundary"; tinyactors-napi/AGENTS.md, "A simulated clock".</evidence>
     </decision>
-    <decision id="d-drive" status="recommended" owner="api-review">
+    <decision id="d-drive" status="decided" owner="maintainer">
       <question>When does the event loop drive a host?</question>
-      <option id="always">Always: an input from outside a turn schedules one turn with <code>setImmediate</code>; an idle turn arms one <code>setTimeout</code>, ref'd while a deadline is pending. <code>runUntilIdle()</code> turns synchronously for scripts and tests.</option>
+      <option id="transparent">Always, and only it: the host works on the runtime's event loop with nothing for the programmer to choose or start. An input from outside a turn schedules one turn with <code>setImmediate</code>; a turn that yields schedules the next; an idle turn arms one <code>setTimeout</code> at the deadline, ref'd while it is pending. There is no synchronous driver in the API.</option>
       <option id="after-idle">Only once <code>idle()</code> was awaited, as Python attaches asyncio's loop at the first <code>idle()</code>.</option>
-      <recommendation option="always">Python needs an attach step because a Python program may have no running loop; a Node program always has one. Inputs that ran no turn would otherwise sit until the application remembered to drive. <code>setImmediate</code>, not a microtask, so I/O runs between turns.</recommendation>
-      <evidence kind="repo">tinyactors-cpython/src/loop.c, ta_python_loop_schedule (returns when host-&gt;loop is None); bindings.md section 3, "Bound each turn".</evidence>
+      <recommendation option="transparent">Decided by the maintainer (2026-10-16): "Python had a choice between using an event loop and not using an event loop, but obviously in Node, this is not a thing. So it should work transparently with the event loop from the perspective of a JavaScript programmer." <code>await host.idle()</code> stays as a promise that settles when the host is next idle (for tests and an orderly shutdown); it observes the loop's turns and drives nothing. <code>setImmediate</code>, not a microtask, so I/O runs between turns.</recommendation>
+      <evidence kind="repo">tinyactors-cpython/src/loop.c, ta_python_loop_schedule (returns when host-&gt;loop is None); bindings.md section 3, "Not every program has an event loop" (Node's always has one) and "Bound each turn".</evidence>
     </decision>
     <decision id="d-typed" status="open" owner="api-review">
       <question>The shape of a typed method.</question>
@@ -344,8 +344,15 @@
       <question>Where does an error go that a turn the event loop ran raises (a handler threw, a reply's error had no onError, a fault, an exhausted pool) when no <code>idle()</code> waits?</question>
       <option id="keep">Keep it for the next <code>idle()</code> or <code>runUntilIdle()</code>, as Python's asyncio driver does.</option>
       <option id="throw">Reject every waiting <code>idle()</code>; with none waiting, throw it from the turn's callback, so the runtime reports it as any uncaught error (<code>process.on('uncaughtException')</code>, Bun's equivalent).</option>
-      <recommendation option="throw">With decision d-drive, most turns run with nobody awaiting <code>idle()</code>; a kept error would wait for a call many programs never make. An uncaught error is how Node and Bun report a callback's failure, and the application's own handler decides what to do.</recommendation>
+      <recommendation option="throw">There is no driver call to raise an error from (d-drive, decided): every turn runs from an event-loop callback, so a kept error would wait for an <code>idle()</code> many programs never call. An uncaught error is how Node and Bun report a callback's failure, and the application's own handler decides what to do.</recommendation>
       <evidence kind="repo">tinyactors-cpython/src/loop.c, ta_python_loop_settle ("nobody waits: the next idle() raises it").</evidence>
+    </decision>
+    <decision id="d-clock" status="recommended" owner="api-review">
+      <question>What does <code>SimulatedClock.increment(ms)</code> do, now that there is no synchronous driver?</question>
+      <option id="schedule">It moves the clock and schedules a turn on every host made with it, like any input; a test awaits <code>host.idle()</code> to see what ran.</option>
+      <option id="sync">It turns every such host until idle before it returns, as xstate's and Python's do.</option>
+      <recommendation option="schedule">The decided rule (d-drive) has one driver, the event loop; a synchronous turn inside increment would be a second one, and would run handlers (and their promises' first steps) inside the caller's stack. The cost is one await in a test: <code>clock.increment(1000); await host.idle()</code>.</recommendation>
+      <evidence kind="repo">bindings.md section 3, "A caller's own clock"; tinyactors-cpython/src/loop.c, ta_python_clock_increment.</evidence>
     </decision>
   </decisions>
 
@@ -381,10 +388,10 @@
         <done-when>A host is made and closed under both runtimes; a collected host frees its memory (test with --expose-gc and Bun.gc).</done-when>
         <files>src/host.c, src/module.c, tools/lint/rules/allocation-in-tables-and-host.yml</files>
       </step>
-      <step id="p1-loop" status="todo" after="p1-host" decision="d-drive d-time d-errors">
+      <step id="p1-loop" status="todo" after="p1-host" decision="d-drive d-time d-errors d-clock">
         <title>The loop and both drivers</title>
-        <does>src/loop.c: drain with the batch flag and its bound before a take, turn with the bound of 64 runs, every run status as Python's table has it; runUntilIdle(); the event-loop driver (setImmediate for a yield and for inputs outside a turn, one setTimeout at the deadline, ref'd while pending, replaced on each idle turn); await idle(); SimulatedClock holding its hosts weakly (WeakRef); both clocks before every run and every input that depends on them, and after each run when an encoder is configured.</does>
-        <done-when>The loop's tests: every status, the bound yields, one timer, no timer with a SimulatedClock, a process exits when no deadline is pending and stays while one is.</done-when>
+        <does>src/loop.c: drain with the batch flag and its bound before a take, turn with the bound of 64 runs, every run status as Python's table has it, run only from the event loop (decision d-drive): setImmediate for a yield and for an input outside a turn (one pending at a time), one setTimeout at the deadline, ref'd while pending, replaced on each idle turn; await idle() settling its waiters at the next idle turn, and errors as decision d-errors says; SimulatedClock holding its hosts weakly (WeakRef), increment as decision d-clock says; both clocks before every run and every input that depends on them, and after each run when an encoder is configured.</does>
+        <done-when>The loop's tests: every status; a send with no other call runs its actor (no driver called); the bound yields to I/O; one timer; no timer with a SimulatedClock; a process exits when no deadline is pending and stays while one is.</done-when>
         <files>src/loop.c, test/loop.test.mjs, test/liveness.test.mjs</files>
       </step>
       <step id="p1-compile" status="todo" after="p1-loop" decision="d-image">
@@ -485,7 +492,7 @@
     <finding id="x-dom" verdict="unchecked"><claim>The native datamodel needs B.2's XML DOM, which today exists only as a static string inside quickjs's datamodel.</claim><scenario>W3C 557 and 561 on the native datamodel.</scenario><evidence kind="repo">datamodel_ecmascript.c:273-321.</evidence><action>Decision d-dom; request r-dom if the maintainer agrees.</action></finding>
     <finding id="x-datamodel" verdict="unchecked"><claim>The application must be able to choose quickjs for a host, through the public API.</claim><scenario>The suite's quickjs runs go through conform.mjs, which imports only the package (its lint); and an application running charts it does not trust needs max_ops and a bounded heap.</scenario><evidence kind="repo">tinyactors-napi/AGENTS.md, "Tasks" (the adapter imports only @tinyactors/node); driver.md:72-82; datamodel_ecmascript.h (max_ops, memory_limit).</evidence><action>Decision d-datamodel.</action></finding>
     <finding id="x-rulebook" verdict="unchecked"><claim>The Node rulebook predates ADR 0014 and ADR 0017: it still speaks of envelopes, PEER and synchronous I/O processors.</claim><scenario>A session building from tinyactors-napi/AGENTS.md as it stands would design a peer API core no longer has.</scenario><evidence kind="repo">tinyactors-napi/AGENTS.md, "What reaches the application" and "Lifetimes and thin views"; tinyactors-napi/ROADMAP.md, "Done means"; commits d7db9ad, f4c2819.</evidence><action>Phase p0-rulebook, section rulebook.</action></finding>
-    <finding id="x-drive" verdict="unchecked"><claim>Node needs no attach step before the event loop drives a host.</claim><scenario>A server calls host.send from an HTTP handler and never calls idle(); with Python's rule no turn would run until something drove the host.</scenario><evidence kind="repo">tinyactors-cpython/src/loop.c, ta_python_loop_schedule.</evidence><action>Decision d-drive.</action></finding></findings>
+    <finding id="x-drive" verdict="confirmed"><claim>Node needs no attach step before the event loop drives a host.</claim><scenario>A server calls host.send from an HTTP handler and never calls idle(); with Python's rule no turn would run until something drove the host.</scenario><evidence kind="repo">tinyactors-cpython/src/loop.c, ta_python_loop_schedule.</evidence><action>Decided by the maintainer (2026-10-16): decision d-drive, transparent; no synchronous driver; d-clock follows from it.</action></finding></findings>
 
   <spikes>
     <spike id="s-napi" ran="2026-10-16">
@@ -543,6 +550,11 @@
       <now>"a handler that runs later (an async function's continuation, a promise callback) gets a record of the language's values made before it is scheduled".</now>
       <becomes>The rule of decision d-async, once decided.</becomes>
       <evidence kind="repo">decision d-async.</evidence>
+    </change>
+    <change id="c-loop" file="tinyactors-napi/AGENTS.md" section="The loop">
+      <now>"A simulated clock, SimulatedClock with increment(ms) (xstate's shape, our meaning)"; the driver's table is Python's, with a synchronous driver beside the event loop's.</now>
+      <becomes>The event loop drives every host, transparently: no synchronous driver; a turn runs from setImmediate (an input, a yield) and one setTimeout (the deadline); idle() is a promise that observes; increment as decision d-clock decides.</becomes>
+      <evidence kind="repo">decision d-drive (the maintainer, 2026-10-16).</evidence>
     </change>
   </rulebook>
 </plan>
