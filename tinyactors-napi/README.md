@@ -24,3 +24,11 @@ The last published version, 0.2.0, was built from an earlier binding.
 - **`using host = new Host(...)` needs a runtime that parses `using`:**
   Bun 1.4 does, Node.js 22 does not. `Symbol.dispose` and
   `Symbol.asyncDispose` call `close()`, which works everywhere.
+- **A `<script>` that declares top-level names gives each session a
+  context of its own.** A chart whose scripts declare `var`, `function`,
+  `let`, `const` or `class` at their top level runs each of its sessions
+  in a `vm` context of its own (about 143 KB a session on Node.js, 60 KB
+  on Bun), so the script's functions close over its own variables. A
+  chart that declares nothing shares one context per host: declare the
+  function as a `<data>` and assign it in the script
+  (`<data id="price"/>`, `price = (sku) => ...`).
