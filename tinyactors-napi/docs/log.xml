@@ -475,10 +475,11 @@
     <why>A per-call cost that grows with the population shows only at scale; the Python binding found such a walk in core (quadratic migration, tinyactors-cpython/ROADMAP.md, "Migration").</why>
     <resolution>The same gate would serve the Python binding; noted for the coordinator of both bindings.</resolution>
   </entry>
-  <entry id="l-p1-rules-long-string" date="2026-10-16" step="p1-rules" kind="request-to-core" status="open">
+  <entry id="l-p1-rules-long-string" date="2026-10-16" step="p1-rules" kind="request-to-core" status="resolved">
     <what>An event string longer than a slab page (4096 bytes) makes ta_host_send grow the segment without bound: host.send(session, 'x'.repeat(8000)) never returns and the process is killed at about 6 GB resident.</what>
     <why>ta_system_send answers TA_ERROR_NO_MEMORY for a string no slab class holds (src/base/slab.h: max object size TA_SLAB_PAGE), and host_send_to retries after segment_grow for as long as the growth succeeds; the same retry is in spawn (host.c:713), adopt (:1481, :1530) and wake (:2083), and a run's EXHAUSTED grows between runs too (unverified for a chart's long eventexpr). Any input carrying text reaches it, a transport's message from the network included. The addon works around nothing (AGENTS.md, 'Gaps in core'); written under ROADMAP.md, 'Requests to core'.</why>
     <evidence>gdb on node 22.23.3: ta_napi_host_send -&gt; ta_host_send -&gt; segment_grow -&gt; ta_system_relocate -&gt; place (memset); 4000 bytes pass, 6000 and 8000 hang; tinyactors-core/src/host/host.c:724-737</evidence>
+    <resolution>Fixed in core (269646f, 2026-10-16): a text longer than TA_SYSTEM_MAX_STRING (4087 bytes, system.h) in an input is TA_ERROR_INVALID at the call, nothing allocated, the payload the caller's; a chart expression past it is error.execution; a blob naming one is malformed; segment_grow refuses when every capacity is at its hard limit. Decided by the core-fix session with the maintainer unavailable: refuse rather than store long strings another way, since core keeps every dynamic string as one slab object and has no other path. Tests: tinyactors-core/tests/unit/test_host_strings.c.</resolution>
   </entry>
   <entry id="l-p1-rules-session-zero" date="2026-10-16" step="p1-rules" kind="decision" status="for-maintainer">
     <what>A session 0n is refused as a TypeError by send, fail, terminate and send(message), as the message 'a session is a bigint from 1 to 2^64-1' said; it used to reach core, which refused it with another status.</what>

@@ -118,6 +118,15 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   `host.c:713`, `:1481`, `:1530` and `:2083`. The addon works around
   nothing: its tests keep each text under 4096 bytes
   (`test/rules.test.mjs`, "marks nest in the host's arena").
+  **Answered 2026-10-16 (`269646f`):** each text core keeps is at most
+  `TA_SYSTEM_MAX_STRING` bytes (4087, `system.h`); a longer one in an
+  input (`ta_host_send`, `_send_many`, `ta_host_spawn`, the system's
+  calls) is `TA_ERROR_INVALID` with nothing allocated and the payload the
+  caller's; a chart's expression past it is `error.execution`; a
+  traceparent has no limit. `segment_grow` stops when every capacity is
+  at its hard limit, so no retry loop in `host.c` grows without bound.
+  Tests: `tinyactors-core/tests/unit/test_host_strings.c`. The addon
+  needs no change; a test of the refusal is its own to add.
 
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
