@@ -466,7 +466,7 @@
         <done-when>Each rule names its test in AGENTS.md.</done-when>
         <files>test/*.test.mjs</files>
       </step>
-      <gate>mise run test: lint, build, the binding's tests under node and bun, M1 on both datamodels under both runtimes; then the API review side by side with Python.</gate>
+      <gate>mise run test: lint, build, the binding's tests under node and bun, M1 on both datamodels under both runtimes; then the API review side by side with Python. The review is in docs/api-review.md.</gate>
     </phase>
 
     <phase id="p2" title="The rest of 8.5, in the order the Python binding took">

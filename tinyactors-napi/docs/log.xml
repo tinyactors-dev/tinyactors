@@ -523,4 +523,25 @@
     <why>The fix was dispatched by the coordinator to unblock the end-to-end goal (a transport passing on network messages).</why>
     <evidence>tinyactors-core/tests/unit/test_host_strings.c; commit 269646f</evidence>
   </entry>
+  <entry id="l-p1-review-compile-message" date="2026-10-16" step="p1-review" kind="decision" status="resolved">
+    <what>A CompileError's message is now 'file:line:column: error: message', as Python's (the repr of its first error Diagnostic) and as a compiler prints it; it was 'file:line:column: message' (l-p1-compile-errors).</what>
+    <why>The API review side by side with Python found the two bindings' messages differing by the severity word only, for no reason either log gives; the test already called it 'the message, as a compiler prints it'.</why>
+    <evidence>tinyactors-cpython/src/compile.c:218-224 (PyObject_Repr of the first error); probe under node: 'c.scxml:1:1: XML: unterminated start tag', Python: 'c.scxml:1:1: error: XML: unterminated start tag'.</evidence>
+    <resolution>2a0f926: src/compile.c ta_napi_located, test/compile.test.mjs, docs/api-map.md and index.d.ts.</resolution>
+  </entry>
+  <entry id="l-p1-review-declaring-script" date="2026-10-16" step="p1-review" kind="decision" status="resolved">
+    <what>The README says that a &lt;script&gt; declaring top-level names (var, function, let, const, class) gives each session a vm context of its own (about 143 KB on node, 60 KB on bun), and how a chart keeps the shared context (a &lt;data&gt; assigned a function in the script).</what>
+    <why>Writing the review's chart program, the natural JavaScript (function price(sku) {...} in a &lt;script&gt;) silently costs a context per session (decision d-declarations); nothing an application developer reads said so. The alternative was run under node and bun with the same output.</why>
+    <evidence>docs/api-review.md, 'A JavaScript chart'; AGENTS.md, 'The native ecmascript datamodel' (143 KB / 60 KB).</evidence>
+    <resolution>0603967: README.md, 'Before you use it'.</resolution>
+  </entry>
+  <entry id="l-p1-review-result-ids" date="2026-10-16" step="p1-review" kind="decision" status="for-maintainer">
+    <what>Sessions inside a typed method's result are numbers (actorList's sessions, actorGet's session), while every input takes a session only as a bigint (a number is a TypeError), so host.terminate(result.sessions[0]) throws; in Python both are int and the result's ids pass straight back. Not fixed: either change crosses a rule. Options: (a) inputs also accept a number that is a safe integer from 1 (Number.isSafeInteger), still refusing every other number, so nothing saturates; (b) results decode integers past a method-specific list of id fields as bigint (a per-method schema in the addon, which core's requests.md would have to define); (c) keep it, and the README says to wrap with BigInt(). Recommended: (a), the smallest change that keeps the guarantee the rule exists for (no id loses bits); it changes AGENTS.md's rule 'Sessions are bigints ... a number ... is a TypeError' and its test.</what>
+    <why>The API review read a program that lists actors and acts on them; the same program in Python needs no conversion. Logged before as an uncertainty (l-p1-methods-result-ids); this is the decision it needs.</why>
+    <evidence>probe under node: actorList -&gt; { sessions: [ 1 ], cursor: null }, actorGet -&gt; { session: 1, ... }; AGENTS.md, 'Rules the suite cannot see', 'Sessions are bigints from 1 to 2^64-1'; test/rules.test.mjs 'sessions are bigints from 1 to 2^64-1, never a number that saturates'.</evidence>
+  </entry>
+  <entry id="l-p1-review-refutation" date="2026-10-16" step="p1-review" kind="note" status="for-maintainer">
+    <what>The review's findings were not given to a fresh agent to refute (reasoned-analysis, step 8): this step agent cannot spawn one. The two fixes are small and tested; the one recommendation (l-p1-review-result-ids, option a) is unrefuted until the coordinator or the maintainer runs that check.</what>
+    <evidence>docs/api-review.md, 'How this review was made'.</evidence>
+  </entry>
 </log>
