@@ -137,7 +137,7 @@ class ApplicationTraces(unittest.TestCase):
 
         def processor(host, send):
             seen.append((send.traceparent, time.time_ns()))
-            time.sleep(0.02)  # a slow handler: the actor's spans must not be stretched over it
+            time.sleep(0.02)  # a slow handler: only its sender's spans wait for it
             send.answer("reserved")  # a later turn, whose clocks come after the handler
 
         config = {"systemID": "t", "ioProcessors": [{"type": APP}], "telemetry": {}}
@@ -169,8 +169,9 @@ class ApplicationTraces(unittest.TestCase):
         self.assertEqual(handling["parent"], reserve["span"])
         traceparent, handled_at = seen[0]
         self.assertEqual(traceparent, "00-%s-%s-01" % (self.APP_TRACE, handling["span"]))  # and out to the application
-        self.assertLessEqual(reserve["end"], handled_at)  # stamped within its run, before the handler ran
-        self.assertLessEqual(handling["end"], handled_at)
+        # the sender waits for its send to be handled: its macrostep ends after the handler
+        self.assertGreaterEqual(reserve["end"], handled_at)
+        self.assertGreaterEqual(handling["end"], handled_at)
         self.assertLess(order["end"] - order["start"], 10_000_000)  # microseconds, not the handler's 20 ms
 
 

@@ -227,7 +227,7 @@ class Services(unittest.TestCase):
             return session, host.snapshot()
 
     def restore(self, blob, **options):
-        config = {"systemID": "t", "system": {"ticksPerSecond": 1000}, "ioProcessors": [{"type": "app", "sync": False}]}
+        config = {"systemID": "t", "system": {"ticksPerSecond": 1000}, "ioProcessors": [{"type": "app"}]}
         options.setdefault("clock", tinyactors.SimulatedClock())
         return tinyactors.Host.restore(blob, config, **options)
 

@@ -61,11 +61,11 @@ def text(root):
     return ET.tostring(root, encoding="unicode")
 
 
-def host_with(documents, processors=None, sync=False, **options):
+def host_with(documents, processors=None, **options):
     """A host on a simulated clock with one I/O processor of type APP, the
     documents compiled into one image and added."""
     config = {"systemID": "t", "system": {"ticksPerSecond": 1000},
-              "ioProcessors": [{"type": APP, "sync": sync}]}
+              "ioProcessors": [{"type": APP}]}
     options.setdefault("clock", tinyactors.SimulatedClock())
     host = tinyactors.Host(config, processors if processors is not None else {}, **options)
     with tinyactors.compile_charts(documents) as compiled:

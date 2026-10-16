@@ -268,5 +268,8 @@ ta_effect_record *ta_system_effect_push(ta_system *s, uint32_t kind, uint32_t ac
 void ta_system_emit_wakes(ta_system *s);
 int ta_system_effect_full(const ta_system *s);
 void ta_system_effect_release(ta_system *s, ta_effect_record *f);
+void ta_system_effects_release(ta_system *system, uint32_t n, int resume);
+void ta_system_sender_resume(ta_system *system, uint32_t actor, uint64_t serial);
+int ta_system_senders_waiting(const ta_system *system);
 
 #endif /* TINYACTORS_SYSTEM_SYSTEM_INTERNAL_H */

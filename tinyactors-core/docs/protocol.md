@@ -125,4 +125,5 @@ writes a value as text, for logs and traces.
   (`tests/unit/test_datamodel_ecmascript.c`) and by the suite, through the
   echo setup and the remote I/O processor.
 - `tests/unit/test_remote.c` — the remote I/O processor: a send to another
-  system, an input by address, the reply to its origin, sync, refusals.
+  system, an input by address, the reply to its origin, the sender waiting
+  for its send, refusals.

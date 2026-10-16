@@ -313,10 +313,11 @@ The handler does the I/O and then does one of two things:
 - **`send.fail()`** reports that the send could not be delivered. The
   sending actor gets `error.communication`.
 
-A handler may also do neither, when the send needs no reply. A processor
-the config marks `"sync": true` is different: the run stops after a send
-to it, and the sending actor waits until the send is answered. A handler
-that raises before answering has its send failed for it, and the driver
+A handler may also do neither, when the send needs no reply. The sending
+actor waits while the handler runs, so a plain function's `answer()` or
+`fail()` reaches it before its next step, as SCXML has a `<send>`
+behave; the other actors go on meanwhile. An `async def` handler
+answers after the sending actor has gone on. A handler that raises before answering has its send failed for it, and the driver
 raises the exception after the turn.
 
 Read the fields inside the handler: a plain function gets a thin view

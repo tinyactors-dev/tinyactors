@@ -731,13 +731,13 @@ static void test_bad_targets(void) {
     world_close(&e);
 }
 
-/* TA_IO_PROCESSOR_SYNC through the host: the run stops right after the send,
- * and what the host answers (an error, or an event back) comes before what
- * the sender does next — the BasicHTTP cases of W3C 577 and 201 */
+/* A send to an I/O processor parks its sender until the batch is acked;
+ * the other actors go on, and what the handler gives before the ack (an
+ * error, or an event back) comes before what the sender does next: the
+ * BasicHTTP cases of W3C 577 and 201 */
 #define IO_TYPE "http://example.com/io"
-static void test_sync_io_processor(void) {
-    ta_io_processor_descriptor io = {
-        {IO_TYPE, (uint32_t)strlen(IO_TYPE)}, {"http://example.com/", 19}, TA_IO_PROCESSOR_SYNC, 0};
+static void test_a_sender_waits_for_its_send(void) {
+    ta_io_processor_descriptor io = {{IO_TYPE, (uint32_t)strlen(IO_TYPE)}, {"http://example.com/", 19}, 0, 0};
     for (int answer = 0; answer < 2; answer++) { /* 0: error.communication, 1: an event back */
         host_world e;
         world_open(&e, 16, &io, 1);
@@ -751,18 +751,26 @@ static void test_sync_io_processor(void) {
                           "<state id='ok'><onentry><log expr=\"'ok:' + _event.name\"/></onentry>"
                           "</state><state id='bad'><onentry>"
                           "<log expr=\"'bad:' + _event.name\"/></onentry></state>"));
+        world_add(&e, SC("o", "initial='a'><state id='a'><onentry><log expr=\"'other'\"/></onentry></state>"));
         uint64_t session = spawn(&e, "s");
+        spawn(&e, "o");
         ta_run result = ta_host_run(e.host, 100000);
         CHECK_EQUAL(result.status, TA_RUN_EFFECTS);
         const ta_host_effect *effects;
         uint32_t n = ta_host_effects(e.host, &effects);
-        CHECK(n >= 1);
-        CHECK_EQUAL(effects[n - 1].kind, TA_EFFECT_SEND);
-        CHECK_EQUAL(effects[n - 1].io_processor, 0);
-        CHECK_EQUAL(effects[n - 1].session, session);
-        drain(&e);
-        CHECK(strcmp(e.log, "") == 0); /* the sender has not gone on */
-        if (answer == 0) {
+        int sends = 0, other = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            if (effects[i].kind == TA_EFFECT_SEND) {
+                sends++;
+                CHECK_EQUAL(effects[i].io_processor, 0);
+                CHECK_EQUAL(effects[i].session, session);
+                CHECK(effects[i].flags & TA_EFFECT_FLAG_WAITING);
+            }
+            other += effects[i].kind == TA_EFFECT_LOG; /* only the other actor has logged */
+        }
+        CHECK_EQUAL(sends, 1);
+        CHECK_EQUAL(other, 1);
+        if (answer == 0) { /* before the ack: the handler's outcome */
             ta_event_in event;
             memset(&event, 0, sizeof event);
             event.size = sizeof event;
@@ -773,8 +781,9 @@ static void test_sync_io_processor(void) {
         } else {
             CHECK_EQUAL(send(&e, session, "back", NULL), TA_OK);
         }
+        drain(&e); /* the ack: the send is decided, the sender goes on */
         run(&e);
-        CHECK(strcmp(e.log, answer == 0 ? "next;ok:error.communication;" : "next;ok:back;") == 0);
+        CHECK(strcmp(e.log, answer == 0 ? "other;next;ok:error.communication;" : "other;next;ok:back;") == 0);
         world_close(&e);
     }
 }
@@ -1317,7 +1326,7 @@ int main(void) {
     RUN(test_snapshot_restore);
     RUN(test_snapshot_of_one_image_in_two_segments);
     RUN(test_bad_targets);
-    RUN(test_sync_io_processor);
+    RUN(test_a_sender_waits_for_its_send);
     RUN(test_fair_segments);
     RUN(test_routing_between_segments);
     RUN(test_class_across_segments);

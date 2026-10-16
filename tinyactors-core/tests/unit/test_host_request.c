@@ -510,13 +510,11 @@ static void test_create(void) {
     ta_cbor_write_simple(&w, TA_CBOR_FALSE);
     ta_cbor_write_text(&w, ta_string("ioProcessors"));
     ta_cbor_write_array(&w, 1);
-    ta_cbor_write_map(&w, 3);
+    ta_cbor_write_map(&w, 2);
     ta_cbor_write_text(&w, ta_string("type"));
     ta_cbor_write_text(&w, ta_string("http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor"));
     ta_cbor_write_text(&w, ta_string("location"));
     ta_cbor_write_text(&w, ta_string("http://localhost:8080/"));
-    ta_cbor_write_text(&w, ta_string("sync"));
-    ta_cbor_write_simple(&w, TA_CBOR_TRUE);
     ta_cbor_write_text(&w, ta_string("migrateQuantum"));
     ta_cbor_write_uint(&w, 16);
     ta_cbor_write_text(&w, ta_string("telemetry"));

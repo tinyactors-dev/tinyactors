@@ -334,7 +334,7 @@ class W3C:
     BASIC_HTTP = "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor"
     CONFIG = {"systemID": "w3c",
               "system": {"ticksPerSecond": 1000, "maxEvents": 1024, "maxActors": 64},
-              "ioProcessors": [{"type": BASIC_HTTP, "location": LOCATION, "sync": True}]}
+              "ioProcessors": [{"type": BASIC_HTTP, "location": LOCATION}]}
     ROUNDS = 200
 
     def __init__(self, documents):

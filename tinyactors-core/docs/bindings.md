@@ -55,7 +55,7 @@ on wake (timer fired, input arrived, I/O completed):
         drain(host)                         # the run's effects, then its notifications
 
         TA_RUN_EFFECTS_FULL → the effect list was full: run again now
-        TA_RUN_EFFECTS      → answer the sync sends (they are inputs), run again now
+        TA_RUN_EFFECTS      → senders waited for this batch: they go on at its ack, run again now
         TA_RUN_YIELDED      → give the event loop a turn, wake again at once
         TA_RUN_EXHAUSTED    → the allocator refused (run.detail names the pool):
                               run again once it has memory
@@ -99,8 +99,8 @@ static binding_next turn(binding_host *host) {
         ta_run run = ta_host_run(host->h, BUDGET);          /* bounded: BUDGET fuel per call */
         drain(host);
         switch (run.status) {
-        case TA_RUN_EFFECTS:                                /* a sync I/O processor's send: answered in
-                                                               drain, or its sender waits (host.h:215-228) */
+        case TA_RUN_EFFECTS:                                /* senders waited for the batch drain acked:
+                                                               they go on now (host.h, ta_host_run) */
         case TA_RUN_EFFECTS_FULL:  continue;                /* run again now */
         case TA_RUN_YIELDED:       return NEXT_YIELD;       /* budget spent, actors still runnable */
         case TA_RUN_IDLE:          host->deadline = run.next_deadline; return NEXT_IDLE;
@@ -152,7 +152,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 
 | Effect                  | The binding                                                                                                                                                                                                                       | Answers with                                                                                                                         |
 |-------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
-| `TA_EFFECT_SEND`        | The actor’s output: hand it to the application’s handler for the I/O processor at index `io_processor` of the config’s `ioProcessors`, as a thin view (section 6). A `sync` processor’s sender waits until it is answered (`host.h:215-228`). With `io_processor` `TA_NIL` it is a send to an invoked service: route it by `token`.          | The handler’s answer: `ta_host_send` to the sending session (`SESSION`) with the send’s `sendid` and `origintype` the processor’s type; its failure: `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION` and the `sendid` (`system.h:155-157`), the event name not repeated.              |
+| `TA_EFFECT_SEND`        | The actor’s output: hand it to the application’s handler for the I/O processor at index `io_processor` of the config’s `ioProcessors`, as a thin view (section 6). Its sender waits until the batch is acknowledged, so an answer or a failure given in the handler comes before the sender goes on. With `io_processor` `TA_NIL` it is a send to an invoked service: route it by `token`.          | The handler’s answer: `ta_host_send` to the sending session (`SESSION`) with the send’s `sendid` and `origintype` the processor’s type; its failure: `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION` and the `sendid` (`system.h:155-157`), the event name not repeated.              |
 | `TA_EFFECT_INVOKE`      | Start the service of type `event` with `target` (its src), `sendid` (its invokeid) and `payload` (its params), keyed by `(segment, token)`. Sends to it carry the same token: keep no table of invoke ids. Flagged `TA_EFFECT_FLAG_RESTORED`, it is a restored host announcing an invocation that was running at the snapshot (at its first run): the application's handler starts the service again, or a stand-in; without one, a communication error. | Its events with `TA_EVENT_IN_FROM_INVOKE` and the token; at its end `TA_EVENT_IN_INVOKE_DONE`; its failure `TA_EVENT_IN_FROM_INVOKE \| TA_EVENT_IN_ERROR_COMMUNICATION` with the token (core ends the invocation's side of the service: not announced again, later events refused). |
 | `TA_EFFECT_UNINVOKE`    | Stop that service; forget the key.                                                                                                                                                                                                | Nothing.                                                                                                                             |
 | `TA_EFFECT_REQUEST`     | A fetch at run time (2026-10-13: it stays; ADR 0012, decision 8): an `<invoke srcexpr>`, or a `src` the compiler did not match, whose name (`auxiliary`) core normalized and found no chart for in the requesting segment’s image (`route.c:439-497`). The fetching is built out later ([boundary.md section 12](boundary.md#12-compiling-and-the-resolver); `ROADMAP.md`, “Decided later”). Until then, answered in C, never by the language, and without a lookup of its own: core has already looked. Not the control plane, which is `ta_host_post` and its `REPLY` and `NOTIFICATION` (rows below; ADR 0011). | `ta_host_resume` with the token and `TA_ERROR_INVALID`; the parent gets `error.execution` (`route.c:544-550`). A resume names only a chart of the requesting segment’s image (`:544-553`). |

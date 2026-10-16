@@ -1212,13 +1212,11 @@ static void request_run_host_config(request *r, uint32_t map) {
     request_put_key(r, "ioProcessors"); /* [0] is the host's own remote processor */
     cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, host->io_processor_count - 1u);
     for (uint32_t i = 1; i < host->io_processor_count; i++) {
-        cbor_output_head(&r->out, CBOR_MAJOR_MAP, 4);
+        cbor_output_head(&r->out, CBOR_MAJOR_MAP, 3);
         request_put_key(r, "type");
         cbor_output_text(&r->out, host->io_processors[i].type);
         request_put_key(r, "location");
         cbor_output_text(&r->out, host->io_processors[i].location);
-        request_put_key(r, "sync");
-        request_put_bool(r, (host->io_processors[i].flags & TA_IO_PROCESSOR_SYNC) != 0);
         request_put_key(r, "remote");
         request_put_bool(r, (host->io_processors[i].flags & TA_IO_PROCESSOR_REMOTE) != 0);
     }
@@ -1280,7 +1278,7 @@ static int config_read_system(request *r, uint32_t map, ta_system_config *system
 
 static int config_read_io_processors(request *r, uint32_t list, ta_io_processor_descriptor *out,
                                      uint32_t *count) {
-    static const char *const fields[] = {"type", "location", "sync", "remote", NULL};
+    static const char *const fields[] = {"type", "location", "remote", NULL};
     uint32_t remotes = 0;
     *count = 0;
     if (list == TA_NIL) return 1;
@@ -1296,7 +1294,7 @@ static int config_read_io_processors(request *r, uint32_t list, ta_io_processor_
     uint32_t at = list + 1;
     for (uint32_t i = 0; i < request_token(r, list)->count; i++, at = ta_cbor_next(r->document, at)) {
         ta_io_processor_descriptor *d = &out[i];
-        int sync, remote;
+        int remote;
         ta_memset(d, 0, sizeof *d);
         request_path_set(r, "ioProcessors", i, "");
         if (request_token(r, at)->kind != TA_CBOR_MAP) {
@@ -1313,15 +1311,13 @@ static int config_read_io_processors(request *r, uint32_t list, ta_io_processor_
         if (!request_read_text(r, type, &d->type)) return 0;
         request_path_set(r, "ioProcessors", i, "location");
         if (!request_read_text(r, request_member(r, at, "location"), &d->location)) return 0;
-        request_path_set(r, "ioProcessors", i, "sync");
-        if (!request_read_bool(r, request_member(r, at, "sync"), 0, &sync)) return 0;
         request_path_set(r, "ioProcessors", i, "remote");
         if (!request_read_bool(r, request_member(r, at, "remote"), 0, &remote)) return 0;
         if (remote && remotes++) {
             request_refuse(r, "range", "at most one I/O processor carries sends to other systems");
             return 0;
         }
-        d->flags = (sync ? TA_IO_PROCESSOR_SYNC : 0) | (remote ? TA_IO_PROCESSOR_REMOTE : 0);
+        d->flags = remote ? TA_IO_PROCESSOR_REMOTE : 0;
     }
     *count = request_token(r, list)->count;
     return 1;

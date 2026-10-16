@@ -124,16 +124,17 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
         int stop = 0;
         switch (rc) {
         case TA_STEP_SEND: {
-            int sync = core->out.route == TA_ROUTE_EXTERNAL &&
-                       core->out.arg < system->config.io_processor_count &&
-                       (system->config.io_processors[core->out.arg].flags & TA_IO_PROCESSOR_SYNC) &&
-                       !core->out.delay_ns;
+            uint32_t sent = system->effects_length;
             if (ta_system_route_send(system, index, &core->out) == TA_POOL_TIMERS)
                 ta_core_raise_platform(core, instance, "error.execution", TA_NIL);
-            if (sync) { /* let the host answer before the sender continues */
-                run_queue_push_front(system, index);
-                status = TA_RUN_EFFECTS;
-                stop = 1;
+            if (system->effects_length > sent) { /* it left the system: wait until it is decided */
+                ta_effect_record *effect =
+                    &SYSTEM_POINTER(system, effects_relative, ta_effect_record)[system->effects_length - 1];
+                if (effect->kind == TA_EFFECT_SEND) {
+                    effect->flags |= TA_EFFECT_FLAG_WAITING;
+                    ta_actor_at(system, index)->state = TA_ACTOR_WAIT_EXTERNAL;
+                    stop = 1;
+                }
             }
             break;
         }
@@ -281,6 +282,7 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
         status = TA_RUN_YIELDED;
     if (status == TA_RUN_IDLE && !ta_index_queue_empty(&system->wake_queue))
         status = TA_RUN_EFFECTS_FULL;
+    if (status == TA_RUN_IDLE && ta_system_senders_waiting(system)) status = TA_RUN_EFFECTS;
     system->in_call = 0;
     system->stats_fuel += used;
     system->fuel_clock += used;

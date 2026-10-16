@@ -40,7 +40,7 @@ static void world_open(world *w, int remote) {
     ta_io_processor_descriptor processors[2] = {
         {{"urn:test:other", 14}, {"", 0}, 0, 0},
         {{REMOTE_TYPE, sizeof REMOTE_TYPE - 1}, {"", 0},
-         TA_IO_PROCESSOR_REMOTE | (remote == 2 ? TA_IO_PROCESSOR_SYNC : 0u), 0},
+         TA_IO_PROCESSOR_REMOTE, 0},
     };
     test_host_config config;
     memset(&config, 0, sizeof config);
@@ -159,11 +159,11 @@ static void test_an_input_by_address_and_the_reply_to_its_origin(void) {
     world_close(&w);
 }
 
-/* A sync remote processor: the run stops right after the send, so the
- * transport can answer within the sender's macrostep. */
-static void test_a_sync_remote_processor_stops_the_run(void) {
+/* A send to another system parks its sender until the transport's batch is
+ * acked, so the transport can fail it within the sender's macrostep. */
+static void test_a_sender_waits_for_the_transport(void) {
     world w;
-    world_open(&w, 2);
+    world_open(&w, 1);
     run(&w);
     ta_host_effects_ack(w.host);
     ta_event_in call;
@@ -238,7 +238,7 @@ static void test_at_most_one_remote_processor(void) {
 int main(void) {
     RUN(test_a_send_to_another_system_is_a_send_for_the_remote_processor);
     RUN(test_an_input_by_address_and_the_reply_to_its_origin);
-    RUN(test_a_sync_remote_processor_stops_the_run);
+    RUN(test_a_sender_waits_for_the_transport);
     RUN(test_the_remote_type_in_a_chart_is_decided_the_same_way);
     RUN(test_without_a_remote_processor_the_sender_is_told);
     RUN(test_at_most_one_remote_processor);

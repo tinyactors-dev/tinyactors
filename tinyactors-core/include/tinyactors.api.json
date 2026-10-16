@@ -261,6 +261,10 @@
       "value": 2
     },
     {
+      "name": "TA_EFFECT_FLAG_WAITING",
+      "value": 4
+    },
+    {
       "name": "TA_EFFECT_INVOKE",
       "value": 3
     },
@@ -419,10 +423,6 @@
     {
       "name": "TA_IO_PROCESSOR_SCXML_SHARED",
       "value": 4
-    },
-    {
-      "name": "TA_IO_PROCESSOR_SYNC",
-      "value": 1
     },
     {
       "name": "TA_NIL",

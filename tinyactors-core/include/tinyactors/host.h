@@ -246,10 +246,10 @@ TA_API void ta_host_advance_time(ta_host *h, ta_host_time now);
  * status: TA_RUN_IDLE / TA_RUN_YIELDED / TA_RUN_EFFECTS_FULL / TA_RUN_FAULT /
  * TA_RUN_EXHAUSTED (the allocator refused memory: run again once it has
  * some; detail as for ta_system_run, TA_POOL_NONE for the host's own) /
- * TA_RUN_EFFECTS (the run stopped right after a send to a
- * TA_IO_PROCESSOR_SYNC processor, the last effect of its segment: answer it
- * — ta_host_send of events or of TA_EVENT_IN_ERROR_COMMUNICATION to the
- * sender — and run again; the sender goes on only then);
+ * TA_RUN_EFFECTS (senders wait for sends handed out in this batch,
+ * TA_EFFECT_FLAG_WAITING: handle them — a failure is ta_host_send of
+ * TA_EVENT_IN_ERROR_COMMUNICATION to the sender, before the ack — ack and
+ * run again; each sender goes on only then, the other actors meanwhile);
  * next_deadline: the earliest of the segments' timers, the migrations'
  * timeouts, the end of a trace watch, and the encoder's flush (flush_interval after a request's
  * first record); UINT64_MAX for none. Arm one timer for it and call

@@ -22,7 +22,7 @@ M1 protocol requests config values
 M1 scenarios basics outcome-compile outcome-fail outcome-timeout
 
 # M2, W3C in each language: the IRP suite, but the skip lists (skip.txt,
-# skip-<language>.txt), with BasicHTTP's sync sends.
+# skip-<language>.txt), with BasicHTTP's sends.
 M2 w3c
 
 # M3, every effect: invoke and its done events.

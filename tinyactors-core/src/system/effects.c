@@ -74,12 +74,40 @@ uint32_t ta_system_effects(ta_system *system, const ta_effect **out) {
     return n;
 }
 
+/* A sender parked for its send (TA_EFFECT_FLAG_WAITING) goes on; nothing if
+ * it ended or was reclaimed meanwhile. */
+void ta_system_sender_resume(ta_system *system, uint32_t actor, uint64_t serial) {
+    uint32_t index = ta_system_resolve_actor(system, actor);
+    if (index == TA_NIL) return;
+    ta_actor *record = ta_actor_at(system, index);
+    if (record->serial != serial || record->state != TA_ACTOR_WAIT_EXTERNAL) return;
+    record->state = TA_ACTOR_IDLE;
+    ta_system_make_runnable(system, index);
+}
+
+int ta_system_senders_waiting(const ta_system *system) {
+    const ta_effect_record *effect = SYSTEM_POINTER(system, effects_relative, ta_effect_record);
+    for (uint32_t i = system->effects_head; i < system->effects_length; i++)
+        if (effect[i].flags & TA_EFFECT_FLAG_WAITING) return 1;
+    return 0;
+}
+
 void ta_system_effects_ack(ta_system *system, uint32_t n) {
+    ta_system_effects_release(system, n, 1);
+}
+
+/* resume: the acked sends are decided, their senders go on (ta_system_effects_ack);
+ * 0: the caller decides them later, with ta_system_sender_resume (the host) */
+void ta_system_effects_release(ta_system *system, uint32_t n, int resume) {
     ta_effect_record *effect = SYSTEM_POINTER(system, effects_relative, ta_effect_record);
     uint32_t avail = system->effects_length - system->effects_head;
     if (n > avail) n = avail;
-    for (uint32_t i = 0; i < n; i++)
-        ta_system_effect_release(system, &effect[system->effects_head + i]);
+    for (uint32_t i = 0; i < n; i++) {
+        ta_effect_record *record = &effect[system->effects_head + i];
+        if (resume && (record->flags & TA_EFFECT_FLAG_WAITING))
+            ta_system_sender_resume(system, record->actor, record->serial);
+        ta_system_effect_release(system, record);
+    }
     ta_memset(&effect[system->effects_head], 0,
               (size_t)n * sizeof(ta_effect_record)); /* dead entries: never residue */
     system->effects_head += n;

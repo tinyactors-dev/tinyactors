@@ -502,7 +502,7 @@ static void test_closed_batch_during_release(void) {
         world w;
         world_open(&w, 0);
         send_event(&w, w.session, "out");
-        CHECK_EQUAL(ta_host_run(w.host, 100000).status, TA_RUN_IDLE);
+        CHECK_EQUAL(ta_host_run(w.host, 100000).status, TA_RUN_EFFECTS); /* its sender waits for the batch */
         const ta_host_effect *effects;
         uint32_t count = ta_host_effects(w.host, &effects);
         int payload = 0;

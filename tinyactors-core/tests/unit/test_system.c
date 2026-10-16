@@ -144,7 +144,8 @@ static void test_external_io(void) {
     CHECK(effect[0].event.length == 3 && memcmp(effect[0].event.pointer, "out", 3) == 0);
     CHECK(strcmp(datamodel_test_payload_string(t.datamodel, effect[0].payload),
                  "[object Object]") == 0);
-    ta_system_effects_ack(t.system, 1);
+    ta_system_effects_ack(t.system, 1); /* the send is decided: its sender goes on */
+    ta_system_run(t.system, 100000);
     CHECK(strcmp(tsys_config(&t, a), "b") == 0); /* unknown type -> error.execution */
     /* the host reports the send failed */
     ta_event_in event;

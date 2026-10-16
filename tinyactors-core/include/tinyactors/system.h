@@ -34,9 +34,9 @@ typedef struct ta_io_processor_descriptor {
     uint32_t flags;          /* TA_IO_PROCESSOR_* */
     uint32_t pad;
 } ta_io_processor_descriptor;
-/* TA_IO_PROCESSOR_SYNC: ta_system_run returns TA_RUN_EFFECTS right after a send to
- * this processor, before the sender continues, so the host can deliver the
- * outcome (e.g. error.communication) as part of the sender's macrostep. */
+/* A send to an I/O processor (without a delay) parks its sender until the
+ * send is decided (TA_EFFECT_FLAG_WAITING), so the outcome (e.g.
+ * error.communication) is part of the sender's macrostep, as SCXML has it. */
 /* TA_IO_PROCESSOR_SCXML_REMOTE: carries SCXML-to-SCXML events to sessions of
  * *other* systems (another ta_system in this process, another process, ...).
  * `location` is this system's base URI, e.g. "tinyactors://a/". Sessions then
@@ -53,7 +53,6 @@ typedef struct ta_io_processor_descriptor {
  * this processor (target = the full URI): the host knows which system has
  * that session now, or reports failure with TA_EVENT_IN_ERROR_COMMUNICATION. */
 enum {
-    TA_IO_PROCESSOR_SYNC = 1u << 0,
     TA_IO_PROCESSOR_SCXML_REMOTE = 1u << 1,
     TA_IO_PROCESSOR_SCXML_SHARED = 1u << 2,
     /* read by the host only: the processor that carries sends to other
@@ -206,7 +205,7 @@ enum {
     TA_RUN_EFFECTS_FULL = 2, /* outbox full; drain effects and run again */
     TA_RUN_EXHAUSTED = 3,    /* a pool is exhausted (detail = TA_POOL_*); relocate/grow */
     TA_RUN_FAULT = 4,
-    TA_RUN_EFFECTS = 5 /* a TA_IO_PROCESSOR_SYNC send needs handling; drain effects, run again */
+    TA_RUN_EFFECTS = 5 /* senders wait for their sends (TA_EFFECT_FLAG_WAITING): drain, run again */
 };
 /* ta_run.detail for TA_RUN_EXHAUSTED: which capacity to grow */
 enum {
@@ -245,7 +244,12 @@ enum {
     TA_EFFECT_FLAG_NEEDS_RESPONSE = 1u << 0,
     /* TA_EFFECT_INVOKE of an external invocation that was running when the host's snapshot was
        taken: the first ta_host_run after ta_host_restore announces each one again */
-    TA_EFFECT_FLAG_RESTORED = 1u << 1
+    TA_EFFECT_FLAG_RESTORED = 1u << 1,
+    /* TA_EFFECT_SEND: its sender waits (TA_ACTOR_WAIT_EXTERNAL) until the send is decided.
+       ta_system_effects_ack decides it: the sender goes on, with any
+       error.communication given for the send before the ack (ta_system_send,
+       TA_EVENT_IN_ERROR_COMMUNICATION) in its internal queue */
+    TA_EFFECT_FLAG_WAITING = 1u << 2
 };
 /* Field use per kind (unused fields are empty / 0):
  *   SEND      target, event (name), sendid, payload, io_processor; token = external
@@ -296,7 +300,7 @@ enum {
     TA_ACTOR_IDLE = 1,
     TA_ACTOR_RUNNABLE = 2,
     TA_ACTOR_WAIT_WORKSPACE = 3,
-    TA_ACTOR_WAIT_EXTERNAL = 4,
+    TA_ACTOR_WAIT_EXTERNAL = 4, /* sent outside the system: waits for the ack (TA_EFFECT_FLAG_WAITING) */
     TA_ACTOR_DONE = 5,
     TA_ACTOR_HIBERNATED = 6 /* unloaded by the host; see ta_actor_hibernate */
 };

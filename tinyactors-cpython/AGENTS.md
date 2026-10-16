@@ -213,10 +213,11 @@ Decided by the maintainer (2026-10-13); every item is in
     avoid the round trip; nothing needs it now.
   - A plain function gets a **thin view** (below, "Thin views"); an
     **`async def`** handler is scheduled as a task and gets a
-    **materialized record**, made before it is scheduled. A processor
-    configured `sync` stops the run until its send is answered: its
-    sender waits until then (`host.h:215-228`), so an `async def`
-    handler may answer it later.
+    **materialized record**, made before it is scheduled. A send's
+    sender waits until the batch is acknowledged (`host.h`,
+    `ta_host_run`), so a plain function's answer or `fail()` comes
+    before the sender goes on; an `async def` handler answers after
+    the ack, when the sender has gone on.
   - **An `async def` handler under the synchronous driver**, which runs
     no event loop: entering the `Host` with `with` raises `TypeError`
     naming the handler. The check is made at registration
@@ -414,8 +415,8 @@ static ta_python_next ta_python_turn(ta_python_host *host) {
         ta_run run = ta_host_run(host->h, TA_PYTHON_BUDGET); /* bounded: fuel per call */
         ta_python_drain(host);
         switch (run.status) {
-        case TA_RUN_EFFECTS:                                /* a sync I/O processor's send: answered in
-                                                               the drain, or its sender waits */
+        case TA_RUN_EFFECTS:                                /* senders waited for the batch the drain
+                                                               acked: they go on now */
         case TA_RUN_EFFECTS_FULL: continue;                 /* run again now */
         case TA_RUN_YIELDED:      return TA_PYTHON_NEXT_YIELD; /* budget spent, actors still runnable */
         case TA_RUN_IDLE:         host->deadline = run.next_deadline; /* UINT64_MAX: none */

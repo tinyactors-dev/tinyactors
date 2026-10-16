@@ -50,13 +50,11 @@ static ta_status config_write(void *context, ta_buffer *out) {
     ta_cbor_write_uint(&writer, 64);
     ta_cbor_write_text(&writer, ta_string("ioProcessors"));
     ta_cbor_write_array(&writer, 1);
-    ta_cbor_write_map(&writer, 3);
+    ta_cbor_write_map(&writer, 2);
     ta_cbor_write_text(&writer, ta_string("type"));
     ta_cbor_write_text(&writer, ta_string(TA_BASIC_HTTP_TYPE));
     ta_cbor_write_text(&writer, ta_string("location"));
     ta_cbor_write_text(&writer, ta_string(LOCATION));
-    ta_cbor_write_text(&writer, ta_string("sync"));
-    ta_cbor_write_simple(&writer, TA_CBOR_TRUE);
     return conform_writer_end(&writer, out);
 }
 

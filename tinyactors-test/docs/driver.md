@@ -200,8 +200,8 @@ What the world does around a W3C test (`ta-conform`:
 
 - **The host:** `ticksPerSecond` 1000, `maxEvents` 1024, `maxActors` 64,
   one I/O processor: BasicHTTP (`basic_http.h`, `TA_BASIC_HTTP_TYPE`) at
-  `http://localhost:8080/scxml`, synchronous (`"sync": true`,
-  `TA_IO_PROCESSOR_SYNC`). The image holds the start document and the
+  `http://localhost:8080/scxml`. A send to it parks its sender until the
+  batch is acknowledged, as every send that leaves its segment does. The image holds the start document and the
   dependencies that are charts, and the start chart is booted
   (`ta_host_boot`: `ta_compile_charts` makes the first chart the image's
   boot actor).

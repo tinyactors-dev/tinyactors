@@ -713,7 +713,8 @@ static void test_detail_classes(void) {
         ta_traceparent_format(&effects[0].trace, &(ta_buffer){text, TA_TRACEPARENT_LENGTH, 0}),
         TA_OK);
     CHECK(strcmp(text + 53, "01") == 0); /* the W3C flags alone */
-    ta_system_effects_ack(t.system, 1);
+    ta_system_effects_ack(t.system, 1); /* the sender goes on and ends its macrostep */
+    tsys_run(&t, 10000, 5);
     collect(&t);
     uint64_t s = session_of(&t, a);
     const ta_trace_record *begin = find(TA_TRACE_MACROSTEP_BEGIN, s, 2, "go");

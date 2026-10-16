@@ -46,7 +46,7 @@ diagnostic notation.
 {"systemID": "orders",
  "system": {"maxActors": 10000, "ticksPerSecond": 1000},
  "ioProcessors": [{"type": "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor",
-                   "location": "http://localhost:8080/", "sync": true}],
+                   "location": "http://localhost:8080/"}],
  "telemetry": {"flushInterval": 5000, "resource": {"service.name": "orders"}}}
 ```
 
@@ -56,7 +56,7 @@ diagnostic notation.
 |---|---|---|---|
 | `systemID` | text | required | this system's id: its addresses are `tinyactors://<systemID>/...` (docs/protocol.md, Addresses) |
 | `system` | map | `{}` | the capacities of each new segment, below |
-| `ioProcessors` | list of maps, at most 16 | `[]` | the host's I/O processors: `type` (text, required), `location` (text), `sync` (bool: the run stops after a send to it, `TA_IO_PROCESSOR_SYNC`), `remote` (bool, at most one: it carries the sends to other systems' addresses, `TA_IO_PROCESSOR_REMOTE`) |
+| `ioProcessors` | list of maps, at most 16 | `[]` | the host's I/O processors: `type` (text, required), `location` (text), `remote` (bool, at most one: it carries the sends to other systems' addresses, `TA_IO_PROCESSOR_REMOTE`) |
 | `migrateQuantum` | uint | `256` | actors a migration looks at per run |
 | `telemetry` | map | absent: no encoder | the OTLP encoder, below |
 

@@ -219,7 +219,7 @@ Result: a map, its keys in this order:
   `ticksPerSecond`, `traceBytes`, `traceContexts`, `traceRules`,
   `traceSeed` (unsigned integers), then `tracing` (bool).
   `instanceBytes` 0 means derived from each segment's image;
-- `ioProcessors`: a list of `{"type", "location", "sync"}`, as given;
+- `ioProcessors`: a list of `{"type", "location", "remote"}`, as given;
 - `migrateQuantum`;
 - `telemetry`, only when the host has an encoder: `stagingBytes`,
   `logBytes`, `openSpans`, `chunks`, `scopes`, `valueLimit`, `renderBytes`,

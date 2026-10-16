@@ -378,12 +378,7 @@ static ta_status host_new(const host_config *config, ta_host **out) {
     host->io_processor_count = 1 + config->io_processor_count;
     host->remote_processor = TA_NIL;
     for (uint32_t i = 0; i < config->io_processor_count; i++)
-        if (host->io_processors[1 + i].flags & TA_IO_PROCESSOR_REMOTE) {
-            host->remote_processor = i;
-            /* the system stops after a send through the SCXML processor, which is
-             * where a send to another system is made: its sync is the remote one's */
-            host->io_processors[0].flags |= host->io_processors[1 + i].flags & TA_IO_PROCESSOR_SYNC;
-        }
+        if (host->io_processors[1 + i].flags & TA_IO_PROCESSOR_REMOTE) host->remote_processor = i;
     host->draining = TA_NIL;
     if (!resource_copy(host, &config->telemetry)) {
         ta_host_free(host);
@@ -918,6 +913,12 @@ static void effects_release(ta_host *host) {
         ta_host_effect *effect = &host->effects[i];
         if (effect->payload && effect->datamodel < host->config.datamodel_count)
             host_release(host, &host->datamodels[effect->datamodel], effect->payload);
+        /* handled: the send is decided, its sender goes on */
+        if (effect->kind == TA_EFFECT_SEND && (effect->flags & TA_EFFECT_FLAG_WAITING) &&
+            effect->segment < host->segment_count && host->segments[effect->segment].live) {
+            ta_system_sender_resume(host->segments[effect->segment].system, effect->actor, effect->session);
+            host->segments[effect->segment].busy = 1; /* it runs at the next ta_host_run */
+        }
     }
     uint32_t keep = host->effect_count - seen;
     if (keep) { /* the unseen ones to the front */
@@ -1336,9 +1337,15 @@ static ta_status drain(ta_host *host, uint32_t si) {
             status = TA_OK;
         } else if (effect_view->kind == TA_EFFECT_SEND &&
                    (effect_view->io_processor == 0 ||
-                    (host->remote_processor != TA_NIL && effect_view->io_processor == host->remote_processor + 1)))
+                    (host->remote_processor != TA_NIL && effect_view->io_processor == host->remote_processor + 1))) {
+            uint32_t copied = host->effect_count;
             status = scxml_send(host, si, effect_view); /* the remote type named in a chart: the same decision */
-        else if (effect_view->kind == TA_EFFECT_SEND)
+            /* delivered here, or failed: decided, so its sender goes on (handed out: at the ack) */
+            if (status == TA_OK && host->effect_count == copied && (effect_view->flags & TA_EFFECT_FLAG_WAITING)) {
+                ta_system_sender_resume(host->segments[si].system, effect_view->actor, effect_view->session);
+                host->segments[si].busy = 1;
+            }
+        } else if (effect_view->kind == TA_EFFECT_SEND)
             status = effect_copy(
                 host, si, effect_view,
                 effect_view->io_processor == TA_NIL ? TA_NIL : effect_view->io_processor - 1);
@@ -1354,8 +1361,8 @@ static ta_status drain(ta_host *host, uint32_t si) {
         }
         if (status != TA_OK) break;
     }
-    uint32_t was = host_guard(host); /* release */
-    ta_system_effects_ack(system, done);
+    uint32_t was = host_guard(host); /* release; what was handed out is decided at the host's ack */
+    ta_system_effects_release(system, done, 0);
     host_unguard(host, was);
     host->draining = TA_NIL;
     if (done < n) segment->busy = 1;
@@ -1888,12 +1895,12 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     host->encoder->drain(host); /* records written up to the last ta_host_advance_time */
     host->encoder->effects(host);
     uint32_t left = budget;
-    int full = 0, fault = 0, exhausted = 0, sync = 0;
+    int full = 0, fault = 0, exhausted = 0, waiting = 0;
     uint32_t detail = TA_POOL_NONE;
     /* what an earlier run or call could not finish for lack of memory */
     if (host->error_count && errors_deliver(host) != TA_OK) exhausted = 1;
     if (host->announcing && !announce_invocations(host)) exhausted = 1; /* after a restore */
-    for (int round = 0; round < 64 && !full && !exhausted && !sync; round++) {
+    for (int round = 0; round < 64 && !full && !exhausted; round++) {
         int ran = 0;
         /* fair shares: a runaway segment must not starve the others */
         uint32_t runnable = 0;
@@ -1901,7 +1908,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             const host_segment *segment = segment_of(host, k);
             runnable += segment && (segment->busy || segment->deadline <= host->now);
         }
-        for (uint32_t k = 0; k < host->segment_count && !full && !exhausted && !sync; k++) {
+        for (uint32_t k = 0; k < host->segment_count && !full && !exhausted; k++) {
             uint32_t si = (host->round_robin + k) % host->segment_count;
             host_segment *segment = segment_of(host, si);
             if (!segment || (!segment->busy && segment->deadline > host->now)) continue;
@@ -1935,8 +1942,6 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
                 fault = 1;
                 segment->busy = 0;
             }
-            /* a TA_IO_PROCESSOR_SYNC send: the caller answers it before the sender goes on */
-            if (result.status == TA_RUN_EFFECTS) sync = 1;
             if (host->effect_count >= EFFECTS_PER_RUN) full = 1;
         }
         for (uint32_t i = 0; i < host->migration_count && round == 0; i++) /* one quantum per run */
@@ -1945,7 +1950,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
                     exhausted = 1;
                 ran = 1;
             }
-        if (!ran || !left || sync) break;
+        if (!ran || !left) break;
         int more = 0;
         for (uint32_t i = 0; i < host->segment_count; i++)
             more |= host->segments[i].live && host->segments[i].busy;
@@ -1990,13 +1995,15 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
     host->encoder->note(host);
     ta_time flush = host->encoder->deadline(host); /* a request is ready then */
     if (flush < out.next_deadline) out.next_deadline = flush;
+    for (uint32_t i = 0; i < host->effect_count && !waiting; i++) /* senders wait for their handling */
+        waiting = host->effects[i].kind == TA_EFFECT_SEND && (host->effects[i].flags & TA_EFFECT_FLAG_WAITING);
     out.used = budget - left;
     out.effect_count = host->effect_count;
     out.detail = exhausted ? detail : TA_POOL_NONE;
     out.status = full        ? TA_RUN_EFFECTS_FULL
-                 : sync      ? TA_RUN_EFFECTS
                  : fault     ? TA_RUN_FAULT
                  : exhausted ? TA_RUN_EXHAUSTED
+                 : waiting   ? TA_RUN_EFFECTS
                  : busy      ? TA_RUN_YIELDED
                              : TA_RUN_IDLE;
     return out;

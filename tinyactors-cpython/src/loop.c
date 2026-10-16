@@ -169,7 +169,7 @@ static ta_python_next ta_python_turn(ta_python_host *host) {
         if (bounded && run.status != TA_RUN_EXHAUSTED && run.status != TA_RUN_FAULT)
             return TA_PYTHON_NEXT_YIELD; /* the turn's bound: let the program run, then turn again */
         switch (run.status) {
-        case TA_RUN_EFFECTS:      /* a sync I/O processor's send: answered in the drain, or its sender waits */
+        case TA_RUN_EFFECTS:      /* senders waited for the batch the drain acked: they go on now */
         case TA_RUN_EFFECTS_FULL: continue; /* run again now */
         case TA_RUN_YIELDED:      return TA_PYTHON_NEXT_YIELD; /* budget spent, actors still runnable */
         case TA_RUN_IDLE:         if (host->inputs) return TA_PYTHON_NEXT_YIELD; /* handlers fed inputs in the
