@@ -316,8 +316,12 @@ The handler does the I/O and then does one of two things:
 A handler may also do neither, when the send needs no reply. The sending
 actor waits while the handler runs, so a plain function's `answer()` or
 `fail()` reaches it before its next step, as SCXML has a `<send>`
-behave; the other actors go on meanwhile. An `async def` handler
-answers after the sending actor has gone on. A handler that raises before answering has its send failed for it, and the driver
+behave; the other actors go on meanwhile. So hand the message to your
+transport and return: SCXML needs the send dispatched, not delivered,
+and a handler that waits for delivery (a request's response, a
+broker's confirmation) holds its sender that long. An `async def`
+handler answers after the sending actor has gone on. A handler that
+raises before answering has its send failed for it, and the driver
 raises the exception after the turn.
 
 Read the fields inside the handler: a plain function gets a thin view
