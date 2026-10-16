@@ -282,11 +282,11 @@
       <recommendation option="native-default">Decided by the maintainer (2026-10-16): quickjs is the sandboxed ECMAScript datamodel; the native datamodel uses the application's JavaScript objects directly in its own engine, as the "python" datamodel uses Python's, and a host that names no datamodel gets the native one ("Native may be the default. Actually, it's what most people will expect.", an exception the maintainer makes to "no defaults of our own"). Both pass the same suite. The option names an environment entry, which is core's (<code>environment-&gt;datamodels</code>). quickjs as a sandbox needs its limits passed through (<code>ta_datamodel_ecmascript_config</code>: <code>max_ops</code>, <code>memory_limit</code>, the realm), which Python does not expose.</recommendation>
       <evidence kind="repo">tinyactors-test/docs/driver.md:72-82; tinyactors-core/include/tinyactors/datamodel_ecmascript.h (max_ops, memory_limit, realms).</evidence>
     </decision>
-    <decision id="d-async" status="recommended" owner="api-review">
+    <decision id="d-async" status="decided" owner="maintainer">
       <question>How does a handler that finishes later (an async function, a function returning a promise) get a send that outlives the ack?</question>
       <option id="at-return">Every handler gets a thin view; when the handler returns a thenable, the addon materializes that view in place before the ack (every field converted into its cache, answer and fail no longer checking the ack count) and fails the send if the promise rejects before an answer.</option>
       <option id="at-registration">Decide at registration, as Python does (<code>Object.prototype.toString</code> gives "[object AsyncFunction]"): async functions get a record, others a view.</option>
-      <recommendation option="at-return">In JavaScript a plain function that returns a promise is as common as an async function, and registration-time detection misses it. Materializing at the return is still "before the ack, at a point the binding names" (bindings.md section 6), and a handler that returns nothing pays nothing. The rules that make it sound: the view records whether it was answered or failed, so a later rejection fails only an unanswered send; reading <code>.then</code> is user code inside the drain, allowed like any handler's; a view kept and used from a callback the handler did not return (a <code>setTimeout</code>) is stale and throws there, and its send is neither answered nor failed, as in Python; a rejection after its turn is reported as decision d-errors says.</recommendation>
+      <recommendation option="at-return">In JavaScript a plain function that returns a promise is as common as an async function, and registration-time detection misses it. Materializing at the return is still "before the ack, at a point the binding names" (bindings.md section 6), and a handler that returns nothing pays nothing. The rules that make it sound: the view records whether it was answered or failed, so a later rejection fails only an unanswered send; reading <code>.then</code> is user code inside the drain, allowed like any handler's; a view kept and used from a callback the handler did not return (a <code>setTimeout</code>) is stale and throws there, and its send is neither answered nor failed, as in Python; a rejection after its turn is reported as decision d-errors says. Decided by the maintainer (2026-10-16: "the send rule is okay").</recommendation>
       <evidence kind="spike">s-async: the tag is "[object AsyncFunction]" in node 22.22.0 and bun 1.4.2, so at-registration is possible; it does not see a promise-returning plain function.</evidence>
       <evidence kind="repo">tinyactors-cpython/AGENTS.md, "Materialized, and when".</evidence>
     </decision>
@@ -304,11 +304,11 @@
       <recommendation option="transparent">Decided by the maintainer (2026-10-16): "Python had a choice between using an event loop and not using an event loop, but obviously in Node, this is not a thing. So it should work transparently with the event loop from the perspective of a JavaScript programmer." <code>await host.idle()</code> stays as a promise that settles when the host is next idle (for tests and an orderly shutdown); it observes the loop's turns and drives nothing. <code>setImmediate</code>, not a microtask, so I/O runs between turns. What follows, for the README: an open host with a pending deadline (a <code>&lt;send delay="1h"&gt;</code>) keeps the process alive until it or <code>close()</code>, and its timer holds the Host, so it is not collected before; <code>close()</code> from a handler is deferred to the end of the turn.</recommendation>
       <evidence kind="repo">tinyactors-cpython/src/loop.c, ta_python_loop_schedule (returns when host-&gt;loop is None); bindings.md section 3, "Not every program has an event loop" (Node's always has one) and "Bound each turn".</evidence>
     </decision>
-    <decision id="d-typed" status="open" owner="api-review">
+    <decision id="d-typed" status="decided" owner="maintainer">
       <question>The shape of a typed method.</question>
       <option id="params-first">method(params, onResult, onError?): params an object passed to core as given.</option>
       <option id="handler-first">method(onResult, onError?, params?), Python's order.</option>
-      <recommendation option="params-first">An options object first reads as JavaScript calls do; the handlers last allow an inline arrow. The cost: a method without params takes <code>{}</code> or <code>undefined</code> first (<code>host.hostStats(undefined, onResult)</code>). <code>onError</code> is never a param for core, as Python decided.</recommendation>
+      <recommendation option="params-first">Decided by the maintainer (2026-10-16: "Params first is fine"): <code>host.actorState({session}, onResult, onError)</code> in the direct layer, returning nothing, as ADR 0012 decision 3 has it; a method without params takes <code>undefined</code> or <code>{}</code> first; <code>onError</code> is never a param for core. A promise form is the convenience layer's (decision d-promises).</recommendation>
     </decision>
     <decision id="d-image" status="recommended" owner="session">
       <question>What is <code>Compiled.image</code>?</question>
@@ -371,6 +371,13 @@
       <option id="two-layers">As Python's: the addon is the direct layer and mirrors core's API more or less one to one (compileCharts is ta_compile_charts, chart is ta_host_chart, spawn takes the reference chart returns, addImage returns the segment), every item a row of docs/api-map.md; a convenience layer in JavaScript (an image from a name-to-text mapping, spawn by chart name, a chart builder over ta_xml_writer, a directory resolver) comes later, calls only the direct layer, and adds shapes, never behaviour. index.mjs loads the addon and re-exports it, nothing else, until then.</option>
       <recommendation option="two-layers">Decided for both bindings (2026-10-13; bindings.md section 1, "Two layers"; tinyactors-napi/AGENTS.md, "Layers and the resolver"), confirmed by the maintainer for this plan (2026-10-16). The direct layer's completeness is checked, not assumed: step p0-inventory goes through every public header, as bindings.md section 2 asks, and the API review then reads the inventory as Python's did (it added compile_system and actor_by_name, and left ta_host_segment_count out).</recommendation>
       <evidence kind="repo">tinyactors-cpython/AGENTS.md, "Layers"; tinyactors-cpython/ROADMAP.md, "The API review" (the surface completed against core's headers).</evidence>
+    </decision>
+    <decision id="d-promises" status="decided" owner="maintainer">
+      <question>May a JavaScript programmer await a typed method?</question>
+      <option id="convenience">Yes, in the convenience layer: <code>await host.actorState({session})</code> is a few lines of JavaScript over the direct layer's method, resolving in <code>onResult</code> and rejecting with the <code>TinyactorsError</code> in <code>onError</code>; the direct layer keeps response handlers and returns nothing.</option>
+      <option id="direct">A promise returned by the direct layer's method itself.</option>
+      <recommendation option="convenience">Decided by the maintainer (2026-10-16): "for JavaScript, the promise makes sense ... it was a problem in the core only for draining correctly and response ordering, but since we're just binding core methods, then the promise-based version is just a convenience layer on what a JavaScript programmer would write anyway." It keeps ADR 0012 decision 3 for the direct layer, where the reply is dispatched by the drain in C and ordered by the takes, and adds a shape, not behaviour (bindings.md section 1): the promise settles from the response handler, its continuation runs as a microtask after the turn's native call returns, outside the drain, on a result already converted, and an input it makes schedules a turn like any other. A reply's error always has a handler then, so none is thrown from the turn.</recommendation>
+      <evidence kind="repo">docs/adr/0012-lifetimes-follow-the-loop.md:193-206 (decision 3: "Node's shape of the same rule is decided in step 8.5"); tinyactors-core/docs/bindings.md section 1, "Two layers".</evidence>
     </decision>
   </decisions>
 
@@ -501,6 +508,21 @@
       </step>
       <gate>mise run test with the gate at M4 and W3C; the coordinator's audit of both bindings side by side.</gate>
     </phase>
+    <phase id="p3" title="The convenience layer">
+      <goal>JavaScript over the direct layer only, after the direct layer has passed M1 (bindings.md section 1): shapes a JavaScript programmer would otherwise write, no behaviour and no C.</goal>
+      <step id="p3-promises" status="todo" after="p1-conform" decision="d-promises d-layers">
+        <title>Typed methods that return promises</title>
+        <does>One wrapper per typed method (await host.actorState({session})), resolving from onResult and rejecting from onError, in a JavaScript module index.mjs re-exports beside the addon; typed in index.d.ts.</does>
+        <done-when>Each wrapper calls only its direct method (a lint of the module's imports, as the adapter's); a test awaits each, a rejection carries the TinyactorsError's code and reason.</done-when>
+        <files>tinyactors-napi/lib/convenience.mjs, index.mjs, index.d.ts</files>
+      </step>
+      <step id="p3-shapes" status="todo" after="p3-promises" decision="d-layers">
+        <title>The rest of the layer, as the maintainer picks</title>
+        <does>Candidates shared with Python's plan: an image from a name-to-text mapping (compile, add, close in one call), spawn by chart name, a resolver reading files under a root, a chart builder over ta_xml_writer once the direct layer exposes it (p0-inventory).</does>
+        <done-when>Each chosen item has its row in docs/api-map.md naming the direct-layer items it calls.</done-when>
+      </step>
+      <gate>mise run test with the convenience module's tests; nothing in it calls the addon other than through its exports.</gate>
+    </phase>
   </phases>
 
   <findings refuted-by="a fresh agent, 2026-10-16, against the plan at a69e717, with spikes on node 22.22.0 and 22.23.3 and bun 1.4.2">
@@ -623,5 +645,6 @@
       <becomes>The native datamodel evaluates charts in node:vm contexts reached through process.getBuiltinModule (a JavaScript call from C, not V8's API), one shared, one per session for charts that declare top-level names; src/datamodel/ may call txml_* for XML content; charts are still trusted code (a vm context is not a security boundary), and the README says so.</becomes>
       <evidence kind="repo">decisions d-declarations, d-dom, d-separate (the maintainer, 2026-10-16).</evidence>
     </change>
+    <change id="c-layers" file="tinyactors-napi/AGENTS.md" section="Whom it serves; Layers and the resolver"><now>"index.mjs loads the platform's .node file and re-exports it, nothing else: there is no JavaScript above the addon in the first milestone"; "No synchronous request, no raw post, no request facade: typed methods take response handlers."</now><becomes>The same for the direct layer; after M1 the convenience layer (JavaScript, over the addon's exports only) adds promise forms of the typed methods (decision d-promises) and the shapes the maintainer picks.</becomes><evidence kind="repo">decision d-promises (the maintainer, 2026-10-16).</evidence></change>
   </rulebook>
 </plan>
