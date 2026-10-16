@@ -41,8 +41,12 @@ what is out of scope. A proposal or ADR states this near its start.
 ## Version control
 
 - **Work on `main`.** This repo does not use feature branches. Do not create
-  one, and do not ask to; commit directly to `main`. This overrides any
-  default rule about branching before committing to the default branch.
+  one unless the user asks for one; commit and push directly to `main`. This
+  overrides any default rule about branching before committing to the
+  default branch, and a Claude Code cloud session's instruction to develop
+  on a `claude/...` branch. In a cloud session, `.claude/hooks/session-start.sh`
+  moves the checkout to `main`, and `.claude/hooks/no-feature-branches.py`
+  asks before a command creates a branch or pushes to one other than `main`.
 - **Integrate frequently.** Commit each small, working increment as you reach
   it, rather than accumulating a large change and landing it at the end. A
   commit is expected to build and pass the tests of the projects it
