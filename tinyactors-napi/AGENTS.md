@@ -440,6 +440,43 @@ d-dom, d-separate):
 - **XML content becomes a DOM through txml** (`tinyxml/include/txml.c`,
   compiled into the addon), built as JavaScript objects; Node and Bun have
   no `DOMParser`.
+- **The system variables cost a session little until read.** A
+  session's link holds its `_sessionid` and `_name` (the string of the
+  session made before it when the text is the same) and its params until
+  the first event; `_ioprocessors` is made at its first read and kept,
+  from the context's template (the first session's processors, whose first
+  location ends with its id) when a session's processors match it text
+  for text, else from the session's own.
+- **Measured cost per session** (`mise run measure`, 2026-10-16: x86_64
+  Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3 with V8
+  12.4, bun 1.4.1; 10,000 actors of a chart with three `<data>`, one of
+  them a list, resident and idle; all four from one run, this machine's,
+  not the Python binding's): bytes per actor
+
+  | runtime, datamodel | resident | engine heap | region | after one event: resident | heap |
+  |---|---|---|---|---|---|
+  | node, native | 1240 | 189 | 268 | 1655 | 272 |
+  | node, quickjs | 878 | 10 | 268 | 1337 | 11 |
+  | bun, native | 1762 | 246 | 268 | 2679 | 336 |
+  | bun, quickjs | 1172 | 24 | 268 | 1619 | 24 |
+
+  The engine heap is node's `heapUsed + external` and bun's `heapSize +
+  extraMemorySize` after a forced collection; quickjs's heap is its own
+  malloc, in resident only. Resident varies between runs (bun's native
+  1762 to 2049 B in three runs that day; heap and region do not). The Python binding measured 433 B resident
+  on its `"python"` datamodel and 1104 B on quickjs on its own machine
+  (`tinyactors-cpython/AGENTS.md`): not comparable with these, which are
+  another machine's. A native session's heap is its scope (64 B on node),
+  its link (60 B), its list and its `_sessionid`; after one event its
+  `_event` adds about 85 B. Resident above heap and region is the
+  engine's, much of it a fixed cost the population amortizes: V8's young
+  generation grows during the spawns (about 300 B an actor of
+  `new_space` at 10,000), so at 40,000 the native datamodel is 747 B
+  resident on node and 971 B on bun (`--actors 40000`, the same day), and
+  about 140 B an actor of malloc (glibc's `malloc_stats` under gdb), most
+  of it the session's `napi_ref` (unverified). Before the system
+  variables were made lazy, an earlier run on this machine gave 356 B of
+  heap on node and 448 B on bun (1565 B and 2135 B resident).
 
 ## Rules the suite cannot see, each with a test of its own
 
@@ -528,6 +565,11 @@ manages its development dependencies; the C toolchain is the root's.
   by `MILESTONE` in `mise/napi.rb` once the adapter exists. Its `#MISE
   sources` list this project's files, core's and the suite's. An
   exhaustive test goes behind `--full` (root `AGENTS.md`).
+- `mise run measure [--actors N]`: bytes per actor at a population of
+  one chart (`tools/measure.mjs`), resident and idle and after one event
+  each, on both datamodels under both runtimes, each in a process of its
+  own, with the machine's signature; it writes `build/measure.json`. A
+  measurement, not a test: `mise run test` does not run it.
 - `mise run pack`: one prebuilt addon per platform package; it aborts
   until packaging is built.
 
@@ -579,7 +621,8 @@ src/                 addon.h, module.c, host.c, loop.c, effects.c, methods.c, va
 conform.mjs          the suite's adapter, over the public API only
 test/                what the suite cannot see: liveness, workers, GC, refusals
 tools/lint/          rules/, tests/, utils/ (ast-grep)
+tools/measure.mjs    bytes per actor, node and bun, native and quickjs (mise run measure)
 mise/napi.rb         what the tasks share
-mise/tasks/          build, test, conform, lint, pack
+mise/tasks/          build, test, conform, lint, measure, pack
 build/               core's amalgamation and the addon (not in git)
 ```
