@@ -518,4 +518,9 @@
     <evidence>src/loop.c ta_napi_keep_error, ta_napi_take_kept; src/compile.c ta_napi_resolve_refused; test/loop.test.mjs 'a handler's error is whatever it threw: a string, a number, undefined and null reject idle() too'; test/compile.test.mjs 'another error of a resolver is thrown from the compile call, whatever value it is'</evidence>
     <resolution>Fixed in p1-rules: the value is kept in a one-element array (as a primitive payload is), and 'none pending' is napi_is_exception_pending.</resolution>
   </entry>
+  <entry id="l-coord-long-string-leftovers" date="2026-10-16" step="core-fix" kind="issue" status="for-maintainer">
+    <what>After 269646f (TA_SYSTEM_MAX_STRING, 4087 bytes): a &lt;log&gt; text over the limit still comes out empty (src/system/schedule.c step_log) rather than refused; and the refutation pass of reasoned-analysis was not run on the choice to refuse long strings rather than store them another way.</what>
+    <why>The fix was dispatched by the coordinator to unblock the end-to-end goal (a transport passing on network messages).</why>
+    <evidence>tinyactors-core/tests/unit/test_host_strings.c; commit 269646f</evidence>
+  </entry>
 </log>
