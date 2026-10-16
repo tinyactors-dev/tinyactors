@@ -102,9 +102,11 @@ napi_value ta_napi_throw_core_error(napi_env env, const ta_napi_core_error *core
     if (core->error != NULL && napi_typeof(env, core->error, &type) != napi_ok) return NULL;
     bool map = type == napi_object;
     if (napi_get_reference_value(env, instance->error, &class) != napi_ok ||
-        napi_create_object(env, &arguments[1]) != napi_ok ||
-        napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &status) != napi_ok ||
-        napi_set_named_property(env, arguments[1], "status", status) != napi_ok)
+        napi_create_object(env, &arguments[1]) != napi_ok)
+        return NULL;
+    /* a reply's error has no status of a call: TA_OK leaves it undefined */
+    if (core->status != TA_OK && (napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &status) != napi_ok ||
+                                  napi_set_named_property(env, arguments[1], "status", status) != napi_ok))
         return NULL;
     if (map) {
         if (napi_get_named_property(env, core->error, "message", &arguments[0]) != napi_ok ||

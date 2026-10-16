@@ -618,10 +618,9 @@ void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index) 
         ta_napi_schedule(env, host); /* an input: the turn runs it */
         break;
     }
-    case TA_HOST_EFFECT_REPLY: { /* the creation's host.config; the typed methods' with p1-methods */
-        napi_value reply = ta_napi_value_read(env, ta_host_effect_bytes(host->host, index, TA_EFFECT_FIELD_WIRE));
-        if (reply == NULL) ta_napi_keep_error(env, host);
-        else if (napi_escape_handle(env, scope, reply, &state->reply) != napi_ok) state->reply = NULL;
+    case TA_HOST_EFFECT_REPLY: { /* a typed method's, handled there; the creation's host.config kept */
+        napi_value reply = ta_napi_reply(env, host, index);
+        if (reply != NULL && napi_escape_handle(env, scope, reply, &state->reply) != napi_ok) state->reply = NULL;
         break;
     }
     case TA_HOST_EFFECT_TRACES: ta_napi_take(env, host, true); break;

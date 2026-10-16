@@ -53,8 +53,8 @@ export type Status =
 
 /** An error core reported: a refused call, a thin view read after its ack,
  * a run's fault or an exhausted pool, or a typed method's error. Branch on
- * `status`; a typed method's error also has `code`, `reason` and `path` as
- * the host's reply wrote them. */
+ * `status`; a typed method's error has instead `code`, `reason` and `path`
+ * as the host's reply wrote them, and no `status`. */
 export class TinyactorsError extends Error {
   constructor(
     message?: string,
@@ -389,17 +389,22 @@ export class Host implements Disposable, AsyncDisposable {
    * host is closed first. It observes the turns; the event loop drives them. */
   idle(): Promise<void>;
 
-  actorState(params: Params, onResult: OnResult, onError?: OnError): void;
-  actorContext(params: Params, onResult: OnResult, onError?: OnError): void;
-  actorList(params: Params, onResult: OnResult, onError?: OnError): void;
-  actorGet(params: Params, onResult: OnResult, onError?: OnError): void;
-  hostStats(params: Params, onResult: OnResult, onError?: OnError): void;
-  hostConfig(params: Params, onResult: OnResult, onError?: OnError): void;
-  traceConfigure(params: Params, onResult: OnResult, onError?: OnError): void;
-  traceWatch(params: Params, onResult: OnResult, onError?: OnError): void;
-  traceUnwatch(params: Params, onResult: OnResult, onError?: OnError): void;
-  traceEnd(params: Params, onResult: OnResult, onError?: OnError): void;
-  traceSpansDecode(params: Params, onResult: OnResult, onError?: OnError): void;
+  /** The typed methods, one per method of core's requests.md but
+   * `actor.send` (which is `send`): `params` passed to core as given;
+   * `onResult` or `onError` called once, in a later drain; without
+   * `onError` the error rejects `idle()`. Pending handlers are dropped at
+   * `close()`. */
+  actorState(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  actorContext(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  actorList(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  actorGet(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  hostStats(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  hostConfig(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceConfigure(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceWatch(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceUnwatch(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceEnd(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceSpansDecode(params: Params, onResult: OnResult, onError?: OnError | null): void;
 
   metrics(): Uint8Array;
   sweep(maxScan: number, limit: number): bigint[];

@@ -1146,6 +1146,7 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
     else if (async_dispose == NULL) count--;
     napi_value class;
     napi_status status = napi_define_class(env, "Host", NAPI_AUTO_LENGTH, ta_napi_host_new, NULL, count, properties, &class);
+    if (status == napi_ok) status = ta_napi_methods_define(env, class);
     if (status == napi_ok) status = napi_set_named_property(env, exports, "Host", class);
     return status;
 }

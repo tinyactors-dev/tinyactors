@@ -96,7 +96,8 @@ typedef struct ta_napi_core_error {
 } ta_napi_core_error;
 
 /* Throws a TinyactorsError with the error's message, `code`, `reason` and
- * `path`, and `status` ta_status_name(status); returns NULL. */
+ * `path`, and `status` ta_status_name(status), none for TA_OK (a reply's
+ * error); returns NULL. */
 napi_value ta_napi_throw_core_error(napi_env env, const ta_napi_core_error *error);
 
 /* ---- values.c: the value table (docs/values.md) ------------------------- */
@@ -377,6 +378,19 @@ void ta_napi_take(napi_env env, ta_napi_host *host, bool traces);
 /* The classes Send and LogEntry and the rejection function, in the
  * instance; nothing is exported (index.d.ts declares them as interfaces). */
 napi_status ta_napi_effects_define(napi_env env, napi_value exports);
+
+/* ---- methods.c: the typed methods (AGENTS.md, "What reaches the application") */
+
+/* A REPLY of the open batch: a typed method's (its id a pending row's
+ * handle) has its row removed and its handler called, NULL returned; a
+ * stale or unknown id is dropped (NULL). The reply of a message posted with
+ * id 0, the creation's host.config, is returned decoded for its caller. A
+ * handler's error is kept on the host. */
+napi_value ta_napi_reply(napi_env env, ta_napi_host *host, uint32_t index);
+
+/* The typed methods (actorState ... traceSpansDecode) on the prototype of
+ * `host_class`. */
+napi_status ta_napi_methods_define(napi_env env, napi_value host_class);
 
 /* host.idle() and host.nextDeadline. */
 napi_value ta_napi_host_idle(napi_env env, napi_callback_info info);
