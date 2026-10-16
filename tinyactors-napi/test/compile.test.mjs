@@ -112,13 +112,22 @@ test('any callable resolves: an arrow, a bound method', () => {
   }
 });
 
-test('another error of a resolver is thrown from the compile call', () => {
+test('another error of a resolver is thrown from the compile call, whatever value it is', () => {
   const disk = new Error('disk');
   throws(() => compileCharts([{ name: 'parent.scxml', text: PARENT }], () => {
     throw disk;
   }), (error) => {
     if (error !== disk) throw error;
   }, 'a resolver that throws');
+  for (const thrown of ['a string', 7, undefined, null]) { // any value, not only an object
+    let caught = 'nothing';
+    try {
+      compileCharts([{ name: 'parent.scxml', text: PARENT }], () => { throw thrown; });
+    } catch (error) {
+      caught = error;
+    }
+    if (caught !== thrown) throw new Error(`a resolver that throws ${String(thrown)}: ${String(caught)} thrown`);
+  }
   throws(() => compileCharts([{ name: 'parent.scxml', text: PARENT }], () => 42), typeError, 'a resolver returning a number');
   throws(() => compileCharts([{ name: 'parent.scxml', text: PARENT }], () => '\uD800'), status('TA_ERROR_INVALID'),
     'a resolver returning a lone surrogate');

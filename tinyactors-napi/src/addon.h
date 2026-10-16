@@ -274,7 +274,8 @@ typedef enum ta_napi_datamodel_kind {
  *               it from the collector;
  *   idle        the deferred of the promise idle() returns until the next
  *               idle turn (`idle_promise`, the same to every caller);
- *   error       the turn's first error (a handler threw), reported after
+ *   error       the turn's first error (a handler threw: any value, in a
+ *               one-element array), reported after
  *               the turn;
  *   encoder     the effective config has `telemetry`;
  *   telemetry   a telemetry handler was given (the last take goes to it);

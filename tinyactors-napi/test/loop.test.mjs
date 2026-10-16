@@ -321,6 +321,19 @@ test('a handler\'s error, with no idle() waiting, is thrown from the turn\'s cal
   if (!output.includes('ended true')) throw new Error(`the host went on: ${output}`);
 });
 
+test('a handler\'s error is whatever it threw: a string, a number, undefined and null reject idle() too', async () => {
+  for (const thrown of [new Error('e'), 'a string', 42, undefined, null]) {
+    const host = hostWith({ logger: LOGGER }, { log: () => { throw thrown; } });
+    host.spawn(host.chart('logger'));
+    let rejected = false;
+    let reason;
+    await host.idle().catch((error) => { rejected = true; reason = error; });
+    equal(rejected, true, `idle() rejects when a handler throws ${String(thrown)}`);
+    equal(reason, thrown, 'with what it threw');
+    host.close();
+  }
+});
+
 /** The runtime's pending Timeout handles (node's process.getActiveResourcesInfo);
  * undefined on a runtime that does not list them. */
 function timeouts() {

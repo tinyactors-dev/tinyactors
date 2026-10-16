@@ -185,8 +185,9 @@ static ta_string_view ta_napi_scratch_text(napi_env env, napi_value value, const
 }
 
 /* The exception pending now as the compiler's refusal: a ResolveError is
- * a diagnostic at its line and column; anything else is kept, to be
- * thrown from the compile call, and its text is the diagnostic. */
+ * a diagnostic at its line and column; anything else (any value: in a
+ * one-element array) is kept, to be thrown from the compile call, and its
+ * text is the diagnostic. */
 static ta_status ta_napi_resolve_refused(ta_napi_resolving *resolving, const ta_resolve_request *request, ta_resolve_result *out) {
     napi_env env = resolving->env;
     napi_value error = NULL, message = NULL;
@@ -206,7 +207,10 @@ static ta_status ta_napi_resolve_refused(ta_napi_resolving *resolving, const ta_
         out->error.column = ta_napi_position(env, error, "column");
     } else {
         out->error.message = ta_napi_scratch_text(env, error, request);
-        if (resolving->raised == NULL) napi_create_reference(env, error, 1, &resolving->raised);
+        napi_value box; /* any value may be thrown, and Node-API 8 references objects only */
+        if (resolving->raised == NULL && napi_create_array_with_length(env, 1, &box) == napi_ok &&
+            napi_set_element(env, box, 0, error) == napi_ok)
+            napi_create_reference(env, box, 1, &resolving->raised);
     }
     return TA_ERROR_INVALID;
 }
@@ -367,9 +371,11 @@ static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, co
                                                              &compiled);
         ta_napi_failure failure = {status, {&instance->arena, NULL, NULL}};
         bool converted = ta_napi_diagnostics_of(env, compiled, &failure.diagnostics);
-        napi_value raised = NULL;
+        napi_value raised = NULL, box = NULL;
         if (resolving.raised != NULL) {
-            napi_get_reference_value(env, resolving.raised, &raised);
+            if (napi_get_reference_value(env, resolving.raised, &box) != napi_ok || box == NULL ||
+                napi_get_element(env, box, 0, &raised) != napi_ok)
+                raised = NULL;
             napi_delete_reference(env, resolving.raised);
         }
         if (!converted || raised != NULL || status != TA_OK || failure.diagnostics.first != NULL) {

@@ -511,4 +511,10 @@
     <evidence>README.md; test/rules.test.mjs 'the README says what no test can show: charts are trusted, deadlines keep a process alive, errors end it, using'</evidence>
     <resolution>Written in p1-rules; the README's usage sections come with the convenience layer.</resolution>
   </entry>
+  <entry id="l-p1-rules-primitive-errors" date="2026-10-16" step="p1-rules" kind="issue" status="resolved">
+    <what>A handler that threw a value that is not an object (a string, a number, undefined, null) had its error dropped: idle() resolved and nothing was reported; a resolver's such throw became a diagnostic and a CompileError instead of being thrown from the compile call.</what>
+    <why>The kept error was a napi_ref of the thrown value, and Node-API 8 references objects only (napi_create_reference failed, unchecked); the keep also took an undefined exception for none.</why>
+    <evidence>src/loop.c ta_napi_keep_error, ta_napi_take_kept; src/compile.c ta_napi_resolve_refused; test/loop.test.mjs 'a handler's error is whatever it threw: a string, a number, undefined and null reject idle() too'; test/compile.test.mjs 'another error of a resolver is thrown from the compile call, whatever value it is'</evidence>
+    <resolution>Fixed in p1-rules: the value is kept in a one-element array (as a primitive payload is), and 'none pending' is napi_is_exception_pending.</resolution>
+  </entry>
 </log>

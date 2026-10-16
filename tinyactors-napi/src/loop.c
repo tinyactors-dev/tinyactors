@@ -46,19 +46,25 @@ enum { TA_NAPI_BY_IMMEDIATE = 0, TA_NAPI_BY_TIMER = 1 };
 
 /* ---- errors ------------------------------------------------------------------- */
 
+/* The error is kept in a one-element array: a handler may throw any value
+ * (a string, undefined), and Node-API 8 references objects only. */
 void ta_napi_keep_error(napi_env env, ta_napi_host *host) {
-    napi_value error;
-    if (napi_get_and_clear_last_exception(env, &error) != napi_ok) return;
-    napi_valuetype type = napi_undefined;
-    if (host->error != NULL || napi_typeof(env, error, &type) != napi_ok || type == napi_undefined) return;
-    napi_create_reference(env, error, 1, &host->error);
+    bool pending = false;
+    napi_value error, box;
+    if (napi_is_exception_pending(env, &pending) != napi_ok || !pending ||
+        napi_get_and_clear_last_exception(env, &error) != napi_ok || host->error != NULL)
+        return;
+    if (napi_create_array_with_length(env, 1, &box) == napi_ok && napi_set_element(env, box, 0, error) == napi_ok)
+        napi_create_reference(env, box, 1, &host->error);
 }
 
 /* The kept error, its reference deleted; NULL when none. */
 static napi_value ta_napi_take_kept(napi_env env, ta_napi_host *host) {
-    napi_value error = NULL;
+    napi_value box = NULL, error = NULL;
     if (host->error == NULL) return NULL;
-    if (napi_get_reference_value(env, host->error, &error) != napi_ok) error = NULL;
+    if (napi_get_reference_value(env, host->error, &box) != napi_ok || box == NULL ||
+        napi_get_element(env, box, 0, &error) != napi_ok)
+        error = NULL;
     napi_delete_reference(env, host->error);
     host->error = NULL;
     return error;
