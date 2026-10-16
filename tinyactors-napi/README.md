@@ -284,3 +284,30 @@ written to a file and its store copied; the copy restored with its own
 store and clock, whose own snapshot is the same bytes, then migrated to a
 new version while events come, its clock run past the delayed sends,
 while the live host goes on with events of its own.
+
+One run of it (`mise run snapshot`, and again with `--actors 100000
+--resident 100000 --events 100000`, 2026-10-16, x86_64 Linux 6.18, Intel
+Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3, bun 1.4.1). Two million
+actors of an order chart, at most 1000 resident, 200,000 events before the
+snapshot and 200,000 more on each host after it; then 100,000 actors all
+resident, so the datamodel's own state is most of the snapshot. In every
+run the copy's snapshot was the same bytes, the copy migrated every actor
+to version 2 (2,018,400 wakes from its store at two million), all 25,000
+sampled actors had their counts, delayed sends and versions on both hosts,
+the live store held only the live host's blobs, and after every eviction
+at most R actors were resident.
+
+| runtime, datamodel | actors, resident | snapshot | taken | restored | migrate on the copy | peak resident (both hosts) |
+|---|---|---|---|---|---|---|
+| node, native | 2,000,000, 1000 | 116.2 MB (58 B per actor) | 0.11 s | 0.55 s | 172.4 s | 934 MB |
+| node, quickjs | 2,000,000, 1000 | 116.1 MB (58 B per actor) | 0.09 s | 0.09 s | 125.7 s | 851 MB |
+| bun, native | 2,000,000, 1000 | 116.2 MB (58 B per actor) | 0.10 s | 0.08 s | 144.9 s | 1018 MB |
+| bun, quickjs | 2,000,000, 1000 | 116.1 MB (58 B per actor) | 0.09 s | 0.07 s | 111.8 s | 937 MB |
+| node, native | 100,000, 100,000 | 65.9 MB (659 B per actor) | 0.76 s | 3.42 s | 5.0 s | 817 MB |
+| node, quickjs | 100,000, 100,000 | 60.9 MB (609 B per actor) | 0.90 s | 0.74 s | 3.6 s | 638 MB |
+| bun, native | 100,000, 100,000 | 65.9 MB (659 B per actor) | 0.62 s | 1.13 s | 4.6 s | 1106 MB |
+| bun, quickjs | 100,000, 100,000 | 60.9 MB (609 B per actor) | 0.86 s | 0.61 s | 3.3 s | 742 MB |
+
+Core's region is 58 B an actor with most of them hibernated and 469 B
+all resident; the native datamodel's rows take about 50 B an actor more
+than quickjs's state in a snapshot of resident actors.

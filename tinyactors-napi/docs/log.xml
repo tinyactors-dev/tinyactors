@@ -642,4 +642,67 @@
     <what>The full migration gate ran once (mise run migration: 2,000,000 actors, 1000 resident, 200,000 events before and during): it passed on all four runtime and datamodel pairs; migrate took 109 to 154 s, peak resident 605 to 680 MB; numbers in the README, 'Migration'.</what>
     <evidence>mise run migration, 2026-10-16, x86_64 Linux 6.18, 4 CPUs: exit 0; node native 154.2 s, node quickjs 108.7 s, bun native 131.2 s, bun quickjs 109.5 s</evidence>
   </entry>
+  <entry id="l-p2-snapshot-state" date="2026-10-16" step="p2-snapshot" kind="decision" status="resolved">
+    <what>The datamodel state in the pack is a CBOR map of one key, the host's one datamodel: {"native": the native state's map} or {"quickjs": ta_datamodel_ecmascript_snapshot's bytes}. Host.restore refuses a snapshot of the other datamodel with TA_ERROR_INVALID and a message naming the datamodel to pass; it does not take the datamodel from the snapshot.</what>
+    <why>Python's host holds both datamodels and packs both states; a Node host holds one (d-datamodel), so packing an empty state for the other would be bytes for nothing. Taking the datamodel from the snapshot would be a default of our own; options stay as new Host takes them.</why>
+    <evidence>src/host.c ta_napi_host_snapshot, ta_napi_host_restore_state; test/snapshot.test.mjs: 'restore refuses another system\'s config, another datamodel, another program\'s pack'</evidence>
+    <resolution>implemented in 90fd3a8</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-construct" date="2026-10-16" step="p2-snapshot" kind="decision" status="resolved">
+    <what>Host.restore is a static method of Host that calls the constructor (napi_new_instance on `this`) with the snapshot handed over through the instance's `restoring` pointer, which the constructor takes and clears at its entry; the snapshot's bytes are read only after the config is written to CBOR (a getter there may run JavaScript and detach or transfer the ArrayBuffer), copied through the environment's allocator when not 8-aligned, and freed by the static method after the construction.</what>
+    <why>One construction path for new Host and Host.restore (options, handlers, the wrap, the clock), as Python's ta_python_host_build takes a pack; a hidden constructor argument would be visible to the application. No JavaScript runs between reading the bytes and the end of the restore (chart_attach and the rows' refill run only the realm's kit and `throw 0;`-prefixed scripts).</why>
+    <evidence>src/host.c ta_napi_host_restore, ta_napi_host_new, ta_napi_host_restore_core; src/addon.h ta_napi_instance.restoring</evidence>
+    <resolution>implemented in 90fd3a8</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-rows" date="2026-10-16" step="p2-snapshot" kind="decision" status="resolved">
+    <what>A native session row in a snapshot is [handle, segment, chart index, {name: value bytes} (the variables hibernation writes), _event's 11 fields as bytes, the link's [sessionid, name, processors] as bytes, its init (params, or a woken blob's vars until the first event or migrate) as bytes or null, its added names as bytes]; the processors are the template's, the link's pairs, or, once _ioprocessors was read, recovered from its frozen entries (an alias is the same entry object). The restore makes the link with the kit's system(), _event's strings from the processors' types, the init copied into the shared context, then the session as a wake makes it, its `added` set from the snapshot (realm.js linked, relink).</what>
+    <why>Python writes the system variables with the row because a restore has no create call to give them; a Node link also holds init and added, which a migration after a wake needs, so the snapshot covers every field of the link. Each value as bytes of its own, as Python's review fixed: a value nests as deep as in a send.</why>
+    <evidence>src/datamodel/datamodel.c ta_napi_snapshot_session, ta_napi_restore_session; src/datamodel/realm.js linked, relink; test/snapshot.test.mjs: 'the snapshot of a restored host is the same bytes', 'a value nests as deep in a snapshot as in a send'</evidence>
+    <resolution>implemented in 90fd3a8</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-lexical" date="2026-10-16" step="p2-snapshot" kind="decision" status="resolved">
+    <what>A session of a chart whose scripts declare with let, const or class refuses the snapshot (TA_ERROR_UNSUPPORTED, the reason saying why), as it refuses hibernation and migration.</what>
+    <why>A restored session is made as a wake makes it: a new context whose scripts are instantiated and not run, which cannot give lexical bindings back (they stay in their TDZ). Python has no such chart.</why>
+    <evidence>src/datamodel/datamodel.c ta_napi_snapshot_session (TA_NAPI_CHART_LEXICAL); README.md, 'Snapshots'</evidence>
+    <resolution>implemented in 90fd3a8</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-refusals" date="2026-10-16" step="p2-snapshot" kind="decision" status="resolved">
+    <what>Host.restore throws a TypeError for a snapshot that is not a Uint8Array or ArrayBuffer and for a restore not called on Host; a TinyactorsError TA_ERROR_INVALID for bytes that are no pack, a pack another program labelled, another datamodel's state, rows that do not match the tables, and a config whose systemID is not the pack's (the message names the snapshot's system). Python raises ValueError for the last.</what>
+    <why>TypeError for a wrong type and a TinyactorsError with core's status for a refusal is what the addon throws elsewhere; JavaScript has no ValueError.</why>
+    <evidence>src/host.c ta_napi_host_restore, ta_napi_host_same_system; test/snapshot.test.mjs: 'restore refuses what is no snapshot, and what is not bytes'</evidence>
+    <resolution>implemented in 90fd3a8</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-buffer" date="2026-10-16" step="p2-snapshot" kind="deviation" status="resolved">
+    <what>snapshot() does not copy the pack into a Buffer: it probes ta_host_snapshot_pack for the size, makes a Buffer of it (napi_create_buffer) and lets core write the pack straight into it. AGENTS.md said snapshot() was copied once with napi_create_buffer_copy; it now says this.</what>
+    <why>A snapshot fills a ta_buffer the caller lends (ADR 0012, lifetimes; host.h:455-459), it is not a view until the ack: writing into the Buffer is the one copy, of what may be hundreds of megabytes. Python writes into a bytes object the same way.</why>
+    <evidence>src/host.c ta_napi_host_snapshot; AGENTS.md, 'Lifetimes and thin views'</evidence>
+    <resolution>implemented in 90fd3a8</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-bun-global" date="2026-10-16" step="p2-snapshot" kind="issue" status="resolved">
+    <what>On bun, a declaring session's var written by one of its functions hibernated (and would have been snapshotted) with an older value: bun's vm context leaves the global object's property stale after a function writes the var, while the binding has the new value. p2-hibernate's test wrote it once, from global code, so it did not show.</what>
+    <why>Found by this step's declaring-chart snapshot test on bun (expected '9 9 report', got '6 6 report').</why>
+    <evidence>spike, bun 1.4.1: vm.runInContext('var total = 0; function bump(k) { total += k }'); bump(2); bump(3): ctx.total and globalThis.total 2, runInContext('total') 5; node gives 5 for each. test/hibernation.test.mjs: 'a chart whose scripts declare: its var and function come back after the wake' fails on bun without the fix</evidence>
+    <resolution>fixed in a381c81: realm.js stored() reads a declaring session's globals by name with the context's indirect eval. actor.context's variable() still reads the global's property: it reads only &lt;data&gt; ids, which declare() defines before the scripts run, and a test writing one from a function (with and without a script var of the same name) read the right value on bun without the fix, so it was left as is.</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-no-services" date="2026-10-16" step="p2-snapshot" kind="deviation" status="open">
+    <what>tools/snapshot.mjs is Python's tools/snapshot.py without its payments: no actor pays through an invoked service when the snapshot is taken, so the copy starts no restored invocation on a stand-in and the live host's real service is not checked. The order charts keep their payment states.</what>
+    <why>The addon has no services yet: TA_EFFECT_INVOKE is dropped until p2-services builds them.</why>
+    <evidence>tools/snapshot.mjs (its header); docs/plan.xml p2-services</evidence>
+    <resolution>p2-services adds the payments to tools/snapshot.mjs (pay half the resident actors, a stand-in that declines each restored invocation once, the live service never stopped) and a test that a restored host announces each running invocation again</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-m4" date="2026-10-16" step="p2-snapshot" kind="note" status="resolved">
+    <what>mise run conform -- --milestone M4 passes by hand under node and bun on native and quickjs: protocol 90 pass 50 skip, scenarios 8 of 8 (hibernate, migrate, snapshot, invoke included), w3c 191 of 191. GATE and MILESTONE stay M1's in mise/napi.rb: p2-w3c raises them.</what>
+    <evidence>mise run conform -- --milestone M4, 2026-10-16, exit 0, on all four</evidence>
+    <resolution>p2-w3c raises the gate</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-bytes" date="2026-10-16" step="p2-snapshot" kind="note" status="resolved">
+    <what>The four copies of 'the bytes of a Uint8Array or an ArrayBuffer' (decode, addImage, wake, parseHTTPRequest) became one helper, ta_napi_bytes_of in values.c, which snapshot's restore uses too.</what>
+    <evidence>src/values.c ta_napi_bytes_of; src/host.c, src/http.c</evidence>
+    <resolution>implemented in 90fd3a8</resolution>
+  </entry>
+  <entry id="l-p2-snapshot-full-gate" date="2026-10-16" step="p2-snapshot" kind="note" status="resolved">
+    <what>The full snapshot gate ran once: mise run snapshot (2,000,000 actors, 1000 resident, 200,000 events) and --actors 100000 --resident 100000 --events 100000, on all four runtime and datamodel pairs: every run passed (the copy's snapshot the same bytes, every actor migrated on the copy, 0 of 25,000 sampled wrong on either host, the live store only the live host's). Snapshot 116 MB at two million (58 B an actor), 61 to 66 MB at 100,000 resident; restore 0.07 to 3.42 s; numbers in the README, 'Snapshots'.</what>
+    <evidence>mise run snapshot, 2026-10-16, x86_64 Linux 6.18, 4 CPUs: exit 0 (873.97 s); the 100,000 run exit 0</evidence>
+    <resolution>numbers in README.md</resolution>
+  </entry>
 </log>

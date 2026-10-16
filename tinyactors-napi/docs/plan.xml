@@ -486,7 +486,7 @@
         <does>migrate, migrated, migrationDone; deserialize with a new chart and migrate returning the old bindings.</does>
         <done-when>The suite's M4 migrate scenario and tools/migration.mjs.</done-when>
       </step>
-      <step id="p2-snapshot" status="todo" after="p2-migrate">
+      <step id="p2-snapshot" status="done" after="p2-migrate" commit="90fd3a8">
         <title>Snapshots</title>
         <does>snapshot and Host.restore with the native datamodel's tables' namespaces and rows, and quickjs's state; a session's chart named by its segment and index (ta_datamodel_chart.segment: two segments may run one image); quiescence checked before any datamodel state is built; a restore refuses rows that come twice or do not match the tables; a restored host's clock from the snapshot's time.</does>
         <done-when>M4's snapshot scenario; tools/snapshot.mjs; a restored host's snapshot is the same bytes.</done-when>
