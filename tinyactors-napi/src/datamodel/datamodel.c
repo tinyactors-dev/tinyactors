@@ -738,7 +738,10 @@ static ta_status ta_napi_from_wire(void *datamodel, ta_bytes cbor, ta_payload *o
     return status;
 }
 
-/* A <data> variable for inspection (actor.context): a copy, as a payload. */
+/* A <data> variable for inspection (actor.context): the value itself as a
+ * payload, which core writes out with to_wire at once and releases; not
+ * a copy, which would refuse what to_wire writes (a function dropped, a
+ * Date as its JSON). */
 static ta_status ta_napi_variable(const ta_datamodel_call *call, ta_string_view name, ta_payload *out) {
     ta_napi_entry entry;
     if (!ta_napi_enter_entry(call, &entry)) return TA_ERROR_INVALID;
@@ -753,9 +756,8 @@ static ta_status ta_napi_variable(const ta_datamodel_call *call, ta_string_view 
     }
     napi_value key, value;
     ta_status status = declared && napi_create_string_utf8(env, name.pointer, name.length, &key) == napi_ok &&
-                               napi_get_property(env, evaluation->scope, key, &value) == napi_ok &&
-                               ta_napi_native_payload(evaluation->native, value, out)
-                           ? TA_OK
+                               napi_get_property(env, evaluation->scope, key, &value) == napi_ok
+                           ? ta_napi_native_add(evaluation->native, value, out)
                            : TA_ERROR_INVALID;
     if (status != TA_OK) ta_napi_failed(env);
     ta_napi_frame_close(&entry.frame);

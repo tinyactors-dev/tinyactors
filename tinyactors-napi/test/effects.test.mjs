@@ -200,7 +200,9 @@ test('a promise that rejects before an answer fails the send and stays unhandled
     const made = caller(async () => { await sleep(1); throw boom; });
     outcomes = made.outcomes;
     await made.host.idle();
-    if (!(await until(() => outcomes.length > 0))) throw new Error('the send was not failed');
+    // by time, not turns: the rejection comes after the handler's timer
+    for (let i = 0; i < 500 && outcomes.length === 0; i++) await sleep(2);
+    if (outcomes.length === 0) throw new Error('the send was not failed');
     made.host.close();
   });
   equal(outcomes.join(), 'failed x1', 'error.communication for the sender');
