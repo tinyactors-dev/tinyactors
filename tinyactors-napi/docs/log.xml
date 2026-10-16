@@ -115,10 +115,11 @@
     <why>AGENTS.md 'Values' and plan item a-values: undefined and null stay distinct, plain objects and arrays only, what cannot be written is refused, never turned into a value. For the next steps: the native datamodel's to_wire (p1-datamodel) needs values.txt's to_wire rules, a second mode of values.c; and the adapter's host.run sends must carry the sender's wire form, since encode(send.data) of a native payload holding undefined writes f7 where the echo expects f6 ('ECMAScript: undefined at the top is null').</why>
     <evidence>tinyactors-test/suites/protocol/values.txt (encode cases; header: 'encode and invalid cases are value.encode's ... on ECMAScript datamodels'); tinyactors-test/docs/driver.md:65 (value.encode is to_wire); tinyactors-napi/docs/values.md, 'encode and a datamodel's to_wire'</evidence>
   </entry>
-  <entry id="l-p1-host-native-refused" date="2026-10-16" step="p1-host" kind="decision" status="open">
+  <entry id="l-p1-host-native-refused" date="2026-10-16" step="p1-host" kind="decision" status="resolved">
     <what>A host whose datamodel is "native" (the default, so also new Host(config) with no datamodel option) throws TinyactorsError TA_ERROR_UNSUPPORTED until p1-datamodel builds the native datamodel; quickjs is never registered under the native name. Tests and the next steps pass datamodel: "quickjs".</what>
     <why>The brief offered either; registering quickjs as "native" would make tests pass for the wrong datamodel and hide which one ran. p1-datamodel removes the refusal and the test "the native datamodel is refused until it is built" in test/host.test.mjs.</why>
     <evidence>tinyactors-napi/src/host.c (ta_napi_host_datamodel); test/host.test.mjs</evidence>
+    <resolution>p1-datamodel built the native datamodel: a host that names none, or names 'native', gets it; the refusal and its test are gone, and test/host.test.mjs checks which datamodel ran by its values' realm.</resolution>
   </entry>
   <entry id="l-p1-host-allocator-context" date="2026-10-16" step="p1-host" kind="decision" status="resolved">
     <what>The allocator's context is the napi_env itself (ta_napi_allocator(env) in module.c), not the instance; the host struct is made and freed through it, so it is reported too.</what>
@@ -355,5 +356,68 @@
     <what>ta_host_post's refusals at the call (TA_ERROR_STATE during a run or inside a datamodel, TA_ERROR_NO_MEMORY) remove the row and throw, but no test reaches them: no JavaScript runs inside a run on quickjs, and the allocator cannot be made to refuse from a test. The native datamodel (p1-datamodel) runs JavaScript inside a run: a chart's script calling host.hostStats should then be refused with TA_ERROR_STATE, worth a test there.</what>
     <why>The brief lists those refusals; the path exists in code only.</why>
     <evidence>tinyactors-napi/src/methods.c ta_napi_typed (posting.status)</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-realm-script" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+    <what>What must be made with a context's own constructors is made by a script that runs once in every node:vm context the native datamodel makes, src/datamodel/realm.js (embedded as a C string by mise/napi.rb, as Python embeds support.py): its kit copies values crossing between actors, makes a chart's scope constructor, a session's system variables, _event and XML nodes, and parses JSON content. C calls the kit's functions; the expressions themselves are each a vm.Script compiled at their first evaluation.</what>
+    <why>Node-API creates objects in the addon's realm only (napi_create_object, napi_create_array), and AGENTS.md wants values made with the receiving context's constructors (finding x-realm) and the DOM's methods on one prototype in the datamodel's context (decision d-dom). The script is the datamodel's implementation inside its own contexts, not JavaScript above the addon: no application code calls it and it never runs in the application's realm.</why>
+    <evidence>tinyactors-napi/src/datamodel/realm.js; src/datamodel/realms.c (ta_napi_realm_new); mise/napi.rb (embed_realm)</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-script-names" date="2026-10-16" step="p1-datamodel" kind="deviation" status="for-maintainer">
+    <what>A shared chart's scope holds from the start its &lt;data&gt; ids and its &lt;foreach&gt;es' item and index (TA_EXPRESSION_ITEM identifiers), not 'the names a script's assignments bind': a &lt;script&gt; of a chart that declares nothing runs as a strict function in `with (scope)`, so an assignment to a name the chart does not declare (an implicit global) is that script's error.execution, as in quickjs's shared realm. A script that declares (var, function, let, const, class) puts its chart on a context per session, where it runs as global sloppy code.</what>
+    <why>Which names a script assigns without declaring them is known only by parsing the script, and the addon parses no JavaScript (decision d-declarations); the engine is asked only which names a script declares. Python finds its assignments with its own ast module. W3C 150, 151, 302, 304 and 525 pass: their names are foreach items or declared with var.</why>
+    <evidence>src/datamodel/datamodel.c ta_napi_chart_names; test/datamodel.test.mjs (a script's implicit global is error.execution); scratch W3C runner: 150, 151, 302, 304, 525 pass on node and bun</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-shared-global" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+    <what>The shared context's global object is not frozen: charts of one host share its builtins, and a chart that assigns to an existing global (Math = 1, Array.prototype.x = 1) changes them for the host's other charts on the shared context. Undeclared names are still refused (strict code).</what>
+    <why>A spike: node refuses Object.freeze on a vm context's global ('Cannot freeze'), and on bun the freeze succeeds but leaves the lazily made builtins undefined (Symbol.for threw afterwards). Charts are trusted code on the native datamodel (AGENTS.md); quickjs, the sandbox, freezes its shared global.</why>
+    <evidence>scratchpad spike.mjs (2026-10-16, node 22.23.3, bun 1.4.1)</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-crossing" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+    <what>What crosses between actors on the native datamodel (inputs' data and params, capture, from_wire): primitives (shared, symbols and bigints included), plain objects of any realm (prototype null or a realm's Object.prototype, own enumerable string keys, getters read), arrays (holes as undefined), Uint8Arrays (a Buffer becomes a plain Uint8Array) and the datamodel's XML nodes, each copied into the receiving context; anything else (a function, a Date, a Map, a class instance, the Host) is refused: at an input with TinyactorsError TA_ERROR_UNSUPPORTED, nested deeper than 64 or cyclic with TA_ERROR_INVALID, an error a getter throws passing through; inside a chart it is the capture's error.execution.</what>
+    <why>AGENTS.md: values cross by copy, made with the receiving context's constructors, immutable ones shared; actors share no mutable value (bindings.md section 8). Python's copy refuses what is outside the value table the same way; quickjs shares its values within its runtime (so its to_wire later drops a function or writes a Date's JSON). A shared context's payload is shared by the shared context's sessions without a copy; a declaring session's context gets its own copy at bind_event and create.</why>
+    <evidence>src/datamodel/realm.js (copy, refusal); src/datamodel/rows.c ta_napi_native_payload; test/datamodel.test.mjs</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-variable" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
+    <what>The native datamodel's variable entry (actor.context) gives core the variable's value itself as a payload, not a copy: core writes it at once with to_wire and releases it, so to_wire's rules apply (undefined and functions dropped, a Date as its JSON), where a copy would refuse them.</what>
+    <why>requests.md, actor.context: 'A variable the datamodel cannot read or write as a neutral value is undefined or null'; the payload never reaches a chart, so no actor shares it.</why>
+    <evidence>src/datamodel/datamodel.c ta_napi_variable; test/datamodel.test.mjs (actor.context)</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-event" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+    <what>The native _event is a frozen plain object of the session's context with name, type, sendid, origin, origintype, invokeid, data (the payload row's value itself, unfrozen; a declaring session's own copy) and raw when there is one, absent fields undefined; its name, invoke id and origin are the chart's strings by core's ids, its origintype the host's processor type. quickjs's _event is not frozen.</what>
+    <why>SCXML 5.10: _event is read-only; Python's Event is immutable. W3C 329 assigns to _event itself, which the non-writable property refuses.</why>
+    <evidence>src/datamodel/realm.js (event); src/datamodel/datamodel.c ta_napi_bind_event</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-dom" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+    <what>The XML document of B.2 content: txml's tree (elements, text, CDATA, comments, processing instructions; the declaration and DOCTYPE left out, whitespace text kept) as XMLNode objects of the context: nodeType, nodeName, childNodes, parentNode (not enumerable), and for elements tagName, localName (after the prefix) and attributes (an object of qualified name to value); getters firstChild, lastChild, documentElement, textContent; methods appendChild, getElementsByTagName ('*' or a qualified or local name, document order), getAttribute (null when absent), hasAttribute; a document's toString is the text it was read from, which an &lt;invoke&gt;'s content expression gives core as the document (W3C 530). No namespaceURI yet.</what>
+    <why>d-dom names nodeType, nodeName, childNodes, attributes, textContent and getElementsByTagName; W3C 557, 561 and 530 need these. txml has no realloc, and asks alignments above 8 the host's allocator does not give: those blocks are aligned by hand (src/datamodel/dom.c).</why>
+    <evidence>src/datamodel/dom.c, src/datamodel/realm.js; scratch W3C runner: 530, 557, 561 pass</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-realms-plain" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
+    <what>values.c accepts a plain object of the native datamodel's contexts as a value (strict mode, encode and the inputs): its prototype is checked against the instance's WeakSet of their Object.prototypes after this realm's, so encode(send.data) of a native payload works.</what>
+    <why>A send's data on the native datamodel is the payload row's value itself, an object of the shared context (AGENTS.md, thin views), whose prototype is not the application's Object.prototype.</why>
+    <evidence>src/values.c ta_napi_realm_prototype; src/datamodel/realms.c (realms.add)</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-tests" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
+    <what>The binding's tests run on both datamodels: mise/tasks/test runs each file under each runtime with TA_NAPI_DATAMODEL=native and =quickjs; test/charts.mjs's ENGINE ({datamodel}) replaces QUICKJS, and a file run on its own uses native, the default. Tests of quickjs's options keep their own {datamodel: 'quickjs'}, and the native datamodel's own cases force it.</what>
+    <why>The native datamodel became the default; both datamodels must pass the same cases (AGENTS.md, Tasks). The test task takes about 11 s.</why>
+    <evidence>mise/tasks/test; test/charts.mjs</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-typed-method" date="2026-10-16" step="p1-datamodel" kind="note" status="for-maintainer">
+    <what>The test 'a typed method called from a chart expression is refused with TA_ERROR_STATE' cannot be written: on the native datamodel no application code runs inside ta_host_run. A chart reaches nothing of the application's: the Host, functions and class instances do not cross into a chart (TA_ERROR_UNSUPPORTED at the input), copies are made at the inputs (getters run there, outside a run), and the chart's contexts have no application global. test/datamodel.test.mjs checks that the Host and a function that would call it are refused as data. ta_host_post's TA_ERROR_STATE stays unreached from JavaScript (l-p1-methods-refusals-untested).</what>
+    <why>The brief asked for it; the design that copies values at the boundary rules it out.</why>
+    <evidence>test/datamodel.test.mjs ('a typed method is never called from a chart'); src/methods.c ta_napi_typed</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-tinyxml-dependency" date="2026-10-16" step="p1-datamodel" kind="note" status="for-maintainer">
+    <what>tinyactors-napi now builds tinyxml/include/txml.c, and its test task lists ../tinyxml/include/** in #MISE sources; the root AGENTS.md table ('You changed tinyxml: tinyxml') does not say that a change to tinyxml reruns napi's tests. The root file is not this project's to edit.</what>
+    <evidence>tinyactors-napi/mise/tasks/test; AGENTS.md (root), 'What a change reruns'</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-hibernation" date="2026-10-16" step="p1-datamodel" kind="note" status="open">
+    <what>serialize, deserialize, migrate, payload_serialize and payload_deserialize of the native datamodel answer TA_ERROR_UNSUPPORTED until the hibernation, migration and snapshot steps (p2): hibernate() of a native session stays refused, a migration of one fails.</what>
+    <evidence>src/datamodel/datamodel.c</evidence>
+  </entry>
+  <entry id="l-p1-datamodel-suite" date="2026-10-16" step="p1-datamodel" kind="note" status="resolved">
+    <what>The suite's adapter does not exist yet (p1-conform), so its scenarios were run by hand: a scratch W3C runner over tinyactors-test/build/w3c/ecmascript (converted with lib/w3c.rb) with a simulated clock and a BasicHTTP loopback that does not encode HTTP passes 184/191 on the native datamodel under node and under bun, quickjs 185/191; the misses are the loopback's (509, 518, 519, 520, 531, 534 need the POST encoded) and none is the datamodel's after 530 (a document's text) was fixed. The basics scenario, driven by hand, passes on both datamodels under both runtimes.</what>
+    <why>The step's done-when names the suite's scenarios; p1-conform runs them for real and raises the gate.</why>
+    <evidence>scratchpad p1-datamodel/w3c.mjs and basics.mjs (not in git)</evidence>
   </entry>
 </log>
