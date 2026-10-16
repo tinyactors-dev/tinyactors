@@ -454,7 +454,7 @@
         <done-when><code>mise run conform -- --milestone M1</code> passes under node and bun on native and quickjs; GATE in mise/napi.rb says so.</done-when>
         <files>conform.mjs, mise/napi.rb</files>
       </step>
-      <step id="p1-measure" status="todo" after="p1-conform">
+      <step id="p1-measure" status="done" after="p1-conform" commit="0dfb075">
         <title>The measurement</title>
         <does>A task spawning 10,000 actors of one chart (three &lt;data&gt;, one a list), resident and idle, then after one event each: bytes per actor from the process (rss), the engine's heap (process.memoryUsage heapUsed and external) and the host (host.stats regionBytes), on native and quickjs, under node and bun, with the machine's signature.</does>
         <done-when>The numbers are in AGENTS.md beside Python's 433 B and quickjs's 1104 B, each from the same machine and run.</done-when>

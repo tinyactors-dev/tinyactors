@@ -447,4 +447,26 @@
     <why>The step asks for the whole suite's result per datamodel and runtime.</why>
     <evidence>mise run //tinyactors-test:run -- --kind binding --datamodel {native,quickjs} {node,bun} conform.mjs: 'w3c: 191 pass, 0 fail, 0 skip', 'scenarios: 5 pass, 3 fail, 0 skip' (fail scenarios hibernate, migrate, snapshot)</evidence>
   </entry>
+  <entry id="l-p1-measure-system-variables" date="2026-10-16" step="p1-measure" kind="issue" status="resolved">
+    <what>The native datamodel's heap per idle actor was 356 B on node and 448 B on bun, about 240 B of it the system variables built eagerly at create: the link, a frozen _ioprocessors object, one entry object per processor with a location string, and a _name string per session.</what>
+    <why>A heap snapshot of 10,000 idle actors (node) grouped by constructor: 30,845 Objects (148.6 B an actor), 10,001 'fit' strings (24 B), beside the Scope (64 B) and the list (32 B).</why>
+    <evidence>scratchpad p1-measure/snap.mjs (v8.writeHeapSnapshot, grouped by node name); mise run measure before and after</evidence>
+    <resolution>fb8114f: _ioprocessors made at its first read and kept in the link, from the context's template when the session's processors match it text for text (else from the session's own pairs); consecutive sessions with the same _name share its string. Heap 189 B on node, 246 B on bun; test/datamodel.test.mjs checks each session's own _ioprocessors, its short name, the config's processor and a spawn's name.</resolution>
+  </entry>
+  <entry id="l-p1-measure-numbers" date="2026-10-16" step="p1-measure" kind="note" status="resolved">
+    <what>Bytes per actor at 10,000 idle actors (x86_64 Linux 6.18, Xeon @ 2.10GHz, 4 CPUs; node 22.23.3, bun 1.4.1), resident / engine heap / region: node native 1240/189/268, node quickjs 878/10/268, bun native 1762/246/268, bun quickjs 1172/24/268; after one event each, resident 1655, 1337, 2679, 1619. At 40,000 native is 747 B resident on node, 971 B on bun. Python's 433 B and 1104 B are another machine's and not comparable.</what>
+    <why>The step's done-when: the numbers in AGENTS.md beside Python's, from one machine and run.</why>
+    <evidence>mise run measure (build/measure.json); tinyactors-napi/AGENTS.md, 'Measured cost per session'</evidence>
+    <resolution>In AGENTS.md. Resident varies between runs (bun native 1762 to 2049 B); heap and region do not.</resolution>
+  </entry>
+  <entry id="l-p1-measure-resident-engine" date="2026-10-16" step="p1-measure" kind="note" status="for-maintainer">
+    <what>What resident holds beyond the engine heap and the region on the native datamodel is mostly the engine's: V8's new_space grows about 300 B an actor at 10,000 (a cost that does not scale with the population: 747 B resident at 40,000), and malloc grows about 140 B an actor (glibc malloc_stats under gdb), most likely the napi_ref each session row holds (node's v8impl::Reference and its global handle; unverified). Holding the scopes in one JavaScript array by slot instead would save that, but AGENTS.md has a session row hold its scope's napi_ref and forbids tables of our own, so it was not done.</what>
+    <why>The step asked to find and fix the cause if native is far above quickjs; the system variables were the addon's and are fixed; the rest is the engine's or a design choice.</why>
+    <evidence>scratchpad p1-measure/phys.mjs (v8.getHeapSpaceStatistics deltas: new_space 299, old_space 236 B an actor), phys2.mjs under gdb (malloc in use +1.39 MB for 10,000 native actors, +8.7 MB for quickjs)</evidence>
+  </entry>
+  <entry id="l-p1-measure-quickjs-heap" date="2026-10-16" step="p1-measure" kind="deviation" status="open">
+    <what>The report has no quickjs heap column: host.quickjsHeapBytes (ta_datamodel_ecmascript_heap_bytes) is still planned in docs/api-map.md, and quickjs allocates with its own malloc, so neither engine's heap counter sees it; on quickjs, resident is the only number for its heap.</what>
+    <why>Implementing quickjsHeapBytes belongs to its own step.</why>
+    <evidence>docs/api-map.md (host.quickjsHeapBytes *planned*); tools/measure.mjs</evidence>
+  </entry>
 </log>
