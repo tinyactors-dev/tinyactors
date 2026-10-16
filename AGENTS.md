@@ -103,7 +103,7 @@ Do it at release time, not between releases.
   | `tinyactors-test/test` (the runner's own tests) | tinyactors-test                  |
   | `tinyactors-napi`                   | napi                                     |
   | `tinyactors-cpython`                | cpython                                  |
-  | `tinyxml`                           | tinyxml                                  |
+  | `tinyxml`                           | tinyxml, napi (the native datamodel compiles txml) |
   | `tinyparse`                         | tinyparse                                |
   | `staticjs`                          | staticjs                                 |
   | root `mise/lib`, `mise.toml`        | all of them                              |
