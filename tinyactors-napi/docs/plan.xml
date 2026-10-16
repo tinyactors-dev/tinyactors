@@ -481,7 +481,7 @@
         <does>sweep, hibernate, wake and the wake handler; serialize writes a native session's variables and _event as CBOR through the value table (a function or an object outside the table refuses with TA_ERROR_UNSUPPORTED; payload_serialize answers TA_ERROR_UNSUPPORTED where to_wire keeps TA_ERROR_INVALID); destroy removes the row; a blob whose copy into a Buffer fails is woken back from the view before the ack; sweep and wake refuse numbers out of range.</does>
         <done-when>tools/stress.mjs with a store (node:sqlite under node, bun:sqlite under bun, or a Map) passes 20,000 actors with 100 resident; --full two million with 1000.</done-when>
       </step>
-      <step id="p2-migrate" status="todo" after="p2-hibernate">
+      <step id="p2-migrate" status="done" after="p2-hibernate" commit="97085b5">
         <title>Migration</title>
         <does>migrate, migrated, migrationDone; deserialize with a new chart and migrate returning the old bindings.</does>
         <done-when>The suite's M4 migrate scenario and tools/migration.mjs.</done-when>
