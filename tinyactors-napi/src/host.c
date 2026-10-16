@@ -746,7 +746,7 @@ static napi_value ta_napi_input_status(napi_env env, const ta_napi_refusal *refu
 static bool ta_napi_session_of(napi_env env, napi_value value, uint64_t *session) {
     bool lossless = false;
     if (!ta_napi_is(env, value, napi_bigint) || napi_get_value_bigint_uint64(env, value, session, &lossless) != napi_ok ||
-        !lossless) {
+        !lossless || *session == 0) { /* 0 is core's "no session" (ta_host_actor_by_name) */
         napi_throw_type_error(env, NULL, "a session is a bigint from 1 to 2^64-1");
         return false;
     }

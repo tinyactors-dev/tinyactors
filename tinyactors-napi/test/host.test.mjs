@@ -261,6 +261,7 @@ test('send refuses what it cannot take, and keeps nothing of it', () => {
   const session = host.spawn(host.chart('waiter'), { name: 'w' });
   throws(() => host.send(Number(session), 'go'), typeError, 'a session as a number');
   throws(() => host.send(-1n, 'go'), typeError, 'a negative session');
+  throws(() => host.send(0n, 'go'), typeError, 'session 0, core\'s none');
   throws(() => host.send(1n << 64n, 'go'), typeError, 'a session past 64 bits');
   throws(() => host.send(session, 1), typeError, 'an event that is not a string');
   throws(() => host.send(session, 'go', undefined, { sendID: 'x' }), typeError, 'an unknown option');
