@@ -49,13 +49,21 @@ Dir.mktmpdir('release-mirror') do |tmp|
     title = message[/\A# (.+)$/, 1] || "#{directory} #{version}"
     notes.write(message)
   else
-    out, status = Open3.capture2('gh', 'release', 'view', tag, '--repo', Release::MONOREPO, '--json', 'name,body')
+    # Through the REST API (`gh api`), as staticjs's site:release reads
+    # releases: it is what every gh credential can reach.
+    out, status = Open3.capture2('gh', 'api', "repos/#{Release::MONOREPO}/releases/tags/#{tag}")
     Release.fail!("#{Release::MONOREPO} has no GitHub release #{tag}; pass --assets") unless status.success?
     source = JSON.parse(out)
     title = source['name'].to_s.empty? ? "#{directory} #{version}" : source['name']
     notes.write(source['body'].to_s)
     dir = tmp.join('assets')
-    Release.run('gh', 'release', 'download', tag, '--repo', Release::MONOREPO, '--dir', dir.to_s)
+    FileUtils.mkdir_p(dir)
+    source['assets'].each do |asset|
+      bytes, status = Open3.capture2('gh', 'api', '-H', 'Accept: application/octet-stream',
+                                     "repos/#{Release::MONOREPO}/releases/assets/#{asset['id']}", binmode: true)
+      Release.fail!("downloading #{asset['name']} failed") unless status.success? && bytes.bytesize == asset['size']
+      dir.join(asset['name']).binwrite(bytes)
+    end
   end
 
   # With a SHA256SUMS, the files it lists and itself, each checked (a

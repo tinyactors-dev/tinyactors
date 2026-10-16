@@ -318,10 +318,12 @@ module Release
   # which `gh release create` leaves when an upload fails, fails the
   # release: its files are not all there.
   def released?(repository, release_tag)
-    out, status = Open3.capture2('gh', 'release', 'view', release_tag, '--repo', repository, '--json', 'isDraft',
-                                 err: File::NULL)
-    return false unless status.success?
-    return true unless out.include?('"isDraft":true')
+    # The list, not releases/tags/<tag>, which leaves drafts out.
+    out, status = Open3.capture2('gh', 'api', '--paginate', "repos/#{repository}/releases",
+                                 '--jq', ".[] | select(.tag_name == \"#{release_tag}\") | .draft")
+    fail!("gh api repos/#{repository}/releases failed") unless status.success?
+    return false if out.strip.empty?
+    return true unless out.lines.map(&:strip).include?('true')
 
     fail!("#{repository}'s release #{release_tag} is a draft, left by a stopped upload; delete it " \
           "(gh release delete #{release_tag} --repo #{repository}) and run the publish again")
@@ -353,7 +355,7 @@ module Release
   # without issues or a wiki: those stay in this repository. Nothing when
   # it exists.
   def ensure_release_repository!(repository, directory)
-    return if system('gh', 'repo', 'view', repository, '--json', 'name', out: File::NULL, err: File::NULL)
+    return if system('gh', 'api', "repos/#{repository}", '--silent', out: File::NULL, err: File::NULL)
 
     run('gh', 'repo', 'create', repository, '--private', '--disable-issues', '--disable-wiki',
         '--description', "Releases of #{directory}/ from #{MONOREPO}, where it is developed")
@@ -411,8 +413,14 @@ module Release
 
     parent = git('ls-remote', url, 'refs/heads/main').to_s.split.first
     run('git', 'fetch', '--quiet', '--no-tags', url, 'refs/heads/main') if parent
-    snapshot = commit_tree!(tree: tree, parent: parent, from: commit,
-                            message: "#{directory} #{version}\n\n#{directory}/ at #{tag} in #{MONOREPO} (#{commit}).\n")
+    # A main that holds this tree already is this release's snapshot, from
+    # a push that stopped before the tag: only the tag is missing.
+    snapshot = if parent && git('rev-parse', "#{parent}^{tree}").to_s.strip == tree
+                 parent
+               else
+                 commit_tree!(tree: tree, parent: parent, from: commit,
+                              message: "#{directory} #{version}\n\n#{directory}/ at #{tag} in #{MONOREPO} (#{commit}).\n")
+               end
     run('git', 'push', '--atomic', url, "#{snapshot}:refs/heads/main", "#{snapshot}:refs/tags/#{release_tag}")
     [repository, release_tag]
   end
