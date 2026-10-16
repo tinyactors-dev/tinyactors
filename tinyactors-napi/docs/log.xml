@@ -788,4 +788,7 @@
     <evidence>ps during mise run scale 2026-10-16: 11 GB RSS for the 2,000,000 resident child; SIGKILL of 'resident at 2000000'; tools/scale.mjs --child resident at 10k..160k</evidence>
     <resolution>mise run scale and mise run test --full pass --resident-actors 1000000; snapshots() closes the host before its first restore so one population is in memory at a time.</resolution>
   </entry>
+  <entry id="l-coord-examples-phase" date="2026-10-16" step="p4-examples" kind="decision" status="resolved">
+    <what>The maintainer asked for a final step: ten example applications by ten subagents, in tinyactors-napi/examples/&lt;name&gt;, exercising every feature in tricky real-world cases with tinyactors modelling the domain logic, and every surprise catalogued and fixed. Phase p4 holds it after p2-pack, with p4-remote (the Python-to-Node conversation, the coordinator's definition of done) first; the log schema gained kind="surprise" and an example attribute.</what>
+  </entry>
 </log>

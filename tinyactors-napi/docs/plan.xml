@@ -528,6 +528,28 @@
       </step>
       <gate>mise run test with the convenience module's tests; nothing in it calls the addon other than through its exports.</gate>
     </phase>
+    <phase id="p4" title="End to end: two languages, ten applications">
+      <goal>The binding proven in use: a Python system and a Node system talking through their transports, then ten real applications that model their domain logic in tinyactors and exercise every feature in tricky cases, with every surprise they meet catalogued and fixed.</goal>
+      <step id="p4-remote" status="todo" after="p2-pack" decision="d-address">
+        <title>A Python system and a Node system talking to each other</title>
+        <does>The coordinator's definition of done (the maintainer, 2026-10-16): one Python host (tinyactors-cpython) and one Node host (this binding), separate processes, each with a transport handler that moves send.message to the other over a socket, the wire being the JSON-RPC 2.0 shape or its CBOR form (each side's encode/decode), and the other side calling host.send(message) unchanged, host.fail for a send it could not deliver. Charts on both sides address each other by tinyactors:// addresses (Address on both), exchange events with data both ways, answer, and observe error.communication when the peer is down. Kept as examples/remote-python/ with a test that starts both processes and checks the conversation, run by mise run test.</does>
+        <done-when>The test passes under node and bun against the Python binding built from tinyactors-cpython; the README of the example says how to run it.</done-when>
+        <files>tinyactors-napi/examples/remote-python/</files>
+      </step>
+      <step id="p4-examples" status="todo" after="p4-remote">
+        <title>Ten example applications</title>
+        <does>Ten subagents, one application each (requested by the maintainer, 2026-10-16), in tinyactors-napi/examples/&lt;name&gt;/, each a real application whose domain logic is SCXML charts on the Node binding and whose I/O is the application's: chosen to cover every feature in tricky real-world cases between them (I/O processors with async answers, the transport between systems, invoked services and their cancellation, delayed sends and timeouts on the real clock and a SimulatedClock in its tests, hibernation with a store under load, migration of a live population, snapshots and restore, telemetry to an exporter, typed methods for inspection, both datamodels, XML content, script declarations, errors and their reporting, close and liveness). Each has a README, runs with one command, and has a test run by mise run test. Each subagent records every surprise it meets (behaviour that differed from what the docs, the types or a reasonable JavaScript programmer expected; a missing API; a confusing error; a bug) in docs/log.xml as kind="surprise" with the example's name.</does>
+        <done-when>Ten examples, each passing its test under node and bun; the surprises logged.</done-when>
+        <files>tinyactors-napi/examples/</files>
+      </step>
+      <step id="p4-surprises" status="todo" after="p4-examples">
+        <title>Every surprise catalogued and fixed</title>
+        <does>The coordinator catalogues the examples' surprises (docs/surprises.md, generated from docs/log.xml's kind="surprise" entries: what, where, the fix), and each is fixed: in the addon, its docs, index.d.ts or README, with a test; in core or the suite through the coordinator, as a core change with its tests; or, where the fix is the maintainer's decision, logged for-maintainer with a recommendation. The examples are updated to drop any workaround a fix made unnecessary.</does>
+        <done-when>Every surprise entry is resolved or for-maintainer with a recommendation; the examples carry no workaround; mise run test passes.</done-when>
+        <files>tinyactors-napi/docs/surprises.md</files>
+      </step>
+      <gate>mise run test with the remote example and the ten examples' tests; the surprise catalogue complete.</gate>
+    </phase>
   </phases>
 
   <findings refuted-by="a fresh agent, 2026-10-16, against the plan at a69e717, with spikes on node 22.22.0 and 22.23.3 and bun 1.4.2">
