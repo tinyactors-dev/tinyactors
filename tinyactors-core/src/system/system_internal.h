@@ -15,9 +15,9 @@
 /* The region's layout: 2 since the step counters and trace references
  * (docs/adr/0006 in the repository root), 3 with the charts' counts, 4 since
  * an external invocation's request keeps its type and params, 5 with the queue
- * of parked spawns, 6 with the index of actor names; a snapshot of another is
- * refused. */
-#define TA_SYSTEM_VERSION      6u
+ * of parked spawns, 6 with the index of actor names, 7 with each actor's count
+ * of requests; a snapshot of another is refused. */
+#define TA_SYSTEM_VERSION      7u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -57,9 +57,11 @@ TA_STATIC_ASSERT(sizeof(ta_actor) == 48, actor_record_is_48_bytes);
 
 /* What an actor is linked into besides its record, in an array beside the
  * actor pool (actor_links, indexed like it): the ring of the live actors of
- * its name, in the order they came (the index of names holds the oldest). */
+ * its name, in the order they came (the index of names holds the oldest),
+ * and how many requests it made that are live. */
 typedef struct ta_actor_links {
     uint32_t name_prev, name_next; /* actor indices; an actor alone with its name links itself */
+    uint32_t requests; /* live ta_requests whose `actor` is this one (ta_system_request_*) */
 } ta_actor_links;
 
 typedef struct ta_timer {
@@ -282,6 +284,13 @@ void ta_system_external_free(ta_system *s, uint32_t ri);
 uint32_t ta_system_external_invocation(ta_system *s, uint32_t from, ta_effect *out);
 void ta_system_autoforward(ta_system *s, uint32_t parent, const ta_core_out *o);
 void ta_system_done(ta_system *s, uint32_t index, ta_payload done, uint32_t final_state);
+/* A request of actor `index` (its parent): allocated with its `actor` set,
+ * counted in the actor's links, so a stable point is checked in O(1)
+ * (hibernate.c); TA_NIL when the pool is full. Freed the same way. */
+uint32_t ta_system_request_alloc(ta_system *s, uint32_t index);
+void ta_system_request_free(ta_system *s, uint32_t ri);
+/* the live requests actor `index` made */
+uint32_t ta_system_actor_requests(const ta_system *s, uint32_t index);
 /* Retry spawns parked by pool exhaustion; returns TA_POOL_* still exhausted. */
 uint32_t ta_system_retry_pending(ta_system *s);
 

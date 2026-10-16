@@ -303,7 +303,7 @@ static uint32_t park_spawn(ta_system *system, uint32_t parent, uint32_t slot, ui
                            uint32_t invokeid, ta_payload payload) {
     ta_core *core = &system->core;
     uint32_t pool = ta_pool_free_count(&system->actors) == 0 ? TA_POOL_ACTORS : TA_POOL_SLAB;
-    uint32_t ri = ta_pool_alloc(&system->requests);
+    uint32_t ri = ta_system_request_alloc(system, parent);
     if (ri == TA_NIL) { /* cannot even park it: the invoke fails */
         const ta_datamodel_binding *binding =
             ta_core_datamodel(core, ta_actor_chart(system, actor_at(system, parent)));
@@ -314,9 +314,7 @@ static uint32_t park_spawn(ta_system *system, uint32_t parent, uint32_t slot, ui
         return TA_POOL_REQUESTS;
     }
     ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
-    ta_memset(request, 0, sizeof *request);
     request->kind = REQUEST_PENDING_SPAWN;
-    request->actor = ta_pool_handle(&system->actors, parent);
     request->slot = slot;
     request->invokeid = invokeid;
     ta_shared_string_retain(core, invokeid);
@@ -367,7 +365,7 @@ uint32_t ta_system_retry_pending(ta_system *system) {
         }
         ta_index_queue_pop(&system->pending_spawns, &system->requests, PENDING_SPAWN_LINK);
         ta_shared_string_release(core, request_record.invokeid);
-        ta_pool_free(&system->requests, i);
+        ta_system_request_free(system, i);
         if (i == last) break;
     }
     return TA_POOL_NONE;
@@ -407,7 +405,7 @@ void ta_system_external_free(ta_system *system, uint32_t ri) {
         const ta_datamodel_binding *binding = &system->datamodels[request->pad];
         if (binding->vtable->release) binding->vtable->release(binding->datamodel, request->payload);
     }
-    ta_pool_free(&system->requests, ri);
+    ta_system_request_free(system, ri);
 }
 
 uint32_t ta_system_external_invocation(ta_system *system, uint32_t from, ta_effect *out) {
@@ -447,19 +445,17 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
     ta_actor *pa = actor_at(system, parent);
     ta_instance *pin = ta_actor_instance(system, pa);
     if (out->type != TA_NIL) { /* external invoke: the host runs it */
-        uint32_t ri = ta_pool_alloc(&system->requests);
+        uint32_t ri = ta_system_request_alloc(system, parent);
         ta_effect_record *effect = ri == TA_NIL
                                        ? (ta_effect_record *)0
                                        : ta_system_effect_push(system, TA_EFFECT_INVOKE, parent);
         if (!effect) {
-            if (ri != TA_NIL) ta_pool_free(&system->requests, ri);
+            if (ri != TA_NIL) ta_system_request_free(system, ri);
             ta_core_raise_platform(core, pin, "error.execution", TA_NIL);
             return ri == TA_NIL ? TA_POOL_REQUESTS : TA_POOL_NONE;
         }
         ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
-        ta_memset(request, 0, sizeof *request);
         request->kind = REQUEST_EXTERNAL_INVOKE;
-        request->actor = ta_pool_handle(&system->actors, parent);
         request->slot = out->slot;
         request->invokeid = out->invokeid;
         ta_shared_string_retain(core, out->invokeid);
@@ -541,12 +537,12 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
     if (chart != TA_NIL)
         return spawn_child(system, parent, out->slot, chart, out->invokeid, out->payload, 1);
     /* unknown dynamic src: ask the host to resolve it to a chart index */
-    uint32_t ri = ta_pool_alloc(&system->requests);
+    uint32_t ri = ta_system_request_alloc(system, parent);
     ta_effect_record *effect = ri == TA_NIL
                                    ? (ta_effect_record *)0
                                    : ta_system_effect_push(system, TA_EFFECT_REQUEST, parent);
     if (!effect) {
-        if (ri != TA_NIL) ta_pool_free(&system->requests, ri);
+        if (ri != TA_NIL) ta_system_request_free(system, ri);
         const ta_datamodel_binding *binding = ta_core_datamodel(core, ta_actor_chart(system, pa));
         if (out->payload && binding->vtable->release)
             binding->vtable->release(binding->datamodel, out->payload);
@@ -554,9 +550,7 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
         return ri == TA_NIL ? TA_POOL_REQUESTS : TA_POOL_NONE;
     }
     ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
-    ta_memset(request, 0, sizeof *request);
     request->kind = REQUEST_RESOLVE_SOURCE;
-    request->actor = ta_pool_handle(&system->actors, parent);
     request->slot = out->slot;
     request->invokeid = out->invokeid;
     ta_shared_string_retain(core, out->invokeid);
@@ -583,7 +577,7 @@ ta_status ta_system_resume(ta_system *system, const ta_resume *resume) {
     if (request_record->kind != REQUEST_RESOLVE_SOURCE) return TA_ERROR_INVALID;
     uint32_t parent = ta_system_resolve_actor(system, request_record->actor);
     ta_request request_copy = *request_record;
-    ta_pool_free(&system->requests, ri);
+    ta_system_request_free(system, ri);
     ta_status result_status = TA_OK;
     if (parent == TA_NIL ||
         ta_core_invoke_id(core, ta_actor_instance(system, actor_at(system, parent)),

@@ -392,9 +392,10 @@ static void s12_hundred_thousand(void) {
     size_t instance = ta_core_instance_size(&t.image, 0);
     fprintf(stderr, "  100k actors: region %.1f MB (%zu B/actor incl. pools), instance %zu B\n",
             (double)t.memory_length / 1e6, t.memory_length / 100000, instance);
-    /* the budget holds, beside the pools, each actor's place in the ring of
-     * its name and the index of names (about 13 B per actor), which make a
-     * lookup by name O(1) */
+    /* the budget holds, beside the pools, each actor's links (its place in
+     * the ring of its name, its count of requests) and the index of names
+     * (about 17 B per actor), which make a lookup by name and the check of a
+     * stable point O(1) */
     CHECK(t.memory_length / 100000 < 220);
     tsys_free(&t);
 }

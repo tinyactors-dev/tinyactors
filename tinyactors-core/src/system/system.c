@@ -474,6 +474,7 @@ void ta_system_name_insert(ta_system *system, uint32_t index) {
     uint32_t *t = SYSTEM_POINTER(system, names_relative, uint32_t);
     ta_actor_links *links = names_links(system);
     uint32_t i = names_slot(system, names_actor_name(system, index));
+    links[index].requests = 0;
     if (t[i] == TA_NIL) {
         t[i] = index;
         links[index].name_prev = links[index].name_next = index;
@@ -512,6 +513,29 @@ static void names_remove(ta_system *system, uint32_t index) {
         }
     }
     t[i] = TA_NIL;
+}
+
+/* ---- requests ------------------------------------------------------------------------------ */
+
+uint32_t ta_system_request_alloc(ta_system *system, uint32_t index) {
+    uint32_t ri = ta_pool_alloc(&system->requests);
+    if (ri == TA_NIL) return TA_NIL;
+    ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
+    ta_memset(request, 0, sizeof *request);
+    request->actor = ta_pool_handle(&system->actors, index);
+    names_links(system)[index].requests++;
+    return ri;
+}
+
+void ta_system_request_free(ta_system *system, uint32_t ri) {
+    uint32_t index =
+        ta_system_resolve_actor(system, ((ta_request *)ta_pool_at(&system->requests, ri))->actor);
+    if (index != TA_NIL) names_links(system)[index].requests--; /* else: it ended, and its count */
+    ta_pool_free(&system->requests, ri);
+}
+
+uint32_t ta_system_actor_requests(const ta_system *system, uint32_t index) {
+    return names_links(system)[index].requests;
 }
 
 /* ---- actors -------------------------------------------------------------------------------- */
@@ -904,7 +928,7 @@ void ta_system_deinit(ta_system *system) {
             if (binding->vtable->release)
                 binding->vtable->release(binding->datamodel, request->payload);
         }
-        ta_pool_free(&system->requests, i);
+        ta_system_request_free(system, i);
     }
     ta_core_release_out(&system->core);
     detach_charts(system);

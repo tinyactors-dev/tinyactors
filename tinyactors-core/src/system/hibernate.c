@@ -146,10 +146,9 @@ static ta_status stable_member(const ta_system *system, uint32_t index, int chil
         if (ta_actor_at(system, ki)->parent != self || ta_actor_at(system, ki)->parent_slot != i)
             return TA_ERROR_STATE;
     }
-    for (uint32_t i = 0; i < system->requests.high_water_mark; i++)
-        if (ta_pool_live(&system->requests, i) &&
-            ((const ta_request *)ta_pool_at(&system->requests, i))->actor == self)
-            return TA_ERROR_STATE;
+    /* a pending fetch or a parked spawn is in no invoke slot: the count says
+     * whether one will write into it, O(1) whatever the requests */
+    if (ta_system_actor_requests(system, index)) return TA_ERROR_STATE;
     return datamodel_can_hibernate(ta_core_datamodel(&system->core, instance->chart))
                ? TA_OK
                : TA_ERROR_UNSUPPORTED;

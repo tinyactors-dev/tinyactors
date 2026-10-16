@@ -326,14 +326,15 @@ typedef struct ecmascript_test {
     ta_datamodel_ecmascript *ecmascript;
 } ecmascript_test;
 
-static int ecmascript_open(ecmascript_test *x, const char *chart) {
+static int ecmascript_open_with(ecmascript_test *x, const char *chart,
+                                const ta_system_config *given) {
     memset(x, 0, sizeof *x);
     test_system *t = &x->test_system;
     t->bytes = compile_chart("es.scxml", chart, NULL, &t->length, 0);
     if (!t->bytes || ta_image_open((ta_bytes){t->bytes, t->length}, &t->image) != TA_OK) return 0;
     x->ecmascript = ta_datamodel_ecmascript_new(NULL);
     t->binding = ta_datamodel_ecmascript_binding(x->ecmascript);
-    ta_system_config config = test_system_config();
+    ta_system_config config = given ? *given : test_system_config();
     if (ta_system_layout(&t->image, &config, &t->memory_length) != TA_OK) return 0;
     t->memory = malloc(t->memory_length);
     return ta_system_init(
@@ -341,6 +342,10 @@ static int ecmascript_open(ecmascript_test *x, const char *chart) {
                    {t->memory, t->memory_length}, &t->image, &config, &t->binding, 1, 0},
                &t->system) == TA_OK &&
            ta_system_boot(t->system) == TA_OK;
+}
+
+static int ecmascript_open(ecmascript_test *x, const char *chart) {
+    return ecmascript_open_with(x, chart, NULL);
 }
 
 static const char *ecmascript_eval(ecmascript_test *x, uint32_t actor, const char *expression) {
@@ -583,6 +588,107 @@ static void test_names_index(void) {
     tsys_free(&t);
 }
 
+/* ---- a stable point is checked against the actor's own requests ---- */
+
+#define SERVICES 200u
+
+/* Whether an actor is at a stable point counts only its own requests (a
+ * pending fetch, a parked spawn: neither is in an invoke slot), whatever
+ * the other actors hold: each actor's links count the requests it made, set
+ * where a request is made and ended, so hibernation reads one word instead
+ * of walking every request. */
+static void test_stable_point_counts_own_requests(void) {
+    ta_system_config config = test_system_config();
+    config.max_actors = 512;
+    config.max_requests = 512;
+    config.outbox = 512;
+    config.max_events = 2048;
+    ecmascript_test x;
+    CHECK(ecmascript_open_with(
+        &x,
+        ESSC("initial='idle'><state id='idle'><transition event='fetch' target='f'/>"
+             "<transition event='serve' target='s'/></state>"
+             "<state id='f'><invoke id='dyn' srcexpr=\"'other.scxml'\"/>"
+             "<transition event='error.execution' target='idle'/></state>"
+             "<state id='s'><invoke id='svc' type='http://example.com/svc' src='svc://x'/>"
+             "<transition event='stop' target='idle'/></state>"),
+        &config));
+    test_system *t = &x.test_system;
+    uint32_t quiet = ta_system_actor_by_name(t->system, (ta_string_view){"es.scxml", 8});
+    static uint32_t served[SERVICES];
+    for (uint32_t i = 0; i < SERVICES; i++) {
+        ta_spawn spawn;
+        memset(&spawn, 0, sizeof spawn);
+        CHECK_EQUAL(ta_system_spawn(t->system, &spawn, &served[i]), TA_OK);
+    }
+    ta_spawn spawn;
+    memset(&spawn, 0, sizeof spawn);
+    uint32_t fetcher;
+    CHECK_EQUAL(ta_system_spawn(t->system, &spawn, &fetcher), TA_OK);
+    run_all(t);
+    for (uint32_t i = 0; i < SERVICES; i++)
+        CHECK_EQUAL(tsys_send(t, served[i], "serve", NULL), TA_OK);
+    CHECK_EQUAL(tsys_send(t, fetcher, "fetch", NULL), TA_OK);
+    ta_system_run(t->system, 1000000);
+    const ta_effect *effect;
+    uint32_t n = ta_system_effects(t->system, &effect), request = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (effect[i].kind == TA_EFFECT_REQUEST) request = effect[i].token;
+    CHECK(request != 0);
+    ta_system_effects_ack(t->system, n);
+    CHECK_EQUAL(t->system->requests.used, SERVICES + 1);
+    uint32_t index = ta_system_resolve_actor(t->system, fetcher);
+    CHECK_EQUAL(ta_system_actor_requests(t->system, index), 1u); /* the pending fetch */
+    for (uint32_t i = 0; i < SERVICES; i++)
+        CHECK_EQUAL(ta_system_actor_requests(t->system, ta_system_resolve_actor(t->system, served[i])),
+                    1u);
+    CHECK_EQUAL(ta_system_actor_requests(t->system, ta_system_resolve_actor(t->system, quiet)), 0u);
+    /* the quiet actor hibernates, with 201 requests of others live */
+    ta_status status;
+    size_t length = hibernate(t, quiet, &status);
+    CHECK_EQUAL(status, TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t->system, quiet, (ta_bytes){blob, length}), TA_OK);
+    /* the fetcher is idle and stable, but its fetch will write into it */
+    hibernate(t, fetcher, &status);
+    CHECK_EQUAL(status, TA_ERROR_STATE);
+    hibernate(t, served[0], &status);
+    CHECK_EQUAL(status, TA_ERROR_STATE); /* a running service, in its invoke slot */
+    /* the counts move with the region */
+    ta_system_config big = config;
+    big.max_actors = 2 * config.max_actors;
+    size_t need;
+    CHECK_EQUAL(ta_system_layout(&t->image, &big, &need), TA_OK);
+    void *memory = malloc(need);
+    ta_system *moved = t->system;
+    CHECK_EQUAL(ta_system_relocate(&moved, (ta_memory){memory, need}, &big), TA_OK);
+    free(t->memory);
+    t->memory = memory;
+    t->system = moved;
+    CHECK_EQUAL(ta_system_actor_requests(t->system, ta_system_resolve_actor(t->system, fetcher)), 1u);
+    /* the fetch is answered (refused): the request ends, the count with it */
+    CHECK_EQUAL(ta_system_resume(t->system, &(ta_resume){0, request, TA_ERROR_INVALID, 0, 0}),
+                TA_OK);
+    run_all(t);
+    CHECK_EQUAL(ta_system_actor_requests(t->system, ta_system_resolve_actor(t->system, fetcher)), 0u);
+    length = hibernate(t, fetcher, &status);
+    CHECK_EQUAL(status, TA_OK);
+    CHECK_EQUAL(ta_actor_wake(t->system, fetcher, (ta_bytes){blob, length}), TA_OK);
+    /* a service ends with its state: its request ends too */
+    CHECK_EQUAL(tsys_send(t, served[0], "stop", NULL), TA_OK);
+    run_all(t);
+    CHECK_EQUAL(ta_system_actor_requests(t->system, ta_system_resolve_actor(t->system, served[0])),
+                0u);
+    CHECK_EQUAL(t->system->requests.used, SERVICES - 1);
+    /* an actor that ends with a live request: a new actor in its slot counts from 0 */
+    CHECK_EQUAL(ta_system_terminate(t->system, served[1]), TA_OK);
+    run_all(t);
+    CHECK_EQUAL(ta_system_spawn(t->system, &spawn, &served[1]), TA_OK);
+    run_all(t);
+    CHECK_EQUAL(ta_system_actor_requests(t->system, ta_system_resolve_actor(t->system, served[1])),
+                0u);
+    ecmascript_close(&x);
+}
+
 int main(void) {
     RUN(test_roundtrip_and_single_wake);
     RUN(test_watch_ends_with_hibernation);
@@ -591,6 +697,7 @@ int main(void) {
     RUN(test_error_communication_order);
     RUN(test_cold_sweep);
     RUN(test_names_index);
+    RUN(test_stable_point_counts_own_requests);
     RUN(test_ecmascript_state_survives);
     RUN(test_ecmascript_unsupported);
     TEST_MAIN_END();
