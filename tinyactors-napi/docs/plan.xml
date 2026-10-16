@@ -406,7 +406,7 @@
 
     <phase id="p1" title="Step 8.5's done means: M1 on both runtimes and both datamodels">
       <goal>The scope of tinyactors-napi/ROADMAP.md, "Done means", built in the Python binding's order, each step a commit that passes this project's <code>mise run test</code>.</goal>
-      <step id="p1-values" status="todo">
+      <step id="p1-values" status="done" commit="ea1fbe0">
         <title>Values first</title>
         <does>src/values.c: CBOR to JavaScript and back with ta_cbor_reader and ta_cbor_writer in the call's arena; integers to 2^53 as numbers and beyond as bigint, a number checked with Number.isSafeInteger; Uint8Array; undefined and null; tag 32 read as text, never written; a lone surrogate refused (UTF-8 with EF BF BD read again as UTF-16 and checked); nesting 64; plain objects and arrays only. encode and decode exported; module.c with instance data; index.mjs loads the .node; the adapter's framing.</does>
         <done-when>test/values.test.mjs passes values.txt's ecmascript lines under node and bun; the adapter answers -32601 for every method it lacks.</done-when>

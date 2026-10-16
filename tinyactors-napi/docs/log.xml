@@ -95,4 +95,24 @@
     <why>A native datamodel's state is the addon's own CBOR, which another binding cannot read.</why>
     <evidence>tinyactors-cpython/AGENTS.md, 'Snapshots'; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
   </entry>
+  <entry id="l-p1-values-gate-empty" date="2026-10-16" step="p1-values" kind="deviation" status="for-maintainer">
+    <what>GATE in mise/napi.rb holds no suite (suites: []), so mise run test skips the conformance run; it was protocol and scenarios before any adapter existed.</what>
+    <why>With conform.mjs present the test task runs the gate, and an adapter that answers -32601 to everything passes no case: the runner fails a suite that passes nothing ('proves nothing') and a binding that does not offer host.create. The brief allowed emptying it; the next step (p1-host) raises it again as host.create and the protocol vectors' methods land.</why>
+    <evidence>tinyactors-test/lib/runner.rb:347-359 (summary, REQUIRED); mise run conform -- --milestone M1 --suite protocol: 'protocol: 0 pass, 0 fail, 140 skip ... FAIL no case passed in protocol ... FAIL not offered, but a binding must offer: host.create'</evidence>
+  </entry>
+  <entry id="l-p1-values-module-arena" date="2026-10-16" step="p1-values" kind="decision" status="for-maintainer">
+    <what>encode has no host, so its writer and its strings live in a ta_growable_arena of the environment's instance (module.c), a mark per call, released on every path; the allocator (malloc and free with napi_adjust_external_memory) lives in module.c too, with the instance as its context, for every host to share. The allocation lint names module.c's ta_napi_allocator_alloc/_free and ta_napi_instance_new/_finalize, and host.c's ta_napi_host_new/_finalize, instead of the removed handles.c and host.c's own allocator.</what>
+    <why>The plan says 'in the call's arena' and the rulebook has one arena per host; a module-level call needs one arena outside any host. Python's encode uses a 256-byte stack room growing through the raw allocator instead; the arena keeps its chunks, so a warmed encode allocates nothing, and nested calls (a getter that encodes) nest marks.</why>
+    <evidence>tinyactors-napi/src/module.c, src/values.c (ta_napi_encode); tinyactors-cpython/src/values.c:132-147; test/values.test.mjs 'marks nest'</evidence>
+  </entry>
+  <entry id="l-p1-values-error-class" date="2026-10-16" step="p1-values" kind="decision" status="resolved">
+    <what>TinyactorsError is defined once per environment by a constant script (napi_run_script of a class extending Error), referenced from the instance and exported; C throws it with napi_new_instance(message, {status: ta_status_name(...)}).</what>
+    <why>A class made with napi_define_class is no Error (no stack, no [[ErrorData]]); class ... extends Error is the language's own way. The script is the addon's constant, not chart code; it runs on node 22.23.3 and bun 1.4.1.</why>
+    <evidence>tinyactors-napi/src/module.c (ta_napi_error_source); test/values.test.mjs 'TinyactorsError: an Error with ...' under both runtimes</evidence>
+  </entry>
+  <entry id="l-p1-values-encode-not-to-wire" date="2026-10-16" step="p1-values" kind="decision" status="for-maintainer">
+    <what>encode follows the rulebook's value table, not values.txt's encode cases, which are an ECMAScript datamodel's to_wire: it keeps undefined (f7, at the top, in arrays and as a key's value) and refuses a Date, a function, an ArrayBuffer, a DataView and typed arrays other than Uint8Array with TA_ERROR_UNSUPPORTED (to_wire writes null, drops, writes JSON or bytes). test/values.test.mjs lists those nine cases (DIFFERS) with what encode gives, and checks each name is still in values.txt. Refusals: TA_ERROR_UNSUPPORTED for a value outside the table, TA_ERROR_INVALID for one it cannot hold and for malformed CBOR (the reader's status passes through: an indefinite length is TA_ERROR_UNSUPPORTED); decode of a non-bytes argument is a TypeError; decode gives a plain Uint8Array, not a Buffer.</what>
+    <why>AGENTS.md 'Values' and plan item a-values: undefined and null stay distinct, plain objects and arrays only, what cannot be written is refused, never turned into a value. For the next steps: the native datamodel's to_wire (p1-datamodel) needs values.txt's to_wire rules, a second mode of values.c; and the adapter's host.run sends must carry the sender's wire form, since encode(send.data) of a native payload holding undefined writes f7 where the echo expects f6 ('ECMAScript: undefined at the top is null').</why>
+    <evidence>tinyactors-test/suites/protocol/values.txt (encode cases; header: 'encode and invalid cases are value.encode's ... on ECMAScript datamodels'); tinyactors-test/docs/driver.md:65 (value.encode is to_wire); tinyactors-napi/docs/values.md, 'encode and a datamodel's to_wire'</evidence>
+  </entry>
 </log>
