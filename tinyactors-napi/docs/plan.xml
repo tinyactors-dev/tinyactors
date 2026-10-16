@@ -290,11 +290,11 @@
       <evidence kind="spike">s-async: the tag is "[object AsyncFunction]" in node 22.22.0 and bun 1.4.2, so at-registration is possible; it does not see a promise-returning plain function.</evidence>
       <evidence kind="repo">tinyactors-cpython/AGENTS.md, "Materialized, and when".</evidence>
     </decision>
-    <decision id="d-time" status="recommended" owner="api-review">
+    <decision id="d-time" status="decided" owner="maintainer">
       <question>The unit of time at the API: milliseconds or seconds?</question>
       <option id="ms">Milliseconds (a number), as <code>setTimeout</code>, <code>Date.now()</code> and xstate's <code>SimulatedClock.increment(ms)</code> use; <code>nextDeadline</code>, <code>migrate</code>'s <code>timeout</code>, <code>increment</code>, <code>now</code>.</option>
       <option id="s">Seconds, as Python's API review chose.</option>
-      <recommendation option="ms">Python's review chose the language's unit (<code>time.sleep</code> takes seconds); JavaScript's is the millisecond. Ticks stay inside the addon either way.</recommendation>
+      <recommendation option="ms">Decided by the maintainer (2026-10-16: "milliseconds make sense because that's what JavaScript programmers expect"): a deliberate difference from Python's seconds, each binding using its language's unit. Ticks stay inside the addon.</recommendation>
       <evidence kind="repo">tinyactors-cpython/ROADMAP.md, "The API review": "Seconds at every boundary"; tinyactors-napi/AGENTS.md, "A simulated clock".</evidence>
     </decision>
     <decision id="d-drive" status="decided" owner="maintainer">
