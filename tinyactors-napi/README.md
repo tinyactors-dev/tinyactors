@@ -216,3 +216,20 @@ while (done === undefined) {
 
 `tools/migration.mjs` (`mise run migration`) is this pattern at scale:
 two million actors, at most 1000 resident, the rest in SQLite.
+
+One run of it (`mise run migration`, 2026-10-16, x86_64 Linux 6.18, Intel
+Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3, bun 1.4.1): two million
+actors of version 1 of a counter, at most 1000 resident, 200,000 events
+before the migration and 200,000 more during it, every actor moved to
+version 2 with `wake: true` (2,218,265 wakes from the store in each run).
+The migration ended with every actor migrated, none failed and none left;
+all 25,000 sampled actors had their count and version 2; version 1's
+segment was retired; and after every eviction at most 1000 actors were
+resident (plus two batches while the migration moved them).
+
+| runtime, datamodel | populate (2,000,000 and 200,000 events) | migrate (2,000,000 moved, 200,000 events) | peak resident | core's region, both versions / after | SQLite file |
+|---|---|---|---|---|---|
+| node, native | 54.5 s | 154.2 s (12,970 a second) | 656 MB (328 B per actor) | 231 MB / 115 MB (58 B per actor) | 576 MB |
+| node, quickjs | 42.0 s | 108.7 s (18,390 a second) | 657 MB (329 B per actor) | 231 MB / 115 MB (58 B per actor) | 756 MB |
+| bun, native | 50.5 s | 131.2 s (15,240 a second) | 680 MB (340 B per actor) | 231 MB / 115 MB (58 B per actor) | 576 MB |
+| bun, quickjs | 41.0 s | 109.5 s (18,270 a second) | 605 MB (303 B per actor) | 231 MB / 115 MB (58 B per actor) | 756 MB |

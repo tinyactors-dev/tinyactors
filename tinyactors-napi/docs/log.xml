@@ -602,4 +602,44 @@
     <what>Bun counts a Buffer's bytes in process.memoryUsage().heapUsed and node does not: the test that a hibernated native session leaves the engine's heap subtracts the blobs' bytes on bun.</what>
     <evidence>bun:jsc heapStats after hibernating 200 actors: 201 Uint8Array alive, heapUsed 3.7 MB of which 3.08 MB the blobs; node's heapUsed back to its value before the arrays (2026-10-16)</evidence>
   </entry>
+  <entry id="l-p2-migrate-link-init" date="2026-10-16" step="p2-migrate" kind="decision" status="resolved">
+    <what>The native datamodel's deserialize keeps the blob's variables in the session's link as its init (where a spawn's params wait until the first event), and migrate takes them from there as the old bindings, exactly the old chart's variables, copied into the shared context as one payload; bind_event clears init as before. Not a field of the session row.</what>
+    <why>Python keeps them in row-&gt;extra, which is its params' place too; the napi link already plays that part, so the session row stays 32 bytes and a woken session pays one property it already has.</why>
+    <evidence>src/datamodel/datamodel.c ta_napi_deserialize, ta_napi_migrate; src/datamodel/realm.js upgrade; test/migration.test.mjs: 'an actor moves with its bindings: one MIGRATED, then migrationDone'</evidence>
+    <resolution>implemented in 97085b5</resolution>
+  </entry>
+  <entry id="l-p2-migrate-declaring" date="2026-10-16" step="p2-migrate" kind="decision" status="for-maintainer">
+    <what>A declaring chart's session (a node:vm context each) migrates: deserialize instantiates the new chart's scripts in the new context without running them (as a wake does), then restores the blob's variables; the names the blob added to the global that the new chart's declarations did not make are kept on the link as `added`, and migrate deletes them from the global. So the new chart's script vars exist but are undefined (its scripts do not run), and its added &lt;data&gt; are initialized by core.</what>
+    <why>datamodel.h asks migrate to drop variables the new chart does not declare; Python sets only the variables both charts declare. A declaring global has no list of declared names but what the instantiation made, so restore records what it added beyond them. Running the new version's top-level scripts at a migration would re-run initialization code the actor already ran in version 1.</why>
+    <evidence>src/datamodel/realm.js restore, upgrade; test/migration.test.mjs: "native: a declaring chart migrates: its old names go, the new scripts' are declared"; tinyactors-core/include/tinyactors/datamodel.h:199-206</evidence>
+    <resolution>Built. The maintainer may want a migrated declaring session to run its new version's top-level scripts; not done (it would also run statements with effects).</resolution>
+  </entry>
+  <entry id="l-p2-migrate-refusals" date="2026-10-16" step="p2-migrate" kind="decision" status="resolved">
+    <what>migrate's options are an object of chart, session, wake, timeout (or nothing); an unknown key, a chart that is not a string, a wake that is not a boolean, a timeout that is not a number or a session that is not a bigint from 1 to 2^64-1 is a TypeError; an empty chart and a negative, NaN, infinite or 2^64-nanosecond timeout a RangeError. Python raises TypeError, ValueError and OverflowError for the same.</what>
+    <why>TypeError for a wrong type and RangeError for a value out of range is what the addon throws elsewhere (SimulatedClock.increment's RangeError, ta_napi_session_of's TypeError); an empty name would be core's every chart, so it is refused, as Python does.</why>
+    <evidence>src/host.c ta_napi_migration_of; test/migration.test.mjs: 'migrate refuses bad arguments'</evidence>
+  </entry>
+  <entry id="l-p2-migrate-ids" date="2026-10-16" step="p2-migrate" kind="decision" status="resolved">
+    <what>A migration id is a number (core's uint32_t) in migrate's return, the Migrated view's migration, migrationDone's result and the wake handler's third argument; a Migrated's segment is a number, its session a bigint; migrationDone's pending is a frozen array of bigints.</what>
+    <why>Ids that fit 32 bits are numbers in this API (segments, the wake handler's migration since p2-hibernate); sessions are bigints (AGENTS.md, Values). index.d.ts already typed them so.</why>
+    <evidence>src/effects.c ta_napi_migrated_field, ta_napi_migration_result; index.d.ts Migrated, MigrationResult</evidence>
+  </entry>
+  <entry id="l-p2-migrate-store" date="2026-10-16" step="p2-migrate" kind="decision" status="resolved">
+    <what>The SQLite store, the seeded generator and BATCH moved from tools/stress.mjs into tools/store.mjs, which tools/migration.mjs imports too; NodeAPI.stress takes the tool, and mise run test runs both gates at 20,000 actors with 100 resident (--full: two million with 1000).</what>
+    <why>Python's migration.py imports Store from stress.py; an ES module that runs its main at import cannot be imported, and node 22 has no import.meta.main.</why>
+    <evidence>tools/store.mjs; mise/napi.rb stress; mise/tasks/test; mise/tasks/migration</evidence>
+  </entry>
+  <entry id="l-p2-migrate-payloads" date="2026-10-16" step="p2-migrate" kind="note" status="resolved">
+    <what>payload_serialize and payload_deserialize are exercised by a migration: a delayed send with data pending at the migration arrives in version 2 with its data. With payload_serialize made to refuse (a spike, reverted), that test fails (the actor fails to migrate and the send stays in version 1), so the export goes through them.</what>
+    <evidence>test/migration.test.mjs: 'a delayed send survives the move with its data' (spike 2026-10-16: payload_serialize returning TA_ERROR_UNSUPPORTED left the log empty)</evidence>
+  </entry>
+  <entry id="l-p2-migrate-scenario-gate" date="2026-10-16" step="p2-migrate" kind="note" status="resolved">
+    <what>The suite's migrate scenario passes under node and bun on native and quickjs through the adapter's migrate step (host.migrate, then idle() until migrationDone, bounded to 100 turns as Python's); every scenario but snapshot passes. The gate stays M1 until p2-w3c raises it (M4 also holds snapshot, M2 and M3 other steps).</what>
+    <evidence>mise run //tinyactors-test:run -- --kind binding --datamodel &lt;native|quickjs&gt; --suite scenarios &lt;node|bun&gt; conform.mjs: 'pass scenarios migrate' on all four (2026-10-16)</evidence>
+    <resolution>Raise GATE/MILESTONE with p2-w3c.</resolution>
+  </entry>
+  <entry id="l-p2-migrate-full-gate" date="2026-10-16" step="p2-migrate" kind="note" status="resolved">
+    <what>The full migration gate ran once (mise run migration: 2,000,000 actors, 1000 resident, 200,000 events before and during): it passed on all four runtime and datamodel pairs; migrate took 109 to 154 s, peak resident 605 to 680 MB; numbers in the README, 'Migration'.</what>
+    <evidence>mise run migration, 2026-10-16, x86_64 Linux 6.18, 4 CPUs: exit 0; node native 154.2 s, node quickjs 108.7 s, bun native 131.2 s, bun quickjs 109.5 s</evidence>
+  </entry>
 </log>
