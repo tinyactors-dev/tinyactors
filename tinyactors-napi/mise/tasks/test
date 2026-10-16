@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test tinyactors-napi: lint (rules, the addon's C, the adapter, the mapping table, the build scripts, acronyms), the build, the runtimes, and the conformance set named by MILESTONE against the adapter under node and bun on both datamodels"
-#MISE sources=["src/**/*", "conform.mjs", "index.mjs", "index.d.ts", "test/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
+#MISE sources=["src/**/*", "conform.mjs", "index.mjs", "index.d.ts", "test/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyxml/include/**/*", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -10,8 +10,9 @@
 # task from the root's `mise run test` (AGENTS.md, "Tests: what to run").
 #
 # It lints, builds the addon, and runs the binding's own tests (test/,
-# what the suite cannot see) under each runtime, each file a program of its
-# own (test/harness.mjs). The conformance suite needs the adapter
+# what the suite cannot see) under each runtime on each datamodel (the
+# charts' datamodel is TA_NAPI_DATAMODEL, test/charts.mjs), each file a
+# program of its own (test/harness.mjs). The conformance suite needs the adapter
 # (conform.mjs): without it, this task says so and skips it; with it, the
 # part of the set named by NodeAPI::MILESTONE that NodeAPI::GATE holds now
 # must pass (`mise run conform -- --milestone <it> --suite <each>`, on the
@@ -27,9 +28,11 @@ NodeAPI::RUNTIMES.each do |runtime|
   program = NodeAPI.pinned(runtime)
   version = IO.popen([program, '--version'], &:read).strip
   puts "test: #{runtime} #{version}: #{program}"
-  NodeAPI.tests.each do |file|
-    puts "test: #{runtime} #{file.relative_path_from(NodeAPI::ROOT)}"
-    NodeAPI.run(program, file.to_s)
+  NodeAPI::DATAMODELS.each do |datamodel|
+    NodeAPI.tests.each do |file|
+      puts "test: #{runtime} #{datamodel} #{file.relative_path_from(NodeAPI::ROOT)}"
+      NodeAPI.run(program, file.to_s, env: { 'TA_NAPI_DATAMODEL' => datamodel })
+    end
   end
 end
 

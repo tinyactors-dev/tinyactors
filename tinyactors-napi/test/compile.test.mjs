@@ -4,7 +4,7 @@
 // TA_ERROR_STALE), CompileError with every diagnostic, the resolver and
 // ResolveError, and the finalizer that frees a result never closed.
 import { compileCharts, compileSystem, CompileError, Host, ResolveError, TinyactorsError } from '@tinyactors/node';
-import { CONFIG, QUICKJS, equal, scxml, status, throws, typeError, until } from './charts.mjs';
+import { CONFIG, ENGINE, equal, scxml, status, throws, typeError, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 const GOOD = scxml('c', '<state id="s"/>');
@@ -61,7 +61,7 @@ test('the image is a Buffer copied on first read, the same after, and it outlive
   compiled.close(); // again: nothing
   equal(compiled.image, image, 'the copy read before close()');
   if (!image.equals(copy)) throw new Error('the Buffer changed at close()');
-  const host = new Host(CONFIG, QUICKJS);
+  const host = new Host(CONFIG, ENGINE);
   equal(host.addImage(image), 0, 'the copy makes a segment after close()');
   host.close();
 });
@@ -145,7 +145,7 @@ test('sources are an array of {name, text} of strings', () => {
 test('a manifest compiles into an image whose actors boot by name', async () => {
   const resolve = resolver({ 'worker.scxml': WORKER });
   const compiled = compileSystem({ name: 'system.xml', text: SYSTEM }, resolve);
-  const host = new Host(CONFIG, QUICKJS);
+  const host = new Host(CONFIG, ENGINE);
   const segment = host.addImage(compiled.image);
   compiled.close();
   equal(host.actorByName('first'), undefined, 'before boot');

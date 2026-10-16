@@ -17,6 +17,19 @@
  *   a plain object                a map of its own enumerable string keys,
  *                                 in Object.keys order
  *
+ * A plain object may be of another realm: its prototype is null, this
+ * realm's Object.prototype, or that of a context the native datamodel made
+ * (the instance's `realms`), so a payload of the datamodel's context is a
+ * value too.
+ *
+ * The native datamodel's to_wire writes in a second mode, `wire`
+ * (tinyactors-test/suites/protocol/values.txt, the encode cases): what
+ * JSON.stringify leaves out (undefined, a function, a symbol) is null at
+ * the top and in an array and drops its key in an object; toJSON is
+ * applied (a Date is its JSON text); an ArrayBuffer, a typed array and a
+ * DataView are their bytes; any other object is the map of its own
+ * enumerable string keys. Its refusals are TA_ERROR_INVALID.
+ *
  * and back: integers within +-(2^53-1) numbers, others bigints; bytes a
  * Uint8Array; tag 32 on text (an actor reference) its address string, never
  * written. Anything else is refused: TinyactorsError with TA_ERROR_UNSUPPORTED
@@ -40,6 +53,7 @@ typedef struct ta_napi_encoder {
     ta_cbor_writer *writer;
     ta_napi_refusal refusal;
     bool thrown;
+    bool wire;
 } ta_napi_encoder;
 
 static bool ta_napi_refuse(ta_napi_encoder *encoder, ta_status status, const char *message) {
@@ -114,7 +128,7 @@ bool ta_napi_text_of(napi_env env, napi_value value, ta_napi_text *text) {
     }
     ta_napi_instance *instance = ta_napi_instance_of(env);
     if (instance == NULL) return false;
-    ta_napi_encoder encoder = {env, instance, text->arena, NULL, {TA_OK, NULL}, false};
+    ta_napi_encoder encoder = {env, instance, text->arena, NULL, {TA_OK, NULL}, false, false};
     if (ta_napi_utf8(&encoder, value, &text->view)) return true;
     if (!encoder.thrown) ta_napi_throw(env, &encoder.refusal);
     return false;
@@ -153,6 +167,97 @@ static bool ta_napi_write_bigint(ta_napi_encoder *encoder, napi_value value) {
 
 static bool ta_napi_write(ta_napi_encoder *encoder, napi_value value, uint32_t depth);
 
+/* Whether `prototype` is the Object.prototype of a context the native
+ * datamodel made (the instance's WeakSet `realms`, when there is one). */
+static bool ta_napi_realm_prototype(ta_napi_encoder *encoder, napi_value prototype, bool *found) {
+    napi_env env = encoder->env;
+    napi_value realms, has, result;
+    *found = false;
+    if (encoder->instance->realms == NULL) return true;
+    TA_NAPI_CHECK(encoder, napi_get_reference_value(env, encoder->instance->realms, &realms));
+    TA_NAPI_CHECK(encoder, napi_get_named_property(env, realms, "has", &has));
+    TA_NAPI_CHECK(encoder, napi_call_function(env, realms, has, 1, &prototype, &result));
+    TA_NAPI_CHECK(encoder, napi_get_value_bool(env, result, found));
+    return true;
+}
+
+/* The wire mode's toJSON, as JSON.stringify applies it: again on what it
+ * returns, each call a level of nesting. */
+static bool ta_napi_wire_resolve(ta_napi_encoder *encoder, napi_value *value, uint32_t *depth) {
+    napi_env env = encoder->env;
+    for (;;) {
+        napi_valuetype kind;
+        bool is = false;
+        if (*depth > TA_CBOR_DEPTH_MAX)
+            return ta_napi_refuse(encoder, TA_ERROR_INVALID, "a value nested deeper than 64 (or a cycle)");
+        TA_NAPI_CHECK(encoder, napi_typeof(env, *value, &kind));
+        if (kind != napi_object) return true;
+        TA_NAPI_CHECK(encoder, napi_is_arraybuffer(env, *value, &is));
+        if (!is) TA_NAPI_CHECK(encoder, napi_is_typedarray(env, *value, &is));
+        if (!is) TA_NAPI_CHECK(encoder, napi_is_dataview(env, *value, &is));
+        if (is) return true;
+        napi_value to_json, key;
+        TA_NAPI_CHECK(encoder, napi_get_named_property(env, *value, "toJSON", &to_json));
+        TA_NAPI_CHECK(encoder, napi_typeof(env, to_json, &kind));
+        if (kind != napi_function) return true;
+        TA_NAPI_CHECK(encoder, napi_create_string_utf8(env, "", 0, &key));
+        TA_NAPI_CHECK(encoder, napi_call_function(env, *value, to_json, 1, &key, value));
+        (*depth)++;
+    }
+}
+
+/* What JSON.stringify leaves out: undefined, a function, a symbol. */
+static bool ta_napi_wire_dropped(ta_napi_encoder *encoder, napi_value value) {
+    napi_valuetype kind = napi_undefined;
+    napi_typeof(encoder->env, value, &kind);
+    return kind == napi_undefined || kind == napi_function || kind == napi_symbol;
+}
+
+/* One member of an array or a map in the wire mode: toJSON applied, then
+ * written; `*dropped` when it is left out (the caller writes null in an
+ * array, drops the key in a map). */
+typedef struct ta_napi_member {
+    napi_value value;
+    uint32_t depth;
+    bool dropped; /* out */
+} ta_napi_member;
+
+static bool ta_napi_wire_member(ta_napi_encoder *encoder, ta_napi_member *member) {
+    if (!ta_napi_wire_resolve(encoder, &member->value, &member->depth)) return false;
+    member->dropped = ta_napi_wire_dropped(encoder, member->value);
+    return true;
+}
+
+/* The bytes of an ArrayBuffer, a typed array or a DataView (wire mode):
+ * `*written` when it was one. */
+static bool ta_napi_wire_bytes(ta_napi_encoder *encoder, napi_value value, bool *written) {
+    napi_env env = encoder->env;
+    bool is = false;
+    void *data = NULL;
+    size_t length = 0;
+    *written = false;
+    TA_NAPI_CHECK(encoder, napi_is_arraybuffer(env, value, &is));
+    if (is) TA_NAPI_CHECK(encoder, napi_get_arraybuffer_info(env, value, &data, &length));
+    if (!is) {
+        TA_NAPI_CHECK(encoder, napi_is_typedarray(env, value, &is));
+        if (is) {
+            napi_typedarray_type type;
+            size_t count = 0;
+            TA_NAPI_CHECK(encoder, napi_get_typedarray_info(env, value, &type, &count, &data, NULL, NULL));
+            static const uint8_t sizes[] = {1, 1, 1, 2, 2, 4, 4, 4, 8, 8, 8};
+            length = count * ((size_t)type < sizeof sizes ? sizes[type] : 1);
+        }
+    }
+    if (!is) {
+        TA_NAPI_CHECK(encoder, napi_is_dataview(env, value, &is));
+        if (is) TA_NAPI_CHECK(encoder, napi_get_dataview_info(env, value, &length, &data, NULL, NULL));
+    }
+    if (!is) return true;
+    ta_cbor_write_bytes(encoder->writer, (ta_bytes){data, length});
+    *written = true;
+    return true;
+}
+
 static bool ta_napi_write_array(ta_napi_encoder *encoder, napi_value array, uint32_t depth) {
     napi_env env = encoder->env;
     uint32_t length = 0;
@@ -161,6 +266,13 @@ static bool ta_napi_write_array(ta_napi_encoder *encoder, napi_value array, uint
     for (uint32_t i = 0; i < length; i++) {
         napi_value item;
         TA_NAPI_CHECK(encoder, napi_get_element(env, array, i, &item));
+        if (encoder->wire) {
+            ta_napi_member member = {item, depth + 1, false};
+            if (!ta_napi_wire_member(encoder, &member)) return false;
+            if (member.dropped) ta_cbor_write_simple(encoder->writer, TA_CBOR_NULL); /* null in an array */
+            else if (!ta_napi_write(encoder, member.value, member.depth)) return false;
+            continue;
+        }
         if (!ta_napi_write(encoder, item, depth + 1)) return false;
     }
     ta_cbor_write_end(encoder->writer);
@@ -176,9 +288,10 @@ static bool ta_napi_write_object(ta_napi_encoder *encoder, napi_value object, ui
     bool same = false;
     TA_NAPI_CHECK(encoder, napi_get_prototype(env, object, &prototype));
     TA_NAPI_CHECK(encoder, napi_typeof(env, prototype, &kind));
-    if (kind != napi_null) {
+    if (kind != napi_null && !encoder->wire) {
         TA_NAPI_CHECK(encoder, napi_get_reference_value(env, encoder->instance->object, &plain));
         TA_NAPI_CHECK(encoder, napi_strict_equals(env, prototype, plain, &same));
+        if (!same && !ta_napi_realm_prototype(encoder, prototype, &same)) return false;
         if (!same)
             return ta_napi_refuse(encoder, TA_ERROR_UNSUPPORTED,
                                   "only plain objects, arrays and Uint8Arrays are values (docs/values.md)");
@@ -193,10 +306,13 @@ static bool ta_napi_write_object(ta_napi_encoder *encoder, napi_value object, ui
         napi_value key, item;
         ta_string_view text;
         TA_NAPI_CHECK(encoder, napi_get_element(env, keys, i, &key));
+        TA_NAPI_CHECK(encoder, napi_get_property(env, object, key, &item));
+        ta_napi_member member = {item, depth + 1, false};
+        if (encoder->wire && !ta_napi_wire_member(encoder, &member)) return false;
+        if (member.dropped) continue; /* wire mode: its key goes too */
         if (!ta_napi_utf8(encoder, key, &text)) return false;
         ta_cbor_write_text(encoder->writer, text);
-        TA_NAPI_CHECK(encoder, napi_get_property(env, object, key, &item));
-        if (!ta_napi_write(encoder, item, depth + 1)) return false;
+        if (!ta_napi_write(encoder, member.value, member.depth)) return false;
     }
     ta_cbor_write_end(encoder->writer);
     return true;
@@ -239,6 +355,16 @@ static bool ta_napi_write(ta_napi_encoder *encoder, napi_value value, uint32_t d
             if (!ta_napi_write_array(encoder, value, depth)) return false;
             break;
         }
+        if (encoder->wire) {
+            if (!ta_napi_wire_bytes(encoder, value, &is)) return false;
+            if (!is && !ta_napi_write_object(encoder, value, depth)) return false;
+            break;
+        }
+        if (encoder->wire) {
+            if (!ta_napi_wire_bytes(encoder, value, &is)) return false;
+            if (!is && !ta_napi_write_object(encoder, value, depth)) return false;
+            break;
+        }
         TA_NAPI_CHECK(encoder, napi_is_typedarray(env, value, &is));
         if (is) {
             napi_typedarray_type type;
@@ -270,10 +396,70 @@ static bool ta_napi_write(ta_napi_encoder *encoder, napi_value value, uint32_t d
 bool ta_napi_value_write(napi_env env, napi_value value, const ta_napi_writing *writing) {
     ta_napi_instance *instance = ta_napi_instance_of(env);
     if (instance == NULL) return false;
-    ta_napi_encoder encoder = {env, instance, writing->arena, writing->writer, {TA_OK, NULL}, false};
-    if (ta_napi_write(&encoder, value, 0)) return true;
+    ta_napi_encoder encoder = {env, instance, writing->arena, writing->writer, {TA_OK, NULL}, false, writing->wire};
+    bool written;
+    if (writing->wire) { /* the top: what JSON leaves out is null */
+        ta_napi_member member = {value, 0, false};
+        written = ta_napi_wire_member(&encoder, &member);
+        if (written && member.dropped) ta_cbor_write_simple(encoder.writer, TA_CBOR_NULL);
+        else if (written) written = ta_napi_write(&encoder, member.value, member.depth);
+        if (!written && !encoder.thrown && encoder.refusal.status != TA_ERROR_NO_MEMORY)
+            encoder.refusal.status = TA_ERROR_INVALID;
+    } else written = ta_napi_write(&encoder, value, 0);
+    if (written) return true;
     if (!encoder.thrown) ta_napi_throw(env, &encoder.refusal);
     return false;
+}
+
+bool ta_napi_text_kept(napi_env env, napi_value value, ta_napi_room *room) {
+    size_t length = 0, written = 0, units = 0, read = 0;
+    room->view = (ta_string_view){NULL, 0};
+    if (napi_get_value_string_utf8(env, value, NULL, 0, &length) != napi_ok) return false;
+    if (length > UINT32_MAX) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_INVALID, "a string longer than 2^32-1 bytes"});
+        return false;
+    }
+    if (!ta_napi_room_grow(room, length + 1)) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for a string"});
+        return false;
+    }
+    char *text = (char *)room->buffer->pointer;
+    if (napi_get_value_string_utf8(env, value, text, length + 1, &written) != napi_ok) return false;
+    /* Node-API writes a lone surrogate as U+FFFD: read as UTF-16 then, past the UTF-8 */
+    for (size_t at = 0; at + 3 <= written; at++) {
+        if ((unsigned char)text[at] != 0xEF || (unsigned char)text[at + 1] != 0xBF || (unsigned char)text[at + 2] != 0xBD)
+            continue;
+        if (napi_get_value_string_utf16(env, value, NULL, 0, &units) != napi_ok) return false;
+        size_t offset = (written + 2) & ~(size_t)1;
+        if (!ta_napi_room_grow(room, offset + (units + 1) * sizeof(char16_t))) {
+            ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for a string"});
+            return false;
+        }
+        text = (char *)room->buffer->pointer;
+        char16_t *wide = (char16_t *)(text + offset);
+        if (napi_get_value_string_utf16(env, value, wide, units + 1, &read) != napi_ok) return false;
+        if (ta_napi_lone_surrogate((ta_bytes){wide, read * sizeof *wide})) {
+            ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_INVALID, "a string with a lone surrogate is not text"});
+            return false;
+        }
+        break;
+    }
+    room->view = (ta_string_view){text, (uint32_t)written};
+    return true;
+}
+
+bool ta_napi_room_grow(ta_napi_room *room, size_t capacity) {
+    ta_buffer *buffer = room->buffer;
+    if (buffer->capacity >= capacity) return true;
+    size_t grown = buffer->capacity ? buffer->capacity : 256;
+    while (grown < capacity) grown *= 2;
+    void *block = room->allocator->alloc(room->allocator->context, grown, 8);
+    if (block == NULL) return false;
+    if (buffer->pointer != NULL) room->allocator->free(room->allocator->context, buffer->pointer, buffer->capacity);
+    buffer->pointer = block;
+    buffer->capacity = grown;
+    buffer->length = 0;
+    return true;
 }
 
 /* encode(value) -> Uint8Array: the value's CBOR, copied once out of the
@@ -289,7 +475,7 @@ napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
     ta_allocator scratch = ta_growable_arena_allocator(&instance->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &scratch);
-    if (ta_napi_value_write(env, argument, &(ta_napi_writing){&writer, &instance->arena})) {
+    if (ta_napi_value_write(env, argument, &(ta_napi_writing){&writer, &instance->arena, false})) {
         ta_bytes bytes;
         ta_status status = ta_cbor_writer_bytes(&writer, &bytes);
         void *data = NULL;
@@ -466,4 +652,26 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
         return NULL;
     }
     return ta_napi_value_read(env, (ta_bytes){data, length});
+}
+
+bool ta_napi_value_wire(napi_env env, napi_value value, ta_napi_wiring *wiring) {
+    ta_napi_room *room = &wiring->room;
+    ta_buffer *buffer = room->buffer;
+    ta_growable_arena_mark mark = ta_growable_arena_position(wiring->arena);
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){buffer->pointer, buffer->capacity, 0}, room->allocator);
+    bool ok = ta_napi_value_write(env, value, &(ta_napi_writing){&writer, wiring->arena, true});
+    ta_status status = ok ? ta_cbor_writer_bytes(&writer, &wiring->out) : TA_OK;
+    if (ok && status != TA_OK) {
+        ta_napi_throw(env, &(ta_napi_refusal){status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID,
+                                              "the value could not be written"});
+        ok = false;
+    }
+    if (ok && writer.bytes != (unsigned char *)buffer->pointer) { /* it grew: its block is the room now */
+        if (buffer->pointer != NULL) room->allocator->free(room->allocator->context, buffer->pointer, buffer->capacity);
+        *buffer = (ta_buffer){writer.bytes, writer.capacity, 0};
+    } else if (!ok)
+        ta_cbor_writer_free(&writer); /* a block it grew, never the room */
+    ta_growable_arena_release(wiring->arena, mark);
+    return ok;
 }

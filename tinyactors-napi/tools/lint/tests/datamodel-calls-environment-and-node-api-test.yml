@@ -6,6 +6,8 @@ valid:
   - "static ta_status ta_napi_to_wire(ta_cbor_writer *writer, ta_bytes *out) { ta_cbor_write_simple(writer, TA_CBOR_NULL); return ta_cbor_writer_bytes(writer, out); }"
   - "static int32_t ta_napi_from(ta_cbor_reader *reader, ta_cbor_item *item) { return ta_cbor_read(reader, item); }"
   - "static napi_value ta_napi_eval(napi_env env, napi_value script) { napi_value result; napi_run_script(env, script, &result); return result; }"
+  - "static void *ta_napi_row(ta_table *table, uint64_t handle) { return ta_table_get(table, handle); }"
+  - "static txml_step ta_napi_parse(txml_parser *parser) { return txml_parse_step(parser); }"
 invalid:
   - "static void ta_napi_sneak(ta_host *host, uint64_t session) { ta_host_send(host, NULL); }"
   - "static void ta_napi_peek(ta_system *system) { ta_system_run(system, 1); }"

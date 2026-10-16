@@ -103,6 +103,7 @@ void ta_napi_drain(napi_env env, ta_napi_drain_state *state) {
         ta_host_effects_ack(host->host); /* everything handed out for the batch ends */
         host->batch = false;
         host->acks++;                    /* its thin views are stale from here: core keeps no batch counter */
+        if (host->depth <= 1) ta_napi_native_flush(&host->native); /* outside core, not nested */
     }
 }
 

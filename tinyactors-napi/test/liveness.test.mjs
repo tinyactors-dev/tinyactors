@@ -25,12 +25,12 @@ function exits(body, what) {
 }
 
 test('a process with only an open host exits', () => {
-  exits(`globalThis.host = new m.Host({ systemID: 't' }, { datamodel: 'quickjs' });`, 'a host never turned');
+  exits(`globalThis.host = new m.Host({ systemID: 't' }, { datamodel: process.env.TA_NAPI_DATAMODEL ?? 'native' });`, 'a host never turned');
 });
 
 test('a process exits after an idle turn, the host still open', () => {
   const output = exits(`
-    globalThis.host = new m.Host({ systemID: 't' }, { datamodel: 'quickjs' });
+    globalThis.host = new m.Host({ systemID: 't' }, { datamodel: process.env.TA_NAPI_DATAMODEL ?? 'native' });
     await host.idle();
     console.log('idle', host.closed, host.nextDeadline);`, 'a host idle');
   if (!output.includes('idle false undefined')) throw new Error(`the child said: ${output}`);
@@ -39,14 +39,14 @@ test('a process exits after an idle turn, the host still open', () => {
 test('a process exits with a simulated clock moved', () => {
   exits(`
     const clock = new m.SimulatedClock();
-    globalThis.host = new m.Host({ systemID: 't' }, { datamodel: 'quickjs', clock });
+    globalThis.host = new m.Host({ systemID: 't' }, { datamodel: process.env.TA_NAPI_DATAMODEL ?? 'native', clock });
     clock.increment(3600 * 1000);
     await host.idle();`, 'a host on a simulated clock');
 });
 
 test('a process exits when a waiting idle() is rejected by close()', () => {
   const output = exits(`
-    const host = new m.Host({ systemID: 't' }, { datamodel: 'quickjs' });
+    const host = new m.Host({ systemID: 't' }, { datamodel: process.env.TA_NAPI_DATAMODEL ?? 'native' });
     const waiting = host.idle();
     host.close();
     await waiting.catch((error) => console.log('rejected', error.status));`, 'a host closed while idle() waits');
@@ -63,7 +63,7 @@ function delayed(ms, after) {
     const started = Date.now();
     process.on('exit', () => console.log('lived', Date.now() - started));
     const compiled = m.compileCharts([{ name: 'later.scxml', text: chart }]);
-    globalThis.host = new m.Host({ systemID: 't' }, { datamodel: 'quickjs' });
+    globalThis.host = new m.Host({ systemID: 't' }, { datamodel: process.env.TA_NAPI_DATAMODEL ?? 'native' });
     host.addImage(compiled.image);
     compiled.close();
     host.spawn(host.chart('later'), { name: 'later' });

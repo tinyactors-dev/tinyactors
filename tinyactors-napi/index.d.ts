@@ -313,9 +313,9 @@ export interface HostOptions {
   migrationDone?: (host: Host, result: MigrationResult) => void;
   /** The handler of each `<invoke>` type the application runs. */
   services?: { [type: string]: (host: Host, invocation: Invocation) => Service | void };
-  /** The ECMAScript datamodel: the application's engine (default) or the
-   * quickjs sandbox. Until the native datamodel is built, a native host
-   * throws `TA_ERROR_UNSUPPORTED`. */
+  /** The ECMAScript datamodel: the application's engine (`"native"`, the
+   * default: charts run in `node:vm` contexts of their own, trusted code)
+   * or the quickjs sandbox, for charts that are not trusted. */
   datamodel?: 'native' | 'quickjs';
   /** The sandbox's limits, with `datamodel: "quickjs"` only. */
   quickjs?: QuickJSOptions;

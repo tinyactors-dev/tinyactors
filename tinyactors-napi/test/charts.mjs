@@ -1,10 +1,13 @@
-// Charts the tests share, on the ECMAScript datamodel (a host here holds
-// quickjs until the native datamodel is built), and the helpers that make a
-// host run them. Actors are observed with what the inputs give: an actor
+// Charts the tests share, on the ECMAScript datamodel the test task names
+// (TA_NAPI_DATAMODEL: each file runs once on "native" and once on
+// "quickjs"; "native", the default, when run on its own), and the helpers
+// that make a host run them. Actors are observed with what the inputs give: an actor
 // that reaches a final state ends, so host.actorByName stops finding it.
 import { compileCharts, Host, TinyactorsError } from '@tinyactors/node';
 
-export const QUICKJS = { datamodel: 'quickjs' };
+export const DATAMODEL = process.env.TA_NAPI_DATAMODEL ?? 'native';
+/** The Host options that name the datamodel under test. */
+export const ENGINE = { datamodel: DATAMODEL };
 export const CONFIG = { systemID: 't' };
 
 /** An SCXML document `name` whose body is `body`. */
@@ -23,9 +26,9 @@ export function image(charts) {
   }
 }
 
-/** A quickjs host running `charts`; `host.ref(name)` is a chart's reference. */
+/** A host on the datamodel under test running `charts`; `host.ref(name)` is a chart's reference. */
 export function hostWith(charts, { config = CONFIG, ...options } = {}) {
-  const host = new Host(config, { ...QUICKJS, ...options });
+  const host = new Host(config, { ...ENGINE, ...options });
   host.addImage(image(charts));
   return host;
 }

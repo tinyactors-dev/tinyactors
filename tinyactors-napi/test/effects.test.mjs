@@ -6,7 +6,7 @@
 // the transport, with and without a handler; an I/O processor without one;
 // log entries. The actors are observed through their <log> lines.
 import { Address, Host, TinyactorsError } from '@tinyactors/node';
-import { equal, hostWith, image, scxml, sleep, status, throws, typeError, until } from './charts.mjs';
+import { ENGINE, equal, hostWith, image, scxml, sleep, status, throws, typeError, until } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 const OUT = { systemID: 't', ioProcessors: [{ type: 'urn:out' }] };
@@ -278,7 +278,7 @@ test('the transport without a handler fails each send to another system', async 
 
 test('the transport: send.target and send.origin are Addresses, send.message crosses to the other host', async () => {
   const lines = [];
-  const other = new Host({ systemID: 'other' }, { datamodel: 'quickjs', log: (h, entry) => lines.push(entry.text) });
+  const other = new Host({ systemID: 'other' }, { ...ENGINE, log: (h, entry) => lines.push(entry.text) });
   other.addImage(image({ pong: PONG }));
   const pong = other.spawn(other.chart('pong'), { name: 'pong' });
   let seen;

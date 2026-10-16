@@ -5,10 +5,11 @@
 // chart, spawn, send in both shapes, fail, sendMany, terminate,
 // actorByName, each with its refusals, and TA_EFFECT_REQUEST answered in C.
 import { Host, TinyactorsError } from '@tinyactors/node';
-import { ENDER, WAITER, hostWith, image, scxml, status, until } from './charts.mjs';
+import { ENDER, ENGINE, WAITER, hostWith, image, scxml, status, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 const QUICKJS = { datamodel: 'quickjs' };
+
 
 function equal(actual, expected, what) {
   if (actual !== expected) throw new Error(`${what}: ${actual}, expected ${expected}`);
@@ -25,36 +26,46 @@ function throws(body, check, what) {
 }
 
 test('a host reads ticksPerSecond from its effective config', () => {
-  const host = new Host({ systemID: 't', system: { ticksPerSecond: 1000 } }, QUICKJS);
+  const host = new Host({ systemID: 't', system: { ticksPerSecond: 1000 } }, ENGINE);
   equal(host.ticksPerSecond, 1000, 'ticksPerSecond');
   equal(host.closed, false, 'closed');
   host.close();
-  const defaults = new Host({ systemID: 't' }, QUICKJS);
+  const defaults = new Host({ systemID: 't' }, ENGINE);
   equal(defaults.ticksPerSecond, 1e9, 'the default rate, core\'s');
   defaults.close();
 });
 
 test('a refused config throws core\'s error', () => {
-  throws(() => new Host({ systemID: 't', x: 1 }, QUICKJS), (error) => {
+  throws(() => new Host({ systemID: 't', x: 1 }, ENGINE), (error) => {
     if (!(error instanceof TinyactorsError)) throw error;
     equal(error.code, -32602, 'code');
     equal(error.reason, 'unknown', 'reason');
     equal(error.path, 'x', 'path');
     equal(error.status, 'TA_ERROR_INVALID', 'status');
   }, 'an unknown key');
-  throws(() => new Host('not a map', QUICKJS), (error) => {
+  throws(() => new Host('not a map', ENGINE), (error) => {
     if (!(error instanceof TinyactorsError)) throw error;
   }, 'a config that is not a map');
 });
 
-test('the native datamodel is refused until it is built', () => {
-  // p1-datamodel builds it; then a host that names none gets it.
-  for (const options of [undefined, {}, { datamodel: 'native' }]) {
-    throws(() => new Host({ systemID: 't' }, options), (error) => {
-      if (!(error instanceof TinyactorsError)) throw error;
-      equal(error.status, 'TA_ERROR_UNSUPPORTED', 'status');
-    }, 'a native host');
+test('a host that names no datamodel gets the native one', async () => {
+  // The native datamodel's values are of its own context: an array a chart
+  // sends is an array (Array.isArray) but not of the application's realm;
+  // quickjs's are decoded in the application's realm.
+  const chart = scxml('out', `
+    <state id="s"><onentry><send event="out" type="urn:out" target="x"><content expr="[1, 2]"/></send></onentry></state>`);
+  const seen = {};
+  for (const options of [undefined, {}, { datamodel: 'native' }, QUICKJS]) {
+    const host = new Host({ systemID: 't', ioProcessors: [{ type: 'urn:out' }] }, {
+      ...options,
+      ioProcessors: { 'urn:out': (h, send) => { seen[options?.datamodel ?? String(options)] = [Array.isArray(send.data), send.data instanceof Array]; } },
+    });
+    host.addImage(image({ out: chart }));
+    host.spawn(host.chart('out'));
+    await host.idle();
+    host.close();
   }
+  equal(JSON.stringify(seen), JSON.stringify({ undefined: [true, false], '[object Object]': [true, false], native: [true, false], quickjs: [true, true] }), 'which datamodel ran');
 });
 
 test('options are checked', () => {
@@ -62,17 +73,18 @@ test('options are checked', () => {
     if (!(error instanceof TypeError)) throw error;
   };
   const config = { systemID: 't', ioProcessors: [{ type: 'urn:x' }] };
-  throws(() => new Host(config, { ...QUICKJS, bogus: 1 }), typeError, 'an unknown option');
+  throws(() => new Host(config, { ...ENGINE, bogus: 1 }), typeError, 'an unknown option');
   throws(() => new Host(config, { datamodel: 'v8' }), typeError, 'an unknown datamodel');
-  throws(() => new Host(config, { ...QUICKJS, log: 1 }), typeError, 'a handler that is not a function');
-  throws(() => new Host(config, { ...QUICKJS, ioProcessors: { 'urn:nope': () => {} } }), typeError,
+  throws(() => new Host(config, { ...ENGINE, log: 1 }), typeError, 'a handler that is not a function');
+  throws(() => new Host(config, { ...ENGINE, ioProcessors: { 'urn:nope': () => {} } }), typeError,
     'a type the config lacks');
-  throws(() => new Host(config, { ...QUICKJS, ioProcessors: { 'urn:x': 1 } }), typeError, 'a processor not a function');
+  throws(() => new Host(config, { ...ENGINE, ioProcessors: { 'urn:x': 1 } }), typeError, 'a processor not a function');
   throws(() => new Host(config, { datamodel: 'native', quickjs: {} }), typeError, 'quickjs limits on a native host');
+  throws(() => new Host(config, { quickjs: {} }), typeError, 'quickjs limits on a host of the default datamodel');
   throws(() => new Host(config, { ...QUICKJS, quickjs: { maxOps: -1 } }), typeError, 'a negative maxOps');
   throws(() => new Host(config, { ...QUICKJS, quickjs: { realm: 'shared' } }), typeError, 'an unknown realm');
   throws(() => new Host(config, { ...QUICKJS, quickjs: { heap: 1 } }), typeError, 'an unknown quickjs option');
-  throws(() => Host(config, QUICKJS), typeError, 'a call without new');
+  throws(() => Host(config, ENGINE), typeError, 'a call without new');
   const host = new Host(config, {
     ...QUICKJS,
     ioProcessors: { 'urn:x': () => {} },
@@ -82,16 +94,16 @@ test('options are checked', () => {
 });
 
 test('close twice, and the dispose symbols', async () => {
-  const host = new Host({ systemID: 't' }, QUICKJS);
+  const host = new Host({ systemID: 't' }, ENGINE);
   host.close();
   host.close();
   equal(host.closed, true, 'closed');
   equal(host.ticksPerSecond, 1e9, 'ticksPerSecond after close');
-  const disposed = new Host({ systemID: 't' }, QUICKJS);
+  const disposed = new Host({ systemID: 't' }, ENGINE);
   disposed[Symbol.dispose]();
   equal(disposed.closed, true, 'closed by Symbol.dispose');
   disposed[Symbol.dispose]();
-  const awaited = new Host({ systemID: 't' }, QUICKJS);
+  const awaited = new Host({ systemID: 't' }, ENGINE);
   const promise = awaited[Symbol.asyncDispose]();
   if (!(promise instanceof Promise)) throw new Error('asyncDispose gave no promise');
   equal(await promise, undefined, 'asyncDispose\'s value');
@@ -100,7 +112,7 @@ test('close twice, and the dispose symbols', async () => {
 
 test('the handlers are the wrapper\'s, under a symbol, and go at close', () => {
   const log = () => {};
-  const host = new Host({ systemID: 't' }, { ...QUICKJS, log });
+  const host = new Host({ systemID: 't' }, { ...ENGINE, log });
   equal(Object.keys(host).length, 0, 'enumerable own keys');
   const [key] = Object.getOwnPropertySymbols(host);
   equal(host[key].log, log, 'the log handler');
@@ -131,7 +143,7 @@ test('a dropped host whose handlers close over it is collected and frees its mem
     for (let i = 0; i < 50; i++) {
       const box = {};
       const host = new Host({ systemID: 't' }, {
-        ...QUICKJS,
+        ...ENGINE,
         log: () => box.host, // handler -> box -> host -> handlers -> handler
         ioProcessors: {},
       });
@@ -163,7 +175,7 @@ const gone = (host, name) => until(() => host.actorByName(name) === undefined);
 
 test('addImage takes a Uint8Array, a Buffer or an ArrayBuffer, and returns the segment', () => {
   const bytes = image({ waiter: WAITER });
-  const host = new Host({ systemID: 't' }, QUICKJS);
+  const host = new Host({ systemID: 't' }, ENGINE);
   equal(host.addImage(bytes), 0, 'a Buffer');
   equal(host.addImage(new Uint8Array(bytes)), 1, 'a Uint8Array');
   const buffer = new ArrayBuffer(bytes.length);

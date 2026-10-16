@@ -12,10 +12,9 @@
 // l-p1-compile-unreachable-statuses).
 import { spawnSync } from 'node:child_process';
 import { Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
-import { ENDER, hostWith, scxml, sleep } from './charts.mjs';
+import { ENDER, ENGINE, hostWith, scxml, sleep } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
-const QUICKJS = { datamodel: 'quickjs' };
 const CONFIG = { systemID: 't' };
 
 function equal(actual, expected, what) {
@@ -46,7 +45,7 @@ const stateError = (error) => {
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 test('idle() on a fresh host settles at the next turn, with no driver called', async () => {
-  const host = new Host(CONFIG, QUICKJS);
+  const host = new Host(CONFIG, ENGINE);
   const first = host.idle();
   if (!(first instanceof Promise)) throw new Error('idle() gave no promise');
   equal(host.idle(), first, 'the same promise until it settles');
@@ -58,7 +57,7 @@ test('idle() on a fresh host settles at the next turn, with no driver called', a
 });
 
 test('nextDeadline is undefined with nothing due, and on a closed host', async () => {
-  const host = new Host(CONFIG, QUICKJS);
+  const host = new Host(CONFIG, ENGINE);
   equal(host.nextDeadline, undefined, 'before a turn');
   await host.idle();
   equal(host.nextDeadline, undefined, 'after an idle turn with no deadline');
@@ -67,13 +66,13 @@ test('nextDeadline is undefined with nothing due, and on a closed host', async (
 });
 
 test('idle() on a closed host is refused', () => {
-  const host = new Host(CONFIG, QUICKJS);
+  const host = new Host(CONFIG, ENGINE);
   host.close();
   throws(() => host.idle(), stateError, 'idle() after close');
 });
 
 test('close() rejects a waiting idle() and clears its turn', async () => {
-  const host = new Host(CONFIG, QUICKJS);
+  const host = new Host(CONFIG, ENGINE);
   const waiting = host.idle();
   host.close();
   let rejected;
@@ -113,12 +112,12 @@ test('SimulatedClock: milliseconds, moved only by increment', () => {
   equal(clock.now, 1000.5, 'unchanged by the refusals');
   throws(() => SimulatedClock(), typeError, 'a call without new');
   throws(() => SimulatedClock.prototype.increment.call({}, 1), typeError, 'increment on another object');
-  throws(() => new Host(CONFIG, { ...QUICKJS, clock: {} }), typeError, 'a clock that is not a SimulatedClock');
+  throws(() => new Host(CONFIG, { ...ENGINE, clock: {} }), typeError, 'a clock that is not a SimulatedClock');
 });
 
 test('increment schedules a turn on each host made with the clock', async () => {
   const clock = new SimulatedClock();
-  const hosts = [new Host(CONFIG, { ...QUICKJS, clock }), new Host(CONFIG, { ...QUICKJS, clock })];
+  const hosts = [new Host(CONFIG, { ...ENGINE, clock }), new Host(CONFIG, { ...ENGINE, clock })];
   clock.increment(250);
   for (const host of hosts) {
     await host.idle();
@@ -136,7 +135,7 @@ test('a clock holds its hosts weakly', async () => {
   let collected = 0;
   const registry = new FinalizationRegistry(() => collected++);
   (() => {
-    for (let i = 0; i < 10; i++) registry.register(new Host(CONFIG, { ...QUICKJS, clock }), i);
+    for (let i = 0; i < 10; i++) registry.register(new Host(CONFIG, { ...ENGINE, clock }), i);
   })();
   await collect();
   equal(collected, 10, 'hosts collected while their clock lives');
@@ -303,7 +302,7 @@ test('a handler\'s error, with no idle() waiting, is thrown from the turn\'s cal
       { name: 'ender.scxml', text: ${JSON.stringify(ENDER)} },
     ];
     const compiled = m.compileCharts(charts);
-    const host = new m.Host({ systemID: 't' }, { datamodel: 'quickjs', log: (h, entry) => { throw new Error('from ' + entry.label); } });
+    const host = new m.Host({ systemID: 't' }, { datamodel: process.env.TA_NAPI_DATAMODEL ?? 'native', log: (h, entry) => { throw new Error('from ' + entry.label); } });
     host.addImage(compiled.image);
     compiled.close();
     host.spawn(host.chart('logger'));

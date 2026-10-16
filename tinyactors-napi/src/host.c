@@ -65,6 +65,7 @@ static void ta_napi_tables_init(ta_napi_host *host) {
  * references, the tables, quickjs, the arena. Basic-env calls only, so a
  * finalizer may call it; pending handlers are dropped, never called. */
 static void ta_napi_host_release(napi_env env, ta_napi_host *host) {
+    host->native.freeing = true; /* its rows go with basic-env calls only */
     if (host->host != NULL) ta_host_free(host->host);
     host->host = NULL;
     /* the loop's references: a timer's handle is cleared by close() first
@@ -82,6 +83,7 @@ static void ta_napi_host_release(napi_env env, ta_napi_host *host) {
     for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) ta_napi_rows_release(env, &rows[i]);
     if (host->quickjs != NULL) ta_datamodel_ecmascript_free(host->quickjs); /* after the host that used it */
     host->quickjs = NULL;
+    ta_napi_native_free(&host->native);
     ta_growable_arena_free(&host->arena);
 }
 
@@ -147,7 +149,9 @@ void ta_napi_leave(ta_napi_call *call) {
     ta_napi_host *host = call->host;
     ta_growable_arena_release(&host->arena, call->mark);
     host->depth--;
-    if (host->depth == 0 && !host->turning && host->closing) ta_napi_host_close_now(host->env, host);
+    if (host->depth > 0 || host->turning) return;
+    if (host->closing) ta_napi_host_close_now(host->env, host);
+    else ta_napi_native_flush(&host->native); /* outside core, not nested: the last drops go */
 }
 
 /* ---- options ------------------------------------------------------------------- */
@@ -451,7 +455,7 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
     ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
-    bool ok = ta_napi_value_write(env, config, &(ta_napi_writing){&writer, &host->arena});
+    bool ok = ta_napi_value_write(env, config, &(ta_napi_writing){&writer, &host->arena, false});
     ta_bytes cbor = {NULL, 0};
     ta_status status = ok ? ta_cbor_writer_bytes(&writer, &cbor) : TA_OK;
     if (ok && status != TA_OK) {
@@ -484,9 +488,9 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
     return ok;
 }
 
-/* The datamodel option: "native" (the default) or "quickjs". The native
- * datamodel is built in a later step (docs/plan.xml, p1-datamodel): until
- * then a native host is refused with TA_ERROR_UNSUPPORTED. */
+/* The datamodel option: "native" (the default) or "quickjs", the one
+ * "ecmascript" datamodel the host holds (docs/plan.xml, decision
+ * d-datamodel). */
 static bool ta_napi_host_datamodel(napi_env env, ta_napi_host *host, const ta_napi_options *options) {
     static const char *const names[] = {"native", "quickjs"};
     napi_value value = ta_napi_option(env, options, "datamodel"), limits = ta_napi_option(env, options, "quickjs");
@@ -501,10 +505,8 @@ static bool ta_napi_host_datamodel(napi_env env, ta_napi_host *host, const ta_na
             napi_throw_type_error(env, NULL, "quickjs's limits are for a host with datamodel \"quickjs\"");
             return false;
         }
-        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_UNSUPPORTED,
-                                              "the native \"ecmascript\" datamodel is not built yet: "
-                                              "pass datamodel: \"quickjs\""});
-        return false;
+        host->datamodels[0] = (ta_datamodel_binding){ta_napi_native_vtable(), &host->native};
+        return true;
     }
     ta_datamodel_ecmascript_config config;
     if (!ta_napi_quickjs_config(env, limits, &config)) return false;
@@ -560,6 +562,7 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     if (host == NULL) return ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for a Host"});
     memset(host, 0, sizeof *host);
     host->env = env;
+    host->native.host = host;
     host->allocator = allocator;
     host->deadline = UINT64_MAX;
     host->telemetry = !ta_napi_is(env, ta_napi_option(env, &options, "telemetry"), napi_undefined);
@@ -686,11 +689,12 @@ bool ta_napi_host_payload(napi_env env, ta_napi_host *host, ta_napi_payload_for 
         napi_throw_type_error(env, NULL, "the chart's datamodel takes no data");
         return false;
     }
-    /* quickjs: CBOR in the call's arena (AGENTS.md, "The binding's memory");
-     * the native datamodel copies the value (p1-datamodel) */
+    /* the native datamodel copies the value into its shared context;
+     * quickjs takes CBOR in the call's arena (AGENTS.md, "The binding's memory") */
+    if (host->datamodel == TA_NAPI_DATAMODEL_NATIVE) return ta_napi_native_payload(&host->native, target->value, &target->payload);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
-    bool ok = ta_napi_value_write(env, target->value, &(ta_napi_writing){&writer, &host->arena});
+    bool ok = ta_napi_value_write(env, target->value, &(ta_napi_writing){&writer, &host->arena, false});
     if (ok) {
         ta_bytes cbor;
         ta_status status = ta_cbor_writer_bytes(&writer, &cbor);

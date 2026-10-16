@@ -5,6 +5,10 @@
 # a runtime beyond Node-API: Bun runs the same addon and has no libuv
 # timers (uv_*; oven-sh/bun#18546), and V8's API is Node's alone.
 #
+# Of other libraries it calls txml's txml_* (the project's XML library,
+# compiled into the addon for the native datamodel's XML content:
+# docs/plan.xml, decision d-dom), called from src/datamodel/dom.c only.
+#
 # Of the C library it calls the memory and string functions below, which
 # value conversion needs, and malloc, calloc, realloc and free: the host's
 # allocator (AGENTS.md, "The host's allocator"). A C library function the
@@ -23,4 +27,4 @@ rule:
     field: function
     kind: identifier
     not:
-      regex: '^(ta_\w+|TA_\w+|napi_\w+|node_api_\w+|NAPI_\w+|offsetof|assert|static_assert|_Static_assert|memcpy|memmove|memset|memcmp|memchr|strlen|malloc|calloc|realloc|free)$'
+      regex: '^(ta_\w+|TA_\w+|txml_\w+|napi_\w+|node_api_\w+|NAPI_\w+|offsetof|assert|static_assert|_Static_assert|memcpy|memmove|memset|memcmp|memchr|strlen|malloc|calloc|realloc|free)$'

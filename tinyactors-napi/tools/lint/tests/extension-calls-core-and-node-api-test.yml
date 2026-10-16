@@ -9,6 +9,7 @@ valid:
   - "static void ta_napi_check(void) { assert(sizeof(int) == 4); size_t at = offsetof(ta_spawn, size); }"
   - "static void ta_napi_vtable(const ta_datamodel_call *call) { call->datamodel->release(call); }"
   - "NAPI_MODULE_INIT() { return ta_napi_module_init(env, exports); }"
+  - "static txml_cursor ta_napi_root(const txml_doc *doc) { return txml_doc_root(doc); }"
 invalid:
   - "static void ta_napi_arm(uv_loop_t *loop, uv_timer_t *timer) { uv_timer_start(timer, NULL, 10, 0); }"
   - "static void ta_napi_log(const char *text) { printf(\"%s\", text); }"

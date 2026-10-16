@@ -48,7 +48,16 @@
  *              LogEntry (effects.c), made only by the drain;
  *   rejected   the function a handler's promise calls when it rejects
  *              (effects.c), bound to its view: it fails an unanswered send
- *              and throws the rejection on. */
+ *              and throws the rejection on;
+ *   vm, realm  node:vm (process.getBuiltinModule) and the vm.Script of
+ *              the realm's script every context of the native datamodel
+ *              runs (datamodel/realms.c), made on first use;
+ *   realms     a WeakSet of those contexts' Object.prototype: a plain
+ *              object of theirs is a value (values.c);
+ *   in         In(), the function every context's scopes hold: it reads
+ *              `evaluating`, the native datamodel whose entry runs now
+ *              (NULL outside one), so it holds no pointer of its own;
+ *   stringify  JSON.stringify, for <log> of an object. */
 typedef struct ta_napi_instance {
     napi_env env;
     ta_allocator allocator;
@@ -63,6 +72,8 @@ typedef struct ta_napi_instance {
     napi_ref address;
     napi_ref send, entry;
     napi_ref rejected;
+    napi_ref vm, realm, realms, in, stringify;
+    struct ta_napi_native *evaluating;
 } ta_napi_instance;
 
 /* The environment's instance, or NULL (and an exception pending) before
@@ -107,6 +118,7 @@ napi_value ta_napi_throw_core_error(napi_env env, const ta_napi_core_error *erro
 typedef struct ta_napi_writing {
     ta_cbor_writer *writer;
     ta_growable_arena *arena;
+    bool wire; /* the native datamodel's to_wire: values.txt's ECMAScript rules (values.c) */
 } ta_napi_writing;
 
 /* Writes `value` into writing->writer as the value table's CBOR. On a
@@ -130,6 +142,20 @@ typedef struct ta_napi_text {
     ta_string_view view; /* out */
 } ta_napi_text;
 bool ta_napi_text_of(napi_env env, napi_value value, ta_napi_text *text);
+
+/* A block kept between calls (the native datamodel's last output): a
+ * buffer grown through `allocator`, its old block freed; `view` the text
+ * a call wrote into it. */
+typedef struct ta_napi_room {
+    ta_buffer *buffer;
+    const ta_allocator *allocator;
+    ta_string_view view; /* out */
+} ta_napi_room;
+/* At least `capacity` bytes in room->buffer, its contents not kept. */
+bool ta_napi_room_grow(ta_napi_room *room, size_t capacity);
+/* A string's UTF-8 in the room (room->view), a lone surrogate refused
+ * (TinyactorsError TA_ERROR_INVALID); false with an exception pending. */
+bool ta_napi_text_kept(napi_env env, napi_value value, ta_napi_room *room);
 
 /* Optional text: undefined or null is none (an empty view), a string its
  * UTF-8 in text->arena, anything else a TypeError saying text->what. */
@@ -158,7 +184,10 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info);
  *            whose handlers close over it from the collector); `slot` is
  *            their place there. */
 typedef struct ta_napi_chart_row {
-    napi_ref functions;
+    napi_ref functions;   /* its record (datamodel/datamodel.h) */
+    const ta_image *image; /* the image it is attached from, until chart_detach */
+    uint32_t chart;       /* its index in the image */
+    uint32_t flags;       /* TA_NAPI_CHART_* */
 } ta_napi_chart_row;
 
 typedef struct ta_napi_session_row {
@@ -167,8 +196,9 @@ typedef struct ta_napi_session_row {
 } ta_napi_session_row;
 
 typedef struct ta_napi_payload_row {
-    napi_ref value;
+    napi_ref value; /* the value, or a one-element array holding a primitive */
     uint32_t count;
+    uint32_t boxed; /* `value` is that array: Node-API 8 references objects only */
 } ta_napi_payload_row;
 
 typedef struct ta_napi_loop_row {
@@ -178,6 +208,29 @@ typedef struct ta_napi_loop_row {
 typedef struct ta_napi_pending_row {
     uint32_t slot;
 } ta_napi_pending_row;
+
+/* The native "ecmascript" datamodel of a host (src/datamodel/; AGENTS.md,
+ * "The native "ecmascript" datamodel"): its rows are the host's tables.
+ *
+ *   shared       the record [context, kit] of the host's one shared
+ *                node:vm context, made on first use;
+ *   drops        an array holding the values whose last reference went,
+ *                emptied by the flush after the outer call into core;
+ *   strings      ["platform", "internal", "external", the I/O processors'
+ *                types...]: _event's strings by core's ids;
+ *   environment  the evaluating entry's (In() reads it);
+ *   output       the datamodel's last output (eval_string, log, to_wire),
+ *                valid until its next call;
+ *   freeing      the host is being freed: rows go with basic-env calls
+ *                only (a finalizer may be freeing it). */
+struct ta_napi_host;
+typedef struct ta_napi_native {
+    struct ta_napi_host *host;
+    napi_ref shared, drops, strings;
+    ta_datamodel_environment *environment;
+    ta_buffer output;
+    bool freeing;
+} ta_napi_native;
 
 /* The datamodels a host can hold: one of the two "ecmascript" ones
  * (AGENTS.md, "The native "ecmascript" datamodel"). */
@@ -230,6 +283,7 @@ typedef enum ta_napi_datamodel_kind {
  *               processor, the transport's). */
 typedef struct ta_napi_host {
     napi_env env;
+    ta_napi_native native;
     napi_ref self;
     ta_allocator allocator;
     ta_host *host;
@@ -295,6 +349,30 @@ void ta_napi_host_payload_release(ta_napi_host *host, ta_payload payload);
 
 /* Defines the class Host on `exports`. */
 napi_status ta_napi_host_define(napi_env env, napi_value exports);
+
+/* ---- datamodel/: the native "ecmascript" datamodel ----------------------- */
+
+const ta_datamodel_vtable *ta_napi_native_vtable(void);
+/* `value` copied into the shared context, a payload with one reference;
+ * false with an exception pending (a value that cannot cross: TypeError). */
+bool ta_napi_native_payload(ta_napi_native *native, napi_value value, ta_payload *out);
+/* A payload's value itself (the row's, not a copy); undefined for none. */
+napi_value ta_napi_native_value(ta_napi_native *native, ta_payload payload);
+/* The drops let go: after the outer call into core returns. */
+void ta_napi_native_flush(ta_napi_native *native);
+/* After ta_host_free: the datamodel's own references and output, with
+ * basic-env calls only. */
+void ta_napi_native_free(ta_napi_native *native);
+
+/* to_wire's CBOR of `value` in `room` (values.c's wire mode), the call's
+ * text in `arena` under a mark of its own; false with an exception
+ * pending. */
+typedef struct ta_napi_wiring {
+    ta_napi_room room;
+    ta_growable_arena *arena;
+    ta_bytes out; /* out: a view of the room */
+} ta_napi_wiring;
+bool ta_napi_value_wire(napi_env env, napi_value value, ta_napi_wiring *wiring);
 
 /* ---- address.c: Address (AGENTS.md, "Other systems") -------------------- */
 

@@ -36,7 +36,7 @@ rows were written (log entries `l-p0-map-*`, for the maintainer).
 | `compiled.close()`, `compiled[Symbol.dispose]()` | `ta_compile_free` | frees the result and removes its wrap; a second call does nothing; the finalizer as a fallback; a copy of `image` already read lives on with the collector (no export count: nothing holds the result's memory) |
 | `CompileError`, `Diagnostic` | `ta_compile_diagnostics`, `TA_DIAGNOSTIC_ERROR`, `TA_DIAGNOSTIC_WARNING`, `TA_DIAGNOSTIC_NOTE` | a `TinyactorsError` (status `TA_ERROR_INVALID`) whose `diagnostics` are every diagnostic: `severity` (`"error"`, `"warning"`, `"note"`), `code`, `file`, `line`, `column`, `message` |
 | `resolver(base, source) → string`, `new ResolveError(message, {line, column}?)` | `ta_compile_charts`, `ta_compile_diagnostics` | any callable, as `ta_compile_options.resolve`, given to the compile calls only (a static `src` at compile time); a `ResolveError` becomes a diagnostic of the resolved file at its line and column, the message's UTF-8 in the compilation's scratch arena; a `SyntaxError` is not converted (no JavaScript is compiled at resolve time); any other error is thrown from the compile call after the result is freed |
-| `new Host(config, options?)`: `ioProcessors`, `log`, `clock`, `telemetry`, `wake`, `migrated`, `services`, `migrationDone`, `transport`, `datamodel`, `quickjs` | `ta_host_create`, `host.config`, `ta_datamodel_ecmascript_new`, `ta_datamodel_ecmascript_binding` | the config (a plain object) as CBOR in the host's arena; a refused config throws `TinyactorsError` with core's error; `host.config` posted once at creation for `system.ticksPerSecond` and the I/O processors' indices; `datamodel` `"native"` (the default, the maintainer's exception) or `"quickjs"`, the one ECMAScript datamodel in the environment's list (until the native datamodel is built, a native host is refused with `TinyactorsError` `TA_ERROR_UNSUPPORTED`); `quickjs` the sandbox's `maxOps`, `memoryLimit`, `stackLimit` and `realm`, refused on a native host; an unknown option, a handler that is not a function, or an `ioProcessors` type the config lacks throws `TypeError`; the handlers kept on the Host's own object under a symbol, never by a strong reference |
+| `new Host(config, options?)`: `ioProcessors`, `log`, `clock`, `telemetry`, `wake`, `migrated`, `services`, `migrationDone`, `transport`, `datamodel`, `quickjs` | `ta_host_create`, `host.config`, `ta_datamodel_ecmascript_new`, `ta_datamodel_ecmascript_binding` | the config (a plain object) as CBOR in the host's arena; a refused config throws `TinyactorsError` with core's error; `host.config` posted once at creation for `system.ticksPerSecond` and the I/O processors' indices; `datamodel` `"native"` (the default, the maintainer's exception) or `"quickjs"`, the one ECMAScript datamodel in the environment's list; `quickjs` the sandbox's `maxOps`, `memoryLimit`, `stackLimit` and `realm`, refused on a native host; an unknown option, a handler that is not a function, or an `ioProcessors` type the config lacks throws `TypeError`; the handlers kept on the Host's own object under a symbol, never by a strong reference |
 | `options.quickjs`: `{maxOps, memoryLimit, stackLimit, realm}` | `ta_datamodel_ecmascript_new`, `TA_DATAMODEL_ECMASCRIPT_REALM_AUTO`, `TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED` | *planned*; the sandbox's limits, passed through as `ta_datamodel_ecmascript_config`'s `max_ops`, `memory_limit` (bytes), `stack_limit` (bytes) and `realm` (`"auto"` or `"isolated"`), each absent field core's default (0); given with `datamodel: "native"` it throws `TypeError` at creation |
 | `host.quickjsHeapBytes` | `ta_datamodel_ecmascript_heap_bytes` | *planned*; the quickjs engine's heap in bytes, read on each access (O(1)), for an operator watching a sandboxed host against `memoryLimit`; `undefined` on a native host |
 | `host.ticksPerSecond`, `host.closed` | `host.config`, `ta_host_free` | read once at creation; whether the host was freed (as Python's) |
@@ -95,7 +95,7 @@ rows were written (log entries `l-p0-map-*`, for the maintainer).
 | `Address.fromSession(system, session)`, `Address.fromName(system, name)` | `ta_address_format`, `ta_address_format_name` | an `Address` made from its parts by core's formatter (the name percent-encoded); a system id or name core refuses throws `TinyactorsError` with `TA_ERROR_INVALID` |
 | `encodeHTTPPost({url, event, fields, body}) → Buffer` | `ta_http_encode_post` | *planned*; SCXML's BasicHTTP (C.2.1): the POST request of a send, `fields` an array of `{name, value}` (or `body` when there are none), written into the call's arena and copied once; a URL that is not `http://host[:port]/path` throws `TA_ERROR_INVALID` |
 | `parseHTTPRequest(message) → {method, target, body, event, fields}` | `ta_http_parse_request` | *planned*; SCXML's BasicHTTP (C.2.2): an incoming request's event name (`_scxmleventname`, else `HTTP.<METHOD>`) and its decoded form fields, as strings, the scratch in the call's arena; a malformed request throws `TA_ERROR_INVALID` |
-| the native `"ecmascript"` datamodel, `_event` | `TA_DATAMODEL_EVENT_DETACHABLE`, `ta_datamodel_environment_in`, `ta_image_chart_datamodel` | *planned*; the vtable of `datamodel.h` in the application's engine: `node:vm` contexts (one shared per host, one per session for a chart whose scripts declare top-level names), a scope per session shaped once per chart, expressions compiled lazily, `_event` until the next `bind_event` or `destroy` (kept across `detach_event`), XML content a DOM through txml |
+| the native `"ecmascript"` datamodel, `_event` | `TA_DATAMODEL_EVENT_DETACHABLE`, `ta_datamodel_environment_in`, `ta_image_chart_datamodel` | the vtable of `datamodel.h` in the application's engine: `node:vm` contexts (one shared per host, one per session for a chart whose scripts declare top-level names, as the engine says at `chart_attach`), a scope per session made by its chart's constructor over a frozen prototype of the system variables, expressions compiled one at a time at their first evaluation (sloppy `with`, strict inside: an undeclared assignment, a write to a system variable or to `_event` is `error.execution`), values crossing by copy into the receiving context, `_event` frozen and kept until the next `bind_event` or `destroy` (across `detach_event`), XML content a DOM through txml; hibernation, migration and snapshots *planned* (`TA_ERROR_UNSUPPORTED` until then) |
 
 ## Every public function of core, in one of three lists
 
@@ -198,22 +198,22 @@ function decided here for the API review is marked so; its decision is in
 - **The native datamodel** (`src/datamodel/`): `ta_datamodel_environment_in`
   (`In()`), `ta_datamodel_environment_charge` (fuel per evaluation),
   `ta_datamodel_environment_image` and `ta_datamodel_environment_chart`;
-  at `chart_attach` the chart's code and names: `ta_image_get_info`,
-  `ta_image_chart_name`, `ta_image_chart_source`,
-  `ta_image_chart_datamodel` (also `src/host.c`, above),
-  `ta_image_data_count`, `ta_image_data`, `ta_image_expression_count`,
-  `ta_image_expression`, `ta_image_state_by_name` (`In()`'s argument),
-  `ta_image_event_name` and `ta_image_string` (event names and ids shared
-  per chart).
+  the chart's code and names, read from its image: `ta_image_data_count`,
+  `ta_image_data`, `ta_image_expression_count`, `ta_image_expression`
+  (each expression's source, compiled at its first evaluation),
+  `ta_image_state_by_name` (`In()`'s argument) and `ta_image_string`
+  (`<param>` names); `ta_image_chart_datamodel` in `src/host.c`, above.
+  Event names and invoke ids are shared per chart by core's ids
+  (`ta_event_view`), not read from the image.
 - **txml, for XML content** (`src/datamodel/dom.c`; tinyxml's API,
   `tinyxml/include/txml.h`, not core's): the parser, `txml_parser_init`
   (over the host's allocator), `txml_parse_feed`, `txml_parse_step`,
-  `txml_parser_error`, `txml_parser_finish`, `txml_parser_destroy`,
-  `txml_doc_destroy`; the tree, `txml_doc_root`, `txml_first_child`,
-  `txml_next_sibling`, `txml_kind`, `txml_node_name_id`,
-  `txml_doc_name_at` (`nodeName`, the qualified name), `txml_node_text`
-  (text and CDATA); the attributes, `txml_first_attribute`,
-  `txml_next_attribute`, `txml_attribute_read`. Nothing else of txml is
+  `txml_parser_doc`, `txml_parser_destroy`; the tree, `txml_doc_root`,
+  `txml_first_child`, `txml_next_sibling`, `txml_kind`, `txml_flags`
+  (CDATA), `txml_node_name_id`, `txml_node_prefix` and `txml_doc_name_at`
+  (`nodeName`, the qualified name), `txml_node_text` (text, CDATA,
+  comments, processing instructions); the attributes,
+  `txml_first_attribute`, `txml_next_attribute`, `txml_attribute_read`. Nothing else of txml is
   called: `getElementsByTagName` walks the JavaScript objects already
   built, and the DOM is read-only, so no writer.
 
