@@ -90,6 +90,21 @@ module NodeAPI
   # Node.js the package claims, so the addon uses nothing newer.
   def node_headers = Pathname.new(pinned('node')).dirname.parent.join('include/node')
 
+  # The hibernation stress gate (tools/stress.mjs; README.md,
+  # "Hibernation"): N actors of a counter, at most R resident, the rest in
+  # each runtime's SQLite (node:sqlite, bun:sqlite), on both datamodels
+  # under both runtimes, each run a process of its own. A failed check (a
+  # count wrong, more than R resident after an eviction) ends the task.
+  def stress(actors:, resident:, events:)
+    RUNTIMES.each do |runtime|
+      DATAMODELS.each do |datamodel|
+        puts "stress: #{runtime} #{datamodel}, #{actors} actors, #{resident} resident, #{events} events"
+        run(pinned(runtime), *(runtime == 'node' ? ['--disable-warning=ExperimentalWarning'] : []), 'tools/stress.mjs',
+            '--datamodel', datamodel, '--actors', actors.to_s, '--resident', resident.to_s, '--events', events.to_s)
+      end
+    end
+  end
+
   # The binding's own tests: each a program that exits 1 when a case fails
   # (test/harness.mjs), run under every runtime.
   def tests = ROOT.glob('test/*.test.mjs').sort

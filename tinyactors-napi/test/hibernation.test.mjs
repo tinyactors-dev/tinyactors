@@ -194,56 +194,59 @@ test('a value outside the table keeps the actor resident, and the error names th
   host.close();
 });
 
-if (DATAMODEL === 'native') {
-  test('native: a Map, a class instance or an XML document in a variable keeps the actor resident', async () => {
-    for (const expr of ['new Map()', 'new (class Point {})()', 'new Date(0)']) {
-      const chart = scxml('odd', `
-        <datamodel><data id="v" expr="0"/></datamodel>
-        <state id="s"><transition event="odd"><assign location="v" expr="${expr}"/></transition></state>`);
-      const host = hostWith({ odd: chart });
-      const session = host.spawn(host.chart('odd'));
-      host.send(session, 'odd');
-      await host.idle();
-      throws(() => host.hibernate(session), status('TA_ERROR_UNSUPPORTED'), expr);
-      host.close();
-    }
-  });
-
-  test('native: a hibernated actor holds nothing in the engine; its values come back with the blob', async () => {
-    const chart = scxml('big', `
-      <datamodel><data id="big" expr="[]"/></datamodel>
-      <state id="s">
-        <transition event="fill"><assign location="big" expr="Array.from({length: 4000}, (_, i) => i * 1.5)"/></transition>
-        <transition event="report"><log label="sum" expr="String(big.reduce((a, b) => a + b, 0))"/></transition>
-      </state>`);
-    const logs = new Logs();
-    const store = new Store();
-    const host = hostWith({ big: chart }, { log: logs.handler, wake: store.handler });
-    const ref = host.chart('big');
-    const sessions = Array.from({ length: 200 }, () => host.spawn(ref));
+test('native: a Map, a class instance, a Date or an XML document in a variable keeps the actor resident', async () => {
+  if (DATAMODEL !== 'native') return; // quickjs stores what its engine can
+  const odd = (data, assign) => scxml('odd', `
+    <datamodel>${data}</datamodel>
+    <state id="s"><transition event="odd">${assign}</transition></state>`);
+  const charts = ['new Map()', 'new (class Point {})()', 'new Date(0)']
+    .map((expr) => odd('<data id="v" expr="0"/>', `<assign location="v" expr="${expr}"/>`));
+  charts.push(odd('<data id="v"><doc><item/></doc></data>', '')); // XML content: a DOM
+  for (const chart of charts) {
+    const host = hostWith({ odd: chart });
+    const session = host.spawn(host.chart('odd'));
+    host.send(session, 'odd');
     await host.idle();
-    await collect();
-    const empty = process.memoryUsage().heapUsed;
-    for (const session of sessions) host.send(session, 'fill');
-    await host.idle();
-    await collect();
-    const full = process.memoryUsage().heapUsed;
-    for (const session of sessions) store.blobs.set(session, host.hibernate(session));
-    await collect();
-    // Bun counts a Buffer's bytes in heapUsed, node does not: the blobs the
-    // store keeps are not the actors' (bun:jsc's heapStats, 2026-10-16)
-    let blobs = 0;
-    for (const blob of store.blobs.values()) blobs += blob.length;
-    const after = process.memoryUsage().heapUsed - (globalThis.Bun ? blobs : 0);
-    // the arrays (200 of 4000 numbers) leave the engine's heap with their actors
-    if (full - empty < 1_000_000) throw new Error(`the arrays took ${full - empty} B of heap only`);
-    if (full - after < 0.8 * (full - empty)) throw new Error(`the heap went from ${full} to ${after}, the arrays took ${full - empty}`);
-    host.send(sessions[7], 'report');
-    await host.idle();
-    equal(logs.labelled('sum').join('|'), String(1.5 * (3999 * 4000) / 2), 'woken with its array');
+    throws(() => host.hibernate(session), status('TA_ERROR_UNSUPPORTED'), chart);
     host.close();
-  });
-}
+  }
+});
+
+test('native: a hibernated actor holds nothing in the engine; its values come back with the blob', async () => {
+  if (DATAMODEL !== 'native') return; // quickjs's heap is its own malloc
+  const chart = scxml('big', `
+    <datamodel><data id="big" expr="[]"/></datamodel>
+    <state id="s">
+      <transition event="fill"><assign location="big" expr="Array.from({length: 4000}, (_, i) => i * 1.5)"/></transition>
+      <transition event="report"><log label="sum" expr="String(big.reduce((a, b) => a + b, 0))"/></transition>
+    </state>`);
+  const logs = new Logs();
+  const store = new Store();
+  const host = hostWith({ big: chart }, { log: logs.handler, wake: store.handler });
+  const ref = host.chart('big');
+  const sessions = Array.from({ length: 200 }, () => host.spawn(ref));
+  await host.idle();
+  await collect();
+  const empty = process.memoryUsage().heapUsed;
+  for (const session of sessions) host.send(session, 'fill');
+  await host.idle();
+  await collect();
+  const full = process.memoryUsage().heapUsed;
+  for (const session of sessions) store.blobs.set(session, host.hibernate(session));
+  await collect();
+  // Bun counts a Buffer's bytes in heapUsed, node does not: the blobs the
+  // store keeps are not the actors' (bun:jsc's heapStats, 2026-10-16)
+  let blobs = 0;
+  for (const blob of store.blobs.values()) blobs += blob.length;
+  const after = process.memoryUsage().heapUsed - (globalThis.Bun ? blobs : 0);
+  // the arrays (200 of 4000 numbers) leave the engine's heap with their actors
+  if (full - empty < 1_000_000) throw new Error(`the arrays took ${full - empty} B of heap only`);
+  if (full - after < 0.8 * (full - empty)) throw new Error(`the heap went from ${full} to ${after}, the arrays took ${full - empty}`);
+  host.send(sessions[7], 'report');
+  await host.idle();
+  equal(logs.labelled('sum').join('|'), String(1.5 * (3999 * 4000) / 2), 'woken with its array');
+  host.close();
+});
 
 test('a chart whose scripts declare: its var and function come back after the wake', async () => {
   const chart = scxml('declares', `

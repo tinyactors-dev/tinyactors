@@ -447,6 +447,35 @@ d-dom, d-separate):
   from the context's template (the first session's processors, whose first
   location ends with its id) when a session's processors match it text
   for text, else from the session's own.
+- **Hibernation writes the session out** (decided 2026-10-16, as the
+  Python binding's "hibernation writes the session out"; docs/plan.xml,
+  p2-hibernate). `serialize` writes the session's variables and its
+  `_event` as one CBOR document through the value table, `{"vars": {name:
+  value}, "event": [its eight fields, then core's ids of its name, invoke
+  and origintype] | null}`, into the writer the datamodel keeps until its
+  next call; core puts the bytes in the blob and calls `destroy`, which
+  removes the row, so a hibernated session holds nothing in the engine.
+  The ids live in the session's row (set at `bind_event`), not on the
+  frozen `_event`. A shared chart's variables are its scope's own names
+  but `_event`; a declaring session's are the names its chart and scripts
+  put on its global (the realm's baseline and the system variables left
+  out), and a name the chart's scripts declare as a function is left out
+  while it holds a function. `deserialize` makes a new scope, or for a
+  declaring chart a new context in which every script of the chart is
+  instantiated again without running a statement (`throw 0;` ahead, the
+  probe `chart_attach` already compiles, kept in the chart's record), so
+  its function declarations exist again before the variables are copied
+  in with the context's constructors. A chart whose scripts declare with
+  `let`, `const` or `class` refuses (`TA_ERROR_UNSUPPORTED`): a new
+  context cannot be given those bindings again (a binding instantiated
+  and never run stays in its TDZ). A value outside the table (a function,
+  a `Map`, a `Date`, a class's instance, an XML document) refuses too, and
+  the datamodel keeps why (the variable's name and the value table's
+  message) for `host.hibernate`'s error, as quickjs's `last_error` does.
+  The payloads of the session's pending delayed sends and waiting events
+  stay in the payload table. `payload_serialize` writes the value table's
+  CBOR (`TA_ERROR_UNSUPPORTED` outside it; `to_wire` keeps
+  `TA_ERROR_INVALID`), and `payload_deserialize` reads as `from_wire`.
 - **Measured cost per session** (`mise run measure`, 2026-10-16: x86_64
   Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3 with V8
   12.4, bun 1.4.1; 10,000 actors of a chart with three `<data>`, one of
@@ -581,6 +610,27 @@ file.
   outer value intact'` (the module's arena) and `'a getter that throws:
   its error, the arena released'`; `test/methods.test.mjs: 'a getter of
   params may call the host again: both methods are answered'`.
+- **An output taken with no batch open opens a batch of its own,
+  acknowledged at once; from a handler it joins the open one** (a
+  hibernation blob, `metrics()`), tracked by a flag from a take to its ack,
+  never by the call depth; and a drain stops at its bound before a take, so
+  no batch stays open between turns. Tests: `test/hibernation.test.mjs:
+  'hibernate from a call inside a call outside a turn leaves no batch
+  open'`, `'hibernate from a handler joins the open batch'` and
+  `'hibernate between turns ends no effect undispatched'`. A blob whose
+  copy into a `Buffer` fails is woken back from the view before the ack;
+  no input makes `napi_create_buffer_copy` fail, so that path is code only
+  (`ta_napi_host_output` in `src/host.c`).
+- **A hibernated native session holds nothing in the engine**, and what
+  the value table cannot hold keeps it resident. Tests:
+  `test/hibernation.test.mjs: 'native: a hibernated actor holds nothing in
+  the engine; its values come back with the blob'`, `'native: a Map, a
+  class instance, a Date or an XML document in a variable keeps the actor
+  resident'` and `'a value outside the table keeps the actor resident, and
+  the error names the variable'`.
+- **Sweep and wake refuse numbers out of range**, never wrapped. Test:
+  `test/hibernation.test.mjs: 'sweep, hibernate and wake refuse numbers out
+  of range'`.
 - **Pending handlers are dropped at `ta_host_free`**, never called.
   Tests: `test/methods.test.mjs: 'pending handlers are never called after
   close; a method on a closed host throws'`; `test/rules.test.mjs: 'a
@@ -673,6 +723,13 @@ manages its development dependencies; the C toolchain is the root's.
   each, on both datamodels under both runtimes, each in a process of its
   own, with the machine's signature; it writes `build/measure.json`. A
   measurement, not a test: `mise run test` does not run it.
+- `mise run stress [--actors N] [--resident R] [--events E]`: the
+  hibernation gate (`tools/stress.mjs`): N actors of a counter, at most R
+  resident, the rest in the runtime's SQLite (`node:sqlite` under node,
+  `bun:sqlite` under bun), E events to actors drawn at random, a sample's
+  counts checked, on both datamodels under both runtimes. `mise run test`
+  runs 20,000 actors with 100 resident; `mise run test --full` two million
+  with 1000.
 - `mise run pack`: one prebuilt addon per platform package; it aborts
   until packaging is built.
 
@@ -725,7 +782,8 @@ conform.mjs          the suite's adapter, over the public API only
 test/                what the suite cannot see: liveness, workers, GC, refusals
 tools/lint/          rules/, tests/, utils/ (ast-grep)
 tools/measure.mjs    bytes per actor, node and bun, native and quickjs (mise run measure)
+tools/stress.mjs     hibernation under load, the rest in SQLite (mise run stress)
 mise/napi.rb         what the tasks share
-mise/tasks/          build, test, conform, lint, measure, pack
+mise/tasks/          build, test, conform, lint, measure, stress, pack
 build/               core's amalgamation and the addon (not in git)
 ```

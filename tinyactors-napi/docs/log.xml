@@ -561,4 +561,45 @@
     <evidence>tinyactors-napi/src/effects.c ta_napi_take; src/loop.c ta_napi_turn; AGENTS.md "Refusals no input reaches"</evidence>
     <resolution>code only</resolution>
   </entry>
+  <entry id="l-p2-hibernate-declaring" date="2026-10-16" step="p2-hibernate" kind="decision" status="for-maintainer">
+    <what>A declaring chart's sessions (a node:vm context each) hibernate: serialize writes the names the chart and its scripts put on the session's global (the realm's baseline and the system variables left out), leaving out a function declaration's name while it holds a function; deserialize makes a new context, instantiates every script of the chart there without running a statement (`throw 0;` ahead, the probe chart_attach already compiles, now kept in the chart's record), then copies the variables in. A chart whose scripts declare with let, const or class refuses with TA_ERROR_UNSUPPORTED and a reason.</what>
+    <why>realms.c builds a declaring session's context by running its scripts as global code, so its functions close over the global's vars: making the functions again in the new context (they are re-created from source, over the new global) keeps those closures right without parsing JavaScript. Lexical bindings are not properties of the global: a new context cannot be given them again (instantiating `throw 0; let x` leaves x in its TDZ forever), so the session stays resident rather than waking wrong. quickjs keeps let and const (its own engine writes them), so the two datamodels differ here.</why>
+    <evidence>src/datamodel/realms.c ta_napi_realm_declares and ta_napi_realm_hoist; src/datamodel/realm.js stored, restore, functions; test/hibernation.test.mjs: 'a chart whose scripts declare: its var and function come back after the wake', 'a chart whose scripts declare with let: native keeps it resident, quickjs hibernates it'; tinyactors-core/include/tinyactors/datamodel_ecmascript.h:42-47</evidence>
+    <resolution>Built. Two limits the maintainer may want to weigh: a function declaration's name reassigned to another function wakes as the declared one (the blob leaves it out), and every script of the chart is instantiated at the wake, so a function declared only in a transition's script that never ran exists after a wake. Lifting the let/const refusal would need a script that declares the names with their values, which means generating JavaScript from the names (no parser): not done.</resolution>
+  </entry>
+  <entry id="l-p2-hibernate-event-ids" date="2026-10-16" step="p2-hibernate" kind="decision" status="resolved">
+    <what>Core's ids of _event's strings (name_id, invoke_slot, origintype_id) are kept in the session's row, set at bind_event, and written into the blob after the eight fields, as Python's blob holds them, so a woken session shares the chart's strings again.</what>
+    <why>The native _event is a frozen plain object of the context: a property for the ids would be visible to the chart (Object.getOwnPropertySymbols) and cost an engine slot per session; the row is the addon's own memory and the blob needs them only at serialize.</why>
+    <evidence>src/addon.h ta_napi_session_row; src/datamodel/datamodel.c ta_napi_bind_event, ta_napi_event_write, ta_napi_event_from</evidence>
+    <resolution>The session row grows from 16 to 32 bytes (three uint32 and padding) per resident session.</resolution>
+  </entry>
+  <entry id="l-p2-hibernate-reason" date="2026-10-16" step="p2-hibernate" kind="decision" status="resolved">
+    <what>host.hibernate's TA_ERROR_UNSUPPORTED names the variable on both datamodels: quickjs's through ta_datamodel_ecmascript_last_error, the native datamodel's through a reason it keeps (a fixed 256-byte buffer in ta_napi_native, "variable 'v' cannot be stored: &lt;the value table's message&gt;"), set by serialize and read after ta_host_hibernate returns.</what>
+    <why>The application needs to know which variable keeps an actor resident; core's status alone does not say. A fixed buffer in the datamodel's struct allocates nothing.</why>
+    <evidence>src/datamodel/datamodel.c ta_napi_reason; src/host.c ta_napi_host_hibernate; test/hibernation.test.mjs: 'a value outside the table keeps the actor resident, and the error names the variable'</evidence>
+  </entry>
+  <entry id="l-p2-hibernate-store" date="2026-10-16" step="p2-hibernate" kind="decision" status="resolved">
+    <what>tools/stress.mjs stores the blobs in each runtime's own SQLite: node:sqlite under node (run with --disable-warning=ExperimentalWarning, its module still being experimental in node 22) and bun:sqlite under bun, behind one small Store class.</what>
+    <why>Both runtimes ship an SQLite of their own, so the gate needs no dependency, and it is the store Python's stress.py uses; a Map would not show the store's cost.</why>
+    <evidence>tools/stress.mjs Store; node 22.23.3 and bun 1.4.1 both read and write a BLOB keyed by a bigint (spike, 2026-10-16)</evidence>
+  </entry>
+  <entry id="l-p2-hibernate-ranges" date="2026-10-16" step="p2-hibernate" kind="decision" status="resolved">
+    <what>sweep's maxScan and limit are integers from 0 to 2^32-1 and a session a bigint from 1 to 2^64-1; anything else is a TypeError (Python raises OverflowError), never wrapped. sweep allocates min(limit, maxScan) uint64 in the host's arena, since it answers at most one session a slot scanned.</what>
+    <why>TypeError is what the addon throws for every other count and session (ta_napi_count_of, ta_napi_session_of); bounding the room by maxScan keeps sweep(10, 2^32-1) from asking for 34 GB.</why>
+    <evidence>src/host.c ta_napi_host_sweep; test/hibernation.test.mjs: 'sweep, hibernate and wake refuse numbers out of range'</evidence>
+  </entry>
+  <entry id="l-p2-hibernate-wake-promise" date="2026-10-16" step="p2-hibernate" kind="decision" status="resolved">
+    <what>The wake handler's return value is not followed: a promise it returns runs on (it may call host.wake later), and its rejection is an unhandled rejection; a handler that throws has its error reported as the turn's.</what>
+    <why>A WAKE has nothing to fail or answer (unlike a send, whose sender waits), so there is nothing to materialize before the ack: the session id and migration are already JavaScript values. The loop's rule for a handler's promise that rejects after its turn applies.</why>
+    <evidence>src/effects.c ta_napi_dispatch_wake; test/hibernation.test.mjs: 'an async wake handler wakes the actor later, from its promise', 'a wake handler that throws: its error rejects idle()'</evidence>
+  </entry>
+  <entry id="l-p2-hibernate-scenario-gate" date="2026-10-16" step="p2-hibernate" kind="note" status="resolved">
+    <what>The suite's hibernate scenario passes under node and bun on native and quickjs (the adapter's `hibernate` step and a wake handler over a Map), but mise run test's gate cannot hold it yet: it belongs to M4, and --milestone M4 also runs M2 (w3c) and M3 (invoke), which later steps build.</what>
+    <evidence>mise run //tinyactors-test:run -- --kind binding --datamodel &lt;native|quickjs&gt; --suite scenarios &lt;node|bun&gt; conform.mjs: 'pass scenarios hibernate' on all four (2026-10-16); tinyactors-test/suites/milestones.txt</evidence>
+    <resolution>Raise GATE/MILESTONE when M4's other parts (migrate, snapshot) and M2, M3 are in.</resolution>
+  </entry>
+  <entry id="l-p2-hibernate-bun-heap" date="2026-10-16" step="p2-hibernate" kind="note" status="resolved">
+    <what>Bun counts a Buffer's bytes in process.memoryUsage().heapUsed and node does not: the test that a hibernated native session leaves the engine's heap subtracts the blobs' bytes on bun.</what>
+    <evidence>bun:jsc heapStats after hibernating 200 actors: 201 Uint8Array alive, heapUsed 3.7 MB of which 3.08 MB the blobs; node's heapUsed back to its value before the arrays (2026-10-16)</evidence>
+  </entry>
 </log>

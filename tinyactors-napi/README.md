@@ -44,3 +44,99 @@ The last published version, 0.2.0, was built from an earlier binding.
   chart that declares nothing shares one context per host: declare the
   function as a `<data>` and assign it in the script
   (`<data id="price"/>`, `price = (sku) => ...`).
+  A function held in a variable keeps its session resident (below,
+  "Hibernation"); a declaring chart's function declarations do not.
+
+## Hibernation
+
+Most actors spend most of their time waiting. Hibernation lets a host
+keep millions of actors while only some of them are in memory: the rest
+are blobs in your store, and the host asks for one back when it has work.
+The host does no I/O, so storing and loading the blobs is your program's
+job.
+
+- **`host.sweep(maxScan, limit) → bigint[]`** returns at most `limit`
+  actors that have not run since the previous sweep and can be hibernated
+  now (a CLOCK sweep over at most `maxScan` slots). Calling it regularly
+  is what makes "not run since the previous sweep" mean cold.
+- **`host.hibernate(session) → Buffer`** takes the actor out of memory
+  and returns its blob for you to store. It throws a `TinyactorsError`
+  when the actor is not at rest (`TA_ERROR_STATE`: events waiting, in a
+  macrostep, an invoked child), or when a variable holds what its
+  datamodel cannot store (`TA_ERROR_UNSUPPORTED`, the message names the
+  variable). The actor stays resident then. A pending delayed send stays
+  in the host and wakes the actor when it falls due.
+- **`wake: (host, session, migration) => ...`** is called when a
+  hibernated actor has work: an event or a due delayed send (`migration`
+  is `undefined`), or a migration that asks for it (`migration` is its
+  id). The events wait in the mailbox while your handler loads the blob
+  and calls **`host.wake(session, blob)`**, then or later (an `async`
+  handler is fine; its promise is not awaited). The handler is called once
+  per hibernation, however many events come. Without a `wake` handler the
+  host does not ask: the actor stays hibernated, and its events wait,
+  until you call `host.wake`.
+
+On the native datamodel a blob holds the session's variables and its
+`_event` as CBOR, through the same value table as `encode`: numbers,
+bigints, strings, `Uint8Array`s, arrays, plain objects, `true`, `false`,
+`null` and `undefined`. A function, a `Map`, a `Date`, a class's instance
+or an XML document in a variable keeps the session resident. A hibernated
+native session leaves nothing in the engine's heap; the payloads of its
+pending delayed sends and of the events waiting in its mailbox stay in the
+host. A chart whose scripts declare top-level names gets a new context at
+the wake: its `var`s come back from the blob and its `function`
+declarations are made again from its scripts; one that declares with
+`let`, `const` or `class` keeps its sessions resident. On quickjs the
+sandbox stores what it can (its own rules, `let` and `const` included).
+
+```js
+import { DatabaseSync } from 'node:sqlite'; // bun: import { Database } from 'bun:sqlite'
+
+const db = new DatabaseSync('actors.db');
+db.exec('CREATE TABLE IF NOT EXISTS blobs (session INTEGER PRIMARY KEY, blob BLOB)');
+const put = db.prepare('INSERT OR REPLACE INTO blobs VALUES (?, ?)');
+const get = db.prepare('SELECT blob FROM blobs WHERE session = ?');
+
+const host = new Host(config, { wake: (host, session) => host.wake(session, get.get(session).blob) });
+
+function evict(host) {                     // after a turn: the cold actors leave
+  for (const session of host.sweep(1 << 20, 1024)) {
+    try {
+      put.run(session, host.hibernate(session));
+    } catch (error) {                      // not at rest, or a value outside the table
+      if (!(error instanceof TinyactorsError)) throw error;
+    }
+  }
+}
+```
+
+**Plan the capacity up front.** A hibernated actor keeps its slot and its
+session's record in the host (about 60 B), so `system.maxActors` counts
+every actor. Instance and string memory are needed for the resident ones
+only. Left to grow, a segment doubles all its pools together and sizes
+instance memory from `maxActors`. For `R` actors resident out of `N`:
+
+```js
+const config = { systemID: 'big', system: {
+  maxActors: N + room, maxEvents: 4096,
+  instanceBytes: 2048 * (R + room), stringBytes: 16384 + 64 * (R + room) } };
+```
+
+`tools/stress.mjs` (`mise run stress`) is this pattern at scale: two
+million actors, at most 1000 resident, the rest in SQLite (`node:sqlite`
+under Node.js, `bun:sqlite` under Bun).
+
+One run of it (`mise run stress`, 2026-10-16, x86_64 Linux 6.18, Intel
+Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3, bun 1.4.1): two million
+actors of a counter chart, at most 1000 resident, 200,000 events to actors
+drawn at random, so nearly every event wakes one from the store and the
+sweep sends another back (199,860 wakes in each run). Every sampled actor's
+count matched the events it was sent, and after every eviction at most
+1000 actors were resident.
+
+| runtime, datamodel | populate (spawn and hibernate 2,000,000) | 200,000 events (woken, swept back) | peak resident | core's region | SQLite file |
+|---|---|---|---|---|---|
+| node, native | 26.1 s (76,700 a second) | 14.6 s (13,700 a second) | 253 MB (126 B per actor) | 115 MB (58 B per actor) | 378 MB |
+| node, quickjs | 17.1 s (116,900 a second) | 11.9 s (16,900 a second) | 262 MB (131 B per actor) | 115 MB (58 B per actor) | 409 MB |
+| bun, native | 19.5 s (102,600 a second) | 12.9 s (15,500 a second) | 236 MB (118 B per actor) | 115 MB (58 B per actor) | 378 MB |
+| bun, quickjs | 14.0 s (143,000 a second) | 11.9 s (16,900 a second) | 221 MB (111 B per actor) | 115 MB (58 B per actor) | 409 MB |
