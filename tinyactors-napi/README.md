@@ -406,3 +406,23 @@ random, then a third finish with done data, a third leave the invoking
 state (the service is stopped), the rest keep theirs; every pong is
 counted once, every done datum is right, every cancelled service was
 stopped once and no other, and the ended services are collected.
+
+One run of it (`mise run services`, 2026-10-16, x86_64 Linux 6.18, Intel
+Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3, bun 1.4.1). 200,000 actors,
+each with a counter service, made 1,000,000 round trips (actor, service,
+actor); then a third finished with done data and a third were cancelled.
+In every run every pong and done datum was right, every cancelled service
+was stopped exactly once and no other, and the host held only the 66,666
+services still running.
+
+| runtime, datamodel | start 200,000 invocations | 1,000,000 round trips | end (done, cancel) | peak resident | core's region |
+|---|---|---|---|---|---|
+| node, native | 5.5 s (36,000 a second) | 250.2 s (4,000 a second) | 17.1 s | 441 MB (2207 B per actor and service) | 50.3 MB (251 B per actor) |
+| node, quickjs | 5.0 s (40,000 a second) | 237.3 s (4,200 a second) | 17.8 s | 669 MB (3345 B per actor and service) | 61.8 MB (309 B per actor) |
+| bun, native | 4.7 s (43,000 a second) | 226.2 s (4,400 a second) | 14.8 s | 648 MB (3239 B per actor and service) | 50.3 MB (251 B per actor) |
+| bun, quickjs | 4.0 s (50,000 a second) | 216.3 s (4,600 a second) | 15.5 s | 753 MB (3766 B per actor and service) | 61.8 MB (309 B per actor) |
+
+The round trips are slow at this size because of core, not the
+services: each run scans every live request, and each running invocation
+holds one. With 10,000 actors the same round trips run at 33,000 to
+42,000 a second. The request to core is in ROADMAP.md.

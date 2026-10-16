@@ -741,4 +741,9 @@
     <evidence>gdb, 6 samples during node native traffic at 200,000 actors: 5 in ta_system_retry_pending &lt;- ta_system_run &lt;- ta_host_run &lt;- ta_napi_turn; mise run services 2026-10-16; PYTHONPATH=build/abi3 python tools/services.py --actors 200000 --events 50000</evidence>
     <resolution>Written under "Requests to core" in tinyactors-napi/ROADMAP.md. The addon waits; the README gives the numbers as measured.</resolution>
   </entry>
+  <entry id="l-p2-services-full-gate" date="2026-10-16" step="p2-services" kind="note" status="resolved">
+    <what>The full services gate ran once (mise run services: 200,000 actors, 1,000,000 round trips). It passed on all four runtime and datamodel pairs: 0 wrong, 66,666 services still running, the rest collected. The round trips took 216 to 250 s (4,000 to 4,600 a second; see l-p2-services-retry-pending). Peak resident was 441 to 753 MB. The fast pass (10,000 actors, 50,000 round trips) runs in mise run test. The suite's scenarios (invoke included) pass 8 of 8 under node and bun on both datamodels.</what>
+    <evidence>mise run services, 2026-10-16, exit 0 (1035 s); mise run //tinyactors-test:run -- --kind binding --datamodel &lt;native|quickjs&gt; --suite scenarios &lt;node|bun&gt; conform.mjs: 8 pass</evidence>
+    <resolution>numbers in README.md, "Invoked services"</resolution>
+  </entry>
 </log>

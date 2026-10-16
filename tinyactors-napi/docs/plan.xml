@@ -491,7 +491,7 @@
         <does>snapshot and Host.restore with the native datamodel's tables' namespaces and rows, and quickjs's state; a session's chart named by its segment and index (ta_datamodel_chart.segment: two segments may run one image); quiescence checked before any datamodel state is built; a restore refuses rows that come twice or do not match the tables; a restored host's clock from the snapshot's time.</does>
         <done-when>M4's snapshot scenario; tools/snapshot.mjs; a restored host's snapshot is the same bytes.</done-when>
       </step>
-      <step id="p2-services" status="todo" after="p2-snapshot">
+      <step id="p2-services" status="done" after="p2-snapshot" commit="a8227f6">
         <title>Invoked services</title>
         <does>services, the Invocation record, receive and stop, restored invocations announced again.</does>
         <done-when>M3's invoke scenario; tools/services.mjs.</done-when>
