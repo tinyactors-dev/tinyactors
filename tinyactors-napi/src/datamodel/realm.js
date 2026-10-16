@@ -135,11 +135,34 @@
       'an array, a Uint8Array or an XML node, not ' + tag.call(value)));
   }
 
+  // _ioprocessors, made at its first read and kept in the link: {type:
+  // {location}}, with the short names the W3C tests use. The link holds
+  // the processors core gave ([type, location] pairs), or undefined when
+  // they are the context's template with this session's id (system below).
+  let template; // [prefix of the first location, the processors of the session that made it]
+  function ioprocessors(link) {
+    if (link.io !== undefined && !isArray(link.io)) return link.io;
+    let processors = link.io;
+    if (processors === undefined) {
+      processors = template[1].slice();
+      processors[0] = [processors[0][0], template[0] + link.sessionid];
+    }
+    const io = {};
+    for (const [type, location] of processors) {
+      const entry = freeze({ location });
+      own(io, type, entry);
+      if (type.endsWith('#SCXMLEventProcessor')) own(io, 'scxml', entry);
+      if (type.endsWith('#BasicHTTPEventProcessor')) own(io, 'basichttp', entry);
+    }
+    link.io = freeze(io);
+    return link.io;
+  }
+
   // The system variables of the scopes, read through the session's link.
   const variables = freeze(create(null, {
     _sessionid: { get() { return this[LINK].sessionid; }, enumerable: true },
     _name: { get() { return this[LINK].name; }, enumerable: true },
-    _ioprocessors: { get() { return this[LINK].ioprocessors; }, enumerable: true },
+    _ioprocessors: { get() { return ioprocessors(this[LINK]); }, enumerable: true },
     In: { value: In, enumerable: true },
   }));
 
@@ -156,16 +179,30 @@
     return Scope;
   }
 
-  // A session's link: its system variables and its params until its first event.
-  function system(sessionid, name, processors) {
-    const io = {};
-    for (const [type, location] of processors) {
-      const entry = freeze({ location });
-      own(io, type, entry);
-      if (type.endsWith('#SCXMLEventProcessor')) own(io, 'scxml', entry);
-      if (type.endsWith('#BasicHTTPEventProcessor')) own(io, 'basichttp', entry);
+  // A session's link: its system variables and its params until its first
+  // event. What sessions of a context have in common is kept once: the name
+  // of the session made before (a chart's sessions mostly share one), and
+  // the processors as a template whose first location ends with the
+  // session's id, so a session whose processors match it, text for text,
+  // keeps nothing of them until it reads _ioprocessors.
+  let lastName;
+  function same(processors, sessionid) {
+    if (template === undefined) {
+      const first = processors.length ? processors[0][1] : undefined;
+      if (typeof first !== 'string' || !first.endsWith(sessionid)) return false;
+      template = [first.slice(0, first.length - sessionid.length), processors];
+      return true;
     }
-    return { sessionid, name, ioprocessors: freeze(io), init: undefined };
+    const kept = template[1];
+    if (kept.length !== processors.length || processors[0][1] !== template[0] + sessionid) return false;
+    for (let i = 0; i < kept.length; i++)
+      if (kept[i][0] !== processors[i][0] || (i > 0 && kept[i][1] !== processors[i][1])) return false;
+    return true;
+  }
+  function system(sessionid, name, processors) {
+    if (name === lastName) name = lastName;
+    else lastName = name;
+    return { sessionid, name, io: same(processors, sessionid) ? undefined : processors, init: undefined };
   }
 
   // A context of its own session: the names on its global object.
@@ -175,7 +212,7 @@
     for (const name of names) if (!hasOwn(global, name)) own(global, name, undefined);
     defineProperty(global, '_sessionid', { get() { return link.sessionid; }, enumerable: true });
     defineProperty(global, '_name', { get() { return link.name; }, enumerable: true });
-    defineProperty(global, '_ioprocessors', { get() { return link.ioprocessors; }, enumerable: true });
+    defineProperty(global, '_ioprocessors', { get() { return ioprocessors(link); }, enumerable: true });
     defineProperty(global, 'In', { value: In, enumerable: true });
     defineProperty(global, '_event', { value: undefined, enumerable: true, configurable: true });
     return global;

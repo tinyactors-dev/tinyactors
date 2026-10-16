@@ -155,6 +155,33 @@ test('a chart that declares nothing: its sessions\' variables are their own', as
   same(logged.sort(), [`n: ${a}:1`, `n: ${a}:2`, `n: ${b}:1`].sort(), 'counts per session');
 });
 
+test('the system variables are each session\'s own, _ioprocessors one object per session', async () => {
+  const chart = scxml('c', `
+    <state id="s"><onentry>
+      <log label="sv" expr="JSON.stringify([_sessionid, _name, _ioprocessors, _ioprocessors === _ioprocessors, Object.isFrozen(_ioprocessors)])"/>
+    </onentry></state>`);
+  const config = { systemID: 't', ioProcessors: [{ type: 'urn:out' }] };
+  const { host, lines: logged } = logging({ c: chart }, { config, ioProcessors: { 'urn:out': () => {} } });
+  const a = host.spawn(host.chart('c'));
+  const b = host.spawn(host.chart('c'), { name: 'named' });
+  const c = host.spawn(host.chart('c'));
+  await host.idle();
+  host.close();
+  const seen = logged.map((line) => JSON.parse(line.slice('sv: '.length)));
+  equal(seen.length, 3, 'three sessions');
+  for (const [i, session] of [a, b, c].entries()) {
+    const [sessionid, , processors, same, frozen] = seen.find(([id]) => id === String(session));
+    equal(sessionid, String(session), `session ${i}: _sessionid`);
+    const scxmlType = Object.keys(processors).find((type) => type.endsWith('#SCXMLEventProcessor'));
+    equal(processors[scxmlType].location.endsWith(`#_scxml_${session}`), true, `session ${i}: its own location`);
+    equal(processors.scxml.location, processors[scxmlType].location, `session ${i}: the short name`);
+    equal('urn:out' in processors, true, `session ${i}: the config's processor`);
+    equal(same, true, `session ${i}: one object`);
+    if (DATAMODEL === 'native') equal(frozen, true, `session ${i}: frozen`); // quickjs's is not
+  }
+  equal(seen.find(([id]) => id === String(b))[1], 'named', 'the spawn\'s name');
+});
+
 test('XML content is a document: elements, attributes, text, and a copy of it in a send', async () => {
   const chart = scxml('c', `
     <datamodel>
