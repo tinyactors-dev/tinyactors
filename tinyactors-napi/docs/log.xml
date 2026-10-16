@@ -7,4 +7,37 @@
   <entry id="l-tools" date="2026-10-16" step="coordination" kind="note" status="resolved">
     <what>tools/planxml.py edits docs/plan.xml (Plan) and docs/log.xml (Log), each validated against its schema before it is written.</what>
   </entry>
+  <entry id="l-p0-inventory-address-format" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+    <what>Expose ta_address_format and ta_address_format_name as Address.fromSession(system, session) and Address.fromName(system, name), static constructors of the Address type (decision d-address); p0-map writes their planned row.</what>
+    <why>An application with a transport addresses an actor on another system by its system id and session or name. d-address made the Address core's parser behind a JavaScript type so that no application parses the grammar; formatting it by hand (percent-encoding a name, the #_scxml_ prefix) is the same grammar written the other way, and core has the function. Not instance properties: .session and .name are the parts already. Python has no counterpart (its Address takes text only), so the two bindings differ until Python adds it or the maintainer refuses it here.</why>
+    <evidence>tinyactors-core/include/tinyactors/address.h (ta_address_format, ta_address_format_name, ta_buffer out); tinyactors-cpython/src/value_types.c:41-60 (Address(text) only); docs/plan.xml decision d-address.</evidence>
+  </entry>
+  <entry id="l-p0-inventory-quickjs-limits" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+    <what>quickjs: ta_datamodel_ecmascript_heap_bytes behind an API item (a read of the engine's heap on a datamodel "quickjs" host, named in p0-map); ta_datamodel_ecmascript_last_error used internally, as the message of the TinyactorsError that hibernate(), snapshot() or a migration failure gives with TA_ERROR_UNSUPPORTED on quickjs; ta_datamodel_ecmascript_set_memory_limit not exposed.</what>
+    <why>quickjs is the sandbox (d-datamodel), whose limits are passed at creation (ta_datamodel_ecmascript_config: max_ops, memory_limit, realm); an operator watching a sandboxed host against its limit needs the usage, which is O(1). last_error says which variable could not be stored: it improves an error the API already raises, with no new item. Changing the limit on a running host has no need shown (the creation option covers the sandbox), so it stays out until one is. Python exposes none of the three and raises a bare TA_ERROR_UNSUPPORTED.</why>
+    <evidence>tinyactors-core/include/tinyactors/datamodel_ecmascript.h:118-128; docs/plan.xml decision d-datamodel ("quickjs as a sandbox needs its limits passed through"); tinyactors-cpython/src/host.c:508-511 (a zeroed config).</evidence>
+  </entry>
+  <entry id="l-p0-inventory-basic-http" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+    <what>Expose ta_http_encode_post and ta_http_parse_request as two functions of the module (the POST of a BasicHTTP send, and the event of an incoming request), for an application's HTTP I/O processor and the adapter's W3C BasicHTTP loopback; p0-map names them.</what>
+    <why>BasicHTTP is SCXML's standard I/O processor (C.2), the codec is in core, transport-agnostic and freestanding, and the root rule says code free of any language's API belongs in a C layer, not in a binding. Without it an application (and the adapter) writes the form encoding again in JavaScript. This departs from Python's precedent: Python's adapter encodes and parses BasicHTTP in Python.</why>
+    <evidence>tinyactors-core/include/tinyactors/basic_http.h; tinyactors-cpython/conform/__main__.py:404-429 (BasicHTTP written in Python); root AGENTS.md, "Layers".</evidence>
+  </entry>
+  <entry id="l-p0-inventory-segments" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+    <what>ta_host_segment_count and ta_host_snapshot_segments are not exposed, as Python decided.</what>
+    <why>host.stats has segments; Host.restore reads the images from the pack itself (ta_host_snapshot_image), so nothing needs the hashes.</why>
+    <evidence>tinyactors-cpython/ROADMAP.md, "The API review (2026-10-15)", last paragraph.</evidence>
+  </entry>
+  <entry id="l-p0-inventory-xml-writer" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+    <what>ta_xml_writer_* are not exposed now: the chart builder that would use them is the convenience layer's, after M1 and when the maintainer picks it, and the direct layer gains an item over the writer in that change.</what>
+    <why>An application writes chart text today; no need for the writer is shown before the builder exists, and the direct layer mirrors core only where an item uses it (d-layers).</why>
+    <evidence>tinyactors-core/include/tinyactors/compile.h:84-110; docs/plan.xml decision d-layers; tinyactors-cpython/AGENTS.md, "Layers" (the same deferral).</evidence>
+  </entry>
+  <entry id="l-p0-inventory-internals" date="2026-10-16" step="p0-inventory" kind="decision" status="resolved">
+    <what>Two internal uses the plan did not name: ta_runtime_now_ns is the wall clock of a host given no clock (src/loop.c, as Python's loop.c), and ta_host_snapshot with an empty buffer is snapshot()'s quiescence check before any datamodel state is built (as Python's host.c).</what>
+    <evidence>tinyactors-cpython/src/loop.c:119; tinyactors-cpython/src/host.c:1342.</evidence>
+  </entry>
+  <entry id="l-p0-inventory-python-scan" date="2026-10-16" step="p0-inventory" kind="note" status="for-maintainer">
+    <what>The same scan applies to the Python binding: its docs/api-map.md lists only ta_host_resume, ta_host_locate, ta_host_system, ta_actor_info_get and ta_host_segment_info_get as used internally, and names no not-exposed functions except in ROADMAP.md. Its src calls 97 of core's 230 public functions; the three lists of tinyactors-napi/docs/api-map.md ("Every public function of core") can be carried over with Python's file names, and the decisions above (Address from parts, quickjs's heap and last error, BasicHTTP) asked of Python too. tinyactors-cpython was not edited.</what>
+    <evidence>tinyactors-cpython/docs/api-map.md (the list under the table); a scan of tinyactors-cpython/src for calls of the names in tinyactors-core/include/*.api.json.</evidence>
+  </entry>
 </log>
