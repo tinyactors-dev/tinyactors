@@ -424,7 +424,7 @@
         <done-when>The loop's tests: every status; a send with no other call runs its actor (no driver called); the bound yields to I/O; one timer; no timer with a SimulatedClock; a process exits when no deadline is pending and stays while one is.</done-when>
         <files>src/loop.c, test/loop.test.mjs, test/liveness.test.mjs</files>
       </step>
-      <step id="p1-compile" status="todo" after="p1-loop" decision="d-image">
+      <step id="p1-compile" status="done" after="p1-loop" decision="d-image" commit="470d320">
         <title>The compiler, images and inputs</title>
         <does>compileCharts, compileSystem, Compiled (image copied once into a Buffer on first read; close calls ta_compile_free; a first read after close throws TA_ERROR_STALE), CompileError, the resolver with ResolveError (message copied into request-&gt;scratch); addImage, chart, boot, spawn, send (a target bigint or address), sendMany in slices, terminate, actorByName; TA_EFFECT_REQUEST answered in C with TA_ERROR_INVALID.</does>
         <done-when>Each refusal and each input has a test; a Buffer read before close outlives it; a first read after close throws TA_ERROR_STALE.</done-when>
