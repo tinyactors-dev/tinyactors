@@ -40,4 +40,59 @@
     <what>The same scan applies to the Python binding: its docs/api-map.md lists only ta_host_resume, ta_host_locate, ta_host_system, ta_actor_info_get and ta_host_segment_info_get as used internally, and names no not-exposed functions except in ROADMAP.md. Its src calls 97 of core's 230 public functions; the three lists of tinyactors-napi/docs/api-map.md ("Every public function of core") can be carried over with Python's file names, and the decisions above (Address from parts, quickjs's heap and last error, BasicHTTP) asked of Python too. tinyactors-cpython was not edited.</what>
     <evidence>tinyactors-cpython/docs/api-map.md (the list under the table); a scan of tinyactors-cpython/src for calls of the names in tinyactors-core/include/*.api.json.</evidence>
   </entry>
+  <entry id="l-p0-map-quickjs-option" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>The quickjs sandbox's limits are the Host option quickjs: {maxOps, memoryLimit, stackLimit, realm: 'auto' | 'isolated'}, each field ta_datamodel_ecmascript_config's (max_ops, memory_limit, stack_limit, realm), an absent field core's default 0; given with datamodel 'native' it throws TypeError at creation.</what>
+    <why>d-datamodel says the limits are passed through from the Host's option but names no shape. One nested object keeps the sandbox's settings together and mirrors the C struct field by field (camelCase); abort_flag is not exposed (no JavaScript caller can set a C flag asynchronously). A TypeError for a quickjs option on a native host refuses a setting that would otherwise be silently ignored.</why>
+    <evidence>tinyactors-core/include/tinyactors/datamodel_ecmascript.h:61-72; docs/plan.xml decision d-datamodel; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-quickjs-heap" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>ta_datamodel_ecmascript_heap_bytes is the getter host.quickjsHeapBytes (a number, read on each access), undefined on a native host.</what>
+    <why>l-p0-inventory-quickjs-limits decided to expose the read and left the name to p0-map. A getter, not a method, because the read is O(1) and has no effect; the quickjs prefix says it is the sandbox's, not the host's memory.</why>
+    <evidence>tinyactors-core/include/tinyactors/datamodel_ecmascript.h:124; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-basic-http" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>BasicHTTP is encodeHTTPPost({url, event, fields, body}) returning the request's bytes (a Buffer copied once from the call's arena), and parseHTTPRequest(message) returning {method, target, body, event, fields}; fields are arrays of {name, value} strings, as ta_http_field; a refusal throws TinyactorsError with TA_ERROR_INVALID.</what>
+    <why>l-p0-inventory-basic-http decided to expose the codec and left the names to p0-map. The names follow the root acronym rule (HTTP in capitals); an array of {name, value} keeps order and repeated names, which a plain object would lose.</why>
+    <evidence>tinyactors-core/include/tinyactors/basic_http.h; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-send-many" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>host.sendMany(items) takes an array of objects of host.send(message)'s fields ({target, event, data, sendid, origin, traceparent}), not Python's tuples.</what>
+    <why>JavaScript has no tuples; one shape for send(message), sendMany's items and send.message means a transport can batch what it received unchanged.</why>
+    <evidence>tinyactors-cpython/docs/api-map.md, row Host.send_many; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-traceparent-null" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>send.answer, invocation.sendBack and invocation.done keep the send's (or invocation's) trace unless the options give traceparent; traceparent: null starts a new trace; an absent or undefined traceparent keeps it.</what>
+    <why>AGENTS.md says an answer keeps the trace 'unless the caller passes none' without saying how none is written. In JavaScript undefined means absent (an options object spread with a missing key), so null is the explicit 'none', as Python's traceparent=None is.</why>
+    <evidence>tinyactors-napi/AGENTS.md, 'Layers and the resolver', the traceparent bullet; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-host-properties" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>host.ticksPerSecond and host.closed are in the API, as Python's Host.ticks_per_second and Host.closed are; the plan's api section did not list them.</what>
+    <why>Python's adapter converts the driver's monotonic ticks with ticks_per_second, and closed is how an application knows a close deferred from a handler happened. Borrowed from Python, not invented: host.config behind one, ta_host_free behind the other.</why>
+    <evidence>tinyactors-cpython/docs/api-map.md, row Host.ticks_per_second, Host.closed; tinyactors-cpython/conform/__main__.py:182; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-exhausted" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>An exhausted pool (TA_RUN_EXHAUSTED) is reported as TinyactorsError with status TA_ERROR_NO_MEMORY and the pool's name in the message, where Python raises MemoryError naming the pool.</what>
+    <why>JavaScript has no MemoryError; RangeError is what engines throw for an allocation they refuse, but it carries no status to branch on. A TinyactorsError keeps one error type for core's reports, and the host stays usable as in Python.</why>
+    <evidence>tinyactors-cpython/AGENTS.md, 'The loop' table (TA_PYTHON_NEXT_EXHAUSTED); tinyactors-core/include/tinyactors/system.h (TA_RUN_EXHAUSTED, TA_POOL_*); tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-address" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>new Address(text) takes any text (parts undefined when it is no address); Address.fromSession(system, session: bigint) and Address.fromName(system, name) throw TinyactorsError with TA_ERROR_INVALID when core's formatter refuses; an Address is not a Value, so encode and a payload refuse it.</what>
+    <why>d-address follows Python's Address(text); tag 32 is never written by Node (values.txt, ECMAScript), so an Address inside data has no encoding and is refused rather than turned into a string silently.</why>
+    <evidence>tinyactors-core/include/tinyactors/address.h:45-60; docs/plan.xml decision d-address; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-send-options" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>host.send's options are {sendid, traceparent, origin} (Python's keywords, sendid included, which the plan's item omitted), and host.fail(target, sendid?) takes the sendid as optional, as Python's sendid=None.</what>
+    <why>sendid is ta_event_in's field and send.message carries it, so send(target, ...) and send(message) take the same fields.</why>
+    <evidence>tinyactors-cpython/docs/api-map.md, rows Host.send and Host.fail; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-types" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>index.d.ts declares Compiled, Send, LogEntry, Migrated, Invocation, Service, ChartRef and MigrationResult as interfaces (no constructor exported); TinyactorsError, CompileError, ResolveError, Address, SimulatedClock and Host as classes. TinyactorsError's constructor is (message, {code, reason, path, status}); ResolveError's (message, {line, column}); ChartRef is {segment, chart}.</what>
+    <why>Only what an application constructs or tests with instanceof is a class; the rest the addon makes. Options objects in place of Python's keyword arguments, as the plan's ResolveError item already writes.</why>
+    <evidence>docs/plan.xml section api, items a-resolver, a-error; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
+  <entry id="l-p0-map-snapshot-label" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+    <what>host.snapshot() labels its datamodel state tinyactors-napi, as Python's is labelled tinyactors-cpython, and Host.restore refuses a pack another program labelled.</what>
+    <why>A native datamodel's state is the addon's own CBOR, which another binding cannot read.</why>
+    <evidence>tinyactors-cpython/AGENTS.md, 'Snapshots'; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+  </entry>
 </log>
