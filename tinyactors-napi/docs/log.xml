@@ -544,4 +544,21 @@
     <what>The review's findings were not given to a fresh agent to refute (reasoned-analysis, step 8): this step agent cannot spawn one. The two fixes are small and tested; the one recommendation (l-p1-review-result-ids, option a) is unrefuted until the coordinator or the maintainer runs that check.</what>
     <evidence>docs/api-review.md, 'How this review was made'.</evidence>
   </entry>
+  <entry id="l-p2-telemetry-close-settles-waiter" date="2026-10-16" step="p2-telemetry" kind="decision" status="resolved">
+    <what>A close() a handler asks for in a turn now runs before the waiting idle() settles, and the waiter is kept from loop_stop, so the last take's error rejects idle() (Python raises it from the driver); without an error the waiter resolves as before.</what>
+    <why>d-errors: a turn's error rejects every waiting idle(); before, the waiter resolved and the last take's error was thrown as uncaught.</why>
+    <evidence>tinyactors-napi/src/loop.c ta_napi_loop_turn; test/telemetry.test.mjs: 'a close a handler asked for: its last take\'s error rejects the waiting idle()'</evidence>
+    <resolution>implemented in 07adc08</resolution>
+  </entry>
+  <entry id="l-p2-telemetry-endings" date="2026-10-16" step="p2-telemetry" kind="decision" status="resolved">
+    <what>What the telemetry handler returns in the last take is gathered in an array living only in the close's native call (host-&gt;endings); [Symbol.asyncDispose] returns Promise.all of it mapped to undefined, rejecting with the first rejection; a sync close() leaves them unawaited (an unhandled rejection if one rejects). Every object or function result is gathered, not only thenables: Promise.all resolves the others at once.</what>
+    <why>Python's async with awaits the async last take; Node has no async def to detect, and a napi_ref kept on the host would hold promises that close over the host (the cycle rule).</why>
+    <evidence>tinyactors-napi/src/host.c ta_napi_host_async_dispose; test/telemetry.test.mjs: 'asyncDispose rejects with a promise\'s rejection in the last take'</evidence>
+    <resolution>implemented in 07adc08</resolution>
+  </entry>
+  <entry id="l-p2-telemetry-unreachable" date="2026-10-16" step="p2-telemetry" kind="note" status="resolved">
+    <what>A take the allocator refused (TA_ERROR_NO_MEMORY from ta_host_traces/ta_host_logs) is reported once and retried at the next turn (host-&gt;retake, from p1-loop, now handing the retried take to the handler); no test, as with the other allocator refusals: no input of the public API makes the allocator refuse.</what>
+    <evidence>tinyactors-napi/src/effects.c ta_napi_take; src/loop.c ta_napi_turn; AGENTS.md "Refusals no input reaches"</evidence>
+    <resolution>code only</resolution>
+  </entry>
 </log>

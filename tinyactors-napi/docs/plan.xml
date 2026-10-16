@@ -471,7 +471,7 @@
 
     <phase id="p2" title="The rest of 8.5, in the order the Python binding took">
       <goal>Every effect through the API, the W3C suite, and a release, each item with its gate from the Python binding's roadmap translated to Node.</goal>
-      <step id="p2-telemetry" status="todo">
+      <step id="p2-telemetry" status="done" commit="07adc08">
         <title>Telemetry</title>
         <does>telemetry handler, metrics(), the stop's trace.end and bounded last take; a take the allocator refused retried next turn.</does>
         <done-when>Python's test_telemetry cases in Node, spans decoded back with traceSpansDecode.</done-when>
