@@ -115,4 +115,49 @@
     <why>AGENTS.md 'Values' and plan item a-values: undefined and null stay distinct, plain objects and arrays only, what cannot be written is refused, never turned into a value. For the next steps: the native datamodel's to_wire (p1-datamodel) needs values.txt's to_wire rules, a second mode of values.c; and the adapter's host.run sends must carry the sender's wire form, since encode(send.data) of a native payload holding undefined writes f7 where the echo expects f6 ('ECMAScript: undefined at the top is null').</why>
     <evidence>tinyactors-test/suites/protocol/values.txt (encode cases; header: 'encode and invalid cases are value.encode's ... on ECMAScript datamodels'); tinyactors-test/docs/driver.md:65 (value.encode is to_wire); tinyactors-napi/docs/values.md, 'encode and a datamodel's to_wire'</evidence>
   </entry>
+  <entry id="l-p1-host-native-refused" date="2026-10-16" step="p1-host" kind="decision" status="open">
+    <what>A host whose datamodel is "native" (the default, so also new Host(config) with no datamodel option) throws TinyactorsError TA_ERROR_UNSUPPORTED until p1-datamodel builds the native datamodel; quickjs is never registered under the native name. Tests and the next steps pass datamodel: "quickjs".</what>
+    <why>The brief offered either; registering quickjs as "native" would make tests pass for the wrong datamodel and hide which one ran. p1-datamodel removes the refusal and the test "the native datamodel is refused until it is built" in test/host.test.mjs.</why>
+    <evidence>tinyactors-napi/src/host.c (ta_napi_host_datamodel); test/host.test.mjs</evidence>
+  </entry>
+  <entry id="l-p1-host-allocator-context" date="2026-10-16" step="p1-host" kind="decision" status="resolved">
+    <what>The allocator's context is the napi_env itself (ta_napi_allocator(env) in module.c), not the instance; the host struct is made and freed through it, so it is reported too.</what>
+    <why>A host finalizer may run at the environment's teardown after or before the instance data's finalizer (order unverified across Node and Bun); with the env as context the finalizer never reads the instance.</why>
+    <evidence>tinyactors-napi/src/module.c (ta_napi_allocator); src/host.c (ta_napi_host_new, ta_napi_host_finalize)</evidence>
+  </entry>
+  <entry id="l-p1-host-handlers-symbol" date="2026-10-16" step="p1-host" kind="decision" status="resolved">
+    <what>The handlers are one object on the wrapper under a Symbol("tinyactors.handlers") the instance keeps (in an object it references), non-enumerable, non-configurable, writable so close() sets it to undefined. It holds the handlers by name and processors, an array: processors[0] the transport, processors[i + 1] the handler of the config's ioProcessors[i] (core's IO_PROCESSOR numbering). The C side reaches the wrapper through a weak napi_ref (count 0).</what>
+    <why>Node-API has no private symbols (an unexported Symbol is the nearest; Object.getOwnPropertySymbols still sees it); a napi_ref to a symbol needs Node-API 10, so the instance references an object holding it.</why>
+    <evidence>tinyactors-napi/src/host.c (ta_napi_host_keep, ta_napi_host_read_config); test/host.test.mjs "the handlers are the wrapper's"</evidence>
+  </entry>
+  <entry id="l-p1-host-unknown-options" date="2026-10-16" step="p1-host" kind="decision" status="for-maintainer">
+    <what>new Host refuses an option name it does not know (TypeError "unknown Host option: x"), and the quickjs option's too; a handler that is not a function, ioProcessors or services not objects of functions, and an ioProcessors type the config lacks are TypeErrors (Python: ValueError for the last). A non-native datamodel name other than "quickjs" is a TypeError.</what>
+    <why>Python's keyword arguments refuse a misspelled name by themselves; an options bag ignores one silently, so a typo (ioprocessors) would drop a handler without a word.</why>
+    <evidence>tinyactors-napi/src/host.c (ta_napi_only_known); tinyactors-cpython/tests/test_host.py:181</evidence>
+  </entry>
+  <entry id="l-p1-host-node-external" date="2026-10-16" step="p1-host" kind="uncertainty" status="resolved">
+    <what>Node 22 does not show napi_adjust_external_memory's blocks in process.memoryUsage().external nor v8.getHeapStatistics().external_memory (50 hosts: +40 bytes), Bun does (+347 KB, back to +3 KB after collection). The test checks collection with a FinalizationRegistry on both and the memory where the runtime shows it. A spike that printed napi_adjust_external_memory's adjusted total on node showed 10992 bytes before 5 hosts, 221568 with them, and 10648 after gc: the finalizer frees every block.</what>
+    <why>The done-when asks that a dropped host frees its memory under both runtimes; on node it is shown only by the counter Node-API returns.</why>
+    <evidence>spike (scratchpad p1-host, a fprintf in ta_napi_allocator_alloc/_free, not committed): "adj 10992 ... adj 221568 created ... free 10648 collected"; test/host.test.mjs, the last case</evidence>
+  </entry>
+  <entry id="l-p1-host-gate" date="2026-10-16" step="p1-host" kind="note" status="open">
+    <what>GATE stays empty: the adapter still offers no method. host.create alone cannot pass a suite, since the runner fails a binding kind that does not offer every method but value.encode (host.post, image.add, host.run, actor.spawn, scenario.run, w3c.run ...), so the gate is raised in p1-conform, when the adapter offers them all.</what>
+    <why>The previous step expected p1-host to raise it.</why>
+    <evidence>tinyactors-test/lib/runner.rb:37-40 (METHODS, REQUIRED), :357-359; tinyactors-napi/mise/napi.rb (GATE comment)</evidence>
+  </entry>
+  <entry id="l-p1-host-close-scope" date="2026-10-16" step="p1-host" kind="deviation" status="open">
+    <what>close() frees the host, its tables (each row's napi_ref deleted first), quickjs and the arena, and drops the handlers; from inside a call (ta_napi_enter/_leave depth) or a turn it is deferred to the outermost leave. Not yet: trace.end and the last take of telemetry (with the encoder's step), clearing the timer and the deferral at the end of a turn (p1-loop sets host-&gt;turning), and the asyncDispose wait for the last take's promises: asyncDispose resolves at once. ta_napi_enter and ta_napi_leave exist for the next steps' calls; no method of p1-host enters (close and the getters touch no arena).</what>
+    <why>The loop and the encoder are later steps; the api-map row says the last take is planned.</why>
+    <evidence>tinyactors-napi/src/host.c (ta_napi_host_close, ta_napi_host_close_now, ta_napi_leave); docs/api-map.md row host.close()</evidence>
+  </entry>
+  <entry id="l-p1-host-value-write" date="2026-10-16" step="p1-host" kind="decision" status="resolved">
+    <what>ta_napi_value_write takes a ta_napi_writing {writer, arena}: the arena of the call's text is the caller's (the module's arena for encode, the host's for a host's call), as the rulebook has one arena per host.</what>
+    <why>values.c wrote text into the instance's arena whatever the caller; the API changed in place (root AGENTS.md).</why>
+    <evidence>tinyactors-napi/src/addon.h (ta_napi_writing); src/values.c; src/host.c (ta_napi_host_create)</evidence>
+  </entry>
+  <entry id="l-p1-host-rows" date="2026-10-16" step="p1-host" kind="note" status="open">
+    <what>The tables are made with rows the rulebook names, each a placeholder its step fills: chart {functions}, session {scope, chart}, payload {value, count}, loop {items}, pending {slot: the handlers' place on the wrapper}. Every row but pending holds its napi_ref first, which the host deletes at free.</what>
+    <why>The brief asks for the tables now; their contents are p1-datamodel's and p1-methods', which may change the rows (the release in ta_napi_host_release assumes the reference first).</why>
+    <evidence>tinyactors-napi/src/addon.h (ta_napi_*_row); src/host.c (ta_napi_rows_release)</evidence>
+  </entry>
 </log>

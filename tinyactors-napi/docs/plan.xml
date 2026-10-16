@@ -412,7 +412,7 @@
         <done-when>test/values.test.mjs passes values.txt's ecmascript lines under node and bun; the adapter answers -32601 for every method it lacks.</done-when>
         <files>src/addon.h, src/module.c, src/values.c, index.mjs, index.d.ts, conform.mjs, test/values.test.mjs</files>
       </step>
-      <step id="p1-host" status="todo" after="p1-values">
+      <step id="p1-host" status="done" after="p1-values" commit="387366b">
         <title>The Host and its memory</title>
         <does>new Host(config, handlers): the config as CBOR, ta_host_create with an allocator over malloc and free that reports each block with napi_adjust_external_memory; the arena with a mark per call; the tables (charts, sessions, payloads, loops, pending); host.config read once; the type tag on every wrapped object; the environment recorded; close and the dispose symbols (close from a handler deferred to the end of the turn; a drive or close from a finalizer refused); handlers kept reachable from the wrapper's own JavaScript object (a property under a private symbol), not by strong napi_refs, so a handler that closes over the host does not keep it from the collector; a finalizer that frees the host with the deferred drops done at once and no last take, calling only basic-env functions, so the same path serves the environment's teardown; the lint rule allocation-in-tables-and-host moved to the new files.</does>
         <done-when>A host is made and closed under both runtimes; a dropped host whose handlers close over it is collected and frees its memory (test with --expose-gc and Bun.gc).</done-when>
