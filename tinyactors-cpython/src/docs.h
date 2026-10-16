@@ -8,57 +8,44 @@
 #define TA_PYTHON_DOCS_H
 
 static const char ta_python_doc_module[] =
-    "SCXML actors in a host, with charts in Python or ECMAScript.\n"
+    "Run SCXML statecharts as actors in a host, with charts in Python or ECMAScript.\n"
     "\n"
-    "The pieces, from the outside in (GLOSSARY.md in the repository has every\n"
-    "word):\n"
+    "A Host holds actors and runs each one's chart when events reach it. It\n"
+    "does no I/O: what an actor asks of the outside world reaches a handler\n"
+    "you give the host, and the handler does the work. The pieces:\n"
     "\n"
-    "- A Host runs many actor systems as one. It is the only object that\n"
-    "  holds actors; everything else here is made for it, by it or about it.\n"
-    "  Create one with Host(config, ...), drive it with run_until_idle(), run()\n"
-    "  or `await host.idle()`, and leave it with `with` / `async with` or\n"
-    "  close().\n"
-    "- Charts are SCXML state machines. compile_charts() turns documents into\n"
-    "  an image (Compiled.image); compile_system() does it for a <system>\n"
-    "  manifest that also names the actors an application starts with, which\n"
-    "  Host.boot() spawns. Host.add_image() runs an image as a new\n"
-    "  segment of the host: one actor system, with its own memory. Adding an\n"
-    "  image with a chart of a name the host already runs is a deploy: the new\n"
-    "  segment holds the chart's current version, and Host.migrate() moves the\n"
-    "  running actors over (they get error.platform.upgrade).\n"
-    "- Actors are running instances of a chart: Host.chart(name) gives the\n"
-    "  current version as a ChartRef, Host.spawn() starts an actor and returns\n"
-    "  its session id (Host.actor_by_name() finds a named one again),\n"
-    "  Host.send() and send_many() give it events. A chart's\n"
-    "  datamodel is \"python\" (expressions in a restricted Python, values are\n"
-    "  Python objects, _event is an Event) or \"ecmascript\" (quickjs).\n"
-    "- What actors ask of the world reaches your handlers, which you pass to\n"
-    "  Host(...): io_processors for <send> to a transport (each gets a Send),\n"
-    "  services for <invoke> of a service you run (each gets an Invocation),\n"
-    "  log for <log> (a LogEntry), wake for a hibernated actor that has work\n"
-    "  (Host.wake answers it), migrated (a Migrated) and\n"
-    "  migration_done for migrations, and telemetry (OTLP bytes). Other systems (another thread's host, a browser) are reached\n"
-    "  through the I/O processor the config marks \"remote\": its handler\n"
-    "  carries a Send to the other side, where Host.send(address, ...,\n"
-    "  origin=send.origin) delivers it. A handler that is a plain\n"
-    "  function gets a thin view, valid until the host acknowledges the batch\n"
-    "  it came in; an async def handler gets a record.\n"
-    "- Questions about the host itself are typed methods (actor_state,\n"
-    "  host_stats, trace_watch, ...): each takes a handler that runs at a\n"
-    "  later drain with the answer.\n"
-    "- Taking actors out of memory: Host.hibernate() writes an actor at rest\n"
-    "  to bytes you store, Host.sweep() says which ones are cold, Host.wake()\n"
-    "  brings one back. Host.snapshot() and Host.restore() copy a whole host,\n"
-    "  every segment at once: for rehearsing a deploy, capturing a host for a\n"
-    "  developer, preparing tests, or taking a host out of the process. None\n"
-    "  of these is durability: keeping data is your database's.\n"
-    "- Values crossing between Python, quickjs and other processes are those\n"
-    "  of the value table: int, float, str, bytes, list, dict with str keys,\n"
-    "  bool, None, UNDEFINED and Address. encode() and decode() are its CBOR\n"
-    "  form. SimulatedClock drives time in tests.\n"
-    "- Errors core reports are TinyactorsError (its status names core's\n"
-    "  status); a compilation that fails raises CompileError with every\n"
-    "  Diagnostic.";
+    "- Charts. compile_charts() compiles SCXML documents into an image\n"
+    "  (Compiled.image). compile_system() compiles a <system> manifest, which\n"
+    "  also names the actors an application starts with.\n"
+    "- Host. Host(config, ...) creates one. Host.add_image() runs an image as\n"
+    "  a new segment, one actor system with its own memory. An image with a\n"
+    "  chart the host already runs holds a new version of it: Host.migrate()\n"
+    "  moves the running actors over.\n"
+    "- Actors. Host.chart(name) gives the current version of a chart as a\n"
+    "  ChartRef, Host.spawn() starts an actor and returns its session id, and\n"
+    "  Host.send() gives it events. Host.boot() spawns an image's boot actors\n"
+    "  and Host.actor_by_name() finds a named one.\n"
+    "- Driving. Inputs (spawn, send, ...) apply at the call; the actors run\n"
+    "  when the host turns. Use run_until_idle() or run(), a SimulatedClock in\n"
+    "  tests, or `async with Host(...)` and `await host.idle()` under asyncio.\n"
+    "- Handlers. Host(...) takes io_processors for <send> (each gets a Send),\n"
+    "  services for <invoke> (an Invocation), log for <log> (a LogEntry),\n"
+    "  wake for a hibernated actor that has work, migrated and migration_done\n"
+    "  for migrations, and telemetry for OTLP bytes. A plain function handler\n"
+    "  gets a thin view, valid until its batch is acknowledged; an async def\n"
+    "  handler gets a record it can keep. The I/O processor the config marks\n"
+    "  \"remote\" carries the sends to other systems.\n"
+    "- Questions. Typed methods (actor_state, host_stats, trace_watch, ...)\n"
+    "  take a handler that runs at a later turn with the answer.\n"
+    "- Memory. Host.sweep() finds cold actors, Host.hibernate() writes one to\n"
+    "  bytes you store, and Host.wake() brings it back. Host.snapshot() and\n"
+    "  Host.restore() copy a whole host. None of these is durability: keeping\n"
+    "  data is your database's job.\n"
+    "- Values. Actors exchange int, float, str, bytes, list, dict with str\n"
+    "  keys, bool, None, UNDEFINED and Address. encode() and decode() give\n"
+    "  their CBOR form, for values that leave the process.\n"
+    "- Errors. The host raises TinyactorsError, whose status names the core's\n"
+    "  status. A failed compilation raises CompileError with every Diagnostic.";
 
 static const char ta_python_doc_compile_charts[] =
     "compile_charts(sources, resolver=None)\n"
@@ -162,7 +149,7 @@ static const char ta_python_doc_compiled_diagnostics[] =
     "Diagnostic (errors raise CompileError instead).";
 
 static const char ta_python_doc_compiled_enter[] =
-    "Use the result in a `with` block: returns it, and close() runs at the block's end.";
+    "Enter a `with` block: returns the result, and close() runs at the block's end.";
 
 static const char ta_python_doc_compiled_exit[] =
     "Leave the `with` block: close() the result, so the image is freed.";
@@ -179,7 +166,8 @@ static const char ta_python_doc_host[] =
     "Host(config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None)\n"
     "--\n"
     "\n"
-    "A host: many actor systems run as one, the object that holds actors.\n"
+    "A host: the object that holds actors and runs their charts, many actor\n"
+    "systems as one.\n"
     "\n"
     "`config` is the host's configuration as a dict (systemID, system limits\n"
     "such as maxActors and instanceBytes, ioProcessors, telemetry; see the\n"
@@ -192,8 +180,7 @@ static const char ta_python_doc_host[] =
     "  address (tinyactors://<other systemID>/...): your transport.\n"
     "- services: {type: handler(host, invocation)} for the services your\n"
     "  application runs; an <invoke type=...> starts one with an Invocation,\n"
-    "  and the handler returns the service object (README, \"Invoked\n"
-    "  services\").\n"
+    "  and the handler returns the service object (see Invocation).\n"
     "- log: handler(host, entry) for <log> lines (LogEntry).\n"
     "- wake: handler(host, session, migration) when a hibernated actor has\n"
     "  work (migration: the id of the migration that asks, or None); answer\n"
@@ -217,7 +204,8 @@ static const char ta_python_doc_host[] =
     "Drive the host with run_until_idle() (until nothing is runnable now),\n"
     "run() (sleeping to each timer), or `await host.idle()` under asyncio.\n"
     "Inputs (spawn, send, terminate, ...) apply at the call; their effects\n"
-    "reach your handlers in the next turn. One thread per host.";
+    "reach your handlers in the next turn. A host is used from the thread\n"
+    "that created it.";
 
 static const char ta_python_doc_host_closed[] =
     "True once the host was freed (close(), the end of a `with` block); every call refuses then.";
@@ -493,10 +481,12 @@ static const char ta_python_doc_host_close[] =
     "close()\n"
     "--\n"
     "\n"
-    "Free the host: the last traces go to the telemetry handler, then the\n"
-    "memory is released. Pending typed-method handlers are dropped, running\n"
-    "services dropped without stop. `with` and `async with` call it on exit;\n"
-    "the collector as a fallback.";
+    "Free the host. The open spans end and the last traces and logs go to\n"
+    "the telemetry handler, then the memory is released. Typed-method\n"
+    "handlers still waiting for a reply are dropped without being called,\n"
+    "and running services are dropped without stop(). `with` and\n"
+    "`async with` call it on exit. The collector frees a host you did not\n"
+    "close, but without the last telemetry.";
 
 static const char ta_python_doc_host_enter[] =
     "Enter the synchronous driver: returns the host; refuses an async def handler (use async with).";
@@ -739,12 +729,12 @@ static const char ta_python_doc_send_answer[] =
     "--\n"
     "\n"
     "Give the sending actor an event in reply, with this send's sendid and\n"
-    "the processor's type as origintype. It keeps the send's trace; pass\n"
-    "traceparent=None to start a new one. `origin` (a str) is where the\n"
-    "actor replies to, _event.origin, and `raw` (a str) the message as the\n"
-    "transport carried it, _event.raw: an HTTP processor passes the request\n"
-    "it read. Answering after the batch's ack needs a record (an async def\n"
-    "handler).";
+    "the processor's type as origintype. The reply keeps the send's trace;\n"
+    "pass traceparent=None to start a new one. `origin` (a str) becomes\n"
+    "_event.origin, where the actor replies to. `raw` (a str) becomes\n"
+    "_event.raw, the message as the transport carried it: an HTTP processor\n"
+    "passes the request it read. To answer after the batch is acknowledged,\n"
+    "write the handler as async def, which gets a record.";
 
 static const char ta_python_doc_send_fail[] =
     "fail()\n"
