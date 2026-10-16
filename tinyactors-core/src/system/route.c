@@ -1,5 +1,6 @@
 /* route.c — the built-in SCXML I/O processor: local routing between
  * sessions, delayed sends and <cancel>, invocation lifecycle, done.invoke. */
+#include <stddef.h>
 #include <tinyactors/address.h>
 #include "base/memory.h"
 #include "system/system_internal.h"
@@ -296,6 +297,8 @@ static uint32_t spawn_child(ta_system *system, uint32_t parent, uint32_t slot, u
     return TA_POOL_NONE;
 }
 
+#define PENDING_SPAWN_LINK ((uint32_t)offsetof(ta_request, next))
+
 static uint32_t park_spawn(ta_system *system, uint32_t parent, uint32_t slot, uint32_t chart,
                            uint32_t invokeid, ta_payload payload) {
     ta_core *core = &system->core;
@@ -320,15 +323,19 @@ static uint32_t park_spawn(ta_system *system, uint32_t parent, uint32_t slot, ui
     request->source = chart;
     request->payload = payload;
     request->pad = core->chart_datamodel[ta_actor_chart(system, actor_at(system, parent))];
+    ta_index_queue_push(&system->pending_spawns, &system->requests, PENDING_SPAWN_LINK, ri);
     return pool;
 }
 
+/* The parked spawns, oldest first: O(parked), whatever else holds a request.
+ * One that still finds no room stays at the head, with those behind it, for
+ * the next run; one parked while this runs waits for the next run too. */
 uint32_t ta_system_retry_pending(ta_system *system) {
     ta_core *core = &system->core;
-    for (uint32_t i = 0; i < system->requests.high_water_mark; i++) {
-        if (!ta_pool_live(&system->requests, i)) continue;
+    uint32_t last = system->pending_spawns.tail;
+    while (!ta_index_queue_empty(&system->pending_spawns)) {
+        uint32_t i = system->pending_spawns.head;
         ta_request *request = (ta_request *)ta_pool_at(&system->requests, i);
-        if (request->kind != REQUEST_PENDING_SPAWN) continue;
         uint32_t parent = ta_system_resolve_actor(system, request->actor);
         ta_request request_record = *request;
         if (parent == TA_NIL ||
@@ -358,8 +365,10 @@ uint32_t ta_system_retry_pending(ta_system *system) {
             }
             ta_system_make_runnable(system, parent);
         }
+        ta_index_queue_pop(&system->pending_spawns, &system->requests, PENDING_SPAWN_LINK);
         ta_shared_string_release(core, request_record.invokeid);
         ta_pool_free(&system->requests, i);
+        if (i == last) break;
     }
     return TA_POOL_NONE;
 }

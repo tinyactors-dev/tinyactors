@@ -14,9 +14,9 @@
 #define TA_SYSTEM_MAGIC 0x53594154u /* "TAYS" */
 /* The region's layout: 2 since the step counters and trace references
  * (docs/adr/0006 in the repository root), 3 with the charts' counts, 4 since
- * an external invocation's request keeps its type and params; a snapshot of
- * another is refused. */
-#define TA_SYSTEM_VERSION      4u
+ * an external invocation's request keeps its type and params, 5 with the queue
+ * of parked spawns; a snapshot of another is refused. */
+#define TA_SYSTEM_VERSION      5u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -72,7 +72,10 @@ typedef struct ta_request {
     uint64_t payload;  /* invoke params awaiting a resolved chart / a free slot; an external
                           invocation's params, retained while it runs (a restore announces it
                           again with them) */
-    uint32_t type;     /* REQUEST_EXTERNAL_INVOKE: the service's type, string reference (owned) */
+    union {
+        uint32_t type; /* REQUEST_EXTERNAL_INVOKE: the service's type, string reference (owned) */
+        uint32_t next; /* REQUEST_PENDING_SPAWN: the link of the system's pending_spawns */
+    };
     uint32_t ended;    /* REQUEST_EXTERNAL_INVOKE: the service finished (its INVOKE_DONE was accepted,
                           the done.invoke not taken yet) or failed (ERROR_COMMUNICATION from it): not
                           announced after a restore, and its FROM_INVOKE / INVOKE_DONE refused */
@@ -100,6 +103,10 @@ struct ta_system {
     ta_slab slab;
     ta_heap heap;
     ta_index_queue run_queue, workspace_queue, wake_queue;
+    /* the REQUEST_PENDING_SPAWNs, in the order they were parked (request.next):
+     * a run retries these, never walks the requests, which hold every running
+     * external invocation too */
+    ta_index_queue pending_spawns;
     uint32_t runnable_count; /* length of run_queue (stats are O(1)) */
     uint32_t hibernated_count, pending_wake_count;
     uint64_t stats_hibernations, stats_wakes;

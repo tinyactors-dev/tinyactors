@@ -664,6 +664,71 @@ static void test_send_many_prefix(void) {
     tsys_free(&t);
 }
 
+static uint32_t parked_spawns(const ta_system *system) {
+    uint32_t n = 0;
+    for (uint32_t i = system->pending_spawns.head; i != TA_NIL;
+         i = ((const ta_request *)ta_pool_at(&system->requests, i))->next)
+        n++;
+    return n;
+}
+
+/* An invoked child that finds no room is parked, and each run retries the
+ * parked spawns only: the requests of running external invocations are not
+ * in the queue, so a run's retry costs O(parked), not O(invocations). A
+ * parked child that still finds no room stays parked; the run reports the
+ * pool, and the child is spawned once the region has grown. */
+static void test_parked_spawns(void) {
+    static const test_file files[] = {
+        {"kid.scxml", "<scxml xmlns='http://www.w3.org/2005/07/scxml' initial='k'><final id='k'/></scxml>"},
+        {NULL, NULL}};
+    ta_system_config config = test_system_config();
+    config.max_actors = 1; /* the parent only */
+    config.max_requests = 64;
+    test_system t;
+    CHECK(tsys_init(
+        &t,
+        SC("initial='a'><datamodel><data id='got' expr=\"''\"/></datamodel>"
+           "<state id='a'>"
+           "<invoke type='http://example.com/svc' src='svc://1'/>"
+           "<invoke type='http://example.com/svc' src='svc://2'/>"
+           "<invoke type='http://example.com/svc' src='svc://3'/>"
+           "<invoke type='http://example.com/svc' src='svc://4'/>"
+           "<invoke id='one' src='kid.scxml'/><invoke id='two' src='kid.scxml'/>"
+           "<transition event='done.invoke.*'><assign location='got' expr='got + _event.name'/>"
+           "</transition></state>"),
+        files, &config));
+    ta_system_boot(t.system);
+    uint32_t a = tsys_actor(&t, "main.scxml");
+    ta_run result = ta_system_run(t.system, 100000);
+    CHECK_EQUAL(result.status, TA_RUN_EXHAUSTED);
+    CHECK_EQUAL(result.detail, TA_POOL_ACTORS);
+    tsys_drain(&t);
+    CHECK_EQUAL(t.effect_count[TA_EFFECT_INVOKE], 4);
+    CHECK_EQUAL(t.system->requests.used, 5u); /* four running services, one parked child */
+    CHECK_EQUAL(parked_spawns(t.system), 1u);
+    /* no room yet: the child is retried and stays parked */
+    result = ta_system_run(t.system, 100000);
+    CHECK_EQUAL(result.status, TA_RUN_EXHAUSTED);
+    CHECK_EQUAL(result.detail, TA_POOL_ACTORS);
+    CHECK_EQUAL(parked_spawns(t.system), 1u);
+    ta_system_config big = config;
+    big.max_actors = 3;
+    size_t need;
+    CHECK_EQUAL(ta_system_layout(&t.image, &big, &need), TA_OK);
+    void *memory = malloc(need);
+    ta_system *moved = t.system;
+    CHECK_EQUAL(ta_system_relocate(&moved, (ta_memory){memory, need}, &big), TA_OK);
+    free(t.memory);
+    t.memory = memory;
+    t.system = moved;
+    CHECK_EQUAL(parked_spawns(t.system), 1u); /* the queue moves with the region */
+    CHECK_EQUAL(tsys_run(&t, 100000, 10), TA_RUN_IDLE);
+    CHECK_EQUAL(parked_spawns(t.system), 0u);
+    CHECK_EQUAL(t.system->requests.used, 4u); /* the services still run, and are in no queue */
+    CHECK(strcmp(tsys_var(&t, a, "got"), "done.invoke.onedone.invoke.two") == 0);
+    tsys_free(&t);
+}
+
 int main(void) {
     RUN(test_layout_and_init);
     RUN(test_send_run_effects);
@@ -673,6 +738,7 @@ int main(void) {
     RUN(test_external_io);
     RUN(test_no_spawn_by_send);
     RUN(test_external_invoke_and_request);
+    RUN(test_parked_spawns);
     RUN(test_exhaustion_and_relocate);
     RUN(test_timer_exhaustion);
     RUN(test_snapshot_no_residue);

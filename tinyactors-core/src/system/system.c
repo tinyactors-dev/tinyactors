@@ -351,6 +351,7 @@ ta_status ta_system_init(const ta_system_setup *setup, ta_system **out) {
     ta_index_queue_init(&system->run_queue);
     ta_index_queue_init(&system->workspace_queue);
     ta_index_queue_init(&system->wake_queue);
+    ta_index_queue_init(&system->pending_spawns);
     set_rels(system, &arena, &o);
     ta_journal_init(&system->journal, ta_arena_pointer(&arena, o.trace_storage),
                     normalized.trace_bytes);
@@ -783,6 +784,7 @@ void ta_system_deinit(ta_system *system) {
     ta_index_queue_init(&system->run_queue);
     ta_index_queue_init(&system->workspace_queue);
     ta_index_queue_init(&system->wake_queue);
+    ta_index_queue_init(&system->pending_spawns);
     system->runnable_count = 0;
     for (uint32_t i = 0; i < system->actors.high_water_mark; i++) {
         if (!ta_pool_live(&system->actors, i)) continue;
