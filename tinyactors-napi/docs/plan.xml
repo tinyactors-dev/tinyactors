@@ -490,27 +490,27 @@
   <spikes>
     <spike id="s-napi" ran="2026-10-16">
       <question>Do the Node-API calls the plan relies on behave the same in Node.js and Bun?</question>
-      <setup>One C addon (NAPI_VERSION 8) built with clang 18.1.3 (not the pinned clang 22) against /opt/node22/include/node, loaded by node v22.22.0 (not the pinned 22.23.2) and bun 1.4.2 (not the pinned 1.4.1).</setup>
+      <setup>One C addon (NAPI_VERSION 8) built against the pinned node's headers, loaded by node and bun. First run: clang 18.1.3, node v22.22.0, bun 1.4.2. Rerun on the pins (mise): clang 22.1.8, node v22.23.3, bun 1.4.1, with the same results.</setup>
       <result>Both: napi_type_tag_object and its check; napi_adjust_external_memory; an external ArrayBuffer, and napi_detach_arraybuffer leaving its Uint8Array and byteLength at 0 (detached true); napi_get_value_string_utf8 turns 'a\uD800b' into 61 EF BF BD 62 with no error; napi_get_value_int64 gives 9223372036854775807 for 2**70, 1 for 1.5 and 0 for NaN, all with napi_ok; 1000 wrapped objects finalized after a forced collection (gc() under --expose-gc, Bun.gc(true)); a setTimeout called from C returns an object with ref, unref and hasRef. node_api_post_finalizer is exported by both binaries but declared only under NAPI_EXPERIMENTAL in Node 22's js_native_api.h:538-545.</result>
     </spike>
     <spike id="s-js" ran="2026-10-16">
       <question>Does quickjs's compiled shape work in V8 and JavaScriptCore through napi_run_script, and do the scoped-form symbols exist?</question>
-      <setup>The same addon's napi_run_script on <code>(function(__s){with(__s){return [function(){'use strict';return (x + 1)}, function(__v){'use strict'; y = __v}, function(){ var z = 5; function f(){return 7} __s.f = f }]}})</code> with a null-prototype scope.</setup>
+      <setup>The same addon's napi_run_script on <code>(function(__s){with(__s){return [function(){'use strict';return (x + 1)}, function(__v){'use strict'; y = __v}, function(){ var z = 5; function f(){return 7} __s.f = f }]}})</code> with a null-prototype scope. Run on node v22.22.0 and bun 1.4.2, then again on the pins (node v22.23.3, bun 1.4.1) with the same results.</setup>
       <result>Both runtimes: the getter reads the scope (2); assigning an undeclared y throws ReferenceError "y is not defined", and once scope.y exists the assignment writes it; var z = 5 writes the pre-declared scope.z; the copied-out function is on the scope; an unknown name falls through to globalThis (typeof toString is "function", from the global object, not the scope). Symbol.dispose and Symbol.asyncDispose are symbols; a using declaration parses.</result>
     </spike>
     <spike id="s-async" ran="2026-10-16">
       <question>Can an async function be told at registration?</question>
-      <setup>Object.prototype.toString.call(async function(){}) in both runtimes.</setup>
+      <setup>Object.prototype.toString.call(async function(){}) in both runtimes. Run on node v22.22.0 and bun 1.4.2, then again on the pins (node v22.23.3, bun 1.4.1) with the same results.</setup>
       <result>"[object AsyncFunction]" in both; a plain function returning a promise is "[object Function]".</result>
     </spike>
     <spike id="s-shape" ran="2026-10-16">
       <question>What does a session scope object cost, by how it is made?</question>
-      <setup>100,000 objects with four properties each (three variables and _event), heap measured after forced collections: process.memoryUsage().heapUsed under node --expose-gc, bun:jsc heapStats().heapSize under bun.</setup>
+      <setup>100,000 objects with four properties each (three variables and _event), heap measured after forced collections: process.memoryUsage().heapUsed under node --expose-gc, bun:jsc heapStats().heapSize under bun. Run on node v22.22.0 and bun 1.4.2, then again on the pins (node v22.23.3, bun 1.4.1) with the same results.</setup>
       <result>node v22.22.0: Object.create(null) 280 B per object (V8 makes a null-prototype object a dictionary); Object.create(a shared frozen prototype of null prototype) 56 B; a per-chart constructor 56 B; an object literal 56 B. bun 1.4.2: 64 B for the first three, 48 B for the literal.</result>
     </spike>
     <spike id="s-worker" ran="2026-10-16">
       <question>Can a wrapped object of one environment reach another?</question>
-      <setup>A napi_wrap'ped object passed as workerData to a node:worker_threads Worker, under node and bun.</setup>
+      <setup>A napi_wrap'ped object passed as workerData to a node:worker_threads Worker, under node and bun. Run on node v22.22.0 and bun 1.4.2, then again on the pins (node v22.23.3, bun 1.4.1) with the same results.</setup>
       <result>Both: the worker receives a structured clone, a plain object with the own enumerable properties ({"x":1}) and Object's prototype; the wrap and the type tag do not cross.</result>
     </spike>
   </spikes>
