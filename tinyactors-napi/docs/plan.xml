@@ -496,7 +496,12 @@
         <does>services, the Invocation record, receive and stop, restored invocations announced again.</does>
         <done-when>M3's invoke scenario; tools/services.mjs.</done-when>
       </step>
-      <step id="p2-w3c" status="todo" after="p2-services" decision="d-declarations d-dom">
+      <step id="p2-scale" status="todo" after="p2-services">
+        <title>Every operation at two and four million actors</title>
+        <does>A scaling gate against accidentally quadratic work (requested by the maintainer, 2026-10-16): tools/scale.mjs times every operation of the API on a host holding N actors, at N = 2,000,000 and N = 4,000,000, under node and bun, on native and quickjs: spawn, send, sendMany, terminate, actorByName, boot, each typed method (actorState, actorContext, actorList, actorGet, hostStats, hostConfig, the trace methods), the I/O processor and transport round trip, a delayed send and the timer, sweep, hibernate, wake, migrate (a chart and one session), snapshot and restore, an invoked service's round trip, and close. Most of the population is hibernated in the application's store (as tools/stress.mjs keeps it), so memory stays bounded; the operations that concern resident actors run with a resident population of the same two sizes where memory allows, or the largest that fits, logged. For each operation the cost per call (or per actor, for whole-population operations such as migrate, snapshot, actorList and close) at 4M must be within a stated factor (1.5x, noise allowed for) of the cost at 2M; a ratio near 2 for a per-call operation is a quadratic, investigated with a profile and fixed in the addon, or filed as a request to core with the measurement. The fast pass keeps the same property at small sizes (20,000 against 40,000 actors, a few seconds) in test/scale.test.mjs; the two and four million run is behind --full (root AGENTS.md, "Where a new test goes"), as mise run scale.</does>
+        <done-when>Every operation's ratio is within the factor at 2M and 4M on all four runtime and datamodel pairs, the numbers and the machine's signature are in AGENTS.md, and the small version runs in mise run test.</done-when>
+        <files>tools/scale.mjs, mise/tasks/scale, test/scale.test.mjs</files>
+      </step><step id="p2-w3c" status="todo" after="p2-scale" decision="d-declarations d-dom">
         <title>The W3C suite, M2</title>
         <does>w3c.run in the adapter with BasicHTTP as an I/O processor answered in its handler and a SimulatedClock moved to the next deadline.</does>
         <done-when>191 of 191 on quickjs and on the native datamodel, under node and bun.</done-when>

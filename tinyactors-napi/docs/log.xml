@@ -469,4 +469,9 @@
     <why>Implementing quickjsHeapBytes belongs to its own step.</why>
     <evidence>docs/api-map.md (host.quickjsHeapBytes *planned*); tools/measure.mjs</evidence>
   </entry>
+  <entry id="l-coord-scale-step" date="2026-10-16" step="p2-scale" kind="decision" status="resolved">
+    <what>The maintainer asked for a step testing every operation with 2 and 4 million actors, against accidentally quadratic operations; it is p2-scale, after the services step (so every operation exists) and before W3C and packaging.</what>
+    <why>A per-call cost that grows with the population shows only at scale; the Python binding found such a walk in core (quadratic migration, tinyactors-cpython/ROADMAP.md, "Migration").</why>
+    <resolution>The same gate would serve the Python binding; noted for the coordinator of both bindings.</resolution>
+  </entry>
 </log>
