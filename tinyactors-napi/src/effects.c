@@ -588,16 +588,46 @@ static void ta_napi_dispatch_log(napi_env env, ta_napi_host *host, uint32_t inde
     if (napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) != napi_ok) ta_napi_keep_error(env, host);
 }
 
+/* The application's exporter gets the request as a Buffer it keeps (one
+ * copy, boundary.md section 7), in a handle scope of its own; posting it,
+ * retrying and capping what waits are the application's. Without a handler
+ * the request is dropped, so the encoder goes on. In the last take
+ * (host->endings set) what the handler returns is kept for
+ * [Symbol.asyncDispose] to await. */
+void ta_napi_telemetry(napi_env env, ta_napi_host *host, const ta_napi_export *export) {
+    napi_handle_scope scope;
+    if (napi_open_handle_scope(env, &scope) != napi_ok) return;
+    napi_value wrapper = ta_napi_self(env, host), handler = NULL, argv[3], result;
+    if (wrapper != NULL) handler = ta_napi_handler_of(env, wrapper, &(ta_napi_handler_at){"telemetry", UINT32_MAX});
+    if (handler == NULL) ta_napi_keep_error(env, host);
+    else if (ta_napi_is(env, handler, napi_function)) {
+        argv[0] = wrapper;
+        if (napi_create_string_utf8(env, export->signal, NAPI_AUTO_LENGTH, &argv[1]) != napi_ok ||
+            napi_create_buffer_copy(env, export->data.length, export->data.pointer, NULL, &argv[2]) != napi_ok ||
+            napi_call_function(env, ta_napi_undefined(env), handler, 3, argv, &result) != napi_ok)
+            ta_napi_keep_error(env, host);
+        else if (host->endings != NULL &&
+                 (ta_napi_is(env, result, napi_object) || ta_napi_is(env, result, napi_function))) {
+            uint32_t length = 0; /* a promise, or a thenable: awaited by [Symbol.asyncDispose] */
+            if (napi_get_array_length(env, host->endings, &length) != napi_ok ||
+                napi_set_element(env, host->endings, length, result) != napi_ok)
+                ta_napi_keep_error(env, host);
+        }
+    }
+    napi_close_handle_scope(env, scope);
+}
+
 void ta_napi_take(napi_env env, ta_napi_host *host, bool traces) {
     ta_bytes taken; /* the host's view, until the ack */
     ta_status status = traces ? ta_host_traces(host->host, &taken) : ta_host_logs(host->host, &taken);
     uint8_t bit = traces ? 1u : 2u;
     if (status == TA_OK) {
         host->retake &= (uint8_t)~bit;
-        return; /* no telemetry handler yet (p2): dropped, so the encoder goes on */
+        if (taken.length) ta_napi_telemetry(env, host, &(ta_napi_export){traces ? "traces" : "logs", taken});
+        return;
     }
     if (status == TA_ERROR_NO_MEMORY && !(host->retake & bit)) {
-        host->retake |= bit;
+        host->retake |= bit; /* the request stays staged; no other effect comes until a take */
         ta_napi_throw(env, &(ta_napi_refusal){status, traces ? "the take of traces was refused"
                                                              : "the take of logs was refused"});
         ta_napi_keep_error(env, host);

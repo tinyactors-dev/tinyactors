@@ -279,6 +279,10 @@ typedef enum ta_napi_datamodel_kind {
  *               the turn;
  *   encoder     the effective config has `telemetry`;
  *   telemetry   a telemetry handler was given (the last take goes to it);
+ *   endings     during the last take at close, an array of what the
+ *               telemetry handler returned (its promises), for
+ *               [Symbol.asyncDispose] to await; a value of the close's
+ *               native call, NULL outside it;
  *   processors  the effective config's ioProcessors, numbered from 1 as
  *               the effects' IO_PROCESSOR numbers them (0: the SCXML
  *               processor, the transport's). */
@@ -305,6 +309,7 @@ typedef struct ta_napi_host {
     napi_ref clock, immediate, timer, idle_promise, error;
     napi_deferred idle;
     bool encoder, telemetry;
+    napi_value endings;
     uint32_t processors;
 } ta_napi_host;
 
@@ -454,7 +459,18 @@ void ta_napi_loop_stop(napi_env env, ta_napi_host *host);
  * dropped. A handler's error is kept on the host (ta_napi_keep_error). */
 void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index);
 
-/* A take of traces (`traces`) or logs, dropped until the telemetry step;
+/* An OTLP request the host wrote: its signal ("traces", "logs") and the
+ * host's view of its bytes, until the ack. */
+typedef struct ta_napi_export {
+    const char *signal;
+    ta_bytes data;
+} ta_napi_export;
+
+/* Hands a request to the telemetry handler, copied once into a Buffer; a
+ * handler's error is kept on the host. Without a handler, nothing. */
+void ta_napi_telemetry(napi_env env, ta_napi_host *host, const ta_napi_export *export);
+
+/* A take of traces (`traces`) or logs, handed to the telemetry handler;
  * one the allocator refused is reported once and retried at the next turn
  * (host->retake). */
 void ta_napi_take(napi_env env, ta_napi_host *host, bool traces);

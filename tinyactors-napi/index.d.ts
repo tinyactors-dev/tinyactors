@@ -306,7 +306,12 @@ export interface HostOptions {
   /** `<log>` lines; without one they are discarded. */
   log?: (host: Host, entry: LogEntry) => void;
   clock?: SimulatedClock;
-  /** The application's exporter of OTLP requests. */
+  /** The application's exporter of OTLP requests, called in the turn
+   * with each traces or logs request the encoder wrote (protobuf, for a
+   * collector's `/v1/traces` or `/v1/logs`), a Buffer copied once; without
+   * one the requests are dropped. Its error is the turn's; the promises it
+   * returns in the last take at close are awaited by
+   * `[Symbol.asyncDispose]`. */
   telemetry?: (host: Host, signal: 'traces' | 'logs', data: Uint8Array) => Handled;
   /** A hibernated session is wanted: load its blob, call `host.wake`. */
   wake?: (host: Host, session: bigint, migration: number | undefined) => Handled;
@@ -407,6 +412,9 @@ export class Host implements Disposable, AsyncDisposable {
   traceEnd(params: Params, onResult: OnResult, onError?: OnError | null): void;
   traceSpansDecode(params: Params, onResult: OnResult, onError?: OnError | null): void;
 
+  /** The host's counters now as an OTLP metrics request (a Buffer, for a
+   * collector's `/v1/metrics`); TA_ERROR_STATE without telemetry in the
+   * config. From a handler it joins the open batch. */
   metrics(): Uint8Array;
   sweep(maxScan: number, limit: number): bigint[];
   hibernate(session: bigint): Uint8Array;

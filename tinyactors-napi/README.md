@@ -21,6 +21,18 @@ The last published version, 0.2.0, was built from an earlier binding.
   rejects is an unhandled rejection. Either ends a Node.js or Bun process
   unless the application handles `uncaughtException` and
   `unhandledRejection`.
+- **Telemetry is the application's to send.** With `telemetry` in the
+  config and a `telemetry` handler in the options, the handler gets each
+  OTLP traces or logs request as a `Buffer` (protobuf, for a collector's
+  `/v1/traces` or `/v1/logs`); `host.metrics()` gives the metrics request
+  when you ask. The handler runs in the host's turn, so post the bytes
+  from a promise rather than wait for the collector there. Only a turn's
+  first error is reported (to `idle()` or as uncaught); the others of that
+  turn are lost. `close()` hands the last take (the spans still open,
+  ended, and what is staged) to the handler before it frees the host, and
+  `[Symbol.asyncDispose]` also awaits the promises the handler returned
+  there. A `Host` the collector frees without `close()` skips the last
+  take: close the hosts whose telemetry you want.
 - **`using host = new Host(...)` needs a runtime that parses `using`:**
   Bun 1.4 does, Node.js 22 does not. `Symbol.dispose` and
   `Symbol.asyncDispose` call `close()`, which works everywhere.

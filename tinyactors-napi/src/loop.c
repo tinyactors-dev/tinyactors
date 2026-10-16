@@ -376,12 +376,27 @@ static napi_value ta_napi_loop_turn(napi_env env, napi_callback_info info) {
         settle = true;
     }
     if (error == NULL) error = ta_napi_take_kept(env, host); /* scheduling or arming failed */
+    /* a close a handler asked for runs at the leave: the waiters are kept
+     * from it (it would reject them as closed before idle) and settle
+     * after it, so its last take's error reaches them */
+    bool closing = host->closing && host->depth == 1;
+    napi_deferred waiter = closing ? host->idle : NULL;
+    napi_ref waiter_promise = closing ? host->idle_promise : NULL;
+    if (closing) {
+        host->idle = NULL;
+        host->idle_promise = NULL;
+    }
+    ta_napi_leave(&call);
+    if (closing) {
+        if (error == NULL) error = ta_napi_take_kept(env, host); /* the last take's error */
+        host->idle = waiter;
+        host->idle_promise = waiter_promise;
+        settle = true;
+    }
     if (error != NULL && host->idle != NULL) {
         ta_napi_settle(env, host, error); /* the waiters get it */
         error = NULL;
     } else if (settle) ta_napi_settle(env, host, NULL);
-    ta_napi_leave(&call); /* a close a handler asked for runs here */
-    if (error == NULL && host->host == NULL) error = ta_napi_take_kept(env, host); /* its last take's error */
     if (error != NULL) {
         napi_throw(env, error);
         return NULL;
@@ -426,9 +441,12 @@ napi_value ta_napi_host_next_deadline(napi_env env, napi_callback_info info) {
 
 /* trace.end, then the last take of traces and logs, before ta_host_free
  * (bindings.md, section 4): the spans still open are ended and go to the
- * telemetry handler with the rest. A call on the stack, as a drain is: a
- * handler's close is this one. Bounded: a handler may make inputs here. */
-static void ta_napi_end_traces(ta_napi_host *host) {
+ * telemetry handler with the rest (a handler's error is kept). A call on
+ * the stack, as a drain is: a handler's close() is this one, its
+ * metrics() joins the open batch. Bounded: a handler that makes inputs
+ * here (a spawn) makes more records at every take. What the handler
+ * returns is gathered in host->endings, for [Symbol.asyncDispose]. */
+static void ta_napi_end_traces(napi_env env, ta_napi_host *host) {
     unsigned char room[64];
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){room, sizeof room, 0}, &host->arena_allocator);
@@ -436,17 +454,17 @@ static void ta_napi_end_traces(ta_napi_host *host) {
     ta_cbor_write_text(&writer, ta_string("method"));
     ta_cbor_write_text(&writer, ta_string("trace.end"));
     ta_bytes message;
+    if (napi_create_array(env, &host->endings) != napi_ok) host->endings = NULL;
     host->depth++;
     if (ta_cbor_writer_bytes(&writer, &message) == TA_OK && ta_host_post(host->host, message) == TA_OK) {
         const ta_host_effect *effects;
         for (uint32_t batches = 0; batches < TA_NAPI_END_TAKES && ta_host_effects(host->host, &effects) > 0; batches++) {
             host->batch = true;
             ta_bytes taken;
-            /* the takes go to the telemetry handler with the telemetry step (p2); dropped until then */
             for (uint32_t takes = 0; takes < TA_NAPI_END_TAKES && ta_host_traces(host->host, &taken) == TA_OK && taken.length; takes++)
-                ;
+                ta_napi_telemetry(env, host, &(ta_napi_export){"traces", taken});
             for (uint32_t takes = 0; takes < TA_NAPI_END_TAKES && ta_host_logs(host->host, &taken) == TA_OK && taken.length; takes++)
-                ;
+                ta_napi_telemetry(env, host, &(ta_napi_export){"logs", taken});
             ta_host_effects_ack(host->host);
             host->batch = false;
             host->acks++;
@@ -457,14 +475,22 @@ static void ta_napi_end_traces(ta_napi_host *host) {
     ta_cbor_writer_free(&writer);
 }
 
-void ta_napi_loop_stop(napi_env env, ta_napi_host *host) {
+/* The timers cleared and a waiting idle() rejected. */
+static void ta_napi_loop_quiet(napi_env env, ta_napi_host *host) {
     ta_napi_clear(env, &(ta_napi_handle){&host->timer, "clearTimeout"});
     ta_napi_clear(env, &(ta_napi_handle){&host->immediate, "clearImmediate"});
     if (host->idle != NULL) {
         napi_value error = ta_napi_error_of(env, &(ta_napi_refusal){TA_ERROR_STATE, "the Host was closed before it was idle"});
         ta_napi_settle(env, host, error);
     }
-    if (host->host != NULL && host->encoder && host->telemetry) ta_napi_end_traces(host);
+}
+
+void ta_napi_loop_stop(napi_env env, ta_napi_host *host) {
+    host->endings = NULL;
+    ta_napi_loop_quiet(env, host);
+    if (host->host == NULL || !host->encoder || !host->telemetry) return;
+    ta_napi_end_traces(env, host);
+    ta_napi_loop_quiet(env, host); /* what a handler there scheduled or awaited: the host is going */
 }
 
 /* ---- SimulatedClock -------------------------------------------------------------------- */

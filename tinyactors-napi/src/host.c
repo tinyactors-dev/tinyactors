@@ -150,8 +150,10 @@ void ta_napi_leave(ta_napi_call *call) {
     ta_growable_arena_release(&host->arena, call->mark);
     host->depth--;
     if (host->depth > 0 || host->turning) return;
-    if (host->closing) ta_napi_host_close_now(host->env, host);
-    else ta_napi_native_flush(&host->native); /* outside core, not nested: the last drops go */
+    if (host->closing) {
+        ta_napi_host_close_now(host->env, host);
+        host->endings = NULL; /* nobody awaits a close a handler asked for */
+    } else ta_napi_native_flush(&host->native); /* outside core, not nested: the last drops go */
 }
 
 /* ---- options ------------------------------------------------------------------- */
@@ -605,13 +607,15 @@ static napi_value ta_napi_this(napi_env env, napi_callback_info info) {
     return self;
 }
 
-/* close(): clears the timers, rejects a waiting idle(), gives the last
- * take to the telemetry handler and frees the host; again, nothing. From a
- * handler (a call or a turn on the stack) it is done when the outermost
- * one returns. */
-static napi_value ta_napi_host_close(napi_env env, napi_callback_info info) {
-    ta_napi_host *host = ta_napi_host_of(env, &(ta_napi_host_check){ta_napi_this(env, info), false});
+/* close()'s work for `self`: NULL with the last take's error thrown. From
+ * a handler (a call or a turn on the stack) it is done when the outermost
+ * one returns. host->endings holds, after it, what the last take's
+ * handlers returned (NULL for none). */
+static napi_value ta_napi_host_close_self(napi_env env, napi_value self, ta_napi_host **closed) {
+    ta_napi_host *host = ta_napi_host_of(env, &(ta_napi_host_check){self, false});
     if (host == NULL) return NULL;
+    *closed = host;
+    host->endings = NULL;
     napi_value undefined;
     if (napi_get_undefined(env, &undefined) != napi_ok) return NULL;
     if (host->host == NULL) return undefined;
@@ -621,11 +625,50 @@ static napi_value ta_napi_host_close(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
-/* [Symbol.asyncDispose](): close(), then a promise; it will also wait for
- * the promises the last take's handlers return (the telemetry step). */
+/* close(): clears the timers, rejects a waiting idle(), gives the last
+ * take to the telemetry handler and frees the host; again, nothing. A
+ * promise a handler returned there is not awaited (an unhandled rejection
+ * if it rejects); [Symbol.asyncDispose] awaits them. */
+static napi_value ta_napi_host_close(napi_env env, napi_callback_info info) {
+    ta_napi_host *host = NULL;
+    napi_value result = ta_napi_host_close_self(env, ta_napi_this(env, info), &host);
+    if (host != NULL) host->endings = NULL;
+    return result;
+}
+
+/* A promise's .then(fulfilled) value: undefined, whatever Promise.all gave. */
+static napi_value ta_napi_host_disposed(napi_env env, napi_callback_info info) {
+    (void)info;
+    napi_value undefined = NULL;
+    napi_get_undefined(env, &undefined);
+    return undefined;
+}
+
+/* [Symbol.asyncDispose](): close(), then a promise of undefined that
+ * settles when the promises the last take's handlers returned have
+ * (Promise.all): rejected with the first rejection, or with the last
+ * take's error. */
 static napi_value ta_napi_host_async_dispose(napi_env env, napi_callback_info info) {
+    ta_napi_host *host = NULL;
     napi_deferred deferred;
-    napi_value promise, result = ta_napi_host_close(env, info);
+    napi_value promise, endings = NULL, result = ta_napi_host_close_self(env, ta_napi_this(env, info), &host);
+    if (host != NULL) {
+        endings = host->endings;
+        host->endings = NULL;
+    }
+    uint32_t count = 0;
+    if (result != NULL && endings != NULL && napi_get_array_length(env, endings, &count) == napi_ok && count > 0) {
+        napi_value global, promise_class, all, then, fulfilled, waited, argv[1];
+        if (napi_get_global(env, &global) != napi_ok || napi_get_named_property(env, global, "Promise", &promise_class) != napi_ok ||
+            napi_get_named_property(env, promise_class, "all", &all) != napi_ok ||
+            napi_call_function(env, promise_class, all, 1, &endings, &waited) != napi_ok ||
+            napi_get_named_property(env, waited, "then", &then) != napi_ok ||
+            napi_create_function(env, "disposed", NAPI_AUTO_LENGTH, ta_napi_host_disposed, NULL, &fulfilled) != napi_ok)
+            return NULL;
+        argv[0] = fulfilled;
+        if (napi_call_function(env, waited, then, 1, argv, &promise) != napi_ok) return NULL;
+        return promise;
+    }
     if (napi_create_promise(env, &deferred, &promise) != napi_ok) return NULL;
     if (result != NULL) {
         napi_resolve_deferred(env, deferred, result);
@@ -841,6 +884,36 @@ static napi_value ta_napi_host_actor_by_name(napi_env env, napi_callback_info in
         if (session == 0) napi_get_undefined(env, &result);
         else napi_create_bigint_uint64(env, session, &result);
     }
+    ta_napi_leave(&call);
+    return result;
+}
+
+/* An output was taken (metrics, a hibernation blob), copied once into a
+ * Buffer: with no batch open it opened a batch of this output alone,
+ * acknowledged here; with one open (a handler's call) it joined that
+ * batch, which the drain acks (host->batch, from a take to its ack, never
+ * guessed from the depth). NULL with an exception pending. */
+static napi_value ta_napi_host_output(napi_env env, ta_napi_host *host, ta_bytes taken) {
+    napi_value result = NULL;
+    if (napi_create_buffer_copy(env, taken.length, taken.pointer, NULL, &result) != napi_ok) result = NULL;
+    if (!host->batch) {
+        ta_host_effects_ack(host->host);
+        host->acks++;
+    }
+    return result;
+}
+
+/* host.metrics() -> Buffer: the host's counters as an OTLP metrics
+ * request (ta_host_metrics), pulled when the application wants them;
+ * TA_ERROR_STATE without telemetry in the config. */
+static napi_value ta_napi_host_metrics(napi_env env, napi_callback_info info) {
+    ta_napi_call call;
+    if (!ta_napi_enter(env, ta_napi_this(env, info), &call)) return NULL;
+    ta_bytes taken;
+    ta_status status = ta_host_metrics(call.host->host, &taken);
+    napi_value result = status == TA_OK ? ta_napi_host_output(env, call.host, taken)
+                                        : ta_napi_throw(env, &(ta_napi_refusal){status, "metrics were refused (TA_ERROR_STATE: "
+                                                                                        "the config has no telemetry)"});
     ta_napi_leave(&call);
     return result;
 }
@@ -1141,6 +1214,7 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"sendMany", NULL, ta_napi_host_send_many, NULL, NULL, NULL, napi_default_method, NULL},
         {"terminate", NULL, ta_napi_host_terminate, NULL, NULL, NULL, napi_default_method, NULL},
         {"actorByName", NULL, ta_napi_host_actor_by_name, NULL, NULL, NULL, napi_default_method, NULL},
+        {"metrics", NULL, ta_napi_host_metrics, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, dispose, ta_napi_host_close, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, async_dispose, ta_napi_host_async_dispose, NULL, NULL, NULL, napi_default_method, NULL},
     };
