@@ -430,7 +430,7 @@
         <done-when>Each refusal and each input has a test; a Buffer read before close outlives it; a first read after close throws TA_ERROR_STALE.</done-when>
         <files>src/compile.c, src/host.c, test/compile.test.mjs, test/host.test.mjs</files>
       </step>
-      <step id="p1-effects" status="todo" after="p1-compile" decision="d-async">
+      <step id="p1-effects" status="done" after="p1-compile" decision="d-async" commit="a7a6c63">
         <title>Effects as thin views</title>
         <does>src/effects.c: dispatch by effect; the send view with lazy cached getters, answer and fail (keeping the send's trace), its materialization when a handler returns a thenable, a failed send for a handler that throws or rejects before answering; the transport handler (a failed send without one); the log view; DONE, ERROR, SEGMENT_FREED and unknown NOTIFICATIONs dropped; the ack count and the stale check.</does>
         <done-when>Tests: a view read after its ack throws TA_ERROR_STALE; a promise-returning handler answers after the ack; a throwing one gives error.communication and its error is thrown after the turn.</done-when>

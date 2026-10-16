@@ -212,7 +212,7 @@
     <what>Two run statuses stay untested: TA_RUN_EXHAUSTED (core grows a full pool itself between runs; it answers EXHAUSTED only when the host's allocator refuses) and TA_RUN_FAULT (a run with a batch open, which the drain before every run rules out). A handler's error thrown from the turn's callback and close() from a handler deferred to the turn's end need a handler that runs JavaScript in a turn (the log handler, an I/O processor), which p1-effects builds.</what>
     <why>No input of the public API reaches them, and the rulebook adds no test hook of our own (no allocator that fails on demand).</why>
     <evidence>tinyactors-core/docs/host-config.md (every capacity doubles when it fills); tinyactors-core/include/tinyactors/host.h:243-256; tinyactors-napi/test/loop.test.mjs (header)</evidence>
-    <resolution>p1-effects adds the handler cases to test/loop.test.mjs</resolution>
+    <resolution>p1-effects added to test/loop.test.mjs: a handler's error with no idle() waiting thrown from the turn's callback (a child process, its uncaughtException), the host going on, and close() from a handler deferred to the end of the turn. TA_RUN_EXHAUSTED and TA_RUN_FAULT stay untested (status open).</resolution>
   </entry>
   <entry id="l-p1-compile-input-options" date="2026-10-16" step="p1-compile" kind="decision" status="for-maintainer">
     <what>spawn's and send's options objects refuse a key they do not know (TypeError, as new Host does: l-p1-host-unknown-options); send(message) ignores unknown keys, as the rulebook says. undefined and null are 'none' for name, sendid, origin and traceparent; data undefined is no payload, null is a payload of null. send(target, ...) takes the message shape only when called with one object argument.</what>
@@ -224,11 +224,11 @@
     <why>The rulebook: ids are always BigInt, napi_get_value_int64 saturates silently; napi_get_value_bigint_uint64's lossless flag refuses a negative or a 65-bit one.</why>
     <evidence>tinyactors-napi/src/host.c ta_napi_session_of; test/host.test.mjs</evidence>
   </entry>
-  <entry id="l-p1-compile-address-strings" date="2026-10-16" step="p1-compile" kind="deviation" status="open">
+  <entry id="l-p1-compile-address-strings" date="2026-10-16" step="p1-compile" kind="deviation" status="resolved">
     <what>Address does not exist yet: send's and fail's target and send's origin take a string address (or a bigint session); an Address object is a TypeError until it is built.</what>
     <why>The brief: accept strings now; Address belongs with the transport's views (send.origin, send.target).</why>
     <evidence>tinyactors-napi/src/host.c ta_napi_target_of; docs/api-map.md rows host.send, host.fail (Address marked planned)</evidence>
-    <resolution>the step that builds Address unwraps it to its text in ta_napi_target_of and for origin</resolution>
+    <resolution>p1-effects built Address (src/address.c); ta_napi_target_of and the origin of send and answer read its text (ta_napi_address_text).</resolution>
   </entry>
   <entry id="l-p1-compile-host-fail" date="2026-10-16" step="p1-compile" kind="deviation" status="resolved">
     <what>host.fail(target, sendid?) is built in this step, though the step's list does not name it: it is ta_host_send with TA_EVENT_IN_ERROR_COMMUNICATION through the same event conversion as send.</what>
@@ -245,11 +245,11 @@
     <why>Python's CompileError takes the first error's repr as its message; a compiler's 'file:line:column: message' is what a JavaScript programmer reads in a stack trace.</why>
     <evidence>tinyactors-napi/src/compile.c ta_napi_located, ta_napi_resolve_refused; tinyactors-cpython/src/compile.c ta_python_refusal</evidence>
   </entry>
-  <entry id="l-p1-compile-request-in-loop" date="2026-10-16" step="p1-compile" kind="note" status="open">
+  <entry id="l-p1-compile-request-in-loop" date="2026-10-16" step="p1-compile" kind="note" status="resolved">
     <what>TA_EFFECT_REQUEST is answered (ta_host_resume with TA_ERROR_INVALID, then a turn scheduled) in loop.c's ta_napi_dispatch, where the drain's dispatch lives until src/effects.c exists.</what>
     <why>p1-effects writes effects.c; the brief puts the answer in the drain's dispatch now.</why>
     <evidence>tinyactors-napi/src/loop.c ta_napi_dispatch; test/host.test.mjs 'a run-time fetch'</evidence>
-    <resolution>p1-effects moves the case into effects.c's dispatch</resolution>
+    <resolution>p1-effects moved the REQUEST case into src/effects.c ta_napi_dispatch.</resolution>
   </entry>
   <entry id="l-p1-compile-payloads" date="2026-10-16" step="p1-compile" kind="decision" status="resolved">
     <what>Data and params become a payload of the target's datamodel: the chart's datamodel name from its image (ta_image_chart_datamodel; a session's chart through ta_host_locate, ta_host_system, ta_actor_info_get), 'ecmascript' the host's one ECMAScript datamodel (quickjs: encode's CBOR in the host's arena, ta_datamodel_ecmascript_payload_from_cbor); any other datamodel takes no data (TypeError); data for a session that is not live is TA_ERROR_STALE, as Python. The payload is made after every other field, released through the datamodel's vtable when core refuses the input. spawn and boot advance the clocks first; send, fail and terminate do not (as Python).</what>
@@ -265,5 +265,55 @@
     <what>values.c exports ta_napi_text_of(env, value, {arena, what, view}): a string's UTF-8 in a given arena with a lone surrogate refused, the conversion the inputs and the resolver use (into the host's arena, the module's, or the compilation's scratch); the static helper it wraps is renamed ta_napi_utf8.</what>
     <why>One conversion of text for every call; the resolver's text must live in request-&gt;scratch.</why>
     <evidence>tinyactors-napi/src/values.c, src/addon.h</evidence>
+  </entry>
+  <entry id="l-p1-effects-view-state" date="2026-10-16" step="p1-effects" kind="decision" status="resolved">
+    <what>A thin view (Send, LogEntry) is an instance of an unexported class whose state is one array under the instance's Symbol('tinyactors.view'): the Host's wrapper, the ack count (a double), the effect's index, the I/O processor, flags (record, answered, failed), then one slot per field, a hole until read (napi_has_element tells a cached undefined from an unread field). Only the drain makes one: the constructor refuses unless its first argument is the instance's keys object, which no export reaches. Views carry no type tag: a forged state reaches only a host ta_napi_host_of checks, and an index past the batch reads 0 or empty (host.h:316-321).</what>
+    <why>No allocation of the addon's own per effect (AGENTS.md, 'Where the allocator is called'): the state is the engine's memory, as a Python view's fields are Python's.</why>
+    <evidence>tinyactors-napi/src/effects.c (ta_napi_view_new, ta_napi_view_construct, ta_napi_view_read)</evidence>
+  </entry>
+  <entry id="l-p1-effects-processor-without-handler" date="2026-10-16" step="p1-effects" kind="decision" status="for-maintainer">
+    <what>A send to an I/O processor of the config that has no handler in options.ioProcessors is failed (error.communication for the sender), as the transport's is; the rulebook names the transport only.</what>
+    <why>Python fails it ('no handler: a failed completion'); the brief says to reuse Python's decisions unless the rulebook says otherwise, and ADR 0009 has a runtime that cannot do what an effect asks answer with a failure.</why>
+    <evidence>tinyactors-cpython/src/effects.c ta_python_dispatch_send; tinyactors-napi/src/effects.c ta_napi_dispatch_send; test/effects.test.mjs 'an I/O processor without a handler fails each send to it'</evidence>
+  </entry>
+  <entry id="l-p1-effects-empty-fields" date="2026-10-16" step="p1-effects" kind="decision" status="resolved">
+    <what>send.sendid, send.target (a processor's), send.origin and send.traceparent are undefined when core's text is empty, as Python gives None; index.d.ts types target and sendid with undefined.</what>
+    <why>Empty is core's 'none' for those fields (ta_event_in); a string '' would be passed back to core as a sendid of nothing anyway.</why>
+    <evidence>tinyactors-cpython/src/effects.c ta_python_send_read (empty_none); tinyactors-napi/index.d.ts Send</evidence>
+  </entry>
+  <entry id="l-p1-effects-answer-once" date="2026-10-16" step="p1-effects" kind="decision" status="resolved">
+    <what>answer() and fail() work once: a second, or one after the other, throws TinyactorsError TA_ERROR_STATE; answer's options other than traceparent, origin and raw throw TypeError; traceparent undefined (or absent) keeps the send's trace, null starts a new one; origin takes a string or an Address.</what>
+    <why>Python raises its TinyactorsError for the second answer; refusing unknown option keys follows l-p1-compile-input-options.</why>
+    <evidence>tinyactors-napi/src/effects.c ta_napi_send_reply, ta_napi_send_answer; test/effects.test.mjs 'answer and fail: once'</evidence>
+  </entry>
+  <entry id="l-p1-effects-rejection" date="2026-10-16" step="p1-effects" kind="decision" status="resolved">
+    <what>A thenable a handler returns is followed with then(undefined, rejected.bind(undefined, view)), one C function per environment (instance-&gt;rejected) bound to the view: it fails the send unless answered or failed, then throws the reason on, so the promise then() made rejects with the same reason, unhandled, and the runtime reports it (node and bun both give process 'unhandledRejection' the handler's error). The flags are re-read from the view's state before each check and write, since a handler's answer() sets them through a view of its own.</what>
+    <why>Decisions d-async and d-errors; Node-API gives no closure over a napi_value, and bind needs no script.</why>
+    <evidence>tinyactors-napi/src/effects.c ta_napi_send_follow, ta_napi_send_rejected, ta_napi_view_flags; test/effects.test.mjs 'a promise that rejects before an answer ...', '... after an answer fails nothing'</evidence>
+  </entry>
+  <entry id="l-p1-effects-origintype" date="2026-10-16" step="p1-effects" kind="note" status="resolved">
+    <what>An answer's event shows _event.origintype (the processor's type) only when the answer gives an origin: core sets origintype in the event view only beside an origin.</what>
+    <why>The tests first expected the type on every answer.</why>
+    <evidence>tinyactors-core/src/core/event_pool.c:189-191; test/effects.test.mjs first case</evidence>
+  </entry>
+  <entry id="l-p1-effects-service-sends" date="2026-10-16" step="p1-effects" kind="note" status="open">
+    <what>A SEND with IO_PROCESSOR TA_NIL (to an invoked service) and INVOKE and UNINVOKE are still dropped, as are WAKE, MIGRATED and MIGRATION_DONE: their handlers belong to later steps (services, hibernation, migration).</what>
+    <why>The step builds sends to I/O processors and the transport only.</why>
+    <evidence>tinyactors-napi/src/effects.c ta_napi_dispatch_send, ta_napi_dispatch (default)</evidence>
+  </entry>
+  <entry id="l-p1-effects-address-file" date="2026-10-16" step="p1-effects" kind="deviation" status="resolved">
+    <what>Address is in a file of its own, src/address.c, not in the rulebook's layout; Python's is src/value_types.c (with UNDEFINED, which Node does not need).</what>
+    <why>It is neither the value table (values.c) nor an effect; the name says what it holds.</why>
+    <evidence>tinyactors-napi/src/address.c; tinyactors-cpython/src/value_types.c</evidence>
+  </entry>
+  <entry id="l-p1-effects-address-details" date="2026-10-16" step="p1-effects" kind="decision" status="resolved">
+    <what>An Address is frozen, type-tagged, with an own read-only enumerable `text`; system, session and name are getters on its prototype that parse the text on each access in the module's arena under a mark; a decoded name that is not UTF-8 throws TinyactorsError TA_ERROR_INVALID, found by reading the engine's string back as UTF-8 and comparing (no validator of ours); fromSession takes a bigint (session 0 is core's TA_ERROR_INVALID), fromName a string; a getter or toString on another object throws TypeError. send and fail take an Address as target (its text resolved by core) and as origin.</what>
+    <why>Decision d-address; Python decodes the name strictly; no UTF-8 validator is public in core.</why>
+    <evidence>tinyactors-napi/src/address.c; test/address.test.mjs</evidence>
+  </entry>
+  <entry id="l-p1-effects-log-result" date="2026-10-16" step="p1-effects" kind="note" status="resolved">
+    <what>The log handler's return value is ignored: a promise it returns that rejects stays unhandled; only its throw is kept for the turn.</what>
+    <why>A log line has nothing to answer or fail, so nothing outlives the ack.</why>
+    <evidence>tinyactors-napi/src/effects.c ta_napi_dispatch_log</evidence>
   </entry>
 </log>
