@@ -19,4 +19,6 @@ export const {
   Host,
   SimulatedClock,
   Address,
+  encodeHTTPPost,
+  parseHTTPRequest,
 } = addon;

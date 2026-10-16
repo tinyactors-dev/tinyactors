@@ -384,6 +384,11 @@ napi_value ta_napi_address_text(napi_env env, napi_value value);
 /* Defines the class Address on `exports`. */
 napi_status ta_napi_address_define(napi_env env, napi_value exports);
 
+/* ---- http.c: BasicHTTP's codec (tinyactors/basic_http.h) ---------------- */
+
+/* encodeHTTPPost and parseHTTPRequest on `exports`. */
+napi_status ta_napi_http_define(napi_env env, napi_value exports);
+
 /* ---- compile.c: the compiler ------------------------------------------- */
 
 /* compileCharts, compileSystem, CompileError and ResolveError on
