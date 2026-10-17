@@ -508,10 +508,15 @@
       </step>
       <step id="p2-pack" status="doing" after="p2-w3c">
         <title>Packaging and the first release</title>
-        <does>mise run pack: one addon per platform package as ADR 0001 decisions 10, 11 and 15 say, built with the root's zig, checked by its symbols (exports the module's entry points only, loads no library, leaves undefined only napi_* and the libc list); smoke tests under node and bun; the changelog through the release-changelog skill.</does>
+        <does>mise run pack: one addon per platform package as ADR 0001 decisions 10, 11 and 15 say, built with the root's zig, checked by its symbols (exports the module's entry points only, loads no library, leaves undefined only napi_* and the libc list); smoke tests under node and bun; the changelog through the release-changelog skill. Releases happen in, and are mirrored to, tinyactors-dev/tinyactors-napi (the maintainer, 2026-10-17; docs/adr/0016-a-release-repository-per-component.md): mise run release uses the root's Release.push_and_release! as tinyactors-cpython's release does (the monorepo's tag tinyactors-napi/v&amp;lt;version&amp;gt;, then a snapshot of tinyactors-napi/ pushed to tinyactors-dev/tinyactors-napi tagged v&amp;lt;version&amp;gt;, the GitHub release and its assets there); mise run release:mirror finishes one that stopped. The package's repository field points at tinyactors-dev/tinyactors-napi.</does>
         <done-when>The packages install and pass the smoke test on this machine; the release waits for the maintainer.</done-when>
       </step>
-      <gate>mise run test with the gate at M4 and W3C; the coordinator's audit of both bindings side by side.</gate>
+      <step id="p2-docs" status="todo" after="p2-pack">
+        <title>User documentation for someone meeting the library for the first time</title>
+        <does>The maintainer's request (2026-10-17): excellent user-facing documentation, written for a JavaScript developer who has never seen tinyactors, SCXML or actors. README.md as the front door: what it is and when to use it, install, a first program that runs as pasted (a chart, a host, spawn, send, an I/O processor answering), then the concepts in the order a newcomer needs them (charts and the datamodel; the host and its event loop; actors, sessions and addresses; effects and handlers; values; time and the SimulatedClock; errors and how they surface), and links into guides under docs/guide/ for each feature (I/O processors and the transport, invoked services, typed methods and inspection, telemetry, hibernation with a store, migration, snapshots, talking to other systems, the quickjs sandbox and when to choose it, capacity and memory, testing your charts), each with a complete runnable example tested by mise run test (the examples are extracted and run, so a document that drifts from the API fails). Reference stays in index.d.ts's doc comments, which every exported item gets. Written with the technical-writing skill (anthropic-skills:technical-writing): sequencing and teaching, Harper's checks; no ADR numbers or decision history in evergreen docs (root AGENTS.md, "Current-state documentation"). Reviewed by a fresh agent reading it as a newcomer, who writes down every place it got lost; those places are fixed.</does>
+        <done-when>The README and every guide's examples run under node and bun in mise run test; the newcomer review's findings are fixed; the documentation states nothing the API does not do.</done-when>
+        <files>tinyactors-napi/README.md, tinyactors-napi/docs/guide/, tinyactors-napi/index.d.ts, test/docs.test.mjs</files>
+      </step><gate>mise run test with the gate at M4 and W3C; the coordinator's audit of both bindings side by side.</gate>
     </phase>
     <phase id="p3" title="The convenience layer">
       <goal>JavaScript over the direct layer only, after the direct layer has passed M1 (bindings.md section 1): shapes a JavaScript programmer would otherwise write, no behaviour and no C.</goal>
@@ -549,6 +554,46 @@
         <files>tinyactors-napi/docs/surprises.md</files>
       </step>
       <gate>mise run test with the remote example and the ten examples' tests; the surprise catalogue complete.</gate>
+    </phase>
+    <phase id="p5" title="The browser: one JavaScript API, a WASM core, no emnapi">
+      <goal>The maintainer's decision (2026-10-17): a package that works in the browser, built from core compiled to WebAssembly with a JavaScript layer over it, not the Node-API addon over emnapi (too much baggage). A developer writing JavaScript sees the same API in Node.js, Bun and the browser: the same classes, methods, handlers, values, errors and types (one index.d.ts). The browser needs no quickjs at first; quickjs ships in a later step. This settles the root ROADMAP's "Decided later: the browser" in favour of the JavaScript twin it described, so the twin is held to one API and one suite with the addon.</goal>
+      <step id="p5-design" status="todo" after="p4-surprises">
+        <title>The design, checked before code</title>
+        <does>A proposal in tinyactors-napi/docs/browser.md, written with the reasoned-analysis and boundary-design skills and refuted by a fresh agent before code: whom it serves and who pays (download size, call cost across the wasm boundary, work in two implementations); what is C in the wasm module (core, the host, the loop's drain and turn? the values codec?) and what is JavaScript (the classes, the event loop with setTimeout/queueMicrotask/MessageChannel, the native datamodel's vtable entries as imports), and why each, from what core's wasm builds already offer (tinyactors-core: tinyactors_wasm.c, include/tinyactors/wasm.h, mise run check:wasm, wasm:test; staticjs-js's loader and its Chromium test as the pattern); memory growth detaching views (bindings.md section 11); the native datamodel without node:vm (an iframe or a Worker per realm? new Function in the page's realm? a Content Security Policy that forbids it) and the cost per actor that choice implies; values crossing as CBOR or through a handle table; how the one API is kept one: a shared index.d.ts and test files run against both packages; packaging (one package with conditional exports, or a sibling package) and releases (a release repository per component, ADR 0016). Each decision logged; the maintainer's open choices marked for-maintainer with a recommendation.</does>
+        <done-when>docs/browser.md exists with its refutation's verdicts; the plan's next steps are refined from it.</done-when>
+        <files>tinyactors-napi/docs/browser.md</files>
+      </step>
+      <step id="p5-build" status="todo" after="p5-design">
+        <title>The WASM module and its loader</title>
+        <does>Core and whatever the design puts in C, compiled to wasm with the root toolchain (Toolchain::Target for wasm; zig or the pinned clang), exporting only what the JavaScript layer calls; a loader for browsers and for Node (so the same tests run in both), memory growth handled as the design says; size reported.</does>
+        <done-when>The module loads in Chromium (the pre-installed Playwright browser) and in node; a host is made and freed.</done-when>
+      </step>
+      <step id="p5-api" status="todo" after="p5-build">
+        <title>The same API over the module</title>
+        <does>Every direct-layer item of docs/api-map.md implemented over the wasm module in JavaScript, with the same names, shapes, errors and lifetimes (thin views, stale after the ack; the event loop driving transparently), quickjs absent (datamodel: "quickjs" refused with TA_ERROR_UNSUPPORTED until p5-quickjs); the binding's test files made to run against both packages from one source, in node against the wasm package and in Chromium.</does>
+        <done-when>The shared tests pass against the wasm package in node and in Chromium, except those that need quickjs, node:vm-specific behaviour or a filesystem, each excluded with its reason.</done-when>
+      </step>
+      <step id="p5-datamodel" status="todo" after="p5-api">
+        <title>The native datamodel in the browser</title>
+        <does>The native "ecmascript" datamodel as the design chose for the browser's realms, with the same semantics as the addon's (scopes per chart, lazy expressions, declaring charts, B.2 content with an XML DOM — the browser's DOMParser or txml compiled in, as the design says), hibernation, migration and snapshots of its state.</does>
+        <done-when>The suite (protocol, scenarios, W3C) passes against the wasm package on the native datamodel, in node and in Chromium (an adapter speaking the driver protocol, as conform.mjs does).</done-when>
+      </step>
+      <step id="p5-parity" status="todo" after="p5-datamodel">
+        <title>One API, checked</title>
+        <does>A check in mise run test that the two packages export the same names with the same shapes (one index.d.ts type-checked against both, a runtime comparison of every export's properties), the user documentation (p2-docs) and the examples (p4-examples) run in the browser where they need no Node built-in, and docs say what differs (the store an application uses, liveness, no quickjs yet).</does>
+        <done-when>The parity check passes; every documented example that does not need Node runs in Chromium.</done-when>
+      </step>
+      <step id="p5-pack" status="todo" after="p5-parity">
+        <title>Packaging the browser build</title>
+        <does>The browser package (or conditional exports) packed reproducibly, its size reported, smoke-tested from a fresh project with a bundler-free ES module import in Chromium and in node; released with the Node package, mirrored to tinyactors-dev/tinyactors-napi (or its own release repository if the design gives it one), never published without the maintainer.</does>
+        <done-when>The package installs and runs its smoke test in Chromium and node.</done-when>
+      </step>
+      <step id="p5-quickjs" status="todo" after="p5-pack">
+        <title>quickjs in the browser, later</title>
+        <does>quickjs-ng's ECMAScript datamodel compiled into the wasm module (or a second module loaded on demand, so pages that do not need it do not download it: bindings.md section 11), datamodel: "quickjs" accepted, the suite passing on it in Chromium, its size reported.</does>
+        <done-when>The suite passes on quickjs in the browser; the size is in the README.</done-when>
+      </step>
+      <gate>mise run test runs the shared tests and the suite against the wasm package in node and in Chromium; the parity check passes.</gate>
     </phase>
   </phases>
 

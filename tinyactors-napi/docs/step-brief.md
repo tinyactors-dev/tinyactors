@@ -13,6 +13,7 @@ You are a step agent building `@tinyactors/node`, a Node-API addon in C for Node
 
 ## Rules for your work
 - You own tinyactors-napi/ only. Never edit tinyactors-core, tinyactors-test or tinyactors-cpython. A gap in core or the suite: log it as kind="request-to-core" (below), and work only with what core has; if the step cannot pass without it, implement everything else, log it, and say so in your report.
+- **Commit and push often** (the maintainer, 2026-10-17): this container can stop at any moment (a usage limit, a restart), and work that is not on origin/main is lost. Push every passing increment as soon as it passes, at least every hour of work; never leave a finished piece only in the working tree. Work too large for one passing commit is split into passing commits.
 - Work on `main`. Commit each small working increment with `git commit -- <paths>` naming only tinyactors-napi paths (git add new files by path first); never `git add -A`, `git commit -a`, `git stash`, `git reset --hard`, `git checkout -- .`. Then `git pull --rebase origin main` and `git push origin main`. If `.git/index.lock` exists, wait and retry; never delete it. Commit subjects: `feat(napi): ...`, `fix(napi): ...`, `docs(napi): ...`, `test(napi): ...`; end every commit message with these two lines:
   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01QJS6QCvPoTfa95aRoSkLY3

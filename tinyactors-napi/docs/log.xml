@@ -875,4 +875,17 @@
     <why>The container is ephemeral: uncommitted work could be lost before the limit resets.</why>
     <resolution>Resume p2-pack after the reset: git apply docs/wip-p2-pack.patch, fix the bun export, finish, delete the patch file.</resolution>
   </entry>
+  <entry id="l-coord-release-repo" date="2026-10-17" step="p2-pack" kind="decision" status="resolved">
+    <what>Releases of the Node package happen in, and are mirrored to, tinyactors-dev/tinyactors-napi (the maintainer, 2026-10-17), through the root Release.push_and_release! and release:mirror (ADR 0016), as tinyactors-cpython does.</what>
+  </entry>
+  <entry id="l-coord-push-often" date="2026-10-17" step="coordination" kind="decision" status="resolved">
+    <what>Step agents commit and push every passing increment at once, so no work waits in a container (the maintainer, 2026-10-17); the brief says so.</what>
+  </entry>
+  <entry id="l-coord-docs-step" date="2026-10-17" step="p2-docs" kind="decision" status="resolved">
+    <what>Excellent user-facing documentation for someone meeting the library for the first time (the maintainer, 2026-10-17): step p2-docs after packaging, with tested examples and a newcomer review.</what>
+  </entry>
+  <entry id="l-coord-browser" date="2026-10-17" step="p5-design" kind="decision" status="resolved">
+    <what>A package that works in the browser, WASM with a JavaScript layer, not emnapi; the same API in Node.js, Bun and the browser; no quickjs in the browser at first, shipped in a later step (the maintainer, 2026-10-17). Phase p5; it settles the root ROADMAP's "Decided later: the browser".</what>
+    <why>The root ROADMAP left the choice between a JavaScript twin and the addon over emnapi to measurements; the maintainer chose the twin, held to the same API and suite.</why>
+  </entry>
 </log>
