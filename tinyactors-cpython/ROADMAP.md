@@ -684,7 +684,15 @@ Gaps in core or in the suite this session finds. Each says what is
 missing, why, and which suite case or test shows it; the coordinator moves
 it into the root ROADMAP.md's "Requests to core" and answers there.
 
-- **Open: one exhausted pool doubles every pool.** What: when any pool of a
+- **Answered (2026-10-17, core `7adbb343`, `5f2afad1`): one exhausted
+  pool doubles every pool.** A segment now grows only the pool that ran
+  out (the actors double, their instances and strings by what the added
+  actors need; another pool doubles or more, by at least a quarter of the
+  region), an explicit `instanceBytes` keeps its own part, and
+  `host.stats` reports each pool's `capacity`, `used` and `highWater`
+  under `pools` (`tinyactors-core/docs/requests.md`). 40,000 actors grown
+  from the default size: 48,967,040 B before, 12,634,136 B after (sized up
+  front: 10,415,192 B). The request as it was: when any pool of a
   segment runs out, `segment_grow` doubles all of them, derives
   `instanceBytes` again from the doubled `maxActors`, and holds the old and
   the new region at once (`src/host/host.c`, `segment_grow`). Why: a
