@@ -14,7 +14,8 @@
   "homepage": "https://github.com/tinyactors-dev/tinyactors-napi#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tinyactors-dev/tinyactors-napi.git"
+    "url": "git+https://github.com/tinyactors-dev/tinyactors.git",
+    "directory": "tinyactors-napi"
   },
   "bugs": {
     "url": "https://github.com/tinyactors-dev/tinyactors/issues"
