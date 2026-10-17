@@ -141,7 +141,7 @@ costs about 60 bytes in the host and its blob in your store.
 
 `tools/scale.mjs` (`mise run scale` in the repository) times every
 operation of the API on a host of N actors and on one of 2N, each in a
-process of its own, and fails when an operation costs more than 1.5 times
+process of its own. It fails when an operation costs more than 1.5 times
 as much at 2N: per call for an operation on one actor, per actor for one
 on the whole population. Most of the actors are hibernated in SQLite and
 one in a hundred runs an invoked service; then the same with every actor

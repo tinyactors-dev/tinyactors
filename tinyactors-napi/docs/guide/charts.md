@@ -254,7 +254,7 @@ from `compileCharts` as it is.
 **The compile result.** `compileCharts` returns an object whose `image`
 is a `Buffer`, yours from the first read, and whose `diagnostics` lists
 the compiler's warnings. `close()` frees the compiler's memory at once (the
-garbage collector does it otherwise); read `image` before. An image is
+garbage collector does it otherwise); read `image` first. An image is
 plain bytes: write it to a file and load it in another process with
 `host.addImage(readFileSync(path))`. `addImage` copies it and returns the
 image's **segment**, a number the host uses for that image.

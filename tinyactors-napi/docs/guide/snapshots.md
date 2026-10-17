@@ -138,27 +138,28 @@ after idle(): true
 ## At scale
 
 `tools/snapshot.mjs` (`mise run snapshot` in the repository) rehearses a
-deploy on a copy: a live host of two million actors, at most 1000
-resident and the rest in SQLite, a delayed send pending for each resident
-one, and half of those paying through an invoked payment service that has
-not answered; its snapshot written to a file and its store copied; the
-copy restored with its own store and clock and a stand-in payment
-service, which gets every payment in flight again (`restored`, with its
-amount) and declines it, and whose own snapshot is the same bytes, then
-migrated to a new version while events come, its clock run past the
-delayed sends, while the live host goes on with events of its own and its
-payments still in flight. The copy never reaches the real service.
+deploy on a copy. The live host has two million actors, at most 1000
+resident and the rest in SQLite. Each resident actor has a delayed send
+pending, and half of them are paying through an invoked payment service
+that has not answered. The tool writes the host's snapshot to a file and
+copies the store. It restores the copy with its own store and clock and
+a stand-in payment service, which gets every payment in flight again
+(`restored`, with its amount) and declines it; the copy's own snapshot
+must be the same bytes. Then it migrates the copy to a new version while
+events come and runs its clock past the delayed sends, while the live
+host goes on with events of its own and its payments still in flight. The
+copy never reaches the real service.
 
 One run of it (2026-10-16, x86_64 Linux 6.18, Intel Xeon @ 2.10GHz, 4
 CPUs, 16 GiB; node 22.23.3, bun 1.4.1), with two million actors, at most
 1000 resident, 200,000 events before the snapshot and 200,000 more on
 each host after it; then 100,000 actors all resident, so the datamodel's
-own state is most of the snapshot. In every run the copy's snapshot was
-the same bytes, the copy migrated every actor to version 2 (2,018,400
-wakes from its store at two million), all 25,000 sampled actors had their
-counts, delayed sends and versions on both hosts, the live store held
-only the live host's blobs, and after every eviction at most R actors
-were resident.
+own state is most of the snapshot. Every run passed its checks: the
+copy's snapshot was the same bytes, and the copy migrated every actor to
+version 2 (2,018,400 wakes from its store at two million). All 25,000
+sampled actors had their counts, delayed sends and versions on both
+hosts, the live store held only the live host's blobs, and after every
+eviction at most R actors were resident.
 
 | runtime, datamodel | actors, resident | snapshot | taken | restored | migrate on the copy | peak resident (both hosts) |
 |---|---|---|---|---|---|---|

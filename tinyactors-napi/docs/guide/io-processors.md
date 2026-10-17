@@ -2,8 +2,8 @@
 
 An actor cannot reach the network, a file or a database itself: the host
 does no I/O. When a chart needs something from outside, it sends an event
-to an **I/O processor**, and your handler for that processor does the
-work and, if there is an answer, sends it back as an event. The chart
+to an **I/O processor**. Your handler for that processor does the work
+and, if there is an answer, sends it back as an event. The chart
 stays a description of what happens; your code decides how.
 
 ## Declaring a processor

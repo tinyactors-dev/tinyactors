@@ -285,12 +285,12 @@ it runs out ([Capacity and memory](capacity.md)).
 ## At scale
 
 `tools/services.mjs` (`mise run services` in the repository) runs a
-population of actors that each invoke a counter service: pings and pongs
-to actors drawn at random, then a third finish with done data, a third
-leave the invoking state (the service is stopped), the rest keep theirs;
-every pong is counted once, every done datum is right, every cancelled
-service was stopped once and no other, and the ended services are
-collected.
+population of actors that each invoke a counter service. It sends pings
+and pongs to actors drawn at random. Then a third finish with done data,
+a third leave the invoking state (the service is stopped), and the rest
+keep theirs. It checks that every pong is counted once, every done datum
+is right, every cancelled service was stopped once and no other, and the
+ended services are collected.
 
 One run of it (2026-10-16, x86_64 Linux 6.18, Intel Xeon @ 2.10GHz, 4
 CPUs, 16 GiB; node 22.23.3, bun 1.4.1). 200,000 actors, each with a
