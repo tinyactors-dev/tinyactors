@@ -709,12 +709,12 @@
       "value": 2
     },
     {
-      "name": "TA_TRACE_BYTES_MIN",
-      "value": 65536
+      "name": "TA_TRACE_BYTES_DEFAULT",
+      "value": 131072
     },
     {
-      "name": "TA_TRACE_BYTES_PER_EVENT",
-      "value": 512
+      "name": "TA_TRACE_BYTES_MIN",
+      "value": 65536
     },
     {
       "name": "TA_TRACE_CANCELLED",

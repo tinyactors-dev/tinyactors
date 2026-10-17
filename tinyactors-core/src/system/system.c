@@ -49,10 +49,7 @@ void ta_system_config_normalize(const ta_image_view *view, const ta_system_confi
     /* tracing: on by default, at full detail (docs/adr/0006); off carves nothing */
     if (config->tracing != TA_TRACING_DISABLED) {
         config->tracing = TA_TRACING_ENABLED;
-        if (!config->trace_bytes) {
-            uint64_t bytes = (uint64_t)config->max_events * TA_TRACE_BYTES_PER_EVENT;
-            config->trace_bytes = bytes > 0x40000000u ? 0x40000000u : (uint32_t)bytes;
-        }
+        if (!config->trace_bytes) config->trace_bytes = TA_TRACE_BYTES_DEFAULT;
         if (config->trace_bytes < TA_TRACE_BYTES_MIN) config->trace_bytes = TA_TRACE_BYTES_MIN;
         if (config->trace_bytes > 0x40000000u) config->trace_bytes = 0x40000000u;
         config->trace_bytes &= ~(TA_JOURNAL_ALIGN - 1);

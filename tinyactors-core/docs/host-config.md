@@ -93,7 +93,7 @@ clamped to the limits in `tinyactors/system.h`):
 | `instanceBytes` | 0: derived from each segment's image and `maxActors` |
 | `stringBytes` | 16384 + 16 × `maxActors` |
 | `ticksPerSecond` | 1000000000 (the monotonic clock in nanoseconds; 1000 for milliseconds) |
-| `traceBytes` | 512 × `maxEvents`, at least 65536 (0 when `tracing` is false) |
+| `traceBytes` | 131072 (`TA_TRACE_BYTES_DEFAULT`), at least 65536, whatever `maxEvents`: the journal holds the trace records a run writes until the host takes them, and loses (and counts) what does not fit (0 when `tracing` is false) |
 | `traceContexts` | `maxEvents` (0 when `tracing` is false) |
 | `traceRules` | 16, at most 255 (0 when `tracing` is false) |
 | `traceSeed` | 0 |
@@ -111,7 +111,7 @@ runs, into a new block with more of what ran out and the rest as it was
 | Ran out | Grows |
 |---|---|
 | actors | `maxActors` doubles (or more, below); `instanceBytes` and `stringBytes` grow by what the added actors need (their instances, and 16 bytes each of strings), so a value given for either keeps its own part |
-| events | `maxEvents` doubles (or more, below), and `traceContexts` and `traceBytes` with it |
+| events | `maxEvents` doubles (or more, below), and `traceContexts` with it (a queued event holds a trace context); `traceBytes` stays |
 | timers | `maxTimers` doubles (or more) |
 | requests | `maxRequests` doubles (or more) |
 | the slab | `stringBytes` doubles (or more) |
@@ -129,8 +129,7 @@ actors waiting for one, the host adds workspaces for those holding and
 those waiting (at least double, at most 4096 more at once, since a run
 hands out at most 4096 effects, and no more than `maxActors`), unless
 that run's batch is full. A value given
-here grows like a default: `traceBytes` included, so an explicit
-`traceBytes` is the journal's starting size, not a bound on trace memory.
+here grows like a default; `traceBytes` never grows.
 `host.stats` reports each pool's capacity, use and high-water mark
 ([requests.md](requests.md#hoststats)), from which a capacity planner
 sizes a host up front. Why the defaults are small:

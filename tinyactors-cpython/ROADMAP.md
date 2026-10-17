@@ -705,7 +705,13 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   only the pool that ran out, keep an explicit `instanceBytes`, and report
   each pool's capacity and high-water mark in `host.stats`. Which test:
   the memory investigation's `grow_cliff.py` (2026-10-15).
-- **Open: the trace journal is sized from `maxEvents`.** What: with
+- **Answered (2026-10-17, core): the trace journal is sized from
+  `maxEvents`.** `traceBytes` now defaults to 131072
+  (`TA_TRACE_BYTES_DEFAULT`) whatever `maxEvents`, and a segment's growth
+  never grows it; `traceContexts` stays one per event slot (48 B: a queued
+  event holds one). 40,000 quickjs actors grown from the default and sent
+  one event each: 53,130,169 B before, 26,653,625 B after. The request
+  as it was: with
   tracing on (the default), `traceBytes` is 512 × `maxEvents` and
   `traceContexts` is `maxEvents` (`src/system/system.c`), 618 B per event
   slot. Why: sizing `maxEvents` for quickjs's actors (above) adds 618 B per

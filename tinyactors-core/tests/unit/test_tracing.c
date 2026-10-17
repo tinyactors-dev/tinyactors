@@ -127,7 +127,7 @@ static void test_on_by_default(void) {
     ta_system_stats stats;
     stats.size = sizeof stats;
     ta_system_stats_get(t.system, &stats);
-    CHECK_EQUAL(stats.trace_bytes_capacity, 256 * TA_TRACE_BYTES_PER_EVENT); /* max_events 256 */
+    CHECK_EQUAL(stats.trace_bytes_capacity, TA_TRACE_BYTES_DEFAULT); /* whatever max_events */
     CHECK_EQUAL(stats.trace_contexts_capacity, 256);                         /* max_events */
     size_t on = t.memory_length;
     uint32_t a = 0;

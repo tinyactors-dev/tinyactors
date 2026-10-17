@@ -1317,7 +1317,8 @@ static void test_request_answered_with_an_error(void) {
  * grows the actors, by at least a quarter of the region (8 to 512 at once
  * here, beside the default events), and the slab by what they need (a
  * grown segment is the size of one made for that many actors), and the
- * other pools stay; events past maxEvents grow the events alone. The
+ * other pools stay; events past maxEvents grow the events (and their trace
+ * contexts) alone, not the trace journal. The
  * high-water marks are what the pools held at most. */
 static ta_system_stats segment_stats(host_world *e, uint32_t segment) {
     ta_system_stats stats;
@@ -1358,7 +1359,9 @@ static void test_growth_grows_what_ran_out(void) {
     for (uint32_t i = 0; i < events; i++)
         CHECK_EQUAL(send(&e, sessions[0], "noop", NULL), TA_OK);
     ta_system_stats more = segment_stats(&e, segment);
-    CHECK_EQUAL(more.events_capacity, before.events_capacity * 2);
+    CHECK(more.events_capacity >= before.events_capacity * 2);
+    CHECK_EQUAL(more.trace_contexts_capacity, more.events_capacity); /* one per queued event */
+    CHECK_EQUAL(more.trace_bytes_capacity, before.trace_bytes_capacity); /* the journal stays */
     CHECK(more.events_high_water >= events);
     CHECK_EQUAL(more.actors_capacity, 512u);
     CHECK_EQUAL(more.timers_capacity, before.timers_capacity);

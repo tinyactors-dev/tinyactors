@@ -217,10 +217,9 @@ static int grown_config(const host_segment *segment, growth growth, ta_system_co
     }
     case TA_POOL_EVENTS:
         wanted.max_events = times(wanted.max_events, growth.factor);
-        /* the trace contexts and the journal keep up with the events, as
-         * their defaults do */
+        /* a queued event holds a trace context, so they keep up; the journal
+         * holds a run's records, whatever the events, and stays */
         wanted.trace_contexts = times(wanted.trace_contexts, growth.factor);
-        wanted.trace_bytes = times(wanted.trace_bytes, growth.factor);
         break;
     case TA_POOL_TIMERS: wanted.max_timers = times(wanted.max_timers, growth.factor); break;
     case TA_POOL_REQUESTS: wanted.max_requests = times(wanted.max_requests, growth.factor); break;

@@ -98,10 +98,11 @@ typedef struct ta_system_config {
  * send (TA_EVENT_IN_ERROR_COMMUNICATION). */
 enum { TA_SYSTEM_SHARED_BASE = 1u << 0 };
 enum { TA_TRACING_ENABLED = 0, TA_TRACING_DISABLED = 1 };
-/* The default and the smallest journal (TA_TRACE_*_BYTES), and its default
- * share per event of max_events. */
-#define TA_TRACE_BYTES_MIN       65536u
-#define TA_TRACE_BYTES_PER_EVENT 512u
+/* The smallest trace journal, and its default: sized for the records a run
+ * writes before the host takes them, not for the event pool (a full journal
+ * loses records and counts them). */
+#define TA_TRACE_BYTES_MIN     65536u
+#define TA_TRACE_BYTES_DEFAULT 131072u
 
 /* ---- lifetime: one caller-owned memory block ---------------------------- */
 /* A system to create: the block it lives in, the image it runs, its
