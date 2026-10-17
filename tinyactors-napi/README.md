@@ -159,8 +159,9 @@ function evict(host) {                     // after a turn: the cold actors leav
 **Plan the capacity up front.** A hibernated actor keeps its slot and its
 session's record in the host (about 60 B), so `system.maxActors` counts
 every actor. Instance and string memory are needed for the resident ones
-only. Left to grow, a segment doubles all its pools together and sizes
-instance memory from `maxActors`. For `R` actors resident out of `N`:
+only. Left to grow, a segment grows the pool that ran out, by at least a
+quarter of its region, and its instance memory with `maxActors`,
+hibernated actors included. For `R` actors resident out of `N`:
 
 ```js
 const config = { systemID: 'big', system: {

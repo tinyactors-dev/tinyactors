@@ -535,9 +535,9 @@ def evict(host):                          # after a turn: the cold actors leave
 **Plan the capacity up front.** A hibernated actor keeps its slot and its
 session's record in the host (about 60 B), so `system.maxActors` counts
 every actor. Instance and string memory are needed for the resident ones
-only. Left to grow, a segment doubles all its pools together and sizes
-instance memory from `maxActors`, about 31 KB per actor at two million.
-For `R` actors resident out of `N`:
+only. Left to grow, a segment grows the pool that ran out, by at least a
+quarter of its region, and its instance memory with `maxActors`,
+hibernated actors included. For `R` actors resident out of `N`:
 
 ```python
 config = {"systemID": "big", "system": {
@@ -785,8 +785,8 @@ an event, a `"python"` session keeps one more object, its `_event`
 (about 100 B). Its name, invoke id, origin and origin type are strings
 that the chart or the host holds once for every session. With the pools
 sized, the region does not grow after the events. Left at its default
-`maxEvents` (256), quickjs's region grew to 12,440 B per actor, because a
-segment that grows doubles every pool.
+`maxEvents` (256), quickjs's region grows its event pool as the actors'
+last events fill it: an event and a trace context per actor.
 
 ### Sizing the config
 
@@ -809,11 +809,12 @@ these matter most:
   resident actor, because quickjs keeps each actor's last event in the
   core's event pool.
 - **`maxRequests`:** the service invocations that run at once.
-- **`tracing`:** on by default. It takes 512 B of journal and a trace
-  context per `maxEvents` slot; turn it off where nobody exports traces.
+- **`tracing`:** on by default. It takes a journal of 128 KiB per
+  segment and a trace context (48 B) per `maxEvents` slot; turn it off
+  where nobody exports traces.
 - **Size the pools; do not let them grow.** A segment that runs out of
-  any pool doubles every pool at once. On the services benchmark, a
-  `maxEvents` too small for quickjs grew the region to 980 MB.
+  a pool grows that pool by at least a quarter of its region, copying the
+  whole region into a new block, and never shrinks.
 
 ## Performance
 
