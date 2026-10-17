@@ -51,8 +51,9 @@ test('made from parts by core\'s formatter', () => {
   equal(named.name, 'a b/é', 'and decodes back');
   if (!(named instanceof Address)) throw new Error('an Address');
   throws(() => Address.fromSession('Bad System', 1n), invalid, 'an invalid system id');
-  throws(() => Address.fromSession('sys', 0n), invalid, 'session 0, which core refuses');
-  throws(() => Address.fromSession('sys', 1), typeError, 'a session that is not a bigint');
+  throws(() => Address.fromSession('sys', 0n), typeError, 'session 0');
+  throws(() => Address.fromSession('sys', 1.5), typeError, 'a session that is not an integer');
+  equal(Address.fromSession('sys', 7).text, 'tinyactors://sys/#_scxml_7', 'a safe integer is a session');
   throws(() => Address.fromName('sys', ''), invalid, 'an empty name');
   throws(() => Address.fromName('sys'), typeError, 'no name');
 });

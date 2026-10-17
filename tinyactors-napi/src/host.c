@@ -976,13 +976,23 @@ static napi_value ta_napi_input_status(napi_env env, const ta_napi_refusal *refu
     return undefined;
 }
 
-/* A session: a bigint from 1 to 2^64-1 (ids are always bigints: a number
- * would lose bits past 2^53). */
-static bool ta_napi_session_of(napi_env env, napi_value value, uint64_t *session) {
+/* A session: a bigint from 1 to 2^64-1, or a number that is a safe
+ * integer from 1 (2^53-1 at most: a number past it has lost bits, and
+ * napi_get_value_int64 would saturate silently). spawn gives bigints. */
+bool ta_napi_session_of(napi_env env, napi_value value, uint64_t *session) {
     bool lossless = false;
-    if (!ta_napi_is(env, value, napi_bigint) || napi_get_value_bigint_uint64(env, value, session, &lossless) != napi_ok ||
-        !lossless || *session == 0) { /* 0 is core's "no session" (ta_host_actor_by_name) */
-        napi_throw_type_error(env, NULL, "a session is a bigint from 1 to 2^64-1");
+    double number = 0;
+    napi_valuetype type = napi_undefined;
+    bool ok = napi_typeof(env, value, &type) == napi_ok;
+    if (ok && type == napi_bigint)
+        ok = napi_get_value_bigint_uint64(env, value, session, &lossless) == napi_ok && lossless;
+    else if (ok && type == napi_number) {
+        ok = napi_get_value_double(env, value, &number) == napi_ok && number >= 1 && number <= 9007199254740991.0 &&
+             number == (double)(uint64_t)number;
+        if (ok) *session = (uint64_t)number;
+    } else ok = false;
+    if (!ok || *session == 0) { /* 0 is core's "no session" (ta_host_actor_by_name) */
+        napi_throw_type_error(env, NULL, "a session is a bigint from 1 to 2^64-1 or a safe integer from 1");
         return false;
     }
     return true;
@@ -1343,15 +1353,15 @@ typedef struct ta_napi_event {
     ta_event_in in; /* out */
 } ta_napi_event;
 
-/* An event's target: a session (a bigint), or a local address (a string
+/* An event's target: a session (a bigint or a safe integer), or a local address (a string
  * or an Address) core resolves to one (ta_host_resolve) before the payload
  * is made in that session's datamodel: event->in.session. */
 static bool ta_napi_target_of(napi_env env, const ta_napi_call *call, ta_napi_event *event) {
     napi_value value = ta_napi_address_text(env, event->target);
     uint64_t *session = &event->in.session;
     if (!ta_napi_is(env, value, napi_string)) {
-        if (ta_napi_is(env, value, napi_bigint)) return ta_napi_session_of(env, value, session);
-        napi_throw_type_error(env, NULL, "a target is a session (a bigint) or a local address (a string or an Address)");
+        if (ta_napi_is(env, value, napi_bigint) || ta_napi_is(env, value, napi_number)) return ta_napi_session_of(env, value, session);
+        napi_throw_type_error(env, NULL, "a target is a session (a bigint or a safe integer) or a local address (a string or an Address)");
         return false;
     }
     ta_napi_text address = {&call->host->arena, "an address is a string", {NULL, 0}};

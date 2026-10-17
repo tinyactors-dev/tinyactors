@@ -61,6 +61,12 @@ Development builds of `main` are published under the `next` dist-tag
   `[Symbol.asyncDispose]` also awaits the promises the handler returned
   there. A `Host` the collector frees without `close()` skips the last
   take: close the hosts whose telemetry you want.
+- **Sessions are bigints.** `spawn`, `actorByName`, `sweep` and every
+  view give a session as a `bigint`; the inputs that take one (`send`,
+  `fail`, `terminate`, `hibernate`, `wake`, `migrate`, `Address.fromSession`)
+  also take a number that is a safe integer from 1, as a database or JSON
+  gives it back. A number past `Number.MAX_SAFE_INTEGER`, a fraction or 0 is
+  a `TypeError`: it would name another session.
 - **`using host = new Host(...)` needs a runtime that parses `using`:**
   Bun 1.4 does, Node.js 22 does not. `Symbol.dispose` and
   `Symbol.asyncDispose` call `close()`, which works everywhere.

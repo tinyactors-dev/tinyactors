@@ -975,4 +975,9 @@
     <what>One mise run test failed on test/scale.test.mjs under bun on the native datamodel: restore 11.9 us a session at 10,000 against 18.9 at 200,000 (factor 1.5); three runs of the file alone and the next whole mise run test passed. Nothing in this step touches restore.</what>
     <evidence>the step scratch's p2-pack/test1.log (FAIL), test2.log (exit 0)</evidence>
   </entry>
+  <entry id="l-p2-decisions-sessions" date="2026-10-17" step="p2-decisions" kind="decision" status="resolved">
+    <what>Every input that takes a session (send, fail and send(message)'s target, terminate, hibernate, wake, migrate's session, Address.fromSession) takes a bigint from 1 to 2^64-1 or a number that is a safe integer from 1, through one function, ta_napi_session_of; Address.fromSession refuses 0 and 0n as a TypeError now (core refused it as TA_ERROR_INVALID before). Typed methods' params need no change: a safe integer is written as a CBOR integer, as a bigint is. What the API gives back stays a bigint.</what>
+    <why>l-coord-decisions (1); one rule for every input, and 0 is no session in any of them.</why>
+    <evidence>tinyactors-napi/src/host.c ta_napi_session_of; test/rules.test.mjs: sessions are bigints from 1 to 2^64-1 or safe integers from 1, never a number that saturates</evidence>
+  </entry>
 </log>

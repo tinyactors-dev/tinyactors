@@ -415,7 +415,8 @@ The addon allocates almost nothing (bindings.md, section 6):
 - **The value table** is `tinyactors-core/docs/protocol.md`, "Values",
   with JavaScript's side in `docs/values.md`: numbers checked with
   `Number.isSafeInteger` and `BigInt` beyond (ids are always `BigInt`:
-  `napi_get_value_int64` saturates silently), strings as valid UTF-8 (a
+  `napi_get_value_int64` saturates silently; a session an input takes
+  may be a safe integer too), strings as valid UTF-8 (a
   lone surrogate refused, never replaced), `Uint8Array`, arrays, plain
   objects, `true`, `false`, `null`, `undefined`; **inside a value an
   actor reference is its address string** (decided 2026-10-12, commit
@@ -756,13 +757,22 @@ file.
   Tests: `test/values.test.mjs: 'text: U+FFFD itself is text, a pair is
   text, a lone surrogate is not'`; `test/host.test.mjs: 'send refuses
   what it cannot take, and keeps nothing of it'` (an event's name).
-- **Sessions are bigints from 1 to 2^64-1** (`napi_get_value_int64`
-  saturates silently; a number loses bits past 2^53): a number, 0n, a
-  negative or a bigint past 64 bits is a `TypeError`, and a value's
-  bigint past 64 bits `TA_ERROR_INVALID`. Tests: `test/rules.test.mjs:
-  'sessions are bigints from 1 to 2^64-1, never a number that saturates'`
-  (a value's bigints too); `test/values.test.mjs: 'integers: numbers to
-  2^53-1, bigints beyond, both ways'`.
+- **A session an input takes is a bigint from 1 to 2^64-1 or a number
+  that is a safe integer from 1** (decided 2026-10-17, l-coord-decisions:
+  `Number.isSafeInteger`, so no number that lost bits past 2^53 reaches
+  core, and `napi_get_value_int64`, which saturates silently, is never
+  used): `send`, `fail` and `send(message)`'s target, `terminate`,
+  `hibernate`, `wake`, `migrate`'s `session` and `Address.fromSession`, in
+  one function (`ta_napi_session_of`); typed methods' params go to core as
+  given, where a safe integer is CBOR's integer as a bigint is. 0, 0n, a
+  negative, a fraction, a number past 2^53-1, a bigint past 64 bits or
+  another type is a `TypeError`, and a value's bigint past 64 bits
+  `TA_ERROR_INVALID`. What the API gives back (`spawn`, `actorByName`,
+  `sweep`, a view's `session`) stays a bigint. Tests:
+  `test/rules.test.mjs: 'sessions are bigints from 1 to 2^64-1 or safe
+  integers from 1, never a number that saturates'` (a value's bigints
+  too); `test/values.test.mjs: 'integers: numbers to 2^53-1, bigints
+  beyond, both ways'`.
 - **Refusals no input reaches.** `TA_RUN_EXHAUSTED` comes only when the
   host's allocator refuses a pool's growth and `TA_RUN_FAULT` only from a
   run with a batch open (which the drain before every run rules out) or a

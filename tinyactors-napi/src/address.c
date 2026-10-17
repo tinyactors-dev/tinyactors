@@ -166,13 +166,9 @@ static napi_value ta_napi_address_from(napi_env env, napi_callback_info info) {
     ta_napi_text system = {arena, "a system id is a string", {NULL, 0}};
     ta_napi_text name = {arena, "an actor's name is a string", {NULL, 0}};
     uint64_t id = 0;
-    bool lossless = false;
-    napi_valuetype type = napi_undefined;
     bool ok = ta_napi_text_of(env, argv[0], &system);
     if (ok && session) {
-        ok = napi_typeof(env, argv[1], &type) == napi_ok && type == napi_bigint &&
-             napi_get_value_bigint_uint64(env, argv[1], &id, &lossless) == napi_ok && lossless;
-        if (!ok) napi_throw_type_error(env, NULL, "a session is a bigint from 1 to 2^64-1");
+        ok = ta_napi_session_of(env, argv[1], &id);
     } else if (ok) ok = ta_napi_text_of(env, argv[1], &name);
     if (ok) {
         size_t room = session ? TA_ADDRESS_SESSION_MAX : 13u + (size_t)system.view.length + 2u + 3u * (size_t)name.view.length;

@@ -420,9 +420,9 @@ test('sweep, hibernate and wake refuse numbers out of range', async () => {
   const host = hostWith({ counter: counter() });
   for (const [scan, limit] of [[10, -1], [10, 2 ** 32 + 3], [-1, 1], [1.5, 1], [10n, 1], [10, undefined]])
     throws(() => host.sweep(scan, limit), typeError, `sweep(${scan}, ${limit})`);
-  for (const session of [-1n, 0n, 1, 2n ** 64n])
+  for (const session of [-1n, 0n, 0, 1.5, 2 ** 53, 2n ** 64n])
     throws(() => host.wake(session, new Uint8Array(1)), typeError, `wake(${session})`);
-  throws(() => host.hibernate(1), typeError, 'hibernate(1)');
+  throws(() => host.hibernate(1.5), typeError, 'hibernate(1.5)');
   host.close();
   throws(() => host.sweep(1, 1), status('TA_ERROR_STATE'), 'a closed host');
 });

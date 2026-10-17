@@ -3,13 +3,21 @@
 // shows: a Host posted to a worker, a worker's teardown freeing its open
 // hosts, a payload let go after the call, the host's arena marks nesting
 // in an input, a view staying valid across the later calls of its batch,
-// sessions as bigints that never saturate, and the SimulatedClock's type
+// sessions as bigints or safe integers that never saturate, and the SimulatedClock's type
 // tag. The other rules name their tests in AGENTS.md.
 import { readdirSync, readFileSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
-import { decode, encode, Host, SimulatedClock } from '@tinyactors/node';
+import { Address, decode, encode, Host, SimulatedClock } from '@tinyactors/node';
 import { DATAMODEL, ENDER, ENGINE, equal, hostWith, scxml, status, throws, typeError, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
+
+/** Counts `inc`, an error.communication included, and keeps running. */
+const KEEPER = scxml('keeper', `
+  <datamodel><data id="n" expr="0"/></datamodel>
+  <state id="s">
+    <transition event="inc"><assign location="n" expr="n + 1"/></transition>
+    <transition event="error.communication"><assign location="n" expr="n + 1"/></transition>
+  </state>`);
 
 /** Runs `code` (CommonJS, with `module` the package's URL and `data` the
  * workerData's other fields) in a worker; its messages and exit code. */
@@ -221,18 +229,46 @@ test('a dropped host with rows (charts, sessions, payloads) is collected and fre
   equal(collected, 10, 'hosts collected');
 });
 
-test('sessions are bigints from 1 to 2^64-1, never a number that saturates', () => {
-  const host = hostWith({ ender: ENDER });
+test('sessions are bigints from 1 to 2^64-1 or safe integers from 1, never a number that saturates', async () => {
+  const host = hostWith({ ender: ENDER, keeper: KEEPER });
   const session = host.spawn(host.chart('ender'), { name: 'e' });
   equal(typeof session, 'bigint', 'spawn gives a bigint');
-  const outside = [Number(session), 2 ** 53 + 1, 2 ** 64, -1n, 0n, 1n << 64n, (1n << 64n) + session];
+  const outside = [0, -1, 1.5, 2 ** 53, 2 ** 64, Number.NaN, Infinity, null, -1n, 0n, 1n << 64n, (1n << 64n) + session];
   for (const value of outside) {
     throws(() => host.send(value, 'go'), typeError, `send(${String(value)})`);
     throws(() => host.terminate(value), typeError, `terminate(${String(value)})`);
     throws(() => host.fail(value, 'x'), typeError, `fail(${String(value)})`);
     throws(() => host.send({ target: value, event: 'go' }), typeError, `send({target: ${String(value)}})`);
+    throws(() => host.hibernate(value), typeError, `hibernate(${String(value)})`);
+    throws(() => host.wake(value, new Uint8Array(1)), typeError, `wake(${String(value)})`);
+    throws(() => host.migrate({ session: value }), typeError, `migrate({session: ${String(value)}})`);
+    throws(() => Address.fromSession('t', value), typeError, `Address.fromSession(${String(value)})`);
   }
+  for (const take of [(v) => host.terminate(v), (v) => host.hibernate(v), (v) => host.migrate({ session: v })])
+    throws(() => take(String(session)), typeError, 'a string where only a session goes');
   equal(host.actorByName('e'), session, 'nothing reached the actor');
+  // a safe integer is the same session as its bigint, for every input
+  const keeper = host.spawn(host.chart('keeper'));
+  const number = Number(keeper);
+  host.send(number, 'inc');
+  host.send({ target: number, event: 'inc' });
+  host.send(Address.fromSession('t', number), 'inc');
+  host.fail(number, 'x');
+  await host.idle();
+  const blob = host.hibernate(number);
+  host.wake(number, blob);
+  host.migrate({ session: number });
+  await host.idle();
+  let n;
+  host.actorContext({ session: number }, (h, result) => { n = result.variables.n; });
+  await host.idle();
+  equal(n, 4, 'three events and a failure reached the session given as a number');
+  host.send(Number(session), 'go');
+  await host.idle();
+  equal(host.actorByName('e'), undefined, 'the ender ended');
+  host.terminate(number);
+  await host.idle();
+  throws(() => host.terminate(number), status('TA_ERROR_STALE'), 'the keeper is gone');
   host.close();
   // inside a value: a bigint to 64 bits each way, refused past them
   equal(decode(encode((1n << 64n) - 1n)), (1n << 64n) - 1n, '2^64-1');

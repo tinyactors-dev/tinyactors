@@ -187,6 +187,10 @@ bool ta_napi_room_grow(ta_napi_room *room, size_t capacity);
  * (TinyactorsError TA_ERROR_INVALID); false with an exception pending. */
 bool ta_napi_text_kept(napi_env env, napi_value value, ta_napi_room *room);
 
+/* A session an input takes: a bigint from 1 to 2^64-1 or a number that is
+ * a safe integer from 1; false with a TypeError for anything else. */
+bool ta_napi_session_of(napi_env env, napi_value value, uint64_t *session);
+
 /* Optional text: undefined or null is none (an empty view), a string its
  * UTF-8 in text->arena, anything else a TypeError saying text->what. */
 bool ta_napi_optional_text(napi_env env, napi_value value, ta_napi_text *text);

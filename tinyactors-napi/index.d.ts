@@ -4,10 +4,16 @@
 // still marked *planned* there is declared ahead of its implementation, and
 // index.mjs exports only the items built so far (docs/plan.xml).
 //
-// Time is milliseconds; sessions are bigints; bytes the host hands out are
+// Time is milliseconds; sessions are bigints (an input also takes a safe
+// integer from 1); bytes the host hands out are
 // Buffers (a Uint8Array subclass) copied once, never views of host memory.
 
 // ---- values -------------------------------------------------------------
+
+/** A session an input takes: a bigint from 1 to 2^64-1, or a number that is
+ * a safe integer from 1 (anything else a `TypeError`). What the API gives
+ * back is a bigint. */
+export type Session = bigint | number;
 
 /** A value of the value table (docs/values.md): what crosses as event data,
  * spawn params, a reply's result, and `encode`/`decode`. Inside a value an
@@ -135,7 +141,7 @@ export function compileSystem(manifest: Source, resolver?: Resolver): Compiled;
 export class Address {
   constructor(text: string);
   /** An address made from a system id and a session. */
-  static fromSession(system: string, session: bigint): Address;
+  static fromSession(system: string, session: Session): Address;
   /** An address made from a system id and an actor's name. */
   static fromName(system: string, name: string): Address;
   readonly text: string;
@@ -230,7 +236,7 @@ export interface AnswerOptions {
 
 /** An event for `host.send(message)` and `host.sendMany(items)`. */
 export interface SendMessage {
-  target: bigint | string | Address;
+  target: Session | string | Address;
   event: string;
   data?: Value;
   sendid?: string;
@@ -365,7 +371,7 @@ export interface SendOptions {
 export interface MigrateOptions {
   /** A chart's name; none: every chart. */
   chart?: string;
-  session?: bigint;
+  session?: Session;
   /** Ask the application to wake hibernated actors. */
   wake?: boolean;
   /** Milliseconds of the host's clock from now, rounded up to its next
@@ -399,12 +405,12 @@ export class Host implements Disposable, AsyncDisposable {
   chart(name: string): ChartRef;
   boot(segment: number): void;
   spawn(ref: ChartRef, options?: SpawnOptions): bigint;
-  send(target: bigint | string | Address, event: string, data?: Value, options?: SendOptions): void;
+  send(target: Session | string | Address, event: string, data?: Value, options?: SendOptions): void;
   send(message: SendMessage): void;
-  fail(target: bigint | string | Address, sendid?: string): void;
+  fail(target: Session | string | Address, sendid?: string): void;
   /** The length of the accepted prefix. */
   sendMany(items: readonly SendMessage[]): number;
-  terminate(session: bigint): void;
+  terminate(session: Session): void;
   actorByName(name: string): bigint | undefined;
 
   /** Settles at the next idle turn (the same promise to every caller until
@@ -442,10 +448,10 @@ export class Host implements Disposable, AsyncDisposable {
    * TA_ERROR_UNSUPPORTED when a variable holds what the datamodel cannot
    * store (the message names it); it stays resident then. From a handler it
    * joins the open batch. */
-  hibernate(session: bigint): Uint8Array;
+  hibernate(session: Session): Uint8Array;
   /** Back into memory from the blob `hibernate` gave; its waiting events run
    * at the next turn. */
-  wake(session: bigint, blob: Uint8Array | ArrayBuffer): void;
+  wake(session: Session, blob: Uint8Array | ArrayBuffer): void;
   /** Starts a migration of the running actors (every chart's, `chart`'s or
    * one `session`) to the current version of their chart, in later runs;
    * returns core's migration id, which `migrated` and `migrationDone` (and
