@@ -7,7 +7,10 @@ allocator, traced by lifetime, measured, with arenas over the
 environment's allocator proposed where a lifetime is known instead of a
 `malloc` and a `free` per block. It subsumes item (2), the spike of a
 session row's `napi_ref` against scopes held in one JavaScript array per
-host.
+host. A fresh agent's refutation (log entry `l-p2-decisions-refute`, its
+spikes in the scratch directory `refute-allocation`) and step
+p2-allocation, which built what it found, corrected it: each finding
+says what changed, and the table at the end gives the verdicts.
 
 **Whom it serves:** first the capacity planner and the operator (bytes
 per actor, calls into the allocator per event), then the application
@@ -17,7 +20,12 @@ for both bindings). **What answers them already:** `mise run measure`
 **Who pays for a change:** per event nothing, per actor nothing, per host
 the scratch arena's high-water mark once a chart parses XML; code size a
 few lines in `src/datamodel/dom.c`; API surface none; work in the Python
-binding none (its datamodel has no XML parser). **Out of scope:**
+binding none (its datamodel has no XML parser). Step p2-allocation's
+changes cost nothing per event either (each measured, findings 3, 3b, 7,
+8), save about 96 B of `malloc` an actor and a `napi_ref` and a box per
+primitive payload, and give back an arena's chunks over its cap after a
+large call, at the price of allocating one chunk again on the next call.
+**Out of scope:**
 quickjs's own `malloc` (core's sandbox allocates for itself), V8's and
 JavaScriptCore's heaps, and core's growth policy.
 
@@ -69,19 +77,20 @@ host's allocator. "Calls" are calls of the allocator.
 | Object | Owner | Created | Read | Ends | Size, calls | Shaped by its lifetime? |
 |---|---|---|---|---|---|---|
 | the environment's instance (`ta_napi_instance`) | the environment | module init, `calloc` (`src/module.c:157`) | every call | the environment's teardown | one struct | yes: one block for the environment's life |
-| the instance's arena | the environment | first module call (`encode`, `decode`, `Address`) | the call | chunks kept until teardown, a mark per call | 64 KB chunks | yes |
+| the instance's arena | the environment | first module call (`encode`, `decode`, `Address`) | the call | chunks kept until teardown, a mark per call; above 64 KB, freed when the outermost call releases (finding 7) | 16 KB chunks | yes |
 | a `ta_napi_host` | the wrapper | `new Host` (`src/host.c:750`) | every host call | the wrapper's finalizer | one struct | yes |
-| the host's arena | the host | `new Host`, chunks on first use | the call (config CBOR, text, input structs, typed methods' params) | chunks kept until `close()`, a mark per call | 16 KB chunks; 2 at creation | yes |
-| the host's tables (charts, sessions, payloads, loops, pending) | the host | first row | the datamodel's entries, the drain | `close()` | doubling: 10 calls for 10,000 sessions, the last 655,360 B (64 B a slot) | yes: one block per table size, the old one freed at the doubling |
-| core's region of a segment | core, through the host's allocator | `ta_host_add_image` | runs | the next size (a relocation) or `close()` | sized up front by `maxActors`: one block of 2,868,303 B for 10,016 actors; grown from the default size: 10 relocations to 48,967,047 B at 40,000 actors | yes: one block per segment size; old and new coexist during the copy, so an arena could not hold less |
+| the host's arena | the host | `new Host`, chunks on first use | the call (config CBOR, text, input structs, typed methods' params) | chunks kept until `close()`, a mark per call; above 256 KB, freed when the outermost call releases (finding 7) | 16 KB chunks; 2 at creation | yes |
+| the host's tables (charts, sessions, payloads, loops, pending) | the host | first row | the datamodel's entries, the drain | `close()` | doubling: 10 calls for 10,000 sessions, the last 655,360 B (16,384 slots of 40 B: a 32 B row and core's 8 B record; 32 B a slot since the session row is 24 B, finding 3) | yes: one block per table size, the old one freed at the doubling |
+| core's region of a segment | core, through the host's allocator | `ta_host_add_image` | runs | the next size (a relocation) or `close()` | sized up front by `maxActors`: one block of 2,868,303 B for 10,016 actors; grown from the default size: 10 relocations to 48,967,047 B at 40,000 actors, each doubling every pool; never smaller again (finding 6) | yes: one block per segment size; old and new coexist during the copy, so an arena could not hold less |
 | core's other host blocks | core | `ta_host_create` | runs, takes | `close()` | about 20 blocks of 16 B to 64 KB | yes |
-| the compile result | the `Compiled` | `compileCharts` (`ta_compile_options.alloc`) | `image`'s first read | `close()` or the finalizer (`ta_compile_free`) | about 40 blocks of 16 B to 1.5 KB, freed block by block by the compiler | the lifetime is known, the blocks freed one by one; not changed (below) |
+| the compile result | the `Compiled` | `compileCharts` (`ta_compile_options.alloc`) | `image`'s first read | `close()` or the finalizer (`ta_compile_free`) | the result is core's arena of 32 KB chunks (`tinyactors-core/src/compile/compile.c:47`); the about 40 blocks of 16 B to 1.5 KB freed one by one are the compiler's temporaries | yes (finding 4) |
 | the native datamodel's last output (`native->output`) | the datamodel | its first output | core, until the datamodel's next call | grown, kept until `close()` | one block, doubling | yes |
-| **an XML parse's tree** (txml) | the parse | `ta_napi_dom` (`src/datamodel/dom.c`) | the tree's cursors, while its JavaScript is made | the parse's end | **13 blocks, about 1.7 MB, for a small document, freed block by block** | **no, before this step; yes now** (finding 2) |
-| a snapshot's pack | the call | `host.snapshot()` (`src/host.c:1565`, `:1608`) | `ta_host_snapshot_pack` | the call's end | the snapshot's size | the call's, but sized by the population: kept chunks would hold the largest snapshot for the host's life; not changed |
+| **an XML parse's tree** (txml) | the parse | `ta_napi_dom` (`src/datamodel/dom.c`) | the tree's cursors, while its JavaScript is made | the parse's end | **13 blocks, about 1.7 MB, for a small document, freed block by block**; now the datamodel's scratch arena, 2.48 MB high-water with the host's other blocks at the first parse | **no, before p2-decisions; yes now** (findings 2, 8) |
+| a snapshot's pack | the call | `host.snapshot()` (`src/host.c:1565`, `:1608`) | `ta_host_snapshot_pack` | the call's end | the snapshot's size; on quickjs its state three times (quickjs's buffer, the writer's copy, the pack's `Buffer`) | the call's, but sized by the population: kept chunks would hold the largest snapshot for the host's life; not changed (finding 5) |
 | `Host.restore`'s copy of an unaligned snapshot, and its system id | the call | `Host.restore` (`src/host.c:592`, `:636`) | the restore | the call's end | the snapshot's size, once | as above |
-| a session's `napi_ref` | the session's row | `create`, `deserialize`, a restore | every entry (`ta_napi_evaluation_of`) | `destroy` | node's `v8impl::Reference` and its global handle, outside the host's allocator: about 96 B an actor of `malloc` (finding 3) | not the host's allocator; an alternative measured, not adopted |
-| a payload's, a chart's and a loop's `napi_ref` | the row | `capture`, an input; `chart_attach`; `<foreach>` | the datamodel | the row's end | one per row | as above, not measured separately |
+| a session's scope | the host's `scopes` array, at the row's slot | `create`, `deserialize`, a restore | every entry (`ta_napi_evaluation_of`) | `destroy` | an element (8 B of the engine's heap); before p2-allocation a `napi_ref`, node's `v8impl::Reference` and its global handle outside the host's allocator, about 96 B an actor of `malloc` (finding 3) | yes |
+| a payload's value | an object's: the row's `napi_ref`; a primitive's: the host's `values` array at the row's slot | `capture`, an input | the datamodel | the row's end | a `napi_ref` (about 96 B of `malloc` on node) per object payload, an element per primitive one; before p2-allocation a `napi_ref` and a box per primitive: node `malloc` per event with data (finding 3b) | yes: an event's |
+| a chart's and a loop's `napi_ref` | the row | `chart_attach`; `<foreach>` | the datamodel | the row's end | one per row: per chart, per loop in progress | yes |
 
 ## Findings
 
@@ -106,14 +115,16 @@ analysis sees it; the refutation is below.
   calls on native (the region's 10 relocations, 190,511 B to 48,967,047
   B, and the session table's 12 doublings), 10 on quickjs, none during
   the events.
-- **Verdict:** confirmed for these scenarios. A `malloc` per block is the
-  right shape here: each block is one lifetime (a table size, a segment
-  size), and the old and new blocks of a growth coexist during the copy,
-  which an arena would not shorten.
-- **Action:** none. Observation for core, not followed here: a region
-  grown from the default size is 48,967,047 B at 40,000 actors (1224 B an
-  actor), while one sized up front for 10,016 is 2,868,303 B (287 B an
-  actor); why growth costs four times as much per actor is unverified.
+- **Verdict:** confirmed for the host's allocator by the refutation, but
+  the claim missed what is not the host's allocator: a payload's
+  `napi_ref`, and the array that boxed a primitive one, were node
+  `malloc`s per event with data (`src/datamodel/rows.c`, before finding
+  3b), and the arenas kept their high-water mark (finding 7). A `malloc`
+  per block is the right shape for the blocks above: each block is one
+  lifetime (a table size, a segment size), and the old and new blocks of a
+  growth coexist during the copy, which an arena would not shorten.
+- **Action:** none for these blocks. The observation that a grown region
+  costs four times as much per actor was refuted: finding 6.
 
 ### 2. An XML parse allocated and freed about 1.7 MB in 13 blocks, each time
 
@@ -217,9 +228,11 @@ analysis sees it; the refutation is below.
 - **Evidence:** the 39 frees of 16 B to 1.5 KB in phase 0 of gdb's counts
   (the compile, then `close()`); the compiler frees through
   `ta_compile_options.alloc` (`src/compile.c:366`).
-- **Verdict:** plausible saving, but nothing pays for it: about 40 calls
-  per compile, rare. An arena would need one more object per result to
-  own it.
+- **Verdict:** the conclusion holds, the reason does not (the
+  refutation): the result is already core's arena of 32 KB chunks
+  (`tinyactors-core/src/compile/compile.c:47-48`, freed at `:287`), and
+  the about 40 blocks freed one by one are the compiler's temporaries
+  during `ta_compile_charts`, about 40 calls a compile, which is rare.
 - **Action:** none.
 
 ### 5. A snapshot's buffers are a call's, sized by the population
@@ -231,8 +244,33 @@ analysis sees it; the refutation is below.
 - **Evidence:** `src/host.c:1565-1584` (the pack, its probe's size),
   `:1608` (the writer through the host's allocator, "a snapshot's size is
   no call's scratch").
-- **Verdict:** confirmed by reading; not measured.
-- **Action:** none.
+- **Verdict:** confirmed (the refutation), with one more cost: on quickjs
+  the state is written three times, into quickjs's buffer
+  (`ta_napi_quickjs_state`), copied into the writer's CBOR, and copied
+  again by the pack into the `Buffer` (`src/host.c`, `ta_napi_host_snapshot`).
+- **Action:** none in p2-allocation (a snapshot is rare, and the copies
+  are the call's); writing the state once is later work.
+
+### 6. A region grown from the default size, and regions never shrink
+
+- **Claim (finding 1's observation):** a region grown from the default
+  size costs about four times as much per actor as one sized up front
+  (1,224 B against 287 B an actor).
+- **Evidence:** the refutation's `region.mjs`, run again for this step
+  (node 22.23.3, the regions' bytes from `host.stats`): sized up front for
+  10,016 actors 2,868,296 B, for 40,016 actors 10,415,192 B (260 B an
+  actor); grown by spawning 40,000 from the default size 48,967,040 B,
+  exactly the size of a region configured with every pool at 1,024 times
+  its default (events, timers, requests, workspaces and the strings), and
+  21,167,552 B with events and strings sized for the actors: growth doubles
+  every pool, not only the actors'. No `shrink` appears in core's system or
+  host (`tinyactors-core/src/system`, `src/host`): a region keeps its
+  largest size until `close()`.
+- **Verdict:** refuted as a per-actor cost: it is the growth policy,
+  which sizes every pool by the actors' growth.
+- **Action:** core's (step p2-core-memory); a capacity planner sizes a
+  host up front (`system.maxActors` and the pools) or plans for the grown
+  size.
 
 ### 7. An arena keeps its high-water mark (step p2-allocation (c))
 
@@ -289,18 +327,19 @@ analysis sees it; the refutation is below.
 
 ## Refutation
 
-The step asks for a fresh agent to refute each finding against the
-repository and the primary sources before any finding changes the design
-(reasoned-analysis, step 8). This session cannot start one, so the claims
-wait for the coordinator (log entry `l-p2-decisions-refute`). Finding 2
-was built because its evidence is a measurement both ways; the others
-change nothing.
+A fresh agent refuted each finding against the repository and the
+primary sources (reasoned-analysis, step 8; log entry
+`l-p2-decisions-refute`), and step p2-allocation built what it found,
+measuring each change before and after on this machine.
 
-| # | Claim to refute | Status |
-|---|---|---|
-| 1 | The host's allocator is called once per lifetime-sized block (tables' doublings, a segment's region per size), never per actor or per event; an arena would not do better. | unrefuted |
-| 1b | A region grown from the default size costs about four times as much per actor as one sized up front (1224 B against 287 B). | unrefuted (an observation; its cause unverified) |
-| 2 | An XML parse made 13 blocks of about 1.7 MB through the host's allocator; an arena with a mark per parse removes every call after warm-up and the bun cost (447 to 503 us to 15 us an event), at the price of the high-water mark kept per host. | unrefuted |
-| 3 | A session's `napi_ref` costs about 96 B an actor of `malloc` on node; one array per host saves it but costs about 8 % an event on node, so it is not adopted. | unrefuted |
-| 4 | The compile result's blocks are not worth an arena. | unrefuted |
-| 5 | A snapshot's buffers are rightly a `malloc` and a `free` per call. | unrefuted |
+| # | Claim | Verdict | What changed |
+|---|---|---|---|
+| 1 | The host's allocator is called once per lifetime-sized block, never per actor or per event; an arena would not do better. | confirmed for the host's allocator; missed the payloads' `napi_ref`s per event and the arenas' high-water | findings 3b, 7 |
+| 1b | A region grown from the default size costs about four times as much per actor as one sized up front. | refuted: growth doubles every pool (260 B an actor sized up front at 40,000, 1,224 B grown), and regions never shrink | finding 6; core's, step p2-core-memory |
+| 2 | An XML parse made 13 blocks of about 1.7 MB; an arena with a mark per parse removes every call after warm-up, at the price of the high-water kept per host. | confirmed; txml's window and chunks can halve what is kept | finding 8: the window only, the chunks cost every parse |
+| 3 | A session's `napi_ref` costs about 96 B an actor; one array per host costs about 8 % an event on node, so it is not adopted. | refuted: three runs a side and a redundant `napi_typeof`; the lean shape costs nothing | built: finding 3 |
+| 3b | (p2-allocation) A payload's value in an array saves its `napi_ref` without a cost. | confirmed for primitives, refuted for objects on node | built for primitives |
+| 4 | The compile result's blocks are not worth an arena. | the conclusion holds: the result is already an arena | none |
+| 5 | A snapshot's buffers are rightly a `malloc` and a `free` per call. | confirmed; quickjs's state is copied three times | none yet |
+| 7 | (missed) An arena keeps its high-water mark for its owner's life. | confirmed: 6.5 MB after one 2 MB `encode` | built: a cap per arena |
+| — | (missed) A table's slot is 64 B. | refuted: 40 B, a 32 B row and core's 8 B record | the table above |

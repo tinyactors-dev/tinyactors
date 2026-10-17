@@ -641,6 +641,11 @@ d-dom, d-separate):
   generation grows during the spawns (about 300 B an actor of
   `new_space` at 10,000), so at 40,000 the native datamodel is 747 B
   resident on node and 971 B on bun (`--actors 40000`, 2026-10-16).
+  The region is sized up front here (`maxActors`); grown from the default
+  size it doubles every pool, not only the actors', and never shrinks:
+  48,967,040 B at 40,000 actors against 10,415,192 B sized for them (1,224
+  and 260 B an actor; docs/allocation.md, finding 6). The host's tables
+  add a slot per row, the row and core's 8 B record: 32 B a session.
   **A session holds no `napi_ref`** (2026-10-17, docs/allocation.md,
   finding 3): node's is a `v8impl::Reference` and its global handle,
   about 96 B an actor of malloc (glibc's bytes in use, 160.4 B an actor
