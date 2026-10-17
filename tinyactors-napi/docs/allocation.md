@@ -166,12 +166,18 @@ analysis sees it; the refutation is below.
   5.27, 5.16 us before, 5.54, 5.70, 5.84 us after**; bun 3.73, 3.90, 3.90
   before, 3.93, 3.89, 4.00 after; spawn and terminate node 7.49 to 7.63
   us before, 7.91 to 8.41 after.
-- **Verdict:** confirmed for node; on bun the saving is within resident's
-  variation and the cost within noise.
-- **Action:** not adopted: the decision (`l-p1-measure-resident-engine`)
-  adopts it only "if it saves memory per actor without a cost per event",
-  and node pays about 8 % an event. The numbers are in AGENTS.md,
-  "Measured cost per session", in place of the unverified attribution.
+- **Verdict:** refuted (the refutation, below): the 8 % was three runs
+  a side and a redundant `napi_typeof` in the spike.
+- **Action:** built (step p2-allocation (a)): the scopes are one array
+  per host at the row's slot, and the row is 24 B. Measured again with the
+  lean shape, 12 alternating runs pinned to one CPU, the array's read
+  alone cost node 1 to 3 % an event (three series: 5.233 against 5.382 us,
+  5.179 against 5.312, 5.225 against 5.277); an entry no longer reads the
+  shared context, which only a compilation needs, and with that node is
+  5.225 us before and 5.198 after, bun 3.599 and 3.561. Resident, three
+  runs each: node native 1282, 1278, 1277 B before, 1188, 1185, 1192 B
+  after; bun native 2058, 2024, 2071 and 1632, 1661, 1919. AGENTS.md,
+  "Measured cost per session", has the numbers.
 
 ### 4. The compile result's blocks are freed one by one
 

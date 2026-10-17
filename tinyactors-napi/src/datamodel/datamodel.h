@@ -70,6 +70,16 @@ napi_value ta_napi_native_get(ta_napi_native *native, napi_ref reference);
  * value kept in the drops until the flush (dropping the last reference can
  * run JavaScript: AGENTS.md, "Rules the suite cannot see"). */
 void ta_napi_native_drop(ta_napi_native *native, napi_ref reference);
+/* A session's scope, element `slot` of `scopes` for its row's handle;
+ * NULL when it has none. */
+napi_value ta_napi_session_scope(ta_napi_native *native, uint64_t handle);
+/* Holds `scope` for the session of row `handle`; false with an exception
+ * pending. */
+bool ta_napi_session_hold(ta_napi_native *native, uint64_t handle, napi_value scope);
+/* The session's scope let go: kept in the drops until the flush, as a
+ * row's reference is; nothing while the host is freed (the array goes with
+ * the datamodel). */
+void ta_napi_session_let_go(ta_napi_native *native, uint64_t handle);
 /* A new payload holding `value` (of the shared context) with one reference. */
 ta_status ta_napi_native_add(ta_napi_native *native, napi_value value, ta_payload *out);
 void ta_napi_native_retain(void *datamodel, ta_payload payload);
@@ -137,7 +147,6 @@ typedef struct ta_napi_evaluation {
     napi_value record;  /* the chart's record */
     napi_value own;     /* a declaring session's record, or NULL */
     napi_value kit;     /* the kit of the scope's context */
-    napi_value context; /* the shared context (a shared chart's session) */
 } ta_napi_evaluation;
 
 /* The value of expression `e`, or NULL with its exception pending (a

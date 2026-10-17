@@ -322,7 +322,9 @@ least 8 on each. So the addon's `alloc` need not align by hand (an
 The addon allocates almost nothing (bindings.md, section 6):
 
 - **Rows in core's `ta_table`** (`tinyactors/table.h`, ADR 0012 decision
-  5): a session (its scope), a chart (its compiled functions), a
+  5): a session (its chart and its `_event`'s string ids, 24 B; its
+  scope is the element at the row's slot of one JavaScript array per
+  host, no `napi_ref`), a chart (its compiled functions), a
   payload (its `napi_ref` and reference count), a `<foreach>`, a pending
   typed method (its handlers). The tables grow
   through the host's allocator and are freed once with the host. Keep
@@ -588,7 +590,7 @@ d-dom, d-separate):
   (`(0, eval)(name)` in its context), for hibernation, migration and
   snapshots alike: bun's vm context leaves a global's property stale after
   a function writes its `var` (spike, bun 1.4.1, 2026-10-16).
-- **Measured cost per session** (`mise run measure`, 2026-10-16: x86_64
+- **Measured cost per session** (`mise run measure`, 2026-10-17: x86_64
   Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3 with V8
   12.4, bun 1.4.1; 10,000 actors of a chart with three `<data>`, one of
   them a list, resident and idle; all four from one run, this machine's,
@@ -596,37 +598,42 @@ d-dom, d-separate):
 
   | runtime, datamodel | resident | engine heap | region | after one event: resident | heap |
   |---|---|---|---|---|---|
-  | node, native | 1240 | 189 | 268 | 1655 | 272 |
-  | node, quickjs | 878 | 10 | 268 | 1337 | 11 |
-  | bun, native | 1762 | 246 | 268 | 2679 | 336 |
-  | bun, quickjs | 1172 | 24 | 268 | 1619 | 24 |
+  | node, native | 1188 | 197 | 287 | 1589 | 281 |
+  | node, quickjs | 891 | 10 | 287 | 1363 | 11 |
+  | bun, native | 1632 | 255 | 287 | 2602 | 345 |
+  | bun, quickjs | 1195 | 24 | 287 | 1602 | 24 |
 
   The engine heap is node's `heapUsed + external` and bun's `heapSize +
   extraMemorySize` after a forced collection; quickjs's heap is its own
   malloc, in resident only. Resident varies between runs (bun's native
-  1762 to 2049 B in three runs that day; heap and region do not). The Python binding measured 433 B resident
+  1632 to 1919 B in three runs that day; heap and region do not). The Python binding measured 433 B resident
   on its `"python"` datamodel and 1104 B on quickjs on its own machine
   (`tinyactors-cpython/AGENTS.md`): not comparable with these, which are
   another machine's. A native session's heap is its scope (64 B on node),
-  its link (60 B), its list and its `_sessionid`; after one event its
+  its link (60 B), its list, its `_sessionid` and its element of the
+  host's `scopes` array (8 B); after one event its
   `_event` adds about 85 B. Resident above heap and region is the
   engine's, much of it a fixed cost the population amortizes: V8's young
   generation grows during the spawns (about 300 B an actor of
   `new_space` at 10,000), so at 40,000 the native datamodel is 747 B
-  resident on node and 971 B on bun (`--actors 40000`, the same day), and
-  about 140 B an actor of malloc (glibc's `malloc_stats` under gdb).
-  **Most of that malloc is the session's `napi_ref`** (measured
-  2026-10-17, docs/allocation.md, finding 3; 160 B an actor of malloc in
-  use that day, 52 to 65 B of it the session table): a spike that held
-  the scopes in one array per host at the row's slot, with no `napi_ref`
-  per session, gave 63.9 B; resident on node native 1266, 1237, 1269 B
-  before and 1194, 1184, 1180 B after (after one event 1666, 1654, 1693
-  and 1595, 1593, 1615), heap 189 and 197 B; bun native 2008, 2043, 1767
-  and 1910, 1918, 1919. It is not adopted: each datamodel entry then
-  reads its scope with `napi_get_element`, and an event cost 5.13 to 5.27
-  us before and 5.54 to 5.84 us after on node (8 %; bun 3.73 to 3.90 and
-  3.89 to 4.00), which the decision (`l-p1-measure-resident-engine`)
-  does not allow. Before the system
+  resident on node and 971 B on bun (`--actors 40000`, 2026-10-16).
+  **A session holds no `napi_ref`** (2026-10-17, docs/allocation.md,
+  finding 3): node's is a `v8impl::Reference` and its global handle,
+  about 96 B an actor of malloc (glibc's bytes in use, 160.4 B an actor
+  with it, 63.9 B without, 52 to 65 B of either the session table), so
+  the scopes are one JavaScript array per host at the row's slot and the
+  row is 24 B. Before and after, three runs each of `mise run measure`:
+  node native resident 1282, 1278, 1277 B and 1188, 1185, 1192 B (after
+  one event 1647, 1679, 1720 and 1589, 1593, 1579), heap 189 and 197 B;
+  bun native 2058, 2024, 2071 and 1632, 1661, 1919. Per event (the
+  benchmark of 10,000 actors of `fit`, one event to each per round, the
+  least of 40 rounds, pinned to one CPU, builds alternating, the mean of
+  12 runs on node and 8 on bun): node 5.225 us before, 5.198 us after;
+  bun 3.599 and 3.561. The array's read (`napi_get_element`) alone cost
+  node 1 to 3 % an event in three such series (5.277 us against 5.225 in
+  this one), since each entry reads its scope; the shared
+  context, which only a compilation needs, is no longer read per entry,
+  and that pays for it. Before the system
   variables were made lazy, an earlier run on this machine gave 356 B of
   heap on node and 448 B on bun (1565 B and 2135 B resident).
 

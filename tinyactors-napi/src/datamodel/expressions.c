@@ -48,11 +48,12 @@ static napi_value ta_napi_fail(napi_env env, const char *message) {
 
 /* The compiled form of `e` in `cache` (a JavaScript array), compiled and
  * kept there at its first use; null kept when it did not compile, so it is
- * not compiled again. `run` makes a function of the script (in `context`);
- * without it the vm.Script itself is kept. */
+ * not compiled again. `shared` makes a function of the script, run in the
+ * shared context (read only here, when it compiles: an evaluation does not
+ * read it); without it the vm.Script itself is kept. */
 typedef struct ta_napi_compiled {
     napi_value cache;
-    napi_value context; /* NULL: keep the vm.Script */
+    bool shared; /* false: keep the vm.Script */
     ta_napi_script_of shape;
 } ta_napi_compiled;
 
@@ -64,8 +65,12 @@ static napi_value ta_napi_compiled_of(ta_napi_evaluation *evaluation, const ta_n
     if (napi_get_element(env, compiled->cache, e, &kept) != napi_ok || napi_typeof(env, kept, &type) != napi_ok) return NULL;
     if (type == napi_null) return ta_napi_fail(env, "the expression did not compile");
     if (type != napi_undefined) return kept;
-    napi_value made = ta_napi_script(evaluation->native, &compiled->shape);
-    if (made != NULL && compiled->context != NULL) made = ta_napi_run_in(env, made, compiled->context);
+    napi_value made = ta_napi_script(evaluation->native, &compiled->shape), shared, context;
+    if (made != NULL && compiled->shared)
+        made = (shared = ta_napi_realm_shared(evaluation->native)) != NULL &&
+                       napi_get_element(env, shared, TA_NAPI_REALM_CONTEXT, &context) == napi_ok
+                   ? ta_napi_run_in(env, made, context)
+                   : NULL;
     if (made == NULL) { /* kept as null, and this evaluation fails with the SyntaxError */
         napi_value error = NULL, null;
         napi_get_and_clear_last_exception(env, &error);
@@ -96,7 +101,7 @@ static napi_value ta_napi_own_function(ta_napi_evaluation *evaluation, const ta_
     if (napi_get_element(env, evaluation->record, of->scripts, &scripts) != napi_ok ||
         napi_get_element(env, evaluation->own, TA_NAPI_OWN_CONTEXT, &context) != napi_ok)
         return NULL;
-    napi_value script = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){scripts, NULL, of->shape});
+    napi_value script = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){scripts, false, of->shape});
     napi_value made = script != NULL ? ta_napi_run_in(env, script, context) : NULL;
     if (made == NULL || napi_set_element(env, cache, e, made) != napi_ok) return NULL;
     return made;
@@ -118,7 +123,7 @@ napi_value ta_napi_evaluate(ta_napi_evaluation *evaluation, ta_expression e) {
                                                                TA_NAPI_TEXT(ta_napi_shared_script_end), e}
                                          : (ta_napi_script_of){TA_NAPI_TEXT(ta_napi_shared_value), source,
                                                                TA_NAPI_TEXT(ta_napi_shared_value_end), e};
-        function = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){cache, evaluation->context, shape});
+        function = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){cache, true, shape});
         if (function == NULL ||
             napi_call_function(env, undefined, function, 1, &evaluation->scope, &result) != napi_ok)
             return NULL;
@@ -129,7 +134,7 @@ napi_value ta_napi_evaluate(ta_napi_evaluation *evaluation, ta_expression e) {
         if (napi_get_element(env, evaluation->record, TA_NAPI_CHART_GETTERS, &scripts) != napi_ok ||
             napi_get_element(env, evaluation->own, TA_NAPI_OWN_CONTEXT, &context) != napi_ok)
             return NULL;
-        napi_value made = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){scripts, NULL, {{"\n", 1}, source, {NULL, 0}, e}});
+        napi_value made = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){scripts, false, {{"\n", 1}, source, {NULL, 0}, e}});
         return made != NULL ? ta_napi_run_in(env, made, context) : NULL;
     }
     ta_napi_own_of of = {TA_NAPI_OWN_GETTERS, TA_NAPI_CHART_GETTERS,
@@ -176,7 +181,7 @@ bool ta_napi_assign(ta_napi_evaluation *evaluation, const ta_napi_assignment *as
         napi_value cache, function, argv[2] = {evaluation->scope, assignment->value};
         if (napi_get_element(env, evaluation->record, TA_NAPI_CHART_SETTERS, &cache) != napi_ok) return false;
         ta_napi_script_of shape = {TA_NAPI_TEXT(ta_napi_shared_setter), source, TA_NAPI_TEXT(ta_napi_shared_setter_end), e};
-        function = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){cache, evaluation->context, shape});
+        function = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){cache, true, shape});
         return function != NULL && napi_call_function(env, undefined, function, 2, argv, &result) == napi_ok;
     }
     ta_napi_own_of of = {TA_NAPI_OWN_SETTERS, TA_NAPI_CHART_SETTERS,

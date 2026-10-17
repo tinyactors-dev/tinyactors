@@ -223,7 +223,9 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info);
  *
  *   chart    a chart the native datamodel attached: its compiled
  *            functions, made lazily;
- *   session  a session's scope (or its context), and its chart's row;
+ *   session  its chart's row and its _event's string ids (24 B); its
+ *            scope (or its context) is the native datamodel's `scopes`
+ *            element at the row's slot, not a napi_ref;
  *   payload  a value crossing between actors: its reference and count;
  *   loop     a <foreach> in progress: the items it walks;
  *   pending  a typed method's message: its handlers are kept on the
@@ -240,12 +242,13 @@ typedef struct ta_napi_chart_row {
                              segments may run one image */
 } ta_napi_chart_row;
 
-/* A session's row: its scope, its chart's row, and core's ids of its
- * _event's strings (the name, the invoke's slot, the origintype: TA_NIL for
- * none), which a hibernation blob carries so a woken session shares the
- * chart's strings again. */
+/* A session's row: its chart's row (never 0 once filled), and core's ids
+ * of its _event's strings (the name, the invoke's slot, the origintype:
+ * TA_NIL for none), which a hibernation blob carries so a woken session
+ * shares the chart's strings again. Its scope is not in the row: it is
+ * element `slot` of the native datamodel's `scopes` array, the slot of the
+ * row's handle, so a session holds no napi_ref of its own. */
 typedef struct ta_napi_session_row {
-    napi_ref scope;
     uint64_t chart;
     uint32_t name_id, invoke_slot, origintype_id;
 } ta_napi_session_row;
@@ -269,6 +272,10 @@ typedef struct ta_napi_pending_row {
  *
  *   shared       the record [context, kit] of the host's one shared
  *                node:vm context, made on first use;
+ *   scopes       an array of the sessions' scopes (a scope object, or a
+ *                declaring session's own context's record), each at its
+ *                row's slot (ta_table's handle: generation << 32 | slot + 1),
+ *                made on first use: one napi_ref for every session;
  *   drops        an array holding the values whose last reference went,
  *                emptied by the flush after the outer call into core;
  *   strings      ["platform", "internal", "external", the I/O processors'
@@ -288,7 +295,7 @@ typedef struct ta_napi_pending_row {
 struct ta_napi_host;
 typedef struct ta_napi_native {
     struct ta_napi_host *host;
-    napi_ref shared, drops, strings;
+    napi_ref shared, scopes, drops, strings;
     ta_datamodel_environment *environment;
     ta_growable_arena scratch;
     ta_buffer output;

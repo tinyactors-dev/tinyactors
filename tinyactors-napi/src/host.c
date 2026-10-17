@@ -30,7 +30,9 @@ static const napi_type_tag ta_napi_host_tag = {0x7461686f73744e41ULL, 0x5049686f
 /* ---- the tables and their release ------------------------------------------ */
 
 /* The tables a host keeps and, for each, where its row's napi_ref is
- * (every row kind but pending holds one, first). */
+ * (a chart's, a payload's and a loop's hold one, first; a session's scope
+ * is in the native datamodel's `scopes` array, a pending row's handlers on
+ * the wrapper). */
 typedef struct ta_napi_rows {
     ta_table *table;
     bool referenced;
@@ -77,7 +79,7 @@ static void ta_napi_host_release(napi_env env, ta_napi_host *host) {
         *references[i] = NULL;
     }
     const ta_napi_rows rows[] = {
-        {&host->charts, true}, {&host->sessions, true}, {&host->payloads, true},
+        {&host->charts, true}, {&host->sessions, false}, {&host->payloads, true},
         {&host->loops, true},  {&host->pending, false},
     };
     for (size_t i = 0; i < sizeof rows / sizeof rows[0]; i++) ta_napi_rows_release(env, &rows[i]);

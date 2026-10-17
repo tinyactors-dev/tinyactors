@@ -2,9 +2,10 @@
  * AGENTS.md, "The native "ecmascript" datamodel"; structured as
  * tinyactors-cpython/src/datamodel/datamodel.c, sharing no code or text with
  * quickjs's datamodel). A chart is a row holding its record (datamodel.h);
- * a session a row holding its scope, a scope made by its chart's
- * constructor in the shared context, or, for a chart whose scripts
- * declare, the record of a context of its own. Every entry opens a handle
+ * a session a row whose scope, a scope made by its chart's constructor in
+ * the shared context or, for a chart whose scripts declare, the record of
+ * a context of its own, is the element at the row's slot of the host's
+ * one `scopes` array (rows.c). Every entry opens a handle
  * scope of its own (a run is one native call: handles would pile up until
  * it returns); an expression that throws is TA_ERROR_EXECUTION. Values
  * cross by copy, made with the receiving context's constructors (the
@@ -68,7 +69,7 @@ static bool ta_napi_evaluation_of(const ta_datamodel_call *call, ta_napi_evaluat
     if (chart == NULL) return false;
     evaluation->row = *chart;
     evaluation->chart = &evaluation->row;
-    napi_value held = ta_napi_native_get(native, session->scope), shared;
+    napi_value held = ta_napi_session_scope(native, call->instance), shared;
     if (held == NULL || (evaluation->record = ta_napi_native_get(native, chart->functions)) == NULL) return false;
     if (chart->flags & TA_NAPI_CHART_DECLARES) {
         evaluation->own = held;
@@ -78,8 +79,7 @@ static bool ta_napi_evaluation_of(const ta_datamodel_call *call, ta_napi_evaluat
     } else {
         evaluation->scope = held;
         if ((shared = ta_napi_realm_shared(native)) == NULL ||
-            napi_get_element(env, shared, TA_NAPI_REALM_KIT, &evaluation->kit) != napi_ok ||
-            napi_get_element(env, shared, TA_NAPI_REALM_CONTEXT, &evaluation->context) != napi_ok)
+            napi_get_element(env, shared, TA_NAPI_REALM_KIT, &evaluation->kit) != napi_ok)
             return false;
     }
     if (call->environment != NULL) ta_datamodel_environment_charge(call->environment, 1); /* fuel once per evaluation */
@@ -334,19 +334,19 @@ static ta_status ta_napi_create(void *datamodel, const ta_datamodel_start *start
     ta_napi_chart_row *chart = (ta_napi_chart_row *)ta_table_get(&native->host->charts, chart_handle);
     ta_status status = TA_OK;
     napi_value made = NULL;
-    napi_ref reference = NULL;
     if (chart == NULL || !ta_napi_keep_strings(native, start->system_variables) ||
-        (made = ta_napi_session_new(native, &(ta_napi_start_of){chart, start->system_variables, init, NULL})) == NULL ||
-        napi_create_reference(env, made, 1, &reference) != napi_ok)
+        (made = ta_napi_session_new(native, &(ta_napi_start_of){chart, start->system_variables, init, NULL})) == NULL)
         status = ta_napi_failed(env);
     uint64_t handle = 0;
     ta_napi_session_row *row = status == TA_OK ? (ta_napi_session_row *)ta_table_add(&native->host->sessions, &handle) : NULL;
-    if (status == TA_OK && row == NULL) {
-        napi_delete_reference(env, reference);
-        status = TA_ERROR_NO_MEMORY;
+    if (status == TA_OK && row == NULL) status = TA_ERROR_NO_MEMORY;
+    if (row != NULL && !ta_napi_session_hold(native, handle, made)) { /* no row without its scope */
+        ta_table_remove(&native->host->sessions, handle);
+        row = NULL;
+        status = ta_napi_failed(env);
     }
     if (row != NULL) {
-        *row = (ta_napi_session_row){reference, chart_handle, TA_NIL, TA_NIL, TA_NIL};
+        *row = (ta_napi_session_row){chart_handle, TA_NIL, TA_NIL, TA_NIL};
         *instance = handle;
     }
     ta_napi_frame_close(&frame);
@@ -357,9 +357,8 @@ static void ta_napi_destroy(const ta_datamodel_call *call) {
     ta_napi_native *native = (ta_napi_native *)call->datamodel;
     ta_napi_session_row *row = (ta_napi_session_row *)ta_table_get(&native->host->sessions, call->instance);
     if (row == NULL) return;
-    napi_ref reference = row->scope;
+    ta_napi_session_let_go(native, call->instance);
     ta_table_remove(&native->host->sessions, call->instance);
-    ta_napi_native_drop(native, reference);
 }
 
 /* The session's link: its system variables and params. */
@@ -920,7 +919,7 @@ static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *
     uint64_t chart_handle = (uint64_t)(uintptr_t)start->chart_context;
     ta_napi_chart_row *found = (ta_napi_chart_row *)ta_table_get(&native->host->charts, chart_handle);
     ta_napi_chart_row chart = found != NULL ? *found : (ta_napi_chart_row){NULL, NULL, 0, 0, 0};
-    ta_napi_session_row row = {NULL, chart_handle, TA_NIL, TA_NIL, TA_NIL};
+    ta_napi_session_row row = {chart_handle, TA_NIL, TA_NIL, TA_NIL};
     napi_value state = NULL, vars = NULL, fields = NULL, made = NULL, record, kit, target, context, shared, undefined, event;
     napi_valuetype type = napi_undefined;
     bool ok = found != NULL && napi_get_undefined(env, &undefined) == napi_ok && ta_napi_keep_strings(native, start->system_variables) &&
@@ -945,12 +944,14 @@ static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *
         ok = event != NULL && napi_define_properties(env, target, 1, &property) == napi_ok;
     }
     ta_status status = TA_OK;
-    if (!ok || napi_create_reference(env, made, 1, &row.scope) != napi_ok) status = (ta_napi_failed(env), TA_ERROR_INVALID);
+    if (!ok) status = (ta_napi_failed(env), TA_ERROR_INVALID);
     uint64_t handle = 0;
     ta_napi_session_row *added = status == TA_OK ? (ta_napi_session_row *)ta_table_add(&native->host->sessions, &handle) : NULL;
-    if (status == TA_OK && added == NULL) {
-        napi_delete_reference(env, row.scope);
-        status = TA_ERROR_NO_MEMORY;
+    if (status == TA_OK && added == NULL) status = TA_ERROR_NO_MEMORY;
+    if (added != NULL && !ta_napi_session_hold(native, handle, made)) {
+        ta_table_remove(&native->host->sessions, handle);
+        added = NULL;
+        status = (ta_napi_failed(env), TA_ERROR_INVALID);
     }
     if (added != NULL) {
         *added = row;
@@ -1400,9 +1401,9 @@ static bool ta_napi_restore_session(ta_napi_native *native, const ta_napi_sessio
     ta_napi_chart_row *found = (ta_napi_chart_row *)ta_table_get(&native->host->charts, in->attachment->found);
     ta_napi_session_row *slot = (ta_napi_session_row *)ta_table_get(&native->host->sessions, handle);
     if (found == NULL) return ta_napi_restore_refuse(env, "a session whose chart the restored host does not have");
-    if (slot == NULL || slot->scope != NULL) return ta_napi_restore_refuse(env, "a session the snapshot's tables do not hold, or twice");
+    if (slot == NULL || slot->chart != 0) return ta_napi_restore_refuse(env, "a session the snapshot's tables do not hold, or twice");
     ta_napi_chart_row chart = *found;
-    ta_napi_session_row row = {NULL, in->attachment->found, TA_NIL, TA_NIL, TA_NIL};
+    ta_napi_session_row row = {in->attachment->found, TA_NIL, TA_NIL, TA_NIL};
     napi_valuetype type = napi_undefined;
     uint32_t count = 0;
     bool ok = napi_get_undefined(env, &undefined) == napi_ok && (record = ta_napi_native_get(native, chart.functions)) != NULL &&
@@ -1437,7 +1438,7 @@ static bool ta_napi_restore_session(ta_napi_native *native, const ta_napi_sessio
         ok = event != NULL && napi_define_properties(env, target, 1, &property) == napi_ok;
     }
     if (!ok) return ta_napi_restore_refuse(env, "not a session of a snapshot");
-    if (napi_create_reference(env, made, 1, &row.scope) != napi_ok) return false;
+    if (!ta_napi_session_hold(native, handle, made)) return false;
     slot = (ta_napi_session_row *)ta_table_get(&native->host->sessions, handle); /* JavaScript ran: get it again */
     *slot = row;
     return true;
