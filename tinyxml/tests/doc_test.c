@@ -404,11 +404,52 @@ static void test_prefixes_are_per_node(void) {
     txml_doc_destroy(doc);
 }
 
+/* The pool's directory grows with the document: strings on many more pages
+ * than it starts with keep their addresses and bytes, and a page past what
+ * max_document_bytes allows is still TXML_ERR_LIMIT. */
+static void test_pool_directory_grows(void) {
+    txml_doc *doc = create(1024u);
+    static char page[1001];
+    uint32_t offsets[200];
+    const char *first = NULL;
+    for (uint32_t i = 0u; i < 200u; i++) {
+        memset(page, (int)('a' + i % 26u), sizeof page - 1u);
+        CHECK(txml_doc_pool_append(doc, (txml_str){ page, sizeof page - 1u }, &offsets[i]) == TXML_OK);
+        if (i == 0u) {
+            first = txml_doc_pool_str(doc, offsets[0], sizeof page - 1u).ptr;
+        }
+    }
+    CHECK(txml_doc_pool_str(doc, offsets[0], sizeof page - 1u).ptr == first); /* never moved */
+    for (uint32_t i = 0u; i < 200u; i++) {
+        const txml_str text = txml_doc_pool_str(doc, offsets[i], sizeof page - 1u);
+        CHECK(text.length == sizeof page - 1u && text.ptr[0] == (char)('a' + i % 26u) &&
+              text.ptr[sizeof page - 2u] == (char)('a' + i % 26u));
+    }
+    txml_doc_destroy(doc);
+
+    txml_parser_config config = {
+        .allocator = { NULL, &heap_vtable },
+        .limits = TXML_LIMITS_DEFAULT,
+        .chunk_size = 1024u,
+    };
+    config.limits.max_document_bytes = 8u * 1024u; /* 8 pages, and 2 to skip to */
+    CHECK(txml_doc_create(&doc, &config) == TXML_OK);
+    txml_result result = TXML_OK;
+    uint32_t appended = 0u;
+    while (appended < 20u && (result = txml_doc_pool_append(doc, (txml_str){ page, sizeof page - 1u }, &offsets[0])) == TXML_OK) {
+        appended++;
+    }
+    CHECK(result == TXML_ERR_LIMIT);
+    CHECK(appended == 10u);
+    txml_doc_destroy(doc);
+}
+
 int main(void) {
     test_layout();
     test_worked_example();
     test_open_document();
     test_growth();
+    test_pool_directory_grows();
     test_prefixes_are_per_node();
 
     if (failures != 0) {

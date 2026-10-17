@@ -90,6 +90,15 @@ lives at
 size is `chunk_size` clamped to `[1024, 65536]` and rounded down to a power of
 two.
 
+Unlike a column's, the pool's directory grows with the document. A small page
+would make a directory sized for `max_document_bytes` large (16,386 pointers
+for the default limits at 4096 B pages), and setting it up would cost every
+parse. It starts at 16 slots and doubles when a page past its end is needed,
+up to `max_document_bytes / page + 2`: the new array, in the values arena,
+takes the page pointers, and the old one is abandoned there, counted in
+`used`. The pages do not move, so no offset or `txml_str` changes; only the
+index to them is copied.
+
 Three rules keep pool references usable:
 
 1. **A string never spans a page.** If a run does not fit in the remainder of

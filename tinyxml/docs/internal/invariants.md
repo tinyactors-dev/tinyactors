@@ -32,9 +32,10 @@ green.
 
 7. **Nothing relocates.** No memory that was handed to a caller, or that any
    stored offset or index refers to, ever changes address. The allocator
-   vtable has no `realloc` and none is simulated. The one structure rebuilt on
-   growth is the parser's name hash index, which holds name IDs only and is
-   never referenced from outside the parser.
+   vtable has no `realloc` and none is simulated. The structures rebuilt on
+   growth are the parser's name hash index, which holds name IDs only, and
+   the pool's page directory, which holds pointers to pages that stay where
+   they are; neither is referenced from outside the document.
 8. **A string never spans a pool page.** Every `txml_str` a document returns
    is one contiguous run. An oversized run reserves consecutive directory
    slots that point into a single arena block. A run that streams in moves to

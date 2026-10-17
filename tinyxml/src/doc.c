@@ -70,6 +70,51 @@ static txml_result column_push(txml_column *column, txml_arena *arena, void **en
  * The pool.
  */
 
+#define POOL_DIRECTORY_INITIAL 16u
+
+/* The most slots the directory needs: every page of the largest document the
+ * limits allow, and the pages an oversized run skips to. */
+static uint32_t pool_directory_limit(const txml_doc *doc) {
+    return (uint32_t)(doc->limits.max_document_bytes >> doc->pool_shift) + 2u;
+}
+
+/* Room in the pool directory for slot `last`. The directory grows with the
+ * document, doubling: a new array in the values arena takes the page
+ * pointers, and the old one is abandoned there (counted in `used`, about
+ * the size of the final one in all). The pages do not move, so no offset or
+ * txml_str changes; only the index to them is copied. */
+static txml_result pool_directory_reserve(txml_doc *doc, uint32_t last) {
+    if (last < doc->pool_directory_capacity) {
+        return TXML_OK;
+    }
+    const uint32_t limit = pool_directory_limit(doc);
+    if (last >= limit) {
+        return TXML_ERR_LIMIT;
+    }
+    uint64_t capacity = doc->pool_directory_capacity == 0u ? POOL_DIRECTORY_INITIAL : doc->pool_directory_capacity;
+    while (capacity <= last) {
+        capacity *= 2u;
+    }
+    if (capacity > limit) {
+        capacity = limit;
+    }
+    unsigned char **directory = (unsigned char **)txml_arena_alloc(
+        &doc->values, (size_t)capacity * sizeof(unsigned char *), sizeof(void *));
+    if (directory == NULL) {
+        return TXML_ERR_NOMEM;
+    }
+    uint32_t i = 0u;
+    for (; i < doc->pool_directory_capacity; i++) {
+        directory[i] = doc->pool_directory[i];
+    }
+    for (; i < (uint32_t)capacity; i++) {
+        directory[i] = NULL;
+    }
+    doc->pool_directory = directory;
+    doc->pool_directory_capacity = (uint32_t)capacity;
+    return TXML_OK;
+}
+
 txml_str txml_doc_pool_str(const txml_doc *doc, uint32_t offset, uint32_t length) {
     static const char empty[1] = { 0 };
     txml_str out = { empty, 0u };
@@ -111,8 +156,9 @@ txml_result txml_doc_pool_append(txml_doc *doc, txml_str bytes, uint32_t *offset
 
     const uint32_t first = start >> doc->pool_shift;
     const uint32_t last = (start + length - 1u) >> doc->pool_shift;
-    if (last >= doc->pool_directory_capacity) {
-        return TXML_ERR_LIMIT;
+    const txml_result reserved = pool_directory_reserve(doc, last);
+    if (reserved != TXML_OK) {
+        return reserved;
     }
 
     if (length > page_size) {
@@ -180,8 +226,9 @@ txml_result txml_doc_run_reserve(txml_doc *doc, txml_run *run, uint32_t extra) {
         const uint32_t wanted = need < RUN_MINIMUM_CAPACITY ? RUN_MINIMUM_CAPACITY : need;
         if (wanted <= remaining) {
             const uint32_t slot = start >> doc->pool_shift;
-            if (slot >= doc->pool_directory_capacity) {
-                return TXML_ERR_LIMIT;
+            const txml_result reserved = pool_directory_reserve(doc, slot);
+            if (reserved != TXML_OK) {
+                return reserved;
             }
             if (doc->pool_directory[slot] == NULL) {
                 unsigned char *page = (unsigned char *)txml_arena_alloc(&doc->values, page_size, 8u);
@@ -208,11 +255,15 @@ txml_result txml_doc_run_reserve(txml_doc *doc, txml_run *run, uint32_t extra) {
     }
     const uint64_t pages = (want + mask) >> doc->pool_shift;
     const uint64_t capacity = pages << doc->pool_shift;
-    if (begin + capacity > UINT32_MAX || (begin >> doc->pool_shift) + pages > doc->pool_directory_capacity) {
+    if (begin + capacity > UINT32_MAX || (begin >> doc->pool_shift) + pages > pool_directory_limit(doc)) {
         return TXML_ERR_LIMIT;
     }
     if ((uint64_t)doc->values.used + doc->tree.used + capacity > doc->limits.max_document_bytes) {
         return TXML_ERR_LIMIT;
+    }
+    const txml_result reserved = pool_directory_reserve(doc, (uint32_t)((begin >> doc->pool_shift) + pages - 1u));
+    if (reserved != TXML_OK) {
+        return reserved;
     }
     unsigned char *block = (unsigned char *)txml_arena_alloc(&doc->values, (size_t)capacity, 8u);
     if (block == NULL) {
@@ -660,16 +711,15 @@ static txml_result doc_build(txml_doc *doc) {
         return result;
     }
 
-    doc->pool_directory_capacity = (uint32_t)(budget >> doc->pool_shift) + 2u;
-    doc->pool_directory = (unsigned char **)txml_arena_alloc(
-        &doc->values, (size_t)doc->pool_directory_capacity * sizeof(unsigned char *), sizeof(void *));
+    /* the pool directory grows with the document (pool_directory_reserve) */
+    result = pool_directory_reserve(doc, 0u);
+    if (result != TXML_OK) {
+        return result;
+    }
     doc->name_slots = (uint32_t *)txml_arena_alloc(
         &doc->values, (size_t)NAME_SLOTS_INITIAL * sizeof(uint32_t), sizeof(uint32_t));
-    if (doc->pool_directory == NULL || doc->name_slots == NULL) {
+    if (doc->name_slots == NULL) {
         return TXML_ERR_NOMEM;
-    }
-    for (uint32_t i = 0u; i < doc->pool_directory_capacity; i++) {
-        doc->pool_directory[i] = NULL;
     }
     for (uint32_t i = 0u; i < NAME_SLOTS_INITIAL; i++) {
         doc->name_slots[i] = TXML_NAME_NONE;

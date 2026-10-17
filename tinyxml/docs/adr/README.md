@@ -30,6 +30,7 @@ ADRs 0016–0019 and 0023 revise earlier ones. 0016 replaces the single-arena an
 | [0022](0022-the-input-padded-escape-hatch-is-withdrawn.md) | [The input-padded escape hatch is withdrawn](0022-the-input-padded-escape-hatch-is-withdrawn.md) |
 | [0023](0023-nodes-and-attributes-record-where-they-end.md) | [Nodes and attributes record where they end](0023-nodes-and-attributes-record-where-they-end.md) |
 | [0024](0024-the-writer-can-write-a-content-fragment.md) | [The writer can write a content fragment](0024-the-writer-can-write-a-content-fragment.md) |
+| [0025](0025-the-pool-directory-grows-with-the-document.md) | [The pool directory grows with the document](0025-the-pool-directory-grows-with-the-document.md) |
 
 txml is the XML front end that `tinyactors-core` deliberately lacks: core ADR 0001 adopts SCXML semantics without an XML dependency, core ADR 0025 defers an importer/exporter to a separate component, and core ADR 0023 sets the freestanding constraints txml inherits. Where a decision here mirrors one there, the text says so.
 
