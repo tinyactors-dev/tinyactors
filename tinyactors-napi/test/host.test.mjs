@@ -306,6 +306,8 @@ test('send refuses what it cannot take, and keeps nothing of it', () => {
   throws(() => host.send(session, 'go', undefined, { sendID: 'x' }), typeError, 'an unknown option');
   throws(() => host.send(session, 'go', undefined, { sendid: 1 }), typeError, 'a sendid that is not a string');
   throws(() => host.send(session, 'go', new Date()), status('TA_ERROR_UNSUPPORTED'), 'data outside the value table');
+  throws(() => host.send(session, 'go', Symbol('s')), status('TA_ERROR_UNSUPPORTED'), 'a symbol');
+  throws(() => host.send(session, 'go', { nested: Symbol('s') }), status('TA_ERROR_UNSUPPORTED'), 'a symbol inside a value');
   throws(() => host.send(session, '\uD800'), status('TA_ERROR_INVALID'), 'a lone surrogate');
   throws(() => host.send(session + 100n, 'go', { n: 1 }), status('TA_ERROR_STALE'), 'data for no session');
   throws(() => host.send(session + 100n, 'go'), (error) => {

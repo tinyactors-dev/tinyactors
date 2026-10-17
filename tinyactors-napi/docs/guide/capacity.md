@@ -18,7 +18,7 @@ key is a whole number; an absent key, or 0, is the default:
 | `maxEvents` | 256 | events waiting in the actors' queues |
 | `maxTimers` | 64 | pending delayed sends |
 | `maxRequests` | 16 | running invocations (child charts and services) |
-| `workspaces` | 4 | actors running at the same moment |
+| `workspaces` | 4 | actors in the middle of a step at once (a sender keeps its workspace until its send is handled); never refused: an actor waits for one, and the host adds more |
 | `instanceBytes` | derived from the image and `maxActors` | the actors' variables and states |
 | `stringBytes` | 16384 + 16 × `maxActors` | strings the actors hold |
 | `ticksPerSecond` | 1,000,000,000 | the host's clock rate |

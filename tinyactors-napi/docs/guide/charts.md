@@ -17,7 +17,7 @@ sees the variables by name, plus these:
 
 | Name | What it holds |
 |---|---|
-| `_event` | the event being handled: `name`, `data`, `type`, `sendid`, `origin`, `origintype`, `invokeid` |
+| `_event` | the event being handled: `name`, `data`, `type` (`'external'`, `'internal'` or `'platform'`), `sendid`, `origin`, `origintype`, `invokeid`, and `raw` when an I/O processor's answer gave one |
 | `_sessionid` | the actor's session, as a string |
 | `_name` | the actor's name, or its chart's name when it has none |
 | `_ioprocessors` | the I/O processors, by type; `_ioprocessors.scxml.location` is the actor's address |
@@ -87,7 +87,8 @@ XML needs `&lt;` for `<` and `&amp;` for `&` inside an attribute. The
 event is handled by both, in one step: the states a transition leaves
 are exited first, then every transition's actions run, then the new
 states are entered. So `In('on')` in the recorder is true only when the
-heater stays on. The `typo` event assigns to
+heater stays on: at 18°C the heater is turning on, and the recorder logs
+`heating: false` before the heater's `heater on`. The `typo` event assigns to
 `tagret`, which the chart never declared.
 
 ## Scripts
@@ -154,6 +155,74 @@ A function held in a variable keeps its actor in memory too: hibernation
 stores the variables as values, and a function is not one. So the
 `basket` above cannot be hibernated, while a chart that declares its
 helpers with `function` in a script can, at the cost of its context.
+
+## Sending events
+
+`<send>` is how an actor talks to anything: itself, another actor, an I/O
+processor, a service. Its attributes, each with an `...expr` form that
+computes it:
+
+| Attribute | What it gives | Default |
+|---|---|---|
+| `event`, `eventexpr` | the event's name | required |
+| `target`, `targetexpr` | where it goes: an address, `#_scxml_<session>`, `#_parent`, `#_<invokeid>`, `#_internal` | the actor itself, at the back of its queue |
+| `type`, `typeexpr` | the I/O processor ([I/O processors](io-processors.md)) | SCXML's own, between actors |
+| `id`, `idlocation` | the send's id, for `<cancel>` and the answer's `_event.sendid`; `idlocation` names a declared `<data>` that gets a generated id | none |
+| `delay`, `delayexpr` | when: `500ms`, `1.5s`, `30s` | now |
+| `namelist` | variables whose names and values become the data | none |
+
+The data is `<param name expr>`s and `namelist` (an object), or one
+`<content expr>` (any value). `#_internal` puts the event in the actor's
+internal queue, which runs before anything waiting outside, as `<raise>`
+does.
+
+```js
+import { compileCharts, Host } from '@tinyactors/node';
+
+const sender = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="sender" initial="s">
+  <datamodel>
+    <data id="qty" expr="2"/>
+    <data id="sku" expr="'tea'"/>
+    <data id="lastid"/>
+    <data id="peer" expr="'#_scxml_2'"/>
+  </datamodel>
+  <state id="s">
+    <onentry>
+      <send event="self.order" namelist="qty sku" idlocation="lastid"/>
+      <send event="self.note" target="#_internal"/>
+      <send eventexpr="'hello.' + sku" targetexpr="peer"/>
+      <log expr="'the order went out as ' + lastid"/>
+    </onentry>
+    <transition event="self.*"><log expr="_event.name + ' (' + _event.type + ') ' + JSON.stringify(_event.data)"/></transition>
+  </state>
+</scxml>`;
+const receiver = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="receiver" initial="s">
+  <state id="s"><transition event="hello"><log expr="'receiver got ' + _event.name"/></transition></state>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'sender.scxml', text: sender }, { name: 'receiver.scxml', text: receiver }]);
+const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
+host.addImage(compiled.image);
+compiled.close();
+host.spawn(host.chart('sender'));
+host.spawn(host.chart('receiver'));
+await host.idle();
+host.close();
+```
+
+```output
+the order went out as send.1
+receiver got hello.tea
+self.note (internal) undefined
+self.order (external) {"qty":2,"sku":"tea"}
+```
+
+`idlocation` must name a declared `<data>`, as every assignment must;
+otherwise the `<send>` fails with `error.execution` and nothing is sent.
 
 ## XML data
 
@@ -360,5 +429,8 @@ right 1
 left 2
 ```
 
-An image from `compileCharts` has one boot actor: an actor of its first
-chart, named after it.
+Booting is for a system that should start the same actors every time it
+starts: the manifest names them, and the program does not need to know
+which. A program that spawns its own actors never needs `boot`. An image
+from `compileCharts` has one boot actor too: an actor of its first chart,
+named after its `<scxml name>`.

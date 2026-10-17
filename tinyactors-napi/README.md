@@ -153,8 +153,11 @@ Read these in order the first time. Each builds on the one before.
 A chart is an SCXML document. Its parts, from the outside in:
 
 - **`<scxml>`** names the chart (`name`), its first state (`initial`) and
-  its language for data and expressions. This package takes
-  `datamodel="ecmascript"`: JavaScript.
+  its language for data and expressions. Write `datamodel="ecmascript"`,
+  JavaScript, on every chart. A chart without the attribute gets SCXML's
+  null datamodel, which evaluates no expression and says nothing about it:
+  its `<log>`s and `<data>` do nothing. Another value is refused when the
+  image is added (`host.addImage` throws `TA_ERROR_INVALID`).
 - **`<state id>`** is a state the actor can be in. States nest (a
   compound state has children, one of them active), and `<parallel>`
   holds regions that are all active at once. **`<final>`** ends the
@@ -169,9 +172,10 @@ A chart is an SCXML document. Its parts, from the outside in:
   each. Every expression in the chart sees them as plain variables, and
   sees the event being handled as `_event` (`_event.name`, `_event.data`).
 
-An event's name is matched by prefix, word by word: `event="error"`
-matches `error.execution` and `error.communication`; `event="*"` matches
-any event.
+An event's name is matched by prefix, word by word: `event="error"` and
+`event="error.*"` match `error.execution` and `error.communication`;
+`event="a b"` matches either name; `event="*"` matches any event. An
+event no transition matches is dropped.
 
 [Writing charts](docs/guide/charts.md) covers the JavaScript a chart may
 hold, `<script>`, XML data, several charts in one image, and `<invoke>`.
@@ -218,8 +222,10 @@ Hi, Bob!
 ### The host and its event loop
 
 A host holds actors and runs them on your program's event loop. There is
-no `run()` to call. An input (`spawn`, `send`, `terminate`) is applied at
-once and schedules a turn with `setImmediate`; in its turns the host runs
+no `run()` to call. An input (`spawn`, `send`, `terminate`) is taken at
+once (the event is in the actor's queue when `send` returns, or the call
+throws), but nothing runs yet: it schedules a turn with `setImmediate`,
+and in its turns the host runs
 every actor that has an event, calls your handlers with what the actors
 sent out, and runs again until nothing is left. A turn does a bounded
 amount of work and then yields, so a busy host never starves your I/O.
@@ -228,6 +234,11 @@ amount of work and then yields, so a busy host never starves your I/O.
 It is for tests, scripts and an orderly shutdown; a server never needs to
 call it. A handler may call the host (send an event, spawn an actor): the
 input applies at once, and the actors run in the same or a later turn.
+
+Each `addImage` makes a **segment**: the host's memory for that image's
+actors, numbered from 0, which `addImage` returns. A host runs many
+segments as one; you need the number for `boot` and see it in the host's
+statistics.
 
 A host also keeps time. A delayed `<send>` or a timeout is a deadline,
 and an idle host arms one `setTimeout` for its next one. That timer keeps
@@ -240,10 +251,13 @@ still waiting.
 `spawn` returns the actor's **session**, a `bigint` unique in its host.
 Inputs take it back: `host.send(session, event, data)`,
 `host.terminate(session)`. They also take a number that is a safe
-integer, since that is what a database or JSON gives back, but what the
-API returns is always a `bigint` (`console.log` prints `1n`, and
+integer, since that is what a database or JSON gives back. The calls and
+views return sessions as `bigint`s (`console.log` prints `1n`, and
 `JSON.stringify` refuses one: convert with `String()` or `Number()`
-yourself).
+yourself), while the results of the typed methods
+([Inspecting a host](docs/guide/inspection.md)) hold them as numbers. So
+compare with `Number(session) === listed`, never `===` across the two;
+either kind may be passed back to an input.
 
 An actor may also have a **name**, given at spawn, and
 `host.actorByName(name)` finds it. An actor that reaches a `<final>`
@@ -321,8 +335,10 @@ a handler you give the host in its options:
 | spans, logs and metrics as OpenTelemetry (OTLP) | `telemetry: (host, signal, data) => ...` | [Telemetry](docs/guide/telemetry.md) |
 | an event for an actor you took out of memory | `wake: (host, session, migration) => ...` | [Hibernation](docs/guide/hibernation.md) |
 
-A send with no handler for its type is failed: the sender gets the event
-`error.communication`, so a chart can always react. `<log>` lines without
+A send to an I/O processor the config lists but no handler serves is
+failed: the sender gets the event `error.communication`, so a chart can
+always react. A send to a type the config does not list at all raises
+`error.execution` in the chart. `<log>` lines without
 a `log` handler are dropped.
 
 **A handler's argument is a view, valid while the handler runs.** The
@@ -365,10 +381,13 @@ refusal.
 
 ### Time and the SimulatedClock
 
-Time in this API is milliseconds. In a chart, `<send event="timeout"
-delay="30s"/>` sends an event to the actor itself 30 seconds later, and
-`<cancel sendid>` takes it back. A delay is written in seconds or
-milliseconds (`30s`, `1.5s`, `500ms`); `delayexpr` computes one. By default the host reads the runtime's
+Time in this API is milliseconds, with two exceptions that the host's
+config and the trace methods inherit from core: `telemetry.flushInterval`
+counts the host's clock ticks, and `traceWatch` takes `seconds`. In a
+chart, `<send event="timeout" delay="30s"/>` sends an event to the actor
+itself 30 seconds later, and `<cancel sendid>` takes it back. A delay is
+written in seconds or milliseconds (`30s`, `1.5s`, `500ms`), and any
+other form (`10`, `1m`) is a compile error; `delayexpr` computes one. By default the host reads the runtime's
 clock. A test gives it a `SimulatedClock` instead, which moves only when
 you move it, so a test of a 30-second timeout takes no time:
 
@@ -406,8 +425,11 @@ closed at 30000
 ```
 
 `clock.increment(ms)` moves the clock and schedules a turn on every host
-made with it; `await host.idle()` then sees what ran. A host on a
-`SimulatedClock` arms no timer. [Testing your charts](docs/guide/testing.md)
+made with it; `await host.idle()` then sees what ran. One increment past
+several deadlines does not replay each of them: what is due runs once, at
+the new time, and a delay it starts counts from there. Step the clock one
+deadline at a time to see each. A host on a `SimulatedClock` arms no
+timer. [Testing your charts](docs/guide/testing.md)
 has more.
 
 ### Errors
@@ -418,15 +440,23 @@ Errors surface in four places:
   message is the first error as `file:line:column: error: message`, and
   whose `diagnostics` holds them all.
 - **At a call,** the host throws a `TinyactorsError` for what it refuses
-  at once: a chart it does not have, a session that ended, a config it
-  does not take. Branch on `error.status` (`'TA_ERROR_STALE'`,
-  `'TA_ERROR_INVALID'`, ...); the message is for people. Arguments of the
+  at once: a chart it does not have, a session that ended or never was, a
+  config it does not take. Branch on `error.status` (`'TA_ERROR_STALE'`,
+  `'TA_ERROR_INVALID'`, ...); the message is for people. A refused config
+  also has `error.path`, the key it is about (`system.maxActors`), and
+  `error.reason`. Arguments of the
   wrong JavaScript type throw a `TypeError`.
 - **In a chart,** an expression that throws, or an `<assign>` to a
   variable the chart does not declare, raises the event `error.execution`
   for that actor, and a send that cannot be delivered raises
-  `error.communication`. The actor goes on, and a transition on `error`
-  handles both. These are events, not exceptions.
+  `error.communication`. These are events, not exceptions. A failed action
+  also stops the rest of its block: the actions after it in the same
+  `<onentry>`, `<onexit>` or transition do not run. The actor goes on,
+  and a transition on `error` handles both; without one the error event
+  is dropped like any event no transition matches. The event carries no
+  message (`_event.data` is `undefined`): to learn which action failed,
+  turn on [telemetry](docs/guide/telemetry.md), whose spans and log
+  records mark the failed action.
 - **In your handlers,** an error a handler throws is reported after its
   turn: it rejects a waiting `host.idle()`, or, with none waiting, is
   thrown as an uncaught exception (below).
@@ -471,7 +501,9 @@ TA_ERROR_INVALID - the host has no chart of that name
   deadline, as `setTimeout` does. `host.close()` clears it, and the process
   can exit.
 - **A handler's error ends the process by default.** An error thrown by
-  a handler (an I/O processor's, the log handler, a typed method's)
+  a handler (an I/O processor's, the log handler, the result handler of
+  a typed method, one of the host's queries in
+  [Inspecting a host](docs/guide/inspection.md))
   rejects a waiting `host.idle()`; with none waiting it is thrown from the
   host's turn as an uncaught exception, and a handler's promise that
   rejects is an unhandled rejection. Either ends a Node.js or Bun process

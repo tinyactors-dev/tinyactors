@@ -116,6 +116,9 @@
   }
 
   function copy(value, depth) {
+    if (typeof value === 'symbol')
+      throw refuse('unsupported', new TypeError('a value crossing between actors is a primitive, a plain object, ' +
+        'an array, a Uint8Array or an XML node, not a symbol'));
     if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return value;
     if (depth >= 64) throw refuse('invalid', new RangeError('a value nested deeper than 64 (or a cycle) does not cross between actors'));
     if (isArray(value)) {

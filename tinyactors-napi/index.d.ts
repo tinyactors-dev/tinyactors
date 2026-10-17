@@ -3,16 +3,18 @@
 // order, with examples. Each declaration is a row of docs/api-map.md,
 // which names the core behind it.
 //
-// Units: time is milliseconds; sessions are bigints (inputs also take a
-// safe integer from 1); bytes the host hands out are Buffers, copied once,
-// yours to keep.
+// Units: time is milliseconds (but telemetry.flushInterval, in the host's
+// clock ticks, and traceWatch's seconds); sessions are bigints (inputs also
+// take a safe integer from 1, and typed methods' results hold numbers);
+// bytes the host hands out are Buffers, copied once, yours to keep.
 
 // ---- values -------------------------------------------------------------
 
 /** An actor's session, as an input takes it: a `bigint` from 1 to
  * 2^64-1, or a number that is a safe integer from 1 (as a database or
- * JSON gives one back). Anything else is a `TypeError`. What the API
- * returns is always a `bigint`. */
+ * JSON gives one back). Anything else is a `TypeError`. The calls and
+ * views return a `bigint`; a typed method's result holds a number, so
+ * compare with `Number(session) === listed`. */
 export type Session = bigint | number;
 
 /** A value that crosses between your program and a chart: event data,
@@ -58,8 +60,8 @@ export function decode(bytes: Uint8Array | ArrayBuffer): Value;
 /** The reason a call was refused, as `TinyactorsError.status` names it:
  * - `TA_ERROR_INVALID`: an argument the host does not take (a chart it
  *   does not have, a config key, malformed bytes);
- * - `TA_ERROR_STALE`: something that ended (a session, a view read after
- *   its handler returned, a closed compile result);
+ * - `TA_ERROR_STALE`: something that ended or never was (a session, a
+ *   view read after its handler returned, a closed compile result);
  * - `TA_ERROR_STATE`: not now (a snapshot from a handler, a second
  *   answer, hibernating an actor that is not at rest);
  * - `TA_ERROR_UNSUPPORTED`: a value outside the value table;
@@ -265,7 +267,9 @@ export class SimulatedClock {
   /** Milliseconds since the clock was made. */
   readonly now: number;
   /** Moves the clock `ms` forward and schedules a turn on every host made
-   * with it; `await host.idle()` to see what ran. */
+   * with it; `await host.idle()` to see what ran. What is due runs once, at
+   * the new time, and a delay it starts counts from there: to see each of
+   * several deadlines, step to each. */
   increment(ms: number): void;
 }
 
@@ -297,8 +301,11 @@ export interface Send {
   /** The sending step's trace as W3C `traceparent` text, for the header of
    * the request you make; `undefined` when untraced. */
   readonly traceparent: string | undefined;
-  /** The transport's half: what `host.send(message)` takes on the other
-   * side, unchanged. */
+  /** The outgoing half, `{ target, event, data, sendid, origin,
+   * traceparent }`: what `host.send(message)` takes on the other side,
+   * unchanged. The transport's reason to exist; present on every send. Its
+   * addresses are `Address`es, which `JSON.stringify` writes as `{ text }`:
+   * convert them with `String()` for a wire. */
   readonly message: SendMessage;
   /** Sends `event` back to the sender, with this send's `sendid`. It
    * continues the send's trace unless `options.traceparent` is given
@@ -430,7 +437,9 @@ export interface ChartRef {
  *   may send to;
  * - `system`: each segment's first sizes (`maxActors`, `maxEvents`,
  *   `maxTimers`, `maxRequests`, `workspaces`, `instanceBytes`,
- *   `stringBytes`), `ticksPerSecond` (default 1e9) and `tracing`;
+ *   `stringBytes`), `ticksPerSecond` (default 1e9), `tracing`, and
+ *   `traceSeed` (default 0), the seed of the trace IDs: the same seed gives
+ *   the same IDs, so give each process its own;
  * - `telemetry`: present to turn on the OTLP encoder (`flushInterval`,
  *   `resource`, `logs`, `values`, `linkParents`, ...);
  * - `migrateQuantum`: actors a migration looks at per run.
@@ -616,9 +625,10 @@ export class Host implements Disposable, AsyncDisposable {
   send(target: Session | string | Address, event: string, data?: Value, options?: SendOptions): void;
   /** The same, from a `SendMessage` (the transport's `send.message`). */
   send(message: SendMessage): void;
-  /** Gives the actor `target` `error.communication` for its send `sendid`:
-   * the transport could not deliver it. */
-  fail(target: Session | string | Address, sendid?: string): void;
+  /** Tells a sender that its send could not be delivered: the actor
+   * `sender` (a session or its address, the send's `origin`) gets
+   * `error.communication` with `sendid`. */
+  fail(sender: Session | string | Address, sendid?: string): void;
   /** Sends each of `items` in order, and returns how many were taken: the
    * rest, from the first one refused, were not sent. */
   sendMany(items: readonly SendMessage[]): number;
@@ -676,8 +686,8 @@ export class Host implements Disposable, AsyncDisposable {
    * collector's `/v1/metrics`). `TA_ERROR_STATE` without `telemetry` in the
    * config. */
   metrics(): Uint8Array;
-  /** The CLOCK sweep: at most `limit` sessions that did not run since the
-   * previous sweep and can be hibernated now, looking at most at `maxScan`
+  /** Finds cold actors: at most `limit` sessions that did not run since
+   * the previous sweep and can be hibernated now, looking at most at `maxScan`
    * actors (each an integer from 0 to 2^32-1). The first sweep after an
    * actor ran skips it. */
   sweep(maxScan: number, limit: number): bigint[];
@@ -696,13 +706,13 @@ export class Host implements Disposable, AsyncDisposable {
    * migration's id, which `migrated`, `migrationDone` and the wake handler
    * name. */
   migrate(options?: MigrateOptions): number;
-  /** The whole host as one `Buffer`: every segment, the images, the system
+  /** The whole host as one `Buffer` (typed as its `Uint8Array`): every segment, the images, the system
    * id, the host's time and the datamodel's state, for `Host.restore` on the
    * same build of the package. Only when quiescent: from a handler, with an
    * effect or a reply pending, or during a migration it throws
    * `TA_ERROR_STATE`; a value outside the value table throws
    * `TA_ERROR_UNSUPPORTED`. */
-  snapshot(): Buffer;
+  snapshot(): Uint8Array;
 
   /** Frees the host: the last telemetry requests go to the handler, the
    * timer is cleared, pending typed methods and running services are

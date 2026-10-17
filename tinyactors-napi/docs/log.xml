@@ -1085,4 +1085,125 @@
     <evidence>docs/guide/inspection.md, docs/guide/services.md; spikes i1.mjs, p8.mjs</evidence>
     <resolution>documented</resolution>
   </entry>
+  <entry id="l-p2-docs-review-sessions-numbers" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 1: the README and index.d.ts said every session the API returns is a bigint, while typed methods' results hold numbers (inspection.md said so), so spawn's 1n === actorList's 1 is false.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md 'Actors, sessions and addresses' and index.d.ts (Session, the header) say results hold numbers and to compare with Number(session); the inputs take either.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-trace-seed" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 2: with the default config every process makes the same trace IDs (system.traceSeed defaults to 0: same seed, same IDs), so restarts or several processes collide at a collector; no document of the package named traceSeed.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>docs/guide/telemetry.md, 'Trace IDs repeat unless you seed them', with a tested example; index.d.ts HostConfig. The default is core's (l-p2-docs-review-trace-seed-default).</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-datamodel-attribute" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 3: a chart without datamodel="ecmascript" compiles and runs on SCXML's null datamodel and evaluates nothing, silently (the README's own CompileError example left the attribute out); datamodel="xpath" compiles and is refused at addImage with no reason.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md, Charts: write datamodel="ecmascript" on every chart, and what happens otherwise. A warning from the compiler would be core's (l-p2-docs-review-null-datamodel).</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-symbol" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 4: host.send accepted a Symbol as event data on the native datamodel (the chart saw it), though the value table refuses symbols and encode throws for one: src/datamodel/realm.js copy() passed every non-object through.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>src/datamodel/realm.js copy() refuses a symbol (TA_ERROR_UNSUPPORTED), at any depth; test/host.test.mjs 'send refuses what it cannot take, and keeps nothing of it' sends a symbol and one inside a value, on both datamodels.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-error-cause" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Findings 5 and 6: error.execution carries no message (_event.data undefined), an error event no transition matches is dropped without a trace, and a failed action stops the rest of its block (SCXML), which no document said.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md, Errors: the block stops, the event is dropped without a transition, and telemetry's span event scxml.action_failed and WARN log record show which action failed (spike r3.mjs); the cause's message is nowhere (l-p2-docs-review-error-message).</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-send-attributes" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 7: &lt;send&gt;'s attributes (targetexpr, delayexpr, idlocation, namelist, &lt;content&gt;) and event descriptors with several names or .* were not documented; idlocation must name a declared &lt;data&gt;.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>docs/guide/charts.md, 'Sending events': the attributes, targets, #_internal, with a tested example; README.md, the descriptor forms.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-links" date="2026-10-17" step="p2-docs" kind="note" status="open">
+    <what>Finding 8: links to docs/guide/ and docs/values.md, and error messages that cite docs/values.md or docs/protocol.md, do not resolve from an installed package, which ships only index.mjs, index.d.ts, README.md and LICENSE.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>Left for packaging, with l-p2-docs-package-links: ship docs/ in the package, or make the README's links absolute; the messages are core's and the addon's.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-clock-jump" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 9: SimulatedClock.increment past several deadlines runs what is due once, at the new time, and a delay it starts counts from there (a 1 s ticker ticks once for increment(3500)); nothing said so.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md (Time), docs/guide/testing.md 'Stepping the clock' with a tested example, index.d.ts increment.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-units" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 10: 'time is milliseconds' had exceptions nobody named: telemetry.flushInterval is in host ticks, traceWatch takes seconds, and a delay that is not Ns or Nms is a compile error.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md (Time) and the index.d.ts header name them.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-terms" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 11: terms used before they were explained, or never: typed method, segment, boot, macrostep, microstep, fuel, fuelClock, turns, routed, workspaces, CLOCK sweep, errorsPlatform, faults.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md defines segment and links typed method; charts.md says what booting is for; inspection.md explains the counters' words; index.d.ts sweep says what it finds.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-wait-for-end" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 12: no call says when an actor ends, and idle() resolves while real-clock deadlines are pending, so a script on the real clock had to poll.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>docs/guide/testing.md, 'Waiting for something to happen': an until() helper (tested) and a chart that sends to a test's I/O processor from its final state. A call for it would be new API (l-p2-docs-review-wishes).</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-fail-sender" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 13: host.fail(target, sendid) named its argument target, but it is the sender (the message's origin); the reviewer first passed message.target.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>index.d.ts names it sender and says it is the send's origin; docs/guide/other-systems.md likewise.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-address-json" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 14: JSON.stringify writes an Address as {text}, and send.message is present on every send, not only the transport's.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>index.d.ts Send.message and docs/guide/other-systems.md say both and to convert with String(); an Address.toJSON would be new API (l-p2-docs-review-wishes).</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-config-message" date="2026-10-17" step="p2-docs" kind="note" status="resolved">
+    <what>Finding 15: a refused config's message does not name the key; error.path does.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md, Errors, and index.d.ts HostConfig point to error.path and error.reason; the message is core's.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-no-handler" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 16: the README said a send with no handler for its type is failed with error.communication, which holds for a listed type only; an unlisted type gets error.execution, as io-processors.md said.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md, Effects and handlers, says both.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-pools-shape" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 17: inspection.md did not describe hostStats().pools' shape (per segment, named pools).</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>docs/guide/inspection.md describes it; index.d.ts hostStats already named capacity, used, highWater.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-types" date="2026-10-17" step="p2-docs" kind="note" status="open">
+    <what>Finding 18: HostConfig and OnResult are untyped Value maps, so results and configs need casts and typos surface at run time; snapshot() was typed Buffer, which needs @types/node.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>snapshot() is typed Uint8Array (a Buffer is one). Typed result and config shapes per method are new declarations (l-p2-docs-review-wishes).</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-applied-at-once" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 19: README 'an input is applied at once' read as the opposite of testing.md 'nothing has run right after host.send returns'.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>README.md, The host and its event loop: an input is taken at once and runs in a later turn.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-event-raw" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 20: _event.raw (from answer's raw) and _event.type's values were missing from charts.md's _event row.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>docs/guide/charts.md lists them.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-stale-never" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 21: a session that never existed is refused as TA_ERROR_STALE, while index.d.ts defined STALE as something that ended.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>index.d.ts Status and README.md, Errors: ended or never was.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-in-explained" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>Finding 22: charts.md's In('on') output (heating: false at 18°C before 'heater on') looked like a bug before its explanation.</what>
+    <evidence>the newcomer review (a fresh Claude Code session, session_01YC6veYXRRr4LQAeS2idxJe, 2026-10-17: all 38 examples ran as written under node 22.23.3 and bun 1.4.1; 22 findings)</evidence>
+    <resolution>docs/guide/charts.md says at that line why.</resolution>
+  </entry>
+  <entry id="l-p2-docs-review-trace-seed-default" date="2026-10-17" step="p2-docs" kind="note" status="for-maintainer">
+    <what>Core's system.traceSeed defaults to 0, so every host made with the default config starts the same trace IDs: reproducible in tests, colliding across processes at a collector. A binding has no defaults of its own; a default seed from the clock or the OS, or a binding that seeds per process, is a decision for core or the maintainer.</what>
+    <evidence>spike build/docs-probe/r2.mjs: seed 0 twice gives 00-99ec5f36cb75f2b4bf6e1f784956452a-... both times; seed 7 another</evidence>
+  </entry>
+  <entry id="l-p2-docs-review-null-datamodel" date="2026-10-17" step="p2-docs" kind="note" status="for-maintainer">
+    <what>A chart without a datamodel attribute (SCXML's null datamodel) compiles with no diagnostic and evaluates nothing, and datamodel="xpath" compiles and is refused only at addImage ('the image was refused'). A compiler warning for a chart on the null datamodel that has expressions, and a reason for the refusal, would be core's; requested here, not built.</what>
+    <evidence>spike build/docs-probe/r1.mjs</evidence>
+  </entry>
+  <entry id="l-p2-docs-review-error-message" date="2026-10-17" step="p2-docs" kind="note" status="for-maintainer">
+    <what>error.execution reaches the chart with _event.data undefined, and telemetry records only which action failed (scxml.action_failed with its opcode; a WARN 'action failed' log record), never the JavaScript error's message: a developer cannot learn why an expression failed. SCXML lets a platform put data on error events; carrying the message there or in the span would be core's and the datamodels'.</what>
+    <evidence>spike build/docs-probe/r3.mjs</evidence>
+  </entry>
+  <entry id="l-p2-docs-review-wishes" date="2026-10-17" step="p2-docs" kind="note" status="for-maintainer">
+    <what>API the newcomer review wanted, not built (the direct layer adds nothing core lacks; the convenience layer may): a promise or handler for an actor's end; actorGet returning the actor's name; Address.toJSON; typed result shapes per typed method and a typed HostConfig in index.d.ts.</what>
+    <evidence>the newcomer review, findings 12, 14 and 18</evidence>
+  </entry>
 </log>

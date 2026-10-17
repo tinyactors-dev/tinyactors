@@ -72,6 +72,7 @@ The handler's second argument describes one `<send>`:
 | `type` | the processor's type |
 | `origin` | the sender's address, an `Address` |
 | `traceparent` | the sending step's trace as W3C text, `undefined` when untraced ([Telemetry](telemetry.md)) |
+| `message` | the outgoing half, for a transport ([Other systems](other-systems.md)) |
 
 Then two methods, of which a handler calls at most one:
 

@@ -1,5 +1,8 @@
 # Telemetry
 
+Telemetry is optional: a host without it runs the same. Turn it on to see
+what your actors did in an OpenTelemetry backend.
+
 A host can describe what its actors did as OpenTelemetry data: a span
 for each step an actor takes (the event, the transitions, the states left
 and entered), a log record for each `<log>` and each failed action, and
@@ -150,6 +153,47 @@ the outgoing request continues trace 4bf92f3577b34da6a3ce929d0e0e4736
 
 Tracing is on by default (`system.tracing`), with or without an encoder,
 so trace context flows even when nothing is exported.
+
+**Trace IDs repeat unless you seed them.** A trace the host starts itself
+takes its ID from a generator seeded by `system.traceSeed`, 0 by default,
+and the same seed gives the same IDs: every process started with the
+default config makes the same first trace ID. That makes a test's traces
+reproducible, and makes the traces of two processes, or of one process
+and its restart, collide at the collector. Give each process its own
+seed:
+
+```js
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'c.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="c" initial="s">
+  <state id="s"><onentry><send type="urn:example:api" event="call"/></onentry></state>
+</scxml>` }]);
+const image = compiled.image;
+compiled.close();
+
+const firstTrace = async (system) => {
+  let trace;
+  const host = new Host({ systemID: 'demo', ioProcessors: [{ type: 'urn:example:api' }], system }, {
+    ioProcessors: { 'urn:example:api': (host, send) => { trace = send.traceparent.split('-')[1]; } },
+  });
+  host.addImage(image);
+  host.spawn(host.chart('c'));
+  await host.idle();
+  host.close();
+  return trace;
+};
+
+console.log('default seed, twice:', (await firstTrace({})) === (await firstTrace({})));
+const seed = () => ({ traceSeed: Math.floor(Math.random() * 2 ** 48) });
+console.log('a seed per process:', (await firstTrace(seed())) === (await firstTrace(seed())));
+```
+
+```output
+default seed, twice: true
+a seed per process: false
+```
 
 ## Choosing what is traced
 

@@ -143,15 +143,39 @@ sessions: 1 2 3 4 5
 
 `hostStats` answers three parts:
 
-- `host`: `segments`, `actors`, `hibernated`, `runnable`, `migrations`,
-  `regionBytes` (the memory of the live segments), `delivered`, `routed`,
-  `migrated`, `retired` (segments freed after a migration), `fuelClock`.
-- `pools`: one entry per live segment, with each pool's `capacity`,
-  `used` and `highWater` ([Capacity and memory](capacity.md)).
+- `host`: `segments` (live), `actors` and `hibernated` (now),
+  `runnable` (actors with work waiting), `migrations` (running),
+  `regionBytes` (the memory of the live segments), `delivered` (events
+  put in queues), `routed` (sends between the host's segments),
+  `migrated` (actors moved), `retired` (segments freed after a
+  migration), and `fuelClock` (the work the host has done, the clock its
+  trace records are stamped with).
+- `pools`: an array with one entry per live segment, in segment order.
+  Each entry has its `segment` number and one object per pool, `actors`,
+  `events`, `timers`, `workspaces`, `requests` and `slabBytes`, each
+  `{ capacity, used, highWater }`: `stats.pools[0].actors.used`
+  ([Capacity and memory](capacity.md)).
 - `charts`: one entry per chart name, summed over its versions: `name`,
   `actors`, `hibernated`, `spawned`, `ended`, `turns`, `macrosteps`,
   `fuel`, `errorsExecution`, `errorsCommunication`, `errorsPlatform`,
   `faults`.
+
+The words, as the counters use them:
+
+- A **macrostep** is everything one event does to an actor: its
+  transitions and those that follow on their own, until the actor waits
+  for the next event. A **microstep** is one set of transitions taken
+  together. Spans are named after both ([Telemetry](telemetry.md)).
+- **Fuel** is the host's unit of work: an action, a transition, and a
+  share of the JavaScript an expression runs. A **turn** is one time an
+  actor is given the processor; it runs until it waits or has spent its
+  fuel for the turn (`system.quantum`), so a busy actor cannot starve the
+  others.
+- A **workspace** is the room an actor needs while it runs; the host has
+  a few and an actor waits for one.
+- `errorsPlatform` counts `error.platform` events raised in the chart's
+  actors; `faults` counts actors the host
+  had to end because their run failed inside the host.
 
 ```js
 import { compileCharts, Host } from '@tinyactors/node';

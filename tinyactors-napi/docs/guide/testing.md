@@ -109,6 +109,97 @@ The test answered by sending `charged` itself with `host.send`, which is
 what the I/O processor's `send.answer('charged')` would do, without the
 `sendid`. A test may equally answer from the handler.
 
+## Stepping the clock
+
+`clock.increment(ms)` moves the clock once. What is due by then runs once,
+at the new time, and a delay it starts counts from the new time. So a
+chart that ticks every second ticks once for an `increment(3500)`, and
+its next tick is due a second later. To see every tick, step to each
+deadline; `host.nextDeadline` says how far the next one is:
+
+```js
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'ticker.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="ticker" initial="ticking">
+  <datamodel><data id="n" expr="0"/></datamodel>
+  <state id="ticking">
+    <onentry><send event="tick" delay="1s"/></onentry>
+    <transition event="tick" target="ticking"><assign location="n" expr="n + 1"/><log expr="'tick ' + n"/></transition>
+  </state>
+</scxml>` }]);
+const clock = new SimulatedClock();
+const host = new Host({ systemID: 'test' }, { clock, log: (host, entry) => console.log(entry.text, 'at', clock.now) });
+host.addImage(compiled.image);
+compiled.close();
+host.spawn(host.chart('ticker'));
+await host.idle();
+
+clock.increment(3500);             // one jump: one tick
+await host.idle();
+while (clock.now < 6500) {         // step deadline by deadline
+  clock.increment(host.nextDeadline);
+  await host.idle();
+}
+host.close();
+```
+
+```output
+tick 1 at 3500
+tick 2 at 4500
+tick 3 at 5500
+tick 4 at 6500
+```
+
+## Waiting for something to happen
+
+`await host.idle()` waits until the host has nothing to do now. It does
+not wait for a deadline on the runtime's clock, nor for your handlers'
+promises, and no call tells you when one actor ends. When a test runs on
+the real clock, wait for the condition itself:
+
+```js
+import { compileCharts, Host } from '@tinyactors/node';
+
+/** Turns the host until `condition()` holds, checking every 10 ms. */
+async function until(host, condition, ms = 5000) {
+  for (const end = Date.now() + ms; !condition(); ) {
+    if (Date.now() > end) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await host.idle();
+  }
+}
+
+const compiled = compileCharts([{ name: 'job.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="job" initial="working">
+  <state id="working"><onentry><send event="finish" delay="50ms"/></onentry>
+    <transition event="finish" target="done"/>
+  </state>
+  <final id="done"/>
+</scxml>` }]);
+const host = new Host({ systemID: 'test' });
+host.addImage(compiled.image);
+compiled.close();
+
+host.spawn(host.chart('job'), { name: 'job' });
+await host.idle();
+console.log('after idle():', host.actorByName('job') === undefined ? 'ended' : 'still running');
+await until(host, () => host.actorByName('job') === undefined);
+console.log('after until():', 'ended');
+host.close();
+```
+
+```output
+after idle(): still running
+after until(): ended
+```
+
+A chart can also say it is done: a `<send type="urn:test:done">` in its
+final state's `<onentry>`, to an I/O processor the test serves, resolves
+whatever promise the test waits on.
+
 ## Habits that help
 
 - **Await `idle()` after each input** that should have an effect before

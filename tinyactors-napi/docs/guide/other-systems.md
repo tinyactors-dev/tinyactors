@@ -16,7 +16,8 @@ outgoing half, an object of `target`, `event`, `data`, `sendid`,
 `origin` and `traceparent`, which the receiving side passes to
 `host.send(message)` as it is. On a wire, the message is a value once its
 two addresses are strings, so `encode` writes it and `decode` reads it
-back:
+back. (`JSON.stringify` writes an `Address` as `{ "text": ... }`; convert
+the two with `String()` for JSON too.)
 
 ```js
 import { Address, compileCharts, decode, encode, Host } from '@tinyactors/node';
@@ -82,9 +83,11 @@ approved by tinyactors://bank/#_scxml_1
 The receiver answers to `_event.origin`, which is the sender's full
 address, so the answer goes back through the bank's transport.
 
-**A send that cannot be delivered** is the transport's to report:
-`host.fail(target, sendid)` on the sending host (`send.fail()` while the
-handler runs) gives the sender `error.communication` with that `sendid`.
+**A send that cannot be delivered** is the transport's to report. While
+the handler runs, `send.fail()` does it. Later, on the sending host,
+`host.fail(sender, sendid)` does, where `sender` is the message's
+`origin` (the actor that sent it, not its target): the sender gets
+`error.communication` with that `sendid`.
 Delivery that worked needs no answer. Without a `transport` handler, each
 send to another system is failed.
 
