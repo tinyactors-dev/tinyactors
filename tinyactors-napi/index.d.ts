@@ -682,6 +682,37 @@ export class Host implements Disposable, AsyncDisposable {
    * `attributes`, ... */
   traceSpansDecode(params: Params, onResult: OnResult, onError?: OnError | null): void;
 
+  // The typed methods as promises (the convenience layer): each calls the
+  // method above of its name, resolving with its result and rejecting with
+  // its `TinyactorsError` (`code`, `reason`, `path`); a refusal at the call
+  // rejects too. A rejection is yours: without a `catch` it is an unhandled
+  // rejection, and `idle()` does not see it. A method still pending at
+  // `close()` never settles.
+
+  /** `actorState` as a promise: `const { value } = await
+   * host.actorStateAsync({ session })`. */
+  actorStateAsync(params?: Params): Promise<Value>;
+  /** `actorContext` as a promise of `{ variables }`. */
+  actorContextAsync(params?: Params): Promise<Value>;
+  /** `actorList` as a promise of a page, `{ sessions, cursor }`. */
+  actorListAsync(params?: Params): Promise<Value>;
+  /** `actorGet` as a promise of the actor. */
+  actorGetAsync(params?: Params): Promise<Value>;
+  /** `hostStats` as a promise of the counters: `await host.hostStatsAsync()`. */
+  hostStatsAsync(params?: Params): Promise<Value>;
+  /** `hostConfig` as a promise of the effective config. */
+  hostConfigAsync(params?: Params): Promise<Value>;
+  /** `traceConfigure` as a promise. */
+  traceConfigureAsync(params?: Params): Promise<Value>;
+  /** `traceWatch` as a promise of `{ id }`. */
+  traceWatchAsync(params?: Params): Promise<Value>;
+  /** `traceUnwatch` as a promise. */
+  traceUnwatchAsync(params?: Params): Promise<Value>;
+  /** `traceEnd` as a promise. */
+  traceEndAsync(params?: Params): Promise<Value>;
+  /** `traceSpansDecode` as a promise of `{ spans }`. */
+  traceSpansDecodeAsync(params?: Params): Promise<Value>;
+
   /** The host's counters now as an OTLP metrics request (a `Buffer`, for a
    * collector's `/v1/metrics`). `TA_ERROR_STATE` without `telemetry` in the
    * config. */

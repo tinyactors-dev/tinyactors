@@ -14,7 +14,7 @@ module NodeAPI
   # Core's amalgamation, built from tinyactors-core's sources into this
   # project's own build/ (AGENTS.md, "Tasks").
   CORE_BUILD = BUILD.join('core')
-  # The objects the addon links, and the addon itself, which index.mjs loads.
+  # The objects the addon links, and the addon itself, which lib/direct.mjs loads.
   OBJECTS = BUILD.join('objects')
   ADDON = BUILD.join('tinyactors.node')
   # The suite's adapter, `node conform.mjs` (tinyactors-test/docs/driver.md).

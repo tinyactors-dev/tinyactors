@@ -58,14 +58,12 @@ console.log('signals:', requests.map(([signal]) => signal).sort().join(', '));
 // Read the spans back (for a test; a collector does this for you).
 for (const [signal, data] of requests) {
   if (signal !== 'traces') continue;
-  host.traceSpansDecode({ traces: data }, (host, result) => {
-    const ours = result.spans.filter((span) => span.trace === '0af7651916cd43dd8448eb211c80319c');
-    console.log('spans in the caller\'s trace:', ours.map((span) => span.name).sort().join(', '));
-    const step = ours.find((span) => span.name === 'scxml.macrostep pay');
-    console.log('the step\'s parent is the caller\'s span:', step.parent === 'b7ad6b7169203331');
-  });
+  const { spans } = await host.traceSpansDecodeAsync({ traces: data });
+  const ours = spans.filter((span) => span.trace === '0af7651916cd43dd8448eb211c80319c');
+  console.log('spans in the caller\'s trace:', ours.map((span) => span.name).sort().join(', '));
+  const step = ours.find((span) => span.name === 'scxml.macrostep pay');
+  console.log('the step\'s parent is the caller\'s span:', step.parent === 'b7ad6b7169203331');
 }
-await host.idle();
 host.close();
 ```
 
@@ -200,17 +198,17 @@ a seed per process: false
 Typed methods ([Inspecting a host](inspection.md)) set what the host
 records:
 
-- **`traceConfigure(params)`** sets what every actor traces: `detail`
+- **`traceConfigureAsync(params)`** sets what every actor traces: `detail`
   (`'summary'`, `'decisions'`, `'full'` or `'off'`), `values`, `sample`
   (the share of new traces sampled, 0 to 1) and `rules`. It replaces the
   previous configuration.
-- **`traceWatch({ rules, seconds })`** adds rules in front of the
+- **`traceWatchAsync({ rules, seconds })`** adds rules in front of the
   configured ones for a while (900 seconds by default), and answers `{ id
-  }`; **`traceUnwatch({ id })`** ends a watch early. A watch is how an
+  }`; **`traceUnwatchAsync({ id })`** ends a watch early. A watch is how an
   operator looks closely at one chart or one actor without tracing
   everything.
-- **`traceEnd()`** ends every open span now, as `close()` does.
-- **`traceSpansDecode({ traces })`** reads the spans of a traces request
+- **`traceEndAsync()`** ends every open span now, as `close()` does.
+- **`traceSpansDecodeAsync({ traces })`** reads the spans of a traces request
   back, as above.
 
 A rule matches by `chart`, `actor` (a trailing `*` makes it a prefix),
@@ -222,11 +220,10 @@ A rule matches by `chart`, `actor` (a trailing `*` makes it a prefix),
 import { Host } from '@tinyactors/node';
 
 const host = new Host({ systemID: 'shop', telemetry: {} });
-host.traceConfigure({ detail: 'summary', sample: 0.01 }, () => console.log('1 trace in 100, summarized'));
-host.traceWatch({ rules: [{ chart: 'checkout', sample: 'keep', detail: 'full' }], seconds: 60 }, (host, watch) => {
-  console.log(`watch ${watch.id}: every checkout in full for a minute`);
-});
-await host.idle();
+await host.traceConfigureAsync({ detail: 'summary', sample: 0.01 });
+console.log('1 trace in 100, summarized');
+const watch = await host.traceWatchAsync({ rules: [{ chart: 'checkout', sample: 'keep', detail: 'full' }], seconds: 60 });
+console.log(`watch ${watch.id}: every checkout in full for a minute`);
 host.close();
 ```
 

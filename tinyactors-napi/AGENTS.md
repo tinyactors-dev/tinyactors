@@ -30,9 +30,10 @@ method over a posted message, or the handling of an effect
 
 The addon is the binding: it defines the classes, runs the loop,
 dispatches effects, converts values and implements the native datamodel
-in C. `index.mjs` loads the platform's `.node` file and re-exports it,
-nothing else, until the direct layer has passed M1; then the convenience
-layer joins it ("Layers and the resolver"). The plan of step 8.5, with
+in C. `lib/direct.mjs` loads the platform's `.node` file and re-exports
+it, nothing else; `index.mjs` exports it and the convenience layer
+(`lib/convenience.mjs`, JavaScript over `lib/direct.mjs` only), which
+joined it after M1 ("Layers and the resolver"). The plan of step 8.5, with
 every decision below and its evidence, is [docs/plan.xml](docs/plan.xml).
 
 ## Layers and the resolver
@@ -51,13 +52,20 @@ API"). Node's names and shapes (decided 2026-10-16, docs/plan.xml):
   (`ta_host_add_image` copies the bytes); `chart(name)` over
   `ta_host_chart`; `spawn(ref, ...)` over `ta_host_spawn`, taking that
   reference.
-- **A convenience layer in JavaScript above it comes after M1:** it
-  calls only the addon's exports and adds shapes, not behaviour. First
-  the typed methods as promises (`await host.actorState({session})`,
-  resolving from the response handler, rejecting from the error handler;
-  decided 2026-10-16: the direct layer keeps ADR 0012's response
+- **A convenience layer in JavaScript above it, after M1:**
+  `lib/convenience.mjs`, which imports only `lib/direct.mjs`, the
+  addon's exports (the lint rule `convenience-imports-the-direct-layer`),
+  and adds shapes, not behaviour. First the typed methods as promises
+  (decided 2026-10-16: the direct layer keeps ADR 0012's response
   handlers, and a promise is what a JavaScript programmer would write over
-  them anyway); then what the maintainer picks (images from a name→text
+  them anyway): **`await host.actorStateAsync({session})`**, one method
+  of `Host.prototype` per typed method, beside the direct one, which it
+  calls with a handler that resolves and one that rejects with the same
+  `TinyactorsError` (a separate name, 2026-10-17, l-p3-promises-shape:
+  the direct methods stay as they are, so a caller passing handlers pays
+  nothing; a refusal at the call rejects; a rejection with no `catch` is
+  an unhandled rejection, never the turn's; pending at `close()`, it
+  never settles); then what the maintainer picks (images from a name→text
   mapping, spawning by chart name, a resolver reading files under a root,
   a chart builder).
 - **A resolver is any callable** `(base, source) => text` (a function,
@@ -898,8 +906,8 @@ file.
   exception, the maintainer's: a host that names no datamodel gets the
   native one); nothing C
   does done again in JavaScript (bindings.md section 2); no JavaScript
-  above the addon until the convenience layer is taken up ("Layers and
-  the resolver").
+  above the addon but the convenience layer, over the addon's exports
+  only ("Layers and the resolver").
 - No serialization on the hot path, no struct layout read from
   JavaScript, no libuv, no V8's C++ API, no JavaScript parser of our own.
 
@@ -915,7 +923,7 @@ manages its development dependencies; the C toolchain is the root's.
   `mise/lib/toolchain.rb`; never a compiler from `PATH`, never `$CC`).
   `Target#plugin` links a loadable module, and `Toolchain::ObjectFormat`
   already allows a Node-API addon's undefined `napi_*`.
-- `mise run lint`: the rules' tests, the rules over `src/`, the adapters'
+- `mise run lint`: the rules' tests, the rules over `src/` and `lib/`, the adapters'
   lint (`mise run //tinyactors-test:lint -- conform.mjs`: the adapter
   imports only `@tinyactors/node` and `node:` built-ins),
   `docs/api-map.md` against core (`mise/lib/api_map.rb`), and the root's
@@ -998,12 +1006,12 @@ manages its development dependencies; the C toolchain is the root's.
   `node_api_module_get_api_version_v1` only, leaves undefined only
   Node-API and `Pack::LIBC`), each in `@tinyactors/node-<os>-<cpu>`
   (`os` and `cpu`, no `libc`), and the main package (`index.mjs`,
-  `index.d.ts`, README, LICENSE) listing them as `optionalDependencies` at
+  `lib/`, `index.d.ts`, README, LICENSE) listing them as `optionalDependencies` at
   exactly its version; packed with the pinned `npm pack` into
   `build/packages/`, the same bytes for the same commit. This machine's
   tarballs are installed by path into a fresh project outside the
   repository, with npm for node and with `bun add` for bun, and
-  `tools/smoke.mjs` runs there with `LD_BIND_NOW=1`. `index.mjs` loads
+  `tools/smoke.mjs` runs there with `LD_BIND_NOW=1`. `lib/direct.mjs` loads
   `build/tinyactors.node` first and the platform package after, whose
   version must be its own: Bun, run where no `node_modules` is, installs
   a package it cannot resolve from the registry (the last release's
@@ -1068,7 +1076,9 @@ compared file by file.
 ```
 README.md, CHANGELOG.md, mise.toml, package.json, sgconfig.yml
 ROADMAP.md           the work in progress: plan, progress, how it runs, requests to core
-index.mjs, index.d.ts   load the platform's .node and re-export it; the types
+index.mjs, index.d.ts   the package: both layers' exports; the types
+lib/direct.mjs       the direct layer: loads the platform's .node and re-exports it
+lib/convenience.mjs  the convenience layer: JavaScript over lib/direct.mjs only
 docs/api-map.md      each API item → ta_* function, method or effect (checked)
 docs/values.md       the JavaScript side of the value table
 src/                 addon.h, module.c, host.c, loop.c, effects.c, methods.c, values.c,

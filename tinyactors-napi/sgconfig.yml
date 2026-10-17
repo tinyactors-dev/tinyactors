@@ -1,6 +1,6 @@
 # ast-grep project of tinyactors-napi (invoke as `ast-grep`; in orbs `sg`
 # is shadow-utils' group tool). `mise run lint` runs the rules' tests, then
-# scans src/ with the rules.
+# scans src/ and lib/ with the rules.
 #
 # Two of the rules are the repository's (AGENTS.md, "At most three
 # parameters"), applied to all of the addon's C rather than to public
@@ -8,7 +8,8 @@
 # (four-or-more-parameters, bytes-as-pointer-and-length, allocator-signature),
 # so the patterns are core's and are written once. The others are this
 # binding's own (AGENTS.md, "C rules"): the layers, one timer,
-# the ta_napi_ prefix, and no mutable globals.
+# the ta_napi_ prefix, no mutable globals, and the convenience layer's
+# imports (lib/convenience.mjs imports only lib/direct.mjs).
 ruleDirs:
   - tools/lint/rules
 utilDirs:

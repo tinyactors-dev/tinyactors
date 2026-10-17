@@ -52,19 +52,17 @@ const compiled = compileCharts([{ name: 'idle.scxml', text: `
 const image = compiled.image;
 compiled.close();
 
-const stats = (host) => new Promise((resolve) => host.hostStats(undefined, (host, result) => resolve(result)));
-
 for (const system of [{}, { maxActors: 1000 }]) {
   const host = new Host({ systemID: 'demo', system });
   host.addImage(image);
-  const before = (await stats(host)).pools[0].actors;
+  const before = (await host.hostStatsAsync()).pools[0].actors;
   for (let i = 0; i < 1000; i++) host.spawn(host.chart('idle'));
-  const after = (await stats(host)).pools[0].actors;
+  const after = (await host.hostStatsAsync()).pools[0].actors;
   console.log(`maxActors ${system.maxActors ?? 'default'}: capacity ${before.capacity}, ` +
     `then ${after.used} used, high water ${after.highWater}, grown: ${after.capacity > before.capacity}`);
 
   host.addImage(image);
-  console.log('segments reported:', (await stats(host)).pools.map((pool) => pool.segment).join(', '));
+  console.log('segments reported:', (await host.hostStatsAsync()).pools.map((pool) => pool.segment).join(', '));
   host.close();
 }
 ```
@@ -78,7 +76,7 @@ segments reported: 0, 1
 
 `highWater` against `capacity` is what a config sized up front needs: run
 a realistic load, read the high-water marks, and give the next host those
-sizes. `host.hostConfig` answers the sizes a host was made with, every
+sizes. `host.hostConfigAsync()` answers the sizes a host was made with, every
 default filled in.
 
 ## Sizing a host up front
@@ -101,8 +99,7 @@ const host = new Host({ systemID: 'big', system: {
   maxActors: N + room, maxEvents: 4096,
   instanceBytes: 2048 * (R + room), stringBytes: 16384 + 64 * (R + room),
 } });
-host.hostConfig(undefined, (host, config) => console.log(config.system.maxActors));
-await host.idle();
+console.log((await host.hostConfigAsync()).system.maxActors);
 host.close();
 ```
 

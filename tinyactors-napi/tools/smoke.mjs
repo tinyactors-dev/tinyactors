@@ -6,7 +6,8 @@
 //   node smoke.mjs        bun smoke.mjs
 //
 // It compiles a counter for both datamodels, sends its actor three events,
-// reads the count from its log line, round-trips a value through the
+// reads the count from its log line, awaits a typed method's promise
+// (the convenience layer), round-trips a value through the
 // codec, checks that the addon came from the platform package, and prints
 // one line naming the platform. Exits with status 1 when a check fails.
 import { createRequire } from 'node:module';
@@ -36,6 +37,9 @@ async function count(datamodel) {
     for (const value of [1, 'two', { three: [3] }]) host.send(session, 'inc', value);
     host.send(session, 'report');
     await host.idle();
+    // the convenience layer shipped with the main package (lib/)
+    const stats = await host.hostStatsAsync();
+    if (stats.host.actors !== 1) lines.push(`hostStatsAsync answered ${stats.host.actors} actors, not 1`);
   } finally {
     host.close();
   }
@@ -52,7 +56,7 @@ const back = decode(encode(value));
 if (JSON.stringify(back, (k, v) => (v instanceof Uint8Array ? [...v] : v)) !== JSON.stringify(value, (k, v) => (v instanceof Uint8Array ? [...v] : v))) {
   failures.push(`the codec does not round-trip ${JSON.stringify(back)}`);
 }
-// The platform package index.mjs loads is the one resolved from the main
+// The platform package lib/direct.mjs loads is the one resolved from the main
 // package's directory, and it must be this build's: a registry's package of
 // the same name (an older release) would pass every check above.
 const require = createRequire(import.meta.url);
@@ -60,7 +64,7 @@ const main = dirname(require.resolve('@tinyactors/node'));
 const version = JSON.parse(readFileSync(join(main, 'package.json'), 'utf8')).version;
 const platformPackage = `@tinyactors/node-${process.platform}-${process.arch}`;
 try {
-  const loaded = createRequire(join(main, 'index.mjs'))(`${platformPackage}/package.json`).version;
+  const loaded = createRequire(join(main, 'lib', 'direct.mjs'))(`${platformPackage}/package.json`).version;
   if (loaded !== version) failures.push(`${platformPackage} is ${loaded}, not ${version}, the main package's`);
 } catch (error) {
   failures.push(`${platformPackage} does not resolve from the main package: ${error.message}`);

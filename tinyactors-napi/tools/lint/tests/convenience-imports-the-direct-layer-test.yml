@@ -1,0 +1,22 @@
+id: convenience-imports-the-direct-layer
+valid:
+  - "import { Host } from './direct.mjs';"
+  - "import * as direct from \"./direct.mjs\";"
+  - "export { Host } from './direct.mjs';"
+  - "export const name = 'node:fs';"
+  - "const label = '../build/not-an-import.node';"
+invalid:
+  - "import addon from '../build/tinyactors.node';"
+  - "import { Host } from '../index.mjs';"
+  - "import { Host } from '@tinyactors/node';"
+  - "import { readFileSync } from 'node:fs';"
+  - "import cbor from 'cbor-x';"
+  - "import { Host } from './direct.mjs?raw';"
+  - "import { other } from './other.mjs';"
+  - "export * from './other.mjs';"
+  - "const direct = await import('./direct.mjs');"
+  - "const addon = await import(path);"
+  - "const addon = require('../build/tinyactors.node');"
+  - "process.dlopen(module, '../build/tinyactors.node');"
+  - "const fs = process.getBuiltinModule('node:fs');"
+  - "const require = createRequire(import.meta.url);"

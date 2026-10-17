@@ -1,12 +1,13 @@
 #!/usr/bin/env ruby
-#MISE description="Lint: the ast-grep rules' tests, then the addon's C (parameters, buffers, layers, one timer, the ta_napi_ prefix, no mutable globals), the adapter's imports, the mapping table, the build scripts' portability and acronyms"
+#MISE description="Lint: the ast-grep rules' tests, then the addon's C (parameters, buffers, layers, one timer, the ta_napi_ prefix, no mutable globals; the convenience layer's imports), the adapter's imports, the mapping table, the build scripts' portability and acronyms"
 # vim:ft=ruby
 
 # 1. tools/lint/rules (sgconfig.yml), after their tests in tools/lint/tests:
 #    at most three parameters and ta_bytes/ta_buffer for every function of
 #    src/ (with the utility rules of tinyactors-core/tools/lint/utils), the
-#    layer rules, one timer in src/loop.c, the ta_napi_ prefix, and no
-#    mutable globals.
+#    layer rules, one timer in src/loop.c, the ta_napi_ prefix, no
+#    mutable globals, and the convenience layer's imports (lib/: only
+#    lib/direct.mjs, the addon's exports).
 # 2. The adapters' lint (tinyactors-test/lint): the adapter imports only
 #    the public module, `@tinyactors/node`, and `node:` built-ins.
 # 3. docs/api-map.md: every API item names a core function, constant or

@@ -532,7 +532,7 @@
     </phase>
     <phase id="p3" title="The convenience layer">
       <goal>JavaScript over the direct layer only, after the direct layer has passed M1 (bindings.md section 1): shapes a JavaScript programmer would otherwise write, no behaviour and no C.</goal>
-      <step id="p3-promises" status="todo" after="p1-conform" decision="d-promises d-layers">
+      <step id="p3-promises" status="doing" after="p1-conform" decision="d-promises d-layers">
         <title>Typed methods that return promises</title>
         <does>One wrapper per typed method (await host.actorState({session})), resolving from onResult and rejecting from onError, in a JavaScript module index.mjs re-exports beside the addon; typed in index.d.ts.</does>
         <done-when>Each wrapper calls only its direct method (a lint of the module's imports, as the adapter's); a test awaits each, a rejection carries the TinyactorsError's code and reason.</done-when>

@@ -194,10 +194,8 @@ host.migrate({ wake: true });
 while (done === undefined) {
   for (const session of asked.splice(0, 10)) host.wake(session, store.get(session));
   await host.idle();
-  host.hostStats(undefined, (host, stats) => {
-    mostResident = Math.max(mostResident, stats.host.actors - stats.host.hibernated);
-  });
-  await host.idle();
+  const stats = await host.hostStatsAsync();
+  mostResident = Math.max(mostResident, stats.host.actors - stats.host.hibernated);
   evict();
   evict();
 }

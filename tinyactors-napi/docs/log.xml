@@ -1216,4 +1216,22 @@
     <why>These are core defaults or core semantics, not binding choices.</why>
     <resolution>The coordinator left all of them alone. The guides tell users to set traceSeed and maxOps, and the null datamodel is SCXML. A notification when an actor ends is refused by design (ADR 0012 removed subscriptions); a chart can send to its parent with donedata.</resolution>
   </entry>
+  <entry id="l-p3-promises-shape" date="2026-10-17" step="p3-promises" kind="decision" status="for-maintainer">
+    <what>The promise forms are separate names, host.&lt;method&gt;Async(params), methods of Host.prototype beside the direct ones, not the direct methods returning a promise when no handler is passed.</what>
+    <why>The direct methods stay exactly as they are (no onResult is still a TypeError, tested), so a caller passing handlers pays nothing: an overload would put a JavaScript wrapper in front of every direct call, or need C to make the promise, and would turn a TypeError of the direct layer into a supported call. Names borrowed from libraries that put a promise form beside a callback one: Meteor 3 (callAsync, findOneAsync) and Bluebird promisifyAll (methodAsync). Not chosen: free functions actorState(host, params) (a second name per method with another argument order); a host.promises namespace as fs.promises (an object per host, made or cached on first read). d-promises wrote await host.actorState({session}); this is that call with the suffix, which the maintainer may rename in one place (TYPED_METHODS in lib/convenience.mjs).</why>
+    <evidence>tinyactors-napi/lib/convenience.mjs; test/convenience.test.mjs: the direct form is unchanged: handlers, no promise, no onResult refused</evidence>
+    <resolution>Built; the guides show the Async form first and the handler form after it.</resolution>
+  </entry>
+  <entry id="l-p3-promises-layout" date="2026-10-17" step="p3-promises" kind="decision" status="resolved">
+    <what>The addon loader moved from index.mjs to lib/direct.mjs; index.mjs re-exports lib/direct.mjs and lib/convenience.mjs, and lib/convenience.mjs imports only lib/direct.mjs.</what>
+    <why>The convenience layer installs its methods on Host.prototype when it is evaluated, so it needs Host then. Importing index.mjs (or @tinyactors/node, which resolves to it) from a module index.mjs re-exports is a cycle in which the convenience module evaluates first and reads Host in its TDZ. lib/direct.mjs exports the addon items and nothing else, so importing it is importing the package direct exports; the ast-grep rule convenience-imports-the-direct-layer refuses any other specifier, built-ins included, and dynamic or computed imports, createRequire, process.dlopen and process.getBuiltinModule. The pack stages lib/ (mise/pack.rb FILES), and tools/smoke.mjs awaits hostStatsAsync where the packages are installed.</why>
+    <evidence>tinyactors-napi/index.mjs; lib/direct.mjs; tools/lint/rules/convenience-imports-the-direct-layer.yml and its test</evidence>
+    <resolution>p3-shapes widens the rule in its own commit if directoryResolver needs node:fs or node:path.</resolution>
+  </entry>
+  <entry id="l-p3-promises-refusals" date="2026-10-17" step="p3-promises" kind="decision" status="resolved">
+    <what>A refusal at the call (a closed host, another object as this, params that cannot be written) rejects the promise instead of throwing; a method pending at close() never settles.</what>
+    <why>The wrapper calls the direct method inside the Promise executor, so a throw there rejects, as a throw in an async function does: a caller writes one catch. Close drops the pending handlers uncalled (ADR 0012; AGENTS.md, pending handlers are dropped at ta_host_free), and the wrapper only has those handlers, so rejecting at close would be behaviour of its own the direct layer does not have.</why>
+    <evidence>test/convenience.test.mjs: 'a refusal at the call rejects: a closed host, another object' and 'a method pending at close never settles'</evidence>
+    <resolution>Documented in index.d.ts, docs/api-map.md and docs/guide/inspection.md.</resolution>
+  </entry>
 </log>

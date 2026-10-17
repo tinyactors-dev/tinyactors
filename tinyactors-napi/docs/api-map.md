@@ -25,7 +25,9 @@ A row marked *planned* is an item the plan (`docs/plan.xml`, section
 api) calls for, written ahead so its core is checked and the API review
 sees it; the commit that adds the item removes the mark. `index.d.ts`
 declares every row, planned or not; `index.mjs` exports the items
-built so far. Names the plan left open were picked when the
+built so far: the direct layer's (`lib/direct.mjs`, the addon's
+exports) and the convenience layer's (`lib/convenience.mjs`, JavaScript
+over the direct layer's exports only). Names the plan left open were picked when the
 rows were written (log entries `l-p0-map-*`, for the maintainer).
 
 | API item | Core | Notes |
@@ -72,6 +74,17 @@ rows were written (log entries `l-p0-map-*`, for the maintainer).
 | `host.traceUnwatch(params, onResult, onError?)` | `trace.unwatch`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | `host.traceEnd(params, onResult, onError?)` | `trace.end`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | `host.traceSpansDecode(params, onResult, onError?)` | `trace.spans.decode`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
+| `host.actorStateAsync(params?) → Promise` | `actor.state`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | the convenience layer (`lib/convenience.mjs`, JavaScript, no C): a promise over `host.actorState(params, onResult, onError)`, its direct method, and nothing else; resolves with the result `onResult` gets, rejects with the `TinyactorsError` `onError` gets (`code`, `reason`, `path`), so a reply's error never reaches the turn: without a `catch` it is an unhandled rejection; a refusal at the call (a closed host, another object) rejects too; still pending at `close()`, it never settles; a method of `Host.prototype` beside the direct one, which stays as it is, so a caller passing handlers pays nothing |
+| `host.actorContextAsync(params?) → Promise` | `actor.context`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.actorContext` |
+| `host.actorListAsync(params?) → Promise` | `actor.list`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.actorList` |
+| `host.actorGetAsync(params?) → Promise` | `actor.get`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.actorGet` |
+| `host.hostStatsAsync(params?) → Promise` | `host.stats`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.hostStats` |
+| `host.hostConfigAsync(params?) → Promise` | `host.config`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.hostConfig` |
+| `host.traceConfigureAsync(params?) → Promise` | `trace.configure`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.traceConfigure` |
+| `host.traceWatchAsync(params?) → Promise` | `trace.watch`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.traceWatch` |
+| `host.traceUnwatchAsync(params?) → Promise` | `trace.unwatch`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.traceUnwatch` |
+| `host.traceEndAsync(params?) → Promise` | `trace.end`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.traceEnd` |
+| `host.traceSpansDecodeAsync(params?) → Promise` | `trace.spans.decode`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | as `host.actorStateAsync`, over `host.traceSpansDecode` |
 | `options.telemetry`: `(host, signal, data) => ...` | `TA_HOST_EFFECT_TRACES`, `TA_HOST_EFFECT_LOGS`, `ta_host_traces`, `ta_host_logs` | the handling of an effect: the request taken when its effect comes and copied once into a `Buffer` (`napi_create_buffer_copy`), `signal` `"traces"` or `"logs"`, called in the turn; without a handler the request is taken and dropped, so the encoder goes on; its error is the turn's; a take the allocator refused is reported once and retried at the next turn; what it returns in the last take is awaited by `[Symbol.asyncDispose]` |
 | `host.metrics() → Buffer` | `ta_host_metrics` | pulled when the application wants them, copied once; outside a drain its batch is acknowledged at once, from a handler it joins the open one; `TA_ERROR_STATE` without telemetry in the config |
 | `host.sweep(maxScan, limit) → bigint[]` | `ta_host_sweep` | the CLOCK sweep: at most `limit` sessions that did not run since the previous sweep and can be hibernated now, scanning at most `maxScan` slots; each an integer from 0 to 2^32-1, anything else a `TypeError` |

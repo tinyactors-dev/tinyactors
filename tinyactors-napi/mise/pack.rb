@@ -7,7 +7,8 @@
 # (mise/tasks/pack) and the release task (mise/tasks/release) both build
 # through this file.
 #
-# - @tinyactors/node: index.mjs, index.d.ts, README.md, LICENSE and a
+# - @tinyactors/node: index.mjs, lib/ (the direct layer and the
+#   convenience layer), index.d.ts, README.md, LICENSE and a
 #   package.json made from this directory's, with optionalDependencies on
 #   every platform package at exactly its own version. They live only in
 #   the staged copy: the repository's package.json cannot name packages
@@ -37,7 +38,7 @@ module NodeAPI
     RELEASE = BUILD.join('release')
     PACKAGES = BUILD.join('packages')
     # Each native release target: npm's os and cpu (process.platform and
-    # process.arch, which index.mjs names the package by).
+    # process.arch, which lib/direct.mjs names the package by).
     TARGETS = {
       'aarch64-macos' => %w[darwin arm64],
       'x86_64-macos' => %w[darwin x64],
@@ -45,7 +46,7 @@ module NodeAPI
       'aarch64-linux' => %w[linux arm64]
     }.freeze
     # The main package's files, beside its package.json.
-    FILES = %w[index.mjs index.d.ts README.md LICENSE].freeze
+    FILES = %w[index.mjs lib/direct.mjs lib/convenience.mjs index.d.ts README.md LICENSE].freeze
     # What the addon exports: the runtime that loads it finds it by these
     # names (NAPI_MODULE_INIT, Node.js's include/node/node_api.h).
     EXPORTS = %w[napi_register_module_v1 node_api_module_get_api_version_v1].freeze
@@ -148,7 +149,10 @@ module NodeAPI
     # every platform package at `version`.
     def stage_main(dir, version)
       FileUtils.mkdir_p(dir)
-      FILES.each { |file| FileUtils.cp(file == 'LICENSE' ? LICENSE : ROOT.join(file), dir.join(file)) }
+      FILES.each do |file|
+        FileUtils.mkdir_p(dir.join(file).dirname)
+        FileUtils.cp(file == 'LICENSE' ? LICENSE : ROOT.join(file), dir.join(file))
+      end
       staged = manifest.merge(
         'version' => version,
         'files' => FILES,

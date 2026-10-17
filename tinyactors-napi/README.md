@@ -506,9 +506,10 @@ TA_ERROR_INVALID - the host has no chart of that name
   [Inspecting a host](docs/guide/inspection.md))
   rejects a waiting `host.idle()`; with none waiting it is thrown from the
   host's turn as an uncaught exception, and a handler's promise that
-  rejects is an unhandled rejection. Either ends a Node.js or Bun process
-  unless the application handles `uncaughtException` and
-  `unhandledRejection`. Only a turn's first error is reported; the others
+  rejects is an unhandled rejection, as is a typed method's promise
+  (`await host.actorStateAsync(...)`) that rejects with no `catch`. Either
+  ends a Node.js or Bun process unless the application handles
+  `uncaughtException` and `unhandledRejection`. Only a turn's first error is reported; the others
   of that turn are lost.
 - **`using host = new Host(...)` needs a runtime that parses `using`:**
   Bun 1.4 does, Node.js 22 does not. `Symbol.dispose` and
