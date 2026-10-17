@@ -66,6 +66,7 @@ void ta_napi_native_free(ta_napi_native *native) {
         allocator->free(allocator->context, native->output.pointer, native->output.capacity);
     }
     native->output = (ta_buffer){NULL, 0, 0};
+    ta_growable_arena_free(&native->scratch);
 }
 
 /* ---- payloads ---------------------------------------------------------------- */

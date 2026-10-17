@@ -758,6 +758,8 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
     ta_growable_arena_config arena = {sizeof arena, 0, 16384, &host->allocator};
     ta_growable_arena_init(&host->arena, &arena);
     host->arena_allocator = ta_growable_arena_allocator(&host->arena);
+    ta_growable_arena_config scratch = {sizeof scratch, 0, 0, &host->allocator};
+    ta_growable_arena_init(&host->native.scratch, &scratch);
     ta_napi_tables_init(host);
 
     napi_value effective = NULL;

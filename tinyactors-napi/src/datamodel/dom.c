@@ -1,7 +1,7 @@
 /* XML content as a document (SCXML B.2; docs/plan.xml, decision d-dom):
  * the text parsed with txml, the project's XML library, compiled into the
- * addon (Node and Bun have no DOMParser), allocating through the host's
- * allocator; its tree read with cursors into arrays of
+ * addon (Node and Bun have no DOMParser), allocating from the datamodel's
+ * scratch arena for the parse; its tree read with cursors into arrays of
  * [nodeType, nodeName, text, attributes, children], which the kit makes
  * into XML nodes of its context (realm.js, `dom`). The document is the
  * parser's for the call only. */
@@ -10,32 +10,25 @@
 #include <string.h>
 #include <txml.h>
 
-/* ---- txml's allocator: the host's ------------------------------------------------- */
+/* ---- txml's allocator: the datamodel's scratch arena ------------------------------ */
 
-/* A block of `alignment` above 8, which the host's allocator does not give:
- * one larger block, aligned by hand, its start kept just before the
- * aligned one. */
+/* A parse's blocks live until the parse ends: they come from the
+ * datamodel's scratch arena above a mark taken for the parse and released
+ * after it, so frees are nothing and a warmed parse calls no allocator
+ * (txml asks for about 1.7 MB in 13 blocks for a small document, freed
+ * block by block before). A block of `alignment` above 8, which the arena
+ * does not give, is a larger block aligned by hand. */
 static void *ta_napi_txml_alloc(void *self, size_t size, size_t alignment) {
-    const ta_allocator *allocator = (const ta_allocator *)self;
-    if (alignment <= 8) return allocator->alloc(allocator->context, size, alignment);
-    size_t total = size + alignment + sizeof(void *);
-    unsigned char *block = (unsigned char *)allocator->alloc(allocator->context, total, 8);
+    ta_growable_arena *arena = (ta_growable_arena *)self;
+    if (alignment <= 8) return ta_growable_arena_alloc(arena, size, alignment ? alignment : 1);
+    unsigned char *block = (unsigned char *)ta_growable_arena_alloc(arena, size + alignment, 8);
     if (block == NULL) return NULL;
-    uintptr_t aligned = ((uintptr_t)(block + sizeof(void *)) + alignment - 1) & ~(uintptr_t)(alignment - 1);
-    memcpy((unsigned char *)aligned - sizeof(void *), &block, sizeof block);
-    return (void *)aligned;
+    return (void *)(((uintptr_t)block + alignment - 1) & ~(uintptr_t)(alignment - 1));
 }
 
 static void ta_napi_txml_free(void *self, const txml_allocator_free_params *params) {
-    const ta_allocator *allocator = (const ta_allocator *)self;
-    if (params->ptr == NULL) return;
-    if (params->alignment <= 8) {
-        allocator->free(allocator->context, params->ptr, params->size);
-        return;
-    }
-    unsigned char *block;
-    memcpy(&block, (unsigned char *)params->ptr - sizeof(void *), sizeof block);
-    allocator->free(allocator->context, block, params->size + params->alignment + sizeof(void *));
+    (void)self; /* the parse's mark releases it */
+    (void)params;
 }
 
 static const txml_allocator_vtable ta_napi_txml_vtable = {ta_napi_txml_alloc, ta_napi_txml_free};
@@ -154,9 +147,14 @@ static napi_value ta_napi_txml_children(napi_env env, txml_cursor parent) {
 
 napi_value ta_napi_dom(const ta_napi_xml *xml) {
     napi_env env = xml->native->host->env;
-    txml_parser_config config = {{(void *)&xml->native->host->allocator, &ta_napi_txml_vtable}, TXML_LIMITS_DEFAULT, 0, 0, 0};
+    ta_growable_arena *arena = &xml->native->scratch;
+    ta_growable_arena_mark mark = ta_growable_arena_position(arena);
+    txml_parser_config config = {{(void *)arena, &ta_napi_txml_vtable}, TXML_LIMITS_DEFAULT, 0, 0, 0};
     txml_parser *parser = NULL;
-    if (txml_parser_init(&parser, &config) != TXML_OK) return NULL;
+    if (txml_parser_init(&parser, &config) != TXML_OK) {
+        ta_growable_arena_release(arena, mark);
+        return NULL;
+    }
     const uint8_t *bytes = (const uint8_t *)xml->text.pointer;
     uint32_t fed = 0;
     txml_step step = TXML_STEP_NEED_INPUT;
@@ -180,5 +178,6 @@ napi_value ta_napi_dom(const ta_napi_xml *xml) {
             document = ta_napi_kit(env, xml->kit, &(ta_napi_kit_call){"dom", 2, {children, text}});
     }
     txml_parser_destroy(parser);
+    ta_growable_arena_release(arena, mark); /* the tree is read: the parse's blocks end */
     return document;
 }

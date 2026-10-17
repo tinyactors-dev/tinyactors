@@ -274,6 +274,10 @@ typedef struct ta_napi_pending_row {
  *   strings      ["platform", "internal", "external", the I/O processors'
  *                types...]: _event's strings by core's ids;
  *   environment  the evaluating entry's (In() reads it);
+ *   scratch      the arena of the datamodel's calls that need memory for
+ *                the call only (an XML parse: txml's tree), a mark per
+ *                call, its chunks kept, so a warmed parse makes no call of
+ *                the host's allocator;
  *   output       the datamodel's last output (eval_string, log, to_wire,
  *                serialize, payload_serialize), valid until its next call;
  *   reason       why the last serialize refused (TA_ERROR_UNSUPPORTED: which
@@ -286,6 +290,7 @@ typedef struct ta_napi_native {
     struct ta_napi_host *host;
     napi_ref shared, drops, strings;
     ta_datamodel_environment *environment;
+    ta_growable_arena scratch;
     ta_buffer output;
     char reason[256];
     bool freeing;

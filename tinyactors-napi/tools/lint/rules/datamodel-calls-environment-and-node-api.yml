@@ -13,6 +13,9 @@
 #     2883 and 2995);
 #   - ta_table_*: its rows, which live in the host's tables (AGENTS.md,
 #     "The binding's memory");
+#   - ta_growable_arena_*: its scratch arena, the memory of a call that
+#     needs it for the call only (an XML parse's tree), a mark per call
+#     (AGENTS.md, "The binding's memory");
 #   - txml's txml_*: XML content parsed into a DOM (docs/plan.xml,
 #     decision d-dom; tinyxml/include/txml.h);
 #   - the addon's own ta_napi_* (values.c's conversion, rows.c).
@@ -24,7 +27,7 @@
 id: datamodel-calls-environment-and-node-api
 language: c
 severity: error
-message: "src/datamodel/ calls of core only ta_datamodel_environment_*, ta_image_*, ta_cbor_* and ta_table_* (and txml_* and the addon's own ta_napi_*)"
+message: "src/datamodel/ calls of core only ta_datamodel_environment_*, ta_image_*, ta_cbor_*, ta_table_* and ta_growable_arena_* (and txml_* and the addon's own ta_napi_*)"
 files:
   - src/datamodel/**/*.c
   - src/datamodel/**/*.h
@@ -35,4 +38,4 @@ rule:
     kind: identifier
     regex: '^ta_'
     not:
-      regex: '^ta_(datamodel_environment|image|cbor|table|napi)_\w+$'
+      regex: '^ta_(datamodel_environment|image|cbor|table|growable_arena|napi)_\w+$'

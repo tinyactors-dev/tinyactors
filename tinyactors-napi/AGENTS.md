@@ -348,6 +348,16 @@ The addon allocates almost nothing (bindings.md, section 6):
   as UTF-16 only when `EF BF BD` appears, to refuse a lone surrogate. What
   the host hands out is a view until the ack (above). Core's values are
   read with `ta_cbor_reader` as they stream.
+- **The datamodel's scratch arena, a mark per parse** (decided
+  2026-10-17, docs/allocation.md): an XML parse's tree (txml's blocks,
+  about 1.7 MB in 13 blocks even for a small document) lives for the
+  parse only, so txml allocates from a `ta_growable_arena` of the native
+  datamodel (`native->scratch`, over the host's allocator, its chunks kept)
+  above a mark released when the tree is read; its frees are nothing. A
+  warmed parse calls no allocator: 1,000 parses made 13,006 blocks before
+  and none after, and an event that assigns XML content went from 447-503
+  us to 15 us on bun (21-23 us before and after on node), at the cost of
+  the high-water mark kept for the host's life once a chart parses XML.
 - **The datamodel's last output.** `to_wire`, `serialize`,
   `payload_serialize` and the strings handed back to core (`eval_string`,
   `log`) are written with a writer the datamodel keeps, overwritten by its
@@ -362,7 +372,7 @@ The addon allocates almost nothing (bindings.md, section 6):
   the allocator (`src/module.c`, with `napi_adjust_external_memory`) and
   the environment's instance that holds it, and through core
   (`ta_table`, `ta_growable_arena` while it grows, the compiler's
-  options); nowhere else, nothing
+  options, the datamodel's scratch arena for txml); nowhere else, nothing
   per event or per evaluation. The lint rule `allocation-in-tables-and-host`
   checks it. The module's own calls (`encode`) have no host: they use an
   arena of the environment's instance, a mark per call, as a host's
@@ -399,10 +409,10 @@ The addon allocates almost nothing (bindings.md, section 6):
   - `datamodel-calls-environment-and-node-api`: `src/datamodel/` calls of
     core only `ta_datamodel_environment_*`, `ta_image_*` (the chart's
     expressions, read at `chart_attach`), `ta_cbor_*` (`to_wire`,
-    `from_wire`) and `ta_table_*`, txml's `txml_*` (XML content, "The
-    native datamodel"), and our own `ta_napi_*`; never the host or the
-    system (`datamodel.h`: "they must never call ta_system_*
-    functions"). It reaches `node:vm` through `process.getBuiltinModule`,
+    `from_wire`), `ta_table_*`, `ta_growable_arena_*` (its scratch
+    arena), txml's `txml_*` (XML content, "The native datamodel"), and our
+    own `ta_napi_*`; never the host or the system (`datamodel.h`: "they
+    must never call ta_system_* functions"). It reaches `node:vm` through `process.getBuiltinModule`,
     a JavaScript call made with Node-API, not V8's C++ API.
   - `one-timer-in-loop`: the global timers (`setTimeout`, `setInterval`,
     `setImmediate` and their clear functions) appear in `src/loop.c`
