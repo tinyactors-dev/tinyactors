@@ -111,12 +111,16 @@ runs, into a new block with more of what ran out and the rest as it was
 | Ran out | Grows |
 |---|---|
 | actors | `maxActors` doubles; `instanceBytes` and `stringBytes` grow by what the added actors need (their instances, and 16 bytes each of strings), so a value given for either keeps its own part |
-| events | `maxEvents` doubles, and `traceContexts` and `traceBytes` with it |
-| timers | `maxTimers` doubles |
-| requests | `maxRequests` doubles |
-| the slab | `stringBytes` doubles |
+| events | `maxEvents` doubles (or more, below), and `traceContexts` and `traceBytes` with it |
+| timers | `maxTimers` doubles (or more) |
+| requests | `maxRequests` doubles (or more) |
+| the slab | `stringBytes` doubles (or more) |
 
-Each is clamped to its limit; a pool at its limit is not grown again, and
+A pool other than the actors grows by more than double when doubling would
+add less than a quarter of the segment's region: a relocation copies the
+whole region, so the events beside 80,000 actors grow from 256 to 131,072
+at once rather than in nine copies of it. Each is clamped to its limit; a
+pool at its limit is not grown again, and
 the input or the run is refused (`TA_ERROR_NO_MEMORY`, `TA_RUN_EXHAUSTED`).
 `workspaces` does not grow: an actor waits for a free one. A value given
 here grows like a default: `traceBytes` included, so an explicit

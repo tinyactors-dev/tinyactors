@@ -160,61 +160,93 @@ static uint32_t derived_instance_bytes(const host_segment *segment, uint32_t max
     return config.instance_bytes;
 }
 
-static uint32_t doubled(uint32_t value) {
-    return value > UINT32_MAX / 2 ? UINT32_MAX : value * 2;
+static uint32_t times(uint32_t value, uint32_t factor) {
+    uint64_t product = (uint64_t)value * factor;
+    return product > UINT32_MAX ? UINT32_MAX : (uint32_t)product;
+}
+
+static uint32_t slab_bytes(uint64_t bytes) {
+    return bytes > TA_SLAB_MAX_BYTES ? TA_SLAB_MAX_BYTES : (uint32_t)bytes;
+}
+
+/* What ran out of a segment (a TA_POOL_*), and how many times its capacity
+ * a bigger block holds. */
+typedef struct growth {
+    uint32_t pool, factor;
+} growth;
+
+/* The segment's config with more of `growth.pool` and the rest as it was:
+ * 0 if nothing says what ran out. ta_system_config_normalize clamps each
+ * capacity to its hard limit. */
+static int grown_config(const host_segment *segment, growth growth, ta_system_config *config) {
+    ta_system_config wanted = segment->config;
+    switch (growth.pool) {
+    case TA_POOL_ACTORS: {
+        /* the slab by what the added actors need: their instances, and the
+         * strings' share per actor (not its fixed base) */
+        uint32_t before = wanted.max_actors;
+        wanted.max_actors = times(before, growth.factor);
+        if (wanted.max_actors > TA_SYSTEM_MAX_ACTORS) wanted.max_actors = TA_SYSTEM_MAX_ACTORS;
+        uint32_t added = wanted.max_actors - before;
+        wanted.instance_bytes = slab_bytes((uint64_t)wanted.instance_bytes +
+                                           derived_instance_bytes(segment, wanted.max_actors) -
+                                           derived_instance_bytes(segment, before));
+        wanted.string_bytes =
+            slab_bytes((uint64_t)wanted.string_bytes + (uint64_t)added * TA_STRING_BYTES_PER_ACTOR);
+        break;
+    }
+    case TA_POOL_EVENTS:
+        wanted.max_events = times(wanted.max_events, growth.factor);
+        /* the trace contexts and the journal keep up with the events, as
+         * their defaults do */
+        wanted.trace_contexts = times(wanted.trace_contexts, growth.factor);
+        wanted.trace_bytes = times(wanted.trace_bytes, growth.factor);
+        break;
+    case TA_POOL_TIMERS: wanted.max_timers = times(wanted.max_timers, growth.factor); break;
+    case TA_POOL_REQUESTS: wanted.max_requests = times(wanted.max_requests, growth.factor); break;
+    case TA_POOL_SLAB: wanted.string_bytes = slab_bytes((uint64_t)wanted.string_bytes * growth.factor); break;
+    default: return 0;
+    }
+    ta_system_config_normalize(&segment->system->core.image_view, &wanted, config);
+    return 1;
 }
 
 /* A bigger block for a segment, with more of `pool` (a TA_POOL_*, what ran
  * out) and the rest as it was: TA_OK; TA_ERROR_NO_MEMORY if the allocator
  * refused it; TA_ERROR_INVALID if that pool cannot grow (the segment
- * unchanged). */
+ * unchanged).
+ *
+ * The actors double. Another pool doubles, or more: a relocation copies the
+ * whole region, so its block grows by at least a quarter of the region (the
+ * events beside many actors, doubling from 256, would otherwise copy the
+ * region at every doubling), up to the pool's hard limit. The actors need
+ * no such rule: their share of the region is most of it once copying it
+ * costs anything. */
 static ta_status segment_grow(ta_host *host, host_segment *segment, uint32_t pool) {
     if (host->running) return TA_ERROR_NO_MEMORY; /* nothing grows during a run */
-    /* the pool doubled up to its hard limit (ta_system_config_normalize
-     * clamps it; the slab's bytes saturate before they would wrap) */
-    ta_system_config wanted = segment->config, config;
-    switch (pool) {
-    case TA_POOL_ACTORS: {
-        /* the slab by what the added actors need: their instances, and the
-         * strings' share per actor (not its fixed base) */
-        uint32_t before = wanted.max_actors;
-        wanted.max_actors = doubled(before);
-        if (wanted.max_actors > TA_SYSTEM_MAX_ACTORS) wanted.max_actors = TA_SYSTEM_MAX_ACTORS;
-        uint32_t added = wanted.max_actors - before;
-        uint64_t instances = (uint64_t)wanted.instance_bytes +
-                             derived_instance_bytes(segment, wanted.max_actors) -
-                             derived_instance_bytes(segment, before);
-        uint64_t strings = (uint64_t)wanted.string_bytes + (uint64_t)added * TA_STRING_BYTES_PER_ACTOR;
-        wanted.instance_bytes = instances > TA_SLAB_MAX_BYTES ? TA_SLAB_MAX_BYTES : (uint32_t)instances;
-        wanted.string_bytes = strings > TA_SLAB_MAX_BYTES ? TA_SLAB_MAX_BYTES : (uint32_t)strings;
-        break;
+    const size_t enough =
+        pool == TA_POOL_ACTORS ? 0 : segment->memory_size + segment->memory_size / 4;
+    ta_system_config config;
+    size_t need = 0;
+    for (uint32_t factor = 2; factor; factor = factor < (1u << 30) ? factor * 2 : 0) {
+        ta_system_config next;
+        size_t bytes;
+        if (!grown_config(segment, (growth){pool, factor}, &next) ||
+            ta_system_layout(segment->image, &next, &bytes) != TA_OK || bytes <= need)
+            break; /* at its limit: what the last factor gave */
+        config = next;
+        need = bytes;
+        if (need >= enough) break;
     }
-    case TA_POOL_EVENTS:
-        wanted.max_events = doubled(wanted.max_events);
-        /* the trace contexts and the journal keep up with the events, as
-         * their defaults do */
-        wanted.trace_contexts = doubled(wanted.trace_contexts);
-        wanted.trace_bytes = doubled(wanted.trace_bytes);
-        break;
-    case TA_POOL_TIMERS: wanted.max_timers = doubled(wanted.max_timers); break;
-    case TA_POOL_REQUESTS: wanted.max_requests = doubled(wanted.max_requests); break;
-    case TA_POOL_SLAB:
-        wanted.string_bytes = wanted.string_bytes > TA_SLAB_MAX_BYTES / 2 ? TA_SLAB_MAX_BYTES
-                                                                          : wanted.string_bytes * 2;
-        break;
-    default: return TA_ERROR_INVALID; /* nothing says what ran out */
-    }
-    ta_system_config_normalize(&segment->system->core.image_view, &wanted, &config);
     /* that pool at its hard limit: a retry would fail the same way, so the
      * caller's loop stops (TA_ERROR_INVALID: the limits refused, not the
      * allocator) */
     const ta_system_config *now = &segment->system->config;
-    if (config.max_actors <= now->max_actors && config.max_events <= now->max_events &&
-        config.max_timers <= now->max_timers && config.max_requests <= now->max_requests &&
-        config.string_bytes <= now->string_bytes && config.instance_bytes <= now->instance_bytes)
+    if (!need || (config.max_actors <= now->max_actors && config.max_events <= now->max_events &&
+                  config.max_timers <= now->max_timers && config.max_requests <= now->max_requests &&
+                  config.string_bytes <= now->string_bytes &&
+                  config.instance_bytes <= now->instance_bytes))
         return TA_ERROR_INVALID;
-    size_t need;
-    if (ta_system_layout(segment->image, &config, &need) != TA_OK) return TA_ERROR_INVALID;
     void *memory = host_alloc(host, need);
     if (!memory) return TA_ERROR_NO_MEMORY;
     ta_system *new_system = segment->system;

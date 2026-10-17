@@ -1368,8 +1368,34 @@ static void test_growth_grows_what_ran_out(void) {
     world_close(&e);
 }
 
+/* Beside many actors the events are a small share of the region: their
+ * pool grows by at least a quarter of the region at once, not by doubling
+ * from 256, which would copy the whole region at every doubling. */
+static void test_a_small_pool_grows_by_a_share_of_the_region(void) {
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    uint32_t segment = world_add(&e, ECHO);
+    uint64_t first = 0;
+    for (int i = 0; i < 4000; i++) {
+        uint64_t session = spawn(&e, "echo");
+        if (!first) first = session;
+        if (i % 256 == 255) run(&e);
+    }
+    run(&e);
+    ta_system_stats before = segment_stats(&e, segment);
+    for (uint32_t i = 0; i <= before.events_capacity; i++)
+        CHECK_EQUAL(send(&e, first, "noop", NULL), TA_OK);
+    ta_system_stats after = segment_stats(&e, segment);
+    CHECK(after.events_capacity > before.events_capacity * 2);
+    CHECK(after.region_bytes >= before.region_bytes + before.region_bytes / 4);
+    CHECK_EQUAL(after.actors_capacity, before.actors_capacity);
+    run(&e);
+    world_close(&e);
+}
+
 int main(void) {
     RUN(test_growth_grows_what_ran_out);
+    RUN(test_a_small_pool_grows_by_a_share_of_the_region);
     RUN(test_boot_manifest);
     RUN(test_boot_refused);
     RUN(test_image_copied);
