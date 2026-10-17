@@ -34,6 +34,12 @@ export type Value =
   | Value[]
   | { [key: string]: Value };
 
+/** A {@link Value} the host hands you (`send.data`, `invocation.data`,
+ * `decode`, a typed method's variables), typed `any` as `JSON.parse`'s
+ * result is: it holds whatever a chart put there, so you read its fields
+ * without narrowing first. What it holds at run time is a `Value`. */
+export type ReceivedValue = any;
+
 /** A value as CBOR bytes, the form to store or send it in.
  *
  * Throws a `TinyactorsError`: `TA_ERROR_UNSUPPORTED` for what is not a
@@ -53,7 +59,7 @@ export function encode(value: Value): Uint8Array;
  * {@link encode}. Throws a `TinyactorsError` (`TA_ERROR_INVALID`) for bytes
  * that are not one such item, a `TypeError` for an argument that is not
  * bytes. */
-export function decode(bytes: Uint8Array | ArrayBuffer): Value;
+export function decode(bytes: Uint8Array | ArrayBuffer): ReceivedValue;
 
 // ---- errors -------------------------------------------------------------
 
@@ -313,7 +319,7 @@ export interface Send {
   /** `<send id>`, or the id the host generated; `undefined` when none. */
   readonly sendid: string | undefined;
   /** The `<param>`s as an object, or the `<content>`'s value. */
-  readonly data: Value;
+  readonly data: ReceivedValue;
   /** The I/O processor's type; `undefined` for the transport and a service. */
   readonly type: string | undefined;
   /** The sender's address. */
@@ -407,7 +413,7 @@ export interface Invocation {
   /** `<invoke src>`. */
   readonly src: string;
   /** The `<param>`s as an object, or the `<content>`'s value. */
-  readonly data: Value;
+  readonly data: ReceivedValue;
   /** The invoking step's trace, as W3C text. */
   readonly traceparent: string | undefined;
   /** True when a restored host announces an invocation that was running
@@ -451,28 +457,132 @@ export interface ChartRef {
 }
 
 /** The host's config: plain values, checked by the host, every absent key
- * a default.
- * - `systemID` (required): this system's id, part of every address;
- * - `ioProcessors`: `[{ type, location? }]`, the I/O processors the charts
- *   may send to;
- * - `system`: each segment's first sizes (`maxActors`, `maxEvents`,
- *   `maxTimers`, `maxRequests`, `workspaces`, `instanceBytes`,
- *   `stringBytes`), `ticksPerSecond` (default 1e9), `tracing`, and
- *   `traceSeed` (default 0), the seed of the trace IDs: the same seed gives
- *   the same IDs, so give each process its own;
- * - `telemetry`: present to turn on the OTLP encoder (`flushInterval`,
- *   `resource`, `logs`, `values`, `linkParents`, ...);
- * - `migrateQuantum`: actors a migration looks at per run.
+ * a default (the host's, never the package's). A key the host does not
+ * take, or a value of the wrong type, throws a `TinyactorsError`
+ * (`TA_ERROR_INVALID`) at `new Host`, with the host's `reason` and the key
+ * as `path` (`system.maxActors`). `host.hostConfigAsync()` answers the
+ * config with every default filled in, as {@link EffectiveHostConfig}.
  *
- * A key the host does not take, or a value of the wrong type, throws a
- * `TinyactorsError` (`TA_ERROR_INVALID`) at `new Host`, with the host's
- * `reason` and the key as `path` (`system.maxActors`). `host.hostConfig` answers the config with every default. */
-export type HostConfig = { [key: string]: Value };
+ * @example
+ * const config = { systemID: 'orders', system: { maxActors: 10_000 }, telemetry: { resource: { 'service.name': 'orders' } } };
+ */
+export interface HostConfig {
+  /** Required: this system's id, part of every address it hands out
+   * (`tinyactors://<systemID>/...`). No two systems that talk may share
+   * one. */
+  systemID: string;
+  /** The capacities of each new segment, each its first size, not a cap
+   * (a pool that fills grows its segment). */
+  system?: SystemConfig;
+  /** The I/O processors the charts may send to (`<send type>`), at most
+   * 16; each needs a handler in `options.ioProcessors`. Sends to another
+   * system need none: they go to `options.transport`. */
+  ioProcessors?: readonly IOProcessorConfig[];
+  /** Actors a migration looks at per run (default 256). */
+  migrateQuantum?: number;
+  /** Present: the host has an OTLP encoder, and `options.telemetry` gets
+   * its requests. Absent: none, and nothing is paid for it. */
+  telemetry?: TelemetryConfig;
+}
 
-/** What a handler returns: nothing, or a promise. A send whose handler
- * returns a promise is read in full before the host moves on, and may be
- * answered when the promise gets there. */
-export type Handled = void | PromiseLike<unknown>;
+/** An I/O processor of the config. */
+export interface IOProcessorConfig {
+  /** The `<send type>` it serves. */
+  type: string;
+  /** Its location, which `_ioprocessors` shows the charts. */
+  location?: string;
+}
+
+/** Each new segment's first sizes: unsigned integers, 0 or absent for the
+ * host's default; larger values are clamped to the host's limits. */
+export interface SystemConfig {
+  /** Default 64, at most 8388606. */
+  maxActors?: number;
+  /** Queued events; default 256. */
+  maxEvents?: number;
+  /** Delayed sends and timeouts; default 64. */
+  maxTimers?: number;
+  /** Actors that may be in a step at once; default 4. */
+  workspaces?: number;
+  /** Default 16. */
+  maxRequests?: number;
+  /** Default 64. */
+  outbox?: number;
+  /** Default 1000. */
+  quantum?: number;
+  /** Default 0: derived from the image and `maxActors`. */
+  instanceBytes?: number;
+  /** Default 16384 + 16 per actor of `maxActors`. */
+  stringBytes?: number;
+  /** The host's clock rate; default 1e9 (nanoseconds). */
+  ticksPerSecond?: number;
+  /** The trace journal; default 131072, at least 65536. */
+  traceBytes?: number;
+  /** Default `maxEvents`. */
+  traceContexts?: number;
+  /** Default 16, at most 255. */
+  traceRules?: number;
+  /** The seed of the trace IDs (default 0): the same seed gives the same
+   * IDs, so give each process its own. */
+  traceSeed?: number;
+  /** Write trace records (default true), so export or a watch can be
+   * turned on later. */
+  tracing?: boolean;
+}
+
+/** The OTLP encoder: unsigned integers, 0 or absent for its default. */
+export interface TelemetryConfig {
+  /** Default 1048576, from 65536 to 1073741824. */
+  stagingBytes?: number;
+  /** Default a quarter of `stagingBytes`. */
+  logBytes?: number;
+  /** Default 1024. */
+  openSpans?: number;
+  /** Default 8 per open span. */
+  chunks?: number;
+  /** Default 64. */
+  scopes?: number;
+  /** Default 256. */
+  valueLimit?: number;
+  /** Default 16384. */
+  renderBytes?: number;
+  /** Default 4096. */
+  resourceBytes?: number;
+  /** Default 65536. */
+  metricBytes?: number;
+  /** Default 64. */
+  spanMetricCharts?: number;
+  /** A request is ready this long after its first record, in the host's
+   * clock ticks; 0 or absent: only when the staging is full. */
+  flushInterval?: number;
+  /** A macrostep is a root span linked to its cause (default false). */
+  linkParents?: boolean;
+  /** Event data and assigned values in the spans (default false: they may
+   * hold personal data). */
+  values?: boolean;
+  /** `<log>`s and failed actions as log records (default true). */
+  logs?: boolean;
+  /** Attributes on every request (`service.name`, ...), at most 32. */
+  resource?: { readonly [key: string]: string };
+}
+
+/** The config a host runs with, every key present, as `hostConfig`
+ * answers it: a host made from it answers the same. */
+export interface EffectiveHostConfig {
+  readonly systemID: string;
+  readonly system: Readonly<Required<SystemConfig>>;
+  readonly ioProcessors: readonly Readonly<IOProcessorConfig>[];
+  readonly migrateQuantum: number;
+  /** Only when the host has an encoder. */
+  readonly telemetry?: Readonly<Required<TelemetryConfig>>;
+}
+
+/** What a handler returns: nothing, or a promise (typed `unknown`, so a
+ * handler that returns another value, as `(host, send) => sent.push(send)`
+ * does, is one too; the host ignores it). A send whose handler returns a
+ * promise is read in full before the host moves on, and may be answered
+ * when the promise gets there. */
+export type Handled = unknown;
 
 /** The handlers and choices of a host. A handler's error is reported after
  * its turn: it rejects a waiting `host.idle()`, or else is thrown as an
@@ -582,14 +692,207 @@ export interface MigrateOptions {
   timeout?: number;
 }
 
-/** A typed method's params, passed to the host as given; `undefined` for
- * none. */
+/** A typed method's params, passed to the host as given (the host checks
+ * them); `undefined` for none. Each method has its own type below. */
 export type Params = { [key: string]: Value } | undefined;
-/** A typed method's result handler, called once, in a later turn. */
-export type OnResult = (host: Host, result: Value) => void;
+/** The params of a method that takes none: `undefined` or `{}`. */
+export type NoParams = undefined | { readonly [key: string]: never };
+/** A typed method's result handler, called once, in a later turn, with the
+ * method's result. */
+export type OnResult<R = Value> = (host: Host, result: R) => void;
 /** A typed method's error handler. Without one, the error rejects a
  * waiting `idle()` or is thrown as an uncaught exception. */
 export type OnError = (host: Host, error: TinyactorsError) => void;
+
+// ---- the typed methods' params and results ---------------------------
+//
+// As the host writes them (each method of the host's control plane). A
+// session or a count in a result is a number; an integer past 2^53 would
+// be a bigint, which only `trace.spans.decode`'s nanosecond times reach.
+
+/** An active configuration, as xstate's `value`: an atomic state is its
+ * id (`'s'`), a compound state `{ [state]: its active child }`, a parallel
+ * state `{ [state]: { [region]: ... } }`, an atomic region `{}`. */
+export type StateValue = string | { readonly [state: string]: StateValue };
+
+/** The params of `actorState`, `actorContext` and `actorGet`. */
+export interface SessionParams {
+  session: Session;
+}
+/** `actorState`'s result. */
+export interface ActorStateResult {
+  readonly value: StateValue;
+}
+/** `actorContext`'s result: each `<data>`, in the chart's order. */
+export interface ActorContextResult {
+  readonly variables: { readonly [id: string]: ReceivedValue };
+}
+/** The params of `actorList`. */
+export interface ActorListParams {
+  /** From the previous page; absent: the first. */
+  cursor?: number;
+  /** 1 to 512, default 256. */
+  limit?: number;
+}
+/** `actorList`'s result: a page of sessions. */
+export interface ActorListResult {
+  readonly sessions: readonly number[];
+  /** The next page's cursor, opaque; `null` after the last page. */
+  readonly cursor: number | null;
+}
+/** `actorGet`'s result. */
+export interface ActorGetResult {
+  readonly session: number;
+  readonly segment: number;
+  /** The chart's name. */
+  readonly chart: string;
+  /** The session that invoked it; `null` for a root actor. */
+  readonly parent: number | null;
+  /** Events waiting for it. */
+  readonly mailbox: number;
+  /** Services it runs. */
+  readonly invocations: number;
+}
+/** A pool of a segment: its size, what it holds, the most it held. */
+export interface Pool {
+  readonly capacity: number;
+  readonly used: number;
+  readonly highWater: number;
+}
+/** One live segment's pools, in `host.stats`. */
+export interface SegmentPools {
+  /** The segment, as `addImage` returned it. */
+  readonly segment: number;
+  readonly actors: Pool;
+  readonly events: Pool;
+  readonly timers: Pool;
+  readonly workspaces: Pool;
+  readonly requests: Pool;
+  /** The slab of instances and strings, in bytes. */
+  readonly slabBytes: Pool;
+}
+/** One chart's counters, summed over every segment, retired versions
+ * included. */
+export interface ChartStats {
+  readonly name: string;
+  readonly actors: number;
+  readonly hibernated: number;
+  readonly spawned: number;
+  readonly ended: number;
+  readonly turns: number;
+  readonly macrosteps: number;
+  readonly fuel: number;
+  readonly errorsExecution: number;
+  readonly errorsCommunication: number;
+  readonly errorsPlatform: number;
+  readonly faults: number;
+}
+/** `hostStats`'s result. */
+export interface HostStatsResult {
+  readonly host: {
+    readonly segments: number;
+    readonly actors: number;
+    readonly hibernated: number;
+    readonly runnable: number;
+    readonly migrations: number;
+    /** The live segments' regions; the host's copies of the images are not
+     * in it. */
+    readonly regionBytes: number;
+    readonly delivered: number;
+    readonly routed: number;
+    readonly migrated: number;
+    readonly retired: number;
+    readonly fuelClock: number;
+  };
+  /** One entry per live segment, in segment order. */
+  readonly pools: readonly SegmentPools[];
+  readonly charts: readonly ChartStats[];
+}
+/** A trace rule of `traceConfigure` and `traceWatch`: each absent field
+ * matches anything. */
+export interface TraceRule {
+  at?: 'start' | 'take';
+  chart?: string;
+  /** An actor's name; a trailing `*` makes it a prefix. */
+  actor?: string;
+  /** An event descriptor, SCXML's prefix rule. */
+  event?: string;
+  session?: Session;
+  from?: readonly ('host' | 'actor' | 'timer' | 'spawn' | 'sampled' | 'unsampled')[];
+  /** What a match decides (default `'keep'`); a number samples that share
+   * of trace IDs. */
+  sample?: 'keep' | 'sample' | 'drop' | number;
+  detail?: TraceDetail;
+  values?: boolean;
+  perSecond?: number;
+  burst?: number;
+}
+/** How much a trace records. */
+export type TraceDetail = 'summary' | 'decisions' | 'full' | 'off';
+/** The params of `traceConfigure`, which replace the last ones. */
+export interface TraceConfigureParams {
+  /** Default `'summary'`. */
+  detail?: TraceDetail;
+  /** Default false. */
+  values?: boolean;
+  /** The share of new traces sampled, 0 to 1 (default 1). */
+  sample?: number;
+  /** False writes no records; traceparents still flow (default true). */
+  records?: boolean;
+  /** At most 32. */
+  rules?: readonly TraceRule[];
+}
+/** The params of `traceWatch`. */
+export interface TraceWatchParams {
+  /** At least one. */
+  rules: readonly TraceRule[];
+  /** On the host's clock; `null`: no end (default 900). */
+  seconds?: number | null;
+}
+/** `traceWatch`'s result. */
+export interface TraceWatchResult {
+  readonly id: number;
+}
+/** The params of `traceUnwatch`. */
+export interface TraceUnwatchParams {
+  id: number;
+}
+/** The params of `traceSpansDecode`. */
+export interface TraceSpansDecodeParams {
+  /** An OTLP traces request, as the telemetry handler gets it. */
+  traces: Uint8Array;
+}
+/** A span event. */
+export interface SpanEvent {
+  readonly name: string;
+  readonly time: number | bigint;
+  readonly attributes: { readonly [key: string]: ReceivedValue };
+}
+/** A span of `traceSpansDecode`. */
+export interface Span {
+  /** Lowercase hex. */
+  readonly trace: string;
+  readonly span: string;
+  /** `null` for a root span. */
+  readonly parent: string | null;
+  readonly name: string;
+  /** OTLP's span kind. */
+  readonly kind: number;
+  /** Nanoseconds since the Unix epoch (a bigint past 2^53). */
+  readonly start: number | bigint;
+  readonly end: number | bigint;
+  /** OTLP's status code. */
+  readonly status: number;
+  readonly statusMessage: string;
+  readonly attributes: { readonly [key: string]: ReceivedValue };
+  readonly events: readonly SpanEvent[];
+}
+/** `traceSpansDecode`'s result. */
+export interface TraceSpansDecodeResult {
+  readonly spans: readonly Span[];
+}
+/** The result of the methods that answer nothing: `{}`. */
+export type EmptyResult = { readonly [key: string]: never };
 
 /** Runs actors: many charts, many images, from a handful of actors to
  * millions, on the runtime's event loop. Inputs (`spawn`, `send`, ...)
@@ -691,38 +994,38 @@ export class Host implements Disposable, AsyncDisposable {
    * child }` for compound states. Params `{ session }`. The typed methods
    * read the host when called, and call `onResult` or `onError` once, in a
    * later turn; `close()` drops them uncalled. */
-  actorState(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  actorState(params: SessionParams, onResult: OnResult<ActorStateResult>, onError?: OnError | null): void;
   /** An actor's variables, `{ variables }`. Params `{ session }`; refused
    * for a hibernated actor. */
-  actorContext(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  actorContext(params: SessionParams, onResult: OnResult<ActorContextResult>, onError?: OnError | null): void;
   /** The host's sessions a page at a time, `{ sessions, cursor }`, `cursor`
    * `null` after the last page. Params `{ cursor?, limit? }` (1 to 512,
    * default 256). */
-  actorList(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  actorList(params: ActorListParams | undefined, onResult: OnResult<ActorListResult>, onError?: OnError | null): void;
   /** One actor, `{ session, segment, chart, parent, mailbox, invocations }`.
    * Params `{ session }`. */
-  actorGet(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  actorGet(params: SessionParams, onResult: OnResult<ActorGetResult>, onError?: OnError | null): void;
   /** The host's counters, `{ host, pools, charts }`: `pools` has one entry
    * per live segment with each pool's `capacity`, `used` and `highWater`.
    * No params. */
-  hostStats(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  hostStats(params: NoParams, onResult: OnResult<HostStatsResult>, onError?: OnError | null): void;
   /** The config the host runs with, every default filled in. No params. */
-  hostConfig(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  hostConfig(params: NoParams, onResult: OnResult<EffectiveHostConfig>, onError?: OnError | null): void;
   /** Sets what every actor traces: `{ detail, values, sample, records,
    * rules }`. */
-  traceConfigure(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceConfigure(params: TraceConfigureParams | undefined, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
   /** Adds trace rules for a while: `{ rules, seconds }` (default 900);
    * answers `{ id }`. */
-  traceWatch(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceWatch(params: TraceWatchParams, onResult: OnResult<TraceWatchResult>, onError?: OnError | null): void;
   /** Ends a watch early: `{ id }`. */
-  traceUnwatch(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceUnwatch(params: TraceUnwatchParams, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
   /** Ends every open span now, marked incomplete, for the telemetry handler.
    * Refused without `telemetry` in the config. */
-  traceEnd(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceEnd(params: NoParams, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
   /** The spans of a traces request: `{ traces }` (the bytes) answers `{
    * spans }`, each with `trace`, `span`, `parent`, `name`, `start`, `end`,
    * `attributes`, ... */
-  traceSpansDecode(params: Params, onResult: OnResult, onError?: OnError | null): void;
+  traceSpansDecode(params: TraceSpansDecodeParams, onResult: OnResult<TraceSpansDecodeResult>, onError?: OnError | null): void;
 
   // The typed methods as promises (the convenience layer): each calls the
   // method above of its name, resolving with its result and rejecting with
@@ -733,27 +1036,27 @@ export class Host implements Disposable, AsyncDisposable {
 
   /** `actorState` as a promise: `const { value } = await
    * host.actorStateAsync({ session })`. */
-  actorStateAsync(params?: Params): Promise<Value>;
+  actorStateAsync(params: SessionParams): Promise<ActorStateResult>;
   /** `actorContext` as a promise of `{ variables }`. */
-  actorContextAsync(params?: Params): Promise<Value>;
+  actorContextAsync(params: SessionParams): Promise<ActorContextResult>;
   /** `actorList` as a promise of a page, `{ sessions, cursor }`. */
-  actorListAsync(params?: Params): Promise<Value>;
+  actorListAsync(params?: ActorListParams): Promise<ActorListResult>;
   /** `actorGet` as a promise of the actor. */
-  actorGetAsync(params?: Params): Promise<Value>;
+  actorGetAsync(params: SessionParams): Promise<ActorGetResult>;
   /** `hostStats` as a promise of the counters: `await host.hostStatsAsync()`. */
-  hostStatsAsync(params?: Params): Promise<Value>;
+  hostStatsAsync(params?: NoParams): Promise<HostStatsResult>;
   /** `hostConfig` as a promise of the effective config. */
-  hostConfigAsync(params?: Params): Promise<Value>;
+  hostConfigAsync(params?: NoParams): Promise<EffectiveHostConfig>;
   /** `traceConfigure` as a promise. */
-  traceConfigureAsync(params?: Params): Promise<Value>;
+  traceConfigureAsync(params?: TraceConfigureParams): Promise<EmptyResult>;
   /** `traceWatch` as a promise of `{ id }`. */
-  traceWatchAsync(params?: Params): Promise<Value>;
+  traceWatchAsync(params: TraceWatchParams): Promise<TraceWatchResult>;
   /** `traceUnwatch` as a promise. */
-  traceUnwatchAsync(params?: Params): Promise<Value>;
+  traceUnwatchAsync(params: TraceUnwatchParams): Promise<EmptyResult>;
   /** `traceEnd` as a promise. */
-  traceEndAsync(params?: Params): Promise<Value>;
+  traceEndAsync(params?: NoParams): Promise<EmptyResult>;
   /** `traceSpansDecode` as a promise of `{ spans }`. */
-  traceSpansDecodeAsync(params?: Params): Promise<Value>;
+  traceSpansDecodeAsync(params: TraceSpansDecodeParams): Promise<TraceSpansDecodeResult>;
 
   /** The host's counters now as an OTLP metrics request (a `Buffer`, for a
    * collector's `/v1/metrics`). `TA_ERROR_STATE` without `telemetry` in the

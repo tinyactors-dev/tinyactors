@@ -70,6 +70,15 @@ that names no actor (it ended, or never was). Sessions in a result are
 numbers, and the inputs take them back as they are
 (`host.send(result.sessions[0], ...)`).
 
+Each method's params and result are typed in the package's `index.d.ts`
+(`SessionParams`, `ActorStateResult`, `ActorListResult`,
+`HostStatsResult`, `EffectiveHostConfig`, ...), for the promise forms and
+the handlers' `result` alike, and so is the host's config (`HostConfig`).
+An editor completes `stats.pools[0].actors.highWater`, and TypeScript, or
+`tsc` checking JavaScript, refuses a field a result does not have or
+a param a method does not take. Every example of these guides is checked
+that way against the package's types, the one below included.
+
 `actorContextAsync` is refused for a hibernated actor: wake it first
 ([Hibernation](hibernation.md)).
 
@@ -117,6 +126,7 @@ try {
 } catch (error) {
   console.log(error.reason, error.path, error.code);
 }
+// @ts-expect-error: a param actorGet does not take, which the types refuse too
 await host.actorGetAsync({ name: 'first' }).catch((error) => console.log(error.reason, error.path));
 host.close();
 ```

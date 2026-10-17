@@ -161,6 +161,7 @@ const image = (version) => {
 
 const store = new Map();
 const asked = [];
+/** @type {import('@tinyactors/node').MigrationResult | undefined} */
 let done;
 let mostResident = 0;
 

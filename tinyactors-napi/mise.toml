@@ -18,3 +18,7 @@ node = "22"
 bun = "1.4.1"
 # Installs the package's development dependencies (none yet).
 pnpm = "12.12.1"
+# tsc, for `mise run lint`: index.d.ts checked against the documentation's
+# examples and test/types (tools/typecheck.mjs). A tool of the checks, not
+# a dependency of the package.
+"npm:typescript" = "5.9.3"

@@ -932,7 +932,10 @@ manages its development dependencies; the C toolchain is the root's.
 - `mise run lint`: the rules' tests, the rules over `src/` and `lib/`, the adapters'
   lint (`mise run //tinyactors-test:lint -- conform.mjs`: the adapter
   imports only `@tinyactors/node` and `node:` built-ins),
-  `docs/api-map.md` against core (`mise/lib/api_map.rb`), and the root's
+  `docs/api-map.md` against core (`mise/lib/api_map.rb`), `index.d.ts`
+  against every example of the README and the guides and the cases of
+  `test/types` (`tools/typecheck.mjs`, with the `tsc` of
+  `mise.toml`'s `npm:typescript`), and the root's
   checks on this project's files: the build scripts' portability and
   acronyms.
 - `mise run conform [-- runner options]`: the suite against

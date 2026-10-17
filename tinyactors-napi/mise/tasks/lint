@@ -1,5 +1,5 @@
 #!/usr/bin/env ruby
-#MISE description="Lint: the ast-grep rules' tests, then the addon's C (parameters, buffers, layers, one timer, the ta_napi_ prefix, no mutable globals; the convenience layer's imports), the adapter's imports, the mapping table, the build scripts' portability and acronyms"
+#MISE description="Lint: the ast-grep rules' tests, then the addon's C (parameters, buffers, layers, one timer, the ta_napi_ prefix, no mutable globals; the convenience layer's imports), the adapter's imports, the mapping table, the types against the examples (tsc), the build scripts' portability and acronyms"
 # vim:ft=ruby
 
 # 1. tools/lint/rules (sgconfig.yml), after their tests in tools/lint/tests:
@@ -11,7 +11,9 @@
 # 2. The adapters' lint (tinyactors-test/lint): the adapter imports only
 #    the public module, `@tinyactors/node`, and `node:` built-ins.
 # 3. docs/api-map.md: every API item names a core function, constant or
-#    request method (mise/lib/api_map.rb).
+#    request method (mise/lib/api_map.rb); then index.d.ts checked by the
+#    pinned tsc against every example of README.md and docs/guide/ and the
+#    cases of test/types (tools/typecheck.mjs).
 # 4. The root's checks, on this project's files only: its build scripts
 #    leave what differs between hosts to the toolchain (check-portability's
 #    rules, mise/lib/build_scripts.rb), and acronyms are all capitals or
@@ -41,6 +43,8 @@ problems = APIMap.check(NodeAPI::MAPPING)
 problems.each { |problem| warn "lint: docs/api-map.md: #{problem}" }
 abort "lint: docs/api-map.md: #{problems.size} problem(s)" unless problems.empty?
 puts 'lint: docs/api-map.md names core behind every API item'
+
+NodeAPI.run(NodeAPI.pinned('node'), 'tools/typecheck.mjs', NodeAPI.pinned('tsc'))
 
 project = NodeAPI::ROOT.basename.to_s
 findings = BuildScripts.scan(project)
