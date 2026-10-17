@@ -412,8 +412,9 @@ The addon allocates almost nothing (bindings.md, section 6):
     `from_wire`), `ta_table_*`, `ta_growable_arena_*` (its scratch
     arena), txml's `txml_*` (XML content, "The native datamodel"), and our
     own `ta_napi_*`; never the host or the system (`datamodel.h`: "they
-    must never call ta_system_* functions"). It reaches `node:vm` through `process.getBuiltinModule`,
-    a JavaScript call made with Node-API, not V8's C++ API.
+    must never call ta_system_* functions"). It reaches `node:vm`
+    through `process.getBuiltinModule`, a JavaScript call made with
+    Node-API, not V8's C++ API.
   - `one-timer-in-loop`: the global timers (`setTimeout`, `setInterval`,
     `setImmediate` and their clear functions) appear in `src/loop.c`
     only.
@@ -613,8 +614,19 @@ d-dom, d-separate):
   generation grows during the spawns (about 300 B an actor of
   `new_space` at 10,000), so at 40,000 the native datamodel is 747 B
   resident on node and 971 B on bun (`--actors 40000`, the same day), and
-  about 140 B an actor of malloc (glibc's `malloc_stats` under gdb), most
-  of it the session's `napi_ref` (unverified). Before the system
+  about 140 B an actor of malloc (glibc's `malloc_stats` under gdb).
+  **Most of that malloc is the session's `napi_ref`** (measured
+  2026-10-17, docs/allocation.md, finding 3; 160 B an actor of malloc in
+  use that day, 52 to 65 B of it the session table): a spike that held
+  the scopes in one array per host at the row's slot, with no `napi_ref`
+  per session, gave 63.9 B; resident on node native 1266, 1237, 1269 B
+  before and 1194, 1184, 1180 B after (after one event 1666, 1654, 1693
+  and 1595, 1593, 1615), heap 189 and 197 B; bun native 2008, 2043, 1767
+  and 1910, 1918, 1919. It is not adopted: each datamodel entry then
+  reads its scope with `napi_get_element`, and an event cost 5.13 to 5.27
+  us before and 5.54 to 5.84 us after on node (8 %; bun 3.73 to 3.90 and
+  3.89 to 4.00), which the decision (`l-p1-measure-resident-engine`)
+  does not allow. Before the system
   variables were made lazy, an earlier run on this machine gave 356 B of
   heap on node and 448 B on bun (1565 B and 2135 B resident).
 
