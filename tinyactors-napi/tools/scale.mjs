@@ -55,12 +55,7 @@ const RESIDENT = 1000;
 /** Operations whose cost grows with the population because of core, each
  * with the request to core that says so (docs/log.xml): reported as
  * failing, never as passing, and not retried. */
-export const KNOWN = {
-  actorByName: 'l-p2-scale-actor-by-name', // ta_system_actor_by_name walks every actor
-  hibernate: 'l-p2-scale-stable-member', // stable_member walks every request
-  'migrate (one session)': 'l-p2-scale-stable-member', // the export checks the actor with stable_member too
-  'wake (an event waiting)': 'l-p2-scale-wake-queue', // ta_actor_wake walks the wake queue
-};
+export const KNOWN = {};
 
 const COUNTER = (version) => `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="counter" initial="s">
   <datamodel>

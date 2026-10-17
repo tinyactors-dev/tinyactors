@@ -190,6 +190,20 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   The addon works around nothing: `tools/scale.mjs` lists the three
   operations in `KNOWN`, the README's "Scale" table records them as
   failing, and the step stays open until they pass.
+  **Answered 2026-10-17 (`e43239c1`, `fc8ff117`, `ae93a346`):** a system
+  keeps an index of names (one slot per distinct name, holding its oldest
+  live actor; the others in a ring beside the actor pool), each actor
+  counts its live requests, and the wake queue is linked both ways. At
+  2,000,000 and 4,000,000 actors (`mise run scale`, README "Scale"):
+  `actorByName` 0.3 to 0.6 µs a call (ratio 0.97 to 1.16; 5 to 29 ms
+  before), `hibernate` 4 to 6 µs (0.91 to 1.04), `migrate (one session)`
+  18 to 29 µs (0.97 to 1.20), `wake (an event waiting)` 4 to 9 µs (0.95
+  to 1.13; 1.1 to 3.3 ms before), on all four pairs. Within a segment
+  `actorByName` now answers the oldest live actor of the name. Core's
+  region grows by about 17 B per actor of capacity. `KNOWN` is empty; the
+  addon needs no change. The gate still fails on one pair: bun native's
+  snapshot of the hibernated population, whose fastest sample at
+  2,000,000 is faster than any at 4,000,000 (log `l-p2-scale-rerun`).
 
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
