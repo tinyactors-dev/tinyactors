@@ -66,13 +66,25 @@ static uint32_t exhausted_pool(const ta_system *system) {
                                                                        : TA_POOL_SLAB;
 }
 
-/* The LOG effect and record of a <log> (core->out.label, .text). */
+/* The length of `text` cut to at most TA_SYSTEM_MAX_STRING bytes, before a
+ * UTF-8 continuation byte, so no character is split. */
+static uint32_t log_length(ta_string_view text) {
+    uint32_t length = text.length;
+    if (length <= TA_SYSTEM_MAX_STRING) return length;
+    length = TA_SYSTEM_MAX_STRING;
+    while (length > 0 && ((unsigned char)text.pointer[length] & 0xC0u) == 0x80u)
+        length--;
+    return length;
+}
+
+/* The LOG effect and record of a <log> (core->out.label, .text). A text
+ * longer than a string may be is cut to the longest one that is (a <log>
+ * never changes what a chart does). */
 static void step_log(ta_system *system, uint32_t index, ta_instance *instance) {
     ta_core *core = &system->core;
     ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_LOG, index);
-    uint32_t text = core->out.text.length
-                        ? ta_shared_string_new(core, core->out.text.pointer, core->out.text.length)
-                        : TA_NIL;
+    uint32_t length = log_length(core->out.text);
+    uint32_t text = length ? ta_shared_string_new(core, core->out.text.pointer, length) : TA_NIL;
     if (effect) {
         effect->auxiliary = core->out.label;
         ta_shared_string_retain(core, effect->auxiliary);

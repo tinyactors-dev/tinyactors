@@ -100,8 +100,10 @@ no limit. A transport that passes text from the network either checks
 the length or reports the refusal as any other. A chart's expression
 that gives a longer string where core keeps it (`<send>`'s `eventexpr`
 and `targetexpr`, `<cancel>`'s `sendidexpr`, `<invoke>`'s `typeexpr`
-and `srcexpr`) raises `error.execution`. Data is not text: a payload
-belongs to the datamodel and has no such limit.
+and `srcexpr`) raises `error.execution`. A `<log>` text that is longer
+comes out cut to the longest text that fits, before a UTF-8 character
+(the `TA_EFFECT_LOG` and its trace record alike); the chart goes on. Data
+is not text: a payload belongs to the datamodel and has no such limit.
 
 During a run, a datamodel's code may call spawn, send, send_many and
 terminate (`host.h:151-170`): they take the paths of an internal

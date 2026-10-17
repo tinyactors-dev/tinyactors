@@ -2,7 +2,8 @@
  * a longer one is refused with TA_ERROR_INVALID at the call, before anything
  * is allocated, and the host does not grow a segment for it. A chart's
  * expression that gives a longer string (an eventexpr, a targetexpr, a
- * cancel's sendidexpr, an invoke's srcexpr) is error.execution. A segment
+ * cancel's sendidexpr, an invoke's srcexpr) is error.execution; a <log>'s
+ * text is cut at a character instead. A segment
  * that cannot grow any more stops the host's retries. */
 #include "../harness/harness.h"
 #include "../support/compile_util.h"
@@ -27,6 +28,10 @@
        "<transition event='long.cancel'><cancel sendidexpr='big'/></transition>"                   \
        "<transition event='long.invoke' target='i'/>"                                              \
        "<transition event='later'><send eventexpr='edge' delay='100s'/></transition>"               \
+       "<transition event='log.long'><log expr='big'/></transition>"                               \
+       "<transition event='log.edge'><log expr='edge'/></transition>"                              \
+       "<transition event='log.two'><log expr=\"'a'.repeat(4086) + '\\u00e9'\"/></transition>"      \
+       "<transition event='log.four'><log expr=\"'a'.repeat(4085) + '\\u{1F600}'\"/></transition>"  \
        "<transition event='*'><log expr=\"'got:' + _event.name.length\"/></transition>"            \
        "</state>"                                                                                  \
        "<state id='i'><invoke type='scxml' srcexpr='big'/>"                                        \
@@ -69,6 +74,8 @@ typedef struct world {
     void *image;
     uint64_t session;
     char log[1024];
+    char last[TA_SYSTEM_MAX_STRING + 1]; /* the last log's text */
+    uint32_t last_length;
 } world;
 
 static char text[TA_SYSTEM_MAX_STRING + 2]; /* 'a' repeated, no terminator needed */
@@ -85,6 +92,9 @@ static void drain(world *w) {
             size_t l = strlen(w->log);
             snprintf(w->log + l, sizeof w->log - l, "%.*s;", (int)effects[i].event.length,
                      effects[i].event.pointer);
+            w->last_length = effects[i].event.length;
+            if (w->last_length <= TA_SYSTEM_MAX_STRING)
+                memcpy(w->last, effects[i].event.pointer, w->last_length);
         }
     ta_host_effects_ack(w->host);
 }
@@ -289,6 +299,32 @@ static void test_an_expression_past_the_limit_is_error_execution(void) {
     }
 }
 
+/* A <log> text past the limit comes out cut to the longest text that fits,
+ * before a UTF-8 continuation byte; one at the limit is whole. */
+static void test_a_long_log_is_cut_at_a_character(void) {
+    static const struct {
+        const char *event;
+        uint32_t length; /* what comes out: 'a's or 'y's, then nothing of the character */
+    } cases[] = {{"log.long", TA_SYSTEM_MAX_STRING},
+                 {"log.edge", TA_SYSTEM_MAX_STRING},
+                 {"log.two", TA_SYSTEM_MAX_STRING - 1},   /* é at 4086..4087 */
+                 {"log.four", TA_SYSTEM_MAX_STRING - 2}}; /* U+1F600 at 4085..4088 */
+    for (uint32_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        world w;
+        world_open(&w);
+        ta_event_in go = event_for(w.session, (ta_string_view){cases[i].event, (uint32_t)strlen(cases[i].event)});
+        CHECK_EQUAL(ta_host_send(w.host, &go), TA_OK);
+        CHECK_EQUAL(run(&w).status, TA_RUN_IDLE);
+        CHECK_EQUAL(w.last_length, cases[i].length);
+        char want = i == 1 ? 'y' : i == 0 ? 'x' : 'a';
+        uint32_t same = 0;
+        while (same < w.last_length && w.last[same] == want)
+            same++;
+        CHECK_EQUAL(same, cases[i].length);
+        world_close(&w);
+    }
+}
+
 int main(void) {
     RUN(test_send_refuses_a_string_past_the_limit);
     RUN(test_send_many_stops_at_a_string_past_the_limit);
@@ -296,5 +332,6 @@ int main(void) {
     RUN(test_spawn_refuses_a_name_past_the_limit);
     RUN(test_a_blob_with_a_string_past_the_limit_is_invalid);
     RUN(test_an_expression_past_the_limit_is_error_execution);
+    RUN(test_a_long_log_is_cut_at_a_character);
     TEST_MAIN_END();
 }
