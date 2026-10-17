@@ -56,6 +56,14 @@ tools and validate it (`xmllint --noout --relaxng docs/plan.rng
 docs/plan.xml`). `GATE` in `mise/napi.rb` names what of
 the set `mise run test` runs so far, and grows with the work.
 
+Progress (2026-10-17): phases p0 and p1 are done, and p2 but its last
+step: telemetry, hibernation, migration, snapshots, invoked services
+and the scaling gate are built, and `mise run test` holds the whole
+suite (`MILESTONE` M5, `GATE` protocol, scenarios and w3c): W3C 191 of
+191 and all 8 scenarios on node and bun, on the native datamodel and
+on quickjs (p2-w3c). Next: p2-pack, the packages and the first
+release.
+
 ## How the work runs
 
 The root ROADMAP.md, step 8, "Rules for the work", sets these for every
