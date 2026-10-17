@@ -499,8 +499,9 @@ TA_ERROR_INVALID - the host has no chart of that name
   the native datamodel the charts that declare nothing run in one `vm`
   context per host, so a chart that changes a builtin (`Math.random = ...`,
   `Array.prototype.sum = ...`) changes it for the host's other charts
-  there; its sessions' own variables stay apart. Quickjs, the sandbox,
-  freezes its builtins.
+  there; its sessions' own variables stay apart. On quickjs the same holds,
+  unless `quickjs: { realm: 'isolated' }` gives each session a context of
+  its own ([the quickjs sandbox](docs/guide/quickjs.md#realms)).
 
 ## Guides
 

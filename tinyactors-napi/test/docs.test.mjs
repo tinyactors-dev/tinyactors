@@ -69,6 +69,22 @@ test('the documents have examples', () => {
     if (!examples.some((example) => example.document === document)) throw new Error(`${document} has no example`);
 });
 
+test('every export of index.d.ts, and every member of Host, has a doc comment', () => {
+  const lines = readFileSync(join(ROOT, 'index.d.ts'), 'utf8').split('\n');
+  const missing = [];
+  let inHost = false;
+  lines.forEach((line, i) => {
+    if (/^export class Host\b/.test(line)) inHost = true;
+    else if (inHost && line === '}') inHost = false;
+    const declares = /^export /.test(line) || (inHost && /^ {2}[^ /*].*;$/.test(line));
+    if (!declares) return;
+    let j = i - 1;
+    while (j >= 0 && lines[j].trim() === '') j--;
+    if (!lines[j]?.trim().endsWith('*/')) missing.push(`${i + 1}: ${line.trim()}`);
+  });
+  if (missing.length) throw new Error(`no doc comment:\n${missing.join('\n')}`);
+});
+
 if (DATAMODEL === 'native') {
   const directory = mkdtempSync(join(ROOT, 'build', 'docs-'));
   // a few at a time: each is a runtime of its own

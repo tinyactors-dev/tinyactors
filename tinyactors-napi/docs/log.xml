@@ -987,8 +987,9 @@
     <why>Core ends the invocation at the UNINVOKE, so the record answers nothing: a receive that answered a queued send with sendBack threw TA_ERROR_STALE, a crash and an unhandled rejection that ends the process, for a send whose invoker has already left the state. Dropping them is what a done service gets for its sends too.</why>
     <evidence>tinyactors-napi/src/effects.c ta_napi_service_started; test/services.test.mjs: an UNINVOKE while it starts stops the service once it resolves; the sends before it are dropped</evidence>
   </entry>
-  <entry id="l-coord-spawn-params-docs" date="2026-10-17" step="p2-docs" kind="note" status="open">
+  <entry id="l-coord-spawn-params-docs" date="2026-10-17" step="p2-docs" kind="note" status="resolved">
     <what>Starting a session with given values for its datamodel is host.spawn(ref, {params: {...}}): each key that names a top-level &lt;data&gt; id replaces that data's initial value; keys that name none are not added; absent keys keep the chart's default (SCXML 6.4, docs/SCXML.md:2085, which core applies to spawn params as to an &lt;invoke&gt;'s params). Checked 2026-10-17 on node and bun, native and quickjs. The README and index.d.ts do not say so: p2-docs must, with a tested example.</what>
+    <resolution>README.md, "Starting an actor with data" (a tested example: three spawns, defaults, two params, a key that names no data left out); index.d.ts SpawnOptions.params; docs/guide/charts.md for an invoke's params.</resolution>
   </entry>
   <entry id="l-p2-decisions-log-truncate" date="2026-10-17" step="p2-decisions" kind="request-to-core" status="resolved">
     <what>For the coordinator to dispatch (l-coord-decisions (4), l-coord-long-string-leftovers): a &lt;log&gt; whose text is longer than TA_SYSTEM_MAX_STRING (4087 bytes) is truncated, not emptied. In tinyactors-core/src/system/schedule.c step_log, before ta_shared_string_new(core, core-&gt;out.text.pointer, core-&gt;out.text.length): when the length exceeds TA_SYSTEM_MAX_STRING, cut it to the largest length n &lt;= TA_SYSTEM_MAX_STRING at a UTF-8 boundary (while n &gt; 0 and (pointer[n] &amp; 0xC0) == 0x80, n--: the byte at the cut must not be a continuation byte, so no sequence is split), and make the shared string of those n bytes; the TA_EFFECT_LOG effect (EVENT) and the trace record (ta_trace_log.text) carry the same truncated text, the label is unchanged, and the chart goes on as before (a &lt;log&gt; never changes what a chart does). A test in tinyactors-core/tests/unit/test_host_strings.c: a &lt;log&gt; of 5000 ASCII bytes comes out as its first 4087; one whose byte 4087 is inside a multi-byte character (e.g. 4086 ASCII bytes then U+00E9, or a 4-byte character straddling the limit) comes out cut before that character, valid UTF-8; a text of exactly 4087 bytes is unchanged. Core passes its full pass (mise run test:full in tinyactors-core). The addon needs no change: a LogEntry reads EVENT as it does now.</what>
@@ -1045,5 +1046,43 @@
     <what>Beside a large region, the quarter-of-region growth floor lets a small pool grow far: 65 delayed sends grew the timers from 64 to 8,388,608 (+360 MB, measured before the trace fix).</what>
     <why>A pool should grow in proportion to its own size, not the size of the region.</why>
     <evidence>scratchpad core-growth-fixes spike5</evidence>
+  </entry>
+  <entry id="l-p2-docs-examples-tested" date="2026-10-17" step="p2-docs" kind="decision" status="resolved">
+    <what>Every ```js block of README.md and docs/guide/*.md is a complete program; test/docs.test.mjs writes each into a temporary directory under build/ (inside the package, so the import of @tinyactors/node resolves to this build), runs it with the runtime running the test (node or bun), and compares its stdout with the ```output block that follows, when there is one. The examples choose their own datamodel, so they run in the native pass of the test task only, once per runtime. The same file checks that every export of index.d.ts and every member of Host has a doc comment.</what>
+    <why>The step's done-when: the documents' examples run under node and bun in mise run test, so a document that drifts from the API fails.</why>
+    <evidence>tinyactors-napi/test/docs.test.mjs</evidence>
+  </entry>
+  <entry id="l-p2-docs-readme-moved" date="2026-10-17" step="p2-docs" kind="decision" status="resolved">
+    <what>The README's feature sections (hibernation, migration, snapshots, invoked services, scale) and their measurement tables moved into docs/guide/, one guide per feature; the README keeps the newcomer's path and 'Before you use it'. The rule test for the service-handler note now reads docs/guide/services.md (a test of its own), and AGENTS.md's rule says the services guide says it.</what>
+    <why>The README is the front door for someone new; the measurements and details belong with their feature.</why>
+    <evidence>test/rules.test.mjs: 'the services guide says a handler returns the service, or a promise of it'</evidence>
+  </entry>
+  <entry id="l-p2-docs-sources" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>mise run test skipped as up to date after a README change: its #MISE sources did not list README.md, which test/rules.test.mjs already read.</what>
+    <evidence>mise run test: '[//tinyactors-napi:test] sources up-to-date, skipping' after editing README.md</evidence>
+    <resolution>mise/tasks/test lists README.md and docs/guide/**/* in its sources.</resolution>
+  </entry>
+  <entry id="l-p2-docs-quickjs-builtins" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>The README said quickjs, the sandbox, freezes its builtins. It does not: on realm 'auto' its shared context's global object is frozen, but Math and the builtin prototypes are shared and writable, so a chart's Math.random = ... is seen by every session and chart of the host, as on the native datamodel; realm 'isolated' gives each session its own context.</what>
+    <evidence>spike build/docs-probe/q3.mjs, node 22.23.3: quickjs auto: a1 true, a2 true, b1 true; isolated: a1 true, a2 false, b1 false; tinyactors-core/include/tinyactors/datamodel_ecmascript.h:17-29</evidence>
+    <resolution>README.md 'Before you use it' and docs/guide/quickjs.md, Realms, say what it does.</resolution>
+  </entry>
+  <entry id="l-p2-docs-quickjs-heap" date="2026-10-17" step="p2-docs" kind="issue" status="resolved">
+    <what>docs/api-map.md marked options.quickjs planned though src/host.c reads and passes all four fields (maxOps measurably bounds an evaluation); host.quickjsHeapBytes is declared in index.d.ts but not built: it reads undefined on a quickjs host too.</what>
+    <evidence>src/host.c:280-314; spike q2.mjs: maxOps 1000 stops while(true) in 26 ms, the default in 27 s; host.quickjsHeapBytes undefined with datamodel quickjs</evidence>
+    <resolution>api-map: options.quickjs's planned mark dropped; index.d.ts and docs/guide/quickjs.md say quickjsHeapBytes is not built yet and reads undefined. Building it is left to a later step.</resolution>
+  </entry>
+  <entry id="l-p2-docs-maxops-default" date="2026-10-17" step="p2-docs" kind="note" status="for-maintainer">
+    <what>Core's default max_ops (1,000,000 interrupt checks) lets a chart's while (true) {} run about 27 s on quickjs before error.execution, and max_ops does not bound memory: a loop that allocates was killed by the kernel with the default memoryLimit (none). docs/guide/quickjs.md tells users to set both (maxOps: 10000, memoryLimit: 16 MB stop both within milliseconds). A smaller default in core would serve the sandbox's users; that is core's decision.</what>
+    <evidence>spikes build/docs-probe/q1.mjs, q2.mjs (node 22.23.3, x86_64 Linux)</evidence>
+  </entry>
+  <entry id="l-p2-docs-package-links" date="2026-10-17" step="p2-docs" kind="note" status="open">
+    <what>README.md links to docs/guide/*.md and docs/values.md, which the npm package does not ship (mise/pack.rb FILES: index.mjs, index.d.ts, README.md, LICENSE). On npm the links resolve against the repository field (the monorepo, directory tinyactors-napi), so they lead to GitHub; shipping docs/ in the package would make them work offline. Not changed here: packaging is p2-pack's.</what>
+    <evidence>tinyactors-napi/mise/pack.rb:48</evidence>
+  </entry>
+  <entry id="l-p2-docs-replies-at-call" date="2026-10-17" step="p2-docs" kind="note" status="resolved">
+    <what>Found while writing the examples: a typed method reads the host when it is called (an actorState right after spawn and send answers {} and the variables unset), and only its handler runs in a later turn; an &lt;invoke&gt;'s service does not exist yet during its state's &lt;onentry&gt;, so a send to it there gets error.communication (SCXML starts invocations at the end of the macrostep). Both are as designed and now documented.</what>
+    <evidence>docs/guide/inspection.md, docs/guide/services.md; spikes i1.mjs, p8.mjs</evidence>
+    <resolution>documented</resolution>
   </entry>
 </log>

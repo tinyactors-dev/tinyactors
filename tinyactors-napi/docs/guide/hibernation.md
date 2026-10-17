@@ -102,8 +102,9 @@ a `Date`, a class's instance, an XML document) keeps the actor in memory.
 A chart whose scripts declare top-level names gets a new context at the
 wake: its `var`s come back from the blob and its `function` declarations
 are made again from its scripts. One that declares with `let`, `const`
-or `class` keeps its actors in memory. On quickjs the sandbox stores what
-it can by its own rules, `let` and `const` included.
+or `class` keeps its actors in memory. On quickjs the engine writes its
+own values, so a `Date`, a `Map`, a `Set` or a typed array is stored too
+([The quickjs sandbox](quickjs.md#what-differs-from-the-native-datamodel)).
 
 What stays in the host: a hibernated actor keeps its slot and a small
 record (about 60 bytes), and the data of its pending delayed sends and of
