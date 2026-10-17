@@ -806,7 +806,12 @@ file.
   deadline keeps the process alive while the host is open (bindings.md,
   section 11), that a handler's error ends the process by default, and
   that `using` needs a runtime that parses it (bun 1.4 does, node 22 does
-  not). Tests: `test/rules.test.mjs: 'the README says what no test can
+  not); and (decided 2026-10-17, l-coord-decisions) that a chart whose
+  scripts declare with `let`, `const` or `class` keeps its sessions
+  resident, that the charts of a host share the builtins of its shared
+  context, and that a service handler returns the service or a promise of
+  it, with the pattern of a service whose methods await its own start.
+  Tests: `test/rules.test.mjs: 'the README says what no test can
   show: charts are trusted, deadlines keep a process alive, errors end
   it, using'`; `test/liveness.test.mjs: 'a pending deadline keeps the
   process alive until it comes'` and `'close() lets a process with a
@@ -956,7 +961,10 @@ manages its development dependencies; the C toolchain is the root's.
   those and pushes, and the root's `mise run release:mirror --
   tinyactors-napi/v<version> --assets tinyactors-napi/build/dist/<version>`
   finishes one whose tag is pushed. `--build-only` builds and checks
-  only. `package.json`'s `repository` is tinyactors-dev/tinyactors-napi.
+  only. `package.json`'s `repository` names the monorepo (its `directory`
+  `tinyactors-napi`), as root `docs/adr/0016` says package metadata does:
+  the source, the issues and the pull requests are there; its `homepage`
+  is the release repository's README, tinyactors-dev/tinyactors-napi.
 
 The adapter imports the package by its name, `@tinyactors/node`, which
 resolves to this directory through `package.json`'s `exports`; its lint

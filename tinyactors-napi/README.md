@@ -80,6 +80,18 @@ Development builds of `main` are published under the `next` dist-tag
   (`<data id="price"/>`, `price = (sku) => ...`).
   A function held in a variable keeps its session resident (below,
   "Hibernation"); a declaring chart's function declarations do not.
+- **A chart whose scripts declare with `let`, `const` or `class` keeps
+  its sessions resident.** Hibernation, migration and snapshots refuse its
+  sessions (`TA_ERROR_UNSUPPORTED`): a new context cannot be given those
+  bindings back. Declare with `var` and `function`, or hold the values in
+  `<data>`, for a chart whose sessions should hibernate.
+- **The charts of a host share the builtins of its shared context.** On
+  the native datamodel the charts that declare nothing run in one `vm`
+  context per host, so a chart that changes a builtin (`Math.random = ...`,
+  `Array.prototype.sum = ...`) changes it for the host's other charts
+  there; its sessions' own variables stay apart. Node.js refuses to
+  freeze a context's global and Bun's builtins break when it is frozen;
+  quickjs, the sandbox, freezes its own.
 
 ## Hibernation
 
