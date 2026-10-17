@@ -869,11 +869,13 @@ file.
   not); and (decided 2026-10-17, l-coord-decisions) that a chart whose
   scripts declare with `let`, `const` or `class` keeps its sessions
   resident, that the charts of a host share the builtins of its shared
-  context, and that a service handler returns the service or a promise of
-  it, with the pattern of a service whose methods await its own start.
+  context; and its services guide (`docs/guide/services.md`) that a
+  service handler returns the service or a promise of it, with the
+  pattern of a service whose methods await its own start.
   Tests: `test/rules.test.mjs: 'the README says what no test can
   show: charts are trusted, deadlines keep a process alive, errors end
-  it, using'`; `test/liveness.test.mjs: 'a pending deadline keeps the
+  it, using'` and `'the services guide says a handler returns the
+  service, or a promise of it'`; `test/liveness.test.mjs: 'a pending deadline keeps the
   process alive until it comes'` and `'close() lets a process with a
   pending deadline exit'`; `test/loop.test.mjs: 'a handler's error, with
   no idle() waiting, is thrown from the turn's callback; the host goes
