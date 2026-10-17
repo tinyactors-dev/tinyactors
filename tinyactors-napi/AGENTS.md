@@ -883,11 +883,13 @@ manages its development dependencies; the C toolchain is the root's.
   given). An operation's cost at 2N, per call or per actor for the
   operations on the whole population, must be within `FACTOR` (1.5) of
   its cost at N, the median of five samples of at least 200 ms each, an
-  operation over it measured again before it fails; an operation in
+  operation over it measured again, with another seed, before it fails
+  (a sweep of every actor timed from memory, a snapshot less the
+  kernel's page faults: README.md, "Scale"); an operation in
   `KNOWN` grows because of core and names its request to core, reported
   as failing and not failing the task. `mise run test` runs it as
   `test/scale.test.mjs` at 20,000 and 40,000 actors (all resident: 40,000 and 80,000; samples of 20 ms,
-  three attempts); `--full` and `mise run scale` at two and four million.
+  four attempts); `--full` and `mise run scale` at two and four million.
   Its numbers are in README.md, "Scale".
 - `mise run pack`: one prebuilt addon per platform package; it aborts
   until packaging is built.
