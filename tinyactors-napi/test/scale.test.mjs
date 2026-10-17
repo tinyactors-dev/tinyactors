@@ -11,7 +11,10 @@
 // does not fail the test and a scan does: a process's costs vary by up to
 // 1.6 times from one process to the next (a collection, its heap's
 // layout), and four attempts left one operation over in 3 of 8 runs
-// (docs/log.xml, l-p2-decisions-scale-gate-noise). The operations known to grow because
+// (docs/log.xml, l-p2-decisions-scale-gate-noise); from the third attempt
+// the median of the attempts' own ratios counts too, since a slow minute
+// of the machine slows both sizes of an attempt alike
+// (l-p2-allocation-scale-slow-minutes). The operations known to grow because
 // of core (KNOWN, each with its request to core) are reported, not failed.
 // `mise run scale` and `mise run test --full` run the same at two and four
 // million actors.

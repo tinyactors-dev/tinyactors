@@ -35,7 +35,9 @@
 // two sizes are measured again, up to --attempts times, each time with the
 // next seed, and each size keeps
 // each operation's lowest cost: noise only adds time and does not repeat,
-// a scan does.
+// a scan does. From the third attempt the median of the attempts' own
+// ratios counts too (see `gate`): a slow minute of the machine slows both
+// sizes of one attempt alike.
 //
 // Prints a table per scenario with the machine's signature and exits 1 when
 // an operation exceeds the factor and is not KNOWN. --json writes the
@@ -151,6 +153,12 @@ function options(argv) {
   if (!['hibernated', 'resident', 'all'].includes(given.scenario)) throw new Error('--scenario is hibernated, resident or all');
   return given;
 }
+
+const median = (values) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+};
 
 /** Distinct members of a dense set, drawn at random. */
 class IndexSet {
@@ -1002,7 +1010,7 @@ export async function gate(given = {}) {
       for (const failure of [...small.failures, ...large.failures]) report.failures.push(`${scenario}: ${failure}`);
       // each size keeps each operation's lowest cost of every attempt: noise
       // only ever adds time, so a slow process does not fail the gate
-      if (!best) best = { small, large, ratios: {}, attempts: attempt };
+      if (!best) best = { small, large, ratios: {}, paired: {}, attempts: attempt };
       else {
         best.attempts = attempt;
         best.small.peak = Math.max(best.small.peak, small.peak);
@@ -1011,8 +1019,22 @@ export async function gate(given = {}) {
           for (const [name, result] of Object.entries(now.results))
             if (!at.results[name] || result.cost < at.results[name].cost) at.results[name] = result;
       }
-      for (const [name, at] of Object.entries(best.small.results))
-        if (best.large.results[name]) best.ratios[name] = best.large.results[name].cost / at.cost;
+      // and each attempt's own ratio, of the two processes measured one
+      // after the other: a slow minute of the machine slows both, while the
+      // least costs may pair a calm minute's small size with a slow
+      // minute's large one (a full run once found every process of the
+      // larger size slower in three operations for eight attempts in a row,
+      // 1.67 times the least small cost: docs/log.xml,
+      // l-p2-allocation-scale-slow-minutes). From the third attempt an
+      // operation is over only when the median of its attempts' ratios is
+      // over too: a scan is over in every attempt, noise in a few.
+      for (const [name, at] of Object.entries(small.results))
+        if (large.results[name]) (best.paired[name] ??= []).push(large.results[name].cost / at.cost);
+      for (const [name, at] of Object.entries(best.small.results)) {
+        if (!best.large.results[name]) continue;
+        const pairs = best.paired[name] ?? [];
+        best.ratios[name] = Math.min(best.large.results[name].cost / at.cost, pairs.length >= 3 ? median(pairs) : Infinity);
+      }
       const over = Object.entries(best.ratios).filter(([name, ratio]) => ratio > FACTOR && !KNOWN[name]);
       if (!over.length) break;
       if (attempt < o.attempts) console.log(`scale: ${scenario}: ${over.map(([n, r]) => `${n} ${r.toFixed(2)}`).join(', ')} over ${FACTOR}: measuring again`);

@@ -1024,4 +1024,10 @@
     <why>Step p2-allocation (d) could not adopt 4096 B chunks: 14 to 27 % per XML parse.</why>
     <evidence>docs/allocation.md, finding 8</evidence>
   </entry>
+  <entry id="l-p2-allocation-scale-slow-minutes" date="2026-10-17" step="p2-allocation" kind="issue" status="resolved">
+    <what>In the sixth of ten consecutive full runs after the gate kept least costs and eight attempts (commit 34101ef0), the fast scaling gate failed on bun, quickjs, hibernated: actorByName 1.67, actorState 1.51, traceWatch 1.50, the same three over in attempts 3 to 8 with the best costs unchanged (actorByName 0.292 us at 20,000, never below 0.488 at 40,000 in eight processes). In 14 other processes of each size that day the larger size measured 0.30 to 0.51 us (eight processes) and 0.345 to 0.394 (six): so the machine was slow for minutes, not one process (this VM reports steal time: 22,051 jiffies of /proc/stat in 3.8 hours). The ratio of least costs pairs the small size of a calm minute with the large size of a slow one.</what>
+    <why>Item (f) asks for ten consecutive passes without a looser factor.</why>
+    <evidence>scratch p2-allocation/ten-6.log:1142-1149, dist-bun-qjs-hib.txt, dist2-bun-qjs-hib.txt; a reference of plain JavaScript timed beside each operation did not follow contention (its least time stays the calm one), so it was not adopted</evidence>
+    <resolution>tools/scale.mjs, gate: from the third attempt an operation is over only when the median of its attempts own ratios (the two sizes measured one after the other) is over too; a scan is over in every attempt. The factor stays 1.5.</resolution>
+  </entry>
 </log>
