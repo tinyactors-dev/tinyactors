@@ -538,7 +538,7 @@
         <done-when>Each wrapper calls only its direct method (a lint of the module's imports, as the adapter's); a test awaits each, a rejection carries the TinyactorsError's code and reason.</done-when>
         <files>tinyactors-napi/lib/convenience.mjs, index.mjs, index.d.ts</files>
       </step>
-      <step id="p3-shapes" status="todo" after="p3-promises" decision="d-layers">
+      <step id="p3-shapes" status="done" after="p3-promises" decision="d-layers" commit="69f97177">
         <title>Shapes a JavaScript programmer would otherwise write</title>
         <does>Chosen by the coordinator (2026-10-17, under the maintainer's instruction to balance convenience and performance): (1) an image from a name-to-text mapping, compiled, added and closed in one call (host.addCharts({name: text}) returns the segment); (2) spawn by chart name (host.spawnChart(name, options), over host.chart and host.spawn); (3) directoryResolver(root), a resolver in JavaScript that reads source relative to base under root and refuses a path that leaves it; (4) Address.toJSON, returning its text form; (5) TypeScript types for host configs and for each typed method's result (from tinyactors-core/docs/requests.md and host-config.md); (6) the package ships docs/ so README links resolve after an install, or the links become absolute. Not chosen: a chart builder (the direct layer does not expose ta_xml_writer).</does>
         <done-when>Each chosen item has its row in docs/api-map.md naming the direct-layer items it calls.</done-when>
