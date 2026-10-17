@@ -6,8 +6,12 @@
 // under test, each size in a process of its own under this runtime. The
 // cost at 40,000 must be within the gate's factor of the cost at 20,000
 // (per call, or per actor for the operations on the whole population); an
-// operation over it is measured again before it fails, so timer noise does
-// not fail the test and a scan does. The operations known to grow because
+// operation over it is measured again before it fails, both sizes in new
+// processes, up to eight times, each size keeping its least cost, so noise
+// does not fail the test and a scan does: a process's costs vary by up to
+// 1.6 times from one process to the next (a collection, its heap's
+// layout), and four attempts left one operation over in 3 of 8 runs
+// (docs/log.xml, l-p2-decisions-scale-gate-noise). The operations known to grow because
 // of core (KNOWN, each with its request to core) are reported, not failed.
 // `mise run scale` and `mise run test --full` run the same at two and four
 // million actors.
@@ -17,7 +21,7 @@ import { CONFIG, DATAMODEL, ENGINE, image, scxml } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 test(`every operation costs at 40,000 actors at most ${FACTOR} times what it costs at 20,000`, async () => {
-  const report = await gate({ actors: 20_000, 'resident-actors': 40_000, datamodel: DATAMODEL, samples: 5, 'min-ms': 20, attempts: 4 });
+  const report = await gate({ actors: 20_000, 'resident-actors': 40_000, datamodel: DATAMODEL, samples: 5, 'min-ms': 20, attempts: 8 });
   for (const known of report.known) console.log(`     known: ${known}`);
   for (const [name, request] of Object.entries(KNOWN)) {
     const measured = Object.values(report.scenarios).some((scenario) => name in scenario.ratios);

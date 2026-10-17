@@ -26,8 +26,9 @@
 //
 // How a cost is measured: an operation runs in batches (64 calls, say,
 // then the turn that answers them); batches add up to a sample of at least
-// --min-ms milliseconds; the cost is the median of --samples samples (for
-// an operation on the whole population, the least of three). What
+// --min-ms milliseconds; the cost is the least of --samples samples (of
+// three for an operation on the whole population): a collection or a
+// neighbour only adds time to a sample, a scan adds it to every one. What
 // a batch needs first or leaves behind (actors to wake, put back to sleep,
 // spawned to be terminated) is done outside the timed part. When an
 // operation exceeds the factor and is not a known gap in core (KNOWN), the
@@ -151,12 +152,6 @@ function options(argv) {
   return given;
 }
 
-const median = (values) => {
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = sorted.length >> 1;
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-};
-
 /** Distinct members of a dense set, drawn at random. */
 class IndexSet {
   constructor(capacity) {
@@ -193,7 +188,7 @@ class IndexSet {
   }
 }
 
-/** Times the operations of one host: each one's batches, its samples, its median. */
+/** Times the operations of one host: each one's batches, its samples, their least. */
 class Clock {
   constructor(o, results) {
     this.o = o;
@@ -219,11 +214,14 @@ class Clock {
     this.record(name, unit, costs, calls);
   }
 
-  // per call: the median of the samples; per actor (a whole population
-  // at a time, a few samples of seconds each, where the first pays for
-  // room the later ones reuse and gigabytes of pages fault in): the least
+  // the least of the samples, per call as per actor (a whole population
+  // at a time, where the first sample pays for room the later ones reuse
+  // and gigabytes of pages fault in): the median let a collection in
+  // three samples of five decide a cost, and the fast pass failed in 3 of
+  // 8 runs on operations nobody touched (docs/log.xml,
+  // l-p2-decisions-scale-gate-noise)
   record(name, unit, costs, calls) {
-    const cost = unit === 'per actor' ? Math.min(...costs) : median(costs);
+    const cost = Math.min(...costs);
     this.results[name] = { unit, cost, costs, calls };
     console.log(`  ${name}: ${cost.toFixed(3)} µs ${unit} (${calls} ${unit === 'per actor' ? 'actors' : 'calls'}, ` +
       `samples ${costs.map((c) => c.toFixed(3)).join(' ')})`);
