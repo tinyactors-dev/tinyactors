@@ -10,10 +10,19 @@
 # system (`createRequire`, `process.dlopen`, `process.getBuiltinModule`).
 # A shape that needs a built-in (a resolver reading files) widens this
 # rule in its own commit, with its reason.
+#
+# Widened once (docs/plan.xml, p3-shapes): `node:fs` and `node:path`, for
+# directoryResolver(root), a resolver that reads a chart's `src` from a
+# file under `root` (fs: realpathSync to see through symlinks, readFileSync
+# to read; path: resolve, relative and dirname to place `source` relative to
+# `base` and refuse what leaves `root`). Both names exactly, with their
+# `node:` prefix: not `fs`, not `node:fs/promises`, no other built-in. The
+# addon is still reached only through ./direct.mjs, so the layer still calls
+# nothing an application could not.
 id: convenience-imports-the-direct-layer
 language: javascript
 severity: error
-message: "the convenience layer imports only the direct layer's exports ('./direct.mjs'): no other module, path, package, built-in, .node file or computed import"
+message: "the convenience layer imports only the direct layer's exports ('./direct.mjs') and the built-ins 'node:fs' and 'node:path' (directoryResolver): no other module, path, package, built-in, .node file or computed import"
 files:
   - lib/**/*.mjs
 ignores:
@@ -26,7 +35,7 @@ rule:
         - any:
             - inside: {kind: import_statement}
             - inside: {kind: export_statement}
-        - not: {regex: '^[''"]\./direct\.mjs[''"]$'}
+        - not: {regex: '^[''"](\./direct\.mjs|node:fs|node:path)[''"]$'}
     # import('<specifier>') and require('<specifier>'), whatever the specifier
     - all:
         - kind: call_expression

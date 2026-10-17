@@ -102,6 +102,26 @@ snapshots:
       style: secondary
       start: 0
       end: 40
+  import { join } from 'node:path/posix';:
+    labels:
+    - source: '''node:path/posix'''
+      style: primary
+      start: 21
+      end: 38
+    - source: import { join } from 'node:path/posix';
+      style: secondary
+      start: 0
+      end: 39
+  import { join } from 'path';:
+    labels:
+    - source: '''path'''
+      style: primary
+      start: 21
+      end: 27
+    - source: import { join } from 'path';
+      style: secondary
+      start: 0
+      end: 28
   import { other } from './other.mjs';:
     labels:
     - source: '''./other.mjs'''
@@ -112,6 +132,26 @@ snapshots:
       style: secondary
       start: 0
       end: 36
+  import { readFile } from 'node:fs/promises';:
+    labels:
+    - source: '''node:fs/promises'''
+      style: primary
+      start: 25
+      end: 43
+    - source: import { readFile } from 'node:fs/promises';
+      style: secondary
+      start: 0
+      end: 44
+  import { readFileSync } from 'fs';:
+    labels:
+    - source: '''fs'''
+      style: primary
+      start: 29
+      end: 33
+    - source: import { readFileSync } from 'fs';
+      style: secondary
+      start: 0
+      end: 34
   import { readFileSync } from 'node:fs';:
     labels:
     - source: '''node:fs'''
@@ -122,6 +162,26 @@ snapshots:
       style: secondary
       start: 0
       end: 39
+  import { spawn } from 'node:child_process';:
+    labels:
+    - source: '''node:child_process'''
+      style: primary
+      start: 22
+      end: 42
+    - source: import { spawn } from 'node:child_process';
+      style: secondary
+      start: 0
+      end: 43
+  import { tmpdir } from 'node:os';:
+    labels:
+    - source: '''node:os'''
+      style: primary
+      start: 23
+      end: 32
+    - source: import { tmpdir } from 'node:os';
+      style: secondary
+      start: 0
+      end: 33
   process.dlopen(module, '../build/tinyactors.node');:
     labels:
     - source: process.dlopen(module, '../build/tinyactors.node')
