@@ -14,7 +14,7 @@
 import { Host } from '@tinyactors/node';
 import { FACTOR, gate, KNOWN } from '../tools/scale.mjs';
 import { CONFIG, DATAMODEL, ENGINE, image, scxml } from './charts.mjs';
-import { run, test } from './harness.mjs';
+import { collect, run, test } from './harness.mjs';
 
 test(`every operation costs at 40,000 actors at most ${FACTOR} times what it costs at 20,000`, async () => {
   const report = await gate({ actors: 20_000, 'resident-actors': 40_000, datamodel: DATAMODEL, samples: 5, 'min-ms': 20, attempts: 4 });
@@ -34,7 +34,8 @@ const LISTS = scxml('lists', `
   <datamodel><data id="n" expr="0"/><data id="list" expr="[1, 2, 3, 4, 5, 6, 7, 8, 'a', 'b', 'c', 'd', {x: 1}, {y: 2}]"/></datamodel>
   <state id="s"/>`);
 
-async function restoreCost(sessions) {
+/** A snapshot of `sessions` sessions of LISTS. */
+async function snapshotOf(sessions) {
   const host = new Host(CONFIG, ENGINE);
   host.addImage(image({ lists: LISTS }));
   const chart = host.chart('lists');
@@ -45,20 +46,32 @@ async function restoreCost(sessions) {
   await host.idle();
   const snapshot = host.snapshot();
   host.close();
-  let best = Infinity;
-  for (let k = 0; k < 2; k++) {
-    const started = performance.now();
-    const restored = Host.restore(snapshot, CONFIG, ENGINE);
-    best = Math.min(best, (performance.now() - started) / sessions);
-    restored.close();
-  }
-  return best;
+  return snapshot;
+}
+
+/** One restore's cost per session, after a full collection: a restore is
+ * not charged the collection of the hosts restored before it. */
+async function restoreCost(snapshot, sessions) {
+  await collect(2);
+  const started = performance.now();
+  const restored = Host.restore(snapshot, CONFIG, ENGINE);
+  const cost = (performance.now() - started) / sessions;
+  restored.close();
+  return cost;
 }
 
 test(`a restore costs per session at 200,000 sessions at most ${FACTOR} times what it costs at 10,000`, async () => {
   if (DATAMODEL !== 'native') return; // quickjs's state is restored by core, in one call
-  const small = await restoreCost(10_000);
-  const large = await restoreCost(200_000);
+  const sizes = [10_000, 200_000];
+  const snapshots = [];
+  for (const sessions of sizes) snapshots.push(await snapshotOf(sessions));
+  // each size keeps its least cost of every attempt, the two sizes measured
+  // in turn: noise (a collection, a neighbour) only adds time and does not
+  // repeat, a restore that grows with the sessions does (as the gate does)
+  const best = [Infinity, Infinity];
+  for (let attempt = 0; attempt < 4 && (attempt < 2 || best[1] / best[0] > FACTOR); attempt++)
+    for (let i = 0; i < sizes.length; i++) best[i] = Math.min(best[i], await restoreCost(snapshots[i], sizes[i]));
+  const [small, large] = best;
   if (large / small > FACTOR)
     throw new Error(`restore: ${(small * 1000).toFixed(1)} us a session at 10,000, ${(large * 1000).toFixed(1)} at 200,000`);
 });
