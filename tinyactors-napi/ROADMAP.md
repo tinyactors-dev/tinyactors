@@ -61,8 +61,17 @@ step: telemetry, hibernation, migration, snapshots, invoked services
 and the scaling gate are built, and `mise run test` holds the whole
 suite (`MILESTONE` M5, `GATE` protocol, scenarios and w3c): W3C 191 of
 191 and all 8 scenarios on node and bun, on the native datamodel and
-on quickjs (p2-w3c). Next: p2-pack, the packages and the first
-release.
+on quickjs (p2-w3c). The packages are built (p2-pack): `mise run pack`
+makes one zig-built addon per platform package, checked by its symbols,
+and the main package, reproducibly, and this machine's install into a
+fresh project and pass the smoke test under node and bun; `mise run
+release` checks, tags `tinyactors-napi/v<version>`, publishes to npm and
+releases through tinyactors-dev/tinyactors-napi. The first release waits
+for the maintainer: its changelog section (the release-changelog skill,
+at release time), the container smoke tests (no Docker daemon here), and
+mirroring 0.1.0 and 0.2.0 into the release repository first (root
+`mise run release:mirror`; `push_snapshot!` refuses a version below the
+repository's latest, so 0.3.0 before them would block their copies).
 
 ## How the work runs
 

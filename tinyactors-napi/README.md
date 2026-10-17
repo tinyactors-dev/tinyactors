@@ -3,6 +3,34 @@
 **Status: being rewritten** from core's redesigned API ([ROADMAP.md](ROADMAP.md)).
 The last published version, 0.2.0, was built from an earlier binding.
 
+## Install
+
+```sh
+npm install @tinyactors/node     # or: pnpm add, bun add
+```
+
+It runs on Node.js 22.3 or later (`engines`) and on Bun (tested on 1.4), on macOS (arm64,
+x64) and Linux (x64, arm64; glibc or musl). Nothing compiles on
+install: the addon is prebuilt, one per platform, in
+`@tinyactors/node-darwin-arm64`, `-darwin-x64`, `-linux-x64` and
+`-linux-arm64`, which the main package lists as optional dependencies
+at exactly its own version, so the package manager installs only the
+one whose `os` and `cpu` match. A Linux addon links no C library, so
+one file serves glibc and musl. The macOS addons are cross-built from
+Linux and checked by their symbols; no Mac has run them yet. An install that left the optional
+dependencies out (`--no-optional`, `--omit=optional`) fails at import,
+naming the package it needs.
+
+```js
+import { compileCharts, Host } from '@tinyactors/node';
+```
+
+Development builds of `main` are published under the `next` dist-tag
+(`npm install @tinyactors/node@next`), versioned
+`<next minor>-dev.<date>.<n>.g<commit>`. Releases, their tarballs and
+`SHA256SUMS` are on
+[tinyactors-dev/tinyactors-napi](https://github.com/tinyactors-dev/tinyactors-napi/releases).
+
 ## Before you use it
 
 - **Chart code is trusted code.** On the native datamodel (the default)

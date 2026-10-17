@@ -2,8 +2,8 @@
 
 # What tinyactors-napi's tasks share: where things are, how a task runs a
 # command, the runtimes this project pins, and how the addon is built
-# (Toolchain::Target.host for the tests, Target.release for the packages
-# when packaging is built; mise/lib/toolchain.rb).
+# (Toolchain::Target.host for the tests; the packages' Target.release is
+# mise/pack.rb's; mise/lib/toolchain.rb).
 require 'digest'
 require 'pathname'
 require 'toolchain'
@@ -69,10 +69,10 @@ module NodeAPI
 
   module_function
 
-  # Runs a command in the project's directory; a failure ends the task with
-  # its status.
-  def run(*command, env: {})
-    pid = Process.spawn(env, *command, chdir: ROOT.to_s)
+  # Runs a command in the project's directory (or `chdir`); a failure ends
+  # the task with its status.
+  def run(*command, env: {}, chdir: ROOT)
+    pid = Process.spawn(env, *command, chdir: chdir.to_s)
     _pid, status = Process.wait2(pid)
     exit(status.exitstatus || 1) unless status.success?
   end

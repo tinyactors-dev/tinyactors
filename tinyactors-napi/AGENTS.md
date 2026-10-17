@@ -891,8 +891,44 @@ manages its development dependencies; the C toolchain is the root's.
   `test/scale.test.mjs` at 20,000 and 40,000 actors (all resident: 40,000 and 80,000; samples of 20 ms,
   four attempts); `--full` and `mise run scale` at two and four million.
   Its numbers are in README.md, "Scale".
-- `mise run pack`: one prebuilt addon per platform package; it aborts
-  until packaging is built.
+- `mise run pack [target...]`: the npm packages (`mise/pack.rb`; root
+  `docs/adr/0001`, decisions 10, 11, 14 and 15), at HEAD's development
+  version (`Release.dev_version`: package.json's is the last release's,
+  which the registry has). One addon per native release target
+  (`aarch64-macos`, `x86_64-macos`, `x86_64-linux`, `aarch64-linux`),
+  built with the root's zig (`Toolchain::Target.release`, `-g0`: zig cc
+  writes debug information by default, and the Mach-O linker then records
+  each object's path and time in the addon), checked by its symbols (for
+  its target, loads no library, exports `napi_register_module_v1` and
+  `node_api_module_get_api_version_v1` only, leaves undefined only
+  Node-API and `Pack::LIBC`), each in `@tinyactors/node-<os>-<cpu>`
+  (`os` and `cpu`, no `libc`), and the main package (`index.mjs`,
+  `index.d.ts`, README, LICENSE) listing them as `optionalDependencies` at
+  exactly its version; packed with the pinned `npm pack` into
+  `build/packages/`, the same bytes for the same commit. This machine's
+  tarballs are installed by path into a fresh project outside the
+  repository, with npm for node and with `bun add` for bun, and
+  `tools/smoke.mjs` runs there with `LD_BIND_NOW=1`. `index.mjs` loads
+  `build/tinyactors.node` first and the platform package after, whose
+  version must be its own: Bun, run where no `node_modules` is, installs
+  a package it cannot resolve from the registry (the last release's
+  addon).
+- `mise run release -- <version> [--publish] | --dev [--publish]`: the
+  checks (a clean tree, the version, the changelog, npm, the test task),
+  the version committed and tagged `tinyactors-napi/v<version>`, every
+  package built and smoke-tested here and, with Docker, in Node.js
+  (Debian, Alpine) and Bun containers of each Linux architecture,
+  `SHA256SUMS`, into `build/dist/<version>/`; with `--publish`, `npm
+  publish` with fnox's `NPM_TOKEN` (platform packages first), then the
+  root's `Release.push_and_release!`: the push, a snapshot of
+  `tinyactors-napi/` pushed to tinyactors-dev/tinyactors-napi tagged
+  `v<version>`, and the GitHub release there (root `docs/adr/0016`).
+  `--dev` publishes HEAD under the `next` dist-tag only. A publish that
+  stopped keeps its commit, tag and files: `--resume` publishes exactly
+  those and pushes, and the root's `mise run release:mirror --
+  tinyactors-napi/v<version> --assets tinyactors-napi/build/dist/<version>`
+  finishes one whose tag is pushed. `--build-only` builds and checks
+  only. `package.json`'s `repository` is tinyactors-dev/tinyactors-napi.
 
 The adapter imports the package by its name, `@tinyactors/node`, which
 resolves to this directory through `package.json`'s `exports`; its lint
@@ -950,6 +986,8 @@ tools/services.mjs   invoked services under load (mise run services)
 tools/scale.mjs      every operation at N and 2N actors, its cost within a factor (mise run scale)
 tools/store.mjs      what the gates share: the SQLite store, a seeded generator
 mise/napi.rb         what the tasks share
-mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, scale, pack
+mise/pack.rb         the packages: the release build per target, its checks, npm pack, the smoke tests
+mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, scale, pack, release
+tools/smoke.mjs      the packages' smoke test, run where they are installed
 build/               core's amalgamation and the addon (not in git)
 ```

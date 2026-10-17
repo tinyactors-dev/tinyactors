@@ -11,16 +11,18 @@
     "napi",
     "bun"
   ],
-  "homepage": "https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi#readme",
+  "homepage": "https://github.com/tinyactors-dev/tinyactors-napi#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tinyactors-dev/tinyactors.git",
-    "directory": "tinyactors-napi"
+    "url": "git+https://github.com/tinyactors-dev/tinyactors-napi.git"
   },
   "bugs": {
     "url": "https://github.com/tinyactors-dev/tinyactors/issues"
   },
   "license": "MIT",
+  "engines": {
+    "node": ">=22.3.0"
+  },
   "type": "module",
   "exports": {
     ".": {
