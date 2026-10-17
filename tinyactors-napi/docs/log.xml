@@ -1206,4 +1206,14 @@
     <what>API the newcomer review wanted, not built (the direct layer adds nothing core lacks; the convenience layer may): a promise or handler for an actor's end; actorGet returning the actor's name; Address.toJSON; typed result shapes per typed method and a typed HostConfig in index.d.ts.</what>
     <evidence>the newcomer review, findings 12, 14 and 18</evidence>
   </entry>
+  <entry id="l-coord-p3-shapes" date="2026-10-17" step="p3-shapes" kind="decision" status="resolved">
+    <what>The coordinator chose what p3-shapes builds, from the candidates and the docs review.</what>
+    <why>The maintainer asked for reasonable decisions balancing convenience and performance. Each shape calls only the direct layer and costs nothing per event.</why>
+    <resolution>addCharts, spawnChart, directoryResolver, Address.toJSON, typed configs and results, and docs shipped in the package. The chart builder waits.</resolution>
+  </entry>
+  <entry id="l-coord-p2-docs-maintainer" date="2026-10-17" step="p2-docs" kind="decision" status="for-maintainer">
+    <what>Core defaults the docs review flagged: traceSeed 0 gives every process the same trace IDs, and maxOps lets a while(true) run about 27 s on quickjs. error.execution carries no message. A chart with no datamodel attribute evaluates nothing (the SCXML null datamodel). The review also asked for a way to know when an actor ends.</what>
+    <why>These are core defaults or core semantics, not binding choices.</why>
+    <resolution>The coordinator left all of them alone. The guides tell users to set traceSeed and maxOps, and the null datamodel is SCXML. A notification when an actor ends is refused by design (ADR 0012 removed subscriptions); a chart can send to its parent with donedata.</resolution>
+  </entry>
 </log>
