@@ -298,52 +298,11 @@ was refused where Python's name the status.
 ## Waiting for the maintainer
 
 Every entry of [log.xml](log.xml) with status `for-maintainer`, one line
-each; the entry has the reasons and the evidence.
+each; the entry has the reasons and the evidence. The 52 entries this
+section listed on 2026-10-16 were decided by the coordinator on
+2026-10-17, as the maintainer delegated (`l-coord-decisions`); what they
+changed is step p2-decisions of [plan.xml](plan.xml). Regenerated
+2026-10-17 from the log:
 
-- `l-p0-inventory-address-format`: `Address.fromSession` and `Address.fromName` over core's formatter; Python has no counterpart.
-- `l-p0-inventory-quickjs-limits`: quickjs's heap read exposed, its last error used in messages, `set_memory_limit` not exposed.
-- `l-p0-inventory-basic-http`: core's BasicHTTP codec exposed as two module functions; Python's adapter writes it in Python.
-- `l-p0-inventory-segments`: `ta_host_segment_count` and `ta_host_snapshot_segments` not exposed, as Python decided.
-- `l-p0-inventory-xml-writer`: the XML writer not exposed until the chart builder of the convenience layer.
-- `l-p0-inventory-python-scan`: the same inventory of core's functions could be carried over to Python's api-map.
-- `l-p0-map-quickjs-option`: the sandbox's limits as the Host option `quickjs: {maxOps, memoryLimit, stackLimit, realm}`.
-- `l-p0-map-quickjs-heap`: `host.quickjsHeapBytes`, `undefined` on a native host.
-- `l-p0-map-basic-http`: the shapes of `encodeHTTPPost` and `parseHTTPRequest`.
-- `l-p0-map-send-many`: `sendMany` items are objects of `send(message)`'s fields, not Python's tuples.
-- `l-p0-map-traceparent-null`: an answer keeps the send's trace unless given one; `traceparent: null` starts a new trace.
-- `l-p0-map-host-properties`: `ticksPerSecond` and `closed` are in the API, as Python's are.
-- `l-p0-map-exhausted`: an exhausted pool is `TinyactorsError` `TA_ERROR_NO_MEMORY`, where Python raises `MemoryError`.
-- `l-p0-map-address`: `new Address(text)` takes any text; an `Address` is not a value.
-- `l-p0-map-send-options`: `send`'s options are `{sendid, traceparent, origin}`; `fail`'s sendid optional.
-- `l-p0-map-types`: which types are interfaces and which classes; the error classes' constructors; `ChartRef` is `{segment, chart}`.
-- `l-p0-map-snapshot-label`: snapshots labelled `tinyactors-napi`; a pack another program labelled is refused.
-- `l-p1-values-module-arena`: `encode`'s arena and the allocator live in the environment's instance.
-- `l-p1-values-encode-not-to-wire`: `encode` follows the value table, not the ECMAScript datamodel's `to_wire` cases of values.txt.
-- `l-p1-host-unknown-options`: unknown Host options and bad handlers are `TypeError`s (Python: `ValueError` for an unknown processor type).
-- `l-p1-loop-idle-one-promise`: `idle()` gives one promise per pending idle turn; `close()` rejects it.
-- `l-p1-loop-pool-names`: an exhausted pool's message names it by core's enum name.
-- `l-p1-compile-input-options`: `spawn`'s and `send`'s options refuse unknown keys; `send(message)` ignores them.
-- `l-p1-compile-errors`: `CompileError`'s and `ResolveError`'s statuses and messages (the message now says `error:`, `l-p1-review-compile-message`).
-- `l-p1-effects-processor-without-handler`: a send to a configured I/O processor with no handler is failed.
-- `l-p1-methods-error-status`: a reply's error has `code`, `reason`, `path`, and no `status`.
-- `l-p1-methods-arguments`: `onResult` and `onError` checked; `{}` posted as an empty params map.
-- `l-p1-methods-result-ids`: ids in a reply's result are numbers while inputs take bigints (the decision is `l-p1-review-result-ids`).
-- `l-p1-datamodel-realm-script`: what each `vm` context needs is made by an embedded `realm.js`.
-- `l-p1-datamodel-script-names`: a shared chart's scope holds its `<data>` and `<foreach>` names only; an undeclared assignment in a script is `error.execution`.
-- `l-p1-datamodel-shared-global`: the shared context's global is not frozen, so charts on it share its builtins.
-- `l-p1-datamodel-crossing`: what may cross between actors on the native datamodel, and how it is refused.
-- `l-p1-datamodel-event`: the native `_event` is a frozen plain object; quickjs's is not frozen.
-- `l-p1-datamodel-dom`: the DOM of XML content: its nodes, properties and methods; no `namespaceURI` yet.
-- `l-p1-datamodel-typed-method`: a typed method from a chart expression cannot be reached, so its refusal has no test.
-- `l-p1-datamodel-tinyxml-dependency`: napi now builds tinyxml, which the root AGENTS.md table does not list.
-- `l-p1-conform-wire`: the adapter writes a send's data with ECMAScript's wire rules in JavaScript; `encode` has no wire mode.
-- `l-p1-conform-http`: details of the built BasicHTTP functions, and the adapter's use of them.
-- `l-p1-measure-resident-engine`: resident memory beyond heap and region is the engine's, probably the session's `napi_ref` (unverified).
-- `l-p1-rules-session-zero`: a session `0n` is a `TypeError`.
-- `l-p1-rules-handle-scope`: "one handle scope per vtable entry" has no test.
-- `l-p1-rules-deferral`: the deferred last drop is tested by its effect, not by the deferral.
-- `l-p1-rules-receiver-check`: node refuses a method on another object before the type tag, bun at the tag; both `TypeError`.
-- `l-p1-rules-view-state`: a thin view's state is reachable through `Object.getOwnPropertySymbols`; it can misread an effect, never memory.
-- `l-coord-long-string-leftovers`: a `<log>` text over core's string limit still comes out empty; the refusal choice was not refuted.
-- `l-p1-review-result-ids`: ids in results are numbers, inputs bigints; recommended: inputs also take a safe-integer number.
-- `l-p1-review-refutation`: the review's findings await a refutation by a fresh agent.
+- `l-p2-pack-unverified`: the Linux container smoke tests of the packages were not run here (no Docker in this container); the release runs them.
+- `l-p2-pack-mirror-first`: before the first release through tinyactors-dev/tinyactors-napi, copy 0.1.0 and 0.2.0 there with the root's `mise run release:mirror`.
