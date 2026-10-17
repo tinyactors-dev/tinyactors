@@ -702,7 +702,7 @@ async function hibernated(o, results, failures) {
   // snapshot, restore, close: per actor
   total = await actorsOf(host);
   store.flush();
-  await snapshots(host, config, { ...handlers, wake: () => {}, services: { 'urn:scale:service': () => ({}) } }, clock, total, o, { hold: true });
+  await snapshots(host, config, { ...handlers, wake: () => {}, services: { 'urn:scale:service': () => ({}) } }, clock, total, o);
   other.close();
   rmSync(directory, { recursive: true, force: true });
 }
@@ -713,28 +713,26 @@ async function hibernated(o, results, failures) {
  * one population is in memory at a time. With `then`, the last restored
  * host is handed to it before its close is timed.
  *
- * With `hold`, each snapshot is kept until the last is taken, so each is
- * written into memory the runtime has not had before. Core writes the
- * snapshot into the runtime's Buffer, and the first write of each page
- * costs a page fault: on bun, a Buffer of 200 MB made after one was
- * collected reuses its pages some of the time (bun's allocator; docs/log.xml,
- * l-p2-scale-snapshot-pages), and a reused one is written at less than half the
- * cost, so the least of three samples was the one that found its pages
- * made. Holding them makes each sample pay the faults, at both sizes, as
- * an application that keeps its snapshots does. The resident scenario
- * does not hold: its snapshots are gigabytes. */
-async function snapshots(host, config, handlers, clock, total, o, { hold = false, then } = {}) {
+ * A snapshot's cost is its time less the system time of the process
+ * during it: the kernel's, faulting in the pages of the Buffer core
+ * writes into (and of the room the datamodel's state is written in). The
+ * faults per actor are the same at both sizes, but each costs what the
+ * runtime and the machine make it: on bun a Buffer made after one was
+ * collected reuses its pages some of the time, so one sample of three
+ * paid no faults (docs/log.xml, l-p2-scale-snapshot-pages); and on this
+ * virtual machine a fault costs two to five times as much in a process
+ * that holds 6 GB as in one that holds 3 GB (l-p2-scale-snapshot-faults). */
+async function snapshots(host, config, handlers, clock, total, o, then) {
   const closes = [];
-  const held = [];
   let blob;
   await clock.time('snapshot', 'per actor', async () => {
+    const before = process.resourceUsage().systemCPUTime;
     const t = await elapsed(() => {
       blob = host.snapshot();
     });
-    if (hold) held.push(blob);
-    return { ms: t, calls: total };
+    const kernel = (process.resourceUsage().systemCPUTime - before) / 1000; // microseconds to milliseconds
+    return { ms: Math.max(t - kernel, 0), calls: total };
   }, { batches: 1, samples: Math.min(3, o.samples) });
-  held.length = 0;
   host.close(); // a host after every operation: the restored ones' closes are timed, each a population as large
   const samples = Math.min(3, o.samples);
   let round = 0;
@@ -918,7 +916,7 @@ async function residentScenario(o, results, failures) {
 
   // snapshot and restore, then every actor of the last restored host moved
   // to version 2 (per actor): one population in memory at a time
-  await snapshots(host, config, handlers, clock, total, o, { then: async (restored) => {
+  await snapshots(host, config, handlers, clock, total, o, async (restored) => {
     const v2 = compileCharts([{ name: 'counter.scxml', text: COUNTER(2) }]);
     restored.addImage(v2.image);
     v2.close();
@@ -929,7 +927,7 @@ async function residentScenario(o, results, failures) {
     if (migrationsDone.failed || migrationsDone.migrated !== total)
       failures.push(`migrate: ${migrationsDone.migrated} of ${total} moved, ${migrationsDone.failed} failed`);
     clock.record('migrate (a chart, every actor)', 'per actor', [(moving * 1000) / total], total);
-  } });
+  });
 }
 
 // ---- one process: one scenario at one size ----------------------------------
