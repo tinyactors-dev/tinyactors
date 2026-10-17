@@ -870,4 +870,9 @@
     <what>Phase p2 for the coordinator. Done, each with the commit that finished it: p2-telemetry (07adc08: telemetry handler, metrics, trace end), p2-hibernate (4b11981: sweep, hibernate, wake with the application's store), p2-migrate (97085b5: migrate, migrated, migrationDone), p2-snapshot (90fd3a8: snapshot and Host.restore with both datamodels' state), p2-services (a8227f6: invoked services, Invocation, receive and stop), p2-scale (1a5434bc: the scaling gate at 2M and 4M actors after core's three answers e43239c1, fc8ff117, ae93a346), p2-w3c (91ec2176: mise run test gates the whole suite, M5, W3C 191 of 191 and 8 of 8 scenarios on node and bun, native and quickjs). Left: p2-pack (packaging and the first release: mise run pack per platform with zig, symbol checks, smoke tests under node and bun, the changelog through release-changelog; the release waits for the maintainer). Open for the maintainer: l-p2-hibernate-declaring, l-p2-migrate-declaring, l-p2-services-promise, l-p2-w3c-snapshot-samples. Requests to core from p2: l-p2-services-retry-pending and the three of p2-scale, all answered.</what>
     <evidence>docs/plan.xml, //phase[@id='p2']; docs/log.xml</evidence>
   </entry>
+  <entry id="l-coord-pack-paused" date="2026-10-17" step="p2-pack" kind="issue" status="open">
+    <what>The p2-pack agent stopped early on the account's weekly usage limit (resets 2026-10-19 09:00 UTC). Its partial work (index.mjs resolving the platform package, mise/pack.rb, mise/tasks/pack, tools/smoke.mjs, package.json) failed the bun tests (index.mjs did not export Address under bun), so it is kept as docs/wip-p2-pack.patch, not applied, and main stays green.</what>
+    <why>The container is ephemeral: uncommitted work could be lost before the limit resets.</why>
+    <resolution>Resume p2-pack after the reset: git apply docs/wip-p2-pack.patch, fix the bun export, finish, delete the patch file.</resolution>
+  </entry>
 </log>
