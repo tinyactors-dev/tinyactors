@@ -337,7 +337,9 @@ export interface HostOptions {
   migrationDone?: (host: Host, result: MigrationResult) => void;
   /** The handler of each `<invoke>` type the application runs: it returns
    * the service now, not a promise. */
-  services?: { [type: string]: (host: Host, invocation: Invocation) => Service | void };
+  /** A service handler returns the service, or a promise of it: until it
+   * settles the sends to the invocation wait for it, in order. */
+  services?: { [type: string]: (host: Host, invocation: Invocation) => Service | void | PromiseLike<Service | void> };
   /** The ECMAScript datamodel: the application's engine (`"native"`, the
    * default: charts run in `node:vm` contexts of their own, trusted code)
    * or the quickjs sandbox, for charts that are not trusted. */

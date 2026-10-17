@@ -54,6 +54,10 @@
  *   crashed    the function a service's receive promise calls when it
  *              rejects (effects.c), bound to its invocation and its send:
  *              the service crashed, and the rejection goes on;
+ *   started, start_failed  the functions a service handler's promise calls
+ *              when it settles (effects.c), bound to its invocation: the
+ *              service kept and the sends and UNINVOKE queued while it
+ *              started given to it in order, or a failed start;
  *   vm, realm  node:vm (process.getBuiltinModule) and the vm.Script of
  *              the realm's script every context of the native datamodel
  *              runs (datamodel/realms.c), made on first use;
@@ -80,7 +84,7 @@ typedef struct ta_napi_instance {
     napi_ref address;
     napi_ref send, entry, migrated;
     napi_ref rejected;
-    napi_ref invocation, crashed;
+    napi_ref invocation, crashed, started, start_failed;
     napi_ref vm, realm, realms, in, stringify;
     struct ta_napi_native *evaluating;
     struct ta_napi_restoring *restoring;

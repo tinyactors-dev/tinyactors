@@ -774,13 +774,22 @@ enum {
     TA_NAPI_INVOCATION_SRC,
     TA_NAPI_INVOCATION_DATA,
     TA_NAPI_INVOCATION_TRACEPARENT,
+    TA_NAPI_INVOCATION_QUEUE, /* while it starts: the records of its sends */
     TA_NAPI_INVOCATION_COUNT
 };
 
 /* ended: done, cancelled or failed, answers refused; failed: it never ran
  * (or crashed), so sends to it fail; restored: started again after a
- * restore (TA_EFFECT_FLAG_RESTORED). */
-enum { TA_NAPI_INVOCATION_ENDED = 1u, TA_NAPI_INVOCATION_FAILED = 2u, TA_NAPI_INVOCATION_RESTORED = 4u };
+ * restore (TA_EFFECT_FLAG_RESTORED); starting: its handler returned a
+ * promise that has not settled, so what comes for it is queued;
+ * uninvoked: an UNINVOKE came while it was starting. */
+enum {
+    TA_NAPI_INVOCATION_ENDED = 1u,
+    TA_NAPI_INVOCATION_FAILED = 2u,
+    TA_NAPI_INVOCATION_RESTORED = 4u,
+    TA_NAPI_INVOCATION_STARTING = 8u,
+    TA_NAPI_INVOCATION_UNINVOKED = 16u
+};
 
 /* The getters' data: a field's slot, or one of these. */
 enum { TA_NAPI_INVOCATION_GET_RESTORED = 100, TA_NAPI_INVOCATION_GET_RUNNING = 101 };
@@ -826,6 +835,16 @@ static bool ta_napi_invocation_flag(napi_env env, ta_napi_invocation *invocation
     if (!ta_napi_state_uint32(env, &(ta_napi_slot){invocation->state, TA_NAPI_INVOCATION_FLAGS, &invocation->flags}))
         return false;
     invocation->flags |= flag;
+    return napi_create_uint32(env, invocation->flags, &flags) == napi_ok &&
+           napi_set_element(env, invocation->state, TA_NAPI_INVOCATION_FLAGS, flags) == napi_ok;
+}
+
+/* Clears `flag` in the state, read again first. */
+static bool ta_napi_invocation_unflag(napi_env env, ta_napi_invocation *invocation, uint32_t flag) {
+    napi_value flags;
+    if (!ta_napi_state_uint32(env, &(ta_napi_slot){invocation->state, TA_NAPI_INVOCATION_FLAGS, &invocation->flags}))
+        return false;
+    invocation->flags &= ~flag;
     return napi_create_uint32(env, invocation->flags, &flags) == napi_ok &&
            napi_set_element(env, invocation->state, TA_NAPI_INVOCATION_FLAGS, flags) == napi_ok;
 }
@@ -1176,10 +1195,53 @@ static bool ta_napi_thenable(napi_env env, napi_value value, bool *thenable) {
     return true;
 }
 
+/* Appends `item` to the queue of an invocation that is starting. */
+static bool ta_napi_invocation_queue(napi_env env, const ta_napi_invocation *invocation, napi_value item) {
+    napi_value queue;
+    uint32_t length = 0;
+    return napi_get_element(env, invocation->state, TA_NAPI_INVOCATION_QUEUE, &queue) == napi_ok &&
+           napi_get_array_length(env, queue, &length) == napi_ok && napi_set_element(env, queue, length, item) == napi_ok;
+}
+
+/* A service handler returned a thenable: the invocation is starting until
+ * it settles. Its entry is kept with no service, so the sends and an
+ * UNINVOKE that come meanwhile find it and are queued (records made before
+ * their ack), and the thenable is followed with `started` and
+ * `start_failed` bound to the record. False with an exception pending. */
+static bool ta_napi_invocation_start(napi_env env, ta_napi_invocation *invocation, napi_value thenable) {
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    napi_value queue, entry, then, bind, functions[2], bound[2], argv[2];
+    napi_ref refs[2];
+    if (instance == NULL || napi_create_array(env, &queue) != napi_ok ||
+        napi_set_element(env, invocation->state, TA_NAPI_INVOCATION_QUEUE, queue) != napi_ok ||
+        !ta_napi_invocation_flag(env, invocation, TA_NAPI_INVOCATION_STARTING))
+        return false;
+    refs[0] = instance->started;
+    refs[1] = instance->start_failed;
+    for (int i = 0; i < 2; i++) {
+        argv[0] = ta_napi_undefined(env);
+        argv[1] = invocation->self;
+        if (napi_get_reference_value(env, refs[i], &functions[i]) != napi_ok ||
+            napi_get_named_property(env, functions[i], "bind", &bind) != napi_ok ||
+            napi_call_function(env, functions[i], bind, 2, argv, &bound[i]) != napi_ok)
+            return false;
+    }
+    napi_value ignored;
+    if (napi_get_named_property(env, thenable, "then", &then) != napi_ok ||
+        napi_call_function(env, thenable, then, 2, bound, &ignored) != napi_ok)
+        return false;
+    if (invocation->flags & TA_NAPI_INVOCATION_ENDED) return true; /* done() in the handler: nothing to keep */
+    return napi_create_array_with_length(env, 2, &entry) == napi_ok && napi_set_element(env, entry, 0, invocation->self) == napi_ok &&
+           napi_set_element(env, entry, 1, ta_napi_undefined(env)) == napi_ok &&
+           ta_napi_services(env, invocation->wrapper,
+                            &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation->segment, invocation->token), entry}) != NULL;
+}
+
 /* TA_EFFECT_INVOKE: the handler registered for the type starts the
  * service; what it returns is kept, by (segment, token), until done or
- * UNINVOKE. No handler, or one that throws (or returns a promise: the
- * service is what it returns, now): error.communication for the invoker
+ * UNINVOKE. A promise of the service (an async handler) makes the
+ * invocation starting until it settles (ta_napi_invocation_start). No
+ * handler, or one that throws: error.communication for the invoker
  * (unless it cancelled it already in this batch), the error reported after
  * the turn, and the entry kept as failed. A restored invocation with no
  * handler is the application's choice not to start it again: the invoker
@@ -1208,8 +1270,7 @@ static void ta_napi_dispatch_invoke(napi_env env, const ta_napi_batch *batch, ui
         started = napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) == napi_ok &&
                   ta_napi_thenable(env, result, &thenable);
         if (started && thenable) {
-            napi_throw_type_error(env, NULL, "a service handler returns the service, not a promise: start the work in it "
-                                             "and answer with invocation.sendBack() and done() when it is ready");
+            if (ta_napi_invocation_start(env, &invocation, result)) return;
             started = false;
         }
     } else if (!(invocation.flags & TA_NAPI_INVOCATION_RESTORED)) {
@@ -1259,45 +1320,32 @@ static napi_value ta_napi_service_crashed(napi_env env, napi_callback_info info)
     return NULL;
 }
 
-/* A send to an invoked service (IO_PROCESSOR TA_NIL): its service's
- * receive(host, send), called on the service, with the send as a thin
- * view; a service without receive, or none (done): dropped; one that
- * failed to start or crashed: the send fails with error.communication; a
- * receive that throws: the service crashed. A receive that returns a
- * promise has its view filled before the ack, and a rejection is a crash. */
-static void ta_napi_dispatch_service_send(napi_env env, ta_napi_host *host, uint32_t index) {
-    ta_napi_effect_entry found = {host, index, NULL, NULL, {NULL, NULL, NULL, NULL, 0, 0, 0}};
-    if (!ta_napi_effect_entry_of(env, &found)) return;
-    napi_value sendid = NULL, receive = NULL, result;
-    if (found.invocation.flags & TA_NAPI_INVOCATION_FAILED) { /* a service that never ran: the send fails, as core's do */
-        sendid = ta_napi_effect_text(env, &(ta_napi_view){NULL, NULL, found.invocation.wrapper, host, (double)host->acks, index, TA_NIL, 0},
-                                     &(ta_napi_text_field){TA_EFFECT_FIELD_SENDID, true});
-        ta_napi_service_event failed = {TA_NAPI_INVOCATION_FAILURE, NULL, ta_napi_undefined(env), NULL, sendid};
-        if (sendid == NULL || !ta_napi_invocation_post(env, &found.invocation, &failed)) ta_napi_keep_error(env, host);
-        return;
-    }
-    if ((ta_napi_is(env, found.service, napi_object) || ta_napi_is(env, found.service, napi_function)) &&
-        napi_get_named_property(env, found.service, "receive", &receive) != napi_ok) {
-        ta_napi_keep_error(env, host);
-        return;
-    }
-    if (receive == NULL || !ta_napi_is(env, receive, napi_function)) return;
+/* A send for a running service's receive: called on the service with
+ * `view` (a thin view in the drain, or a record queued while it started).
+ * A receive that returns a promise has its view filled now, before the
+ * ack, and a rejection is a crash. False with the error pending when it
+ * threw: the service crashed (the invoker gets error.communication with
+ * the send's sendid). */
+typedef struct ta_napi_delivery {
+    ta_napi_invocation *invocation;
+    napi_value service, receive;
+    ta_napi_view *view;
+} ta_napi_delivery;
+
+static bool ta_napi_service_receive(napi_env env, const ta_napi_delivery *delivery) {
     ta_napi_instance *instance = ta_napi_instance_of(env);
-    ta_napi_view view;
-    if (instance == NULL || !ta_napi_view_new(env, &(ta_napi_view_spec){host, instance->send, index, TA_NIL, TA_NAPI_SEND_COUNT}, &view)) {
-        ta_napi_keep_error(env, host);
-        return;
-    }
-    napi_value argv[2] = {view.wrapper, view.self};
+    ta_napi_view *view = delivery->view;
+    napi_value argv[2] = {view->wrapper, view->self}, result;
     bool thenable = false;
-    bool ok = napi_call_function(env, found.service, receive, 2, argv, &result) == napi_ok && ta_napi_thenable(env, result, &thenable);
+    bool ok = instance != NULL && napi_call_function(env, delivery->service, delivery->receive, 2, argv, &result) == napi_ok &&
+              ta_napi_thenable(env, result, &thenable);
     if (ok && thenable) { /* filled before the ack; a rejection is a crash */
         napi_value crashed, bind, bound = NULL, then, args[3];
-        ok = ta_napi_send_materialize(env, &view) && napi_get_reference_value(env, instance->crashed, &crashed) == napi_ok &&
+        ok = ta_napi_send_materialize(env, view) && napi_get_reference_value(env, instance->crashed, &crashed) == napi_ok &&
              napi_get_named_property(env, crashed, "bind", &bind) == napi_ok;
         args[0] = ta_napi_undefined(env);
-        args[1] = found.invocation.self;
-        args[2] = view.self;
+        args[1] = delivery->invocation->self;
+        args[2] = view->self;
         ok = ok && napi_call_function(env, crashed, bind, 3, args, &bound) == napi_ok &&
              napi_get_named_property(env, result, "then", &then) == napi_ok;
         args[1] = bound;
@@ -1305,29 +1353,197 @@ static void ta_napi_dispatch_service_send(napi_env env, ta_napi_host *host, uint
         ok = ok && napi_call_function(env, result, then, 2, args, &ignored) == napi_ok;
     }
     if (!ok) {
-        sendid = ta_napi_effect_text(env, &view, &(ta_napi_text_field){TA_EFFECT_FIELD_SENDID, true});
-        ta_napi_invocation_fail(env, &found.invocation, &(ta_napi_invocation_failure){sendid, true});
-        ta_napi_keep_error(env, host);
+        napi_value raised = NULL, ignored;
+        if (napi_get_and_clear_last_exception(env, &raised) != napi_ok) raised = NULL;
+        napi_value sendid = ta_napi_send_read(env, view, TA_NAPI_SEND_SENDID);
+        if (sendid == NULL) napi_get_and_clear_last_exception(env, &ignored);
+        ta_napi_invocation_fail(env, delivery->invocation, &(ta_napi_invocation_failure){sendid, true});
+        if (raised != NULL) napi_throw(env, raised);
     }
+    return ok;
+}
+
+/* A method of a service (receive, stop), or NULL when it has none (an
+ * object without one, a value that is no object) or reading it threw (the
+ * error pending, `threw` set). */
+typedef struct ta_napi_method {
+    napi_value service;
+    const char *name;
+    bool threw; /* out */
+} ta_napi_method;
+
+static napi_value ta_napi_service_method(napi_env env, ta_napi_method *of) {
+    napi_value method = NULL;
+    of->threw = false;
+    if (!ta_napi_is(env, of->service, napi_object) && !ta_napi_is(env, of->service, napi_function)) return NULL;
+    if (napi_get_named_property(env, of->service, of->name, &method) != napi_ok) {
+        of->threw = true;
+        return NULL;
+    }
+    return ta_napi_is(env, method, napi_function) ? method : NULL;
+}
+
+/* A send to an invoked service (IO_PROCESSOR TA_NIL): its service's
+ * receive(host, send), called on the service, with the send as a thin
+ * view; a service without receive, or none (done): dropped; one that
+ * failed to start or crashed: the send fails with error.communication; a
+ * receive that throws: the service crashed. A receive that returns a
+ * promise has its view filled before the ack, and a rejection is a crash.
+ * A service that is starting gets the send as a record, queued for it. */
+static void ta_napi_dispatch_service_send(napi_env env, ta_napi_host *host, uint32_t index) {
+    ta_napi_effect_entry found = {host, index, NULL, NULL, {NULL, NULL, NULL, NULL, 0, 0, 0}};
+    if (!ta_napi_effect_entry_of(env, &found)) return;
+    if (found.invocation.flags & TA_NAPI_INVOCATION_FAILED) { /* a service that never ran: the send fails, as core's do */
+        napi_value sendid = ta_napi_effect_text(env, &(ta_napi_view){NULL, NULL, found.invocation.wrapper, host, (double)host->acks, index, TA_NIL, 0},
+                                                &(ta_napi_text_field){TA_EFFECT_FIELD_SENDID, true});
+        ta_napi_service_event failed = {TA_NAPI_INVOCATION_FAILURE, NULL, ta_napi_undefined(env), NULL, sendid};
+        if (sendid == NULL || !ta_napi_invocation_post(env, &found.invocation, &failed)) ta_napi_keep_error(env, host);
+        return;
+    }
+    bool starting = (found.invocation.flags & TA_NAPI_INVOCATION_STARTING) != 0;
+    ta_napi_method of = {found.service, "receive", false};
+    napi_value receive = starting ? NULL : ta_napi_service_method(env, &of);
+    if (of.threw) ta_napi_keep_error(env, host);
+    if (!starting && receive == NULL) return;
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    ta_napi_view view;
+    if (instance == NULL || !ta_napi_view_new(env, &(ta_napi_view_spec){host, instance->send, index, TA_NIL, TA_NAPI_SEND_COUNT}, &view)) {
+        ta_napi_keep_error(env, host);
+        return;
+    }
+    if (starting) { /* a record now, for the service once it started */
+        if (!ta_napi_send_materialize(env, &view) || !ta_napi_invocation_queue(env, &found.invocation, view.self))
+            ta_napi_keep_error(env, host);
+        return;
+    }
+    if (!ta_napi_service_receive(env, &(ta_napi_delivery){&found.invocation, found.service, receive, &view}))
+        ta_napi_keep_error(env, host);
 }
 
 /* TA_EFFECT_UNINVOKE: the invoker cancelled it (it left the state, or
  * ended); its entry goes, then the service's stop(host), called on the
- * service; none for one that failed or crashed. */
+ * service; none for one that failed or crashed. One that is starting is
+ * marked uninvoked: it is stopped once it resolves. */
 static void ta_napi_dispatch_uninvoke(napi_env env, ta_napi_host *host, uint32_t index) {
     ta_napi_effect_entry found = {host, index, NULL, NULL, {NULL, NULL, NULL, NULL, 0, 0, 0}};
     if (!ta_napi_effect_entry_of(env, &found)) return; /* done already, or never kept */
     bool failed = (found.invocation.flags & TA_NAPI_INVOCATION_FAILED) != 0;
-    napi_value stop = NULL, result;
+    bool starting = (found.invocation.flags & TA_NAPI_INVOCATION_STARTING) != 0;
+    napi_value result;
+    if (starting && !ta_napi_invocation_flag(env, &found.invocation, TA_NAPI_INVOCATION_UNINVOKED)) {
+        ta_napi_keep_error(env, host);
+        return;
+    }
     if (!ta_napi_invocation_end(env, &found.invocation)) {
         ta_napi_keep_error(env, host);
         return;
     }
-    if (failed || !(ta_napi_is(env, found.service, napi_object) || ta_napi_is(env, found.service, napi_function))) return;
-    napi_value argv[1] = {found.invocation.wrapper};
-    if (napi_get_named_property(env, found.service, "stop", &stop) != napi_ok ||
-        (ta_napi_is(env, stop, napi_function) && napi_call_function(env, found.service, stop, 1, argv, &result) != napi_ok))
+    if (failed || starting) return;
+    ta_napi_method of = {found.service, "stop", false};
+    napi_value stop = ta_napi_service_method(env, &of), argv[1] = {found.invocation.wrapper};
+    if (of.threw || (stop != NULL && napi_call_function(env, found.service, stop, 1, argv, &result) != napi_ok))
         ta_napi_keep_error(env, host);
+}
+
+/* The queue of a starting invocation taken out of its state; NULL with an
+ * exception pending. */
+static napi_value ta_napi_invocation_settle(napi_env env, ta_napi_invocation *invocation) {
+    napi_value queue;
+    if (napi_get_element(env, invocation->state, TA_NAPI_INVOCATION_QUEUE, &queue) != napi_ok ||
+        napi_set_element(env, invocation->state, TA_NAPI_INVOCATION_QUEUE, ta_napi_undefined(env)) != napi_ok ||
+        !ta_napi_invocation_unflag(env, invocation, TA_NAPI_INVOCATION_STARTING))
+        return NULL;
+    return queue;
+}
+
+/* A service handler's promise resolved with the service (bound to its
+ * invocation; between turns, never inside a run). Cancelled meanwhile
+ * (an UNINVOKE): its stop(host), and the sends queued for it are dropped,
+ * since the invoker has gone and nothing could answer them. Done in its
+ * start: nothing kept, the sends dropped, as a done service's are. Else
+ * the service is kept and the queued sends given to its receive in order;
+ * a receive that throws is a crash, and the first error is thrown on, so
+ * the promise `then` made rejects unhandled and the runtime reports it.
+ * After close nothing is given: the service is dropped, not stopped. */
+static napi_value ta_napi_service_started(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = {NULL, NULL}, queue, entry, item, raised = NULL, result;
+    ta_napi_invocation invocation;
+    uint32_t length = 0;
+    bool threw = false;
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) return NULL;
+    if (argc < 2) argv[1] = ta_napi_undefined(env);
+    if (!ta_napi_invocation_of(env, argv[0], &invocation) || (queue = ta_napi_invocation_settle(env, &invocation)) == NULL)
+        return NULL;
+    if (invocation.host->host == NULL) return ta_napi_undefined(env); /* closed: dropped, not started */
+    napi_value service = argv[1], args[1] = {invocation.wrapper};
+    if (invocation.flags & TA_NAPI_INVOCATION_UNINVOKED) { /* cancelled while it started: stopped now */
+        ta_napi_method of = {service, "stop", false};
+        napi_value stop = ta_napi_service_method(env, &of);
+        if (!of.threw && stop != NULL) napi_call_function(env, service, stop, 1, args, &result);
+        return NULL; /* undefined, or what stop threw, thrown on */
+    }
+    if (invocation.flags & TA_NAPI_INVOCATION_ENDED) return ta_napi_undefined(env); /* done in its start */
+    if (napi_create_array_with_length(env, 2, &entry) != napi_ok || napi_set_element(env, entry, 0, invocation.self) != napi_ok ||
+        napi_set_element(env, entry, 1, service) != napi_ok ||
+        ta_napi_services(env, invocation.wrapper,
+                         &(ta_napi_services_call){"set", ta_napi_invocation_key(env, invocation.segment, invocation.token), entry}) == NULL ||
+        napi_get_array_length(env, queue, &length) != napi_ok)
+        return NULL;
+    for (uint32_t i = 0; i < length && invocation.host->host != NULL; i++) {
+        ta_napi_view view;
+        threw = false;
+        if (napi_get_element(env, queue, i, &item) != napi_ok || !ta_napi_view_of(env, item, &view) ||
+            !ta_napi_state_uint32(env, &(ta_napi_slot){invocation.state, TA_NAPI_INVOCATION_FLAGS, &invocation.flags}))
+            return NULL;
+        if (invocation.flags & TA_NAPI_INVOCATION_FAILED) { /* crashed on an earlier send: this one fails, as core's do */
+            napi_value sendid = ta_napi_send_read(env, &view, TA_NAPI_SEND_SENDID);
+            ta_napi_service_event failure = {TA_NAPI_INVOCATION_FAILURE, NULL, ta_napi_undefined(env), NULL, sendid};
+            threw = sendid == NULL || !ta_napi_invocation_post(env, &invocation, &failure);
+        } else if (!(invocation.flags & TA_NAPI_INVOCATION_ENDED)) { /* done by an earlier receive: dropped */
+            ta_napi_method of = {service, "receive", false};
+            napi_value receive = ta_napi_service_method(env, &of);
+            threw = of.threw;
+            if (!threw && receive != NULL)
+                threw = !ta_napi_service_receive(env, &(ta_napi_delivery){&invocation, service, receive, &view});
+        }
+        napi_value error = NULL;
+        if (threw && napi_get_and_clear_last_exception(env, &error) == napi_ok && raised == NULL) raised = error;
+    }
+    if (raised != NULL) napi_throw(env, raised);
+    return raised != NULL ? NULL : ta_napi_undefined(env);
+}
+
+/* A service handler's promise rejected (bound to its invocation): a failed
+ * start, unless it ended meanwhile (done, or cancelled: nobody is told).
+ * The invoker gets error.communication, then each send queued for it with
+ * its sendid, and the entry stays failed until the UNINVOKE. The rejection
+ * goes on, an unhandled rejection the runtime reports. */
+static napi_value ta_napi_service_start_failed(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = {NULL, NULL}, queue, item, ignored;
+    ta_napi_invocation invocation;
+    uint32_t length = 0;
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) return NULL;
+    if (argc < 2) argv[1] = ta_napi_undefined(env);
+    if (ta_napi_invocation_of(env, argv[0], &invocation) && (queue = ta_napi_invocation_settle(env, &invocation)) != NULL &&
+        invocation.host->host != NULL && !(invocation.flags & TA_NAPI_INVOCATION_ENDED)) {
+        ta_napi_invocation_fail(env, &invocation, &(ta_napi_invocation_failure){NULL, true});
+        napi_get_and_clear_last_exception(env, &ignored);
+        if (napi_get_array_length(env, queue, &length) != napi_ok) length = 0;
+        for (uint32_t i = 0; i < length && invocation.host->host != NULL; i++) {
+            ta_napi_view view;
+            napi_value sendid = NULL;
+            if (napi_get_element(env, queue, i, &item) == napi_ok && ta_napi_view_of(env, item, &view) && (sendid = ta_napi_send_read(env, &view, TA_NAPI_SEND_SENDID)) != NULL) {
+                ta_napi_service_event failure = {TA_NAPI_INVOCATION_FAILURE, NULL, ta_napi_undefined(env), NULL, sendid};
+                ta_napi_invocation_post(env, &invocation, &failure);
+            }
+            napi_get_and_clear_last_exception(env, &ignored); /* a failure core refuses is nobody's news */
+        }
+    }
+    napi_get_and_clear_last_exception(env, &ignored);
+    napi_throw(env, argv[1]);
+    return NULL;
 }
 
 void ta_napi_dispatch(napi_env env, const ta_napi_batch *batch, uint32_t index) {
@@ -1412,7 +1628,8 @@ napi_status ta_napi_effects_define(napi_env env, napi_value exports) {
         {"sendBack", NULL, ta_napi_invocation_send_back, NULL, NULL, NULL, napi_default_method, NULL},
         {"done", NULL, ta_napi_invocation_done, NULL, NULL, NULL, napi_default_method, NULL},
     };
-    napi_value send_class, entry_class, migrated_class, invocation_class, rejected, crashed, keys, description, symbol;
+    napi_value send_class, entry_class, migrated_class, invocation_class, rejected, crashed, started, start_failed, keys,
+        description, symbol;
     napi_status status = napi_define_class(env, "Send", NAPI_AUTO_LENGTH, ta_napi_view_construct, NULL,
                                            sizeof send / sizeof send[0], send, &send_class);
     if (status == napi_ok) status = napi_create_reference(env, send_class, 1, &instance->send);
@@ -1434,6 +1651,12 @@ napi_status ta_napi_effects_define(napi_env env, napi_value exports) {
     if (status == napi_ok)
         status = napi_create_function(env, "crashed", NAPI_AUTO_LENGTH, ta_napi_service_crashed, NULL, &crashed);
     if (status == napi_ok) status = napi_create_reference(env, crashed, 1, &instance->crashed);
+    if (status == napi_ok)
+        status = napi_create_function(env, "started", NAPI_AUTO_LENGTH, ta_napi_service_started, NULL, &started);
+    if (status == napi_ok) status = napi_create_reference(env, started, 1, &instance->started);
+    if (status == napi_ok)
+        status = napi_create_function(env, "startFailed", NAPI_AUTO_LENGTH, ta_napi_service_start_failed, NULL, &start_failed);
+    if (status == napi_ok) status = napi_create_reference(env, start_failed, 1, &instance->start_failed);
     if (status == napi_ok) status = napi_get_reference_value(env, instance->keys, &keys);
     if (status == napi_ok) status = napi_create_string_utf8(env, "tinyactors.view", NAPI_AUTO_LENGTH, &description);
     if (status == napi_ok) status = napi_create_symbol(env, description, &symbol);

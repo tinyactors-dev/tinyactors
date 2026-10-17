@@ -250,9 +250,21 @@ The rules the Python binding follows hold here too (bindings.md, sections
   with `IO_PROCESSOR` `TA_NIL` goes to the service's **`receive(host,
   send)`**, called on the service, with a thin `Send` whose `type` is
   `undefined`; a `TA_EFFECT_UNINVOKE` to its **`stop(host)`**, then the
-  entry goes; both optional. No handler, a handler that throws, or one
-  that returns a thenable (a `TypeError`: the service is what it returns,
-  decided 2026-10-16, as Python's handlers are synchronous): `ta_host_send`
+  entry goes; both optional. **A handler may return a thenable of the
+  service** (decided 2026-10-17, l-p2-services-promise revised: async is
+  the event loop's): the invocation is starting until it settles, its
+  entry kept with no service and its record's `queue`; a send that comes
+  meanwhile is made a record before its ack (as a promise-returning I/O
+  processor's) and queued, and given to `receive` in order when the
+  promise resolves (`ta_napi_service_started`, a microtask between turns,
+  never inside a run); an UNINVOKE meanwhile ends the invocation and its
+  `stop` is called once it resolves, the queued sends dropped (the
+  invocation has ended, so nothing could answer them); a `done()` in the
+  start keeps nothing; a rejection (`ta_napi_service_start_failed`) is a
+  failed start: `error.communication` to the invoker and to each queued
+  send with its sendid, the entry failed, the rejection thrown on
+  (unhandled, as a handler's promise's); after `close()` a settling
+  promise is ignored. No handler, or a handler that throws: `ta_host_send`
   with `TA_EVENT_IN_ERROR_COMMUNICATION | TA_EVENT_IN_FROM_INVOKE` to the
   invoker and the error reported as "The loop" says; none when an
   UNINVOKE of the same token follows in the open batch. A failed start
@@ -737,11 +749,17 @@ file.
   answers after the ack until the invocation ends. Tests:
   `test/services.test.mjs: 'a dropped host whose running services close
   over it is collected'`, `'services left at close are dropped, not
-  stopped, and collected'`, `'a service done in its handler is neither
+  stopped, and collected'`, `'a handler that returns a promise of the
+  service: what comes while it starts is given to it in order'`, `'an
+  UNINVOKE while it starts stops the service once it resolves; the sends
+  before it are dropped'`, `'a promise that settles after close, or after
+  the invocation was cancelled, tells nobody'`, `'a service done in its handler is neither
   kept nor stopped'` and `'an async receive reads its send after the ack;
   its rejection is a crash'`; failures that reach the invoker:
   `test/services.test.mjs: 'a handler that throws is a communication
-  error; a send to it fails too, until the UNINVOKE'`, `'a failure to
+  error; a send to it fails too, until the UNINVOKE'`, `'a handler's
+  promise that rejects is a failed start: the invoker and each queued
+  send are told'`, `'a failure to
   start an invocation cancelled in the same run is not reported to the
   invoker'` and `'a restore without the service tells the invoker, and
   throws nothing'`.

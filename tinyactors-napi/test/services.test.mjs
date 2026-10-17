@@ -4,7 +4,7 @@
 // the datamodel under test; failures to start, crashes, the services left
 // at close, and a restored host announcing each running invocation again.
 import { Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
-import { DATAMODEL, ENGINE, equal, hostWith, image, scxml, status, throws, typeError } from './charts.mjs';
+import { DATAMODEL, ENGINE, equal, hostWith, image, scxml, status, throws, typeError, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 const TYPE = 'urn:test:echo'; // the charts' <invoke type="urn:test:echo">
@@ -243,15 +243,145 @@ test('a handler that throws is a communication error; a send to it fails too, un
   same(logs.labelled('error'), ['communication', 'communication'], 'the invoker\'s errors');
 });
 
-test('a handler that returns a promise is refused: the service is what it returns', async () => {
+/** A service handler that resolves with the service once `release()` is
+ * called, as one whose start awaits a connection would. */
+function gate() {
+  let release;
+  const opened = new Promise((resolve) => (release = resolve));
+  return { opened, release };
+}
+
+/** Collects the unhandled rejections while `body` runs. */
+async function withRejections(body) {
+  const rejections = [];
+  const onRejection = (reason) => rejections.push(reason?.message);
+  process.on('unhandledRejection', onRejection);
+  try {
+    await body(rejections);
+  } finally {
+    process.off('unhandledRejection', onRejection);
+  }
+}
+
+const later = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('a handler that returns a promise of the service: what comes while it starts is given to it in order', async () => {
   const logs = new Logs();
-  const host = client({ log: logs.handler, services: { [TYPE]: async () => ({}) } });
-  host.spawn(host.chart('client'));
-  const error = await rejected(host.idle());
-  if (!(error instanceof TypeError) || !/not a promise/.test(error.message)) throw error;
+  const record = [];
+  const { opened, release } = gate();
+  const host = client({
+    log: logs.handler,
+    services: {
+      [TYPE]: async (h, invocation) => {
+        invocation.sendBack('answer', { echo: 'starting' }); // the invocation answers while it starts
+        await opened;
+        return new Echo(record, invocation);
+      },
+    },
+  });
+  const session = host.spawn(host.chart('client'));
+  await host.idle();
+  host.send(session, 'ask', 'first');
+  host.send(session, 'ask', 'second');
+  await host.idle();
+  same(record, [], 'nothing received before it started');
+  release();
+  await later();
+  await host.idle();
+  same(record.map((r) => [r[0], r[0] === 'start' ? r[1] : r[2]]), [['start', session], ['receive', 'first'], ['receive', 'second']], 'the queued sends, in order');
+  host.send(session, 'ask', 'third');
+  await host.idle();
+  host.send(session, 'ask', 'finish');
   await host.idle();
   host.close();
-  same(logs.labelled('error'), ['communication'], 'the invoker\'s error');
+  same(logs.labelled('answer'), ['{"echo":"starting"} echo', '{"echo":"first"} echo', '{"echo":"second"} echo', '{"echo":"third"} echo'], 'every answer');
+  same(logs.labelled('done'), ['{"asked":4}'], 'done once started');
+  same(logs.labelled('error'), [], 'no error');
+});
+
+test('an UNINVOKE while it starts stops the service once it resolves; the sends before it are dropped', async () => {
+  const record = [];
+  const { opened, release } = gate();
+  const host = client({
+    services: {
+      [TYPE]: async (h, invocation) => {
+        await opened;
+        return new Echo(record, invocation);
+      },
+    },
+  });
+  const session = host.spawn(host.chart('client'));
+  await host.idle();
+  host.send(session, 'ask', 'before');
+  host.send(session, 'leave');
+  await host.idle();
+  release();
+  await later();
+  await host.idle();
+  same(record.map((r) => r[0]), ['start', 'stop'], 'stopped, the send dropped: nothing could answer it');
+  host.close();
+});
+
+test('a handler\'s promise that rejects is a failed start: the invoker and each queued send are told', async () => {
+  await withRejections(async (rejections) => {
+    const logs = new Logs();
+    const { opened, release } = gate();
+    const host = client({
+      log: logs.handler,
+      services: {
+        [TYPE]: async () => {
+          await opened;
+          throw new Error('no connection');
+        },
+      },
+    });
+    const session = host.spawn(host.chart('client'));
+    await host.idle();
+    host.send(session, 'ask', 'queued');
+    await host.idle();
+    release();
+    await later();
+    await host.idle();
+    host.send(session, 'ask', 'after'); // the entry stays failed until the UNINVOKE
+    await host.idle();
+    host.close();
+    same(logs.labelled('error'), ['communication', 'communication', 'communication'], 'the start, the queued send, the later send');
+    same(rejections, ['no connection'], 'the rejection stays unhandled');
+  });
+});
+
+test('a promise that settles after close, or after the invocation was cancelled, tells nobody', async () => {
+  await withRejections(async (rejections) => {
+    const logs = new Logs();
+    const record = [];
+    const gates = [gate(), gate()];
+    let started = 0;
+    const host = client({
+      log: logs.handler,
+      services: {
+        [TYPE]: async (h, invocation) => {
+          const which = started++;
+          await gates[which].opened;
+          if (which === 1) throw new Error('late');
+          return new Echo(record, invocation);
+        },
+      },
+    });
+    const first = host.spawn(host.chart('client'));
+    await host.idle();
+    host.send(first, 'leave'); // cancelled while it starts; it rejects later
+    host.spawn(host.chart('client')); // the second starts, then the host closes
+    await host.idle();
+    gates[0].release();
+    await later();
+    await host.idle();
+    host.close();
+    gates[1].release();
+    await until(() => rejections.length > 0); // bun reports a rejection a few turns later
+    same(record.map((r) => r[0]), ['start', 'stop'], 'the first stopped once it resolved');
+    same(logs.labelled('error'), [], 'nobody told');
+    same(rejections, ['late'], 'the rejection after close still unhandled');
+  });
 });
 
 test('a failure to start an invocation cancelled in the same run is not reported to the invoker', async () => {

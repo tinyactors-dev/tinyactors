@@ -413,13 +413,35 @@ const host = new Host(config, {
   ends, so it may read it after an `await`. A service that ended with
   `done` is neither stopped nor kept, so a handler may call `done` and
   return at once.
-- **The handler returns the service, not a promise.** An `async` handler
-  is refused with a `TypeError` and the invoker gets
-  `error.communication`: start the work in a plain handler, return the
-  service at once, and answer with `sendBack` and `done` when the work is
-  ready.
+- **The handler may return a promise of the service** (an `async`
+  handler, one that awaits a connection). Until it settles the invocation
+  is starting: the sends to it wait, filled before their batch ends, and
+  go to `receive` in order once the promise resolves; the invocation may
+  `sendBack` meanwhile. A cancel that comes first stops the service as
+  soon as it resolves, and the sends before it are dropped, since nothing
+  could answer them. A rejection is a failed start: the invoker gets
+  `error.communication`, and each waiting send one more, and the
+  rejection stays unhandled, as any handler's promise's ("Before you use
+  it"). After `close()` a promise that settles is ignored.
+- **Or return the service at once** and let its own methods await its
+  start, when the service should take sends before it is ready:
+
+  ```js
+  class Connection {
+    constructor(invocation) {
+      this.invocation = invocation;
+      this.ready = connect(invocation.src); // a promise, started now
+      this.ready.catch(() => {});           // its failure is answered in receive
+    }
+    async receive(host, send) {             // send was filled before the batch ended
+      const socket = await this.ready;
+      this.invocation.sendBack('reply', await socket.ask(send.data));
+    }
+  }
+  ```
 - **A failure** of any kind gives the invoker `error.communication`: no
-  handler for the type, a handler that throws, a `receive` that throws or
+  handler for the type, a handler that throws or whose promise rejects, a
+  `receive` that throws or
   whose promise rejects (the service crashed and is dropped, not
   stopped), or no handler for a restored invocation. Each later send to
   that invocation gets one too, until the invoker leaves the state. The
