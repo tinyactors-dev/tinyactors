@@ -1314,10 +1314,11 @@ static void test_request_answered_with_an_error(void) {
 }
 
 /* A segment grows only the pool that ran out: spawning past maxActors
- * doubles the actors and the slab by what they need (a grown segment is the
- * size of one made for that many actors), and the other pools stay; events
- * past maxEvents grow the events alone. The high-water marks are what the
- * pools held at most. */
+ * grows the actors, by at least a quarter of the region (8 to 512 at once
+ * here, beside the default events), and the slab by what they need (a
+ * grown segment is the size of one made for that many actors), and the
+ * other pools stay; events past maxEvents grow the events alone. The
+ * high-water marks are what the pools held at most. */
 static ta_system_stats segment_stats(host_world *e, uint32_t segment) {
     ta_system_stats stats;
     stats.size = sizeof stats;
@@ -1327,7 +1328,7 @@ static ta_system_stats segment_stats(host_world *e, uint32_t segment) {
 
 static void test_growth_grows_what_ran_out(void) {
     host_world sized;
-    world_open(&sized, 64, NULL, 0);
+    world_open(&sized, 512, NULL, 0);
     uint32_t sized_segment = world_add(&sized, ECHO);
     ta_system_stats want = segment_stats(&sized, sized_segment);
     world_close(&sized);
@@ -1340,7 +1341,8 @@ static void test_growth_grows_what_ran_out(void) {
     for (int i = 0; i < 40; i++)
         sessions[i] = spawn(&e, "echo");
     ta_system_stats grown = segment_stats(&e, segment);
-    CHECK_EQUAL(grown.actors_capacity, 64u); /* 8, 16, 32, 64 */
+    CHECK_EQUAL(grown.actors_capacity, 512u); /* one relocation, not 8, 16, 32, 64 */
+    CHECK(grown.region_bytes >= before.region_bytes + before.region_bytes / 4);
     CHECK_EQUAL(grown.actors_high_water, 40u);
     CHECK_EQUAL(grown.events_capacity, before.events_capacity);
     CHECK_EQUAL(grown.timers_capacity, before.timers_capacity);
@@ -1358,7 +1360,7 @@ static void test_growth_grows_what_ran_out(void) {
     ta_system_stats more = segment_stats(&e, segment);
     CHECK_EQUAL(more.events_capacity, before.events_capacity * 2);
     CHECK(more.events_high_water >= events);
-    CHECK_EQUAL(more.actors_capacity, 64u);
+    CHECK_EQUAL(more.actors_capacity, 512u);
     CHECK_EQUAL(more.timers_capacity, before.timers_capacity);
     CHECK_EQUAL(more.slab_pages_capacity, grown.slab_pages_capacity);
     run(&e);
@@ -1431,10 +1433,43 @@ static void test_workspaces_grow_for_waiting_senders(void) {
     world_close(&e);
 }
 
+/* Beside a large explicit maxEvents the actors are a small share of the
+ * region: spawning past maxActors grows them by at least a quarter of the
+ * region at once, not by doubling from 64, which would copy the whole
+ * region at every doubling. */
+static void test_actors_grow_by_a_share_of_the_region(void) {
+    host_world e;
+    memset(&e, 0, sizeof e);
+    e.ecmascript = ta_datamodel_ecmascript_new(NULL);
+    e.binding = ta_datamodel_ecmascript_binding(e.ecmascript);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.system.size = sizeof config.system;
+    config.system.ticks_per_second = 1000;
+    config.system.max_events = 20000;
+    config.datamodels = &e.binding;
+    config.datamodel_count = 1;
+    config.allocator = (ta_allocator){NULL, refusable_alloc, refusable_free};
+    CHECK_EQUAL(test_host_new(&config, &e.host), TA_OK);
+    uint32_t segment = world_add(&e, ECHO);
+    ta_system_stats before = segment_stats(&e, segment);
+    for (uint32_t i = 0; i <= before.actors_capacity; i++)
+        spawn(&e, "echo");
+    ta_system_stats after = segment_stats(&e, segment);
+    CHECK(after.actors_capacity > before.actors_capacity * 2);
+    CHECK(after.region_bytes >= before.region_bytes + before.region_bytes / 4);
+    CHECK_EQUAL(after.events_capacity, before.events_capacity);
+    run(&e);
+    world_close(&e);
+}
+
 int main(void) {
     RUN(test_growth_grows_what_ran_out);
     RUN(test_a_small_pool_grows_by_a_share_of_the_region);
     RUN(test_workspaces_grow_for_waiting_senders);
+    RUN(test_actors_grow_by_a_share_of_the_region);
     RUN(test_boot_manifest);
     RUN(test_boot_refused);
     RUN(test_image_copied);

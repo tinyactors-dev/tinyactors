@@ -207,7 +207,8 @@ static int grown_config(const host_segment *segment, growth growth, ta_system_co
         wanted.max_actors = times(before, growth.factor);
         if (wanted.max_actors > TA_SYSTEM_MAX_ACTORS) wanted.max_actors = TA_SYSTEM_MAX_ACTORS;
         uint32_t added = wanted.max_actors - before;
-        wanted.instance_bytes = slab_bytes((uint64_t)wanted.instance_bytes +
+        /* from the system's: a config that left instanceBytes 0 holds 0 */
+        wanted.instance_bytes = slab_bytes((uint64_t)segment->system->config.instance_bytes +
                                            derived_instance_bytes(segment, wanted.max_actors) -
                                            derived_instance_bytes(segment, before));
         wanted.string_bytes =
@@ -236,18 +237,17 @@ static int grown_config(const host_segment *segment, growth growth, ta_system_co
  * refused it; TA_ERROR_INVALID if that pool cannot grow (the segment
  * unchanged).
  *
- * The actors double. Another pool doubles, or more: a relocation copies the
- * whole region, so its block grows by at least a quarter of the region (the
- * events beside many actors, doubling from 256, would otherwise copy the
- * region at every doubling), up to the pool's hard limit. The actors need
- * no such rule: their share of the region is most of it once copying it
- * costs anything. The workspaces (GROW_WORKSPACES) grow to what
- * workspaces_wanted says, once. */
+ * A pool doubles, or more: a relocation copies the whole region, so its
+ * block grows by at least a quarter of the region, up to the pool's hard
+ * limit. Without it a small pool beside a big one copies the region at
+ * every doubling: the events beside many actors, doubling from 256, and
+ * the actors beside a large explicit maxEvents (64 to 20,000 actors beside
+ * a million events: nine copies of a 595 MB region, 5.3 GB). The
+ * workspaces (GROW_WORKSPACES) grow to what workspaces_wanted says, once. */
 static ta_status segment_grow(ta_host *host, host_segment *segment, uint32_t pool) {
     if (host->running) return TA_ERROR_NO_MEMORY; /* nothing grows during a run */
-    const size_t enough = pool == TA_POOL_ACTORS || pool == GROW_WORKSPACES
-                              ? 0
-                              : segment->memory_size + segment->memory_size / 4;
+    const size_t enough =
+        pool == GROW_WORKSPACES ? 0 : segment->memory_size + segment->memory_size / 4;
     uint32_t workspaces = 0;
     if (pool == GROW_WORKSPACES) workspaces = workspaces_wanted(segment->system);
     ta_system_config config;
