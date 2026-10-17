@@ -1465,11 +1465,52 @@ static void test_actors_grow_by_a_share_of_the_region(void) {
     world_close(&e);
 }
 
+/* A datamodel that refuses to create an actor is no pool running out:
+ * nothing grows. A spawn is refused with TA_ERROR_NO_MEMORY (no trap); an
+ * <invoke> fails with error.execution in the parent, which goes on, and
+ * the slab stays as it was (it grew toward its limit before). */
+static void test_a_datamodel_refusal_grows_nothing(void) {
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    uint32_t segment = world_add(
+        &e, SC("p", "initial='a'><state id='a'><transition event='go' target='b'/></state>"
+                    "<state id='b'><invoke type='scxml'><content>"
+                    "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' "
+                    "initial='x'><state id='x'/></scxml></content></invoke>"
+                    "<transition event='error.execution' target='c'/></state>"
+                    "<state id='c'><transition event='check'><log expr=\"'failed'\"/>"
+                    "</transition></state>"));
+    uint64_t parent = spawn(&e, "p");
+    run(&e);
+    ta_system_stats before = segment_stats(&e, segment);
+    ta_datamodel_ecmascript_set_memory_limit(e.ecmascript, 1);
+    ta_host_chart_ref ref;
+    CHECK_EQUAL(ta_host_chart(e.host, (ta_string_view){"p", 1}, &ref), TA_OK);
+    uint64_t refused = 0;
+    CHECK_EQUAL(ta_host_spawn(e.host,
+                              &(ta_spawn){ref.segment, ref.chart, (ta_string_view){0, 0}, 0,
+                                          (ta_string_view){0, 0}},
+                              &refused),
+                TA_ERROR_NO_MEMORY);
+    CHECK_EQUAL(send(&e, parent, "go", NULL), TA_OK);
+    CHECK_EQUAL(run(&e), TA_RUN_IDLE);
+    ta_datamodel_ecmascript_set_memory_limit(e.ecmascript, 0);
+    CHECK_EQUAL(send(&e, parent, "check", NULL), TA_OK); /* in c: the invoke failed */
+    run(&e);
+    CHECK(strcmp(e.log, "failed;") == 0);
+    ta_system_stats after = segment_stats(&e, segment);
+    CHECK_EQUAL(after.region_bytes, before.region_bytes);
+    CHECK_EQUAL(after.slab_pages_capacity, before.slab_pages_capacity);
+    CHECK_EQUAL(after.actors_capacity, before.actors_capacity);
+    world_close(&e);
+}
+
 int main(void) {
     RUN(test_growth_grows_what_ran_out);
     RUN(test_a_small_pool_grows_by_a_share_of_the_region);
     RUN(test_workspaces_grow_for_waiting_senders);
     RUN(test_actors_grow_by_a_share_of_the_region);
+    RUN(test_a_datamodel_refusal_grows_nothing);
     RUN(test_boot_manifest);
     RUN(test_boot_refused);
     RUN(test_image_copied);

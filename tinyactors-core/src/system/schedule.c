@@ -67,14 +67,6 @@ static uint32_t next_external(ta_system *system, uint32_t index) {
     return event_index;
 }
 
-/* What a step that stopped for memory ran out of: the pool that refused;
- * else a full timer pool (core checks it before a delayed send without
- * allocating), else the slab. */
-static uint32_t exhausted_pool(ta_system *system) {
-    uint32_t pool = ta_system_exhausted(system);
-    if (pool != TA_POOL_NONE) return pool;
-    return ta_pool_free_count(&system->timers) == 0 ? TA_POOL_TIMERS : TA_POOL_SLAB;
-}
 
 /* The length of `text` cut to at most TA_SYSTEM_MAX_STRING bytes, before a
  * UTF-8 continuation byte, so no character is split. */
@@ -169,7 +161,7 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
         case TA_STEP_INVOKE: {
             uint32_t pool = ta_system_invoke(system, index, &core->out);
             core->out.payload = 0;
-            if (pool == TA_POOL_ACTORS || pool == TA_POOL_SLAB) {
+            if (pool != TA_POOL_NONE) {
                 /* spawn parked; let the host grow the system, then retry */
                 run_queue_push_front(system, index);
                 *detail = pool;
@@ -224,7 +216,7 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
         }
         case TA_STEP_EXHAUSTED:
             run_queue_push_front(system, index);
-            *detail = exhausted_pool(system);
+            *detail = ta_system_exhausted(system); /* NONE: nothing to grow (a fault) */
             status = TA_RUN_EXHAUSTED;
             stop = 1;
             break;

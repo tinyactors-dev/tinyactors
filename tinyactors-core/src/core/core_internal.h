@@ -102,7 +102,7 @@ struct ta_core {
     ta_image_view image_view;
     const ta_image *image;
     ta_pool *events;
-    const ta_pool *timers; /* a delayed send needs a free slot here (NULL: unlimited) */
+    ta_pool *timers; /* a delayed send needs a free slot here (NULL: unlimited); marked refused when none is */
     ta_pool *workspaces;
     ta_slab *slab;
     const ta_datamodel_binding *datamodels;

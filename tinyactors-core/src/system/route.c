@@ -269,10 +269,13 @@ void ta_system_fire_timers(ta_system *system) {
 
 /* ---- invocation -------------------------------------------------------------------------- */
 
-/* Spawn an SCXML child for an invoke. On pool exhaustion the spawn is parked
- * as a pending request (retried after growth) and TA_POOL_* is returned. */
-static uint32_t park_spawn(ta_system *s, uint32_t parent, uint32_t slot, uint32_t chart,
-                           uint32_t invokeid, ta_payload payload);
+/* Spawn an SCXML child for an invoke. When a pool or the slab refused it
+ * (ta_system_exhausted names one) the spawn is parked as a pending request
+ * (retried after growth) and that TA_POOL_* is returned. Any other refusal
+ * (the child's datamodel refused to create it) fails the invoke with
+ * error.execution, as does a spawn that cannot be parked: TA_POOL_NONE. */
+static int park_spawn(ta_system *s, uint32_t parent, uint32_t slot, uint32_t chart,
+                      uint32_t invokeid, ta_payload payload);
 
 static uint32_t spawn_child(ta_system *system, uint32_t parent, uint32_t slot, uint32_t chart,
                             uint32_t invokeid, ta_payload payload, int may_park) {
@@ -283,8 +286,11 @@ static uint32_t spawn_child(ta_system *system, uint32_t parent, uint32_t slot, u
                                        ph, slot, (ta_string_view){(const char *)0, 0}, &status);
     ta_instance *pin = ta_actor_instance(system, actor_at(system, parent));
     if (c == TA_NIL) {
-        if (status == TA_ERROR_NO_MEMORY && may_park)
-            return park_spawn(system, parent, slot, chart, invokeid, payload);
+        uint32_t pool = status == TA_ERROR_NO_MEMORY && may_park ? ta_system_exhausted(system)
+                                                                 : TA_POOL_NONE;
+        if (pool != TA_POOL_NONE)
+            return park_spawn(system, parent, slot, chart, invokeid, payload) ? pool
+                                                                               : TA_POOL_NONE;
         if (payload) {
             const ta_datamodel_binding *binding =
                 ta_core_datamodel(core, ta_actor_chart(system, actor_at(system, parent)));
@@ -299,10 +305,11 @@ static uint32_t spawn_child(ta_system *system, uint32_t parent, uint32_t slot, u
 
 #define PENDING_SPAWN_LINK ((uint32_t)offsetof(ta_request, next))
 
-static uint32_t park_spawn(ta_system *system, uint32_t parent, uint32_t slot, uint32_t chart,
-                           uint32_t invokeid, ta_payload payload) {
+/* 1 if parked; 0 if it cannot even be parked (no request): the invoke
+ * failed with error.execution. */
+static int park_spawn(ta_system *system, uint32_t parent, uint32_t slot, uint32_t chart,
+                      uint32_t invokeid, ta_payload payload) {
     ta_core *core = &system->core;
-    uint32_t pool = ta_pool_free_count(&system->actors) == 0 ? TA_POOL_ACTORS : TA_POOL_SLAB;
     uint32_t ri = ta_system_request_alloc(system, parent);
     if (ri == TA_NIL) { /* cannot even park it: the invoke fails */
         const ta_datamodel_binding *binding =
@@ -311,7 +318,7 @@ static uint32_t park_spawn(ta_system *system, uint32_t parent, uint32_t slot, ui
             binding->vtable->release(binding->datamodel, payload);
         ta_core_raise_platform(core, ta_actor_instance(system, actor_at(system, parent)),
                                "error.execution", TA_NIL);
-        return TA_POOL_REQUESTS;
+        return 0;
     }
     ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
     request->kind = REQUEST_PENDING_SPAWN;
@@ -322,7 +329,7 @@ static uint32_t park_spawn(ta_system *system, uint32_t parent, uint32_t slot, ui
     request->payload = payload;
     request->pad = core->chart_datamodel[ta_actor_chart(system, actor_at(system, parent))];
     ta_index_queue_push(&system->pending_spawns, &system->requests, PENDING_SPAWN_LINK, ri);
-    return pool;
+    return 1;
 }
 
 /* The parked spawns, oldest first: O(parked), whatever else holds a request.
@@ -349,8 +356,11 @@ uint32_t ta_system_retry_pending(ta_system *system) {
                                                ta_shared_string_get(core, request_record.invokeid),
                                                request_record.payload, ph, request_record.slot,
                                                (ta_string_view){(const char *)0, 0}, &status);
-            if (c == TA_NIL && status == TA_ERROR_NO_MEMORY)
-                return ta_pool_free_count(&system->actors) == 0 ? TA_POOL_ACTORS : TA_POOL_SLAB;
+            /* a pool or the slab refused it: it stays parked until that grows;
+             * any other refusal fails the invoke */
+            uint32_t pool = c == TA_NIL && status == TA_ERROR_NO_MEMORY ? ta_system_exhausted(system)
+                                                                        : TA_POOL_NONE;
+            if (pool != TA_POOL_NONE) return pool;
             if (c == TA_NIL) {
                 const ta_datamodel_binding *binding = &system->datamodels[request_record.pad];
                 if (request_record.payload && binding->vtable->release)
@@ -452,7 +462,7 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
         if (!effect) {
             if (ri != TA_NIL) ta_system_request_free(system, ri);
             ta_core_raise_platform(core, pin, "error.execution", TA_NIL);
-            return ri == TA_NIL ? TA_POOL_REQUESTS : TA_POOL_NONE;
+            return TA_POOL_NONE; /* failed, nothing parked */
         }
         ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
         request->kind = REQUEST_EXTERNAL_INVOKE;
@@ -547,7 +557,7 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
         if (out->payload && binding->vtable->release)
             binding->vtable->release(binding->datamodel, out->payload);
         ta_core_raise_platform(core, pin, "error.execution", TA_NIL);
-        return ri == TA_NIL ? TA_POOL_REQUESTS : TA_POOL_NONE;
+        return TA_POOL_NONE; /* failed, nothing parked */
     }
     ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
     request->kind = REQUEST_RESOLVE_SOURCE;

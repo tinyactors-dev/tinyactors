@@ -1078,6 +1078,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     /* no timer slot: do not execute the send; the host grows the pool and the
      * instruction is retried (like event exhaustion), so no send is lost */
     if (delay && core->timers && ta_pool_free_count(core->timers) == 0) {
+        core->timers->refused = 1; /* what ta_system_exhausted names */
         status = SEND_NOMEM;
         goto fail;
     }

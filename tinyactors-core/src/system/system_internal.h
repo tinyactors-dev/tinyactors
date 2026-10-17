@@ -282,6 +282,7 @@ void ta_system_deliver(ta_system *s, uint32_t sender, uint32_t event, uint32_t r
 void ta_system_cancel(ta_system *s, uint32_t sender, uint32_t sendid);
 void ta_system_cancel_timers(ta_system *s, uint32_t index);
 void ta_system_fire_timers(ta_system *s);
+/* TA_POOL_NONE, or the pool a parked spawn waits for (the host grows it) */
 uint32_t ta_system_invoke(ta_system *s, uint32_t parent, const ta_core_out *o);
 /* The default string slab: a base and a share per actor (a host that grows
  * the actors grows the strings by their share) */

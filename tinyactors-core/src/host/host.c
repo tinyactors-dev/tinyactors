@@ -286,10 +286,12 @@ static ta_status segment_grow(ta_host *host, host_segment *segment, uint32_t poo
     return TA_OK;
 }
 
-/* Grow what the segment's last refused input ran out of. */
+/* Grow what the segment's last refused input ran out of: TA_ERROR_NO_MEMORY
+ * when no pool ran out (a datamodel refused to create an actor), which
+ * growing would not help. */
 static ta_status segment_grow_exhausted(ta_host *host, host_segment *segment) {
     uint32_t pool = ta_system_exhausted(segment->system);
-    TA_ASSERT(pool != TA_POOL_NONE); /* every refusal of an input names its pool */
+    if (pool == TA_POOL_NONE) return TA_ERROR_NO_MEMORY;
     return segment_grow(host, segment, pool);
 }
 
