@@ -4,48 +4,22 @@
 // this file (node or bun), from a directory inside the package so that
 // `import ... from '@tinyactors/node'` resolves to this build. A block
 // followed by an ```output block must print exactly that. A document
-// that drifts from the API fails here.
+// that drifts from the API fails here. The blocks are read by
+// tools/examples.mjs, which tools/typecheck.mjs shares.
 //
 // The examples name their own datamodel, so they run in the native pass
 // of the test task only (TA_NAPI_DATAMODEL), once per runtime.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { documents, examples as readExamples, fileName } from '../tools/examples.mjs';
 import { DATAMODEL } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const DOCUMENTS = ['README.md', ...readdirSync(join(ROOT, 'docs/guide')).filter((name) => name.endsWith('.md')).sort().map((name) => `docs/guide/${name}`)];
-
-/** The fenced blocks of `text`: {info, body, line}, a block's indentation removed. */
-function blocks(text) {
-  const found = [];
-  const lines = text.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const open = /^(\s*)```(\S*)\s*$/.exec(lines[i]);
-    if (!open) continue;
-    const [, indent, info] = open;
-    const body = [];
-    let j = i + 1;
-    for (; j < lines.length && !/^\s*```\s*$/.test(lines[j]); j++) body.push(lines[j].startsWith(indent) ? lines[j].slice(indent.length) : lines[j]);
-    if (j === lines.length) throw new Error(`an unclosed block at line ${i + 1}`);
-    found.push({ info, body: body.join('\n'), line: i + 1 });
-    i = j;
-  }
-  return found;
-}
-
-/** Each example: its document, line, program and the output it must print (or undefined). */
-const examples = [];
-for (const document of DOCUMENTS) {
-  const found = blocks(readFileSync(join(ROOT, document), 'utf8'));
-  found.forEach((block, i) => {
-    if (block.info !== 'js') return;
-    const next = found[i + 1];
-    examples.push({ document, line: block.line, program: block.body, output: next?.info === 'output' ? next.body : undefined });
-  });
-}
+const DOCUMENTS = documents(ROOT);
+const examples = readExamples(ROOT);
 
 /** Runs `file` with this runtime: its exit code, stdout and stderr. */
 function execute(file, cwd) {
@@ -93,7 +67,7 @@ if (DATAMODEL === 'native') {
   const start = () => {
     if (next === examples.length) return;
     const i = next++;
-    const file = join(directory, `${examples[i].document.replace(/[/.]/g, '-')}-${examples[i].line}.mjs`);
+    const file = join(directory, fileName(examples[i]));
     writeFileSync(file, examples[i].program);
     pending[i].resolve(execute(file, directory).finally(start));
   };

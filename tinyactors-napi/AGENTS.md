@@ -65,9 +65,15 @@ API"). Node's names and shapes (decided 2026-10-16, docs/plan.xml):
   the direct methods stay as they are, so a caller passing handlers pays
   nothing; a refusal at the call rejects; a rejection with no `catch` is
   an unhandled rejection, never the turn's; pending at `close()`, it
-  never settles); then what the maintainer picks (images from a name→text
-  mapping, spawning by chart name, a resolver reading files under a root,
-  a chart builder).
+  never settles); then the shapes chosen in p3-shapes (2026-10-17):
+  **`host.addCharts({name: text}, {resolver}?)`** (compileCharts,
+  addImage, close; returns the segment), **`host.spawnChart(name,
+  options?)`** (chart, then spawn), **`directoryResolver(root)`** (reads
+  `source` under `root` relative to `base`, refusing with `ResolveError` a
+  path that leaves it, symbolic links included; the one use of the
+  built-ins the layer may import, `node:fs` and `node:path`) and
+  **`Address.prototype.toJSON`** (its text). A chart builder waits for the
+  direct layer to expose `ta_xml_writer`.
 - **A resolver is any callable** `(base, source) => text` (a function,
   an arrow, a bound method; decided 2026-10-16, as Python's API review
   did), given to the compile call only (a static `src`, at compile time;

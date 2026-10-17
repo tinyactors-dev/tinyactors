@@ -188,6 +188,23 @@ export function compileCharts(sources: readonly Source[], resolver?: Resolver): 
  * `host.boot` spawns with their names. Throws `CompileError`. */
 export function compileSystem(manifest: Source, resolver?: Resolver): Compiled;
 
+/** A {@link Resolver} that reads each `src` as a file under `root`,
+ * relative to the directory of the document that names it (`base`): a
+ * document named `orders/order.scxml` asking for `payment.scxml` reads
+ * `<root>/orders/payment.scxml`. It refuses with a `ResolveError` (a
+ * compile error) a path that leaves `root` (`..` past it, an absolute
+ * path, a symbolic link that points outside), a file that does not exist,
+ * and text that is not UTF-8; another error of the file system is thrown
+ * from the compile call as it is. `root` is resolved through its links
+ * once, here: one that does not exist throws now. A document it read is
+ * named by its `src` as written. (The convenience layer: JavaScript over
+ * `node:fs`.)
+ *
+ * @example
+ * host.addCharts({ 'orders/order.scxml': text }, { resolver: directoryResolver('charts') });
+ */
+export function directoryResolver(root: string | URL): Resolver;
+
 // ---- addresses ----------------------------------------------------------
 
 /** An actor's address: `tinyactors://<system>/#_scxml_<session>`, or
@@ -210,6 +227,9 @@ export class Address {
   readonly name: string | undefined;
   /** The text. */
   toString(): string;
+  /** The text, so `JSON.stringify` writes an address as a string, which
+   * `new Address(text)` and `host.send` read back. */
+  toJSON(): string;
 }
 
 // ---- BasicHTTP ----------------------------------------------------------
@@ -304,8 +324,8 @@ export interface Send {
   /** The outgoing half, `{ target, event, data, sendid, origin,
    * traceparent }`: what `host.send(message)` takes on the other side,
    * unchanged. The transport's reason to exist; present on every send. Its
-   * addresses are `Address`es, which `JSON.stringify` writes as `{ text }`:
-   * convert them with `String()` for a wire. */
+   * addresses are `Address`es, which `JSON.stringify` writes as their text
+   * (`toJSON`); convert them with `String()` for `encode`. */
   readonly message: SendMessage;
   /** Sends `event` back to the sender, with this send's `sendid`. It
    * continues the send's trace unless `options.traceparent` is given
@@ -518,6 +538,13 @@ export interface QuickJSOptions {
   realm?: 'auto' | 'isolated';
 }
 
+/** The options of `host.addCharts`. */
+export interface AddChartsOptions {
+  /** The compile call's resolver, for each `src` the documents do not
+   * answer. */
+  resolver?: Resolver;
+}
+
 /** The options of `host.spawn`. */
 export interface SpawnOptions {
   /** The actor's name: `host.actorByName` finds it, `_name` holds it, and
@@ -613,12 +640,27 @@ export class Host implements Disposable, AsyncDisposable {
   /** The current version of chart `name`, for `spawn`. Throws
    * `TA_ERROR_INVALID` when the host has no chart of that name. */
   chart(name: string): ChartRef;
+  /** Compiles the documents of `charts` (`{ [name]: text }`, the first
+   * key the boot chart), adds the image and closes the compile result, in
+   * one call: `compileCharts`, `addImage` and `close()`. Returns the
+   * segment. Throws `compileCharts`'s `CompileError`, with every
+   * diagnostic, and adds nothing; `TypeError` for `charts` that is not an
+   * object or an option it does not take.
+   *
+   * @example
+   * host.addCharts({ 'order.scxml': text });
+   * const order = host.spawnChart('order');
+   */
+  addCharts(charts: { readonly [name: string]: string }, options?: AddChartsOptions): number;
   /** Spawns the boot actors of the image of `segment`: a system manifest's
    * `<actor>`s, or an actor of `compileCharts`' first chart. */
   boot(segment: number): void;
   /** Starts an actor of `ref` and returns its session. It runs in a later
    * turn. */
   spawn(ref: ChartRef, options?: SpawnOptions): bigint;
+  /** Starts an actor of the current version of chart `name`:
+   * `host.spawn(host.chart(name), options)`. */
+  spawnChart(name: string, options?: SpawnOptions): bigint;
   /** Puts `event`, with `data`, in the queue of the actor `target` names (a
    * session or an address). Throws `TA_ERROR_STALE` for an actor that
    * ended. */

@@ -328,6 +328,88 @@ plain bytes: write it to a file and load it in another process with
 `host.addImage(readFileSync(path))`. `addImage` copies it and returns the
 image's **segment**, a number the host uses for that image.
 
+**In one call.** `host.addCharts({ [name]: text }, { resolver })`
+compiles the documents of an object, adds the image and closes the
+compile result, and returns the segment: `compileCharts`, `addImage` and
+`close()` as you would write them. The object's first key is the boot
+chart (JavaScript keeps an object's keys in the order they were written,
+except keys that are integers, which come first). A compile error throws
+the same `CompileError`, with every diagnostic, and adds nothing.
+`host.spawnChart(name, options)` spawns the current version of chart
+`name`, as `host.spawn(host.chart(name), options)` does:
+
+```js
+import { Host } from '@tinyactors/node';
+
+const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
+const segment = host.addCharts({
+  'hello.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="hello">
+    <datamodel><data id="who" expr="'world'"/></datamodel>
+    <state id="s"><onentry><log expr="'hello, ' + who"/></onentry></state>
+  </scxml>`,
+});
+console.log('segment', segment);
+host.spawnChart('hello');
+host.spawnChart('hello', { params: { who: 'Ada' } });
+await host.idle();
+host.close();
+```
+
+```output
+segment 0
+hello, world
+hello, Ada
+```
+
+**Charts in a directory.** `directoryResolver(root)` is a resolver that
+reads each `src` as a file under `root`, relative to the directory of
+the document that names it: a document named `orders/order.scxml` that
+asks for `payment.scxml` reads `<root>/orders/payment.scxml`. It refuses,
+as a compile error, a path that leaves `root` (`..` past it, an absolute
+path, or a symbolic link that points outside), a file that does not
+exist, and a file that is not UTF-8; another error of the file system (a
+directory, no permission) is thrown as it is:
+
+```js
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { CompileError, directoryResolver, Host } from '@tinyactors/node';
+
+const root = mkdtempSync(join(tmpdir(), 'charts-'));
+mkdirSync(join(root, 'orders'));
+writeFileSync(join(root, 'orders', 'payment.scxml'), `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+    datamodel="ecmascript" name="payment">
+  <state id="s"><onentry><log expr="'paying'"/></onentry></state>
+</scxml>`);
+const order = (src) => `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="order">
+  <state id="s"><invoke src="${src}"/></state>
+</scxml>`;
+
+const resolver = directoryResolver(root);
+const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
+host.addCharts({ 'orders/order.scxml': order('payment.scxml') }, { resolver });
+host.spawnChart('order');
+await host.idle();
+
+try {
+  host.addCharts({ 'orders/order.scxml': order('../../etc/passwd') }, { resolver });
+} catch (error) {
+  if (!(error instanceof CompileError)) throw error;
+  console.log(error.diagnostics[0].message);
+}
+host.close();
+rmSync(root, { recursive: true });
+```
+
+```output
+paying
+../../etc/passwd (from orders/order.scxml) leaves the resolver's root
+```
+
+A document the resolver read is named by its `src` as written, so a
+`src` inside it is read relative to that name's directory.
+
 ## A chart that starts another
 
 `<invoke src="child.scxml">` starts an actor of another chart, a

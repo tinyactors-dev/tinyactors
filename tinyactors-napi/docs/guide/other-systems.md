@@ -16,8 +16,8 @@ outgoing half, an object of `target`, `event`, `data`, `sendid`,
 `origin` and `traceparent`, which the receiving side passes to
 `host.send(message)` as it is. On a wire, the message is a value once its
 two addresses are strings, so `encode` writes it and `decode` reads it
-back. (`JSON.stringify` writes an `Address` as `{ "text": ... }`; convert
-the two with `String()` for JSON too.)
+back. (`JSON.stringify` writes an `Address` as its text, so a message
+goes through JSON as it is: see "Addresses" below.)
 
 ```js
 import { Address, compileCharts, decode, encode, Host } from '@tinyactors/node';
@@ -118,6 +118,41 @@ console.log(new Address('not an address').system);
 tinyactors://shop/#_scxml_42 shop 42n
 tinyactors://shop/@front%20desk front desk
 undefined
+```
+
+`JSON.stringify` writes an address as its text (`address.toJSON()`), and
+`new Address(text)` reads it back, so a transport's `send.message` goes
+through JSON and into the other side's `host.send` as it is:
+
+```js
+import { Address, Host } from '@tinyactors/node';
+
+let wire;
+const shop = new Host({ systemID: 'shop' }, { transport: (host, send) => { wire = JSON.stringify(send.message); } });
+const bank = new Host({ systemID: 'bank' }, { log: (host, entry) => console.log(entry.text) });
+shop.addCharts({ 'checkout.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="checkout">
+  <state id="s"><onentry><send event="charge" target="tinyactors://bank/@teller"><param name="amount" expr="12"/></send></onentry></state>
+</scxml>` });
+bank.addCharts({ 'teller.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="teller">
+  <state id="s"><transition event="charge"><log expr="'charge ' + _event.data.amount + ' from ' + _event.origin"/></transition></state>
+</scxml>` });
+bank.spawnChart('teller', { name: 'teller' });
+shop.spawnChart('checkout');
+await shop.idle();
+
+const message = JSON.parse(wire); // its addresses are strings
+console.log(typeof message.target, message.target);
+bank.send(message);
+await bank.idle();
+console.log(new Address(message.origin).session);
+shop.close();
+bank.close();
+```
+
+```output
+string tinyactors://bank/@teller
+charge 12 from tinyactors://shop/#_scxml_1
+1n
 ```
 
 Inside event data an address is plain text: values have no address type.

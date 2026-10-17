@@ -178,7 +178,9 @@ An event's name is matched by prefix, word by word: `event="error"` and
 event no transition matches is dropped.
 
 [Writing charts](docs/guide/charts.md) covers the JavaScript a chart may
-hold, `<script>`, XML data, several charts in one image, and `<invoke>`.
+hold, `<script>`, XML data, several charts in one image (and
+`host.addCharts`, `host.spawnChart` and `directoryResolver`, which save
+the steps), and `<invoke>`.
 
 ### Starting an actor with data
 
