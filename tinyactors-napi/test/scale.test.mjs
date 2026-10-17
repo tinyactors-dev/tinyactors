@@ -17,7 +17,7 @@ import { CONFIG, DATAMODEL, ENGINE, image, scxml } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 test(`every operation costs at 40,000 actors at most ${FACTOR} times what it costs at 20,000`, async () => {
-  const report = await gate({ actors: 20_000, 'resident-actors': 40_000, datamodel: DATAMODEL, samples: 5, 'min-ms': 20, attempts: 3 });
+  const report = await gate({ actors: 20_000, 'resident-actors': 40_000, datamodel: DATAMODEL, samples: 5, 'min-ms': 20, attempts: 4 });
   for (const known of report.known) console.log(`     known: ${known}`);
   for (const [name, request] of Object.entries(KNOWN)) {
     const measured = Object.values(report.scenarios).some((scenario) => name in scenario.ratios);

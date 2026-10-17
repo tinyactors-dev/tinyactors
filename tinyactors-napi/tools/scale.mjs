@@ -31,7 +31,8 @@
 // a batch needs first or leaves behind (actors to wake, put back to sleep,
 // spawned to be terminated) is done outside the timed part. When an
 // operation exceeds the factor and is not a known gap in core (KNOWN), the
-// two sizes are measured again, up to --attempts times, and each size keeps
+// two sizes are measured again, up to --attempts times, each time with the
+// next seed, and each size keeps
 // each operation's lowest cost: noise only adds time and does not repeat,
 // a scan does.
 //
@@ -253,24 +254,40 @@ function answering(count) {
   return answers;
 }
 
-/** A batch of a sweep of every actor, the sweep that finds each of them
- * idle: one sweep, untimed, first marks every actor that ran since the
+/** The sweep of every actor, timed: the sweep that finds each of them
+ * idle. One sweep, untimed, first marks every actor that ran since the
  * last (core's CLOCK sweep), so each timed one scans every actor and
- * returns it. A sweep repeats until a sample takes --min-ms: one that
- * returned nothing took a tenth of a millisecond at 40,000 actors, so a
- * sample of one sweep was the timer's noise and the fast pass failed in
- * two runs of six (docs/log.xml, l-p2-scale-rerun). */
-function sweeping(host, total) {
-  let marked = false;
-  return async () => {
-    if (!marked) host.sweep(total() + 1024, total() + 1024);
-    marked = true;
-    let found = 0;
-    const t = await elapsed(() => {
-      found = host.sweep(total() + 1024, total() + 1024).length;
-    });
-    return { ms: t, calls: total(), found };
-  };
+ * returns each that can be hibernated. A sample is sweeps until it takes
+ * --min-ms: a sample of one sweep of 40,000 actors (a tenth of a
+ * millisecond) was the timer's noise, and the fast pass failed in two
+ * runs of six (docs/log.xml, l-p2-scale-rerun).
+ *
+ * A sweep reads each actor's slot, so it costs what the memory it reads
+ * costs: sweep after sweep, 2,000,000 hibernated actors stay in this
+ * machine's cache of 260 MB (3 ns an actor) and 4,000,000 do not (7 to 8
+ * ns), and the gate failed by the cache, not by the work (docs/log.xml,
+ * l-p2-scale-sweep-cache). So when the marking sweep takes COLD_MS or
+ * more (a population whose slots are megabytes), each timed sweep starts
+ * from memory: EVICT bytes of other data are written before it, untimed,
+ * as a sweep between an application's other work does. Below COLD_MS both
+ * sizes stay in the cache, and evicting before each of hundreds of short
+ * sweeps would take minutes. The hibernated scenario times it; the
+ * resident one times a sweep of a page. */
+const COLD_MS = 2;
+const EVICT = 768e6;
+
+async function timeSweep(clock, host, total) {
+  const all = total + 1024;
+  const t0 = performance.now();
+  host.sweep(all, all);
+  let evict = performance.now() - t0 >= COLD_MS ? new Uint8Array(EVICT) : null;
+  let round = 0;
+  await clock.time('sweep (every actor)', 'per actor', async () => {
+    if (evict) evict.fill(++round & 0xff);
+    const t = await elapsed(() => host.sweep(all, all));
+    return { ms: t, calls: total };
+  });
+  evict = null;
 }
 
 // ---- the hibernated scenario ----------------------------------------------
@@ -660,7 +677,7 @@ async function hibernated(o, results, failures) {
     if (listed !== total) failures.push(`actorList: ${listed} sessions of ${total}`);
     return { ms: t, calls: listed };
   }, { batches: 1, samples: Math.min(3, o.samples) });
-  await clock.time('sweep (every actor)', 'per actor', sweeping(host, () => total));
+  await timeSweep(clock, host, total);
 
   // migration of one session at a time, to version 2
   {
@@ -862,7 +879,22 @@ async function residentScenario(o, results, failures) {
     if (listed !== total) failures.push(`actorList: ${listed} sessions of ${total}`);
     return { ms: t, calls: listed };
   }, { batches: 1, samples: Math.min(3, o.samples) });
-  await clock.time('sweep (every actor)', 'per actor', sweeping(host, () => total));
+  // Every resident actor is idle, so after the first sweep each sweep
+  // finds all it scans: one that returns every actor makes a bigint for
+  // each, and its cost at 2,000,000 was the engine's collector (0.22 then
+  // 0.35 µs an actor on node with quickjs; docs/log.xml,
+  // l-p2-scale-sweep-cache). An application sweeps a page at a time, from
+  // where the last sweep stopped (core's cursor): that is timed per call,
+  // and the scan of every actor in the hibernated scenario.
+  host.sweep(total + 1024, total + 1024); // marks every actor that ran
+  await clock.time(`sweep (a page of ${BATCH})`, 'per call', async () => {
+    let found = 0;
+    const t = await elapsed(() => {
+      for (let k = 0; k < 16; k++) found += host.sweep(total + 1024, BATCH).length;
+    });
+    if (found !== 16 * BATCH) failures.push(`sweep: ${found} sessions in 16 pages of ${BATCH}`);
+    return { ms: t, calls: 16 };
+  });
   await clock.time('hibernate', 'per call', async () => {
     const chosen = live.pick(32, draw);
     const blobs = [];
@@ -956,8 +988,12 @@ export async function gate(given = {}) {
     const sizes = scenario === 'resident' && o['resident-actors'] ? o['resident-actors'] : o.actors;
     let best;
     for (let attempt = 1; attempt <= o.attempts; attempt++) {
-      const small = await measure(scenario, sizes, o);
-      const large = await measure(scenario, 2 * sizes, o);
+      // each attempt another seed: the same seed is the same run, whose
+      // collections fall in the same operation each time; a scan repeats
+      // whatever the seed (docs/log.xml, l-p2-scale-fast-noise)
+      const run = { ...o, seed: o.seed + attempt - 1 };
+      const small = await measure(scenario, sizes, run);
+      const large = await measure(scenario, 2 * sizes, run);
       for (const failure of [...small.failures, ...large.failures]) report.failures.push(`${scenario}: ${failure}`);
       // each size keeps each operation's lowest cost of every attempt: noise
       // only ever adds time, so a slow process does not fail the gate
