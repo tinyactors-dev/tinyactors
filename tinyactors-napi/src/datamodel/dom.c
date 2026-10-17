@@ -145,11 +145,22 @@ static napi_value ta_napi_txml_children(napi_env env, txml_cursor parent) {
 
 /* ---- a parse ---------------------------------------------------------------- */
 
+/* txml's input window, fitted to what a chart's XML content is (a <data>
+ * or an <assign> of a few hundred bytes) rather than txml's 64 KiB: a
+ * larger document streams through it, and no limit changes. Its arenas'
+ * chunk stays txml's default: a smaller one made a parse's high-water
+ * 787 KB less (1.7 MB to 884 KB at 4096 B) but each parse slower, 14 % on
+ * node and 27 % on bun at 4096 B (3 % and 12 % at 8192), since txml's
+ * string pool directory has max_document_bytes / chunk entries, each set
+ * at every parse (tinyxml/src/doc.c:663-672); the window saves 66 KB for
+ * nothing (docs/allocation.md, finding 8). */
+enum { TA_NAPI_TXML_STAGING = 4096 };
+
 napi_value ta_napi_dom(const ta_napi_xml *xml) {
     napi_env env = xml->native->host->env;
     ta_growable_arena *arena = &xml->native->scratch;
     ta_growable_arena_mark mark = ta_growable_arena_position(arena);
-    txml_parser_config config = {{(void *)arena, &ta_napi_txml_vtable}, TXML_LIMITS_DEFAULT, 0, 0, 0};
+    txml_parser_config config = {{(void *)arena, &ta_napi_txml_vtable}, TXML_LIMITS_DEFAULT, TA_NAPI_TXML_STAGING, 0, 0};
     txml_parser *parser = NULL;
     if (txml_parser_init(&parser, &config) != TXML_OK) {
         ta_napi_arena_release(arena, mark, TA_NAPI_ARENA_UNCAPPED);

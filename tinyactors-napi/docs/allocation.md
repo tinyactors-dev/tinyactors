@@ -260,6 +260,33 @@ analysis sees it; the refutation is below.
   since one default 64 KB chunk with its header is over 64 KB and would be
   freed after every call. The datamodel's scratch (txml) is exempt.
 
+### 8. txml's window and chunks, fitted to the content (step p2-allocation (d))
+
+- **Claim (the refutation's spike, `txmlspike.c`):** txml's 64 KiB
+  staging window and arena chunks are sized for large documents; at 4096
+  B each, a small document's parse keeps 884 KB instead of 1.7 MB, with no
+  limit changed.
+- **Scenario:** `xml.mjs` (the step's scratch): 1,000 actors whose
+  `<data>` is XML content, an `<assign>` of XML content per event, the
+  least of 20 rounds, pinned to one CPU, builds alternating, 8 runs each.
+- **Evidence:** gdb's counts of the host allocator at the first parse
+  (txml's high-water in the scratch, with the host's other blocks):
+  2,546,119 B with txml's defaults; 2,480,359 with a 4096 B window
+  (-65,760 B); 1,758,807 with a 4096 B window and 4096 B chunks (-787,312
+  B); 8192 B chunks the same as 4096; 16384 B chunks 2,480,103. Per event,
+  node and bun: defaults 21.32 and 13.70 us; 4096 B window and chunks
+  24.27 and 17.37 (+14 %, +27 %); 4096 B window, 8192 B chunks 22.03 and
+  15.36 (+3 %, +12 %); a 4096 B window alone 20.96 against 20.79 and 13.91
+  against 15.35 (noise). The cost is txml's string pool directory: its
+  capacity is `max_document_bytes` over the page (the chunk), 16,386
+  entries of 8 B at 4096 B against 1,026 at 64 KiB, each set to NULL in
+  every parse (`tinyxml/src/doc.c:663-672`).
+- **Verdict:** confirmed for the memory; the chunk costs every parse time.
+- **Action:** the window is 4096 B (`src/datamodel/dom.c`), the chunks
+  txml's default: a host keeps 66 KB less, and a parse costs the same.
+  The 787 KB wait for txml to grow its directory as the pool grows (log
+  entry `l-p2-allocation-txml-directory`).
+
 ## Refutation
 
 The step asks for a fresh agent to refute each finding against the

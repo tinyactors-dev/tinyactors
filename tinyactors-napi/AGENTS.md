@@ -377,6 +377,13 @@ The addon allocates almost nothing (bindings.md, section 6):
   and none after, and an event that assigns XML content went from 447-503
   us to 15 us on bun (21-23 us before and after on node), at the cost of
   the high-water mark kept for the host's life once a chart parses XML.
+  txml's input window is 4096 B (a larger document streams through it),
+  66 KB less of that mark at no cost; its arenas' chunk stays txml's
+  64 KiB default, since a 4096 B chunk saved 787 KB more but made each
+  parse 14 % slower on node and 27 % on bun, all of it txml setting its
+  string pool's directory, `max_document_bytes` / chunk entries, at every
+  parse (docs/allocation.md, finding 8). Test: `test/datamodel.test.mjs:
+  'XML content larger than the parser\'s 4 KB input window is read whole'`.
 - **The datamodel's last output.** `to_wire`, `serialize`,
   `payload_serialize` and the strings handed back to core (`eval_string`,
   `log`) are written with a writer the datamodel keeps, overwritten by its

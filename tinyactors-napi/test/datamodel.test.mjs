@@ -217,6 +217,22 @@ test('XML content is a document: elements, attributes, text, and a copy of it in
   ], 'the document');
 });
 
+test('XML content larger than the parser\'s 4 KB input window is read whole', async () => {
+  // txml reads a document through an input window (src/datamodel/dom.c:
+  // 4096 B) that a larger one streams through
+  const items = Array.from({ length: 600 }, (_, i) => `<b i="${i}">item ${i}</b>`).join('');
+  const chart = scxml('c', `
+    <datamodel><data id="big"><a xmlns="">${items}</a></data></datamodel>
+    <state id="s">
+      <onentry>
+        <log label="count" expr="big.getElementsByTagName('b').length"/>
+        <log label="last" expr="big.getElementsByTagName('b')[599].getAttribute('i') + ' ' + big.getElementsByTagName('b')[599].textContent"/>
+      </onentry>
+    </state>`);
+  if (items.length < 3 * 4096) throw new Error(`the content is ${items.length} B`);
+  same(await lines(chart), ['count: 600', 'last: 599 item 599'], 'the document');
+});
+
 test('the native datamodel: data from the application is the chart\'s own, of its realm, and a copy', async () => {
   const chart = scxml('c', `
     <state id="s">

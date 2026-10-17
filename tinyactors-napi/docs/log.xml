@@ -1012,4 +1012,15 @@
     <why>Each failure blocks a commit until a rerun; the gate needs the same treatment the restore check got, by the step that owns the gate.</why>
     <evidence>the step scratch p2-decisions/t3.log, t6.log, t7.log (FAIL), t4.log, t5.log, t8.log (pass)</evidence>
   </entry>
+  <entry id="l-p2-allocation-txml-chunk" date="2026-10-17" step="p2-allocation" kind="deviation" status="resolved">
+    <what>Item (d) asked for txml staging and chunk sizes of 4096 B. Only the staging window is 4096 B; the arenas chunk stays txml default (64 KiB), because a 4096 B chunk made each XML parse 14 % slower on node and 27 % on bun (8192 B: 3 % and 12 %).</what>
+    <why>The step adopts changes only without a cost per event; the 787 KB a host keeps once it parses XML is a one-time cost, the parse cost is per event of every chart with XML content.</why>
+    <evidence>docs/allocation.md, finding 8: xml.mjs, defaults 21.32/13.70 us, 4096/4096 24.27/17.37 us, 4096 window alone 20.96/13.91 us; gdb high-water 2,546,119 B, 2,480,359 B (window), 1,758,807 B (window and chunk)</evidence>
+    <resolution>src/datamodel/dom.c: TA_NAPI_TXML_STAGING 4096, chunk 0 (txml default); test/datamodel.test.mjs, XML content larger than the window</resolution>
+  </entry>
+  <entry id="l-p2-allocation-txml-directory" date="2026-10-17" step="p2-allocation" kind="request-to-core" status="open">
+    <what>tinyxml: txml_doc_create sizes its string pool directory as max_document_bytes over the pool page (the chunk size) plus 2 and sets every entry to NULL at every parse (tinyxml/src/doc.c:663-672): 16,386 entries of 8 B at a 4096 B chunk, 1,026 at 64 KiB. A directory grown as the pool grows would let a binding fit the chunks to small documents (787 KB less kept per host that parses XML) without a cost per parse.</what>
+    <why>Step p2-allocation (d) could not adopt 4096 B chunks: 14 to 27 % per XML parse.</why>
+    <evidence>docs/allocation.md, finding 8</evidence>
+  </entry>
 </log>
