@@ -330,10 +330,9 @@ typedef struct host_watch_rules {
 ta_status host_trace_watch(ta_host *h, const host_watch_rules *watch, uint32_t *id);
 ta_status host_trace_unwatch(ta_host *h, uint32_t id); /* TA_ERROR_STALE: it has ended */
 void host_stats_get(const ta_host *h, ta_host_stats *out);
-/* Every live segment's pools, summed: their capacities, what they hold and
- * their high-water marks (the ta_system_stats fields of the pools; the
- * slab's in pages). */
-void host_pools_get(const ta_host *h, ta_system_stats *out);
+/* Segment `segment`'s stats (its pools' capacities, what they hold, their
+ * high-water marks): 0 if it is not live. */
+int host_segment_pools(const ta_host *host, uint32_t segment, ta_system_stats *out);
 /* Per chart name, over every segment and retired version (ta_chart_stats);
  * fills up to `capacity` and returns how many names there are. */
 uint32_t host_chart_stats(const ta_host *h, ta_chart_stats *out, uint32_t capacity);

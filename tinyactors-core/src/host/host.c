@@ -2415,35 +2415,12 @@ void host_stats_get(const ta_host *host, ta_host_stats *o) {
     o->size = n;
 }
 
-void host_pools_get(const ta_host *host, ta_system_stats *o) {
-    ta_memset(o, 0, sizeof *o);
-    o->size = sizeof *o;
-    for (uint32_t i = 0; i < host->segment_count; i++) {
-        const host_segment *segment = segment_of(host, i);
-        if (!segment) continue;
-        ta_system_stats stats;
-        stats.size = sizeof stats;
-        ta_system_stats_get(segment->system, &stats);
-        o->actors += stats.actors;
-        o->actors_capacity += stats.actors_capacity;
-        o->actors_high_water += stats.actors_high_water;
-        o->events += stats.events;
-        o->events_capacity += stats.events_capacity;
-        o->events_high_water += stats.events_high_water;
-        o->timers += stats.timers;
-        o->timers_capacity += stats.timers_capacity;
-        o->timers_high_water += stats.timers_high_water;
-        o->workspaces += stats.workspaces;
-        o->workspaces_capacity += stats.workspaces_capacity;
-        o->workspaces_high_water += stats.workspaces_high_water;
-        o->requests += stats.requests;
-        o->requests_capacity += stats.requests_capacity;
-        o->requests_high_water += stats.requests_high_water;
-        o->slab_pages += stats.slab_pages;
-        o->slab_pages_capacity += stats.slab_pages_capacity;
-        o->slab_pages_high_water += stats.slab_pages_high_water;
-        o->slab_page_bytes = stats.slab_page_bytes;
-    }
+int host_segment_pools(const ta_host *host, uint32_t segment, ta_system_stats *out) {
+    const host_segment *record = segment_of(host, segment);
+    if (!record) return 0;
+    out->size = sizeof *out;
+    ta_system_stats_get(record->system, out);
+    return 1;
 }
 
 uint32_t host_actors(const ta_host *host, uint64_t *cursor, ta_uint64_array sessions) {

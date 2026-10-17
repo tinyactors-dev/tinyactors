@@ -1505,12 +1505,41 @@ static void test_a_datamodel_refusal_grows_nothing(void) {
     world_close(&e);
 }
 
+/* host.stats reports each live segment's pools apart, with its index: two
+ * images grown differently are two entries, not one sum. */
+static void test_stats_pools_per_segment(void) {
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    uint32_t first = world_add(&e, ECHO);
+    uint32_t second = world_add(&e, SC("o", "initial='a'><state id='a'/>"));
+    for (int i = 0; i < 20; i++)
+        spawn(&e, "echo");
+    spawn(&e, "o");
+    run(&e);
+    static host_ask a;
+    ask_begin(&a, "host.stats", 0);
+    CHECK_EQUAL(ask_send(e.host, &a), TA_OK);
+    uint32_t pools = ask_field(&a, 0, "pools");
+    CHECK(pools != TA_NIL && a.document.tokens[pools].kind == TA_CBOR_ARRAY);
+    CHECK_EQUAL(a.document.tokens[pools].count, 2u);
+    uint32_t at = pools + 1, next = ta_cbor_next(&a.document, at);
+    CHECK_EQUAL(ask_uint(&a, at, "segment"), first);
+    CHECK_EQUAL(ask_uint(&a, next, "segment"), second);
+    CHECK_EQUAL(ask_uint(&a, ask_field(&a, at, "actors"), "capacity"),
+                segment_stats(&e, first).actors_capacity);
+    CHECK_EQUAL(ask_uint(&a, ask_field(&a, at, "actors"), "highWater"), 20u);
+    CHECK_EQUAL(ask_uint(&a, ask_field(&a, next, "actors"), "capacity"), 8u);
+    CHECK_EQUAL(ask_uint(&a, ask_field(&a, next, "actors"), "used"), 1u);
+    world_close(&e);
+}
+
 int main(void) {
     RUN(test_growth_grows_what_ran_out);
     RUN(test_a_small_pool_grows_by_a_share_of_the_region);
     RUN(test_workspaces_grow_for_waiting_senders);
     RUN(test_actors_grow_by_a_share_of_the_region);
     RUN(test_a_datamodel_refusal_grows_nothing);
+    RUN(test_stats_pools_per_segment);
     RUN(test_boot_manifest);
     RUN(test_boot_refused);
     RUN(test_image_copied);

@@ -556,8 +556,6 @@ static void request_run_host_stats(request *r, uint32_t map) {
     for (uint32_t i = 0; i < count; i++)
         charts[i].size = sizeof charts[i];
     host_chart_stats(r->host, charts, count);
-    ta_system_stats pools;
-    host_pools_get(r->host, &pools);
     cbor_output_head(&r->out, CBOR_MAJOR_MAP, 3);
     request_put_key(r, "host");
     cbor_output_head(&r->out, CBOR_MAJOR_MAP, 11);
@@ -584,17 +582,25 @@ static void request_run_host_stats(request *r, uint32_t map) {
     request_put_key(r, "fuelClock");
     cbor_output_uint(&r->out, stats.fuel_clock);
     request_put_key(r, "pools");
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 6);
-    uint64_t page = pools.slab_page_bytes;
-    request_put_pool(r, "actors", (request_pool){pools.actors_capacity, pools.actors, pools.actors_high_water});
-    request_put_pool(r, "events", (request_pool){pools.events_capacity, pools.events, pools.events_high_water});
-    request_put_pool(r, "timers", (request_pool){pools.timers_capacity, pools.timers, pools.timers_high_water});
-    request_put_pool(r, "workspaces",
-                     (request_pool){pools.workspaces_capacity, pools.workspaces, pools.workspaces_high_water});
-    request_put_pool(r, "requests",
-                     (request_pool){pools.requests_capacity, pools.requests, pools.requests_high_water});
-    request_put_pool(r, "slabBytes", (request_pool){pools.slab_pages_capacity * page, pools.slab_pages * page,
-                                                     pools.slab_pages_high_water * page});
+    cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, stats.segments);
+    for (uint32_t segment = 0, n = 0; n < stats.segments; segment++) {
+        ta_system_stats pools;
+        if (!host_segment_pools(r->host, segment, &pools)) continue;
+        n++;
+        uint64_t page = pools.slab_page_bytes;
+        cbor_output_head(&r->out, CBOR_MAJOR_MAP, 7);
+        request_put_key(r, "segment");
+        cbor_output_uint(&r->out, segment);
+        request_put_pool(r, "actors", (request_pool){pools.actors_capacity, pools.actors, pools.actors_high_water});
+        request_put_pool(r, "events", (request_pool){pools.events_capacity, pools.events, pools.events_high_water});
+        request_put_pool(r, "timers", (request_pool){pools.timers_capacity, pools.timers, pools.timers_high_water});
+        request_put_pool(r, "workspaces",
+                         (request_pool){pools.workspaces_capacity, pools.workspaces, pools.workspaces_high_water});
+        request_put_pool(r, "requests",
+                         (request_pool){pools.requests_capacity, pools.requests, pools.requests_high_water});
+        request_put_pool(r, "slabBytes", (request_pool){pools.slab_pages_capacity * page, pools.slab_pages * page,
+                                                         pools.slab_pages_high_water * page});
+    }
     request_put_key(r, "charts");
     cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, count);
     for (uint32_t i = 0; i < count; i++)
