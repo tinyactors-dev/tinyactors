@@ -980,4 +980,12 @@
     <why>l-coord-decisions (1); one rule for every input, and 0 is no session in any of them.</why>
     <evidence>tinyactors-napi/src/host.c ta_napi_session_of; test/rules.test.mjs: sessions are bigints from 1 to 2^64-1 or safe integers from 1, never a number that saturates</evidence>
   </entry>
+  <entry id="l-p2-decisions-services-cancel" date="2026-10-17" step="p2-decisions" kind="deviation" status="resolved">
+    <what>A service handler may return a promise of the service (l-p2-services-promise, revised). One difference from that resolution: when an UNINVOKE comes while the invocation is starting, the sends queued before it are dropped and only stop() is called once the promise resolves, rather than given to receive first.</what>
+    <why>Core ends the invocation at the UNINVOKE, so the record answers nothing: a receive that answered a queued send with sendBack threw TA_ERROR_STALE, a crash and an unhandled rejection that ends the process, for a send whose invoker has already left the state. Dropping them is what a done service gets for its sends too.</why>
+    <evidence>tinyactors-napi/src/effects.c ta_napi_service_started; test/services.test.mjs: an UNINVOKE while it starts stops the service once it resolves; the sends before it are dropped</evidence>
+  </entry>
+  <entry id="l-coord-spawn-params-docs" date="2026-10-17" step="p2-docs" kind="note" status="open">
+    <what>Starting a session with given values for its datamodel is host.spawn(ref, {params: {...}}): each key that names a top-level &lt;data&gt; id replaces that data's initial value; keys that name none are not added; absent keys keep the chart's default (SCXML 6.4, docs/SCXML.md:2085, which core applies to spawn params as to an &lt;invoke&gt;'s params). Checked 2026-10-17 on node and bun, native and quickjs. The README and index.d.ts do not say so: p2-docs must, with a tested example.</what>
+  </entry>
 </log>
