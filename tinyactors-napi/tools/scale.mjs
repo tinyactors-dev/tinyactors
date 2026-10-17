@@ -253,6 +253,26 @@ function answering(count) {
   return answers;
 }
 
+/** A batch of a sweep of every actor, the sweep that finds each of them
+ * idle: one sweep, untimed, first marks every actor that ran since the
+ * last (core's CLOCK sweep), so each timed one scans every actor and
+ * returns it. A sweep repeats until a sample takes --min-ms: one that
+ * returned nothing took a tenth of a millisecond at 40,000 actors, so a
+ * sample of one sweep was the timer's noise and the fast pass failed in
+ * two runs of six (docs/log.xml, l-p2-scale-rerun). */
+function sweeping(host, total) {
+  let marked = false;
+  return async () => {
+    if (!marked) host.sweep(total() + 1024, total() + 1024);
+    marked = true;
+    let found = 0;
+    const t = await elapsed(() => {
+      found = host.sweep(total() + 1024, total() + 1024).length;
+    });
+    return { ms: t, calls: total(), found };
+  };
+}
+
 // ---- the hibernated scenario ----------------------------------------------
 
 async function hibernated(o, results, failures) {
@@ -640,10 +660,7 @@ async function hibernated(o, results, failures) {
     if (listed !== total) failures.push(`actorList: ${listed} sessions of ${total}`);
     return { ms: t, calls: listed };
   }, { batches: 1, samples: Math.min(3, o.samples) });
-  await clock.time('sweep (every actor)', 'per actor', async () => {
-    const t = await elapsed(() => host.sweep(total + 1024, 1 << 20));
-    return { ms: t, calls: total };
-  }, { batches: 1 });
+  await clock.time('sweep (every actor)', 'per actor', sweeping(host, () => total));
 
   // migration of one session at a time, to version 2
   {
@@ -668,7 +685,7 @@ async function hibernated(o, results, failures) {
   // snapshot, restore, close: per actor
   total = await actorsOf(host);
   store.flush();
-  await snapshots(host, config, { ...handlers, wake: () => {}, services: { 'urn:scale:service': () => ({}) } }, clock, total, o);
+  await snapshots(host, config, { ...handlers, wake: () => {}, services: { 'urn:scale:service': () => ({}) } }, clock, total, o, { hold: true });
   other.close();
   rmSync(directory, { recursive: true, force: true });
 }
@@ -677,16 +694,30 @@ async function hibernated(o, results, failures) {
  * first turn (per actor) and the restored host's close (per actor), again
  * and again. The host is closed before the first restore, so that at most
  * one population is in memory at a time. With `then`, the last restored
- * host is handed to it before its close is timed. */
-async function snapshots(host, config, handlers, clock, total, o, then) {
+ * host is handed to it before its close is timed.
+ *
+ * With `hold`, each snapshot is kept until the last is taken, so each is
+ * written into memory the runtime has not had before. Core writes the
+ * snapshot into the runtime's Buffer, and the first write of each page
+ * costs a page fault: on bun, a Buffer of 200 MB made after one was
+ * collected reuses its pages some of the time (bun's allocator; docs/log.xml,
+ * l-p2-scale-snapshot-pages), and a reused one is written at less than half the
+ * cost, so the least of three samples was the one that found its pages
+ * made. Holding them makes each sample pay the faults, at both sizes, as
+ * an application that keeps its snapshots does. The resident scenario
+ * does not hold: its snapshots are gigabytes. */
+async function snapshots(host, config, handlers, clock, total, o, { hold = false, then } = {}) {
   const closes = [];
+  const held = [];
   let blob;
   await clock.time('snapshot', 'per actor', async () => {
     const t = await elapsed(() => {
       blob = host.snapshot();
     });
+    if (hold) held.push(blob);
     return { ms: t, calls: total };
   }, { batches: 1, samples: Math.min(3, o.samples) });
+  held.length = 0;
   host.close(); // a host after every operation: the restored ones' closes are timed, each a population as large
   const samples = Math.min(3, o.samples);
   let round = 0;
@@ -831,10 +862,7 @@ async function residentScenario(o, results, failures) {
     if (listed !== total) failures.push(`actorList: ${listed} sessions of ${total}`);
     return { ms: t, calls: listed };
   }, { batches: 1, samples: Math.min(3, o.samples) });
-  await clock.time('sweep (every actor)', 'per actor', async () => {
-    const t = await elapsed(() => host.sweep(total + 1024, 1 << 20));
-    return { ms: t, calls: total };
-  }, { batches: 1 });
+  await clock.time('sweep (every actor)', 'per actor', sweeping(host, () => total));
   await clock.time('hibernate', 'per call', async () => {
     const chosen = live.pick(32, draw);
     const blobs = [];
@@ -858,7 +886,7 @@ async function residentScenario(o, results, failures) {
 
   // snapshot and restore, then every actor of the last restored host moved
   // to version 2 (per actor): one population in memory at a time
-  await snapshots(host, config, handlers, clock, total, o, async (restored) => {
+  await snapshots(host, config, handlers, clock, total, o, { then: async (restored) => {
     const v2 = compileCharts([{ name: 'counter.scxml', text: COUNTER(2) }]);
     restored.addImage(v2.image);
     v2.close();
@@ -869,7 +897,7 @@ async function residentScenario(o, results, failures) {
     if (migrationsDone.failed || migrationsDone.migrated !== total)
       failures.push(`migrate: ${migrationsDone.migrated} of ${total} moved, ${migrationsDone.failed} failed`);
     clock.record('migrate (a chart, every actor)', 'per actor', [(moving * 1000) / total], total);
-  });
+  } });
 }
 
 // ---- one process: one scenario at one size ----------------------------------
