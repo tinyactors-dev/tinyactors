@@ -1036,4 +1036,14 @@
     <what>Done-when: ten consecutive full mise run test passes at 7c818f49 (19:46 to 20:27, about 4 to 5 minutes each). The fast scaling gate, 8 configurations a run (2 runtimes, 2 datamodels, 2 scenarios), finished in 1 attempt 38 times, 2 attempts 31, 3 attempts 10, 4 attempts once, of 80.</what>
     <evidence>scratch p2-allocation/ten.txt, ten-1.log to ten-10.log</evidence>
   </entry>
+  <entry id="l-core-growth-fixes" date="2026-10-17" step="p2-core-memory" kind="note" status="resolved">
+    <what>The growth refutation found 6 problems; all fixed in core.</what>
+    <evidence>9469cb1b 03eb3fcd b626d5a3 afa732b3 1291711e 5d5dc142 ecb80b27</evidence>
+    <resolution>Workspaces grow: 4,000 senders went from 1,001 cycles to 2. Actors get a growth floor: 5.3 GB copied before, 780 MB after. A refusal that names no pool grows nothing. Stale flags fixed. host.stats pools are reported per segment. The trace journal is fixed at 128 KiB.</resolution>
+  </entry>
+  <entry id="l-timer-pool-jump" date="2026-10-17" step="p2-core-memory" kind="issue" status="open">
+    <what>Beside a large region, the quarter-of-region growth floor lets a small pool grow far: 65 delayed sends grew the timers from 64 to 8,388,608 (+360 MB, measured before the trace fix).</what>
+    <why>A pool should grow in proportion to its own size, not the size of the region.</why>
+    <evidence>scratchpad core-growth-fixes spike5</evidence>
+  </entry>
 </log>
