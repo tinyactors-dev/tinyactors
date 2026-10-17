@@ -149,7 +149,7 @@ static void ta_napi_host_close_now(napi_env env, ta_napi_host *host);
 
 void ta_napi_leave(ta_napi_call *call) {
     ta_napi_host *host = call->host;
-    ta_growable_arena_release(&host->arena, call->mark);
+    ta_napi_arena_release(&host->arena, call->mark, TA_NAPI_HOST_ARENA_CAP);
     host->depth--;
     if (host->depth > 0 || host->turning) return;
     if (host->closing) {
@@ -506,7 +506,7 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
         }
     }
     ta_cbor_writer_free(&writer);
-    ta_growable_arena_release(&host->arena, mark);
+    ta_napi_arena_release(&host->arena, mark, TA_NAPI_HOST_ARENA_CAP);
     return ok;
 }
 
@@ -647,7 +647,7 @@ static bool ta_napi_host_restore_core(napi_env env, ta_napi_host *host, ta_napi_
     /* the datamodel's handles valid again before the first run */
     ok = ok && ta_napi_host_restore_state(env, host, (ta_bytes){contents.state, contents.state_length});
     ta_cbor_writer_free(&writer);
-    ta_growable_arena_release(&host->arena, mark);
+    ta_napi_arena_release(&host->arena, mark, TA_NAPI_HOST_ARENA_CAP);
     return ok;
 }
 
@@ -776,7 +776,7 @@ static napi_value ta_napi_host_new(napi_env env, napi_callback_info info) {
         ok = effective != NULL &&
              ta_napi_host_read_config(env, host, &(ta_napi_effective){effective, handlers}) &&
              (restoring == NULL || ta_napi_host_same_system(env, host, restoring));
-        ta_growable_arena_release(&host->arena, mark);
+        ta_napi_arena_release(&host->arena, mark, TA_NAPI_HOST_ARENA_CAP);
     }
     ok = ok && ta_napi_host_keep(env, self, handlers) &&
          napi_wrap(env, self, host, ta_napi_host_finalize, NULL, NULL) == napi_ok;
@@ -1512,7 +1512,7 @@ static int64_t ta_napi_send_slice(napi_env env, const ta_napi_call *call, const 
         if (made == slice->count) taken = ta_host_send_many(host->host, events, made);
         for (uint32_t i = taken < 0 ? 0 : (uint32_t)taken; i < made; i++) ta_napi_host_payload_release(host, events[i].data);
     }
-    ta_growable_arena_release(&host->arena, mark);
+    ta_napi_arena_release(&host->arena, mark, TA_NAPI_ARENA_UNCAPPED);
     return taken;
 }
 

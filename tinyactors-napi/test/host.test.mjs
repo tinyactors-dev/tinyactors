@@ -5,7 +5,7 @@
 // chart, spawn, send in both shapes, fail, sendMany, terminate,
 // actorByName, each with its refusals, and TA_EFFECT_REQUEST answered in C.
 import { Host, TinyactorsError } from '@tinyactors/node';
-import { ENDER, ENGINE, WAITER, hostWith, image, scxml, status, until } from './charts.mjs';
+import { CONFIG, ENDER, ENGINE, WAITER, hostWith, image, scxml, status, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 const QUICKJS = { datamodel: 'quickjs' };
@@ -164,6 +164,44 @@ test('a dropped host whose handlers close over it is collected and frees its mem
       throw new Error(`external memory: ${before} before, ${during} with the hosts, ${after} after`);
     }
   }
+});
+
+test('one 2 MB send leaves the host arena under its cap', async () => {
+  // A call's scratch is its arena's, a mark per call; when the outermost
+  // call releases an arena that keeps more than its cap (256 KB for a
+  // host's, 64 KB for the environment's), its chunks go back. A send to
+  // quickjs writes its data as CBOR there: without the cap one send of
+  // 2 MB kept about 6.4 MB for the host's life. Neither runtime shows the
+  // addon's blocks in a counter that stays (log entry
+  // l-p1-host-node-external), so the test reads the resident set over 16
+  // hosts: about 100 MB more without the cap, at most 21 MB with it
+  // (docs/allocation.md, finding 7).
+  const big = Array.from({ length: 200_000 }, (_, i) => `item${i}`);
+  const CHART = scxml('big', `
+  <datamodel><data id="d" expr="0"/></datamodel>
+  <state id="s"><transition event="x"><assign location="d" expr="_event.data.length"/></transition></state>`);
+  const bytes = image({ big: CHART });
+  const hosts = [];
+  for (let i = 0; i < 16; i++) {
+    const host = new Host(CONFIG, QUICKJS);
+    host.addImage(bytes);
+    const session = host.spawn(host.chart('big'));
+    host.send(session, 'x', [1]);
+    await host.idle();
+    hosts.push({ host, session });
+  }
+  await collect();
+  const before = process.memoryUsage.rss();
+  for (const { host, session } of hosts) {
+    host.send(session, 'x', big);
+    await host.idle();
+    host.send(session, 'x', [1]); // _event lets the large value go
+    await host.idle();
+  }
+  await collect();
+  const grown = process.memoryUsage.rss() - before;
+  for (const { host } of hosts) host.close();
+  if (grown > 50e6) throw new Error(`16 sends of 2 MB kept ${(grown / 1e6).toFixed(1)} MB resident`);
 });
 
 // ---- inputs ----------------------------------------------------------------

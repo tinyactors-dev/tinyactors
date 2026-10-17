@@ -396,7 +396,7 @@ static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, co
             }
         }
     }
-    ta_growable_arena_release(&instance->arena, mark);
+    ta_napi_arena_release(&instance->arena, mark, TA_NAPI_INSTANCE_ARENA_CAP);
     return result;
 }
 

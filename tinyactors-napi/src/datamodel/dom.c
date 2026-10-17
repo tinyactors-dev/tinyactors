@@ -152,7 +152,7 @@ napi_value ta_napi_dom(const ta_napi_xml *xml) {
     txml_parser_config config = {{(void *)arena, &ta_napi_txml_vtable}, TXML_LIMITS_DEFAULT, 0, 0, 0};
     txml_parser *parser = NULL;
     if (txml_parser_init(&parser, &config) != TXML_OK) {
-        ta_growable_arena_release(arena, mark);
+        ta_napi_arena_release(arena, mark, TA_NAPI_ARENA_UNCAPPED);
         return NULL;
     }
     const uint8_t *bytes = (const uint8_t *)xml->text.pointer;
@@ -178,6 +178,6 @@ napi_value ta_napi_dom(const ta_napi_xml *xml) {
             document = ta_napi_kit(env, xml->kit, &(ta_napi_kit_call){"dom", 2, {children, text}});
     }
     txml_parser_destroy(parser);
-    ta_growable_arena_release(arena, mark); /* the tree is read: the parse's blocks end */
+    ta_napi_arena_release(arena, mark, TA_NAPI_ARENA_UNCAPPED); /* the tree is read: the parse's blocks end; its high-water kept */
     return document;
 }

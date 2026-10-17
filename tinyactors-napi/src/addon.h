@@ -102,6 +102,20 @@ ta_napi_instance *ta_napi_instance_of(napi_env env);
  * environment's teardown. */
 ta_allocator ta_napi_allocator(napi_env env);
 
+/* What an arena keeps between calls (AGENTS.md, "The binding's memory"):
+ * a release to a mark that empties it (the outermost call's: nothing
+ * else lives in it) gives its chunks back when it keeps more than its
+ * cap, so one large call (a 2 MB encode or send) does not hold its
+ * high-water mark for the lifetime's rest; under the cap the chunks stay,
+ * and a warmed call calls no allocator. A release nested in a call or in
+ * a run passes TA_NAPI_ARENA_UNCAPPED, as does the native datamodel's
+ * scratch (txml's high-water, kept: AGENTS.md); the call's leave applies
+ * the cap. */
+#define TA_NAPI_HOST_ARENA_CAP ((size_t)256 * 1024)
+#define TA_NAPI_INSTANCE_ARENA_CAP ((size_t)64 * 1024)
+#define TA_NAPI_ARENA_UNCAPPED SIZE_MAX
+void ta_napi_arena_release(ta_growable_arena *arena, ta_growable_arena_mark mark, size_t cap);
+
 /* A refusal: the message and the status core names (ta_status_name). */
 typedef struct ta_napi_refusal {
     ta_status status;

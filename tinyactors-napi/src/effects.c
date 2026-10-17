@@ -654,7 +654,7 @@ static napi_value ta_napi_migration_result(napi_env env, ta_napi_host *host, uin
     bool ok = (count == 0 || left != NULL) && napi_create_array_with_length(env, got, &pending) == napi_ok;
     for (uint32_t i = 0; ok && i < got; i++)
         ok = napi_create_bigint_uint64(env, left[i], &session) == napi_ok && napi_set_element(env, pending, i, session) == napi_ok;
-    ta_growable_arena_release(&host->arena, mark);
+    ta_napi_arena_release(&host->arena, mark, TA_NAPI_ARENA_UNCAPPED);
     if (!ok) {
         if (count != 0 && left == NULL) ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the migration's pending sessions"});
         return NULL;

@@ -234,6 +234,32 @@ analysis sees it; the refutation is below.
 - **Verdict:** confirmed by reading; not measured.
 - **Action:** none.
 
+### 7. An arena keeps its high-water mark (step p2-allocation (c))
+
+- **Claim (the refutation's):** an arena's chunks are kept for its
+  owner's life, so one large call holds its high-water mark until the host
+  closes or the environment ends: the arena's allocator view has a no-op
+  free, so a writer's growth keeps each earlier block until the release.
+- **Scenario:** one `encode` of 200,000 short strings (2,088,895 B), and
+  one send of the same value to a session on quickjs (its CBOR written in
+  the host's arena), each followed by a small one.
+- **Evidence:** gdb's counts of the host allocator (`encode2.mjs`, node,
+  the refutation's spike): before, the encode made 43 blocks of 6,554,976
+  B and freed none until the process ended, the send 143 blocks of
+  6,394,336 B, freed at `close()`. After: the encode 144 blocks (16 KB
+  chunks) and 144 frees in the call, the small encode after it one chunk
+  of 16,416 B; the send 143 blocks and 144 frees, the small send one chunk.
+  Resident over 16 quickjs hosts each sent 2 MB then a small event
+  (`test/host.test.mjs`), three runs: node +106.1, +102.5, +103.3 MB
+  before, +2.0, +0.3, +3.7 MB after; bun +104.4, +107.0, +108.8 and +11.2,
+  +2.9, +21.0 MB.
+- **Verdict:** confirmed.
+- **Action:** built: `ta_napi_arena_release` frees an arena that a
+  release empties when it keeps more than its cap (256 KB a host's, 64 KB
+  the environment's); the environment's chunks are 16 KB, as a host's,
+  since one default 64 KB chunk with its header is over 64 KB and would be
+  freed after every call. The datamodel's scratch (txml) is exempt.
+
 ## Refutation
 
 The step asks for a fresh agent to refute each finding against the

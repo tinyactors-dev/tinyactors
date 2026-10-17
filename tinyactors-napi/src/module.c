@@ -35,6 +35,12 @@ ta_allocator ta_napi_allocator(napi_env env) {
     return (ta_allocator){env, ta_napi_allocator_alloc, ta_napi_allocator_free};
 }
 
+void ta_napi_arena_release(ta_growable_arena *arena, ta_growable_arena_mark mark, size_t cap) {
+    ta_growable_arena_release(arena, mark);
+    if (ta_growable_arena_position(arena).chunk == NULL && arena->reserved > cap)
+        ta_growable_arena_free(arena); /* it may allocate again, as a new history */
+}
+
 /* ---- TinyactorsError ------------------------------------------------------ */
 
 /* The class index.d.ts declares, an Error subclass with read-only `code`,
@@ -162,7 +168,10 @@ static ta_napi_instance *ta_napi_instance_new(napi_env env) {
     }
     instance->env = env;
     instance->allocator = ta_napi_allocator(env);
-    ta_growable_arena_config config = {sizeof config, 0, 0, &instance->allocator};
+    /* 16 KB chunks, as a host's: its cap (TA_NAPI_INSTANCE_ARENA_CAP) keeps
+     * three of them, where one default chunk of 64 KB and its header would
+     * be over it, given back after every call */
+    ta_growable_arena_config config = {sizeof config, 0, 16384, &instance->allocator};
     ta_growable_arena_init(&instance->arena, &config);
     if (napi_set_instance_data(env, instance, ta_napi_instance_finalize, NULL) != napi_ok) {
         ta_napi_instance_finalize(env, instance, NULL);

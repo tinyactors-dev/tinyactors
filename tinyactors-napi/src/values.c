@@ -489,7 +489,7 @@ napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
         }
     }
     ta_cbor_writer_free(&writer);
-    ta_growable_arena_release(&instance->arena, mark);
+    ta_napi_arena_release(&instance->arena, mark, TA_NAPI_INSTANCE_ARENA_CAP);
     return result;
 }
 
@@ -696,6 +696,6 @@ bool ta_napi_document_close(ta_napi_document *document, bool keep) {
         ta_cbor_writer_free(&document->writer); /* a block it grew, never the room */
         document->out = (ta_bytes){NULL, 0};
     }
-    ta_growable_arena_release(document->arena, document->mark);
+    ta_napi_arena_release(document->arena, document->mark, TA_NAPI_ARENA_UNCAPPED); /* in a run: the call's leave caps it */
     return kept;
 }

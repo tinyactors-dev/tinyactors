@@ -345,6 +345,21 @@ The addon allocates almost nothing (bindings.md, section 6):
   Node-API forces, below) and input structs. JavaScript running during a
   call (a getter, `toJSON`) may call the `Host` again: the nested call
   allocates above the outer one and releases to its own mark.
+- **An arena keeps at most its cap between calls** (2026-10-17,
+  docs/allocation.md, finding 7): every release goes through
+  `ta_napi_arena_release`, and a release that empties the arena (the
+  outermost call's) frees its chunks when it keeps more than 256 KB (a
+  host's arena) or 64 KB (the environment's, `encode`, `decode`,
+  `Address`, `compileCharts`, of 16 KB chunks as a host's); below the
+  cap the chunks stay and a warmed call calls no allocator. A release
+  nested in a call or in a run (a datamodel's document, a `sendMany`
+  slice) is uncapped, and so is the datamodel's scratch (txml's
+  high-water, below). Without the cap one 2 MB `encode` kept 6.5 MB for
+  the process's life and one 2 MB send to quickjs 6.4 MB for the host's
+  (the arena keeps a writer's earlier blocks as it grows); with it the
+  next call allocates one chunk again. Test: `test/host.test.mjs: 'one
+  2 MB send leaves the host arena under its cap'` (16 hosts: about 100
+  MB resident kept before, at most 21 MB after).
 - **Views of what core and JavaScript hold.** Bytes come from a typed
   array's data (`napi_get_typedarray_info`, `napi_get_arraybuffer_info`),
   for the call. Text is the one copy Node-API forces: it is written as

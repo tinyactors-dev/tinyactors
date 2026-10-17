@@ -106,7 +106,7 @@ static napi_value ta_napi_http_encode(napi_env env, napi_callback_info info) {
         else if (napi_create_buffer_copy(env, out.length, out.pointer, &data, &result) != napi_ok)
             result = NULL;
     }
-    ta_growable_arena_release(arena, mark);
+    ta_napi_arena_release(arena, mark, TA_NAPI_INSTANCE_ARENA_CAP);
     return result;
 }
 
@@ -187,7 +187,7 @@ static napi_value ta_napi_http_parse(napi_env env, napi_callback_info info) {
                  !ta_napi_http_result(env, &(ta_napi_http_parsed){request, room, result}))
             result = NULL;
     }
-    ta_growable_arena_release(arena, mark);
+    ta_napi_arena_release(arena, mark, TA_NAPI_INSTANCE_ARENA_CAP);
     return result;
 }
 

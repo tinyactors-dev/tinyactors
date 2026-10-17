@@ -129,7 +129,7 @@ static napi_value ta_napi_address_part(napi_env env, napi_callback_info info) {
         else if (part == TA_NAPI_PART_NAME && address->kind == TA_ADDRESS_NAME) result = ta_napi_address_name(env, &parts);
         else napi_get_undefined(env, &result);
     }
-    ta_growable_arena_release(&instance->arena, mark);
+    ta_napi_arena_release(&instance->arena, mark, TA_NAPI_INSTANCE_ARENA_CAP);
     return result;
 }
 
@@ -180,7 +180,7 @@ static napi_value ta_napi_address_from(napi_env env, napi_callback_info info) {
         if (status != TA_OK) ta_napi_throw(env, &(ta_napi_refusal){status, "core refused the address's parts"});
         else result = ta_napi_address_new(env, (ta_string_view){pointer, (uint32_t)out.length});
     }
-    ta_growable_arena_release(arena, mark);
+    ta_napi_arena_release(arena, mark, TA_NAPI_INSTANCE_ARENA_CAP);
     return result;
 }
 
