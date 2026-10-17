@@ -506,7 +506,7 @@
         <does>w3c.run in the adapter with BasicHTTP as an I/O processor answered in its handler and a SimulatedClock moved to the next deadline.</does>
         <done-when>191 of 191 on quickjs and on the native datamodel, under node and bun.</done-when>
       </step>
-      <step id="p2-pack" status="doing" after="p2-w3c">
+      <step id="p2-pack" status="done" after="p2-w3c" commit="5e77f9ed">
         <title>Packaging and the first release</title>
         <does>mise run pack: one addon per platform package as ADR 0001 decisions 10, 11 and 15 say, built with the root's zig, checked by its symbols (exports the module's entry points only, loads no library, leaves undefined only napi_* and the libc list); smoke tests under node and bun; the changelog through the release-changelog skill. Releases happen in, and are mirrored to, tinyactors-dev/tinyactors-napi (the maintainer, 2026-10-17; docs/adr/0016-a-release-repository-per-component.md): mise run release uses the root's Release.push_and_release! as tinyactors-cpython's release does (the monorepo's tag tinyactors-napi/v&amp;lt;version&amp;gt;, then a snapshot of tinyactors-napi/ pushed to tinyactors-dev/tinyactors-napi tagged v&amp;lt;version&amp;gt;, the GitHub release and its assets there); mise run release:mirror finishes one that stopped. The package's repository field points at tinyactors-dev/tinyactors-napi.</does>
         <done-when>The packages install and pass the smoke test on this machine; the release waits for the maintainer.</done-when>

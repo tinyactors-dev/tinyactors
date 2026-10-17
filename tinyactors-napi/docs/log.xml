@@ -918,10 +918,10 @@
     <evidence>docs/plan.xml, //phase[@id='p2']; docs/log.xml</evidence>
     <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-coord-pack-paused" date="2026-10-17" step="p2-pack" kind="issue" status="open">
+  <entry id="l-coord-pack-paused" date="2026-10-17" step="p2-pack" kind="issue" status="resolved">
     <what>The p2-pack agent stopped early on the account's weekly usage limit (resets 2026-10-19 09:00 UTC). Its partial work (index.mjs resolving the platform package, mise/pack.rb, mise/tasks/pack, tools/smoke.mjs, package.json) failed the bun tests (index.mjs did not export Address under bun), so it is kept as docs/wip-p2-pack.patch, not applied, and main stays green.</what>
     <why>The container is ephemeral: uncommitted work could be lost before the limit resets.</why>
-    <resolution>Resume p2-pack after the reset: git apply docs/wip-p2-pack.patch, fix the bun export, finish, delete the patch file.</resolution>
+    <resolution>5e77f9ed: the patch applied, the bun export fixed (l-p2-pack-bun-autoinstall), the work finished, docs/wip-p2-pack.patch deleted.</resolution>
   </entry>
   <entry id="l-coord-release-repo" date="2026-10-17" step="p2-pack" kind="decision" status="resolved">
     <what>Releases of the Node package happen in, and are mirrored to, tinyactors-dev/tinyactors-napi (the maintainer, 2026-10-17), through the root Release.push_and_release! and release:mirror (ADR 0016), as tinyactors-cpython does.</what>
@@ -942,5 +942,37 @@
   <entry id="l-coord-allocation" date="2026-10-17" step="p2-decisions" kind="decision" status="resolved">
     <what>The maintainer (2026-10-17): malloc/free is almost never the right choice compared to arenas backed by an allocator, because the lifetimes are known and can be leveraged. The binding's allocations are to be traced by lifetime (the environment's, a host's, a segment's, a batch's, a call's, a compile result's) and served from arenas over the environment's allocator where the lifetime is known, instead of a malloc and a free per block; what core frees block by block (a segment's region when it grows or retires) is given an allocator shaped by that lifetime. A reasoned analysis with a lifetime table and a measurement decides it, refuted by a fresh agent before code.</what>
     <why>The session row's napi_ref costs about 140 B an actor of malloc (l-p1-measure-resident-engine), and the host's allocator is malloc and free per block today (src/module.c).</why>
+  </entry>
+  <entry id="l-p2-pack-bun-autoinstall" date="2026-10-17" step="p2-pack" kind="issue" status="resolved">
+    <what>Under bun the patch's index.mjs exported no Address: it asked for @tinyactors/node-linux-x64 first, and Bun, run where no node_modules directory is (the repository), installs a package it cannot resolve from the registry, so it loaded the published 0.2.0 addon (the earlier binding).</what>
+    <evidence>a require of the platform package under bun 1.4.1 resolved /root/.bun/install/cache/@tinyactors/node-linux-x64@0.2.0@@@1/tinyactors.node with no exports</evidence>
+    <resolution>5e77f9ed: index.mjs loads build/tinyactors.node first (an installed package has no build/), then the platform package, whose package.json version must be the main package's, else it throws naming both.</resolution>
+  </entry>
+  <entry id="l-p2-pack-reproducible" date="2026-10-17" step="p2-pack" kind="issue" status="resolved">
+    <what>Two pack runs of one commit gave other bytes for both macOS addons: zig cc writes debug information by default, and its Mach-O linker records each object's absolute path and modification time as OSO stabs (and a UUID over them), which -Wl,-S does not remove. The Linux addons were the same bytes.</what>
+    <why>ADR 0001 asks for reproducible packages; the paths also named the build machine.</why>
+    <evidence>llvm-nm -a on the two aarch64-macos addons: OSO /home/user/tinyactors/tinyactors-napi/build/release/aarch64-macos/objects/addon/address.o with differing times; 0 OSO entries with -g0; two runs from rm -rf build/release give the same SHA-256 for all five tarballs</evidence>
+    <resolution>5e77f9ed: mise/pack.rb compiles with -g0 on every target. Unverified: whether the Python wheels' macOS objects have the same OSO entries (tinyactors-cpython/mise/wheel.rb removes -g but zig adds debug information itself); not checked, not this session's directory.</resolution>
+  </entry>
+  <entry id="l-p2-pack-repository" date="2026-10-17" step="p2-pack" kind="deviation" status="for-maintainer">
+    <what>package.json's repository is git+https://github.com/tinyactors-dev/tinyactors-napi.git (no directory) and its homepage that repository's README, as the step says; ADR 0016 says package metadata keeps naming the monorepo. bugs stays the monorepo's issues, which ADR 0016 keeps there.</what>
+    <why>The step's does (the maintainer, 2026-10-17) names the release repository; it is newer than the ADR.</why>
+    <evidence>docs/plan.xml //step[@id='p2-pack']/does; docs/adr/0016-a-release-repository-per-component.md, the paragraph after decision 8</evidence>
+  </entry>
+  <entry id="l-p2-pack-unverified" date="2026-10-17" step="p2-pack" kind="uncertainty" status="for-maintainer">
+    <what>Not run here: the Linux container smoke tests (node:22-bookworm-slim, node:22-alpine, oven/bun:1, oven/bun:1-alpine, the other architecture under emulation; Bun on musl x64 left out), since this container has the docker client but no daemon; the macOS addons on a Mac (checked by their symbols only, ADR 0001 decision 14); and every publishing path of mise run release (npm, the tag, push_and_release!, --resume, --dev --publish), which waits for the maintainer.</what>
+    <evidence>docker info: failed to connect to the docker API at unix:///var/run/docker.sock; mise run release -- 0.3.0 --build-only --skip-containers passed (five tarballs in build/dist/0.3.0, smoke ok under node 22.23.3 and bun 1.4.1)</evidence>
+  </entry>
+  <entry id="l-p2-pack-mirror-first" date="2026-10-17" step="p2-pack" kind="note" status="for-maintainer">
+    <what>Before the first release through tinyactors-dev/tinyactors-napi, copy 0.1.0 and 0.2.0 there (root: mise run release:mirror -- tinyactors-napi/v0.1.0, then tinyactors-napi/v0.2.0 --directory tinyactors-core/bindings/node, and 0.1.0's directory as it was then): push_snapshot! refuses a version not above the repository's latest, so a 0.3.0 published first would block their copies. The first release's changelog section is written at release time with the release-changelog skill (root AGENTS.md), not in this step: mise run release refuses without it.</what>
+    <evidence>mise/lib/release.rb push_snapshot! (the latest-version check); mise/tasks/release/mirror (--directory)</evidence>
+  </entry>
+  <entry id="l-p2-pack-decisions" date="2026-10-17" step="p2-pack" kind="decision" status="resolved">
+    <what>Decided here: the release assets go to build/dist/&lt;version&gt;/ (build/release/&lt;target&gt;/ holds the addons, and pack empties build/packages/); mise run pack versions the packages with Release.dev_version, never package.json's (that is the last release's, which the registry has); the release commits package.json's version (release(napi): v&lt;version&gt;) and tags before it builds, publishes to npm first (platform packages, then the main one) and then pushes, as the Python release does with PyPI; engines asks for Node.js 22.3.0, the first with process.getBuiltinModule, which the native datamodel calls for node:vm.</what>
+    <why>The Python release (tinyactors-cpython/mise/tasks/release) and the removed napi release (943b1f31^:tinyactors-napi/mise/tasks/release) are the models; npm, like PyPI, never takes a version back.</why>
+  </entry>
+  <entry id="l-p2-pack-scale-flake" date="2026-10-17" step="p2-pack" kind="issue" status="for-maintainer">
+    <what>One mise run test failed on test/scale.test.mjs under bun on the native datamodel: restore 11.9 us a session at 10,000 against 18.9 at 200,000 (factor 1.5); three runs of the file alone and the next whole mise run test passed. Nothing in this step touches restore.</what>
+    <evidence>the step scratch's p2-pack/test1.log (FAIL), test2.log (exit 0)</evidence>
   </entry>
 </log>
