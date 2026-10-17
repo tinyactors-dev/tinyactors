@@ -167,6 +167,8 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
                 *detail = pool;
                 status = TA_RUN_EXHAUSTED;
                 stop = 1;
+            } else {
+                (void)ta_system_exhausted(system); /* a failed invoke goes on: nothing to grow */
             }
             break;
         }

@@ -99,8 +99,9 @@ static void load_workspace(kernel_context *kernel) {
 
 static int acquire_workspace(kernel_context *kernel) {
     if (kernel->instance->workspace == TA_NIL) {
+        /* none free: the actor waits for one (no refusal to mark) */
+        if (!ta_pool_free_count(kernel->core->workspaces)) return 0;
         uint32_t i = ta_pool_alloc(kernel->core->workspaces);
-        if (i == TA_NIL) return 0;
         kernel->instance->workspace = i;
         load_workspace(kernel);
         ta_memset(kernel->workspace, 0, sizeof *kernel->workspace);
@@ -170,6 +171,7 @@ static uint32_t raise_platform(ta_core *core, ta_instance *instance, const char 
     uint32_t event_index = ta_event_new(core, 1);
     if (event_index == TA_NIL) {
         core->dropped_errors++;
+        core->events->refused = 0; /* dropped, and the run goes on: nothing to grow */
         return TA_NIL;
     }
     ta_event *event = ta_event_at(core, event_index);
@@ -179,6 +181,7 @@ static uint32_t raise_platform(ta_core *core, ta_instance *instance, const char 
     if (ta_event_set_name(core, event, name, length) != TA_OK) {
         ta_event_release(core, event_index);
         core->dropped_errors++;
+        core->slab->refused = 0; /* dropped, and the run goes on: nothing to grow */
         return TA_NIL;
     }
     event->type = TA_EVENT_TYPE_PLATFORM;

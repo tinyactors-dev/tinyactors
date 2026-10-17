@@ -729,6 +729,46 @@ static void test_parked_spawns(void) {
     tsys_free(&t);
 }
 
+/* What ran out is what refuses now: a flag a pool keeps after it has room
+ * again is stale, and the slab that refused after it is named; a check for
+ * room for several (an adoption's) names its pool while it has less room
+ * than that. An actor without a free workspace waits for one, and the
+ * workspaces mark no refusal. */
+static void test_stale_refusals(void) {
+    test_system t;
+    CHECK(tsys_open_image(&t, "m.scxml",
+                          SC("initial='a'><state id='a'><onentry>"
+                             "<send type='http://example.com/io' event='out' target='http://x/y'/>"
+                             "</onentry></state>"),
+                          NULL));
+    ta_io_processor_entry io_processor = {{"http://example.com/io", 21}, {"http://me/", 10}};
+    ta_system_config config = test_system_config();
+    config.io_processors = &io_processor;
+    config.io_processor_count = 1;
+    config.workspaces = 1;
+    CHECK(tsys_create(&t, &config));
+    ta_system_boot(t.system);
+    uint32_t second = TA_NIL;
+    CHECK_EQUAL(ta_system_spawn(t.system,
+                                &(ta_spawn){0, 0, (ta_string_view){0, 0}, 0, (ta_string_view){0, 0}},
+                                &second),
+                TA_OK);
+    ta_system_run(t.system, 100000); /* the first holds the workspace until its send is decided */
+    CHECK_EQUAL(ta_system_workspace_waiters(t.system), 1u);
+    CHECK_EQUAL(t.system->workspaces.refused, 0u);
+    CHECK_EQUAL(ta_system_exhausted(t.system), TA_POOL_NONE);
+
+    t.system->events.refused = 1; /* refused once, and has room since */
+    t.system->slab.refused = 1;
+    CHECK_EQUAL(ta_system_exhausted(t.system), TA_POOL_SLAB);
+    CHECK_EQUAL(ta_system_exhausted(t.system), TA_POOL_NONE); /* read once */
+    t.system->actors.refused = ta_pool_free_count(&t.system->actors) + 1; /* room for fewer */
+    CHECK_EQUAL(ta_system_exhausted(t.system), TA_POOL_ACTORS);
+    t.system->timers.refused = ta_pool_free_count(&t.system->timers); /* room for all asked */
+    CHECK_EQUAL(ta_system_exhausted(t.system), TA_POOL_NONE);
+    tsys_free(&t);
+}
+
 int main(void) {
     RUN(test_layout_and_init);
     RUN(test_send_run_effects);
@@ -745,5 +785,6 @@ int main(void) {
     RUN(test_snapshot_restore);
     RUN(test_terminate_and_determinism);
     RUN(test_cross_system);
+    RUN(test_stale_refusals);
     TEST_MAIN_END();
 }

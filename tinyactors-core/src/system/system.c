@@ -1017,15 +1017,12 @@ uint32_t ta_system_exhausted(ta_system *system) {
     static const uint32_t names[4] = {TA_POOL_ACTORS, TA_POOL_REQUESTS, TA_POOL_TIMERS,
                                       TA_POOL_EVENTS};
     uint32_t found = TA_POOL_NONE;
-    /* a pool that refused and is full still; then one that refused (a check
-     * for room for several, as an adoption's); then the slab, whose free
-     * bytes do not say whether an object fits */
-    for (uint32_t i = 0; i < 4 && found == TA_POOL_NONE; i++) {
-        uint32_t reserve = pools[i] == &system->events ? system->core.reserve : 0;
-        if (pools[i]->refused && ta_pool_free_count(pools[i]) <= reserve) found = names[i];
-    }
+    /* a pool that refused and still has less room than was asked of it (a
+     * flag of a pool that has room again is stale: what refused then is
+     * not what refused now); then the slab, whose free bytes do not say
+     * whether an object fits */
     for (uint32_t i = 0; i < 4 && found == TA_POOL_NONE; i++)
-        if (pools[i]->refused) found = names[i];
+        if (pools[i]->refused && ta_pool_free_count(pools[i]) < pools[i]->refused) found = names[i];
     if (found == TA_POOL_NONE && system->slab.refused) found = TA_POOL_SLAB;
     for (uint32_t i = 0; i < 4; i++)
         pools[i]->refused = 0;

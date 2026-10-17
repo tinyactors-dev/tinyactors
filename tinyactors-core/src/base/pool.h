@@ -27,7 +27,9 @@ typedef struct ta_pool {
     uint32_t free_head;       /* TA_NIL if empty */
     uint32_t high_water_mark; /* slots [high_water_mark, capacity) have never been allocated */
     uint32_t used;
-    uint32_t refused; /* 1 once an alloc found it full; its owner clears it */
+    uint32_t refused; /* the free slots an allocation needed and did not find (1 for
+                         one, more for a check for room for several), 0 when none was
+                         refused; its owner clears it */
 } ta_pool;
 
 TA_INLINE uint32_t ta_pool_stride(uint32_t payload) {

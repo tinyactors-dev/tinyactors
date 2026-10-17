@@ -100,7 +100,7 @@ int ta_core_parse_duration(ta_string_view s, uint64_t *ns) {
 
 uint32_t ta_event_new(ta_core *core, int reserve_ok) {
     if (!reserve_ok && ta_pool_free_count(core->events) <= core->reserve) {
-        core->events->refused = 1; /* the reserve is the pool's too */
+        core->events->refused = core->reserve + 1; /* the reserve is the pool's too */
         return TA_NIL;
     }
     uint32_t i = ta_pool_alloc(core->events);
