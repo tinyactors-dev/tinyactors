@@ -24,15 +24,15 @@ module NodeAPI
   # The suite's set `mise run test` runs (`--milestone`, a set of
   # tinyactors-test/suites/milestones.txt), named here and nowhere else.
   # Which set the binding is held to now is in ROADMAP.md.
-  MILESTONE = 'M1'
+  MILESTONE = 'M5'
   # The runtimes the package serves, each running the same addon.
   RUNTIMES = %w[node bun].freeze
   # What of that set `mise run test` runs now: the suites (`--suite`) and
-  # the datamodels (the differential run). It grows with the work
-  # (ROADMAP.md, M1, "Plan and progress"): M1 is every suite of the set,
-  # protocol and scenarios, on both datamodels, native and quickjs, and
-  # both pass under node and bun (docs/plan.xml, p1-conform).
-  GATE = { suites: %w[protocol scenarios], datamodels: %w[native quickjs] }.freeze
+  # the datamodels (the differential run). M5 is the whole suite (it adds
+  # no case to M4): every protocol vector, every scenario and the W3C
+  # suite, on both datamodels, native and quickjs, and all of it passes
+  # under node and bun (docs/plan.xml, p2-w3c).
+  GATE = { suites: %w[protocol scenarios w3c], datamodels: %w[native quickjs] }.freeze
   # The datamodels `mise run conform` runs the suite on: both, unless
   # TA_NAPI_DATAMODELS names some (the test task's gate does).
   DATAMODELS = %w[native quickjs].freeze
