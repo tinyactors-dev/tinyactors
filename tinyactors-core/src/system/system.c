@@ -44,7 +44,8 @@ void ta_system_config_normalize(const ta_image_view *view, const ta_system_confi
     if (config->instance_bytes > TA_SLAB_MAX_BYTES) config->instance_bytes = TA_SLAB_MAX_BYTES;
     if (!config->quantum) config->quantum = 1000;
     if (!config->ticks_per_second) config->ticks_per_second = 1000000000ull;
-    if (!config->string_bytes) config->string_bytes = 16384 + config->max_actors * 16;
+    if (!config->string_bytes)
+        config->string_bytes = TA_STRING_BYTES_BASE + config->max_actors * TA_STRING_BYTES_PER_ACTOR;
     /* tracing: on by default, at full detail (docs/adr/0006); off carves nothing */
     if (config->tracing != TA_TRACING_DISABLED) {
         config->tracing = TA_TRACING_ENABLED;
@@ -854,6 +855,14 @@ void ta_system_stats_get(const ta_system *system, ta_system_stats *o) {
     z.traces_started = system->stats_traces_started;
     z.traces_sampled = system->stats_traces_sampled;
     z.next_deadline = ta_system_next_deadline(system);
+    /* a pool hands out its free list before a slot it never used, so the
+     * first slot never used is the most it held at once */
+    z.actors_high_water = system->actors.high_water_mark;
+    z.events_high_water = system->events.high_water_mark;
+    z.timers_high_water = system->timers.high_water_mark;
+    z.workspaces_high_water = system->workspaces.high_water_mark;
+    z.requests_high_water = system->requests.high_water_mark;
+    z.slab_pages_high_water = system->slab.high_water_mark;
     uint32_t n = o->size && o->size < sizeof z ? o->size : (uint32_t)sizeof z;
     ta_memcpy(o, &z, n);
     o->size = n;
@@ -999,6 +1008,29 @@ uint32_t ta_actor_config(const ta_system *system, uint32_t actor, ta_uint32_arra
             n++;
         }
     return n;
+}
+
+/* ---- exhaustion ------------------------------------------------------------------------------ */
+
+uint32_t ta_system_exhausted(ta_system *system) {
+    ta_pool *pools[4] = {&system->actors, &system->requests, &system->timers, &system->events};
+    static const uint32_t names[4] = {TA_POOL_ACTORS, TA_POOL_REQUESTS, TA_POOL_TIMERS,
+                                      TA_POOL_EVENTS};
+    uint32_t found = TA_POOL_NONE;
+    /* a pool that refused and is full still; then one that refused (a check
+     * for room for several, as an adoption's); then the slab, whose free
+     * bytes do not say whether an object fits */
+    for (uint32_t i = 0; i < 4 && found == TA_POOL_NONE; i++) {
+        uint32_t reserve = pools[i] == &system->events ? system->core.reserve : 0;
+        if (pools[i]->refused && ta_pool_free_count(pools[i]) <= reserve) found = names[i];
+    }
+    for (uint32_t i = 0; i < 4 && found == TA_POOL_NONE; i++)
+        if (pools[i]->refused) found = names[i];
+    if (found == TA_POOL_NONE && system->slab.refused) found = TA_POOL_SLAB;
+    for (uint32_t i = 0; i < 4; i++)
+        pools[i]->refused = 0;
+    system->slab.refused = 0;
+    return found;
 }
 
 /* ---- relocation ------------------------------------------------------------------------------ */

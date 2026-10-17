@@ -30,7 +30,7 @@ void ta_slab_init(ta_slab *slab, void *pages, ta_slab_page *metadata, uint32_t p
     slab->used_pages = 0;
     for (uint32_t i = 0; i < TA_SLAB_CLASSES; i++)
         slab->class_head[i] = TA_NIL;
-    slab->pad = 0;
+    slab->refused = 0;
 }
 
 static void list_remove(ta_slab *slab, uint32_t c, uint32_t p) {
@@ -63,6 +63,7 @@ uint32_t ta_slab_alloc(ta_slab *slab, uint32_t size) {
         } else if (slab->high_water_mark < slab->page_count) {
             p = slab->high_water_mark++;
         } else {
+            slab->refused = 1;
             return TA_NIL;
         }
         m[p].size_class = (uint8_t)c;

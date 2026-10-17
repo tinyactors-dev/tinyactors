@@ -283,6 +283,14 @@ void ta_system_cancel(ta_system *s, uint32_t sender, uint32_t sendid);
 void ta_system_cancel_timers(ta_system *s, uint32_t index);
 void ta_system_fire_timers(ta_system *s);
 uint32_t ta_system_invoke(ta_system *s, uint32_t parent, const ta_core_out *o);
+/* The default string slab: a base and a share per actor (a host that grows
+ * the actors grows the strings by their share) */
+#define TA_STRING_BYTES_BASE      16384u
+#define TA_STRING_BYTES_PER_ACTOR 16u
+/* The pool an allocation found full since the last call or the last
+ * relocation (a TA_POOL_*; TA_POOL_NONE if none did), and the marks cleared:
+ * what the host grows for a TA_ERROR_NO_MEMORY or a TA_RUN_EXHAUSTED. */
+uint32_t ta_system_exhausted(ta_system *s);
 void ta_system_uninvoke(ta_system *s, uint32_t parent, const ta_core_out *o);
 /* An external invocation ends: its request and what it holds (invoke id, type, src, params). */
 void ta_system_external_free(ta_system *s, uint32_t ri);

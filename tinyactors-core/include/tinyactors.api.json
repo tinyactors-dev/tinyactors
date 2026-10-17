@@ -3158,11 +3158,35 @@
         {
           "name": "next_deadline",
           "type": "ta_time"
+        },
+        {
+          "name": "actors_high_water",
+          "type": "uint32_t"
+        },
+        {
+          "name": "events_high_water",
+          "type": "uint32_t"
+        },
+        {
+          "name": "timers_high_water",
+          "type": "uint32_t"
+        },
+        {
+          "name": "workspaces_high_water",
+          "type": "uint32_t"
+        },
+        {
+          "name": "requests_high_water",
+          "type": "uint32_t"
+        },
+        {
+          "name": "slab_pages_high_water",
+          "type": "uint32_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 224,
+          "size": 248,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3204,11 +3228,17 @@
             "fuel_clock": 192,
             "traces_started": 200,
             "traces_sampled": 208,
-            "next_deadline": 216
+            "next_deadline": 216,
+            "actors_high_water": 224,
+            "events_high_water": 228,
+            "timers_high_water": 232,
+            "workspaces_high_water": 236,
+            "requests_high_water": 240,
+            "slab_pages_high_water": 244
           }
         },
         "aarch64": {
-          "size": 224,
+          "size": 248,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3250,11 +3280,17 @@
             "fuel_clock": 192,
             "traces_started": 200,
             "traces_sampled": 208,
-            "next_deadline": 216
+            "next_deadline": 216,
+            "actors_high_water": 224,
+            "events_high_water": 228,
+            "timers_high_water": 232,
+            "workspaces_high_water": 236,
+            "requests_high_water": 240,
+            "slab_pages_high_water": 244
           }
         },
         "wasm32": {
-          "size": 224,
+          "size": 248,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -3296,7 +3332,13 @@
             "fuel_clock": 192,
             "traces_started": 200,
             "traces_sampled": 208,
-            "next_deadline": 216
+            "next_deadline": 216,
+            "actors_high_water": 224,
+            "events_high_water": 228,
+            "timers_high_water": 232,
+            "workspaces_high_water": 236,
+            "requests_high_water": 240,
+            "slab_pages_high_water": 244
           }
         }
       }

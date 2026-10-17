@@ -183,11 +183,18 @@ The host's counters (`ta_host_stats`) and each chart's
 (`ta_chart_stats`), summed by chart name over every segment, retired
 versions included. No params.
 
-Result: `{"host": {...}, "charts": [...]}`:
+Result: `{"host": {...}, "pools": {...}, "charts": [...]}`:
 - `host`: `segments`, `actors`, `hibernated`, `runnable`, `migrations`,
   `regionBytes`, `delivered`, `routed`, `migrated`, `retired`, `fuelClock`.
   `regionBytes` sums the live segments' regions; the host's copies of
   their images (`ta_host_add_image`) are not in it.
+- `pools`: `actors`, `events`, `timers`, `workspaces`, `requests` and
+  `slabBytes` (the slab of instances and strings, in bytes), each
+  `{"capacity", "used", "highWater"}`: what the pool holds now, the most
+  it held at once since its segment was made, and its size, summed over
+  the live segments. A pool that fills grows its segment
+  ([host-config.md](host-config.md)); `highWater` against `capacity` is
+  what a config sized up front needs.
 - each chart: `name`, `actors`, `hibernated`, `spawned`, `ended`, `turns`,
   `macrosteps`, `fuel`, `errorsExecution`, `errorsCommunication`,
   `errorsPlatform`, `faults`.
@@ -199,6 +206,10 @@ All the numbers are unsigned integers.
 → {"id": 1, "result": {"host": {"segments": 1, "actors": 1, "hibernated": 0, "runnable": 0, "migrations": 0,
    "regionBytes": 131072, "delivered": 0, "routed": 0, "migrated": 0, "retired": 0,
    "fuelClock": 3},
+   "pools": {"actors": {"capacity": 64, "used": 1, "highWater": 1},
+   "events": {"capacity": 256, "used": 0, "highWater": 1}, "timers": {"capacity": 64, "used": 0, "highWater": 0},
+   "workspaces": {"capacity": 4, "used": 0, "highWater": 1}, "requests": {"capacity": 16, "used": 0, "highWater": 0},
+   "slabBytes": {"capacity": 94208, "used": 4096, "highWater": 4096}},
    "charts": [{"name": "pinged", "actors": 1, "hibernated": 0, "spawned": 1,
    "ended": 0, "turns": 1, "macrosteps": 1, "fuel": 3, "errorsExecution": 0,
    "errorsCommunication": 0, "errorsPlatform": 0, "faults": 0}]}}

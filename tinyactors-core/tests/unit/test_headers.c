@@ -101,6 +101,8 @@ ABI_CHECK(offsetof(ta_system_stats, size) == 0, system_stats_size_first);
 /* the stats grow at the end: older readers set a smaller size */
 ABI_CHECK(offsetof(ta_system_stats, traces_started) > offsetof(ta_system_stats, fuel_clock),
           system_stats_traces_last);
+ABI_CHECK(offsetof(ta_system_stats, actors_high_water) > offsetof(ta_system_stats, next_deadline),
+          system_stats_high_water_last);
 ABI_CHECK(offsetof(ta_chart_stats, size) == 0, chart_stats_size_first);
 ABI_CHECK(offsetof(ta_chart_stats, actors) == 8 + sizeof(ta_string_view),
           chart_stats_actors_offset);

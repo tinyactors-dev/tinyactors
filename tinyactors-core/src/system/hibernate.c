@@ -1019,9 +1019,12 @@ ta_status ta_system_adopt(ta_system *system, ta_bytes bytes, uint32_t *actor) {
         if (!parent_ok) return TA_ERROR_INVALID;
         timers += view.timer_count;
     }
-    if (ta_pool_free_count(&system->actors) < th.session_count ||
-        ta_pool_free_count(&system->timers) < timers ||
-        ta_pool_free_count(&system->events) < timers + core->reserve + 1)
+    /* room for the whole tree first; a pool without it is marked refused, so
+     * the host grows that one (ta_system_exhausted) */
+    if (ta_pool_free_count(&system->actors) < th.session_count) system->actors.refused = 1;
+    if (ta_pool_free_count(&system->timers) < timers) system->timers.refused = 1;
+    if (ta_pool_free_count(&system->events) < timers + core->reserve + 1) system->events.refused = 1;
+    if (system->actors.refused || system->timers.refused || system->events.refused)
         return TA_ERROR_NO_MEMORY;
     /* sessions in preorder: each one's parent is already here */
     uint32_t root = TA_NIL;

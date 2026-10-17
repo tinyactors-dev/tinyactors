@@ -49,6 +49,10 @@ typedef struct ta_system_stats {
      * of them were sampled */
     uint64_t traces_started, traces_sampled;
     ta_time next_deadline; /* the earliest pending delayed send, UINT64_MAX: none */
+    /* the most each pool held at once since the system was made (a
+     * relocation keeps them): what a planner sizes a config by */
+    uint32_t actors_high_water, events_high_water, timers_high_water;
+    uint32_t workspaces_high_water, requests_high_water, slab_pages_high_water;
 } ta_system_stats;
 
 /* What one chart's actors did in one system (ta_system_chart_stats_get), or

@@ -12,7 +12,7 @@ void ta_pool_init(ta_pool *pool, void *slots, unsigned char *generations, uint32
     pool->free_head = TA_NIL;
     pool->high_water_mark = 0;
     pool->used = 0;
-    pool->pad = 0;
+    pool->refused = 0;
 }
 
 uint32_t ta_pool_alloc(ta_pool *pool) {
@@ -24,6 +24,7 @@ uint32_t ta_pool_alloc(ta_pool *pool) {
         index = pool->high_water_mark++;
         ta_pool__generations(pool)[index] = 0;
     } else {
+        pool->refused = 1;
         return TA_NIL;
     }
     ta_pool__generations(pool)[index]++; /* even -> odd: live */

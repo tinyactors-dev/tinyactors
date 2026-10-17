@@ -103,15 +103,27 @@ binding can turn on export or a watch later without making the host
 again).
 
 **Every capacity is a segment's initial size, not a cap.** When a pool or
-slab of a segment fills, a run answers `TA_RUN_EXHAUSTED` and the host
-grows that segment, between runs, into a block twice as large
-(`segment_grow` in `src/host/host.c`): `maxActors`, `maxEvents`,
-`maxTimers`, `maxRequests`, `workspaces`, `stringBytes`, `traceContexts`
-and `traceBytes` double, each clamped to its limit, and `instanceBytes`
-is derived again. A value given here doubles like a default: `traceBytes`
-included, so an explicit `traceBytes` is the journal's starting size, not
-a bound on trace memory (accepted 2026-10-13; until then only a defaulted
-journal grew, through `maxEvents`). Why the defaults are small:
+the slab of a segment fills, a run answers `TA_RUN_EXHAUSTED` naming it
+(or an input is refused for it), and the host grows that segment, between
+runs, into a new block with more of what ran out and the rest as it was
+(`segment_grow` in `src/host/host.c`):
+
+| Ran out | Grows |
+|---|---|
+| actors | `maxActors` doubles; `instanceBytes` and `stringBytes` grow by what the added actors need (their instances, and 16 bytes each of strings), so a value given for either keeps its own part |
+| events | `maxEvents` doubles, and `traceContexts` and `traceBytes` with it |
+| timers | `maxTimers` doubles |
+| requests | `maxRequests` doubles |
+| the slab | `stringBytes` doubles |
+
+Each is clamped to its limit; a pool at its limit is not grown again, and
+the input or the run is refused (`TA_ERROR_NO_MEMORY`, `TA_RUN_EXHAUSTED`).
+`workspaces` does not grow: an actor waits for a free one. A value given
+here grows like a default: `traceBytes` included, so an explicit
+`traceBytes` is the journal's starting size, not a bound on trace memory.
+`host.stats` reports each pool's capacity, use and high-water mark
+([requests.md](requests.md#hoststats)), from which a capacity planner
+sizes a host up front. Why the defaults are small:
 
 - **`stringBytes`: 16384 + 16 × `maxActors`** (17408 at 64 actors), the
   system's default for every segment. Until 2026-10-13 the host gave each

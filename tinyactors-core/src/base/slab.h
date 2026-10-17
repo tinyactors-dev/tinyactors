@@ -37,7 +37,7 @@ typedef struct ta_slab {
     uint32_t high_water_mark; /* pages [high_water_mark, page_count) never used */
     uint32_t used_pages;
     uint32_t class_head[TA_SLAB_CLASSES];
-    uint32_t pad;
+    uint32_t refused; /* 1 once an alloc found no page; its owner clears it */
 } ta_slab;
 
 TA_INLINE size_t ta_slab_pages_bytes(uint32_t page_count) {

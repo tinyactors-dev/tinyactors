@@ -60,10 +60,13 @@ static uint32_t next_external(ta_system *system, uint32_t index) {
     return event_index;
 }
 
-static uint32_t exhausted_pool(const ta_system *system) {
-    if (ta_pool_free_count(&system->timers) == 0) return TA_POOL_TIMERS;
-    return ta_pool_free_count(&system->events) <= system->core.reserve ? TA_POOL_EVENTS
-                                                                       : TA_POOL_SLAB;
+/* What a step that stopped for memory ran out of: the pool that refused;
+ * else a full timer pool (core checks it before a delayed send without
+ * allocating), else the slab. */
+static uint32_t exhausted_pool(ta_system *system) {
+    uint32_t pool = ta_system_exhausted(system);
+    if (pool != TA_POOL_NONE) return pool;
+    return ta_pool_free_count(&system->timers) == 0 ? TA_POOL_TIMERS : TA_POOL_SLAB;
 }
 
 /* The length of `text` cut to at most TA_SYSTEM_MAX_STRING bytes, before a
@@ -137,8 +140,11 @@ static uint32_t run_actor(ta_system *system, uint32_t index, uint32_t quantum, u
         switch (rc) {
         case TA_STEP_SEND: {
             uint32_t sent = system->effects_length;
-            if (ta_system_route_send(system, index, &core->out) == TA_POOL_TIMERS)
+            if (ta_system_route_send(system, index, &core->out) == TA_POOL_TIMERS) {
+                /* no timer for it: the chart is told, and the pool does not grow */
+                system->timers.refused = 0;
                 ta_core_raise_platform(core, instance, "error.execution", TA_NIL);
+            }
             if (system->effects_length > sent) { /* it left the system: wait until it is decided */
                 ta_effect_record *effect =
                     &SYSTEM_POINTER(system, effects_relative, ta_effect_record)[system->effects_length - 1];
@@ -261,6 +267,7 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
      * before it (docs/adr/0006, section 9) */
     system->fuel_clock++;
     system->core.trace_clock = system->fuel_clock;
+    (void)ta_system_exhausted(system); /* what refused before this run is not its */
     ta_system_fire_timers(system);
     uint32_t used = 0, status = TA_RUN_IDLE;
     uint32_t pending = ta_system_retry_pending(system);

@@ -496,6 +496,22 @@ static void request_run_trace_unwatch(request *r, uint32_t map) {
         request_refuse(r, "stale", "no such watch: it ended or never was");
 }
 
+/* A pool of host.stats: what it can hold, holds now, and held at most. */
+typedef struct request_pool {
+    uint64_t capacity, used, high_water;
+} request_pool;
+
+static void request_put_pool(request *r, const char *name, request_pool pool) {
+    request_put_key(r, name);
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 3);
+    request_put_key(r, "capacity");
+    cbor_output_uint(&r->out, pool.capacity);
+    request_put_key(r, "used");
+    cbor_output_uint(&r->out, pool.used);
+    request_put_key(r, "highWater");
+    cbor_output_uint(&r->out, pool.high_water);
+}
+
 static void request_put_chart(request *r, const ta_chart_stats *chart) {
     cbor_output_head(&r->out, CBOR_MAJOR_MAP, 12);
     request_put_key(r, "name");
@@ -540,7 +556,9 @@ static void request_run_host_stats(request *r, uint32_t map) {
     for (uint32_t i = 0; i < count; i++)
         charts[i].size = sizeof charts[i];
     host_chart_stats(r->host, charts, count);
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 2);
+    ta_system_stats pools;
+    host_pools_get(r->host, &pools);
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 3);
     request_put_key(r, "host");
     cbor_output_head(&r->out, CBOR_MAJOR_MAP, 11);
     request_put_key(r, "segments");
@@ -565,6 +583,18 @@ static void request_run_host_stats(request *r, uint32_t map) {
     cbor_output_uint(&r->out, stats.retired);
     request_put_key(r, "fuelClock");
     cbor_output_uint(&r->out, stats.fuel_clock);
+    request_put_key(r, "pools");
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 6);
+    uint64_t page = pools.slab_page_bytes;
+    request_put_pool(r, "actors", (request_pool){pools.actors_capacity, pools.actors, pools.actors_high_water});
+    request_put_pool(r, "events", (request_pool){pools.events_capacity, pools.events, pools.events_high_water});
+    request_put_pool(r, "timers", (request_pool){pools.timers_capacity, pools.timers, pools.timers_high_water});
+    request_put_pool(r, "workspaces",
+                     (request_pool){pools.workspaces_capacity, pools.workspaces, pools.workspaces_high_water});
+    request_put_pool(r, "requests",
+                     (request_pool){pools.requests_capacity, pools.requests, pools.requests_high_water});
+    request_put_pool(r, "slabBytes", (request_pool){pools.slab_pages_capacity * page, pools.slab_pages * page,
+                                                     pools.slab_pages_high_water * page});
     request_put_key(r, "charts");
     cbor_output_head(&r->out, CBOR_MAJOR_ARRAY, count);
     for (uint32_t i = 0; i < count; i++)

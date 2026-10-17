@@ -151,35 +151,67 @@ uint32_t host_moved_get(const ta_host *host, uint64_t key) {
 
 /* ---- segments ---------------------------------------------------------------------- */
 
-/* A bigger block for a segment: TA_OK; TA_ERROR_NO_MEMORY if the allocator
- * refused it; TA_ERROR_INVALID if it cannot grow (the segment unchanged). */
-static ta_status segment_grow(ta_host *host, host_segment *segment) {
-    if (host->running) return TA_ERROR_NO_MEMORY; /* nothing grows during a run */
-    /* each capacity doubled up to its hard limit (ta_system_config_normalize
-     * clamps them; the slab's bytes saturate before they would wrap) */
+/* What a segment's config derives for its instances with `max_actors` actors. */
+static uint32_t derived_instance_bytes(const host_segment *segment, uint32_t max_actors) {
     ta_system_config wanted = segment->config, config;
-    wanted.max_actors *= 2;
-    wanted.max_events *= 2;
-    wanted.max_timers *= 2;
-    wanted.max_requests *= 2;
-    wanted.workspaces *= 2;
-    wanted.instance_bytes = 0; /* derived from max_actors */
-    wanted.string_bytes =
-        wanted.string_bytes > TA_SLAB_MAX_BYTES / 2 ? TA_SLAB_MAX_BYTES : wanted.string_bytes * 2;
-    /* the trace contexts and the journal keep up with the events, as their
-     * defaults do */
-    wanted.trace_contexts *= 2;
-    wanted.trace_bytes *= 2;
+    wanted.max_actors = max_actors;
+    wanted.instance_bytes = 0;
     ta_system_config_normalize(&segment->system->core.image_view, &wanted, &config);
-    /* every capacity at its hard limit: a retry would fail the same way, so
-     * the caller's loop stops (TA_ERROR_INVALID: the limits refused, not the
+    return config.instance_bytes;
+}
+
+static uint32_t doubled(uint32_t value) {
+    return value > UINT32_MAX / 2 ? UINT32_MAX : value * 2;
+}
+
+/* A bigger block for a segment, with more of `pool` (a TA_POOL_*, what ran
+ * out) and the rest as it was: TA_OK; TA_ERROR_NO_MEMORY if the allocator
+ * refused it; TA_ERROR_INVALID if that pool cannot grow (the segment
+ * unchanged). */
+static ta_status segment_grow(ta_host *host, host_segment *segment, uint32_t pool) {
+    if (host->running) return TA_ERROR_NO_MEMORY; /* nothing grows during a run */
+    /* the pool doubled up to its hard limit (ta_system_config_normalize
+     * clamps it; the slab's bytes saturate before they would wrap) */
+    ta_system_config wanted = segment->config, config;
+    switch (pool) {
+    case TA_POOL_ACTORS: {
+        /* the slab by what the added actors need: their instances, and the
+         * strings' share per actor (not its fixed base) */
+        uint32_t before = wanted.max_actors;
+        wanted.max_actors = doubled(before);
+        if (wanted.max_actors > TA_SYSTEM_MAX_ACTORS) wanted.max_actors = TA_SYSTEM_MAX_ACTORS;
+        uint32_t added = wanted.max_actors - before;
+        uint64_t instances = (uint64_t)wanted.instance_bytes +
+                             derived_instance_bytes(segment, wanted.max_actors) -
+                             derived_instance_bytes(segment, before);
+        uint64_t strings = (uint64_t)wanted.string_bytes + (uint64_t)added * TA_STRING_BYTES_PER_ACTOR;
+        wanted.instance_bytes = instances > TA_SLAB_MAX_BYTES ? TA_SLAB_MAX_BYTES : (uint32_t)instances;
+        wanted.string_bytes = strings > TA_SLAB_MAX_BYTES ? TA_SLAB_MAX_BYTES : (uint32_t)strings;
+        break;
+    }
+    case TA_POOL_EVENTS:
+        wanted.max_events = doubled(wanted.max_events);
+        /* the trace contexts and the journal keep up with the events, as
+         * their defaults do */
+        wanted.trace_contexts = doubled(wanted.trace_contexts);
+        wanted.trace_bytes = doubled(wanted.trace_bytes);
+        break;
+    case TA_POOL_TIMERS: wanted.max_timers = doubled(wanted.max_timers); break;
+    case TA_POOL_REQUESTS: wanted.max_requests = doubled(wanted.max_requests); break;
+    case TA_POOL_SLAB:
+        wanted.string_bytes = wanted.string_bytes > TA_SLAB_MAX_BYTES / 2 ? TA_SLAB_MAX_BYTES
+                                                                          : wanted.string_bytes * 2;
+        break;
+    default: return TA_ERROR_INVALID; /* nothing says what ran out */
+    }
+    ta_system_config_normalize(&segment->system->core.image_view, &wanted, &config);
+    /* that pool at its hard limit: a retry would fail the same way, so the
+     * caller's loop stops (TA_ERROR_INVALID: the limits refused, not the
      * allocator) */
     const ta_system_config *now = &segment->system->config;
     if (config.max_actors <= now->max_actors && config.max_events <= now->max_events &&
         config.max_timers <= now->max_timers && config.max_requests <= now->max_requests &&
-        config.workspaces <= now->workspaces && config.string_bytes <= now->string_bytes &&
-        config.instance_bytes <= now->instance_bytes &&
-        config.trace_contexts <= now->trace_contexts && config.trace_bytes <= now->trace_bytes)
+        config.string_bytes <= now->string_bytes && config.instance_bytes <= now->instance_bytes)
         return TA_ERROR_INVALID;
     size_t need;
     if (ta_system_layout(segment->image, &config, &need) != TA_OK) return TA_ERROR_INVALID;
@@ -196,6 +228,13 @@ static ta_status segment_grow(ta_host *host, host_segment *segment) {
     segment->system = new_system;
     segment->config = config;
     return TA_OK;
+}
+
+/* Grow what the segment's last refused input ran out of. */
+static ta_status segment_grow_exhausted(ta_host *host, host_segment *segment) {
+    uint32_t pool = ta_system_exhausted(segment->system);
+    TA_ASSERT(pool != TA_POOL_NONE); /* every refusal of an input names its pool */
+    return segment_grow(host, segment, pool);
 }
 
 static uint32_t image_charts(const ta_image *image) {
@@ -719,7 +758,7 @@ ta_status ta_host_spawn(ta_host *host, const ta_spawn *spawn, uint64_t *session)
         uint32_t was = host_guard(host); /* create */
         status = ta_system_spawn(segment_record->system, spawn, &actor);
         host_unguard(host, was);
-        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, segment_record) != TA_OK) break;
+        if (status != TA_ERROR_NO_MEMORY || segment_grow_exhausted(host, segment_record) != TA_OK) break;
     }
     if (status != TA_OK) return status;
     ta_actor_info actor_info;
@@ -740,7 +779,7 @@ ta_status host_send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_even
         uint32_t was = host_guard(host); /* release (error.communication) */
         status = ta_system_send(segment->system, &event_in);
         host_unguard(host, was);
-        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, segment) != TA_OK) break;
+        if (status != TA_ERROR_NO_MEMORY || segment_grow_exhausted(host, segment) != TA_OK) break;
     }
     if (status == TA_OK) segment->busy = 1;
     return status;
@@ -1487,7 +1526,7 @@ static void adopt_home(ta_host *host, host_segment *from, const unsigned char *b
         uint32_t was = host_guard(host); /* deserialize, payload_deserialize */
         ta_status status = ta_system_adopt(from->system, (ta_bytes){blob, length}, &actor);
         host_unguard(host, was);
-        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, from) != TA_OK) break;
+        if (status != TA_ERROR_NO_MEMORY || segment_grow_exhausted(host, from) != TA_OK) break;
     }
     from->busy = 1;
 }
@@ -1536,7 +1575,7 @@ static int migrate_one(ta_host *host, host_migration *migration, uint64_t sessio
                 was = host_guard(host); /* deserialize, payload_deserialize, migrate */
                 status = ta_system_adopt(to->system, blob, &na);
                 host_unguard(host, was);
-                if (status != TA_ERROR_NO_MEMORY || (grown = segment_grow(host, to)) != TA_OK) break;
+                if (status != TA_ERROR_NO_MEMORY || (grown = segment_grow_exhausted(host, to)) != TA_OK) break;
             }
             moved = status == TA_OK;
             refused = !moved && grown == TA_ERROR_NO_MEMORY;
@@ -1928,7 +1967,7 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             if (drain(host, si) != TA_OK) exhausted = 1;
             segment = &host->segments[si];
             if (result.status == TA_RUN_EXHAUSTED) {
-                ta_status grown = segment_grow(host, segment);
+                ta_status grown = segment_grow(host, segment, result.detail);
                 if (grown == TA_ERROR_NO_MEMORY) { /* refused: the same run again later */
                     exhausted = 1;
                     detail = result.detail;
@@ -2089,7 +2128,7 @@ ta_status ta_host_wake(ta_host *host, uint64_t session, ta_bytes blob) {
         uint32_t was = host_guard(host); /* deserialize */
         status = ta_actor_wake(segment->system, actor, blob);
         host_unguard(host, was);
-        if (status != TA_ERROR_NO_MEMORY || segment_grow(host, segment) != TA_OK) break;
+        if (status != TA_ERROR_NO_MEMORY || segment_grow_exhausted(host, segment) != TA_OK) break;
     }
     if (status == TA_OK) {
         segment->busy = 1;
@@ -2310,6 +2349,37 @@ void host_stats_get(const ta_host *host, ta_host_stats *o) {
     o->size = n;
 }
 
+void host_pools_get(const ta_host *host, ta_system_stats *o) {
+    ta_memset(o, 0, sizeof *o);
+    o->size = sizeof *o;
+    for (uint32_t i = 0; i < host->segment_count; i++) {
+        const host_segment *segment = segment_of(host, i);
+        if (!segment) continue;
+        ta_system_stats stats;
+        stats.size = sizeof stats;
+        ta_system_stats_get(segment->system, &stats);
+        o->actors += stats.actors;
+        o->actors_capacity += stats.actors_capacity;
+        o->actors_high_water += stats.actors_high_water;
+        o->events += stats.events;
+        o->events_capacity += stats.events_capacity;
+        o->events_high_water += stats.events_high_water;
+        o->timers += stats.timers;
+        o->timers_capacity += stats.timers_capacity;
+        o->timers_high_water += stats.timers_high_water;
+        o->workspaces += stats.workspaces;
+        o->workspaces_capacity += stats.workspaces_capacity;
+        o->workspaces_high_water += stats.workspaces_high_water;
+        o->requests += stats.requests;
+        o->requests_capacity += stats.requests_capacity;
+        o->requests_high_water += stats.requests_high_water;
+        o->slab_pages += stats.slab_pages;
+        o->slab_pages_capacity += stats.slab_pages_capacity;
+        o->slab_pages_high_water += stats.slab_pages_high_water;
+        o->slab_page_bytes = stats.slab_page_bytes;
+    }
+}
+
 uint32_t host_actors(const ta_host *host, uint64_t *cursor, ta_uint64_array sessions) {
     uint64_t *out = sessions.pointer;
     uint32_t capacity = sessions.capacity;
@@ -2350,7 +2420,7 @@ ta_status ta_host_boot(ta_host *host, uint32_t segment) {
         stats.size = sizeof stats;
         ta_system_stats_get(segment_record->system, &stats);
         if (stats.actors + image_info.boot_actor_count <= stats.actors_capacity) break;
-        if (segment_grow(host, segment_record) != TA_OK) return TA_ERROR_NO_MEMORY;
+        if (segment_grow(host, segment_record, TA_POOL_ACTORS) != TA_OK) return TA_ERROR_NO_MEMORY;
     }
     uint32_t was = host_guard(host); /* create */
     ta_status r = ta_system_boot(segment_record->system);

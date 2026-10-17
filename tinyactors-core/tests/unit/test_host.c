@@ -1313,7 +1313,63 @@ static void test_request_answered_with_an_error(void) {
     world_close(&e);
 }
 
+/* A segment grows only the pool that ran out: spawning past maxActors
+ * doubles the actors and the slab by what they need (a grown segment is the
+ * size of one made for that many actors), and the other pools stay; events
+ * past maxEvents grow the events alone. The high-water marks are what the
+ * pools held at most. */
+static ta_system_stats segment_stats(host_world *e, uint32_t segment) {
+    ta_system_stats stats;
+    stats.size = sizeof stats;
+    ta_system_stats_get(ta_host_system(e->host, segment), &stats);
+    return stats;
+}
+
+static void test_growth_grows_what_ran_out(void) {
+    host_world sized;
+    world_open(&sized, 64, NULL, 0);
+    uint32_t sized_segment = world_add(&sized, ECHO);
+    ta_system_stats want = segment_stats(&sized, sized_segment);
+    world_close(&sized);
+
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    uint32_t segment = world_add(&e, ECHO);
+    ta_system_stats before = segment_stats(&e, segment);
+    uint64_t sessions[40];
+    for (int i = 0; i < 40; i++)
+        sessions[i] = spawn(&e, "echo");
+    ta_system_stats grown = segment_stats(&e, segment);
+    CHECK_EQUAL(grown.actors_capacity, 64u); /* 8, 16, 32, 64 */
+    CHECK_EQUAL(grown.actors_high_water, 40u);
+    CHECK_EQUAL(grown.events_capacity, before.events_capacity);
+    CHECK_EQUAL(grown.timers_capacity, before.timers_capacity);
+    CHECK_EQUAL(grown.requests_capacity, before.requests_capacity);
+    CHECK_EQUAL(grown.workspaces_capacity, before.workspaces_capacity);
+    CHECK_EQUAL(grown.trace_contexts_capacity, before.trace_contexts_capacity);
+    CHECK_EQUAL(grown.slab_pages_capacity, want.slab_pages_capacity);
+    CHECK_EQUAL(grown.region_bytes, want.region_bytes);
+    run(&e);
+
+    /* more events than the pool holds, for one actor that has not run */
+    uint32_t events = before.events_capacity + before.events_capacity / 2;
+    for (uint32_t i = 0; i < events; i++)
+        CHECK_EQUAL(send(&e, sessions[0], "noop", NULL), TA_OK);
+    ta_system_stats more = segment_stats(&e, segment);
+    CHECK_EQUAL(more.events_capacity, before.events_capacity * 2);
+    CHECK(more.events_high_water >= events);
+    CHECK_EQUAL(more.actors_capacity, 64u);
+    CHECK_EQUAL(more.timers_capacity, before.timers_capacity);
+    CHECK_EQUAL(more.slab_pages_capacity, grown.slab_pages_capacity);
+    run(&e);
+    ta_system_stats after = segment_stats(&e, segment);
+    CHECK(after.events < events); /* handled (an actor may keep its last one) */
+    CHECK_EQUAL(after.events_high_water, more.events_high_water); /* a mark, not a gauge */
+    world_close(&e);
+}
+
 int main(void) {
+    RUN(test_growth_grows_what_ran_out);
     RUN(test_boot_manifest);
     RUN(test_boot_refused);
     RUN(test_image_copied);
