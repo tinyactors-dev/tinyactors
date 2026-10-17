@@ -28,6 +28,13 @@ static void wake_workspace_waiters(ta_system *system) {
     }
 }
 
+uint32_t ta_system_workspace_waiters(const ta_system *system) {
+    uint32_t n = 0;
+    for (uint32_t i = system->workspace_queue.head; i != TA_NIL; i = ta_actor_at(system, i)->next)
+        n++;
+    return n;
+}
+
 static uint32_t mailbox_pop(ta_system *system, ta_actor *actor) {
     uint32_t event = actor->mailbox_head;
     if (event == TA_NIL) return TA_NIL;
@@ -269,6 +276,7 @@ ta_run ta_system_run(ta_system *system, uint32_t budget) {
     system->core.trace_clock = system->fuel_clock;
     (void)ta_system_exhausted(system); /* what refused before this run is not its */
     ta_system_fire_timers(system);
+    wake_workspace_waiters(system); /* workspaces added since the last run (a relocation) */
     uint32_t used = 0, status = TA_RUN_IDLE;
     uint32_t pending = ta_system_retry_pending(system);
     if (pending != TA_POOL_NONE) {

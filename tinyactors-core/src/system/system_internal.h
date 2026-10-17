@@ -320,5 +320,7 @@ void ta_system_effect_release(ta_system *s, ta_effect_record *f);
 void ta_system_effects_release(ta_system *system, uint32_t n, int resume);
 void ta_system_sender_resume(ta_system *system, uint32_t actor, uint64_t serial);
 int ta_system_senders_waiting(const ta_system *system);
+/* How many actors wait for a workspace (WAIT_WORKSPACE): their queue's length. */
+uint32_t ta_system_workspace_waiters(const ta_system *system);
 
 #endif /* TINYACTORS_SYSTEM_SYSTEM_INTERNAL_H */

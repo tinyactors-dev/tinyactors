@@ -169,11 +169,30 @@ static uint32_t slab_bytes(uint64_t bytes) {
     return bytes > TA_SLAB_MAX_BYTES ? TA_SLAB_MAX_BYTES : (uint32_t)bytes;
 }
 
-/* What ran out of a segment (a TA_POOL_*), and how many times its capacity
- * a bigger block holds. */
+/* Not a TA_POOL_*: no workspace is ever refused, an actor waits for one
+ * (WAIT_WORKSPACE); the host adds workspaces when actors are left waiting. */
+#define GROW_WORKSPACES 6u
+
+/* What a segment grows (a TA_POOL_* or GROW_WORKSPACES), how many times its
+ * capacity a bigger block holds, and for the workspaces how many. */
 typedef struct growth {
-    uint32_t pool, factor;
+    uint32_t pool, factor, workspaces;
 } growth;
+
+/* The workspaces for a segment whose actors wait for one: what its holders
+ * and waiters need, at least twice what it has, and at most as many as it
+ * has actors. A holder waits for the handling of its send (WAIT_EXTERNAL)
+ * and a run hands out at most EFFECTS_PER_RUN effects, so one growth adds
+ * at most that many: 40,000 actors sending at once take 4,100 workspaces,
+ * not 40,000. */
+static uint32_t workspaces_wanted(const ta_system *system) {
+    uint32_t have = system->workspaces.capacity;
+    uint64_t need = (uint64_t)system->workspaces.used + ta_system_workspace_waiters(system);
+    if (need > (uint64_t)have + EFFECTS_PER_RUN) need = (uint64_t)have + EFFECTS_PER_RUN;
+    if (need < (uint64_t)have * 2) need = (uint64_t)have * 2;
+    if (need > system->config.max_actors) need = system->config.max_actors;
+    return (uint32_t)need;
+}
 
 /* The segment's config with more of `growth.pool` and the rest as it was:
  * 0 if nothing says what ran out. ta_system_config_normalize clamps each
@@ -205,6 +224,7 @@ static int grown_config(const host_segment *segment, growth growth, ta_system_co
     case TA_POOL_TIMERS: wanted.max_timers = times(wanted.max_timers, growth.factor); break;
     case TA_POOL_REQUESTS: wanted.max_requests = times(wanted.max_requests, growth.factor); break;
     case TA_POOL_SLAB: wanted.string_bytes = slab_bytes((uint64_t)wanted.string_bytes * growth.factor); break;
+    case GROW_WORKSPACES: wanted.workspaces = growth.workspaces; break;
     default: return 0;
     }
     ta_system_config_normalize(&segment->system->core.image_view, &wanted, config);
@@ -221,17 +241,21 @@ static int grown_config(const host_segment *segment, growth growth, ta_system_co
  * events beside many actors, doubling from 256, would otherwise copy the
  * region at every doubling), up to the pool's hard limit. The actors need
  * no such rule: their share of the region is most of it once copying it
- * costs anything. */
+ * costs anything. The workspaces (GROW_WORKSPACES) grow to what
+ * workspaces_wanted says, once. */
 static ta_status segment_grow(ta_host *host, host_segment *segment, uint32_t pool) {
     if (host->running) return TA_ERROR_NO_MEMORY; /* nothing grows during a run */
-    const size_t enough =
-        pool == TA_POOL_ACTORS ? 0 : segment->memory_size + segment->memory_size / 4;
+    const size_t enough = pool == TA_POOL_ACTORS || pool == GROW_WORKSPACES
+                              ? 0
+                              : segment->memory_size + segment->memory_size / 4;
+    uint32_t workspaces = 0;
+    if (pool == GROW_WORKSPACES) workspaces = workspaces_wanted(segment->system);
     ta_system_config config;
     size_t need = 0;
     for (uint32_t factor = 2; factor; factor = factor < (1u << 30) ? factor * 2 : 0) {
         ta_system_config next;
         size_t bytes;
-        if (!grown_config(segment, (growth){pool, factor}, &next) ||
+        if (!grown_config(segment, (growth){pool, factor, workspaces}, &next) ||
             ta_system_layout(segment->image, &next, &bytes) != TA_OK || bytes <= need)
             break; /* at its limit: what the last factor gave */
         config = next;
@@ -244,7 +268,7 @@ static ta_status segment_grow(ta_host *host, host_segment *segment, uint32_t poo
     const ta_system_config *now = &segment->system->config;
     if (!need || (config.max_actors <= now->max_actors && config.max_events <= now->max_events &&
                   config.max_timers <= now->max_timers && config.max_requests <= now->max_requests &&
-                  config.string_bytes <= now->string_bytes &&
+                  config.workspaces <= now->workspaces && config.string_bytes <= now->string_bytes &&
                   config.instance_bytes <= now->instance_bytes))
         return TA_ERROR_INVALID;
     void *memory = host_alloc(host, need);
@@ -2013,6 +2037,14 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
                 fault = 1;
                 segment->busy = 0;
             }
+            /* actors left waiting for a workspace, held by senders whose
+             * sends wait for their handling: more workspaces, unless this
+             * run's batch is full (its senders go on at the ack). Refused,
+             * they wait as they would have. */
+            if (host->effect_count < EFFECTS_PER_RUN && segment->busy &&
+                !ta_index_queue_empty(&segment->system->workspace_queue) &&
+                segment_grow(host, segment, GROW_WORKSPACES) == TA_OK)
+                segment->busy = 1;
             if (host->effect_count >= EFFECTS_PER_RUN) full = 1;
         }
         for (uint32_t i = 0; i < host->migration_count && round == 0; i++) /* one quantum per run */

@@ -1393,9 +1393,48 @@ static void test_a_small_pool_grows_by_a_share_of_the_region(void) {
     world_close(&e);
 }
 
+/* Senders hold their workspaces until their sends are handled: actors left
+ * waiting for one make the host add workspaces (as many as hold and wait),
+ * so 256 actors sending at once are handed out in one batch, not four at a
+ * time. A segment whose actors never wait keeps its four. */
+static void test_workspaces_grow_for_waiting_senders(void) {
+    ta_io_processor_entry io = {{IO_TYPE, (uint32_t)strlen(IO_TYPE)}, {"http://example.com/", 19}};
+    host_world e;
+    world_open(&e, 8, &io, 1);
+    uint32_t segment = world_add(&e, SC("s", "initial='a'><state id='a'><transition event='go'>"
+                                             "<send type='" IO_TYPE "' target='out' event='x'/>"
+                                             "</transition></state>"));
+    uint64_t sessions[256];
+    for (int i = 0; i < 256; i++)
+        sessions[i] = spawn(&e, "s");
+    run(&e);
+    CHECK_EQUAL(segment_stats(&e, segment).workspaces_capacity, 4u);
+    for (int i = 0; i < 256; i++)
+        CHECK_EQUAL(send(&e, sessions[i], "go", NULL), TA_OK);
+    int cycles = 0, sends = 0;
+    while (sends < 256 && cycles < 1000) {
+        ta_run result = ta_host_run(e.host, 1000000);
+        CHECK(result.status != TA_RUN_FAULT && result.status != TA_RUN_EXHAUSTED);
+        const ta_host_effect *effects;
+        uint32_t n = ta_host_effects(e.host, &effects);
+        for (uint32_t i = 0; i < n; i++)
+            sends += effects[i].kind == TA_EFFECT_SEND;
+        ta_host_effects_ack(e.host);
+        cycles++;
+    }
+    CHECK_EQUAL(sends, 256);
+    CHECK_EQUAL(cycles, 1); /* four a batch before: 64 */
+    ta_system_stats stats = segment_stats(&e, segment);
+    CHECK_EQUAL(stats.workspaces_capacity, 256u); /* the holders and the waiters */
+    CHECK_EQUAL(stats.workspaces_high_water, 256u);
+    run(&e);
+    world_close(&e);
+}
+
 int main(void) {
     RUN(test_growth_grows_what_ran_out);
     RUN(test_a_small_pool_grows_by_a_share_of_the_region);
+    RUN(test_workspaces_grow_for_waiting_senders);
     RUN(test_boot_manifest);
     RUN(test_boot_refused);
     RUN(test_image_copied);

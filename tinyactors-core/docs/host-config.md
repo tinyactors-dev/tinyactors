@@ -122,7 +122,12 @@ whole region, so the events beside 80,000 actors grow from 256 to 131,072
 at once rather than in nine copies of it. Each is clamped to its limit; a
 pool at its limit is not grown again, and
 the input or the run is refused (`TA_ERROR_NO_MEMORY`, `TA_RUN_EXHAUSTED`).
-`workspaces` does not grow: an actor waits for a free one. A value given
+A workspace is never refused: an actor waits for a free one, and a
+sender holds its workspace until its send is handled. When a run leaves
+actors waiting for one, the host adds workspaces for those holding and
+those waiting (at least double, at most 4096 more at once, since a run
+hands out at most 4096 effects, and no more than `maxActors`), unless
+that run's batch is full. A value given
 here grows like a default: `traceBytes` included, so an explicit
 `traceBytes` is the journal's starting size, not a bound on trace memory.
 `host.stats` reports each pool's capacity, use and high-water mark
