@@ -7,93 +7,110 @@
   <entry id="l-tools" date="2026-10-16" step="coordination" kind="note" status="resolved">
     <what>tools/planxml.py edits docs/plan.xml (Plan) and docs/log.xml (Log), each validated against its schema before it is written.</what>
   </entry>
-  <entry id="l-p0-inventory-address-format" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+  <entry id="l-p0-inventory-address-format" date="2026-10-16" step="p0-inventory" kind="decision" status="resolved">
     <what>Expose ta_address_format and ta_address_format_name as Address.fromSession(system, session) and Address.fromName(system, name), static constructors of the Address type (decision d-address); p0-map writes their planned row.</what>
     <why>An application with a transport addresses an actor on another system by its system id and session or name. d-address made the Address core's parser behind a JavaScript type so that no application parses the grammar; formatting it by hand (percent-encoding a name, the #_scxml_ prefix) is the same grammar written the other way, and core has the function. Not instance properties: .session and .name are the parts already. Python has no counterpart (its Address takes text only), so the two bindings differ until Python adds it or the maintainer refuses it here.</why>
     <evidence>tinyactors-core/include/tinyactors/address.h (ta_address_format, ta_address_format_name, ta_buffer out); tinyactors-cpython/src/value_types.c:41-60 (Address(text) only); docs/plan.xml decision d-address.</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-inventory-quickjs-limits" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+  <entry id="l-p0-inventory-quickjs-limits" date="2026-10-16" step="p0-inventory" kind="decision" status="resolved">
     <what>quickjs: ta_datamodel_ecmascript_heap_bytes behind an API item (a read of the engine's heap on a datamodel "quickjs" host, named in p0-map); ta_datamodel_ecmascript_last_error used internally, as the message of the TinyactorsError that hibernate(), snapshot() or a migration failure gives with TA_ERROR_UNSUPPORTED on quickjs; ta_datamodel_ecmascript_set_memory_limit not exposed.</what>
     <why>quickjs is the sandbox (d-datamodel), whose limits are passed at creation (ta_datamodel_ecmascript_config: max_ops, memory_limit, realm); an operator watching a sandboxed host against its limit needs the usage, which is O(1). last_error says which variable could not be stored: it improves an error the API already raises, with no new item. Changing the limit on a running host has no need shown (the creation option covers the sandbox), so it stays out until one is. Python exposes none of the three and raises a bare TA_ERROR_UNSUPPORTED.</why>
     <evidence>tinyactors-core/include/tinyactors/datamodel_ecmascript.h:118-128; docs/plan.xml decision d-datamodel ("quickjs as a sandbox needs its limits passed through"); tinyactors-cpython/src/host.c:508-511 (a zeroed config).</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-inventory-basic-http" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+  <entry id="l-p0-inventory-basic-http" date="2026-10-16" step="p0-inventory" kind="decision" status="resolved">
     <what>Expose ta_http_encode_post and ta_http_parse_request as two functions of the module (the POST of a BasicHTTP send, and the event of an incoming request), for an application's HTTP I/O processor and the adapter's W3C BasicHTTP loopback; p0-map names them.</what>
     <why>BasicHTTP is SCXML's standard I/O processor (C.2), the codec is in core, transport-agnostic and freestanding, and the root rule says code free of any language's API belongs in a C layer, not in a binding. Without it an application (and the adapter) writes the form encoding again in JavaScript. This departs from Python's precedent: Python's adapter encodes and parses BasicHTTP in Python.</why>
     <evidence>tinyactors-core/include/tinyactors/basic_http.h; tinyactors-cpython/conform/__main__.py:404-429 (BasicHTTP written in Python); root AGENTS.md, "Layers".</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-inventory-segments" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+  <entry id="l-p0-inventory-segments" date="2026-10-16" step="p0-inventory" kind="decision" status="resolved">
     <what>ta_host_segment_count and ta_host_snapshot_segments are not exposed, as Python decided.</what>
     <why>host.stats has segments; Host.restore reads the images from the pack itself (ta_host_snapshot_image), so nothing needs the hashes.</why>
     <evidence>tinyactors-cpython/ROADMAP.md, "The API review (2026-10-15)", last paragraph.</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-inventory-xml-writer" date="2026-10-16" step="p0-inventory" kind="decision" status="for-maintainer">
+  <entry id="l-p0-inventory-xml-writer" date="2026-10-16" step="p0-inventory" kind="decision" status="resolved">
     <what>ta_xml_writer_* are not exposed now: the chart builder that would use them is the convenience layer's, after M1 and when the maintainer picks it, and the direct layer gains an item over the writer in that change.</what>
     <why>An application writes chart text today; no need for the writer is shown before the builder exists, and the direct layer mirrors core only where an item uses it (d-layers).</why>
     <evidence>tinyactors-core/include/tinyactors/compile.h:84-110; docs/plan.xml decision d-layers; tinyactors-cpython/AGENTS.md, "Layers" (the same deferral).</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p0-inventory-internals" date="2026-10-16" step="p0-inventory" kind="decision" status="resolved">
     <what>Two internal uses the plan did not name: ta_runtime_now_ns is the wall clock of a host given no clock (src/loop.c, as Python's loop.c), and ta_host_snapshot with an empty buffer is snapshot()'s quiescence check before any datamodel state is built (as Python's host.c).</what>
     <evidence>tinyactors-cpython/src/loop.c:119; tinyactors-cpython/src/host.c:1342.</evidence>
   </entry>
-  <entry id="l-p0-inventory-python-scan" date="2026-10-16" step="p0-inventory" kind="note" status="for-maintainer">
+  <entry id="l-p0-inventory-python-scan" date="2026-10-16" step="p0-inventory" kind="note" status="resolved">
     <what>The same scan applies to the Python binding: its docs/api-map.md lists only ta_host_resume, ta_host_locate, ta_host_system, ta_actor_info_get and ta_host_segment_info_get as used internally, and names no not-exposed functions except in ROADMAP.md. Its src calls 97 of core's 230 public functions; the three lists of tinyactors-napi/docs/api-map.md ("Every public function of core") can be carried over with Python's file names, and the decisions above (Address from parts, quickjs's heap and last error, BasicHTTP) asked of Python too. tinyactors-cpython was not edited.</what>
     <evidence>tinyactors-cpython/docs/api-map.md (the list under the table); a scan of tinyactors-cpython/src for calls of the names in tinyactors-core/include/*.api.json.</evidence>
+    <resolution>For the Python binding's session, not this one: noted in this log, Python not edited.</resolution>
   </entry>
-  <entry id="l-p0-map-quickjs-option" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-quickjs-option" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>The quickjs sandbox's limits are the Host option quickjs: {maxOps, memoryLimit, stackLimit, realm: 'auto' | 'isolated'}, each field ta_datamodel_ecmascript_config's (max_ops, memory_limit, stack_limit, realm), an absent field core's default 0; given with datamodel 'native' it throws TypeError at creation.</what>
     <why>d-datamodel says the limits are passed through from the Host's option but names no shape. One nested object keeps the sandbox's settings together and mirrors the C struct field by field (camelCase); abort_flag is not exposed (no JavaScript caller can set a C flag asynchronously). A TypeError for a quickjs option on a native host refuses a setting that would otherwise be silently ignored.</why>
     <evidence>tinyactors-core/include/tinyactors/datamodel_ecmascript.h:61-72; docs/plan.xml decision d-datamodel; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-quickjs-heap" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-quickjs-heap" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>ta_datamodel_ecmascript_heap_bytes is the getter host.quickjsHeapBytes (a number, read on each access), undefined on a native host.</what>
     <why>l-p0-inventory-quickjs-limits decided to expose the read and left the name to p0-map. A getter, not a method, because the read is O(1) and has no effect; the quickjs prefix says it is the sandbox's, not the host's memory.</why>
     <evidence>tinyactors-core/include/tinyactors/datamodel_ecmascript.h:124; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-basic-http" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-basic-http" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>BasicHTTP is encodeHTTPPost({url, event, fields, body}) returning the request's bytes (a Buffer copied once from the call's arena), and parseHTTPRequest(message) returning {method, target, body, event, fields}; fields are arrays of {name, value} strings, as ta_http_field; a refusal throws TinyactorsError with TA_ERROR_INVALID.</what>
     <why>l-p0-inventory-basic-http decided to expose the codec and left the names to p0-map. The names follow the root acronym rule (HTTP in capitals); an array of {name, value} keeps order and repeated names, which a plain object would lose.</why>
     <evidence>tinyactors-core/include/tinyactors/basic_http.h; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-send-many" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-send-many" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>host.sendMany(items) takes an array of objects of host.send(message)'s fields ({target, event, data, sendid, origin, traceparent}), not Python's tuples.</what>
     <why>JavaScript has no tuples; one shape for send(message), sendMany's items and send.message means a transport can batch what it received unchanged.</why>
     <evidence>tinyactors-cpython/docs/api-map.md, row Host.send_many; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-traceparent-null" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-traceparent-null" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>send.answer, invocation.sendBack and invocation.done keep the send's (or invocation's) trace unless the options give traceparent; traceparent: null starts a new trace; an absent or undefined traceparent keeps it.</what>
     <why>AGENTS.md says an answer keeps the trace 'unless the caller passes none' without saying how none is written. In JavaScript undefined means absent (an options object spread with a missing key), so null is the explicit 'none', as Python's traceparent=None is.</why>
     <evidence>tinyactors-napi/AGENTS.md, 'Layers and the resolver', the traceparent bullet; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-host-properties" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-host-properties" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>host.ticksPerSecond and host.closed are in the API, as Python's Host.ticks_per_second and Host.closed are; the plan's api section did not list them.</what>
     <why>Python's adapter converts the driver's monotonic ticks with ticks_per_second, and closed is how an application knows a close deferred from a handler happened. Borrowed from Python, not invented: host.config behind one, ta_host_free behind the other.</why>
     <evidence>tinyactors-cpython/docs/api-map.md, row Host.ticks_per_second, Host.closed; tinyactors-cpython/conform/__main__.py:182; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-exhausted" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-exhausted" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>An exhausted pool (TA_RUN_EXHAUSTED) is reported as TinyactorsError with status TA_ERROR_NO_MEMORY and the pool's name in the message, where Python raises MemoryError naming the pool.</what>
     <why>JavaScript has no MemoryError; RangeError is what engines throw for an allocation they refuse, but it carries no status to branch on. A TinyactorsError keeps one error type for core's reports, and the host stays usable as in Python.</why>
     <evidence>tinyactors-cpython/AGENTS.md, 'The loop' table (TA_PYTHON_NEXT_EXHAUSTED); tinyactors-core/include/tinyactors/system.h (TA_RUN_EXHAUSTED, TA_POOL_*); tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-address" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-address" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>new Address(text) takes any text (parts undefined when it is no address); Address.fromSession(system, session: bigint) and Address.fromName(system, name) throw TinyactorsError with TA_ERROR_INVALID when core's formatter refuses; an Address is not a Value, so encode and a payload refuse it.</what>
     <why>d-address follows Python's Address(text); tag 32 is never written by Node (values.txt, ECMAScript), so an Address inside data has no encoding and is refused rather than turned into a string silently.</why>
     <evidence>tinyactors-core/include/tinyactors/address.h:45-60; docs/plan.xml decision d-address; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-send-options" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-send-options" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>host.send's options are {sendid, traceparent, origin} (Python's keywords, sendid included, which the plan's item omitted), and host.fail(target, sendid?) takes the sendid as optional, as Python's sendid=None.</what>
     <why>sendid is ta_event_in's field and send.message carries it, so send(target, ...) and send(message) take the same fields.</why>
     <evidence>tinyactors-cpython/docs/api-map.md, rows Host.send and Host.fail; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-types" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-types" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>index.d.ts declares Compiled, Send, LogEntry, Migrated, Invocation, Service, ChartRef and MigrationResult as interfaces (no constructor exported); TinyactorsError, CompileError, ResolveError, Address, SimulatedClock and Host as classes. TinyactorsError's constructor is (message, {code, reason, path, status}); ResolveError's (message, {line, column}); ChartRef is {segment, chart}.</what>
     <why>Only what an application constructs or tests with instanceof is a class; the rest the addon makes. Options objects in place of Python's keyword arguments, as the plan's ResolveError item already writes.</why>
     <evidence>docs/plan.xml section api, items a-resolver, a-error; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p0-map-snapshot-label" date="2026-10-16" step="p0-map" kind="decision" status="for-maintainer">
+  <entry id="l-p0-map-snapshot-label" date="2026-10-16" step="p0-map" kind="decision" status="resolved">
     <what>host.snapshot() labels its datamodel state tinyactors-napi, as Python's is labelled tinyactors-cpython, and Host.restore refuses a pack another program labelled.</what>
     <why>A native datamodel's state is the addon's own CBOR, which another binding cannot read.</why>
     <evidence>tinyactors-cpython/AGENTS.md, 'Snapshots'; tinyactors-napi/docs/api-map.md (its row); tinyactors-napi/index.d.ts</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-values-gate-empty" date="2026-10-16" step="p1-values" kind="deviation" status="resolved">
     <what>GATE in mise/napi.rb holds no suite (suites: []), so mise run test skips the conformance run; it was protocol and scenarios before any adapter existed.</what>
@@ -101,20 +118,22 @@
     <evidence>tinyactors-test/lib/runner.rb:347-359 (summary, REQUIRED); mise run conform -- --milestone M1 --suite protocol: 'protocol: 0 pass, 0 fail, 140 skip ... FAIL no case passed in protocol ... FAIL not offered, but a binding must offer: host.create'</evidence>
     <resolution>p1-conform raised GATE to protocol and scenarios on both datamodels, as before the adapter existed.</resolution>
   </entry>
-  <entry id="l-p1-values-module-arena" date="2026-10-16" step="p1-values" kind="decision" status="for-maintainer">
+  <entry id="l-p1-values-module-arena" date="2026-10-16" step="p1-values" kind="decision" status="resolved">
     <what>encode has no host, so its writer and its strings live in a ta_growable_arena of the environment's instance (module.c), a mark per call, released on every path; the allocator (malloc and free with napi_adjust_external_memory) lives in module.c too, with the instance as its context, for every host to share. The allocation lint names module.c's ta_napi_allocator_alloc/_free and ta_napi_instance_new/_finalize, and host.c's ta_napi_host_new/_finalize, instead of the removed handles.c and host.c's own allocator.</what>
     <why>The plan says 'in the call's arena' and the rulebook has one arena per host; a module-level call needs one arena outside any host. Python's encode uses a 256-byte stack room growing through the raw allocator instead; the arena keeps its chunks, so a warmed encode allocates nothing, and nested calls (a getter that encodes) nest marks.</why>
     <evidence>tinyactors-napi/src/module.c, src/values.c (ta_napi_encode); tinyactors-cpython/src/values.c:132-147; test/values.test.mjs 'marks nest'</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-values-error-class" date="2026-10-16" step="p1-values" kind="decision" status="resolved">
     <what>TinyactorsError is defined once per environment by a constant script (napi_run_script of a class extending Error), referenced from the instance and exported; C throws it with napi_new_instance(message, {status: ta_status_name(...)}).</what>
     <why>A class made with napi_define_class is no Error (no stack, no [[ErrorData]]); class ... extends Error is the language's own way. The script is the addon's constant, not chart code; it runs on node 22.23.3 and bun 1.4.1.</why>
     <evidence>tinyactors-napi/src/module.c (ta_napi_error_source); test/values.test.mjs 'TinyactorsError: an Error with ...' under both runtimes</evidence>
   </entry>
-  <entry id="l-p1-values-encode-not-to-wire" date="2026-10-16" step="p1-values" kind="decision" status="for-maintainer">
+  <entry id="l-p1-values-encode-not-to-wire" date="2026-10-16" step="p1-values" kind="decision" status="resolved">
     <what>encode follows the rulebook's value table, not values.txt's encode cases, which are an ECMAScript datamodel's to_wire: it keeps undefined (f7, at the top, in arrays and as a key's value) and refuses a Date, a function, an ArrayBuffer, a DataView and typed arrays other than Uint8Array with TA_ERROR_UNSUPPORTED (to_wire writes null, drops, writes JSON or bytes). test/values.test.mjs lists those nine cases (DIFFERS) with what encode gives, and checks each name is still in values.txt. Refusals: TA_ERROR_UNSUPPORTED for a value outside the table, TA_ERROR_INVALID for one it cannot hold and for malformed CBOR (the reader's status passes through: an indefinite length is TA_ERROR_UNSUPPORTED); decode of a non-bytes argument is a TypeError; decode gives a plain Uint8Array, not a Buffer.</what>
     <why>AGENTS.md 'Values' and plan item a-values: undefined and null stay distinct, plain objects and arrays only, what cannot be written is refused, never turned into a value. For the next steps: the native datamodel's to_wire (p1-datamodel) needs values.txt's to_wire rules, a second mode of values.c; and the adapter's host.run sends must carry the sender's wire form, since encode(send.data) of a native payload holding undefined writes f7 where the echo expects f6 ('ECMAScript: undefined at the top is null').</why>
     <evidence>tinyactors-test/suites/protocol/values.txt (encode cases; header: 'encode and invalid cases are value.encode's ... on ECMAScript datamodels'); tinyactors-test/docs/driver.md:65 (value.encode is to_wire); tinyactors-napi/docs/values.md, 'encode and a datamodel's to_wire'</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-host-native-refused" date="2026-10-16" step="p1-host" kind="decision" status="resolved">
     <what>A host whose datamodel is "native" (the default, so also new Host(config) with no datamodel option) throws TinyactorsError TA_ERROR_UNSUPPORTED until p1-datamodel builds the native datamodel; quickjs is never registered under the native name. Tests and the next steps pass datamodel: "quickjs".</what>
@@ -132,10 +151,11 @@
     <why>Node-API has no private symbols (an unexported Symbol is the nearest; Object.getOwnPropertySymbols still sees it); a napi_ref to a symbol needs Node-API 10, so the instance references an object holding it.</why>
     <evidence>tinyactors-napi/src/host.c (ta_napi_host_keep, ta_napi_host_read_config); test/host.test.mjs "the handlers are the wrapper's"</evidence>
   </entry>
-  <entry id="l-p1-host-unknown-options" date="2026-10-16" step="p1-host" kind="decision" status="for-maintainer">
+  <entry id="l-p1-host-unknown-options" date="2026-10-16" step="p1-host" kind="decision" status="resolved">
     <what>new Host refuses an option name it does not know (TypeError "unknown Host option: x"), and the quickjs option's too; a handler that is not a function, ioProcessors or services not objects of functions, and an ioProcessors type the config lacks are TypeErrors (Python: ValueError for the last). A non-native datamodel name other than "quickjs" is a TypeError.</what>
     <why>Python's keyword arguments refuse a misspelled name by themselves; an options bag ignores one silently, so a typo (ioprocessors) would drop a handler without a word.</why>
     <evidence>tinyactors-napi/src/host.c (ta_napi_only_known); tinyactors-cpython/tests/test_host.py:181</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-host-node-external" date="2026-10-16" step="p1-host" kind="uncertainty" status="resolved">
     <what>Node 22 does not show napi_adjust_external_memory's blocks in process.memoryUsage().external nor v8.getHeapStatistics().external_memory (50 hosts: +40 bytes), Bun does (+347 KB, back to +3 KB after collection). The test checks collection with a FinalizationRegistry on both and the memory where the runtime shows it. A spike that printed napi_adjust_external_memory's adjusted total on node showed 10992 bytes before 5 hosts, 221568 with them, and 10648 after gc: the finalizer frees every block.</what>
@@ -175,20 +195,22 @@
     <evidence>tinyactors-napi/test/liveness.test.mjs (header)</evidence>
     <resolution>p1-compile added both cases to test/liveness.test.mjs: a child with a 400 ms delayed send lives past the deadline, one with a 5 s deadline exits at close().</resolution>
   </entry>
-  <entry id="l-p1-loop-idle-one-promise" date="2026-10-16" step="p1-loop" kind="decision" status="for-maintainer">
+  <entry id="l-p1-loop-idle-one-promise" date="2026-10-16" step="p1-loop" kind="decision" status="resolved">
     <what>idle() returns one promise per pending idle turn, the same to every caller until it settles (one napi_deferred on the host, no list), and schedules a turn when none is pending; on a closed host it throws TinyactorsError TA_ERROR_STATE; close() rejects a waiting idle() with TinyactorsError TA_ERROR_STATE ('the Host was closed before it was idle'), as Python's close cancels its futures.</what>
     <why>Every waiter settles at the same turn with the same outcome, so one promise is the same to them and costs no allocation; a rejection at close is the nearest to asyncio's cancel (resolving would tell a waiter the host went idle when it did not).</why>
     <evidence>tinyactors-cpython/src/loop.c ta_python_loop_stop (cancel), ta_python_host_idle; tinyactors-napi/src/loop.c ta_napi_host_idle, ta_napi_loop_stop; test/loop.test.mjs 'close() rejects a waiting idle()'</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-loop-clock-state" date="2026-10-16" step="p1-loop" kind="decision" status="resolved">
     <what>A SimulatedClock keeps its state in JavaScript, not in C: an object under the instance's Symbol('tinyactors.clock') holding `time`, an ArrayBuffer of one uint64 of nanoseconds (exact; now and increment are milliseconds at the API), and `hosts`, an array of WeakRefs pruned of collected and closed hosts at each increment. A host made with it holds a strong napi_ref to the ArrayBuffer and reads it at each advance (napi_get_arraybuffer_info, length checked). The clock is type-tagged. A simulated clock's time is the host's wall clock too, as Python's.</what>
     <why>No allocation of the addon's own (AGENTS.md, 'Where the allocator is called'); the clock never holds a host strongly, so a host whose clock lives is still collected.</why>
     <evidence>tinyactors-napi/src/loop.c (ta_napi_clock_new, ta_napi_clock_attach, ta_napi_now); test/loop.test.mjs 'a clock holds its hosts weakly'</evidence>
   </entry>
-  <entry id="l-p1-loop-pool-names" date="2026-10-16" step="p1-loop" kind="decision" status="for-maintainer">
+  <entry id="l-p1-loop-pool-names" date="2026-10-16" step="p1-loop" kind="decision" status="resolved">
     <what>An exhausted pool is reported as TinyactorsError TA_ERROR_NO_MEMORY whose message names the pool by core's enum name (TA_POOL_EVENTS, TA_POOL_SLAB, TA_POOL_TIMERS, TA_POOL_ACTORS, TA_POOL_REQUESTS, TA_POOL_NONE for the host's own) from a const table of six messages in loop.c; Python's MemoryError gives the number only.</what>
     <why>The brief asks that the error name the pool and core has no function naming a TA_POOL_*.</why>
     <evidence>tinyactors-core/include/tinyactors/system.h:203-210; tinyactors-napi/src/loop.c ta_napi_pools</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-loop-request-pool-name" date="2026-10-16" step="p1-loop" kind="request-to-core" status="open">
     <what>A ta_pool_name(detail) beside ta_status_name, so a binding names the pool of a TA_RUN_EXHAUSTED without a table of its own.</what>
@@ -217,10 +239,11 @@
     <evidence>tinyactors-core/docs/host-config.md (every capacity doubles when it fills); tinyactors-core/include/tinyactors/host.h:243-256; tinyactors-napi/test/loop.test.mjs (header)</evidence>
     <resolution>p1-effects added to test/loop.test.mjs: a handler's error with no idle() waiting thrown from the turn's callback (a child process, its uncaughtException), the host going on, and close() from a handler deferred to the end of the turn. TA_RUN_EXHAUSTED and TA_RUN_FAULT stay untested (status open). p1-rules: logged as unreachable through the public API, with the reasons in AGENTS.md ('Refusals no input reaches'): TA_RUN_EXHAUSTED needs the host's allocator to refuse a pool's growth (malloc under overcommit does not refuse; a child under ulimit -v was not tried as a test: unverified); TA_RUN_FAULT needs a run with a batch open, which the drain before every run rules out, or a segment past core's limits (8388606 actors). The addon adds no allocator that fails on demand.</resolution>
   </entry>
-  <entry id="l-p1-compile-input-options" date="2026-10-16" step="p1-compile" kind="decision" status="for-maintainer">
+  <entry id="l-p1-compile-input-options" date="2026-10-16" step="p1-compile" kind="decision" status="resolved">
     <what>spawn's and send's options objects refuse a key they do not know (TypeError, as new Host does: l-p1-host-unknown-options); send(message) ignores unknown keys, as the rulebook says. undefined and null are 'none' for name, sendid, origin and traceparent; data undefined is no payload, null is a payload of null. send(target, ...) takes the message shape only when called with one object argument.</what>
     <why>A misspelled option (sendID) would otherwise be dropped silently; a message from another system may carry keys a newer sender added.</why>
     <evidence>tinyactors-napi/src/host.c (ta_napi_input_options, ta_napi_message_of, ta_napi_optional_text); test/host.test.mjs 'send refuses what it cannot take'</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-compile-session-bigint" date="2026-10-16" step="p1-compile" kind="decision" status="resolved">
     <what>A session given to send, fail, terminate (and a send target) is a bigint from 1 to 2^64-1; a number throws TypeError (Python takes any int). spawn and actorByName return bigints.</what>
@@ -243,10 +266,11 @@
     <why>Decision d-image; no allocation of the addon's own (AGENTS.md, 'Where the allocator is called').</why>
     <evidence>tinyactors-napi/src/compile.c; test/compile.test.mjs</evidence>
   </entry>
-  <entry id="l-p1-compile-errors" date="2026-10-16" step="p1-compile" kind="decision" status="for-maintainer">
+  <entry id="l-p1-compile-errors" date="2026-10-16" step="p1-compile" kind="decision" status="resolved">
     <what>CompileError(message, {diagnostics, status}) has status TA_ERROR_INVALID (or core's status when it gave another), frozen diagnostics, and the first error as its message, 'file:line:column: message', formatted before the result is freed; TA_ERROR_NO_MEMORY from the compiler is a plain TinyactorsError. ResolveError(message, {line, column}) has status TA_ERROR_INVALID; a line or column that is not an integer from 1 is unspecified (0). A resolver's other exception, a result that is not a string (a TypeError) or one with a lone surrogate (TinyactorsError TA_ERROR_INVALID) is thrown from the compile call after the result is freed, the first of them if several. A SyntaxError is not converted (Python converts it: a .py file is compiled at resolve time, and no JavaScript is).</what>
     <why>Python's CompileError takes the first error's repr as its message; a compiler's 'file:line:column: message' is what a JavaScript programmer reads in a stack trace.</why>
     <evidence>tinyactors-napi/src/compile.c ta_napi_located, ta_napi_resolve_refused; tinyactors-cpython/src/compile.c ta_python_refusal</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-compile-request-in-loop" date="2026-10-16" step="p1-compile" kind="note" status="resolved">
     <what>TA_EFFECT_REQUEST is answered (ta_host_resume with TA_ERROR_INVALID, then a turn scheduled) in loop.c's ta_napi_dispatch, where the drain's dispatch lives until src/effects.c exists.</what>
@@ -274,10 +298,11 @@
     <why>No allocation of the addon's own per effect (AGENTS.md, 'Where the allocator is called'): the state is the engine's memory, as a Python view's fields are Python's.</why>
     <evidence>tinyactors-napi/src/effects.c (ta_napi_view_new, ta_napi_view_construct, ta_napi_view_read)</evidence>
   </entry>
-  <entry id="l-p1-effects-processor-without-handler" date="2026-10-16" step="p1-effects" kind="decision" status="for-maintainer">
+  <entry id="l-p1-effects-processor-without-handler" date="2026-10-16" step="p1-effects" kind="decision" status="resolved">
     <what>A send to an I/O processor of the config that has no handler in options.ioProcessors is failed (error.communication for the sender), as the transport's is; the rulebook names the transport only.</what>
     <why>Python fails it ('no handler: a failed completion'); the brief says to reuse Python's decisions unless the rulebook says otherwise, and ADR 0009 has a runtime that cannot do what an effect asks answer with a failure.</why>
     <evidence>tinyactors-cpython/src/effects.c ta_python_dispatch_send; tinyactors-napi/src/effects.c ta_napi_dispatch_send; test/effects.test.mjs 'an I/O processor without a handler fails each send to it'</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-effects-empty-fields" date="2026-10-16" step="p1-effects" kind="decision" status="resolved">
     <what>send.sendid, send.target (a processor's), send.origin and send.traceparent are undefined when core's text is empty, as Python gives None; index.d.ts types target and sendid with undefined.</what>
@@ -334,25 +359,28 @@
     <why>Decision d-typed; requests.md: a reply's keys come in order, id first.</why>
     <evidence>tinyactors-napi/src/methods.c ta_napi_reply_id, ta_napi_reply; tinyactors-core/docs/requests.md "The envelope"</evidence>
   </entry>
-  <entry id="l-p1-methods-error-status" date="2026-10-16" step="p1-methods" kind="decision" status="for-maintainer">
+  <entry id="l-p1-methods-error-status" date="2026-10-16" step="p1-methods" kind="decision" status="resolved">
     <what>A reply's error is a TinyactorsError with code, reason, path and message and no status (undefined): ta_napi_throw_core_error now leaves status unset for TA_OK. index.d.ts says a typed method's error has code, reason and path instead of status.</what>
     <why>The error is no call's refusal, so no ta_status names it; Python sets no status either (ta_python_error_from_reply).</why>
     <evidence>tinyactors-napi/src/module.c ta_napi_throw_core_error; tinyactors-cpython/src/host.c:72; test/methods.test.mjs "an error goes to onError ..."</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-methods-arguments" date="2026-10-16" step="p1-methods" kind="decision" status="for-maintainer">
+  <entry id="l-p1-methods-arguments" date="2026-10-16" step="p1-methods" kind="decision" status="resolved">
     <what>onResult must be a function and onError a function, undefined or null (null: none, as Python's None), else TypeError. params are written as given whenever they are not undefined: {} is posted as an empty params map (Python omits an empty dict), null and non-objects are core's to refuse (-32600 type, path params); a value the value table cannot write throws at the call and leaves no row.</what>
     <why>Decision d-typed: params passed as given; core checks them.</why>
     <evidence>tinyactors-napi/src/methods.c ta_napi_typed, ta_napi_post; test/methods.test.mjs "params pass to core as given", "the arguments are checked at the call"</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-methods-close-in-turn" date="2026-10-16" step="p1-methods" kind="note" status="resolved">
     <what>close() from a handler is deferred to the end of the turn (p1-host), so a typed method posted in that turn is still answered when the turn's drain takes its reply; what is pending when the host is actually freed is never called. trace.end at close (ta_napi_end_traces) dispatches nothing, so no reply is answered there.</what>
     <why>The done-when says pending handlers are never called after close; the deferral decides what "after" means.</why>
     <evidence>tinyactors-napi/src/loop.c ta_napi_end_traces; test/methods.test.mjs "close from a handler waits for the end of the turn ..."</evidence>
   </entry>
-  <entry id="l-p1-methods-result-ids" date="2026-10-16" step="p1-methods" kind="uncertainty" status="for-maintainer">
+  <entry id="l-p1-methods-result-ids" date="2026-10-16" step="p1-methods" kind="uncertainty" status="resolved">
     <what>Sessions inside a reply's result (actor.list's sessions, actor.get's session) are numbers, as the value table decodes integers to 2^53-1, while the API's own ids are bigints; params take either, but host.send and host.terminate take only a bigint, so a caller converts with BigInt().</what>
     <why>The rulebook says ids are always bigints, and the value table says safe integers are numbers; a reply is a value.</why>
     <evidence>tinyactors-napi/docs/values.md; test/methods.test.mjs first case (actorList)</evidence>
+    <resolution>Decided (option a): inputs take a session as a bigint, or as a number that is a safe integer from 1 (Number.isSafeInteger); every other number is still a TypeError, so nothing saturates. Results keep numbers. Implemented in step p2-decisions.</resolution>
   </entry>
   <entry id="l-p1-methods-refusals-untested" date="2026-10-16" step="p1-methods" kind="note" status="resolved">
     <what>ta_host_post's refusals at the call (TA_ERROR_STATE during a run or inside a datamodel, TA_ERROR_NO_MEMORY) remove the row and throw, but no test reaches them: no JavaScript runs inside a run on quickjs, and the allocator cannot be made to refuse from a test. The native datamodel (p1-datamodel) runs JavaScript inside a run: a chart's script calling host.hostStats should then be refused with TA_ERROR_STATE, worth a test there.</what>
@@ -360,40 +388,46 @@
     <evidence>tinyactors-napi/src/methods.c ta_napi_typed (posting.status)</evidence>
     <resolution>p1-rules: unreachable through the public API, said in AGENTS.md ('Refusals no input reaches'): TA_ERROR_STATE at the post needs application JavaScript inside ta_host_run, which no chart reaches on the native datamodel (no application object crosses: l-p1-datamodel-typed-method) and quickjs never runs; TA_ERROR_NO_MEMORY needs an allocator that refuses. The path stays code only (ta_napi_typed removes the row and throws).</resolution>
   </entry>
-  <entry id="l-p1-datamodel-realm-script" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+  <entry id="l-p1-datamodel-realm-script" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
     <what>What must be made with a context's own constructors is made by a script that runs once in every node:vm context the native datamodel makes, src/datamodel/realm.js (embedded as a C string by mise/napi.rb, as Python embeds support.py): its kit copies values crossing between actors, makes a chart's scope constructor, a session's system variables, _event and XML nodes, and parses JSON content. C calls the kit's functions; the expressions themselves are each a vm.Script compiled at their first evaluation.</what>
     <why>Node-API creates objects in the addon's realm only (napi_create_object, napi_create_array), and AGENTS.md wants values made with the receiving context's constructors (finding x-realm) and the DOM's methods on one prototype in the datamodel's context (decision d-dom). The script is the datamodel's implementation inside its own contexts, not JavaScript above the addon: no application code calls it and it never runs in the application's realm.</why>
     <evidence>tinyactors-napi/src/datamodel/realm.js; src/datamodel/realms.c (ta_napi_realm_new); mise/napi.rb (embed_realm)</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-datamodel-script-names" date="2026-10-16" step="p1-datamodel" kind="deviation" status="for-maintainer">
+  <entry id="l-p1-datamodel-script-names" date="2026-10-16" step="p1-datamodel" kind="deviation" status="resolved">
     <what>A shared chart's scope holds from the start its &lt;data&gt; ids and its &lt;foreach&gt;es' item and index (TA_EXPRESSION_ITEM identifiers), not 'the names a script's assignments bind': a &lt;script&gt; of a chart that declares nothing runs as a strict function in `with (scope)`, so an assignment to a name the chart does not declare (an implicit global) is that script's error.execution, as in quickjs's shared realm. A script that declares (var, function, let, const, class) puts its chart on a context per session, where it runs as global sloppy code.</what>
     <why>Which names a script assigns without declaring them is known only by parsing the script, and the addon parses no JavaScript (decision d-declarations); the engine is asked only which names a script declares. Python finds its assignments with its own ast module. W3C 150, 151, 302, 304 and 525 pass: their names are foreach items or declared with var.</why>
     <evidence>src/datamodel/datamodel.c ta_napi_chart_names; test/datamodel.test.mjs (a script's implicit global is error.execution); scratch W3C runner: 150, 151, 302, 304, 525 pass on node and bun</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-datamodel-shared-global" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+  <entry id="l-p1-datamodel-shared-global" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
     <what>The shared context's global object is not frozen: charts of one host share its builtins, and a chart that assigns to an existing global (Math = 1, Array.prototype.x = 1) changes them for the host's other charts on the shared context. Undeclared names are still refused (strict code).</what>
     <why>A spike: node refuses Object.freeze on a vm context's global ('Cannot freeze'), and on bun the freeze succeeds but leaves the lazily made builtins undefined (Symbol.for threw afterwards). Charts are trusted code on the native datamodel (AGENTS.md); quickjs, the sandbox, freezes its shared global.</why>
     <evidence>scratchpad spike.mjs (2026-10-16, node 22.23.3, bun 1.4.1)</evidence>
+    <resolution>Kept: charts are trusted code; freezing the shared global breaks bun's builtins. The README says charts of a host share builtins.</resolution>
   </entry>
-  <entry id="l-p1-datamodel-crossing" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+  <entry id="l-p1-datamodel-crossing" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
     <what>What crosses between actors on the native datamodel (inputs' data and params, capture, from_wire): primitives (shared, symbols and bigints included), plain objects of any realm (prototype null or a realm's Object.prototype, own enumerable string keys, getters read), arrays (holes as undefined), Uint8Arrays (a Buffer becomes a plain Uint8Array) and the datamodel's XML nodes, each copied into the receiving context; anything else (a function, a Date, a Map, a class instance, the Host) is refused: at an input with TinyactorsError TA_ERROR_UNSUPPORTED, nested deeper than 64 or cyclic with TA_ERROR_INVALID, an error a getter throws passing through; inside a chart it is the capture's error.execution.</what>
     <why>AGENTS.md: values cross by copy, made with the receiving context's constructors, immutable ones shared; actors share no mutable value (bindings.md section 8). Python's copy refuses what is outside the value table the same way; quickjs shares its values within its runtime (so its to_wire later drops a function or writes a Date's JSON). A shared context's payload is shared by the shared context's sessions without a copy; a declaring session's context gets its own copy at bind_event and create.</why>
     <evidence>src/datamodel/realm.js (copy, refusal); src/datamodel/rows.c ta_napi_native_payload; test/datamodel.test.mjs</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-datamodel-variable" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
     <what>The native datamodel's variable entry (actor.context) gives core the variable's value itself as a payload, not a copy: core writes it at once with to_wire and releases it, so to_wire's rules apply (undefined and functions dropped, a Date as its JSON), where a copy would refuse them.</what>
     <why>requests.md, actor.context: 'A variable the datamodel cannot read or write as a neutral value is undefined or null'; the payload never reaches a chart, so no actor shares it.</why>
     <evidence>src/datamodel/datamodel.c ta_napi_variable; test/datamodel.test.mjs (actor.context)</evidence>
   </entry>
-  <entry id="l-p1-datamodel-event" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+  <entry id="l-p1-datamodel-event" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
     <what>The native _event is a frozen plain object of the session's context with name, type, sendid, origin, origintype, invokeid, data (the payload row's value itself, unfrozen; a declaring session's own copy) and raw when there is one, absent fields undefined; its name, invoke id and origin are the chart's strings by core's ids, its origintype the host's processor type. quickjs's _event is not frozen.</what>
     <why>SCXML 5.10: _event is read-only; Python's Event is immutable. W3C 329 assigns to _event itself, which the non-writable property refuses.</why>
     <evidence>src/datamodel/realm.js (event); src/datamodel/datamodel.c ta_napi_bind_event</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-datamodel-dom" date="2026-10-16" step="p1-datamodel" kind="decision" status="for-maintainer">
+  <entry id="l-p1-datamodel-dom" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
     <what>The XML document of B.2 content: txml's tree (elements, text, CDATA, comments, processing instructions; the declaration and DOCTYPE left out, whitespace text kept) as XMLNode objects of the context: nodeType, nodeName, childNodes, parentNode (not enumerable), and for elements tagName, localName (after the prefix) and attributes (an object of qualified name to value); getters firstChild, lastChild, documentElement, textContent; methods appendChild, getElementsByTagName ('*' or a qualified or local name, document order), getAttribute (null when absent), hasAttribute; a document's toString is the text it was read from, which an &lt;invoke&gt;'s content expression gives core as the document (W3C 530). No namespaceURI yet.</what>
     <why>d-dom names nodeType, nodeName, childNodes, attributes, textContent and getElementsByTagName; W3C 557, 561 and 530 need these. txml has no realloc, and asks alignments above 8 the host's allocator does not give: those blocks are aligned by hand (src/datamodel/dom.c).</why>
     <evidence>src/datamodel/dom.c, src/datamodel/realm.js; scratch W3C runner: 530, 557, 561 pass</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-datamodel-realms-plain" date="2026-10-16" step="p1-datamodel" kind="decision" status="resolved">
     <what>values.c accepts a plain object of the native datamodel's contexts as a value (strict mode, encode and the inputs): its prototype is checked against the instance's WeakSet of their Object.prototypes after this realm's, so encode(send.data) of a native payload works.</what>
@@ -405,14 +439,16 @@
     <why>The native datamodel became the default; both datamodels must pass the same cases (AGENTS.md, Tasks). The test task takes about 11 s.</why>
     <evidence>mise/tasks/test; test/charts.mjs</evidence>
   </entry>
-  <entry id="l-p1-datamodel-typed-method" date="2026-10-16" step="p1-datamodel" kind="note" status="for-maintainer">
+  <entry id="l-p1-datamodel-typed-method" date="2026-10-16" step="p1-datamodel" kind="note" status="resolved">
     <what>The test 'a typed method called from a chart expression is refused with TA_ERROR_STATE' cannot be written: on the native datamodel no application code runs inside ta_host_run. A chart reaches nothing of the application's: the Host, functions and class instances do not cross into a chart (TA_ERROR_UNSUPPORTED at the input), copies are made at the inputs (getters run there, outside a run), and the chart's contexts have no application global. test/datamodel.test.mjs checks that the Host and a function that would call it are refused as data. ta_host_post's TA_ERROR_STATE stays unreached from JavaScript (l-p1-methods-refusals-untested).</what>
     <why>The brief asked for it; the design that copies values at the boundary rules it out.</why>
     <evidence>test/datamodel.test.mjs ('a typed method is never called from a chart'); src/methods.c ta_napi_typed</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-datamodel-tinyxml-dependency" date="2026-10-16" step="p1-datamodel" kind="note" status="for-maintainer">
+  <entry id="l-p1-datamodel-tinyxml-dependency" date="2026-10-16" step="p1-datamodel" kind="note" status="resolved">
     <what>tinyactors-napi now builds tinyxml/include/txml.c, and its test task lists ../tinyxml/include/** in #MISE sources; the root AGENTS.md table ('You changed tinyxml: tinyxml') does not say that a change to tinyxml reruns napi's tests. The root file is not this project's to edit.</what>
     <evidence>tinyactors-napi/mise/tasks/test; AGENTS.md (root), 'What a change reruns'</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-datamodel-hibernation" date="2026-10-16" step="p1-datamodel" kind="note" status="open">
     <what>serialize, deserialize, migrate, payload_serialize and payload_deserialize of the native datamodel answer TA_ERROR_UNSUPPORTED until the hibernation, migration and snapshot steps (p2): hibernate() of a native session stays refused, a migration of one fails.</what>
@@ -423,10 +459,11 @@
     <why>The step's done-when names the suite's scenarios; p1-conform runs them for real and raises the gate.</why>
     <evidence>scratchpad p1-datamodel/w3c.mjs and basics.mjs (not in git)</evidence>
   </entry>
-  <entry id="l-p1-conform-wire" date="2026-10-16" step="p1-conform" kind="decision" status="for-maintainer">
+  <entry id="l-p1-conform-wire" date="2026-10-16" step="p1-conform" kind="decision" status="resolved">
     <what>The adapter's transport writes a send's data for host.run with ECMAScript's wire rules in JavaScript (undefined is null at the top and in arrays, dropped from objects, as JSON writes it), then encode; encode keeps its value-table mode and no wire mode was added to the API.</what>
     <why>ADR 0014: the transport and the wire encoding are the application's, and the adapter is the application. encode(send.data) of a native payload holding undefined writes f7 where values.txt's 'ECMAScript: undefined at the top is null' expects f6 (l-p1-values-encode-not-to-wire); a wire option on encode would be API of our own that no core function stands behind.</why>
     <evidence>tinyactors-napi/conform.mjs wire(); tinyactors-test/suites/protocol/values.txt:82-85; mise run conform -- --milestone M1: protocol 90 pass on native and quickjs under node and bun</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-conform-settle" date="2026-10-16" step="p1-conform" kind="decision" status="resolved">
     <what>Each driver method that makes an input (actor.spawn, actor.send, clock.advance, host.post) awaits host.idle() before answering and keeps a turn's error for the next host.run, which reports it as TA_RUN_EXHAUSTED (TA_ERROR_NO_MEMORY) or TA_RUN_FAULT.</what>
@@ -438,10 +475,11 @@
     <why>The values bytes, empty bytes and bytes in data failed on native until then (an object of indices came back).</why>
     <evidence>tinyactors-napi/conform.mjs wire(), Scenario.value, form(); AGENTS.md, 'Values cross by copy, made with the receiving context's constructors'</evidence>
   </entry>
-  <entry id="l-p1-conform-http" date="2026-10-16" step="p1-conform" kind="decision" status="for-maintainer">
+  <entry id="l-p1-conform-http" date="2026-10-16" step="p1-conform" kind="decision" status="resolved">
     <what>encodeHTTPPost and parseHTTPRequest are built (src/http.c, test/http.test.mjs): the post object's keys other than url, event, fields and body are ignored (as host.send(message) ignores them), not refused as an options object's are; a parsed request is frozen, its fields an array of frozen {name, value}; a decoded field that is not UTF-8 is TA_ERROR_INVALID, never replaced. The adapter writes the W3C loopback's POST with encodeHTTPPost and reads it with parseHTTPRequest, the raw message as its text; the form's values that are not text are written in diagnostic notation by a JavaScript function of the adapter, as Python's adapter does (core's ta_cbor_diagnostic is not in the API).</what>
     <why>The inventory decided to expose core's BasicHTTP codec (api-map rows); the W3C environment writes a real POST (driver.md, 'The W3C environment').</why>
     <evidence>tinyactors-napi/src/http.c; tinyactors-napi/docs/api-map.md rows encodeHTTPPost, parseHTTPRequest; tinyactors-core/tools/conform/w3c.c:62-120</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-p1-conform-full-suite" date="2026-10-16" step="p1-conform" kind="note" status="open">
     <what>The whole suite (mise run conform, no milestone): W3C 191 pass, 0 fail on native and on quickjs, under node and under bun (the scratch runner's six BasicHTTP misses of l-p1-datamodel-suite pass with the real POST). Scenarios: 5 pass, 3 fail on each of the four: hibernate, migrate and snapshot, whose steps the adapter refuses ('not in the binding's API yet') until host.hibernate, wake, snapshot, Host.restore and migrate are built; invoke passes. Protocol 90 pass, 50 skip (reference only, refuse, value.encode). For p2-w3c: the W3C suite already passes, so M2 (w3c) can join GATE and MILESTONE there.</what>
@@ -460,10 +498,11 @@
     <evidence>mise run measure (build/measure.json); tinyactors-napi/AGENTS.md, 'Measured cost per session'</evidence>
     <resolution>In AGENTS.md. Resident varies between runs (bun native 1762 to 2049 B); heap and region do not.</resolution>
   </entry>
-  <entry id="l-p1-measure-resident-engine" date="2026-10-16" step="p1-measure" kind="note" status="for-maintainer">
+  <entry id="l-p1-measure-resident-engine" date="2026-10-16" step="p1-measure" kind="note" status="resolved">
     <what>What resident holds beyond the engine heap and the region on the native datamodel is mostly the engine's: V8's new_space grows about 300 B an actor at 10,000 (a cost that does not scale with the population: 747 B resident at 40,000), and malloc grows about 140 B an actor (glibc malloc_stats under gdb), most likely the napi_ref each session row holds (node's v8impl::Reference and its global handle; unverified). Holding the scopes in one JavaScript array by slot instead would save that, but AGENTS.md has a session row hold its scope's napi_ref and forbids tables of our own, so it was not done.</what>
     <why>The step asked to find and fix the cause if native is far above quickjs; the system variables were the addon's and are fixed; the rest is the engine's or a design choice.</why>
     <evidence>scratchpad p1-measure/phys.mjs (v8.getHeapSpaceStatistics deltas: new_space 299, old_space 236 B an actor), phys2.mjs under gdb (malloc in use +1.39 MB for 10,000 native actors, +8.7 MB for quickjs)</evidence>
+    <resolution>Decided: measure it. A spike compares a session row holding its own napi_ref with scopes held in one JavaScript array (indexed by the ta_table slot, held by one napi_ref per host: the handles stay ta_table's, so it is no table of our own); adopted if it saves memory per actor without a cost per event, with AGENTS.md updated. Step p2-decisions.</resolution>
   </entry>
   <entry id="l-p1-measure-quickjs-heap" date="2026-10-16" step="p1-measure" kind="deviation" status="open">
     <what>The report has no quickjs heap column: host.quickjsHeapBytes (ta_datamodel_ecmascript_heap_bytes) is still planned in docs/api-map.md, and quickjs allocates with its own malloc, so neither engine's heap counter sees it; on quickjs, resident is the only number for its heap.</what>
@@ -481,30 +520,35 @@
     <evidence>gdb on node 22.23.3: ta_napi_host_send -&gt; ta_host_send -&gt; segment_grow -&gt; ta_system_relocate -&gt; place (memset); 4000 bytes pass, 6000 and 8000 hang; tinyactors-core/src/host/host.c:724-737</evidence>
     <resolution>Fixed in core (269646f, 2026-10-16): a text longer than TA_SYSTEM_MAX_STRING (4087 bytes, system.h) in an input is TA_ERROR_INVALID at the call, nothing allocated, the payload the caller's; a chart expression past it is error.execution; a blob naming one is malformed; segment_grow refuses when every capacity is at its hard limit. Decided by the core-fix session with the maintainer unavailable: refuse rather than store long strings another way, since core keeps every dynamic string as one slab object and has no other path. Tests: tinyactors-core/tests/unit/test_host_strings.c.</resolution>
   </entry>
-  <entry id="l-p1-rules-session-zero" date="2026-10-16" step="p1-rules" kind="decision" status="for-maintainer">
+  <entry id="l-p1-rules-session-zero" date="2026-10-16" step="p1-rules" kind="decision" status="resolved">
     <what>A session 0n is refused as a TypeError by send, fail, terminate and send(message), as the message 'a session is a bigint from 1 to 2^64-1' said; it used to reach core, which refused it with another status.</what>
     <why>0 is core's 'no session' (ta_host_actor_by_name), never an id; one refusal for every value that is not a session.</why>
     <evidence>tinyactors-napi/src/host.c ta_napi_session_of; test/host.test.mjs 'send refuses what it cannot take, and keeps nothing of it'; test/rules.test.mjs 'sessions are bigints from 1 to 2^64-1, never a number that saturates'</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-rules-handle-scope" date="2026-10-16" step="p1-rules" kind="note" status="for-maintainer">
+  <entry id="l-p1-rules-handle-scope" date="2026-10-16" step="p1-rules" kind="note" status="resolved">
     <what>'One handle scope per vtable entry' has no test: a missing scope changes nothing JavaScript can read. AGENTS.md says so and names the code that shows it.</what>
     <why>Handles live outside the engine's heap (not in memoryUsage, not in v8.getHeapStatistics), and neither runtime bounds them in one native call, so a run without scopes neither fails nor shows a counter.</why>
     <evidence>src/datamodel/datamodel.c ta_napi_frame_open / ta_napi_enter_entry in every entry that makes a value; rows.c ta_napi_native_drop opens its own; effects.c ta_napi_dispatch one per effect; compile.c ta_napi_resolve one per call</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-rules-deferral" date="2026-10-16" step="p1-rules" kind="note" status="for-maintainer">
+  <entry id="l-p1-rules-deferral" date="2026-10-16" step="p1-rules" kind="note" status="resolved">
     <what>The deferred last drop of a payload is tested by its effect (the value is collected after the flush), not by the deferral: neither runtime runs JavaScript when a napi_ref is deleted.</what>
     <why>A FinalizationRegistry callback is a task of its own, after the collection; so the drops list is a guard for the rule of bindings.md section 8 that no test can trip on node or bun.</why>
     <evidence>test/rules.test.mjs 'a payload whose last reference goes is let go after the call: its value is collected' (native only: quickjs's payloads are quickjs's)</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-rules-receiver-check" date="2026-10-16" step="p1-rules" kind="note" status="for-maintainer">
+  <entry id="l-p1-rules-receiver-check" date="2026-10-16" step="p1-rules" kind="note" status="resolved">
     <what>Node refuses a Host prototype method called on another object before the addon's type tag is read (V8's receiver check: TypeError 'Illegal invocation'); Bun reaches the tag ('not a Host'). Both give a TypeError, which is what the tests check.</what>
     <why>Node-API's napi_define_class gives prototype methods a signature in Node; Bun's does not.</why>
     <evidence>spike in a worker, node 22.23.3 and bun 1.4.1 (test/rules.test.mjs 'a Host posted to a worker arrives as a plain object, which every method refuses')</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
-  <entry id="l-p1-rules-view-state" date="2026-10-16" step="p1-rules" kind="uncertainty" status="for-maintainer">
+  <entry id="l-p1-rules-view-state" date="2026-10-16" step="p1-rules" kind="uncertainty" status="resolved">
     <what>A thin view's state (host, ack count, index, flags, cached fields) is an array under the instance's view symbol, which Object.getOwnPropertySymbols reveals on a real view: code that rewrites it (the RECORD flag, the ack count) can read another effect of the same host, or answer a send after its ack. It cannot read memory: core bounds every index and payloads are generation-checked handles.</what>
     <why>Views are not wrapped (the addon allocates nothing per effect) and Node-API has no private symbols. Tampering is the application's own code against its own host; type-tagging views would refuse a copied state but not a rewritten one. Left as is; said in AGENTS.md.</why>
     <evidence>src/effects.c ta_napi_view_new, ta_napi_view_construct; tinyactors-core/src/host/host.c:1120-1121, :1203-1205</evidence>
+    <resolution>Kept: no memory can be read through it; hiding the state would cost a WeakMap lookup per field read.</resolution>
   </entry>
   <entry id="l-p1-rules-readme" date="2026-10-16" step="p1-rules" kind="decision" status="resolved">
     <what>README.md now says the four things the rulebook asks it to (chart code is trusted, a pending deadline keeps the process alive, a handler's error ends the process by default, using needs a runtime that parses it), in a section 'Before you use it'; a test checks each.</what>
@@ -518,10 +562,11 @@
     <evidence>src/loop.c ta_napi_keep_error, ta_napi_take_kept; src/compile.c ta_napi_resolve_refused; test/loop.test.mjs 'a handler's error is whatever it threw: a string, a number, undefined and null reject idle() too'; test/compile.test.mjs 'another error of a resolver is thrown from the compile call, whatever value it is'</evidence>
     <resolution>Fixed in p1-rules: the value is kept in a one-element array (as a primitive payload is), and 'none pending' is napi_is_exception_pending.</resolution>
   </entry>
-  <entry id="l-coord-long-string-leftovers" date="2026-10-16" step="core-fix" kind="issue" status="for-maintainer">
+  <entry id="l-coord-long-string-leftovers" date="2026-10-16" step="core-fix" kind="issue" status="resolved">
     <what>After 269646f (TA_SYSTEM_MAX_STRING, 4087 bytes): a &lt;log&gt; text over the limit still comes out empty (src/system/schedule.c step_log) rather than refused; and the refutation pass of reasoned-analysis was not run on the choice to refuse long strings rather than store them another way.</what>
     <why>The fix was dispatched by the coordinator to unblock the end-to-end goal (a transport passing on network messages).</why>
     <evidence>tinyactors-core/tests/unit/test_host_strings.c; commit 269646f</evidence>
+    <resolution>Decided: a &lt;log&gt; text over TA_SYSTEM_MAX_STRING is truncated at a UTF-8 boundary, not emptied, since a &lt;log&gt; must not change what a chart does; a core change through the coordinator, in step p2-decisions. The refusal of long strings elsewhere stands.</resolution>
   </entry>
   <entry id="l-p1-review-compile-message" date="2026-10-16" step="p1-review" kind="decision" status="resolved">
     <what>A CompileError's message is now 'file:line:column: error: message', as Python's (the repr of its first error Diagnostic) and as a compiler prints it; it was 'file:line:column: message' (l-p1-compile-errors).</what>
@@ -535,14 +580,16 @@
     <evidence>docs/api-review.md, 'A JavaScript chart'; AGENTS.md, 'The native ecmascript datamodel' (143 KB / 60 KB).</evidence>
     <resolution>0603967: README.md, 'Before you use it'.</resolution>
   </entry>
-  <entry id="l-p1-review-result-ids" date="2026-10-16" step="p1-review" kind="decision" status="for-maintainer">
+  <entry id="l-p1-review-result-ids" date="2026-10-16" step="p1-review" kind="decision" status="resolved">
     <what>Sessions inside a typed method's result are numbers (actorList's sessions, actorGet's session), while every input takes a session only as a bigint (a number is a TypeError), so host.terminate(result.sessions[0]) throws; in Python both are int and the result's ids pass straight back. Not fixed: either change crosses a rule. Options: (a) inputs also accept a number that is a safe integer from 1 (Number.isSafeInteger), still refusing every other number, so nothing saturates; (b) results decode integers past a method-specific list of id fields as bigint (a per-method schema in the addon, which core's requests.md would have to define); (c) keep it, and the README says to wrap with BigInt(). Recommended: (a), the smallest change that keeps the guarantee the rule exists for (no id loses bits); it changes AGENTS.md's rule 'Sessions are bigints ... a number ... is a TypeError' and its test.</what>
     <why>The API review read a program that lists actors and acts on them; the same program in Python needs no conversion. Logged before as an uncertainty (l-p1-methods-result-ids); this is the decision it needs.</why>
     <evidence>probe under node: actorList -&gt; { sessions: [ 1 ], cursor: null }, actorGet -&gt; { session: 1, ... }; AGENTS.md, 'Rules the suite cannot see', 'Sessions are bigints from 1 to 2^64-1'; test/rules.test.mjs 'sessions are bigints from 1 to 2^64-1, never a number that saturates'.</evidence>
+    <resolution>Decided: option (a), as l-p1-methods-result-ids. Implemented in step p2-decisions.</resolution>
   </entry>
-  <entry id="l-p1-review-refutation" date="2026-10-16" step="p1-review" kind="note" status="for-maintainer">
+  <entry id="l-p1-review-refutation" date="2026-10-16" step="p1-review" kind="note" status="resolved">
     <what>The review's findings were not given to a fresh agent to refute (reasoned-analysis, step 8): this step agent cannot spawn one. The two fixes are small and tested; the one recommendation (l-p1-review-result-ids, option a) is unrefuted until the coordinator or the maintainer runs that check.</what>
     <evidence>docs/api-review.md, 'How this review was made'.</evidence>
+    <resolution>Superseded: the recommendation was decided under the maintainer's delegation (2026-10-17) and is implemented with tests in p2-decisions.</resolution>
   </entry>
   <entry id="l-p2-telemetry-close-settles-waiter" date="2026-10-16" step="p2-telemetry" kind="decision" status="resolved">
     <what>A close() a handler asks for in a turn now runs before the waiting idle() settles, and the waiter is kept from loop_stop, so the last take's error rejects idle() (Python raises it from the driver); without an error the waiter resolves as before.</what>
@@ -561,11 +608,11 @@
     <evidence>tinyactors-napi/src/effects.c ta_napi_take; src/loop.c ta_napi_turn; AGENTS.md "Refusals no input reaches"</evidence>
     <resolution>code only</resolution>
   </entry>
-  <entry id="l-p2-hibernate-declaring" date="2026-10-16" step="p2-hibernate" kind="decision" status="for-maintainer">
+  <entry id="l-p2-hibernate-declaring" date="2026-10-16" step="p2-hibernate" kind="decision" status="resolved">
     <what>A declaring chart's sessions (a node:vm context each) hibernate: serialize writes the names the chart and its scripts put on the session's global (the realm's baseline and the system variables left out), leaving out a function declaration's name while it holds a function; deserialize makes a new context, instantiates every script of the chart there without running a statement (`throw 0;` ahead, the probe chart_attach already compiles, now kept in the chart's record), then copies the variables in. A chart whose scripts declare with let, const or class refuses with TA_ERROR_UNSUPPORTED and a reason.</what>
     <why>realms.c builds a declaring session's context by running its scripts as global code, so its functions close over the global's vars: making the functions again in the new context (they are re-created from source, over the new global) keeps those closures right without parsing JavaScript. Lexical bindings are not properties of the global: a new context cannot be given them again (instantiating `throw 0; let x` leaves x in its TDZ forever), so the session stays resident rather than waking wrong. quickjs keeps let and const (its own engine writes them), so the two datamodels differ here.</why>
     <evidence>src/datamodel/realms.c ta_napi_realm_declares and ta_napi_realm_hoist; src/datamodel/realm.js stored, restore, functions; test/hibernation.test.mjs: 'a chart whose scripts declare: its var and function come back after the wake', 'a chart whose scripts declare with let: native keeps it resident, quickjs hibernates it'; tinyactors-core/include/tinyactors/datamodel_ecmascript.h:42-47</evidence>
-    <resolution>Built. Two limits the maintainer may want to weigh: a function declaration's name reassigned to another function wakes as the declared one (the blob leaves it out), and every script of the chart is instantiated at the wake, so a function declared only in a transition's script that never ran exists after a wake. Lifting the let/const refusal would need a script that declares the names with their values, which means generating JavaScript from the names (no parser): not done.</resolution>
+    <resolution>Kept: sessions of a chart whose scripts declare with let, const or class stay resident (a context cannot be given those bindings back); the README says so and points to var or &lt;data&gt;.</resolution>
   </entry>
   <entry id="l-p2-hibernate-event-ids" date="2026-10-16" step="p2-hibernate" kind="decision" status="resolved">
     <what>Core's ids of _event's strings (name_id, invoke_slot, origintype_id) are kept in the session's row, set at bind_event, and written into the blob after the eight fields, as Python's blob holds them, so a woken session shares the chart's strings again.</what>
@@ -608,11 +655,11 @@
     <evidence>src/datamodel/datamodel.c ta_napi_deserialize, ta_napi_migrate; src/datamodel/realm.js upgrade; test/migration.test.mjs: 'an actor moves with its bindings: one MIGRATED, then migrationDone'</evidence>
     <resolution>implemented in 97085b5</resolution>
   </entry>
-  <entry id="l-p2-migrate-declaring" date="2026-10-16" step="p2-migrate" kind="decision" status="for-maintainer">
+  <entry id="l-p2-migrate-declaring" date="2026-10-16" step="p2-migrate" kind="decision" status="resolved">
     <what>A declaring chart's session (a node:vm context each) migrates: deserialize instantiates the new chart's scripts in the new context without running them (as a wake does), then restores the blob's variables; the names the blob added to the global that the new chart's declarations did not make are kept on the link as `added`, and migrate deletes them from the global. So the new chart's script vars exist but are undefined (its scripts do not run), and its added &lt;data&gt; are initialized by core.</what>
     <why>datamodel.h asks migrate to drop variables the new chart does not declare; Python sets only the variables both charts declare. A declaring global has no list of declared names but what the instantiation made, so restore records what it added beyond them. Running the new version's top-level scripts at a migration would re-run initialization code the actor already ran in version 1.</why>
     <evidence>src/datamodel/realm.js restore, upgrade; test/migration.test.mjs: "native: a declaring chart migrates: its old names go, the new scripts' are declared"; tinyactors-core/include/tinyactors/datamodel.h:199-206</evidence>
-    <resolution>Built. The maintainer may want a migrated declaring session to run its new version's top-level scripts; not done (it would also run statements with effects).</resolution>
+    <resolution>Kept: a migrated declaring session does not run its new version's scripts (running them again would repeat their side effects); core initializes the added &lt;data&gt;.</resolution>
   </entry>
   <entry id="l-p2-migrate-refusals" date="2026-10-16" step="p2-migrate" kind="decision" status="resolved">
     <what>migrate's options are an object of chart, session, wake, timeout (or nothing); an unknown key, a chart that is not a string, a wake that is not a boolean, a timeout that is not a number or a session that is not a bigint from 1 to 2^64-1 is a TypeError; an empty chart and a negative, NaN, infinite or 2^64-nanosecond timeout a RangeError. Python raises TypeError, ValueError and OverflowError for the same.</what>
@@ -705,11 +752,11 @@
     <evidence>mise run snapshot, 2026-10-16, x86_64 Linux 6.18, 4 CPUs: exit 0 (873.97 s); the 100,000 run exit 0</evidence>
     <resolution>numbers in README.md</resolution>
   </entry>
-  <entry id="l-p2-services-promise" date="2026-10-16" step="p2-services" kind="decision" status="for-maintainer">
+  <entry id="l-p2-services-promise" date="2026-10-16" step="p2-services" kind="decision" status="resolved">
     <what>A service handler that returns a thenable (an async function, a plain function returning a promise) is refused: TypeError "a service handler returns the service, not a promise ...", the invocation kept as failed and the invoker given error.communication, the error reported after the turn. The promise is not awaited and its later rejection stays unhandled.</what>
     <why>The plan asked to decide whether to await it. Python's handlers are synchronous. Awaiting would leave the service missing while sends to it arrive: they would be dropped or need a queue the addon does not have (no tables of its own). The Invocation is a record that outlives the ack, so a plain handler can return the service at once and answer later. Refusing shows the mistake at once and loses no message without a trace.</why>
     <evidence>tinyactors-napi/src/effects.c ta_napi_dispatch_invoke; test/services.test.mjs: 'a handler that returns a promise is refused: the service is what it returns'</evidence>
-    <resolution>Built. The maintainer may prefer to await the promise and treat sends before it settles as failed</resolution>
+    <resolution>Kept: a service handler returns the service at once, as Python's does, so sends that come before an asynchronous start have a defined target. The README shows the pattern of a service whose methods await its own start.</resolution>
   </entry>
   <entry id="l-p2-services-receive-async" date="2026-10-16" step="p2-services" kind="decision" status="resolved">
     <what>A receive that returns a thenable has its Send view filled before the ack, as an I/O processor's view is (d-async). Its rejection is a crash: if the invocation has not ended, the invoker gets error.communication with the send's sendid and the entry stays failed without the service (dropped, not stopped). The rejection goes on, unhandled. This uses a function bound to the invocation and the view (instance-&gt;crashed). stop() is called; what it returns is not followed.</what>
@@ -860,15 +907,16 @@
     <what>The test task's results do not depend on BUN_OPTIONS=--smol and BUN_FEATURE_FLAG_DISABLE_STANDALONE_MADVISE=1, which this shell sets: with both unset (env -u) mise run test passed (207 s), with every conformance count the same as with them set (236 s). The one failure in a run with them unset was under node, which reads neither: the scaling fast pass's snapshot (l-p2-w3c-snapshot-samples).</what>
     <evidence>the step scratch's p2-w3c/test-unset.log (the failure, node quickjs test/scale.test.mjs), test2-unset.log and test2-env.log (both pass)</evidence>
   </entry>
-  <entry id="l-p2-w3c-snapshot-samples" date="2026-10-17" step="p2-w3c" kind="issue" status="for-maintainer">
+  <entry id="l-p2-w3c-snapshot-samples" date="2026-10-17" step="p2-w3c" kind="issue" status="resolved">
     <what>test/scale.test.mjs failed in 2 of 7 runs under node on quickjs: the hibernated snapshot, 1.53 and 2.46 after four attempts. The kernel charges system time in steps of about 4 ms (a temporary print in tools/scale.mjs: a call's system time was 0, 4.0, 8.0 or 12.2 ms), and one snapshot of the fast pass's hibernated population takes 4 to 15 ms of wall time, so a sample of one snapshot less its own system time ranged from 0.06 to 0.41 us an actor, and the least of three picked a sample a whole tick had been taken from (8.8 ms wall less 8.0). A sample is now snapshots until it takes --min-ms, as a sweep's is (17afd0d1): 25 of 25 runs passed on the four pairs (10 node quickjs, 5 each other pair). The cost per actor it measures is the snapshot's own: in a call with no tick, 0.25 us an actor at 20,000 and 0.18 at 40,000, because about 8 MB of each snapshot does not depend on N (11.3 MB at 20,000, 15.1 MB at 40,000: likely quickjs's state of the 1000 resident actors, the same at both sizes). That fixed part dilutes a growth per actor at this size: an O(N) busy wait injected per actor (0.2 us an actor at 15,000, not committed) failed the fast pass in 1 of 4 runs with the new sample and 2 of 3 with the old one, which also failed 2 of 7 runs with no scan at all. Under --full the fixed part is negligible (2,000,000 against 4,000,000), and a sample there is one or two snapshots; the full gate was not rerun with the change (unverified).</what>
     <why>A check that flakes is made robust, not loosened; the factor stays 1.5. Whether the fast pass's hibernated snapshot should leave the resident actors' state out (fewer resident at the fast size, or the cost measured per hibernated actor less a one-actor snapshot) is a change to the scenario, for the maintainer.</why>
     <evidence>the step scratch's p2-w3c/scale-nq-*.log, fix-*.log, and the spike runs in this step's transcript; tools/scale.mjs snapshots()</evidence>
-    <resolution>17afd0d1: a sample is snapshots until --min-ms. Open: the fast pass's hibernated snapshot detects a modest scan only some of the time.</resolution>
+    <resolution>Accepted: the full 2M/4M run catches a per-actor snapshot cost; the fast pass is a smoke check for it.</resolution>
   </entry>
-  <entry id="l-p2-w3c-phase" date="2026-10-17" step="p2-w3c" kind="note" status="for-maintainer">
+  <entry id="l-p2-w3c-phase" date="2026-10-17" step="p2-w3c" kind="note" status="resolved">
     <what>Phase p2 for the coordinator. Done, each with the commit that finished it: p2-telemetry (07adc08: telemetry handler, metrics, trace end), p2-hibernate (4b11981: sweep, hibernate, wake with the application's store), p2-migrate (97085b5: migrate, migrated, migrationDone), p2-snapshot (90fd3a8: snapshot and Host.restore with both datamodels' state), p2-services (a8227f6: invoked services, Invocation, receive and stop), p2-scale (1a5434bc: the scaling gate at 2M and 4M actors after core's three answers e43239c1, fc8ff117, ae93a346), p2-w3c (91ec2176: mise run test gates the whole suite, M5, W3C 191 of 191 and 8 of 8 scenarios on node and bun, native and quickjs). Left: p2-pack (packaging and the first release: mise run pack per platform with zig, symbol checks, smoke tests under node and bun, the changelog through release-changelog; the release waits for the maintainer). Open for the maintainer: l-p2-hibernate-declaring, l-p2-migrate-declaring, l-p2-services-promise, l-p2-w3c-snapshot-samples. Requests to core from p2: l-p2-services-retry-pending and the three of p2-scale, all answered.</what>
     <evidence>docs/plan.xml, //phase[@id='p2']; docs/log.xml</evidence>
+    <resolution>Accepted as built (the coordinator, deciding under the maintainer's delegation on 2026-10-17: "Make reasonable decisions balancing user convenience with performance").</resolution>
   </entry>
   <entry id="l-coord-pack-paused" date="2026-10-17" step="p2-pack" kind="issue" status="open">
     <what>The p2-pack agent stopped early on the account's weekly usage limit (resets 2026-10-19 09:00 UTC). Its partial work (index.mjs resolving the platform package, mise/pack.rb, mise/tasks/pack, tools/smoke.mjs, package.json) failed the bun tests (index.mjs did not export Address under bun), so it is kept as docs/wip-p2-pack.patch, not applied, and main stays green.</what>
@@ -887,5 +935,8 @@
   <entry id="l-coord-browser" date="2026-10-17" step="p5-design" kind="decision" status="resolved">
     <what>A package that works in the browser, WASM with a JavaScript layer, not emnapi; the same API in Node.js, Bun and the browser; no quickjs in the browser at first, shipped in a later step (the maintainer, 2026-10-17). Phase p5; it settles the root ROADMAP's "Decided later: the browser".</what>
     <why>The root ROADMAP left the choice between a JavaScript twin and the addon over emnapi to measurements; the maintainer chose the twin, held to the same API and suite.</why>
+  </entry>
+  <entry id="l-coord-decisions" date="2026-10-17" step="coordination" kind="decision" status="resolved">
+    <what>The coordinator decided all 52 entries waiting for the maintainer, as delegated (2026-10-17): most accepted as built; session ids also as safe-integer numbers, the per-session napi_ref measured against one array, a long &lt;log&gt; truncated, the rest kept with documentation. Step p2-decisions implements what changes.</what>
   </entry>
 </log>
