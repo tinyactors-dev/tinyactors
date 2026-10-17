@@ -721,7 +721,16 @@ async function hibernated(o, results, failures) {
  * collected reuses its pages some of the time, so one sample of three
  * paid no faults (docs/log.xml, l-p2-scale-snapshot-pages); and on this
  * virtual machine a fault costs two to five times as much in a process
- * that holds 6 GB as in one that holds 3 GB (l-p2-scale-snapshot-faults). */
+ * that holds 6 GB as in one that holds 3 GB (l-p2-scale-snapshot-faults).
+ * A sample is snapshots until it takes --min-ms, as a sweep's is: the
+ * system time is charged in steps of about 4 ms (the kernel's tick), and
+ * the fast pass's snapshot of a hibernated population takes 4 to 15 ms,
+ * so one call less its own system time was anywhere from 0.06 to 0.41 us
+ * an actor (docs/log.xml, l-p2-w3c-snapshot-samples); over a sample of
+ * many calls the steps average out. Under --full (--min-ms 200) a sample
+ * is one snapshot of an all-resident population and two of a hibernated
+ * one at two million actors (90 to 124 ms each), one or two at four
+ * million (180 to 216 ms). */
 async function snapshots(host, config, handlers, clock, total, o, then) {
   const closes = [];
   let blob;
@@ -732,7 +741,7 @@ async function snapshots(host, config, handlers, clock, total, o, then) {
     });
     const kernel = (process.resourceUsage().systemCPUTime - before) / 1000; // microseconds to milliseconds
     return { ms: Math.max(t - kernel, 0), calls: total };
-  }, { batches: 1, samples: Math.min(3, o.samples) });
+  }, { samples: Math.min(3, o.samples) });
   host.close(); // a host after every operation: the restored ones' closes are timed, each a population as large
   const samples = Math.min(3, o.samples);
   let round = 0;
