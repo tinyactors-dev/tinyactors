@@ -69,7 +69,7 @@ static bool ta_napi_evaluation_of(const ta_datamodel_call *call, ta_napi_evaluat
     if (chart == NULL) return false;
     evaluation->row = *chart;
     evaluation->chart = &evaluation->row;
-    napi_value held = ta_napi_session_scope(native, call->instance), shared;
+    napi_value held = ta_napi_slot_value(native, &(ta_napi_slot){&native->scopes, call->instance}), shared;
     if (held == NULL || (evaluation->record = ta_napi_native_get(native, chart->functions)) == NULL) return false;
     if (chart->flags & TA_NAPI_CHART_DECLARES) {
         evaluation->own = held;
@@ -340,7 +340,7 @@ static ta_status ta_napi_create(void *datamodel, const ta_datamodel_start *start
     uint64_t handle = 0;
     ta_napi_session_row *row = status == TA_OK ? (ta_napi_session_row *)ta_table_add(&native->host->sessions, &handle) : NULL;
     if (status == TA_OK && row == NULL) status = TA_ERROR_NO_MEMORY;
-    if (row != NULL && !ta_napi_session_hold(native, handle, made)) { /* no row without its scope */
+    if (row != NULL && !ta_napi_slot_hold(native, &(ta_napi_slot){&native->scopes, handle}, made)) { /* no row without its scope */
         ta_table_remove(&native->host->sessions, handle);
         row = NULL;
         status = ta_napi_failed(env);
@@ -357,7 +357,7 @@ static void ta_napi_destroy(const ta_datamodel_call *call) {
     ta_napi_native *native = (ta_napi_native *)call->datamodel;
     ta_napi_session_row *row = (ta_napi_session_row *)ta_table_get(&native->host->sessions, call->instance);
     if (row == NULL) return;
-    ta_napi_session_let_go(native, call->instance);
+    ta_napi_slot_let_go(native, &(ta_napi_slot){&native->scopes, call->instance});
     ta_table_remove(&native->host->sessions, call->instance);
 }
 
@@ -948,7 +948,7 @@ static ta_status ta_napi_deserialize(void *datamodel, const ta_datamodel_start *
     uint64_t handle = 0;
     ta_napi_session_row *added = status == TA_OK ? (ta_napi_session_row *)ta_table_add(&native->host->sessions, &handle) : NULL;
     if (status == TA_OK && added == NULL) status = TA_ERROR_NO_MEMORY;
-    if (added != NULL && !ta_napi_session_hold(native, handle, made)) {
+    if (added != NULL && !ta_napi_slot_hold(native, &(ta_napi_slot){&native->scopes, handle}, made)) {
         ta_table_remove(&native->host->sessions, handle);
         added = NULL;
         status = (ta_napi_failed(env), TA_ERROR_INVALID);
@@ -1438,7 +1438,7 @@ static bool ta_napi_restore_session(ta_napi_native *native, const ta_napi_sessio
         ok = event != NULL && napi_define_properties(env, target, 1, &property) == napi_ok;
     }
     if (!ok) return ta_napi_restore_refuse(env, "not a session of a snapshot");
-    if (!ta_napi_session_hold(native, handle, made)) return false;
+    if (!ta_napi_slot_hold(native, &(ta_napi_slot){&native->scopes, handle}, made)) return false;
     slot = (ta_napi_session_row *)ta_table_get(&native->host->sessions, handle); /* JavaScript ran: get it again */
     *slot = row;
     return true;
@@ -1453,7 +1453,7 @@ typedef struct ta_napi_other_in {
 
 static bool ta_napi_restore_other(ta_napi_native *native, const ta_napi_other_in *in) {
     napi_env env = native->host->env;
-    napi_value parts[3], shared, kit, value, held;
+    napi_value parts[3], shared, kit, value;
     uint32_t length = 0, want = in->payload ? 3 : 2;
     bool array = false;
     uint64_t handle = 0, references = 1;
@@ -1468,25 +1468,24 @@ static bool ta_napi_restore_other(ta_napi_native *native, const ta_napi_other_in
                                                                           references == 0 || references > UINT32_MAX)))
         return ta_napi_restore_refuse(env, what);
     ta_table *table = in->payload ? &native->host->payloads : &native->host->loops;
-    napi_ref *slot = (napi_ref *)ta_table_get(table, handle); /* each row holds its reference first */
-    if (slot == NULL || *slot != NULL) return ta_napi_restore_refuse(env, what);
+    void *row = ta_table_get(table, handle); /* a payload's count, a loop's reference: 0 until filled */
+    if (row == NULL || (in->payload ? ((ta_napi_payload_row *)row)->count != 0 : ((ta_napi_loop_row *)row)->items != NULL))
+        return ta_napi_restore_refuse(env, what);
+    napi_valuetype type = napi_undefined;
     if ((shared = ta_napi_realm_shared(native)) == NULL || napi_get_element(env, shared, TA_NAPI_REALM_KIT, &kit) != napi_ok ||
         (value = ta_napi_restore_value(env, parts[want - 1])) == NULL ||
         (value = ta_napi_kit(env, kit, &(ta_napi_kit_call){"copy", 1, {value}})) == NULL)
         return ta_napi_restore_refuse(env, what);
-    napi_valuetype type = napi_undefined;
     if (napi_typeof(env, value, &type) != napi_ok) return false;
-    if (!in->payload && type != napi_object) return ta_napi_restore_refuse(env, "a <foreach>'s items are not an array");
-    bool boxed = type != napi_object && type != napi_function; /* as ta_napi_native_add holds a primitive */
-    held = value;
-    if (boxed && (napi_create_array_with_length(env, 1, &held) != napi_ok || napi_set_element(env, held, 0, value) != napi_ok))
+    bool object = type == napi_object || type == napi_function;
+    if (!in->payload && !object) return ta_napi_restore_refuse(env, "a <foreach>'s items are not an array");
+    napi_ref reference = NULL; /* as ta_napi_native_add holds them: a primitive payload in `values` */
+    if (object ? napi_create_reference(env, value, 1, &reference) != napi_ok
+               : !ta_napi_slot_hold(native, &(ta_napi_slot){&native->values, handle}, value))
         return false;
-    napi_ref reference;
-    if (napi_create_reference(env, held, 1, &reference) != napi_ok) return false;
-    if (in->payload) {
-        ta_napi_payload_row *row = (ta_napi_payload_row *)ta_table_get(table, handle);
-        *row = (ta_napi_payload_row){reference, (uint32_t)references, boxed};
-    } else ((ta_napi_loop_row *)ta_table_get(table, handle))->items = reference;
+    row = ta_table_get(table, handle); /* JavaScript ran: get it again */
+    if (in->payload) *(ta_napi_payload_row *)row = (ta_napi_payload_row){reference, (uint32_t)references};
+    else ((ta_napi_loop_row *)row)->items = reference;
     return true;
 }
 

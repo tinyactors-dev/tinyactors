@@ -29,10 +29,10 @@ static const napi_type_tag ta_napi_host_tag = {0x7461686f73744e41ULL, 0x5049686f
 
 /* ---- the tables and their release ------------------------------------------ */
 
-/* The tables a host keeps and, for each, where its row's napi_ref is
- * (a chart's, a payload's and a loop's hold one, first; a session's scope
- * is in the native datamodel's `scopes` array, a pending row's handlers on
- * the wrapper). */
+/* The tables a host keeps and, for each, whether its row holds a napi_ref
+ * first (a chart's, a payload's and a loop's do, NULL for a primitive
+ * payload in the native datamodel's `values`; a session's scope is in its
+ * `scopes`, a pending row's handlers on the wrapper). */
 typedef struct ta_napi_rows {
     ta_table *table;
     bool referenced;

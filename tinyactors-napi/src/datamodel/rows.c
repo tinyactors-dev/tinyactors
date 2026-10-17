@@ -1,10 +1,11 @@
 /* The native datamodel's rows (AGENTS.md, "The binding's memory"; as
  * tinyactors-cpython/src/datamodel/rows.c): its charts, sessions, payloads
  * and <foreach> loops are rows of the host's tables (core's ta_table, grown
- * through the host's allocator, freed with the host). A chart's, a
- * payload's and a loop's row hold one napi_ref first; a session's scope is
- * the element at its row's slot of one array per host (`scopes`), so a
- * session holds no napi_ref (node's is about 96 B of malloc an actor). A payload's reference count lives in its row; at zero
+ * through the host's allocator, freed with the host). A chart's and a
+ * loop's row hold one napi_ref first; a session's scope and a payload's
+ * value are the element at the row's slot of one array per host and
+ * table (`scopes`, `values`), so neither holds a napi_ref (node's is about
+ * 96 B of malloc). A payload's reference count lives in its row; at zero
  * the row goes, and its value is kept in the drops until the flush after
  * the outer call into core returns (dropping the last reference can run
  * JavaScript: bindings.md, section 8). While the host is freed (a
@@ -38,38 +39,38 @@ void ta_napi_native_drop(ta_napi_native *native, napi_ref reference) {
     napi_delete_reference(env, reference);
 }
 
-/* ---- sessions' scopes ------------------------------------------------------- */
+/* ---- values at a row's slot ------------------------------------------------ */
 
-static uint32_t ta_napi_scope_slot(uint64_t handle) {
+static uint32_t ta_napi_slot_index(uint64_t handle) {
     return (uint32_t)(handle & 0xffffffffu) - 1u; /* ta_table: generation << 32 | slot + 1 */
 }
 
-napi_value ta_napi_session_scope(ta_napi_native *native, uint64_t handle) {
-    napi_value scopes = ta_napi_native_get(native, native->scopes), scope = NULL;
-    if (scopes == NULL || napi_get_element(native->host->env, scopes, ta_napi_scope_slot(handle), &scope) != napi_ok)
+napi_value ta_napi_slot_value(ta_napi_native *native, const ta_napi_slot *slot) {
+    napi_value array = ta_napi_native_get(native, *slot->array), value = NULL;
+    if (array == NULL || napi_get_element(native->host->env, array, ta_napi_slot_index(slot->handle), &value) != napi_ok)
         return NULL;
-    return scope; /* the row exists, so its element is set */
+    return value; /* the row exists, so its element is set */
 }
 
-bool ta_napi_session_hold(ta_napi_native *native, uint64_t handle, napi_value scope) {
+bool ta_napi_slot_hold(ta_napi_native *native, const ta_napi_slot *slot, napi_value value) {
     napi_env env = native->host->env;
-    napi_value scopes = ta_napi_native_get(native, native->scopes);
-    if (scopes == NULL &&
-        (napi_create_array(env, &scopes) != napi_ok || napi_create_reference(env, scopes, 1, &native->scopes) != napi_ok))
+    napi_value array = ta_napi_native_get(native, *slot->array);
+    if (array == NULL &&
+        (napi_create_array(env, &array) != napi_ok || napi_create_reference(env, array, 1, slot->array) != napi_ok))
         return false;
-    return napi_set_element(env, scopes, ta_napi_scope_slot(handle), scope) == napi_ok;
+    return napi_set_element(env, array, ta_napi_slot_index(slot->handle), value) == napi_ok;
 }
 
-void ta_napi_session_let_go(ta_napi_native *native, uint64_t handle) {
+void ta_napi_slot_let_go(ta_napi_native *native, const ta_napi_slot *slot) {
     if (native->freeing) return; /* the array goes with the datamodel: basic-env calls only */
     napi_env env = native->host->env;
     napi_handle_scope frame;
     if (napi_open_handle_scope(env, &frame) != napi_ok) return;
-    napi_value scopes = ta_napi_native_get(native, native->scopes), drops = ta_napi_native_get(native, native->drops), scope, undefined;
-    uint32_t slot = ta_napi_scope_slot(handle), length = 0;
-    if (scopes != NULL && napi_get_element(env, scopes, slot, &scope) == napi_ok) {
-        if (drops != NULL && napi_get_array_length(env, drops, &length) == napi_ok) napi_set_element(env, drops, length, scope);
-        if (napi_get_undefined(env, &undefined) == napi_ok) napi_set_element(env, scopes, slot, undefined);
+    napi_value array = ta_napi_native_get(native, *slot->array), drops = ta_napi_native_get(native, native->drops), value, undefined;
+    uint32_t index = ta_napi_slot_index(slot->handle), length = 0;
+    if (array != NULL && napi_get_element(env, array, index, &value) == napi_ok) {
+        if (drops != NULL && napi_get_array_length(env, drops, &length) == napi_ok) napi_set_element(env, drops, length, value);
+        if (napi_get_undefined(env, &undefined) == napi_ok) napi_set_element(env, array, index, undefined);
     }
     napi_close_handle_scope(env, frame);
 }
@@ -94,7 +95,7 @@ void ta_napi_native_flush(ta_napi_native *native) {
 
 void ta_napi_native_free(ta_napi_native *native) {
     napi_env env = native->host->env;
-    napi_ref *references[] = {&native->shared, &native->scopes, &native->drops, &native->strings};
+    napi_ref *references[] = {&native->shared, &native->scopes, &native->values, &native->drops, &native->strings};
     for (size_t i = 0; i < sizeof references / sizeof references[0]; i++) {
         if (*references[i] != NULL) napi_delete_reference(env, *references[i]);
         *references[i] = NULL;
@@ -113,31 +114,32 @@ ta_status ta_napi_native_add(ta_napi_native *native, napi_value value, ta_payloa
     napi_env env = native->host->env;
     napi_valuetype type = napi_undefined;
     if (napi_typeof(env, value, &type) != napi_ok) return TA_ERROR_EXECUTION;
-    bool boxed = type != napi_object && type != napi_function;
-    napi_value held = value;
-    if (boxed && (napi_create_array_with_length(env, 1, &held) != napi_ok || napi_set_element(env, held, 0, value) != napi_ok))
+    napi_ref reference = NULL; /* an object's; a primitive is an element of `values` (no box) */
+    if ((type == napi_object || type == napi_function) && napi_create_reference(env, value, 1, &reference) != napi_ok)
         return TA_ERROR_NO_MEMORY;
-    napi_ref reference;
-    if (napi_create_reference(env, held, 1, &reference) != napi_ok) return TA_ERROR_NO_MEMORY;
     uint64_t handle = 0;
     ta_napi_payload_row *row = (ta_napi_payload_row *)ta_table_add(&native->host->payloads, &handle);
+    if (row != NULL && reference == NULL && !ta_napi_slot_hold(native, &(ta_napi_slot){&native->values, handle}, value)) {
+        ta_table_remove(&native->host->payloads, handle); /* no row without its value */
+        row = NULL;
+    }
     if (row == NULL) {
-        napi_delete_reference(env, reference);
+        if (reference != NULL) napi_delete_reference(env, reference);
         return TA_ERROR_NO_MEMORY;
     }
-    *row = (ta_napi_payload_row){reference, 1, boxed};
+    row = (ta_napi_payload_row *)ta_table_get(&native->host->payloads, handle); /* JavaScript may have run */
+    *row = (ta_napi_payload_row){reference, 1};
     *out = handle;
     return TA_OK;
 }
 
 napi_value ta_napi_native_value(ta_napi_native *native, ta_payload payload) {
-    napi_env env = native->host->env;
     napi_value value = NULL;
     ta_napi_payload_row *row = payload ? (ta_napi_payload_row *)ta_table_get(&native->host->payloads, payload) : NULL;
-    if (row != NULL && (value = ta_napi_native_get(native, row->value)) != NULL && row->boxed &&
-        napi_get_element(env, value, 0, &value) != napi_ok)
-        value = NULL;
-    if (value == NULL) napi_get_undefined(env, &value);
+    if (row != NULL)
+        value = row->value != NULL ? ta_napi_native_get(native, row->value)
+                                   : ta_napi_slot_value(native, &(ta_napi_slot){&native->values, payload});
+    if (value == NULL) napi_get_undefined(native->host->env, &value);
     return value;
 }
 
@@ -152,8 +154,9 @@ void ta_napi_native_release(void *datamodel, ta_payload payload) {
     ta_napi_payload_row *row = (ta_napi_payload_row *)ta_table_get(&native->host->payloads, payload);
     if (row == NULL || --row->count > 0) return;
     napi_ref reference = row->value;
+    if (reference == NULL) ta_napi_slot_let_go(native, &(ta_napi_slot){&native->values, payload});
     ta_table_remove(&native->host->payloads, payload);
-    ta_napi_native_drop(native, reference); /* later: it can run JavaScript */
+    ta_napi_native_drop(native, reference); /* both kept until the flush: dropping can run JavaScript */
 }
 
 bool ta_napi_native_payload(ta_napi_native *native, napi_value value, ta_payload *out) {

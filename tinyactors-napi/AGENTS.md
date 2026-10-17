@@ -325,7 +325,9 @@ The addon allocates almost nothing (bindings.md, section 6):
   5): a session (its chart and its `_event`'s string ids, 24 B; its
   scope is the element at the row's slot of one JavaScript array per
   host, no `napi_ref`), a chart (its compiled functions), a
-  payload (its `napi_ref` and reference count), a `<foreach>`, a pending
+  payload (its reference count, and an object's `napi_ref`; a primitive
+  is the element at its row's slot of one array per host: measured,
+  docs/allocation.md, finding 3b), a `<foreach>`, a pending
   typed method (its handlers). The tables grow
   through the host's allocator and are freed once with the host. Keep
   handles, never row pointers across a `ta_table_add`. The addon writes no
@@ -680,8 +682,9 @@ file.
   `src/datamodel/datamodel.c`), the entries that only drop a row go
   through `ta_napi_native_drop`, which opens its own, and the drain opens
   one per effect (`ta_napi_dispatch`), the resolver one per call.
-- **Reference counts live in the row,** one `napi_ref` per payload row,
-  deleted at zero (`napi_delete_reference` takes a `node_api_basic_env`:
+- **Reference counts live in the row,** with an object payload's
+  `napi_ref` (a primitive payload's value is the element at its row's slot
+  of one array per host, no `napi_ref` and no box), deleted at zero (`napi_delete_reference` takes a `node_api_basic_env`:
   Node.js 22's `include/node/js_native_api.h:339, 355`), so the host's
   finalizer and the environment's teardown free a host with basic-env
   calls only, and skip the last take. Tests: `test/rules.test.mjs: 'a

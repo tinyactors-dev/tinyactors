@@ -70,16 +70,20 @@ napi_value ta_napi_native_get(ta_napi_native *native, napi_ref reference);
  * value kept in the drops until the flush (dropping the last reference can
  * run JavaScript: AGENTS.md, "Rules the suite cannot see"). */
 void ta_napi_native_drop(ta_napi_native *native, napi_ref reference);
-/* A session's scope, element `slot` of `scopes` for its row's handle;
- * NULL when it has none. */
-napi_value ta_napi_session_scope(ta_napi_native *native, uint64_t handle);
-/* Holds `scope` for the session of row `handle`; false with an exception
- * pending. */
-bool ta_napi_session_hold(ta_napi_native *native, uint64_t handle, napi_value scope);
-/* The session's scope let go: kept in the drops until the flush, as a
- * row's reference is; nothing while the host is freed (the array goes with
- * the datamodel). */
-void ta_napi_session_let_go(ta_napi_native *native, uint64_t handle);
+/* A value held at a row's slot: element `handle`'s slot of the array
+ * `*array` (one per table: `scopes`, `values`), made on first use. */
+typedef struct ta_napi_slot {
+    napi_ref *array;
+    uint64_t handle;
+} ta_napi_slot;
+/* The value at the slot; NULL when there is none. */
+napi_value ta_napi_slot_value(ta_napi_native *native, const ta_napi_slot *slot);
+/* Holds `value` at the slot; false with an exception pending. */
+bool ta_napi_slot_hold(ta_napi_native *native, const ta_napi_slot *slot, napi_value value);
+/* The slot's value let go: kept in the drops until the flush, as a row's
+ * reference is; nothing while the host is freed (the arrays go with the
+ * datamodel). */
+void ta_napi_slot_let_go(ta_napi_native *native, const ta_napi_slot *slot);
 /* A new payload holding `value` (of the shared context) with one reference. */
 ta_status ta_napi_native_add(ta_napi_native *native, napi_value value, ta_payload *out);
 void ta_napi_native_retain(void *datamodel, ta_payload payload);

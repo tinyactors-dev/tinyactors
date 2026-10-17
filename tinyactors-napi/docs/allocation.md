@@ -179,6 +179,34 @@ analysis sees it; the refutation is below.
   after; bun native 2058, 2024, 2071 and 1632, 1661, 1919. AGENTS.md,
   "Measured cost per session", has the numbers.
 
+### 3b. A payload's `napi_ref`, and its box for a primitive (step p2-allocation (b))
+
+- **Claim:** a payload's value held as the element at its row's slot of
+  one array per host, as the sessions' scopes are, saves the `napi_ref`
+  (and, for a primitive, the one-element array that boxes it, since
+  Node-API 8 references objects only) per payload, without a cost per
+  event with data.
+- **Scenario:** 10,000 actors of `fit`, rounds of one `inc` to each with
+  data: an object (`{n, list: [1, 2]}`) or a number. Each send makes a
+  payload in the target session's datamodel, released after its event.
+- **Evidence:** `perevent-data.mjs` (the step's scratch), the least of 40
+  rounds, pinned to one CPU, builds alternating, the mean of 10 runs on
+  node and 6 on bun. Every value in the array: node object 7.531 us
+  before, 7.890 after (+4.8 %; again 7.600 and 7.788, +2.5 %), number
+  6.244 and 6.064; bun object 4.926 and 4.812, number 4.508 and 4.190. So
+  on node the array costs an object payload time. Only primitives in the
+  array, objects by `napi_ref` as before: node object 7.554 and 7.720 in
+  one series, 7.674 and 7.624 in the next with the order reversed (the
+  same path: noise), number **6.272 and 6.093** (-3 %); bun object 4.983
+  and 4.904, number **4.542 and 4.202** (-7 %); without data node 5.245
+  and 5.199.
+- **Verdict:** confirmed for primitives, refuted for objects on node.
+- **Action:** built: a primitive payload's value is the element at its
+  row's slot of `values`, an object's a `napi_ref` in its row (16 B, as
+  before). A primitive payload saves the reference and its box (node's
+  reference about 96 B of malloc, the box a JavaScript array); payloads
+  are an event's, so this is per event in flight, not per actor.
+
 ### 4. The compile result's blocks are freed one by one
 
 - **Claim:** a compile result's about 40 small blocks share one lifetime

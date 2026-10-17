@@ -226,7 +226,9 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info);
  *   session  its chart's row and its _event's string ids (24 B); its
  *            scope (or its context) is the native datamodel's `scopes`
  *            element at the row's slot, not a napi_ref;
- *   payload  a value crossing between actors: its reference and count;
+ *   payload  a value crossing between actors: an object's napi_ref, and
+ *            its reference count; a primitive is the native datamodel's
+ *            `values` element at the row's slot (no napi_ref, no box);
  *   loop     a <foreach> in progress: the items it walks;
  *   pending  a typed method's message: its handlers are kept on the
  *            wrapper (never by a strong napi_ref, which would keep a host
@@ -254,9 +256,8 @@ typedef struct ta_napi_session_row {
 } ta_napi_session_row;
 
 typedef struct ta_napi_payload_row {
-    napi_ref value; /* the value, or a one-element array holding a primitive */
+    napi_ref value; /* an object's (a function's) value; NULL: a primitive, in `values` */
     uint32_t count;
-    uint32_t boxed; /* `value` is that array: Node-API 8 references objects only */
 } ta_napi_payload_row;
 
 typedef struct ta_napi_loop_row {
@@ -276,6 +277,9 @@ typedef struct ta_napi_pending_row {
  *                declaring session's own context's record), each at its
  *                row's slot (ta_table's handle: generation << 32 | slot + 1),
  *                made on first use: one napi_ref for every session;
+ *   values       the payloads' values, each at its row's slot, as `scopes`
+ *                for a primitive payload (an element needs no box; an object
+                is a napi_ref, which costs node less per event);
  *   drops        an array holding the values whose last reference went,
  *                emptied by the flush after the outer call into core;
  *   strings      ["platform", "internal", "external", the I/O processors'
@@ -295,7 +299,7 @@ typedef struct ta_napi_pending_row {
 struct ta_napi_host;
 typedef struct ta_napi_native {
     struct ta_napi_host *host;
-    napi_ref shared, scopes, drops, strings;
+    napi_ref shared, scopes, values, drops, strings;
     ta_datamodel_environment *environment;
     ta_growable_arena scratch;
     ta_buffer output;
