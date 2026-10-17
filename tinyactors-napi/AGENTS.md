@@ -1014,8 +1014,10 @@ manages its development dependencies; the C toolchain is the root's.
   its target, loads no library, exports `napi_register_module_v1` and
   `node_api_module_get_api_version_v1` only, leaves undefined only
   Node-API and `Pack::LIBC`), each in `@tinyactors/node-<os>-<cpu>`
-  (`os` and `cpu`, no `libc`), and the main package (`index.mjs`,
-  `lib/`, `index.d.ts`, README, LICENSE) listing them as `optionalDependencies` at
+  (`os` and `cpu`, no `libc`), and the main package (package.json's
+  `files`: `index.mjs`, `lib/`, `index.d.ts`, README, LICENSE,
+  `docs/guide/` and `docs/values.md`, so the README's relative links
+  resolve after an install, which `test/links.test.mjs` checks) listing them as `optionalDependencies` at
   exactly its version; packed with the pinned `npm pack` into
   `build/packages/`, the same bytes for the same commit. This machine's
   tarballs are installed by path into a fresh project outside the

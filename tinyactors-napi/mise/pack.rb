@@ -7,8 +7,11 @@
 # (mise/tasks/pack) and the release task (mise/tasks/release) both build
 # through this file.
 #
-# - @tinyactors/node: index.mjs, lib/ (the direct layer and the
-#   convenience layer), index.d.ts, README.md, LICENSE and a
+# - @tinyactors/node: the files package.json's `files` lists (index.mjs,
+#   lib/ with the direct layer and the convenience layer, index.d.ts,
+#   README.md, LICENSE, and the guides and docs/values.md, which the
+#   README links to: test/links.test.mjs checks that every relative link
+#   of a shipped document resolves inside the package) and a
 #   package.json made from this directory's, with optionalDependencies on
 #   every platform package at exactly its own version. They live only in
 #   the staged copy: the repository's package.json cannot name packages
@@ -45,8 +48,6 @@ module NodeAPI
       'x86_64-linux' => %w[linux x64],
       'aarch64-linux' => %w[linux arm64]
     }.freeze
-    # The main package's files, beside its package.json.
-    FILES = %w[index.mjs lib/direct.mjs lib/convenience.mjs index.d.ts README.md LICENSE].freeze
     # What the addon exports: the runtime that loads it finds it by these
     # names (NAPI_MODULE_INIT, Node.js's include/node/node_api.h).
     EXPORTS = %w[napi_register_module_v1 node_api_module_get_api_version_v1].freeze
@@ -76,6 +77,10 @@ module NodeAPI
     def target_names = TARGETS.keys
 
     def manifest = JSON.parse(PACKAGE_JSON.read)
+
+    # The main package's files and directories, beside its package.json:
+    # package.json's `files`, which the link test reads too.
+    def files = manifest.fetch('files')
 
     def platform_name(target) = "#{NAME}-#{TARGETS.fetch(target).join('-')}"
 
@@ -149,13 +154,12 @@ module NodeAPI
     # every platform package at `version`.
     def stage_main(dir, version)
       FileUtils.mkdir_p(dir)
-      FILES.each do |file|
+      files.each do |file|
         FileUtils.mkdir_p(dir.join(file).dirname)
-        FileUtils.cp(file == 'LICENSE' ? LICENSE : ROOT.join(file), dir.join(file))
+        FileUtils.cp_r(file == 'LICENSE' ? LICENSE : ROOT.join(file), dir.join(file))
       end
       staged = manifest.merge(
         'version' => version,
-        'files' => FILES,
         'optionalDependencies' => target_names.to_h { |target| [platform_name(target), version] }
       )
       dir.join('package.json').write("#{JSON.pretty_generate(staged)}\n")

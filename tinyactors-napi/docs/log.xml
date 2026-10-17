@@ -1234,4 +1234,36 @@
     <evidence>test/convenience.test.mjs: 'a refusal at the call rejects: a closed host, another object' and 'a method pending at close never settles'</evidence>
     <resolution>Documented in index.d.ts, docs/api-map.md and docs/guide/inspection.md.</resolution>
   </entry>
+  <entry id="l-p3-shapes-resolver-semantics" date="2026-10-17" step="p3-shapes" kind="decision" status="resolved">
+    <what>directoryResolver(root): source is read at resolve(realpath(root), dirname(base), source); refused with ResolveError when the path as written or its real path (symbolic links resolved) is not under root, when the file does not exist (ENOENT, ENOTDIR), and when its bytes are not UTF-8 (a fatal TextDecoder); any other file-system error (EISDIR, EACCES) is thrown as it is; root is realpath-ed once at the call, so a missing root throws there; root may be a string or a file URL (realpathSync takes both).</what>
+    <why>The step said "refuses a path that leaves root, symlinks included"; whether a missing file is a diagnostic or a thrown error was not settled. A src naming no file is the chart's error, so it is reported at compile time like a refused path; an I/O failure is the environment's, so it passes through as the direct layer's resolver contract says for other errors.</why>
+    <evidence>tinyactors-napi/lib/convenience.mjs (directoryResolver); test/shapes.test.mjs: three directoryResolver cases</evidence>
+  </entry>
+  <entry id="l-p3-shapes-resolved-name" date="2026-10-17" step="p3-shapes" kind="note" status="for-maintainer">
+    <what>A document the resolver read is named by its src as written (src/compile.c:242 sets out-&gt;source.name = request-&gt;source; the direct layer's resolver returns text only), so a src inside orders/payment.scxml, read as "payment.scxml", is resolved relative to root, not orders/.</what>
+    <why>directoryResolver cannot name the document it returns without the direct layer letting a resolver return a name too (ta_resolve_result.source.name exists in core). Documented in index.d.ts and docs/guide/charts.md.</why>
+    <evidence>tinyactors-core/include/tinyactors/compile.h: ta_resolve_result; tinyactors-napi/src/compile.c:242</evidence>
+    <resolution>Left as it is: changing the direct layer's resolver to return {name, text} is the maintainer's call.</resolution>
+  </entry>
+  <entry id="l-p3-shapes-browser" date="2026-10-17" step="p3-shapes" kind="note" status="open">
+    <what>directoryResolver imports node:fs and node:path (the lint rule convenience-imports-the-direct-layer widened for exactly those, commit 50567fbd); in p5 a browser has no fs, so that build must leave directoryResolver out or give it another module. Not designed for now, as the step says.</what>
+    <evidence>tinyactors-napi/tools/lint/rules/convenience-imports-the-direct-layer.yml</evidence>
+  </entry>
+  <entry id="l-p3-shapes-received-value" date="2026-10-17" step="p3-shapes" kind="decision" status="resolved">
+    <what>Types: data the host hands out (send.data, invocation.data, decode(), actorContext variables, span attributes) is ReceivedValue, typed any as JSON.parse's result; inputs stay Value. Handled (a handler's return) is unknown, not void | PromiseLike&lt;unknown&gt;. The examples are checked with checkJs not strict, test/types strict.</what>
+    <why>With Value (a union) every guide example reading send.data.amount or decode(bytes).sku failed tsc; a JavaScript programmer expects received data to be read without narrowing, as JSON.parse's. A union return type broke the void-return rule, so (host, send) =&gt; list.push(send) (docs/guide/testing.md) was refused.</why>
+    <evidence>tools/typecheck.mjs output before the change: TS2339 on README-md-60, README-md-367, io-processors-md-15, other-systems-md-22; TS2322 on testing-md-21</evidence>
+  </entry>
+  <entry id="l-p3-shapes-typescript-pin" date="2026-10-17" step="p3-shapes" kind="decision" status="resolved">
+    <what>tsc comes from mise.toml as "npm:typescript" = "5.9.3" (mise's npm backend), not a devDependency: the package keeps no development dependencies to install; mise run lint runs tools/typecheck.mjs with it. The examples' Node.js built-ins are typed any by test/types/node.d.ts (no @types/node); tsconfigs are JSON files in test/types so their option names are not ours for the acronym check.</what>
+    <evidence>tinyactors-napi/mise.toml; tinyactors-napi/test/types/</evidence>
+  </entry>
+  <entry id="l-p3-shapes-docs-row" date="2026-10-17" step="p3-shapes" kind="deviation" status="resolved">
+    <what>Item 6 (the package ships docs/guide and docs/values.md, its links checked by test/links.test.mjs) has no row in docs/api-map.md's table but a paragraph below it: the table's rule (mise/lib/api_map.rb) is that a row names core behind it and an item with nothing in core does not belong; packaging calls nothing. package.json gained `files`, which mise/pack.rb stages instead of its own list.</what>
+    <evidence>tinyactors-napi/docs/api-map.md, "Not an API item: the package's documents"</evidence>
+  </entry>
+  <entry id="l-p3-shapes-addcharts-shape" date="2026-10-17" step="p3-shapes" kind="decision" status="resolved">
+    <what>host.addCharts takes a plain object only (null, an array or a string is a TypeError) and options {resolver} only (another key a TypeError, as the direct layer refuses unknown options); its keys go to compileCharts in Object.entries order, so integer-like keys come first (documented in docs/guide/charts.md). spawnChart passes options to spawn unchanged.</what>
+    <evidence>test/shapes.test.mjs: addCharts cases</evidence>
+  </entry>
 </log>

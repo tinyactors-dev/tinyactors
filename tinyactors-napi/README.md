@@ -540,7 +540,9 @@ TA_ERROR_INVALID - the host has no chart of that name
 
 ## Guides
 
-One per feature, each with complete examples that run as written:
+One per feature, each with complete examples that run as written. They
+are in the package too, under `docs/guide/` in
+`node_modules/@tinyactors/node`, so these links work after an install:
 
 - [Writing charts](docs/guide/charts.md): JavaScript in charts, scripts,
   XML data, several charts, `<invoke>` of a chart, systems and `boot`.
