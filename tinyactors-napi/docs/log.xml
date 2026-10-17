@@ -1030,4 +1030,8 @@
     <evidence>scratch p2-allocation/ten-6.log:1142-1149, dist-bun-qjs-hib.txt, dist2-bun-qjs-hib.txt; a reference of plain JavaScript timed beside each operation did not follow contention (its least time stays the calm one), so it was not adopted</evidence>
     <resolution>tools/scale.mjs, gate: from the third attempt an operation is over only when the median of its attempts own ratios (the two sizes measured one after the other) is over too; a scan is over in every attempt. The factor stays 1.5.</resolution>
   </entry>
+  <entry id="l-p2-allocation-ten-passes" date="2026-10-17" step="p2-allocation" kind="note" status="resolved">
+    <what>Done-when: ten consecutive full mise run test passes at 7c818f49 (19:46 to 20:27, about 4 to 5 minutes each). The fast scaling gate, 8 configurations a run (2 runtimes, 2 datamodels, 2 scenarios), finished in 1 attempt 38 times, 2 attempts 31, 3 attempts 10, 4 attempts once, of 80.</what>
+    <evidence>scratch p2-allocation/ten.txt, ten-1.log to ten-10.log</evidence>
+  </entry>
 </log>
