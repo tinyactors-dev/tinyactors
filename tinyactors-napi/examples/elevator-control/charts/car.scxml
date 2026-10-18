@@ -247,11 +247,11 @@
                  fails. Nothing is lost: `held` is read when the controller
                  starts, and a door that shut while the car was overloaded
                  opens again from `closed`. One sent as the controller ends
-                 fails, as harmlessly. A workaround as much as a rule: a
-                 send that fails at its own step carries no sendid, so the
-                 car could not tell these failures from a reopen's
-                 (docs/log.xml, l-p4-examples-elevator-error-sendid,
-                 l-p4-examples-elevator-invoke-start). -->
+                 fails, as harmlessly. A send that fails at its own step
+                 carries its sendid now (l-p4-examples-elevator-error-sendid),
+                 so such a failure is told from a reopen's; the guard stays
+                 for the sends before the controller starts
+                 (l-p4-examples-elevator-invoke-start). -->
             <transition event="obstructed" cond="doorRunning"><send event="obstructed" target="#_door" id="door.signal"/></transition>
             <transition event="load.over" cond="doorRunning"><send event="hold" target="#_door" id="door.signal"/></transition>
             <transition event="load.ok" cond="doorRunning"><send event="release" target="#_door" id="door.signal"/></transition>

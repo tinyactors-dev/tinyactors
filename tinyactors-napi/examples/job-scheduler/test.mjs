@@ -290,7 +290,7 @@ test('SIGTERM: a graceful shutdown, what is dropped at close, and a clean exit',
   assert.equal(closed.idleAtClose, 'TA_ERROR_STATE');
   const last = find('exit');
   assert.equal(last.stateAtClose, 'pending', 'a typed method pending at close never settles');
-  assert.deepEqual(last.unanswered.map((u) => [u.job, u.reason]), [['batch', 'TA_ERROR_STATE']],
+  assert.deepEqual(last.unanswered.map((u) => [u.job, u.reason]), [['batch', 'closed']],
     'a worker that finished after close found a closed host');
 });
 

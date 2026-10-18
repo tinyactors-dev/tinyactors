@@ -167,12 +167,14 @@ Recorded in [`docs/log.xml`](../../docs/log.xml):
 
 - `l-p4-examples-approval-done-early`: a resubmission that returns legal
   to its final state through history raised `done.state.review` while
-  finance was still being entered; the transition on it is guarded with
-  `In()` for both final states.
+  finance was still being entered. Fixed in core: the guard is gone.
 - `l-p4-examples-approval-xml-content`: inline XML `<content>` sent to an
-  I/O processor is an `XMLNode` on the native datamodel and cannot be read
-  on quickjs (`TA_ERROR_INVALID`).
+  I/O processor was an `XMLNode` on the native datamodel and cannot be
+  read on quickjs (`TA_ERROR_INVALID`). The native datamodel now gives its
+  XML text; quickjs waits for core, so the chart still sends its record as
+  text it writes.
 - `l-p4-examples-approval-context-null`: `actorContext` reads `null` for
-  an `undefined` variable, and for every variable before the first turn.
+  an `undefined` variable, and for every variable before the first turn:
+  core's encoding, requested of core.
 - `l-p4-examples-approval-hidden-timers`: no method shows an actor's
   pending delayed sends or its history states.

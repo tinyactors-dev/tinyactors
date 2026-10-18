@@ -28,9 +28,8 @@ export class Billing {
    * @param {object} [options.plan] the subscription chart's settings for
    *   every new subscription: cycleMs, retryMs, maxRetries, graceMs
    * @param {object} [options.trial] the trial chart's: trialMs
-   * @param {number} [options.charges] the most renewals charged at once
    */
-  constructor({ clock, gateway, datamodel, plan = {}, trial = {}, charges = 4096 }) {
+  constructor({ clock, gateway, datamodel, plan = {}, trial = {} }) {
     this.clock = clock;
     this.gateway = gateway;
     this.planSettings = plan;
@@ -57,21 +56,13 @@ export class Billing {
       {
         systemID: 'billing',
         ioProcessors: [{ type: 'urn:billing:notify' }],
-        // every charge is an invocation, which holds one of the host's
-        // requests; that pool does not grow (docs/log.xml,
-        // l-p4-examples-billing-requests-pool): past it an <invoke> is
-        // error.execution, and the subscription would sit in charging, so
-        // it is sized for every renewal that may be charged at once
-        system: { maxRequests: charges },
       },
       {
         clock,
         datamodel,
         services: { 'urn:billing:payments': (host, invocation) => this.payment(invocation) },
         ioProcessors: {
-          // structuredClone: on the native datamodel send.data is made in
-          // the chart's realm (docs/log.xml, l-p4-examples-chat-realm)
-          'urn:billing:notify': (host, send) => this.notify(send.session, send.event, structuredClone(send.data)),
+          'urn:billing:notify': (host, send) => this.notify(send.session, send.event, send.data),
         },
         wake: (host, session, migration) => this.wake(session, migration),
         migrated: (host, moved) => this.moved(moved),
@@ -333,9 +324,10 @@ export class Billing {
   }
 
   /** Waits until the host is idle and the gateway's answers that are due
-   * have reached it: `host.idle()` alone does not wait for the payment
-   * service's promises (docs/log.xml, l-p4-examples-order-settle), so this
-   * turns until a round sees no new activity. Charges still waiting for
+   * have reached it: the payment service answers from a promise it starts
+   * and does not return to the host (it returns the service at once, so
+   * that a cancel reaches it), which `host.idle()` cannot wait for, so
+   * this turns until a round sees no new activity. Charges still waiting for
    * their time on the clock are not waited for. */
   async settle() {
     let seen;

@@ -37,10 +37,7 @@ export class Storefront {
       clock,
       datamodel,
       transport: this.link.transport,
-      // On the native datamodel send.data is made in the chart's vm context,
-      // so its objects are not this realm's (docs/log.xml,
-      // l-p4-examples-chat-realm): structuredClone makes them ours.
-      ioProcessors: { 'urn:shop:customer': (host, send) => this.#notify({ event: send.event, ...structuredClone(send.data) }) },
+      ioProcessors: { 'urn:shop:customer': (host, send) => this.#notify({ event: send.event, ...send.data }) },
       log: (host, entry) => this.logs.push(`${entry.label}: ${entry.text}`),
     });
     this.host.addCharts({ 'cart.scxml': CART_CHART });

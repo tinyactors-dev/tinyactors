@@ -82,11 +82,11 @@ attempt or time out within a grace period, then closes the host and exits.
   on a promise with no I/O behind it does not hold the process open; the
   attempt's timeout, a delayed send, is what does, until it fires.
 - **`await host.idle()`** resolves at the next turn with nothing to do: it
-  does not wait for delayed sends that are not yet due, nor for workers'
-  promises. A worker that answers from a promise answers after the idle
-  turn, so the test loops `setImmediate` and `idle()` to let both settle.
-  An `idle()` that is waiting when the host closes rejects with
-  `TA_ERROR_STATE`; `idle()` called on a closed host throws.
+  does not wait for delayed sends that are not yet due; it waits for the
+  workers' promises, which the run handler returns. The tests that hold a
+  worker to look at the host meanwhile let turns run with `setImmediate`
+  instead. An `idle()` that is waiting when the host closes rejects with
+  `TA_ERROR_STATE`, and so does one asked of a closed host.
 
 ## The shutdown, and what close() drops
 
@@ -103,8 +103,10 @@ its signal are still running at the close:
 - **a typed method pending at the close never settles** (the promise of
   `actorStateAsync`) and keeps nothing alive;
 - **an `idle()` waiting at the close rejects** with `TA_ERROR_STATE`;
-- **a worker that finishes after the close** finds a closed host:
-  `send.answer()` throws `TA_ERROR_STATE`, which the scheduler records;
+- **a worker that finishes after the close** finds a closed host
+  (`send.answer()` would throw `TA_ERROR_STATE`), which the scheduler
+  records, as it records an answer that `send.answer()` could not deliver
+  (`false`: the job ended while its worker ran);
 - the process exits on its own once the stubborn worker's own timer has
   fired, with no `process.exit()`.
 

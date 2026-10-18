@@ -42,11 +42,9 @@ export class Warehouse {
       clock,
       datamodel,
       transport: this.link.transport,
-      // structuredClone: on the native datamodel send.data is made in the
-      // chart's vm context, not this realm (docs/log.xml, l-p4-examples-chat-realm).
       ioProcessors: {
         'urn:warehouse:stock': (host, send) => {
-          const entry = { event: send.event, ...structuredClone(send.data) };
+          const entry = { event: send.event, ...send.data };
           this.ledger.push(entry);
           onReport(entry);
         },

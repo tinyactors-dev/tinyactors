@@ -139,9 +139,8 @@ name with `host.chart` first.
 - **Both datamodels**, which differ here: the native one refuses a `Date`
   in a variable, QuickJS keeps it.
 
-The host sizes `system.maxRequests` for every charge that may run at
-once: an invocation past the requests pool is `error.execution` and the
-pool does not grow (docs/log.xml, `l-p4-examples-billing-requests-pool`).
+The requests pool, which every running charge holds a place of, grows
+when the invocations fill it.
 
 ## Run it
 

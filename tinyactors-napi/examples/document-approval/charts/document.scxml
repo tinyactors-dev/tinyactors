@@ -108,12 +108,8 @@
                the approval as it was first given. -->
           <script>approvals[_event.data.stage] ??= { by: _event.data.by, note: _event.data.note, version: version };</script>
         </transition>
-        <!-- Both regions are final: the review is done. The guard works
-             around a done.state.review that comes too early: a resubmission
-             that returns legal to its final state raises it while finance
-             is still being entered (docs/log.xml,
-             l-p4-examples-approval-done-early). -->
-        <transition event="done.state.review" cond="In('legalApproved') &amp;&amp; In('financeApproved')" target="signoff"/>
+        <!-- Both regions are final: the review is done. -->
+        <transition event="done.state.review" target="signoff"/>
 
         <state id="legal" initial="legalQueued">
           <history id="legalWasAt" type="shallow">

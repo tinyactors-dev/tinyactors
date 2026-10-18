@@ -95,10 +95,9 @@ eviction at rest no more than `maxResident` actors were in memory.
 - **Both datamodels:** the test runs every case on the native datamodel
   and on quickjs.
 
-The host is sized up front for the population (`maxActors`, `maxTimers`,
-`maxEvents`, `instanceBytes`, `stringBytes`): a run whose actor-to-actor
-sends fill the event pool or the slab crashes today instead of growing
-it (docs/log.xml, `l-p4-examples-chat-events-crash`).
+The host is sized up front for the population (`maxActors`,
+`maxTimers`); the pools of events, variables and strings grow when a
+burst fills them.
 
 ## Run it
 

@@ -173,8 +173,6 @@ export class Building {
         clock,
         datamodel,
         ioProcessors: {
-          // Only primitive fields are read, so the native datamodel's
-          // objects need no copy (docs/log.xml, l-p4-examples-chat-realm).
           'urn:elevator:hw': (host, send) => {
             const { event, data } = send;
             this.trace?.(`${this.clock.now} ${data.car} ${event} ${data.state ?? data.mode ?? data.floor ?? data.on}`);

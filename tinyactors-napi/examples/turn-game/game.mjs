@@ -84,8 +84,9 @@ export class GameServer {
     this.recovery = recovery;
     this.rules = rules;
     this.checkpointOnResult = checkpointOnResult;
-    /** the server's clock, in milliseconds: the journal's times */
-    this.now = clock ? () => clock.now : () => performance.now();
+    /** the host's clock, in milliseconds: the journal's times, on the
+     * clock the snapshots' times are on */
+    this.now = () => this.host.now();
     /** the last input's journal number */
     this.seq = 0;
     /** `now()` at the last checkpoint: a journal entry's `at` counts from it */
@@ -258,13 +259,9 @@ export class GameServer {
   async #snapshot(host) {
     for (let attempt = 1; ; attempt++) {
       try {
-        // On the runtime's clock, a snapshot holds the time of the host's
-        // last turn, not now (docs/log.xml, l-p4-examples-game-snapshot-time).
-        // A typed method's turn moves the host's clock to now, right after
-        // it hands out the reply: the reading taken then is the snapshot's
-        // time, to the turn's first drain.
-        const at = this.clock !== undefined ? this.now()
-          : await new Promise((resolve, reject) => host.hostStats(undefined, () => resolve(this.now()), (h, error) => reject(error)));
+        // the snapshot holds the host's time at the call, which this
+        // reading of the host's clock just before it is, to the microsecond
+        const at = host.now();
         return { snapshot: host.snapshot(), at };
       } catch (error) {
         if (!(error instanceof TinyactorsError) || error.status !== 'TA_ERROR_STATE' || attempt === CHECKPOINT_ATTEMPTS) throw error;
@@ -315,10 +312,8 @@ export class GameServer {
     try {
       await host.idle();
       for (const entry of entries) {
-        // Every deadline due by the input's time first, one at a time. The
-        // times are the server's readings, not the host's, which cannot be
-        // read: a move within a few milliseconds of its turn's timeout may
-        // be judged the other way (docs/log.xml, l-p4-examples-game-host-clock).
+        // Every deadline due by the input's time first, one at a time: the
+        // times are the host's clock's, read as each input came.
         while (host.nextDeadline !== undefined && clock.now + host.nextDeadline <= entry.at) {
           clock.increment(Math.max(host.nextDeadline, 0));
           await host.idle();

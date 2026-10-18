@@ -147,8 +147,9 @@ it out of the handler first, so the demo rarely sees one.
 - **A `SimulatedClock`** for the replay, to move time to each journaled
   input, and in the tests.
 - **Typed methods** (`actorContextAsync`, `actorStateAsync`) for the
-  players' records, and `hostStats` to move the host's clock before a
-  snapshot.
+  players' records.
+- **`host.now()`** for the journal's times: the host's clock, on which a
+  snapshot's time is too.
 - **Both datamodels**: the charts keep only plain values (no `Date`, no
   `let` in scripts), which a snapshot writes on either.
 
@@ -156,15 +157,10 @@ it out of the handler first, so the demo rarely sees one.
 
 Two, in docs/log.xml:
 
-- `l-p4-examples-game-snapshot-time`: on the runtime's clock a snapshot
-  holds the time of the host's last turn, not the time `snapshot()` was
-  called, so a restored timer gets back the time the host was idle
-  before it. The server calls a typed method first, whose turn moves
-  the host's clock to now.
-- `l-p4-examples-game-host-clock`: the host's clock cannot be read, so
-  the journal's times are the server's readings, which can differ from
-  the host's by a fraction of a millisecond; a replay can then judge a
-  move that raced its timeout the other way.
+- `l-p4-examples-game-snapshot-time`: a snapshot held the time of the
+  host's last turn. Fixed: it holds the time of the `snapshot()` call.
+- `l-p4-examples-game-host-clock`: the host's clock could not be read.
+  Fixed: `host.now()`, which the journal now uses.
 
 ## Run it
 

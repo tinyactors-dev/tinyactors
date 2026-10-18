@@ -31,10 +31,10 @@ function setup(datamodel, { payments, refunds, warehouse, stock = { tea: 10 } } 
   return { clock, gateway, warehouse: store, shop };
 }
 
-/** Lets the host and the services' promises settle: `idle()` waits for the
- * host only, and a service answers from a promise, which schedules another
- * turn after the idle one. A workaround (docs/log.xml,
- * l-p4-examples-order-settle): nothing in the API waits for both. */
+/** Lets the host and the services' promises settle: a service answers
+ * from a promise it starts and does not return to the host (it returns the
+ * service at once, so that a cancel reaches it), which `idle()` cannot
+ * wait for. */
 async function settle(shop) {
   for (let round = 0; round < 4; round++) {
     await new Promise((resolve) => setImmediate(resolve));

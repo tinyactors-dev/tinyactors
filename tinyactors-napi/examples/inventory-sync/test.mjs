@@ -27,8 +27,7 @@ async function world(datamodel, { catalog = CATALOG, holdFor = '900s', timing = 
 
 /** Lets both hosts and the connection settle: each host idle, and every
  * frame written on the connection read on the other side, three rounds in
- * a row. `idle()` waits for one host, not for the bytes between two
- * (as l-p4-examples-order-settle found for a service's promise). */
+ * a row. `idle()` waits for one host, not for the bytes between two. */
 async function settle({ warehouse, shop }) {
   const start = performance.now();
   for (let quiet = 0; quiet < 3;) {

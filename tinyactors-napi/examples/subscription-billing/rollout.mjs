@@ -41,11 +41,7 @@ export async function rollout(billing, { release, charts, canary, timeoutMs = 0,
   }
 
   for (const chart of charts) {
-    // a migration of a chart the host does not have moves nothing and
-    // reports success: a typo would look like a finished rollout
-    // (docs/log.xml, l-p4-examples-billing-migrate-unknown), so ask first;
-    // host.chart throws for a name it does not know
-    billing.host.chart(chart);
+    // migrate throws TA_ERROR_INVALID for a chart the host does not have
     const migration = billing.migrate({ chart, wake: true, timeout: timeoutMs });
     const [result] = await drive(billing, [migration], { batch, stepMs, maxResident, during });
     report.migrations.push({ chart, id: migration.id, moved: migration.moved.length, result });
@@ -58,10 +54,9 @@ export async function rollout(billing, { release, charts, canary, timeoutMs = 0,
   return report;
 }
 
-/** The live actors of `charts` that are not on `release`, by chart. A
- * migration's result counts the actors that failed but does not name
- * them (docs/log.xml, l-p4-examples-billing-failed-unnamed), so this asks
- * the host about every actor. */
+/** The live actors of `charts` that are not on `release`, by chart: every
+ * actor the host has, asked of it, so this counts the ones a migration's
+ * `failed` names and the ones that came after it alike. */
 export async function leftBehind(billing, release, charts) {
   const inventory = await billing.inventory();
   const result = {};

@@ -69,10 +69,7 @@ export class ApprovalDesk {
   }
 
   notify(event, data) {
-    // On the native datamodel a send's objects are made in the chart's vm
-    // context, so a nested one is not the application's Object; a clone
-    // makes it ours (docs/log.xml, l-p4-examples-chat-realm).
-    const message = { event, ...structuredClone(data) };
+    const message = { event, ...data };
     this.outbox.push(message);
     if (FINAL.has(event)) this.endings.get(data.docID)?.resolve(message);
   }
@@ -131,19 +128,10 @@ export class ApprovalDesk {
     return this.endings.get(id)?.promise;
   }
 
-  /** Waits until the host is idle and the archive has nothing running.
-   * `host.idle()` waits for the host only, and an archive call answers
-   * from a promise after it (docs/log.xml, l-p4-examples-order-settle). */
+  /** Waits until the host is idle: `host.idle()` waits for the archive
+   * handler's promise too. */
   async settle() {
-    for (;;) {
-      await this.host.idle();
-      if (this.pending.size === 0) {
-        await new Promise((resolve) => setImmediate(resolve));
-        await this.host.idle();
-        if (this.pending.size === 0) return;
-      }
-      await Promise.allSettled([...this.pending]);
-    }
+    await this.host.idle();
   }
 
   close() {

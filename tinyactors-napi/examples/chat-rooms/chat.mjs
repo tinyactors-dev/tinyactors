@@ -49,36 +49,26 @@ export class Chat {
     /** the first error a wake or a write met; settle() throws it */
     this.failure = undefined;
 
-    // Sized for the population: every actor has a slot, hibernated or not,
-    // and its delayed digest. The event pool and the slab (variables and
-    // strings) are sized for every actor resident at once and every join
-    // and fan-out of a burst: a run whose actor-to-actor sends fill either
-    // crashes the process instead of growing it (docs/log.xml,
-    // l-p4-examples-chat-events-crash), so the host must not need to grow
-    // in a run.
+    // Sized for the population up front: every actor has a slot,
+    // hibernated or not, and its delayed digest. The pools of events and
+    // of variables and strings grow when a burst fills them.
     this.host = new Host(
       {
         systemID: 'chat',
         ioProcessors: [{ type: 'urn:chat:client' }, { type: 'urn:chat:mail' }, { type: 'urn:chat:reply' }],
         system: {
-          maxActors: actors + 256, maxTimers: actors + 256, maxEvents: 8 * actors + 4096,
-          instanceBytes: 4096 * (actors + 256), stringBytes: 16384 + 512 * (actors + 256),
+          maxActors: actors + 256, maxTimers: actors + 256,
         },
       },
       {
         clock,
         datamodel,
         wake: (host, session) => this.wake(session),
-        // On the native datamodel send.data is made in the chart's node:vm
-        // context: its arrays are not this realm's Arrays (instanceof Array
-        // is false, assert.deepStrictEqual against a literal fails), so the
-        // handlers copy it into this realm (docs/log.xml,
-        // l-p4-examples-chat-realm).
         ioProcessors: {
-          'urn:chat:client': (host, send) => this.push(send.target, send.event, structuredClone(send.data)),
-          'urn:chat:mail': (host, send) => { this.mail.push({ user: send.target, ...structuredClone(send.data) }); },
+          'urn:chat:client': (host, send) => this.push(send.target, send.event, send.data),
+          'urn:chat:mail': (host, send) => { this.mail.push({ user: send.target, ...send.data }); },
           'urn:chat:reply': (host, send) => {
-            const { request, ...result } = structuredClone(send.data);
+            const { request, ...result } = send.data;
             this.requests.get(request)?.(result);
             this.requests.delete(request);
           },
@@ -166,8 +156,9 @@ export class Chat {
       this.woke(session);
       return;
     }
-    // The handler returns nothing: a promise from it would be awaited by no
-    // one, and settle() tracks it instead (l-p4-examples-order-settle).
+    // The handler does not return the read's promise, which host.idle()
+    // would wait for: the tests hold a read to look at the host while it
+    // is on its way, and settle() tracks it.
     this.track(blob.then((bytes) => {
       this.host.wake(session, bytes);
       this.woke(session);
@@ -226,11 +217,12 @@ export class Chat {
     const tracked = promise.catch((error) => { this.failure ??= error; })
       .finally(() => this.inflight.delete(tracked));
     this.inflight.add(tracked);
+    return tracked;
   }
 
   /** Waits until the host is idle and no wake or write is on the way:
-   * `host.idle()` alone does not wait for the wake handler's file reads
-   * (l-p4-examples-order-settle). */
+   * the wake handler's file reads and the writes after a sweep are
+   * promises this class starts and tracks itself. */
   async settle() {
     for (;;) {
       await this.host.idle();

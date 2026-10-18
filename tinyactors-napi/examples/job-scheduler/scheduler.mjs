@@ -14,9 +14,6 @@ import { Host, TinyactorsError } from '@tinyactors/node';
 
 const CHART = readFileSync(new URL('charts/job.scxml', import.meta.url), 'utf8');
 
-/** The statuses an answer meets when nobody is left to take it: the job
- * ended while its worker ran (cancelled, expired), or the host closed. */
-const GONE = new Set(['TA_ERROR_STALE', 'TA_ERROR_STATE']);
 
 export class Scheduler {
   /**
@@ -225,12 +222,11 @@ export class Scheduler {
       this.unanswered.push({ job, run, attempt, reason: 'aborted', event });
       return;
     }
-    try {
-      send.answer(event, data);
-    } catch (error) {
-      if (!(error instanceof TinyactorsError && GONE.has(error.status))) throw error;
-      this.unanswered.push({ job, run, attempt, reason: error.status, event });
-    }
+    // nobody is left to take it: the host closed (answer() would throw
+    // TA_ERROR_STATE), or the job ended while its worker ran (cancelled,
+    // expired: answer() gives false)
+    if (this.host.closed) this.unanswered.push({ job, run, attempt, reason: 'closed', event });
+    else if (!send.answer(event, data)) this.unanswered.push({ job, run, attempt, reason: 'ended', event });
   }
 
   #abort(session, runID) {
