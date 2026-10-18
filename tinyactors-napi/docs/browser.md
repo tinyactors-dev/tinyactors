@@ -733,7 +733,12 @@ and M6 on the refutation's verdicts, and M5 stays the maintainer's.
   maintainer): decided on p5-parity's numbers, quickjs and resident
   memory after hibernation included.
 - **M6, size against speed** (`l-p5-design-optimize`, decided): `-O2`
-  now, `-Oz` measured in p5-pack.
+  now, `-Oz` measured in p5-pack. Measured (p5-pack, `l-p5-pack-oz`): `-Oz` is 421,294 B against
+  605,553 B (brotli 139.9 KB against 170.4 KB, 18 % less) and 2.8 % (node)
+  and 3.6 % (bun) slower per event on the null chart, 1.8 % and 0.3 % on
+  `fit`; `-O2` kept until the maintainer chooses. `-mno-extended-const`
+  gives the same bytes: the feature is in the `target_features` of the
+  linked objects, not used by the code, so dropping it buys nothing.
 - **The floor** (`l-p5-design-floor`, for the maintainer): keep zig's
   wasm features (Chrome 114, Firefox 119, Safari 16.4), unless p5-pack
   shows that dropping `extended-const` costs nothing.

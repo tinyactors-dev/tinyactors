@@ -595,7 +595,7 @@
         <does>A check in mise run test that the two packages export the same names with the same shapes (index.d.ts type-checked against both, a runtime comparison of every export's properties); the user documentation and the examples run in the browser where they need no Node built-in; docs say what differs (the shared realm per runtime, the session function's reports, memory that never shrinks, the 4 GiB cap, the browser floor, no quickjs yet); mise run measure and the per-event benchmark of both packages side by side on node and bun, with resident memory after hibernation, for the maintainer's M5 decision.</does>
         <done-when>The parity check passes; every documented example that does not need Node runs in Chromium; the side-by-side numbers are in the log for M5.</done-when>
       </step>
-      <step id="p5-pack" status="todo" after="p5-parity">
+      <step id="p5-pack" status="done" after="p5-parity" commit="9c61a929">
         <title>Packaging @tinyactors/wasm</title>
         <does>@tinyactors/wasm staged from tinyactors-napi/ at the addon's version (both entries, the module, index.d.ts, es2022), packed reproducibly, its size reported; -Oz and dropping extended-const measured for size and speed before choosing; smoke-tested from a fresh project with a bundler-free ES module import in Chromium, a Worker, node and bun, and with a bundler; @tinyactors/node's missing-addon error names it; released with the Node package and mirrored to tinyactors-dev/tinyactors-napi, never published without the maintainer.</does>
         <done-when>The package installs and runs its smoke test in Chromium, node and bun; the size and the floor are in the README.</done-when>
