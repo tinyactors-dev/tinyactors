@@ -286,7 +286,10 @@ static napi_value ta_napi_send_read(napi_env env, const ta_napi_view *view, uint
 }
 
 /* send.message: the outgoing half of a send between systems, the object
- * host.send(message) takes on the other side (ta_event_in's fields). */
+ * host.send(message) takes on the other side (ta_event_in's fields). A
+ * text field the send lacks (sendid, origin, traceparent) is null, as
+ * Python's message has None: encoded, every binding reads it as absent
+ * (Python's host.send refuses undefined, its UNDEFINED, for a text). */
 static napi_value ta_napi_send_message(napi_env env, napi_callback_info info) {
     static const char *const keys[] = {"target", "event", "data", "sendid", "origin", "traceparent"};
     static const uint32_t fields[] = {TA_NAPI_SEND_TARGET, TA_NAPI_SEND_EVENT,  TA_NAPI_SEND_DATA,
@@ -299,7 +302,10 @@ static napi_value ta_napi_send_message(napi_env env, napi_callback_info info) {
         return NULL;
     for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
         napi_value value = ta_napi_send_read(env, &view, fields[i]);
-        if (value == NULL || napi_set_named_property(env, message, keys[i], value) != napi_ok) return NULL;
+        napi_valuetype type = napi_undefined;
+        if (value == NULL || napi_typeof(env, value, &type) != napi_ok) return NULL;
+        if (type == napi_undefined && i >= 3 && napi_get_null(env, &value) != napi_ok) return NULL; /* text fields */
+        if (napi_set_named_property(env, message, keys[i], value) != napi_ok) return NULL;
     }
     return message;
 }

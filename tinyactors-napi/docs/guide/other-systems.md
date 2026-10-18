@@ -13,8 +13,9 @@ yours: a socket, a queue, HTTP, a worker's `postMessage`.
 Each send to another system reaches the `transport` handler as a `Send`.
 Its `target` and `origin` are `Address`es, and its `message` is the
 outgoing half, an object of `target`, `event`, `data`, `sendid`,
-`origin` and `traceparent`, which the receiving side passes to
-`host.send(message)` as it is. On a wire, the message is a value once its
+`origin` and `traceparent` (`null` for a field the send lacks), which
+the receiving side passes to `host.send(message)` as it is, in this
+process or in another binding's: a Python host takes it too. On a wire, the message is a value once its
 two addresses are strings, so `encode` writes it and `decode` reads it
 back. (`JSON.stringify` writes an `Address` as its text, so a message
 goes through JSON as it is: see "Addresses" below.)

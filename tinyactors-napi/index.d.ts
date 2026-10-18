@@ -329,8 +329,10 @@ export interface Send {
   readonly traceparent: string | undefined;
   /** The outgoing half, `{ target, event, data, sendid, origin,
    * traceparent }`: what `host.send(message)` takes on the other side,
-   * unchanged. The transport's reason to exist; present on every send. Its
-   * addresses are `Address`es, which `JSON.stringify` writes as their text
+   * unchanged. The transport's reason to exist; present on every send. A
+   * text field the send lacks (`sendid`, `origin`, `traceparent`) is
+   * `null`, as in a Python host's message, so encoded it is absent to
+   * every binding. Its addresses are `Address`es, which `JSON.stringify` writes as their text
    * (`toJSON`); convert them with `String()` for `encode`. */
   readonly message: SendMessage;
   /** Sends `event` back to the sender, with this send's `sendid`. It
@@ -363,12 +365,12 @@ export interface SendMessage {
   event: string;
   data?: Value;
   /** The event's `_event.sendid`. */
-  sendid?: string;
+  sendid?: string | null;
   /** The event's `_event.origin`: where an answer goes. */
-  origin?: string | Address;
+  origin?: string | Address | null;
   /** The trace the event continues, as W3C text; text that does not parse
    * starts a new one. */
-  traceparent?: string;
+  traceparent?: string | null;
 }
 
 /** A `<log>` line: a view, valid while the log handler runs. */

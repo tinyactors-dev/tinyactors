@@ -5,8 +5,8 @@
 // handler that throws, its send failed and its error reported by the turn;
 // the transport, with and without a handler; an I/O processor without one;
 // log entries. The actors are observed through their <log> lines.
-import { Address, Host, TinyactorsError } from '@tinyactors/node';
-import { ENGINE, equal, hostWith, image, scxml, sleep, status, throws, typeError, until } from './charts.mjs';
+import { Address, decode, encode, Host, TinyactorsError } from '@tinyactors/node';
+import { CONFIG, ENGINE, equal, hostWith, image, scxml, sleep, status, throws, typeError, until } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 const OUT = { systemID: 't', ioProcessors: [{ type: 'urn:out' }] };
@@ -302,6 +302,25 @@ test('the transport: send.target and send.origin are Addresses, send.message cro
   equal(lines.join(), `ping 2 ${seen.origin.text} p1`, 'the other side got it, with origin and sendid');
   host.close();
   other.close();
+});
+
+test('send.message: a text field the send lacks is null, so encoded it is absent to every binding', async () => {
+  const chart = scxml('bare', `
+    <state id="s"><onentry><send event="hello" target="tinyactors://other/@x"/></onentry></state>`);
+  let message;
+  const host = hostWith({ bare: chart }, {
+    config: { ...CONFIG, system: { tracing: false } },
+    transport: (h, send) => { message = send.message; },
+  });
+  host.spawn(host.chart('bare'));
+  await host.idle();
+  equal(Object.keys(message).join(), 'target,event,data,sendid,origin,traceparent', 'every key');
+  equal(message.sendid, null, 'no sendid: null');
+  equal(message.traceparent, null, 'untraced: null');
+  equal(message.data, undefined, 'no data: undefined, a value');
+  const read = decode(encode({ ...message, target: String(message.target), origin: String(message.origin) }));
+  equal(read.sendid, null, 'encoded and read back, still null');
+  host.close();
 });
 
 test('log entries: session, label, text, stale after the ack; none without a handler', async () => {
