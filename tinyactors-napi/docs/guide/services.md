@@ -278,9 +278,9 @@ the mail service failed
 host keeps them on its own object, so a host you drop without closing,
 whose services refer back to it, is still collected.
 
-An invocation uses one of the host's requests, so `system.maxRequests`
-must cover the invocations that run at once; a segment grows the pool when
-it runs out ([Capacity and memory](capacity.md)).
+An invocation uses one of the host's requests; `system.maxRequests` is
+where the pool starts, and a segment grows it when it runs out
+([Capacity and memory](capacity.md)).
 
 ## At scale
 

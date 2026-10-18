@@ -287,6 +287,11 @@ void ta_core_cancel(ta_core *core, ta_instance *in);
 void ta_core_release_out(ta_core *core); /* release strings owned by core->out */
 void ta_core_set_invoke_child(ta_core *core, ta_instance *in, uint32_t slot, uint32_t child);
 void ta_core_clear_invoke_child(ta_core *core, ta_instance *in, uint32_t slot);
+/* The invoke core->out describes could not start (a pool of the system ran
+ * out): the instance's next step starts it again, evaluating it anew, as a
+ * <send> refused for memory is. Called in the step that returned
+ * TA_STEP_INVOKE; the caller releases out's payload. */
+void ta_core_invoke_retry(ta_core *core, ta_instance *in);
 uint32_t ta_core_invoke_child(ta_core *core, ta_instance *in, uint32_t slot);
 uint32_t ta_core_invoke_id(ta_core *core, ta_instance *in, uint32_t slot);
 /* Raise a platform event (e.g. error.communication) into the internal queue;

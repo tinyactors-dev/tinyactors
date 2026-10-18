@@ -2095,6 +2095,13 @@ void ta_core_clear_invoke_child(ta_core *core, ta_instance *instance, uint32_t s
     ta_instance_word(instance, l.invoke_ids)[slot] = TA_NIL;
 }
 
+void ta_core_invoke_retry(ta_core *core, ta_instance *instance) {
+    const ta_chart_record *chart = &core->image_view.charts[instance->chart];
+    const ta_invoke_record *invoke = &core->image_view.invokes[chart->first_invoke + core->out.slot];
+    instance->cursor2--; /* PHASE_INVOKE starts the same slot again */
+    if (invoke->id == TA_NIL) instance->ids--; /* and generates the same id again */
+}
+
 uint32_t ta_core_invoke_child(ta_core *core, ta_instance *instance, uint32_t slot) {
     ta_instance_layout l = ta_instance_layout_of(&core->image_view.charts[instance->chart]);
     return ta_instance_word(instance, l.invoke_children)[slot];

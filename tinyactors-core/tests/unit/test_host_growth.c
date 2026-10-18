@@ -54,13 +54,21 @@
                  "<transition event='done.invoke'><log expr=\"'hello'\"/></transition>"            \
                  "</state>")
 
+/* An external service invoked at entry, which the host runs (one request
+ * each while it runs); an error.execution is logged. */
+#define CLIENT SC("client", "initial='s'><state id='s'><invoke type='urn:svc' src='x:y'/>"           \
+                            "<transition event='error.execution'><log expr=\"'error'\"/>"          \
+                            "</transition></state>")
+
 typedef struct world {
     ta_datamodel_ecmascript *ecmascript;
     ta_datamodel_binding binding;
     ta_host *host;
     void *images[2];
     uint32_t image_count;
-    uint32_t hellos; /* the lines logged 'hello' */
+    uint32_t hellos;  /* the lines logged 'hello' */
+    uint32_t errors;  /* the lines logged 'error' */
+    uint32_t invokes; /* TA_EFFECT_INVOKE effects */
 } world;
 
 #define SOURCE(name, text) {{name, (uint32_t)sizeof name - 1}, {text, (uint32_t)sizeof text - 1}}
@@ -133,7 +141,8 @@ static void world_all(world *w, const ta_system_config *system) {
     static const ta_source sources[] = {
         SOURCE("sink.scxml", SINK),       SOURCE("sender.scxml", SENDER),
         SOURCE("twice.scxml", TWICE),     SOURCE("fanout.scxml", FANOUT),
-        SOURCE("raiser.scxml", RAISER),   SOURCE("parent.scxml", PARENT)};
+        SOURCE("raiser.scxml", RAISER),   SOURCE("parent.scxml", PARENT),
+        SOURCE("client.scxml", CLIENT)};
     world_add(w, (ta_source_list){sources, sizeof sources / sizeof *sources});
 }
 
@@ -157,10 +166,15 @@ static void drain(world *w) {
     const ta_host_effect *effects;
     uint32_t n;
     while ((n = ta_host_effects(w->host, &effects)) > 0) {
-        for (uint32_t i = 0; i < n; i++)
+        for (uint32_t i = 0; i < n; i++) {
             if (effects[i].kind == TA_EFFECT_LOG && effects[i].event.length == 5 &&
                 !memcmp(effects[i].event.pointer, "hello", 5))
                 w->hellos++;
+            if (effects[i].kind == TA_EFFECT_LOG && effects[i].event.length == 5 &&
+                !memcmp(effects[i].event.pointer, "error", 5))
+                w->errors++;
+            if (effects[i].kind == TA_EFFECT_INVOKE) w->invokes++;
+        }
         ta_host_effects_ack(w->host);
     }
 }
@@ -262,6 +276,28 @@ static void test_invokes_and_done_events_fill_the_pools(void) {
     world_close(&w);
 }
 
+/* 200 actors invoke a service the host runs, all in one run and then one
+ * per run: the requests (16 by default) grow as the other pools do, and no
+ * invoke fails (tinyactors-napi/docs/log.xml,
+ * l-p4-examples-billing-requests-pool). */
+static void test_external_invokes_fill_the_requests(void) {
+    world w;
+    world_all(&w, NULL);
+    spawn_many(&w, "client", 200);
+    run_until_idle(&w);
+    for (int i = 0; i < 40; i++) {
+        spawn(&w, "client", NULL);
+        run_until_idle(&w);
+    }
+    CHECK_EQUAL(w.invokes, 240u);
+    CHECK_EQUAL(w.errors, 0u);
+    ta_system_stats stats;
+    stats.size = sizeof stats;
+    ta_system_stats_get(ta_host_system(w.host, 0), &stats);
+    CHECK(stats.requests_capacity >= 240u);
+    world_close(&w);
+}
+
 /* 2000 actors spawned before a run, each sending at entry: the actors pool
  * grows at the spawns, the events and the slab in the drains. */
 static void test_spawns_then_sends_at_entry(void) {
@@ -304,6 +340,7 @@ int main(void) {
     RUN(test_raises_fill_the_event_pool);
     RUN(test_invokes_and_done_events_fill_the_pools);
     RUN(test_spawns_then_sends_at_entry);
+    RUN(test_external_invokes_fill_the_requests);
     RUN(test_a_refused_growth_is_exhausted);
     TEST_MAIN_END();
 }

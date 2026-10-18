@@ -401,8 +401,8 @@ host = tinyactors.Host(config, services={"urn:example:counter": lambda host, inv
   nothing, since declining to start it again was your choice.
 - **Leaving the host** drops the running services without calling `stop`.
 
-An invocation uses one of the core's requests, so `system.maxRequests`
-must cover the invocations that run at once.
+An invocation uses one of the core's requests; `system.maxRequests` is
+where the pool starts, and a segment grows it when it runs out.
 
 ## Telemetry
 

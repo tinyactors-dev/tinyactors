@@ -271,9 +271,20 @@ void ta_system_fire_timers(ta_system *system) {
 
 /* Spawn an SCXML child for an invoke. When a pool or the slab refused it
  * (ta_system_exhausted names one) the spawn is parked as a pending request
- * (retried after growth) and that TA_POOL_* is returned. Any other refusal
- * (the child's datamodel refused to create it) fails the invoke with
- * error.execution, as does a spawn that cannot be parked: TA_POOL_NONE. */
+ * (retried after growth) and that TA_POOL_* is returned. A spawn that cannot
+ * be parked (no request) is started again by the invoking step once the
+ * requests grew (SPAWN_OR_RETRY: in that step) and TA_POOL_REQUESTS is
+ * returned, or fails (SPAWN_OR_PARK, outside it). Any other refusal (the
+ * child's datamodel refused to create it) fails the invoke with
+ * error.execution: TA_POOL_NONE. */
+enum { SPAWN_OR_PARK = 1, SPAWN_OR_RETRY = 2 };
+
+static void release_invoke_payload(ta_system *system, uint32_t parent, ta_payload payload) {
+    const ta_datamodel_binding *binding =
+        ta_core_datamodel(&system->core, ta_actor_chart(system, actor_at(system, parent)));
+    if (payload && binding->vtable->release) binding->vtable->release(binding->datamodel, payload);
+}
+
 static int park_spawn(ta_system *s, uint32_t parent, uint32_t slot, uint32_t chart,
                       uint32_t invokeid, ta_payload payload);
 
@@ -288,9 +299,14 @@ static uint32_t spawn_child(ta_system *system, uint32_t parent, uint32_t slot, u
     if (c == TA_NIL) {
         uint32_t pool = status == TA_ERROR_NO_MEMORY && may_park ? ta_system_exhausted(system)
                                                                  : TA_POOL_NONE;
-        if (pool != TA_POOL_NONE)
-            return park_spawn(system, parent, slot, chart, invokeid, payload) ? pool
-                                                                               : TA_POOL_NONE;
+        if (pool != TA_POOL_NONE) {
+            if (park_spawn(system, parent, slot, chart, invokeid, payload)) return pool;
+            if (may_park == SPAWN_OR_RETRY) {
+                release_invoke_payload(system, parent, payload);
+                ta_core_invoke_retry(core, pin);
+                return TA_POOL_REQUESTS;
+            }
+        }
         if (payload) {
             const ta_datamodel_binding *binding =
                 ta_core_datamodel(core, ta_actor_chart(system, actor_at(system, parent)));
@@ -305,21 +321,13 @@ static uint32_t spawn_child(ta_system *system, uint32_t parent, uint32_t slot, u
 
 #define PENDING_SPAWN_LINK ((uint32_t)offsetof(ta_request, next))
 
-/* 1 if parked; 0 if it cannot even be parked (no request): the invoke
- * failed with error.execution. */
+/* 1 if parked; 0 if it cannot be parked (no request), the payload still
+ * the caller's. */
 static int park_spawn(ta_system *system, uint32_t parent, uint32_t slot, uint32_t chart,
                       uint32_t invokeid, ta_payload payload) {
     ta_core *core = &system->core;
     uint32_t ri = ta_system_request_alloc(system, parent);
-    if (ri == TA_NIL) { /* cannot even park it: the invoke fails */
-        const ta_datamodel_binding *binding =
-            ta_core_datamodel(core, ta_actor_chart(system, actor_at(system, parent)));
-        if (payload && binding->vtable->release)
-            binding->vtable->release(binding->datamodel, payload);
-        ta_core_raise_platform(core, ta_actor_instance(system, actor_at(system, parent)),
-                               "error.execution", TA_NIL);
-        return 0;
-    }
+    if (ri == TA_NIL) return 0;
     ta_request *request = (ta_request *)ta_pool_at(&system->requests, ri);
     request->kind = REQUEST_PENDING_SPAWN;
     request->slot = slot;
@@ -446,7 +454,9 @@ uint32_t ta_system_external_invocation(ta_system *system, uint32_t from, ta_effe
 
 uint32_t ta_system_invoke(ta_system *system, uint32_t parent, const ta_core_out *out) {
     uint32_t pool = invoke(system, parent, out);
-    trace_invoked(system, ta_actor_instance(system, actor_at(system, parent)), out);
+    /* TA_POOL_REQUESTS: not started, the step starts it again after growth */
+    if (pool != TA_POOL_REQUESTS)
+        trace_invoked(system, ta_actor_instance(system, actor_at(system, parent)), out);
     return pool;
 }
 
@@ -460,7 +470,12 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
                                        ? (ta_effect_record *)0
                                        : ta_system_effect_push(system, TA_EFFECT_INVOKE, parent);
         if (!effect) {
-            if (ri != TA_NIL) ta_system_request_free(system, ri);
+            release_invoke_payload(system, parent, out->payload);
+            if (ri == TA_NIL) { /* the requests grow, then the step starts it again */
+                ta_core_invoke_retry(core, pin);
+                return TA_POOL_REQUESTS;
+            }
+            ta_system_request_free(system, ri);
             ta_core_raise_platform(core, pin, "error.execution", TA_NIL);
             return TA_POOL_NONE; /* failed, nothing parked */
         }
@@ -545,17 +560,20 @@ static uint32_t invoke(ta_system *system, uint32_t parent, const ta_core_out *ou
         }
     }
     if (chart != TA_NIL)
-        return spawn_child(system, parent, out->slot, chart, out->invokeid, out->payload, 1);
+        return spawn_child(system, parent, out->slot, chart, out->invokeid, out->payload,
+                           SPAWN_OR_RETRY);
     /* unknown dynamic src: ask the host to resolve it to a chart index */
     uint32_t ri = ta_system_request_alloc(system, parent);
     ta_effect_record *effect = ri == TA_NIL
                                    ? (ta_effect_record *)0
                                    : ta_system_effect_push(system, TA_EFFECT_REQUEST, parent);
     if (!effect) {
-        if (ri != TA_NIL) ta_system_request_free(system, ri);
-        const ta_datamodel_binding *binding = ta_core_datamodel(core, ta_actor_chart(system, pa));
-        if (out->payload && binding->vtable->release)
-            binding->vtable->release(binding->datamodel, out->payload);
+        release_invoke_payload(system, parent, out->payload);
+        if (ri == TA_NIL) { /* the requests grow, then the step starts it again */
+            ta_core_invoke_retry(core, pin);
+            return TA_POOL_REQUESTS;
+        }
+        ta_system_request_free(system, ri);
         ta_core_raise_platform(core, pin, "error.execution", TA_NIL);
         return TA_POOL_NONE; /* failed, nothing parked */
     }
@@ -606,7 +624,7 @@ ta_status ta_system_resume(ta_system *system, const ta_resume *resume) {
     } else {
         system->in_call = 1;
         uint32_t pool = spawn_child(system, parent, request_copy.slot, (uint32_t)(result - 1),
-                                    request_copy.invokeid, request_copy.payload, 1);
+                                    request_copy.invokeid, request_copy.payload, SPAWN_OR_PARK);
         system->in_call = 0;
         if (pool) result_status = TA_ERROR_NO_MEMORY;
     }
