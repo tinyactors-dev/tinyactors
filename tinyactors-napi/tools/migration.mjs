@@ -292,8 +292,8 @@ async function main() {
   evict(host, false);
   store.flush();
   const migration = (performance.now() - started) / 1000;
-  const result = current.result ?? { migration: undefined, migrated: 0, failed: 0, pending: undefined };
-  if (result.migration !== current.id || result.migrated !== o.actors || result.failed || result.pending?.length !== 0)
+  const result = current.result ?? { migration: undefined, migrated: 0, failed: [], pending: undefined };
+  if (result.migration !== current.id || result.migrated !== o.actors || result.failed.length || result.pending?.length !== 0)
     failures.push(`the migration ended ${JSON.stringify(result, (_, v) => (typeof v === 'bigint' ? `${v}` : v))}, not ${o.actors} migrated`);
   if (moves !== o.actors) failures.push(`${moves} MIGRATED effects for ${o.actors} actors`);
   await checkResident(host, 0);

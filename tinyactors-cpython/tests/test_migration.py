@@ -38,7 +38,7 @@ class Migration(unittest.TestCase):
             host.send(session, "inc")
             host.send(session, "report")
             host.run_until_idle()
-        self.assertEqual(done, [{"migration": migration, "migrated": 1, "failed": 0, "pending": []}])
+        self.assertEqual(done, [{"migration": migration, "migrated": 1, "failed": [], "pending": []}])
         self.assertEqual(moved, [(session, segment, "counter", migration)])
         return logs.labelled("n")
 
@@ -129,7 +129,7 @@ class Migration(unittest.TestCase):
             host.run_until_idle()
             self.assertEqual(done, [])
             clock.increment(0.5)
-        self.assertEqual(done, [{"migration": migration, "migrated": 1, "failed": 0, "pending": [asleep]}])
+        self.assertEqual(done, [{"migration": migration, "migrated": 1, "failed": [], "pending": [asleep]}])
         self.assertNotIn(awake, done[0]["pending"])
 
     def test_one_session_or_one_chart(self):
@@ -162,7 +162,7 @@ class Migration(unittest.TestCase):
             host.send(session, "inc")  # still version 1, still running
             host.run_until_idle()
         self.assertEqual(done[0]["migrated"], 0)
-        self.assertEqual(done[0]["failed"], 1)
+        self.assertEqual(done[0]["failed"], [{"session": session, "reason": "TA_ERROR_UNSUPPORTED"}])
 
     def test_the_view_is_stale_after_the_ack(self):
         v1, v2 = versions("python")

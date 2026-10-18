@@ -130,7 +130,7 @@ handle, string, `WIRE` byte and `TRACEPARENT` text is valid until
 | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` | a root actor finished or faulted: release what you keep for the session | nothing |
 | `TA_HOST_EFFECT_TRACES`, `_LOGS` | take the OTLP request (`ta_host_traces`, `ta_host_logs`) and post it | nothing; the next comes after a take |
 | `TA_HOST_EFFECT_REPLY`, `_NOTIFICATION` | the control plane (section 5) | nothing |
-| `TA_HOST_EFFECT_MIGRATED`, `_MIGRATION_DONE`, `_SEGMENT_FREED` | a migration's progress and end (`ta_host_migration_pending`), a retired version | nothing |
+| `TA_HOST_EFFECT_MIGRATED`, `_MIGRATION_DONE`, `_SEGMENT_FREED` | a migration's progress and end (`ta_host_migration_failed`, `ta_host_migration_pending`), a retired version | nothing |
 
 **While handling, call the host as you need:** take traces, post,
 send, hibernate. What those calls hand you lives

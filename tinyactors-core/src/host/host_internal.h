@@ -104,7 +104,9 @@ typedef struct host_migration {
     session_map members; /* the sessions it waits for: MIGRATION_ASLEEP or MIGRATION_RETRY (host.c) */
     uint64_t *retry;     /* the MIGRATION_RETRY members, tried round robin from retry_next */
     uint32_t retry_count, retry_capacity, retry_next;
-    uint32_t migrated, failed;
+    uint32_t migrated;
+    ta_host_migration_failure *failures; /* the sessions it could not move, and why */
+    uint32_t failure_count, failure_capacity;
     uint64_t *left; /* after it ended: stragglers (until the next run) */
     uint32_t left_count, left_capacity;
 } host_migration;

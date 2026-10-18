@@ -35,6 +35,8 @@ typedef struct host_world {
     char request_source[64];
     unsigned char blob[1 << 16];
     uint32_t wake_migration; /* the last WAKE's migration: 0 when no migration asked */
+    uint32_t failure_count;  /* the last MIGRATION_DONE's failed sessions, read at its dispatch */
+    ta_host_migration_failure failures[4];
     size_t blob_length;
 } host_world;
 
@@ -125,6 +127,8 @@ static void drain(host_world *e) {
         if (effect->kind == TA_HOST_EFFECT_MIGRATION_DONE) {
             e->last_migration = effect->migration;
             e->last_done = *effect;
+            e->failure_count = ta_host_migration_failed(e->host, effect->migration,
+                                                        (ta_host_migration_failures){e->failures, 4});
         }
     }
     ta_host_effects_ack(e->host);
@@ -451,6 +455,41 @@ static void test_versions_and_migration(void) {
           w_stats->actors == before.actors);
     free(hs);
     free(ds);
+    world_close(&e);
+}
+
+/* A migration names the sessions it could not move and why, as it names
+ * the pending ones: an actor whose variable holds a function cannot be
+ * written out (TA_ERROR_UNSUPPORTED) and stays on version 1
+ * (tinyactors-napi/docs/log.xml, l-p4-examples-billing-failed-unnamed). */
+#define HOLDER(version)                                                                            \
+    SC("holder", "initial='a'><datamodel><data id='f' expr='0'/></datamodel><state id='a'>"         \
+                 "<transition event='poison'><assign location='f' expr='() => 1'/></transition>"    \
+                 "<transition event='which'><log expr=\"'" version "'\"/></transition></state>")
+static void test_migration_names_the_failed(void) {
+    host_world e;
+    world_open(&e, 16, NULL, 0);
+    world_add(&e, HOLDER("v1"));
+    uint64_t good = spawn(&e, "holder"), bad = spawn(&e, "holder");
+    run(&e);
+    CHECK_EQUAL(send(&e, bad, "poison", NULL), TA_OK);
+    run(&e);
+    world_add(&e, HOLDER("v2"));
+    uint32_t migration;
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"holder", 6}, 0, 0, 0, 0}, &migration),
+                TA_OK);
+    run(&e);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 1 && e.last_done.failed == 1);
+    CHECK_EQUAL(e.failure_count, 1u);
+    CHECK_EQUAL(e.failures[0].session, bad);
+    CHECK_EQUAL(e.failures[0].status, TA_ERROR_UNSUPPORTED);
+    e.log[0] = 0;
+    CHECK_EQUAL(send(&e, good, "which", NULL), TA_OK);
+    CHECK_EQUAL(send(&e, bad, "which", NULL), TA_OK);
+    run(&e);
+    CHECK(strstr(e.log, "v2;") && strstr(e.log, "v1;")); /* one moved, one stayed */
+    /* after the next run the migration is gone: nothing to read */
+    CHECK_EQUAL(ta_host_migration_failed(e.host, migration, (ta_host_migration_failures){e.failures, 4}), 0u);
     world_close(&e);
 }
 
@@ -1633,6 +1672,7 @@ int main(void) {
     RUN(test_class_across_segments);
     RUN(test_versions_and_migration);
     RUN(test_migration_refuses_what_it_cannot_move);
+    RUN(test_migration_names_the_failed);
     RUN(test_migration_wake_and_timeout);
     RUN(test_migration_asks_again_and_takes_the_woken);
     RUN(test_migration_of_many_hibernated_actors);

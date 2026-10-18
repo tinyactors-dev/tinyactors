@@ -88,6 +88,7 @@ ABI_CHECK(offsetof(ta_datamodel_vtable, payload_serialize) >
 ABI_CHECK(offsetof(ta_datamodel_vtable, payload_deserialize) >
               offsetof(ta_datamodel_vtable, payload_serialize),
           vtable_payload_deserialize_last);
+ABI_CHECK(sizeof(ta_host_migration_failure) == 16, host_migration_failure_fixed);
 ABI_CHECK(TA_SYSTEM_SHARED_BASE == 1, system_shared_base_flag);
 ABI_CHECK(offsetof(ta_state_info, size) == 0, state_info_size_first);
 ABI_CHECK(offsetof(ta_actor_info, size) == 0, actor_info_size_first);

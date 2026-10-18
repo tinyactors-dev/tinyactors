@@ -405,7 +405,7 @@ async function hibernated(o, results, failures) {
     services: { 'urn:scale:service': startService },
     ioProcessors: { 'urn:scale:echo': (h, send) => { ioProcessed.count++; send.answer('answer'); } },
     transport: (h, send) => other.send(send.message),
-    migrationDone: (h, result) => { migrationsDone.count++; migrationsDone.failed += result.failed; },
+    migrationDone: (h, result) => { migrationsDone.count++; migrationsDone.failed += result.failed.length; },
   };
   host = new Host(config, handlers);
   const compiled = compileSystem({ name: 'system.xml', text: SYSTEM }, (b, source) => FILES[source]);
@@ -778,7 +778,7 @@ async function residentScenario(o, results, failures) {
   const handlers = {
     datamodel: o.datamodel,
     clock: new SimulatedClock(),
-    migrationDone: (h, result) => { migrationsDone.count++; migrationsDone.failed += result.failed; migrationsDone.migrated += result.migrated; },
+    migrationDone: (h, result) => { migrationsDone.count++; migrationsDone.failed += result.failed.length; migrationsDone.migrated += result.migrated; },
   };
   // no pools sized: the segment grows from core's defaults as the actors come
   const config = { systemID: 'scale', system: { tracing: false } };

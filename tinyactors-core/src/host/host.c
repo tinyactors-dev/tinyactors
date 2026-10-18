@@ -563,6 +563,7 @@ static void migration_free(ta_host *host, host_migration *migration) {
     session_map_free(&migration->members, &host->config.allocator);
     host_free(host, migration->retry, sizeof(uint64_t) * migration->retry_capacity);
     host_free(host, migration->left, sizeof(uint64_t) * migration->left_capacity);
+    host_free(host, migration->failures, sizeof *migration->failures * migration->failure_capacity);
 }
 
 void ta_host_free(ta_host *host) {
@@ -1573,6 +1574,14 @@ uint32_t ta_host_migration_pending(const ta_host *host, uint32_t id, ta_uint64_a
     return n;
 }
 
+uint32_t ta_host_migration_failed(const ta_host *host, uint32_t id, ta_host_migration_failures out) {
+    const host_migration *migration = migration_by_id(host, id);
+    if (!migration) return 0;
+    for (uint32_t i = 0; i < migration->failure_count && i < out.capacity; i++)
+        out.pointer[i] = migration->failures[i];
+    return migration->failure_count;
+}
+
 /* Should (segment, actor) move for this migration? Returns the target version. */
 static const chart_version *candidate(ta_host *host, host_migration *migration, uint32_t si,
                                       uint32_t actor, ta_actor_info *actor_info) {
@@ -1587,6 +1596,28 @@ static const chart_version *candidate(ta_host *host, host_migration *migration, 
 }
 
 enum { MIGRATE_ASLEEP = -4, MIGRATE_NO_MEMORY = -3, MIGRATE_SKIP = -2, MIGRATE_FAILED = -1, MIGRATE_LATER = 0 };
+
+/* Room for one more failure of the migration: 0 if refused. */
+static int failure_reserve(ta_host *host, host_migration *migration) {
+    if (migration->failure_count < migration->failure_capacity) return 1;
+    uint32_t capacity = migration->failure_capacity ? migration->failure_capacity * 2 : 8;
+    ta_host_migration_failure *failures = (ta_host_migration_failure *)host_alloc(host, sizeof *failures * capacity);
+    if (!failures) return 0;
+    if (migration->failure_count) ta_memcpy(failures, migration->failures, sizeof *failures * migration->failure_count);
+    host_free(host, migration->failures, sizeof *failures * migration->failure_capacity);
+    migration->failures = failures;
+    migration->failure_capacity = capacity;
+    return 1;
+}
+
+/* A session the migration could not move, and why (room reserved): MIGRATE_FAILED. */
+static int migration_fail(host_migration *migration, uint64_t session, ta_status why) {
+    ta_host_migration_failure *failure = &migration->failures[migration->failure_count++];
+    ta_memset(failure, 0, sizeof *failure);
+    failure->session = session;
+    failure->status = why;
+    return MIGRATE_FAILED;
+}
 
 /* Adopt an exported blob back where it came from. The export just freed
  * what it needs there, so this does not need to grow. */
@@ -1617,7 +1648,7 @@ static int migrate_one(ta_host *host, host_migration *migration, uint64_t sessio
     uint32_t chart = version->chart, tseg = version->segment;
     ta_string_view key = chart_key(to->image, chart);
     /* everything the move needs once the actor has left its segment */
-    if (!host_effects_reserve(host, 1, key.length) || !moved_reserve(host, 1))
+    if (!host_effects_reserve(host, 1, key.length) || !moved_reserve(host, 1) || !failure_reserve(host, migration))
         return MIGRATE_NO_MEMORY;
     /* between the segments' runs (ta_host_run's migration step): the blob grows
      * through the host's allocator while it is written, once */
@@ -1627,18 +1658,18 @@ static int migrate_one(ta_host *host, host_migration *migration, uint64_t sessio
     host_unguard(host, was);
     if (status == TA_ERROR_NO_MEMORY) return MIGRATE_NO_MEMORY; /* it stays where it was */
     if (status == TA_ERROR_STATE) return MIGRATE_LATER;
-    if (status != TA_OK) return MIGRATE_FAILED;
+    if (status != TA_OK) return migration_fail(migration, session, status);
     size_t length = host->blob.length;
     int moved = 0, refused = 0;
     ta_blob_migration blob_request = {from->image, to->image, chart, 0, {host->blob.bytes, length}};
     ta_buffer migrated = {(void *)0, 0, 0};
-    ta_status ms = ta_blob_migrate(&blob_request, &migrated);
+    ta_status ms = ta_blob_migrate(&blob_request, &migrated), why = ms;
     if (ms == TA_ERROR_NO_MEMORY &&
         !buffer_at(host, &host->blob2, &host->blob2_capacity, migrated.length)) {
         refused = 1;
     } else if (ms == TA_ERROR_NO_MEMORY) {
         migrated = (ta_buffer){host->blob2, host->blob2_capacity, 0};
-        if (ta_blob_migrate(&blob_request, &migrated) == TA_OK) {
+        if ((why = ta_blob_migrate(&blob_request, &migrated)) == TA_OK) {
             ta_bytes blob = {host->blob2, migrated.length};
             uint32_t na;
             ta_status grown = TA_OK;
@@ -1650,13 +1681,14 @@ static int migrate_one(ta_host *host, host_migration *migration, uint64_t sessio
             }
             moved = status == TA_OK;
             refused = !moved && grown == TA_ERROR_NO_MEMORY;
+            why = status;
         }
     }
     if (!moved) { /* back home, unchanged */
         adopt_home(host, from, host->blob.bytes, length);
         if (refused) return MIGRATE_NO_MEMORY;
         /* running invocations (a session tree): migrated once they finished */
-        return ms == TA_ERROR_UNSUPPORTED ? MIGRATE_LATER : MIGRATE_FAILED;
+        return ms == TA_ERROR_UNSUPPORTED ? MIGRATE_LATER : migration_fail(migration, session, why);
     }
     moved_put(host, session, (uint32_t)(session >> SERIALS_SHIFT) == tseg ? TA_NIL : tseg);
     to->busy = 1;
@@ -1700,7 +1732,6 @@ typedef struct migration_outcome {
 static ta_status migration_settle(ta_host *host, host_migration *migration, migration_outcome outcome) {
     int r = outcome.result;
     if (r > 0) migration->migrated++;
-    if (r == MIGRATE_FAILED) migration->failed++;
     if (r > 0 || r == MIGRATE_FAILED || r == MIGRATE_SKIP) {
         session_map_put(&migration->members, outcome.session, TA_NIL);
         return TA_OK;
@@ -1757,7 +1788,7 @@ static ta_status migration_end(ta_host *host, host_migration *migration) {
     ta_host_effect *effect = host_effect_new(host, TA_HOST_EFFECT_MIGRATION_DONE, TA_NIL);
     effect->migration = migration->id;
     effect->migrated = migration->migrated;
-    effect->failed = migration->failed;
+    effect->failed = migration->failure_count;
     effect->pending = migration->left_count;
     return TA_OK;
 }

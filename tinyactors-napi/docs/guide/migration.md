@@ -57,7 +57,7 @@ const v2 = image('counter-v2.scxml', `
 const host = new Host({ systemID: 'demo' }, {
   log: (host, entry) => console.log(entry.text),
   migrated: (host, moved) => console.log(`session ${moved.session} moved to segment ${moved.segment}`),
-  migrationDone: (host, result) => console.log(`migration ${result.migration}: ${result.migrated} moved, ${result.failed} failed`),
+  migrationDone: (host, result) => console.log(`migration ${result.migration}: ${result.migrated} moved, ${result.failed.length} failed`),
 });
 
 host.addImage(v1);
@@ -102,7 +102,9 @@ memory; `host.hostStats` counts the retired segments
   move nothing is refused rather than reported done.
 - **`migrationDone: (host, result) => ...`**, in the host's options, gets
   the end of each migration: `{ migration, migrated, failed, pending }`,
-  `pending` the sessions (`bigint`s) its timeout left behind. It is a
+  `failed` the actors it could not move, each `{ session, reason }`
+  (`reason` core's status, below), and `pending` the sessions
+  (`bigint`s) its timeout left behind. It is a
   handler of the host, so a migration started by a host that was later
   [restored](snapshots.md) reports to the restored host's handler.
 - **`migrated: (host, moved) => ...`** gets each actor moved, a view of
@@ -124,8 +126,10 @@ reaches `migrationDone`.
 
 ## Actors that do not move
 
-An actor that cannot be written out stays on its version and counts as
-failed. On the native datamodel that is one whose variables hold a value
+An actor that cannot be written out stays on its version and is in
+the result's `failed`, with its session and the reason,
+`'TA_ERROR_UNSUPPORTED'` for a state that cannot be written out (`host.hibernate`
+of the actor names the variable). On the native datamodel that is one whose variables hold a value
 outside the value table (a function, a `Map`, a `Date`, ...), or whose
 chart's scripts declare with `let`, `const` or `class`, the same actors
 [hibernation](hibernation.md) refuses.
@@ -202,7 +206,7 @@ while (done === undefined) {
   evict();
   evict();
 }
-console.log(`${done.migrated} moved, ${done.failed} failed, at most ${mostResident} in memory at once`);
+console.log(`${done.migrated} moved, ${done.failed.length} failed, at most ${mostResident} in memory at once`);
 host.close();
 ```
 

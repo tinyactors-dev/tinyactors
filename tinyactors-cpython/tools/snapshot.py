@@ -326,7 +326,7 @@ def main():
         copy.check_resident(rehearsal, 2 * BATCH)
     copy.migrating = False
     traffic(copy, rehearsal, sent_copy, options.events - copy_events)
-    result = copy.migration_done or {"migration": None, "migrated": 0, "failed": 0, "pending": None}
+    result = copy.migration_done or {"migration": None, "migrated": 0, "failed": [], "pending": None}
     if result["migration"] != migration or result["migrated"] != options.actors or result["failed"] or result["pending"]:
         failures.append("copy: the migration ended %r, not %d migrated" % (result, options.actors))
     rehearsed = time.perf_counter() - started

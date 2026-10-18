@@ -640,32 +640,49 @@ static void ta_napi_dispatch_migrated(napi_env env, ta_napi_host *host, uint32_t
 }
 
 /* The result of a MIGRATION_DONE: {migration, migrated, failed, pending},
- * the sessions it left behind read now (ta_host_migration_pending: valid
- * until the next run) into the host's arena, under a mark of its own. */
+ * `failed` the sessions it could not move, each {session, reason} with the
+ * status that refused it named by core, and `pending` the sessions it left
+ * behind, both read now (ta_host_migration_failed, ta_host_migration_pending:
+ * valid until the next run) into the host's arena, under a mark of its own. */
 static napi_value ta_napi_migration_result(napi_env env, ta_napi_host *host, uint32_t index) {
-    static const char *const names[] = {"migration", "migrated", "failed"};
-    static const uint32_t fields[] = {TA_EFFECT_FIELD_MIGRATION, TA_EFFECT_FIELD_MIGRATED, TA_EFFECT_FIELD_FAILED};
     uint32_t id = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_MIGRATION);
     uint32_t count = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_PENDING);
-    napi_value result, number, pending, session;
+    uint32_t failed_count = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_FAILED);
+    napi_value result, number, pending, failed, session, entry, reason;
     if (napi_create_object(env, &result) != napi_ok) return NULL;
-    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
-        if (napi_create_uint32(env, (uint32_t)ta_host_effect_number(host->host, index, fields[i]), &number) != napi_ok ||
-            napi_set_named_property(env, result, names[i], number) != napi_ok)
-            return NULL;
+    if (napi_create_uint32(env, id, &number) != napi_ok || napi_set_named_property(env, result, "migration", number) != napi_ok ||
+        napi_create_uint32(env, (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_MIGRATED), &number) != napi_ok ||
+        napi_set_named_property(env, result, "migrated", number) != napi_ok)
+        return NULL;
     ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
     uint64_t *left = count ? (uint64_t *)ta_growable_arena_alloc(&host->arena, sizeof(uint64_t) * count, 8) : NULL;
-    uint32_t got = left != NULL ? ta_host_migration_pending(host->host, id, (ta_uint64_array){left, count}) : 0;
+    ta_host_migration_failure *failures =
+        failed_count ? (ta_host_migration_failure *)ta_growable_arena_alloc(&host->arena, sizeof *failures * failed_count, 8) : NULL;
+    bool room = (count == 0 || left != NULL) && (failed_count == 0 || failures != NULL);
+    uint32_t got = room && left != NULL ? ta_host_migration_pending(host->host, id, (ta_uint64_array){left, count}) : 0;
+    uint32_t lost = room && failures != NULL ? ta_host_migration_failed(host->host, id, (ta_host_migration_failures){failures, failed_count}) : 0;
     if (got > count) got = count;
-    bool ok = (count == 0 || left != NULL) && napi_create_array_with_length(env, got, &pending) == napi_ok;
+    if (lost > failed_count) lost = failed_count;
+    bool ok = room && napi_create_array_with_length(env, got, &pending) == napi_ok &&
+              napi_create_array_with_length(env, lost, &failed) == napi_ok;
     for (uint32_t i = 0; ok && i < got; i++)
         ok = napi_create_bigint_uint64(env, left[i], &session) == napi_ok && napi_set_element(env, pending, i, session) == napi_ok;
+    for (uint32_t i = 0; ok && i < lost; i++) {
+        const char *name = ta_status_name((ta_status)failures[i].status);
+        ok = napi_create_object(env, &entry) == napi_ok &&
+             napi_create_bigint_uint64(env, failures[i].session, &session) == napi_ok &&
+             napi_set_named_property(env, entry, "session", session) == napi_ok &&
+             napi_create_string_utf8(env, name, NAPI_AUTO_LENGTH, &reason) == napi_ok &&
+             napi_set_named_property(env, entry, "reason", reason) == napi_ok && napi_object_freeze(env, entry) == napi_ok &&
+             napi_set_element(env, failed, i, entry) == napi_ok;
+    }
     ta_napi_arena_release(&host->arena, mark, TA_NAPI_ARENA_UNCAPPED);
     if (!ok) {
-        if (count != 0 && left == NULL) ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the migration's pending sessions"});
+        if (!room) ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for the migration's failed and pending sessions"});
         return NULL;
     }
-    return napi_set_named_property(env, result, "pending", pending) == napi_ok && napi_object_freeze(env, pending) == napi_ok
+    return napi_set_named_property(env, result, "failed", failed) == napi_ok && napi_object_freeze(env, failed) == napi_ok &&
+                   napi_set_named_property(env, result, "pending", pending) == napi_ok && napi_object_freeze(env, pending) == napi_ok
                ? result
                : NULL;
 }

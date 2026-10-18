@@ -76,7 +76,7 @@ test('an actor moves with its bindings: one MIGRATED, then migrationDone', async
   host.send(session, 'report');
   await host.idle();
   host.close();
-  equal(json(done), json([{ migration, migrated: 1, failed: 0, pending: [] }]), 'the result');
+  equal(json(done), json([{ migration, migrated: 1, failed: [], pending: [] }]), 'the result');
   equal(json(moved), json([[session, segment, 'counter', migration]]), 'the moved actor');
   equal(logs.labelled('n').join('|'), '3 2 ["n","other"]', 'the old bindings, exactly version 1\'s');
 });
@@ -175,7 +175,7 @@ test('without wake a hibernated actor is left at the timeout, in pending', async
   clock.increment(1);
   await host.idle();
   host.close();
-  equal(json(done), json([{ migration, migrated: 1, failed: 0, pending: [asleep] }]), 'the result');
+  equal(json(done), json([{ migration, migrated: 1, failed: [], pending: [asleep] }]), 'the result');
   if (done[0].pending.includes(awake)) throw new Error('the awake actor is pending');
   if (!Object.isFrozen(done[0].pending)) throw new Error('pending is not frozen');
 });
@@ -246,7 +246,7 @@ test('an actor with a value outside the table fails and stays on version 1', asy
   await host.idle();
   host.close();
   equal(done[0].migrated, 0, 'none migrated');
-  equal(done[0].failed, 1, 'one failed');
+  equal(json(done[0].failed), json([{ session, reason: 'TA_ERROR_UNSUPPORTED' }]), 'the failed one, named, and why');
   equal(logs.labelled('n').join('|'), 'v1 1', 'still version 1');
 });
 

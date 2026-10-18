@@ -218,7 +218,7 @@ def main():
     evict(host, False)
     store.flush()
     migration = time.perf_counter() - started
-    result = current["result"] or {"migration": None, "migrated": 0, "failed": 0, "pending": None}
+    result = current["result"] or {"migration": None, "migrated": 0, "failed": [], "pending": None}
     if result["migration"] != current["id"] or result["migrated"] != options.actors or result["failed"] or result["pending"]:
         failures.append("the migration ended %r, not %d migrated" % (result, options.actors))
     if moves[0] != options.actors:

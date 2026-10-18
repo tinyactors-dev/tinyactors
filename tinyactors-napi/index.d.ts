@@ -394,12 +394,21 @@ export interface Migrated {
   readonly migration: number;
 }
 
-/** A migration's end: how many actors it moved, how many failed (they stay
- * on their version), and the sessions its timeout left behind. */
+/** A session a migration could not move: it stays on its version.
+ * `reason` names core's status, `'TA_ERROR_UNSUPPORTED'` when its state
+ * cannot be written out (a value outside the value table). */
+export interface MigrationFailure {
+  readonly session: bigint;
+  readonly reason: string;
+}
+
+/** A migration's end: how many actors it moved, the ones it could not move
+ * and why (they stay on their version), and the sessions its timeout left
+ * behind. */
 export interface MigrationResult {
   readonly migration: number;
   readonly migrated: number;
-  readonly failed: number;
+  readonly failed: readonly MigrationFailure[];
   readonly pending: readonly bigint[];
 }
 

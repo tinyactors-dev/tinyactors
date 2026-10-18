@@ -7823,6 +7823,91 @@
         }
       }
     },
+    "ta_host_migration_failure": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "session",
+          "type": "uint64_t"
+        },
+        {
+          "name": "status",
+          "type": "int32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "session": 0,
+            "status": 8,
+            "pad": 12
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "session": 0,
+            "status": 8,
+            "pad": 12
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "session": 0,
+            "status": 8,
+            "pad": 12
+          }
+        }
+      }
+    },
+    "ta_host_migration_failures": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "pointer",
+          "type": "ta_host_migration_failure *"
+        },
+        {
+          "name": "capacity",
+          "type": "uint32_t"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "aarch64": {
+          "size": 16,
+          "align": 8,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 8
+          }
+        },
+        "wasm32": {
+          "size": 8,
+          "align": 4,
+          "offsets": {
+            "pointer": 0,
+            "capacity": 4
+          }
+        }
+      }
+    },
     "ta_host_snapshot_input": {
       "kind": "struct",
       "fields": [
@@ -9336,6 +9421,27 @@
         {
           "name": "migration",
           "type": "uint32_t *"
+        }
+      ],
+      "public": true,
+      "static_inline": false,
+      "implemented": true
+    },
+    {
+      "name": "ta_host_migration_failed",
+      "returns": "uint32_t",
+      "params": [
+        {
+          "name": "h",
+          "type": "const ta_host *"
+        },
+        {
+          "name": "migration",
+          "type": "uint32_t"
+        },
+        {
+          "name": "out",
+          "type": "ta_host_migration_failures"
         }
       ],
       "public": true,

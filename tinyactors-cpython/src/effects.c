@@ -925,14 +925,37 @@ static void ta_python_dispatch_uninvoke(ta_python_host *host, uint32_t index) {
     Py_DECREF(entry);
 }
 
+/* The sessions a migration could not move, each {"session", "reason"}
+ * (the status that refused it, named by core), read now
+ * (ta_host_migration_failed: valid until the next run) into a bytes the
+ * list is made from, then dropped. */
+static PyObject *ta_python_migration_failed(ta_host *core, uint32_t index) {
+    uint32_t id = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_MIGRATION);
+    uint32_t count = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_FAILED);
+    PyObject *room = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)count * (Py_ssize_t)sizeof(ta_host_migration_failure));
+    ta_host_migration_failure *failures = room ? (ta_host_migration_failure *)PyBytes_AsString(room) : NULL;
+    uint32_t got = failures ? ta_host_migration_failed(core, id, (ta_host_migration_failures){failures, count}) : 0;
+    PyObject *failed = failures ? PyList_New(got < count ? got : count) : NULL;
+    for (uint32_t i = 0; failed && i < got && i < count; i++) {
+        PyObject *entry = Py_BuildValue("{s:K,s:s}", "session", (unsigned long long)failures[i].session, "reason",
+                                        ta_status_name((ta_status)failures[i].status));
+        if (!entry) Py_CLEAR(failed);
+        else PyList_SetItem(failed, i, entry);
+    }
+    Py_XDECREF(room);
+    return failed;
+}
+
 /* A migration ended: the host's migration_done handler gets {"migration",
- * "migrated", "failed", "pending"}, the sessions it left behind read now (ta_host_migration_pending:
- * valid until the next run) into a bytes the list is made from, then
- * dropped; no handler, nothing read. */
+ * "migrated", "failed", "pending"}, the sessions it could not move and
+ * those it left behind read now (ta_host_migration_failed,
+ * ta_host_migration_pending: valid until the next run) into bytes the
+ * lists are made from, then dropped; no handler, nothing read. */
 static void ta_python_dispatch_migration(ta_python_host *host, uint32_t index) {
     ta_host *core = host->host;
     uint32_t id = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_MIGRATION);
-    PyObject *handler = host->migration_done, *migration = NULL, *pending = NULL, *result = NULL, *called = NULL;
+    PyObject *handler = host->migration_done, *migration = NULL, *pending = NULL, *failed = NULL, *result = NULL,
+             *called = NULL;
     int found = handler == Py_None ? 0 : (migration = PyLong_FromUnsignedLong(id)) ? 1 : -1;
     if (found > 0) {
         uint32_t count = (uint32_t)ta_host_effect_number(core, index, TA_EFFECT_FIELD_PENDING);
@@ -946,15 +969,17 @@ static void ta_python_dispatch_migration(ta_python_host *host, uint32_t index) {
             else PyList_SetItem(pending, i, session);
         }
         Py_XDECREF(room);
-        result = pending ? Py_BuildValue("{s:O,s:k,s:k,s:O}", "migration", migration, "migrated",
-                                         (unsigned long)ta_host_effect_number(core, index, TA_EFFECT_FIELD_MIGRATED), "failed",
-                                         (unsigned long)ta_host_effect_number(core, index, TA_EFFECT_FIELD_FAILED), "pending", pending)
-                         : NULL;
+        failed = pending ? ta_python_migration_failed(core, index) : NULL;
+        result = failed ? Py_BuildValue("{s:O,s:k,s:O,s:O}", "migration", migration, "migrated",
+                                        (unsigned long)ta_host_effect_number(core, index, TA_EFFECT_FIELD_MIGRATED), "failed",
+                                        failed, "pending", pending)
+                        : NULL;
         called = result ? PyObject_CallFunctionObjArgs(handler, (PyObject *)host, result, NULL) : NULL;
     }
     if (found < 0 || (found > 0 && !called)) ta_python_host_keep_error(host);
     Py_XDECREF(called);
     Py_XDECREF(result);
+    Py_XDECREF(failed);
     Py_XDECREF(pending);
     Py_XDECREF(migration);
 }

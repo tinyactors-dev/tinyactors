@@ -461,7 +461,9 @@ static const char ta_python_doc_host_migrate[] =
     "TinyactorsError TA_ERROR_INVALID, a session that ended TA_ERROR_STALE.\n"
     "\n"
     "The host's migration_done handler gets its end, with result\n"
-    "{\"migration\", \"migrated\", \"failed\", \"pending\": [session, ...]}; the\n"
+    "{\"migration\", \"migrated\", \"failed\": [{\"session\", \"reason\"}, ...],\n"
+    "\"pending\": [session, ...]}, failed naming the actors it could not move\n"
+    "and why (core's status), pending those its timeout left behind; the\n"
     "migrated handler sees each actor that moved.";
 
 static const char ta_python_doc_host_run_until_idle[] =

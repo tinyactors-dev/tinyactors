@@ -190,7 +190,7 @@ TA_API uint64_t ta_host_actor_by_name(const ta_host *h, ta_string_view name);
  *     macrostep does not run).
  * Lookups answer as usual: ta_host_chart, ta_host_locate,
  * ta_host_actor_by_name, ta_host_segment_count, ta_host_segment_info_get,
- * ta_host_system, ta_host_resolve, ta_host_migration_pending, and the effect
+ * ta_host_system, ta_host_resolve, ta_host_migration_failed, ta_host_migration_pending, and the effect
  * accessors (which answer 0 or empty: no batch is open in a run).
  * ta_host_free does nothing. Every other call is refused:
  * TA_ERROR_STATE, an empty answer or nothing done (ta_host_effects returns
@@ -269,7 +269,7 @@ TA_API ta_run ta_host_run(ta_host *h, uint32_t budget);
 enum {
     /* TA_EFFECT_SEND .. TA_EFFECT_WAKE (1..8) as in tinyactors/system.h, plus: */
     TA_HOST_EFFECT_MIGRATED = 16, /* session moved to (segment, chart); migration */
-    TA_HOST_EFFECT_MIGRATION_DONE = 17, /* migration ended: migrated, failed, pending (ta_host_migration_pending) */
+    TA_HOST_EFFECT_MIGRATION_DONE = 17, /* migration ended: migrated, failed (ta_host_migration_failed), pending (ta_host_migration_pending) */
     TA_HOST_EFFECT_SEGMENT_FREED = 18, /* segment retired (the host freed its image copy) */
     /* the encoder (the config's "telemetry"): a request is ready, because the
      * staging is full or flush_interval passed since its first record; take
@@ -395,6 +395,24 @@ TA_API ta_status ta_host_migrate(ta_host *h, const ta_host_migration *request, u
 /* The sessions a migration waits for while it runs, in no order; those a finished
  * migration left behind (valid until the next ta_host_run). */
 TA_API uint32_t ta_host_migration_pending(const ta_host *h, uint32_t migration, ta_uint64_array out);
+/* A session a migration could not move: it stays on its version. `status`
+ * says why: TA_ERROR_UNSUPPORTED when its datamodel cannot write its state
+ * out (a value outside the value table, in a variable or a pending delayed
+ * send's data), another TA_ERROR_* when the new version refused it. */
+typedef struct ta_host_migration_failure {
+    uint64_t session;
+    int32_t status;
+    uint32_t pad;
+} ta_host_migration_failure;
+typedef struct ta_host_migration_failures {
+    ta_host_migration_failure *pointer;
+    uint32_t capacity;
+} ta_host_migration_failures;
+/* The sessions a migration could not move so far, in the order they failed;
+ * returns how many (MIGRATION_DONE's `failed`), writing at most
+ * out.capacity. Those of a finished migration are valid until the next
+ * ta_host_run, as its pending sessions are. */
+TA_API uint32_t ta_host_migration_failed(const ta_host *h, uint32_t migration, ta_host_migration_failures out);
 
 /* ---- hibernation (the host stores the blobs) ------------------------------------ */
 /* CLOCK sweep over all segments: up to `max_scan` slots, at most

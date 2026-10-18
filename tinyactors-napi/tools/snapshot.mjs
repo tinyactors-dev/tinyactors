@@ -428,8 +428,8 @@ async function main() {
   }
   copy.migrating = false;
   await traffic(copy, rehearsal, sentCopy, o.events - copyEvents);
-  const result = copy.done ?? { migration: undefined, migrated: 0, failed: 0, pending: undefined };
-  if (result.migration !== migration || result.migrated !== o.actors || result.failed || result.pending?.length !== 0)
+  const result = copy.done ?? { migration: undefined, migrated: 0, failed: [], pending: undefined };
+  if (result.migration !== migration || result.migrated !== o.actors || result.failed.length || result.pending?.length !== 0)
     failures.push(`copy: the migration ended ${JSON.stringify(result, (_, v) => (typeof v === 'bigint' ? `${v}` : v))}, ` +
       `not ${o.actors} migrated`);
   console.log(`rehearse: ${copy.moves} actors to version 2 in ${seconds(started)} s, ${o.events} events meanwhile, ` +

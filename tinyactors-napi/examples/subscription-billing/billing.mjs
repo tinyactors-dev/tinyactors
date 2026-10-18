@@ -116,7 +116,7 @@ export class Billing {
 
   finished(result) {
     const record = this.migrations.get(result.migration);
-    record.result = { migration: result.migration, migrated: result.migrated, failed: result.failed, pending: [...result.pending] };
+    record.result = { migration: result.migration, migrated: result.migrated, failed: result.failed.length, pending: [...result.pending] };
     // the wakes it asked for and nobody did are no longer needed
     this.migrationWakes = this.migrationWakes.filter((wake) => wake.migration !== result.migration);
     record.resolve(record.result);

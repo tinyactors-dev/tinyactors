@@ -577,8 +577,10 @@ version takes what it keeps from there:
   with `TA_ERROR_INVALID`, and a `session` that ended `TA_ERROR_STALE`: a
   migration that could move nothing is refused rather than reported done.
 - **`migration_done=handler(host, result)`** gets the end of each
-  migration, with `{"migration", "migrated", "failed", "pending":
-  [session, ...]}`. It is a handler of the host, not of the call, so it
+  migration, with `{"migration", "migrated", "failed": [{"session",
+  "reason"}, ...], "pending": [session, ...]}`: `failed` the actors it
+  could not move and why (core's status, by name), `pending` those its
+  timeout left behind. It is a handler of the host, not of the call, so it
   also gets the end of a migration that a restored host goes on with.
 - **`migrated=handler(host, migrated)`** gets each actor moved, as a thin
   `Migrated` view of `session`, `segment`, `chart` (its name) and
@@ -595,7 +597,9 @@ Each run costs the migration one quantum of actors (`migrateQuantum` in
 the config), however many it waits for.
 
 **Actors that do not move.** An actor that cannot be written out stays
-on its version and counts as failed. On the `"python"` datamodel, that is
+on its version and is in the result's `failed`, with the reason
+`"TA_ERROR_UNSUPPORTED"` (`host.hibernate` of it names the variable). On
+the `"python"` datamodel, that is
 one whose variables or pending delayed sends hold a value outside the
 value table. An actor that is running an invocation waits until the
 invocation ends.
