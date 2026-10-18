@@ -222,6 +222,24 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   snapshot of the hibernated population, whose fastest sample at
   2,000,000 is faster than any at 4,000,000 (log `l-p2-scale-rerun`).
 
+- **A hibernation blob carries no identity of the system that made it**
+  (2026-10-18, p5-parity; log entry `l-p5-parity-blob-identity`). A blob
+  of another host, for a session of the same number running the same
+  image, wakes and brings the other actor's state: a blob of an addon
+  host woken into a `@tinyactors/wasm` host, and into a second addon
+  host, each holding a session 1 it had hibernated itself, came back with
+  the first host's count. The header (`src/system/hibernate.c:39-45`)
+  holds the chart, the image's hash and a serial, nothing of the system,
+  and `boundary.md`'s row for `ta_host_wake` refuses "another session's"
+  blob, which a session of the same number on another host is not. A
+  store two hosts share (a server and a browser client, two servers) that
+  mixes up its keys imports one actor's state into another without a
+  word. Asked: a system identity in the blob (made at creation and kept by
+  a snapshot, so a restored host still wakes its own blobs) and
+  `ta_host_wake` refusing another system's blob with `TA_ERROR_INVALID`.
+  The addon works around nothing; its guide says to keep each host's
+  blobs apart (`docs/guide/browser.md`, "One store, two packages").
+
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
 tick rate through `host.config`, `9bd33f03`); their text is in this file's
