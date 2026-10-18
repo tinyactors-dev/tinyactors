@@ -592,7 +592,13 @@ module with top-level `await`), the layer's JavaScript, the module,
 `index.d.ts`, and its `package.json` with `"type": "module"` and plain
 `exports`, `"./tinyactors.wasm"` among them so a bundler or a CDN can
 place it. Its sources live in `tinyactors-napi/wasm/` (`src/*.c`,
-`lib/*.mjs`).
+`lib/*.mjs`). Built (p5-pack): `mise run pack:wasm`, and `mise run pack` and the
+release with the addon's packages, every tarball at one version
+(`mise/pack.rb`, `stage_wasm`). The staged package holds the entries,
+`init.d.ts`, `wasm/lib/` and `lib/convenience.mjs` at its root, the
+latter's `#direct` written as `./direct.mjs` (a module Worker has no
+import map), and drops the `tinyactors-wasm` export condition, which
+only the repository's shared tests use.
 
 - Not one package with conditional exports (`"browser"` to the wasm
   build): a browser project would install `@tinyactors/node` and,

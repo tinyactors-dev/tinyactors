@@ -37,7 +37,7 @@ function load() {
     throw new Error(
       `@tinyactors/node: no addon for ${process.platform}-${process.arch}: ${platformPackage} is not installed ` +
         '(an install of @tinyactors/node brings it where the platform has one), and this is not a build in the ' +
-        'repository (mise run build)',
+        'repository (mise run build); @tinyactors/wasm runs the same API on any platform, without an addon',
       { cause: error },
     );
   }

@@ -1080,10 +1080,28 @@ manages its development dependencies; the C toolchain is the root's.
   version must be its own: Bun, run where no `node_modules` is, installs
   a package it cannot resolve from the registry (the last release's
   addon).
+  The same task packs **`@tinyactors/wasm`** at the same version
+  (`mise run pack:wasm` packs it alone; docs/browser.md, "Packaging and
+  releases"): the module (`wasm:build`, its imports and exports
+  checked), `wasm/index.mjs`, `wasm/init.mjs`, `wasm/init.d.ts` and
+  `wasm/lib/` (the generated `realm-script.mjs` included) at the
+  package's root, `lib/convenience.mjs` beside its direct layer with
+  `#direct` written as `./direct.mjs` (a page and a module Worker read no
+  package.json, and a Worker has no import map), `index.d.ts` (`types`),
+  `wasm/README.md`, LICENSE; exports `.`, `./init`, `./tinyactors.wasm`
+  and `./package.json`, with no export condition. Every tarball's
+  `package.json` must hold the one version. It prints the package's
+  sizes (packed, unpacked, the module raw, gzip -9 and brotli 11) and is
+  smoke-tested from fresh projects: `tools/smoke-wasm.mjs` (with
+  `tools/smoke-wasm-check.mjs`) under node and bun through both entries,
+  and `tools/smoke-wasm-browser.mjs`, the npm project served to Chromium
+  under the guide's policy, a page importing by the package's name
+  through an import map and a module Worker by path.
 - `mise run release -- <version> [--publish] | --dev [--publish]`: the
   checks (a clean tree, the version, the changelog, npm, the test task),
   the version committed and tagged `tinyactors-napi/v<version>`, every
-  package built and smoke-tested here and, with Docker, in Node.js
+  package built and smoke-tested here (the wasm package under node,
+  bun and in Chromium) and, with Docker, the addon in Node.js
   (Debian, Alpine) and Bun containers of each Linux architecture,
   `SHA256SUMS`, into `build/dist/<version>/`; with `--publish`, `npm
   publish` with fnox's `NPM_TOKEN` (platform packages first), then the
@@ -1160,8 +1178,9 @@ tools/store.mjs      what the gates share: the SQLite store, a seeded generator
 tools/parity.mjs     the parity check: both packages' shapes (tools/shape.mjs) compared, and each against index.d.ts
 mise/napi.rb         what the tasks share
 mise/pack.rb         the packages: the release build per target, its checks, npm pack, the smoke tests
-mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, scale, pack, release
+mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, scale, pack (and pack:wasm), wasm:*, release
 tools/smoke.mjs      the packages' smoke test, run where they are installed
+tools/smoke-wasm*.mjs  @tinyactors/wasm's: node and bun, and Chromium (a page, a module Worker)
 examples/            applications over the package, each with a README and a test (mise run examples);
                      order-fulfillment/: payment and shipping as invoked services, timeouts, retries, cancels
                      http-gateway/: node:http sessions as actors, rate limits, an async I/O processor, OTLP export
