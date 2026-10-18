@@ -1950,6 +1950,10 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
             uint32_t r = micro(kernel);
             if (r != KERNEL_CONTINUE) return r;
             int was_exit = kernel->workspace->pad;
+            /* the exit is finished, and calling micro again finishes it at
+             * once: a refused done event is retried after growth */
+            if (was_exit && core->done_event && !core->done_event(core->system, instance->actor))
+                return TA_STEP_EXHAUSTED;
             uint32_t final_state = kernel->workspace->final_state;
             ta_payload done = kernel->workspace->done_payload;
             kernel->workspace->done_payload = 0;

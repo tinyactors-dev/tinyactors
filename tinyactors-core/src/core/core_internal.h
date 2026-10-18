@@ -122,6 +122,10 @@ struct ta_core {
     uint32_t overrun;
     uint64_t (*serial_of)(void *system, uint32_t actor);
     uint32_t (*name_of)(void *system, uint32_t actor); /* string reference, TA_NIL if none */
+    /* before a session ends: what its end sends (its parent's done.invoke)
+     * is made now, so the end cannot lose it; 0 when a pool or the slab
+     * refused it (the end is retried after growth) */
+    int (*done_event)(void *system, uint32_t actor);
     void *system;
     /* tracing (docs/adr/0006): the kinds to write (0: none), where, the
      * context pool, and what stamps a record: the fuel clock at the start of

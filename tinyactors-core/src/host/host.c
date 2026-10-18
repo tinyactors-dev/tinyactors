@@ -836,7 +836,11 @@ ta_status host_send_to(ta_host *host, uint32_t si, uint32_t actor, const ta_even
         uint32_t was = host_guard(host); /* release (error.communication) */
         status = ta_system_send(segment->system, &event_in);
         host_unguard(host, was);
-        if (status != TA_ERROR_NO_MEMORY || segment_grow_exhausted(host, segment) != TA_OK) break;
+        /* the segment being drained grows after its drain, never under it:
+         * the effect being routed, and the strings this event points to,
+         * are in its block (ta_host_run grows it and drains again) */
+        if (status != TA_ERROR_NO_MEMORY || si == host->draining || segment_grow_exhausted(host, segment) != TA_OK)
+            break;
     }
     if (status == TA_OK) segment->busy = 1;
     return status;
@@ -1423,8 +1427,10 @@ static ta_status scxml_send(ta_host *host, uint32_t si, const ta_effect *effect)
 /* Drain a segment's effects: route, copy out, acknowledge. TA_ERROR_NO_MEMORY:
  * the effects from the first one the host could not take on are not
  * acknowledged (they come again with the next drain), or an error for a
- * sender is still pending. */
-static ta_status drain(ta_host *host, uint32_t si) {
+ * sender is still pending; `*full` is then the segment's pool that refused
+ * a send to it (read before the release frees events), TA_POOL_NONE when
+ * none did (the host's allocator refused). */
+static ta_status drain(ta_host *host, uint32_t si, uint32_t *full) {
     host_segment *segment = &host->segments[si];
     ta_system *system = segment->system;
     const ta_effect *effect;
@@ -1451,12 +1457,12 @@ static ta_status drain(ta_host *host, uint32_t si) {
             (effect_view->kind == TA_EFFECT_DONE || effect_view->kind == TA_EFFECT_ERROR) &&
             host_moved_get(host, effect_view->session) != TA_NIL)
             moved_put(host, effect_view->session, TA_NIL);
-        if (segment->system != system) { /* grown while routing: its effects moved with it */
-            system = segment->system;
-            ta_system_effects(system, &effect);
-        }
+        /* nothing grows this segment while its effects are routed
+         * (host_send_to): effect and effect_view stay where they are */
+        TA_ASSERT(segment->system == system);
         if (status != TA_OK) break;
     }
+    *full = status == TA_ERROR_NO_MEMORY ? ta_system_exhausted(system) : TA_POOL_NONE;
     uint32_t was = host_guard(host); /* release; what was handed out is decided at the host's ack */
     ta_system_effects_release(system, done, 0);
     host_unguard(host, was);
@@ -2021,7 +2027,19 @@ ta_run ta_host_run(ta_host *host, uint32_t budget) {
             segment->deadline = result.next_deadline;
             segment->busy =
                 result.status != TA_RUN_IDLE; /* draining may add work (errors, deliveries) */
-            if (drain(host, si) != TA_OK) exhausted = 1;
+            /* a send to this segment found a pool full while it was drained:
+             * grow it now, its effects released up to that send, and route
+             * the rest; refused, the run stops there and the next goes on */
+            ta_status drained;
+            uint32_t refused;
+            while ((drained = drain(host, si, &refused)) == TA_ERROR_NO_MEMORY && refused != TA_POOL_NONE) {
+                ta_status grown = segment_grow(host, &host->segments[si], refused);
+                if (grown != TA_OK) {
+                    if (grown == TA_ERROR_NO_MEMORY) detail = refused;
+                    break;
+                }
+            }
+            if (drained != TA_OK) exhausted = 1;
             segment = &host->segments[si];
             if (result.status == TA_RUN_EXHAUSTED) {
                 ta_status grown = segment_grow(host, segment, result.detail);

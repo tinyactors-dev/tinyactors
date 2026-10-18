@@ -719,6 +719,52 @@ void ta_system_autoforward(ta_system *system, uint32_t parent, const ta_core_out
     ta_system_mailbox_push(system, c, event_index);
 }
 
+/* The done.invoke event for the parent of the actor at `index` ("done.invoke."
+ * and its invoke id; flags, payload and the rest are ta_system_done's):
+ * TA_NIL when it has no live parent that invoked it, `*refused` set when a
+ * pool or the slab refused it. */
+static uint32_t done_invoke_new(ta_system *system, uint32_t index, int *refused) {
+    ta_core *core = &system->core;
+    ta_actor *actor = actor_at(system, index);
+    *refused = 0;
+    uint32_t parent = (actor->flags & ACTOR_FLAG_ORPHAN) ? TA_NIL : ta_system_resolve_actor(system, actor->parent);
+    if (parent == TA_NIL) return TA_NIL;
+    ta_instance *pin = ta_actor_instance(system, actor_at(system, parent));
+    if (ta_core_invoke_child(core, pin, actor->parent_slot) != ta_pool_handle(&system->actors, index))
+        return TA_NIL;
+    uint32_t event_index = ta_event_new(core, 1);
+    if (event_index == TA_NIL) {
+        *refused = 1;
+        return TA_NIL;
+    }
+    ta_string_view ids = ta_shared_string_get(core, ta_core_invoke_id(core, pin, actor->parent_slot));
+    char *buffer = core->scratch;
+    uint32_t n = 0;
+    const char *pre = "done.invoke.";
+    while (pre[n]) {
+        buffer[n] = pre[n];
+        n++;
+    }
+    for (uint32_t i = 0; i < ids.length && n < sizeof core->scratch; i++)
+        buffer[n++] = ids.pointer[i];
+    if (ta_event_set_name(core, ta_event_at(core, event_index), buffer, n) != TA_OK) {
+        ta_event_release(core, event_index);
+        *refused = 1;
+        return TA_NIL;
+    }
+    return event_index;
+}
+
+int ta_system_done_event(void *system_pointer, uint32_t actor_handle) {
+    ta_system *system = (ta_system *)system_pointer;
+    uint32_t index = ta_system_resolve_actor(system, actor_handle);
+    if (index == TA_NIL || system->done_event) return 1;
+    int refused;
+    uint32_t event_index = done_invoke_new(system, index, &refused);
+    if (event_index != TA_NIL) system->done_event = event_index + 1;
+    return !refused;
+}
+
 /* Child (or root) reached a top-level final state. */
 void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t final_state) {
     ta_core *core = &system->core;
@@ -745,39 +791,30 @@ void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t
                           : ta_system_resolve_actor(system, actor->parent);
     uint32_t self = ta_pool_handle(&system->actors, index);
     const ta_datamodel_binding *binding = ta_core_datamodel(core, ta_actor_chart(system, actor));
+    /* made before the end by the done_event hook, which a refusal stops */
+    uint32_t event_index = system->done_event ? system->done_event - 1 : TA_NIL;
+    system->done_event = 0;
+    if (event_index == TA_NIL) { /* an end the hook did not see: made now, or lost if refused */
+        int refused;
+        event_index = done_invoke_new(system, index, &refused);
+    }
     if (parent != TA_NIL) {
         ta_instance *pin = ta_actor_instance(system, actor_at(system, parent));
         uint32_t id = ta_core_invoke_id(core, pin, actor->parent_slot);
-        uint32_t event_index = ta_core_invoke_child(core, pin, actor->parent_slot) == self
-                                   ? ta_event_new(core, 1)
-                                   : TA_NIL;
         if (event_index != TA_NIL) {
             ta_event *event = ta_event_at(core, event_index);
-            ta_string_view ids = ta_shared_string_get(core, id);
-            char *buffer = core->scratch;
-            uint32_t n = 0;
-            const char *pre = "done.invoke.";
-            while (pre[n]) {
-                buffer[n] = pre[n];
-                n++;
-            }
-            for (uint32_t i = 0; i < ids.length && n < sizeof core->scratch; i++)
-                buffer[n++] = ids.pointer[i];
-            if (ta_event_set_name(core, event, buffer, n) == TA_OK) {
-                event->type = TA_EVENT_TYPE_EXTERNAL;
-                event->origin = self;
-                event->invokeid = id;
-                ta_shared_string_retain(core, id);
-                event->invoke_slot = (uint16_t)actor->parent_slot;
-                event->flags = TA_EVENT_FLAG_FROM_CHILD | TA_EVENT_FLAG_DONE;
-                event->payload = done;
-                event->datamodel = core->chart_datamodel[ta_actor_chart(system, actor)];
-                event->trace = ta_core_step_context(core, instance);
-                done = 0;
-                ta_system_mailbox_push(system, parent, event_index);
-            } else {
-                ta_event_release(core, event_index);
-            }
+            event->type = TA_EVENT_TYPE_EXTERNAL;
+            event->origin = self;
+            event->invokeid = id;
+            ta_shared_string_retain(core, id);
+            event->invoke_slot = (uint16_t)actor->parent_slot;
+            event->flags = TA_EVENT_FLAG_FROM_CHILD | TA_EVENT_FLAG_DONE;
+            event->payload = done;
+            event->datamodel = core->chart_datamodel[ta_actor_chart(system, actor)];
+            event->trace = ta_core_step_context(core, instance);
+            done = 0;
+            ta_system_mailbox_push(system, parent, event_index);
+            event_index = TA_NIL;
         }
     } else if (!actor->parent && !(actor->flags & ACTOR_FLAG_ORPHAN)) {
         ta_effect_record *effect = ta_system_effect_push(system, TA_EFFECT_DONE, index);
@@ -795,6 +832,7 @@ void ta_system_done(ta_system *system, uint32_t index, ta_payload done, uint32_t
             }
         }
     }
+    if (event_index != TA_NIL) ta_event_release(core, event_index);
     if (done && binding->vtable->release) binding->vtable->release(binding->datamodel, done);
     ta_system_reclaim(system, index, RECLAIM_ENDED);
 }

@@ -188,6 +188,7 @@ static void rebind(ta_system *system, const ta_image *image) {
     core->base = system->config.base;
     core->serial_of = serial_of;
     core->name_of = name_of;
+    core->done_event = ta_system_done_event;
     core->system = system;
     uint32_t r = system->config.max_events / 8;
     core->reserve = r > 4 ? 4 : r;

@@ -137,7 +137,10 @@ struct ta_system {
     uint32_t session_capacity, session_count;
     uint32_t chart_count, datamodel_count;
     uint32_t in_call; /* re-entrancy guard */
-    uint32_t pad;
+    /* the done.invoke event made for a session that ends now (core's
+     * done_event hook), for the ta_system_done of the same step: its index
+     * + 1, 0 between steps */
+    uint32_t done_event;
     uint64_t now, sequence, next_serial;
     uint64_t stats_delivered, stats_fuel, stats_turns, stats_timers, stats_spawned,
         stats_traces_started, stats_traces_sampled; /* ta_system_stats */
@@ -167,6 +170,9 @@ TA_INLINE uint32_t ta_actor_chart(const ta_system *system, const ta_actor *actor
     return actor->state == TA_ACTOR_HIBERNATED ? actor->instance
                                                : ta_actor_instance(system, actor)->chart;
 }
+
+/* route.c: core's done_event hook (core_internal.h) */
+int ta_system_done_event(void *system, uint32_t actor);
 
 /* system.c */
 uint32_t ta_system_resolve_actor(const ta_system *s, uint32_t handle); /* index or TA_NIL */
