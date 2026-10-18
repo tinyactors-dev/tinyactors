@@ -103,6 +103,8 @@ struct ta_core {
     const ta_image *image;
     ta_pool *events;
     ta_pool *timers; /* a delayed send needs a free slot here (NULL: unlimited); marked refused when none is */
+    ta_pool *requests; /* an <invoke> needs a free slot here before it evaluates anything (NULL:
+                          unlimited); marked refused when none is */
     ta_pool *workspaces;
     ta_slab *slab;
     const ta_datamodel_binding *datamodels;

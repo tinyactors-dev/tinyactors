@@ -176,6 +176,7 @@ static void rebind(ta_system *system, const ta_image *image) {
     core->image = image;
     core->events = &system->events;
     core->timers = &system->timers;
+    core->requests = &system->requests;
     core->workspaces = &system->workspaces;
     core->slab = &system->slab;
     core->datamodels = system->datamodels;

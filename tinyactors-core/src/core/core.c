@@ -1028,6 +1028,18 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     ta_payload payload = 0;
     ta_string_view s;
 
+    /* no event, or no timer for a delay it may have: the pools grow before
+     * the send evaluates anything, so its side effects run once (the
+     * instruction is retried) */
+    if (ta_pool_free_count(core->events) <= core->reserve) {
+        core->events->refused = core->reserve + 1; /* as ta_event_new marks it */
+        return TA_STEP_EXHAUSTED;
+    }
+    if ((send->delay_ns || send->delayexpr != TA_NIL) && core->timers && ta_pool_free_count(core->timers) == 0) {
+        core->timers->refused = 1; /* what ta_system_exhausted names */
+        return TA_STEP_EXHAUSTED;
+    }
+
     /* send id: first, so an error the send raises at its own step carries it
      * (SCXML 5.10.1), as one raised when it is routed does */
     if (send->id != TA_NIL) {
@@ -1177,13 +1189,6 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     }
     if (internal && delay) {
         status = SEND_ERROR_EXECUTION;
-        goto fail;
-    }
-    /* no timer slot: do not execute the send; the host grows the pool and the
-     * instruction is retried (like event exhaustion), so no send is lost */
-    if (delay && core->timers && ta_pool_free_count(core->timers) == 0) {
-        core->timers->refused = 1; /* what ta_system_exhausted names */
-        status = SEND_NOMEM;
         goto fail;
     }
     /* payload */
@@ -1934,6 +1939,13 @@ uint32_t ta_core_step(ta_core *core, ta_instance *instance, uint32_t *fuel) {
                     instance->cursor2 = 0;
                 }
                 if (instance->cursor2 < kernel->states[s].invoke_count) {
+                    /* no request free (an external invoke needs one, a child
+                     * one if its spawn is parked): the pool grows before the
+                     * invoke evaluates anything, so its side effects run once */
+                    if (core->requests && ta_pool_free_count(core->requests) == 0) {
+                        core->requests->refused = 1; /* what ta_system_exhausted names */
+                        return TA_STEP_EXHAUSTED;
+                    }
                     uint32_t slot = kernel->states[s].first_invoke + instance->cursor2;
                     uint32_t r = start_invoke(kernel, slot);
                     if (r == TA_STEP_EXHAUSTED) return r;

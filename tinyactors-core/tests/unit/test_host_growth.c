@@ -302,6 +302,69 @@ static void test_external_invokes_fill_the_requests(void) {
     world_close(&w);
 }
 
+/* An invoke that finds no free request waits for the pool to grow before it
+ * evaluates anything, so a side effect of its <param> runs once per invoke,
+ * however often the pool grows: `calls` counts them (and a <send> that finds
+ * no event waits the same way: `sends` counts its <param>s). */
+static void invokes_count_their_params(uint32_t count) {
+    world w;
+    world_open(&w, NULL);
+    static char text[65536];
+    int k = snprintf(text, sizeof text,
+                     "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='many' "
+                     "initial='s'><datamodel><data id='calls' expr='0'/></datamodel><state id='s'>");
+    for (uint32_t i = 0; i < count; i++)
+        k += snprintf(text + k, sizeof text - (size_t)k,
+                      "<invoke type='urn:svc' src='x:y'><param name='k' expr='calls = calls + 1'/></invoke>");
+    k += snprintf(text + k, sizeof text - (size_t)k,
+                  "<transition event='check' cond='calls === %u'><log expr=\"'hello'\"/></transition>"
+                  "<transition event='error.execution'><log expr=\"'error'\"/></transition></state></scxml>",
+                  count);
+    ta_source source = {{"many.scxml", 10}, {text, (uint32_t)k}};
+    world_add(&w, (ta_source_list){&source, 1});
+    uint64_t session = spawn(&w, "many", NULL);
+    run_until_idle(&w);
+    ta_event_in check;
+    memset(&check, 0, sizeof check);
+    check.size = sizeof check;
+    check.session = session;
+    check.name = (ta_string_view){"check", 5};
+    CHECK_EQUAL(ta_host_send(w.host, &check), TA_OK);
+    run_until_idle(&w);
+    CHECK_EQUAL(w.invokes, count);
+    CHECK_EQUAL(w.errors, 0u);
+    CHECK_EQUAL(w.hellos, 1u); /* calls === count */
+    world_close(&w);
+}
+static void test_invokes_evaluate_once(void) {
+    invokes_count_their_params(40);
+    invokes_count_their_params(300);
+}
+
+#define COUNTING_SENDS                                                                             \
+    SC("counting", "initial='s'><datamodel><data id='sends' expr='0'/></datamodel><state id='s'>"  \
+                   "<onentry><foreach array='Array.from({length: 1000})' item='i'>"                 \
+                   "<send event='tick'><param name='k' expr='sends = sends + 1'/></send>"           \
+                   "</foreach></onentry><transition event='check' cond='sends === 1000'>"          \
+                   "<log expr=\"'hello'\"/></transition></state>")
+static void test_sends_evaluate_once(void) {
+    world w;
+    world_open(&w, NULL);
+    static const ta_source source = SOURCE("counting.scxml", COUNTING_SENDS);
+    world_add(&w, (ta_source_list){&source, 1});
+    uint64_t session = spawn(&w, "counting", NULL);
+    run_until_idle(&w);
+    ta_event_in check;
+    memset(&check, 0, sizeof check);
+    check.size = sizeof check;
+    check.session = session;
+    check.name = (ta_string_view){"check", 5};
+    CHECK_EQUAL(ta_host_send(w.host, &check), TA_OK);
+    run_until_idle(&w);
+    CHECK_EQUAL(w.hellos, 1u); /* sends === 1000 */
+    world_close(&w);
+}
+
 /* A small pool beside a large region grows in proportion to itself: 65
  * delayed sends beside 100,000 events take the timers from 64 to at most 16
  * times that, not to a quarter of the region (1,048,576 timers beside a
@@ -367,6 +430,8 @@ int main(void) {
     RUN(test_invokes_and_done_events_fill_the_pools);
     RUN(test_spawns_then_sends_at_entry);
     RUN(test_external_invokes_fill_the_requests);
+    RUN(test_invokes_evaluate_once);
+    RUN(test_sends_evaluate_once);
     RUN(test_a_small_pool_grows_in_proportion_to_itself);
     RUN(test_a_refused_growth_is_exhausted);
     TEST_MAIN_END();
