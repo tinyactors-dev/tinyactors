@@ -163,6 +163,9 @@ about a second and a half.
 
 ## Surprises
 
+Every example's surprises, and what became of each, are in
+[docs/surprises.md](../../docs/surprises.md), generated from the log.
+
 Recorded in [`docs/log.xml`](../../docs/log.xml):
 
 - `l-p4-examples-approval-done-early`: a resubmission that returns legal

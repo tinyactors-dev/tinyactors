@@ -179,30 +179,38 @@ modules. quickjs is the datamodel for code it does not.
 
 ## What the platform cannot tell its customers
 
-An `error.execution` carries no reason, and telemetry's span marks the
-failed action with an opcode only, so a customer is told "error.execution,
-1" for a rule that ran out of checks, out of memory, threw `new
-Error('boom')` or called `require`, alike (docs/log.xml,
-l-p4-examples-iot-error-reason). `compileCharts` parses a chart's JavaScript
+The platform reports the chart's `errorsExecution` counter, so a customer
+is told "error.execution, 1" for a rule that ran out of checks, out of
+memory, threw `new Error('boom')` or called `require`, alike. The reason
+is in the chart now: `error.execution`'s `_event.data` is `{ reason,
+message }`, `reason` `'fuel'`, `'memory'` or `'exception'` (docs/log.xml,
+l-p4-examples-iot-error-reason, fixed in core), which a template rule
+could send on with its alert; this example does not. `compileCharts` parses a chart's JavaScript
 with the application's engine, which is V8 or JavaScriptCore, not QuickJS,
 so a construct one accepts and the other does not is found only when it
 runs.
 
 ## Surprises
 
+Every example's surprises, and what became of each, are in
+[docs/surprises.md](../../docs/surprises.md), generated from the log.
+
 Recorded in `docs/log.xml` with `example="iot-rules"`:
 
 - `l-p4-examples-iot-maxops-time`: the quickjs guide's "within
-  milliseconds" for `maxOps: 10_000` is 260 ms to 2.5 s.
+  milliseconds" for `maxOps: 10_000` is 260 ms to 2.5 s. Fixed in the
+  guide, which gives these measurements and recommends values.
 - `l-p4-examples-iot-syntax-unchecked`: `compileCharts` did not parse a
   chart's JavaScript. Fixed: it reports a syntax error as a warning, an
   error with `{ warningsAsErrors: true }`, which the platform passes.
-- `l-p4-examples-iot-error-reason`: nothing says why an evaluation failed.
+- `l-p4-examples-iot-error-reason`: nothing said why an evaluation failed.
+  Fixed: `error.execution` carries `{ reason, message }`.
 - `l-p4-examples-iot-invoke-crash`: a sandboxed chart's `<invoke>` of an
   unknown type threw from the host's turn, which could end the process.
   Fixed: the invoker gets `error.communication`, and nothing is thrown.
 - `l-p4-examples-iot-script-let`: a transition's script with a top-level
-  `let` runs once, and fails every time after.
+  `let` ran once, and failed every time after. Fixed: such a script runs
+  in a block.
 
 ## Run it
 

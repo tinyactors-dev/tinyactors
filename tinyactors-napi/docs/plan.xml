@@ -559,7 +559,7 @@
         <done-when>Ten examples, each passing its test under node and bun; the surprises logged.</done-when>
         <files>tinyactors-napi/examples/</files>
       </step>
-      <step id="p4-surprises" status="doing" after="p4-examples">
+      <step id="p4-surprises" status="done" after="p4-examples">
         <title>Every surprise catalogued and fixed</title>
         <does>The coordinator catalogues the examples' surprises (docs/surprises.md, generated from docs/log.xml's kind="surprise" entries: what, where, the fix), and each is fixed: in the addon, its docs, index.d.ts or README, with a test; in core or the suite through the coordinator, as a core change with its tests; or, where the fix is the maintainer's decision, logged for-maintainer with a recommendation. The examples are updated to drop any workaround a fix made unnecessary.</does>
         <done-when>Every surprise entry is resolved or for-maintainer with a recommendation; the examples carry no workaround; mise run test passes.</done-when>

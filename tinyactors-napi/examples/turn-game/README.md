@@ -155,6 +155,9 @@ it out of the handler first, so the demo rarely sees one.
 
 ## Surprises
 
+Every example's surprises, and what became of each, are in
+[docs/surprises.md](../../docs/surprises.md), generated from the log.
+
 Two, in docs/log.xml:
 
 - `l-p4-examples-game-snapshot-time`: a snapshot held the time of the

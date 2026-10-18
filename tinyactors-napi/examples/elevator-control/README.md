@@ -180,6 +180,9 @@ every case, in about two seconds. `ELEVATOR_FULL=1` plays 1000 on each.
 
 ## Surprises
 
+Every example's surprises, and what became of each, are in
+[docs/surprises.md](../../docs/surprises.md), generated from the log.
+
 Recorded in [`docs/log.xml`](../../docs/log.xml):
 
 - `l-p4-examples-elevator-error-sendid`: an error raised by a `<send>`

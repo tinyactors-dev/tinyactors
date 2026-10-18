@@ -14,6 +14,8 @@
           <attribute name="step"/>
           <attribute name="kind"><choice><value>issue</value><value>uncertainty</value><value>decision</value><value>request-to-core</value><value>deviation</value><value>note</value><value>surprise</value></choice></attribute>
           <optional><attribute name="example"/></optional>
+          <!-- a surprise's layers: where it lived (tools/surprises.mjs) -->
+          <optional><attribute name="layer"><list><oneOrMore><choice><value>core</value><value>binding</value><value>docs</value></choice></oneOrMore></list></attribute></optional>
           <attribute name="status"><choice><value>open</value><value>resolved</value><value>for-maintainer</value></choice></attribute>
           <element name="what"><text/></element>
           <optional><element name="why"><text/></element></optional>
