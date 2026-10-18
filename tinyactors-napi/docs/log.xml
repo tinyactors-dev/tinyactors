@@ -1513,10 +1513,11 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <why>l-p4-examples-approval-xml-content: inline XML content reaches the application as its text on both datamodels (the coordinator's decision); the native half is built.</why>
     <evidence>tinyactors-core/src/datamodel_ecmascript/datamodel_ecmascript.c:316-363 (XML_PRELUDE, no toJSON), :2850 wire_write; test/effects.test.mjs (quickjs: TA_ERROR_INVALID)</evidence>
   </entry>
-  <entry id="l-core-release-libm" date="2026-10-18" step="p4-surprises" kind="issue" status="open">
+  <entry id="l-core-release-libm" date="2026-10-18" step="p4-surprises" kind="issue" status="resolved">
     <what>tinyactors-core: mise run build --release fails to link test_torture_loop ("undefined reference to ceil"); -lm seems missing.</what>
     <why>The release build must link before any release.</why>
     <evidence>The core follow-up agent, 2026-10-18.</evidence>
+    <resolution>Fixed in core's build: a test program can name libraries of its own (Program's libraries in tinyactors-core/mise/core.rb, linked after its layers', as a layer's -lm is), and test_torture_loop, which calls ceil in tools/torture/loop.c and links no layer, names -lm. The dev build linked only because the sanitizer runtime pulls in libm. mise run build --release links; check-portability and toolchain-test pass.</resolution>
   </entry>
   <entry id="l-p4-surprises-syntax-warnings" date="2026-10-18" step="p4-surprises" kind="deviation" status="resolved">
     <what>compileCharts reports a chart's ECMAScript syntax error as a warning, and as a CompileError only with {warningsAsErrors: true}, not a CompileError always as the brief said.</what>

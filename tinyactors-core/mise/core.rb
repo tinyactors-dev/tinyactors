@@ -154,8 +154,10 @@ module Core
   # has an exhaustive mode, which `mise run test --full` asks for with
   # `--full` (AGENTS.md, "Where a new test goes"). An `alone` one compares
   # timings, so it runs after the others, by itself (AGENTS.md, "Tests run in
-  # parallel").
-  Program = Struct.new(:name, :sources, :uses, :defines, :arguments, :cxx, :full, :alone, keyword_init: true)
+  # parallel"). `libraries` are what it links beyond its layers' (`-lm` for
+  # a program that calls the math library itself, as its layers' are).
+  Program = Struct.new(:name, :sources, :uses, :defines, :arguments, :cxx, :full, :alone, :libraries,
+                       keyword_init: true)
 
   def self.unit(name, *uses, defines: {}, full: false, alone: false)
     Program.new(name: name, sources: ["tests/unit/#{name}.c"], uses: uses, defines: defines, full: full, alone: alone)
@@ -214,9 +216,9 @@ module Core
     unit('test_remote', 'host', 'runtime', 'compile', *ECMASCRIPT),
     unit('test_otlp', 'otlp', 'system', 'compile', *ECMASCRIPT),
     unit('test_trace', 'trace'),
-    # The torture chamber's event loop.
+    # The torture chamber's event loop; it calls ceil, from the math library.
     Program.new(name: 'test_torture_loop', sources: %w[tests/unit/test_torture_loop.c tools/torture/loop.c], uses: [],
-                defines: {})
+                defines: {}, libraries: %w[-lm])
   ].freeze
 
   # Programs that are built but run by their own tasks.
@@ -335,7 +337,7 @@ module Core
     end
     order = link_order(program.uses)
     archives = order.map { |name| archive_path(variant_name, name).to_s }
-    libraries = order.flat_map { |name| LAYERS.fetch(name).libraries || [] }.uniq
+    libraries = (order.flat_map { |name| LAYERS.fetch(name).libraries || [] } + (program.libraries || [])).uniq
     link = [*objects, *archives, *libraries, *variant(variant_name)[:link]]
     target.program(link, into: program_path(variant_name, program.name).to_s)
   end
