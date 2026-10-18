@@ -187,7 +187,7 @@ static napi_value ta_napi_address_from(napi_env env, napi_callback_info info) {
 napi_status ta_napi_address_define(napi_env env, napi_value exports) {
     ta_napi_instance *instance = ta_napi_instance_of(env);
     if (instance == NULL) return napi_pending_exception;
-    napi_property_attributes getter = napi_default_jsproperty & ~napi_writable;
+    napi_property_attributes getter = napi_configurable; /* as a class's accessor: not enumerable */
     napi_property_descriptor properties[] = {
         {"system", NULL, NULL, ta_napi_address_part, NULL, NULL, getter, (void *)(uintptr_t)TA_NAPI_PART_SYSTEM},
         {"session", NULL, NULL, ta_napi_address_part, NULL, NULL, getter, (void *)(uintptr_t)TA_NAPI_PART_SESSION},

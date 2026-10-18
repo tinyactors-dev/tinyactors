@@ -1690,9 +1690,9 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
     napi_value dispose = ta_napi_well_known(env, "dispose"), async_dispose = ta_napi_well_known(env, "asyncDispose");
     napi_property_descriptor properties[] = {
         {"close", NULL, ta_napi_host_close, NULL, NULL, NULL, napi_default_method, NULL},
-        {"closed", NULL, NULL, ta_napi_host_closed, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
-        {"ticksPerSecond", NULL, NULL, ta_napi_host_ticks, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
-        {"nextDeadline", NULL, NULL, ta_napi_host_next_deadline, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
+        {"closed", NULL, NULL, ta_napi_host_closed, NULL, NULL, napi_configurable, NULL},
+        {"ticksPerSecond", NULL, NULL, ta_napi_host_ticks, NULL, NULL, napi_configurable, NULL},
+        {"nextDeadline", NULL, NULL, ta_napi_host_next_deadline, NULL, NULL, napi_configurable, NULL},
         {"now", NULL, ta_napi_host_now, NULL, NULL, NULL, napi_default_method, NULL},
         {"idle", NULL, ta_napi_host_idle, NULL, NULL, NULL, napi_default_method, NULL},
         {"addImage", NULL, ta_napi_host_add_image, NULL, NULL, NULL, napi_default_method, NULL},

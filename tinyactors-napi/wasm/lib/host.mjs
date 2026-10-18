@@ -1645,7 +1645,9 @@ export class Host {
     });
   }
 
-  send(...args) {
+  // send(target, event, data?, options?) or send(message): its length is 4
+  send(target, event, data, options) { // eslint-disable-line no-unused-vars
+    const args = [...arguments];
     const state = checked(this, true);
     return state.call(() => {
       let message;

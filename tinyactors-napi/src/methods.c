@@ -257,5 +257,10 @@ napi_status ta_napi_methods_define(napi_env env, napi_value host_class) {
     napi_value prototype;
     napi_status status = napi_get_named_property(env, host_class, "prototype", &prototype);
     if (status == napi_ok) status = napi_define_properties(env, prototype, TA_NAPI_METHODS, properties);
+    /* each takes (params, onResult, onError) */
+    ta_napi_arity arities[TA_NAPI_METHODS + 1];
+    for (size_t i = 0; i < TA_NAPI_METHODS; i++) arities[i] = (ta_napi_arity){ta_napi_methods[i].js, 3};
+    arities[TA_NAPI_METHODS] = (ta_napi_arity){NULL, 0};
+    if (status == napi_ok) status = ta_napi_arities(env, prototype, arities);
     return status;
 }

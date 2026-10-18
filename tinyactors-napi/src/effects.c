@@ -1634,7 +1634,7 @@ napi_status ta_napi_effects_define(napi_env env, napi_value exports) {
     ta_napi_instance *instance = ta_napi_instance_of(env);
     (void)exports;
     if (instance == NULL) return napi_pending_exception;
-    napi_property_attributes getter = napi_default_jsproperty & ~napi_writable;
+    napi_property_attributes getter = napi_configurable; /* as a class's accessor: not enumerable */
     napi_property_descriptor send[] = {
         {"session", NULL, NULL, ta_napi_view_get, NULL, NULL, getter, TA_NAPI_GETTER(TA_NAPI_KIND_SEND, TA_NAPI_SEND_SESSION)},
         {"event", NULL, NULL, ta_napi_view_get, NULL, NULL, getter, TA_NAPI_GETTER(TA_NAPI_KIND_SEND, TA_NAPI_SEND_EVENT)},
@@ -1680,6 +1680,9 @@ napi_status ta_napi_effects_define(napi_env env, napi_value exports) {
     napi_status status = napi_define_class(env, "Send", NAPI_AUTO_LENGTH, ta_napi_view_construct, NULL,
                                            sizeof send / sizeof send[0], send, &send_class);
     if (status == napi_ok) status = napi_create_reference(env, send_class, 1, &instance->send);
+    napi_value prototype;
+    if (status == napi_ok) status = napi_get_named_property(env, send_class, "prototype", &prototype);
+    if (status == napi_ok) status = ta_napi_arities(env, prototype, (const ta_napi_arity[]){{"answer", 3}, {NULL, 0}});
     if (status == napi_ok)
         status = napi_define_class(env, "LogEntry", NAPI_AUTO_LENGTH, ta_napi_view_construct, NULL,
                                    sizeof entry / sizeof entry[0], entry, &entry_class);
@@ -1695,6 +1698,9 @@ napi_status ta_napi_effects_define(napi_env env, napi_value exports) {
         status = napi_define_class(env, "Invocation", NAPI_AUTO_LENGTH, ta_napi_invocation_construct, NULL,
                                    sizeof invocation / sizeof invocation[0], invocation, &invocation_class);
     if (status == napi_ok) status = napi_create_reference(env, invocation_class, 1, &instance->invocation);
+    if (status == napi_ok) status = napi_get_named_property(env, invocation_class, "prototype", &prototype);
+    if (status == napi_ok)
+        status = ta_napi_arities(env, prototype, (const ta_napi_arity[]){{"sendBack", 3}, {"done", 2}, {NULL, 0}});
     if (status == napi_ok)
         status = napi_create_function(env, "crashed", NAPI_AUTO_LENGTH, ta_napi_service_crashed, NULL, &crashed);
     if (status == napi_ok) status = napi_create_reference(env, crashed, 1, &instance->crashed);

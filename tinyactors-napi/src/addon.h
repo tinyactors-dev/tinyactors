@@ -132,6 +132,21 @@ ta_allocator ta_napi_allocator(napi_env env);
 #define TA_NAPI_ARENA_UNCAPPED SIZE_MAX
 void ta_napi_arena_release(ta_growable_arena *arena, ta_growable_arena_mark mark, size_t cap);
 
+/* A function's name and length as index.d.ts declares them (the
+ * parameters before a rest one, the optional ones counted, as JavaScript
+ * counts them), which the wasm package's functions have as written:
+ * napi_define_class and napi_define_properties make every function with
+ * length 0, and a module-level one with an empty name. */
+typedef struct ta_napi_arity {
+    const char *name;
+    uint32_t length;
+} ta_napi_arity;
+
+/* Gives each function `object` holds under a name of `arities` (a table
+ * ending in {NULL, 0}) that name and its length, as a function's own are:
+ * not writable, not enumerable, configurable. */
+napi_status ta_napi_arities(napi_env env, napi_value object, const ta_napi_arity *arities);
+
 /* A refusal: the message and the status core names (ta_status_name). */
 typedef struct ta_napi_refusal {
     ta_status status;

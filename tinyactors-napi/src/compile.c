@@ -786,7 +786,7 @@ napi_status ta_napi_compile_define(napi_env env, napi_value exports) {
     if (status == napi_ok) status = napi_set_named_property(env, keys, "image", symbol);
     napi_value dispose = ta_napi_symbol(env, "dispose");
     napi_property_descriptor properties[] = {
-        {"image", NULL, NULL, ta_napi_compiled_image, NULL, NULL, napi_enumerable, NULL},
+        {"image", NULL, NULL, ta_napi_compiled_image, NULL, NULL, napi_configurable, NULL},
         {"close", NULL, ta_napi_compiled_close, NULL, NULL, NULL, napi_default_method, NULL},
         {NULL, dispose, ta_napi_compiled_close, NULL, NULL, NULL, napi_default_method, NULL},
     };

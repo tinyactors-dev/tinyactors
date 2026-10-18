@@ -41,6 +41,55 @@ void ta_napi_arena_release(ta_growable_arena *arena, ta_growable_arena_mark mark
         ta_growable_arena_free(arena); /* it may allocate again, as a new history */
 }
 
+/* ---- names and lengths ------------------------------------------------------ */
+
+napi_status ta_napi_arities(napi_env env, napi_value object, const ta_napi_arity *arities) {
+    for (const ta_napi_arity *arity = arities; arity->name != NULL; arity++) {
+        napi_value function = NULL, name = NULL, length = NULL;
+        napi_status status = napi_get_named_property(env, object, arity->name, &function);
+        if (status == napi_ok) status = napi_create_string_utf8(env, arity->name, NAPI_AUTO_LENGTH, &name);
+        if (status == napi_ok) status = napi_create_uint32(env, arity->length, &length);
+        napi_property_descriptor properties[] = {
+            {"name", NULL, NULL, NULL, NULL, name, napi_configurable, NULL},
+            {"length", NULL, NULL, NULL, NULL, length, napi_configurable, NULL},
+        };
+        if (status == napi_ok) status = napi_define_properties(env, function, 2, properties);
+        if (status != napi_ok) return status;
+    }
+    return napi_ok;
+}
+
+/* The arities of what the module exports, of the classes' static and
+ * prototype methods (the typed methods' are methods.c's), and of the
+ * views' (effects.c). */
+static const ta_napi_arity ta_napi_exported_arities[] = {
+    {"encode", 1},         {"decode", 1}, {"compileCharts", 3}, {"compileSystem", 3}, {"encodeHTTPPost", 1},
+    {"parseHTTPRequest", 1}, {"Host", 2},   {"Address", 1},       {NULL, 0},
+};
+static const ta_napi_arity ta_napi_host_static_arities[] = {{"restore", 3}, {NULL, 0}};
+static const ta_napi_arity ta_napi_host_arities[] = {
+    {"addImage", 1}, {"chart", 1},     {"boot", 1},  {"spawn", 2},     {"send", 4},  {"fail", 2},
+    {"sendMany", 1}, {"terminate", 1}, {"actorByName", 1}, {"sweep", 2}, {"hibernate", 1}, {"wake", 2},
+    {"migrate", 1},  {NULL, 0},
+};
+static const ta_napi_arity ta_napi_address_static_arities[] = {{"fromSession", 2}, {"fromName", 2}, {NULL, 0}};
+static const ta_napi_arity ta_napi_clock_arities[] = {{"increment", 1}, {NULL, 0}};
+
+static napi_status ta_napi_module_arities(napi_env env, napi_value exports) {
+    napi_value host, address, clock, prototype;
+    napi_status status = ta_napi_arities(env, exports, ta_napi_exported_arities);
+    if (status == napi_ok) status = napi_get_named_property(env, exports, "Host", &host);
+    if (status == napi_ok) status = ta_napi_arities(env, host, ta_napi_host_static_arities);
+    if (status == napi_ok) status = napi_get_named_property(env, host, "prototype", &prototype);
+    if (status == napi_ok) status = ta_napi_arities(env, prototype, ta_napi_host_arities);
+    if (status == napi_ok) status = napi_get_named_property(env, exports, "Address", &address);
+    if (status == napi_ok) status = ta_napi_arities(env, address, ta_napi_address_static_arities);
+    if (status == napi_ok) status = napi_get_named_property(env, exports, "SimulatedClock", &clock);
+    if (status == napi_ok) status = napi_get_named_property(env, clock, "prototype", &prototype);
+    if (status == napi_ok) status = ta_napi_arities(env, prototype, ta_napi_clock_arities);
+    return status;
+}
+
 /* ---- TinyactorsError ------------------------------------------------------ */
 
 /* The class index.d.ts declares, an Error subclass with read-only `code`,
@@ -214,7 +263,8 @@ static napi_value ta_napi_module_init(napi_env env, napi_value exports) {
     if (napi_define_properties(env, exports, sizeof properties / sizeof properties[0], properties) != napi_ok ||
         ta_napi_host_define(env, exports) != napi_ok || ta_napi_loop_define(env, exports) != napi_ok ||
         ta_napi_compile_define(env, exports) != napi_ok || ta_napi_address_define(env, exports) != napi_ok ||
-        ta_napi_effects_define(env, exports) != napi_ok || ta_napi_http_define(env, exports) != napi_ok)
+        ta_napi_effects_define(env, exports) != napi_ok || ta_napi_http_define(env, exports) != napi_ok ||
+        ta_napi_module_arities(env, exports) != napi_ok)
         return NULL;
     return exports;
 }

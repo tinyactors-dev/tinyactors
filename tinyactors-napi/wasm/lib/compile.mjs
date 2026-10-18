@@ -92,7 +92,6 @@ export class Compiled {
     this.close();
   }
 }
-Object.defineProperty(Compiled.prototype, 'image', { enumerable: true });
 
 // One diagnostic as a frozen object; its record's words (compile.c).
 function diagnosticAt(module, result, i) {
@@ -368,12 +367,13 @@ function compileWith(manifest, [given, resolver, options], usage) {
   }
 }
 
-export function compileCharts(...args) {
-  return compileWith(false, args, 'compileCharts(sources, resolver?, options?): sources an array of {name, text} of strings');
+// each takes (sources or manifest, resolver?, options?): their lengths are 3
+export function compileCharts(sources, resolver, options) { // eslint-disable-line no-unused-vars
+  return compileWith(false, [...arguments], 'compileCharts(sources, resolver?, options?): sources an array of {name, text} of strings');
 }
 
-export function compileSystem(...args) {
-  return compileWith(true, args, 'compileSystem(manifest, resolver?, options?): the manifest a {name, text} of strings');
+export function compileSystem(manifest, resolver, options) { // eslint-disable-line no-unused-vars
+  return compileWith(true, [...arguments], 'compileSystem(manifest, resolver?, options?): the manifest a {name, text} of strings');
 }
 
 export { TinyactorsError };

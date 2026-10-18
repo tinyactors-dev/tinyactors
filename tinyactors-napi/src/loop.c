@@ -777,7 +777,7 @@ napi_status ta_napi_loop_define(napi_env env, napi_value exports) {
     if (status == napi_ok) status = napi_set_named_property(env, keys, "clock", symbol);
     napi_property_descriptor properties[] = {
         {"increment", NULL, ta_napi_clock_increment, NULL, NULL, NULL, napi_default_method, NULL},
-        {"now", NULL, NULL, ta_napi_clock_milliseconds, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
+        {"now", NULL, NULL, ta_napi_clock_milliseconds, NULL, NULL, napi_configurable, NULL},
     };
     if (status == napi_ok)
         status = napi_define_class(env, "SimulatedClock", NAPI_AUTO_LENGTH, ta_napi_clock_new, NULL,
