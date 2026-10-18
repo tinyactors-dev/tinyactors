@@ -70,9 +70,13 @@ key per region.
 A method without params is called with none: `await
 host.hostStatsAsync()`. The host checks the params: one the method does
 not take, of the wrong type or out of range is an error, as is a session
-that names no actor (it ended, or never was). Sessions in a result are
-numbers, and the inputs take them back as they are
-(`host.send(result.sessions[0], ...)`).
+that names no actor (it ended, or never was). **Sessions in a result are
+numbers**, while `spawn`, `actorByName` and the views give `bigint`s, so
+`result.sessions.includes(session)` is false for a `bigint` session and
+a `Map` keyed by one misses the other: compare with `Number(session) ===
+listed`, or key by `String(session)`
+([README](../../README.md#actors-sessions-and-addresses)). The inputs take
+either back as it is (`host.send(result.sessions[0], ...)`).
 
 Each method's params and result are typed in the package's `index.d.ts`
 (`SessionParams`, `ActorStateResult`, `ActorListResult`,
@@ -255,3 +259,62 @@ host.close();
 job: 3 spawned, 1 ended, 2 running, 1 execution error
 1 segment, 2 actors in its pool
 ```
+
+## Two actors that never rest
+
+Actors that answer each other for ever keep the host busy: each turn
+runs them, `await host.idle()` never resolves, and nothing is logged or
+thrown, since every step is legal. The usual cause is SCXML's prefix
+match ([README](../../README.md#charts)): a transition on `join` also
+takes the answer `join.refused`, and asks again. The counters show it.
+Between two readings while you gave no input, a loop's charts gain
+`macrosteps` and `fuel` without end, `host.delivered` grows, and
+`host.runnable` stays above zero; a host that is only slow drains its
+queue instead.
+
+```js
+import { Host } from '@tinyactors/node';
+
+const host = new Host({ systemID: 'chat' });
+host.addCharts({
+  'user.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="user">
+    <state id="s">
+      <onentry><send event="join" target="tinyactors://chat/@room"/></onentry>
+      <transition event="join"><send event="join" target="tinyactors://chat/@room"/></transition>
+    </state>
+  </scxml>`,
+  'room.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="room">
+    <state id="s"><transition event="join"><send event="join.refused" targetexpr="_event.origin"/></transition></state>
+  </scxml>`,
+});
+host.spawnChart('room', { name: 'room' });
+const user = host.spawnChart('user');
+
+/** The charts whose actors kept working for `ms` with no input given. */
+async function busy(host, ms) {
+  const before = await host.hostStatsAsync();
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  const after = await host.hostStatsAsync();
+  if (after.host.runnable === 0) return [];
+  return after.charts
+    .filter((chart) => chart.macrosteps - (before.charts.find((c) => c.name === chart.name)?.macrosteps ?? 0) > 1000)
+    .map((chart) => chart.name)
+    .sort();
+}
+
+console.log('busy:', (await busy(host, 200)).join(', '));
+host.terminate(user); // in production: alert, and fix the chart
+await host.idle();
+console.log('idle again; busy:', (await busy(host, 50)).length);
+host.close();
+```
+
+```output
+busy: room, user
+idle again; busy: 0
+```
+
+A watchdog that runs this on a timer, and alerts when a chart stays busy
+over several readings, finds such a loop. The fix is in the chart: name
+the answer so that it does not extend the request (`refused.join`), or
+make the `join` transition's `cond` refuse what is not a request.

@@ -32,7 +32,7 @@ const compiled = compileCharts([{ name: 'uploaded.scxml', text: `
 
 const host = new Host({ systemID: 'sandbox' }, {
   datamodel: 'quickjs',
-  quickjs: { maxOps: 10_000, memoryLimit: 16 * 1024 * 1024 },
+  quickjs: { maxOps: 1000, memoryLimit: 16 * 1024 * 1024 },
   log: (host, entry) => console.log(entry.text),
 });
 host.addImage(compiled.image);
@@ -68,12 +68,29 @@ datamodel it is a `TypeError`):
 | `stackLimit` | the engine's | bytes of native stack for JavaScript |
 | `realm` | `'auto'` | `'isolated'` gives every actor a context of its own (below) |
 
-Set both `maxOps` and `memoryLimit` for untrusted charts. The default
-`maxOps` lets a `while (true) {}` run for tens of seconds before it is
-stopped, and it does not bound memory: a loop that allocates can take
-gigabytes in fewer checks. The values above stop both within
-milliseconds; a chart that does real work in its scripts needs a larger
-`maxOps`.
+Set both `maxOps` and `memoryLimit` for untrusted charts. `maxOps` is
+not time: it counts the engine's interrupt checks, one for every 10,000
+jumps and calls QuickJS counts down, and how long a check takes depends
+on the code between them. The time a looping evaluation holds
+the host (and every host of the thread, since they share it), measured
+on x86_64 Linux, Intel Xeon @ 2.10GHz, node 22 and bun 1.4.1 alike
+(2026-10-18):
+
+| Loop | `maxOps: 200` | `1000` | `10_000` | the default, 1,000,000 |
+|---|---|---|---|---|
+| `while (true) {}` | 6 ms | 27 to 39 ms | 260 ms | 26 s |
+| `while (_event.data.value !== null) {}` | 50 ms | 240 to 250 ms | 2.5 to 2.7 s | about 256 s |
+
+So a check costs 26 to 250 microseconds here, and the default lets one
+runaway evaluation stop the process's hosts for minutes. Choose `maxOps`
+by the longest stall your other actors can take: a few hundred (5 to 50
+ms) for a service that answers requests, 1000 (about 25 to 250 ms) for
+background work, and measure your own charts' real work against it,
+since an evaluation that needs more checks than `maxOps` fails every
+time. `maxOps` does not bound memory: a loop that allocates can take
+gigabytes in fewer checks, which `memoryLimit` stops. An evaluation
+stopped by `maxOps` gets `error.execution` with `_event.data.reason`
+`'fuel'`, one stopped by `memoryLimit` `'memory'`.
 
 ## Realms
 

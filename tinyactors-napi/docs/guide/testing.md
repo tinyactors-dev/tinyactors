@@ -150,6 +150,54 @@ tick 3 at 5500
 tick 4 at 6500
 ```
 
+**An input runs at the next turn's time.** `host.send` puts the event in
+the queue at once, but the actor handles it in the host's next turn, at
+the clock's time then, and `host.nextDeadline` still reads the last idle
+turn's. So an input followed by an `increment` in the same tick is
+handled after the clock moved, and a delay it starts counts from the new
+time. Await `idle()` between the two when the input belongs before the
+step:
+
+```js
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'hold.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="hold" initial="s">
+  <state id="s">
+    <transition event="reserve"><log expr="'reserved'"/><send event="expire" delay="60s"/></transition>
+    <transition event="expire"><log expr="'expired'"/></transition>
+  </state>
+</scxml>` }]);
+const clock = new SimulatedClock();
+const host = new Host({ systemID: 'test' }, { clock, log: (host, entry) => console.log(entry.text, 'at', clock.now) });
+host.addImage(compiled.image);
+compiled.close();
+const actor = host.spawn(host.chart('hold'));
+await host.idle();
+
+host.send(actor, 'reserve');
+console.log('nextDeadline right after the input:', host.nextDeadline);
+clock.increment(59_000);          // the input runs now, at 59000: the hold is due at 119000
+await host.idle();
+
+host.send(actor, 'reserve');
+await host.idle();                // the input runs at 59000, before the step
+clock.increment(60_000);
+await host.idle();
+host.close();
+```
+
+```output
+nextDeadline right after the input: undefined
+reserved at 59000
+reserved at 59000
+expired at 119000
+expired at 119000
+```
+
+Both holds came due at 119000, though the first was given at 0.
+
 ## Waiting for something to happen
 
 `await host.idle()` waits until the host has nothing to do now and no

@@ -80,7 +80,10 @@ host), and the handlers `new Host` takes. The host's handlers are not in
 the snapshot either: give the restored host its own.
 
 - **A snapshot is valid only for the same build of the package.** It
-  holds raw memory, so it is not a backup: durability is your database's
+  holds raw memory, with a version of its layout: a snapshot of a build
+  whose layout differs is refused by `Host.restore` with
+  `TA_ERROR_INVALID`, and you take a new one with the new build. It is
+  not a backup: durability is your database's
   job, and [hibernation](hibernation.md) is how a running process keeps
   actors out of memory. A snapshot is a copy of the whole application,
   every chart version at once.

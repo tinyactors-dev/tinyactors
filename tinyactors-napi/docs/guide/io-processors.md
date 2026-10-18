@@ -67,7 +67,7 @@ The handler's second argument describes one `<send>`:
 | `session` | the sender's session, a `bigint` |
 | `event` | the event's name (`<send event>`) |
 | `target` | `<send target>` as a string, `undefined` when it has none |
-| `sendid` | `<send id>`, or the id the host generated; `undefined` when it has none |
+| `sendid` | `<send id>`, or the id the host generated; `undefined` when it has none. A generated id is unique in the sender's session only (each session's first is `send.1`), so key what you keep by both: `` `${send.session}:${send.sendid}` `` |
 | `data` | the `<param>`s as an object, or the `<content>`'s value |
 | `type` | the processor's type |
 | `origin` | the sender's address, an `Address` |
@@ -158,6 +158,66 @@ delivered after 20 ms
 returned: it resolves once the answer ran. A promise the handler starts
 and does not return is not waited for. The pending `timeout` keeps the
 process alive until `host.close()`.
+
+## When the sender ends
+
+An actor that reaches a top-level `<final>` ends at once, and the events
+still in its queue are dropped (SCXML ends the session there). So a
+request your program sent with `host.send`, and holds a promise for, is
+lost when an event before it ends the actor: no handler is called, and
+`host.send` had already returned. Let the chart tell you first: its
+`<final>`'s `<onentry>` sends to your I/O processor, and the handler
+settles everything it still holds for that session.
+
+```js
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'login.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="login" initial="in">
+  <state id="in">
+    <transition event="request"><send type="urn:example:http" event="response"><content expr="'200 ' + _event.data"/></send></transition>
+    <transition event="logout" target="out"/>
+  </state>
+  <final id="out"><onentry><send type="urn:example:http" event="closed"/></onentry></final>
+</scxml>` }]);
+
+const pending = new Map(); // String(session) -> the resolvers of its requests, in order
+const host = new Host({ systemID: 'web', ioProcessors: [{ type: 'urn:example:http' }] }, {
+  ioProcessors: {
+    'urn:example:http': (host, send) => {
+      const waiting = pending.get(String(send.session)) ?? [];
+      if (send.event === 'response') waiting.shift()?.(send.data);
+      if (send.event === 'closed') {
+        for (const resolve of waiting.splice(0)) resolve('401 logged out');
+        pending.delete(String(send.session));
+      }
+    },
+  },
+});
+host.addImage(compiled.image);
+compiled.close();
+
+/** Sends `path` to the session's actor; resolves with its answer. */
+const request = (session, path) => new Promise((resolve) => {
+  const key = String(session);
+  pending.set(key, [...(pending.get(key) ?? []), resolve]);
+  host.send(session, 'request', path);
+});
+
+const session = host.spawn(host.chart('login'));
+const first = request(session, '/home');
+host.send(session, 'logout');
+const second = request(session, '/account'); // queued behind the logout: dropped
+console.log(await first);
+console.log(await second);
+host.close();
+```
+
+```output
+200 /home
+401 logged out
+```
 
 ## When a handler fails
 

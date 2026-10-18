@@ -173,7 +173,7 @@ computes it:
 | `event`, `eventexpr` | the event's name | required |
 | `target`, `targetexpr` | where it goes: an address, `#_scxml_<session>`, `#_parent`, `#_<invokeid>`, `#_internal` | the actor itself, at the back of its queue |
 | `type`, `typeexpr` | the I/O processor ([I/O processors](io-processors.md)) | SCXML's own, between actors |
-| `id`, `idlocation` | the send's id, for `<cancel>` and the answer's `_event.sendid`; `idlocation` names a declared `<data>` that gets a generated id | none |
+| `id`, `idlocation` | the send's id, for `<cancel>` and the answer's `_event.sendid`; `idlocation` names a declared `<data>` that gets a generated id, unique in the actor's session only (every session's first is `send.1`) | none |
 | `delay`, `delayexpr` | when: `500ms`, `1.5s`, `30s` | now |
 | `namelist` | variables whose names and values become the data | none |
 
@@ -475,6 +475,57 @@ the worker answered 42
 A parent sends to its child with `target="#_worker"` (`#_` and the
 invoke's id). `<invoke>` of a type other than SCXML is a service your
 program runs: [Invoked services](services.md).
+
+**The child exists from the end of the macrostep that entered its
+state**, as SCXML starts invocations then. Until that point a send to
+`#_worker` gets `error.communication`: from the state's own `<onentry>`,
+and from anything else in the same macrostep, such as a `<raise>`d
+event's transition, an eventless transition, or a history state that
+re-enters several states at once. Send from a later event: the child's
+first message to its parent (`ready` below) is the usual signal, and
+what the child must know at its start goes in as a `<param>`, which is
+evaluated when it starts.
+
+```js
+import { compileCharts, Host } from '@tinyactors/node';
+
+const parent = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="parent" initial="running">
+  <state id="running">
+    <onentry>
+      <send event="hello" target="#_kid"/>
+      <raise event="soon"/>
+    </onentry>
+    <invoke id="kid" src="kid.scxml"/>
+    <transition event="soon"><send event="hello" target="#_kid"/></transition>
+    <transition event="error.communication"><log expr="'no child yet: error.communication'"/></transition>
+    <transition event="ready"><send event="hello" target="#_kid"/></transition>
+  </state>
+</scxml>`;
+const kid = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="kid" initial="s">
+  <state id="s">
+    <onentry><send event="ready" target="#_parent"/></onentry>
+    <transition event="hello"><log expr="'the child got hello'"/></transition>
+  </state>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'parent.scxml', text: parent }, { name: 'kid.scxml', text: kid }]);
+const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
+host.addImage(compiled.image);
+compiled.close();
+host.spawn(host.chart('parent'));
+await host.idle();
+host.close();
+```
+
+```output
+no child yet: error.communication
+no child yet: error.communication
+the child got hello
+```
 
 ## A system that starts its own actors
 

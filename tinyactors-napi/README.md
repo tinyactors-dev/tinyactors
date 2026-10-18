@@ -180,6 +180,14 @@ An event's name is matched by prefix, word by word: `event="error"` and
 `event="a b"` matches either name; `event="*"` matches any event. An
 event no transition matches is dropped.
 
+The prefix rule also matches an answer whose name starts with the
+request's: `event="join"` takes `join.refused` too. A chart that asks a
+peer again on `join`, and a peer that answers with `join.refused`, then
+answer each other for ever, and `await host.idle()` never resolves. Name
+an answer so that it does not extend the request (`refused.join`), and
+see [Inspecting a host](docs/guide/inspection.md#two-actors-that-never-rest)
+for how such a loop shows in the host's counters.
+
 [Writing charts](docs/guide/charts.md) covers the JavaScript a chart may
 hold, `<script>`, XML data, several charts in one image (and
 `host.addCharts`, `host.spawnChart` and `directoryResolver`, which save
@@ -235,8 +243,9 @@ every actor that has an event, calls your handlers with what the actors
 sent out, and runs again until nothing is left. A turn does a bounded
 amount of work and then yields, so a busy host never starves your I/O.
 
-`await host.idle()` resolves at the next turn that finds nothing to do.
-It is for tests, scripts and an orderly shutdown; a server never needs to
+`await host.idle()` resolves at the next turn that finds nothing to do
+while no promise one of your handlers returned is pending (a promise a
+handler starts and does not return is not waited for). It is for tests, scripts and an orderly shutdown; a server never needs to
 call it. A handler may call the host (send an event, spawn an actor): the
 input applies at once, and the actors run in the same or a later turn.
 
@@ -247,9 +256,11 @@ statistics.
 
 A host also keeps time. A delayed `<send>` or a timeout is a deadline,
 and an idle host arms one `setTimeout` for its next one. That timer keeps
-the process alive while the host is open, as any `setTimeout` does.
-`host.close()` clears it, frees the host, and drops every handler that was
-still waiting.
+the process alive while the host is open, as any `setTimeout` does, and
+it is the only thing the host keeps the process alive with: an open host
+with no deadline lets the process exit, even with actors that wait for an
+answer (below, "Before you use it"). `host.close()` clears the timer,
+frees the host, and drops every handler that was still waiting.
 
 ### Actors, sessions and addresses
 
@@ -264,10 +275,42 @@ yourself), while the results of the typed methods
 compare with `Number(session) === listed`, never `===` across the two;
 either kind may be passed back to an input.
 
+```js
+import { Host } from '@tinyactors/node';
+
+const host = new Host({ systemID: 'demo' });
+host.addCharts({ 'idle.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+    datamodel="ecmascript" name="idle"><state id="s"/></scxml>` });
+const session = host.spawnChart('idle', { name: 'first' });
+const { sessions } = await host.actorListAsync();
+console.log(typeof session, typeof sessions[0]);
+console.log(sessions.includes(Number(session)), sessions.map(BigInt).includes(session));
+const byKey = new Map([[String(session), 'kept under its text']]);
+console.log(byKey.get(String(sessions[0])), host.actorByName('first') === session);
+host.close();
+```
+
+```output
+bigint number
+true true
+kept under its text true
+```
+
+`sessions.includes(session)` would be `false` (TypeScript refuses it),
+and a `Map` keyed by the `bigint` misses the number: key it by
+`String(session)`, which is the same for both kinds.
+
 An actor may also have a **name**, given at spawn, and
 `host.actorByName(name)` finds it. An actor that reaches a `<final>`
 state, or is terminated, ends: its session is refused from then on with
-`TA_ERROR_STALE`, and its name finds nothing.
+`TA_ERROR_STALE`, and its name finds nothing. The events still in its
+queue when it ends are dropped, as SCXML ends a session at its top-level
+`<final>`: a `host.send` that returned before the end is never handled,
+and nothing tells the application. A chart whose events stand for
+requests your program holds (an HTTP response, a promise) tells your
+program from its `<final>` first:
+[I/O processors](docs/guide/io-processors.md#when-the-sender-ends) has the
+pattern.
 
 Actors find each other by **address**. Every system has its `systemID`,
 and an actor's address is `tinyactors://<systemID>/#_scxml_<session>`, or
@@ -384,6 +427,10 @@ console.log(value.sku, value.qty, value.big, 'gone' in value, value.gone);
 tea 2 1152921504606846976n true undefined
 ```
 
+`encode` also writes an `Address` (from "Actors, sessions and
+addresses"), as CBOR's tag 32, and `decode` reads one back as an
+`Address`: that is how a transport's message keeps its addresses
+([Other systems](docs/guide/other-systems.md)).
 [docs/values.md](docs/values.md) has every row of the table and every
 refusal.
 
@@ -395,7 +442,12 @@ counts the host's clock ticks, and `traceWatch` takes `seconds`. In a
 chart, `<send event="timeout" delay="30s"/>` sends an event to the actor
 itself 30 seconds later, and `<cancel sendid>` takes it back. A delay is
 written in seconds or milliseconds (`30s`, `1.5s`, `500ms`), and any
-other form (`10`, `1m`) is a compile error; `delayexpr` computes one. By default the host reads the runtime's
+other form (`10`, `1m`) is a compile error. `delayexpr` computes one, and
+must give such a string: `delayexpr="timeoutMs + 'ms'"`, not
+`delayexpr="timeoutMs"`. A number, or a string without its unit, raises
+`error.execution` with no `_event.data` (the delay is the host's check,
+not code that threw, so there is no reason to give), and nothing is sent.
+By default the host reads the runtime's
 clock. A test gives it a `SimulatedClock` instead, which moves only when
 you move it, so a test of a 30-second timeout takes no time:
 
@@ -432,12 +484,25 @@ next deadline in 30000 ms
 closed at 30000
 ```
 
-`clock.increment(ms)` moves the clock and schedules a turn on every host
+`host.now()` reads the host's clock in milliseconds (the simulated
+clock's time, or the runtime's), the clock its deadlines and snapshots
+use. `clock.increment(ms)` moves the clock and schedules a turn on every host
 made with it; `await host.idle()` then sees what ran. One increment past
 several deadlines does not replay each of them: what is due runs once, at
 the new time, and a delay it starts counts from there. Step the clock one
-deadline at a time to see each. A host on a `SimulatedClock` arms no
-timer. [Testing your charts](docs/guide/testing.md)
+deadline at a time to see each. An input runs at the host's next turn, so
+one given just before an `increment` is handled at the new time: `await
+host.idle()` between them when it should run first. A host on a
+`SimulatedClock` arms no timer.
+
+On the runtime's clock a delay counts from the step that armed it, which
+runs a little after its timer fired (the timer's and the turn's latency).
+So a chart that re-arms `<send event="tick" delay="20ms"/>` at each tick
+falls behind by that latency every tick: 24 ms after 40 ticks alone, 136
+ms beside a CPU-bound job, in the repository's job-scheduler example. A
+chart cannot read the host's clock, so a job that must keep its cadence
+is given its schedule as absolute times by your program, and asks your
+program for the time (an I/O processor) before it arms each delay. [Testing your charts](docs/guide/testing.md)
 has more.
 
 ### Errors
@@ -508,10 +573,14 @@ TA_ERROR_INVALID - the host has no chart of that name
   not trust on quickjs, the sandbox: `new Host(config, { datamodel:
   'quickjs', quickjs: { maxOps, memoryLimit } })`
   ([the quickjs sandbox](docs/guide/quickjs.md)).
-- **An open host with a pending deadline keeps the process alive** (a
-  delayed `<send>`, a timeout): the host arms one timer at its next
-  deadline, as `setTimeout` does. `host.close()` clears it, and the process
-  can exit.
+- **An open host with a pending deadline keeps the process alive, and
+  only then** (a delayed `<send>`, a timeout, the telemetry flush): the host arms one
+  timer at its next deadline, as `setTimeout` does, and `host.close()`
+  clears it. Nothing else holds the event loop: an open host with no
+  deadline lets the process exit, its actors still waiting, and so does an
+  actor that waits for an answer from a handler whose promise has no I/O
+  behind it. Give a chart that waits for an answer a timeout of its own,
+  and keep the process alive with your server, socket or timer.
 - **A handler's error ends the process by default.** An error thrown by
   a handler (an I/O processor's, the log handler, the result handler of
   a typed method, one of the host's queries in

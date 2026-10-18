@@ -15,7 +15,8 @@ are of the new version, and the running ones stay on theirs.
 
 `host.migrate()` moves the running actors to the newest version of their
 chart, during the next turns. A moved actor keeps its session, its active
-states (matched by id), its queue and its delayed sends with their data.
+states (matched by id; [below](#states-the-new-version-enters) for those
+that changed), its queue and its delayed sends with their data.
 Its variables do not carry over by themselves, since the new version may
 name them differently: the actor first gets the event
 `error.platform.upgrade`, whose data holds the old version's variables,
@@ -89,6 +90,87 @@ v2 counts 12
 Once no actor runs on an old segment, the host retires it and frees its
 memory; `host.hostStats` counts the retired segments
 ([Inspecting a host](inspection.md)).
+
+## States the new version enters
+
+A migration puts the actor in the new version's states without running
+any of their `<onentry>`, as it takes it out of the old ones without
+their `<onexit>`: it is not a transition. The states are matched by id,
+and the configuration is completed to a legal one:
+
+- a state that is compound in the new version, and had no children in
+  the old, is entered at its `initial` child (or its first);
+- a state the new version does not have at all is replaced by its
+  parent's initial state (the chart's `initial` at the top);
+- a `<parallel>` gets all its regions, and an `<invoke>` of a state the
+  migration enters is started.
+
+So what an `<onentry>` would have done (arm a timer, tell your program)
+is the `error.platform.upgrade` transition's job, with `In()` to see
+where the actor landed:
+
+```js
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const image = (name, text) => {
+  const compiled = compileCharts([{ name, text }]);
+  const bytes = compiled.image;
+  compiled.close();
+  return bytes;
+};
+
+const v1 = image('sub-v1.scxml', `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="subscription" initial="active">
+  <state id="active"><transition event="miss" target="pastDue"/><transition event="pause" target="paused"/></state>
+  <state id="pastDue"/>
+  <state id="paused"/>
+</scxml>`);
+
+// Version 2: pastDue starts a grace period, and paused is gone.
+const v2 = image('sub-v2.scxml', `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="subscription" initial="active">
+  <state id="active">
+    <transition event="error.platform.upgrade"><log expr="_sessionid + ' upgraded into active'"/></transition>
+  </state>
+  <state id="pastDue" initial="grace">
+    <transition event="error.platform.upgrade" cond="In('grace')">
+      <log expr="_sessionid + ' upgraded into grace: arming its timer'"/>
+      <send event="graceOver" delay="7s"/>
+    </transition>
+    <state id="grace">
+      <onentry><log expr="'grace onentry'"/><send event="graceOver" delay="7s"/></onentry>
+    </state>
+  </state>
+</scxml>`);
+
+const host = new Host({ systemID: 'demo' }, { clock: new SimulatedClock(), log: (host, entry) => console.log(entry.text) });
+host.addImage(v1);
+const late = host.spawn(host.chart('subscription'));
+const paused = host.spawn(host.chart('subscription'));
+host.send(late, 'miss');
+host.send(paused, 'pause');
+await host.idle();
+
+host.addImage(v2);
+host.migrate();
+await host.idle();
+for (const session of [late, paused]) console.log(session, JSON.stringify((await host.actorStateAsync({ session })).value));
+console.log('next deadline', host.nextDeadline);
+host.close();
+```
+
+```output
+1 upgraded into grace: arming its timer
+2 upgraded into active
+1n {"pastDue":"grace"}
+2n "active"
+next deadline 7000
+```
+
+`grace onentry` is never logged: without the upgrade transition's
+`<send>`, actor 1 would wait in `grace` for ever.
 
 ## The calls
 

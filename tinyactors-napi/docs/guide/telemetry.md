@@ -107,6 +107,39 @@ The host's clock runs at `system.ticksPerSecond`, a billion by default
 config sets the rate. Most programs that export set `ticksPerSecond:
 1000` and give the interval in milliseconds.
 
+A pending flush is one of the host's deadlines: once records are staged,
+`host.nextDeadline` reads the time to the flush even when no actor has a
+delayed send left, the host's timer is armed for it (keeping the process
+alive until then), and a test that asserts "no timer is left" first steps
+its clock past the flush:
+
+```js
+import { Host, SimulatedClock } from '@tinyactors/node';
+
+const clock = new SimulatedClock();
+const host = new Host({ systemID: 'shop', system: { ticksPerSecond: 1000 }, telemetry: { flushInterval: 1000 } }, {
+  clock,
+  telemetry: (host, signal) => console.log(signal, 'at', clock.now),
+});
+host.addCharts({ 'job.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="job">
+  <final id="done"/>
+</scxml>` });
+host.spawnChart('job');
+await host.idle();
+console.log('the job ended; nextDeadline', host.nextDeadline);
+clock.increment(host.nextDeadline ?? 0);
+await host.idle();
+console.log('flushed; nextDeadline', host.nextDeadline);
+host.close();
+```
+
+```output
+the job ended; nextDeadline 1000
+traces at 1000
+logs at 1000
+flushed; nextDeadline undefined
+```
+
 ## Trace context
 
 The host carries W3C trace context through every step. An input may name

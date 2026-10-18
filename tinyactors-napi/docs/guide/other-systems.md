@@ -99,6 +99,88 @@ on the host named `shop`) is resolved by the host to its actor. A message's
 `origin` is the sender's address as the other side gave it, and becomes
 the event's `_event.origin`.
 
+## Over a socket
+
+Across processes, a transport writes each message as a frame on a
+connection. Over TCP, call `socket.setNoDelay(true)` on both ends: the
+frames are small, and an answer is often a frame too, so with Nagle's
+algorithm on (Node.js's default) a second small write waits for the
+peer's delayed acknowledgement, about 40 ms on Linux's loopback, before
+it leaves. (Python's asyncio turns it off by itself.) Here each frame is
+four bytes of length and the message's CBOR:
+
+```js
+import { connect, createServer } from 'node:net';
+import { decode, encode, Host } from '@tinyactors/node';
+
+/** Calls `receive` with each message the frames on `socket` hold. */
+function frames(socket, receive) {
+  let buffered = Buffer.alloc(0);
+  socket.on('data', (chunk) => {
+    buffered = Buffer.concat([buffered, chunk]);
+    while (buffered.length >= 4 && buffered.length >= 4 + buffered.readUInt32BE(0)) {
+      const length = buffered.readUInt32BE(0);
+      receive(decode(buffered.subarray(4, 4 + length)));
+      buffered = buffered.subarray(4 + length);
+    }
+  });
+}
+const frame = (message) => {
+  const body = encode(message);
+  const head = Buffer.alloc(4);
+  head.writeUInt32BE(body.length);
+  return Buffer.concat([head, body]);
+};
+
+let toBank;
+let toShop;
+const log = (host, entry) => console.log(entry.text);
+const shop = new Host({ systemID: 'shop' }, { log, transport: (host, send) => toBank.write(frame(send.message)) });
+const bank = new Host({ systemID: 'bank' }, { log, transport: (host, send) => toShop.write(frame(send.message)) });
+shop.addCharts({ 'checkout.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="checkout">
+  <state id="paying">
+    <onentry><send event="charge" target="tinyactors://bank/@teller"/></onentry>
+    <transition event="approved" target="done"><log expr="'approved'"/></transition>
+  </state>
+  <final id="done"/>
+</scxml>` });
+bank.addCharts({ 'teller.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="teller">
+  <state id="s"><transition event="charge"><log expr="'charging ' + _event.origin"/><send event="approved" targetexpr="_event.origin"/></transition></state>
+</scxml>` });
+
+// The bank listens on a port of the system's choosing; the shop connects.
+const server = createServer((socket) => {
+  socket.setNoDelay(true);
+  toShop = socket;
+  frames(socket, (message) => bank.send(message));
+});
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+toBank = connect(server.address().port, '127.0.0.1');
+toBank.setNoDelay(true);
+frames(toBank, (message) => shop.send(message));
+await new Promise((resolve) => toBank.once('connect', resolve));
+await new Promise((resolve) => setImmediate(resolve)); // the server's side of the connection
+
+bank.spawnChart('teller', { name: 'teller' });
+const order = shop.spawnChart('checkout', { name: 'order' });
+while (shop.actorByName('order') !== undefined) await new Promise((resolve) => setTimeout(resolve, 5));
+console.log('order', order, 'ended');
+toBank.end();
+server.close();
+shop.close();
+bank.close();
+```
+
+```output
+charging tinyactors://shop/#_scxml_1
+approved
+order 1n ended
+```
+
+A frame that cannot be written, or a peer that is gone, is the transport's
+to report: `send.fail()` while its handler runs, `host.fail(origin,
+sendid)` after.
+
 ## Addresses
 
 `new Address(text)` reads an address; its `system`, `session` (a

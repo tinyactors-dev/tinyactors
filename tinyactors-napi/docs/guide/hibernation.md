@@ -96,7 +96,9 @@ of it but which hibernation it was. A wake takes the session's latest blob
 only: a blob of an earlier hibernation, which a store that fell behind
 hands back (an overwrite that failed, a replica, a cache), throws
 `TA_ERROR_STALE` and the actor stays hibernated, so no state is lost
-without an error.
+without an error. On a host [restored](snapshots.md) from a snapshot, a
+blob of a hibernation made after the snapshot was taken is accepted too,
+so a store that keeps one blob per session goes on working there.
 
 On the native datamodel the variables are written as values of the
 value table ([README](../../README.md#values)): numbers, `bigint`s,
@@ -117,12 +119,27 @@ the actor when it falls due.
 
 ## When an actor cannot hibernate
 
-`hibernate` throws a `TinyactorsError` and the actor stays in memory:
+`hibernate` throws a `TinyactorsError` and the actor stays where it is:
 
-- **`TA_ERROR_STATE`:** it is not at rest. It has events waiting, is in
-  the middle of a step, or runs an invoked child or service.
+- **`TA_ERROR_STATE`:** not now. Every one of these gives the same
+  status (only the message, which is for people, lists them):
+  - it has events waiting in its queue (an input you gave since its last
+    turn, an event another actor sent, a delayed send that fell due);
+  - its step is not over: called, for example, from the handler of a
+    send it made in this turn;
+  - it runs an invoked child chart or a service;
+  - it is not resident: already hibernated, including one whose wake the
+    host has asked your `wake` handler for and that you have not given
+    back yet.
+- **`TA_ERROR_STALE`:** the session ended, or never was.
 - **`TA_ERROR_UNSUPPORTED`:** a variable holds what its datamodel cannot
   store. The message names the variable.
+
+The first three cases of `TA_ERROR_STATE` pass (try again after a turn);
+the last does not, and the status cannot tell them apart. An eviction
+loop therefore knows which actors are resident itself, as the one above
+does: what `sweep` returns is resident, and a session whose blob is in
+your store, or whose wake you were asked for, is not.
 
 ```js
 import { compileCharts, Host } from '@tinyactors/node';

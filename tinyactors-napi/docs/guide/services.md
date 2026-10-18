@@ -90,10 +90,12 @@ done, total 13
 A service that ended with `done` is not stopped: `stop` runs only for a
 cancel.
 
-An invocation starts once the step that entered its state is over. So a
-`<send target="#_counter">` in that state's own `<onentry>` comes before
-the service exists, and the chart gets `error.communication` for it; send
-from a later event, as `go` does here.
+An invocation starts at the end of the macrostep that entered its state,
+as a child chart does ([Writing charts](charts.md#a-chart-that-starts-another)).
+So a `<send target="#_counter">` in that state's own `<onentry>`, or in
+anything else that macrostep runs (a raised event's transition, an
+eventless one), comes before the service exists, and the chart gets
+`error.communication` for it; send from a later event, as `go` does here.
 
 **The invocation** holds `session` (the invoker, a `bigint`), `invokeid`,
 `type`, `src`, `data` (the `<param>`s as an object, or the `<content>`),

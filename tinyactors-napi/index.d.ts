@@ -338,7 +338,9 @@ export interface Send {
   /** `<send target>`: a string; an `Address` for the transport's sends;
    * `undefined` when the send has none. */
   readonly target: string | Address | undefined;
-  /** `<send id>`, or the id the host generated; `undefined` when none. */
+  /** `<send id>`, or the id the host generated; `undefined` when none. A
+   * generated id is unique in the sender's session only (each session's
+   * first is `send.1`): key by `session` and `sendid` together. */
   readonly sendid: string | undefined;
   /** The `<param>`s as an object, or the `<content>`'s value. */
   readonly data: ReceivedValue;
@@ -937,7 +939,9 @@ export type EmptyResult = { readonly [key: string]: never };
  * `await host.idle()` waits until there is nothing left to do.
  *
  * An open host with a pending deadline keeps the process alive, as a
- * `setTimeout` does; `close()` ends it.
+ * `setTimeout` does; `close()` ends it. With no deadline it keeps nothing
+ * alive: the process may exit with the host open and actors waiting, for
+ * an answer included.
  *
  * @example
  * const host = new Host({ systemID: 'shop' }, { log: (host, entry) => console.log(entry.text) });
@@ -957,7 +961,8 @@ export class Host implements Disposable, AsyncDisposable {
    * takes, its `datamodel` the snapshot's. Every session stays the same, and
    * its clock goes on from the snapshot's time, whatever clock reads it.
    * Invocations that were running are announced again to `services`, with
-   * `invocation.restored` true. */
+   * `invocation.restored` true. A snapshot of a build whose layout differs
+   * throws `TA_ERROR_INVALID`. */
   static restore(snapshot: Uint8Array | ArrayBuffer, config: HostConfig, options?: HostOptions): Host;
 
   /** The host's clock rate, `system.ticksPerSecond`. */
@@ -965,7 +970,9 @@ export class Host implements Disposable, AsyncDisposable {
   /** True once `close()` ran; every input of a closed host throws. */
   readonly closed: boolean;
   /** Milliseconds from the last idle turn to the next deadline (a delayed
-   * send, a timeout); `undefined` for none. */
+   * send, a timeout, or the telemetry encoder's flush once records are
+   * staged); `undefined` for none. An input given since that turn has not
+   * run yet, so its deadlines are not in it. */
   readonly nextDeadline: number | undefined;
   /** Not built yet: reads `undefined` on every host. Planned: the quickjs
    * engine's heap in bytes. */
@@ -1118,15 +1125,20 @@ export class Host implements Disposable, AsyncDisposable {
    * actor ran skips it. */
   sweep(maxScan: number, limit: number): bigint[];
   /** Takes the actor out of memory and returns its blob (a `Buffer`) for
-   * your store. `TA_ERROR_STATE` when it is not at rest (events waiting, in
-   * a step, running an invocation), `TA_ERROR_UNSUPPORTED` when a variable
-   * holds what the datamodel cannot store (the message names it); it stays
-   * in memory then. */
+   * your store. `TA_ERROR_STATE` when it is not at rest (events waiting, a
+   * step not over, running an invoked child or service) and when it is not
+   * resident (already hibernated, its wake asked for and not given): the
+   * status does not tell the two apart. `TA_ERROR_STALE` for a session that
+   * ended or never was, `TA_ERROR_UNSUPPORTED` when a variable holds what
+   * the datamodel cannot store (the message names it); it stays where it
+   * is then. */
   hibernate(session: Session): Uint8Array;
   /** Puts a hibernated actor back from the blob `hibernate` gave; its
    * waiting events run at the next turn. Only its latest blob: one of an
    * earlier hibernation (a store that fell behind) throws `TA_ERROR_STALE`,
-   * another session's `TA_ERROR_INVALID`, and the actor stays hibernated. */
+   * another session's `TA_ERROR_INVALID`, and the actor stays hibernated.
+   * On a restored host a blob of a hibernation made after the snapshot is
+   * taken too. */
   wake(session: Session, blob: Uint8Array | ArrayBuffer): void;
   /** Starts moving running actors (every chart's, `chart`'s, or one
    * `session`) to the current version of their chart, in later turns; each

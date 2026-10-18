@@ -149,6 +149,7 @@ export async function startNode({ port, datamodel = 'native', app = () => {} }) 
   };
 
   socket = connect({ host: '127.0.0.1', port });
+  socket.setNoDelay(true); // small frames, often answered by a frame: no waiting for Nagle's algorithm
   const frames = new Frames();
   socket.on('data', (chunk) => {
     for (const body of frames.push(chunk)) receive(decode(body));
