@@ -1131,6 +1131,7 @@ examples/            applications over the package, each with a README and a tes
                      iot-rules/: customers' alert rules in the quickjs sandbox, one host per rule, hostile uploads reported
                      document-approval/: parallel reviews, history, donedata, XML records, an admin view on the typed methods
                      inventory-sync/: a warehouse and a storefront as two systems over a socket, compensation, idempotent requests
+                     job-scheduler/: recurring and one-shot jobs on the real clock, retries, deadlines, drift, a graceful shutdown
                      remote-python/: a Python host and a Node host over a socket (mise run remote-python)
 build/               core's amalgamation and the addon (not in git)
 ```
