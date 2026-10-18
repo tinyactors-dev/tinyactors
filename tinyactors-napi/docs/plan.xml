@@ -575,7 +575,7 @@
         <done-when>docs/browser.md exists with its refutation's verdicts; the plan's next steps are refined from it.</done-when>
         <files>tinyactors-napi/docs/browser.md</files>
       </step>
-      <step id="p5-build" status="todo" after="p5-design">
+      <step id="p5-build" status="done" after="p5-design" commit="cb72c783">
         <title>The WASM module and its loaders</title>
         <does>As docs/browser.md says: tinyactors-napi/wasm/src/, the C layer (ta_web_*): the host and its arenas over the module's ta_wasm_alloc with the addon's caps, the input records, ta_web_turn with the drain (no take or ack exported), the effect accessors, the CBOR token calls, the vtable forwarding to imports, txml's tree record, and the poisoned state after an escaped exception or a trap; compiled with core's and txml's amalgamations by Toolchain::Target (zig, wasm32-wasi reactor, -O2, custom sections stripped, the stack size set and measured), its imports (ta_web.* only) and exports (the layer's, memory, _initialize) checked; lint rules for the layer (the prefix, three parameters, buffers, no mutable globals); the two loaders (the top-level-await entry and init(url?)) for a page, a Worker, node and bun; every import catching and returning a status, tested with a throwing import and a trap; the size and the target features reported.</does>
         <done-when>The module loads in Chromium, a Worker, node and bun through both entries; a host is made, runs a null-datamodel chart and is freed; a throwing import leaves no stack behind and a trap poisons the instance as designed.</done-when>
