@@ -636,14 +636,11 @@ there (p5-api). So it serves them at no extra cost:
 - **No silent fallback** inside `@tinyactors/node`: an application would
   change its memory profile and lose quickjs (until p5-quickjs) without
   asking.
-- **Whether one implementation can go** (`for-maintainer`, M5): decided
-  on p5-parity's numbers, not before: `mise run measure` and the
-  per-event benchmark against both packages on node and bun side by side,
-  on both datamodels once quickjs is in the wasm package, and the
-  resident memory after hibernation (linear memory never shrinks, where
-  the addon's `malloc` gives memory back). The criterion proposed, within
-  1.5 times the addon per event and 1.25 times its resident bytes per
-  actor, is the maintainer's to keep or change.
+- **Both packages are kept:** `@tinyactors/node`, the addon, for Node.js
+  and Bun on the platforms it is built for, and `@tinyactors/wasm` for
+  browsers, Workers and Windows, since they will change for different
+  reasons. `mise run perevent` measures both side by side, per event and
+  in resident bytes per actor.
 
 ## Exceptions, an unclosed host, the floor, the address space
 
@@ -733,9 +730,9 @@ and M6 on the refutation's verdicts, and M5 stays the maintainer's.
 - **M4, loading** (`l-p5-design-loading`, decided): top-level `await` by
   default, `@tinyactors/wasm/init` for Service Workers and old bundlers,
   es2022.
-- **M5, two implementations** (`l-p5-design-retire`, for the
-  maintainer): decided on p5-parity's numbers, quickjs and resident
-  memory after hibernation included.
+- **M5, two implementations** (`l-p5-design-retire`, decided): both
+  packages are kept, the addon for Node.js and Bun on its platforms, the
+  wasm package for browsers, Workers and Windows.
 - **M6, size against speed** (`l-p5-design-optimize`, decided): `-Oz`
   (the coordinator, after p5-pack's measurement). Measured (p5-pack, `l-p5-pack-oz`): `-Oz` is 421,294 B against
   605,553 B (brotli 139.9 KB against 170.4 KB, 18 % less) and 2.8 % (node)
@@ -744,9 +741,9 @@ and M6 on the refutation's verdicts, and M5 stays the maintainer's.
   there (384 KiB, five times the deepest, 65,768 B). `-mno-extended-const`
   gives the same bytes: the feature is in the `target_features` of the
   linked objects, not used by the code, so dropping it buys nothing.
-- **The floor** (`l-p5-design-floor`, for the maintainer): keep zig's
-  wasm features (Chrome 114, Firefox 119, Safari 16.4), unless p5-pack
-  shows that dropping `extended-const` costs nothing.
+- **The floor** (`l-p5-design-floor`, decided): zig's wasm features
+  stay (Chrome and Edge 114, Firefox 119, Safari 16.4), since dropping
+  `extended-const` gives the same bytes (above).
 - **memory64** (`l-p5-design-memory64`, for the maintainer): beyond
   about two million actors a host needs more than wasm32's 4 GiB.
 
@@ -767,7 +764,7 @@ led to:
 | 6 | M4, top-level `await` | **confirmed for pages, refuted for Service Workers and some bundlers** | `@tinyactors/wasm/init`, es2022, esbuild's copy documented |
 | 7 | the browser floor | **unstated** | stated from the module's features ("Exceptions, ...") |
 | 8 | memory | **confirmed, with a limit**: four million actors exceed 4 GiB with the region's copy | the gate at two million, the limit documented, memory64 logged |
-| 9 | M5, retire on two ratios | **premature** | decided on p5-parity's numbers, quickjs and memory after hibernation included |
+| 9 | M5, retire on two ratios | **premature** | measured on both datamodels, memory after hibernation included; both packages kept |
 | 10 | M1 and M6 | **confirmed** | none; an `i64` as a `BigInt` costs 10 to 30 ns, noted |
 
 ## The steps after this one

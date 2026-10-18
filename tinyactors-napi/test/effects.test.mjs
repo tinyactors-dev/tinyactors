@@ -6,7 +6,7 @@
 // the transport, with and without a handler; an I/O processor without one;
 // log entries. The actors are observed through their <log> lines.
 import { Address, decode, encode, Host, TinyactorsError } from '@tinyactors/node';
-import { CONFIG, ENGINE, equal, hostWith, image, scxml, sleep, status, throws, typeError, until } from './charts.mjs';
+import { CONFIG, DATAMODEL, ENGINE, equal, hostWith, image, scxml, sleep, status, throws, typeError, until } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 const OUT = { systemID: 't', ioProcessors: [{ type: 'urn:out' }] };
@@ -426,6 +426,27 @@ test('send.data is the application\'s: its arrays are Arrays here, and XML conte
   equal(JSON.stringify(got.values), '{"items":[1,{"k":"v"}],"bytes":{"0":1,"1":2}}', 'the values');
   equal(typeof got.xml, 'string', 'XML content is text, on both datamodels');
   if (!got.xml.includes('<metadata xmlns="" id="doc-1"><title>Budget &amp; plan</title></metadata>')) throw new Error(got.xml);
+});
+
+test('send.data and undefined: kept on the native datamodel, JSON\'s rules on quickjs', async () => {
+  const chart = scxml('holes', `
+    <state id="s">
+      <onentry><send type="urn:out" event="holes"><content expr="({ a: undefined, b: [undefined, 1] })"/></send></onentry>
+    </state>`);
+  let data;
+  const host = hostWith({ holes: chart }, { config: OUT, ioProcessors: { 'urn:out': (h, send) => { data = send.data; } } });
+  host.spawn(host.chart('holes'));
+  await host.idle();
+  host.close();
+  if (DATAMODEL === 'quickjs') {
+    // quickjs's to_wire: a key holding undefined is dropped, an array's undefined is null
+    equal('a' in data, false, 'the key holding undefined is dropped');
+    equal(data.b[0], null, 'an array\'s undefined is null');
+  } else {
+    equal('a' in data && data.a === undefined, true, 'the key holding undefined is kept');
+    equal(data.b[0], undefined, 'an array\'s undefined stays undefined');
+  }
+  equal(data.b[1], 1, 'the rest of the array');
 });
 
 await run();

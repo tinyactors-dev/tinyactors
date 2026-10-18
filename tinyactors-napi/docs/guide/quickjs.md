@@ -115,7 +115,10 @@ SCXML. Around the edges:
   ([Hibernation](hibernation.md)).
 - **Values cross by encoding.** Event data and spawn params are converted
   to the engine's values and back, through the same value table
-  ([README](../../README.md#values)).
+  ([README](../../README.md#values)). What a chart sends follows
+  JavaScript's rules for a value sent elsewhere: a key holding
+  `undefined` is dropped and an array's `undefined` is `null`, where the
+  native datamodel keeps both.
 - **Its costs differ.** In the repository's measurements most operations
   cost less on quickjs, and an idle actor takes less memory
   ([Capacity and memory](capacity.md)).

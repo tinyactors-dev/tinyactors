@@ -297,12 +297,9 @@ was refused where Python's name the status.
 
 ## Waiting for the maintainer
 
-Every entry of [log.xml](log.xml) with status `for-maintainer`, one line
-each; the entry has the reasons and the evidence. The 52 entries this
-section listed on 2026-10-16 were decided by the coordinator on
-2026-10-17, as the maintainer delegated (`l-coord-decisions`); what they
-changed is step p2-decisions of [plan.xml](plan.xml). Regenerated
-2026-10-17 from the log:
-
-- `l-p2-pack-unverified`: the Linux container smoke tests of the packages were not run here (no Docker in this container); the release runs them.
-- `l-p2-pack-mirror-first`: before the first release through tinyactors-dev/tinyactors-napi, copy 0.1.0 and 0.2.0 there with the root's `mise run release:mirror`.
+The 52 entries this section listed on 2026-10-16 were decided by the
+coordinator on 2026-10-17, as the maintainer delegated
+(`l-coord-decisions`); what they changed is step p2-decisions of
+[plan.xml](plan.xml). What waits now, with a recommendation each, is
+[maintainer.md](maintainer.md), made from the entries of
+[log.xml](log.xml) with status `for-maintainer`.

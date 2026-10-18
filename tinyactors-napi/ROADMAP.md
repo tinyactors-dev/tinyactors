@@ -66,12 +66,10 @@ makes one zig-built addon per platform package, checked by its symbols,
 and the main package, reproducibly, and this machine's install into a
 fresh project and pass the smoke test under node and bun; `mise run
 release` checks, tags `tinyactors-napi/v<version>`, publishes to npm and
-releases through tinyactors-dev/tinyactors-napi. The first release waits
-for the maintainer: its changelog section (the release-changelog skill,
-at release time), the container smoke tests (no Docker daemon here), and
-mirroring 0.1.0 and 0.2.0 into the release repository first (root
-`mise run release:mirror`; `push_snapshot!` refuses a version below the
-repository's latest, so 0.3.0 before them would block their copies).
+releases through tinyactors-dev/tinyactors-napi. All 37 steps of the plan are
+done (2026-10-18), with `@tinyactors/wasm` beside the addon (phase p5).
+The first release and the decisions that wait for the maintainer are in
+[docs/maintainer.md](docs/maintainer.md).
 
 ## How the work runs
 
@@ -239,6 +237,11 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
   `ta_host_wake` refusing another system's blob with `TA_ERROR_INVALID`.
   The addon works around nothing; its guide says to keep each host's
   blobs apart (`docs/guide/browser.md`, "One store, two packages").
+  **Answered 2026-10-18 (`934d62d1`):** a host's identity, mixed from the
+  system id and `ta_host_environment.nonce` (random bits both packages
+  draw from `crypto.getRandomValues`), is in every blob's header and kept
+  by a snapshot; `ta_host_wake` refuses another identity with
+  `TA_ERROR_INVALID`.
 
 The first addon's two requests were answered on 2026-10-12
 (the runner skips envelope-level vectors for a binding, `34c09cfa`; the
