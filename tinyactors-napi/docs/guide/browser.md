@@ -152,8 +152,8 @@ host.close();
 true
 ```
 
-quickjs is in the one module every page downloads: 387 KiB with brotli
-instead of 140 KiB without it (`mise run pack:wasm` reports the sizes).
+quickjs is in the one module every page downloads: 378 KiB with brotli
+instead of 137 KiB without it (`mise run pack:wasm` reports the sizes).
 Its engine's stack is the module's: at most 256 KiB, whatever
 `quickjs.stackLimit` asks, so a recursion deeper than that is its
 evaluation's `error.execution` (`RangeError: Maximum call stack size

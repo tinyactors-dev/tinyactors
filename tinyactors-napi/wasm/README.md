@@ -42,14 +42,16 @@ path.
   and Edge 114, Firefox 119 and Safari 16.4 (only Chromium is tested);
   Node.js 22.3 and Bun 1.4.
 - **A Content Security Policy** that allows the module and the charts'
-  expressions: `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`.
+  expressions: `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`
+  (on quickjs `'wasm-unsafe-eval'` is enough).
 - **TypeScript:** the `es2022` and `dom` libs; the types declare
   `Symbol.dispose` and `Disposable` themselves, so no `esnext` lib is
   needed.
 - **Size** (measured by `mise run pack:wasm`, 2026-10-18): the package
-  is 240 KiB packed and 690 KiB unpacked; the module, `tinyactors.wasm`
-  (built for size, `-Oz`), is 412 KiB, 163 KiB with gzip and 137 KiB
-  with brotli, as a server sends it.
+  is 534 KiB packed and 1434 KiB unpacked; the module, `tinyactors.wasm`
+  (built for size, `-Oz`, quickjs in it), is 1150 KiB, 456 KiB with gzip
+  and 378 KiB with brotli, as a server sends it; without quickjs it was
+  137 KiB with brotli.
 - **quickjs:** `datamodel: 'quickjs'`, the sandbox for charts you do
   not trust, is in the same module: a page whose policy forbids
   `'unsafe-eval'` uses it.

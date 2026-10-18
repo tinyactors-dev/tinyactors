@@ -600,7 +600,7 @@
         <does>@tinyactors/wasm staged from tinyactors-napi/ at the addon's version (both entries, the module, index.d.ts, es2022), packed reproducibly, its size reported; -Oz and dropping extended-const measured for size and speed before choosing; smoke-tested from a fresh project with a bundler-free ES module import in Chromium, a Worker, node and bun, and with a bundler; @tinyactors/node's missing-addon error names it; released with the Node package and mirrored to tinyactors-dev/tinyactors-napi, never published without the maintainer.</does>
         <done-when>The package installs and runs its smoke test in Chromium, node and bun; the size and the floor are in the README.</done-when>
       </step>
-      <step id="p5-quickjs" status="todo" after="p5-pack">
+      <step id="p5-quickjs" status="done" after="p5-pack" commit="dfebd1ed">
         <title>quickjs in the browser, later</title>
         <does>quickjs-ng's ECMAScript datamodel as a second module loaded on demand (pages that do not need it do not download it: bindings.md section 11), datamodel: "quickjs" accepted, the datamodel for pages whose policy forbids unsafe-eval, the suite passing on it in Chromium, its size reported; the M5 numbers measured again with it.</does>
         <done-when>The suite passes on quickjs in the browser; the size is in the README.</done-when>
