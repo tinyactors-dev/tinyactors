@@ -966,6 +966,29 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     ta_payload payload = 0;
     ta_string_view s;
 
+    /* send id: first, so an error the send raises at its own step carries it
+     * (SCXML 5.10.1), as one raised when it is routed does */
+    if (send->id != TA_NIL) {
+        sendid = send->id;
+    } else if (send->idlocation != TA_NIL) {
+        ta_string_view none = {(const char *)0, 0};
+        sendid = generate_id(kernel, "send", none);
+        if (sendid == TA_NIL) {
+            status = SEND_NOMEM;
+            goto fail;
+        }
+        ta_string_view v = ta_shared_string_get(core, sendid);
+        ta_status assign_status = kernel->datamodel->vtable->assign_string
+                                      ? kernel->datamodel->vtable->assign_string(
+                                            &(ta_datamodel_call){kernel->datamodel->datamodel,
+                                                                 kernel->instance->datamodel, 0},
+                                            send->idlocation, v)
+                                      : TA_ERROR_EXECUTION;
+        if (assign_status != TA_OK) {
+            status = SEND_ERROR_EXECUTION;
+            goto fail;
+        }
+    }
     /* event name */
     if (send->event != TA_NIL) {
         name_id = send->event;
@@ -1096,28 +1119,6 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
         core->timers->refused = 1; /* what ta_system_exhausted names */
         status = SEND_NOMEM;
         goto fail;
-    }
-    /* send id */
-    if (send->id != TA_NIL) {
-        sendid = send->id;
-    } else if (send->idlocation != TA_NIL) {
-        ta_string_view none = {(const char *)0, 0};
-        sendid = generate_id(kernel, "send", none);
-        if (sendid == TA_NIL) {
-            status = SEND_NOMEM;
-            goto fail;
-        }
-        ta_string_view v = ta_shared_string_get(core, sendid);
-        ta_status assign_status = kernel->datamodel->vtable->assign_string
-                                      ? kernel->datamodel->vtable->assign_string(
-                                            &(ta_datamodel_call){kernel->datamodel->datamodel,
-                                                                 kernel->instance->datamodel, 0},
-                                            send->idlocation, v)
-                                      : TA_ERROR_EXECUTION;
-        if (assign_status != TA_OK) {
-            status = SEND_ERROR_EXECUTION;
-            goto fail;
-        }
     }
     /* payload */
     if (datamodel_capture(kernel, send->capture, TA_CAPTURE_SEND, &payload) != TA_OK) {

@@ -1,0 +1,7 @@
+# send-errors: an error a <send> raises at its own step (no invocation of
+# that id running, a type the host does not have) carries the send's id, a
+# given one or one generated into its idlocation
+# (tinyactors-napi/docs/log.xml, l-p4-examples-elevator-error-sendid).
+
+image sender
+spawn s sender

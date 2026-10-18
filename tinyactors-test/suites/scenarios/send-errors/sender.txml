@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<!-- The judge of send-errors. An error a <send> raises at its own step
+carries the send's id in _event.sendid, as one raised when the send is
+routed does (W3C test 332): a send to an invocation that is not running
+(error.communication), one of a type the host does not have
+(error.execution), and one whose id is generated into a location. -->
+<scxml initial="s1" conf:datamodel="" version="1.0" name="sender"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1"/>
+    <data conf:id="2"/>
+    <data conf:id="3"/>
+    <data conf:id="4"/>
+  </datamodel>
+
+  <state id="s1">
+    <onentry>
+      <send event="x" target="#_nobody" id="one"/>
+    </onentry>
+    <transition event="error.communication" target="c1">
+      <assign conf:location="1" conf:eventSendid=""/>
+    </transition>
+    <transition event="*" conf:targetfail=""/>
+  </state>
+  <state id="c1">
+    <transition conf:idQuoteVal="1=one" target="s2"/>
+    <transition conf:targetfail=""/>
+  </state>
+
+  <state id="s2">
+    <onentry>
+      <send event="x" conf:invalidSendType="" id="two"/>
+    </onentry>
+    <transition event="error.execution" target="c2">
+      <assign conf:location="2" conf:eventSendid=""/>
+    </transition>
+    <transition event="*" conf:targetfail=""/>
+  </state>
+  <state id="c2">
+    <transition conf:idQuoteVal="2=two" target="s3"/>
+    <transition conf:targetfail=""/>
+  </state>
+
+  <state id="s3">
+    <onentry>
+      <send event="x" target="#_nobody" conf:idlocation="3"/>
+    </onentry>
+    <transition event="error.communication" target="c3">
+      <assign conf:location="4" conf:eventSendid=""/>
+    </transition>
+    <transition event="*" conf:targetfail=""/>
+  </state>
+  <state id="c3">
+    <transition conf:VarEqVar="3 4" conf:targetpass=""/>
+    <transition conf:targetfail=""/>
+  </state>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>
