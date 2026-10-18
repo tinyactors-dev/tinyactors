@@ -513,6 +513,37 @@ static void test_migration_refuses_what_it_cannot_move(void) {
     CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, w, 0, 0, 0}, &migration),
                 TA_ERROR_STALE);
     CHECK_EQUAL(migration, 0u); /* none started */
+    /* a session of another chart than the one named */
+    uint64_t other = spawn(&e, "w");
+    run(&e);
+    world_add(&e, SC("p", "initial='a'><state id='a'><invoke id='kid'><content><scxml "
+                          "xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' initial='k'>"
+                          "<state id='k'/></scxml></content></invoke></state>"));
+    uint64_t p = spawn(&e, "p");
+    run(&e);
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"p", 1}, other, 0, 0, 0}, &migration),
+                TA_ERROR_INVALID);
+    /* an invoked child moves with its parent, never alone */
+    ta_host_location location;
+    CHECK_EQUAL(ta_host_locate(e.host, p, &location), TA_OK);
+    ta_system *system = ta_host_system(e.host, location.segment);
+    uint32_t cursor = 0, actors[16], count = ta_system_actors(system, &cursor, (ta_uint32_array){actors, 16});
+    uint64_t kid = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        ta_actor_info info;
+        info.size = sizeof info;
+        if (ta_actor_info_get(system, actors[i], &info) == TA_OK && info.parent) kid = info.serial;
+    }
+    CHECK(kid != 0);
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, kid, 0, 0, 0}, &migration),
+                TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"p", 1}, kid, 0, 0, 0}, &migration),
+                TA_ERROR_INVALID);
+    CHECK_EQUAL(migration, 0u);
+    /* the session's own chart is a migration */
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"p", 1}, p, 0, 0, 0}, &migration),
+                TA_OK);
+    run(&e);
     /* a known name, or every chart, is a migration */
     CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 0}, &migration), TA_OK);
     run(&e);

@@ -383,7 +383,9 @@ TA_API ta_status ta_host_logs(ta_host *h, ta_bytes *out);
 enum { TA_HOST_MIGRATE_WAKE = 1u << 0 };
 /* Move actors of older versions to the current version of their chart.
  * Refused when it could move nothing: TA_ERROR_INVALID when the host has no
- * chart of that name, TA_ERROR_STALE when the session has ended. */
+ * chart of that name, when the session is an invoked child (it moves with
+ * its parent) or when it is not of the chart named, TA_ERROR_STALE when the
+ * session has ended. */
 typedef struct ta_host_migration {
     ta_string_view name; /* empty: every chart */
     uint64_t session;    /* != 0: only that actor */

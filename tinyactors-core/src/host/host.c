@@ -1529,7 +1529,16 @@ ta_status ta_host_migrate(ta_host *host, const ta_host_migration *request, uint3
     ta_time timeout = request->timeout;
     /* a migration that could move nothing is refused, not reported done */
     if (name.length && !version_of(host, name)) return TA_ERROR_INVALID; /* no chart of that name */
-    if (session && host_locate(host, session, NULL, NULL) != TA_OK) return TA_ERROR_STALE; /* ended */
+    if (session) {
+        uint32_t si, actor;
+        if (host_locate(host, session, &si, &actor) != TA_OK) return TA_ERROR_STALE; /* ended */
+        ta_actor_info info;
+        info.size = sizeof info;
+        if (ta_actor_info_get(host->segments[si].system, actor, &info) != TA_OK) return TA_ERROR_STALE;
+        if (info.parent) return TA_ERROR_INVALID; /* an invoked child moves with its parent */
+        if (name.length && !name_equal(chart_key(host->segments[si].image, info.chart), name.pointer, name.length))
+            return TA_ERROR_INVALID; /* the session is of another chart */
+    }
     if (!host_grow(host, (void **)&host->migrations, &host->migration_capacity, host->migration_count + 1,
                    sizeof(host_migration)))
         return TA_ERROR_NO_MEMORY;
