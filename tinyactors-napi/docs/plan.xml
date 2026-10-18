@@ -553,7 +553,7 @@
         <done-when>The test passes under node and bun against the Python binding built from tinyactors-cpython; the README of the example says how to run it.</done-when>
         <files>tinyactors-napi/examples/remote-python/</files>
       </step>
-      <step id="p4-examples" status="doing" after="p4-remote">
+      <step id="p4-examples" status="done" after="p4-remote" commit="af30ee6c">
         <title>Ten example applications</title>
         <does>Ten subagents, one application each (requested by the maintainer, 2026-10-16), in tinyactors-napi/examples/&lt;name&gt;/, each a real application whose domain logic is SCXML charts on the Node binding and whose I/O is the application's: chosen to cover every feature in tricky real-world cases between them (I/O processors with async answers, the transport between systems, invoked services and their cancellation, delayed sends and timeouts on the real clock and a SimulatedClock in its tests, hibernation with a store under load, migration of a live population, snapshots and restore, telemetry to an exporter, typed methods for inspection, both datamodels, XML content, script declarations, errors and their reporting, close and liveness). Each has a README, runs with one command, and has a test run by mise run test. Each subagent records every surprise it meets (behaviour that differed from what the docs, the types or a reasonable JavaScript programmer expected; a missing API; a confusing error; a bug) in docs/log.xml as kind="surprise" with the example's name.</does>
         <done-when>Ten examples, each passing its test under node and bun; the surprises logged.</done-when>
