@@ -932,6 +932,10 @@ static PyObject *ta_python_host_send(PyObject *self, PyObject *arguments, PyObje
                      : PyArg_ParseTupleAndKeywords(arguments, keywords, "OO|O$OOO:send", names, &item.target,
                                                    &item.name, &item.data, &item.sendid, &item.traceparent,
                                                    &item.origin);
+    /* UNDEFINED, as another binding's absent field decodes, is absent too */
+    PyObject **absent[] = {&item.sendid, &item.origin, &item.traceparent};
+    for (int i = 0; parsed && i < 3; i++)
+        if (*absent[i] == host->state->undefined) *absent[i] = Py_None;
     ta_python_call call;
     if (parsed && ta_python_enter(host, &call) == 0) {
         ta_event_in event;

@@ -1303,10 +1303,10 @@
     <why>Python writes an Address as tag 32, and the value table defines tag 32. One encoding in both bindings keeps a transport the same in both.</why>
     <resolution>Decided: encode writes an Address as tag 32, and decode gives an Address back. Built in p4-surprises.</resolution>
   </entry>
-  <entry id="l-coord-cpython-undefined" date="2026-10-18" step="p4-remote" kind="request-to-core" status="open">
+  <entry id="l-coord-cpython-undefined" date="2026-10-18" step="p4-remote" kind="request-to-core" status="resolved">
     <what>tinyactors-cpython: host.send(message) refuses UNDEFINED in sendid, origin or traceparent. Node gave undefined there (now null).</what>
     <why>Values that decode as UNDEFINED from another binding should mean absent, the same as None.</why>
-    <resolution>To be fixed in tinyactors-cpython through the coordinator during p4-surprises.</resolution>
+    <resolution>Fixed in tinyactors-cpython: host.send (the message form and the keyword form) takes UNDEFINED in sendid, origin or traceparent as absent, as None. Test: tests/test_host.py, test_a_message_crosses_whole_and_a_failure_is_reported_by_fail.</resolution>
   </entry>
   <entry id="l-p4-examples-order-settle" date="2026-10-18" step="p4-examples" kind="surprise" status="open" example="order-fulfillment">
     <what>Awkward shape: await host.idle() resolves before a service answers from a promise, even one that settles in microtasks with no I/O at all. I placed an order whose payment service answers from gateway.charge(...).then(...) (an async function that awaits nothing slow) and awaited host.idle() once, expecting the order paid, shipped and delivered on a SimulatedClock; the outbox was empty. Each answer (invocation.done, sendBack) schedules a new turn after the idle one resolved, so a test needs its own loop of setImmediate and idle() (settle() in examples/order-fulfillment/test.mjs, four rounds) and a guess at how many rounds are enough. The guides say idle() waits for the host, not your promises (services.md, io-processors.md, testing.md's until() polls on the real clock), but nothing waits for both, and on a SimulatedClock there is nothing to poll on. Workaround: settle() in the example's test.</what>

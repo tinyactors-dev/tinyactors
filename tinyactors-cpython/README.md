@@ -715,7 +715,8 @@ A chart's reply to `_event.origin` goes back the same way. `send.target`
 and `send.origin` are `Address` values: `.system`, `.session` and `.name`
 give their parts, so neither you nor the binding parses an address.
 `host.send(message)` ignores keys it does not know, so a newer peer can
-add one.
+add one, and takes a `sendid`, `origin` or `traceparent` of `UNDEFINED`
+(what another binding's absent field decodes as) as absent, as `None`.
 
 A failure is never part of a message. When the other side reports one,
 and you decide to believe it, call `host.fail(address, sendid)`: the

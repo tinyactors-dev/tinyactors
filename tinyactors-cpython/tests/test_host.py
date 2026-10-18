@@ -399,6 +399,11 @@ class OtherSystems(unittest.TestCase):
                        "origin": message["target"], "a later key": True})
             host.run_until_idle()
             self.assertEqual(logs.labelled("got")[-1], "tinyactors://b/#_scxml_5 %s [2]" % self.SCXML)
+            # another binding's absent fields decode as UNDEFINED: absent, as None is
+            host.send({"target": message["origin"], "event": "hello", "data": [3], "sendid": tinyactors.UNDEFINED,
+                       "origin": tinyactors.UNDEFINED, "traceparent": tinyactors.UNDEFINED})
+            host.run_until_idle()
+            self.assertEqual(logs.labelled("got")[-1], "None None [3]")
             host.fail(message["origin"], message["sendid"])
             host.run_until_idle()
             self.assertEqual(logs.labelled("failed"), ["error.communication h1"])
