@@ -77,11 +77,14 @@ export function launch(pw) {
 }
 
 /** The server, listening on 127.0.0.1 and a port of its own; `pages` maps
- * a path to the HTML it answers. */
+ * a path to the HTML it answers (or to {headers, body}). */
 export function serve(pages = new Map()) {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://x');
     const page = pages.get(url.pathname);
+    if (page !== undefined && typeof page === 'object') { // {headers, body}: a page under a policy
+      return response.writeHead(200, { 'content-type': 'text/html', ...page.headers }).end(page.body);
+    }
     if (page !== undefined) return response.writeHead(200, { 'content-type': 'text/html' }).end(typeof page === 'function' ? page(url) : page);
     const path = normalize(join(REPOSITORY, decodeURIComponent(url.pathname)));
     if (!SERVED.some((dir) => path.startsWith(dir))) return response.writeHead(403).end();
@@ -94,7 +97,9 @@ export function serve(pages = new Map()) {
     if (path === join(REPOSITORY, 'tinyactors-napi/lib/convenience.mjs')) {
       body = body.toString('utf8').replace(/from '#direct'/g, `from '${napi('wasm/lib/direct.mjs')}'`);
     }
-    return response.writeHead(200, { 'content-type': TYPES[extname(path)] ?? 'application/octet-stream' }).end(body);
+    // any origin may read them: a sandboxed page's is opaque
+    return response.writeHead(200, { 'content-type': TYPES[extname(path)] ?? 'application/octet-stream', 'access-control-allow-origin': '*' })
+      .end(body);
   });
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
 }

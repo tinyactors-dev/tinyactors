@@ -490,6 +490,23 @@ nothing run, and is skipped under such a policy, which the README says.
 quickjs (p5-quickjs) is the datamodel for such a page, in a second module
 that a page without it does not download (bindings.md section 11).
 
+**As built (p5-datamodel,** `wasm/lib/datamodel.mjs`, `wasm/lib/realms.mjs`;
+docs/log.xml, `l-p5-datamodel-*`): the session function is a generator
+made inside `with (scope)` (the session's system variables and `_event`),
+declaring the `<data>` ids, the `<foreach>` names and the vars of the
+scripts of executable content, which stops before each chart-level script
+so `<data>` is initialized before the scripts run, as core orders them;
+expressions are closures made once per session; the names a chart declares
+are found by parsing, not by a scratch realm (a script followed by
+`let <name>` that does not parse declares it), so a Worker needs none; the
+realm is made at the host's first chart, and the policy is checked at its
+creation. A chart-level script with a `'use strict'` directive in a
+declaring chart, and a strict script of executable content that declares a
+`var`, are refused at attach too. On `fit` the wasm package's event costs
+less than the addon's (3.7 against 5.0 us on node, 2.7 against 3.7 us on
+bun), its resident memory above the addon's being mostly a fixed cost, V8's
+code for the module (`l-p5-datamodel-benchmark`).
+
 **Observation, out of scope:** the generator works in `node:vm` too, so
 the addon could give a declaring session a few hundred bytes instead of
 a context of 60 to 143 KB. It is not proposed here.

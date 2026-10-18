@@ -3,7 +3,8 @@
 // entries over HTTP (index.mjs fetches tinyactors.wasm by its URL with
 // top-level await; init.mjs's init() answers the same instance), make a
 // host, run a null-datamodel chart and free it, show a throwing import
-// leaves no stack behind and a trap poisons only its own instance. Where
+// leaves no stack behind and a trap poisons only its own instance; the
+// native datamodel's realms there, and its refusals under a policy. Where
 // no Playwright is installed it says so and passes: the test task
 // requires one (mise/tasks/wasm/test).
 import assert from 'node:assert/strict';
@@ -45,6 +46,82 @@ test('the module in a Chromium page and a module Worker, through both entries', 
     assert.equal(worker.error, undefined, worker.error);
     check(worker.out, 'worker');
     assert.deepEqual(errors, []);
+  } finally {
+    await browser.close();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+// The native datamodel's realms (docs/browser.md, M3): a page's charts run
+// in a hidden iframe made at the host's first chart and removed at
+// close(), or by the FinalizationRegistry for a host nobody closed; a
+// Worker's in its own global. Under a policy that refuses string
+// evaluation, a host on the native datamodel is refused at its creation,
+// naming the directive, and compileCharts skips its syntax check.
+const NATIVE_LOGS = ['count=1:1', 'count=2:1', 'realm=iframe', 't=12:2:2', 't=14:3:2'];
+
+test('the native datamodel in a page (an iframe per host) and a Worker (its own global)', async () => {
+  const pw = playwright();
+  if (pw === null) {
+    console.log('skip: no Playwright installed');
+    return;
+  }
+  const server = await serve(new Map([[napi('page.html'), '<!doctype html><title>tinyactors</title><body>']]));
+  const browser = await launch(pw);
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${server.address().port}${napi('page.html')}`);
+    const url = napi('wasm/test/native.mjs');
+    const out = await page.evaluate(async (u) => (await import(u)).nativeScenario(), url);
+    assert.deepEqual(out.logs.sort(), NATIVE_LOGS, 'a page'); // two actors: their lines interleave
+    assert.deepEqual(out.frames, [0, 1, 0], 'its iframe, made at the first chart, removed at close()');
+    const dropped = await page.evaluate(async (u) => (await import(u)).droppedHost(globalThis.gc), url);
+    assert.deepEqual(dropped, [0, 1, 0], 'a host nobody closed: its iframe goes with it');
+    const worker = await page.evaluate((u) => new Promise((resolve) => {
+      const w = new Worker(URL.createObjectURL(new Blob([`import(${JSON.stringify(new URL(u, location.href).href)}).then((m) => m.nativeScenario()).then((out) => postMessage({ out }), (error) => postMessage({ error: String(error?.stack ?? error) }));`], { type: 'text/javascript' })), { type: 'module' });
+      w.onmessage = (event) => resolve(event.data);
+      w.onerror = (event) => resolve({ error: event.message });
+    }), url);
+    assert.equal(worker.error, undefined, worker.error);
+    assert.deepEqual(worker.out.logs.sort(), NATIVE_LOGS.map((line) => (line === 'realm=iframe' ? 'realm=no window' : line)).sort(), 'a Worker');
+    assert.deepEqual(worker.out.frames, [null, null, null], 'no iframe in a Worker');
+  } finally {
+    await browser.close();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('under a policy that refuses string evaluation, a native host is refused at its creation, naming it', async () => {
+  const pw = playwright();
+  if (pw === null) {
+    console.log('skip: no Playwright installed');
+    return;
+  }
+  const body = (scenario) => `<!doctype html><title>policy</title><body><script type="module">
+import(${JSON.stringify(napi('wasm/test/native.mjs'))}).then((m) => m.underPolicy()).then((out) => { window.__out = out; }, (error) => { window.__out = { error: String(error?.stack ?? error) }; });
+</script>`;
+  const pages = {
+    'no-unsafe-eval': ["script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'", /'unsafe-eval'/],
+    'trusted-types': ["script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; require-trusted-types-for 'script'", /Trusted Types/],
+    sandbox: ['sandbox allow-scripts', /sandbox/],
+  };
+  const served = new Map(Object.entries(pages).map(([name, [policy]]) => [napi(`${name}.html`), { headers: { 'content-security-policy': policy }, body: body(name) }]));
+  const server = await serve(served);
+  const browser = await launch(pw);
+  try {
+    for (const [name, [, named]] of Object.entries(pages)) {
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${server.address().port}${napi(`${name}.html`)}`);
+      await page.waitForFunction(() => window.__out !== undefined, null, { timeout: 30000 });
+      const out = await page.evaluate(() => window.__out);
+      assert.equal(out.error, undefined, `${name}: ${out.error}`);
+      assert.equal(out.host[0], 'TA_ERROR_UNSUPPORTED', `${name}: ${out.host}`);
+      if (!named.test(out.host[1])) throw new Error(`${name}: the message does not name it: ${out.host[1]}`);
+      assert.equal(out.syntaxChecked, false, `${name}: compileCharts skips its syntax check`);
+      await page.close();
+    }
   } finally {
     await browser.close();
     server.closeAllConnections();

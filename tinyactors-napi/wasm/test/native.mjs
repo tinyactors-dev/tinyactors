@@ -1,0 +1,83 @@
+// The native "ecmascript" datamodel through the package's API, runtime-
+// neutral, for a page and a Worker (browser.mjs): a chart that declares
+// nothing and one that declares, their logs, where the charts ran, and,
+// on a page, the host's realm (a hidden iframe) made at its first chart
+// and removed at close().
+import { Host, compileCharts } from '../index.mjs';
+
+const SHARED = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="shared" initial="a">
+  <datamodel><data id="count" expr="0"/><data id="doc"><item n="1">x</item></data></datamodel>
+  <state id="a">
+    <transition event="inc"><assign location="count" expr="count + 1"/><log label="count" expr="count + ':' + doc.documentElement.getAttribute('n')"/></transition>
+    <transition event="where"><log label="realm" expr="typeof window === 'undefined' ? 'no window' : window === window.top ? 'top' : 'iframe'"/></transition>
+  </state>
+</scxml>`;
+
+const DECLARING = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="declaring" initial="a">
+  <datamodel><data id="n" expr="5"/></datamodel>
+  <script>const LIMIT = 2; var total = n; function twice() { return total * 2; } let k = 1;</script>
+  <state id="a">
+    <transition event="go"><script>total = total + 1; k++;</script><log label="t" expr="twice() + ':' + k + ':' + LIMIT"/></transition>
+  </state>
+</scxml>`;
+
+const frames = () => (typeof document === 'undefined' ? null : document.querySelectorAll('iframe[data-tinyactors]').length);
+
+export async function nativeScenario() {
+  const logs = [];
+  const before = frames();
+  const host = new Host({ systemID: 'web' }, { log: (h, entry) => logs.push(`${entry.label}=${entry.text}`) });
+  const compiled = compileCharts([{ name: 'shared', text: SHARED }, { name: 'declaring', text: DECLARING }]);
+  host.addImage(compiled.image);
+  compiled.close();
+  const during = frames();
+  const shared = host.spawn(host.chart('shared'));
+  const declaring = host.spawn(host.chart('declaring'));
+  host.send(shared, 'inc');
+  host.send(shared, 'inc');
+  host.send(shared, 'where');
+  host.send(declaring, 'go');
+  host.send(declaring, 'go');
+  await host.idle();
+  host.close();
+  return { logs, frames: [before, during, frames()] };
+}
+
+// A host nobody closed, on a page: its iframe goes when the collector
+// finds the host (the FinalizationRegistry), since the realm holds the
+// host only weakly. `gc` is Chromium's (--expose-gc). Answers the iframes
+// before, while the host lived, and after.
+export async function droppedHost(gc) {
+  const before = frames();
+  let during;
+  await (async () => {
+    const host = new Host({ systemID: 'web' });
+    const compiled = compileCharts([{ name: 'shared', text: SHARED }]);
+    host.addImage(compiled.image);
+    compiled.close();
+    host.spawn(host.chart('shared'));
+    await host.idle();
+    during = frames();
+  })();
+  for (let i = 0; i < 200 && frames() !== before; i++) {
+    gc();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return [before, during, frames()];
+}
+
+// What a page under a policy gets: the native datamodel's refusal at the
+// host's creation, and a compile call that skips its syntax check.
+export async function underPolicy() {
+  const out = {};
+  try {
+    new Host({ systemID: 'web' }); // eslint-disable-line no-new
+    out.host = 'made';
+  } catch (error) {
+    out.host = [error.status, error.message];
+  }
+  const compiled = compileCharts([{ name: 'typo', text: SHARED.replace('count + 1', 'count + )') }]);
+  out.syntaxChecked = compiled.diagnostics.some((d) => /SyntaxError/.test(d.message));
+  compiled.close();
+  return out;
+}

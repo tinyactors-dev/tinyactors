@@ -3,7 +3,7 @@
 #MISE depends=["build", "wasm:build"]
 #USAGE flag "--actors <n>" default="10000" help="the population"
 #USAGE flag "--runs <n>" default="3" help="runs of each configuration, alternating"
-#USAGE flag "--chart <name>" default="null" help="null (both packages) or fit (the native datamodel's work: @tinyactors/node only until p5-datamodel)"
+#USAGE flag "--chart <name>" default="null" help="null (no evaluation) or fit (the native datamodel's work)"
 # vim:ft=ruby
 
 # Root AGENTS.md, "Benchmarks": throughput and memory together, the
@@ -17,7 +17,7 @@ require_relative '../napi'
 actors = ENV.fetch('usage_actors', '10000')
 runs = Integer(ENV.fetch('usage_runs', '3'))
 chart = ENV.fetch('usage_chart', 'null')
-packages = chart == 'fit' ? %w[node] : %w[node wasm]
+packages = %w[node wasm]
 results = Hash.new { |hash, key| hash[key] = [] }
 runs.times do
   NodeAPI::RUNTIMES.each do |runtime|
