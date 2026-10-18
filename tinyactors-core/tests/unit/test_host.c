@@ -760,8 +760,8 @@ static void test_migration_waits_for_invocations(void) {
     world_add(&e, P2);
     uint32_t migration;
     CHECK_EQUAL(
-        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 0}, &migration),
-        TA_OK);
+        ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"p", 1}, 0, 0, 0, 1000000}, &migration),
+        TA_OK); /* a timeout: the migration waits for the invocations up to it */
     for (int i = 0; i < 5; i++)
         run(&e);
     CHECK_EQUAL(e.migrated_count, 0); /* waiting: its kid runs */
@@ -777,6 +777,53 @@ static void test_migration_waits_for_invocations(void) {
     CHECK_EQUAL(e.migrated_count, 1);
     CHECK(e.last_migration == migration && e.last_done.migrated == 1 && e.last_done.pending == 0);
     CHECK(strstr(e.log, "upgraded;") != NULL);
+    world_close(&e);
+}
+
+/* without a timeout a migration does not wait for invocations, which may
+ * never finish: an actor running an SCXML child or an external service fails
+ * with TA_ERROR_STATE, stays on its version, and the migration ends */
+#define Q1                                                                                         \
+    SC("q", "initial='a'><state id='a'><invoke type='urn:svc' src='x:y'/>"                         \
+            "<transition event='which'><log expr=\"'v1'\"/></transition></state>")
+#define Q2                                                                                         \
+    SC("q", "initial='a'><state id='a'>"                                                           \
+            "<transition event='which'><log expr=\"'v2'\"/></transition></state>")
+
+static void test_migration_fails_invoking_actors_without_timeout(void) {
+    host_world e;
+    world_open(&e, 16, NULL, 0);
+    world_add(&e, P1);
+    world_add(&e, Q1);
+    uint64_t p = spawn(&e, "p"), q = spawn(&e, "q");
+    run(&e);
+    world_add(&e, P2);
+    world_add(&e, Q2);
+    uint32_t migration;
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, 0, 0, 0, 0}, &migration),
+                TA_OK);
+    run(&e);
+    CHECK_EQUAL(e.migrated_count, 0);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 0 && e.last_done.failed == 2 &&
+          e.last_done.pending == 0);
+    CHECK_EQUAL(e.failure_count, 2u);
+    for (uint32_t i = 0; i < 2; i++) {
+        CHECK(e.failures[i].session == p || e.failures[i].session == q);
+        CHECK_EQUAL(e.failures[i].status, TA_ERROR_STATE);
+    }
+    e.log[0] = 0;
+    CHECK_EQUAL(send(&e, q, "which", NULL), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "v1;") == 0); /* still on its version, its service still running */
+    /* one session, with a timeout: pending at the deadline, never failed */
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, q, 0, 0, 50}, &migration),
+                TA_OK);
+    run(&e);
+    CHECK_EQUAL(e.last_migration, migration - 1); /* waiting */
+    ta_host_advance_time(e.host, (ta_host_time){100, 0});
+    run(&e);
+    CHECK(e.last_migration == migration && e.last_done.migrated == 0 && e.last_done.failed == 0 &&
+          e.last_done.pending == 1);
     world_close(&e);
 }
 
@@ -1773,5 +1820,6 @@ int main(void) {
     RUN(test_migration_asks_again_and_takes_the_woken);
     RUN(test_migration_of_many_hibernated_actors);
     RUN(test_migration_waits_for_invocations);
+    RUN(test_migration_fails_invoking_actors_without_timeout);
     TEST_MAIN_END();
 }

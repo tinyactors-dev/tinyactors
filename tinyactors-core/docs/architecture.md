@@ -985,8 +985,10 @@ A chart version is a new image, so a new version of a system is a new
   adopts parents before children, re-links slots and timers, and rolls back
   children-first on failure. `ta_blob_migrate` translates a blob of one
   session and refuses larger trees (`TA_ERROR_UNSUPPORTED`); `ta_host`
-  migrates such an actor once its invocations have finished
-  (`ta_actor_info.invocations`).
+  migrates an actor with running invocations (`ta_actor_info.invocations`)
+  once they have finished, if the migration has a timeout to wait until;
+  without one it fails the actor with `TA_ERROR_STATE` at once, since an
+  invocation may never finish.
 - **`ta_blob_migrate`** (pure) translates the blob to another chart: states by
   id; the mapped set plus ancestors is completed top-down to a legal
   configuration (compound without an active child → its initial targets,

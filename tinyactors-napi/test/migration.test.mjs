@@ -348,4 +348,57 @@ test('migrate refuses bad arguments', async () => {
   throws(() => host.migrate(), status('TA_ERROR_STATE'), 'a closed host');
 });
 
+/** Version 1 invokes a service of type `thing` for as long as it is in `s`. */
+const INVOKING = scxml('counter', `
+  <state id="s">
+    <invoke type="thing" id="svc" src="thing://here"/>
+    <transition event="done.invoke.svc" target="after"/>
+    <transition event="report"><log label="n" expr="'v1'"/></transition>
+  </state>
+  <state id="after">
+    <transition event="report"><log label="n" expr="'v1'"/></transition>
+  </state>`);
+
+test('an actor running an invocation fails a migration without a timeout, and keeps its service', async () => {
+  const logs = new Logs();
+  const done = [];
+  const stopped = [];
+  const services = { thing: () => ({ stop: () => stopped.push('stop') }) };
+  const host = hostWith({ counter: INVOKING }, { log: logs.handler, services, migrationDone: (host, result) => done.push(result) });
+  const session = host.spawn(host.chart('counter'));
+  await host.idle();
+  add(host, V2);
+  const migration = host.migrate();
+  await host.idle();
+  host.send(session, 'report');
+  await host.idle();
+  host.close();
+  equal(json(done), json([{ migration, migrated: 0, failed: [{ session, reason: 'TA_ERROR_STATE' }], pending: [] }]),
+    'it ends at once, the actor failed, and why');
+  equal(stopped.length, 0, 'the service was not stopped');
+  equal(logs.labelled('n').join('|'), 'v1', 'still version 1');
+});
+
+test('with a timeout, an actor running an invocation moves once it ends, or is pending at the timeout', async () => {
+  const done = [];
+  const invocations = [];
+  const clock = new SimulatedClock();
+  const services = { thing: (host, invocation) => { invocations.push(invocation); return {}; } };
+  const host = hostWith({ counter: INVOKING }, { clock, services, migrationDone: (host, result) => done.push(result) });
+  const ends = host.spawn(host.chart('counter'));
+  const runs = host.spawn(host.chart('counter'));
+  await host.idle();
+  add(host, V2);
+  const migration = host.migrate({ timeout: 500 });
+  await host.idle();
+  equal(done.length, 0, 'waiting for the invocations');
+  invocations.find((invocation) => invocation.session === ends).done();
+  await host.idle();
+  clock.increment(500);
+  await host.idle();
+  host.close();
+  equal(json(done), json([{ migration, migrated: 1, failed: [], pending: [runs] }]),
+    'the one whose invocation ended moved, the other is pending');
+});
+
 await run();

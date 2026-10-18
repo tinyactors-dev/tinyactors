@@ -196,8 +196,10 @@ next deadline 7000
 ## When a migration ends
 
 A migration ends when every actor it looks at has moved, or at its
-`timeout`. An actor that is running an invocation waits until the
-invocation ends. A hibernated actor moves once it is woken: with `wake:
+`timeout`. An actor that is running an invocation (an invoked chart or
+a service) moves once the invocation ends: a migration with a `timeout`
+waits for that until the timeout, and one without fails the actor at
+once with `'TA_ERROR_STATE'`, since an invocation may never end. A hibernated actor moves once it is woken: with `wake:
 true` the migration asks for it through your `wake` handler, with the
 migration's id as the third argument, and asks again if it finds the
 actor hibernated after a wake. Without `wake`, a hibernated actor that

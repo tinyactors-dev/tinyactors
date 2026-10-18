@@ -400,7 +400,9 @@ TA_API uint32_t ta_host_migration_pending(const ta_host *h, uint32_t migration, 
 /* A session a migration could not move: it stays on its version. `status`
  * says why: TA_ERROR_UNSUPPORTED when its datamodel cannot write its state
  * out (a value outside the value table, in a variable or a pending delayed
- * send's data), another TA_ERROR_* when the new version refused it. */
+ * send's data), TA_ERROR_STATE when it runs invocations (an SCXML child or an
+ * external service) and the migration has no timeout to wait for them to
+ * finish, another TA_ERROR_* when the new version refused it. */
 typedef struct ta_host_migration_failure {
     uint64_t session;
     int32_t status;

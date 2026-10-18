@@ -1628,6 +1628,16 @@ static int migration_fail(host_migration *migration, uint64_t session, ta_status
     return MIGRATE_FAILED;
 }
 
+/* An actor whose invocations run: its session tree is not translated, so it
+ * moves once they finished. A migration with a timeout waits for that until
+ * its deadline (then the actor is pending); one without fails the actor now
+ * with TA_ERROR_STATE, since an invocation may never finish. */
+static int migrate_invoking(ta_host *host, host_migration *migration, uint64_t session) {
+    if (migration->deadline) return MIGRATE_LATER;
+    if (!failure_reserve(host, migration)) return MIGRATE_NO_MEMORY;
+    return migration_fail(migration, session, TA_ERROR_STATE);
+}
+
 /* Adopt an exported blob back where it came from. The export just freed
  * what it needs there, so this does not need to grow. */
 static void adopt_home(ta_host *host, host_segment *from, const unsigned char *blob,
@@ -1653,7 +1663,7 @@ static int migrate_one(ta_host *host, host_migration *migration, uint64_t sessio
     if (!version) return MIGRATE_SKIP;
     host_segment *from = &host->segments[si], *to = &host->segments[version->segment];
     if (actor_info.state == TA_ACTOR_HIBERNATED) return MIGRATE_ASLEEP;
-    if (actor_info.invocations) return MIGRATE_LATER; /* a session tree: once they finished */
+    if (actor_info.invocations) return migrate_invoking(host, migration, session);
     uint32_t chart = version->chart, tseg = version->segment;
     ta_string_view key = chart_key(to->image, chart);
     /* everything the move needs once the actor has left its segment */
@@ -1696,8 +1706,9 @@ static int migrate_one(ta_host *host, host_migration *migration, uint64_t sessio
     if (!moved) { /* back home, unchanged */
         adopt_home(host, from, host->blob.bytes, length);
         if (refused) return MIGRATE_NO_MEMORY;
-        /* running invocations (a session tree): migrated once they finished */
-        return ms == TA_ERROR_UNSUPPORTED ? MIGRATE_LATER : migration_fail(migration, session, why);
+        /* running invocations (a session tree) */
+        return ms == TA_ERROR_UNSUPPORTED ? migrate_invoking(host, migration, session)
+                                          : migration_fail(migration, session, why);
     }
     moved_put(host, session, (uint32_t)(session >> SERIALS_SHIFT) == tseg ? TA_NIL : tseg);
     to->busy = 1;
