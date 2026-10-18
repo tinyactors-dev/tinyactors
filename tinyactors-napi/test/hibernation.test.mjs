@@ -445,4 +445,31 @@ test('sweep, hibernate and wake refuse numbers out of range', async () => {
   throws(() => host.sweep(1, 1), status('TA_ERROR_STATE'), 'a closed host');
 });
 
+test('a function declared in a transition\'s script, and a \'use strict\' that starts one, hibernate and wake', async () => {
+  // a chart-level var makes the chart declaring: a context per session
+  const chart = scxml('blocks', `
+    <script>var n = 0;</script>
+    <state id="s">
+      <transition event="go"><script>function f() { return n + 1; } n = f();</script><log label="n" expr="String(n)"/></transition>
+      <transition event="strict"><script>'use strict'; try { undeclared = 1; n = -1; } catch (e) { n = 100; }</script>
+        <log label="n" expr="String(n)"/></transition>
+    </state>`);
+  const logs = new Logs();
+  const store = new Store();
+  const host = hostWith({ blocks: chart }, { log: logs.handler, wake: store.handler });
+  const session = host.spawn(host.chart('blocks'));
+  host.send(session, 'go');
+  await host.idle();
+  store.blobs.set(session, host.hibernate(session)); // f is the script's again at each run: not stored
+  host.send(session, 'go');
+  await host.idle();
+  host.send(session, 'strict');
+  await host.idle();
+  store.blobs.set(session, host.hibernate(session));
+  host.send(session, 'go');
+  await host.idle();
+  host.close();
+  equal(logs.labelled('n').join(), '1,2,100,101', 'n across the wakes; the directive applied');
+});
+
 await run();

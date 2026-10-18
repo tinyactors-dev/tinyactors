@@ -238,8 +238,19 @@ bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart) {
     chart->declares = chart->lexical = false;
     chart->hoists = chart->functions = NULL;
     uint32_t count = ta_image_expression_count(chart->image, chart->chart);
-    napi_value scratch = NULL, context = NULL, kit = NULL, hoists = NULL;
+    napi_value scratch = NULL, context = NULL, kit = NULL, hoists = NULL, strict = NULL, strict_kit = NULL;
     uint32_t before = 0, after = 0;
+    /* A function declared in a sloppy block (a script in executable
+     * content) is the global's var too (Annex B), and a declaration made
+     * again when the script runs: its name is found as the names a strict
+     * block, which makes no such var, leaves out, in a second scratch
+     * context where every script is instantiated the strict way. */
+    bool blocks = false;
+    for (uint32_t e = 0; e < count && !blocks; e++) {
+        ta_expression_info info;
+        blocks = ta_image_expression(chart->image, (ta_chart_item){chart->chart, e}, &info) == TA_OK &&
+                 info.kind == TA_EXPRESSION_SCRIPT && !ta_napi_strict_directive(info.source);
+    }
     for (uint32_t e = 0; e < count; e++) {
         ta_expression_info info;
         if (ta_image_expression(chart->image, (ta_chart_item){chart->chart, e}, &info) != TA_OK ||
@@ -251,19 +262,36 @@ bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart) {
                 napi_get_element(env, scratch, TA_NAPI_REALM_KIT, &kit) != napi_ok ||
                 napi_create_array(env, &hoists) != napi_ok || !ta_napi_global_names(native, context, &before))
                 return false;
+            napi_value made = blocks ? ta_napi_realm_new(native) : NULL;
+            if (blocks && (made == NULL || napi_get_element(env, made, TA_NAPI_REALM_CONTEXT, &strict) != napi_ok ||
+                           napi_get_element(env, made, TA_NAPI_REALM_KIT, &strict_kit) != napi_ok))
+                return false;
         }
         /* as the session runs it (ta_napi_evaluate): a script in executable
          * content in a block, whose lexical declarations are not the global's */
-        static const char ahead[] = "throw 0;\n", ahead_block[] = "throw 0;{\n";
-        napi_value script = ta_napi_script(native, info.kind == TA_EXPRESSION_SCRIPT
-                                                       ? &(ta_napi_script_of){{ahead_block, sizeof ahead_block - 1}, info.source, {"\n}", 2}, e}
-                                                       : &(ta_napi_script_of){{ahead, sizeof ahead - 1}, info.source, {NULL, 0}, e});
+        static const char ahead[] = "throw 0;\n", ahead_block[] = "throw 0;{\n", ahead_strict[] = "'use strict';throw 0;{\n";
+        bool block = info.kind == TA_EXPRESSION_SCRIPT, directive = block && ta_napi_strict_directive(info.source);
+        ta_napi_script_of block_of = {{directive ? ahead_strict : ahead_block, directive ? sizeof ahead_strict - 1 : sizeof ahead_block - 1},
+                                      info.source, {"\n}", 2}, e};
+        napi_value script = ta_napi_script(native, block ? &block_of
+                                                         : &(ta_napi_script_of){{ahead, sizeof ahead - 1}, info.source, {NULL, 0}, e});
         if (script == NULL) { /* a syntax error: its evaluation's error.execution */
             napi_value ignored;
             napi_get_and_clear_last_exception(env, &ignored);
             continue;
         }
         if (napi_set_element(env, hoists, e, script) != napi_ok) return false;
+        if (strict != NULL) { /* the strict way: a sloppy block's functions make no var there */
+            napi_value strict_script = block && !directive
+                ? ta_napi_script(native, &(ta_napi_script_of){{ahead_strict, sizeof ahead_strict - 1}, info.source, {"\n}", 2}, e})
+                : script;
+            if (strict_script == NULL || !ta_napi_probe(native, strict_script, strict)) { /* not strict code: as it is */
+                napi_value ignored;
+                napi_get_and_clear_last_exception(env, &ignored);
+                ta_napi_probe(native, script, strict);
+                napi_get_and_clear_last_exception(env, &ignored);
+            }
+        }
         if (!ta_napi_probe(native, script, context)) {
             chart->declares = chart->lexical = true; /* its declarations clash with the global's */
             continue;
@@ -278,7 +306,10 @@ bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart) {
     }
     if (!chart->declares) return true;
     chart->hoists = hoists;
-    chart->functions = ta_napi_kit(env, kit, &(ta_napi_kit_call){"functions", 0, {NULL}});
+    if (strict_kit != NULL) {
+        napi_value strict_names = ta_napi_kit(env, strict_kit, &(ta_napi_kit_call){"globals", 0, {NULL}});
+        chart->functions = strict_names != NULL ? ta_napi_kit(env, kit, &(ta_napi_kit_call){"remade", 1, {strict_names}}) : NULL;
+    } else chart->functions = ta_napi_kit(env, kit, &(ta_napi_kit_call){"functions", 0, {NULL}});
     return chart->functions != NULL;
 }
 

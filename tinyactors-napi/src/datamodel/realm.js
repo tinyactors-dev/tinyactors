@@ -330,6 +330,21 @@
     return found;
   }
 
+  // The global's names a chart's scripts made (globals), and the names
+  // made again from them on a wake (remade): the functions they declare,
+  // and the names a strict scratch context's global (`strict`, its
+  // globals()) lacks: a sloppy block's function declarations (Annex B),
+  // whose var a script in executable content fills each time it runs.
+  function globals() {
+    return names(globalThis).filter((name) => !baseline.has(name));
+  }
+  function remade(strict) {
+    const kept = new Set(strict);
+    const found = functions();
+    for (const name of globals()) if (!kept.has(name) && !found.includes(name)) found.push(name);
+    return found;
+  }
+
   function record(names, values) {
     const made = {};
     for (let i = 0; i < names.length; i++) own(made, names[i], copy(values[i], 1));
@@ -353,6 +368,8 @@
     linked,
     relink,
     functions,
+    globals,
+    remade,
     dom,
     parse: (text) => JSON.parse(text),
   });

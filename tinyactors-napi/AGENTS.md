@@ -574,7 +574,14 @@ d-dom, d-separate):
   but `_event`; a declaring session's are the names its chart and scripts
   put on its global (the realm's baseline and the system variables left
   out), and a name the chart's scripts declare as a function is left out
-  while it holds a function. `deserialize` makes a new scope, or for a
+  while it holds a function: a top-level `function`, and one declared in a
+  script of executable content, which runs as a sloppy block and so makes
+  a var of the global (Annex B) that the script fills again at each run
+  (found at `chart_attach` as the names a strict instantiation of the
+  scripts, in a second scratch context, does not make). A script of
+  executable content that starts with a `'use strict'` directive runs as a
+  strict block (`'use strict';{ ... }`), since a block takes no
+  directive. `deserialize` makes a new scope, or for a
   declaring chart a new context in which every script of the chart is
   instantiated again without running a statement (`throw 0;` ahead, the
   probe `chart_attach` already compiles, kept in the chart's record), so

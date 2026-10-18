@@ -132,6 +132,9 @@ typedef struct ta_napi_chart_of {
     napi_value functions;   /* out: an array of names, or NULL */
 } ta_napi_chart_of;
 bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart);
+/* A script whose source starts with a 'use strict' directive: a script in
+ * executable content then runs as a strict block. */
+bool ta_napi_strict_directive(ta_string_view source);
 /* A declaring chart's declarations made in `context`, a woken session's
  * new one: each script of the chart's record (TA_NAPI_CHART_HOISTS) run
  * there, which instantiates it and runs no statement. False with an

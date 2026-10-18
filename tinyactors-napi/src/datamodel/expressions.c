@@ -19,6 +19,7 @@ static const char ta_napi_shared_script[] = "(function(__s){with(__s){(function(
 static const char ta_napi_shared_script_end[] = "\n})();}})";
 static const char ta_napi_shared_setter[] = "(function(__s,__v){with(__s){(function(){'use strict';(\n";
 static const char ta_napi_shared_setter_end[] = "\n) = __v;})();}})";
+static const char ta_napi_strict_block[] = "'use strict';{\n";
 static const char ta_napi_own_value[] = "(function(){'use strict';return (\n";
 static const char ta_napi_own_value_end[] = "\n);})";
 static const char ta_napi_own_setter[] = "(function(__v){'use strict';(\n";
@@ -32,6 +33,15 @@ bool ta_napi_expression_of(const ta_napi_chart_row *chart, ta_expression e, ta_e
 
 static bool ta_napi_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+bool ta_napi_strict_directive(ta_string_view source) {
+    uint32_t at = 0;
+    while (at < source.length && ta_napi_space(source.pointer[at])) at++;
+    if (source.length - at < 12) return false;
+    char quote = source.pointer[at];
+    return (quote == '\'' || quote == '"') && memcmp(source.pointer + at + 1, "use strict", 10) == 0 &&
+           source.pointer[at + 11] == quote;
 }
 
 /* A value's source without a trailing `;` (expr="new Foo();"). */
@@ -137,8 +147,12 @@ napi_value ta_napi_evaluate(ta_napi_evaluation *evaluation, ta_expression e) {
         if (napi_get_element(env, evaluation->record, TA_NAPI_CHART_GETTERS, &scripts) != napi_ok ||
             napi_get_element(env, evaluation->own, TA_NAPI_OWN_CONTEXT, &context) != napi_ok)
             return NULL;
-        ta_napi_script_of shape = block ? (ta_napi_script_of){{"{\n", 2}, source, {"\n}", 2}, e}
-                                        : (ta_napi_script_of){{"\n", 1}, source, {NULL, 0}, e};
+        /* a block takes no directive: a script that starts with 'use strict'
+         * is strict as a whole, as it was when it ran as global code */
+        ta_napi_script_of shape = !block ? (ta_napi_script_of){{"\n", 1}, source, {NULL, 0}, e}
+                                  : ta_napi_strict_directive(source)
+                                      ? (ta_napi_script_of){TA_NAPI_TEXT(ta_napi_strict_block), source, {"\n}", 2}, e}
+                                      : (ta_napi_script_of){{"{\n", 2}, source, {"\n}", 2}, e};
         napi_value made = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){scripts, false, shape});
         return made != NULL ? ta_napi_run_in(env, made, context) : NULL;
     }
