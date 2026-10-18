@@ -174,15 +174,16 @@ static napi_value ta_napi_effect_address(napi_env env, const ta_napi_view *view,
 }
 
 /* The send's data: undefined without a payload; the native datamodel's
- * the payload row's value itself (retained by core until the ack), not a
- * copy; quickjs's decoded from its CBOR (a view of quickjs's memory until
- * its next call, read at once). */
+ * the payload row's value (retained by core until the ack) copied into the
+ * application's realm on first read, an XML node as its text; quickjs's
+ * decoded from its CBOR (a view of quickjs's memory until its next call,
+ * read at once). */
 static napi_value ta_napi_effect_data(napi_env env, const ta_napi_view *view) {
     ta_napi_host *host = view->host;
     ta_payload payload = (ta_payload)ta_host_effect_number(host->host, view->index, TA_EFFECT_FIELD_PAYLOAD);
     uint32_t datamodel = (uint32_t)ta_host_effect_number(host->host, view->index, TA_EFFECT_FIELD_DATAMODEL);
     if (payload == 0 || datamodel == TA_NIL) return ta_napi_undefined(env);
-    if (host->datamodel == TA_NAPI_DATAMODEL_NATIVE) return ta_napi_native_value(&host->native, payload);
+    if (host->datamodel == TA_NAPI_DATAMODEL_NATIVE) return ta_napi_native_exported(&host->native, payload);
     if (host->quickjs == NULL) return ta_napi_undefined(env);
     ta_bytes cbor;
     ta_status status = ta_datamodel_ecmascript_payload_to_cbor(host->quickjs, payload, &cbor);

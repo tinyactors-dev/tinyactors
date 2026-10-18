@@ -152,7 +152,8 @@ static void ta_napi_instance_finalize(napi_env env, void *data, void *hint) {
     napi_ref references[] = {instance->address, instance->send,   instance->entry, instance->migrated, instance->rejected,
                              instance->invocation, instance->crashed, instance->started, instance->start_failed,
                              instance->settled, instance->settled_rejected,
-                             instance->vm,      instance->realm,  instance->realms, instance->in,     instance->stringify};
+                             instance->vm,      instance->realm,  instance->realms, instance->in,     instance->stringify,
+                             instance->application};
     for (size_t i = 0; i < sizeof references / sizeof references[0]; i++)
         if (references[i] != NULL) napi_delete_reference(env, references[i]);
     ta_growable_arena_free(&instance->arena);

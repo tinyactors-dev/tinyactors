@@ -158,6 +158,33 @@ napi_value ta_napi_realm_new(ta_napi_native *native) {
     return record;
 }
 
+/* The kit of the realm's script run in the application's realm, made once
+ * per environment: what it makes is the application's (instanceof Array
+ * holds there). */
+static napi_value ta_napi_realm_application(napi_env env) {
+    ta_napi_instance *instance = ta_napi_realm_module(env);
+    napi_value kit = NULL, realm, made, args[2], global;
+    if (instance == NULL) return NULL;
+    if (instance->application != NULL && napi_get_reference_value(env, instance->application, &kit) == napi_ok && kit != NULL)
+        return kit;
+    if (napi_get_reference_value(env, instance->realm, &realm) != napi_ok ||
+        napi_get_reference_value(env, instance->in, &args[0]) != napi_ok ||
+        napi_get_reference_value(env, instance->address, &args[1]) != napi_ok || napi_get_global(env, &global) != napi_ok ||
+        (made = ta_napi_call_method(env, &(ta_napi_method){realm, "runInThisContext", 0, NULL})) == NULL ||
+        napi_call_function(env, global, made, 2, args, &kit) != napi_ok || !ta_napi_keep(env, kit, &instance->application))
+        return NULL;
+    return kit;
+}
+
+napi_value ta_napi_native_exported(ta_napi_native *native, ta_payload payload) {
+    napi_env env = native->host->env;
+    napi_value value = ta_napi_native_value(native, payload), kit;
+    napi_valuetype type = napi_undefined;
+    if (value == NULL || napi_typeof(env, value, &type) != napi_ok || (type != napi_object && type != napi_function)) return value;
+    if ((kit = ta_napi_realm_application(env)) == NULL) return NULL;
+    return ta_napi_kit(env, kit, &(ta_napi_kit_call){"exported", 1, {value}});
+}
+
 napi_value ta_napi_realm_shared(ta_napi_native *native) {
     napi_env env = native->host->env;
     napi_value record = ta_napi_native_get(native, native->shared), drops;

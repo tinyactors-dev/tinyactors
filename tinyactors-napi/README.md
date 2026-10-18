@@ -358,7 +358,10 @@ results) is a value of one table: `undefined`, `null`, booleans, numbers,
 `bigint`s up to 64 bits, strings, `Uint8Array`s, arrays and plain
 objects. A function, a `Map`, a `Date` or a class's instance is refused
 with `TA_ERROR_UNSUPPORTED`, and a value is copied when it crosses, so a
-chart never holds your object. `undefined` and `null` stay apart; a
+chart never holds your object, and what a chart hands you (`send.data`,
+`invocation.data`) is made with your realm's constructors: its arrays are
+`instanceof Array`, and `assert.deepStrictEqual` compares it with a
+literal. `undefined` and `null` stay apart; a
 whole number past 2^53 comes back as a `bigint`.
 
 `encode(value)` and `decode(bytes)` give that table as CBOR bytes, the

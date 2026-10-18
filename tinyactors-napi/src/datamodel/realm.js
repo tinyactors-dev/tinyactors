@@ -90,8 +90,31 @@
     // A document's text is the XML it was read from: what an <invoke>'s
     // content expression gives the system as the document to run.
     toString() { return this[SOURCE] !== undefined ? this[SOURCE] : Object.prototype.toString.call(this); }
+    // As a neutral value (to_wire, JSON.stringify), a node is its XML text.
+    toJSON() { return xmlText(this); }
   }
   defineProperty(XMLNode.prototype, XML, { value: true });
+
+  // A node's XML: a document's the text it was read from, any other node's
+  // written out.
+  const escaped = (text, quote) => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;').replaceAll(quote ? '"' : '\0', quote ? '&quot;' : '\0');
+  function xmlText(node) {
+    if (node[SOURCE] !== undefined) return node[SOURCE];
+    const inner = () => node.childNodes.map(xmlText).join('');
+    switch (node.nodeType) {
+      case 1: {
+        let text = '<' + node.nodeName;
+        for (const key of keys(node.attributes ?? {})) text += ' ' + key + '="' + escaped(node.attributes[key], true) + '"';
+        return node.childNodes.length ? text + '>' + inner() + '</' + node.nodeName + '>' : text + '/>';
+      }
+      case 3: return escaped(node.nodeValue ?? '', false);
+      case 4: return '<![CDATA[' + node.nodeValue + ']]>';
+      case 7: return '<?' + node.nodeName + ' ' + (node.nodeValue ?? '') + '?>';
+      case 8: return '<!--' + (node.nodeValue ?? '') + '-->';
+      default: return inner();
+    }
+  }
 
   // A node of the tree C read with txml: [nodeType, nodeName, text, attributes, children].
   function node(entry) {
@@ -145,6 +168,27 @@
     }
     throw refuse('unsupported', new TypeError('a value crossing between actors is a primitive, a plain object, ' +
       'an array, a Uint8Array or an XML node, not ' + tag.call(value)));
+  }
+
+  // A payload's value copied out to the application, in the realm this
+  // script runs in (the application's own, for this): as copy, but an XML
+  // node is its XML text.
+  function exported(value, depth) {
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return value;
+    if (depth >= 64) throw new RangeError('a value nested deeper than 64 (or a cycle)');
+    if (isArray(value)) {
+      const made = [];
+      for (let i = 0; i < value.length; i++) made.push(exported(value[i], depth + 1));
+      return made;
+    }
+    if (typeof value === 'object') {
+      if (isView(value) && tag.call(value) === '[object Uint8Array]') return new Uint8Array(value);
+      if (value[XML] === true) return xmlText(value);
+      const made = {};
+      for (const key of keys(value)) own(made, key, exported(value[key], depth + 1));
+      return made;
+    }
+    return value; // a function: kept as it is, as the payload held it
   }
 
   // _ioprocessors, made at its first read and kept in the link: {type:
@@ -358,6 +402,7 @@
     global: globalThis,
     objectPrototype: Object.prototype,
     copy: (value) => copy(value, 0),
+    exported: (value) => exported(value, 0),
     refusal: (error) => refusals.get(error),
     shape,
     system,

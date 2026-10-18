@@ -381,7 +381,7 @@ test('the native datamodel: charts run in a context of their own, never the appl
   }
 });
 
-test('the native datamodel: a send\'s data is the payload\'s value, of the chart\'s realm', async () => {
+test('the native datamodel: a send\'s data is the payload\'s value copied into the application\'s realm, once', async () => {
   const chart = scxml('c', `
     <datamodel><data id="o" expr="({list: [1, 2]})"/></datamodel>
     <state id="s"><onentry><send event="out" type="urn:out" target="x" namelist="o"/></onentry></state>`);
@@ -394,7 +394,7 @@ test('the native datamodel: a send\'s data is the payload\'s value, of the chart
   host.spawn(host.chart('c'));
   await host.idle();
   host.close();
-  same(seen, [true, true, false], 'the same object each read; an array, not of the application\'s realm');
+  same(seen, [true, true, true], 'the same object each read; an array of the application\'s realm');
 });
 
 test('the native datamodel: a typed method is never called from a chart, which cannot reach the Host', () => {

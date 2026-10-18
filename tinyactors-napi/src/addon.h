@@ -66,6 +66,9 @@
  *   vm, realm  node:vm (process.getBuiltinModule) and the vm.Script of
  *              the realm's script every context of the native datamodel
  *              runs (datamodel/realms.c), made on first use;
+ *   application  the kit of the realm's script run in the application's
+ *              own realm, made on first use: its `exported` copies a
+ *              payload's value out to the application (datamodel/realms.c);
  *   realms     a WeakSet of those contexts' Object.prototype: a plain
  *              object of theirs is a value (values.c);
  *   in         In(), the function every context's scopes hold: it reads
@@ -91,7 +94,7 @@ typedef struct ta_napi_instance {
     napi_ref rejected;
     napi_ref invocation, crashed, started, start_failed;
     napi_ref settled, settled_rejected;
-    napi_ref vm, realm, realms, in, stringify;
+    napi_ref vm, realm, realms, in, stringify, application;
     struct ta_napi_native *evaluating;
     struct ta_napi_restoring *restoring;
     /* why the native datamodel's last entry failed (its vtable's failure):
@@ -474,6 +477,11 @@ const ta_datamodel_vtable *ta_napi_native_vtable(void);
 bool ta_napi_native_payload(ta_napi_native *native, napi_value value, ta_payload *out);
 /* A payload's value itself (the row's, not a copy); undefined for none. */
 napi_value ta_napi_native_value(ta_napi_native *native, ta_payload payload);
+/* A payload's value as the application gets it: copied with the
+ * application's realm's constructors (its arrays are Arrays there), an XML
+ * node as its XML text; a primitive as it is. NULL with an exception
+ * pending. */
+napi_value ta_napi_native_exported(ta_napi_native *native, ta_payload payload);
 /* The drops let go: after the outer call into core returns. */
 void ta_napi_native_flush(ta_napi_native *native);
 /* After ta_host_free: the datamodel's own references and output, with

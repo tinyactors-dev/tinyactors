@@ -189,9 +189,11 @@ The rules the Python binding follows hold here too (bindings.md, sections
 - **Thin views, not eager conversion.** Wherever a C value is exposed to
   JavaScript, the addon hands out a view that holds the host, the ack
   count and the effect's index and converts a field when it is read: an
-  I/O processor's send, a `<log>` line. As with the native datamodel's
-  `_event.data`, a view's data from the native datamodel is the payload
-  row's value itself, not a copy.
+  I/O processor's send, a `<log>` line. A view's data from the native
+  datamodel is the payload row's value copied into the application's
+  realm on its first read (2026-10-18, l-p4-examples-chat-realm: the kit
+  of the realm's script run in the application's own realm, its
+  `exported`), an XML node as its XML text; `invocation.data` likewise.
 - **A view is stale after its ack.** The addon counts its acks (bumped
   right after `ta_host_effects_ack` in its drain; core keeps no batch
   counter); a read with another count throws with
@@ -554,7 +556,12 @@ d-dom, d-separate):
   is that evaluation's `error.execution`, not the chart's.
 - **Values cross by copy, made with the receiving context's
   constructors** (an application's array is not `instanceof Array` in
-  another realm); immutable values are shared.
+  another realm); immutable values are shared. The application is a
+  receiver too: a payload it reads is copied into its realm then (capture
+  cannot know the receiver, `ta_datamodel_capture` has no target, and a
+  payload made in the application's realm would be another realm's to the
+  charts that receive it). As a neutral value (`to_wire`,
+  `JSON.stringify`) an XML node is its XML text (`toJSON`).
 - **XML content becomes a DOM through txml** (`tinyxml/include/txml.c`,
   compiled into the addon), built as JavaScript objects; Node and Bun have
   no `DOMParser`.

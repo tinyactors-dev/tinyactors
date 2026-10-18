@@ -399,4 +399,38 @@ test('views are made by the host only', () => {
 });
 
 void TinyactorsError;
+test('send.data is the application\'s: its arrays are Arrays here, and XML content is its text', async () => {
+  const chart = scxml('realm', `
+    <state id="s">
+      <onentry>
+        <send type="urn:out" event="values"><content expr="({ items: [1, { k: 'v' }], bytes: new Uint8Array([1, 2]) })"/></send>
+        <send type="urn:out" event="xml"><content><metadata xmlns="" id="doc-1"><title>Budget &amp; plan</title></metadata></content></send>
+      </onentry>
+    </state>`);
+  const got = {};
+  const host = hostWith({ realm: chart }, {
+    config: OUT,
+    ioProcessors: {
+      'urn:out': (h, send) => {
+        try { got[send.event] = send.data; } catch (error) { got[send.event] = error.status; }
+      },
+    },
+  });
+  host.spawn(host.chart('realm'));
+  await host.idle();
+  host.close();
+  const { items, bytes } = got.values;
+  equal(items instanceof Array && items[1] instanceof Object, true, 'instanceof holds');
+  equal(Object.getPrototypeOf(got.values), Object.prototype, 'a plain object of this realm');
+  equal(bytes instanceof Uint8Array && bytes.length === 2, true, 'bytes are this realm\'s Uint8Array');
+  equal(JSON.stringify(got.values), '{"items":[1,{"k":"v"}],"bytes":{"0":1,"1":2}}', 'the values');
+  if (ENGINE.datamodel === 'quickjs') {
+    // quickjs's DOM is not a neutral value to core (l-p4-surprises-quickjs-xml)
+    equal(got.xml, 'TA_ERROR_INVALID', 'quickjs refuses the XML for now');
+    return;
+  }
+  equal(typeof got.xml, 'string', 'XML content is text');
+  if (!got.xml.includes('<metadata xmlns="" id="doc-1"><title>Budget &amp; plan</title></metadata>')) throw new Error(got.xml);
+});
+
 await run();

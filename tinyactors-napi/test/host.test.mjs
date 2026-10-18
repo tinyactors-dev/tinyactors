@@ -49,23 +49,22 @@ test('a refused config throws core\'s error', () => {
 });
 
 test('a host that names no datamodel gets the native one', async () => {
-  // The native datamodel's values are of its own context: an array a chart
-  // sends is an array (Array.isArray) but not of the application's realm;
-  // quickjs's are decoded in the application's realm.
+  // The native datamodel is the application's engine (V8 or
+  // JavaScriptCore, with WebAssembly); quickjs has none.
   const chart = scxml('out', `
-    <state id="s"><onentry><send event="out" type="urn:out" target="x"><content expr="[1, 2]"/></send></onentry></state>`);
+    <state id="s"><onentry><send event="out" type="urn:out" target="x"><content expr="typeof WebAssembly"/></send></onentry></state>`);
   const seen = {};
   for (const options of [undefined, {}, { datamodel: 'native' }, QUICKJS]) {
     const host = new Host({ systemID: 't', ioProcessors: [{ type: 'urn:out' }] }, {
       ...options,
-      ioProcessors: { 'urn:out': (h, send) => { seen[options?.datamodel ?? String(options)] = [Array.isArray(send.data), send.data instanceof Array]; } },
+      ioProcessors: { 'urn:out': (h, send) => { seen[options?.datamodel ?? String(options)] = send.data; } },
     });
     host.addImage(image({ out: chart }));
     host.spawn(host.chart('out'));
     await host.idle();
     host.close();
   }
-  equal(JSON.stringify(seen), JSON.stringify({ undefined: [true, false], '[object Object]': [true, false], native: [true, false], quickjs: [true, true] }), 'which datamodel ran');
+  equal(JSON.stringify(seen), JSON.stringify({ undefined: 'object', '[object Object]': 'object', native: 'object', quickjs: 'undefined' }), 'which datamodel ran');
 });
 
 test('options are checked', () => {
