@@ -157,7 +157,9 @@ for (const datamodel of ['native', 'quickjs']) {
       const slow = call(url, token, '/api/slow', { traceparent: TRACEPARENT });
       await until(() => upstreamCalls.calls.length === 1, 'the request upstream');
       clock.increment(1999);
-      await gateway.host.idle();
+      // a turn, not idle(): idle() waits for the upstream handler's promise,
+      // which this test holds
+      await new Promise((resolve) => setImmediate(resolve));
       assert.equal(gateway.pending.size, 1, 'still waiting');
       clock.increment(1);
       const response = await slow;
@@ -271,13 +273,13 @@ for (const datamodel of ['native', 'quickjs']) {
       await until(() => upstreamCalls.calls.length === 1, 'the request upstream');
       clock.increment(2000); // a timeout, and its <log> line
       assert.equal((await slow).status, 504);
+      upstreamCalls.calls[0].resolve({ status: 200, body: {} }); // late: idle() waits for the handler's promise
       await gateway.host.idle();
       clock.increment(1000); // the flush interval
       await gateway.host.idle();
       await until(() => collector.requests.length >= 2, 'the first export');
       assert.deepEqual(new Set(collector.requests.map((r) => r.signal)), new Set(['traces', 'logs']));
       assert.ok(collector.requests.every((r) => r.contentType === 'application/x-protobuf'));
-      upstreamCalls.calls[0].resolve({ status: 200, body: {} });
     } finally {
       await close();
     }

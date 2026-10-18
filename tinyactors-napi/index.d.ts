@@ -997,12 +997,24 @@ export class Host implements Disposable, AsyncDisposable {
    * `undefined`. */
   actorByName(name: string): bigint | undefined;
 
-  /** Resolves at the next turn that finds nothing to do; the same promise
-   * to every caller until then. Rejects with the turn's first error (a
+  /** Resolves at the next turn that finds nothing to do while no promise a
+   * handler returned is pending (an I/O processor's, a service's or its
+   * `receive`'s, a wake, telemetry, log, migration or typed-method
+   * handler's): the same promise to every caller until then. A handler's
+   * promise that never settles keeps it pending, and so does a handler
+   * that awaits `idle()` itself. Rejects with the turn's first error (a
    * handler's, a typed method's without `onError`), or with
-   * `TA_ERROR_STATE` when the host is closed first. It waits for the host
-   * only, not for your promises. */
+   * `TA_ERROR_STATE` when the host is closed first; on a closed host it
+   * returns a promise rejected so. It does not wait for promises your
+   * handlers start and do not return. */
   idle(): Promise<void>;
+  /** The host's clock in milliseconds, read now: a `SimulatedClock`'s
+   * time, or the runtime's monotonic clock, on the scale the host's
+   * deadlines and `snapshot()` use, so a restored host's goes on from its
+   * snapshot's. A journal of inputs records it beside each input, and a
+   * replay on a restored host moves its clock to each reading. It reads
+   * and advances nothing; a closed host throws `TA_ERROR_STATE`. */
+  now(): number;
 
   /** An actor's active states, `{ value }`: a state id, or `{ parent:
    * child }` for compound states. Params `{ session }`. The typed methods
@@ -1100,7 +1112,8 @@ export class Host implements Disposable, AsyncDisposable {
    * `TA_ERROR_STALE` for a session that ended. */
   migrate(options?: MigrateOptions): number;
   /** The whole host as one `Buffer` (typed as its `Uint8Array`): every segment, the images, the system
-   * id, the host's time and the datamodel's state, for `Host.restore` on the
+   * id, the host's time (its clocks advanced first: the time of the call,
+   * as `now()` reads it) and the datamodel's state, for `Host.restore` on the
    * same build of the package. Only when quiescent: from a handler, with an
    * effect or a reply pending, or during a migration it throws
    * `TA_ERROR_STATE`; a value outside the value table throws

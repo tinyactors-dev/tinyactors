@@ -146,7 +146,6 @@ host.addImage(compiled.image);
 compiled.close();
 
 host.spawn(host.chart('mailer'));
-await new Promise((resolve) => setTimeout(resolve, 100));
 await host.idle();
 host.close();
 ```
@@ -155,8 +154,9 @@ host.close();
 delivered after 20 ms
 ```
 
-`await host.idle()` waits for the host, not for your handler's promise:
-the example waits on a timer first. The pending `timeout` keeps the
+`await host.idle()` waits for the host and for the promise your handler
+returned: it resolves once the answer ran. A promise the handler starts
+and does not return is not waited for. The pending `timeout` keeps the
 process alive until `host.close()`.
 
 ## When a handler fails

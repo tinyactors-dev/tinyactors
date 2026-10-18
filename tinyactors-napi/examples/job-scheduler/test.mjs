@@ -19,14 +19,11 @@ function held() {
   return { calls, worker };
 }
 
-/** Lets the host and the workers' promises settle: `idle()` waits for the
- * host only, and a worker answers from a promise, which schedules another
- * turn after the idle one (docs/log.xml, l-p4-examples-order-settle). */
+/** Lets the host's turns run. Not `idle()`: it waits for the promises the
+ * host's handlers returned, and the run handler returns the worker's, which
+ * these tests hold until they settle it. */
 async function settle(scheduler) {
-  for (let round = 0; round < 4; round++) {
-    await new Promise((resolve) => setImmediate(resolve));
-    await scheduler.host.idle();
-  }
+  for (let round = 0; round < 8; round++) await new Promise((resolve) => setImmediate(resolve));
 }
 
 /** Moves the clock to `ms` from where it is, deadline by deadline. */
@@ -199,7 +196,7 @@ test('drift: a fixed-rate job keeps its cadence under load, a fixed-delay one fa
   scheduler.host.close();
 });
 
-test('idle(): resolves with a deadline pending and a worker running; rejects with a handler\'s error', async () => {
+test('idle(): waits for a running worker but not for a deadline; rejects with a handler\'s error, and on a closed host', async () => {
   let finish;
   const scheduler = new Scheduler({
     workers: { slow: () => new Promise((resolve) => { finish = resolve; }), quick: () => 'ok' },
@@ -207,27 +204,24 @@ test('idle(): resolves with a deadline pending and a worker running; rejects wit
   });
   scheduler.submit({ id: 'later', kind: 'once', worker: 'quick', in: 60_000 });
   scheduler.submit({ id: 'slow', kind: 'once', worker: 'slow', in: 0, timeout: 60_000 });
-  await scheduler.host.idle();
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  await scheduler.host.idle();
+  let idle = false;
+  const waited = scheduler.host.idle().then(() => { idle = true; });
+  await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(typeof finish, 'function', 'the worker is running');
-  assert.ok(scheduler.host.nextDeadline > 50_000, 'the delayed sends are pending');
-  assert.equal(scheduler.jobs.size, 2, 'idle() waited for neither');
-  // a handler's error: the next idle() rejects with it, and the host goes on
-  scheduler.submit({ id: 'bad', kind: 'once', worker: 'quick', in: 0 });
-  // the worker answers from a promise, after the idle turn
-  // (l-p4-examples-order-settle): the error comes out of a later idle()
-  await assert.rejects(async () => { for (;;) await settle(scheduler); }, /the alert hook failed/);
+  assert.equal(idle, false, 'idle() waits for the worker the run handler returned');
   finish('done');
-  await settle(scheduler);
+  await waited;
   assert.equal(ended(scheduler, 'slow').outcome, 'succeeded');
+  assert.ok(scheduler.host.nextDeadline > 50_000, 'the delayed send is pending: idle() did not wait for it');
+  // a handler's error rejects the idle() waiting, and the host goes on
+  scheduler.submit({ id: 'bad', kind: 'once', worker: 'quick', in: 0 });
+  await assert.rejects(scheduler.host.idle(), /the alert hook failed/);
   // an idle() that waits when the host closes rejects (shutdown's
-  // idleAtClose); one called on a closed host throws at the call instead
-  // of rejecting (docs/log.xml, l-p4-examples-jobs-idle-throws)
+  // idleAtClose), and so does one asked of a closed host
   const waiting = scheduler.host.idle();
   scheduler.host.close();
   await assert.rejects(waiting, (error) => error.status === 'TA_ERROR_STATE');
-  assert.throws(() => scheduler.host.idle(), (error) => error.status === 'TA_ERROR_STATE');
+  await assert.rejects(scheduler.host.idle(), (error) => error.status === 'TA_ERROR_STATE');
 });
 
 // ---- processes ------------------------------------------------------------

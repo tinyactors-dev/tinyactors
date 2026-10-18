@@ -3,7 +3,7 @@
 `host.snapshot()` copies the whole host into one `Buffer`: every
 segment's memory (actors, queues, timers, the hibernated actors'
 records), the datamodel's sessions and values, the images, the system id
-and the host's time. `Host.restore(snapshot, config, options)` makes a
+and the host's time, read when you call it. `Host.restore(snapshot, config, options)` makes a
 new host running it, in this process or another.
 
 Uses: rehearse a deploy on a copy (add the new image, migrate, run the
@@ -64,6 +64,12 @@ reminder: water the plants
 Every session id stays the same, and the host's clock goes on from the
 snapshot's time, whatever clock reads it: a new `SimulatedClock`, as
 here, or the runtime's clock in another process or on another machine.
+The snapshot's time is the time of the `snapshot()` call, so a timer
+with 6 seconds left then has 6 seconds left after the restore, however
+long the host was idle before. `host.now()` reads that clock: a journal of
+the inputs that came after a snapshot records it with each, and a replay
+on a restored host on a `SimulatedClock` moves the clock to each reading
+(`clock.increment(entry.at - host.now())`) before it gives the input.
 
 ## Restoring
 

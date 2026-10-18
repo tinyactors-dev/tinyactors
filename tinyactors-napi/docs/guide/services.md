@@ -226,8 +226,11 @@ host.close();
 db://replica answers ping
 ```
 
-`await host.idle()` waits for the host, not for your promises: these
-examples wait on a timer first, so that the connection is open by then.
+`await host.idle()` waits for the host and for the promises your
+handlers return (a service handler's, a `receive`'s), not for one a
+service starts on its own: these examples open the connection in the
+background, so they wait on a timer first. A handler that returns a
+promise of the service is waited for.
 
 ## Failures
 

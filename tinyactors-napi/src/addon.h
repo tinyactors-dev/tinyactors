@@ -54,6 +54,11 @@
  *   crashed    the function a service's receive promise calls when it
  *              rejects (effects.c), bound to its invocation and its send:
  *              the service crashed, and the rejection goes on;
+ *   settled, settled_rejected  the functions the last promise of a
+ *              handler's chain calls when it settles (loop.c), bound to the
+ *              Host's wrapper: the host's count of pending handler promises
+ *              goes down, and a waiting idle() is given a turn at zero;
+ *              settled_rejected throws the rejection on;
  *   started, start_failed  the functions a service handler's promise calls
  *              when it settles (effects.c), bound to its invocation: the
  *              service kept and the sends and UNINVOKE queued while it
@@ -85,6 +90,7 @@ typedef struct ta_napi_instance {
     napi_ref send, entry, migrated;
     napi_ref rejected;
     napi_ref invocation, crashed, started, start_failed;
+    napi_ref settled, settled_rejected;
     napi_ref vm, realm, realms, in, stringify;
     struct ta_napi_native *evaluating;
     struct ta_napi_restoring *restoring;
@@ -378,6 +384,9 @@ typedef enum ta_napi_datamodel_kind {
  *               telemetry handler returned (its promises), for
  *               [Symbol.asyncDispose] to await; a value of the close's
  *               native call, NULL outside it;
+ *   promises    the promises handlers returned (and the chains the addon
+ *               made of them) that have not settled: idle() waits for none
+ *               to be pending;
  *   processors  the effective config's ioProcessors, numbered from 1 as
  *               the effects' IO_PROCESSOR numbers them (0: the SCXML
  *               processor, the transport's). */
@@ -406,6 +415,7 @@ typedef struct ta_napi_host {
     bool encoder, telemetry;
     napi_value endings;
     uint32_t processors;
+    uint32_t promises;
     uint64_t ticks_offset; /* added to the clock's ticks (mod 2^64): a restored host goes on
                               from its snapshot's time (0 for a new host) */
     size_t quickjs_room;   /* the last quickjs state's length: the next snapshot's guess */
@@ -569,6 +579,14 @@ uint64_t ta_napi_ticks_after(const ta_napi_host *host, uint64_t nanoseconds);
  * the clock reads are offset to read `time` now, whatever the clock. */
 void ta_napi_clock_resume(napi_env env, ta_napi_host *host, uint64_t time);
 
+/* A handler returned `promise` (any thenable): it is followed, the host
+ * counting it pending until it settles, so idle() waits for it. The
+ * caller passes the last promise of its own chain (a send's then with its
+ * rejection function), whose rejection is thrown on: an unhandled
+ * rejection, as before it was followed. What is no thenable, or a then
+ * that throws, is not followed (the exception cleared). */
+void ta_napi_follow(napi_env env, ta_napi_host *host, napi_value promise);
+
 /* An input from outside a turn schedules one turn (setImmediate, one
  * pending at a time); from a turn's handler it makes the turn go on. */
 void ta_napi_schedule(napi_env env, ta_napi_host *host);
@@ -627,8 +645,9 @@ napi_value ta_napi_reply(napi_env env, ta_napi_host *host, uint32_t index);
  * `host_class`. */
 napi_status ta_napi_methods_define(napi_env env, napi_value host_class);
 
-/* host.idle() and host.nextDeadline. */
+/* host.idle(), host.now() and host.nextDeadline. */
 napi_value ta_napi_host_idle(napi_env env, napi_callback_info info);
+napi_value ta_napi_host_now(napi_env env, napi_callback_info info);
 napi_value ta_napi_host_next_deadline(napi_env env, napi_callback_info info);
 
 /* The turn function in the instance, the clock's symbol, and the class

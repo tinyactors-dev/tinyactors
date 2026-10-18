@@ -1593,7 +1593,8 @@ static bool ta_napi_quickjs_state(napi_env env, ta_napi_host *host, ta_cbor_writ
 /* host.snapshot() -> Buffer: ta_host_snapshot_pack of the whole host, with
  * the datamodel's state ({"native": its map} or {"quickjs": its bytes},
  * labelled tinyactors-napi), the images, the system id and the host's
- * time, written once into the Buffer. A quiescent host only: from a
+ * time (its clocks advanced first, so it is the time of the call), written
+ * once into the Buffer. A quiescent host only: from a
  * handler (a batch is open), with an effect or a reply pending, or during
  * a migration, TA_ERROR_STATE, checked by core before the datamodel's
  * state is built; a value outside the value table TA_ERROR_UNSUPPORTED. */
@@ -1610,6 +1611,7 @@ static napi_value ta_napi_host_snapshot(napi_env env, napi_callback_info info) {
         ta_napi_leave(&call);
         return NULL;
     }
+    ta_napi_advance(env, host); /* the snapshot's time is now, not the last turn's */
     ta_cbor_writer writer; /* through the host's allocator: a snapshot's size is no call's scratch */
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->allocator);
     const char *key = ta_napi_state_keys[host->datamodel];
@@ -1691,6 +1693,7 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"closed", NULL, NULL, ta_napi_host_closed, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
         {"ticksPerSecond", NULL, NULL, ta_napi_host_ticks, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
         {"nextDeadline", NULL, NULL, ta_napi_host_next_deadline, NULL, NULL, napi_default_jsproperty & ~napi_writable, NULL},
+        {"now", NULL, ta_napi_host_now, NULL, NULL, NULL, napi_default_method, NULL},
         {"idle", NULL, ta_napi_host_idle, NULL, NULL, NULL, napi_default_method, NULL},
         {"addImage", NULL, ta_napi_host_add_image, NULL, NULL, NULL, napi_default_method, NULL},
         {"chart", NULL, ta_napi_host_chart, NULL, NULL, NULL, napi_default_method, NULL},

@@ -341,6 +341,60 @@ void ta_napi_schedule(napi_env env, ta_napi_host *host) {
     if (!ta_napi_arm(env, host, &(ta_napi_arming){-1.0, &host->immediate})) ta_napi_keep_error(env, host);
 }
 
+/* ---- the handlers' promises ------------------------------------------------------- */
+
+/* settled(wrapper, value) and settled_rejected(wrapper, reason), bound to
+ * the Host's wrapper: one pending promise fewer; at none, a waiting idle()
+ * gets a turn, which settles it when the host is idle too. The rejected
+ * one throws the reason on, so the chain's last promise rejects unhandled. */
+static napi_value ta_napi_settled(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2] = {NULL, NULL}, undefined = NULL;
+    void *rejected = NULL;
+    if (napi_get_cb_info(env, info, &argc, argv, NULL, &rejected) != napi_ok) return NULL;
+    napi_get_undefined(env, &undefined);
+    if (argc < 2) argv[1] = undefined;
+    ta_napi_host *host = argc >= 1 ? ta_napi_host_of(env, &(ta_napi_host_check){argv[0], false}) : NULL;
+    if (host == NULL) {
+        napi_value ignored;
+        napi_get_and_clear_last_exception(env, &ignored);
+    } else if (host->promises > 0 && --host->promises == 0 && host->host != NULL && host->idle != NULL) {
+        ta_napi_schedule(env, host);
+        if (host->error != NULL && host->depth == 0 && !host->turning) ta_napi_throw_kept(env, host);
+    }
+    if (rejected != NULL) {
+        napi_value ignored;
+        napi_get_and_clear_last_exception(env, &ignored);
+        napi_throw(env, argv[1]);
+        return NULL;
+    }
+    return undefined;
+}
+
+void ta_napi_follow(napi_env env, ta_napi_host *host, napi_value promise) {
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    napi_value then, functions[2], bound[2], bind, argv[2], wrapper = ta_napi_self(env, host), ignored;
+    napi_valuetype type = napi_undefined;
+    if (instance == NULL || wrapper == NULL || promise == NULL || napi_typeof(env, promise, &type) != napi_ok ||
+        (type != napi_object && type != napi_function))
+        return;
+    bool ok = napi_get_named_property(env, promise, "then", &then) == napi_ok && napi_typeof(env, then, &type) == napi_ok &&
+              type == napi_function && napi_get_reference_value(env, instance->settled, &functions[0]) == napi_ok &&
+              napi_get_reference_value(env, instance->settled_rejected, &functions[1]) == napi_ok;
+    for (int i = 0; ok && i < 2; i++) {
+        argv[0] = NULL;
+        napi_get_undefined(env, &argv[0]);
+        argv[1] = wrapper;
+        ok = napi_get_named_property(env, functions[i], "bind", &bind) == napi_ok &&
+             napi_call_function(env, functions[i], bind, 2, argv, &bound[i]) == napi_ok;
+    }
+    if (ok && napi_call_function(env, promise, then, 2, bound, &ignored) == napi_ok) {
+        host->promises++;
+        return;
+    }
+    napi_get_and_clear_last_exception(env, &ignored); /* not followed: idle() does not wait for it */
+}
+
 /* The waiting idle() settled: resolved, or rejected with `error`. */
 static void ta_napi_settle(napi_env env, ta_napi_host *host, napi_value error) {
     napi_deferred deferred = host->idle;
@@ -389,7 +443,7 @@ static napi_value ta_napi_loop_turn(napi_env env, napi_callback_info info) {
             ta_napi_arming arming = {delay < TA_NAPI_TIMEOUT_MAX ? delay : TA_NAPI_TIMEOUT_MAX, &host->timer};
             if (!ta_napi_arm(env, host, &arming)) ta_napi_keep_error(env, host);
         }
-        settle = true;
+        settle = next != TA_NAPI_NEXT_IDLE || host->promises == 0; /* idle, and no handler's promise pending */
     }
     if (error == NULL) error = ta_napi_take_kept(env, host); /* scheduling or arming failed */
     /* a close a handler asked for runs at the leave: the waiters are kept
@@ -426,6 +480,16 @@ napi_value ta_napi_host_idle(napi_env env, napi_callback_info info) {
     size_t argc = 0;
     napi_value self = NULL, promise = NULL;
     if (napi_get_cb_info(env, info, &argc, NULL, &self, NULL) != napi_ok) return NULL;
+    ta_napi_host *closed = ta_napi_host_of(env, &(ta_napi_host_check){self, false});
+    if (closed == NULL) return NULL; /* another object: a TypeError, thrown */
+    if (closed->host == NULL) { /* closed: a promise, rejected, as a waiting idle() is at close */
+        napi_deferred deferred;
+        napi_value error = ta_napi_error_of(env, &(ta_napi_refusal){TA_ERROR_STATE, "the Host is closed"});
+        if (error == NULL || napi_create_promise(env, &deferred, &promise) != napi_ok ||
+            napi_reject_deferred(env, deferred, error) != napi_ok)
+            return NULL;
+        return promise;
+    }
     ta_napi_call call;
     if (!ta_napi_enter(env, self, &call)) return NULL;
     ta_napi_host *host = call.host;
@@ -442,6 +506,21 @@ napi_value ta_napi_host_idle(napi_env env, napi_callback_info info) {
     if (host->immediate == NULL) ta_napi_schedule(env, host); /* a turn inside this one settles it at its end */
     ta_napi_leave(&call);
     return promise;
+}
+
+/* host.now(): the host's clock in milliseconds as it reads now (a
+ * SimulatedClock's time, or the runtime's monotonic clock), on the scale
+ * core's time is on: a restored host's goes on from its snapshot's. It
+ * reads, and advances nothing. */
+napi_value ta_napi_host_now(napi_env env, napi_callback_info info) {
+    size_t argc = 0;
+    napi_value self = NULL, result = NULL;
+    if (napi_get_cb_info(env, info, &argc, NULL, &self, NULL) != napi_ok) return NULL;
+    ta_napi_call call;
+    if (!ta_napi_enter(env, self, &call)) return NULL;
+    napi_create_double(env, ta_napi_milliseconds(call.host, ta_napi_now(env, call.host).monotonic), &result);
+    ta_napi_leave(&call);
+    return result;
 }
 
 napi_value ta_napi_host_next_deadline(napi_env env, napi_callback_info info) {
@@ -686,6 +765,12 @@ napi_status ta_napi_loop_define(napi_env env, napi_value exports) {
     if (instance == NULL) return napi_pending_exception;
     napi_status status = napi_create_function(env, "turn", NAPI_AUTO_LENGTH, ta_napi_loop_turn, NULL, &turn);
     if (status == napi_ok) status = napi_create_reference(env, turn, 1, &instance->turn);
+    napi_value settled, settled_rejected;
+    if (status == napi_ok) status = napi_create_function(env, "settled", NAPI_AUTO_LENGTH, ta_napi_settled, NULL, &settled);
+    if (status == napi_ok) status = napi_create_reference(env, settled, 1, &instance->settled);
+    if (status == napi_ok)
+        status = napi_create_function(env, "settledRejected", NAPI_AUTO_LENGTH, ta_napi_settled, (void *)instance, &settled_rejected);
+    if (status == napi_ok) status = napi_create_reference(env, settled_rejected, 1, &instance->settled_rejected);
     if (status == napi_ok) status = napi_get_reference_value(env, instance->keys, &keys);
     if (status == napi_ok) status = napi_create_string_utf8(env, "tinyactors.clock", NAPI_AUTO_LENGTH, &description);
     if (status == napi_ok) status = napi_create_symbol(env, description, &symbol);

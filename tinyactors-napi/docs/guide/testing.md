@@ -152,9 +152,10 @@ tick 4 at 6500
 
 ## Waiting for something to happen
 
-`await host.idle()` waits until the host has nothing to do now. It does
-not wait for a deadline on the runtime's clock, nor for your handlers'
-promises, and no call tells you when one actor ends. When a test runs on
+`await host.idle()` waits until the host has nothing to do now and no
+promise your handlers returned is pending. It does not wait for a
+deadline on the runtime's clock, nor for a promise a handler starts and
+does not return, and no call tells you when one actor ends. When a test runs on
 the real clock, wait for the condition itself:
 
 ```js

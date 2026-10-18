@@ -65,10 +65,52 @@ test('nextDeadline is undefined with nothing due, and on a closed host', async (
   equal(host.nextDeadline, undefined, 'closed');
 });
 
-test('idle() on a closed host is refused', () => {
+test('idle() on a closed host returns a rejected promise', async () => {
   const host = new Host(CONFIG, ENGINE);
   host.close();
-  throws(() => host.idle(), stateError, 'idle() after close');
+  const promise = host.idle(); // no throw at the call
+  let error;
+  try { await promise; } catch (caught) { error = caught; }
+  stateError(error, 'idle() after close');
+});
+
+test('idle() waits for the promises handlers return: a log handler\'s, a typed method\'s, a service\'s', async () => {
+  const chart = scxml('waits', `
+    <state id="s">
+      <onentry><log label="hello" expr="1"/></onentry>
+      <invoke type="urn:test:slow" id="slow" src="x"/>
+      <transition event="done.invoke.slow" target="end"/>
+    </state>
+    <final id="end"/>`);
+  const seen = [];
+  const later = (what) => sleep(20).then(() => seen.push(what));
+  const host = hostWith({ waits: chart }, {
+    log: () => later('log'),
+    services: { 'urn:test:slow': (h, invocation) => later('service').then(() => { invocation.done(); return {}; }) },
+  });
+  const session = host.spawn(host.chart('waits'), { name: 'w' });
+  host.actorState({ session }, () => later('onResult'));
+  await host.idle();
+  equal(seen.sort().join(), 'log,onResult,service', 'every promise settled');
+  equal(host.actorByName('w'), undefined, 'the done the service gave ran too');
+  // a promise that rejects is still an unhandled rejection, and idle() resolves
+  const reasons = [];
+  const listener = (reason) => reasons.push(reason?.message);
+  process.on('unhandledRejection', listener);
+  try {
+    const other = hostWith({ waits: chart }, {
+      log: () => sleep(5).then(() => { throw new Error('late'); }),
+      services: { 'urn:test:slow': (h, invocation) => { invocation.done(); } },
+    });
+    other.spawn(other.chart('waits'));
+    await other.idle();
+    await sleep(20);
+    other.close();
+  } finally {
+    process.off('unhandledRejection', listener);
+  }
+  equal(reasons.join(), 'late', 'the rejection');
+  host.close();
 });
 
 test('close() rejects a waiting idle() and clears its turn', async () => {

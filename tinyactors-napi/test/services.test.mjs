@@ -277,10 +277,10 @@ test('a handler that returns a promise of the service: what comes while it start
     },
   });
   const session = host.spawn(host.chart('client'));
-  await host.idle();
+  await later(); // turns run; idle() would wait for the start
   host.send(session, 'ask', 'first');
   host.send(session, 'ask', 'second');
-  await host.idle();
+  await later(); // turns run; idle() would wait for the start
   same(record, [], 'nothing received before it started');
   release();
   await later();
@@ -308,10 +308,10 @@ test('an UNINVOKE while it starts stops the service once it resolves; the sends 
     },
   });
   const session = host.spawn(host.chart('client'));
-  await host.idle();
+  await later(); // turns run; idle() would wait for the start
   host.send(session, 'ask', 'before');
   host.send(session, 'leave');
-  await host.idle();
+  await later(); // turns run; idle() would wait for the start
   release();
   await later();
   await host.idle();
@@ -333,9 +333,9 @@ test('a handler\'s promise that rejects is a failed start: the invoker and each 
       },
     });
     const session = host.spawn(host.chart('client'));
-    await host.idle();
+    await later(); // turns run; idle() would wait for the start
     host.send(session, 'ask', 'queued');
-    await host.idle();
+    await later(); // turns run; idle() would wait for the start
     release();
     await later();
     await host.idle();
@@ -365,13 +365,13 @@ test('a promise that settles after close, or after the invocation was cancelled,
       },
     });
     const first = host.spawn(host.chart('client'));
-    await host.idle();
+    await later(); // turns run; idle() would wait for the start
     host.send(first, 'leave'); // cancelled while it starts; it rejects later
     host.spawn(host.chart('client')); // the second starts, then the host closes
-    await host.idle();
+    await later(); // turns run; idle() would wait for the start
     gates[0].release();
     await later();
-    await host.idle();
+    await later(); // turns run; idle() would wait for the start
     host.close();
     gates[1].release();
     await until(() => rejections.length > 0); // bun reports a rejection a few turns later

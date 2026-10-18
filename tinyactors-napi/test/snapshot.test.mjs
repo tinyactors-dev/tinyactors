@@ -323,4 +323,37 @@ test('a declaring chart: its var and function come back after a restore', async 
   if (again.length === 0) throw new Error('no snapshot of the restored host');
 });
 
+test('a snapshot holds the time of its call, and host.now() reads that clock on both hosts', async () => {
+  const chart = scxml('timer', `
+    <state id="s"><onentry><send event="ring" delay="300ms"/></onentry>
+      <transition event="ring" target="done"/></state>
+    <final id="done"/>`);
+  const host = new Host(CONFIG, { ...ENGINE });
+  host.addImage(image({ timer: chart }));
+  host.spawn(host.chart('timer'), { name: 'timer' });
+  await host.idle();
+  await new Promise((resolve) => setTimeout(resolve, 150)); // idle on the runtime's clock
+  const before = host.now();
+  const snapshot = host.snapshot();
+  const after = host.now();
+  if (!(after >= before)) throw new Error(`now() went back: ${before} then ${after}`);
+  host.close();
+  const clock = new SimulatedClock();
+  const restored = Host.restore(snapshot, CONFIG, { ...ENGINE, clock });
+  const at = restored.now();
+  if (!(at >= before && at <= after)) throw new Error(`the restored clock reads ${at}, the snapshot was taken between ${before} and ${after}`);
+  await restored.idle();
+  const left = restored.nextDeadline;
+  if (!(left > 0 && left < 200)) throw new Error(`the timer has ${left} ms left after the restore; about 150 were left at the snapshot`);
+  clock.increment(50);
+  equal(restored.now(), at + 50, 'now() moves with the simulated clock');
+  clock.increment(left);
+  await restored.idle();
+  equal(restored.actorByName('timer'), undefined, 'it rang');
+  restored.close();
+  let closed;
+  try { restored.now(); } catch (error) { closed = error.status; }
+  equal(closed, 'TA_ERROR_STATE', 'now() on a closed host');
+});
+
 await run();

@@ -187,18 +187,19 @@ test('an untraced send has no traceparent', async () => {
   host.close();
 });
 
-test('a handler returning a promise: its view is filled before the ack and answers after it', async () => {
+test('a handler returning a promise: its view is filled before the ack and answers after it; idle() waits for it', async () => {
   for (const make of [
     (resolve) => async (h, send) => { await resolve; send.answer('reply', { late: send.sendid }); },
     (resolve) => (h, send) => resolve.then(() => send.answer('reply', { late: send.target })), // a plain function
   ]) {
-    let release;
+    let release, called = false;
     const gate = new Promise((resolve) => { release = resolve; });
-    const { host, outcomes } = caller(make(gate));
-    await host.idle();
+    const { host, outcomes } = caller((h, send) => { called = true; return make(gate)(h, send); });
+    if (!(await until(() => called))) throw new Error('the handler was never called');
     equal(outcomes.length, 0, 'not answered yet');
-    release();
-    if (!(await until(() => outcomes.length > 0))) throw new Error('the late answer never arrived');
+    setTimeout(release, 20);
+    await host.idle(); // the host is idle only once the handler's promise settled and its answer ran
+    equal(outcomes.length, 1, 'answered by the time idle() resolved');
     if (!/^reply \{"late":"(x1|somewhere)"\} x1 undefined undefined$/.test(outcomes[0])) throw new Error(outcomes[0]);
     host.close();
   }

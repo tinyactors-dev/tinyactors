@@ -141,7 +141,16 @@ the ack.
   `uv_timer_*`: oven-sh/bun#18546). So an open host with a pending
   deadline keeps the process alive until it or `close()`, which the README
   says. **`await host.idle()`** is a promise that settles at the next idle
-  turn: it observes, it drives nothing.
+  turn with no handler's promise pending (2026-10-18,
+  l-p4-examples-order-settle: every promise a handler returns, the I/O
+  processors', the services' and their `receive`'s, wake, telemetry, log,
+  migration and typed-method handlers', is followed with `then` and
+  counted on the host, and the count reaching zero with an `idle()`
+  waiting schedules a turn; the last take's at close is `asyncDispose`'s
+  instead): it observes, it drives nothing. On a closed host it returns a
+  rejected promise (`TA_ERROR_STATE`) instead of throwing. **`host.now()`**
+  reads the host's clock now in milliseconds, and `snapshot()` advances
+  the clocks before it packs, so the snapshot's time is the call's.
 - **Every run status** of bindings.md section 3; both clocks before every
   run and every input that depends on them, converted with
   `system.ticksPerSecond`, which the addon reads from `host.config` at

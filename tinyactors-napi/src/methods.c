@@ -235,6 +235,7 @@ napi_value ta_napi_reply(napi_env env, ta_napi_host *host, uint32_t index) {
         }
         napi_value argv[2] = {wrapper, error};
         if (napi_call_function(env, undefined, handlers[1], 2, argv, &called) != napi_ok) ta_napi_keep_error(env, host);
+        else ta_napi_follow(env, host, called); /* idle() waits for a promise it returns */
         return NULL;
     }
     if (napi_get_named_property(env, reply, "result", &value) != napi_ok) {
@@ -244,6 +245,7 @@ napi_value ta_napi_reply(napi_env env, ta_napi_host *host, uint32_t index) {
     napi_value argv[2] = {wrapper, value};
     if (!ta_napi_methods_is(env, handlers[0], napi_function)) return NULL;
     if (napi_call_function(env, undefined, handlers[0], 2, argv, &called) != napi_ok) ta_napi_keep_error(env, host);
+    else ta_napi_follow(env, host, called); /* idle() waits for a promise it returns */
     return NULL;
 }
 

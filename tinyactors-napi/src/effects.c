@@ -579,8 +579,10 @@ static bool ta_napi_send_follow(napi_env env, ta_napi_view *view, napi_value res
     argv[1] = view->self;
     if (napi_call_function(env, rejected, bind, 2, argv, &bound) != napi_ok) return false;
     argv[1] = bound;
-    napi_value ignored;
-    return napi_call_function(env, result, then, 2, argv, &ignored) == napi_ok;
+    napi_value chained;
+    if (napi_call_function(env, result, then, 2, argv, &chained) != napi_ok) return false;
+    ta_napi_follow(env, view->host, chained); /* idle() waits for it */
+    return true;
 }
 
 static void ta_napi_dispatch_service_send(napi_env env, ta_napi_host *host, uint32_t index);
@@ -638,6 +640,7 @@ static void ta_napi_dispatch_log(napi_env env, ta_napi_host *host, uint32_t inde
     }
     napi_value argv[2] = {wrapper, view.self};
     if (napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) != napi_ok) ta_napi_keep_error(env, host);
+    else ta_napi_follow(env, host, result);
 }
 
 /* A MIGRATED: an actor moved; the migrated handler gets the host and a
@@ -659,6 +662,7 @@ static void ta_napi_dispatch_migrated(napi_env env, ta_napi_host *host, uint32_t
     }
     napi_value argv[2] = {wrapper, view.self};
     if (napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) != napi_ok) ta_napi_keep_error(env, host);
+    else ta_napi_follow(env, host, result);
 }
 
 /* The result of a MIGRATION_DONE: {migration, migrated, failed, pending},
@@ -724,6 +728,7 @@ static void ta_napi_dispatch_migration_done(napi_env env, ta_napi_host *host, ui
     if ((argv[1] = ta_napi_migration_result(env, host, index)) == NULL ||
         napi_call_function(env, ta_napi_undefined(env), handler, 2, argv, &result) != napi_ok)
         ta_napi_keep_error(env, host);
+    else ta_napi_follow(env, host, result);
 }
 
 /* A WAKE: a hibernated session has work (an event, a due delayed send:
@@ -731,7 +736,8 @@ static void ta_napi_dispatch_migration_done(napi_env env, ta_napi_host *host, ui
  * the wake handler gets the host, the session and the migration, and calls
  * host.wake with the blob, now or later. Without one the effect is
  * dropped: the session stays hibernated and its events wait. A promise it
- * returns is not followed: its rejection is an unhandled rejection. */
+ * returns is followed, so idle() waits for it; its rejection is an
+ * unhandled rejection. */
 static void ta_napi_dispatch_wake(napi_env env, ta_napi_host *host, uint32_t index) {
     napi_value wrapper = ta_napi_self(env, host), handler = NULL, argv[3], result;
     if (wrapper == NULL) return;
@@ -748,6 +754,7 @@ static void ta_napi_dispatch_wake(napi_env env, ta_napi_host *host, uint32_t ind
         (migration != 0 && napi_create_double(env, (double)migration, &argv[2]) != napi_ok) ||
         napi_call_function(env, ta_napi_undefined(env), handler, 3, argv, &result) != napi_ok)
         ta_napi_keep_error(env, host);
+    else ta_napi_follow(env, host, result);
 }
 
 /* The application's exporter gets the request as a Buffer it keeps (one
@@ -768,7 +775,8 @@ void ta_napi_telemetry(napi_env env, ta_napi_host *host, const ta_napi_export *e
             napi_create_buffer_copy(env, export->data.length, export->data.pointer, NULL, &argv[2]) != napi_ok ||
             napi_call_function(env, ta_napi_undefined(env), handler, 3, argv, &result) != napi_ok)
             ta_napi_keep_error(env, host);
-        else if (host->endings != NULL &&
+        else if (host->endings == NULL) ta_napi_follow(env, host, result); /* idle() waits for it */
+        else if (
                  (ta_napi_is(env, result, napi_object) || ta_napi_is(env, result, napi_function))) {
             uint32_t length = 0; /* a promise, or a thenable: awaited by [Symbol.asyncDispose] */
             if (napi_get_array_length(env, host->endings, &length) != napi_ok ||
@@ -1271,10 +1279,11 @@ static bool ta_napi_invocation_start(napi_env env, ta_napi_invocation *invocatio
             napi_call_function(env, functions[i], bind, 2, argv, &bound[i]) != napi_ok)
             return false;
     }
-    napi_value ignored;
+    napi_value chained;
     if (napi_get_named_property(env, thenable, "then", &then) != napi_ok ||
-        napi_call_function(env, thenable, then, 2, bound, &ignored) != napi_ok)
+        napi_call_function(env, thenable, then, 2, bound, &chained) != napi_ok)
         return false;
+    ta_napi_follow(env, invocation->host, chained); /* idle() waits for the start */
     if (invocation->flags & TA_NAPI_INVOCATION_ENDED) return true; /* done() in the handler: nothing to keep */
     return napi_create_array_with_length(env, 2, &entry) == napi_ok && napi_set_element(env, entry, 0, invocation->self) == napi_ok &&
            napi_set_element(env, entry, 1, ta_napi_undefined(env)) == napi_ok &&
@@ -1385,8 +1394,9 @@ static bool ta_napi_service_receive(napi_env env, const ta_napi_delivery *delive
         ok = ok && napi_call_function(env, crashed, bind, 3, args, &bound) == napi_ok &&
              napi_get_named_property(env, result, "then", &then) == napi_ok;
         args[1] = bound;
-        napi_value ignored;
-        ok = ok && napi_call_function(env, result, then, 2, args, &ignored) == napi_ok;
+        napi_value chained = NULL;
+        ok = ok && napi_call_function(env, result, then, 2, args, &chained) == napi_ok;
+        if (ok) ta_napi_follow(env, delivery->invocation->host, chained); /* idle() waits for it */
     }
     if (!ok) {
         napi_value raised = NULL, ignored;
