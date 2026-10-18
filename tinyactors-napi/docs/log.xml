@@ -1552,4 +1552,86 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <why>Capture cannot know who receives a payload. W3C requires those charts to compile and raise error.execution at run time.</why>
     <resolution>Both accepted.</resolution>
   </entry>
+  <entry id="l-p5-design-split" date="2026-10-18" step="p5-design" kind="decision" status="open">
+    <what>The wasm package's C layer (ta_web_*) holds core, the compiler, txml, the host and its arenas, the input records, the drain and the turn (ta_web_turn, one import per effect JavaScript must see; no take or ack exported), the effect accessors, the CBOR token calls and the vtable forwarding to imports; JavaScript holds the classes, scheduling, values made from tokens and the native datamodel with the addon's realm.js. Pending the refutation.</what>
+    <why>ADR 0009 keeps core's structs in C; a wasm module cannot make JavaScript objects; exporting only the turn makes one drain at a time structural. staticjs-js (ADR 0013) is the same split.</why>
+    <evidence>tinyactors-napi/docs/browser.md, "What is C and what is JavaScript"; crossings 5 to 11 ns (tools/spikes/browser/bench.mjs)</evidence>
+  </entry>
+  <entry id="l-p5-design-values" date="2026-10-18" step="p5-design" kind="decision" status="open">
+    <what>Values: native payloads are ta_table rows with the value at the row's slot of a JavaScript array (never encoded, as the addon); CBOR crosses one token per call through core's ta_cbor_reader and ta_cbor_writer, JavaScript making the values; text in copied into the call's arena (ASCII loop, else encodeInto after isWellFormed), text out decoded on first read. Pending the refutation.</what>
+    <why>One codec (the boundary-design skill rejects a second one in a language layer); a crossing costs 5 to 11 ns, a short string 50 to 600 ns.</why>
+    <evidence>tinyactors-napi/docs/browser.md, "How values cross" and "Boundary costs"</evidence>
+  </entry>
+  <entry id="l-p5-design-memory" date="2026-10-18" step="p5-design" kind="decision" status="open">
+    <what>Memory: the layer's views of linear memory are module-private and re-derived when one reads byteLength 0 (1 to 2.4 ns, against 27 to 30 ns for reading memory.buffer); host outputs, images and snapshots are copied once into a Uint8Array; arenas with marks and the addon's caps over the module's ta_wasm_alloc. Pending the refutation.</what>
+    <why>Growth detaches every view (spike: byteLength 0, a new buffer); toResizableBuffer is absent in node 22 and Chromium 141; linear memory never shrinks.</why>
+    <evidence>tinyactors-napi/docs/browser.md, "Memory"; tools/spikes/browser/bench.mjs</evidence>
+  </entry>
+  <entry id="l-p5-design-scheduling" date="2026-10-18" step="p5-design" kind="decision" status="open">
+    <what>A turn is scheduled with setImmediate where it exists (node, bun), else a MessageChannel message (a page, a Worker); one setTimeout at the deadline; the clock from performance.now and performance.timeOrigin. Pending the refutation.</what>
+    <why>A chained setTimeout(0) waits 4.045 ms a turn in Chromium (the clamp), a MessageChannel 0.011 ms; setImmediate keeps the addon's liveness in node and bun.</why>
+    <evidence>tinyactors-napi/docs/browser.md, "Scheduling, Workers and CSP"; tools/spikes/browser/page.mjs</evidence>
+  </entry>
+  <entry id="l-p5-design-csp" date="2026-10-18" step="p5-design" kind="decision" status="open">
+    <what>Under a Content Security Policy without unsafe-eval, a host on the native datamodel is refused at creation with TA_ERROR_UNSUPPORTED naming the policy, and compileCharts skips its syntax check of ecmascript charts (it parses with the same Function constructor), which the README says; quickjs is the datamodel for such a page later. Pending the refutation.</what>
+    <why>Spike: script-src self wasm-unsafe-eval runs the module but refuses new Function, in an iframe too (the policy is inherited); script-src self refuses the module itself.</why>
+    <evidence>tools/spikes/browser/csp.mjs, drive.mjs, drive3.mjs; tinyactors-napi/docs/browser.md, "Scheduling, Workers and CSP"</evidence>
+  </entry>
+  <entry id="l-p5-design-directory-resolver" date="2026-10-18" step="p5-design" kind="decision" status="open">
+    <what>directoryResolver is exported by both packages: in the wasm package it uses node:fs and node:path through process.getBuiltinModule where they exist, and throws TinyactorsError TA_ERROR_UNSUPPORTED at the call where they do not (a browser). Answers l-p3-shapes-browser once refuted.</what>
+    <why>One API: the same exports; the wasm package runs in node and bun too, where the resolver works.</why>
+    <evidence>tinyactors-napi/docs/browser.md, "One API"</evidence>
+  </entry>
+  <entry id="l-p5-design-shared-tests" date="2026-10-18" step="p5-design" kind="decision" status="open">
+    <what>One index.d.ts (bytes typed Uint8Array, the addon's Buffer a subclass); lib/convenience.mjs imports #direct, which each package maps to its direct layer; the test files unchanged, run against the wasm package under an export condition in node and bun (--conditions=tinyactors-wasm, dropped from the staged package) and an import map in Chromium, exclusions with reasons. Pending the refutation.</what>
+    <why>The tests import @tinyactors/node by name and their own harness, never node:test, so the name is the only seam.</why>
+    <evidence>test/harness.mjs; test/*.test.mjs imports; tinyactors-napi/docs/browser.md, "One API"</evidence>
+  </entry>
+  <entry id="l-p5-design-package" date="2026-10-18" step="p5-design" kind="decision" status="for-maintainer">
+    <what>M1, the package: recommended a sibling @tinyactors/wasm made from tinyactors-napi/ (sources in tinyactors-napi/wasm/), the same version, CHANGELOG.md, tag tinyactors-napi/v&lt;version&gt; and release repository tinyactors-dev/tinyactors-napi, as the platform packages are made from this directory. Alternatives: conditional exports of @tinyactors/node (a browser project would install the developer machine's addon, and the name says Node); a component of its own (two versions for one API, a release repository for no reader).</what>
+    <why>One API means one version and one changelog; ADR 0016 names a release repository after its directory.</why>
+    <evidence>mise/pack.rb:46-49; docs/adr/0016-a-release-repository-per-component.md, decision 2; tinyactors-napi/docs/browser.md, "Packaging and releases"</evidence>
+  </entry>
+  <entry id="l-p5-design-declaring" date="2026-10-18" step="p5-design" kind="decision" status="for-maintainer">
+    <what>M2, a declaring chart's sessions: recommended a generator per session in the host's realm for scripts that declare with var or function only (245 B a session in Chromium), and a realm per session (an iframe, 608 KB resident and 3.6 ms; node:vm in node and bun) for let, const, class or a strict declaring script. Alternatives: a realm per session for every declaring chart (exact, 608 KB each in a browser); refusing lexical ones.</what>
+    <why>A generator's direct eval keeps var and function declarations between scripts, its functions close over them, a throw leaves it running and throw 0; instantiates without running; it does not keep let, const, class or a strict script's vars, its two protocol names are visible, and an undeclared sloppy assignment lands on the host's realm. The suite has one declaring chart (a var); the addon's tests have let and const ones.</why>
+    <evidence>tools/spikes/browser/realms2.mjs, drive.mjs (heap and resident per session), vmgen.mjs (node and bun); test/datamodel.test.mjs:148; test/hibernation.test.mjs:274</evidence>
+  </entry>
+  <entry id="l-p5-design-realm" date="2026-10-18" step="p5-design" kind="decision" status="for-maintainer">
+    <what>M3, the host's realm: recommended a hidden same-origin iframe on a page (one per host), node:vm in node and bun, and the worker's own global in a Worker (no document, so no iframe). Alternative: refuse the native datamodel in a Worker until quickjs.</what>
+    <why>The iframe gives the addon's separation (own globals and constructors, so realm.js copies behave the same) for 608 KB once per host; a removed iframe keeps working (Chromium 141); ShadowRealm is absent in Chromium and node; a Worker per realm cannot serve a synchronous vtable.</why>
+    <evidence>tools/spikes/browser/drive.mjs, detach.mjs, worker.mjs; tinyactors-napi/docs/browser.md, "The native datamodel without node:vm"</evidence>
+  </entry>
+  <entry id="l-p5-design-loading" date="2026-10-18" step="p5-design" kind="decision" status="for-maintainer">
+    <what>M4, loading: recommended top-level await in the wasm package's entry (new URL('./tinyactors.wasm', import.meta.url), instantiateStreaming in a page, node:fs for a file: URL), so import { Host } from '@tinyactors/wasm' is the line it is in Node. Alternative: an explicit load(), which one API would need in the addon too.</what>
+    <why>The old web binding did the same; staticjs-js chose an explicit load().</why>
+    <evidence>git show 997706b8^:tinyactors-core/bindings/web/README.md; staticjs-js/index.mjs</evidence>
+  </entry>
+  <entry id="l-p5-design-retire" date="2026-10-18" step="p5-design" kind="decision" status="for-maintainer">
+    <what>M5, two implementations: the wasm package is supported in node and bun (its tests run there anyway) and is the way on Windows, which has no addon; @tinyactors/node gets no silent fallback, its missing-addon error names @tinyactors/wasm. Recommended: after p5-parity, run mise run measure and the per-event benchmark against both packages side by side, and propose retiring the addon if the wasm package is within 1.5 times per event and 1.25 times resident bytes per actor; else keep both and write it down.</what>
+    <why>The second implementation is the largest cost of p5; core's part of an event costs 1.1 to 2 times its native cost in wasm (about 5 % of a 5.2 us event of the addon's), and a crossing costs 5 to 11 ns against 75 to 210 ns for a Node-API call.</why>
+    <evidence>tools/spikes/browser/perevent.c, run.mjs; mise/pack.rb:46-49; AGENTS.md, "Measured cost per session"</evidence>
+  </entry>
+  <entry id="l-p5-design-optimize" date="2026-10-18" step="p5-design" kind="decision" status="for-maintainer">
+    <what>M6, size against speed: recommended -O2, the release's flags, now (core and compiler 139 KB brotli), with -Oz (114 KB, 19 % smaller) measured for speed in p5-pack before choosing.</what>
+    <why>-Oz's speed is unmeasured.</why>
+    <evidence>tools/spikes/browser/sections.mjs and strip.mjs on spike builds; tinyactors-napi/docs/browser.md, "Sizes"</evidence>
+  </entry>
+  <entry id="l-p5-design-release-wasm-debug" date="2026-10-18" step="p5-design" kind="request-to-core" status="open">
+    <what>tinyactors_runtime.wasm and tinyactors_datamodel_ecmascript.wasm, as mise run wasm:test and the release build them, carry 899 KB and 987 KB of DWARF custom sections (.debug_info, .debug_loc, .debug_line, ...) though the sources compile with -g0: 1,403,617 B against 504,137 B stripped. A browser downloading the release's module pays for them; the binding's own module strips them, so nothing here waits for it.</what>
+    <why>Download size is the browser developer's first cost.</why>
+    <evidence>node tools/spikes/browser/sections.mjs tinyactors-core/build/wasm/wasm32-freestanding/*/*.wasm (2026-10-18)</evidence>
+  </entry>
+  <entry id="l-p5-design-initial-memory" date="2026-10-18" step="p5-design" kind="uncertainty" status="open">
+    <what>A wasm32-wasi link starts with 257 pages (16 MiB) of linear memory, a freestanding one with 17; likely the linker's default stack size, unverified. p5-build sets the stack size and measures it.</what>
+    <evidence>memory.buffer.byteLength after instantiating tools/spikes/browser builds and tinyactors.wasm (2026-10-18)</evidence>
+  </entry>
+  <entry id="l-p5-design-generator-addon" date="2026-10-18" step="p5-design" kind="note" status="open">
+    <what>Observation, not proposed: the generator session works in node:vm contexts on node and bun, so the addon could give a var- or function-declaring session about 245 B instead of a context of 60 to 143 KB.</what>
+    <evidence>tools/spikes/browser/vmgen.mjs; AGENTS.md, "The native ecmascript datamodel"</evidence>
+  </entry>
+  <entry id="l-p5-design-refutation-pending" date="2026-10-18" step="p5-design" kind="issue" status="open">
+    <what>The step's session has no Agent tool to spawn a fresh agent, so the refutation the step requires is not done; browser.md says so, the plan's p5-build to p5-quickjs are not refined yet, and p5-design stays doing until the coordinator's refuter has run and its verdicts are folded in.</what>
+    <evidence>tinyactors-napi/docs/browser.md, "Refutation"</evidence>
+  </entry>
 </log>
