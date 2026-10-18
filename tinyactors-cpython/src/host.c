@@ -428,6 +428,21 @@ static ta_status ta_python_host_restore_core(ta_python_host *host, ta_python_res
     return ok ? TA_OK : TA_ERROR_INVALID;
 }
 
+/* 64 random bits for the host's identity (ta_host_environment.nonce), so
+ * its hibernation blobs wake in no other host: os.urandom(8), the operating
+ * system's random source. -1 with the exception set when it fails. */
+static int ta_python_host_nonce(uint64_t *nonce) {
+    PyObject *os = PyImport_ImportModule("os");
+    PyObject *bits = os ? PyObject_CallMethod(os, "urandom", "i", (int)sizeof *nonce) : NULL;
+    Py_XDECREF(os);
+    if (!bits) return -1;
+    int ok = PyBytes_Check(bits) && PyBytes_Size(bits) == (Py_ssize_t)sizeof *nonce;
+    if (ok) memcpy(nonce, PyBytes_AsString(bits), sizeof *nonce);
+    else PyErr_SetString(PyExc_SystemError, "os.urandom gave no 8 bytes");
+    Py_DECREF(bits);
+    return ok ? 0 : -1;
+}
+
 static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build *build) {
     static char *const names[] = {"config", "io_processors", "log", "clock", "telemetry", "wake", "migrated",
                                   "services", "migration_done", "transport", NULL};
@@ -521,7 +536,12 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
     if (ta_python_host_cbor(host, config, &cbor) < 0) goto fail;
     ta_buffer refusal = {ta_growable_arena_alloc(&host->arena, 8192, 8), 8192, 0};
     ta_host_environment environment = {sizeof environment, TA_PYTHON_DATAMODELS, host->datamodels,
-                                       host->allocator, NULL, refusal.pointer ? &refusal : NULL};
+                                       host->allocator, NULL, refusal.pointer ? &refusal : NULL, 0};
+    /* a restore keeps the snapshot's identity: ta_host_restore ignores the nonce */
+    if (!build->pack && ta_python_host_nonce(&environment.nonce) < 0) {
+        ta_growable_arena_release(&host->arena, mark);
+        goto fail;
+    }
     ta_status status;
     if (build->pack) {
         ta_python_restoring restoring = {*build->pack, &environment, cbor, 0, {NULL, 0}};

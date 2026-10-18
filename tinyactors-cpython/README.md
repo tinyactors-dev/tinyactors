@@ -512,7 +512,12 @@ program's job.
   It takes the session's latest blob only: one of an earlier hibernation
   (a store that fell behind) raises `TinyactorsError` with
   `TA_ERROR_STALE`, another session's `TA_ERROR_INVALID`, and the actor
-  stays hibernated.
+  stays hibernated. A blob belongs to the host that made it: each `Host`
+  draws random bits from `os.urandom` when it is created, so a blob of
+  another host, even for a session of the same number running the same
+  image, raises `TA_ERROR_INVALID` too. A host made by `Host.restore`
+  keeps the snapshot's identity and wakes the blobs its original
+  hibernated.
   The handler is called once per hibernation, however many events come.
   Without a `wake` handler the host does not ask: the actor stays
   hibernated, and its events wait, until you call `host.wake`.

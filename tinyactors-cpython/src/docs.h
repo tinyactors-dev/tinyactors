@@ -406,7 +406,9 @@ static const char ta_python_doc_host_wake[] =
     "the wake handler. Its waiting events run in the next turn. You may call\n"
     "it later than the handler; the actor's events wait until then. Only its\n"
     "latest blob: one of an earlier hibernation raises TinyactorsError\n"
-    "TA_ERROR_STALE, another session's TA_ERROR_INVALID.";
+    "TA_ERROR_STALE, another session's or another Host's TA_ERROR_INVALID\n"
+    "(each Host draws its identity from os.urandom; a restored one keeps\n"
+    "the snapshot's).";
 
 static const char ta_python_doc_host_snapshot[] =
     "snapshot()\n"

@@ -264,7 +264,12 @@ Decided by the maintainer (2026-10-13); every item is in
   `migration` `None`; or a migration asking for it, `migration` its id),
   and the handler
   calls **`host.wake(session, blob)`** (`ta_host_wake`), now or later (an
-  `async def` handler runs as a task; refused under `with`). Without a
+  `async def` handler runs as a task; refused under `with`). A blob
+  wakes only in the host that made it: `Host(...)` fills
+  `ta_host_environment.nonce` with `os.urandom(8)`, called through the
+  API once at creation, so `wake` refuses another host's blob with
+  `TA_ERROR_INVALID`; `Host.restore` draws none, keeping the snapshot's
+  identity. Without a
   `wake` handler the effect is dropped: the session stays hibernated and
   its events wait until the application calls `wake`. An output taken
   with no batch open opens a batch of its own, which the binding

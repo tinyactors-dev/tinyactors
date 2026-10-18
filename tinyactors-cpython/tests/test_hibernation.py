@@ -184,6 +184,25 @@ class Hibernation(unittest.TestCase):
                     host.run_until_idle()
                 self.assertEqual(logs.labelled("n")[0].split(" ")[0], "1")
 
+    def test_wake_refuses_a_blob_of_another_host(self):
+        """Two hosts of one config and one image, each with a session of the
+        same number hibernated: neither wakes the other's blob
+        (TA_ERROR_INVALID, the host's identity differs), and each wakes its
+        own."""
+        source = [("counter.scxml", COUNTER["python"])]
+        with host_with(source) as first, host_with(source) as second:
+            sessions, blobs = [], []
+            for host in (first, second):
+                sessions.append(host.spawn(host.chart("counter")))
+                host.run_until_idle()
+                blobs.append(host.hibernate(sessions[-1]))
+            self.assertEqual(sessions[0], sessions[1])
+            for host, other, own in ((first, blobs[1], blobs[0]), (second, blobs[0], blobs[1])):
+                with self.assertRaises(tinyactors.TinyactorsError) as raised:
+                    host.wake(sessions[0], other)
+                self.assertEqual(raised.exception.status, "TA_ERROR_INVALID")
+                host.wake(sessions[0], own)
+
     def test_wake_refuses_a_blob_it_cannot_read(self):
         with host_with([("counter.scxml", COUNTER["python"])]) as host:
             session = host.spawn(host.chart("counter"))
