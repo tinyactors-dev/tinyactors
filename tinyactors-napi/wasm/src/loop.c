@@ -64,6 +64,15 @@ TA_WEB_EXPORT void ta_web_host_clock_resume(ta_web_host *host) {
     ta_web_leave(host);
 }
 
+/* host.now(): the host's clock as it reads now (the restore's offset in),
+ * in milliseconds at its rate; it advances nothing. */
+TA_WEB_EXPORT double ta_web_host_now(ta_web_host *host) {
+    ta_web_enter(host);
+    ta_time now = ta_web_now(host).monotonic;
+    ta_web_leave(host);
+    return (double)now * 1000.0 / (double)host->ticks_per_second;
+}
+
 /* Milliseconds from now to the host's deadline: 0 when it is due, -1 for
  * none (UINT64_MAX). */
 TA_WEB_EXPORT double ta_web_host_delay(ta_web_host *host) {
@@ -113,23 +122,26 @@ static uint32_t ta_web_reply_slot(ta_web_host *host, uint32_t index) {
 }
 
 /* A take of traces or logs (the encoder's TRACES, LOGS): its bytes to
- * JavaScript, which copies them for the telemetry handler; a take the
- * allocator refused is reported once and retried at the next turn (core
+ * JavaScript (ta_web.output, TA_WEB_OUTPUT_TRACES or _LOGS), which copies
+ * them for the telemetry handler; a take the allocator refused is reported
+ * once (the length TA_WEB_TAKE_REFUSED) and retried at the next turn (core
  * gives no second effect until a take). */
-static void ta_web_take(ta_web_host *host, uint32_t index, bool traces) {
+static void ta_web_take(ta_web_host *host, bool traces) {
     ta_bytes taken;
     ta_status status = traces ? ta_host_traces(host->host, &taken) : ta_host_logs(host->host, &taken);
     uint8_t bit = traces ? 1u : 2u;
+    uint32_t kind = traces ? TA_WEB_OUTPUT_TRACES : TA_WEB_OUTPUT_LOGS;
     if (status == TA_OK) {
         host->retake &= (uint8_t)~bit;
         if (taken.length == 0) return;
         ta_web_set_bytes(host->env->record.word, 0, taken);
-        ta_web_import_effect(host->id, index, (uint32_t)taken.length);
+        ta_web_import_output(host->id, kind, (uint32_t)taken.length);
         return;
     }
     if (status == TA_ERROR_NO_MEMORY && !(host->retake & bit)) {
         host->retake |= bit;
-        ta_web_import_effect(host->id, index, TA_WEB_TAKE_REFUSED);
+        ta_web_set_bytes(host->env->record.word, 0, (ta_bytes){NULL, 0});
+        ta_web_import_output(host->id, kind, TA_WEB_TAKE_REFUSED);
     }
 }
 
@@ -151,8 +163,8 @@ static void ta_web_dispatch(ta_web_host *host, uint32_t index) {
         if (slot != 0) ta_web_import_effect(host->id, index, slot);
         break;
     }
-    case TA_HOST_EFFECT_TRACES: ta_web_take(host, index, true); break;
-    case TA_HOST_EFFECT_LOGS: ta_web_take(host, index, false); break;
+    case TA_HOST_EFFECT_TRACES: ta_web_take(host, true); break;
+    case TA_HOST_EFFECT_LOGS: ta_web_take(host, false); break;
     case TA_EFFECT_SEND:
     case TA_EFFECT_LOG:
     case TA_EFFECT_WAKE:
@@ -196,8 +208,8 @@ TA_WEB_EXPORT uint32_t ta_web_turn(ta_web_host *host) {
     if (ta_web_drain(host)) goto done;
     if (host->retake) { /* a take the allocator refused: again, in a batch of its own */
         host->batch = true;
-        if (host->retake & 1u) ta_web_take(host, TA_NIL, true);
-        if (host->retake & 2u) ta_web_take(host, TA_NIL, false);
+        if (host->retake & 1u) ta_web_take(host, true);
+        if (host->retake & 2u) ta_web_take(host, false);
         ta_host_effects_ack(host->host);
         host->batch = false;
         host->acks++;

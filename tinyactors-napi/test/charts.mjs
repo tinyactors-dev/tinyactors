@@ -1,11 +1,13 @@
 // Charts the tests share, on the ECMAScript datamodel the test task names
-// (TA_NAPI_DATAMODEL: each file runs once on "native" and once on
-// "quickjs"; "native", the default, when run on its own), and the helpers
-// that make a host run them. Actors are observed with what the inputs give: an actor
-// that reaches a final state ends, so host.actorByName stops finding it.
+// (TA_NAPI_DATAMODEL, or a page's runner: test/runtime.mjs; each file runs
+// once on "native" and once on "quickjs"; "native", the default, when run
+// on its own), and the helpers that make a host run them. Actors are
+// observed with what the inputs give: an actor that reaches a final state
+// ends, so host.actorByName stops finding it.
 import { compileCharts, Host, TinyactorsError } from '@tinyactors/node';
+import { datamodel, macrotask } from './runtime.mjs';
 
-export const DATAMODEL = process.env.TA_NAPI_DATAMODEL ?? 'native';
+export const DATAMODEL = datamodel;
 /** The Host options that name the datamodel under test. */
 export const ENGINE = { datamodel: DATAMODEL };
 export const CONFIG = { systemID: 't' };
@@ -43,6 +45,23 @@ export const ENDER = scxml('ender', `
   <state id="s"><transition event="go" target="done"/></state>
   <final id="done"/>`);
 
+/** Whether two byte arrays (Uint8Arrays: a Buffer is one) hold the same bytes. */
+export function sameBytes(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** Where `needle`'s bytes first appear in `bytes`, or -1. */
+export function indexOfBytes(bytes, needle) {
+  for (let i = 0; i + needle.length <= bytes.length; i++) {
+    let j = 0;
+    while (j < needle.length && bytes[i + j] === needle[j]) j++;
+    if (j === needle.length) return i;
+  }
+  return -1;
+}
+
 export function equal(actual, expected, what) {
   if (actual !== expected) throw new Error(`${what}: ${String(actual)}, expected ${String(expected)}`);
 }
@@ -66,7 +85,7 @@ export const status = (name) => (error) => {
   equal(error.status, name, 'status');
 };
 
-export const tick = () => new Promise((resolve) => setImmediate(resolve));
+export const tick = () => macrotask();
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Waits, by event-loop turns only, until `done()` holds (at most `limit`

@@ -117,11 +117,11 @@ test('undefined and null stay apart', () => {
   equal(toHex(encode([undefined, null])), '82f7f6', 'encode');
 });
 
-test('bytes: a Uint8Array, a Buffer too; decode takes an ArrayBuffer', () => {
+test('bytes: a Uint8Array, a Buffer too (where there is one); decode takes an ArrayBuffer', () => {
   const bytes = decode(hex('43010203'));
   equal(Object.getPrototypeOf(bytes), Uint8Array.prototype, 'a plain Uint8Array');
   equal(toHex(bytes), '010203', 'its bytes');
-  equal(toHex(encode(Buffer.from([4, 5]))), '420405', 'a Buffer');
+  if (typeof Buffer === 'function') equal(toHex(encode(Buffer.from([4, 5]))), '420405', 'a Buffer');
   equal(toHex(encode(new Uint8Array([9, 8, 7]).subarray(1))), '420807', 'a view: its own bytes');
   equal(decode(hex('1864').buffer), 100, 'an ArrayBuffer');
   refused(() => encode(new Uint16Array([1])), 'another typed array');

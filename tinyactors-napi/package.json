@@ -28,6 +28,7 @@
   "exports": {
     ".": {
       "types": "./index.d.ts",
+      "tinyactors-wasm": "./wasm/index.mjs",
       "default": "./index.mjs"
     }
   },
@@ -39,5 +40,11 @@
     "LICENSE",
     "docs/guide",
     "docs/values.md"
-  ]
+  ],
+  "imports": {
+    "#direct": {
+      "tinyactors-wasm": "./wasm/lib/direct.mjs",
+      "default": "./lib/direct.mjs"
+    }
+  }
 }

@@ -7,47 +7,8 @@
 // no Playwright is installed it says so and passes: the test task
 // requires one (mise/tasks/wasm/test).
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
-import { createRequire } from 'node:module';
-import { extname, join, normalize } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { run, test } from '../../test/harness.mjs';
-
-const root = fileURLToPath(new URL('..', import.meta.url));
-const TYPES = { '.mjs': 'text/javascript', '.wasm': 'application/wasm', '.html': 'text/html' };
-
-function playwright() {
-  const require = createRequire(import.meta.url);
-  const paths = [root];
-  try {
-    paths.push(execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim());
-  } catch {
-    // no npm on PATH
-  }
-  try {
-    return require(require.resolve('playwright', { paths }));
-  } catch {
-    return null;
-  }
-}
-
-function serve() {
-  const server = createServer(async (request, response) => {
-    const path = normalize(join(root, decodeURIComponent(new URL(request.url, 'http://x').pathname)));
-    if (!path.startsWith(root)) return response.writeHead(403).end();
-    if (path === join(root, 'page.html')) return response.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>tinyactors</title>');
-    let body;
-    try {
-      body = await readFile(path);
-    } catch {
-      return response.writeHead(404).end();
-    }
-    return response.writeHead(200, { 'content-type': TYPES[extname(path)] ?? 'application/octet-stream' }).end(body);
-  });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
-}
+import { launch, napi, playwright, serve } from './serve.mjs';
 
 function check(out, where) {
   assert.deepEqual(out.entries, ['function', 'function', 'TA_ERROR_STATE'], where);
@@ -68,25 +29,25 @@ test('the module in a Chromium page and a module Worker, through both entries', 
     console.log('skip: no Playwright installed');
     return;
   }
-  const server = await serve();
-  const executablePath = process.env.PLAYWRIGHT_CHROMIUM;
-  const browser = await pw.chromium.launch(executablePath ? { executablePath } : {});
+  const server = await serve(new Map([[napi('page.html'), '<!doctype html><title>tinyactors</title>']]));
+  const browser = await launch(pw);
   try {
     const page = await browser.newPage();
     const errors = [];
     page.on('pageerror', (error) => errors.push(error));
-    await page.goto(`http://127.0.0.1:${server.address().port}/page.html`);
-    check(await page.evaluate(async () => (await import('/test/browser.mjs')).everything()), 'page');
-    const worker = await page.evaluate(() => new Promise((resolve) => {
-      const w = new Worker('/test/worker.mjs', { type: 'module' });
+    await page.goto(`http://127.0.0.1:${server.address().port}${napi('page.html')}`);
+    check(await page.evaluate(async (url) => (await import(url)).everything(), napi('wasm/test/browser.mjs')), 'page');
+    const worker = await page.evaluate((url) => new Promise((resolve) => {
+      const w = new Worker(url, { type: 'module' });
       w.onmessage = (event) => resolve(event.data);
       w.onerror = (event) => resolve({ error: event.message });
-    }));
+    }), napi('wasm/test/worker.mjs'));
     assert.equal(worker.error, undefined, worker.error);
     check(worker.out, 'worker');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();
+    server.closeAllConnections();
     server.close();
   }
 });

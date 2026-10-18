@@ -1,20 +1,41 @@
 #!/usr/bin/env ruby
-#MISE description="Test the wasm module and its loaders: build it (wasm:build, its imports and exports checked), then wasm/test/module.test.mjs under node and bun and wasm/test/browser.test.mjs in Chromium (a page and a module Worker, through both entries)"
+#MISE description="Test @tinyactors/wasm: build its module (wasm:build, its imports and exports checked), then wasm/test/module.test.mjs under node and bun and wasm/test/browser.test.mjs in Chromium (a page and a module Worker, through both entries), then the shared test files (test/*.test.mjs) against the wasm package under node and bun (--conditions=tinyactors-wasm) and in Chromium (an import map), each with the exclusions wasm/test/exclusions.mjs lists"
 # vim:ft=ruby
 
 # Chromium is the pre-installed Playwright's (/opt/pw-browsers/chromium,
 # PLAYWRIGHT_CHROMIUM, as staticjs-js's test finds it); without Playwright
-# the browser test says it skipped. `mise run test` runs this task.
+# the browser tests say they skipped. `mise run test` runs this task.
+#
+# The shared test files import `@tinyactors/node`, which package.json's
+# export condition `tinyactors-wasm` maps to wasm/index.mjs (and `#direct`
+# to its direct layer): the condition goes in NODE_OPTIONS and BUN_OPTIONS,
+# so a test's child process (a liveness case, a documentation example)
+# runs the same package, and TA_NAPI_PACKAGE tells the harness which
+# exclusions apply. Each file runs once, on the native datamodel: the
+# quickjs pass is not made until the package has quickjs (p5-quickjs).
 
 require_relative '../../wasm'
 
 NodeAPI.run('mise', 'run', 'wasm:build')
+condition = '--conditions=tinyactors-wasm'
 NodeAPI::RUNTIMES.each do |runtime|
   puts "wasm:test: #{runtime} wasm/test/module.test.mjs"
-  NodeAPI.run(NodeAPI.pinned(runtime), WebModule::ROOT.join('test/module.test.mjs').to_s)
+  NodeAPI.run(NodeAPI.pinned(runtime), condition, WebModule::ROOT.join('test/module.test.mjs').to_s)
 end
 env = {}
 chromium = Pathname.new('/opt/pw-browsers/chromium')
 env['PLAYWRIGHT_CHROMIUM'] = chromium.to_s if chromium.executable?
 puts 'wasm:test: chromium wasm/test/browser.test.mjs'
 NodeAPI.run(NodeAPI.pinned('node'), WebModule::ROOT.join('test/browser.test.mjs').to_s, env: env)
+
+shared = { 'TA_NAPI_PACKAGE' => 'wasm', 'TA_NAPI_DATAMODEL' => 'native', 'NODE_OPTIONS' => condition,
+           'BUN_OPTIONS' => condition }
+NodeAPI::RUNTIMES.each do |runtime|
+  program = NodeAPI.pinned(runtime)
+  NodeAPI.tests.each do |file|
+    puts "wasm:test: #{runtime} native #{file.relative_path_from(NodeAPI::ROOT)} against @tinyactors/wasm"
+    NodeAPI.run(program, file.to_s, env: shared)
+  end
+end
+puts 'wasm:test: chromium test/*.test.mjs against @tinyactors/wasm (wasm/test/chromium.mjs)'
+NodeAPI.run(NodeAPI.pinned('node'), WebModule::ROOT.join('test/chromium.mjs').to_s, env: env)

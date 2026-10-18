@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
 import { ENDER, ENGINE, hostWith, scxml, sleep } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
+import { macrotask } from './runtime.mjs';
 
 const CONFIG = { systemID: 't' };
 
@@ -42,7 +43,7 @@ const stateError = (error) => {
   equal(error.status, 'TA_ERROR_STATE', 'status');
 };
 
-const tick = () => new Promise((resolve) => setImmediate(resolve));
+const tick = () => macrotask();
 
 test('idle() on a fresh host settles at the next turn, with no driver called', async () => {
   const host = new Host(CONFIG, ENGINE);
@@ -245,7 +246,7 @@ test('TA_RUN_YIELDED and the turn\'s bound: the event loop runs between turns', 
   const started = Date.now();
   // a timer and I/O get their turns while the actor spins
   await new Promise((resolve) => setTimeout(() => { timers++; resolve(); }, 1));
-  await new Promise((resolve) => setImmediate(() => { io++; resolve(); }));
+  await macrotask().then(() => { io++; });
   await sleep(20);
   equal(timers, 1, 'the timer ran');
   equal(io, 1, 'the immediate ran');

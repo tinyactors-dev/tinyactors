@@ -1,6 +1,6 @@
 // Telemetry (docs/plan.xml, p2-telemetry; translated from
 // tinyactors-cpython/tests/test_telemetry.py): the OTLP requests the host's
-// encoder writes, handed to the application's handler as a Buffer copied
+// encoder writes, handed to the application's handler as a Uint8Array copied
 // once, metrics pulled in and outside a drain, the last take at close
 // (trace.end, bounded, its handler's close() deferred, its error reported
 // once the host is freed, its promises awaited by [Symbol.asyncDispose]),
@@ -45,7 +45,7 @@ async function spanNames(host, requests) {
 /** A host that decodes, with no encoder of its own. */
 const decoder = () => new Host({ systemID: 'd' }, ENGINE);
 
-test('traces and logs reach the handler as Buffers, copied once, after flushInterval', async () => {
+test('traces and logs reach the handler as Uint8Arrays, copied once, after flushInterval', async () => {
   const got = [];
   const clock = new SimulatedClock();
   const host = logging((h, signal, data) => got.push([signal, data, h]), { clock });
@@ -56,7 +56,7 @@ test('traces and logs reach the handler as Buffers, copied once, after flushInte
   await host.idle();
   equal(got.map(([signal]) => signal).sort().join(), 'logs,traces', 'one request of each');
   for (const [, data, h] of got) {
-    if (!Buffer.isBuffer(data) || data.length === 0) throw new Error('data is not a non-empty Buffer');
+    if (!(data instanceof Uint8Array) || data.length === 0) throw new Error('data is not a non-empty Uint8Array');
     equal(h, host, 'the handler gets the host');
   }
   if (!(await spanNames(host, got)).includes('scxml.macrostep go')) throw new Error('no macrostep go');
@@ -91,7 +91,7 @@ test('without a handler the requests are taken and dropped, so the encoder goes 
 test('metrics are pulled outside a drain: its own batch, acknowledged at once', async () => {
   const host = logging(undefined);
   const first = host.metrics();
-  if (!Buffer.isBuffer(first) || first.length === 0) throw new Error('metrics() gave no Buffer');
+  if (!(first instanceof Uint8Array) || first.length === 0) throw new Error('metrics() gave no Uint8Array');
   if (host.metrics().length === 0) throw new Error('a second metrics() gave nothing'); // the first's batch was acknowledged
   host.send(host.spawn(host.chart('c')), 'go');
   await host.idle(); // and nothing was left open for the run

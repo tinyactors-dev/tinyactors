@@ -150,6 +150,14 @@ module NodeAPI
     # The fields every package shares, from this directory's package.json.
     def shared(manifest, version) = { 'version' => version, **manifest.slice('license', 'homepage', 'repository', 'bugs', 'engines') }
 
+    # The export condition `tinyactors-wasm` maps the package's name and
+    # `#direct` to the wasm package's files in the repository, for the
+    # shared tests (docs/browser.md, "One API"); @tinyactors/node ships
+    # without them, so the staged package drops it.
+    def without_wasm(map)
+      map.transform_values { |conditions| conditions.is_a?(Hash) ? conditions.except('tinyactors-wasm') : conditions }
+    end
+
     # Stages the main package in `dir`: its files and a package.json listing
     # every platform package at `version`.
     def stage_main(dir, version)
@@ -160,6 +168,8 @@ module NodeAPI
       end
       staged = manifest.merge(
         'version' => version,
+        'exports' => without_wasm(manifest.fetch('exports')),
+        'imports' => without_wasm(manifest.fetch('imports')),
         'optionalDependencies' => target_names.to_h { |target| [platform_name(target), version] }
       )
       dir.join('package.json').write("#{JSON.pretty_generate(staged)}\n")

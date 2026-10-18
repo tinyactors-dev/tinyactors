@@ -204,7 +204,7 @@ test('directoryResolver refuses what leaves its root: .., an absolute path, a sy
 test('directoryResolver: text is UTF-8 or refused; other errors of the file system pass; the root must exist', () => {
   const { path, done } = directory();
   try {
-    writeFileSync(join(path, 'latin1.scxml'), Buffer.from([0x3c, 0x73, 0xe9, 0x3e]));
+    writeFileSync(join(path, 'latin1.scxml'), new Uint8Array([0x3c, 0x73, 0xe9, 0x3e]));
     mkdirSync(join(path, 'folder.scxml'));
     const resolver = directoryResolver(path);
     throws(() => resolver('order.scxml', 'latin1.scxml'), (error) => {

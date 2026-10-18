@@ -1,7 +1,7 @@
 // The module instance (docs/browser.md): loads tinyactors.wasm, gives it
-// its imports, and calls its exports. Everything above it (the classes,
-// p5-api) goes through `WebModule.call`, never through the exports
-// themselves, so the two rules of "Exceptions, an unclosed host, the
+// its imports, and calls its exports. Everything above it (the classes)
+// goes through `WebModule.call` or its guarded exports `WebModule.fn`,
+// never through the exports themselves, so the two rules of "Exceptions, an unclosed host, the
 // floor, the address space" hold in one place:
 //
 //   - every import catches what JavaScript throws and answers a status
@@ -28,6 +28,9 @@ const TA_ERROR_STATE = -6;
 const TA_ERROR_ABORTED = -9;
 
 const encoder = new TextEncoder();
+// A double and its two words (little-endian, as wasm's memory is).
+const DOUBLE = new Float64Array(1);
+const BITS = new Uint32Array(DOUBLE.buffer);
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
 // A WebAssembly.Module from `source`: undefined for the bundled one, a URL
@@ -69,7 +72,6 @@ export class WebModule {
   #memory;
   #bytes = new Uint8Array(0);
   #words = new Uint32Array(0);
-  #floats = new Float64Array(0);
   #owners = new Map(); // id -> WeakRef of what an import calls (a host's handler, a compilation's)
   #next = 1;
   #poison = null;      // the first cause, once poisoned
@@ -98,6 +100,25 @@ export class WebModule {
     const instance = new WebAssembly.Instance(module, imports);
     this.#exports = instance.exports;
     this.#memory = instance.exports.memory;
+    // Each export guarded as call() guards it, with its three arguments
+    // fixed (no export takes more): the calls the hot paths make.
+    const fn = {};
+    for (const [name, f] of Object.entries(instance.exports)) {
+      if (typeof f !== 'function') continue;
+      fn[name] = (a, b, c) => {
+        if (this.#poison !== null) throw this.#poisoned();
+        let result;
+        try {
+          result = f(a, b, c);
+        } catch (error) {
+          if (this.#poison === null) this.#poison = error;
+          throw this.#poisoned();
+        }
+        if (this.#poison !== null) throw this.#poisoned();
+        return result;
+      };
+    }
+    this.fn = Object.freeze(fn);
     this.call('_initialize');
     this.#env = this.call('ta_web_env_new');
     if (this.#env === 0) throw new TinyactorsError('no memory for the module\'s environment', { status: 'TA_ERROR_NO_MEMORY' });
@@ -163,6 +184,9 @@ export class WebModule {
 
   get env() { return this.#env; }
 
+  // The record's index in words(), for a caller that writes many words.
+  get record() { return this.#record; }
+
   // The views of linear memory, re-derived when growth detached them.
   bytes() {
     if (this.#bytes.byteLength === 0) this.#views();
@@ -178,7 +202,6 @@ export class WebModule {
     const buffer = this.#memory.buffer;
     this.#bytes = new Uint8Array(buffer);
     this.#words = new Uint32Array(buffer);
-    this.#floats = new Float64Array(buffer);
   }
 
   // The record's words (web.h): written right before an export, read right
@@ -194,20 +217,15 @@ export class WebModule {
 
   // The double whose bits are the record's words `at` and `at + 1`.
   wordFloat(at) {
-    if (this.#floats.byteLength === 0) this.#views();
-    const index = this.#record + at;
-    if (index % 2 === 0) return this.#floats[index / 2];
-    const scratch = new DataView(new ArrayBuffer(8));
-    scratch.setUint32(0, this.word(at), true);
-    scratch.setUint32(4, this.word(at + 1), true);
-    return scratch.getFloat64(0, true);
+    BITS[0] = this.word(at);
+    BITS[1] = this.word(at + 1);
+    return DOUBLE[0];
   }
 
   setWordFloat(at, value) {
-    const scratch = new DataView(new ArrayBuffer(8));
-    scratch.setFloat64(0, value, true);
-    this.setWord(at, scratch.getUint32(0, true));
-    this.setWord(at + 1, scratch.getUint32(4, true));
+    DOUBLE[0] = value;
+    this.setWord(at, BITS[0]);
+    this.setWord(at + 1, BITS[1]);
   }
 
   // ---- calls with an arena: a mark at entry, a release on every path ----------------
@@ -228,7 +246,7 @@ export class WebModule {
 
   // `length` bytes of room in `scratch`, above its current call's mark.
   room(scratch, length) {
-    const at = this.call('ta_web_scratch_room', scratch, length);
+    const at = this.call('ta_web_scratch_room', scratch, length) >>> 0; // a u32: past 2 GiB, an i32 reads negative
     if (at === 0) throw new TinyactorsError('no memory for the call', { status: 'TA_ERROR_NO_MEMORY' });
     return at;
   }
@@ -287,7 +305,7 @@ export class WebModule {
 
   // core's name of a status (ta_status_name).
   statusName(status) {
-    const at = this.call('ta_web_status_name', status);
+    const at = this.call('ta_web_status_name', status) >>> 0;
     const bytes = this.bytes();
     let end = at;
     while (bytes[end] !== 0) end++;

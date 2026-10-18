@@ -116,6 +116,32 @@ rows were written (log entries `l-p0-map-*`, for the maintainer).
 | `parseHTTPRequest(message) → {method, target, body, event, fields}` | `ta_http_parse_request` | SCXML's BasicHTTP (C.2.2): an incoming request's event name (`_scxmleventname`, else `HTTP.<METHOD>`) and its decoded form fields, as strings, the scratch in the call's arena; a malformed request throws `TA_ERROR_INVALID` |
 | the native `"ecmascript"` datamodel, `_event` | `TA_DATAMODEL_EVENT_DETACHABLE`, `ta_datamodel_environment_in`, `ta_image_chart_datamodel` | the vtable of `datamodel.h` in the application's engine: `node:vm` contexts (one shared per host, one per session for a chart whose scripts declare top-level names, as the engine says at `chart_attach`), a scope per session made by its chart's constructor over a frozen prototype of the system variables, expressions compiled one at a time at their first evaluation (sloppy `with`, strict inside: an undeclared assignment, a write to a system variable or to `_event` is `error.execution`), values crossing by copy into the receiving context, `_event` frozen and kept until the next `bind_event` or `destroy` (across `detach_event`), XML content a DOM through txml; hibernation (`serialize` writes the session's variables and `_event` as the value table's CBOR, `TA_ERROR_UNSUPPORTED` for a value outside it or a chart whose scripts declare with `let`, `const` or `class`; `deserialize` makes a new scope, or a new context whose scripts' declarations are made again; `payload_serialize` the value table's CBOR, `payload_deserialize` as `from_wire`, both for a migrated actor's pending delayed sends); migration (`deserialize` keeps the blob's variables in the session's link until the first event or `migrate`, which answers them, exactly the old chart's variables, as one payload, and drops from a declaring session's global the old names the new chart does not declare); snapshots (every session row written as hibernation writes it, with its link's `_sessionid`, `_name`, processors, params and added names, a payload's value and references, a `<foreach>`'s items; restored into a new scope, or a new context whose scripts' declarations are made again, at the row's handle; a declaring session's globals read by name, since bun's vm context leaves a global's property stale after a function writes its `var`) |
 
+**The same items in `@tinyactors/wasm`.** Every row above is an item of
+`@tinyactors/wasm` too, with the same name, shape, errors and lifetimes
+(docs/browser.md, "One API"): its direct layer (`wasm/lib/direct.mjs` and
+the files beside it) is JavaScript over the module's C layer
+(`wasm/src/`, whose `ta_web_*` exports call the core functions each row
+names), and `lib/convenience.mjs` is the same file, its `#direct` mapped
+to that direct layer under the export condition `tinyactors-wasm`. Where
+it differs today, it says so at the call, never silently:
+
+- bytes the host hands out (`compiled.image`, telemetry's data,
+  `metrics()`, `hibernate()`, `snapshot()`) are a `Uint8Array`, the
+  addon's a `Buffer` (a subclass);
+- `datamodel: "quickjs"` throws `TinyactorsError` with
+  `TA_ERROR_UNSUPPORTED` at `new Host` (p5-quickjs), its limits checked
+  first as the addon checks them;
+- the native `"ecmascript"` datamodel is not in it yet (p5-datamodel): a
+  host holds the null datamodel only, so `addImage` of an image with an
+  `"ecmascript"` chart throws `TA_ERROR_UNSUPPORTED`, `compileCharts`
+  makes no syntax check of the charts' ECMAScript, and a snapshot's
+  datamodel state is an empty `"native"` map;
+- `directoryResolver` reaches `node:fs` and `node:path` through
+  `process.getBuiltinModule` (node, bun) and throws `TA_ERROR_UNSUPPORTED`
+  where there is none (a page, a Worker);
+- a host nobody closed is freed by a `FinalizationRegistry`, the
+  addon's finalizer's place; its state reaches the `Host` only weakly.
+
 **Not an API item: the package's documents.** The main package ships
 the README, `docs/guide/` and `docs/values.md` beside the code and the
 types (package.json's `files`, which `mise/pack.rb` stages), so the

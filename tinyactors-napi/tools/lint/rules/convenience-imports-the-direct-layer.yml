@@ -19,10 +19,19 @@
 # `node:` prefix: not `fs`, not `node:fs/promises`, no other built-in. The
 # addon is still reached only through ./direct.mjs, so the layer still calls
 # nothing an application could not.
+#
+# Widened again (docs/plan.xml, p5-api): one convenience layer for both
+# packages (docs/browser.md, "One API"). It imports `#direct`, the subpath
+# import package.json maps to the addon's lib/direct.mjs and, under the
+# export condition `tinyactors-wasm`, to the wasm package's direct layer,
+# in place of './direct.mjs'; and it reaches node:fs and node:path through
+# `process.getBuiltinModule` when directoryResolver is called, so that a
+# browser, which has neither, loads the layer and refuses only that call.
+# Both names exactly, as before; no static import of a built-in.
 id: convenience-imports-the-direct-layer
 language: javascript
 severity: error
-message: "the convenience layer imports only the direct layer's exports ('./direct.mjs') and the built-ins 'node:fs' and 'node:path' (directoryResolver): no other module, path, package, built-in, .node file or computed import"
+message: "the convenience layer imports only the direct layer's exports ('#direct') and reaches only the built-ins 'node:fs' and 'node:path' (directoryResolver, through process.getBuiltinModule): no other module, path, package, built-in, .node file or computed import"
 files:
   - lib/**/*.mjs
 ignores:
@@ -35,11 +44,15 @@ rule:
         - any:
             - inside: {kind: import_statement}
             - inside: {kind: export_statement}
-        - not: {regex: '^[''"](\./direct\.mjs|node:fs|node:path)[''"]$'}
+        - not: {regex: '^[''"]#direct[''"]$'}
     # import('<specifier>') and require('<specifier>'), whatever the specifier
     - all:
         - kind: call_expression
         - has: {field: function, regex: '^(import|require)$'}
     - pattern: process.dlopen($$$ARGUMENTS)
-    - pattern: process.getBuiltinModule($$$ARGUMENTS)
+    # getBuiltinModule of node:fs or node:path only, by name
+    - all:
+        - kind: call_expression
+        - has: {field: function, regex: 'getBuiltinModule'}
+        - not: {regex: '\(\s*([''"])node:(fs|path)([''"])\s*\)$'}
     - pattern: createRequire($$$ARGUMENTS)

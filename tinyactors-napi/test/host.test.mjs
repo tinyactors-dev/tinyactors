@@ -7,6 +7,7 @@
 import { Host, TinyactorsError } from '@tinyactors/node';
 import { CONFIG, ENDER, ENGINE, WAITER, hostWith, image, scxml, status, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
+import { wasm } from './runtime.mjs';
 
 const QUICKJS = { datamodel: 'quickjs' };
 
@@ -132,25 +133,46 @@ test('a method on another object is refused by the type tag', () => {
   }, 'closed on another object');
 });
 
+/** 50 hosts whose handlers close over them, dropped; how many were made. */
+function dropHosts(registry) {
+  for (let i = 0; i < 50; i++) {
+    const box = {};
+    const host = new Host({ systemID: 't' }, {
+      ...ENGINE,
+      log: () => box.host, // handler -> box -> host -> handlers -> handler
+      ioProcessors: {},
+    });
+    box.host = host;
+    registry.register(host, i);
+  }
+}
+
 test('a dropped host whose handlers close over it is collected and frees its memory', async () => {
   await collect();
-  const before = process.memoryUsage().external;
   let collected = 0;
   const registry = new FinalizationRegistry(() => collected++);
-  let during;
-  (() => {
-    for (let i = 0; i < 50; i++) {
-      const box = {};
-      const host = new Host({ systemID: 't' }, {
-        ...ENGINE,
-        log: () => box.host, // handler -> box -> host -> handlers -> handler
-        ioProcessors: {},
-      });
-      box.host = host;
-      registry.register(host, i);
-    }
-    during = process.memoryUsage().external;
-  })();
+  if (wasm) {
+    // @tinyactors/wasm: linear memory never shrinks (docs/browser.md,
+    // "Memory"), so a freed host shows as memory the next hosts reuse: 50
+    // more after the collection leave the module's memory where it was
+    const { instance } = await import('../wasm/lib/state.mjs');
+    const memory = () => instance().bytes().byteLength;
+    dropHosts(registry);
+    await collect();
+    equal(collected, 50, 'hosts collected');
+    const peak = memory();
+    await new Promise((resolve) => setTimeout(() => {
+      dropHosts(registry); // from a task of its own: bun's collector scans the stack
+      resolve();
+    }, 0));
+    for (let i = 0; i < 5 && collected < 100; i++) await collect(); // bun's conservative scan may keep one a while
+    equal(collected, 100, 'hosts collected again');
+    equal(memory(), peak, 'linear memory after 50 more hosts, the first ones freed');
+    return;
+  }
+  const before = process.memoryUsage().external;
+  dropHosts(registry);
+  const during = process.memoryUsage().external;
   await collect();
   equal(collected, 50, 'hosts collected');
   // The host's blocks are reported with napi_adjust_external_memory. Bun

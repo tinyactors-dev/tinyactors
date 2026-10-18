@@ -1,10 +1,10 @@
 // The compiler (docs/plan.xml, p1-compile; decision d-image): compileCharts
-// and compileSystem, the compile result and its image (a Buffer copied on
+// and compileSystem, the compile result and its image (a Uint8Array copied on
 // first read, which outlives close(); a first read after close() throws
 // TA_ERROR_STALE), CompileError with every diagnostic, the resolver and
 // ResolveError, and the finalizer that frees a result never closed.
 import { compileCharts, compileSystem, CompileError, Host, ResolveError, TinyactorsError } from '@tinyactors/node';
-import { CONFIG, ENGINE, equal, scxml, status, throws, typeError, until } from './charts.mjs';
+import { CONFIG, ENGINE, equal, sameBytes, scxml, status, throws, typeError, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 const GOOD = scxml('c', '<state id="s"/>');
@@ -50,17 +50,17 @@ test('an error throws CompileError with every diagnostic', () => {
   }, 'a chart with an unknown target');
 });
 
-test('the image is a Buffer copied on first read, the same after, and it outlives close()', () => {
+test('the image is a Uint8Array copied on first read, the same after, and it outlives close()', () => {
   const compiled = compileCharts([{ name: 'c.scxml', text: GOOD }]);
   equal(Array.isArray(compiled.diagnostics) && compiled.diagnostics.length, 0, 'no diagnostics');
   const image = compiled.image;
-  if (!Buffer.isBuffer(image) || image.length === 0) throw new Error('not a Buffer of the image');
+  if (!(image instanceof Uint8Array) || image.length === 0) throw new Error('not a Uint8Array of the image');
   equal(compiled.image, image, 'cached');
-  const copy = Buffer.from(image);
+  const copy = image.slice();
   compiled.close();
   compiled.close(); // again: nothing
   equal(compiled.image, image, 'the copy read before close()');
-  if (!image.equals(copy)) throw new Error('the Buffer changed at close()');
+  if (!sameBytes(image, copy)) throw new Error('the image changed at close()');
   const host = new Host(CONFIG, ENGINE);
   equal(host.addImage(image), 0, 'the copy makes a segment after close()');
   host.close();

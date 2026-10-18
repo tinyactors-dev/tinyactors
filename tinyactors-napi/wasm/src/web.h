@@ -219,14 +219,23 @@ const ta_datamodel_vtable *ta_web_native_vtable(void);
 /* ---- imports: every one catches what JavaScript throws and answers a status ---- */
 
 /* An effect JavaScript sees (loop.c's drain): `index` in the open batch,
- * `extra` what C found for it (a REPLY's pending slot + 1; a TRACES or LOGS
- * take: its bytes in the record's words 0 and 1, or TA_WEB_TAKE_REFUSED). */
+ * `extra` what C found for it (a REPLY's pending slot + 1). A TRACES or
+ * LOGS take goes to ta_web.output instead (TA_WEB_OUTPUT_TRACES, _LOGS),
+ * its length TA_WEB_TAKE_REFUSED when the allocator refused it. */
 enum { TA_WEB_TAKE_REFUSED = 0xFFFFFFFFu };
 TA_WEB_IMPORT("effect") int32_t ta_web_import_effect(uint32_t host, uint32_t index, uint32_t extra);
-/* A host's output taken outside a drain (metrics, a hibernation blob): its
- * bytes in the record's words 0 and 1, copied by JavaScript before the
- * ack. `kind` is TA_WEB_OUTPUT_*. */
-enum { TA_WEB_OUTPUT_METRICS = 1, TA_WEB_OUTPUT_BLOB = 2, TA_WEB_OUTPUT_SNAPSHOT = 3 };
+/* A host's output taken outside a drain (metrics, a hibernation blob, a
+ * snapshot, the effective config at creation, the last take of traces and
+ * logs at close): its bytes in the record's words 0 and 1, copied by
+ * JavaScript before the ack. `kind` is TA_WEB_OUTPUT_*. */
+enum {
+    TA_WEB_OUTPUT_METRICS = 1,
+    TA_WEB_OUTPUT_BLOB = 2,
+    TA_WEB_OUTPUT_SNAPSHOT = 3,
+    TA_WEB_OUTPUT_CONFIG = 4, /* the effective config's REPLY at creation (host.config) */
+    TA_WEB_OUTPUT_TRACES = 5, /* the last take at close (ta_web_host_end) */
+    TA_WEB_OUTPUT_LOGS = 6
+};
 TA_WEB_IMPORT("output") int32_t ta_web_import_output(uint32_t host, uint32_t kind, uint32_t length);
 /* The host's clocks now, in nanoseconds: `which` 0 the monotonic clock,
  * 1 the wall clock (since the Unix epoch; 0: unknown). */

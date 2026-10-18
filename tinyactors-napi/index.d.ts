@@ -1,4 +1,5 @@
-// The types of @tinyactors/node. Every export has a doc comment, which an
+// The types of @tinyactors/node and @tinyactors/wasm, one API (docs/api-map.md
+// says where @tinyactors/wasm differs today). Every export has a doc comment, which an
 // editor shows on hover; README.md and docs/guide/ teach the same API in
 // order, with examples. Each declaration is a row of docs/api-map.md,
 // which names the core behind it.
@@ -6,7 +7,8 @@
 // Units: time is milliseconds (but telemetry.flushInterval, in the host's
 // clock ticks, and traceWatch's seconds); sessions are bigints (inputs also
 // take a safe integer from 1, and typed methods' results hold numbers);
-// bytes the host hands out are Buffers, copied once, yours to keep.
+// bytes the host hands out are Uint8Arrays (Buffers in @tinyactors/node),
+// copied once, yours to keep.
 
 // ---- values -------------------------------------------------------------
 
@@ -173,7 +175,7 @@ export type Resolver = (base: string, source: string) => string;
 
 /** What a compile call returns: the image and the compiler's warnings. */
 export interface Compiled extends Disposable {
-  /** The compiled image, for `host.addImage`: a `Buffer`, copied on the
+  /** The compiled image, for `host.addImage`: a `Uint8Array`, copied on the
    * first read and yours from then on (write it to a file, load it
    * elsewhere). A first read after `close()` throws `TA_ERROR_STALE`. */
   readonly image: Uint8Array;
@@ -640,7 +642,7 @@ export interface HostOptions {
   clock?: SimulatedClock;
   /** Your exporter: each OTLP traces or logs request the encoder wrote
    * (protobuf, for a collector's `/v1/traces` or `/v1/logs`), as a
-   * `Buffer`. Needs `telemetry` in the config; without a handler the
+   * `Uint8Array`. Needs `telemetry` in the config; without a handler the
    * requests are dropped. It runs in the host's turn: start the post and
    * return. At `close()` it gets the last requests; the promises it
    * returns then are awaited by `[Symbol.asyncDispose]`. */
@@ -660,9 +662,10 @@ export interface HostOptions {
    * the invocation wait, in order; a rejection is a failed start, and the
    * invoker gets `error.communication`. */
   services?: { [type: string]: (host: Host, invocation: Invocation) => Service | void | PromiseLike<Service | void> };
-  /** Where chart code runs: `'native'` (the default), `node:vm` contexts
-   * of your own engine, for trusted charts; or `'quickjs'`, the sandbox,
-   * for charts you do not trust. */
+  /** Where chart code runs: `'native'` (the default), your own engine
+   * (`node:vm` contexts in @tinyactors/node), for trusted charts; or
+   * `'quickjs'`, the sandbox, for charts you do not trust (not yet in
+   * @tinyactors/wasm, which refuses it with `TA_ERROR_UNSUPPORTED`). */
   datamodel?: 'native' | 'quickjs';
   /** The sandbox's limits, with `datamodel: 'quickjs'` only (else a
    * `TypeError`). */
@@ -1115,7 +1118,7 @@ export class Host implements Disposable, AsyncDisposable {
   /** `traceSpansDecode` as a promise of `{ spans }`. */
   traceSpansDecodeAsync(params: TraceSpansDecodeParams): Promise<TraceSpansDecodeResult>;
 
-  /** The host's counters now as an OTLP metrics request (a `Buffer`, for a
+  /** The host's counters now as an OTLP metrics request (a `Uint8Array`, for a
    * collector's `/v1/metrics`). `TA_ERROR_STATE` without `telemetry` in the
    * config. */
   metrics(): Uint8Array;
@@ -1124,7 +1127,7 @@ export class Host implements Disposable, AsyncDisposable {
    * actors (each an integer from 0 to 2^32-1). The first sweep after an
    * actor ran skips it. */
   sweep(maxScan: number, limit: number): bigint[];
-  /** Takes the actor out of memory and returns its blob (a `Buffer`) for
+  /** Takes the actor out of memory and returns its blob (a `Uint8Array`) for
    * your store. `TA_ERROR_STATE` when it is not at rest (events waiting, a
    * step not over, running an invoked child or service) and when it is not
    * resident (already hibernated, its wake asked for and not given): the
@@ -1147,7 +1150,7 @@ export class Host implements Disposable, AsyncDisposable {
    * name. Throws `TA_ERROR_INVALID` for a chart the host does not have and
    * `TA_ERROR_STALE` for a session that ended. */
   migrate(options?: MigrateOptions): number;
-  /** The whole host as one `Buffer` (typed as its `Uint8Array`): every segment, the images, the system
+  /** The whole host as one `Uint8Array`: every segment, the images, the system
    * id, the host's time (its clocks advanced first: the time of the call,
    * as `now()` reads it) and the datamodel's state, for `Host.restore` on the
    * same build of the package. Only when quiescent: from a handler, with an

@@ -1,12 +1,12 @@
 // Snapshots (docs/plan.xml, p2-snapshot; translated from
 // tinyactors-cpython/tests/test_snapshot.py): host.snapshot() and
-// Host.restore, on the datamodel under test. A snapshot is a Buffer; a
+// Host.restore, on the datamodel under test. A snapshot is a Uint8Array; a
 // restored host goes on with its actors' variables, _event, a payload
 // waiting in a mailbox and a delayed send due on a new clock that starts
 // at 0; its own snapshot is the same bytes; what is not quiescent, or not
 // in the value table, is refused.
 import { Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
-import { DATAMODEL, ENGINE, equal, image, scxml, status, throws, typeError } from './charts.mjs';
+import { DATAMODEL, ENGINE, equal, image, indexOfBytes, sameBytes, scxml, status, throws, typeError } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 const CONFIG = { systemID: 't', system: { ticksPerSecond: 1000 } };
@@ -62,7 +62,7 @@ function hostOf(document, options = {}) {
 
 const restore = (blob, options = {}) => Host.restore(blob, CONFIG, { ...ENGINE, ...options });
 
-const same = (a, b) => a.length === b.length && Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0;
+const same = sameBytes;
 
 test('a host goes on after a restore: variables, _event, a waiting payload, a delayed send on a new clock', async () => {
   let logs = new Logs();
@@ -74,7 +74,7 @@ test('a host goes on after a restore: variables, _event, a waiting payload, a de
   await host.idle();
   host.send(session, 'inc', 3); // waiting in the mailbox, its payload in the table
   const blob = host.snapshot();
-  if (!Buffer.isBuffer(blob) || blob.length === 0) throw new Error('the snapshot is not a non-empty Buffer');
+  if (!(blob instanceof Uint8Array) || blob.length === 0) throw new Error('the snapshot is not a non-empty Uint8Array');
   host.close();
   // a new clock that starts at 0: the restored host goes on from the snapshot's time
   logs = new Logs();
@@ -289,10 +289,10 @@ test('restore refuses another system\'s config, another datamodel, another progr
   const otherModel = DATAMODEL === 'native' ? 'quickjs' : 'native';
   throws(() => Host.restore(blob, CONFIG, { datamodel: otherModel }), status('TA_ERROR_INVALID'), 'another datamodel');
   // the label: a byte of "tinyactors-napi" changed in the pack
-  const label = Buffer.from('tinyactors-napi');
-  const at = blob.indexOf(label);
+  const label = new TextEncoder().encode('tinyactors-napi');
+  const at = indexOfBytes(blob, label);
   if (at < 0) throw new Error('the pack does not hold its label');
-  const relabelled = Buffer.from(blob);
+  const relabelled = new Uint8Array(blob);
   relabelled[at + label.length - 1] = 'x'.charCodeAt(0);
   throws(() => restore(relabelled), status('TA_ERROR_INVALID'), "another program's label");
 });

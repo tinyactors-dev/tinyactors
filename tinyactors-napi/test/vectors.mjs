@@ -1,9 +1,8 @@
 // The cases of the suite's values.txt (tinyactors-test/suites/protocol),
 // read for the binding's own tests of its value table.
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { readText } from './runtime.mjs';
 
-const path = fileURLToPath(new URL('../../tinyactors-test/suites/protocol/values.txt', import.meta.url));
+const TEXT = await readText(new URL('../../tinyactors-test/suites/protocol/values.txt', import.meta.url));
 
 export function hex(text) {
   return Uint8Array.from(text.match(/../g) ?? [], (byte) => parseInt(byte, 16));
@@ -17,7 +16,7 @@ export function toHex(bytes) {
 export function values() {
   const cases = [];
   let current = null;
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
+  for (const line of TEXT.split('\n')) {
     if (line.startsWith('#')) continue;
     if (!line.trim()) {
       current = null;

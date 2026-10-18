@@ -1,6 +1,6 @@
 // Hibernation (docs/plan.xml, p2-hibernate; translated from
 // tinyactors-cpython/tests/test_hibernation.py): sweep, hibernate, the
-// wake handler and wake, on the datamodel under test. A blob is a Buffer
+// wake handler and wake, on the datamodel under test. A blob is a Uint8Array
 // copied once; a hibernated native session leaves nothing in the engine;
 // its events and its delayed sends wait in the host until the application
 // wakes it; a value outside the value table keeps it resident.
@@ -54,7 +54,7 @@ class Logs {
   }
 }
 
-test('an actor wakes with its variables: the blob is a Buffer, one WAKE brings it back', async () => {
+test('an actor wakes with its variables: the blob is a Uint8Array, one WAKE brings it back', async () => {
   const logs = new Logs();
   const store = new Store();
   const host = hostWith({ counter: counter() }, { log: logs.handler, wake: store.handler });
@@ -63,7 +63,7 @@ test('an actor wakes with its variables: the blob is a Buffer, one WAKE brings i
   host.send(session, 'inc', 'two');
   await host.idle();
   const blob = host.hibernate(session);
-  if (!Buffer.isBuffer(blob) || blob.length === 0) throw new Error('the blob is not a non-empty Buffer');
+  if (!(blob instanceof Uint8Array) || blob.length === 0) throw new Error('the blob is not a non-empty Uint8Array');
   store.blobs.set(session, blob);
   host.send(session, 'report');
   await host.idle();
@@ -317,7 +317,7 @@ test('wake refuses a blob it cannot read, and a session that is not hibernated',
   const session = host.spawn(host.chart('counter'));
   await host.idle();
   const blob = host.hibernate(session);
-  throws(() => host.wake(session, Buffer.from('\u0000not a blob')), (error) => {
+  throws(() => host.wake(session, new TextEncoder().encode('\u0000not a blob')), (error) => {
     if (error.status === undefined) throw error;
   }, 'not a blob');
   host.wake(session, blob);

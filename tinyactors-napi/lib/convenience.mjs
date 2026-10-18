@@ -1,11 +1,17 @@
-// The convenience layer of @tinyactors/node: JavaScript over the direct
-// layer's exports only (AGENTS.md, "Layers and the resolver"). It adds
-// shapes, not behaviour, and imports nothing but lib/direct.mjs, the
-// package's direct exports (the lint rule convenience-imports-the-direct-layer).
+// The convenience layer of @tinyactors/node and @tinyactors/wasm:
+// JavaScript over the direct layer's exports only (AGENTS.md, "Layers and
+// the resolver"). It adds shapes, not behaviour, and imports nothing but
+// `#direct`, the package's direct exports (the lint rule
+// convenience-imports-the-direct-layer): package.json's `imports` maps it
+// to the addon's lib/direct.mjs, and under the export condition
+// `tinyactors-wasm` to the wasm package's wasm/lib/direct.mjs
+// (docs/browser.md, "One API"), so the two packages share this file.
 //
 // Then the shapes chosen for p3-shapes: host.addCharts, host.spawnChart,
 // directoryResolver and Address.prototype.toJSON (below). The only
-// built-ins it imports are node:fs and node:path, for directoryResolver.
+// built-ins it reaches are node:fs and node:path, for directoryResolver,
+// through process.getBuiltinModule when the resolver is made: a runtime
+// without them (a browser) refuses it there, with TA_ERROR_UNSUPPORTED.
 //
 // The typed methods as promises (docs/plan.xml, d-promises): beside each
 // direct method `host.actorState(params, onResult, onError)` a method
@@ -19,9 +25,7 @@
 // is not a Host) rejects too, as an async function's throw would. A
 // method still pending at `close()` never settles: the direct layer drops
 // its handlers uncalled.
-import { readFileSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path';
-import { Address, compileCharts, Host, ResolveError } from './direct.mjs';
+import { Address, compileCharts, Host, ResolveError, TinyactorsError } from '#direct';
 
 /** The direct method `direct` as a method of the same params returning a
  * promise of its result. */
@@ -116,27 +120,40 @@ method(Address.prototype, 'toJSON', function () {
 // replaced.
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
-/** Whether `path`, absolute, is `root` or under it. */
-function inside(root, path) {
-  const rest = relative(root, path);
-  return rest !== '' && rest !== '..' && !rest.startsWith(`..${sep}`) && !isAbsolute(rest);
+/** node:fs and node:path, from the runtime (node, bun); a runtime without
+ * them refuses directoryResolver. */
+function builtins() {
+  const get = globalThis.process?.getBuiltinModule;
+  if (typeof get !== 'function') {
+    throw new TinyactorsError('directoryResolver reads files with node:fs, which this runtime does not have', {
+      status: 'TA_ERROR_UNSUPPORTED',
+    });
+  }
+  return { fs: get.call(globalThis.process, 'node:fs'), path: get.call(globalThis.process, 'node:path') };
+}
+
+/** Whether `file`, absolute, is `root` or under it (`path`: node:path). */
+function inside(path, root, file) {
+  const rest = path.relative(root, file);
+  return rest !== '' && rest !== '..' && !rest.startsWith(`..${path.sep}`) && !path.isAbsolute(rest);
 }
 
 export function directoryResolver(root) {
-  const top = realpathSync(root);
+  const { fs, path } = builtins();
+  const top = fs.realpathSync(root);
   return function resolve(base, source) {
-    const path = resolvePath(top, dirname(base), source);
-    if (!inside(top, path)) throw new ResolveError(`${source} (from ${base}) leaves the resolver's root`);
+    const file = path.resolve(top, path.dirname(base), source);
+    if (!inside(path, top, file)) throw new ResolveError(`${source} (from ${base}) leaves the resolver's root`);
     let real;
     try {
-      real = realpathSync(path);
+      real = fs.realpathSync(file);
     } catch (error) {
       if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR')
         throw new ResolveError(`${source} (from ${base}): no such file under the resolver's root`);
       throw error;
     }
-    if (!inside(top, real)) throw new ResolveError(`${source} (from ${base}) leaves the resolver's root through a symbolic link`);
-    const bytes = readFileSync(real);
+    if (!inside(path, top, real)) throw new ResolveError(`${source} (from ${base}) leaves the resolver's root through a symbolic link`);
+    const bytes = fs.readFileSync(real);
     try {
       return UTF8.decode(bytes);
     } catch {
