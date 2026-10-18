@@ -1529,4 +1529,9 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <why>The coordinator's brief: remove every workaround the fixed surprises made unnecessary; each example's test still passes.</why>
     <resolution>Kept, with comments saying why: order-fulfillment's and subscription-billing's settle loops (their payment services answer from promises they start and do not return, since a service handler returns the service at once so that a cancel reaches it), chat-rooms' tracking of wake reads and writes (its tests hold a read to look at the host meanwhile, which idle() would wait for), inventory-sync's settle (bytes on a socket between two hosts), job-scheduler's setImmediate turns in the tests that hold a worker, elevator-control's doorRunning (sends before the door controller starts, l-p4-examples-elevator-invoke-start, a docs-batch item), document-approval's XML record written by the chart (quickjs, l-p4-surprises-quickjs-xml), subscription-billing's leftBehind inventory (it counts what came after a migration too).</resolution>
   </entry>
+  <entry id="l-coord-binding-batch" date="2026-10-18" step="p4-surprises" kind="decision" status="resolved">
+    <what>The coordinator reviewed the binding batch's two deviations: the realm copy is made when the application reads a value, and a script syntax error is a warning unless warningsAsErrors is set.</what>
+    <why>Capture cannot know who receives a payload. W3C requires those charts to compile and raise error.execution at run time.</why>
+    <resolution>Both accepted.</resolution>
+  </entry>
 </log>
