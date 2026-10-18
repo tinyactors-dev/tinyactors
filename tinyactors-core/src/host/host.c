@@ -1526,6 +1526,9 @@ ta_status ta_host_migrate(ta_host *host, const ta_host_migration *request, uint3
     uint64_t session = request->session;
     uint32_t flags = request->flags;
     ta_time timeout = request->timeout;
+    /* a migration that could move nothing is refused, not reported done */
+    if (name.length && !version_of(host, name)) return TA_ERROR_INVALID; /* no chart of that name */
+    if (session && host_locate(host, session, NULL, NULL) != TA_OK) return TA_ERROR_STALE; /* ended */
     if (!host_grow(host, (void **)&host->migrations, &host->migration_capacity, host->migration_count + 1,
                    sizeof(host_migration)))
         return TA_ERROR_NO_MEMORY;

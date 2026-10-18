@@ -216,6 +216,20 @@ test('one session or one chart', async () => {
   equal(done.map((result) => result.migrated).join(','), '1,0,1', 'one, none, the other');
 });
 
+test('a chart the host does not have, or a session that ended, is refused', async () => {
+  const done = [];
+  const host = hostWith({ counter: V1 }, { migrationDone: (host, result) => done.push(result) });
+  throws(() => host.migrate({ chart: 'counters' }), status('TA_ERROR_INVALID'), 'a typo of the chart');
+  const session = host.spawn(host.chart('counter'));
+  await host.idle();
+  host.terminate(session);
+  await host.idle();
+  throws(() => host.migrate({ session }), status('TA_ERROR_STALE'), 'a session that ended');
+  await host.idle();
+  host.close();
+  equal(done.length, 0, 'no migration was started');
+});
+
 test('an actor with a value outside the table fails and stays on version 1', async () => {
   const logs = new Logs();
   const done = [];

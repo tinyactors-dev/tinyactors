@@ -1082,7 +1082,8 @@ export class Host implements Disposable, AsyncDisposable {
    * `session`) to the current version of their chart, in later turns; each
    * gets `error.platform.upgrade` with its old variables. Returns the
    * migration's id, which `migrated`, `migrationDone` and the wake handler
-   * name. */
+   * name. Throws `TA_ERROR_INVALID` for a chart the host does not have and
+   * `TA_ERROR_STALE` for a session that ended. */
   migrate(options?: MigrateOptions): number;
   /** The whole host as one `Buffer` (typed as its `Uint8Array`): every segment, the images, the system
    * id, the host's time and the datamodel's state, for `Host.restore` on the

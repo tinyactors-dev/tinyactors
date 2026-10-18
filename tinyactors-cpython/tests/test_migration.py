@@ -220,6 +220,24 @@ class Migration(unittest.TestCase):
             with self.assertRaises(TypeError):
                 host.migrate(3)
 
+    def test_migrate_refuses_what_it_could_not_move(self):
+        """A chart the host does not have and a session that ended are
+        refused, not a migration that ends with nothing moved."""
+        done = []
+        with host_with([("counter.scxml", versions("python")[0])], migration_done=lambda host, result: done.append(result)) as host:
+            with self.assertRaises(tinyactors.TinyactorsError) as refused:
+                host.migrate(chart="counters")
+            self.assertEqual(refused.exception.status, "TA_ERROR_INVALID")
+            session = host.spawn(host.chart("counter"))
+            host.run_until_idle()
+            host.terminate(session)
+            host.run_until_idle()
+            with self.assertRaises(tinyactors.TinyactorsError) as refused:
+                host.migrate(session=session)
+            self.assertEqual(refused.exception.status, "TA_ERROR_STALE")
+            host.run_until_idle()
+        self.assertEqual(done, [])
+
 
 if __name__ == "__main__":
     unittest.main()

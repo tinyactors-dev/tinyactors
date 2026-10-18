@@ -454,6 +454,33 @@ static void test_versions_and_migration(void) {
     world_close(&e);
 }
 
+/* A migration that could move nothing is refused at the call, not reported
+ * done: a chart name the host does not have (TA_ERROR_INVALID, as
+ * ta_host_chart), a session that ended or never was (TA_ERROR_STALE)
+ * (tinyactors-napi/docs/log.xml, l-p4-examples-billing-migrate-unknown). */
+static void test_migration_refuses_what_it_cannot_move(void) {
+    host_world e;
+    world_open(&e, 16, NULL, 0);
+    world_add(&e, W1);
+    uint64_t w = spawn(&e, "w");
+    run(&e);
+    uint32_t migration = 0;
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"nosuch", 6}, 0, 0, 0, 0}, &migration),
+                TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, w + 1000, 0, 0, 0}, &migration),
+                TA_ERROR_STALE);
+    CHECK_EQUAL(ta_host_terminate(e.host, w), TA_OK);
+    run(&e);
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){0, 0}, w, 0, 0, 0}, &migration),
+                TA_ERROR_STALE);
+    CHECK_EQUAL(migration, 0u); /* none started */
+    /* a known name, or every chart, is a migration */
+    CHECK_EQUAL(ta_host_migrate(e.host, &(ta_host_migration){(ta_string_view){"w", 1}, 0, 0, 0, 0}, &migration), TA_OK);
+    run(&e);
+    CHECK_EQUAL(e.last_migration, migration);
+    world_close(&e);
+}
+
 static void test_migration_wake_and_timeout(void) {
     host_world e;
     world_open(&e, 16, NULL, 0);
@@ -1560,6 +1587,7 @@ int main(void) {
     RUN(test_routing_between_segments);
     RUN(test_class_across_segments);
     RUN(test_versions_and_migration);
+    RUN(test_migration_refuses_what_it_cannot_move);
     RUN(test_migration_wake_and_timeout);
     RUN(test_migration_asks_again_and_takes_the_woken);
     RUN(test_migration_of_many_hibernated_actors);

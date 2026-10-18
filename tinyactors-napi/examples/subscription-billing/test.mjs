@@ -344,10 +344,8 @@ test('a rollout refuses a chart the host does not have, before it migrates anyth
     await billing.settle();
     await assert.rejects(rollout(billing, { release: 2, charts: ['subscriptions'], stepMs: 1000 }), { status: 'TA_ERROR_INVALID' });
     assert.equal(billing.migrations.size, 0);
-    // what the guard is for: host.migrate itself takes the name and moves nothing
-    const typo = billing.migrate({ chart: 'subscriptions' });
-    await billing.settle();
-    assert.deepEqual(typo.result, { migration: typo.id, migrated: 0, failed: 0, pending: [] });
+    // host.migrate itself refuses the name too
+    assert.throws(() => billing.migrate({ chart: 'subscriptions' }), { status: 'TA_ERROR_INVALID' });
     assert.equal(await billing.releaseOf(ada), 1);
   } finally {
     billing.close();

@@ -569,7 +569,9 @@ version takes what it keeps from there:
 - **`host.migrate(*, chart=None, session=None, wake=False, timeout=0) ->
   migration`** starts a migration of every chart, of one `chart` by name,
   or of one `session`, and returns its id. `timeout` is in seconds; 0
-  means none.
+  means none. A `chart` the host does not have raises `TinyactorsError`
+  with `TA_ERROR_INVALID`, and a `session` that ended `TA_ERROR_STALE`: a
+  migration that could move nothing is refused rather than reported done.
 - **`migration_done=handler(host, result)`** gets the end of each
   migration, with `{"migration", "migrated", "failed", "pending":
   [session, ...]}`. It is a handler of the host, not of the call, so it

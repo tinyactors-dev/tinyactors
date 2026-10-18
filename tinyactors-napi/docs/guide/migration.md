@@ -97,7 +97,9 @@ memory; `host.hostStats` counts the retired segments
   actors of every chart; `chart` names one chart, `session` one actor.
   `wake: true` asks for the hibernated actors (below). `timeout` is in
   milliseconds of the host's clock, rounded up to its next tick; 0 or none
-  means none.
+  means none. A `chart` the host does not have throws `TA_ERROR_INVALID`
+  and a `session` that ended `TA_ERROR_STALE`: a migration that could
+  move nothing is refused rather than reported done.
 - **`migrationDone: (host, result) => ...`**, in the host's options, gets
   the end of each migration: `{ migration, migrated, failed, pending }`,
   `pending` the sessions (`bigint`s) its timeout left behind. It is a
