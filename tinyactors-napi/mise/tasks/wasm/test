@@ -1,0 +1,20 @@
+#!/usr/bin/env ruby
+#MISE description="Test the wasm module and its loaders: build it (wasm:build, its imports and exports checked), then wasm/test/module.test.mjs under node and bun and wasm/test/browser.test.mjs in Chromium (a page and a module Worker, through both entries)"
+# vim:ft=ruby
+
+# Chromium is the pre-installed Playwright's (/opt/pw-browsers/chromium,
+# PLAYWRIGHT_CHROMIUM, as staticjs-js's test finds it); without Playwright
+# the browser test says it skipped. `mise run test` runs this task.
+
+require_relative '../../wasm'
+
+NodeAPI.run('mise', 'run', 'wasm:build')
+NodeAPI::RUNTIMES.each do |runtime|
+  puts "wasm:test: #{runtime} wasm/test/module.test.mjs"
+  NodeAPI.run(NodeAPI.pinned(runtime), WebModule::ROOT.join('test/module.test.mjs').to_s)
+end
+env = {}
+chromium = Pathname.new('/opt/pw-browsers/chromium')
+env['PLAYWRIGHT_CHROMIUM'] = chromium.to_s if chromium.executable?
+puts 'wasm:test: chromium wasm/test/browser.test.mjs'
+NodeAPI.run(NodeAPI.pinned('node'), WebModule::ROOT.join('test/browser.test.mjs').to_s, env: env)

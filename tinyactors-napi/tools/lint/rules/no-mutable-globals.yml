@@ -23,6 +23,8 @@ message: "no mutable global or static local: keep state in the environment's ins
 files:
   - src/**/*.c
   - src/**/*.h
+  - wasm/src/**/*.c
+  - wasm/src/**/*.h
 utils:
   # The declared object itself is const: `const` on the declaration and no
   # pointer in its declarator, or `* const` next to its name.

@@ -1,4 +1,4 @@
-# Every C function the addon defines or declares takes at most three
+# Every C function the addon and the wasm layer (wasm/src/) define or declare takes at most three
 # parameters, static helpers included, and so does every callback type it
 # declares (the root AGENTS.md, "At most three parameters"; this
 # project's AGENTS.md, "C rules"): group the rest in a struct. A function
@@ -11,6 +11,8 @@ message: "a function or callback takes at most three parameters; group the rest 
 files:
   - src/**/*.c
   - src/**/*.h
+  - wasm/src/**/*.c
+  - wasm/src/**/*.h
 rule:
   kind: function_declarator
   has:

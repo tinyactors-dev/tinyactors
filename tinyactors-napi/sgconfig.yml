@@ -9,7 +9,10 @@
 # so the patterns are core's and are written once. The others are this
 # binding's own (AGENTS.md, "C rules"): the layers, one timer,
 # the ta_napi_ prefix, no mutable globals, and the convenience layer's
-# imports (lib/convenience.mjs imports only lib/direct.mjs).
+# imports (lib/convenience.mjs imports only lib/direct.mjs). The wasm
+# module's C layer (wasm/src/) has the first three and no-mutable-globals,
+# and rules of its own: the ta_web_ prefix, its calls (core, txml, a few of
+# the C library's) and allocation only in its allocator.
 ruleDirs:
   - tools/lint/rules
 utilDirs:

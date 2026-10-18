@@ -12,6 +12,8 @@ message: "bytes cross a function as ta_bytes or ta_buffer *, not a pointer and a
 files:
   - src/**/*.c
   - src/**/*.h
+  - wasm/src/**/*.c
+  - wasm/src/**/*.h
 rule:
   matches: bytes-as-pointer-and-length # tinyactors-core/tools/lint/utils/
   not:

@@ -156,6 +156,7 @@ spike builds with the same zig (`tools/spikes/browser/`, commands in
 | core and compiler, only the 95 functions the addon calls exported, `-O2` | | 481,854 | 174,918 | 139,269 |
 | the same at `-Oz` | | 331,958 | 135,528 | 113,560 |
 | txml (`tinyxml/include/txml.c`), `-O2` / `-Oz` | | 119,685 / 77,004 | 39,505 / 29,207 | 31,502 / 24,989 |
+| built (p5-build): `wasm/tinyactors.wasm`, core, the compiler, txml and the `ta_web_*` layer, `-O2` | 1,489,057 | 587,632 | 207,009 | 164,838 |
 
 - Exporting only what the layer calls saves little (139 KB against 145
   KB brotli): almost all of core is reachable from the host.
