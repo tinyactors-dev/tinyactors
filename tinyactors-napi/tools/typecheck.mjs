@@ -44,11 +44,17 @@ for (const name of readdirSync(join(ROOT, 'test', 'types')).filter((each) => eac
 const typesConfig = JSON.parse(readFileSync(join(ROOT, 'test', 'types', 'tsconfig.types.json'), 'utf8'));
 typesConfig.compilerOptions.paths = { '@tinyactors/wasm': ['../../../index.d.ts'], '@tinyactors/wasm/init': ['../../../wasm/init.d.ts'] };
 writeFileSync(join(directory, 'types-wasm', 'tsconfig.wasm.json'), JSON.stringify(typesConfig, null, 2));
+// test/types again with ES2022's lib and the DOM's, without esnext's
+// disposable lib: index.d.ts declares Symbol.dispose, Symbol.asyncDispose,
+// Disposable and AsyncDisposable itself, so a project need not add it
+const es2022Config = JSON.parse(readFileSync(join(ROOT, 'test', 'types', 'tsconfig.types.json'), 'utf8'));
+es2022Config.compilerOptions.lib = ['es2022', 'dom'];
+writeFileSync(join(directory, 'types', 'tsconfig.es2022.json'), JSON.stringify(es2022Config, null, 2));
 // The examples as an application in JavaScript checks them (checked,
 // not strict: a JavaScript file has no annotations to satisfy it), and
 // test/types as one in TypeScript (strict), each a project of its own:
 // test/types/tsconfig.<project>.json, copied in with the cases.
-for (const project of ['examples', 'types', 'wasm']) {
+for (const project of ['examples', 'types', 'wasm', 'es2022']) {
   const config = join(directory, project === 'wasm' ? 'types-wasm' : 'types', `tsconfig.${project}.json`);
   const result = spawnSync(tsc, ['-p', config, '--pretty', 'false'], { cwd: directory, encoding: 'utf8' });
   if (result.error) throw result.error;
@@ -58,4 +64,4 @@ for (const project of ['examples', 'types', 'wasm']) {
     process.exit(1);
   }
 }
-console.log(`typecheck: ${found.length} examples and test/types compile against index.d.ts, test/types as @tinyactors/node's and as @tinyactors/wasm's`);
+console.log(`typecheck: ${found.length} examples and test/types compile against index.d.ts, test/types as @tinyactors/node's and as @tinyactors/wasm's, and with lib es2022 (no esnext.disposable)`);

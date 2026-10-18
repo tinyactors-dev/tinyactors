@@ -43,6 +43,9 @@ path.
   Node.js 22.3 and Bun 1.4.
 - **A Content Security Policy** that allows the module and the charts'
   expressions: `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`.
+- **TypeScript:** the `es2022` and `dom` libs; the types declare
+  `Symbol.dispose` and `Disposable` themselves, so no `esnext` lib is
+  needed.
 - **Size** (measured by `mise run pack:wasm`, 2026-10-18): the package
   is 240 KiB packed and 690 KiB unpacked; the module, `tinyactors.wasm`
   (built for size, `-Oz`), is 412 KiB, 163 KiB with gzip and 137 KiB

@@ -657,4 +657,7 @@ are in the package too, under `docs/guide/` in
   liveness, memory, and what differs.
 
 The reference is the doc comment of each export in
-[index.d.ts](index.d.ts), which an editor shows on hover.
+[index.d.ts](index.d.ts), which an editor shows on hover. In TypeScript
+the types need the `es2022` lib and a `URL` (the `dom` lib or
+@types/node); they declare `Symbol.dispose` and `Disposable` themselves,
+so no `esnext` lib is needed.

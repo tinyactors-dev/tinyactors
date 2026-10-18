@@ -10,6 +10,25 @@
 // bytes the host hands out are Uint8Arrays (Buffers in @tinyactors/node),
 // copied once, yours to keep.
 
+// ---- disposal ------------------------------------------------------------
+
+// `Symbol.dispose`, `Symbol.asyncDispose`, `Disposable` and
+// `AsyncDisposable`, which a `Host` and a compile result implement, as
+// TypeScript's `esnext.disposable` lib and @types/node declare them: a
+// project need not add that lib, and these merge with it where it does.
+declare global {
+  interface SymbolConstructor {
+    readonly dispose: unique symbol;
+    readonly asyncDispose: unique symbol;
+  }
+  interface Disposable {
+    [Symbol.dispose](): void;
+  }
+  interface AsyncDisposable {
+    [Symbol.asyncDispose](): PromiseLike<void>;
+  }
+}
+
 // ---- values -------------------------------------------------------------
 
 /** An actor's session, as an input takes it: a `bigint` from 1 to

@@ -1858,4 +1858,10 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <what>Not done in p5-pack: a smoke test with a bundler (the plan names one; the coordinator's brief does not), the wasm package in the Linux containers (the release runs only the addon there), and a test of @tinyactors/node's missing-addon message, which now names @tinyactors/wasm (lib/direct.mjs; in the repository build/tinyactors.node always loads first, so no test reaches it without a fake package). index.d.ts needs the esnext.disposable lib (Disposable, Symbol.dispose) in a TypeScript project, for both packages; neither README says so.</what>
     <evidence>mise/tasks/release; lib/direct.mjs:36-41; tsc with lib es2022,dom: TS2304 Disposable</evidence>
   </entry>
+  <entry id="l-p5-pack-disposable" date="2026-10-18" step="p5-pack" kind="decision" status="resolved">
+    <what>index.d.ts declares Symbol.dispose, Symbol.asyncDispose, Disposable and AsyncDisposable itself (declare global, as TypeScript's esnext.disposable lib and @types/node declare them), so a TypeScript project of either package needs no esnext.disposable lib; where it has one, or @types/node, the declarations merge.</what>
+    <why>tsc --strict with lib es2022,dom failed on index.d.ts (TS2304 Disposable, TS2550 Symbol.dispose), for both packages (l-p5-pack-left). Declaring them was preferred to a README note.</why>
+    <evidence>tools/typecheck.mjs compiles test/types a fourth time with lib es2022 and dom (it failed with the six errors before the declarations); a scratchpad check with tsc 5.9.3 of lib es2022, es2022+dom, es2022+esnext.disposable(+dom), esnext(+dom), and es2022/esnext with @types/node: no error</evidence>
+    <resolution>index.d.ts, tools/typecheck.mjs; both READMEs say which libs the types need</resolution>
+  </entry>
 </log>
