@@ -1128,6 +1128,7 @@ examples/            applications over the package, each with a README and a tes
                      chat-rooms/: rooms and users as actors, most hibernated in a file store, a bounded resident set
                      subscription-billing/: a live population migrated to a new chart version while it bills
                      turn-game/: a game server snapshotted to disk, killed, restored, its journal replayed
+                     iot-rules/: customers' alert rules in the quickjs sandbox, one host per rule, hostile uploads reported
                      remote-python/: a Python host and a Node host over a socket (mise run remote-python)
 build/               core's amalgamation and the addon (not in git)
 ```
