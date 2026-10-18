@@ -44,9 +44,9 @@ path.
 - **A Content Security Policy** that allows the module and the charts'
   expressions: `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`.
 - **Size** (measured by `mise run pack:wasm`, 2026-10-18): the package
-  is 286 KiB packed and 869 KiB unpacked; the module, `tinyactors.wasm`,
-  is 591 KiB, 209 KiB with gzip and 167 KiB with brotli, as a server
-  sends it.
+  is 240 KiB packed and 690 KiB unpacked; the module, `tinyactors.wasm`
+  (built for size, `-Oz`), is 412 KiB, 163 KiB with gzip and 137 KiB
+  with brotli, as a server sends it.
 - **Not yet:** the quickjs datamodel, the sandbox for charts you do not
   trust; every chart runs on the native ECMAScript datamodel, in a realm
   of its own.

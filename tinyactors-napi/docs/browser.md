@@ -43,7 +43,7 @@ Playwright 1.56.1); the programs are in `tools/spikes/browser/`.
 |---|---|---|
 | What is C | core, the host, the compiler, txml, and a C layer of ours (`ta_web_*`) that builds core's structs, owns the arenas, runs the drain and the turn, reads CBOR and effect fields, and forwards the datamodel's vtable to imports | ADR 0009 ("only C touches host structs"); staticjs-js's `src/js.c` is the same split (ADR 0013) |
 | What is JavaScript | the classes, scheduling (`setImmediate` where it exists, else `MessageChannel`; one `setTimeout` at the deadline), the handlers' dispatch, making JavaScript values from CBOR tokens and back, the native datamodel's side (with the addon's `realm.js`, shared) | a wasm module cannot make JavaScript objects (root ROADMAP.md, "Decided later") |
-| Download | about 140 KB brotli for core and the compiler at `-O2` (114 KB at `-Oz`), plus txml's 25 to 32 KB and our C layer (unmeasured); quickjs later as a second module, about 300 KB brotli more | "Sizes" |
+| Download | built: 137 KiB brotli at `-Oz` (core, the compiler, txml and our C layer; 166 KiB at `-O2`); quickjs later as a second module, about 300 KB brotli more | "Sizes" |
 | Boundary | 5 to 11 ns a call either way, against 75 to 210 ns for a Node-API call; a short string 50 to 600 ns depending on how it is copied | "Boundary costs" |
 | Memory growth | no view of linear memory outlives a call that can allocate: the layer re-derives its views when one reads `byteLength === 0` (1 to 2.4 ns); nothing the application holds is a view | "Memory" |
 | Native datamodel | one shared realm per host (a hidden iframe on a page, `node:vm` in node and bun, the worker's own global in a Worker); a chart that declares nothing: a scope per session, as the addon (49 B); a declaring chart, `var` or lexical: one session function per chart, made once from its chart-level scripts' text, called once per session (634 B, 3.6 us in Chromium), never an iframe per session; what it cannot match is refused at attach or reported, never a silent difference | "The native datamodel without node:vm" |
@@ -157,10 +157,13 @@ spike builds with the same zig (`tools/spikes/browser/`, commands in
 | the same at `-Oz` | | 331,958 | 135,528 | 113,560 |
 | txml (`tinyxml/include/txml.c`), `-O2` / `-Oz` | | 119,685 / 77,004 | 39,505 / 29,207 | 31,502 / 24,989 |
 | built (p5-build): `wasm/tinyactors.wasm`, core, the compiler, txml and the `ta_web_*` layer, `-O2` | 1,489,057 | 587,632 | 207,009 | 164,838 |
+| built (the release, `mise run pack:wasm`, 2026-10-18): the same at `-Oz` | | 421,735 | 167,215 | 139,810 |
 
 - Exporting only what the layer calls saves little (139 KB against 145
   KB brotli): almost all of core is reachable from the host.
-- `-Oz` saves 19 % (139 KB to 114 KB); its speed is unmeasured.
+- `-Oz` saves 19 % on core and the compiler (139 KB to 114 KB), 18 % on
+  the built module (170 KB to 140 KB brotli), for about 3 % more per
+  event of core work (`l-p5-pack-oz`); the module is built at `-Oz`.
 - The release's `tinyactors_runtime.wasm` carries 899 KB of DWARF
   (`.debug_info`, `.debug_loc`, `.debug_line`, ...) though its sources
   compile with `-g0`: they come with the C library's objects (unverified
@@ -732,11 +735,12 @@ and M6 on the refutation's verdicts, and M5 stays the maintainer's.
 - **M5, two implementations** (`l-p5-design-retire`, for the
   maintainer): decided on p5-parity's numbers, quickjs and resident
   memory after hibernation included.
-- **M6, size against speed** (`l-p5-design-optimize`, decided): `-O2`
-  now, `-Oz` measured in p5-pack. Measured (p5-pack, `l-p5-pack-oz`): `-Oz` is 421,294 B against
+- **M6, size against speed** (`l-p5-design-optimize`, decided): `-Oz`
+  (the coordinator, after p5-pack's measurement). Measured (p5-pack, `l-p5-pack-oz`): `-Oz` is 421,294 B against
   605,553 B (brotli 139.9 KB against 170.4 KB, 18 % less) and 2.8 % (node)
   and 3.6 % (bun) slower per event on the null chart, 1.8 % and 0.3 % on
-  `fit`; `-O2` kept until the maintainer chooses. `-mno-extended-const`
+  `fit`; the module is built at `-Oz`, its shadow stack measured again
+  there (384 KiB, five times the deepest, 65,768 B). `-mno-extended-const`
   gives the same bytes: the feature is in the `target_features` of the
   linked objects, not used by the code, so dropping it buys nothing.
 - **The floor** (`l-p5-design-floor`, for the maintainer): keep zig's
@@ -773,7 +777,7 @@ plan.xml's p5-build to p5-quickjs, refined from this document:
   records, `ta_web_turn` with the drain, effect accessors, CBOR token
   calls, the vtable's forwarding, txml's tree record, the poisoned
   state), compiled with core's and txml's amalgamations by
-  `Toolchain::Target` (zig, wasm32-wasi reactor, `-O2`, custom sections
+  `Toolchain::Target` (zig, wasm32-wasi reactor, `-Oz`, custom sections
   stripped, the stack size set and measured), its imports and exports
   checked; its lint rules; the loaders (top-level `await` and
   `init(url?)`) for a page, a Worker, node and bun; an import that throws

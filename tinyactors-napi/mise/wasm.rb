@@ -5,7 +5,7 @@
 # runtime with its wasm platform file, ta_wasm_alloc over wasi-libc), txml,
 # and the C layer of wasm/src/, compiled by the pinned zig for wasm32-wasi
 # as a reactor (Toolchain::Target.zig; never a compiler from PATH), at
-# -O2 with no debug information, its stack size set, its custom sections
+# -Oz with no debug information, its stack size set, its custom sections
 # stripped. Its imports are the layer's own (ta_web.*) and its exports the
 # layer's functions (TA_WEB_EXPORT in wasm/src/), memory and _initialize,
 # each checked exactly after the link.
@@ -33,13 +33,18 @@ module WebModule
   PROBE = BUILD.join('tinyactors.probe.wasm')
   CORE_SOURCES = %w[tinyactors.c tinyactors_runtime.c tinyactors_runtime_wasm.c].freeze
   # The shadow stack (wasm-ld's -z stack-size): measured with `mise run
-  # wasm:stack` (docs/browser.md, "Exceptions, ..."; the measurement and the
-  # margin are in docs/log.xml, l-p5-build-stack).
-  STACK_SIZE = 256 * 1024
+  # wasm:stack` (docs/browser.md, "Exceptions, ..."): five times the deepest,
+  # rounded up to a page, measured at -Oz (docs/log.xml, l-p5-pack-oz; the
+  # first measurement, at -O2, is l-p5-build-stack).
+  STACK_SIZE = 384 * 1024
+  # Optimized for size, after the target's -O2 (the last -O wins): about
+  # 30 % smaller than -O2 for about 3 % more per event (docs/log.xml,
+  # l-p5-pack-oz).
+  OPTIMIZE = '-Oz'
   # The C layer's own flags: warnings are errors.
-  LAYER_FLAGS = %w[-std=c11 -Wall -Wextra -Werror].freeze
-  CORE_FLAGS = %w[-std=c11].freeze
-  TXML_FLAGS = %w[-std=c11 -w].freeze
+  LAYER_FLAGS = ['-std=c11', '-Wall', '-Wextra', '-Werror', OPTIMIZE].freeze
+  CORE_FLAGS = ['-std=c11', OPTIMIZE].freeze
+  TXML_FLAGS = ['-std=c11', '-w', OPTIMIZE].freeze
   # What the module may import: the layer's imports (wasm/src/web.h).
   IMPORTS = %w[ta_web.clock ta_web.datamodel ta_web.effect ta_web.output ta_web.resolve].freeze
 
