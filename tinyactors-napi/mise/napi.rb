@@ -144,6 +144,30 @@ module NodeAPI
     end
   end
 
+  # The example of two systems in two processes (examples/remote-python/):
+  # the Python binding built from this repository by its own build task
+  # (tinyactors-cpython's `mise run build`, which this project never does
+  # for it otherwise), its interpreter the one that project pins, the
+  # extension on the Python process's PYTHONPATH. `test`: the example's
+  # test under every runtime; else its demo (run.mjs) under node.
+  CPYTHON = ROOT.join('../tinyactors-cpython').expand_path
+  REMOTE_PYTHON = ROOT.join('examples/remote-python')
+
+  def remote_python(test:, rounds: 3)
+    run('mise', 'run', 'build', chdir: CPYTHON)
+    python = IO.popen(['mise', 'which', 'python'], chdir: CPYTHON.to_s, err: File::NULL, &:read).strip
+    abort "python is not installed: run `mise install` in #{CPYTHON}" if python.empty?
+    env = { 'PYTHON' => python, 'PYTHONPATH' => CPYTHON.join('build/abi3').to_s }
+    unless test
+      run(pinned('node'), REMOTE_PYTHON.join('run.mjs').to_s, rounds.to_s, env: env)
+      return
+    end
+    RUNTIMES.each do |runtime|
+      puts "remote-python: #{runtime}, native and quickjs, against #{python}"
+      run(pinned(runtime), REMOTE_PYTHON.join('test.mjs').to_s, env: env)
+    end
+  end
+
   # The binding's own tests: each a program that exits 1 when a case fails
   # (test/harness.mjs), run under every runtime.
   def tests = ROOT.glob('test/*.test.mjs').sort

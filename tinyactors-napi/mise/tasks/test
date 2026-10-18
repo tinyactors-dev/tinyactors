@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
-#MISE description="Test tinyactors-napi: lint (rules, the addon's C, the adapter, the mapping table, the build scripts, acronyms), the build, the runtimes, and the conformance set named by MILESTONE against the adapter under node and bun on both datamodels"
-#MISE sources=["src/**/*", "conform.mjs", "index.mjs", "lib/**/*", "index.d.ts", "README.md", "docs/guide/**/*", "test/**/*", "tools/**/*", "docs/api-map.md", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyxml/include/**/*", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
+#MISE description="Test tinyactors-napi: lint (rules, the addon's C, the adapter, the mapping table, the build scripts, acronyms), the build, the runtimes, and the conformance set named by MILESTONE against the adapter under node and bun on both datamodels, the remote-python example against the Python binding, and the gates"
+#MISE sources=["src/**/*", "conform.mjs", "index.mjs", "lib/**/*", "index.d.ts", "README.md", "docs/guide/**/*", "test/**/*", "tools/**/*", "docs/api-map.md", "examples/**/*", "sgconfig.yml", "package.json", "mise/**/*", "mise.toml", "../tinyactors-core/include/**/*", "../tinyactors-core/src/**/*", "../tinyactors-core/third_party/**/*", "../tinyactors-core/mise/**/*", "../tinyactors-core/tools/lint/utils/**/*", "../tinyactors-core/docs/requests.md", "../tinyxml/include/**/*", "../tinyactors-cpython/src/**/*", "../tinyactors-cpython/mise/**/*", "../tinyactors-cpython/mise.toml", "../tinyactors-cpython/pyproject.toml", "../tinyactors-test/suites/**/*", "../tinyactors-test/lib/**/*", "../tinyactors-test/lint/**/*", "../tinyactors-test/mise/**/*", "../tinyactors-test/mise.toml", "../mise/lib/**/*", "../mise/ast-grep/**/*", "../sgconfig.yml", "../acronyms.txt", "../acronyms-allow.txt", "../mise.toml", "../LICENSE"]
 #MISE outputs={auto=true}
 #USAGE flag "--full" help="the hibernation, migration and snapshot gates at 2,000,000 actors, 1000 resident, snapshots of 100,000 resident actors, the services gate at 200,000 actors and 1,000,000 round trips, and the scaling gate at 2,000,000 and 4,000,000 actors, 1,000,000 and 2,000,000 all resident (tools/stress.mjs, tools/migration.mjs, tools/snapshot.mjs, tools/services.mjs, tools/scale.mjs)"
 # vim:ft=ruby
@@ -19,6 +19,13 @@
 # must pass (`mise run conform -- --milestone <it> --suite <each>`, on the
 # gate's datamodels). `mise run conform` on its own runs the whole suite on
 # both datamodels, and fails without the adapter.
+#
+# Then the example of two systems in two processes (examples/remote-python/,
+# `mise run remote-python --test`): a Python host of tinyactors-cpython,
+# built by that project's own build task (about a minute cold, under a
+# second when up to date), and a Node host over a socket, under node and
+# bun on both datamodels. The Python binding's sources are among this
+# task's sources for it.
 #
 # Then the hibernation stress gate (tools/stress.mjs, `mise run stress`),
 # the migration gate (tools/migration.mjs, `mise run migration`) and the
@@ -60,6 +67,8 @@ else
               *gate[:suites].flat_map { |suite| ['--suite', suite] },
               env: { 'TA_NAPI_DATAMODELS' => gate[:datamodels].join(',') })
 end
+
+NodeAPI.remote_python(test: true)
 
 full = ENV['usage_full'] == 'true' || ARGV.include?('--full')
 %w[stress migration snapshot].each do |tool|

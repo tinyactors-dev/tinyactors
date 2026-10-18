@@ -1266,4 +1266,36 @@
     <what>host.addCharts takes a plain object only (null, an array or a string is a TypeError) and options {resolver} only (another key a TypeError, as the direct layer refuses unknown options); its keys go to compileCharts in Object.entries order, so integer-like keys come first (documented in docs/guide/charts.md). spawnChart passes options to spawn unchanged.</what>
     <evidence>test/shapes.test.mjs: addCharts cases</evidence>
   </entry>
+  <entry id="l-p4-remote-wire" date="2026-10-17" step="p4-remote" kind="decision" status="resolved">
+    <what>The wire between the two systems: TCP on 127.0.0.1, the Python process picks the port (0) and writes {"port": N} as its first stdout line; frames of a 4-byte big-endian length and one CBOR item (the driver protocol's framing); each item a JSON-RPC 2.0 notification without its "jsonrpc" member (core's own message shape), method "message.send" with a send.message as params, and "message.fail" with {sender, sendid} for a message the receiver's host.send refused, which the sender's side gives to host.fail only for a sender of its own system.</what>
+    <why>The task asked for a JSON-RPC 2.0 notification in CBOR form and to reuse a shape the repo defines: requests.md and driver.md define JSON-RPC 2.0 without "jsonrpc" and the length-prefixed CBOR frame, so both are reused; the two method names are this example's (no method for messages between systems exists in core or the suite).</why>
+    <evidence>tinyactors-core/docs/requests.md:6-17; tinyactors-test/docs/driver.md:19-30; tinyactors-napi/examples/remote-python/README.md, "The wire"</evidence>
+  </entry>
+  <entry id="l-p4-remote-message-null" date="2026-10-17" step="p4-remote" kind="issue" status="resolved">
+    <what>A Node send.message crossed to Python was refused: Node gave undefined for the text fields a send lacks (a &lt;send&gt; without id: sendid), encode wrote CBOR undefined, Python decoded tinyactors.UNDEFINED, and Python's host.send(message) raised TypeError "expected a str"; Python's own send.message gives None there.</what>
+    <why>ADR 0017 decision 4: one message shape in every binding.</why>
+    <evidence>spike: host.send({..., "sendid": tinyactors.UNDEFINED}) -&gt; TypeError expected a str; None -&gt; ok (CPython 3.13, build/abi3 at 0860051f)</evidence>
+    <resolution>Fixed in the addon: send.message's sendid, origin and traceparent are null when the send lacks them (src/effects.c, ta_napi_send_message), as Python's None; host.send already took null. Test: test/effects.test.mjs "send.message: a text field the send lacks is null, so encoded it is absent to every binding"; index.d.ts, api-map.md and the guide say so.</resolution>
+  </entry>
+  <entry id="l-p4-remote-python-undefined" date="2026-10-17" step="p4-remote" kind="issue" status="open">
+    <what>For the Python binding (coordinator): Host.send(message) refuses UNDEFINED for sendid, traceparent and origin (TypeError "expected a str"), so a message from a binding or program that writes undefined for an absent field is refused. Recommendation: treat UNDEFINED as absent, as None, for the text fields of a message (keys it does not know are already ignored). Not patched here (tinyactors-cpython is not this step's); the Node binding now writes null, so the example does not need it.</what>
+    <evidence>tinyactors-cpython/src/host.c:858-934 (the message fields through ta_python_text); spike in l-p4-remote-message-null</evidence>
+  </entry>
+  <entry id="l-p4-remote-encode-address" date="2026-10-17" step="p4-remote" kind="uncertainty" status="for-maintainer">
+    <what>encode refuses an Address ("only plain objects, arrays and Uint8Arrays are values"), so a Node transport writes String(target) and String(origin) before encode, while Python's encode(send.message) writes them as tag 32 and its README shows encode(send.message) as it is. Recommendation: encode writes an Address as tag 32 on its text (decode still reads tag 32 as text, as d-address decided for values inside the datamodels), so encode(send.message) works unchanged in both bindings; the guide's String() conversion would go.</what>
+    <why>d-address: tag 32 is never written, decided for values of Node's datamodels; whether the application-level encode may write it is not settled.</why>
+    <evidence>spike: encode({target: new Address("tinyactors://py/@pong")}) throws; tinyactors.encode({"target": Address(...)}) = a266746172676574d82075...; tinyactors-napi/docs/guide/other-systems.md (the String() in its first example)</evidence>
+  </entry>
+  <entry id="l-p4-remote-realm" date="2026-10-17" step="p4-remote" kind="note" status="open">
+    <what>Surprise: on the native datamodel, send.data is the chart context's value, so a Uint8Array an actor sends to an I/O processor is not instanceof the application's Uint8Array (Object.prototype.toString says [object Uint8Array]); assert.deepStrictEqual against the sent value fails with "same structure but not reference-equal". Documented behaviour (send.data is the payload row's value), but a JavaScript programmer comparing values meets it; for p4-surprises to weigh (a note in docs/values.md, or copying out with the application's constructors).</what>
+    <evidence>examples/remote-python/test.mjs, the value case; node 22.23.3 and bun 1.4.1</evidence>
+  </entry>
+  <entry id="l-p4-remote-quickjs-undefined" date="2026-10-17" step="p4-remote" kind="note" status="open">
+    <what>On quickjs, a property whose value is undefined is dropped from what a chart sends, and undefined in an array becomes null (JSON's rules), on one host as across two; the native datamodel keeps both. The example's value test sends undefined on the native datamodel only.</what>
+    <evidence>spike: a chart sending _event.data of {a: undefined, b: [undefined]} to an I/O processor: native {a: undefined, b: [undefined]}, quickjs {b: [null]}</evidence>
+  </entry>
+  <entry id="l-p4-remote-cost" date="2026-10-17" step="p4-remote" kind="decision" status="resolved">
+    <what>The example's test runs as its own task, mise run remote-python --test, called by mise run test after the conformance gate: it runs tinyactors-cpython's own mise run build (54 s cold on 4 CPUs, core's amalgamation and both of its builds; 0.7 s up to date), then examples/remote-python/test.mjs under node and bun (about 0.25 s each, both datamodels). The cpython sources are in the test task's #MISE sources. The root AGENTS.md table ("What a change reruns") should now say a tinyactors-cpython change reruns napi too: a root file, left to the coordinator.</what>
+    <evidence>timings measured 2026-10-17 in a fresh copy of HEAD (git archive) and in place</evidence>
+  </entry>
 </log>
