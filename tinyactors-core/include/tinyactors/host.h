@@ -116,6 +116,14 @@ typedef struct ta_host_environment {
     const ta_trace_policy *trace_policy; /* what each segment traces at first (NULL:
                                             ta_trace_policy_default); copied */
     ta_buffer *error;                    /* optional: why the config was refused */
+    /* Random bits from the platform, which tell this host's hibernation
+     * blobs from another host's: the host's identity is mixed from them and
+     * the config's system id, and ta_host_wake refuses a blob of another
+     * identity (TA_ERROR_INVALID), even for a session of the same number.
+     * 0: the system id alone tells hosts apart. ta_host_restore ignores it:
+     * a restored host keeps its snapshot's identity, so it wakes the blobs
+     * the snapshotted host hibernated. */
+    uint64_t nonce;
 } ta_host_environment;
 TA_API ta_status ta_host_create(ta_bytes config, const ta_host_environment *environment,
                                 ta_host **out);
@@ -431,7 +439,8 @@ TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, ta_bytes *out);
 /* The hibernated `session` back from `blob`, read during the call: its
  * latest blob only. TA_ERROR_STALE for a blob of an earlier hibernation of
  * it (a store that fell behind), TA_ERROR_INVALID for one that is not its
- * own; the actor stays hibernated then. After a restore, a blob of a
+ * own (another session's, or another host's: ta_host_environment.nonce);
+ * the actor stays hibernated then. After a restore, a blob of a
  * hibernation made after the snapshot is accepted too, so a store that
  * keeps one blob per session goes on working. */
 TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);

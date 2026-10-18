@@ -4,8 +4,8 @@
 // copied once; a hibernated native session leaves nothing in the engine;
 // its events and its delayed sends wait in the host until the application
 // wakes it; a value outside the value table keeps it resident.
-import { SimulatedClock } from '@tinyactors/node';
-import { DATAMODEL, equal, hostWith, scxml, status, throws, typeError } from './charts.mjs';
+import { Host, SimulatedClock } from '@tinyactors/node';
+import { CONFIG, DATAMODEL, ENGINE, equal, hostWith, scxml, status, throws, typeError } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 
 /** The counter: `inc` counts and keeps its data, `report` logs both and
@@ -310,6 +310,32 @@ test('wake refuses an older blob of the session: a store that fell behind loses 
   await host.idle();
   equal(logs.labelled('n').join('|'), '1 [1] report', 'woken from the latest');
   host.close();
+});
+
+test('wake refuses another host\'s blob for a session of the same number; a restored host wakes its own', async () => {
+  const logs = new Logs();
+  const one = hostWith({ counter: counter() }, { log: logs.handler });
+  const two = hostWith({ counter: counter() }); // the same config, system id and image
+  const session = one.spawn(one.chart('counter'));
+  equal(two.spawn(two.chart('counter')), session, 'the same session number');
+  one.send(session, 'inc', 1);
+  await one.idle();
+  await two.idle();
+  const blobOne = one.hibernate(session);
+  const blobTwo = two.hibernate(session);
+  throws(() => two.wake(session, blobOne), status('TA_ERROR_INVALID'), 'the first host\'s blob in the second');
+  throws(() => one.wake(session, blobTwo), status('TA_ERROR_INVALID'), 'and the reverse');
+  two.wake(session, blobTwo);
+  two.close();
+  const snapshot = one.snapshot();
+  one.close();
+  const restored = Host.restore(snapshot, CONFIG, { ...ENGINE, log: logs.handler });
+  throws(() => restored.wake(session, blobTwo), status('TA_ERROR_INVALID'), 'the second host\'s blob after the restore');
+  restored.wake(session, blobOne);
+  restored.send(session, 'report');
+  await restored.idle();
+  restored.close();
+  equal(logs.labelled('n').join('|'), '1 [1] report', 'woken in the restored host, with its state');
 });
 
 test('wake refuses a blob it cannot read, and a session that is not hibernated', async () => {

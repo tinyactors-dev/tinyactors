@@ -514,6 +514,20 @@ static ta_status host_config_of(ta_bytes cbor, const ta_host_environment *enviro
     return TA_OK;
 }
 
+/* The identity written into the host's hibernation blobs (ta_system_config.identity):
+ * the system id (FNV-1a) and the environment's nonce, mixed (splitmix64's finalizer)
+ * and folded to 32 bits. */
+static uint32_t host_identity(ta_string_view system_id, uint64_t nonce) {
+    uint64_t x = 0xcbf29ce484222325ull;
+    for (uint32_t i = 0; i < system_id.length; i++)
+        x = (x ^ (unsigned char)system_id.pointer[i]) * 0x100000001b3ull;
+    x ^= nonce;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+    x ^= x >> 31;
+    return (uint32_t)(x ^ (x >> 32));
+}
+
 ta_status ta_host_create(ta_bytes cbor, const ta_host_environment *environment, ta_host **out) {
     ta_otlp_attribute resource[HOST_CONFIG_RESOURCE];
     ta_io_processor_entry processors[HOST_CONFIG_IO_PROCESSORS];
@@ -521,7 +535,9 @@ ta_status ta_host_create(ta_bytes cbor, const ta_host_environment *environment, 
     host_config config;
     *out = NULL;
     ta_status status = host_config_of(cbor, environment, &storage, &config);
-    return status == TA_OK ? host_new(&config, out) : status;
+    if (status != TA_OK) return status;
+    config.system.identity = host_identity(config.system_id, environment->nonce);
+    return host_new(&config, out);
 }
 
 static void effects_release(ta_host *h);
@@ -2564,11 +2580,12 @@ uint64_t ta_host_actor_by_name(const ta_host *host, ta_string_view name) {
 /* ---- snapshot / restore ------------------------------------------------------------- */
 
 #define SNAPSHOT_MAGIC   0x53484154u /* "TAHS" */
-#define SNAPSHOT_VERSION 3u
+#define SNAPSHOT_VERSION 4u /* 4: the host's identity */
 
 typedef struct snapshot_header {
     uint32_t magic, version, segment_count, moved_count;
     uint32_t round_robin, migration_sequence, config_size, retired_charts;
+    uint32_t identity, pad; /* the host's (ta_system_config.identity): a restored host keeps it */
     uint64_t now, routed, migrated, retired;
 } snapshot_header;
 
@@ -2636,6 +2653,7 @@ ta_status ta_host_snapshot(ta_host *host, ta_buffer *out) {
     hd.round_robin = host->round_robin;
     hd.migration_sequence = host->migration_sequence;
     hd.config_size = (uint32_t)sizeof(ta_system_config);
+    hd.identity = host->config.system.identity;
     hd.now = host->now;
     hd.routed = host->routed;
     hd.migrated = host->migrated;
@@ -2760,6 +2778,7 @@ ta_status ta_host_restore(const ta_host_environment *environment,
     ta_status status = host_config_of(input->config, environment, &storage, &config);
     if (status != TA_OK) return status;
     ta_host *host;
+    config.system.identity = hd->identity; /* the blobs it hibernated wake here */
     status = host_new(&config, &host);
     if (status != TA_OK) return status;
     if (hd->segment_count && !host_grow(host, (void **)&host->segments, &host->segment_capacity,

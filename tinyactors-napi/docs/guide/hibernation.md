@@ -91,7 +91,9 @@ In a server, run the sweep on a timer, or after a burst of work, and size
 A blob is the actor's whole state: its active states, its variables, its
 `_event`, its place in the host. Wake it in the host that
 hibernated it, or in one [restored](snapshots.md) from that host's
-snapshot. It lives in your store until the wake; the host keeps nothing
+snapshot. Another host's blob throws `TA_ERROR_INVALID`, even for a
+session of the same number running the same chart: each host draws a
+random identity when it is created, and every blob carries it. It lives in your store until the wake; the host keeps nothing
 of it but which hibernation it was. A wake takes the session's latest blob
 only: a blob of an earlier hibernation, which a store that fell behind
 hands back (an overwrite that failed, a replica, a cache), throws

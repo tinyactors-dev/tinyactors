@@ -128,8 +128,8 @@ blob out.
 Unreleased (v0.1.0): blob formats change freely, and are for one build of the
 library (instance words are copied verbatim).
 
-- **hibernation** (`HIBERNATION_VERSION 2`): header | instance words | invoke ids as
-  text | datamodel bytes.
+- **hibernation** (`HIBERNATION_VERSION 4`): header (its writer's identity
+  among its fields) | instance words | invoke ids as text | datamodel bytes.
 - **export** (`EXPORT_VERSION 2`): header | per session, parents first: header |
   instance words | invoke ids | datamodel bytes | delayed sends (absolute due,
   rank in the tree's firing order, route, slot + 1 for `#_<invokeid>`,

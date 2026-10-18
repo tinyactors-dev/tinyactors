@@ -33,6 +33,7 @@ typedef struct test_host_config {
     uint32_t migrate_quantum;
     ta_allocator allocator;
     test_host_telemetry telemetry;
+    uint64_t nonce; /* the environment's */
 } test_host_config;
 
 typedef struct test_host_cbor {
@@ -147,6 +148,7 @@ TEST_UNUSED static ta_host_environment test_host_environment(const test_host_con
     environment.datamodel_count = c->datamodel_count;
     environment.allocator = c->allocator;
     environment.trace_policy = c->system.trace_policy;
+    environment.nonce = c->nonce;
     cbor->error_reply = (ta_buffer){cbor->error, sizeof cbor->error, 0};
     environment.error = &cbor->error_reply;
     return environment;

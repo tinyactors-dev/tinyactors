@@ -32,7 +32,10 @@ A binding lets one language drive `ta_host` in one runtime. It is that runtimeâ€
 ```
 config  = cbor_encode({ systemID: "app", system: {...}, telemetry: {...} })
 error   = ta_buffer of your own
-env     = { allocator, datamodels[], datamodel_count, trace_policy, error: &error }
+env     = { allocator, datamodels[], datamodel_count, trace_policy, error: &error,
+            nonce: 64 random bits from the platform }
+                                         # the host's identity: ta_host_wake refuses a blob
+                                         # of another host; a restore keeps the snapshot's
 ta_host_create(config, &env, &host)      # TA_ERROR_INVALID: error holds the reply
 ta_host_post(host, {"method": "host.config", "id": 0}); drain(host)
 rate    = reply.result.system.ticksPerSecond

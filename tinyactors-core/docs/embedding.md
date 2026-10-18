@@ -20,7 +20,10 @@ the headers (`include/tinyactors/host.h`, `datamodel.h`, `cbor.h`,
 - **A host** (`host.h`): many systems as one actor system, one per image
   version. `ta_host_create` takes a config as one CBOR map
   ([host-config.md](host-config.md)) and an environment struct: the
-  allocator, the datamodels, a trace policy, an error buffer.
+  allocator, the datamodels, a trace policy, an error buffer, and a
+  `nonce` of random bits from the platform (the host has no source of
+  its own), which with the system id makes the host's identity: its
+  hibernation blobs wake in no other host.
 - **Datamodels:** the ECMAScript one (`datamodel_ecmascript.h`, quickjs),
   or your own behind the vtable (`datamodel.h`), at most eight, each
   chosen by the chart's `datamodel` attribute.

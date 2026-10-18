@@ -1042,6 +1042,7 @@ ta_status ta_system_relocate(ta_system **relocated, ta_memory memory,
     ta_system_config_normalize(view, new_config ? new_config : &system->config, &wanted);
     /* a system keeps tracing on or off for its life: events hold contexts */
     wanted.tracing = system->config.tracing;
+    wanted.identity = system->config.identity; /* its blobs stay its own */
     ta_system_config_normalize(view, &wanted, &config);
     config.io_processors = system->config.io_processors;
     config.io_processor_count = system->config.io_processor_count;

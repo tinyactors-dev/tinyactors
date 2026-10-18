@@ -54,6 +54,10 @@ static void refusable_free(void *context, void *pointer, size_t size) {
     c.free(c.context, pointer, size);
 }
 
+/* The next world_open's environment nonce and system id (test_blob_identity). */
+static uint64_t world_nonce;
+static const char *world_system = "h";
+
 static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor_entry *io,
                        uint32_t io_count) {
     memset(e, 0, sizeof *e);
@@ -62,7 +66,8 @@ static void world_open(host_world *e, uint32_t max_actors, const ta_io_processor
     test_host_config config;
     memset(&config, 0, sizeof config);
     config.size = sizeof config;
-    config.system_id = (ta_string_view){"h", 1};
+    config.system_id = (ta_string_view){world_system, (uint32_t)strlen(world_system)};
+    config.nonce = world_nonce;
     config.system.size = sizeof config.system;
     config.system.ticks_per_second = 1000;
     config.system.max_actors = max_actors;
@@ -825,6 +830,71 @@ static void test_migration_fails_invoking_actors_without_timeout(void) {
     CHECK(e.last_migration == migration && e.last_done.migrated == 0 && e.last_done.failed == 0 &&
           e.last_done.pending == 1);
     world_close(&e);
+}
+
+/* A blob wakes only in the host that hibernated it, or in one restored from
+ * its snapshot (under a nonce of its own): another host's blob of a session
+ * with the same number and chart is refused, told apart by the nonce, or
+ * without one by the system id. */
+static ta_bytes snapshot_of(host_world *e) {
+    ta_buffer written = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(e->host, &written), TA_ERROR_NO_MEMORY);
+    void *bytes = malloc(written.length);
+    written = (ta_buffer){bytes, written.length, 0};
+    CHECK_EQUAL(ta_host_snapshot(e->host, &written), TA_OK);
+    return (ta_bytes){bytes, written.length};
+}
+
+static void test_blob_identity(void) {
+    host_world a, b, c;
+    world_nonce = 1;
+    world_open(&a, 16, NULL, 0);
+    world_nonce = 2;
+    world_open(&b, 16, NULL, 0);
+    world_nonce = 0;
+    world_system = "other";
+    world_open(&c, 16, NULL, 0);
+    world_system = "h";
+    world_add(&a, W1);
+    world_add(&b, W1);
+    world_add(&c, W1);
+    uint64_t s = spawn(&a, "w");
+    CHECK_EQUAL(spawn(&b, "w"), s);
+    CHECK_EQUAL(spawn(&c, "w"), s);
+    run(&a);
+    run(&b);
+    run(&c);
+    static kept_blob blob_a, blob_b, blob_c;
+    keep(&a, s, &blob_a);
+    keep(&b, s, &blob_b);
+    keep(&c, s, &blob_c);
+    CHECK_EQUAL(ta_host_wake(b.host, s, kept(&blob_a)), TA_ERROR_INVALID); /* another nonce */
+    CHECK_EQUAL(ta_host_wake(a.host, s, kept(&blob_b)), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_wake(a.host, s, kept(&blob_c)), TA_ERROR_INVALID); /* another system id */
+    CHECK_EQUAL(ta_host_wake(b.host, s, kept(&blob_b)), TA_OK);
+    CHECK_EQUAL(ta_host_wake(c.host, s, kept(&blob_c)), TA_OK);
+    /* a, still hibernated, packed and restored under another nonce: its blob wakes there */
+    ta_bytes snapshot = snapshot_of(&a);
+    ta_host_free(a.host);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.datamodels = &a.binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    config.nonce = 3;
+    ta_bytes images[1] = {ta_image_bytes(&a.image[0])};
+    CHECK_EQUAL(test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, snapshot, images, 1, 0}, &a.host),
+                TA_OK);
+    CHECK_EQUAL(ta_host_wake(a.host, s, kept(&blob_b)), TA_ERROR_INVALID);
+    CHECK_EQUAL(ta_host_wake(a.host, s, kept(&blob_a)), TA_OK);
+    CHECK_EQUAL(send(&a, s, "ping", NULL), TA_OK);
+    run(&a);
+    free((void *)snapshot.pointer);
+    world_close(&a);
+    world_close(&b);
+    world_close(&c);
 }
 
 /* a segment with a runaway actor gets a share of each run, not all of it */
@@ -1821,5 +1891,6 @@ int main(void) {
     RUN(test_migration_of_many_hibernated_actors);
     RUN(test_migration_waits_for_invocations);
     RUN(test_migration_fails_invoking_actors_without_timeout);
+    RUN(test_blob_identity);
     TEST_MAIN_END();
 }

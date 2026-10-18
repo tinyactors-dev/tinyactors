@@ -83,6 +83,11 @@ typedef struct ta_system_config {
      * init (NULL: ta_trace_policy_default) */
     const ta_trace_policy *trace_policy;
     uint64_t trace_seed; /* the trace ID generator's seed: the same seed, the same IDs */
+    /* Who wrote a hibernation blob: written into each one, and a blob of
+     * another identity is refused when woken (TA_ERROR_INVALID). A host
+     * gives its segments its own (ta_host_environment.nonce). */
+    uint32_t identity;
+    uint32_t identity_pad;
     /* The system's address base, "tinyactors://<id>/" (empty: none), borrowed
      * as io_processors is. Its sessions' SCXML location is the base +
      * "#_scxml_<id>"; a send to an absolute URI outside it is a

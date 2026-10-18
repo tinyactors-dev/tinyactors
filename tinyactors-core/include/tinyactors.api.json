@@ -4943,13 +4943,21 @@
           "type": "uint64_t"
         },
         {
+          "name": "identity",
+          "type": "uint32_t"
+        },
+        {
+          "name": "identity_pad",
+          "type": "uint32_t"
+        },
+        {
           "name": "base",
           "type": "ta_string_view"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 120,
+          "size": 128,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4973,10 +4981,42 @@
             "trace_rules": 84,
             "trace_policy": 88,
             "trace_seed": 96,
-            "base": 104
+            "identity": 104,
+            "identity_pad": 108,
+            "base": 112
           }
         },
         "aarch64": {
+          "size": 128,
+          "align": 8,
+          "offsets": {
+            "size": 0,
+            "max_actors": 4,
+            "max_events": 8,
+            "max_timers": 12,
+            "workspaces": 16,
+            "max_requests": 20,
+            "outbox": 24,
+            "quantum": 28,
+            "instance_bytes": 32,
+            "string_bytes": 36,
+            "io_processor_count": 40,
+            "flags": 44,
+            "ticks_per_second": 48,
+            "io_processors": 56,
+            "first_serial": 64,
+            "tracing": 72,
+            "trace_bytes": 76,
+            "trace_contexts": 80,
+            "trace_rules": 84,
+            "trace_policy": 88,
+            "trace_seed": 96,
+            "identity": 104,
+            "identity_pad": 108,
+            "base": 112
+          }
+        },
+        "wasm32": {
           "size": 120,
           "align": 8,
           "offsets": {
@@ -5001,35 +5041,9 @@
             "trace_rules": 84,
             "trace_policy": 88,
             "trace_seed": 96,
-            "base": 104
-          }
-        },
-        "wasm32": {
-          "size": 112,
-          "align": 8,
-          "offsets": {
-            "size": 0,
-            "max_actors": 4,
-            "max_events": 8,
-            "max_timers": 12,
-            "workspaces": 16,
-            "max_requests": 20,
-            "outbox": 24,
-            "quantum": 28,
-            "instance_bytes": 32,
-            "string_bytes": 36,
-            "io_processor_count": 40,
-            "flags": 44,
-            "ticks_per_second": 48,
-            "io_processors": 56,
-            "first_serial": 64,
-            "tracing": 72,
-            "trace_bytes": 76,
-            "trace_contexts": 80,
-            "trace_rules": 84,
-            "trace_policy": 88,
-            "trace_seed": 96,
-            "base": 104
+            "identity": 104,
+            "identity_pad": 108,
+            "base": 112
           }
         }
       }
@@ -7425,11 +7439,15 @@
         {
           "name": "error",
           "type": "ta_buffer *"
+        },
+        {
+          "name": "nonce",
+          "type": "uint64_t"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 56,
+          "size": 64,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7437,11 +7455,12 @@
             "datamodels": 8,
             "allocator": 16,
             "trace_policy": 40,
-            "error": 48
+            "error": 48,
+            "nonce": 56
           }
         },
         "aarch64": {
-          "size": 56,
+          "size": 64,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -7449,19 +7468,21 @@
             "datamodels": 8,
             "allocator": 16,
             "trace_policy": 40,
-            "error": 48
+            "error": 48,
+            "nonce": 56
           }
         },
         "wasm32": {
-          "size": 32,
-          "align": 4,
+          "size": 40,
+          "align": 8,
           "offsets": {
             "size": 0,
             "datamodel_count": 4,
             "datamodels": 8,
             "allocator": 12,
             "trace_policy": 24,
-            "error": 28
+            "error": 28,
+            "nonce": 32
           }
         }
       }

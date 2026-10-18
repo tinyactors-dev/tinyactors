@@ -34,12 +34,14 @@
 #include "trace/record.h"
 
 #define HIBERNATION_MAGIC   0x42484154u /* "TAHB" */
-#define HIBERNATION_VERSION 3u          /* 3: the 64-byte instance header (docs/adr/0006) */
+#define HIBERNATION_VERSION 4u          /* 4: the writer's identity, in what was padding */
 
+/* `identity` is the writing system's (ta_system_config.identity): a blob of
+ * another system is refused, even for a session of the same number. */
 typedef struct hibernation_header {
     uint32_t magic, version;
     uint32_t chart, instance_bytes;
-    uint32_t ids_bytes, pad;
+    uint32_t ids_bytes, identity;
     uint64_t image_hash, serial;
     uint64_t datamodel_bytes;
 } hibernation_header;
@@ -348,6 +350,7 @@ static ta_status write_hib(ta_system *system, uint32_t index, ta_output *out) {
     header.chart = instance->chart;
     header.instance_bytes = ib;
     header.ids_bytes = idsz;
+    header.identity = system->config.identity;
     header.image_hash = core->image_view.hash;
     header.serial = actor->serial;
     size_t start = out->length;
@@ -616,6 +619,7 @@ ta_status ta_actor_export(ta_system *system, uint32_t actor, ta_buffer *out) {
 typedef struct blob_view {
     uint32_t chart, instance_bytes, ids_bytes, slot;
     uint32_t timer_count, timers_bytes, init_count, name_length;
+    uint32_t identity; /* a hibernation blob's writer */
     uint64_t serial, parent, datamodel_bytes, image_hash;
     const unsigned char *instance, *ids, *datamodel, *timers, *init, *name;
 } blob_view;
@@ -633,6 +637,7 @@ static ta_status parse_hib(const void *blob, size_t length, blob_view *view) {
     view->chart = header.chart;
     view->instance_bytes = header.instance_bytes;
     view->ids_bytes = header.ids_bytes;
+    view->identity = header.identity;
     view->serial = header.serial;
     view->datamodel_bytes = header.datamodel_bytes;
     view->image_hash = header.image_hash;
@@ -759,6 +764,7 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes bytes) {
     blob_view view;
     uint32_t chart = actor_record->instance, off;
     if (parse_hib(blob, length, &view) != TA_OK || view.chart != chart ||
+        view.identity != system->config.identity || /* another system's */
         view.serial != actor_record->serial || view.image_hash != core->image_view.hash ||
         view.instance_bytes != ta_core_chart_instance_size(core, chart))
         return TA_ERROR_INVALID;

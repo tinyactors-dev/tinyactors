@@ -1354,7 +1354,9 @@ function makeHost(state, config, pack) {
   return module.scoped(scratch, () => {
     const [at, length] = cbor.write(module, scratch, config);
     const room = module.room(scratch, CONFIG_ERROR);
-    let packed = [0, 0];
+    // a new host: random bits for its identity, so its hibernation blobs wake
+    // in no other host (a restore keeps its snapshot's)
+    let packed = pack === null ? globalThis.crypto.getRandomValues(new Uint32Array(2)) : [0, 0];
     if (pack !== null) packed = module.copyIn(scratch, pack); // 8-aligned, as a pack's parts need
     module.words().set([at, length, state.id, DATAMODEL_NATIVE, room, CONFIG_ERROR, packed[0], packed[1]], module.record);
     const pointer = module.call(pack === null ? 'ta_web_host_new' : 'ta_web_host_restore', module.env) >>> 0;

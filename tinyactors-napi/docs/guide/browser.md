@@ -479,8 +479,9 @@ A Node.js server on `@tinyactors/node` and a browser client on
   package that made it.
 - **A hibernation blob belongs to its host.** It wakes in the host that
   hibernated it, or in one restored from that host's snapshot, which the
-  other package cannot restore. Keep the server's blobs and the client's
-  apart in the store, by host.
+  other package cannot restore; another host's blob throws
+  `TA_ERROR_INVALID`. Keep the server's blobs and the client's apart in
+  the store, by host.
 - **Values cross.** `encode` and `decode` are one format in both packages
   ([Other systems](other-systems.md)): move work between the server and
   the client as events and their data, from one system to another.

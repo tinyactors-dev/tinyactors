@@ -101,6 +101,7 @@ typedef struct ta_web_making {
     uint32_t id, datamodel;
     ta_buffer error;
     ta_bytes pack;
+    uint64_t nonce; /* ta_host_environment's: JavaScript's random bits (a restore ignores it) */
 } ta_web_making;
 
 /* The label of the datamodel state the layer packs: the package's own. A
@@ -174,7 +175,8 @@ static ta_web_host *ta_web_host_make(ta_web_env *env, const ta_web_making *makin
     ta_web_tables_init(host);
     host->binding = (ta_datamodel_binding){ta_web_native_vtable(), host};
     ta_host_environment environment = {sizeof environment, host->datamodel == TA_WEB_DATAMODEL_NATIVE ? 1u : 0u,
-                                       &host->binding, env->allocator, NULL, error.pointer != NULL ? &error : NULL};
+                                       &host->binding, env->allocator, NULL, error.pointer != NULL ? &error : NULL,
+                                       making->nonce};
     ta_web_enter(host);
     struct ta_web_host *outer = env->making;
     env->making = host;
@@ -203,12 +205,14 @@ static ta_web_host *ta_web_host_make(ta_web_env *env, const ta_web_making *makin
 
 /* A new host. Record: words 0-1 the config's CBOR, 2 JavaScript's id for
  * it, 3 its datamodel (TA_WEB_DATAMODEL_*), 4-5 room for the refused
- * config's error (a pointer and a capacity; 0 for none). Answers the host,
+ * config's error (a pointer and a capacity; 0 for none), 6-7 random bits
+ * for the host's identity (ta_host_environment.nonce). Answers the host,
  * or 0; the record's word 0 is the status, word 1 the length of the error
  * written into the room (or the room it needs, beyond its capacity). */
 TA_WEB_EXPORT ta_web_host *ta_web_host_new(ta_web_env *env) {
     const uint32_t *word = env->record.word;
-    ta_web_making making = {ta_web_bytes_at(word, 0), word[2], word[3], {(unsigned char *)(uintptr_t)word[4], word[5], 0}, {NULL, 0}};
+    ta_web_making making = {ta_web_bytes_at(word, 0), word[2], word[3], {(unsigned char *)(uintptr_t)word[4], word[5], 0}, {NULL, 0},
+                            ta_web_word64(word, 6)};
     return ta_web_host_make(env, &making);
 }
 
@@ -221,7 +225,7 @@ TA_WEB_EXPORT ta_web_host *ta_web_host_new(ta_web_env *env) {
 TA_WEB_EXPORT ta_web_host *ta_web_host_restore(ta_web_env *env) {
     const uint32_t *word = env->record.word;
     ta_web_making making = {ta_web_bytes_at(word, 0), word[2], word[3], {(unsigned char *)(uintptr_t)word[4], word[5], 0},
-                            ta_web_bytes_at(word, 6)};
+                            ta_web_bytes_at(word, 6), 0};
     if (making.pack.pointer == NULL) making.pack.pointer = (const unsigned char *)""; /* an empty pack: core refuses it */
     return ta_web_host_make(env, &making);
 }

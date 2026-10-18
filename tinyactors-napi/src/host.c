@@ -481,6 +481,29 @@ static void ta_napi_host_refused(napi_env env, const ta_napi_refused_config *ref
     ta_napi_throw_core_error(env, &(ta_napi_core_error){error, refused->status});
 }
 
+/* 64 random bits for the host's identity (ta_host_environment.nonce), so
+ * its hibernation blobs wake in no other host: globalThis.crypto's
+ * getRandomValues, which Node.js and Bun have. 0 when it is missing or
+ * throws (its exception cleared): the system id alone tells hosts apart. */
+static uint64_t ta_napi_host_nonce(napi_env env) {
+    napi_value global, crypto, get, buffer, array, result;
+    void *data = NULL;
+    uint64_t nonce = 0;
+    bool ok = napi_get_global(env, &global) == napi_ok &&
+              napi_get_named_property(env, global, "crypto", &crypto) == napi_ok &&
+              napi_get_named_property(env, crypto, "getRandomValues", &get) == napi_ok &&
+              napi_create_arraybuffer(env, sizeof nonce, &data, &buffer) == napi_ok &&
+              napi_create_typedarray(env, napi_uint8_array, sizeof nonce, buffer, 0, &array) == napi_ok &&
+              napi_call_function(env, crypto, get, 1, &array, &result) == napi_ok;
+    bool pending = false;
+    if (!ok && napi_is_exception_pending(env, &pending) == napi_ok && pending) {
+        napi_value error;
+        napi_get_and_clear_last_exception(env, &error);
+    }
+    if (ok) memcpy(&nonce, data, sizeof nonce);
+    return nonce;
+}
+
 /* ta_host_create with the config as CBOR in the call's arena and the
  * environment's one datamodel; a refused config throws core's error. */
 static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value config) {
@@ -497,7 +520,7 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
     if (ok) {
         ta_buffer refusal = {ta_growable_arena_alloc(&host->arena, TA_NAPI_CONFIG_ERROR, 8), TA_NAPI_CONFIG_ERROR, 0};
         ta_host_environment environment = {sizeof environment, 1, host->datamodels, host->allocator, NULL,
-                                           refusal.pointer != NULL ? &refusal : NULL};
+                                           refusal.pointer != NULL ? &refusal : NULL, ta_napi_host_nonce(env)};
         status = ta_host_create(cbor, &environment, &host->host);
         if (status != TA_OK) {
             host->host = NULL;
@@ -631,7 +654,7 @@ static bool ta_napi_host_restore_core(napi_env env, ta_napi_host *host, ta_napi_
     if (ok) {
         ta_buffer refusal = {ta_growable_arena_alloc(&host->arena, TA_NAPI_CONFIG_ERROR, 8), TA_NAPI_CONFIG_ERROR, 0};
         ta_host_environment environment = {sizeof environment, 1, host->datamodels, host->allocator, NULL,
-                                           refusal.pointer != NULL ? &refusal : NULL};
+                                           refusal.pointer != NULL ? &refusal : NULL, 0}; /* the snapshot's identity */
         ta_host_snapshot_input input = {cbor, {contents.host, contents.host_length}, images, contents.image_count, 0};
         status = ta_host_restore(&environment, &input, &host->host);
         if (status != TA_OK) {
