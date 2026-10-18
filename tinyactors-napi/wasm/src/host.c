@@ -103,19 +103,24 @@ typedef struct ta_web_making {
     ta_bytes pack;
 } ta_web_making;
 
-/* The label of the datamodel state the layer packs, the addon's
- * (src/host.c): one API, so a pack's state is labelled as @tinyactors/node
- * labels its own. */
-static const char ta_web_snapshot_label[] = "tinyactors-napi";
+/* The label of the datamodel state the layer packs: the package's own. A
+ * snapshot is the host's memory, laid out for the build that made it
+ * (core's docs/durability.md: "valid for the same build of the library
+ * only"), and the addon's is a 64-bit build's, so the two packages label
+ * their packs apart and each refuses the other's by its label, naming it;
+ * actors cross between them as hibernation blobs (docs/guide/browser.md). */
+static const char ta_web_snapshot_label[] = "tinyactors-wasm";
+static const char ta_web_addon_label[] = "tinyactors-napi";
 
 /* A restore's core: the pack unpacked (its label checked), its images, and
  * ta_host_restore with `environment`; the contents kept for JavaScript. A
  * pack another program labelled is TA_ERROR_INVALID, with the record's
- * word 2 set to 1 so the message can say why. */
+ * word 2 set so the message can say why: 1 another program's, 2 the
+ * addon's. */
 typedef struct ta_web_unpacked {
     const ta_host_environment *environment;
     ta_host_snapshot_contents contents;
-    bool foreign;
+    uint32_t foreign;
 } ta_web_unpacked;
 
 static ta_status ta_web_restore_core(ta_web_host *host, const ta_web_making *making, ta_web_unpacked *unpacked) {
@@ -126,7 +131,9 @@ static ta_status ta_web_restore_core(ta_web_host *host, const ta_web_making *mak
     if (status != TA_OK) return status;
     if (contents->datamodel.length != sizeof ta_web_snapshot_label - 1 ||
         memcmp(contents->datamodel.pointer, ta_web_snapshot_label, contents->datamodel.length) != 0) {
-        unpacked->foreign = true; /* its datamodel's state is not ours */
+        bool addon = contents->datamodel.length == sizeof ta_web_addon_label - 1 &&
+                     memcmp(contents->datamodel.pointer, ta_web_addon_label, contents->datamodel.length) == 0;
+        unpacked->foreign = addon ? 2u : 1u; /* its datamodel's state is not ours */
         return TA_ERROR_INVALID;
     }
     uint32_t level = ta_web_scratch_enter(&host->scratch);
@@ -172,7 +179,7 @@ static ta_web_host *ta_web_host_make(ta_web_env *env, const ta_web_making *makin
     struct ta_web_host *outer = env->making;
     env->making = host;
     ta_status status;
-    ta_web_unpacked unpacked = {&environment, {0}, false};
+    ta_web_unpacked unpacked = {&environment, {0}, 0};
     if (making->pack.pointer == NULL) status = ta_host_create(making->config, &environment, &host->host);
     else status = ta_web_restore_core(host, making, &unpacked);
     if (status == TA_OK) status = ta_web_read_config(host);

@@ -515,6 +515,9 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
 /* The label of the datamodel state this addon packs: a pack another
  * program wrote holds state that is not ours. */
 static const char ta_napi_snapshot_label[] = "tinyactors-napi";
+/* @tinyactors/wasm's label (wasm/src/host.c): its packs are a wasm32
+ * build's memory, which this build does not restore. */
+static const char ta_napi_wasm_label[] = "tinyactors-wasm";
 
 /* The keys of the datamodel state: the one datamodel a host holds. */
 static const char *const ta_napi_state_keys[] = {"native", "quickjs"};
@@ -605,11 +608,16 @@ static bool ta_napi_host_restore_core(napi_env env, ta_napi_host *host, ta_napi_
     contents.size = sizeof contents;
     if (ok) {
         status = ta_host_snapshot_unpack(pack, &contents);
+        bool wasm = status == TA_OK && contents.datamodel.length == sizeof ta_napi_wasm_label - 1 &&
+                    memcmp(contents.datamodel.pointer, ta_napi_wasm_label, contents.datamodel.length) == 0;
         if (status == TA_OK && (contents.datamodel.length != sizeof ta_napi_snapshot_label - 1 ||
                                 memcmp(contents.datamodel.pointer, ta_napi_snapshot_label, contents.datamodel.length) != 0))
             status = TA_ERROR_INVALID; /* a pack another program wrote: its datamodel's state is not ours */
         if (status != TA_OK) {
-            ta_napi_throw(env, &(ta_napi_refusal){status, "not a snapshot of a Host of @tinyactors/node"});
+            const char *message = wasm ? "a snapshot of @tinyactors/wasm: a snapshot restores only in the package that made it, of the "
+                                         "same version (it is the host's memory); move actors between the packages as hibernation blobs"
+                                       : "not a snapshot of a Host of @tinyactors/node";
+            ta_napi_throw(env, &(ta_napi_refusal){status, message});
             ok = false;
         }
     }

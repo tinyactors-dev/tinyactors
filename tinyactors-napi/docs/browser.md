@@ -566,6 +566,18 @@ a context of 60 to 143 KB. It is not proposed here.
   `conform.mjs` does, in node and in Chromium (p5-datamodel).
 - **A parity check** (p5-parity): the two packages' exports compared
   property by property, and `index.d.ts` type-checked against both.
+  **As built:** `tools/parity.mjs` in `mise run test` compares, under node
+  and bun, every export, the objects the API hands out and what 31
+  misuses throw, and each package against `index.d.ts` through the
+  TypeScript compiler's API (tsc cannot type the addon, and infers the
+  wasm package's JavaScript too loosely to check it); the differences it
+  accepts are in `wasm/test/differences.mjs` with their reasons
+  (`Buffer` against `Uint8Array`, quickjs, engine artifacts). The user
+  documentation runs in Chromium (`wasm/test/documentation.mjs`), and
+  `docs/guide/browser.md` says what differs. A snapshot does not cross
+  between the packages (each labels its own and refuses the other's,
+  naming it), nor does a hibernation blob, which belongs to its host
+  (docs/log.xml, `l-p5-parity-crossing`).
 
 ## Packaging and releases
 

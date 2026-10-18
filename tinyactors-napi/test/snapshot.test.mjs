@@ -6,7 +6,7 @@
 // at 0; its own snapshot is the same bytes; what is not quiescent, or not
 // in the value table, is refused.
 import { Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
-import { DATAMODEL, ENGINE, equal, image, indexOfBytes, sameBytes, scxml, status, throws, typeError } from './charts.mjs';
+import { DATAMODEL, ENGINE, equal, image, indexOfBytes, LABEL, sameBytes, scxml, status, throws, typeError } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 const CONFIG = { systemID: 't', system: { ticksPerSecond: 1000 } };
@@ -288,8 +288,8 @@ test('restore refuses another system\'s config, another datamodel, another progr
   }, 'another system');
   const otherModel = DATAMODEL === 'native' ? 'quickjs' : 'native';
   throws(() => Host.restore(blob, CONFIG, { datamodel: otherModel }), status('TA_ERROR_INVALID'), 'another datamodel');
-  // the label: a byte of "tinyactors-napi" changed in the pack
-  const label = new TextEncoder().encode('tinyactors-napi');
+  // the label: a byte of the package's label changed in the pack
+  const label = new TextEncoder().encode(LABEL);
   const at = indexOfBytes(blob, label);
   if (at < 0) throw new Error('the pack does not hold its label');
   const relabelled = new Uint8Array(blob);

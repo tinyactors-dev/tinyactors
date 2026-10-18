@@ -81,3 +81,24 @@ export async function underPolicy() {
   compiled.close();
   return out;
 }
+
+// A snapshot of @tinyactors/node (made by the test's process with the
+// addon) restored here: refused by its label, naming the package; and a
+// snapshot of this package's own, for the test to restore with the addon.
+export async function crossing(addonSnapshot) {
+  let refused = null;
+  try {
+    Host.restore(new Uint8Array(addonSnapshot), { systemID: 't' }).close();
+  } catch (error) {
+    refused = [error.status, error.message];
+  }
+  const host = new Host({ systemID: 't' });
+  const compiled = compileCharts([{ name: 'c.scxml', text: '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="c" initial="s"><state id="s"/></scxml>' }]);
+  host.addImage(compiled.image);
+  compiled.close();
+  host.spawn(host.chart('c'));
+  await host.idle();
+  const own = Array.from(host.snapshot());
+  host.close();
+  return { refused, own };
+}

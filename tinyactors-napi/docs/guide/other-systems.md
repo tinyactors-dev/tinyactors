@@ -53,11 +53,11 @@ const image = (name, text) => {
   return bytes;
 };
 
-// The wire: bytes in a queue, delivered on the next tick.
+// The wire: bytes in a queue, delivered on a later turn of the event loop.
 const hosts = {};
 const wire = (message) => {
   const bytes = encode(message);
-  setImmediate(() => {
+  setTimeout(() => {
     const received = decode(bytes);
     hosts[received.target.system].send(received);
   });

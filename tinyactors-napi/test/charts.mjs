@@ -5,12 +5,15 @@
 // observed with what the inputs give: an actor that reaches a final state
 // ends, so host.actorByName stops finding it.
 import { compileCharts, Host, TinyactorsError } from '@tinyactors/node';
-import { datamodel, macrotask } from './runtime.mjs';
+import { datamodel, macrotask, wasm } from './runtime.mjs';
 
 export const DATAMODEL = datamodel;
 /** The Host options that name the datamodel under test. */
 export const ENGINE = { datamodel: DATAMODEL };
 export const CONFIG = { systemID: 't' };
+/** The label a snapshot of the package under test holds: each package
+ * labels its own, and refuses the other's. */
+export const LABEL = wasm ? 'tinyactors-wasm' : 'tinyactors-napi';
 
 /** An SCXML document `name` whose body is `body`. */
 export function scxml(name, body, { datamodel = 'ecmascript', initial = 's' } = {}) {

@@ -42,7 +42,7 @@ await host.idle();
 clock.increment(30 * 60_000);      // half an hour passes
 await host.idle();
 
-const snapshot = host.snapshot();  // a Buffer: write it to a file, send it elsewhere
+const snapshot = host.snapshot();  // bytes: write them to a file, send them elsewhere
 host.close();
 
 const later = new SimulatedClock(); // a clock that reads 0

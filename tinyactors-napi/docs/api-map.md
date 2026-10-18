@@ -131,16 +131,30 @@ it differs today, it says so at the call, never silently:
 - `datamodel: "quickjs"` throws `TinyactorsError` with
   `TA_ERROR_UNSUPPORTED` at `new Host` (p5-quickjs), its limits checked
   first as the addon checks them;
-- the native `"ecmascript"` datamodel is not in it yet (p5-datamodel): a
-  host holds the null datamodel only, so `addImage` of an image with an
-  `"ecmascript"` chart throws `TA_ERROR_UNSUPPORTED`, `compileCharts`
-  makes no syntax check of the charts' ECMAScript, and a snapshot's
-  datamodel state is an empty `"native"` map;
+- the native `"ecmascript"` datamodel runs charts in one realm per host
+  (a hidden iframe on a page, the worker's global in a Worker, a
+  `node:vm` context in node and bun), declaring charts in one session
+  function per chart, so an undeclared assignment in a chart-level script
+  lands on that realm and makes `hibernate` and `snapshot` refuse
+  declaring sessions, naming the variable; under a policy that refuses
+  string evaluation a native host is refused at `new Host`
+  (docs/guide/browser.md, "Where charts run" and "What a page needs");
+- a snapshot is labelled `tinyactors-wasm` (the addon's
+  `tinyactors-napi`), and each package refuses the other's, naming it: a
+  snapshot is the memory of the build that made it;
 - `directoryResolver` reaches `node:fs` and `node:path` through
   `process.getBuiltinModule` (node, bun) and throws `TA_ERROR_UNSUPPORTED`
   where there is none (a page, a Worker);
 - a host nobody closed is freed by a `FinalizationRegistry`, the
-  addon's finalizer's place; its state reaches the `Host` only weakly.
+  addon's finalizer's place; its state reaches the `Host` only weakly;
+- the second entry, `@tinyactors/wasm/init`, exports the same names and
+  `init(source?)` (`wasm/init.d.ts`), which loads the module that the
+  default entry loads with top-level `await`.
+
+`tools/parity.mjs` (in `mise run test`) compares the two packages' exports,
+the objects they hand out and their refusals under node and bun, and each
+against `index.d.ts`; what it accepts is listed with its reason in
+`wasm/test/differences.mjs`.
 
 **Not an API item: the package's documents.** The main package ships
 the README, `docs/guide/` and `docs/values.md` beside the code and the

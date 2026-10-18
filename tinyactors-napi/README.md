@@ -45,6 +45,10 @@ them yet. An install that left out optional dependencies
 (`--no-optional`, `--omit=optional`) fails at import, naming the package
 it needs.
 
+For a browser, or a platform with no addon (Windows), the same API is
+`@tinyactors/wasm`, core compiled to WebAssembly: see
+[In the browser](docs/guide/browser.md), which says what differs.
+
 Development builds of `main` are published under the `next` dist-tag
 (`npm install @tinyactors/node@next`), versioned
 `<next minor>-dev.<date>.<n>.g<commit>`. Releases, their tarballs and
@@ -648,6 +652,9 @@ are in the package too, under `docs/guide/` in
   grows, and what an actor costs.
 - [Testing your charts](docs/guide/testing.md): a simulated clock,
   `idle()`, and asserting on an actor's state.
+- [In the browser](docs/guide/browser.md): `@tinyactors/wasm`, the same
+  API in a page or a Worker: loading, the CSP, IndexedDB as the store,
+  liveness, memory, and what differs.
 
 The reference is the doc comment of each export in
 [index.d.ts](index.d.ts), which an editor shows on hover.

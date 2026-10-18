@@ -52,7 +52,7 @@ const CONFIG_ERROR = 8192;
 // The longest delay setTimeout keeps (2^31 - 1 ms); a deadline further away
 // is armed at this, and the idle turn it wakes arms the rest.
 const TIMEOUT_MAX = 2147483647;
-const LABEL = 'tinyactors-napi';
+const LABEL = 'tinyactors-wasm';
 
 const POOLS = [
   'the host\'s allocator refused memory for the host\'s own (TA_POOL_NONE)',
@@ -1362,8 +1362,12 @@ function makeHost(state, config, pack) {
     const status = w[0] | 0;
     if (pointer === 0) {
       if (state.error !== null) throw state.takeKept()[0];
+      if (pack !== null && w[2] === 2) {
+        throw refusal('TA_ERROR_INVALID', 'a snapshot of @tinyactors/node: a snapshot restores only in the package that made it, ' +
+          'of the same version (it is the host\'s memory); move actors between the packages as hibernation blobs');
+      }
       if (pack !== null && (w[2] === 1 || (status === TA_ERROR_INVALID && w[1] === 0))) {
-        throw refusal('TA_ERROR_INVALID', 'not a snapshot of a Host of @tinyactors/node');
+        throw refusal('TA_ERROR_INVALID', 'not a snapshot of a Host of @tinyactors/wasm');
       }
       let error = null;
       if (w[1] > 0 && w[1] <= CONFIG_ERROR) {

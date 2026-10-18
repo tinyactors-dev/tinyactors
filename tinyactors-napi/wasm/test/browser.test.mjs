@@ -8,6 +8,7 @@
 // no Playwright is installed it says so and passes: the test task
 // requires one (mise/tasks/wasm/test).
 import assert from 'node:assert/strict';
+import { compileCharts, Host } from '@tinyactors/node';
 import { run, test } from '../../test/harness.mjs';
 import { launch, napi, playwright, serve } from './serve.mjs';
 
@@ -122,6 +123,41 @@ import(${JSON.stringify(napi('wasm/test/native.mjs'))}).then((m) => m.underPolic
       assert.equal(out.syntaxChecked, false, `${name}: compileCharts skips its syntax check`);
       await page.close();
     }
+  } finally {
+    await browser.close();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+// Nothing a host packs crosses between the packages (test/crossing.test.mjs
+// in node and bun): a snapshot of @tinyactors/node, made here with the
+// addon, is refused in a page by its label, naming the package, and the
+// page's snapshot is refused by the addon, naming @tinyactors/wasm.
+test('a snapshot crosses neither way between the addon and a page: each refuses the other\'s, naming it', async () => {
+  const pw = playwright();
+  if (pw === null) {
+    console.log('skip: no Playwright installed');
+    return;
+  }
+  const compiled = compileCharts([{ name: 'c.scxml', text: '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="c" initial="s"><state id="s"/></scxml>' }]);
+  const addon = new Host({ systemID: 't' });
+  addon.addImage(compiled.image);
+  compiled.close();
+  addon.spawn(addon.chart('c'));
+  await addon.idle();
+  const snapshot = Array.from(addon.snapshot());
+  addon.close();
+  const server = await serve(new Map([[napi('page.html'), '<!doctype html><title>tinyactors</title><body>']]));
+  const browser = await launch(pw);
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${server.address().port}${napi('page.html')}`);
+    const out = await page.evaluate(async ([u, bytes]) => (await import(u)).crossing(bytes), [napi('wasm/test/native.mjs'), snapshot]);
+    assert.equal(out.refused?.[0], 'TA_ERROR_INVALID', String(out.refused));
+    assert.match(out.refused[1], /^a snapshot of @tinyactors\/node: /);
+    assert.throws(() => Host.restore(new Uint8Array(out.own), { systemID: 't' }), (error) => error.status === 'TA_ERROR_INVALID' &&
+      /^a snapshot of @tinyactors\/wasm: /.test(error.message));
   } finally {
     await browser.close();
     server.closeAllConnections();

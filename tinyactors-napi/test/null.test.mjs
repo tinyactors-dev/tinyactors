@@ -8,7 +8,7 @@
 // telemetry, each the null datamodel's part of what the other test files
 // show on the ECMAScript datamodels.
 import { Address, Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
-import { ENGINE, equal, image, indexOfBytes, sameBytes, scxml, status, throws, typeError, until } from './charts.mjs';
+import { ENGINE, equal, image, indexOfBytes, LABEL, sameBytes, scxml, status, throws, typeError, until } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 const OUT = 'urn:test:out';
@@ -321,7 +321,7 @@ test('snapshots: a restored host goes on; another system and another program\'s 
   if (!(await gone(restored, 'w'))) throw new Error('the restored actor did not run');
   restored.close();
   throws(() => Host.restore(blob, { systemID: 'other', ioProcessors: [{ type: OUT }] }, ENGINE), status('TA_ERROR_INVALID'), 'another system');
-  const label = new TextEncoder().encode('tinyactors-napi');
+  const label = new TextEncoder().encode(LABEL);
   const at = indexOfBytes(blob, label);
   if (at < 0) throw new Error('the pack does not hold its label');
   const relabelled = new Uint8Array(blob);
