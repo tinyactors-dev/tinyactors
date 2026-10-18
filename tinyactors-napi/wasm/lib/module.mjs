@@ -33,6 +33,10 @@ const DOUBLE = new Float64Array(1);
 const BITS = new Uint32Array(DOUBLE.buffer);
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
+// node:fs by a name a bundler does not follow (esbuild cannot resolve a
+// built-in of Node.js for a page): a page never takes the `file:` branch.
+const NODE_FS = 'node:fs/promises';
+
 // A WebAssembly.Module from `source`: undefined for the bundled one, a URL
 // or a string (relative to this file), a Response or its promise, bytes,
 // or a module. A `file:` URL is read with node:fs (node, bun).
@@ -41,7 +45,7 @@ async function compileModule(source) {
   if (source === undefined || source instanceof URL || typeof source === 'string') {
     const url = source === undefined ? BUNDLED : new URL(source, import.meta.url);
     if (url.protocol === 'file:') {
-      const { readFile } = await import('node:fs/promises');
+      const { readFile } = await import(/* @vite-ignore */ /* webpackIgnore: true */ NODE_FS);
       return WebAssembly.compile(await readFile(url));
     }
     source = fetch(url);

@@ -355,7 +355,8 @@ module NodeAPI
     # repository, once with npm and run by node, once with bun and run by
     # bun (tools/smoke-wasm.mjs, both entries), and the npm project served
     # to Chromium, a page and a module Worker under the guide's policy
-    # (tools/smoke-wasm-browser.mjs).
+    # (tools/smoke-wasm-browser.mjs), then bundled by esbuild and by Vite
+    # from npm, each bundle in Chromium (tools/smoke-wasm-bundlers.mjs).
     def smoke_wasm!(tarball)
       npm = NodeAPI.pinned('npm')
       [
@@ -372,6 +373,7 @@ module NodeAPI
           chromium = Pathname.new('/opt/pw-browsers/chromium')
           env = chromium.executable? ? { 'PLAYWRIGHT_CHROMIUM' => chromium.to_s } : {}
           NodeAPI.run(NodeAPI.pinned('node'), ROOT.join('tools/smoke-wasm-browser.mjs').to_s, dir, env: env)
+          NodeAPI.run(NodeAPI.pinned('node'), ROOT.join('tools/smoke-wasm-bundlers.mjs').to_s, dir, env: env)
         end
       end
     end
