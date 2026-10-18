@@ -12,6 +12,15 @@
 // packages run, so it compares the binding and core alone. `mise run
 // perevent` runs both packages under both runtimes, alternating, and
 // prints them side by side. A measurement, not a test.
+//
+// After the rounds it measures memory twice more: with every actor resident
+// after its events (each keeps its last `_event`), and after every actor
+// was hibernated (two sweeps, then `hibernate` of each, the blobs dropped
+// as a store would take them away): what a process keeps per actor once
+// its population is out of memory. WebAssembly memory never shrinks, so
+// the wasm package keeps its linear memory's peak; the addon's region is
+// malloc'd once and stays too, but the engine gives back what the
+// sessions held.
 import { Host, compileCharts } from '@tinyactors/node';
 
 const args = process.argv.slice(2);
@@ -88,8 +97,20 @@ for (let r = 0; r < ROUNDS; r++) {
   await host.idle();
   bestSpawn = Math.min(bestSpawn, ((performance.now() - t2) * 1000) / 2000);
 }
+gc();
+const resident = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory() };
+host.sweep(2 * N + 16, 2 * N + 16); // marks: every actor ran since the last sweep
+let blobBytes = 0, hibernated = 0;
+for (const session of host.sweep(2 * N + 16, 2 * N + 16)) {
+  blobBytes += host.hibernate(session).length;
+  hibernated++;
+}
+gc();
+await new Promise((resolve) => setTimeout(resolve, 50));
+gc();
+const asleep = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory() };
 host.close();
-const per = (key) => (after[key] - before[key]) / N;
+const per = (key, at = after) => (at[key] - before[key]) / N;
 const os = process.getBuiltinModule('node:os');
 const cpus = os.cpus();
 console.log(JSON.stringify({
@@ -100,4 +121,8 @@ console.log(JSON.stringify({
   eventMicroseconds: Number(best.toFixed(3)), spawnTerminateMicroseconds: Number(bestSpawn.toFixed(3)),
   residentBytesPerActor: Math.round(per('rss')), heapBytesPerActor: Math.round(per('heap')),
   linearBytesPerActor: wasm ? Math.round(per('linear')) : undefined, linearMemoryBytes: wasm ? after.linear : undefined,
+  residentAfterEventsBytesPerActor: Math.round(per('rss', resident)), heapAfterEventsBytesPerActor: Math.round(per('heap', resident)),
+  hibernated, blobBytesPerActor: Math.round(blobBytes / Math.max(hibernated, 1)),
+  residentHibernatedBytesPerActor: Math.round(per('rss', asleep)), heapHibernatedBytesPerActor: Math.round(per('heap', asleep)),
+  linearHibernatedBytes: wasm ? asleep.linear : undefined,
 }));
