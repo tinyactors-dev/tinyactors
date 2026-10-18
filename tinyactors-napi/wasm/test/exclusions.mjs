@@ -36,7 +36,6 @@ export const EXCLUDED = {
     "native: a hibernated actor holds nothing in the engine; its values come back with the blob": ['memoryUsage', 'browser'],
   },
   'host.test.mjs': {
-    "one 2 MB send leaves the host arena under its cap": ['memoryUsage', 'browser'],
   },
   'liveness.test.mjs': {
     "a process with only an open host exits": ['childProcess', 'browser'],

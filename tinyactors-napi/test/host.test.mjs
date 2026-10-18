@@ -217,11 +217,14 @@ test('one 2 MB send leaves the host arena under its cap', async () => {
   // addon's blocks in a counter that stays (log entry
   // l-p1-host-node-external), so the test reads the resident set over 16
   // hosts: about 100 MB more without the cap, at most 21 MB with it
-  // (docs/allocation.md, finding 7). The first host's large send is made
-  // before the reading: @tinyactors/wasm's linear memory grows once to the
-  // peak of one such send (30 to 40 MB with quickjs's copy of the value)
-  // and keeps it, reused by every later block, so the 15 hosts after it
-  // show what each keeps, in both packages.
+  // (docs/allocation.md, finding 7). @tinyactors/wasm's blocks are in its
+  // linear memory, which never shrinks, so there the test reads its size
+  // (the resident set is that memory's pages as they are touched, and the
+  // engine's heap beside it). The first host's large send is made before
+  // the reading: the linear memory grows once to the peak of one such send
+  // (about 46 MB with quickjs's copy of the value) and keeps it, reused by
+  // every later block, so the 15 hosts after it show what each keeps, in
+  // both packages (without the cap about 15 times 6.4 MB).
   const big = Array.from({ length: 200_000 }, (_, i) => `item${i}`);
   const CHART = scxml('big', `
   <datamodel><data id="d" expr="0"/></datamodel>
@@ -242,14 +245,19 @@ test('one 2 MB send leaves the host arena under its cap', async () => {
     host.send(session, 'x', [1]); // _event lets the large value go
     await host.idle();
   };
+  let kept = () => process.memoryUsage.rss();
+  if (wasm) {
+    const { instance } = await import('../wasm/lib/state.mjs');
+    kept = () => instance().bytes().byteLength;
+  }
   await sendBig(hosts[0]);
   await collect();
-  const before = process.memoryUsage.rss();
+  const before = kept();
   for (const entry of hosts.slice(1)) await sendBig(entry);
   await collect();
-  const grown = process.memoryUsage.rss() - before;
+  const grown = kept() - before;
   for (const { host } of hosts) host.close();
-  if (grown > 50e6) throw new Error(`15 sends of 2 MB after the first kept ${(grown / 1e6).toFixed(1)} MB resident`);
+  if (grown > 50e6) throw new Error(`15 sends of 2 MB after the first kept ${(grown / 1e6).toFixed(1)} MB ${wasm ? 'more linear memory' : 'resident'}`);
 });
 
 // ---- inputs ----------------------------------------------------------------
