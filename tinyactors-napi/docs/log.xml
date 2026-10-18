@@ -1298,4 +1298,14 @@
     <what>The example's test runs as its own task, mise run remote-python --test, called by mise run test after the conformance gate: it runs tinyactors-cpython's own mise run build (54 s cold on 4 CPUs, core's amalgamation and both of its builds; 0.7 s up to date), then examples/remote-python/test.mjs under node and bun (about 0.25 s each, both datamodels). The cpython sources are in the test task's #MISE sources. The root AGENTS.md table ("What a change reruns") should now say a tinyactors-cpython change reruns napi too: a root file, left to the coordinator.</what>
     <evidence>timings measured 2026-10-17 in a fresh copy of HEAD (git archive) and in place</evidence>
   </entry>
+  <entry id="l-coord-encode-address" date="2026-10-18" step="p4-remote" kind="decision" status="resolved">
+    <what>Node's encode refuses an Address, so a transport has to call String() on the addresses before encoding.</what>
+    <why>Python writes an Address as tag 32, and the value table defines tag 32. One encoding in both bindings keeps a transport the same in both.</why>
+    <resolution>Decided: encode writes an Address as tag 32, and decode gives an Address back. Built in p4-surprises.</resolution>
+  </entry>
+  <entry id="l-coord-cpython-undefined" date="2026-10-18" step="p4-remote" kind="request-to-core" status="open">
+    <what>tinyactors-cpython: host.send(message) refuses UNDEFINED in sendid, origin or traceparent. Node gave undefined there (now null).</what>
+    <why>Values that decode as UNDEFINED from another binding should mean absent, the same as None.</why>
+    <resolution>To be fixed in tinyactors-cpython through the coordinator during p4-surprises.</resolution>
+  </entry>
 </log>

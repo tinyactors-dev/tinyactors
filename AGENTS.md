@@ -102,7 +102,7 @@ Do it at release time, not between releases.
   | `tinyactors-test/lint` (the adapters' lint) | tinyactors-test, napi, cpython       |
   | `tinyactors-test/test` (the runner's own tests) | tinyactors-test                  |
   | `tinyactors-napi`                   | napi                                     |
-  | `tinyactors-cpython`                | cpython                                  |
+  | `tinyactors-cpython`                | cpython, napi (napi's remote-python example runs it) |
   | `tinyxml`                           | tinyxml, napi (the native datamodel compiles txml) |
   | `tinyparse`                         | tinyparse                                |
   | `staticjs`                          | staticjs                                 |
