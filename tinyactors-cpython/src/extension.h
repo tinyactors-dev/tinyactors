@@ -118,6 +118,9 @@ typedef struct ta_python_datamodel {
     PyObject *drops;            /* values whose last reference was dropped (a list) */
     PyObject *raised;           /* a BaseException an evaluation raised, raised after it */
     PyObject *output;           /* the str eval_string and log answered */
+    PyObject *failure;          /* "Type: message" of the exception the last entry failed with, NULL
+                                   when it did not; forgotten when the next entry starts */
+    uint32_t failure_reason;    /* its TA_DATAMODEL_FAILURE_* */
     PyObject *origintypes;      /* the session's I/O processors' types (system variables, the same for
                                    every session of the host), by an event's origintype_id; NULL until
                                    the first create */

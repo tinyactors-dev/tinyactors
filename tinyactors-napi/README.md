@@ -455,10 +455,14 @@ Errors surface in four places:
   also stops the rest of its block: the actions after it in the same
   `<onentry>`, `<onexit>` or transition do not run. The actor goes on,
   and a transition on `error` handles both; without one the error event
-  is dropped like any event no transition matches. The event carries no
-  message (`_event.data` is `undefined`): to learn which action failed,
-  turn on [telemetry](docs/guide/telemetry.md), whose spans and log
-  records mark the failed action.
+  is dropped like any event no transition matches. When the chart's code
+  failed, `_event.data` says why: `{ reason, message }`, `reason`
+  `'exception'` (code that threw; `message` is its text, as `String(e)`
+  gives it, such as `'Error: boom'`), `'fuel'` (it ran past QuickJS's
+  `maxOps`) or `'memory'` (past QuickJS's `memoryLimit`); a failure the
+  host decides (an unknown `<send>` type) has no data. To learn which
+  action failed, turn on [telemetry](docs/guide/telemetry.md), whose spans
+  and log records mark the failed action.
 - **In your handlers,** an error a handler throws is reported after its
   turn: it rejects a waiting `host.idle()`, or, with none waiting, is
   thrown as an uncaught exception (below).

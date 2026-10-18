@@ -37,6 +37,7 @@ static bool ta_napi_frame_open(ta_napi_native *native, ta_datamodel_environment 
     }
     frame->evaluating = instance->evaluating;
     frame->environment = native->environment;
+    instance->failed = false; /* a new entry: the last one's failure is forgotten */
     instance->evaluating = native;
     native->environment = environment;
     return true;
@@ -50,11 +51,36 @@ static void ta_napi_frame_close(ta_napi_frame *frame) {
     napi_close_handle_scope(env, frame->scope);
 }
 
-/* The exception pending, cleared: the entry's error.execution. */
+/* The exception pending, cleared: the entry's error.execution, its text
+ * kept for ta_napi_failure (the error path only). */
 static ta_status ta_napi_failed(napi_env env) {
-    napi_value ignored;
-    napi_get_and_clear_last_exception(env, &ignored);
+    napi_value exception = NULL, text;
+    ta_napi_instance *instance = ta_napi_instance_of(env);
+    if (napi_get_and_clear_last_exception(env, &exception) != napi_ok || instance == NULL) return TA_ERROR_EXECUTION;
+    size_t length = 0;
+    instance->failed = true;
+    if (napi_coerce_to_string(env, exception, &text) != napi_ok ||
+        napi_get_value_string_utf8(env, text, instance->failure_message, sizeof instance->failure_message, &length) != napi_ok) {
+        napi_value ignored; /* its toString threw */
+        napi_get_and_clear_last_exception(env, &ignored);
+        length = 0;
+    }
+    instance->failure_length = (uint32_t)length;
     return TA_ERROR_EXECUTION;
+}
+
+/* Why the last entry failed, once (datamodel.h): the code raised. */
+static ta_status ta_napi_failure(const ta_datamodel_call *call, ta_datamodel_failure *out) {
+    ta_napi_native *native = (ta_napi_native *)call->datamodel;
+    ta_napi_instance *instance = ta_napi_instance_of(native->host->env);
+    if (instance == NULL || !instance->failed) {
+        out->reason = TA_DATAMODEL_FAILURE_NONE;
+        return TA_OK;
+    }
+    out->reason = TA_DATAMODEL_FAILURE_EXCEPTION;
+    out->message = (ta_string_view){instance->failure_message, instance->failure_length};
+    instance->failed = false;
+    return TA_OK;
 }
 
 /* The evaluation of `call`'s session (an open frame), or false. */
@@ -1577,6 +1603,7 @@ static const ta_datamodel_vtable ta_napi_vtable = {
     .payload_serialize = ta_napi_payload_serialize,
     .payload_deserialize = ta_napi_from_wire, /* the same CBOR: one reference, copied into the shared context */
     .variable = ta_napi_variable,
+    .failure = ta_napi_failure,
 };
 
 const ta_datamodel_vtable *ta_napi_native_vtable(void) {

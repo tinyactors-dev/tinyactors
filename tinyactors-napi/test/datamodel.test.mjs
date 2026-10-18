@@ -142,6 +142,16 @@ test('a script\'s top-level declarations are the session\'s, closures included (
   same(logged.filter((line) => line.startsWith('again')), ['again: 3', 'again: 3'], 'two sessions, two counts');
 });
 
+test('error.execution says why: the exception\'s text, or no data for a failure the host decides', async () => {
+  const chart = scxml('c', `
+    <state id="s">
+      <transition event="go"><script>throw new Error('boom')</script></transition>
+      <transition event="type"><send event="x" type="urn:nosuch"/></transition>
+      <transition event="error.execution"><log label="why" expr="_event.data === undefined ? 'none' : _event.data.reason + ': ' + _event.data.message"/></transition>
+    </state>`);
+  same(await lines(chart, [['go'], ['type']]), ['why: exception: Error: boom', 'why: none'], 'a throw, an unknown type');
+});
+
 test('a chart that declares nothing: its sessions\' variables are their own', async () => {
   const chart = scxml('c', `
     <datamodel><data id="n" expr="0"/></datamodel>

@@ -149,6 +149,22 @@
       "value": 1
     },
     {
+      "name": "TA_DATAMODEL_FAILURE_EXCEPTION",
+      "value": 1
+    },
+    {
+      "name": "TA_DATAMODEL_FAILURE_FUEL",
+      "value": 2
+    },
+    {
+      "name": "TA_DATAMODEL_FAILURE_MEMORY",
+      "value": 3
+    },
+    {
+      "name": "TA_DATAMODEL_FAILURE_NONE",
+      "value": 0
+    },
+    {
       "name": "TA_EFFECT_CHANGED",
       "value": 9
     },
@@ -4430,6 +4446,52 @@
         }
       }
     },
+    "ta_datamodel_failure": {
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "reason",
+          "type": "uint32_t"
+        },
+        {
+          "name": "pad",
+          "type": "uint32_t"
+        },
+        {
+          "name": "message",
+          "type": "ta_string_view"
+        }
+      ],
+      "layout": {
+        "x86_64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "reason": 0,
+            "pad": 4,
+            "message": 8
+          }
+        },
+        "aarch64": {
+          "size": 24,
+          "align": 8,
+          "offsets": {
+            "reason": 0,
+            "pad": 4,
+            "message": 8
+          }
+        },
+        "wasm32": {
+          "size": 16,
+          "align": 4,
+          "offsets": {
+            "reason": 0,
+            "pad": 4,
+            "message": 8
+          }
+        }
+      }
+    },
     "ta_datamodel_vtable": {
       "kind": "struct",
       "fields": [
@@ -4556,11 +4618,15 @@
         {
           "name": "variable",
           "type": "ta_status (*)(const ta_datamodel_call *, ta_string_view, ta_payload *)"
+        },
+        {
+          "name": "failure",
+          "type": "ta_status (*)(const ta_datamodel_call *, ta_datamodel_failure *)"
         }
       ],
       "layout": {
         "x86_64": {
-          "size": 240,
+          "size": 248,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4593,11 +4659,12 @@
             "from_wire": 208,
             "payload_serialize": 216,
             "payload_deserialize": 224,
-            "variable": 232
+            "variable": 232,
+            "failure": 240
           }
         },
         "aarch64": {
-          "size": 240,
+          "size": 248,
           "align": 8,
           "offsets": {
             "size": 0,
@@ -4630,11 +4697,12 @@
             "from_wire": 208,
             "payload_serialize": 216,
             "payload_deserialize": 224,
-            "variable": 232
+            "variable": 232,
+            "failure": 240
           }
         },
         "wasm32": {
-          "size": 124,
+          "size": 128,
           "align": 4,
           "offsets": {
             "size": 0,
@@ -4667,7 +4735,8 @@
             "from_wire": 108,
             "payload_serialize": 112,
             "payload_deserialize": 116,
-            "variable": 120
+            "variable": 120,
+            "failure": 124
           }
         }
       }

@@ -104,6 +104,12 @@ struct ta_datamodel_ecmascript {
     JSValue base;        /* names of a fresh global object, in aux (JS_UNDEFINED until used) */
     JSValue explain; /* finds what in a value cannot be stored, in aux (JS_UNDEFINED until used) */
     char error[512]; /* why the last serialize/snapshot failed */
+    /* why the last evaluation failed (the vtable's failure): a
+     * TA_DATAMODEL_FAILURE_*, set where its exception is cleared, forgotten
+     * when the next evaluation starts */
+    uint32_t failure;
+    uint32_t failure_length;
+    char failure_message[256];
     ta_datamodel_environment
         *environment; /* of the vtable call in progress (NULL outside one): JS work is charged */
     const volatile int *abort_flag; /* the host's "stop now" (ta_datamodel_ecmascript_config) */
@@ -149,8 +155,38 @@ static int interrupt(JSRuntime *rt, void *opaque) {
     return ++ecmascript->operations > ecmascript->max_ops;
 }
 
+/* What an exception says about the evaluation it ends (ecmascript_failure):
+ * past max_ops is fuel, the engine's out of memory is memory, anything else
+ * the exception, with its text. On the error path only. */
+static void failure_note(ta_datamodel_ecmascript *ecmascript, JSContext *context, JSValueConst exception) {
+    ecmascript->failure_length = 0;
+    if (ecmascript->operations > ecmascript->max_ops) {
+        ecmascript->failure = TA_DATAMODEL_FAILURE_FUEL;
+        return;
+    }
+    size_t length = 0;
+    const char *text = JS_IsNull(exception) ? NULL : JS_ToCStringLen(context, &length, exception);
+    if (!text) JS_FreeValue(context, JS_GetException(context)); /* its toString threw */
+    int memory = JS_IsNull(exception) /* thrown when even the error could not be made */ ||
+                 (text && length == 28 && !memcmp(text, "InternalError: out of memory", 28));
+    ecmascript->failure = memory ? TA_DATAMODEL_FAILURE_MEMORY : TA_DATAMODEL_FAILURE_EXCEPTION;
+    if (text && !memory) {
+        if (length > sizeof ecmascript->failure_message) { /* cut at a character's start */
+            length = sizeof ecmascript->failure_message;
+            while (length && ((unsigned char)text[length] & 0xC0u) == 0x80u)
+                length--;
+        }
+        memcpy(ecmascript->failure_message, text, length);
+        ecmascript->failure_length = (uint32_t)length;
+    }
+    if (text) JS_FreeCString(context, text);
+}
+
 static void clear_exception(JSContext *context) {
-    JS_FreeValue(context, JS_GetException(context));
+    JSValue exception = JS_GetException(context);
+    ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)JS_GetRuntimeOpaque(JS_GetRuntime(context));
+    if (ecmascript) failure_note(ecmascript, context, exception);
+    JS_FreeValue(context, exception);
 }
 
 static ecmascript_instance *I(ta_datamodel_ecmascript *ecmascript, uint64_t handle) {
@@ -389,6 +425,7 @@ static ta_status value_of(ta_datamodel_ecmascript *ecmascript, ecmascript_instan
     uint32_t kind = 0;
     ta_string_view source = expression_source(instance, expression, &kind);
     ecmascript->operations = 0;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
     if (kind == TA_EXPRESSION_CONTENT) {
         *out = content_value(instance->context, source);
         return JS_IsException(*out) ? (clear_exception(instance->context), TA_ERROR_EXECUTION)
@@ -464,6 +501,7 @@ static ta_status assign_to(ta_datamodel_ecmascript *ecmascript, ecmascript_insta
         return TA_ERROR_EXECUTION;
     }
     ecmascript->operations = 0;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
     ecmascript->current = instance;
     JSValue r;
     if (instance->chart_context->shared) {
@@ -1745,6 +1783,8 @@ static int explain_var(ta_datamodel_ecmascript *ecmascript, JSContext *context,
     clear_exception(context);
     if (JS_IsUndefined(ecmascript->explain)) {
         ecmascript->operations = 0;
+        ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
         ecmascript->explain = JS_Eval(ecmascript->auxiliary, EXPLAIN_JS, sizeof EXPLAIN_JS - 1,
                                       "<explain>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(ecmascript->explain)) {
@@ -1755,6 +1795,8 @@ static int explain_var(ta_datamodel_ecmascript *ecmascript, JSContext *context,
     JSValue hit = JS_UNDEFINED;
     if (!JS_IsUndefined(ecmascript->explain)) {
         ecmascript->operations = 0;
+        ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
         JSValue args[2] = {JS_DupValue(ecmascript->auxiliary, v),
                            JS_NewString(ecmascript->auxiliary, name)};
         hit = JS_Call(ecmascript->auxiliary, ecmascript->explain, JS_UNDEFINED, 2, args);
@@ -1888,6 +1930,7 @@ static int lex_probe(ta_datamodel_ecmascript *ecmascript, JSContext *context, JS
         return -1;
     }
     ecmascript->operations = 0;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
     JSValue r = eval_name(context, "delete ", name, "", "");
     int gone = JS_IsException(r) ? 1 : JS_ToBool(context, r);
     JS_FreeValue(context, r);
@@ -2168,6 +2211,7 @@ static ta_status apply_state(ta_datamodel_ecmascript *ecmascript, ecmascript_ins
     JSContext *context = instance->context;
     ecmascript_chart *chart = instance->chart_context;
     ecmascript->operations = 0;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
     int isolated = !chart->shared;
     JSValue vars = instance_variables(instance);
     ta_status status = TA_OK;
@@ -2879,6 +2923,7 @@ ta_status ta_datamodel_ecmascript_payload_to_cbor(ta_datamodel_ecmascript *ecmas
     if (!payload || payload > ecmascript->payload_count || !ecmascript->payload_refs[payload - 1])
         return TA_ERROR_INVALID;
     ecmascript->operations = 0;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
     JS_UpdateStackTop(ecmascript->runtime);
     wire_builder b;
     b.status = TA_OK;
@@ -3013,6 +3058,7 @@ ta_status ta_datamodel_ecmascript_payload_from_cbor(ta_datamodel_ecmascript *ecm
         return status == TA_ERROR_NO_MEMORY ? status : TA_ERROR_INVALID;
     }
     ecmascript->operations = 0;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
     JS_UpdateStackTop(ecmascript->runtime);
     uint32_t at = 0;
     JSValue v = wire_read(ecmascript->auxiliary, &document, &at);
@@ -3084,6 +3130,7 @@ ta_payload ta_datamodel_ecmascript_payload_eval(ta_datamodel_ecmascript *ecmascr
         if (!instance || !instance->live) return 0;
     }
     ecmascript->operations = 0;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
     JSContext *context = instance ? instance->context : ecmascript->auxiliary;
     JSValue v = instance ? eval_in_session(ecmascript, instance, expression)
                          : eval_wrapped(context, "(\n", expression, "\n)", JS_EVAL_TYPE_GLOBAL);
@@ -3182,6 +3229,15 @@ static ta_status ecmascript_variable(const ta_datamodel_call *call, ta_string_vi
     return *out ? TA_OK : TA_ERROR_INVALID;
 }
 
+/* Why the last evaluation failed, once (datamodel.h). */
+static ta_status ecmascript_failure(const ta_datamodel_call *call, ta_datamodel_failure *out) {
+    ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)call->datamodel;
+    out->reason = ecmascript->failure;
+    out->message = (ta_string_view){ecmascript->failure_message, ecmascript->failure_length};
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
+    return TA_OK;
+}
+
 static const ta_datamodel_vtable ecmascript_vtable = {sizeof(ta_datamodel_vtable),
                                                       0,
                                                       "ecmascript",
@@ -3212,7 +3268,8 @@ static const ta_datamodel_vtable ecmascript_vtable = {sizeof(ta_datamodel_vtable
                                                       ecmascript_from_wire,
                                                       ecmascript_payload_serialize,
                                                       ecmascript_payload_deserialize,
-                                                      ecmascript_variable};
+                                                      ecmascript_variable,
+                                                      ecmascript_failure};
 
 /* ---- counting allocator: O(1) heap size (JS_ComputeMemoryUsage walks every object) -- */
 

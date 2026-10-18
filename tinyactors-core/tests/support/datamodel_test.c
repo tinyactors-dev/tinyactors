@@ -1105,7 +1105,8 @@ static const ta_datamodel_vtable test_vt = {sizeof(ta_datamodel_vtable),
                                             NULL /* from_wire */,
                                             NULL /* payload_serialize */,
                                             NULL, /* payload_deserialize */
-                                            NULL /* variable */};
+                                            NULL /* variable */,
+                                            NULL /* failure */};
 
 /* ---- public helpers ---------------------------------------------------------------------- */
 

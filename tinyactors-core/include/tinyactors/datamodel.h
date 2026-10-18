@@ -145,6 +145,21 @@ typedef struct ta_datamodel_loop {
     ta_expression index;
 } ta_datamodel_loop;
 
+/* Why a call of a datamodel failed (its vtable's `failure`): `reason` a
+ * TA_DATAMODEL_FAILURE_*, `message` the exception's text (length 0 for
+ * none), a view valid until the datamodel's next call. */
+typedef struct ta_datamodel_failure {
+    uint32_t reason;
+    uint32_t pad;
+    ta_string_view message;
+} ta_datamodel_failure;
+enum {
+    TA_DATAMODEL_FAILURE_NONE = 0,      /* nothing to say */
+    TA_DATAMODEL_FAILURE_EXCEPTION = 1, /* the code raised: `message` says what */
+    TA_DATAMODEL_FAILURE_FUEL = 2,      /* it ran past the datamodel's operation limit */
+    TA_DATAMODEL_FAILURE_MEMORY = 3     /* it ran out of the datamodel's memory */
+};
+
 typedef struct ta_datamodel_vtable {
     uint32_t size;
     uint32_t flags;
@@ -238,6 +253,15 @@ typedef struct ta_datamodel_vtable {
      * `instance`, as a new payload (one reference). It must have no effect the
      * chart can see. TA_ERROR_INVALID when the instance has no such value. */
     ta_status (*variable)(const ta_datamodel_call *call, ta_string_view name, ta_payload *out);
+
+    /* Why the instance's last call failed (optional): core asks on the
+     * error path only, right after a call of the instance failed and before
+     * any other call, and gives the error.execution it raises the data
+     * {"reason": "exception" | "fuel" | "memory", "message": text}, made
+     * with from_wire. A reason of
+     * TA_DATAMODEL_FAILURE_NONE, or a status other than TA_OK: the event
+     * has no data. The datamodel forgets the failure at its next call. */
+    ta_status (*failure)(const ta_datamodel_call *call, ta_datamodel_failure *out);
 } ta_datamodel_vtable;
 
 /* Binding of a datamodel implementation to a system. */

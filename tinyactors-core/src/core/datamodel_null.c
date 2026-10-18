@@ -141,6 +141,7 @@ static const ta_datamodel_vtable null_vt = {
     0,                /* payload_serialize: no payloads */
     0,                /* payload_deserialize */
     0,                /* variable: no data */
+    0,                /* failure: nothing it does fails */
 };
 
 const ta_datamodel_vtable *ta_datamodel_null(void) {

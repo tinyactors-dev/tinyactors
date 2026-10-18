@@ -11,6 +11,7 @@
  *      explicit stack in the workspace or by interval/bitset scans.
  */
 #include "core/core_internal.h"
+#include <tinyactors/cbor.h>
 #include "base/format.h"
 #include "base/memory.h"
 #include "trace/record.h"
@@ -201,9 +202,70 @@ static uint32_t raise_platform(ta_core *core, ta_instance *instance, const char 
 
 static void trace_action_failed(kernel_context *kernel);
 
+/* At most this much of a failure's message goes into error.execution's data. */
+#define FAILURE_MESSAGE_MAX 256u
+
+/* The data of an error.execution a failed call of the datamodel raises: what
+ * its failure entry says, as {"reason", "message"} through from_wire; 0 when
+ * it says nothing. On the error path only. */
+static ta_payload failure_data(kernel_context *kernel) {
+    const ta_datamodel_binding *binding = kernel->datamodel;
+    const ta_datamodel_vtable *vtable = binding->vtable;
+    if (vtable->size < offsetof(ta_datamodel_vtable, failure) + sizeof vtable->failure || !vtable->failure ||
+        !vtable->from_wire)
+        return 0;
+    ta_datamodel_failure failure;
+    ta_memset(&failure, 0, sizeof failure);
+    if (vtable->failure(&(ta_datamodel_call){binding->datamodel, kernel->instance->datamodel, &kernel->environment},
+                        &failure) != TA_OK ||
+        failure.reason == TA_DATAMODEL_FAILURE_NONE || failure.reason > TA_DATAMODEL_FAILURE_MEMORY)
+        return 0;
+    static const char *const reasons[] = {"", "exception", "fuel", "memory"};
+    ta_string_view reason = {reasons[failure.reason], 0}, message = failure.message;
+    while (reason.pointer[reason.length])
+        reason.length++;
+    if (message.length > FAILURE_MESSAGE_MAX) { /* cut at a character's start */
+        message.length = FAILURE_MESSAGE_MAX;
+        while (message.length && ((unsigned char)message.pointer[message.length] & 0xC0u) == 0x80u)
+            message.length--;
+    }
+    unsigned char room[FAILURE_MESSAGE_MAX + 64];
+    ta_cbor_writer writer;
+    ta_cbor_writer_init(&writer, (ta_buffer){room, sizeof room, 0}, (const ta_allocator *)0);
+    ta_cbor_write_map(&writer, message.length ? 2 : 1);
+    ta_cbor_write_text(&writer, (ta_string_view){"reason", 6});
+    ta_cbor_write_text(&writer, reason);
+    if (message.length) {
+        ta_cbor_write_text(&writer, (ta_string_view){"message", 7});
+        ta_cbor_write_text(&writer, message);
+    }
+    ta_bytes bytes;
+    ta_payload data = 0;
+    if (ta_cbor_writer_bytes(&writer, &bytes) != TA_OK ||
+        vtable->from_wire(binding->datamodel, bytes, &data) != TA_OK)
+        return 0;
+    return data;
+}
+
+/* error.execution for a failed call of the datamodel, with what it says
+ * about it as the event's data (failure_data), and `sendid` (TA_NIL: none). */
+static void raise_failure(kernel_context *kernel, uint32_t sendid) {
+    ta_core *core = kernel->core;
+    ta_payload data = failure_data(kernel);
+    uint32_t raised = raise_platform(core, kernel->instance, "error.execution", sendid);
+    if (raised == TA_NIL) {
+        datamodel_release(kernel, data);
+        return;
+    }
+    if (!data) return;
+    ta_event *event = ta_event_at(core, raised);
+    event->payload = data;
+    event->datamodel = core->chart_datamodel[kernel->instance->chart];
+}
+
 static void error_exec(kernel_context *kernel) {
     trace_action_failed(kernel);
-    raise_platform(kernel->core, kernel->instance, "error.execution", TA_NIL);
+    raise_failure(kernel, TA_NIL);
 }
 
 static void init_k(kernel_context *kernel, ta_core *core, ta_instance *instance, uint32_t *fuel) {
@@ -961,7 +1023,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     const ta_send_record *send = &core->image_view.sends[kernel->chart->first_send + index];
     uint32_t name_id = 0, name = TA_NIL, target = TA_NIL, sendid = TA_NIL;
     uint32_t route = TA_ROUTE_SELF, arg = 0, io_processor_index = TA_NIL;
-    int internal = 0, status = SEND_OK;
+    int internal = 0, status = SEND_OK, datamodel_failed = 0; /* an error.execution of the datamodel's */
     uint64_t delay = send->delay_ns;
     ta_payload payload = 0;
     ta_string_view s;
@@ -986,6 +1048,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
                                       : TA_ERROR_EXECUTION;
         if (assign_status != TA_OK) {
             status = SEND_ERROR_EXECUTION;
+            datamodel_failed = 1;
             goto fail;
         }
     }
@@ -996,6 +1059,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     } else if (send->eventexpr != TA_NIL) {
         if (datamodel_string(kernel, send->eventexpr, &s) != TA_OK) {
             status = SEND_ERROR_EXECUTION;
+            datamodel_failed = 1;
             goto fail;
         }
         int exact = 0;
@@ -1020,6 +1084,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     } else if (send->typeexpr != TA_NIL) {
         if (datamodel_string(kernel, send->typeexpr, &s) != TA_OK) {
             status = SEND_ERROR_EXECUTION;
+            datamodel_failed = 1;
             goto fail;
         }
         if (!is_scxml_type(s)) {
@@ -1037,6 +1102,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
         if (kind == TA_SEND_TARGET_EXPRESSION) {
             if (datamodel_string(kernel, send->targetexpr, &s) != TA_OK) {
                 status = SEND_ERROR_EXECUTION;
+                datamodel_failed = 1;
                 goto fail;
             }
             target = ta_shared_string_new(core, s.pointer, s.length);
@@ -1103,8 +1169,8 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     if (status != SEND_OK) goto fail;
     /* delay */
     if (send->delayexpr != TA_NIL) {
-        if (datamodel_string(kernel, send->delayexpr, &s) != TA_OK ||
-            !ta_core_parse_duration(s, &delay)) {
+        datamodel_failed = datamodel_string(kernel, send->delayexpr, &s) != TA_OK;
+        if (datamodel_failed || !ta_core_parse_duration(s, &delay)) {
             status = SEND_ERROR_EXECUTION;
             goto fail;
         }
@@ -1123,6 +1189,7 @@ static uint32_t opcode_send(kernel_context *kernel, uint32_t index) {
     /* payload */
     if (datamodel_capture(kernel, send->capture, TA_CAPTURE_SEND, &payload) != TA_OK) {
         status = SEND_ERROR_EXECUTION;
+        datamodel_failed = 1;
         goto fail;
     }
     {
@@ -1165,9 +1232,12 @@ fail:
             kernel->instance->ids--; /* the retry generates the same id again */
         return TA_STEP_EXHAUSTED;    /* instruction unchanged: retried after growth */
     }
-    raise_platform(core, kernel->instance,
-                   status == SEND_ERROR_COMMUNICATION ? "error.communication" : "error.execution",
-                   sendid);
+    if (datamodel_failed)
+        raise_failure(kernel, sendid);
+    else
+        raise_platform(core, kernel->instance,
+                       status == SEND_ERROR_COMMUNICATION ? "error.communication" : "error.execution",
+                       sendid);
     if (TA_STRING_REF_IS_SLAB(sendid)) ta_shared_string_release(core, sendid);
     if (status == SEND_ERROR_COMMUNICATION) {
         kernel->workspace->instruction += 2; /* communication errors do not abort the block */

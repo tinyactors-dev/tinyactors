@@ -141,6 +141,39 @@ static void test_runaway_script_interrupted(void) {
     ecmascript_close(&t);
 }
 
+/* error.execution says why in its data: {reason: "exception", message}
+ * for code that threw (an expression, a script, a <send>'s targetexpr, with
+ * the send's id), "fuel" past max_ops, "memory" past memory_limit
+ * (tinyactors-napi/docs/log.xml, l-p4-examples-iot-error-reason). */
+#define WHY(content)                                                                               \
+    SC("initial='a'><state id='a'><onentry>" content "</onentry>"                                  \
+       "<transition event='error.execution'><log label='why' expr=\"_event.data.reason + ':' + "   \
+       "(_event.data.message || '') + ':' + (_event.sendid || '')\"/></transition></state>")
+static void test_error_execution_says_why(void) {
+    static const struct {
+        const char *chart;
+        ta_datamodel_ecmascript_config config;
+        const char *want;
+    } cases[] = {
+        {WHY("<script>throw new Error('boom')</script>"), {0}, "why=exception:Error: boom:;"},
+        {WHY("<log expr='nosuch.x'/>"), {0}, "why=exception:ReferenceError: nosuch is not defined:;"},
+        {WHY("<send event='x' targetexpr='nosuch.y' id='s1'/>"), {0},
+         "why=exception:ReferenceError: nosuch is not defined:s1;"},
+        {WHY("<script>while (true) {}</script>"), {sizeof(ta_datamodel_ecmascript_config), 10000, 0, 0, 0, NULL},
+         "why=fuel::;"},
+        {WHY("<script>let a = []; while (true) a.push(new Array(100000).fill(1));</script>"),
+         {sizeof(ta_datamodel_ecmascript_config), 0, 8u << 20, 0, 0, NULL}, "why=memory::;"},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        ecmascript_system t;
+        CHECK(ecmascript_open(&t, cases[i].chart, cases[i].config.size ? &cases[i].config : NULL));
+        ecmascript_run(&t);
+        CHECK(strcmp(t.log, cases[i].want) == 0);
+        if (strcmp(t.log, cases[i].want)) fprintf(stderr, "  case %zu log: %s\n", i, t.log);
+        ecmascript_close(&t);
+    }
+}
+
 static void test_events_payloads_xml(void) {
     ecmascript_system t;
     CHECK(ecmascript_open(
@@ -918,6 +951,7 @@ int main(void) {
     RUN(test_expressions_and_script);
     RUN(test_errors_and_readonly);
     RUN(test_runaway_script_interrupted);
+    RUN(test_error_execution_says_why);
     RUN(test_events_payloads_xml);
     RUN(test_heap_bytes);
     RUN(test_traced_values_are_let_go);

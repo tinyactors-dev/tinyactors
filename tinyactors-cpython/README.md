@@ -336,7 +336,7 @@ Read the fields inside the handler: a plain function gets a thin view
 | `TinyactorsError` | the host refused a call, a thin view was read after its batch, a run faulted, or a typed method's reply was an error | branch on `error.status`, the core's name for the status (`"TA_ERROR_STALE"`, `"TA_ERROR_STATE"`, `"TA_ERROR_INVALID"`, ...) |
 | `MemoryError` naming a pool | the host ran out of a pool its config sized | the host stays usable, and the next run goes on where this one stopped; size the config (below, "Sizing the config") |
 | your handler's exception | a handler raised | the driver raises the first one after the turn |
-| `error.execution`, `error.communication` | inside a chart | handled by the chart, as SCXML defines; see the core's documentation |
+| `error.execution`, `error.communication` | inside a chart | handled by the chart, as SCXML defines; when the chart's code failed, `error.execution`'s `_event.data` is `{"reason", "message"}`: `"exception"` with the exception's type and text (`"NameError: name 'x' is not defined"`), `"memory"` for a `MemoryError`, and on quickjs `"fuel"` past its `maxOps`; see the core's documentation |
 
 `CompileError` and `ResolveError` are subclasses of `TinyactorsError`.
 For example, `host.send(12345, "hello")` to a session that does not exist

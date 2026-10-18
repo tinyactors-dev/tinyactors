@@ -88,6 +88,12 @@ typedef struct ta_napi_instance {
     napi_ref vm, realm, realms, in, stringify;
     struct ta_napi_native *evaluating;
     struct ta_napi_restoring *restoring;
+    /* why the native datamodel's last entry failed (its vtable's failure):
+     * the exception's text, set where it is cleared, forgotten when the
+     * next entry opens its frame */
+    bool failed;
+    uint32_t failure_length;
+    char failure_message[256];
 } ta_napi_instance;
 
 /* The environment's instance, or NULL (and an exception pending) before

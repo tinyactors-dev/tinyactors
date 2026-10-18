@@ -41,6 +41,20 @@ class Scope(unittest.TestCase):
         self.assertEqual(logs.labelled("after"), ["[4, 20, 20, 1]"])
         self.assertEqual(logs.labelled("report"), ["[4, 20, 20, 1]"])
 
+    def test_error_execution_says_why(self):
+        """The data of an error.execution the chart's code raised:
+        {"reason": "exception", "message": "Type: text"}; none for a failure
+        the host decides (an unknown <send> type)."""
+        document = ("<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='python' name='c' initial='s'>"
+                    "<datamodel><data id='x' expr='0'/></datamodel><state id='s'>"
+                    "<transition event='go'><script>x = 1 // 0</script></transition>"
+                    "<transition event='type'><send event='x' type='urn:nosuch'/></transition>"
+                    "<transition event='error.execution'><log label='why' expr=\"_event.data\"/></transition>"
+                    "</state></scxml>")
+        logs = run(document, ["go", "type"])
+        self.assertEqual(logs.labelled("why"), [
+            str({"reason": "exception", "message": "ZeroDivisionError: division by zero"}), "None"])
+
     def test_a_system_variable_is_read_only(self):
         for location in ("_sessionid", "_event", "_name"):
             with self.subTest(location=location):
