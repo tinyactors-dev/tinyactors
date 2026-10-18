@@ -88,6 +88,7 @@ typedef struct ta_napi_instance {
     napi_ref turn;
     napi_ref compiled;
     napi_ref compile_error;
+    napi_ref checker; /* compile.c's syntax check of a chart's ECMAScript: vm.Script, made on first use */
     napi_ref resolve_error;
     napi_ref address;
     napi_ref send, entry, migrated;

@@ -148,6 +148,7 @@ static void ta_napi_instance_finalize(napi_env env, void *data, void *hint) {
     if (instance->turn != NULL) napi_delete_reference(env, instance->turn);
     if (instance->compiled != NULL) napi_delete_reference(env, instance->compiled);
     if (instance->compile_error != NULL) napi_delete_reference(env, instance->compile_error);
+    if (instance->checker != NULL) napi_delete_reference(env, instance->checker);
     if (instance->resolve_error != NULL) napi_delete_reference(env, instance->resolve_error);
     napi_ref references[] = {instance->address, instance->send,   instance->entry, instance->migrated, instance->rejected,
                              instance->invocation, instance->crashed, instance->started, instance->start_failed,

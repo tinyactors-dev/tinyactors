@@ -48,7 +48,14 @@ API"). Node's names and shapes (decided 2026-10-16, docs/plan.xml):
   copied once on first read (a first read after `close()`, which calls
   `ta_compile_free`, throws `TA_ERROR_STALE`; not a view: a detached
   external buffer is still read after the free, `boundary.md` section 7);
-  `addImage(image)` returning the segment
+  a compile call that also parses every expression and script of an
+  `"ecmascript"` chart with the engine (`new vm.Script` in the native
+  datamodel's shapes, nothing run; 2026-10-18,
+  l-p4-examples-iot-syntax-unchecked), each syntax error a warning
+  diagnostic at its element's line, an error with `{warningsAsErrors}`
+  (core's `TA_COMPILE_WERROR`), since SCXML makes such an expression an
+  `error.execution` at its evaluation (W3C 156, 277, 309, 312, 344, 487,
+  488, 528 have them); `addImage(image)` returning the segment
   (`ta_host_add_image` copies the bytes); `chart(name)` over
   `ta_host_chart`; `spawn(ref, ...)` over `ta_host_spawn`, taking that
   reference.

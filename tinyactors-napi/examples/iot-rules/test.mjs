@@ -104,11 +104,11 @@ test('uploads that do not compile are refused with the compiler\'s line numbers,
     assert.deepEqual(platform.uploadChart('acme', { file: 'broken.scxml', text: upload('broken.scxml') }).diagnostics, [
       'broken.scxml:8:38: error: XML: expected quoted attribute value',
     ]);
-    // compileCharts accepts it: its JavaScript is the platform's to check
-    // (the engine's own message follows: V8's and JavaScriptCore's differ)
+    // compileCharts parses its JavaScript, at the line and column of the
+    // element (the engine's own message follows: V8's and JavaScriptCore's differ)
     const where = (diagnostics) => diagnostics.map((d) => d.slice(0, d.indexOf('SyntaxError: ') + 'SyntaxError'.length));
     assert.deepEqual(where(platform.uploadChart('acme', { file: 'typo.scxml', text: upload('typo.scxml') }).diagnostics), [
-      'typo.scxml:8:33: error: cond: SyntaxError',
+      'typo.scxml:8:5: error: cond: SyntaxError',
       'typo.scxml:12:7: error: <script>: SyntaxError',
     ]);
     assert.deepEqual(platform.uploadChart('acme', { file: 'peeker.scxml', text: upload('peeker.scxml') }).diagnostics, [

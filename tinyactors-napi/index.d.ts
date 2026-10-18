@@ -189,19 +189,32 @@ export interface Compiled extends Disposable {
 /** Compiles SCXML documents into one image. Each chart is known by its
  * `<scxml name>`. A `src` is answered by a source of that name or by
  * `resolver`. The first source is the boot chart, which `host.boot`
- * spawns. Throws `CompileError` with every diagnostic.
+ * spawns. Throws `CompileError` with every diagnostic. Every expression
+ * and script of an `"ecmascript"` chart is parsed by the engine, running
+ * nothing: a syntax error is a warning in `diagnostics` (`cond:
+ * SyntaxError: ...`, at its element's line and column, a script's own
+ * line), and an error with `warningsAsErrors`.
  *
  * @example
  * const compiled = compileCharts([{ name: 'order.scxml', text }]);
  * const segment = host.addImage(compiled.image);
  * compiled.close();
  */
-export function compileCharts(sources: readonly Source[], resolver?: Resolver): Compiled;
+export function compileCharts(sources: readonly Source[], resolver?: Resolver, options?: CompileOptions): Compiled;
+
+/** The options of `compileCharts` and `compileSystem`. */
+export interface CompileOptions {
+  /** Every warning is an error, and the compile throws `CompileError`:
+   * the compiler's own warnings and the syntax errors of the charts'
+   * ECMAScript, which are warnings otherwise, since SCXML makes such an
+   * expression an `error.execution` when it is evaluated. */
+  readonly warningsAsErrors?: boolean;
+}
 
 /** Compiles a system manifest: a `<system>` document of `<chart name
  * src>`s, read through `resolver`, and `<actor name chart>`s, which
  * `host.boot` spawns with their names. Throws `CompileError`. */
-export function compileSystem(manifest: Source, resolver?: Resolver): Compiled;
+export function compileSystem(manifest: Source, resolver?: Resolver, options?: CompileOptions): Compiled;
 
 /** A {@link Resolver} that reads each `src` as a file under `root`,
  * relative to the directory of the document that names it (`base`): a

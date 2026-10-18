@@ -149,6 +149,213 @@ static bool ta_napi_diagnostics_of(napi_env env, const ta_compile_result *result
     return napi_object_freeze(env, out->list) == napi_ok;
 }
 
+/* ---- the ECMAScript of a chart, parsed ------------------------------------------ */
+
+/* The engine's parser over one source: new vm.Script(source) compiles it
+ * and runs nothing. null when it parses, else [message, line, column] of
+ * the SyntaxError in the source given (the line from the stack's first
+ * line, `file:line`, the column from its caret, as V8 and JavaScriptCore
+ * both print them). */
+static const char ta_napi_checker_source[] =
+    "(function () {\n"
+    "  const { Script } = process.getBuiltinModule('node:vm');\n"
+    "  return function check(source) {\n"
+    "    try { new Script(source, { filename: 'chart' }); return null; }\n"
+    "    catch (error) {\n"
+    "      if (!(error instanceof SyntaxError)) return null;\n"
+    "      const lines = String(error.stack).split('\\n');\n"
+    "      const at = /:(\\d+)$/.exec(lines[0]);\n"
+    "      const caret = lines.length > 2 ? lines[2].indexOf('^') : -1;\n"
+    "      return [error.message, at ? Number(at[1]) : 2, caret >= 0 ? caret + 1 : 1];\n"
+    "    }\n"
+    "  };\n"
+    "})()";
+
+/* The shapes the native datamodel evaluates in (datamodel/expressions.c):
+ * the source always starts on the shape's second line. A script is checked
+ * as the sloppy global code or block a declaring chart runs it as, which
+ * refuses no less than the parser does. */
+typedef struct ta_napi_shape {
+    const char *prefix, *suffix;
+    const char *what;
+} ta_napi_shape;
+
+static const ta_napi_shape ta_napi_value_shape = {"(function(){'use strict';return (\n", "\n);})", "expr"};
+
+static bool ta_napi_shape_of(const ta_expression_info *info, ta_napi_shape *shape) {
+    static const ta_napi_shape location = {"(function(__v){'use strict';(\n", "\n) = __v;})", "location"};
+    static const ta_napi_shape global = {"\n", "", "<script>"}, block = {"{\n", "\n}", "<script>"};
+    static const ta_napi_shape strict_block = {"'use strict';{\n", "\n}", "<script>"};
+    switch (info->kind) {
+    case TA_EXPRESSION_CONDITION: *shape = ta_napi_value_shape; shape->what = "cond"; return true;
+    case TA_EXPRESSION_VALUE:
+    case TA_EXPRESSION_STRING: *shape = ta_napi_value_shape; return true;
+    case TA_EXPRESSION_LOCATION: *shape = location; return true;
+    case TA_EXPRESSION_ITEM: *shape = location; shape->what = "item"; return true;
+    case TA_EXPRESSION_GLOBAL_SCRIPT: *shape = global; return true;
+    case TA_EXPRESSION_SCRIPT: {
+        uint32_t at = 0;
+        const char *p = info->source.pointer;
+        while (at < info->source.length && (p[at] == ' ' || p[at] == '\t' || p[at] == '\n' || p[at] == '\r')) at++;
+        bool directive = info->source.length - at >= 12 && (p[at] == '\'' || p[at] == '"') &&
+                         memcmp(p + at + 1, "use strict", 10) == 0 && p[at + 11] == p[at];
+        *shape = directive ? strict_block : block;
+        return true;
+    }
+    default: return false; /* <content>: JSON, XML or text, not ECMAScript */
+    }
+}
+
+/* A value's source without a trailing `;`, as the datamodel evaluates it. */
+static ta_string_view ta_napi_check_trimmed(ta_string_view source) {
+    while (source.length > 0) {
+        char c = source.pointer[source.length - 1];
+        if (c != ';' && c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
+        source.length--;
+    }
+    return source;
+}
+
+/* One check: the checker, the arena of the call, the diagnostics found
+ * (an array), and whether they are errors (warningsAsErrors). */
+typedef struct ta_napi_checking {
+    napi_value checker;
+    ta_growable_arena *arena;
+    napi_value found; /* out: an array of diagnostics */
+    napi_value first; /* out: the first one as a compiler prints it, when they are errors */
+    bool errors;
+} ta_napi_checking;
+
+/* Where a diagnostic is: the chart's file, its expression. */
+typedef struct ta_napi_checked {
+    napi_value failure; /* the checker's [message, line, column] */
+    ta_string_view file;
+    const ta_expression_info *info;
+    const ta_napi_shape *shape;
+} ta_napi_checked;
+
+/* The checker's [message, line, column] as a diagnostic of the file: the
+ * line in the shape made the line in the file (the expression's element's
+ * line, then the source's own lines), the column the element's on its
+ * first line. */
+static bool ta_napi_check_report(napi_env env, const ta_napi_checked *at, ta_napi_checking *checking) {
+    napi_value failure = at->failure;
+    napi_value message, line, column;
+    uint32_t in_shape = 2, column_at = 1, lines = 1, last = 0, length = 0;
+    if (napi_get_element(env, failure, 0, &message) != napi_ok || napi_get_element(env, failure, 1, &line) != napi_ok ||
+        napi_get_element(env, failure, 2, &column) != napi_ok || napi_get_value_uint32(env, line, &in_shape) != napi_ok ||
+        napi_get_value_uint32(env, column, &column_at) != napi_ok)
+        return false;
+    for (uint32_t i = 0; i < at->info->source.length; i++)
+        if (at->info->source.pointer[i] == '\n') {
+            lines++;
+            last = i + 1;
+        }
+    uint32_t source_line = in_shape >= 2 ? in_shape - 1 : 1;
+    if (source_line > lines) { /* past the source: at its end */
+        source_line = lines;
+        column_at = at->info->source.length - last + 1;
+    }
+    ta_napi_text text = {checking->arena, "a SyntaxError's message", {NULL, 0}};
+    if (!ta_napi_text_of(env, message, &text)) return false;
+    size_t room = strlen(at->shape->what) + text.view.length + 16;
+    char *written = (char *)ta_growable_arena_alloc(checking->arena, room, 1);
+    if (written == NULL) {
+        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for a diagnostic"});
+        return false;
+    }
+    size_t used = strlen(at->shape->what);
+    memcpy(written, at->shape->what, used);
+    memcpy(written + used, ": SyntaxError: ", 15);
+    used += 15;
+    if (text.view.length) memcpy(written + used, text.view.pointer, text.view.length);
+    used += text.view.length;
+    ta_diagnostic diagnostic = {checking->errors ? TA_DIAGNOSTIC_ERROR : TA_DIAGNOSTIC_WARNING, 0,
+                                at->info->line + source_line - 1, source_line == 1 ? at->info->column : column_at,
+                                at->file, {written, (uint32_t)used}};
+    napi_value item = ta_napi_diagnostic(env, &diagnostic);
+    if (item != NULL && checking->errors && checking->first == NULL &&
+        (checking->first = ta_napi_located(env, &diagnostic, checking->arena)) == NULL)
+        return false;
+    return item != NULL && napi_get_array_length(env, checking->found, &length) == napi_ok &&
+           napi_set_element(env, checking->found, length, item) == napi_ok;
+}
+
+/* Every expression and script of the image's "ecmascript" charts parsed
+ * by the engine, each refusal a diagnostic in checking->found. False with
+ * an exception pending. */
+static bool ta_napi_check_image(napi_env env, ta_string_view bytes, ta_napi_checking *checking) {
+    ta_image image;
+    ta_image_info about;
+    memset(&about, 0, sizeof about);
+    about.size = sizeof about;
+    if (napi_create_array(env, &checking->found) != napi_ok) return false;
+    if (ta_image_open((ta_bytes){bytes.pointer, bytes.length}, &image) != TA_OK) return true; /* core's to refuse */
+    ta_image_get_info(&image, &about);
+    for (uint32_t c = 0; c < about.chart_count; c++) {
+        ta_string_view datamodel = ta_image_chart_datamodel(&image, c);
+        if (datamodel.length != 10 || memcmp(datamodel.pointer, "ecmascript", 10) != 0) continue;
+        uint32_t count = ta_image_expression_count(&image, c);
+        for (uint32_t e = 0; e < count; e++) {
+            ta_expression_info info;
+            ta_napi_shape shape;
+            if (ta_image_expression(&image, (ta_chart_item){c, e}, &info) != TA_OK || !ta_napi_shape_of(&info, &shape)) continue;
+            bool script = info.kind == TA_EXPRESSION_SCRIPT || info.kind == TA_EXPRESSION_GLOBAL_SCRIPT;
+            ta_string_view source = script ? info.source : ta_napi_check_trimmed(info.source);
+            size_t prefix = strlen(shape.prefix), suffix = strlen(shape.suffix), length = prefix + source.length + suffix;
+            ta_growable_arena_mark mark = ta_growable_arena_position(checking->arena);
+            char *text = (char *)ta_growable_arena_alloc(checking->arena, length ? length : 1, 1);
+            if (text == NULL) return ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_NO_MEMORY, "no memory for an expression"}) != NULL;
+            memcpy(text, shape.prefix, prefix);
+            if (source.length) memcpy(text + prefix, source.pointer, source.length);
+            memcpy(text + prefix + source.length, shape.suffix, suffix);
+            napi_escapable_handle_scope scope; /* one per expression; the first error's message escapes it */
+            napi_value argument, failure, undefined, before = checking->first;
+            if (napi_open_escapable_handle_scope(env, &scope) != napi_ok) return false;
+            bool ok = napi_create_string_utf8(env, text, length, &argument) == napi_ok && napi_get_undefined(env, &undefined) == napi_ok &&
+                      napi_call_function(env, undefined, checking->checker, 1, &argument, &failure) == napi_ok;
+            napi_valuetype type = napi_null;
+            if (ok && napi_typeof(env, failure, &type) == napi_ok && type == napi_object)
+                ok = ta_napi_check_report(env, &(ta_napi_checked){failure, ta_image_chart_source(&image, c), &info, &shape}, checking);
+            if (ok && checking->first != before && napi_escape_handle(env, scope, checking->first, &checking->first) != napi_ok)
+                ok = false;
+            napi_close_escapable_handle_scope(env, scope);
+            ta_napi_arena_release(checking->arena, mark, TA_NAPI_ARENA_UNCAPPED);
+            if (!ok) return false;
+        }
+    }
+    return true;
+}
+
+/* The checker of this environment, made on first use. */
+static napi_value ta_napi_checker(napi_env env, ta_napi_instance *instance) {
+    napi_value checker = NULL, source;
+    if (instance->checker != NULL && napi_get_reference_value(env, instance->checker, &checker) == napi_ok && checker != NULL)
+        return checker;
+    if (napi_create_string_utf8(env, ta_napi_checker_source, sizeof ta_napi_checker_source - 1, &source) != napi_ok ||
+        napi_run_script(env, source, &checker) != napi_ok || napi_create_reference(env, checker, 1, &instance->checker) != napi_ok)
+        return NULL;
+    return checker;
+}
+
+/* `found` appended to the frozen `list`: a new frozen array of both. */
+typedef struct ta_napi_joined {
+    napi_value list, found;
+} ta_napi_joined;
+
+static napi_value ta_napi_join(napi_env env, const ta_napi_joined *joined) {
+    uint32_t first = 0, second = 0;
+    napi_value all, item;
+    if (napi_get_array_length(env, joined->list, &first) != napi_ok || napi_get_array_length(env, joined->found, &second) != napi_ok ||
+        napi_create_array_with_length(env, first + second, &all) != napi_ok)
+        return NULL;
+    for (uint32_t i = 0; i < first + second; i++)
+        if (napi_get_element(env, i < first ? joined->list : joined->found, i < first ? i : i - first, &item) != napi_ok ||
+            napi_set_element(env, all, i, item) != napi_ok)
+            return NULL;
+    return napi_object_freeze(env, all) == napi_ok ? all : NULL;
+}
+
 /* ---- the resolver -------------------------------------------------------------- */
 
 /* One compile call's resolver: the function, ResolveError, and the first
@@ -340,11 +547,28 @@ static napi_value ta_napi_compile_throw(napi_env env, ta_napi_instance *instance
 static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, const ta_napi_compile_call *how) {
     ta_napi_instance *instance = ta_napi_instance_of(env);
     if (instance == NULL) return NULL;
-    size_t argc = 2;
-    napi_value argv[2] = {NULL, NULL}, result = NULL, class, resolve_error;
+    size_t argc = 3;
+    napi_value argv[3] = {NULL, NULL, NULL}, result = NULL, class, resolve_error;
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) return NULL;
-    if (argc < 1 && napi_get_undefined(env, &argv[0]) != napi_ok) return NULL;
-    if (argc < 2 && napi_get_undefined(env, &argv[1]) != napi_ok) return NULL;
+    for (size_t i = argc; i < 3; i++)
+        if (napi_get_undefined(env, &argv[i]) != napi_ok) return NULL;
+    bool werror = false;
+    napi_valuetype options_type = napi_undefined;
+    if (napi_typeof(env, argv[2], &options_type) != napi_ok) return NULL;
+    if (options_type == napi_object) {
+        napi_value value;
+        napi_valuetype type = napi_undefined;
+        if (napi_get_named_property(env, argv[2], "warningsAsErrors", &value) != napi_ok || napi_typeof(env, value, &type) != napi_ok)
+            return NULL;
+        if (type == napi_boolean && napi_get_value_bool(env, value, &werror) != napi_ok) return NULL;
+        if (type != napi_boolean && type != napi_undefined) {
+            napi_throw_type_error(env, NULL, "warningsAsErrors is a boolean");
+            return NULL;
+        }
+    } else if (options_type != napi_undefined) {
+        napi_throw_type_error(env, NULL, "a compile call's options are an object: {warningsAsErrors}");
+        return NULL;
+    }
     napi_valuetype resolver = napi_undefined;
     if (napi_typeof(env, argv[1], &resolver) != napi_ok) return NULL;
     if (resolver != napi_undefined && resolver != napi_null && resolver != napi_function) {
@@ -364,6 +588,7 @@ static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, co
         memset(&options, 0, sizeof options);
         options.size = sizeof options;
         options.alloc = ta_napi_allocator(env);
+        if (werror) options.flags |= TA_COMPILE_WERROR;
         if (resolver == napi_function) {
             options.resolve = ta_napi_resolve;
             options.resolve_context = &resolving;
@@ -387,6 +612,23 @@ static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, co
             else if (raised != NULL) napi_throw(env, raised);
             else ta_napi_compile_throw(env, instance, &failure);
         } else {
+            /* the charts' ECMAScript, parsed: warnings, or errors with warningsAsErrors */
+            ta_napi_checking checking = {ta_napi_checker(env, instance), &instance->arena, NULL, NULL, werror};
+            napi_value list = NULL;
+            uint32_t found = 0;
+            bool checked = checking.checker != NULL && ta_napi_check_image(env, ta_compile_image(compiled), &checking) &&
+                           napi_get_array_length(env, checking.found, &found) == napi_ok &&
+                           (found == 0 || (list = ta_napi_join(env, &(ta_napi_joined){failure.diagnostics.list, checking.found})) != NULL);
+            if (checked && found > 0) failure.diagnostics.list = list;
+            if (!checked || (werror && found > 0)) {
+                ta_compile_free(compiled); /* freed before it throws */
+                if (checked) {
+                    failure.diagnostics.first = checking.first;
+                    ta_napi_compile_throw(env, instance, &failure);
+                } else ta_napi_compile_failed(env);
+                ta_napi_arena_release(&instance->arena, mark, TA_NAPI_INSTANCE_ARENA_CAP);
+                return NULL;
+            }
             napi_value args[2] = {NULL, failure.diagnostics.list};
             if (napi_create_external(env, compiled, NULL, NULL, &args[0]) != napi_ok ||
                 napi_new_instance(env, class, 2, args, &result) != napi_ok) {
@@ -401,12 +643,12 @@ static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, co
 }
 
 static napi_value ta_napi_compile_charts(napi_env env, napi_callback_info info) {
-    static const ta_napi_compile_call how = {false, "compileCharts(sources, resolver?): sources an array of {name, text} of strings"};
+    static const ta_napi_compile_call how = {false, "compileCharts(sources, resolver?, options?): sources an array of {name, text} of strings"};
     return ta_napi_compile_with(env, info, &how);
 }
 
 static napi_value ta_napi_compile_system(napi_env env, napi_callback_info info) {
-    static const ta_napi_compile_call how = {true, "compileSystem(manifest, resolver?): the manifest a {name, text} of strings"};
+    static const ta_napi_compile_call how = {true, "compileSystem(manifest, resolver?, options?): the manifest a {name, text} of strings"};
     return ta_napi_compile_with(env, info, &how);
 }
 

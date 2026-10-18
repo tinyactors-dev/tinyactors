@@ -35,7 +35,7 @@ customers upload, which the platform runs for them without trusting it.
 | [`charts/device.scxml`](charts/device.scxml) | a device: deadband, malformed samples, the offline watchdog |
 | [`charts/rule-template.scxml`](charts/rule-template.scxml) | the rule a condition and a message are filled into |
 | [`platform.mjs`](platform.mjs) | the application: the fleet's host, one sandboxed host per rule, routing, reports, audits, suspension |
-| [`check.mjs`](check.mjs) | what the platform checks in an upload before compiling it, and the template's filling |
+| [`check.mjs`](check.mjs) | what the platform checks in an upload before compiling it (its name, a template rule's fields), and the template's filling |
 | [`uploads/`](uploads/) | customers' charts: two good ones, and one for each way a rule goes wrong |
 | [`measure.mjs`](measure.mjs), [`native-rule.mjs`](native-rule.mjs) | the measurements below, and the rules on the native datamodel |
 | [`main.mjs`](main.mjs) | three customers on the real clock, one of them uploading every file of `uploads/` |
@@ -46,7 +46,7 @@ customers upload, which the platform runs for them without trusting it.
 | Upload | What it does | What its customer sees | What everyone else sees |
 |---|---|---|---|
 | [`broken.scxml`](uploads/broken.scxml) | XML that is not well formed | `broken.scxml:8:38: error: XML: expected quoted attribute value` at upload | nothing |
-| [`typo.scxml`](uploads/typo.scxml) | JavaScript that does not parse | `typo.scxml:8:33: error: cond: SyntaxError: ...` and one for its script, at upload | nothing |
+| [`typo.scxml`](uploads/typo.scxml) | JavaScript that does not parse | `typo.scxml:8:5: error: cond: SyntaxError: ...` and one for its script, at upload (`compileCharts` with `warningsAsErrors`) | nothing |
 | [`peeker.scxml`](uploads/peeker.scxml) | `<data src="file:///etc/passwd">` | `peeker.scxml:5:14: error: src="file:///etc/passwd" requires a resolver` | nothing |
 | [`spin.scxml`](uploads/spin.scxml) | a loop that never ends | `error.execution` for each reading, then the rule suspended after 3 | each reading held up about 50 ms |
 | [`hoard.scxml`](uploads/hoard.scxml) | fills a variable until memory runs out | `error.execution`, then suspended | nothing: the memory was its own engine's |
@@ -183,8 +183,7 @@ An `error.execution` carries no reason, and telemetry's span marks the
 failed action with an opcode only, so a customer is told "error.execution,
 1" for a rule that ran out of checks, out of memory, threw `new
 Error('boom')` or called `require`, alike (docs/log.xml,
-l-p4-examples-iot-error-reason). The JavaScript of a chart is not checked
-by the compiler (l-p4-examples-iot-syntax-unchecked): `check.mjs` parses it
+l-p4-examples-iot-error-reason). `compileCharts` parses a chart's JavaScript
 with the application's engine, which is V8 or JavaScriptCore, not QuickJS,
 so a construct one accepts and the other does not is found only when it
 runs.
@@ -195,8 +194,9 @@ Recorded in `docs/log.xml` with `example="iot-rules"`:
 
 - `l-p4-examples-iot-maxops-time`: the quickjs guide's "within
   milliseconds" for `maxOps: 10_000` is 260 ms to 2.5 s.
-- `l-p4-examples-iot-syntax-unchecked`: `compileCharts` does not parse a
-  chart's JavaScript.
+- `l-p4-examples-iot-syntax-unchecked`: `compileCharts` did not parse a
+  chart's JavaScript. Fixed: it reports a syntax error as a warning, an
+  error with `{ warningsAsErrors: true }`, which the platform passes.
 - `l-p4-examples-iot-error-reason`: nothing says why an evaluation failed.
 - `l-p4-examples-iot-invoke-crash`: a sandboxed chart's `<invoke>` of an
   unknown type threw from the host's turn, which could end the process.

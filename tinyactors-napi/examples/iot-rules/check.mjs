@@ -2,13 +2,11 @@
 // and how it fills the rule template. Nothing here runs the customer's
 // code: the sandbox does that, later, with its limits.
 //
-// compileCharts checks the XML and the chart's structure, with line
-// numbers, but not the JavaScript in it: a syntax error in an expression
-// is found at its first evaluation, as an error.execution with no message
-// (docs/log.xml, l-p4-examples-iot-syntax-unchecked). So the platform
-// parses each expression itself, with the application's own engine
-// (`new Function` parses a body and runs none of it), and reports a syntax
-// error as the compiler would, `file:line:column: error: message`.
+// compileCharts checks an uploaded chart's XML, its structure and its
+// JavaScript (with { warningsAsErrors: true } a syntax error refuses it).
+// A template rule's `when` and `message` are checked here first, with the
+// application's own engine (`new Function` parses a body and runs none of
+// it), so that the customer reads an error about the field they wrote.
 
 /** Escapes text for an XML attribute value or element content. */
 export function escapeXML(text) {
@@ -18,14 +16,6 @@ export function escapeXML(text) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;');
-}
-
-/** Reads the five predefined entities and character references back. */
-function unescapeXML(text) {
-  return text.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (_, ref) => {
-    if (ref[0] === '#') return String.fromCodePoint(ref[1] === 'x' ? parseInt(ref.slice(2), 16) : Number(ref.slice(1)));
-    return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[ref];
-  });
 }
 
 /** The syntax error of `source` as JavaScript, or undefined: an
@@ -39,36 +29,6 @@ export function syntaxError(source, script = false) {
     if (error instanceof SyntaxError) return error.message;
     throw error;
   }
-}
-
-/** Line and column (from 1) of `offset` in `text`. */
-function position(text, offset) {
-  const before = text.slice(0, offset).split('\n');
-  return { line: before.length, column: before.at(-1).length + 1 };
-}
-
-/** The attributes of SCXML whose value is an expression. `location` is an
- * expression too (the left side of an assignment). */
-const EXPRESSION_ATTRIBUTES = 'cond|expr|location|targetexpr|eventexpr|delayexpr|typeexpr|srcexpr|idlocation';
-
-/** Every syntax error in the JavaScript of an SCXML document, as
- * diagnostics of the compiler's shape: the expressions' attributes and the
- * `<script>` bodies. */
-export function checkScripts(file, text) {
-  const diagnostics = [];
-  const report = (offset, message) => diagnostics.push({ severity: 'error', file, ...position(text, offset), message });
-  const attributes = new RegExp(`\\s(${EXPRESSION_ATTRIBUTES})\\s*=\\s*("([^"]*)"|'([^']*)')`, 'g');
-  for (const match of text.matchAll(attributes)) {
-    const source = unescapeXML(match[3] ?? match[4]);
-    const message = syntaxError(source);
-    if (message) report(match.index + 1, `${match[1]}: SyntaxError: ${message}`);
-  }
-  for (const match of text.matchAll(/<script(\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
-    const body = match[2].replace(/<!\[CDATA\[([\s\S]*?)\]\]>|([^<]+)/g, (_, data, plain) => data ?? unescapeXML(plain));
-    const message = syntaxError(body, true);
-    if (message) report(match.index, `<script>: SyntaxError: ${message}`);
-  }
-  return diagnostics;
 }
 
 /** The `name` of the document's `<scxml>` element, or undefined. */

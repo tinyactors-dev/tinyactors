@@ -24,7 +24,7 @@
 //   held.
 import { readFileSync } from 'node:fs';
 import { compileCharts, CompileError, Host, TinyactorsError } from '@tinyactors/node';
-import { chartName, checkScripts, fillTemplate, formatDiagnostic, syntaxError } from './check.mjs';
+import { chartName, fillTemplate, formatDiagnostic, syntaxError } from './check.mjs';
 
 const DEVICE_CHART = readFileSync(new URL('./charts/device.scxml', import.meta.url), 'utf8');
 const RULE_TEMPLATE = readFileSync(new URL('./charts/rule-template.scxml', import.meta.url), 'utf8');
@@ -127,8 +127,6 @@ export class Platform {
       // a chart without it gets SCXML's null datamodel, which evaluates nothing
       return this.#refuse(owner, id, [`${file}: the <scxml> element needs datamodel="ecmascript"`]);
     }
-    const diagnostics = checkScripts(file, text).map(formatDiagnostic);
-    if (diagnostics.length) return this.#refuse(owner, id, diagnostics);
     return this.#install(owner, { id, file, text, devices });
   }
 
@@ -141,7 +139,9 @@ export class Platform {
     if (owner.rules.has(id)) return this.#refuse(owner, id, [`a rule named ${id} exists`]);
     let compiled;
     try {
-      compiled = compileCharts([{ name: file, text }]); // no resolver: a `src` is a compile error
+      // no resolver: a `src` is a compile error; warningsAsErrors: a syntax
+      // error in the chart's JavaScript, which compileCharts parses, too
+      compiled = compileCharts([{ name: file, text }], undefined, { warningsAsErrors: true });
     } catch (error) {
       if (!(error instanceof CompileError)) throw error;
       return this.#refuse(owner, id, error.diagnostics.filter((d) => d.severity === 'error').map(formatDiagnostic));

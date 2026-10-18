@@ -132,7 +132,10 @@ What happened, step by step:
    moves to `paid`, a final state, which logs the total.
 2. **`compileCharts`** checks the chart and compiles it. A mistake in the
    XML, an unknown state id or a malformed attribute throws a
-   `CompileError` here, before anything runs.
+   `CompileError` here, before anything runs. JavaScript that does not
+   parse is a warning in `compiled.diagnostics` (SCXML makes it an
+   `error.execution` when it runs), and an error with
+   `compileCharts(sources, undefined, { warningsAsErrors: true })`.
 3. **`new Host(config, options)`** makes a host. The config names this
    system (`systemID`) and the I/O processors its charts may send to; the
    options hold your handlers. The `urn:payments` handler gets each send

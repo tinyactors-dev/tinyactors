@@ -190,4 +190,36 @@ test('a compile result never closed is freed by its finalizer', async () => {
   equal(collected, 20, 'results collected');
 });
 
+test('compileCharts parses each expression and script: a syntax error is a warning at its line, an error with warningsAsErrors', () => {
+  const text = [
+    '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="typo" initial="s">',
+    '  <datamodel><data id="limit" expr="3"/></datamodel>',
+    '  <state id="s">',
+    '    <transition event="reading" cond="_event.data.value &gt; limit)" target="s"/>',
+    '    <transition event="other"><script>',
+    '      var ok = 1;',
+    '      let x = ;',
+    '    </script></transition>',
+    '    <transition event="fine" cond="_event.data.value > limit;"><assign location="limit" expr="limit + 1"/></transition>',
+    '  </state>',
+    '</scxml>'].join('\n');
+  const compiled = compileCharts([{ name: 'typo.scxml', text }]);
+  const found = compiled.diagnostics.filter((d) => /SyntaxError/.test(d.message));
+  compiled.close();
+  equal(found.length, 2, 'two of them');
+  const [cond, script] = found;
+  equal([cond.severity, cond.file, cond.line].join(), 'warning,typo.scxml,4', 'the condition');
+  if (!/^cond: SyntaxError: /.test(cond.message)) throw new Error(cond.message);
+  equal([script.severity, script.line].join(), 'warning,7', 'the script, at its own line');
+  if (!/^<script>: SyntaxError: /.test(script.message)) throw new Error(script.message);
+  let error;
+  try { compileCharts([{ name: 'typo.scxml', text }], undefined, { warningsAsErrors: true }); } catch (caught) { error = caught; }
+  equal(error instanceof CompileError, true, 'a CompileError');
+  equal(error.diagnostics.filter((d) => d.severity === 'error' && /SyntaxError/.test(d.message)).length, 2, 'both, as errors');
+  if (!/^typo\.scxml:4:\d+: error: cond: SyntaxError: /.test(error.message)) throw new Error(error.message);
+  let refused;
+  try { compileCharts([{ name: 'typo.scxml', text }], undefined, 'strict'); } catch (caught) { refused = caught; }
+  equal(refused instanceof TypeError, true, 'options are an object');
+});
+
 await run();
