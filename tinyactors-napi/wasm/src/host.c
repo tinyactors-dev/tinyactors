@@ -169,11 +169,14 @@ static ta_web_host *ta_web_host_make(ta_web_env *env, const ta_web_making *makin
     ta_host_environment environment = {sizeof environment, host->datamodel == TA_WEB_DATAMODEL_NATIVE ? 1u : 0u,
                                        &host->binding, env->allocator, NULL, error.pointer != NULL ? &error : NULL};
     ta_web_enter(host);
+    struct ta_web_host *outer = env->making;
+    env->making = host;
     ta_status status;
     ta_web_unpacked unpacked = {&environment, {0}, false};
     if (making->pack.pointer == NULL) status = ta_host_create(making->config, &environment, &host->host);
     else status = ta_web_restore_core(host, making, &unpacked);
     if (status == TA_OK) status = ta_web_read_config(host);
+    env->making = outer;
     ta_web_leave(host);
     record->word[0] = (uint32_t)status;
     record->word[1] = (uint32_t)error.length;
@@ -229,6 +232,8 @@ TA_WEB_EXPORT int32_t ta_web_host_free(ta_web_host *host) {
 }
 
 TA_WEB_EXPORT ta_web_scratch *ta_web_host_scratch(ta_web_host *host) { return &host->scratch; }
+/* The host ta_web_host_new or _restore is making, during it (0 outside). */
+TA_WEB_EXPORT ta_web_host *ta_web_host_making(ta_web_env *env) { return env->making; }
 TA_WEB_EXPORT uint32_t ta_web_host_depth(const ta_web_host *host) { return host->depth; }
 /* The acks so far, as a double (exact to 2^53): a thin view made at
  * another count is stale. */

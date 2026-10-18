@@ -6,6 +6,8 @@
  * src past the call (tinyactors-core/docs/boundary.md, section 12). */
 #include "web.h"
 
+#include <string.h>
+
 /* The resolver's context: the environment and JavaScript's number for the
  * compilation, which the import names. */
 typedef struct ta_web_compilation {
@@ -111,3 +113,44 @@ TA_WEB_EXPORT void ta_web_compile_diagnostic(ta_web_env *env, const ta_compile_r
 }
 
 TA_WEB_EXPORT void ta_web_compile_free(ta_compile_result *result) { ta_compile_free(result); }
+
+/* ---- the syntax check of "ecmascript" charts (wasm/lib/compile.mjs) ------------------------ */
+
+/* The result's image opened into a ta_image in the environment's arena,
+ * above the caller's mark: its chart count in the record's word 0; 0 when
+ * it does not open (core's to refuse) or the allocator refuses. */
+TA_WEB_EXPORT ta_image *ta_web_image_open(ta_web_env *env, const ta_compile_result *result) {
+    ta_image *image = (ta_image *)ta_growable_arena_alloc(&env->scratch.arena, sizeof *image, 8);
+    ta_string_view bytes = ta_compile_image(result);
+    env->record.word[0] = 0;
+    if (image == NULL || ta_image_open((ta_bytes){bytes.pointer, bytes.length}, image) != TA_OK) return NULL;
+    ta_image_info about;
+    memset(&about, 0, sizeof about);
+    about.size = sizeof about;
+    ta_image_get_info(image, &about);
+    env->record.word[0] = about.chart_count;
+    return image;
+}
+
+/* Chart `c` of the image: its datamodel's name in the record's words 0-1,
+ * its source's name in 2-3; answers its expression count. */
+TA_WEB_EXPORT uint32_t ta_web_image_chart(ta_web_env *env, const ta_image *image, uint32_t c) {
+    uint32_t *word = env->record.word;
+    ta_web_set_text(word, 0, ta_image_chart_datamodel(image, c));
+    ta_web_set_text(word, 2, ta_image_chart_source(image, c));
+    return ta_image_expression_count(image, c);
+}
+
+/* Expression `e` of the chart in the record's word 0: [status, kind, line,
+ * column, source (2 words)], the source a view of the image. */
+TA_WEB_EXPORT int32_t ta_web_image_expression(ta_web_env *env, const ta_image *image, uint32_t e) {
+    uint32_t *word = env->record.word;
+    ta_expression_info info = {0, 0, 0, {"", 0}};
+    ta_status status = ta_image_expression(image, (ta_chart_item){word[0], e}, &info);
+    word[0] = (uint32_t)status;
+    word[1] = info.kind;
+    word[2] = info.line;
+    word[3] = info.column;
+    ta_web_set_text(word, 4, info.source);
+    return status;
+}

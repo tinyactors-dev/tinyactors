@@ -36,11 +36,32 @@ const SAFE = Number.MAX_SAFE_INTEGER;
 const refuse = (status, message) => new TinyactorsError(message, { status });
 const UNSUPPORTED_OBJECT = 'only plain objects, arrays and Uint8Arrays are values (docs/values.md)';
 
+// Whether `prototype` is an Object.prototype, of this realm or another one
+// (the native datamodel's realms): its own constructor is the native
+// Object and it has no prototype (the addon's src/values.c, `realms`).
+const nativeSource = Function.prototype.toString;
+function objectPrototype(prototype) {
+  if (prototype === Object.prototype) return true;
+  if (Object.getPrototypeOf(prototype) !== null || !Object.hasOwn(prototype, 'constructor')) return false;
+  const made = prototype.constructor;
+  return typeof made === 'function' && made.prototype === prototype && made.name === 'Object' &&
+    nativeSource.call(made).includes('[native code]');
+}
+const tagOf = Object.prototype.toString;
+
 // Writes `value` with a writer in `scratch` (a host's arena or the
 // environment's, above the caller's mark); answers [pointer, length] of the
 // bytes, a view valid until the call's leave. `addresses`: an Address is
-// tag 32 on its text (encode, and a payload toward quickjs).
-export function write(module, scratch, value, { addresses = false } = {}) {
+// tag 32 on its text (encode, and a payload toward quickjs). `realms`: a
+// plain object or a Uint8Array of another realm is one too (the native
+// datamodel's values). `wire`: to_wire's mode (the addon's src/values.c):
+// what JSON.stringify leaves out (undefined, a function, a symbol) is null
+// at the top and in an array and drops its key in an object, toJSON is
+// applied, an ArrayBuffer, a typed array and a DataView are their bytes,
+// any other object the map of its own enumerable string keys; its
+// refusals are TA_ERROR_INVALID.
+export function write(module, scratch, value, { addresses = false, realms = false, wire = false } = {}) {
+  if (wire) realms = true;
   const writer = module.call('ta_web_writer_new', module.env, scratch);
   if (writer === 0) throw refuse('TA_ERROR_NO_MEMORY', 'no memory for a CBOR writer');
   const exports = module.fn;
@@ -57,8 +78,39 @@ export function write(module, scratch, value, { addresses = false } = {}) {
     module.setWord(1, length);
     token(TEXT, 0);
   };
+  const bytes = (view) => {
+    const [at, length] = module.copyIn(scratch, view);
+    module.setWord(0, at);
+    module.setWord(1, length);
+    return token(BYTES, 0);
+  };
+  // wire mode: toJSON applied, as JSON.stringify applies it (each call a level)
+  const resolved = (v, depth) => {
+    for (;;) {
+      if (depth.n > DEPTH) throw refuse('TA_ERROR_INVALID', 'a value nested deeper than 64 (or a cycle)');
+      if (v === null || typeof v !== 'object' || ArrayBuffer.isView(v) || tagOf.call(v) === '[object ArrayBuffer]') return v;
+      const toJSON = v.toJSON;
+      if (typeof toJSON !== 'function') return v;
+      v = toJSON.call(v, '');
+      depth.n++;
+    }
+  };
+  const dropped = (v) => v === undefined || typeof v === 'function' || typeof v === 'symbol';
   const put = (v, depth) => {
     if (depth > DEPTH) throw refuse('TA_ERROR_INVALID', 'a value nested deeper than 64 (or a cycle)');
+    if (wire && v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      if (ArrayBuffer.isView(v)) return bytes(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+      if (tagOf.call(v) === '[object ArrayBuffer]') return bytes(new Uint8Array(v));
+      token(MAP, LATER);
+      for (const key of Object.keys(v)) {
+        const at = { n: depth + 1 };
+        const item = resolved(v[key], at);
+        if (dropped(item)) continue;
+        text(key);
+        put(item, at.n);
+      }
+      return token(END, 0);
+    }
     switch (typeof v) {
     case 'undefined': return token(SIMPLE, 23);
     case 'boolean': return token(SIMPLE, v ? 21 : 20);
@@ -80,22 +132,32 @@ export function write(module, scratch, value, { addresses = false } = {}) {
       if (v === null) return token(SIMPLE, 22);
       if (Array.isArray(v)) {
         token(ARRAY, LATER);
-        for (let i = 0, n = v.length; i < n; i++) put(v[i], depth + 1);
+        for (let i = 0, n = v.length; i < n; i++) {
+          if (!wire) {
+            put(v[i], depth + 1);
+            continue;
+          }
+          const at = { n: depth + 1 };
+          const item = resolved(v[i], at);
+          if (dropped(item)) token(SIMPLE, 22);
+          else put(item, at.n);
+        }
         return token(END, 0);
       }
       if (ArrayBuffer.isView(v)) {
-        if (!(v instanceof Uint8Array)) throw refuse('TA_ERROR_UNSUPPORTED', 'bytes are a Uint8Array, not another typed array');
-        const [at, length] = module.copyIn(scratch, v);
-        module.setWord(0, at);
-        module.setWord(1, length);
-        return token(BYTES, 0);
+        if (!(v instanceof Uint8Array) && !(realms && tagOf.call(v) === '[object Uint8Array]')) {
+          throw refuse('TA_ERROR_UNSUPPORTED', 'bytes are a Uint8Array, not another typed array');
+        }
+        return bytes(v);
       }
       if (addresses && isAddress(v)) {
         token(TAG, 32);
         return text(addressText(v));
       }
       const prototype = Object.getPrototypeOf(v);
-      if (prototype !== null && prototype !== Object.prototype) throw refuse('TA_ERROR_UNSUPPORTED', UNSUPPORTED_OBJECT);
+      if (prototype !== null && prototype !== Object.prototype && !(realms && objectPrototype(prototype))) {
+        throw refuse('TA_ERROR_UNSUPPORTED', UNSUPPORTED_OBJECT);
+      }
       token(MAP, LATER);
       for (const key of Object.keys(v)) {
         const item = v[key];
@@ -108,7 +170,19 @@ export function write(module, scratch, value, { addresses = false } = {}) {
       throw refuse('TA_ERROR_UNSUPPORTED', 'a function, a symbol or an external is not a value (docs/values.md)');
     }
   };
-  put(value, 0);
+  if (wire) {
+    try {
+      const at = { n: 0 };
+      const top = resolved(value, at);
+      if (dropped(top)) token(SIMPLE, 22);
+      else put(top, at.n);
+    } catch (error) {
+      if (error instanceof TinyactorsError && error.status !== 'TA_ERROR_NO_MEMORY') {
+        throw refuse('TA_ERROR_INVALID', error.message);
+      }
+      throw error;
+    }
+  } else put(value, 0);
   const status = module.call('ta_web_writer_bytes', writer);
   if (status !== 0) {
     throw refuse(module.statusName(status), status === -4 ? 'no memory for the encoded value' : 'the CBOR writer refused the value');

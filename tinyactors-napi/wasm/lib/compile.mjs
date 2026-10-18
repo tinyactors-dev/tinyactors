@@ -15,11 +15,18 @@
 //     compilation's scratch arena (request->scratch, ta_web_resolve_room),
 //     which lives until the compile call returns.
 //
-// The ECMAScript syntax check the addon makes after a compilation (each
-// expression parsed by the engine in the native datamodel's shapes) is the
-// native datamodel's, which this package does not have yet
-// (docs/plan.xml, p5-datamodel).
+// After a compilation that succeeded, every expression and script of an
+// "ecmascript" chart is parsed by the engine in the native datamodel's
+// shapes, nothing run (the addon's check): each syntax error a warning at
+// its line, an error with warningsAsErrors. The parser is node:vm's Script
+// in node and bun (the addon's), the realm's Function in a browser, where
+// a page finds the error's line and column by a <script> element that
+// does not parse (it runs nothing: the source is inside a function
+// expression); a Worker reports the expression's own position. Under a
+// policy that refuses string evaluation (realms.mjs, policyRefusal) the
+// check is skipped: the native datamodel cannot run there either.
 import { CompileError, ResolveError, TinyactorsError, refusal } from './errors.mjs';
+import { policyRefusal } from './realms.mjs';
 import { instance } from './state.mjs';
 
 const SEVERITIES = ['note', 'warning', 'error'];
@@ -170,6 +177,120 @@ class Resolving {
   }
 }
 
+// ---- the syntax check -------------------------------------------------------------------------
+
+const KIND = { CONDITION: 1, VALUE: 2, LOCATION: 3, SCRIPT: 4, STRING: 5, CONTENT: 6, ITEM: 7, GLOBAL_SCRIPT: 8 };
+const VALUE_SHAPE = ["(function(){'use strict';return (\n", '\n);})', 'expr'];
+
+// The shape an expression is checked in (the datamodel's own), or null
+// for <content> (JSON, XML or text, not ECMAScript).
+function shapeOf(kind, source) {
+  switch (kind) {
+  case KIND.CONDITION: return [VALUE_SHAPE[0], VALUE_SHAPE[1], 'cond'];
+  case KIND.VALUE:
+  case KIND.STRING: return VALUE_SHAPE;
+  case KIND.LOCATION: return ["(function(__v){'use strict';(\n", '\n) = __v;})', 'location'];
+  case KIND.ITEM: return ["(function(__v){'use strict';(\n", '\n) = __v;})', 'item'];
+  case KIND.GLOBAL_SCRIPT: return ['\n', '', '<script>'];
+  case KIND.SCRIPT: return /^[ \t\n\r]*(['"])use strict\1/.test(source) ? ["'use strict';{\n", '\n}', '<script>'] : ['{\n', '\n}', '<script>'];
+  default: return null;
+  }
+}
+
+// The engine's parser over one source: null when it parses, else
+// [message, line, column] of its SyntaxError in the source given.
+function makeChecker() {
+  const vm = globalThis.process?.getBuiltinModule?.('node:vm');
+  if (vm) {
+    return (source) => {
+      try {
+        new vm.Script(source, { filename: 'chart' }); // eslint-disable-line no-new
+        return null;
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) return null;
+        const lines = String(error.stack).split('\n');
+        const at = /:(\d+)$/.exec(lines[0]);
+        const caret = lines.length > 2 ? lines[2].indexOf('^') : -1;
+        return [error.message, at ? Number(at[1]) : 2, caret >= 0 ? caret + 1 : 1];
+      }
+    };
+  }
+  const document = globalThis.document;
+  return (source) => {
+    try {
+      new Function(source); // eslint-disable-line no-new
+      return null;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) return null;
+      let line = 2, column = 1;
+      if (typeof document?.createElement === 'function') { // a page: where, from a <script> that does not parse
+        const listener = (event) => {
+          line = event.lineno - 1;
+          column = event.colno;
+          event.preventDefault();
+        };
+        globalThis.addEventListener('error', listener);
+        try {
+          const script = document.createElement('script');
+          script.text = `(function(){\n${source}\n})`;
+          (document.head ?? document.documentElement).appendChild(script);
+          script.remove();
+        } finally {
+          globalThis.removeEventListener('error', listener);
+        }
+      }
+      return [error.message, line, column];
+    }
+  };
+}
+
+let checker = null;
+
+// The SyntaxErrors of the result's "ecmascript" charts as diagnostics.
+function checkImage(module, result, errors) {
+  if (policyRefusal() !== null) return [];
+  checker ??= makeChecker();
+  const found = [];
+  const image = module.call('ta_web_image_open', module.env, result) >>> 0;
+  if (image === 0) return found; // core's to refuse
+  const charts = module.word(0);
+  for (let c = 0; c < charts; c++) {
+    const count = module.call('ta_web_image_chart', module.env, image, c);
+    const w = module.words().slice(module.record, module.record + 4);
+    if (module.string(w[0], w[1]) !== 'ecmascript') continue;
+    const file = module.string(w[2], w[3]);
+    for (let e = 0; e < count; e++) {
+      module.setWord(0, c);
+      if (module.call('ta_web_image_expression', module.env, image, e) !== 0) continue;
+      const x = module.words().slice(module.record, module.record + 6);
+      const info = { kind: x[1], line: x[2], column: x[3], source: module.string(x[4], x[5]) };
+      const shape = shapeOf(info.kind, info.source);
+      if (shape === null) continue;
+      const script = info.kind === KIND.SCRIPT || info.kind === KIND.GLOBAL_SCRIPT;
+      const source = script ? info.source : info.source.replace(/[; \t\n\r]+$/, '');
+      const failure = checker(shape[0] + source + shape[1]);
+      if (failure === null) continue;
+      const [message, inShape] = failure;
+      let column = failure[2];
+      const lines = info.source.split('\n').length;
+      let sourceLine = inShape >= 2 ? inShape - 1 : 1;
+      if (sourceLine > lines) { // past the source: at its end
+        sourceLine = lines;
+        column = info.source.length - info.source.lastIndexOf('\n');
+      }
+      found.push(Object.freeze({
+        severity: errors ? 'error' : 'warning',
+        code: 0,
+        file,
+        line: info.line + sourceLine - 1,
+        column: sourceLine === 1 ? info.column : column,
+        message: `${shape[2]}: SyntaxError: ${message}`,
+      }));
+    }
+  }
+  return found;
+}
+
 function compileWith(manifest, [given, resolver, options], usage) {
   let flags = 0;
   if (options !== undefined) {
@@ -225,6 +346,20 @@ function compileWith(manifest, [given, resolver, options], usage) {
         if (status === TA_ERROR_NO_MEMORY) throw refusal('TA_ERROR_NO_MEMORY', 'the compiler\'s allocator refused memory');
         const name = module.statusName(status === TA_OK ? TA_ERROR_INVALID : status);
         throw new CompileError(first ?? name, { diagnostics, status: name });
+      }
+      // the charts' ECMAScript, parsed: warnings, or errors with warningsAsErrors
+      let found;
+      try {
+        found = checkImage(module, result, (flags & WERROR) !== 0);
+      } catch (error) {
+        module.call('ta_web_compile_free', result);
+        throw error;
+      }
+      if (found.length > 0) diagnostics = Object.freeze([...diagnostics, ...found]);
+      if (found.length > 0 && (flags & WERROR) !== 0) {
+        module.call('ta_web_compile_free', result); // freed before it throws
+        const d = found[0];
+        throw new CompileError(`${d.file}:${d.line}:${d.column}: error: ${d.message}`, { diagnostics, status: module.statusName(TA_ERROR_INVALID) });
       }
       return new Compiled(MAKING, module, result, diagnostics);
     });

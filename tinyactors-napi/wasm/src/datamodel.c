@@ -648,3 +648,91 @@ TA_WEB_EXPORT void ta_web_payload_retain(ta_web_host *host, uint32_t low, uint32
 TA_WEB_EXPORT void ta_web_payload_drop(ta_web_host *host, uint32_t low, uint32_t high) {
     ta_web_payload_release(host, (uint64_t)low | (uint64_t)high << 32);
 }
+
+/* ---- snapshots of the native datamodel: its tables' namespaces and rows ------------------------ */
+
+/* The table a snapshot names: 0 sessions, 1 payloads, 2 loops. */
+static ta_table *ta_web_dm_table(ta_web_host *host, uint32_t which) {
+    switch (which) {
+    case 0: return &host->sessions;
+    case 1: return &host->payloads;
+    case 2: return &host->loops;
+    default: return NULL;
+    }
+}
+
+/* Table `which`'s handle namespace (ta_table_snapshot) in the output room:
+ * its address in the record's word 0, its length in word 1. */
+TA_WEB_EXPORT int32_t ta_web_dm_layout(ta_web_host *host, uint32_t which) {
+    ta_table *table = ta_web_dm_table(host, which);
+    if (table == NULL) return TA_ERROR_INVALID;
+    ta_buffer probe = {NULL, 0, 0};
+    ta_status status = ta_table_snapshot(table, &probe);
+    if (status != TA_OK && status != TA_ERROR_NO_MEMORY) return status;
+    if (ta_web_dm_output(host, probe.length > 0 ? (uint32_t)probe.length : 1) == 0) return TA_ERROR_NO_MEMORY;
+    ta_buffer out = {host->output.pointer, host->output.capacity, 0};
+    status = ta_table_snapshot(table, &out);
+    uint32_t *word = ta_web_words(host);
+    word[0] = ta_web_address(out.pointer);
+    word[1] = (uint32_t)out.length;
+    return status;
+}
+
+/* The live rows of table `which`, three words each at the address in the
+ * record's word 0, at most word 1 of them: the handle (two words), then a
+ * payload's reference count or a session's chart slot (0 for a loop).
+ * Answers how many it wrote. */
+TA_WEB_EXPORT uint32_t ta_web_dm_rows(ta_web_host *host, uint32_t which) {
+    ta_table *table = ta_web_dm_table(host, which);
+    uint32_t *word = ta_web_words(host);
+    uint32_t *out = (uint32_t *)(uintptr_t)word[0], room = word[1], n = 0;
+    if (table == NULL) return 0;
+    for (uint32_t slot = 0; slot < table->capacity && n < room; slot++) {
+        void *row = ta_table_at(table, slot);
+        if (row == NULL) continue;
+        uint64_t handle = ta_table_handle(table, slot);
+        uint32_t value = 0;
+        if (which == 0) {
+            uint64_t chart = ((const ta_web_session_row *)row)->chart;
+            value = ta_table_get(&host->charts, chart) != NULL ? ta_web_slot(chart) : TA_NIL;
+        } else if (which == 1)
+            value = ((const ta_web_count_row *)row)->count;
+        ta_web_set_word64(out, 3 * n, handle);
+        out[3 * n + 2] = value;
+        n++;
+    }
+    return n;
+}
+
+/* Table `which`'s namespace back from the bytes in the record's words 0-1
+ * (ta_table_restore: TA_ERROR_STATE unless it is empty). */
+TA_WEB_EXPORT int32_t ta_web_dm_restore(ta_web_host *host, uint32_t which) {
+    ta_table *table = ta_web_dm_table(host, which);
+    if (table == NULL) return TA_ERROR_INVALID;
+    return ta_table_restore(table, ta_web_bytes_at(ta_web_words(host), 0));
+}
+
+/* A restored row filled: the handle in the record's words 0-1, in word 2
+ * a payload's reference count (1 and up) or a session's chart slot (a live
+ * chart); TA_ERROR_INVALID for a handle the table does not hold, a row
+ * filled already, or a value that does not fit. A loop's row holds
+ * nothing in C: JavaScript checks it. */
+TA_WEB_EXPORT int32_t ta_web_dm_fill(ta_web_host *host, uint32_t which) {
+    ta_table *table = ta_web_dm_table(host, which);
+    const uint32_t *word = ta_web_words(host);
+    uint64_t handle = ta_web_word64(word, 0);
+    uint32_t value = word[2];
+    void *row = table != NULL ? ta_table_get(table, handle) : NULL;
+    if (row == NULL) return TA_ERROR_INVALID;
+    if (which == 0) {
+        ta_web_session_row *session = (ta_web_session_row *)row;
+        uint64_t chart = ta_table_handle(&host->charts, value);
+        if (session->chart != 0 || chart == 0) return TA_ERROR_INVALID;
+        session->chart = chart;
+    } else if (which == 1) {
+        ta_web_count_row *payload = (ta_web_count_row *)row;
+        if (payload->count != 0 || value == 0) return TA_ERROR_INVALID;
+        payload->count = value;
+    }
+    return TA_OK;
+}

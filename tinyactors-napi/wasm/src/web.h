@@ -99,6 +99,9 @@ void ta_web_scratch_leave(ta_web_scratch *scratch, uint32_t level);
  *              compiler's scratch arena takes the resolver's text);
  *   start      during a datamodel's create or deserialize import, what it
  *              starts from (its system variables are valid then only);
+ *   making     during ta_web_host_new and _restore, the host being made,
+ *              which a datamodel import (a restore's chart_attach) names
+ *              before JavaScript has its pointer;
  *   depth      exports on the stack, entered and left by every export that
  *              can call an import (a test reads it after a throwing import:
  *              it is back at 0). */
@@ -108,6 +111,7 @@ typedef struct ta_web_env {
     ta_web_scratch scratch;
     const ta_resolve_request *resolving;
     const ta_datamodel_start *start;
+    struct ta_web_host *making;
     uint32_t depth;
     uint32_t pad;
 } ta_web_env;

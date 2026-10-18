@@ -19,6 +19,8 @@ import { Address, addressText, isAddress } from './address.mjs';
 import * as cbor from './cbor.mjs';
 import { bytesOf, countOf, inputOptions, onlyKnown, optionalText, sessionOf, textOf } from './checks.mjs';
 import { TinyactorsError, coreError, refusal } from './errors.mjs';
+import { NativeDatamodel } from './datamodel.mjs';
+import { policyRefusal } from './realms.mjs';
 import { instance } from './state.mjs';
 
 // ---- core's constants (tinyactors/host.h, system.h) ---------------------------------
@@ -43,7 +45,7 @@ const MIGRATE_WAKE = 1;
 const NEXT = { YIELD: 0, IDLE: 1, EXHAUSTED: 2, FAULT: 3, REFUSED: 4 };
 const OUTPUT = { METRICS: 1, BLOB: 2, SNAPSHOT: 3, CONFIG: 4, TRACES: 5, LOGS: 6 };
 const TAKE_REFUSED = 0xFFFFFFFF;
-const DATAMODEL_NONE = 0;
+const DATAMODEL_NATIVE = 1;
 const EVENT_WORDS = 19;
 const SLICE = 256;
 const CONFIG_ERROR = 8192;
@@ -143,6 +145,7 @@ class HostState {
     this.simulated = null; // a SimulatedClock's state
     this.processors = 0;
     this.datamodelName = 'native';
+    this.native = null; // the native datamodel (datamodel.mjs)
     this.effective = null;
     this.taken = null;
     this.endings = null;
@@ -239,7 +242,8 @@ class HostState {
     return which === 0 ? performance.now() * 1e6 : Date.now() * 1e6;
   }
 
-  datamodel() { return TA_ERROR_UNSUPPORTED; } // the native datamodel's entries: p5-datamodel
+  // The native datamodel's entries (wasm/src/datamodel.c, datamodel.mjs).
+  datamodel(entry, slot) { return this.native === null ? TA_ERROR_UNSUPPORTED : this.native.entry(entry, slot); }
 
   // ---- effect fields ----
 
@@ -254,16 +258,15 @@ class HostState {
 
   acks() { return this.fn.ta_web_host_acks(this.pointer); }
 
-  // The data of effect `index`: its payload's value, the application's
-  // (the native datamodel's payloads are p5-datamodel's; this host makes
-  // none, so there is no value).
+  // The data of effect `index`: its payload's value, copied into the
+  // application's realm.
   data(index) {
     const payload = this.number(index, FIELD.PAYLOAD);
     if (payload === 0n || this.word(index, FIELD.DATAMODEL) === NIL) return undefined;
     return this.exported(payload);
   }
 
-  exported() { return undefined; }
+  exported(payload) { return this.native === null ? undefined : this.native.exported(payload); }
 
   // The payload a value is for the target's datamodel: 0n for none
   // (undefined), a TypeError for a chart whose datamodel takes no data.
@@ -277,9 +280,7 @@ class HostState {
     const takes = this.fn.ta_web_host_takes_data(this.pointer);
     if (takes === TA_ERROR_STALE) throw refusal('TA_ERROR_STALE', 'no live session takes this data');
     if (takes !== 1) throw new TypeError('the chart\'s datamodel takes no data');
-    // a chart on "ecmascript" in a host with no ecmascript datamodel: the
-    // image was refused, so no session or chart of it is here
-    throw refusal('TA_ERROR_UNSUPPORTED', 'the native "ecmascript" datamodel is not in @tinyactors/wasm yet');
+    return this.native.payload(value);
   }
 
   release(payload) {
@@ -436,7 +437,11 @@ class HostState {
     this.open = false;
     unclosed.unregister(this);
     this.module.unregister(this.id);
-    if (!this.module.poisoned) this.module.call('ta_web_host_free', pointer);
+    try {
+      if (!this.module.poisoned) this.module.call('ta_web_host_free', pointer);
+    } finally {
+      this.native?.free(); // its realm: a page's iframe is removed
+    }
   }
 
   // ---- dispatch ----
@@ -1351,7 +1356,7 @@ function makeHost(state, config, pack) {
     const room = module.room(scratch, CONFIG_ERROR);
     let packed = [0, 0];
     if (pack !== null) packed = module.copyIn(scratch, pack); // 8-aligned, as a pack's parts need
-    module.words().set([at, length, state.id, DATAMODEL_NONE, room, CONFIG_ERROR, packed[0], packed[1]], module.record);
+    module.words().set([at, length, state.id, DATAMODEL_NATIVE, room, CONFIG_ERROR, packed[0], packed[1]], module.record);
     const pointer = module.call(pack === null ? 'ta_web_host_new' : 'ta_web_host_restore', module.env) >>> 0;
     const w = module.words().slice(module.record, module.record + 9);
     const status = w[0] | 0;
@@ -1387,8 +1392,7 @@ function makeHost(state, config, pack) {
 const STATE_KEYS = ['native', 'quickjs'];
 
 // The datamodel's state back: {"native": ...}, the key the host's
-// datamodel. The native datamodel's state is p5-datamodel's: a host here
-// has none, so its state is an empty map.
+// datamodel, its tables' namespaces and rows (datamodel.mjs, restore).
 function restoreDatamodel(state, datamodels) {
   if (datamodels === null || typeof datamodels !== 'object' || Array.isArray(datamodels) || Object.keys(datamodels).length !== 1) {
     throw refusal('TA_ERROR_INVALID', 'not a snapshot of a Host');
@@ -1399,10 +1403,7 @@ function restoreDatamodel(state, datamodels) {
       ? 'the snapshot is of a host on quickjs: restore it with datamodel "quickjs"'
       : 'the snapshot is of a host on the native datamodel: restore it with datamodel "native"');
   }
-  const native = datamodels[key];
-  if (native === null || typeof native !== 'object' || Object.keys(native).length !== 0) {
-    throw refusal('TA_ERROR_INVALID', 'the snapshot holds native datamodel state, which @tinyactors/wasm does not have yet');
-  }
+  state.native.restore(datamodels[key]);
 }
 
 let checked;
@@ -1438,6 +1439,8 @@ export class Host {
       checkQuickjs(options.quickjs);
       throw refusal('TA_ERROR_UNSUPPORTED', 'the quickjs datamodel is not in @tinyactors/wasm yet');
     }
+    const policy = policyRefusal(); // the native datamodel evaluates chart text
+    if (policy !== null) throw refusal('TA_ERROR_UNSUPPORTED', policy);
     const clock = options?.clock;
     let clockState = null;
     if (clock !== undefined) {
@@ -1451,6 +1454,7 @@ export class Host {
     const state = new HostState(module, this);
     state.telemetry = options?.telemetry !== undefined;
     state.datamodelName = 'native';
+    state.native = new NativeDatamodel(state);
     state.id = module.register(state);
     let made;
     try {
@@ -1567,10 +1571,12 @@ export class Host {
       module.setWord(0, at);
       module.setWord(1, length);
       const status = state.fn.ta_web_host_add_image(state.pointer);
-      if (status === TA_ERROR_UNSUPPORTED) {
-        throw refusal('TA_ERROR_UNSUPPORTED', 'the image was refused: a chart\'s datamodel is not in this host (the native "ecmascript" datamodel is not in @tinyactors/wasm yet)');
+      const why = state.native?.attachError;
+      if (state.native !== null) state.native.attachError = null;
+      if (status === TA_ERROR_UNSUPPORTED && why == null) {
+        throw refusal('TA_ERROR_UNSUPPORTED', 'the image was refused: a chart\'s datamodel is not in this host');
       }
-      if (status !== TA_OK) throw refusal(module.statusName(status), 'the image was refused');
+      if (status !== TA_OK) throw refusal(module.statusName(status), why == null ? 'the image was refused' : `the image was refused: ${why}`);
       return module.word(1);
     });
   }
@@ -1838,7 +1844,7 @@ export class Host {
         throw refusal(module.statusName(ready), 'a snapshot needs a quiescent host (TA_ERROR_STATE: from a handler, with an effect or a reply pending, or during a migration)');
       }
       state.advance(); // the snapshot's time is now, not the last turn's
-      const [stateAt, stateLength] = cbor.write(module, state.scratch, { [state.datamodelName]: {} });
+      const [stateAt, stateLength] = cbor.write(module, state.scratch, { [state.datamodelName]: state.native.snapshot() });
       const [labelAt, labelLength] = module.text(state.scratch, LABEL);
       module.words().set([labelAt, labelLength, stateAt, stateLength], module.record);
       state.taken = null;
