@@ -29,20 +29,10 @@ export const DIFFERENCES = [
   },
   { path: 'objects.snapshot', reason: 'snapshot(): a Buffer, or a Uint8Array (as objects.image)' },
   { path: 'objects.metrics', reason: 'metrics(): a Buffer, or a Uint8Array (as objects.image)' },
-  {
-    path: 'refusals.new Host with datamodel quickjs',
-    reason: '@tinyactors/wasm has no quickjs until p5-quickjs: a host on it is refused at creation with TA_ERROR_UNSUPPORTED',
-  },
 ];
 
 // What index.d.ts declares that a package does not have, or the reverse.
-export const DECLARED = [
-  {
-    path: 'exports.Host.quickjsHeapBytes',
-    reason: 'declared as planned, reading undefined on every host (index.d.ts says so): no package defines it yet ' +
-      '(docs/log.xml, l-p0-map-quickjs-heap)',
-  },
-];
+export const DECLARED = [];
 
 const pattern = (path) => new RegExp(`^${path.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
 

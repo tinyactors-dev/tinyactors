@@ -31,7 +31,21 @@ module WebModule
   # The build with the stack probe (TA_WEB_STACK_PROBE), for `mise run
   # wasm:stack` only.
   PROBE = BUILD.join('tinyactors.probe.wasm')
-  CORE_SOURCES = %w[tinyactors.c tinyactors_runtime.c tinyactors_runtime_wasm.c].freeze
+  # Core's sources: the host and the layers below it, the compiler, and
+  # the ECMAScript datamodel on quickjs-ng with its wasm platform file
+  # (ta_wasm_alloc over wasi-libc's malloc, which quickjs allocates from
+  # too, and the WASI functions wasi-libc calls defined inside the module,
+  # its clock the time ta_datamodel_ecmascript_wasm_set_time last set). That
+  # file stands in for tinyactors_runtime_wasm.c, whose ta_wasm_alloc and
+  # ta_wasm_free are the same functions: the module links one of the two
+  # (docs/log.xml, l-p5-quickjs-module). Each with the flags core's
+  # amalgamate task compiles it with (NodeAPI::CORE_SOURCES).
+  CORE_SOURCES = {
+    'tinyactors.c' => %w[-std=c11],
+    'tinyactors_runtime.c' => %w[-std=c11],
+    'tinyactors_datamodel_ecmascript.c' => NodeAPI::CORE_SOURCES.fetch('tinyactors_datamodel_ecmascript.c'),
+    'tinyactors_datamodel_ecmascript_wasm.c' => %w[-std=c11]
+  }.freeze
   # The shadow stack (wasm-ld's -z stack-size): measured with `mise run
   # wasm:stack` (docs/browser.md, "Exceptions, ..."): five times the deepest,
   # rounded up to a page, measured at -Oz (docs/log.xml, l-p5-pack-oz; the
@@ -42,8 +56,7 @@ module WebModule
   # l-p5-pack-oz).
   OPTIMIZE = '-Oz'
   # The C layer's own flags: warnings are errors.
-  LAYER_FLAGS = ['-std=c11', '-Wall', '-Wextra', '-Werror', OPTIMIZE].freeze
-  CORE_FLAGS = ['-std=c11', OPTIMIZE].freeze
+  LAYER_FLAGS = ['-std=c11', '-Wall', '-Wextra', '-Werror', OPTIMIZE, "-DTA_WEB_STACK_SIZE=#{STACK_SIZE}"].freeze
   TXML_FLAGS = ['-std=c11', '-w', OPTIMIZE].freeze
   # What the module may import: the layer's imports (wasm/src/web.h).
   IMPORTS = %w[ta_web.clock ta_web.datamodel ta_web.effect ta_web.output ta_web.resolve].freeze
@@ -82,9 +95,9 @@ module WebModule
 
   def objects(probe: false)
     core_headers = NodeAPI::CORE_BUILD.glob('*.h')
-    core = CORE_SOURCES.map do |name|
+    core = CORE_SOURCES.map do |name, flags|
       compile(NodeAPI::CORE_BUILD.join(name), BUILD.join('objects/core', name.sub(/\.c\z/, '.o')),
-              flags: [*CORE_FLAGS, '-g0', "-I#{NodeAPI::CORE_BUILD}"], inputs: core_headers)
+              flags: [*flags, OPTIMIZE, '-g0', "-I#{NodeAPI::CORE_BUILD}"], inputs: core_headers)
     end
     txml = compile(NodeAPI::TXML.join('txml.c'), BUILD.join('objects/txml/txml.o'),
                    flags: [*TXML_FLAGS, '-g0', "-I#{NodeAPI::TXML}"], inputs: [NodeAPI::TXML.join('txml.h')])

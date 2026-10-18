@@ -7,8 +7,8 @@
 //
 // Through the init entry first: a call before init() settles throws
 // TA_ERROR_STATE, then init() loads the module beside the package's files.
-// Then through each entry: a counter on the native datamodel, three events,
-// its count from its log line, a typed method's promise (the convenience
+// Then through each entry: a counter on each datamodel (native, and
+// quickjs in the same module), three events, its count from its log line, a typed method's promise (the convenience
 // layer), and a value through the codec. Answers the failures, an array of
 // strings.
 
@@ -20,9 +20,9 @@ const COUNTER = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" da
   </state>
 </scxml>`;
 
-async function count({ compileCharts, Host }) {
+async function count({ compileCharts, Host }, datamodel) {
   const lines = [];
-  const host = new Host({ systemID: 'smoke' }, { log: (h, entry) => lines.push(entry.text) });
+  const host = new Host({ systemID: 'smoke' }, { datamodel, log: (h, entry) => lines.push(entry.text) });
   try {
     const compiled = compileCharts([{ name: 'counter.scxml', text: COUNTER }]);
     try {
@@ -45,8 +45,10 @@ async function count({ compileCharts, Host }) {
 const bytes = (k, v) => (v instanceof Uint8Array ? [...v] : v);
 
 async function entry(api, name, failures) {
-  const lines = await count(api);
-  if (lines.length !== 1 || lines[0] !== '3') failures.push(`${name}: the counter logged ${JSON.stringify(lines)}, not 3`);
+  for (const datamodel of ['native', 'quickjs']) {
+    const lines = await count(api, datamodel);
+    if (lines.length !== 1 || lines[0] !== '3') failures.push(`${name}, ${datamodel}: the counter logged ${JSON.stringify(lines)}, not 3`);
+  }
   const value = { n: [1, 2.5, 'x', null, true, new Uint8Array([0])] };
   const back = api.decode(api.encode(value));
   if (!(back.n[5] instanceof Uint8Array) || JSON.stringify(back, bytes) !== JSON.stringify(value, bytes)) {

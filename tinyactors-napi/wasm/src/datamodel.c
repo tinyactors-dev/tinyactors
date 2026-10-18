@@ -640,13 +640,16 @@ const ta_datamodel_vtable *ta_web_native_vtable(void) { return &ta_web_native; }
 
 /* A payload JavaScript holds a reference on (a record that outlives the
  * ack keeps the send's data): one more reference, or one less (the row
- * and the value go at 0). */
+ * and the value go at 0). On quickjs a drop is its release, of a payload
+ * JavaScript made and core refused. */
 TA_WEB_EXPORT void ta_web_payload_retain(ta_web_host *host, uint32_t low, uint32_t high) {
     ta_web_retain(host, (uint64_t)low | (uint64_t)high << 32);
 }
 
 TA_WEB_EXPORT void ta_web_payload_drop(ta_web_host *host, uint32_t low, uint32_t high) {
-    ta_web_payload_release(host, (uint64_t)low | (uint64_t)high << 32);
+    ta_payload payload = (uint64_t)low | (uint64_t)high << 32;
+    if (host->quickjs != NULL) host->binding.vtable->release(host->binding.datamodel, payload); /* quickjs's own */
+    else ta_web_payload_release(host, payload);
 }
 
 /* ---- snapshots of the native datamodel: its tables' namespaces and rows ------------------------ */

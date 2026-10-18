@@ -148,9 +148,9 @@ device, 2000 devices, from `hostStatsAsync` and the process:
 The region is what `hostStatsAsync` counts (`regionBytes` of a host sized
 for the devices, less one sized for one actor; `slabBytes.used`), and it
 is the same for both datamodels: the rule's state and strings in core.
-The engine's own heap is not in the counters (`host.quickjsHeapBytes` is
-declared but not built), so resident is the process's growth, which
-varies between runs. A rule whose script declares a name gets an engine
+The engine's own heap is not in core's counters (`host.quickjsHeapBytes`
+reads it), so resident is the process's growth, which varies between
+runs. A rule whose script declares a name gets an engine
 context per device: 62 KB on quickjs, so a rule with that one `var` over
 130 devices fills an 8 MB `memoryLimit` by itself. The platform's limit
 is per rule, so it is the customer's rule that fails, but the customer

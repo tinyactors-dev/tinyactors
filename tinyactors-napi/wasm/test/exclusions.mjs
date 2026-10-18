@@ -3,7 +3,6 @@
 // what a case needs that the wasm package or the runtime does not have.
 export const REASONS = {
   memoryUsage: 'needs process.memoryUsage (the engine heap\'s size), which a page does not have',
-  quickjs: 'needs quickjs, which @tinyactors/wasm does not have yet (p5-quickjs)',
   fs: 'needs node:fs',
   childProcess: 'needs node:child_process',
   workerThreads: 'needs node:worker_threads',
@@ -13,10 +12,9 @@ export const REASONS = {
 // those runtimes only ('node', 'bun', 'browser'); '*' for every case of
 // the file.
 //
-// The test task runs each file once against @tinyactors/wasm, on the
-// native datamodel: the quickjs pass every file makes against
-// @tinyactors/node is not made (p5-quickjs), and a case below that names
-// quickjs is one the native pass makes with a quickjs host of its own.
+// The test task runs each file against @tinyactors/wasm on both
+// datamodels, native and quickjs, as against @tinyactors/node; an entry
+// excludes the case on both.
 export const EXCLUDED = {
   'address.test.mjs': {
   },
@@ -29,7 +27,6 @@ export const EXCLUDED = {
   'datamodel.test.mjs': {
   },
   'docs.test.mjs': {
-    "docs/guide/quickjs.md:19 runs as written": 'quickjs',
   },
   'effects.test.mjs': {
   },
@@ -39,9 +36,7 @@ export const EXCLUDED = {
     "native: a hibernated actor holds nothing in the engine; its values come back with the blob": ['memoryUsage', 'browser'],
   },
   'host.test.mjs': {
-    "a host that names no datamodel gets the native one": 'quickjs',
-    "one 2 MB send leaves the host arena under its cap": 'quickjs',
-    "options are checked": 'quickjs',
+    "one 2 MB send leaves the host arena under its cap": ['memoryUsage', 'browser'],
   },
   'liveness.test.mjs': {
     "a process with only an open host exits": ['childProcess', 'browser'],
@@ -75,7 +70,6 @@ export const EXCLUDED = {
     "directoryResolver: text is UTF-8 or refused; other errors of the file system pass; the root must exist": ['fs', 'browser'],
   },
   'snapshot.test.mjs': {
-    "restore refuses another system's config, another datamodel, another program's pack": 'quickjs',
   },
   'telemetry.test.mjs': {
   },

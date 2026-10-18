@@ -921,6 +921,18 @@ static napi_value ta_napi_host_ticks(napi_env env, napi_callback_info info) {
     return result;
 }
 
+/* host.quickjsHeapBytes: the bytes the quickjs engine has allocated
+ * (ta_datamodel_ecmascript_heap_bytes, O(1)); undefined on a native host
+ * and on a closed one. */
+static napi_value ta_napi_host_quickjs_heap(napi_env env, napi_callback_info info) {
+    ta_napi_host *host = ta_napi_host_of(env, &(ta_napi_host_check){ta_napi_this(env, info), false});
+    napi_value result = NULL;
+    if (host == NULL) return NULL;
+    if (host->quickjs == NULL || host->host == NULL) napi_get_undefined(env, &result);
+    else napi_create_double(env, (double)ta_datamodel_ecmascript_heap_bytes(host->quickjs), &result);
+    return result;
+}
+
 /* ---- payloads: a value for a session's datamodel ----------------------------------- */
 
 /* The datamodel name of a chart in the host: its image's. */
@@ -1724,6 +1736,7 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"closed", NULL, NULL, ta_napi_host_closed, NULL, NULL, napi_configurable, NULL},
         {"ticksPerSecond", NULL, NULL, ta_napi_host_ticks, NULL, NULL, napi_configurable, NULL},
         {"nextDeadline", NULL, NULL, ta_napi_host_next_deadline, NULL, NULL, napi_configurable, NULL},
+        {"quickjsHeapBytes", NULL, NULL, ta_napi_host_quickjs_heap, NULL, NULL, napi_configurable, NULL},
         {"now", NULL, ta_napi_host_now, NULL, NULL, NULL, napi_default_method, NULL},
         {"idle", NULL, ta_napi_host_idle, NULL, NULL, NULL, napi_default_method, NULL},
         {"addImage", NULL, ta_napi_host_add_image, NULL, NULL, NULL, napi_default_method, NULL},

@@ -2,11 +2,14 @@
 // Chromium (docs/plan.xml, p5-api; docs/browser.md, "One API"): each file
 // in a page of its own, whose import map resolves `@tinyactors/node` to the
 // wasm package and the `node:` built-ins to stubs (wasm/test/serve.mjs),
-// with the cases wasm/test/exclusions.mjs lists for the browser skipped.
+// with the cases wasm/test/exclusions.mjs lists for the browser skipped,
+// once on each datamodel (native, quickjs), as the test task runs them in
+// node and bun.
 // Each line a page prints is printed here; a file that fails, or does not
 // finish within its time, fails the run. `node wasm/test/chromium.mjs
 // [file...]` runs the files named (test/<file>), all of them by default;
-// `--run-excluded` runs the excluded cases too and reports those that pass.
+// `--datamodel=<name>` on that datamodel only; `--run-excluded` runs the
+// excluded cases too and reports those that pass.
 import { readdirSync } from 'node:fs';
 import { fileExcluded } from './exclusions.mjs';
 import { REPOSITORY, launch, napi, playwright, serve, testPage } from './serve.mjs';
@@ -14,6 +17,8 @@ import { REPOSITORY, launch, napi, playwright, serve, testPage } from './serve.m
 const args = process.argv.slice(2);
 const runExcluded = args.includes('--run-excluded');
 const named = args.filter((arg) => !arg.startsWith('--'));
+const chosen = args.find((arg) => arg.startsWith('--datamodel='))?.slice('--datamodel='.length);
+const datamodels = chosen !== undefined ? [chosen] : ['native', 'quickjs'];
 const files = named.length > 0 ? named : readdirSync(new URL('../../test/', import.meta.url)).filter((name) => name.endsWith('.test.mjs')).sort();
 const LIMIT = 240_000; // ms a file may take
 
@@ -23,13 +28,14 @@ if (pw === null) {
   process.exit(0);
 }
 
-const pages = new Map(files.map((file) => [napi(`test/${file}.html`), testPage(file, { runExcluded })]));
+const pathOf = (file, datamodel) => napi(`test/${file}.${datamodel}.html`);
+const pages = new Map(files.flatMap((file) => datamodels.map((datamodel) => [pathOf(file, datamodel), testPage(file, { datamodel, runExcluded })])));
 const server = await serve(pages);
 const browser = await launch(pw);
 let failedFiles = 0;
 const totals = { ok: 0, skip: 0, fail: 0, files: 0 };
 try {
-  for (const file of files) {
+  for (const [datamodel, file] of datamodels.flatMap((datamodel) => files.map((file) => [datamodel, file]))) {
     const whole = fileExcluded(file, 'browser');
     if (whole !== undefined) {
       totals.files++;
@@ -52,8 +58,8 @@ try {
       console.log(text);
     });
     page.on('pageerror', (error) => console.log(`pageerror ${String(error?.stack ?? error)}`));
-    console.log(`chromium: ${file}`);
-    await page.goto(`http://127.0.0.1:${server.address().port}${napi(`test/${file}.html`)}`);
+    console.log(`chromium: ${datamodel} ${file}`);
+    await page.goto(`http://127.0.0.1:${server.address().port}${pathOf(file, datamodel)}`);
     let timer;
     const outcome = await Promise.race([done, new Promise((resolve) => {
       timer = setTimeout(() => resolve('timeout'), LIMIT);
@@ -66,7 +72,7 @@ try {
     // a page whose run() resolves calls done once per run (a file's cases
     // may run once per datamodel); the first call says whether it failed
     if (failures) failedFiles++;
-    console.log(`chromium: ${file}: ${failures ? 'failed' : 'passed'} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+    console.log(`chromium: ${datamodel} ${file}: ${failures ? 'failed' : 'passed'} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
     await context.close();
   }
 } finally {
@@ -74,5 +80,5 @@ try {
   server.closeAllConnections();
   server.close();
 }
-console.log(`chromium: ${files.length} files (${totals.files} excluded whole), ${totals.ok} cases passed, ${totals.skip} excluded, ${totals.fail} failed; repository ${REPOSITORY}`);
+console.log(`chromium: ${files.length} files on ${datamodels.join(' and ')} (${totals.files} runs excluded whole), ${totals.ok} cases passed, ${totals.skip} excluded, ${totals.fail} failed; repository ${REPOSITORY}`);
 if (failedFiles) process.exit(1);

@@ -683,8 +683,9 @@ export interface HostOptions {
   services?: { [type: string]: (host: Host, invocation: Invocation) => Service | void | PromiseLike<Service | void> };
   /** Where chart code runs: `'native'` (the default), your own engine
    * (`node:vm` contexts in @tinyactors/node), for trusted charts; or
-   * `'quickjs'`, the sandbox, for charts you do not trust (not yet in
-   * @tinyactors/wasm, which refuses it with `TA_ERROR_UNSUPPORTED`). */
+   * `'quickjs'`, the sandbox, for charts you do not trust (in
+   * @tinyactors/wasm the datamodel for a page whose policy forbids
+   * `'unsafe-eval'`). */
   datamodel?: 'native' | 'quickjs';
   /** The sandbox's limits, with `datamodel: 'quickjs'` only (else a
    * `TypeError`). */
@@ -996,8 +997,9 @@ export class Host implements Disposable, AsyncDisposable {
    * staged); `undefined` for none. An input given since that turn has not
    * run yet, so its deadlines are not in it. */
   readonly nextDeadline: number | undefined;
-  /** Not built yet: reads `undefined` on every host. Planned: the quickjs
-   * engine's heap in bytes. */
+  /** The quickjs engine's heap in bytes, every actor's together, read on
+   * each access (cheap): what `quickjs.memoryLimit` bounds. `undefined` on
+   * a native host and once closed. */
   readonly quickjsHeapBytes: number | undefined;
 
   /** Loads a compiled image, which it copies, and returns its segment, a

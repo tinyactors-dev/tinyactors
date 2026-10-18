@@ -82,6 +82,8 @@ static void ta_web_host_release(ta_web_host *host) {
     ta_web_xml_end(host);
     if (host->host != NULL) ta_host_free(host->host);
     host->host = NULL;
+    if (host->quickjs != NULL) ta_datamodel_ecmascript_free(host->quickjs); /* after the host that used it */
+    host->quickjs = NULL;
     ta_table_free(&host->payloads);
     ta_table_free(&host->sessions);
     ta_table_free(&host->charts);
@@ -102,7 +104,42 @@ typedef struct ta_web_making {
     ta_buffer error;
     ta_bytes pack;
     uint64_t nonce; /* ta_host_environment's: JavaScript's random bits (a restore ignores it) */
+    ta_datamodel_ecmascript_config quickjs; /* the sandbox's limits, with TA_WEB_DATAMODEL_QUICKJS */
 } ta_web_making;
+
+/* A byte count of two words as a size_t: a count past wasm32's 4 GiB is
+ * no limit the module can reach, so it is the largest one. */
+static size_t ta_web_size_at(const uint32_t *word, uint32_t at) {
+    uint64_t n = ta_web_word64(word, at);
+    return n > SIZE_MAX ? SIZE_MAX : (size_t)n;
+}
+
+/* The most of the module's shadow stack (TA_WEB_STACK_SIZE, wasm-ld's -z
+ * stack-size, mise/wasm.rb) quickjs may use: what the host's own frames
+ * leave, 128 KiB kept for them (the deepest measured is 65,768 B,
+ * docs/log.xml l-p5-pack-oz). quickjs bounds its recursion by its stack
+ * limit below the stack pointer where an evaluation starts, and takes no
+ * limit at all when that would pass the stack's bottom (quickjs.c,
+ * update_stack_limit), so its default of 1 MiB would let a deep recursion
+ * run off the stack and trap. A stackLimit of 0 or above this is this
+ * (docs/log.xml, l-p5-quickjs-stack). */
+#define TA_WEB_QUICKJS_STACK ((size_t)TA_WEB_STACK_SIZE - (size_t)128 * 1024)
+
+/* The quickjs option from the record: 10 maxOps, 11-12 memoryLimit, 13-14
+ * stackLimit, 15 realm (TA_DATAMODEL_ECMASCRIPT_REALM_*), each 0 for
+ * core's default (JavaScript checked them as the addon does), the stack's
+ * at most TA_WEB_QUICKJS_STACK. */
+static ta_datamodel_ecmascript_config ta_web_quickjs_config(const uint32_t *word) {
+    ta_datamodel_ecmascript_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.max_ops = word[10];
+    config.memory_limit = ta_web_size_at(word, 11);
+    config.stack_limit = ta_web_size_at(word, 13);
+    if (config.stack_limit == 0 || config.stack_limit > TA_WEB_QUICKJS_STACK) config.stack_limit = TA_WEB_QUICKJS_STACK;
+    config.realm = word[15];
+    return config;
+}
 
 /* The label of the datamodel state the layer packs: the package's own. A
  * snapshot is the host's memory, laid out for the build that made it
@@ -168,13 +205,26 @@ static ta_web_host *ta_web_host_make(ta_web_env *env, const ta_web_making *makin
     memset(host, 0, sizeof *host);
     host->env = env;
     host->id = making->id;
-    host->datamodel = making->datamodel == TA_WEB_DATAMODEL_NATIVE ? TA_WEB_DATAMODEL_NATIVE : TA_WEB_DATAMODEL_NONE;
+    host->datamodel = making->datamodel == TA_WEB_DATAMODEL_NATIVE || making->datamodel == TA_WEB_DATAMODEL_QUICKJS
+                          ? making->datamodel
+                          : TA_WEB_DATAMODEL_NONE;
     host->deadline = UINT64_MAX;
     ta_web_scratch_init(&host->scratch, &(ta_web_scratch_config){&env->allocator, TA_WEB_HOST_ARENA_CAP});
     ta_growable_arena_init(&host->xml, &(ta_growable_arena_config){sizeof(ta_growable_arena_config), 0, 0, &env->allocator});
     ta_web_tables_init(host);
     host->binding = (ta_datamodel_binding){ta_web_native_vtable(), host};
-    ta_host_environment environment = {sizeof environment, host->datamodel == TA_WEB_DATAMODEL_NATIVE ? 1u : 0u,
+    if (host->datamodel == TA_WEB_DATAMODEL_QUICKJS) {
+        host->quickjs = ta_datamodel_ecmascript_new(&making->quickjs);
+        if (host->quickjs == NULL) {
+            record->word[0] = (uint32_t)TA_ERROR_NO_MEMORY;
+            ta_web_host_release(host);
+            env->allocator.free(env->allocator.context, host, sizeof *host);
+            return NULL;
+        }
+        host->binding = ta_datamodel_ecmascript_binding(host->quickjs);
+        ta_web_quickjs_time(host);
+    }
+    ta_host_environment environment = {sizeof environment, host->datamodel != TA_WEB_DATAMODEL_NONE ? 1u : 0u,
                                        &host->binding, env->allocator, NULL, error.pointer != NULL ? &error : NULL,
                                        making->nonce};
     ta_web_enter(host);
@@ -206,18 +256,19 @@ static ta_web_host *ta_web_host_make(ta_web_env *env, const ta_web_making *makin
 /* A new host. Record: words 0-1 the config's CBOR, 2 JavaScript's id for
  * it, 3 its datamodel (TA_WEB_DATAMODEL_*), 4-5 room for the refused
  * config's error (a pointer and a capacity; 0 for none), 6-7 random bits
- * for the host's identity (ta_host_environment.nonce). Answers the host,
+ * for the host's identity (ta_host_environment.nonce), 10-15 the quickjs
+ * option with TA_WEB_DATAMODEL_QUICKJS (ta_web_quickjs_config). Answers the host,
  * or 0; the record's word 0 is the status, word 1 the length of the error
  * written into the room (or the room it needs, beyond its capacity). */
 TA_WEB_EXPORT ta_web_host *ta_web_host_new(ta_web_env *env) {
     const uint32_t *word = env->record.word;
     ta_web_making making = {ta_web_bytes_at(word, 0), word[2], word[3], {(unsigned char *)(uintptr_t)word[4], word[5], 0}, {NULL, 0},
-                            ta_web_word64(word, 6)};
+                            ta_web_word64(word, 6), ta_web_quickjs_config(word)};
     return ta_web_host_make(env, &making);
 }
 
 /* Host.restore: a new host running a pack of ta_host_snapshot_pack.
- * Record: as ta_web_host_new's, and 6-7 the pack (8-aligned: JavaScript
+ * Record: as ta_web_host_new's (10-15 the quickjs option), and 6-7 the pack (8-aligned: JavaScript
  * copies it into the call's arena). Answers the host, or 0; the record:
  * 0 the status, 1 the error's length, 2 whether the pack is another
  * program's, 3-4 the host's time when it was packed, 5-6 its system id,
@@ -225,7 +276,7 @@ TA_WEB_EXPORT ta_web_host *ta_web_host_new(ta_web_env *env) {
 TA_WEB_EXPORT ta_web_host *ta_web_host_restore(ta_web_env *env) {
     const uint32_t *word = env->record.word;
     ta_web_making making = {ta_web_bytes_at(word, 0), word[2], word[3], {(unsigned char *)(uintptr_t)word[4], word[5], 0},
-                            ta_web_bytes_at(word, 6), 0};
+                            ta_web_bytes_at(word, 6), 0, ta_web_quickjs_config(word)};
     if (making.pack.pointer == NULL) making.pack.pointer = (const unsigned char *)""; /* an empty pack: core refuses it */
     return ta_web_host_make(env, &making);
 }

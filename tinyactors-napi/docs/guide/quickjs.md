@@ -120,6 +120,6 @@ SCXML. Around the edges:
   cost less on quickjs, and an idle actor takes less memory
   ([Capacity and memory](capacity.md)).
 
-`host.quickjsHeapBytes`, the engine's heap for an operator watching it
-against `memoryLimit`, is declared but not built yet: it reads
-`undefined` on every host.
+`host.quickjsHeapBytes` is the engine's heap in bytes, every actor's
+together, for an operator watching it against `memoryLimit`; it is
+`undefined` on a native host and once the host is closed.

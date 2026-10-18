@@ -158,6 +158,7 @@ spike builds with the same zig (`tools/spikes/browser/`, commands in
 | txml (`tinyxml/include/txml.c`), `-O2` / `-Oz` | | 119,685 / 77,004 | 39,505 / 29,207 | 31,502 / 24,989 |
 | built (p5-build): `wasm/tinyactors.wasm`, core, the compiler, txml and the `ta_web_*` layer, `-O2` | 1,489,057 | 587,632 | 207,009 | 164,838 |
 | built (the release, `mise run pack:wasm`, 2026-10-18): the same at `-Oz` | | 421,735 | 167,215 | 139,810 |
+| built (p5-quickjs, 2026-10-18): the same and quickjs, one module, `-Oz` | | 1,177,513 | 467,200 | 386,800 |
 
 - Exporting only what the layer calls saves little (139 KB against 145
   KB brotli): almost all of core is reachable from the host.
@@ -798,7 +799,11 @@ plan.xml's p5-build to p5-quickjs, refined from this document:
 - **p5-pack:** `@tinyactors/wasm` packed with both entries, `-Oz` and the
   floor measured, smoke-tested from a fresh project in Chromium, node and
   bun and with a bundler.
-- **p5-quickjs:** quickjs as a second module, as planned.
+- **p5-quickjs:** quickjs as a second module, as planned. As built:
+  quickjs in the one module, since `new Host` is synchronous and a
+  second module would have to be loaded before it by every page anyway
+  (docs/log.xml, `l-p5-quickjs-module`); its stack bounded by the
+  module's (`l-p5-quickjs-stack`).
 
 ## Reproducing
 

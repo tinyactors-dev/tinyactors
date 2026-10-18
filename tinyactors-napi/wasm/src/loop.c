@@ -44,7 +44,12 @@ static ta_host_time ta_web_now(ta_web_host *host) {
     return (ta_host_time){ta_web_ticks(host, monotonic) + host->ticks_offset, wall};
 }
 
-static void ta_web_advance(ta_web_host *host) { ta_host_advance_time(host->host, ta_web_now(host)); }
+/* Both clocks, and quickjs's (its Date reads the real wall clock, which a
+ * wasm module has only when it is given). */
+static void ta_web_advance(ta_web_host *host) {
+    ta_host_advance_time(host->host, ta_web_now(host));
+    ta_web_quickjs_time(host);
+}
 
 /* Both clocks before an input that depends on them (spawn, a typed
  * method: a trace.watch ends at a time of the host's clock). */

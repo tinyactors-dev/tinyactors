@@ -2,8 +2,8 @@
 // `it` and `describe` as the example applications' tests use them
 // (examples/*/test.mjs): each case registered at the file's import and run
 // in order by run(), which the page calls; a case the page's exclusions
-// name (globalThis.__tinyactors_example.excluded, name -> reason), or one
-// named for quickjs, is skipped with its reason. Each case prints ok, skip
+// name (globalThis.__tinyactors_example.excluded, name -> reason) is
+// skipped with its reason. Each case prints ok, skip
 // or FAIL, as test/harness.mjs does.
 const cases = [];
 const prefix = [];
@@ -26,10 +26,10 @@ export function describe(name, body) {
 }
 
 /** Runs every case; answers the number that failed. */
-export async function run({ excluded = {}, quickjs }) {
+export async function run({ excluded = {} }) {
   let failures = 0;
   for (const { name, fn, skip } of cases) {
-    const reason = excluded[name] ?? (/^quickjs: /.test(name) ? quickjs : skip ? 'skipped by the file' : undefined);
+    const reason = excluded[name] ?? (skip ? 'skipped by the file' : undefined);
     if (reason !== undefined) {
       console.log(`skip ${name} (${reason})`);
       continue;

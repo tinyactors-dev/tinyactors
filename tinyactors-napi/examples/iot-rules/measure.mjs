@@ -64,8 +64,8 @@ export async function neighbourDelay(sandbox) {
  * host's counters: `devices` actors, one reading each. The region is
  * sized up front (`maxActors`), so its growth is the actors' own, not a
  * pool doubling. Also the process's resident growth, which includes the
- * engine's heap: hostStats does not count quickjs's (and
- * `host.quickjsHeapBytes` is not built yet). */
+ * engine's heap: hostStats does not count quickjs's
+ * (`host.quickjsHeapBytes` does). */
 export async function costPerDevice(datamodel, devices = 1000, { declaring = false } = {}) {
   const clock = new SimulatedClock();
   const ruleHost = (maxActors) => new Host({ systemID: 'cost', ioProcessors: [{ type: 'urn:iot:alert' }], system: { maxActors } }, {

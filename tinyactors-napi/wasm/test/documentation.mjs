@@ -19,7 +19,6 @@
 // Usage: node wasm/test/documentation.mjs [--blocks|--applications]
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { examples as readExamples, fileName } from '../../tools/examples.mjs';
-import { REASONS } from './exclusions.mjs';
 import { APPLICATIONS, BLOCKS, CASES, needs } from './documented.mjs';
 import { launch, napi, playwright, serve } from './serve.mjs';
 
@@ -200,7 +199,7 @@ async function runApplication(name) {
     await page.addInitScript(([example, files]) => {
       globalThis.__tinyactors_example = example;
       globalThis.__tinyactors_files = files;
-    }, [{ excluded: CASES[name], quickjs: REASONS.quickjs }, filesOf(name)]);
+    }, [{ excluded: CASES[name] }, filesOf(name)]);
     let done;
     const finished = new Promise((resolve) => { done = resolve; });
     page.on('console', (message) => {

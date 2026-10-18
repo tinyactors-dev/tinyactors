@@ -68,6 +68,27 @@ test('a host that names no datamodel gets the native one', async () => {
   equal(JSON.stringify(seen), JSON.stringify({ undefined: 'object', '[object Object]': 'object', native: 'object', quickjs: 'undefined' }), 'which datamodel ran');
 });
 
+test('quickjsHeapBytes is the quickjs engine\'s heap; undefined on a native host and once closed', async () => {
+  const chart = scxml('hog', `
+    <datamodel><data id="kept" expr="[]"/></datamodel>
+    <state id="s"><transition event="grow"><script>for (let i = 0; i &lt; 20000; i++) kept.push({ i })</script></transition></state>`);
+  const native = new Host(CONFIG, { datamodel: 'native' });
+  equal(native.quickjsHeapBytes, undefined, 'a native host');
+  native.close();
+  const host = new Host(CONFIG, QUICKJS);
+  host.addImage(image({ hog: chart }));
+  const session = host.spawn(host.chart('hog'));
+  await host.idle();
+  const before = host.quickjsHeapBytes;
+  if (!(typeof before === 'number' && before > 0)) throw new Error(`a quickjs host's heap reads ${before}`);
+  host.send(session, 'grow');
+  await host.idle();
+  const after = host.quickjsHeapBytes;
+  if (!(after > before + 20000 * 16)) throw new Error(`20,000 objects kept: the heap went from ${before} to ${after} bytes`);
+  host.close();
+  equal(host.quickjsHeapBytes, undefined, 'a closed host');
+});
+
 test('options are checked', () => {
   const typeError = (error) => {
     if (!(error instanceof TypeError)) throw error;
@@ -196,7 +217,11 @@ test('one 2 MB send leaves the host arena under its cap', async () => {
   // addon's blocks in a counter that stays (log entry
   // l-p1-host-node-external), so the test reads the resident set over 16
   // hosts: about 100 MB more without the cap, at most 21 MB with it
-  // (docs/allocation.md, finding 7).
+  // (docs/allocation.md, finding 7). The first host's large send is made
+  // before the reading: @tinyactors/wasm's linear memory grows once to the
+  // peak of one such send (30 to 40 MB with quickjs's copy of the value)
+  // and keeps it, reused by every later block, so the 15 hosts after it
+  // show what each keeps, in both packages.
   const big = Array.from({ length: 200_000 }, (_, i) => `item${i}`);
   const CHART = scxml('big', `
   <datamodel><data id="d" expr="0"/></datamodel>
@@ -211,18 +236,20 @@ test('one 2 MB send leaves the host arena under its cap', async () => {
     await host.idle();
     hosts.push({ host, session });
   }
-  await collect();
-  const before = process.memoryUsage.rss();
-  for (const { host, session } of hosts) {
+  const sendBig = async ({ host, session }) => {
     host.send(session, 'x', big);
     await host.idle();
     host.send(session, 'x', [1]); // _event lets the large value go
     await host.idle();
-  }
+  };
+  await sendBig(hosts[0]);
+  await collect();
+  const before = process.memoryUsage.rss();
+  for (const entry of hosts.slice(1)) await sendBig(entry);
   await collect();
   const grown = process.memoryUsage.rss() - before;
   for (const { host } of hosts) host.close();
-  if (grown > 50e6) throw new Error(`16 sends of 2 MB kept ${(grown / 1e6).toFixed(1)} MB resident`);
+  if (grown > 50e6) throw new Error(`15 sends of 2 MB after the first kept ${(grown / 1e6).toFixed(1)} MB resident`);
 });
 
 // ---- inputs ----------------------------------------------------------------

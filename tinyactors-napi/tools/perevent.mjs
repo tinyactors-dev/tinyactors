@@ -3,7 +3,8 @@
 // least time per event of the rounds, and a round of spawns and
 // terminations; with the memory it took beside it (resident and the
 // engine's heap per actor, and for @tinyactors/wasm its linear memory).
-// `node tools/perevent.mjs --chart null|fit [--actors N] [--rounds R]`;
+// `node tools/perevent.mjs --chart null|fit [--actors N] [--rounds R]
+// [--datamodel native|quickjs]` (the host's datamodel, for `fit`);
 // the package is the one `@tinyactors/node` resolves to (the export
 // condition `tinyactors-wasm` picks @tinyactors/wasm). `fit` is
 // tinyactors-cpython/tools/charts/fit.ecmascript.scxml (a cond and an
@@ -31,6 +32,7 @@ const option = (name, fallback) => {
 const N = Number(option('actors', 10000));
 const ROUNDS = Number(option('rounds', 30));
 const CHART_NAME = option('chart', 'null');
+const DATAMODEL = option('datamodel', 'native');
 const wasm = process.env.TA_NAPI_PACKAGE === 'wasm';
 
 const CHARTS = {
@@ -71,18 +73,19 @@ function heap() {
 }
 
 const gc = await collector();
-const host = new Host({ systemID: 'm', system: { maxActors: 2 * N + 16, maxEvents: N + 4096, tracing: false } }, { datamodel: 'native' });
+const host = new Host({ systemID: 'm', system: { maxActors: 2 * N + 16, maxEvents: N + 4096, tracing: false } }, { datamodel: DATAMODEL });
 const compiled = compileCharts([{ name: 'fit.scxml', text: await chartText() }]);
 host.addImage(compiled.image);
 compiled.close();
 const chart = host.chart('fit');
 gc();
-const before = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory() };
+const quickjsHeap = () => host.quickjsHeapBytes ?? 0;
+const before = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory(), quickjs: quickjsHeap() };
 const sessions = [];
 for (let i = 0; i < N; i++) sessions.push(host.spawn(chart));
 await host.idle();
 gc();
-const after = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory() };
+const after = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory(), quickjs: quickjsHeap() };
 let best = Infinity, bestSpawn = Infinity;
 for (let r = 0; r < ROUNDS; r++) {
   const t = performance.now();
@@ -98,7 +101,7 @@ for (let r = 0; r < ROUNDS; r++) {
   bestSpawn = Math.min(bestSpawn, ((performance.now() - t2) * 1000) / 2000);
 }
 gc();
-const resident = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory() };
+const resident = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory(), quickjs: quickjsHeap() };
 host.sweep(2 * N + 16, 2 * N + 16); // marks: every actor ran since the last sweep
 let blobBytes = 0, hibernated = 0;
 for (const session of host.sweep(2 * N + 16, 2 * N + 16)) {
@@ -108,7 +111,7 @@ for (const session of host.sweep(2 * N + 16, 2 * N + 16)) {
 gc();
 await new Promise((resolve) => setTimeout(resolve, 50));
 gc();
-const asleep = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory() };
+const asleep = { rss: process.memoryUsage().rss, heap: heap(), linear: await linearMemory(), quickjs: quickjsHeap() };
 host.close();
 const per = (key, at = after) => (at[key] - before[key]) / N;
 const os = process.getBuiltinModule('node:os');
@@ -117,7 +120,7 @@ console.log(JSON.stringify({
   machine: `${os.type()} ${os.release()} ${os.arch()}, ${cpus[0]?.model ?? 'cpu unknown'}, ${cpus.length} CPUs, ${Math.round(os.totalmem() / 2 ** 30)} GiB`,
   package: wasm ? '@tinyactors/wasm' : '@tinyactors/node',
   runtime: globalThis.Bun ? `bun ${globalThis.Bun.version}` : `node ${process.versions.node}`,
-  chart: CHART_NAME, actors: N, rounds: ROUNDS,
+  chart: CHART_NAME, datamodel: DATAMODEL, actors: N, rounds: ROUNDS,
   eventMicroseconds: Number(best.toFixed(3)), spawnTerminateMicroseconds: Number(bestSpawn.toFixed(3)),
   residentBytesPerActor: Math.round(per('rss')), heapBytesPerActor: Math.round(per('heap')),
   linearBytesPerActor: wasm ? Math.round(per('linear')) : undefined, linearMemoryBytes: wasm ? after.linear : undefined,
@@ -125,4 +128,6 @@ console.log(JSON.stringify({
   hibernated, blobBytesPerActor: Math.round(blobBytes / Math.max(hibernated, 1)),
   residentHibernatedBytesPerActor: Math.round(per('rss', asleep)), heapHibernatedBytesPerActor: Math.round(per('heap', asleep)),
   linearHibernatedBytes: wasm ? asleep.linear : undefined,
+  quickjsHeapBytesPerActor: DATAMODEL === 'quickjs' ? Math.round(per('quickjs')) : undefined,
+  quickjsHeapAfterEventsBytesPerActor: DATAMODEL === 'quickjs' ? Math.round(per('quickjs', resident)) : undefined,
 }));

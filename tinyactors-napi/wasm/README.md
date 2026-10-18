@@ -50,9 +50,9 @@ path.
   is 240 KiB packed and 690 KiB unpacked; the module, `tinyactors.wasm`
   (built for size, `-Oz`), is 412 KiB, 163 KiB with gzip and 137 KiB
   with brotli, as a server sends it.
-- **Not yet:** the quickjs datamodel, the sandbox for charts you do not
-  trust; every chart runs on the native ECMAScript datamodel, in a realm
-  of its own.
+- **quickjs:** `datamodel: 'quickjs'`, the sandbox for charts you do
+  not trust, is in the same module: a page whose policy forbids
+  `'unsafe-eval'` uses it.
 
 ## Documentation
 

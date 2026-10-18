@@ -32,7 +32,7 @@ hello from tinyactors://web/#_scxml_1
 - [Loading: top-level await, or init()](#loading-top-level-await-or-init)
 - [What a page needs: the floor and the CSP](#what-a-page-needs-the-floor-and-the-csp)
 - [Bytes are Uint8Arrays](#bytes-are-uint8arrays)
-- [No quickjs yet](#no-quickjs-yet)
+- [The quickjs sandbox](#the-quickjs-sandbox)
 - [Where charts run: declare your variables](#where-charts-run-declare-your-variables)
 - [A dedicated Worker](#a-dedicated-worker)
 - [The store: IndexedDB](#the-store-indexeddb)
@@ -102,8 +102,8 @@ Without `'unsafe-eval'`, under a `sandbox` policy without
 with `'unsafe-eval'`), `new Host(...)` throws `TinyactorsError` with
 `TA_ERROR_UNSUPPORTED`, its message naming the directive, and
 `compileCharts` skips its check of the charts' JavaScript syntax (it
-parses with the same constructor). The quickjs sandbox will be the
-datamodel for such a page ([No quickjs yet](#no-quickjs-yet)).
+parses with the same constructor). The quickjs sandbox is the datamodel
+for such a page ([The quickjs sandbox](#the-quickjs-sandbox)).
 
 ## Bytes are Uint8Arrays
 
@@ -130,29 +130,36 @@ tea omNza3VjdGVhY3F0eQI=
 
 `index.d.ts`, which both packages share, says `Uint8Array` everywhere.
 
-## No quickjs yet
+## The quickjs sandbox
 
-`@tinyactors/wasm` has only the native datamodel for now: a host on
-quickjs, the sandbox for charts you do not trust, is refused at its
-creation. It will come as a second module, which a page that does not ask
-for it does not download.
+`datamodel: 'quickjs'` works as it does in `@tinyactors/node`: the charts
+run on quickjs-ng, inside the package's module, with the same limits,
+realms, hibernation, migration and snapshots
+([the quickjs sandbox](quickjs.md)). It evaluates no chart text with
+your engine, so it needs only `'wasm-unsafe-eval'`: it is the datamodel
+for a page whose policy forbids `'unsafe-eval'`, and for charts you do
+not trust.
 
 ```js
 import { Host } from '@tinyactors/wasm';
 
-try {
-  new Host({ systemID: 'rules' }, { datamodel: 'quickjs' });
-} catch (error) {
-  console.log(error.status);
-}
+const host = new Host({ systemID: 'rules' }, { datamodel: 'quickjs', quickjs: { maxOps: 10000 } });
+console.log(host.quickjsHeapBytes > 0);
+host.close();
 ```
 
 ```output
-TA_ERROR_UNSUPPORTED
+true
 ```
 
-Until then, run charts you do not trust on a server, with
-`@tinyactors/node` and [the quickjs sandbox](quickjs.md).
+quickjs is in the one module every page downloads: 387 KiB with brotli
+instead of 140 KiB without it (`mise run pack:wasm` reports the sizes).
+Its engine's stack is the module's: at most 256 KiB, whatever
+`quickjs.stackLimit` asks, so a recursion deeper than that is its
+evaluation's `error.execution` (`RangeError: Maximum call stack size
+exceeded`), as a deeper one is in `@tinyactors/node`. Its `Date` reads
+the real clock, as in `@tinyactors/node`, whatever clock the host runs
+on.
 
 ## Where charts run: declare your variables
 

@@ -20,6 +20,7 @@ import * as cbor from './cbor.mjs';
 import { bytesOf, countOf, inputOptions, onlyKnown, optionalText, sessionOf, textOf } from './checks.mjs';
 import { TinyactorsError, coreError, refusal } from './errors.mjs';
 import { NativeDatamodel } from './datamodel.mjs';
+import { QuickJSDatamodel } from './quickjs.mjs';
 import { policyRefusal } from './realms.mjs';
 import { instance } from './state.mjs';
 
@@ -45,7 +46,7 @@ const MIGRATE_WAKE = 1;
 const NEXT = { YIELD: 0, IDLE: 1, EXHAUSTED: 2, FAULT: 3, REFUSED: 4 };
 const OUTPUT = { METRICS: 1, BLOB: 2, SNAPSHOT: 3, CONFIG: 4, TRACES: 5, LOGS: 6 };
 const TAKE_REFUSED = 0xFFFFFFFF;
-const DATAMODEL_NATIVE = 1;
+const DATAMODEL_NATIVE = 1, DATAMODEL_QUICKJS = 2;
 const EVENT_WORDS = 19;
 const SLICE = 256;
 const CONFIG_ERROR = 8192;
@@ -146,6 +147,7 @@ class HostState {
     this.processors = 0;
     this.datamodelName = 'native';
     this.native = null; // the native datamodel (datamodel.mjs)
+    this.quickjs = null; // or quickjs's (quickjs.mjs)
     this.effective = null;
     this.taken = null;
     this.endings = null;
@@ -238,6 +240,7 @@ class HostState {
   }
 
   clock(which) {
+    if (which === 2) return Date.now() * 1e6; // quickjs's Date: the real wall clock
     if (this.simulated !== null) return Number(this.simulated.ns);
     return which === 0 ? performance.now() * 1e6 : Date.now() * 1e6;
   }
@@ -266,7 +269,10 @@ class HostState {
     return this.exported(payload);
   }
 
-  exported(payload) { return this.native === null ? undefined : this.native.exported(payload); }
+  exported(payload) {
+    if (this.quickjs !== null) return this.quickjs.exported(payload);
+    return this.native === null ? undefined : this.native.exported(payload);
+  }
 
   // The payload a value is for the target's datamodel: 0n for none
   // (undefined), a TypeError for a chart whose datamodel takes no data.
@@ -280,7 +286,7 @@ class HostState {
     const takes = this.fn.ta_web_host_takes_data(this.pointer);
     if (takes === TA_ERROR_STALE) throw refusal('TA_ERROR_STALE', 'no live session takes this data');
     if (takes !== 1) throw new TypeError('the chart\'s datamodel takes no data');
-    return this.native.payload(value);
+    return (this.quickjs ?? this.native).payload(value);
   }
 
   release(payload) {
@@ -1298,8 +1304,9 @@ function readHandlers(options) {
   return handlers;
 }
 
-// The quickjs option's limits, checked as the addon checks them; the
-// datamodel itself is refused (p5-quickjs).
+// The quickjs option's limits, checked as the addon checks them, as the
+// record's words 10-15 of ta_web_host_new (wasm/src/host.c,
+// ta_web_quickjs_config): maxOps, memoryLimit, stackLimit, realm.
 function checkQuickjs(given) {
   if (given === undefined) return;
   if (given === null || typeof given !== 'object') throw new TypeError('quickjs is an object of the sandbox\'s limits');
@@ -1308,6 +1315,19 @@ function checkQuickjs(given) {
   if (given.memoryLimit !== undefined) countOf(given.memoryLimit, 'quickjs.memoryLimit is a safe integer of bytes, 0 or more', Number.MAX_SAFE_INTEGER);
   if (given.stackLimit !== undefined) countOf(given.stackLimit, 'quickjs.stackLimit is a safe integer of bytes, 0 or more', Number.MAX_SAFE_INTEGER);
   if (given.realm !== undefined && given.realm !== 'auto' && given.realm !== 'isolated') throw new TypeError('quickjs.realm is "auto" or "isolated"');
+}
+
+function quickjsWords(given) {
+  const words = new Uint32Array(6);
+  const wide = (at, n) => {
+    words[at] = n % 0x100000000;
+    words[at + 1] = Math.floor(n / 0x100000000);
+  };
+  words[0] = given?.maxOps ?? 0;
+  wide(1, given?.memoryLimit ?? 0);
+  wide(3, given?.stackLimit ?? 0);
+  words[5] = given?.realm === 'isolated' ? 1 : 0;
+  return words;
 }
 
 // The effective config read once: the tick rate, whether an encoder runs,
@@ -1348,7 +1368,7 @@ function readEffective(state, handlers) {
 // environment's arena and room for a refused config's error; then the
 // checks of a restore. Answers the host's pointer and, for a restore, the
 // snapshot's time.
-function makeHost(state, config, pack) {
+function makeHost(state, config, pack, limits) {
   const module = state.module;
   const scratch = module.scratch;
   return module.scoped(scratch, () => {
@@ -1358,7 +1378,8 @@ function makeHost(state, config, pack) {
     // in no other host (a restore keeps its snapshot's)
     let packed = pack === null ? globalThis.crypto.getRandomValues(new Uint32Array(2)) : [0, 0];
     if (pack !== null) packed = module.copyIn(scratch, pack); // 8-aligned, as a pack's parts need
-    module.words().set([at, length, state.id, DATAMODEL_NATIVE, room, CONFIG_ERROR, packed[0], packed[1]], module.record);
+    const datamodel = state.quickjs !== null ? DATAMODEL_QUICKJS : DATAMODEL_NATIVE;
+    module.words().set([at, length, state.id, datamodel, room, CONFIG_ERROR, packed[0], packed[1], 0, 0, ...quickjsWords(limits)], module.record);
     const pointer = module.call(pack === null ? 'ta_web_host_new' : 'ta_web_host_restore', module.env) >>> 0;
     const w = module.words().slice(module.record, module.record + 9);
     const status = w[0] | 0;
@@ -1397,8 +1418,9 @@ function makeHost(state, config, pack) {
 
 const STATE_KEYS = ['native', 'quickjs'];
 
-// The datamodel's state back: {"native": ...}, the key the host's
-// datamodel, its tables' namespaces and rows (datamodel.mjs, restore).
+// The datamodel's state back: {"native": ...} or {"quickjs": bytes}, the
+// key the host's datamodel: the native tables' namespaces and rows
+// (datamodel.mjs, restore), or quickjs's state (quickjs.mjs).
 function restoreDatamodel(state, datamodels) {
   if (datamodels === null || typeof datamodels !== 'object' || Array.isArray(datamodels) || Object.keys(datamodels).length !== 1) {
     throw refusal('TA_ERROR_INVALID', 'not a snapshot of a Host');
@@ -1409,7 +1431,7 @@ function restoreDatamodel(state, datamodels) {
       ? 'the snapshot is of a host on quickjs: restore it with datamodel "quickjs"'
       : 'the snapshot is of a host on the native datamodel: restore it with datamodel "native"');
   }
-  state.native.restore(datamodels[key]);
+  (state.quickjs ?? state.native).restore(datamodels[key]);
 }
 
 let checked;
@@ -1441,12 +1463,11 @@ export class Host {
     if (datamodel !== 'quickjs' && options?.quickjs !== undefined) {
       throw new TypeError('quickjs\'s limits are for a host with datamodel "quickjs"');
     }
-    if (datamodel === 'quickjs') {
-      checkQuickjs(options.quickjs);
-      throw refusal('TA_ERROR_UNSUPPORTED', 'the quickjs datamodel is not in @tinyactors/wasm yet');
+    if (datamodel === 'quickjs') checkQuickjs(options.quickjs);
+    else {
+      const policy = policyRefusal(); // the native datamodel evaluates chart text; quickjs evaluates none
+      if (policy !== null) throw refusal('TA_ERROR_UNSUPPORTED', policy);
     }
-    const policy = policyRefusal(); // the native datamodel evaluates chart text
-    if (policy !== null) throw refusal('TA_ERROR_UNSUPPORTED', policy);
     const clock = options?.clock;
     let clockState = null;
     if (clock !== undefined) {
@@ -1459,12 +1480,17 @@ export class Host {
     const module = instance();
     const state = new HostState(module, this);
     state.telemetry = options?.telemetry !== undefined;
-    state.datamodelName = 'native';
-    state.native = new NativeDatamodel(state);
+    if (datamodel === 'quickjs') {
+      state.datamodelName = 'quickjs';
+      state.quickjs = new QuickJSDatamodel(state);
+    } else {
+      state.datamodelName = 'native';
+      state.native = new NativeDatamodel(state);
+    }
     state.id = module.register(state);
     let made;
     try {
-      made = makeHost(state, config, restore === null ? null : bytesOf(restore.snapshot, 'restore takes the snapshot\'s bytes: a Uint8Array or an ArrayBuffer'));
+      made = makeHost(state, config, restore === null ? null : bytesOf(restore.snapshot, 'restore takes the snapshot\'s bytes: a Uint8Array or an ArrayBuffer'), options?.quickjs);
     } catch (error) {
       module.unregister(state.id);
       throw error;
@@ -1515,6 +1541,12 @@ export class Host {
 
   get closed() { return !checked(this, false).open; }
   get ticksPerSecond() { return checked(this, false).ticksPerSecond; }
+  // the quickjs engine's heap in bytes (O(1)); undefined on a native host
+  // and on a closed one
+  get quickjsHeapBytes() {
+    const state = checked(this, false);
+    return state.quickjs !== null && state.open ? state.quickjs.heapBytes() : undefined;
+  }
 
   get nextDeadline() {
     const state = checked(this, false);
@@ -1771,7 +1803,8 @@ export class Host {
         let message = status === -6
           ? 'the actor is not at a stable point now (events waiting, in a macrostep, an invoked child), or not resident'
           : 'the hibernation was refused';
-        if (status === TA_ERROR_UNSUPPORTED && state.reason) message = state.reason;
+        const reason = state.quickjs !== null ? state.quickjs.reason() : state.reason;
+        if (status === TA_ERROR_UNSUPPORTED && reason) message = reason;
         throw refusal(state.module.statusName(status), message);
       }
       const taken = state.taken;
@@ -1852,7 +1885,7 @@ export class Host {
         throw refusal(module.statusName(ready), 'a snapshot needs a quiescent host (TA_ERROR_STATE: from a handler, with an effect or a reply pending, or during a migration)');
       }
       state.advance(); // the snapshot's time is now, not the last turn's
-      const [stateAt, stateLength] = cbor.write(module, state.scratch, { [state.datamodelName]: state.native.snapshot() });
+      const [stateAt, stateLength] = cbor.write(module, state.scratch, { [state.datamodelName]: (state.quickjs ?? state.native).snapshot() });
       const [labelAt, labelLength] = module.text(state.scratch, LABEL);
       module.words().set([labelAt, labelLength, stateAt, stateLength], module.record);
       state.taken = null;

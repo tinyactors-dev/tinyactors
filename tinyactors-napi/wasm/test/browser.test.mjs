@@ -94,7 +94,7 @@ test('the native datamodel in a page (an iframe per host) and a Worker (its own 
   }
 });
 
-test('under a policy that refuses string evaluation, a native host is refused at its creation, naming it', async () => {
+test('under a policy that refuses string evaluation, a native host is refused at its creation, naming it; a quickjs host runs', async () => {
   const pw = playwright();
   if (pw === null) {
     console.log('skip: no Playwright installed');
@@ -121,6 +121,7 @@ import(${JSON.stringify(napi('wasm/test/native.mjs'))}).then((m) => m.underPolic
       assert.equal(out.host[0], 'TA_ERROR_UNSUPPORTED', `${name}: ${out.host}`);
       if (!named.test(out.host[1])) throw new Error(`${name}: the message does not name it: ${out.host[1]}`);
       assert.equal(out.syntaxChecked, false, `${name}: compileCharts skips its syntax check`);
+      assert.deepEqual(out.quickjs, ['[2,4,6]'], `${name}: a quickjs host`);
       await page.close();
     }
   } finally {

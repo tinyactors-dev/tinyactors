@@ -31,6 +31,7 @@
 #include <stdint.h>
 
 #include "tinyactors.h"
+#include "tinyactors_datamodel_ecmascript.h"
 #include "tinyactors_runtime.h"
 
 #define TA_WEB_EXPORT __attribute__((visibility("default")))
@@ -125,10 +126,10 @@ uint32_t ta_web_address(const void *pointer);
 
 /* ---- the host ---------------------------------------------------------------- */
 
-/* The datamodels a host holds: the null datamodel only, or the native
+/* The datamodels a host holds: the null datamodel only, the native
  * "ecmascript" one, whose entries call the import ta_web.datamodel
- * (datamodel.c). quickjs is a second module, later (docs/browser.md). */
-enum { TA_WEB_DATAMODEL_NONE = 0, TA_WEB_DATAMODEL_NATIVE = 1 };
+ * (datamodel.c), or core's quickjs one, in the same module (quickjs.c). */
+enum { TA_WEB_DATAMODEL_NONE = 0, TA_WEB_DATAMODEL_NATIVE = 1, TA_WEB_DATAMODEL_QUICKJS = 2 };
 
 /* The rows of a host's tables (ta_table): handles are kept, never row
  * pointers across an add. JavaScript keeps the value of a row at its slot
@@ -156,7 +157,12 @@ typedef struct ta_web_count_row {
  *   scratch     the arena of the host's calls, a mark per call;
  *   tables      payloads, sessions, charts, loops, and pending typed
  *               methods;
- *   binding     the native datamodel's binding (TA_WEB_DATAMODEL_NATIVE);
+ *   binding     the datamodel's binding: the native one's
+ *               (TA_WEB_DATAMODEL_NATIVE) or quickjs's;
+ *   quickjs     quickjs's datamodel (TA_WEB_DATAMODEL_QUICKJS), freed
+ *               after the host that used it;
+ *   quickjs_room the last quickjs state's length: the next snapshot's
+ *               guess;
  *   output      the datamodel's last output (eval_string, log, to_wire,
  *               serialize, payload_serialize, failure), grown through the
  *               allocator, valid until the datamodel's next call;
@@ -185,6 +191,8 @@ typedef struct ta_web_host {
     ta_web_scratch scratch;
     ta_table payloads, sessions, charts, loops, pending;
     ta_datamodel_binding binding;
+    ta_datamodel_ecmascript *quickjs;
+    size_t quickjs_room;
     ta_buffer output;
     ta_datamodel_environment *evaluating;
     ta_growable_arena xml;
@@ -217,6 +225,15 @@ void ta_web_payload_release(ta_web_host *host, ta_payload payload);
 /* Ends an open XML parse (xml.c): its parser and blocks go. */
 void ta_web_xml_end(ta_web_host *host);
 
+/* quickjs's clock: the wall time the host reads now (ta_web.clock's 2, the
+ * real one, whatever clock the host runs on), set before every run and
+ * evaluation outside one (quickjs.c). */
+void ta_web_quickjs_time(ta_web_host *host);
+
+/* Room for the datamodel's output of at least `size` bytes (datamodel.c):
+ * the host's one buffer kept between calls; 0 when the allocator refuses. */
+uint32_t ta_web_dm_output(ta_web_host *host, uint32_t size);
+
 /* The native datamodel's vtable (datamodel.c). */
 const ta_datamodel_vtable *ta_web_native_vtable(void);
 
@@ -242,7 +259,9 @@ enum {
 };
 TA_WEB_IMPORT("output") int32_t ta_web_import_output(uint32_t host, uint32_t kind, uint32_t length);
 /* The host's clocks now, in nanoseconds: `which` 0 the monotonic clock,
- * 1 the wall clock (since the Unix epoch; 0: unknown). */
+ * 1 the wall clock (since the Unix epoch; 0: unknown), 2 the real wall
+ * clock (Date.now(), whatever clock the host runs on: what quickjs's Date
+ * reads, as the addon's reads the system's). */
 TA_WEB_IMPORT("clock") double ta_web_import_clock(uint32_t host, uint32_t which);
 /* A static src="" a compilation asks for (compile.c): base and source in
  * the record; JavaScript answers in it. */

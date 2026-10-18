@@ -67,7 +67,8 @@ export async function droppedHost(gc) {
 }
 
 // What a page under a policy gets: the native datamodel's refusal at the
-// host's creation, and a compile call that skips its syntax check.
+// host's creation, a compile call that skips its syntax check, and a
+// quickjs host that runs, its chart's text evaluated by quickjs.
 export async function underPolicy() {
   const out = {};
   try {
@@ -79,6 +80,20 @@ export async function underPolicy() {
   const compiled = compileCharts([{ name: 'typo', text: SHARED.replace('count + 1', 'count + )') }]);
   out.syntaxChecked = compiled.diagnostics.some((d) => /SyntaxError/.test(d.message));
   compiled.close();
+  // quickjs evaluates no chart text with the page's engine: it runs here
+  const lines = [];
+  try {
+    const host = new Host({ systemID: 'web' }, { datamodel: 'quickjs', log: (h, entry) => lines.push(entry.text) });
+    const sandboxed = compileCharts([{ name: 'q', text: '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="q" initial="s"><datamodel><data id="n" expr="[1, 2, 3].map((x) => x * 2)"/></datamodel><state id="s"><onentry><log expr="JSON.stringify(n)"/></onentry></state></scxml>' }]);
+    host.addImage(sandboxed.image);
+    sandboxed.close();
+    host.spawn(host.chart('q'));
+    await host.idle();
+    host.close();
+    out.quickjs = lines;
+  } catch (error) {
+    out.quickjs = [String(error?.stack ?? error)];
+  }
   return out;
 }
 
