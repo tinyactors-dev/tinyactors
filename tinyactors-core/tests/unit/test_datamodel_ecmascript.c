@@ -370,6 +370,45 @@ static void test_eval_variables(void) {
 /* What a script declares is asked of the engine: names declared at the top
  * level keep the chart isolated (and visible to later expressions); names in
  * blocks, nested functions, comments, strings or regular expressions do not. */
+/* A <script> in executable content runs in a block: its top-level let,
+ * const and class are its own at each run, so it runs again (it failed with
+ * a redeclaration from its second run), and they make the chart declare
+ * nothing (the shared realm); its var stays the session's; the chart's
+ * top-level script stays global code, its const read by the content
+ * (tinyactors-napi/docs/log.xml, l-p4-examples-iot-script-let). */
+#define RERUN(top, script)                                                                         \
+    SC("initial='a'><datamodel><data id='n' expr='0'/><data id='errors' expr='0'/></datamodel>"    \
+       top "<state id='a'><onentry><raise event='go'/><raise event='go'/><raise event='go'/>"     \
+           "</onentry><transition event='go'><script>" script "</script></transition>"            \
+           "<transition event='error.execution'><assign location='errors' expr='errors + 1'/>"    \
+           "</transition></state>")
+static void test_executable_scripts_run_again(void) {
+    static const char *const lexical = "let k = n + 1; const c = k; class K {} n = c;";
+    for (uint32_t realm = 0; realm < 2; realm++) {
+        ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 0, realm, NULL};
+        ecmascript_system t;
+        char chart[1024];
+        snprintf(chart, sizeof chart, RERUN("", "%s"), lexical);
+        CHECK(ecmascript_open(&t, chart, &config));
+        ecmascript_run(&t);
+        CHECK(strcmp(ecmascript_eval(&t, "n"), "3") == 0);
+        CHECK(strcmp(ecmascript_eval(&t, "errors"), "0") == 0);
+        CHECK(strcmp(realm_of(&t), realm ? "\"isolated\"" : "\"shared\"") == 0);
+        ecmascript_close(&t);
+    }
+    ecmascript_system t;
+    CHECK(ecmascript_open(&t, RERUN("<script>const LIMIT = 2;</script>",
+                                    "let k = n + 1; n = Math.min(k, LIMIT); var seen = (typeof seen === "
+                                    "'number' ? seen : 0) + 1;"),
+                          NULL));
+    ecmascript_run(&t);
+    CHECK(strcmp(ecmascript_eval(&t, "n"), "2") == 0);
+    CHECK(strcmp(ecmascript_eval(&t, "seen"), "3") == 0); /* the session's var */
+    CHECK(strcmp(ecmascript_eval(&t, "errors"), "0") == 0);
+    CHECK(strcmp(realm_of(&t), "\"isolated\"") == 0);
+    ecmascript_close(&t);
+}
+
 static void test_toplevel_declarations_isolate(void) {
     ecmascript_system t;
     CHECK(ecmascript_open(&t,
@@ -463,7 +502,8 @@ static const char *STORE_CHART =
        "function add(k) { total += k; items.push(k); return total; }\n"
        "implicit = { nested: [1, 2], when: new Date(0) };</script>"
        "<script>'use strict'; function self() { return this === undefined; }</script>"
-       "<state id='a'><onentry><script>let dead = boom();</script></onentry>"
+       "<script>let dead = boom();</script>" /* a chart-level script: its let is global */
+       "<state id='a'>"
        "<transition event='add'><script>add(_event.data.k); later = items.length;</script>"
        "</transition>"
        "<transition event='bump'><assign location='LIMIT' expr='LIMIT + 1'/></transition>"
@@ -958,6 +998,7 @@ int main(void) {
     RUN(test_shared_realm);
     RUN(test_eval_variables);
     RUN(test_toplevel_declarations_isolate);
+    RUN(test_executable_scripts_run_again);
     RUN(test_store_declarations);
     RUN(test_store_refuses_precisely);
     RUN(test_snapshot_isolated);

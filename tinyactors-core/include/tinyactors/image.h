@@ -102,12 +102,18 @@ enum {
     TA_EXPRESSION_CONDITION = 1,
     TA_EXPRESSION_VALUE = 2,
     TA_EXPRESSION_LOCATION = 3,
+    /* a <script> in executable content, run at each execution: an
+     * ECMAScript datamodel runs it in a block, so its top-level let, const
+     * and class are its own at each run (var and function stay global) */
     TA_EXPRESSION_SCRIPT = 4,
     TA_EXPRESSION_STRING = 5, /* *expr attributes: eventexpr, targetexpr, delayexpr, ... */
     TA_EXPRESSION_CONTENT = 6,
     /* <foreach item index>: a location the datamodel declares when the
      * session has no such variable (SCXML 4.6) */
-    TA_EXPRESSION_ITEM = 7
+    TA_EXPRESSION_ITEM = 7,
+    /* a <script> child of <scxml>, run once at the start: global code,
+     * whose declarations are the session's */
+    TA_EXPRESSION_GLOBAL_SCRIPT = 8
 };
 TA_API uint32_t ta_image_expression_count(const ta_image *image, uint32_t chart);
 /* expression.index: the ta_expression */

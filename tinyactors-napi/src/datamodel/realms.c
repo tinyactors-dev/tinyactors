@@ -243,7 +243,7 @@ bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart) {
     for (uint32_t e = 0; e < count; e++) {
         ta_expression_info info;
         if (ta_image_expression(chart->image, (ta_chart_item){chart->chart, e}, &info) != TA_OK ||
-            info.kind != TA_EXPRESSION_SCRIPT)
+            (info.kind != TA_EXPRESSION_SCRIPT && info.kind != TA_EXPRESSION_GLOBAL_SCRIPT))
             continue;
         if (context == NULL) { /* a scratch context, once per chart that has a script */
             if ((scratch = ta_napi_realm_new(native)) == NULL ||
@@ -252,8 +252,12 @@ bool ta_napi_realm_declares(ta_napi_native *native, ta_napi_chart_of *chart) {
                 napi_create_array(env, &hoists) != napi_ok || !ta_napi_global_names(native, context, &before))
                 return false;
         }
-        static const char ahead[] = "throw 0;\n";
-        napi_value script = ta_napi_script(native, &(ta_napi_script_of){{ahead, sizeof ahead - 1}, info.source, {NULL, 0}, e});
+        /* as the session runs it (ta_napi_evaluate): a script in executable
+         * content in a block, whose lexical declarations are not the global's */
+        static const char ahead[] = "throw 0;\n", ahead_block[] = "throw 0;{\n";
+        napi_value script = ta_napi_script(native, info.kind == TA_EXPRESSION_SCRIPT
+                                                       ? &(ta_napi_script_of){{ahead_block, sizeof ahead_block - 1}, info.source, {"\n}", 2}, e}
+                                                       : &(ta_napi_script_of){{ahead, sizeof ahead - 1}, info.source, {NULL, 0}, e});
         if (script == NULL) { /* a syntax error: its evaluation's error.execution */
             napi_value ignored;
             napi_get_and_clear_last_exception(env, &ignored);

@@ -98,8 +98,14 @@ of the chart, once when an actor starts. A chart-level script is where a
 chart's helper functions go, and how it declares them decides what each
 actor costs.
 
+**A script in a transition, `<onentry>` or `<onexit>` runs in a block**,
+as a function body would: its top-level `let`, `const` and `class` are
+its own at each run, so it runs again and again, and they declare nothing
+for the chart. Its `var`s are the actor's, as a chart-level script's are.
+
 **A script that declares nothing** (no top-level `var`, `function`,
-`let`, `const` or `class`) runs in a context the host shares between the
+`let`, `const` or `class` in a chart-level script, no `var` or `function`
+in one in executable content) runs in a context the host shares between the
 actors of every such chart. Hold a helper function in a `<data>` and
 assign it:
 

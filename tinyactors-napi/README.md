@@ -521,16 +521,18 @@ TA_ERROR_INVALID - the host has no chart of that name
   Bun 1.4 does, Node.js 22 does not. `Symbol.dispose` and
   `Symbol.asyncDispose` call `close()`, which works everywhere.
 - **A `<script>` that declares top-level names gives each session a
-  context of its own.** A chart whose scripts declare `var`, `function`,
-  `let`, `const` or `class` at their top level runs each of its sessions
+  context of its own.** A chart whose scripts declare `var` or `function`,
+  or whose chart-level scripts declare `let`, `const` or `class`, at their
+  top level runs each of its sessions
   in a `vm` context of its own (about 143 KB a session on Node.js, 60 KB
   on Bun), so the script's functions close over its own variables. A
   chart that declares nothing shares one context per host: declare the
   function as a `<data>` and assign it in the script
   (`<data id="price"/>`, `price = (sku) => ...`)
   ([Writing charts](docs/guide/charts.md#scripts)).
-- **A chart whose scripts declare with `let`, `const` or `class` keeps
-  its sessions resident.** Hibernation, migration and snapshots refuse its
+- **A chart whose chart-level scripts declare with `let`, `const` or
+  `class` keeps its sessions resident** (in a transition's script they
+  are the script's own, each run). Hibernation, migration and snapshots refuse its
   sessions (`TA_ERROR_UNSUPPORTED`): a new context cannot be given those
   bindings back. Declare with `var` and `function`, or hold the values in
   `<data>`, for a chart whose sessions should hibernate.

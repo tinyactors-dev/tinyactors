@@ -605,13 +605,14 @@ static void exec_el(chart_builder *builder, const ta_xml_node *node) {
         emit(builder, value);
     } else if (!strcmp(nm, "script")) {
         const char *source = ta_xml_attribute_value(node, "src");
-        uint32_t e;
+        uint32_t e, kind = node->parent && el(node->parent, "scxml") ? TA_EXPRESSION_GLOBAL_SCRIPT /* <scxml>'s */
+                                                                  : TA_EXPRESSION_SCRIPT;
         if (source) {
             ta_source s;
             if (!fetch_source(builder, &(source_fetch){node, source}, &s)) return;
-            e = intern_expression(builder, &(expression_input){TA_EXPRESSION_SCRIPT, {s.text.pointer, s.text.length}, node});
+            e = intern_expression(builder, &(expression_input){kind, {s.text.pointer, s.text.length}, node});
         } else {
-            e = intern_expression(builder, &(expression_input){TA_EXPRESSION_SCRIPT, {node->text, node->text_length}, node});
+            e = intern_expression(builder, &(expression_input){kind, {node->text, node->text_length}, node});
         }
         emit(builder, TA_OPCODE_SCRIPT);
         emit(builder, e);

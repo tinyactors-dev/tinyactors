@@ -373,6 +373,10 @@
       "value": 6
     },
     {
+      "name": "TA_EXPRESSION_GLOBAL_SCRIPT",
+      "value": 8
+    },
+    {
       "name": "TA_EXPRESSION_ITEM",
       "value": 7
     },

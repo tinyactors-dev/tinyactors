@@ -142,6 +142,23 @@ test('a script\'s top-level declarations are the session\'s, closures included (
   same(logged.filter((line) => line.startsWith('again')), ['again: 3', 'again: 3'], 'two sessions, two counts');
 });
 
+test('a script in a transition runs again: its let, const and class are its own at each run', async () => {
+  const chart = scxml('c', `
+    <datamodel><data id="n" expr="0"/></datamodel>
+    <script>const LIMIT = 2;</script>
+    <state id="s">
+      <transition event="go"><script>let k = n + 1; const c = Math.min(k, LIMIT); class K {} n = c;
+        var seen = (typeof seen === 'number' ? seen : 0) + 1;</script><log label="n" expr="n + ' ' + seen"/></transition>
+      <transition event="error.execution"><log label="error" expr="_event.name"/></transition>
+    </state>`);
+  same(await lines(chart, [['go'], ['go'], ['go']]), ['n: 1 1', 'n: 2 2', 'n: 2 3'], 'three runs, no redeclaration');
+  // without a declaration of its own at the top, such a chart declares nothing
+  const plain = scxml('c', `
+    <datamodel><data id="n" expr="0"/></datamodel>
+    <state id="s"><transition event="go"><script>let k = n + 1; n = k;</script><log label="n" expr="n"/></transition></state>`);
+  same(await lines(plain, [['go'], ['go']]), ['n: 1', 'n: 2'], 'twice');
+});
+
 test('error.execution says why: the exception\'s text, or no data for a failure the host decides', async () => {
   const chart = scxml('c', `
     <state id="s">

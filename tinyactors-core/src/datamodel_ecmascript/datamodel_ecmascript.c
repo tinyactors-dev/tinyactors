@@ -246,6 +246,11 @@ static ta_string_view trim_expression(ta_string_view source) {
     return source;
 }
 
+/* a <script>: in executable content, or the chart's top-level one */
+static int is_script(uint32_t kind) {
+    return kind == TA_EXPRESSION_SCRIPT || kind == TA_EXPRESSION_GLOBAL_SCRIPT;
+}
+
 static JSValue *getter_slot(ecmascript_instance *instance, ta_expression expression) {
     return instance->chart_context->shared ? &instance->chart_context->getter[expression]
                                            : &instance->getter[expression];
@@ -261,7 +266,7 @@ static JSValue get_getter(ecmascript_instance *instance, ta_expression expressio
         JSValue f;
         if (instance->chart_context
                 ->shared) { /* compiled once per chart; called with the session scope */
-            f = kind == TA_EXPRESSION_SCRIPT
+            f = is_script(kind)
                     ? eval_expression(instance->context,
                                       "(function(__s){with(__s){(function(){'use strict';\n",
                                       source, "\n})();}})", expression, JS_EVAL_TYPE_GLOBAL)
@@ -270,12 +275,14 @@ static JSValue get_getter(ecmascript_instance *instance, ta_expression expressio
                                       "return (\n",
                                       trim_expression(source), "\n);})();}})", expression,
                                       JS_EVAL_TYPE_GLOBAL);
-        } else if (kind == TA_EXPRESSION_SCRIPT) {
+        } else if (is_script(kind)) {
             /* one line down, as in the scratch analysis (chart_analyze): the
-             * positions of its function declarations are the same there */
+             * positions of its function declarations are the same there; one
+             * in executable content in a block, so it runs again */
             char file[32];
+            int block = kind == TA_EXPRESSION_SCRIPT;
             snprintf(file, sizeof file, "<script:%u>", (unsigned)expression);
-            f = eval_file(instance->context, "\n", source, "", file,
+            f = eval_file(instance->context, block ? "{\n" : "\n", source, block ? "\n}" : "", file,
                           JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
         } else {
             f = eval_expression(instance->context, "(function(){return (\n",
@@ -441,7 +448,7 @@ static ta_status value_of(ta_datamodel_ecmascript *ecmascript, ecmascript_instan
     if (instance->chart_context->shared) {
         v = JS_Call(instance->context, f, JS_UNDEFINED, 1, (JSValueConst *)&instance->scope);
         JS_FreeValue(instance->context, f);
-    } else if (kind == TA_EXPRESSION_SCRIPT) {
+    } else if (is_script(kind)) {
         v = JS_EvalFunction(instance->context, f); /* consumes f */
     } else {
         v = JS_Call(instance->context, f, JS_UNDEFINED, 0, NULL);
@@ -931,6 +938,11 @@ static int analyze_script(ta_datamodel_ecmascript *ecmascript, ecmascript_chart 
     JSContext *sc = scratch->context;
     char file[32];
     snprintf(file, sizeof file, "<script:%u>", (unsigned)e);
+    /* as the session runs it (get_getter): one in executable content in a
+     * block, so its lexical declarations are not the global's */
+    ta_expression_info info;
+    int block = ta_image_expression(chart->image, (ta_chart_item){chart->chart, e}, &info) == TA_OK &&
+                info.kind == TA_EXPRESSION_SCRIPT;
     JSValue c =
         eval_file(sc, "", source, "", file, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
     if (JS_IsException(c)) { /* does not compile: never declares anything */
@@ -941,11 +953,11 @@ static int analyze_script(ta_datamodel_ecmascript *ecmascript, ecmascript_chart 
     /* strict code (a "use strict" directive) cannot have a with statement */
     c = eval_file(sc, "", source, "\n;with({}){}", file,
                   JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-    int strict = JS_IsException(c);
+    int strict = !block && JS_IsException(c); /* a directive in a block is none */
     JS_FreeValue(sc, c);
     clear_exception(sc);
-    JSValue r = eval_file(sc, strict ? "'use strict';throw 0;\n" : "throw 0;\n", source, "", file,
-                          JS_EVAL_TYPE_GLOBAL);
+    JSValue r = eval_file(sc, block ? "throw 0;{\n" : strict ? "'use strict';throw 0;\n" : "throw 0;\n", source,
+                          block ? "\n}" : "", file, JS_EVAL_TYPE_GLOBAL);
     JS_FreeValue(sc, r);
     JSValue x = JS_GetException(sc);
     int hoisted = JS_VALUE_GET_TAG(x) == JS_TAG_INT && JS_VALUE_GET_INT(x) == 0;
@@ -975,7 +987,7 @@ static int analyze_script(ta_datamodel_ecmascript *ecmascript, ecmascript_chart 
     }
     JS_FreePropertyEnum(sc, props, n);
     JS_FreeValue(sc, g);
-    if (rc < 0) return rc;
+    if (rc < 0 || block) return rc; /* a block's let, const and class are its own */
     JSValue cands = JS_NewArray(sc);
     JSValue lex = JS_IsException(cands) || !candidates(sc, source, cands)
                       ? JS_EXCEPTION
@@ -1021,13 +1033,15 @@ static ta_status chart_analyze(ta_datamodel_ecmascript *ecmascript, ecmascript_c
     for (uint32_t e = 0; e < chart->expression_count && status == TA_OK; e++) {
         ta_expression_info info;
         if (ta_image_expression(chart->image, (ta_chart_item){chart->chart, e}, &info) != TA_OK ||
-            info.kind != TA_EXPRESSION_SCRIPT || !may_declare(info.source))
+            !is_script(info.kind) || !may_declare(info.source))
             continue;
         if (!base_names(ecmascript) || (!shared.context && !scratch_new(ecmascript, &shared))) {
             status = TA_ERROR_NO_MEMORY;
             break;
         }
         ecmascript->operations = 0;
+        ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
+    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
         int r = analyze_script(ecmascript, chart, &shared, e, info.source);
         if (r == 2) { /* alone, then */
             ecmascript_scratch fresh;

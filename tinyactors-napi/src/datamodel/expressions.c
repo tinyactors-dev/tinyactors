@@ -112,7 +112,10 @@ napi_value ta_napi_evaluate(ta_napi_evaluation *evaluation, ta_expression e) {
     ta_expression_info info;
     if (!ta_napi_expression_of(&evaluation->row, e, &info)) return ta_napi_fail(env, "no such expression");
     if (info.kind == TA_EXPRESSION_CONTENT) return ta_napi_content(evaluation, info.source);
-    bool script = info.kind == TA_EXPRESSION_SCRIPT;
+    /* a chart's top-level <script> is global code; one in executable content
+     * runs in a block, so its let, const and class are its own at each run */
+    bool script = info.kind == TA_EXPRESSION_SCRIPT || info.kind == TA_EXPRESSION_GLOBAL_SCRIPT;
+    bool block = info.kind == TA_EXPRESSION_SCRIPT;
     ta_string_view source = script ? info.source : ta_napi_trimmed(info.source);
     napi_value result = NULL, function, undefined;
     if (napi_get_undefined(env, &undefined) != napi_ok) return NULL;
@@ -134,7 +137,9 @@ napi_value ta_napi_evaluate(ta_napi_evaluation *evaluation, ta_expression e) {
         if (napi_get_element(env, evaluation->record, TA_NAPI_CHART_GETTERS, &scripts) != napi_ok ||
             napi_get_element(env, evaluation->own, TA_NAPI_OWN_CONTEXT, &context) != napi_ok)
             return NULL;
-        napi_value made = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){scripts, false, {{"\n", 1}, source, {NULL, 0}, e}});
+        ta_napi_script_of shape = block ? (ta_napi_script_of){{"{\n", 2}, source, {"\n}", 2}, e}
+                                        : (ta_napi_script_of){{"\n", 1}, source, {NULL, 0}, e};
+        napi_value made = ta_napi_compiled_of(evaluation, &(ta_napi_compiled){scripts, false, shape});
         return made != NULL ? ta_napi_run_in(env, made, context) : NULL;
     }
     ta_napi_own_of of = {TA_NAPI_OWN_GETTERS, TA_NAPI_CHART_GETTERS,

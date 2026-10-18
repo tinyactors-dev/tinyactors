@@ -327,7 +327,8 @@ def _function(body, parameters, namespace, file):
     return local["_ta_f"]
 
 
-CONDITION, VALUE_KIND, LOCATION, SCRIPT, STRING, CONTENT, ITEM = 1, 2, 3, 4, 5, 6, 7
+CONDITION, VALUE_KIND, LOCATION, SCRIPT, STRING, CONTENT, ITEM, GLOBAL_SCRIPT = 1, 2, 3, 4, 5, 6, 7, 8
+SCRIPTS = (SCRIPT, GLOBAL_SCRIPT)  # in executable content, and the chart's top-level ones: the same here
 
 
 def _names_bound(target, names):
@@ -370,7 +371,7 @@ def attach(name, data, expressions, namespace, file):
     methods = {}
     scripts = []
     for index, (kind, source, line) in enumerate(expressions):
-        if kind == SCRIPT:
+        if kind in SCRIPTS:
             try:
                 tree = _parse(source, "exec", file, line)
             except SyntaxError:
@@ -402,10 +403,10 @@ def attach(name, data, expressions, namespace, file):
     functions = []
     script_trees = dict(scripts)
     for index, (kind, source, line) in enumerate(expressions):
-        rewrite = Rewrite(names, file, 1 if kind == SCRIPT else line)
+        rewrite = Rewrite(names, file, 1 if kind in SCRIPTS else line)
         rewrite.methods = set(methods)
         try:
-            if kind == SCRIPT:
+            if kind in SCRIPTS:
                 tree = script_trees.get(index) or _parse(source, "exec", file, line)
                 body = [rewrite.statement(node, set(), False) for node in tree.body
                         if not isinstance(node, ast.FunctionDef)]

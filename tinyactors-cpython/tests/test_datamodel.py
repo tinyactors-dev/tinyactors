@@ -41,6 +41,26 @@ class Scope(unittest.TestCase):
         self.assertEqual(logs.labelled("after"), ["[4, 20, 20, 1]"])
         self.assertEqual(logs.labelled("report"), ["[4, 20, 20, 1]"])
 
+    def test_a_script_in_a_transition_runs_again(self):
+        """A <script> in executable content runs at each execution, on both
+        datamodels: on quickjs its let, const and class are its own at each
+        run; on "python" what it assigns is the session's."""
+        scripts = {
+            "python": ("<script>k = n + 1\nn = min(k, LIMIT)</script>", "<script>LIMIT = 2</script>", "f'{n}'"),
+            "ecmascript": ("<script>let k = n + 1; const c = Math.min(k, LIMIT); class K {} n = c;</script>",
+                           "<script>const LIMIT = 2;</script>", "'' + n"),
+        }
+        for datamodel, (script, top, report) in scripts.items():
+            with self.subTest(datamodel=datamodel):
+                document = ("<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='%s' name='c' initial='s'>"
+                            "<datamodel><data id='n' expr='0'/></datamodel>%s<state id='s'>"
+                            "<transition event='go'>%s<log label='n' expr=\"%s\"/></transition>"
+                            "<transition event='error.execution'><log label='error' expr=\"'error'\"/></transition>"
+                            "</state></scxml>") % (datamodel, top, script, report)
+                logs = run(document, ["go", "go", "go"])
+                self.assertEqual(logs.labelled("n"), ["1", "2", "2"])
+                self.assertEqual(logs.labelled("error"), [])
+
     def test_error_execution_says_why(self):
         """The data of an error.execution the chart's code raised:
         {"reason": "exception", "message": "Type: text"}; none for a failure
