@@ -97,7 +97,10 @@ text in it, which does not parse either.
   `errorsCommunication` are how the platform learns that a customer's
   chart failed, since an uploaded chart need not catch its errors, and
   `fuel` is how it finds a rule that keeps its host busy without breaking
-  either limit. The counters answer while the host is busy.
+  either limit: the platform divides the fuel a rule used by the
+  process's CPU time it spanned (`process.cpuUsage`), not by the wall
+  clock, so a process that shares its CPUs with others still finds it.
+  The counters answer while the host is busy.
 - **Named actors and spawn params**: a rule's actor for a device is named
   by the device, found with `actorByName`, and spawned at the device's
   first reading with `{ device, sustain }`.

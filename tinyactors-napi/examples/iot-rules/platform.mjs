@@ -45,6 +45,8 @@ const ID = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * so the platform measured its own (measure.mjs, holdTimes). */
 export const SANDBOX = { maxOps: 200, memoryLimit: 8 * 1024 * 1024 };
 
+/** The process's CPU time so far, user and system, in ms. */
+const cpuTime = () => { const { user, system } = process.cpuUsage(); return (user + system) / 1000; };
 const nextTick = () => new Promise((resolve) => setImmediate(resolve));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -54,12 +56,15 @@ export class Platform {
    * @param {import('@tinyactors/node').SimulatedClock} [options.clock] one clock for every host
    * @param {{ maxOps?: number, memoryLimit?: number }} [options.sandbox] each rule's limits
    * @param {number} [options.maxErrors] errors after which a rule is suspended
-   * @param {number} [options.fuelBudget] fuel a rule may use between two audits
+   * @param {number} [options.fuelBudget] fuel a rule may use per millisecond
+   *   of the process's CPU time, measured over at least `fuelWindow` ms of it
+   * @param {number} [options.fuelWindow] the process's CPU time, in ms, an
+   *   audit's measure of fuel spans at least
    * @param {number} [options.maxUploadBytes] the largest chart a customer may upload
    * @param {number} [options.maxLogs] `<log>` lines a rule may send to its customer
    */
-  constructor({ clock, sandbox = SANDBOX, maxErrors = 3, fuelBudget = 100_000, maxUploadBytes = 64 * 1024, maxLogs = 20 } = {}) {
-    Object.assign(this, { clock, sandbox, maxErrors, fuelBudget, maxUploadBytes, maxLogs });
+  constructor({ clock, sandbox = SANDBOX, maxErrors = 3, fuelBudget = 700, fuelWindow = 10, maxUploadBytes = 64 * 1024, maxLogs = 20 } = {}) {
+    Object.assign(this, { clock, sandbox, maxErrors, fuelBudget, fuelWindow, maxUploadBytes, maxLogs });
     /** customer id -> { id, inbox: report[], rules: Map<rule id, rule> } */
     this.customers = new Map();
     /** device id -> { id, customer, session } */
@@ -153,6 +158,8 @@ export class Platform {
       sessions: new Map(),
       /** the counters at the last audit */
       seen: { errorsExecution: 0, errorsCommunication: 0, fuel: 0 },
+      /** the fuel and the process's CPU time (ms) where the current measure began */
+      window: { fuel: 0, cpu: cpuTime() },
     };
     rule.host = new Host(
       { systemID: `rule-${owner.id}-${id}`, ioProcessors: [{ type: 'urn:iot:alert' }] },
@@ -228,7 +235,8 @@ export class Platform {
 
   /** Reads each active rule's counters and reports what changed since the
    * last audit: its errors, and the fuel it used. A rule over `maxErrors`
-   * in all, or over `fuelBudget` since the last audit, is suspended. The
+   * in all, or over `fuelBudget` fuel a millisecond of the process's CPU
+   * time (over at least `fuelWindow` ms of it), is suspended. The
    * counters answer even while a rule keeps its host busy. */
   async audit() {
     for (const owner of this.customers.values()) {
@@ -250,11 +258,20 @@ export class Platform {
           const count = now[key] - rule.seen[key];
           if (count > 0) owner.inbox.push({ type: 'rule.error', rule: rule.id, error, count });
         }
-        const fuel = now.fuel - rule.seen.fuel;
         rule.seen = now;
+        // fuel per ms of the process's CPU time, not of the wall clock: a
+        // process that shares its CPUs gets less of both, and a rule that
+        // keeps its host busy takes most of the process's either way
+        const cpu = cpuTime();
+        const spent = cpu - rule.window.cpu;
+        let rate = 0;
+        if (spent >= this.fuelWindow) {
+          rate = Math.round((now.fuel - rule.window.fuel) / spent);
+          rule.window = { fuel: now.fuel, cpu };
+        }
         const errors = now.errorsExecution + now.errorsCommunication;
         if (errors >= this.maxErrors) this.#suspend(rule, `${errors} errors`);
-        else if (fuel > this.fuelBudget) this.#suspend(rule, `busy: ${fuel} fuel since the last audit, over its budget of ${this.fuelBudget}`);
+        else if (rate > this.fuelBudget) this.#suspend(rule, `busy: ${rate} fuel a millisecond of the process's CPU time, over its budget of ${this.fuelBudget}`);
       }
     }
   }
