@@ -319,23 +319,27 @@ typedef struct ta_napi_answer {
     napi_value name, data, traceparent, origin, raw;
 } ta_napi_answer;
 
-static bool ta_napi_send_reply(napi_env env, ta_napi_view *view, const ta_napi_answer *answer) {
+/* What an answer or a failure came to: refused (an exception pending),
+ * delivered, or not delivered because the sender ended meanwhile. */
+typedef enum ta_napi_replied { TA_NAPI_REPLY_REFUSED, TA_NAPI_REPLY_DELIVERED, TA_NAPI_REPLY_ENDED } ta_napi_replied;
+
+static ta_napi_replied ta_napi_send_reply(napi_env env, ta_napi_view *view, const ta_napi_answer *answer) {
     if (!ta_napi_view_flags(env, view) || !ta_napi_view_live(env, view))
-        return false; /* a thin view answers before its ack, whatever was read */
+        return TA_NAPI_REPLY_REFUSED; /* a thin view answers before its ack, whatever was read */
     if (view->flags & (TA_NAPI_VIEW_ANSWERED | TA_NAPI_VIEW_FAILED)) {
         ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_STATE, view->flags & TA_NAPI_VIEW_FAILED
                                                                   ? "the send was failed already"
                                                                   : "the send was answered already"});
-        return false;
+        return TA_NAPI_REPLY_REFUSED;
     }
     napi_value session = ta_napi_send_read(env, view, TA_NAPI_SEND_SESSION);
     napi_value sendid = session ? ta_napi_send_read(env, view, TA_NAPI_SEND_SENDID) : NULL;
     napi_value type = sendid ? ta_napi_send_read(env, view, TA_NAPI_SEND_TYPE) : NULL;
-    if (type == NULL) return false;
+    if (type == NULL) return TA_NAPI_REPLY_REFUSED;
     napi_value traceparent = answer->traceparent;
     if (traceparent == NULL) traceparent = ta_napi_send_read(env, view, TA_NAPI_SEND_TRACEPARENT);
     ta_napi_call call;
-    if (traceparent == NULL || !ta_napi_enter(env, view->wrapper, &call)) return false;
+    if (traceparent == NULL || !ta_napi_enter(env, view->wrapper, &call)) return TA_NAPI_REPLY_REFUSED;
     ta_napi_host *host = call.host;
     ta_event_in event;
     memset(&event, 0, sizeof event);
@@ -349,6 +353,12 @@ static bool ta_napi_send_reply(napi_env env, ta_napi_view *view, const ta_napi_a
     ta_napi_text raw_text = {&host->arena, "raw is the message as read, a string", {NULL, 0}};
     bool ok = napi_get_value_bigint_uint64(env, session, &event.session, &lossless) == napi_ok &&
               ta_napi_optional_text(env, sendid, &sendid_text) && ta_napi_optional_text(env, traceparent, &trace_text);
+    ta_host_location location;
+    if (ok && ta_host_locate(host->host, event.session, &location) != TA_OK) { /* the sender ended: nobody to tell */
+        ta_napi_leave(&call);
+        return TA_NAPI_REPLY_ENDED;
+    }
+    ta_napi_replied replied = TA_NAPI_REPLY_REFUSED;
     ta_napi_payload_for payload = {event.session, {0, 0}, answer->data, 0};
     if (ok && answer->name == NULL) event.flags = TA_EVENT_IN_ERROR_COMMUNICATION; /* the name is not repeated */
     else if (ok)
@@ -364,20 +374,32 @@ static bool ta_napi_send_reply(napi_env env, ta_napi_view *view, const ta_napi_a
         event.raw = raw_text.view;
         event.data = payload.payload;
         ta_status status = ta_host_send(host->host, &event);
-        if (status != TA_OK) {
+        if (status == TA_ERROR_STALE) { /* the sender ended: nobody to tell */
+            ta_napi_host_payload_release(host, payload.payload); /* still ours */
+            replied = TA_NAPI_REPLY_ENDED;
+        } else if (status != TA_OK) {
             ta_napi_host_payload_release(host, payload.payload); /* still ours */
             ta_napi_throw(env, &(ta_napi_refusal){status, answer->name ? "the answer was refused" : "the failure was refused"});
-            ok = false;
-        } else {
-            ok = ta_napi_view_flag(env, view, answer->name ? TA_NAPI_VIEW_ANSWERED : TA_NAPI_VIEW_FAILED);
+        } else if (ta_napi_view_flag(env, view, answer->name ? TA_NAPI_VIEW_ANSWERED : TA_NAPI_VIEW_FAILED)) {
+            replied = TA_NAPI_REPLY_DELIVERED;
             ta_napi_schedule(env, host);
         }
     }
     ta_napi_leave(&call);
-    return ok;
+    return replied;
 }
 
-/* send.answer(event, data?, {traceparent, origin, raw}?) */
+/* What answer() and fail() return: true when delivered, false when the
+ * sender ended meanwhile; NULL (an exception pending) when refused. */
+static napi_value ta_napi_replied_value(napi_env env, ta_napi_replied replied) {
+    napi_value result = NULL;
+    if (replied == TA_NAPI_REPLY_REFUSED) return NULL;
+    napi_get_boolean(env, replied == TA_NAPI_REPLY_DELIVERED, &result);
+    return result;
+}
+
+/* send.answer(event, data?, {traceparent, origin, raw}?): true when
+ * delivered, false when the sender ended meanwhile. */
 static napi_value ta_napi_send_answer(napi_env env, napi_callback_info info) {
     size_t argc = 3;
     napi_value argv[3] = {NULL, NULL, NULL}, self = NULL, keys, key;
@@ -418,18 +440,18 @@ static napi_value ta_napi_send_answer(napi_env env, napi_callback_info info) {
         napi_throw_type_error(env, NULL, "answer(event, data?, options?): the event is a string");
         return NULL;
     }
-    return ta_napi_send_reply(env, &view, &answer) ? undefined : NULL;
+    return ta_napi_replied_value(env, ta_napi_send_reply(env, &view, &answer));
 }
 
 /* send.fail(): error.communication for the sender, with the send's sendid
- * and trace. */
+ * and trace; false when the sender ended, as answer(). */
 static napi_value ta_napi_send_fail(napi_env env, napi_callback_info info) {
     size_t argc = 0;
     napi_value self = NULL;
     ta_napi_view view;
     if (napi_get_cb_info(env, info, &argc, NULL, &self, NULL) != napi_ok || !ta_napi_view_of(env, self, &view)) return NULL;
     ta_napi_answer answer = {NULL, ta_napi_undefined(env), NULL, NULL, NULL};
-    return ta_napi_send_reply(env, &view, &answer) ? ta_napi_undefined(env) : NULL;
+    return ta_napi_replied_value(env, ta_napi_send_reply(env, &view, &answer));
 }
 
 /* Fails a send nobody answered, for a handler that could not (ADR 0009: a
@@ -443,7 +465,7 @@ static void ta_napi_send_fail_unanswered(napi_env env, ta_napi_view *view) {
     }
     if (view->flags & (TA_NAPI_VIEW_ANSWERED | TA_NAPI_VIEW_FAILED) || view->host->host == NULL) return;
     ta_napi_answer answer = {NULL, ta_napi_undefined(env), NULL, NULL, NULL};
-    if (!ta_napi_send_reply(env, view, &answer)) {
+    if (ta_napi_send_reply(env, view, &answer) == TA_NAPI_REPLY_REFUSED) {
         napi_value ignored;
         napi_get_and_clear_last_exception(env, &ignored);
     }
@@ -588,7 +610,7 @@ static void ta_napi_dispatch_send(napi_env env, ta_napi_host *host, uint32_t ind
     }
     if (!ta_napi_is(env, handler, napi_function)) { /* no handler: a failed completion */
         ta_napi_answer answer = {NULL, ta_napi_undefined(env), NULL, NULL, NULL};
-        if (!ta_napi_send_reply(env, &view, &answer)) ta_napi_keep_error(env, host);
+        if (ta_napi_send_reply(env, &view, &answer) == TA_NAPI_REPLY_REFUSED) ta_napi_keep_error(env, host);
         return;
     }
     napi_value argv[2] = {view.wrapper, view.self}, result;
@@ -1265,10 +1287,10 @@ static bool ta_napi_invocation_start(napi_env env, ta_napi_invocation *invocatio
  * UNINVOKE. A promise of the service (an async handler) makes the
  * invocation starting until it settles (ta_napi_invocation_start). No
  * handler, or one that throws: error.communication for the invoker
- * (unless it cancelled it already in this batch), the error reported after
- * the turn, and the entry kept as failed. A restored invocation with no
- * handler is the application's choice not to start it again: the invoker
- * hears so, and nothing is thrown. */
+ * (unless it cancelled it already in this batch) and the entry kept as
+ * failed; a handler's error is reported after the turn, while a type with
+ * no handler throws nothing: a chart (an untrusted one on quickjs) picks
+ * the type, and the application's process is not its to end. */
 static void ta_napi_dispatch_invoke(napi_env env, const ta_napi_batch *batch, uint32_t index) {
     ta_napi_host *host = batch->state->host;
     napi_value wrapper = ta_napi_self(env, host), handlers = wrapper ? ta_napi_handlers(env, wrapper) : NULL;
@@ -1296,15 +1318,6 @@ static void ta_napi_dispatch_invoke(napi_env env, const ta_napi_batch *batch, ui
             if (ta_napi_invocation_start(env, &invocation, result)) return;
             started = false;
         }
-    } else if (!(invocation.flags & TA_NAPI_INVOCATION_RESTORED)) {
-        size_t length = 0;
-        char name[128] = "";
-        char message[192] = "no service is registered for the invoke type \"";
-        if (napi_get_value_string_utf8(env, type, name, sizeof name, &length) != napi_ok) length = 0;
-        size_t at = strlen(message); /* 46 + at most 127 + 2 bytes: it fits */
-        memcpy(message + at, name, length);
-        memcpy(message + at + length, "\"", 2);
-        ta_napi_throw(env, &(ta_napi_refusal){TA_ERROR_UNSUPPORTED, message});
     }
     if (!started) { /* it does not run: kept as failed, so sends to it fail too, until the UNINVOKE */
         ta_napi_invocation_fail(env, &invocation, &(ta_napi_invocation_failure){NULL, !ta_napi_uninvoked_in_batch(batch, index)});

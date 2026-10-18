@@ -53,7 +53,7 @@ customers upload, which the platform runs for them without trusting it.
 | [`thrower.scxml`](uploads/thrower.scxml) | reads a field that is not there | `error.execution` for each reading, then suspended | nothing |
 | [`nosy.scxml`](uploads/nosy.scxml) | looks for `process`, `require`, `fetch`, timers and a way out of the realm | its own alert says `undefined` for each and `refused: ReferenceError`; `require(...)` is `error.execution` | nothing |
 | [`rogue.scxml`](uploads/rogue.scxml) | sends `reboot` to another customer's device, a forged reading to that customer's rule, the reading to a web server | a violation for each refused send, `error.communication` and `error.execution`, then suspended | nothing: the device and the rule never get them |
-| [`invoker.scxml`](uploads/invoker.scxml) | `<invoke type="urn:shell">` | a violation, and the rule suspended at once | nothing (but see "Surprises") |
+| [`invoker.scxml`](uploads/invoker.scxml) | `<invoke type="urn:shell">` | `error.communication`: the platform runs no such service | nothing: a type with no handler throws nothing in the platform |
 | [`busy.scxml`](uploads/busy.scxml) | sends itself an event, forever | the rule suspended for its fuel | its host interleaves with theirs until the audit |
 
 A template rule whose condition or message does not parse is refused at
@@ -199,9 +199,8 @@ Recorded in `docs/log.xml` with `example="iot-rules"`:
   chart's JavaScript.
 - `l-p4-examples-iot-error-reason`: nothing says why an evaluation failed.
 - `l-p4-examples-iot-invoke-crash`: a sandboxed chart's `<invoke>` of an
-  unknown type throws from the host's turn, and with nothing waiting that
-  ends the process; the platform waits on `idle()` after each input it
-  makes, and `main.mjs` handles `uncaughtException` for the rest.
+  unknown type threw from the host's turn, which could end the process.
+  Fixed: the invoker gets `error.communication`, and nothing is thrown.
 - `l-p4-examples-iot-script-let`: a transition's script with a top-level
   `let` runs once, and fails every time after.
 

@@ -192,7 +192,10 @@ The rules the Python binding follows hold here too (bindings.md, sections
   view. When it returns a thenable (an async function, or a plain function
   returning a promise, which a check at registration would miss), the
   addon fills that view with every field before the ack, and its
-  `answer()` and `fail()` then work any time while the host lives. The
+  `answer()` and `fail()` then work any time while the host lives: they
+  return `true` when delivered and `false` when the sender ended meanwhile
+  (2026-10-18, l-p4-examples-gateway-answer-ended; Python raises), and
+  any other refusal throws. The
   view records whether it was answered or failed: a promise that rejects
   before an answer fails the send (`error.communication` for the sender)
   and stays an unhandled rejection; one that rejects after an answer
@@ -280,16 +283,17 @@ The rules the Python binding follows hold here too (bindings.md, sections
   (unhandled, as a handler's promise's); after `close()` a settling
   promise is ignored. No handler, or a handler that throws: `ta_host_send`
   with `TA_EVENT_IN_ERROR_COMMUNICATION | TA_EVENT_IN_FROM_INVOKE` to the
-  invoker and the error reported as "The loop" says; none when an
-  UNINVOKE of the same token follows in the open batch. A failed start
+  invoker, none when an UNINVOKE of the same token follows in the open
+  batch; a handler's error is reported as "The loop" says, while a type
+  with no handler throws nothing (a chart picks the type: an untrusted
+  one must not end the process). A failed start
   stays as an entry marked failed, so each send to it gets
   `error.communication` with its sendid, until the UNINVOKE (no `stop`).
   A `receive` that throws, or whose promise rejects (its view filled
   before the ack, as an I/O processor's), is a crash: the invoker gets
   `error.communication` with the send's sendid, and the entry stays failed
   without the service (dropped, not stopped). A restored host's first run
-  announces each invocation that was running; a type with no handler
-  gives `error.communication` and throws nothing.
+  announces each invocation that was running, as any INVOKE.
 - **Other systems** (ADR 0014; ADR 0017, decisions 4 and 5;
   bindings.md section 9): the `transport` handler gets every send to
   another system's address (`io_processor` 0; core decides local or not),
@@ -835,8 +839,9 @@ file.
   promise that rejects is a failed start: the invoker and each queued
   send are told'`, `'a failure to
   start an invocation cancelled in the same run is not reported to the
-  invoker'` and `'a restore without the service tells the invoker, and
-  throws nothing'`.
+  invoker'`, `'a restore without the service tells the invoker, and
+  throws nothing'` and `'no service for the type is a communication error
+  for the invoker, and nothing is thrown'`.
 - **Sweep and wake refuse numbers out of range**, never wrapped. Test:
   `test/hibernation.test.mjs: 'sweep, hibernate and wake refuse numbers out
   of range'`.

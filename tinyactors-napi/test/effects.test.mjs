@@ -119,6 +119,31 @@ test('answer and fail: once, refused after either; options are checked', async (
   host.close();
 });
 
+test('answer() and fail() give true when delivered and false when the sender ended; a closed host still throws', async () => {
+  const now = [];
+  const first = caller((h, send) => { now.push(send.answer('reply', { n: 2 })); });
+  await first.host.idle();
+  equal(now.join(), 'true', 'delivered in the handler');
+  first.host.close();
+  for (const reply of [(send) => send.answer('reply', { late: 1 }), (send) => send.fail()]) {
+    let release, view;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const got = [];
+    const { host, outcomes } = caller(async (h, send) => { view = send; await gate; got.push(reply(send)); });
+    if (!(await until(() => view !== undefined))) throw new Error('the handler was never called');
+    host.terminate(host.actorByName('caller'));
+    if (!(await until(() => host.actorByName('caller') === undefined))) throw new Error('the caller did not end');
+    release();
+    if (!(await until(() => got.length > 0))) throw new Error('the late reply never ran');
+    equal(got.join(), 'false', 'not delivered: the sender ended');
+    equal(outcomes.length, 0, 'nobody heard it');
+    host.close();
+    let closed;
+    try { reply(view); } catch (error) { closed = error.status; }
+    equal(closed, 'TA_ERROR_STATE', 'a closed host refuses');
+  }
+});
+
 test('answer keeps the send\'s trace; traceparent: null starts a new one', async () => {
   const chart = scxml('tracer', `
     <state id="s">

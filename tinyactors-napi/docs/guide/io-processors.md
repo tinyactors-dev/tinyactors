@@ -101,6 +101,12 @@ host moves on. Its `answer()` and `fail()` then work whenever the promise
 gets there, as long as the host is open. Until then the actor goes on with
 its other events; the answer arrives as an event like any other.
 
+The sender may end while your promise is pending (a session that logged
+out, an actor terminated). Then `answer()` and `fail()` deliver nothing
+and return `false`; they return `true` when the sender gets the event.
+Any other refusal still throws: an answer after another, a closed host
+(`TA_ERROR_STATE`), data the value table cannot hold.
+
 ```js
 import { compileCharts, Host } from '@tinyactors/node';
 

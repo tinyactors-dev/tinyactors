@@ -815,9 +815,8 @@ static void ta_python_dispatch_invoke(ta_python_host *host, uint32_t index) {
     PyObject_GC_Track((PyObject *)invocation);
     PyObject *handler = NULL, *service = NULL, *key = NULL, *entry = NULL;
     int found = invocation->data ? PyDict_GetItemRef(host->services, invocation->type, &handler) : -1;
-    /* none for a restored invocation: the application chose not to start it again, and the invoker hears so */
-    if (found == 0 && !invocation->restored)
-        PyErr_Format(host->state->error, "no service is registered for the invoke type %R", invocation->type);
+    /* none: the invoker hears so, and nothing is raised (a chart picks the type, and an
+     * untrusted one must not end the application's run) */
     if (found > 0) service = PyObject_CallFunctionObjArgs(handler, (PyObject *)host, (PyObject *)invocation, NULL);
     if (service && invocation->ended) goto done; /* the handler called done(): nothing to keep */
     if (!service) { /* it does not run: kept as failed, so sends to it fail too, until the UNINVOKE */

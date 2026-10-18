@@ -210,14 +210,11 @@ test('a service needs neither receive nor stop', async () => {
   same(logs.labelled('error'), [], 'no error');
 });
 
-test('no service for the type is a communication error, reported after the turn', async () => {
+test('no service for the type is a communication error for the invoker, and nothing is thrown', async () => {
   const logs = new Logs();
   const host = client({ log: logs.handler });
   host.spawn(host.chart('client'));
-  const error = await rejected(host.idle());
-  if (!(error instanceof TinyactorsError) || !/no service is registered for the invoke type "urn:test:echo"/.test(error.message))
-    throw error;
-  await host.idle();
+  await host.idle(); // resolves: no error reaches the application
   host.close();
   same(logs.labelled('error'), ['communication'], 'the invoker\'s error');
 });

@@ -16,7 +16,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import { parseArgs } from 'node:util';
-import { TinyactorsError } from '@tinyactors/node';
 import { costPerDevice, holdTimes, nativeEscape, nativeRule, neighbourDelay } from './measure.mjs';
 import { Platform, SANDBOX } from './platform.mjs';
 
@@ -168,14 +167,6 @@ async function compare() {
 }
 
 if (import.meta.main ?? process.argv[1] === new URL(import.meta.url).pathname) {
-  // A rule's own timers can start a turn that nobody waits for; an
-  // <invoke> in it then throws from the turn (docs/log.xml,
-  // l-p4-examples-iot-invoke-crash). The next audit finds the rule's
-  // error.communication; the process goes on.
-  process.on('uncaughtException', (error) => {
-    if (!(error instanceof TinyactorsError)) throw error;
-    console.error(`a rule's host failed outside a turn the platform waited for: ${error.message}`);
-  });
   const { values } = parseArgs({
     options: {
       samples: { type: 'string', default: '40' }, seed: { type: 'string', default: '1' },

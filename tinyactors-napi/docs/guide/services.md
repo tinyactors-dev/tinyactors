@@ -237,9 +237,10 @@ that throws or whose promise rejects (the service crashed, and is dropped
 without `stop`), or no handler for a restored invocation. Each later send
 to that invocation gets one too, until the invoker leaves the state. The
 invoker gets none when it cancelled the invocation in the same step that
-started it. The error is reported after the turn, as any handler's; a
-restored invocation with no handler throws nothing, since declining to
-start it again was your choice.
+started it. A handler's error is reported after the turn, as any
+handler's. A type with no handler throws nothing: the chart chose the
+type, and a chart (an untrusted one on quickjs, say) must not be able to
+end your process by naming one you do not serve.
 
 ```js
 import { compileCharts, Host } from '@tinyactors/node';

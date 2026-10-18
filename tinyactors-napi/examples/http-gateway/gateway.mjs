@@ -86,18 +86,13 @@ export class Gateway {
             } finally {
               this.forwarding--;
             }
-            // The session may have ended while the upstream worked (a
-            // logout, an expiry), or the gateway closed: then answer() and
-            // fail() throw (TA_ERROR_STALE, "no live session takes this
-            // data"), and nobody is left to tell. A workaround (docs/log.xml,
-            // l-p4-examples-gateway-answer-ended): nothing says whether the
-            // sender still lives.
-            try {
-              if (answer === undefined) send.fail();
-              else send.answer('upstream.response', answer);
-            } catch (error) {
-              if (!(error instanceof TinyactorsError) || !['TA_ERROR_STALE', 'TA_ERROR_STATE'].includes(error.status)) throw error;
-            }
+            // The gateway may have closed while the upstream worked: nobody
+            // is left to tell. A session that ended meanwhile (a logout, an
+            // expiry) makes answer() and fail() deliver nothing and give
+            // false.
+            if (host.closed) return;
+            if (answer === undefined) send.fail();
+            else send.answer('upstream.response', answer);
           },
           'urn:gateway:http': (host, send) => {
             if (send.event === 'respond') this.respond(send.data, send.traceparent);

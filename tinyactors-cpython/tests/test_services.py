@@ -110,13 +110,11 @@ class Services(unittest.TestCase):
             host.run_until_idle()
         self.assertEqual(logs.labelled("answer"), ["hi echo"])
 
-    def test_no_service_for_the_type_is_a_communication_error(self):
+    def test_no_service_for_the_type_is_a_communication_error_and_nothing_is_raised(self):
         logs = Logs()
         with host_with([("client.scxml", CLIENT["python"])], log=logs) as host:
             host.spawn(host.chart("client"))
-            with self.assertRaisesRegex(tinyactors.TinyactorsError, "no service is registered"):
-                host.run_until_idle()
-            host.run_until_idle()
+            host.run_until_idle()  # raises nothing
         self.assertEqual(logs.labelled("error"), ["communication"])
 
     def test_a_handler_that_raises_is_a_communication_error(self):

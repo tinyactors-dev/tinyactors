@@ -252,13 +252,13 @@ test('a rule that sends to a device, to another customer\'s rule or to a server 
   }
 });
 
-test('a rule that invokes a service does not end the process: it is reported and suspended', async () => {
+test('a rule that invokes a service does not end the process: its invoker gets error.communication', async () => {
   const { platform } = await setup();
   try {
     platform.uploadChart('acme', { file: 'invoker.scxml', text: upload('invoker.scxml') });
     await readings(platform, 20);
-    assert.deepEqual(of(platform, 'acme', 'rule.violation', 'invoker').map((m) => m.what), ['no service is registered for the invoke type "urn:shell"']);
-    assert.equal(of(platform, 'acme', 'rule.suspended', 'invoker').length, 1);
+    assert.deepEqual(of(platform, 'acme', 'rule.error', 'invoker').map((m) => [m.error, m.count]), [['error.communication', 1]]);
+    assert.deepEqual(of(platform, 'acme', 'rule.violation', 'invoker'), []);
     await globexStillAlerts(platform);
   } finally {
     platform.close();
@@ -304,6 +304,6 @@ test('the same rules on the native datamodel: one reaches the process, one never
 test('main.mjs: a day of the platform on the real clock', async () => {
   const summary = await run({ samples: 30, quiet: true });
   assert.ok(summary.alerts.globex > 0, 'globex got its alerts');
-  assert.deepEqual(summary.suspended.sort(), ['busy', 'hoard', 'invoker', 'nosy', 'rogue', 'spin', 'thrower']);
+  assert.deepEqual(summary.suspended.sort(), ['busy', 'hoard', 'nosy', 'rogue', 'spin', 'thrower']);
   assert.deepEqual(summary.rejected.sort(), ['broken', 'peeker', 'typo']);
 });

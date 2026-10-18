@@ -338,11 +338,14 @@ export interface Send {
   /** Sends `event` back to the sender, with this send's `sendid`. It
    * continues the send's trace unless `options.traceparent` is given
    * (`null`: a new trace). Once: a second answer, or one after `fail()`,
-   * throws `TA_ERROR_STATE`. */
-  answer(event: string, data?: Value, options?: AnswerOptions): void;
+   * throws `TA_ERROR_STATE`, as does a closed host. Returns `true` when the
+   * sender gets it, `false` when the sender ended meanwhile (an answer
+   * given after the handler returned): nothing is delivered. */
+  answer(event: string, data?: Value, options?: AnswerOptions): boolean;
   /** Gives the sender `error.communication` with this send's `sendid`:
-   * the request could not be done. */
-  fail(): void;
+   * the request could not be done. Returns `true` when the sender gets it,
+   * `false` when it ended meanwhile, as `answer`. */
+  fail(): boolean;
 }
 
 /** The options of `send.answer`. */

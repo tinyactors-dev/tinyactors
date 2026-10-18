@@ -334,8 +334,9 @@ Decided by the maintainer (2026-10-13); every item is in
   (a thin `Send` view, `type` `None`), a `TA_EFFECT_UNINVOKE` to its
   **`stop(host)`** (then it is dropped); both optional. No handler, or a
   handler that raises: `ta_host_send` with
-  `TA_EVENT_IN_ERROR_COMMUNICATION` to the invoker, and the exception is
-  raised after the turn; none when an UNINVOKE of the same token follows
+  `TA_EVENT_IN_ERROR_COMMUNICATION` to the invoker, and a handler's
+  exception is raised after the turn (no handler raises nothing: a chart
+  picks the type); none when an UNINVOKE of the same token follows
   in the open batch (cancelled in the run that started it). A failed
   start stays as an entry marked failed, so each send to it gets
   `ERROR_COMMUNICATION` with its sendid, until the UNINVOKE (no `stop`).

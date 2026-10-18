@@ -148,7 +148,7 @@ export class Platform {
     }
     const rule = {
       id, customer: owner.id, devices: devices === '*' ? '*' : new Set(devices), sustain,
-      status: 'active', reason: undefined, logs: 0, watching: false,
+      status: 'active', reason: undefined, logs: 0,
       /** session -> device, for the reports */
       sessions: new Map(),
       /** the counters at the last audit */
@@ -205,7 +205,6 @@ export class Platform {
           rule.sessions.set(session, reading.device);
         }
         rule.host.send(session, 'reading', reading);
-        this.#watch(rule);
       } catch (error) {
         // the rule's actor for this device ended (a <final>, which a
         // customer's chart may reach): it is spawned again at the next
@@ -214,32 +213,6 @@ export class Platform {
         this.#violation(rule, `could not take a reading: ${error.message}`, reading.device);
       }
     }
-  }
-
-  /**
-   * An error a rule's host reports after a turn is the rule's doing: the
-   * platform's own handlers throw nothing. The one a chart can cause is an
-   * `<invoke>` of a type with no service, which no options can prevent:
-   * the host throws it from its turn, and with nobody waiting it is an
-   * uncaught exception that ends the process (docs/log.xml,
-   * l-p4-examples-iot-invoke-crash). So the platform waits for the turns
-   * its own inputs cause, here, and `main.mjs` catches the rest (turns of a
-   * rule's own timers) at the process.
-   */
-  #watch(rule) {
-    if (rule.watching) return;
-    rule.watching = true;
-    rule.host.idle().then(
-      () => { rule.watching = false; },
-      (error) => { rule.watching = false; this.hostError(rule, error); },
-    );
-  }
-
-  /** Reports and suspends a rule whose host threw from its turn. */
-  hostError(rule, error) {
-    if (rule.status !== 'active') return; // its host was closed: nothing to say
-    this.#violation(rule, error.message);
-    this.#suspend(rule, `its host failed: ${error.message}`);
   }
 
   #violation(rule, what, device) {
@@ -293,14 +266,14 @@ export class Platform {
   async settle({ rounds = 3, patience = 50 } = {}) {
     for (let round = 0; round < rounds; round++) {
       await nextTick();
-      const hosts = [[this.fleet, undefined]];
+      const hosts = [this.fleet];
       for (const owner of this.customers.values()) {
-        for (const rule of owner.rules.values()) if (rule.status === 'active') hosts.push([rule.host, rule]);
+        for (const rule of owner.rules.values()) if (rule.status === 'active') hosts.push(rule.host);
       }
-      await Promise.all(hosts.map(([host, rule]) => Promise.race([
-        host.idle().catch((error) => { if (rule) this.hostError(rule, error); else throw error; }),
-        sleep(patience),
-      ])));
+      // an audit between (main.mjs runs them on a timer) may suspend a rule,
+      // which closes its host: its idle() rejects then, and that is no news
+      const idle = (host) => host.idle().catch((error) => { if (!host.closed) throw error; });
+      await Promise.all(hosts.map((host) => Promise.race([idle(host), sleep(patience)])));
       await this.audit();
     }
   }
