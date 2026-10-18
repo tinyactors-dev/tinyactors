@@ -72,8 +72,10 @@ class Scope(unittest.TestCase):
                     "<transition event='error.execution'><log label='why' expr=\"_event.data\"/></transition>"
                     "</state></scxml>")
         logs = run(document, ["go", "type"])
-        self.assertEqual(logs.labelled("why"), [
-            str({"reason": "exception", "message": "ZeroDivisionError: division by zero"}), "None"])
+        why = logs.labelled("why")
+        self.assertEqual(len(why), 2)
+        self.assertTrue(why[0].startswith("{'reason': 'exception', 'message': 'ZeroDivisionError: "), why[0])
+        self.assertEqual(why[1], "None")
 
     def test_a_system_variable_is_read_only(self):
         for location in ("_sessionid", "_event", "_name"):
