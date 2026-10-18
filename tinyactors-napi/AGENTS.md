@@ -1126,6 +1126,7 @@ examples/            applications over the package, each with a README and a tes
                      order-fulfillment/: payment and shipping as invoked services, timeouts, retries, cancels
                      http-gateway/: node:http sessions as actors, rate limits, an async I/O processor, OTLP export
                      chat-rooms/: rooms and users as actors, most hibernated in a file store, a bounded resident set
+                     subscription-billing/: a live population migrated to a new chart version while it bills
                      remote-python/: a Python host and a Node host over a socket (mise run remote-python)
 build/               core's amalgamation and the addon (not in git)
 ```
