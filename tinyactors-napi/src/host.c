@@ -487,7 +487,7 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
     ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
-    bool ok = ta_napi_value_write(env, config, &(ta_napi_writing){&writer, &host->arena, false, NULL});
+    bool ok = ta_napi_value_write(env, config, &(ta_napi_writing){&writer, &host->arena, false, NULL, false});
     ta_bytes cbor = {NULL, 0};
     ta_status status = ok ? ta_cbor_writer_bytes(&writer, &cbor) : TA_OK;
     if (ok && status != TA_OK) {
@@ -579,7 +579,7 @@ static bool ta_napi_host_restore_core(napi_env env, ta_napi_host *host, ta_napi_
     ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
-    bool ok = ta_napi_value_write(env, restoring->config, &(ta_napi_writing){&writer, &host->arena, false, NULL});
+    bool ok = ta_napi_value_write(env, restoring->config, &(ta_napi_writing){&writer, &host->arena, false, NULL, false});
     ta_bytes cbor = {NULL, 0};
     ta_status status = ok ? ta_cbor_writer_bytes(&writer, &cbor) : TA_OK;
     if (ok && status != TA_OK) {
@@ -933,7 +933,7 @@ bool ta_napi_host_payload(napi_env env, ta_napi_host *host, ta_napi_payload_for 
     if (host->datamodel == TA_NAPI_DATAMODEL_NATIVE) return ta_napi_native_payload(&host->native, target->value, &target->payload);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
-    bool ok = ta_napi_value_write(env, target->value, &(ta_napi_writing){&writer, &host->arena, false, NULL});
+    bool ok = ta_napi_value_write(env, target->value, &(ta_napi_writing){&writer, &host->arena, false, NULL, true}); /* an Address: tag 32, its text to quickjs */
     if (ok) {
         ta_bytes cbor;
         ta_status status = ta_cbor_writer_bytes(&writer, &cbor);

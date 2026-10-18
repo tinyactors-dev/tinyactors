@@ -140,14 +140,15 @@ napi_value ta_napi_realm_new(ta_napi_native *native) {
     napi_env env = native->host->env;
     ta_napi_instance *instance = ta_napi_realm_module(env);
     if (instance == NULL) return NULL;
-    napi_value vm, realm, realms, in, context, made, kit, prototype, record;
+    napi_value vm, realm, realms, args[2], context, made, kit, prototype, record;
     if (napi_get_reference_value(env, instance->vm, &vm) != napi_ok ||
         napi_get_reference_value(env, instance->realm, &realm) != napi_ok ||
         napi_get_reference_value(env, instance->realms, &realms) != napi_ok ||
-        napi_get_reference_value(env, instance->in, &in) != napi_ok)
+        napi_get_reference_value(env, instance->in, &args[0]) != napi_ok ||
+        napi_get_reference_value(env, instance->address, &args[1]) != napi_ok)
         return NULL;
     if ((context = ta_napi_call_method(env, &(ta_napi_method){vm, "createContext", 0, NULL})) == NULL ||
-        (made = ta_napi_run_in(env, realm, context)) == NULL || napi_call_function(env, context, made, 1, &in, &kit) != napi_ok ||
+        (made = ta_napi_run_in(env, realm, context)) == NULL || napi_call_function(env, context, made, 2, args, &kit) != napi_ok ||
         napi_get_named_property(env, kit, "objectPrototype", &prototype) != napi_ok ||
         ta_napi_call_method(env, &(ta_napi_method){realms, "add", 1, &prototype}) == NULL ||
         napi_create_array_with_length(env, 2, &record) != napi_ok ||

@@ -14,11 +14,6 @@
 import { Address, decode, encode } from '@tinyactors/node';
 import { Frames, frame } from '../remote-python/remote.mjs';
 
-/** A message for the wire: the transport's send.message, with its two
- * addresses written as their text (`Address.toJSON`). */
-export function wireMessage(message) {
-  return { ...message, target: message.target.toJSON(), origin: message.origin?.toJSON() ?? null };
-}
 
 export class Link {
   /** frames written on the current connection, and frames read from it */
@@ -49,7 +44,7 @@ export class Link {
 
   /** The host's `transport` handler: every send to another system. */
   transport = (host, send) => {
-    if (send.target.system !== this.peer || !this.#write('message.send', wireMessage(send.message))) {
+    if (send.target.system !== this.peer || !this.#write('message.send', send.message)) {
       send.fail(); // no route, or no connection: the sender gets error.communication
     }
   };
@@ -115,8 +110,8 @@ export class Link {
         // no such actor here (an unknown SKU, a cart that ended): tell the sender
         this.#write('message.fail', { sender: params.origin, sendid: params.sendid });
       }
-    } else if (notification.method === 'message.fail' && typeof params.sender === 'string') {
-      const sender = new Address(params.sender);
+    } else if (notification.method === 'message.fail' && params.sender instanceof Address) {
+      const sender = params.sender;
       if (sender.system === this.system) {
         try {
           this.host.fail(sender, params.sendid ?? undefined); // only a send of ours

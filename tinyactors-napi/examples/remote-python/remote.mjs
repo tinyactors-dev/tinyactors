@@ -51,12 +51,6 @@ export class Frames {
   }
 }
 
-/** A message for the wire: the transport's send.message with its target
- * and origin, Address values, written as their text (values have no
- * address type in JavaScript: docs/values.md). */
-export function wireMessage(message) {
-  return { ...message, target: String(message.target), origin: String(message.origin) };
-}
 
 /** Lines a process writes, each a JSON object, with a way to wait for one. */
 class Lines {
@@ -125,7 +119,7 @@ export async function startNode({ port, datamodel = 'native', app = () => {} }) 
         return;
       }
       const message = send.message;
-      socket.write(frame('message.send', wireMessage(message)), (error) => {
+      socket.write(frame('message.send', message), (error) => {
         if (error) host.fail(message.origin, message.sendid); // the write failed later
       });
     },
@@ -149,7 +143,7 @@ export async function startNode({ port, datamodel = 'native', app = () => {} }) 
         socket.write(frame('message.fail', { sender: params.origin, sendid: params.sendid }));
       }
     } else if (notification.method === 'message.fail') {
-      const sender = new Address(String(params.sender));
+      const sender = params.sender instanceof Address ? params.sender : new Address(String(params.sender));
       if (sender.system === SYSTEM) host.fail(sender, params.sendid ?? undefined); // only a send of ours
     }
   };

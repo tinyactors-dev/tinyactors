@@ -160,6 +160,7 @@ typedef struct ta_napi_writing {
     ta_growable_arena *arena;
     bool wire; /* the native datamodel's to_wire: values.txt's ECMAScript rules (values.c) */
     ta_status *refused; /* out, when not NULL: the refusal's status (TA_ERROR_EXECUTION: an exception) */
+    bool addresses; /* encode's: an Address is tag 32 on its text */
 } ta_napi_writing;
 
 /* Writes `value` into writing->writer as the value table's CBOR. On a
@@ -184,6 +185,7 @@ typedef struct ta_napi_decoder {
     ta_cbor_reader reader;
     ta_napi_refusal refusal;
     bool thrown;
+    bool addresses; /* decode's: tag 32 is an Address, not its text */
 } ta_napi_decoder;
 
 void ta_napi_decoder_init(ta_napi_decoder *decoder, napi_env env, ta_bytes cbor);
@@ -517,6 +519,8 @@ bool ta_napi_document_close(ta_napi_document *document, bool keep);
 
 /* ---- address.c: Address (AGENTS.md, "Other systems") -------------------- */
 
+/* Whether `value` is an Address (its type tag). */
+bool ta_napi_is_address(napi_env env, napi_value value);
 /* An Address of `text` (UTF-8), or NULL with an exception pending. */
 napi_value ta_napi_address_new(napi_env env, ta_string_view text);
 /* `value`'s text when it is an Address, else `value` itself: what an input

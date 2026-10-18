@@ -68,10 +68,9 @@ each side's `encode` and read by its `decode`:
 | `message.send` | a transport's `send.message`: `target`, `event`, `data`, `sendid`, `origin`, `traceparent` | `host.send(params)`, unchanged; if it throws, answers `message.fail` |
 | `message.fail` | `{sender, sendid}`: the `origin` and `sendid` of a message it could not deliver | `host.fail(sender, sendid)`, when `sender` is an address of its own system |
 
-The addresses cross as their text: the Node side writes `String(address)`
-(values have no address type in JavaScript), the Python side writes its
-`Address` values as CBOR tag 32, which this package's `decode` reads as
-the text; both hosts' `host.send` take either. A field a send lacks is
+The addresses cross as CBOR tag 32: both sides' `encode` write an
+`Address` so and their `decode` read it back as one, and both hosts'
+`host.send` take an `Address` or its text. A field a send lacks is
 `null` in both bindings' `send.message`.
 
 A failure is never a key of a message: only `message.fail`, from the

@@ -27,7 +27,7 @@ const value = decode(bytes); // { name: 'ada', score: 1152921504606846976n, tags
 | a `Uint8Array` (a `Buffer` too; a view's own bytes) | bytes | a `Uint8Array` |
 | an array | an array, a hole as undefined | an array |
 | a plain object (its prototype `Object.prototype` or `null`) | a map of its own enumerable string keys, in `Object.keys` order | a plain object |
-| — | tag 32 on text (an actor reference) | its address string |
+| an `Address` | tag 32 on its text (an actor reference) | an `Address` |
 
 `undefined` and `null` stay distinct at every position: a key holding
 `undefined` is kept, and an array's `undefined` is not `null`. Every
@@ -35,10 +35,12 @@ integer comes back as itself, as a number or a `bigint`; a float holding
 an integer (`1.0` in CBOR) comes back as the number `1`, and goes out
 again as an integer.
 
-ECMAScript has no reference type, so an actor reference inside a value
-(tag 32) is read as its address string, and `encode` never writes tag 32.
-The API's own address fields (`send.origin`, the transport's
-`send.target`) are `Address` values instead.
+`encode` and `decode` keep an actor reference: an `Address` is tag 32 on
+its text and comes back an `Address`, as in a Python host, so a
+transport's `send.message` crosses a wire as it is. A chart has no
+reference type: inside a value a chart reads (event data, params) an
+`Address` is its text, and an actor reference a chart sends reaches you
+as its address string.
 
 ## Refusals
 

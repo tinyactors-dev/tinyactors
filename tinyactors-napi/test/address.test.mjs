@@ -91,4 +91,17 @@ test('send and fail take an Address as target, send an Address as origin', async
   host.close();
 });
 
+test('an Address inside a value a chart takes is its text there', async () => {
+  const chart = scxml('reader', `
+    <state id="s"><transition event="who"><log label="who" expr="typeof _event.data.who + ' ' + _event.data.who + ' ' + _event.data.list[0]"/></transition></state>`);
+  const seen = [];
+  const host = hostWith({ reader: chart }, { log: (h, entry) => seen.push(entry.text) });
+  const session = host.spawn(host.chart('reader'));
+  const who = new Address('tinyactors://shop/@ada');
+  host.send(session, 'who', { who, list: [who] });
+  await host.idle();
+  host.close();
+  equal(seen.join(), 'string tinyactors://shop/@ada tinyactors://shop/@ada', 'the text');
+});
+
 await run();

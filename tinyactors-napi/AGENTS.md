@@ -494,11 +494,15 @@ The addon allocates almost nothing (bindings.md, section 6):
   `napi_get_value_int64` saturates silently; a session an input takes
   may be a safe integer too), strings as valid UTF-8 (a
   lone surrogate refused, never replaced), `Uint8Array`, arrays, plain
-  objects, `true`, `false`, `null`, `undefined`; **inside a value an
-  actor reference is its address string** (decided 2026-10-12, commit
-  `20189bdc`): tag 32 is read as its text and never written, as quickjs
-  does, since neither of Node's datamodels has a reference type. The
-  API's own address fields are `Address` values ("Other systems").
+  objects, `true`, `false`, `null`, `undefined`; **`encode` writes an
+  `Address` as tag 32 and `decode` reads tag 32 as an `Address`**
+  (2026-10-18, l-coord-encode-address, as Python's codec does), while
+  **inside a chart's values an actor reference is its address string**
+  (decided 2026-10-12, commit `20189bdc`): the datamodels read tag 32 as
+  its text, as quickjs does, and an `Address` an input carries in its
+  data is its text there, since neither of Node's datamodels has a
+  reference type. The API's own address fields are `Address` values
+  ("Other systems").
 - **`encode(value) -> Uint8Array`** and **`decode(bytes) -> value`**
   expose the one conversion the API uses (`src/values.c`, streaming with
   `ta_cbor_writer` and `ta_cbor_reader`), each with its row in

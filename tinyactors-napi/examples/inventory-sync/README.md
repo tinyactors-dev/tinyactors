@@ -69,7 +69,7 @@ item is `{method, params}`:
 
 | `method` | `params` | The receiver |
 |---|---|---|
-| `message.send` | the transport's `send.message`, its `target` and `origin` written as their text with `Address.toJSON()` | `host.send(params)`, unchanged; if it throws, answers `message.fail` |
+| `message.send` | the transport's `send.message` as it is, `encode` writing its `target` and `origin` as tag 32 | `host.send(params)`, unchanged; if it throws, answers `message.fail` |
 | `message.fail` | `{sender, sendid}`: the `origin` and `sendid` of a message it could not deliver | `host.fail(sender, sendid)`, when `sender` is an address of its own system |
 
 The warehouse listens, and the storefront connects. Each side's transport
@@ -90,8 +90,8 @@ frame waits for the delayed acknowledgement.
   sends leave the system. The wire, the connection and what to do when it
   is gone are the application's.
 - **`Address`** for the transport's `target` and `origin`: `target.system`
-  picks the connection, and `toJSON()` writes the address as its text for
-  `encode`.
+  picks the connection, and `encode` writes it as tag 32, which `decode`
+  reads back as an `Address`.
 - **Named actors** (`spawnChart('sku', { name: 'sku-tea' })`,
   `host.actorByName`): a SKU's address is its name, and the storefront
   finds a cart by the customer's cart id.

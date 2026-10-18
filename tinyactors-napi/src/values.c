@@ -54,6 +54,7 @@ typedef struct ta_napi_encoder {
     ta_napi_refusal refusal;
     bool thrown;
     bool wire;
+    bool addresses;
 } ta_napi_encoder;
 
 static bool ta_napi_refuse(ta_napi_encoder *encoder, ta_status status, const char *message) {
@@ -128,7 +129,7 @@ bool ta_napi_text_of(napi_env env, napi_value value, ta_napi_text *text) {
     }
     ta_napi_instance *instance = ta_napi_instance_of(env);
     if (instance == NULL) return false;
-    ta_napi_encoder encoder = {env, instance, text->arena, NULL, {TA_OK, NULL}, false, false};
+    ta_napi_encoder encoder = {env, instance, text->arena, NULL, {TA_OK, NULL}, false, false, false};
     if (ta_napi_utf8(&encoder, value, &text->view)) return true;
     if (!encoder.thrown) ta_napi_throw(env, &encoder.refusal);
     return false;
@@ -350,6 +351,13 @@ static bool ta_napi_write(ta_napi_encoder *encoder, napi_value value, uint32_t d
     }
     case napi_object: {
         bool is = false;
+        if (encoder->addresses && ta_napi_is_address(env, value)) { /* encode's: an actor reference, tag 32 */
+            ta_string_view text;
+            if (!ta_napi_utf8(encoder, ta_napi_address_text(env, value), &text)) return false;
+            ta_cbor_write_tag(writer, TA_CBOR_TAG_URI);
+            ta_cbor_write_text(writer, text);
+            break;
+        }
         TA_NAPI_CHECK(encoder, napi_is_array(env, value, &is));
         if (is) {
             if (!ta_napi_write_array(encoder, value, depth)) return false;
@@ -396,7 +404,7 @@ static bool ta_napi_write(ta_napi_encoder *encoder, napi_value value, uint32_t d
 bool ta_napi_value_write(napi_env env, napi_value value, const ta_napi_writing *writing) {
     ta_napi_instance *instance = ta_napi_instance_of(env);
     if (instance == NULL) return false;
-    ta_napi_encoder encoder = {env, instance, writing->arena, writing->writer, {TA_OK, NULL}, false, writing->wire};
+    ta_napi_encoder encoder = {env, instance, writing->arena, writing->writer, {TA_OK, NULL}, false, writing->wire, writing->addresses};
     bool written;
     if (writing->wire) { /* the top: what JSON leaves out is null */
         ta_napi_member member = {value, 0, false};
@@ -476,7 +484,7 @@ napi_value ta_napi_encode(napi_env env, napi_callback_info info) {
     ta_allocator scratch = ta_growable_arena_allocator(&instance->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &scratch);
-    if (ta_napi_value_write(env, argument, &(ta_napi_writing){&writer, &instance->arena, false, NULL})) {
+    if (ta_napi_value_write(env, argument, &(ta_napi_writing){&writer, &instance->arena, false, NULL, true})) {
         ta_bytes bytes;
         ta_status status = ta_cbor_writer_bytes(&writer, &bytes);
         void *data = NULL;
@@ -595,6 +603,11 @@ static napi_value ta_napi_read(ta_napi_decoder *decoder) {
         read = ta_cbor_read(&decoder->reader, &child);
         if (read != 1) return ta_napi_reject(decoder, read < 0 ? read : TA_ERROR_INVALID, "malformed or truncated CBOR");
         if (child.kind != TA_CBOR_TEXT) return ta_napi_reject(decoder, TA_ERROR_INVALID, "tag 32 on something but text");
+        if (decoder->addresses) { /* decode's: an Address */
+            out = ta_napi_address_new(env, (ta_string_view){(const char *)child.bytes.pointer, child.bytes.length});
+            if (out == NULL) return ta_napi_broke(decoder);
+            return out;
+        }
         TA_NAPI_MAKE(decoder, napi_create_string_utf8(env, (const char *)child.bytes.pointer, child.bytes.length, &out));
         return out;
     }
@@ -647,7 +660,17 @@ napi_value ta_napi_decode(napi_env env, napi_callback_info info) {
     if (napi_get_cb_info(env, info, &argc, &argument, NULL, NULL) != napi_ok) return NULL;
     ta_napi_bytes bytes = {"decode takes a Uint8Array or an ArrayBuffer", {NULL, 0}};
     if (!ta_napi_bytes_of(env, argc < 1 ? NULL : argument, &bytes)) return NULL;
-    return ta_napi_value_read(env, bytes.view);
+    ta_napi_decoder decoder;
+    ta_napi_decoder_init(&decoder, env, bytes.view);
+    decoder.addresses = true;
+    napi_value value = ta_napi_read(&decoder);
+    if (value != NULL) {
+        ta_cbor_item extra;
+        int32_t read = ta_cbor_read(&decoder.reader, &extra);
+        if (read != 0) value = ta_napi_reject(&decoder, read < 0 ? read : TA_ERROR_INVALID, "bytes after the item");
+    }
+    if (value == NULL && !decoder.thrown) ta_napi_throw(env, &decoder.refusal);
+    return value;
 }
 
 bool ta_napi_bytes_of(napi_env env, napi_value value, ta_napi_bytes *bytes) {
@@ -680,7 +703,7 @@ void ta_napi_document_open(ta_napi_document *document) {
 }
 
 bool ta_napi_document_value(napi_env env, napi_value value, ta_napi_document *document) {
-    return ta_napi_value_write(env, value, &(ta_napi_writing){&document->writer, document->arena, document->wire, &document->refused});
+    return ta_napi_value_write(env, value, &(ta_napi_writing){&document->writer, document->arena, document->wire, &document->refused, false});
 }
 
 bool ta_napi_document_close(ta_napi_document *document, bool keep) {

@@ -6,7 +6,7 @@
 // from null and refuses what is not a value (docs/values.md, "encode and a
 // datamodel's to_wire"); those cases are listed in DIFFERS with what encode
 // gives instead, and each must still be in values.txt.
-import { decode, encode, TinyactorsError } from '@tinyactors/node';
+import { Address, decode, encode, TinyactorsError } from '@tinyactors/node';
 import { hex, toHex, values } from './vectors.mjs';
 import { run, test } from './harness.mjs';
 
@@ -27,11 +27,12 @@ function refused(body, what) {
 
 // What encode gives where values.txt's case is to_wire's: the CBOR, or the
 // status of its refusal. "not ECMAScript" roundtrips not listed here pass
-// as they are: undefined stays undefined.
+// as they are: undefined stays undefined, a reference a reference.
 const DIFFERS = {
   'ECMAScript: undefined at the top is null': { back: 'f7' },
-  'not ECMAScript: an actor reference stays a reference': {
-    back: 'a166706c61796572781e74696e796163746f72733a2f2f7461622d3766332f235f7363786d6c5f34',
+  // encode and decode keep an actor reference: an Address, tag 32 again
+  'ECMAScript: an actor reference is its address': {
+    back: 'a166706c61796572d820781e74696e796163746f72733a2f2f7461622d3766332f235f7363786d6c5f34',
   },
   'undefined properties are dropped': { cbor: 'a26161f7616201' },
   'undefined in arrays is null': { cbor: '82f701' },
@@ -138,8 +139,15 @@ test('decode refuses what is not bytes with a TypeError', () => {
   }
 });
 
-test('tag 32 is read as its text', () => {
-  equal(decode(hex('d8206470656572')), 'peer', 'an actor reference');
+test('tag 32 is an Address both ways', () => {
+  const read = decode(hex('d8206470656572'));
+  equal(read instanceof Address, true, 'an Address');
+  equal(read.text, 'peer', 'its text');
+  equal(toHex(encode(read)), 'd8206470656572', 'encoded back as tag 32');
+  const sender = new Address('tinyactors://shop/#_scxml_4');
+  const message = decode(encode({ target: sender, list: [sender] }));
+  equal(message.target instanceof Address && message.list[0] instanceof Address, true, 'nested');
+  equal(String(message.target), 'tinyactors://shop/#_scxml_4', 'the text');
 });
 
 test('a key "__proto__" is an own key, and no prototype is set', () => {

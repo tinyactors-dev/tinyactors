@@ -13,7 +13,7 @@
 /* napi_type_tag_object's tag of an Address. */
 static const napi_type_tag ta_napi_address_tag = {0x7461616464726573ULL, 0x734e41504961646bULL};
 
-static bool ta_napi_is_address(napi_env env, napi_value value) {
+bool ta_napi_is_address(napi_env env, napi_value value) {
     napi_valuetype type = napi_undefined;
     bool tagged = false;
     return value != NULL && napi_typeof(env, value, &type) == napi_ok && type == napi_object &&

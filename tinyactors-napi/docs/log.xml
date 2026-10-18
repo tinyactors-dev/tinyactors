@@ -1302,7 +1302,7 @@
   <entry id="l-coord-encode-address" date="2026-10-18" step="p4-remote" kind="decision" status="resolved">
     <what>Node's encode refuses an Address, so a transport has to call String() on the addresses before encoding.</what>
     <why>Python writes an Address as tag 32, and the value table defines tag 32. One encoding in both bindings keeps a transport the same in both.</why>
-    <resolution>Decided: encode writes an Address as tag 32, and decode gives an Address back. Built in p4-surprises.</resolution>
+    <resolution>Built in napi: encode writes an Address as tag 32 on its text and decode reads tag 32 as an Address (a decoder flag and a writing flag, set by encode and decode only, so the datamodels' from_wire and to_wire keep reading tag 32 as text). An Address inside the data an input carries (host.send, a decoded message's data) is its text to the chart: the realm's copy turns an application's Address into its text (the Address class is the realm script's second argument), and the quickjs payload's CBOR writes it as tag 32, which quickjs reads as text. examples/remote-python and inventory-sync send send.message as it is (wireMessage removed). Tests: test/values.test.mjs 'tag 32 is an Address both ways'; test/address.test.mjs 'an Address inside a value a chart takes is its text there'.</resolution>
   </entry>
   <entry id="l-coord-cpython-undefined" date="2026-10-18" step="p4-remote" kind="request-to-core" status="resolved">
     <what>tinyactors-cpython: host.send(message) refuses UNDEFINED in sendid, origin or traceparent. Node gave undefined there (now null).</what>

@@ -15,10 +15,11 @@ Its `target` and `origin` are `Address`es, and its `message` is the
 outgoing half, an object of `target`, `event`, `data`, `sendid`,
 `origin` and `traceparent` (`null` for a field the send lacks), which
 the receiving side passes to `host.send(message)` as it is, in this
-process or in another binding's: a Python host takes it too. On a wire, the message is a value once its
-two addresses are strings, so `encode` writes it and `decode` reads it
-back. (`JSON.stringify` writes an `Address` as its text, so a message
-goes through JSON as it is: see "Addresses" below.)
+process or in another binding's: a Python host takes it too. On a wire,
+`encode` writes the message as it is, its addresses as CBOR's tag 32 (as
+a Python host's `encode` does), and `decode` reads them back as
+`Address`es. (`JSON.stringify` writes an `Address` as its text, so a
+message goes through JSON as it is: see "Addresses" below.)
 
 ```js
 import { Address, compileCharts, decode, encode, Host } from '@tinyactors/node';
@@ -55,10 +56,10 @@ const image = (name, text) => {
 // The wire: bytes in a queue, delivered on the next tick.
 const hosts = {};
 const wire = (message) => {
-  const bytes = encode({ ...message, target: String(message.target), origin: String(message.origin) });
+  const bytes = encode(message);
   setImmediate(() => {
     const received = decode(bytes);
-    hosts[new Address(received.target).system].send(received);
+    hosts[received.target.system].send(received);
   });
 };
 

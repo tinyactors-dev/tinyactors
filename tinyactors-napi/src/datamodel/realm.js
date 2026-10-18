@@ -9,7 +9,7 @@
 // session, _event, and XML documents. The build embeds it in the addon
 // (mise/napi.rb); it is not shipped as a file and never runs in the
 // application's realm.
-(function tinyactorsRealm(In) {
+(function tinyactorsRealm(In, Address) {
   'use strict';
   const LINK = Symbol('tinyactors.session');
   const XML = Symbol.for('tinyactors.xml');
@@ -128,6 +128,8 @@
     }
     if (typeof value === 'object') {
       if (isView(value) && tag.call(value) === '[object Uint8Array]') return new Uint8Array(value);
+      // an application's Address (decode gives them): a chart has no reference type, so its text
+      if (Address !== undefined && value instanceof Address) return value.text;
       if (value[XML] === true) {
         const made = new XMLNode(value.nodeType, value.nodeName);
         if (value[SOURCE] !== undefined) defineProperty(made, SOURCE, { value: value[SOURCE] });

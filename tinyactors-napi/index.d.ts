@@ -40,7 +40,16 @@ export type Value =
  * without narrowing first. What it holds at run time is a `Value`. */
 export type ReceivedValue = any;
 
-/** A value as CBOR bytes, the form to store or send it in.
+/** What `encode` writes: a {@link Value}, or one holding `Address`es,
+ * which it writes as CBOR's tag 32 (an actor reference). */
+export type Encodable =
+  | Value
+  | Address
+  | Encodable[]
+  | { [key: string]: Encodable };
+
+/** A value as CBOR bytes, the form to store or send it in. An `Address`
+ * is tag 32 on its text.
  *
  * Throws a `TinyactorsError`: `TA_ERROR_UNSUPPORTED` for what is not a
  * {@link Value} (a function, a symbol, a `Date`, a `Map`, a class's
@@ -53,10 +62,10 @@ export type ReceivedValue = any;
  * const bytes = encode({ sku: 'tea', qty: 2 });
  * decode(bytes); // { sku: 'tea', qty: 2 }
  */
-export function encode(value: Value): Uint8Array;
+export function encode(value: Encodable): Uint8Array;
 
 /** The value of the one CBOR item that fills `bytes`: the inverse of
- * {@link encode}. Throws a `TinyactorsError` (`TA_ERROR_INVALID`) for bytes
+ * {@link encode}, tag 32 an `Address`. Throws a `TinyactorsError` (`TA_ERROR_INVALID`) for bytes
  * that are not one such item, a `TypeError` for an argument that is not
  * bytes. */
 export function decode(bytes: Uint8Array | ArrayBuffer): ReceivedValue;
@@ -333,7 +342,7 @@ export interface Send {
    * text field the send lacks (`sendid`, `origin`, `traceparent`) is
    * `null`, as in a Python host's message, so encoded it is absent to
    * every binding. Its addresses are `Address`es, which `JSON.stringify` writes as their text
-   * (`toJSON`); convert them with `String()` for `encode`. */
+   * (`toJSON`) and `encode` as tag 32. */
   readonly message: SendMessage;
   /** Sends `event` back to the sender, with this send's `sendid`. It
    * continues the send's trace unless `options.traceparent` is given
