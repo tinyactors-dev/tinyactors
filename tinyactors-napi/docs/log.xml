@@ -1793,4 +1793,9 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <what>The step stays doing: its done-when names the protocol suite, which cannot pass against @tinyactors/wasm while the suite's setups need quickjs (l-p5-datamodel-protocol-quickjs). Everything else of it holds: scenarios 10/10 and W3C 191/191 in node, bun and Chromium through conform.mjs, the addon's datamodel tests (every shared test file) on the native datamodel in node, bun and Chromium with no native-datamodel exclusion left.</what>
     <evidence>mise run test (wasm:test)</evidence>
   </entry>
+  <entry id="l-coord-p5-datamodel-protocol" date="2026-10-18" step="p5-datamodel" kind="decision" status="resolved">
+    <what>p5-datamodel's done-when names the protocol suite, which sets up every host with datamodel quickjs. The browser package refuses quickjs until p5-quickjs.</what>
+    <why>Scenarios 10/10 and W3C 191/191 pass in node, bun and Chromium, and the native exclusions are gone. The protocol cases test the host, and they need quickjs only through the runner's setup.</why>
+    <resolution>p5-datamodel is done. The protocol gate against @tinyactors/wasm moves to p5-quickjs's done-when. The undeclared-assignment and block-function differences are accepted, because each refuses or is documented, never silent. p5-parity documents them.</resolution>
+  </entry>
 </log>
