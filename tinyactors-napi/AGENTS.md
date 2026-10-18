@@ -1003,6 +1003,12 @@ manages its development dependencies; the C toolchain is the root's.
   `test/scale.test.mjs` at 20,000 and 40,000 actors (all resident: 40,000 and 80,000; samples of 20 ms,
   four attempts); `--full` and `mise run scale` at two and four million.
   Its numbers are in README.md, "Scale".
+- `mise run examples [name...]`: the example applications
+  (`examples/<name>/`, each a README, a `main.mjs` and a `test.mjs`
+  written with `node:test`), each test under node (`node test.mjs`) and
+  bun (`bun test <path>`), every directory with a `test.mjs` unless it
+  keeps a task of its own (`NodeAPI::EXAMPLES_ELSEWHERE` in
+  `mise/napi.rb`: remote-python). `mise run test` runs them all.
 - `mise run remote-python [--test] [--rounds N]`: two systems in two
   processes (`examples/remote-python/`): a Python host of
   `tinyactors-cpython`, built by that project's own `mise run build`
@@ -1116,7 +1122,8 @@ mise/napi.rb         what the tasks share
 mise/pack.rb         the packages: the release build per target, its checks, npm pack, the smoke tests
 mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, scale, pack, release
 tools/smoke.mjs      the packages' smoke test, run where they are installed
-examples/            applications over the package, each with a README and a test;
+examples/            applications over the package, each with a README and a test (mise run examples);
+                     order-fulfillment/: payment and shipping as invoked services, timeouts, retries, cancels
                      remote-python/: a Python host and a Node host over a socket (mise run remote-python)
 build/               core's amalgamation and the addon (not in git)
 ```

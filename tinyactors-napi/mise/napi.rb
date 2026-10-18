@@ -168,6 +168,43 @@ module NodeAPI
     end
   end
 
+  # The example applications (examples/<name>/, each a README, a main.mjs
+  # and a test.mjs written with node:test): `mise run examples [name...]`,
+  # and `mise run test` after the binding's own tests. Every directory with
+  # a test.mjs is one, found by the glob, so a new example needs no change
+  # here; one that needs more than the package (another binding, a
+  # process of its own) keeps its own task and is listed in
+  # EXAMPLES_ELSEWHERE. Each test runs under node (`node --test-reporter=spec
+  # test.mjs`) and under bun (`bun test <path>`: bun's node:test runs only
+  # inside its test runner), from this directory, so `@tinyactors/node`
+  # resolves to the package; a test picks its datamodels itself.
+  EXAMPLES = ROOT.join('examples')
+  EXAMPLES_ELSEWHERE = {
+    'remote-python' => 'mise run remote-python --test (it builds tinyactors-cpython)'
+  }.freeze
+
+  def examples(names: [])
+    found = EXAMPLES.glob('*/test.mjs').sort.map { |test| test.dirname.basename.to_s }
+    runnable = found - EXAMPLES_ELSEWHERE.keys
+    unknown = names - found
+    abort "examples: no examples/<name>/test.mjs for #{unknown.join(', ')} (have #{found.join(', ')})" unless unknown.empty?
+    elsewhere = names & EXAMPLES_ELSEWHERE.keys
+    abort "examples: #{elsewhere.map { |name| "#{name} runs as #{EXAMPLES_ELSEWHERE[name]}" }.join('; ')}" unless elsewhere.empty?
+    chosen = names.empty? ? runnable : names
+    RUNTIMES.each do |runtime|
+      program = pinned(runtime)
+      chosen.each do |name|
+        test = EXAMPLES.join(name, 'test.mjs')
+        puts "examples: #{runtime} #{name}"
+        if runtime == 'node'
+          run(program, '--disable-warning=ExperimentalWarning', '--test-reporter=spec', test.to_s)
+        else
+          run(program, 'test', test.to_s)
+        end
+      end
+    end
+  end
+
   # The binding's own tests: each a program that exits 1 when a case fails
   # (test/harness.mjs), run under every runtime.
   def tests = ROOT.glob('test/*.test.mjs').sort
