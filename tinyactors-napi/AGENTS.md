@@ -1132,6 +1132,7 @@ examples/            applications over the package, each with a README and a tes
                      document-approval/: parallel reviews, history, donedata, XML records, an admin view on the typed methods
                      inventory-sync/: a warehouse and a storefront as two systems over a socket, compensation, idempotent requests
                      job-scheduler/: recurring and one-shot jobs on the real clock, retries, deadlines, drift, a graceful shutdown
+                     elevator-control/: a bank of cars, parallel regions, In(), deep history, invoked door controllers, generated scenarios
                      remote-python/: a Python host and a Node host over a socket (mise run remote-python)
 build/               core's amalgamation and the addon (not in git)
 ```
