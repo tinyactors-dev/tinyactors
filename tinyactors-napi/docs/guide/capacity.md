@@ -25,9 +25,10 @@ key is a whole number; an absent key, or 0, is the default:
 
 A size is a segment's first size, not a limit. When a pool fills, the
 host grows that segment between runs, into a new region with more of what
-ran out and the rest as it was. A pool doubles, or grows by more when
-doubling would add less than a quarter of the region, so a small pool
-beside a large region does not grow in many small copies. A grown region
+ran out and the rest as it was. A pool doubles, or grows by more, up to 16 times
+at once, when doubling would add less than a quarter of the region, so a
+small pool beside a large region grows in a few copies, and in proportion
+to itself. A grown region
 never shrinks. A run or an input is refused (`TA_ERROR_NO_MEMORY`) only
 when a pool is at its largest size (`maxActors` is at most 8,388,606) or
 the system allocator refuses the memory.

@@ -535,8 +535,9 @@ def evict(host):                          # after a turn: the cold actors leave
 **Plan the capacity up front.** A hibernated actor keeps its slot and its
 session's record in the host (about 60 B), so `system.maxActors` counts
 every actor. Instance and string memory are needed for the resident ones
-only. Left to grow, a segment grows the pool that ran out, by at least a
-quarter of its region, and its instance memory with `maxActors`,
+only. Left to grow, a segment grows the pool that ran out, by a quarter of its
+region when that is at most 16 times the pool, and its instance memory
+with `maxActors`,
 hibernated actors included. For `R` actors resident out of `N`:
 
 ```python
@@ -814,8 +815,9 @@ these matter most:
   segment and a trace context (48 B) per `maxEvents` slot; turn it off
   where nobody exports traces.
 - **Size the pools; do not let them grow.** A segment that runs out of
-  a pool grows that pool by at least a quarter of its region, copying the
-  whole region into a new block, and never shrinks.
+  a pool grows that pool (doubling it, or up to 16 times it to add a
+  quarter of its region), copying the whole region into a new block, and
+  never shrinks.
 
 ## Performance
 

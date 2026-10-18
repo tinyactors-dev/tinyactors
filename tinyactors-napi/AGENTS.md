@@ -656,8 +656,8 @@ d-dom, d-separate):
   `new_space` at 10,000), so at 40,000 the native datamodel is 747 B
   resident on node and 971 B on bun (`--actors 40000`, 2026-10-16).
   The region is sized up front here (`maxActors`); grown from the default
-  size it grows only the pool that ran out, by at least a quarter of the
-  region, and never shrinks (docs/allocation.md, finding 6, measured the
+  size it grows only the pool that ran out, by a quarter of the region
+  when that is at most 16 times the pool, and never shrinks (docs/allocation.md, finding 6, measured the
   doubling of every pool it replaced: 48,967,040 B at 40,000 actors
   against 10,415,192 B sized for them). The host's tables
   add a slot per row, the row and core's 8 B record: 32 B a session.

@@ -237,12 +237,17 @@ static int grown_config(const host_segment *segment, growth growth, ta_system_co
  * unchanged).
  *
  * A pool doubles, or more: a relocation copies the whole region, so its
- * block grows by at least a quarter of the region, up to the pool's hard
- * limit. Without it a small pool beside a big one copies the region at
- * every doubling: the events beside many actors, doubling from 256, and
- * the actors beside a large explicit maxEvents (64 to 20,000 actors beside
- * a million events: nine copies of a 595 MB region, 5.3 GB). The
- * workspaces (GROW_WORKSPACES) grow to what workspaces_wanted says, once. */
+ * block grows by a quarter of the region if the pool reaches that within
+ * GROWTH_FACTOR_MAX times its capacity, up to the pool's hard limit. Without
+ * the quarter a small pool beside a big one copies the region at every
+ * doubling: the events beside many actors, doubling from 256, and the
+ * actors beside a large explicit maxEvents (64 to 20,000 actors beside a
+ * million events: nine relocations; three with the bound, 354 MB allocated
+ * in all for a 149 MB region). Without the bound a small pool grows by the
+ * region's size, not its own: 65 delayed sends beside those took the
+ * timers from 64 to 1,048,576 (+45 MB; 1024 with it). The workspaces
+ * (GROW_WORKSPACES) grow to what workspaces_wanted says, once. */
+#define GROWTH_FACTOR_MAX 16u
 static ta_status segment_grow(ta_host *host, host_segment *segment, uint32_t pool) {
     if (host->running) return TA_ERROR_NO_MEMORY; /* nothing grows during a run */
     const size_t enough =
@@ -251,7 +256,7 @@ static ta_status segment_grow(ta_host *host, host_segment *segment, uint32_t poo
     if (pool == GROW_WORKSPACES) workspaces = workspaces_wanted(segment->system);
     ta_system_config config;
     size_t need = 0;
-    for (uint32_t factor = 2; factor; factor = factor < (1u << 30) ? factor * 2 : 0) {
+    for (uint32_t factor = 2; factor <= GROWTH_FACTOR_MAX; factor *= 2) {
         ta_system_config next;
         size_t bytes;
         if (!grown_config(segment, (growth){pool, factor, workspaces}, &next) ||

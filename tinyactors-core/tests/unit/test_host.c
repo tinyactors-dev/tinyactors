@@ -1314,8 +1314,8 @@ static void test_request_answered_with_an_error(void) {
 }
 
 /* A segment grows only the pool that ran out: spawning past maxActors
- * grows the actors, by at least a quarter of the region (8 to 512 at once
- * here, beside the default events), and the slab by what they need (a
+ * grows the actors, toward a quarter of the region but at most 16 times at
+ * once (8 to 128 here, beside the default events), and the slab by what they need (a
  * grown segment is the size of one made for that many actors), and the
  * other pools stay; events past maxEvents grow the events (and their trace
  * contexts) alone, not the trace journal. The
@@ -1329,7 +1329,7 @@ static ta_system_stats segment_stats(host_world *e, uint32_t segment) {
 
 static void test_growth_grows_what_ran_out(void) {
     host_world sized;
-    world_open(&sized, 512, NULL, 0);
+    world_open(&sized, 128, NULL, 0);
     uint32_t sized_segment = world_add(&sized, ECHO);
     ta_system_stats want = segment_stats(&sized, sized_segment);
     world_close(&sized);
@@ -1342,8 +1342,7 @@ static void test_growth_grows_what_ran_out(void) {
     for (int i = 0; i < 40; i++)
         sessions[i] = spawn(&e, "echo");
     ta_system_stats grown = segment_stats(&e, segment);
-    CHECK_EQUAL(grown.actors_capacity, 512u); /* one relocation, not 8, 16, 32, 64 */
-    CHECK(grown.region_bytes >= before.region_bytes + before.region_bytes / 4);
+    CHECK_EQUAL(grown.actors_capacity, 128u); /* one relocation, not 8, 16, 32, 64 */
     CHECK_EQUAL(grown.actors_high_water, 40u);
     CHECK_EQUAL(grown.events_capacity, before.events_capacity);
     CHECK_EQUAL(grown.timers_capacity, before.timers_capacity);
@@ -1363,7 +1362,7 @@ static void test_growth_grows_what_ran_out(void) {
     CHECK_EQUAL(more.trace_contexts_capacity, more.events_capacity); /* one per queued event */
     CHECK_EQUAL(more.trace_bytes_capacity, before.trace_bytes_capacity); /* the journal stays */
     CHECK(more.events_high_water >= events);
-    CHECK_EQUAL(more.actors_capacity, 512u);
+    CHECK_EQUAL(more.actors_capacity, 128u);
     CHECK_EQUAL(more.timers_capacity, before.timers_capacity);
     CHECK_EQUAL(more.slab_pages_capacity, grown.slab_pages_capacity);
     run(&e);
@@ -1374,8 +1373,9 @@ static void test_growth_grows_what_ran_out(void) {
 }
 
 /* Beside many actors the events are a small share of the region: their
- * pool grows by at least a quarter of the region at once, not by doubling
- * from 256, which would copy the whole region at every doubling. */
+ * pool grows by a quarter of the region at once (within 16 times its
+ * capacity), not by doubling from 256, which would copy the whole region
+ * at every doubling. */
 static void test_a_small_pool_grows_by_a_share_of_the_region(void) {
     host_world e;
     world_open(&e, 8, NULL, 0);
@@ -1392,6 +1392,7 @@ static void test_a_small_pool_grows_by_a_share_of_the_region(void) {
         CHECK_EQUAL(send(&e, first, "noop", NULL), TA_OK);
     ta_system_stats after = segment_stats(&e, segment);
     CHECK(after.events_capacity > before.events_capacity * 2);
+    CHECK(after.events_capacity <= before.events_capacity * 16);
     CHECK(after.region_bytes >= before.region_bytes + before.region_bytes / 4);
     CHECK_EQUAL(after.actors_capacity, before.actors_capacity);
     run(&e);
@@ -1437,9 +1438,9 @@ static void test_workspaces_grow_for_waiting_senders(void) {
 }
 
 /* Beside a large explicit maxEvents the actors are a small share of the
- * region: spawning past maxActors grows them by at least a quarter of the
- * region at once, not by doubling from 64, which would copy the whole
- * region at every doubling. */
+ * region: spawning past maxActors grows them by more than doubling, which
+ * would copy the whole region at every doubling, and at most 16 times at
+ * once, in proportion to themselves rather than to the region. */
 static void test_actors_grow_by_a_share_of_the_region(void) {
     host_world e;
     memset(&e, 0, sizeof e);
@@ -1462,7 +1463,7 @@ static void test_actors_grow_by_a_share_of_the_region(void) {
         spawn(&e, "echo");
     ta_system_stats after = segment_stats(&e, segment);
     CHECK(after.actors_capacity > before.actors_capacity * 2);
-    CHECK(after.region_bytes >= before.region_bytes + before.region_bytes / 4);
+    CHECK(after.actors_capacity <= before.actors_capacity * 16); /* in proportion to itself */
     CHECK_EQUAL(after.events_capacity, before.events_capacity);
     run(&e);
     world_close(&e);

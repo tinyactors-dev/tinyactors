@@ -1042,10 +1042,11 @@
     <evidence>9469cb1b 03eb3fcd b626d5a3 afa732b3 1291711e 5d5dc142 ecb80b27</evidence>
     <resolution>Workspaces grow: 4,000 senders went from 1,001 cycles to 2. Actors get a growth floor: 5.3 GB copied before, 780 MB after. A refusal that names no pool grows nothing. Stale flags fixed. host.stats pools are reported per segment. The trace journal is fixed at 128 KiB.</resolution>
   </entry>
-  <entry id="l-timer-pool-jump" date="2026-10-17" step="p2-core-memory" kind="issue" status="open">
+  <entry id="l-timer-pool-jump" date="2026-10-17" step="p2-core-memory" kind="issue" status="resolved">
     <what>Beside a large region, the quarter-of-region growth floor lets a small pool grow far: 65 delayed sends grew the timers from 64 to 8,388,608 (+360 MB, measured before the trace fix).</what>
     <why>A pool should grow in proportion to its own size, not the size of the region.</why>
     <evidence>scratchpad core-growth-fixes spike5</evidence>
+    <resolution>Fixed in core: segment_grow grows a pool toward a quarter of the region only within 16 times its capacity (GROWTH_FACTOR_MAX). spike5 re-measured side by side (dev build, x86_64 Linux, 4 CPUs): 65 delayed sends beside 20,000 actors and a million events took the timers from 64 to 1,048,576 (region 149 to 194 MB) on HEAD before, 64 to 1,024 (region unchanged at 149 MB) after; the 20,000 actors grown beside the million events took one relocation (149 MB allocated, 0.28 s) before and three (354 MB allocated in all, the same 149 MB region, 0.45 s) after. Test: tinyactors-core tests/unit/test_host_growth.c, test_a_small_pool_grows_in_proportion_to_itself.</resolution>
   </entry>
   <entry id="l-p2-docs-examples-tested" date="2026-10-17" step="p2-docs" kind="decision" status="resolved">
     <what>Every ```js block of README.md and docs/guide/*.md is a complete program; test/docs.test.mjs writes each into a temporary directory under build/ (inside the package, so the import of @tinyactors/node resolves to this build), runs it with the runtime running the test (node or bun), and compares its stdout with the ```output block that follows, when there is one. The examples choose their own datamodel, so they run in the native pass of the test task only, once per runtime. The same file checks that every export of index.d.ts and every member of Host has a doc comment.</what>

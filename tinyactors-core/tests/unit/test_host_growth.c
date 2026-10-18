@@ -54,6 +54,10 @@
                  "<transition event='done.invoke'><log expr=\"'hello'\"/></transition>"            \
                  "</state>")
 
+/* A delayed send at entry: a timer each while it waits. */
+#define DELAYED SC("delayed", "initial='s'><state id='s'><onentry>"                              \
+                              "<send event='x' delay='10s'/></onentry></state>")
+
 /* An external service invoked at entry, which the host runs (one request
  * each while it runs); an error.execution is logged. */
 #define CLIENT SC("client", "initial='s'><state id='s'><invoke type='urn:svc' src='x:y'/>"           \
@@ -142,7 +146,7 @@ static void world_all(world *w, const ta_system_config *system) {
         SOURCE("sink.scxml", SINK),       SOURCE("sender.scxml", SENDER),
         SOURCE("twice.scxml", TWICE),     SOURCE("fanout.scxml", FANOUT),
         SOURCE("raiser.scxml", RAISER),   SOURCE("parent.scxml", PARENT),
-        SOURCE("client.scxml", CLIENT)};
+        SOURCE("client.scxml", CLIENT), SOURCE("delayed.scxml", DELAYED)};
     world_add(w, (ta_source_list){sources, sizeof sources / sizeof *sources});
 }
 
@@ -298,6 +302,28 @@ static void test_external_invokes_fill_the_requests(void) {
     world_close(&w);
 }
 
+/* A small pool beside a large region grows in proportion to itself: 65
+ * delayed sends beside 100,000 events take the timers from 64 to at most 16
+ * times that, not to a quarter of the region (1,048,576 timers beside a
+ * million events before; tinyactors-napi/docs/log.xml, l-timer-pool-jump). */
+static void test_a_small_pool_grows_in_proportion_to_itself(void) {
+    ta_system_config system;
+    memset(&system, 0, sizeof system);
+    system.max_events = 100000;
+    world w;
+    world_all(&w, &system);
+    ta_system_stats before, after;
+    before.size = after.size = sizeof before;
+    ta_system_stats_get(ta_host_system(w.host, 0), &before);
+    spawn_many(&w, "delayed", 65);
+    run_until_idle(&w);
+    ta_system_stats_get(ta_host_system(w.host, 0), &after);
+    CHECK(after.timers >= 65u);
+    CHECK(after.timers_capacity > before.timers_capacity);
+    CHECK(after.timers_capacity <= 16u * before.timers_capacity);
+    world_close(&w);
+}
+
 /* 2000 actors spawned before a run, each sending at entry: the actors pool
  * grows at the spawns, the events and the slab in the drains. */
 static void test_spawns_then_sends_at_entry(void) {
@@ -341,6 +367,7 @@ int main(void) {
     RUN(test_invokes_and_done_events_fill_the_pools);
     RUN(test_spawns_then_sends_at_entry);
     RUN(test_external_invokes_fill_the_requests);
+    RUN(test_a_small_pool_grows_in_proportion_to_itself);
     RUN(test_a_refused_growth_is_exhausted);
     TEST_MAIN_END();
 }

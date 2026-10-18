@@ -117,10 +117,12 @@ runs, into a new block with more of what ran out and the rest as it was
 | the slab | `stringBytes` doubles (or more) |
 
 A pool grows by more than double when doubling would add less than a
-quarter of the segment's region: a relocation copies the whole region, so
-the events beside 80,000 actors grow from 256 to 131,072 at once rather
-than in nine copies of it, and the actors beside a `maxEvents` of a
-million grow from 64 to 1,048,576 at once. Each is clamped to its limit; a
+quarter of the segment's region, up to 16 times its capacity at once: a
+relocation copies the whole region, so a pool beside a much larger one
+grows in a few copies rather than at every doubling (the actors beside a
+`maxEvents` of a million, from 64 to 20,000, in three), and a small pool
+grows in proportion to itself, not to the region (65 delayed sends beside
+them take the timers from 64 to 1,024). Each is clamped to its limit; a
 pool at its limit is not grown again, and
 the input or the run is refused (`TA_ERROR_NO_MEMORY`, `TA_RUN_EXHAUSTED`).
 A workspace is never refused: an actor waits for a free one, and a
