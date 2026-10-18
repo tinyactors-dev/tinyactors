@@ -1701,9 +1701,53 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <evidence>wasm/src/*.c; wasm/test/module.test.mjs</evidence>
     <resolution>Built as stated; p5-api builds the classes over it.</resolution>
   </entry>
-  <entry id="l-p5-build-deferred" date="2026-10-18" step="p5-build" kind="deviation" status="open">
+  <entry id="l-p5-build-deferred" date="2026-10-18" step="p5-build" kind="deviation" status="resolved">
     <what>Not in p5-build, left to p5-api: Host.restore (ta_host_restore with ta_host_snapshot_unpack and _image) has no export yet; the JavaScript value table's refusals (wasm/lib/cbor.mjs writes and reads what a config and a reply hold, nothing more); the FinalizationRegistry for an unclosed host. Everything else of the "does" is built: the host and its arenas, the inputs, ta_web_turn and the drain, the effect accessors, the CBOR token calls, the vtable forwarding, txml's tree record, the poisoned state.</what>
     <why>The step's done-when needs none of them, and each depends on the classes p5-api writes.</why>
     <evidence>wasm/src/host.c; wasm/lib/cbor.mjs</evidence>
+    <resolution>Built in p5-api: Host.restore (ta_web_host_restore), the value table's refusals (wasm/lib/cbor.mjs), the FinalizationRegistry for a host nobody closed (and for a compile result).</resolution>
+  </entry>
+  <entry id="l-p5-api-native-none" date="2026-10-18" step="p5-api" kind="decision" status="resolved">
+    <what>Until p5-datamodel, a @tinyactors/wasm host with datamodel "native" (the default) holds the null datamodel only (TA_WEB_DATAMODEL_NONE): addImage of an image with an "ecmascript" chart throws TinyactorsError with TA_ERROR_UNSUPPORTED, its message naming the missing datamodel; "quickjs" throws TA_ERROR_UNSUPPORTED at new Host after its limits are checked as the addon checks them.</what>
+    <why>The brief: the datamodels of this step are null and a refused quickjs. Core refuses an image whose chart names a datamodel the environment lacks (system.c, TA_ERROR_UNSUPPORTED), so the refusal is core's and never silent; a stub native datamodel that answered nothing would differ from the addon at every evaluation.</why>
+    <evidence>wasm/lib/host.mjs (addImage, the constructor); tinyactors-core/src/system/system.c:236</evidence>
+  </entry>
+  <entry id="l-p5-api-direct-condition" date="2026-10-18" step="p5-api" kind="decision" status="open">
+    <what>lib/convenience.mjs imports #direct; package.json maps it (and the package name) to the wasm package under the export condition tinyactors-wasm, else to the addon. The staged @tinyactors/node drops the condition (mise/pack.rb, without_wasm). A browser reads no package.json, and a module Worker has no import map (spike, Chromium 141: a Worker importing #a with the page's import map fails), so the staged @tinyactors/wasm must write #direct as the relative path of its direct layer: p5-pack's to do; the test server does the same rewrite (wasm/test/serve.mjs).</what>
+    <why>One convenience layer for both packages (docs/browser.md, "One API"); bundlers and node/bun honour package.json imports with conditions, a page and a Worker do not.</why>
+    <evidence>package.json imports and exports; wasm/test/serve.mjs; the spike in the step's scratch directory (imw/)</evidence>
+  </entry>
+  <entry id="l-p5-api-exclusions" date="2026-10-18" step="p5-api" kind="note" status="open">
+    <what>The shared test files run against @tinyactors/wasm in node, bun and Chromium (wasm:test) with 260 exclusions in wasm/test/exclusions.mjs: 242 cases need the native datamodel (p5-datamodel), 3 quickjs (p5-quickjs), 9 node:child_process (the 6 liveness cases, one loop case, and the docs and scale files whole, in the browser only), 6 node:fs (3 rules cases, 2 directoryResolver cases and the links file, in the browser only). No case needs node:worker_threads apart from those already excluded for the native datamodel. A listed case a file does not have fails the run; TA_TEST_EXCLUDED=run (chromium.mjs --run-excluded) runs them and reports the ones that pass, to shorten the list as p5-datamodel lands.</what>
+    <why>The done-when allows a short list for node:fs, child_process, worker_threads and quickjs; the native datamodel's cases are excluded by the brief until p5-datamodel. test/null.test.mjs (16 cases) holds the plumbing of every API item to the addon's behaviour meanwhile, on both packages.</why>
+    <evidence>wasm/test/exclusions.mjs; mise run test (wasm:test): node, bun and chromium passes</evidence>
+  </entry>
+  <entry id="l-p5-api-unsigned" date="2026-10-18" step="p5-api" kind="issue" status="resolved">
+    <what>A wasm export's u32 result reads in JavaScript as an i32, and its u64 as a signed BigInt: TA_NIL (0xFFFFFFFF, a send to an invoked service) read as -1, so service sends were dropped. Every u32 the layer reads (effect words, pointers, which pass 2 GiB with a large population) is read with &gt;&gt;&gt; 0, and u64 fields with BigInt.asUintN(64).</what>
+    <why>WebAssembly has no unsigned integer types at its JavaScript boundary.</why>
+    <evidence>test/null.test.mjs: invoked services (failed on wasm before the fix); wasm/lib/host.mjs word(), number()</evidence>
+  </entry>
+  <entry id="l-p5-api-c-layer" date="2026-10-18" step="p5-api" kind="note" status="resolved">
+    <what>The C layer gained, for p5-api: wasm/src/codecs.c (ta_address_parse, _name_decode, _format, _format_name; ta_http_encode_post, ta_http_parse_request), ta_web_host_restore (ta_host_snapshot_unpack, the label checked in C, ta_host_snapshot_image, ta_host_restore), ta_web_host_end (trace.end and the last take at close), ta_web_host_quiescent, ta_web_host_locate, ta_web_host_takes_data, ta_web_host_now, ta_web_pending_remove (a typed method whose params could not be written). The effective config's REPLY and every take of traces and logs now reach JavaScript through ta_web.output (TA_WEB_OUTPUT_CONFIG, _TRACES, _LOGS), so a retaken request knows its signal.</what>
+    <evidence>wasm/src/codecs.c, host.c, loop.c, web.h</evidence>
+  </entry>
+  <entry id="l-p5-api-snapshot-state" date="2026-10-18" step="p5-api" kind="decision" status="open">
+    <what>A @tinyactors/wasm snapshot is labelled tinyactors-napi, as the addon's (one API; test/snapshot.test.mjs finds the label in the pack), and its datamodel state is {"native": {}} until p5-datamodel writes the native tables; a restore refuses a "native" state that is not empty (TA_ERROR_INVALID), so an addon's pack does not restore in the wasm package, nor the reverse once it holds sessions of an ECMAScript chart.</what>
+    <why>Whether a pack crosses between the packages is p5-datamodel's and p5-parity's to decide: the two native datamodels' states differ (node:vm contexts against realms).</why>
+    <evidence>wasm/lib/host.mjs (snapshot, restoreDatamodel)</evidence>
+  </entry>
+  <entry id="l-p5-api-syntax-check" date="2026-10-18" step="p5-api" kind="deviation" status="open">
+    <what>compileCharts in @tinyactors/wasm makes no syntax check of an "ecmascript" chart's expressions and scripts (the addon parses each with new vm.Script in the native datamodel's shapes): it is the native datamodel's, p5-datamodel's (docs/browser.md, "CSP"), excluded as native.</what>
+    <evidence>test/compile.test.mjs: compileCharts parses each expression and script ... (excluded)</evidence>
+  </entry>
+  <entry id="l-p5-api-clock" date="2026-10-18" step="p5-api" kind="uncertainty" status="open">
+    <what>The clock crosses the ta_web.clock import as a double of nanoseconds: a SimulatedClock past 2^53 ns (104 days) gives the host its time rounded to the double, where the addon reads the clock's uint64 exactly. clock.now and increment keep the exact BigInt.</what>
+    <why>The import returns an f64 (wasm/src/web.h); a BigInt return would cost 10 to 30 ns a crossing on every advance (docs/browser.md, "An i64 crossing as a BigInt").</why>
+    <evidence>wasm/lib/host.mjs (HostState.clock)</evidence>
+  </entry>
+  <entry id="l-p5-api-benchmark" date="2026-10-18" step="p5-api" kind="note" status="open">
+    <what>The per-event benchmark (tools/perevent.mjs, mise run perevent: 10,000 actors, 30 rounds of one inc each, the least of 3 runs, packages alternating) on the null datamodel, Linux 6.18 x64, Xeon 2.10GHz, 4 CPUs, 16 GiB: node 22.23.3: @tinyactors/node 0.624 us an event, 1.460 us a spawn and terminate, 118 B resident and 34 B heap an actor; @tinyactors/wasm 0.789 us, 1.208 us, 1192 B resident, 41 B heap; bun 1.4.1: @tinyactors/node 0.527 us, 1.213 us, 422 B, 53 B; @tinyactors/wasm 0.547 us, 0.966 us, 1756 B, 79 B. The wasm package's linear memory was 9.4 MB for the region sized for 20,016 actors (no growth during the spawns: 0 B an actor of growth). The fit chart (a cond and an assign an event) on the addon's native datamodel, the same session: node 5.021 us, bun 3.539 us; the wasm package cannot run it until p5-datamodel.</what>
+    <why>Root AGENTS.md, "Benchmarks": throughput and memory together, side by side. The wasm package costs 1.26 times the addon per event on node and 1.04 times on bun for the binding and core alone; resident per actor is higher, the region's pages written in linear memory (unverified why the addon's malloc'd region shows fewer resident bytes for the same size: lazily touched pages, likely).</why>
+    <evidence>mise run perevent; mise run perevent --chart fit</evidence>
   </entry>
 </log>
