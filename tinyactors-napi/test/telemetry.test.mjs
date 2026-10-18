@@ -326,30 +326,52 @@ test('a watch traces what it matches until it ends, on a simulated clock', async
 });
 
 test('a watch ends on the real clock, through the host\'s timer', async () => {
-  const got = [];
-  // 1 ms: ticks are nanoseconds by default
-  const host = hostWith(TWO, { config: { systemID: 't', telemetry: { flushInterval: 1_000_000 } }, telemetry: (h, signal, data) => got.push([signal, data]) });
-  async function settle() { // the host's own timer flushes what is staged
-    for (let i = 0; i < 10; i++) {
-      await sleep(5);
+  // The watch's end is the host's clock at the call plus its length, read
+  // between `start` and `started`. The event during it counts only if its
+  // turn ended before the earliest end; a machine too slow for that makes
+  // the attempt inconclusive, and the next one is four times longer. The
+  // event after it is sent once the clock is past the latest end.
+  for (let seconds = 0.25; ; seconds *= 4) {
+    const got = [];
+    // 1 ms: ticks are nanoseconds by default
+    const host = hostWith(TWO, { config: { systemID: 't', telemetry: { flushInterval: 1_000_000 } }, telemetry: (h, signal, data) => got.push([signal, data]) });
+    async function settle() { // the host's own timer flushes what is staged
+      for (let i = 0; i < 10; i++) {
+        await sleep(5);
+        await host.idle();
+      }
+    }
+    try {
+      const a = host.spawn(host.chart('a'));
+      host.traceConfigure({ sample: 0 }, () => {});
+      await settle();
+      got.length = 0;
+      const start = performance.now();
+      host.traceWatch({ rules: [{ chart: 'a', sample: 'sample' }], seconds }, () => {});
+      const started = performance.now();
+      host.send(a, 'go');
       await host.idle();
+      const ran = performance.now();
+      for (let i = 0; i < 400 && !got.some(([signal]) => signal === 'traces'); i++) { // flushed by the host's timer
+        await sleep(5);
+        await host.idle();
+      }
+      const during = await chartsTraced(host, got);
+      if (ran - start >= seconds * 1000) {
+        if (seconds >= 64) throw new Error(`the event's turn took ${ran - start} ms, longer than every watch`);
+        continue; // inconclusive: the watch may have ended before the event's turn
+      }
+      await sleep(started + seconds * 1000 + 5 - performance.now()); // past the watch's end, a deadline of the host's timer
+      await settle();
+      host.send(a, 'go');
+      await settle();
+      const after = await chartsTraced(host, got);
+      equal(`${during}|${after}`, 'a|', 'traced during the watch, not after');
+      return;
+    } finally {
+      host.close();
     }
   }
-  const a = host.spawn(host.chart('a'));
-  host.traceConfigure({ sample: 0 }, () => {});
-  host.traceWatch({ rules: [{ chart: 'a', sample: 'sample' }], seconds: 0.1 }, () => {});
-  await settle();
-  got.length = 0;
-  host.send(a, 'go');
-  await settle();
-  const during = await chartsTraced(host, got);
-  await sleep(100); // past the watch's end, a deadline of the host's timer
-  await settle();
-  host.send(a, 'go');
-  await settle();
-  const after = await chartsTraced(host, got);
-  host.close();
-  equal(`${during}|${after}`, 'a|', 'traced during the watch, not after');
 });
 
 test('options.telemetry is a function', () => {
