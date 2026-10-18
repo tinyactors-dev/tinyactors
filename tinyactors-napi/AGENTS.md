@@ -1157,6 +1157,7 @@ tools/snapshot.mjs   a deploy rehearsed on a restored copy of a live host (mise 
 tools/services.mjs   invoked services under load (mise run services)
 tools/scale.mjs      every operation at N and 2N actors, its cost within a factor (mise run scale)
 tools/store.mjs      what the gates share: the SQLite store, a seeded generator
+tools/parity.mjs     the parity check: both packages' shapes (tools/shape.mjs) compared, and each against index.d.ts
 mise/napi.rb         what the tasks share
 mise/pack.rb         the packages: the release build per target, its checks, npm pack, the smoke tests
 mise/tasks/          build, test, conform, lint, measure, stress, migration, snapshot, services, scale, pack, release
