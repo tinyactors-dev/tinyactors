@@ -1,9 +1,9 @@
 # The browser package: design (p5-design)
 
-**Status:** proposal, 2026-10-18, written before any code
-(docs/plan.xml, `p5-design`). Not yet refuted: the refutation by a fresh
-agent is pending (below, "Refutation"), and the plan's steps p5-build to
-p5-quickjs are refined from this document only after it.
+**Status:** design, 2026-10-18, written before any code (docs/plan.xml,
+`p5-design`), refuted by a fresh agent and revised with the
+coordinator's decisions on its verdicts (below, "Refutation"). The plan's
+steps p5-build to p5-quickjs are refined from it.
 
 The maintainer decided (2026-10-17, plan.xml phase p5): core compiled to
 WebAssembly with a JavaScript layer over it, not the Node-API addon over
@@ -31,8 +31,9 @@ Playwright 1.56.1); the programs are in `tools/spikes/browser/`.
 - [One API](#one-api)
 - [Packaging and releases](#packaging-and-releases)
 - [Node.js and Bun](#nodejs-and-bun)
+- [Exceptions, an unclosed host, the floor, the address space](#exceptions-an-unclosed-host-the-floor-the-address-space)
 - [Not chosen](#not-chosen)
-- [Choices for the maintainer](#choices-for-the-maintainer)
+- [Decisions and open choices](#decisions-and-open-choices)
 - [Refutation](#refutation)
 - [The steps after this one](#the-steps-after-this-one)
 
@@ -45,10 +46,12 @@ Playwright 1.56.1); the programs are in `tools/spikes/browser/`.
 | Download | about 140 KB brotli for core and the compiler at `-O2` (114 KB at `-Oz`), plus txml's 25 to 32 KB and our C layer (unmeasured); quickjs later as a second module, about 300 KB brotli more | "Sizes" |
 | Boundary | 5 to 11 ns a call either way, against 75 to 210 ns for a Node-API call; a short string 50 to 600 ns depending on how it is copied | "Boundary costs" |
 | Memory growth | no view of linear memory outlives a call that can allocate: the layer re-derives its views when one reads `byteLength === 0` (1 to 2.4 ns); nothing the application holds is a view | "Memory" |
-| Native datamodel | one realm per host (a hidden iframe on a page, `node:vm` in node and bun, the worker's own global in a Worker); a chart that declares nothing: a scope per session, as the addon (49 B); a chart whose scripts declare with `var` or `function`: a generator per session in the host's realm (245 B); with `let`, `const`, `class` or a strict script: a realm per session (an iframe: 608 KB, 3.6 ms) | "The native datamodel without node:vm" |
-| CSP | the module needs `'wasm-unsafe-eval'`, the native datamodel `'unsafe-eval'`; under a policy without it, a host on the native datamodel is refused at creation (`TA_ERROR_UNSUPPORTED`) and quickjs (later) is the way | spike, "CSP" |
+| Native datamodel | one shared realm per host (a hidden iframe on a page, `node:vm` in node and bun, the worker's own global in a Worker); a chart that declares nothing: a scope per session, as the addon (49 B); a declaring chart, `var` or lexical: one session function per chart, made once from its chart-level scripts' text, called once per session (634 B, 3.6 us in Chromium), never an iframe per session; what it cannot match is refused at attach or reported, never a silent difference | "The native datamodel without node:vm" |
+| CSP | the module needs `'wasm-unsafe-eval'`, the native datamodel `'unsafe-eval'`; without it, under a CSP `sandbox`, or with Trusted Types enforced, a host on the native datamodel is refused at creation (`TA_ERROR_UNSUPPORTED`, the message naming the directive) and quickjs (later) is the way | spike, "CSP" |
+| Exceptions | every import catches and returns a status; an exception that escapes into wasm, or a `WebAssembly.RuntimeError`, poisons the instance, and every host on it refuses with a fault naming the cause; the stack size is set explicitly | the refuter's spike: 1,000 throws leaked 256 KB of shadow stack |
 | Values | CBOR is read and written by core's `ta_cbor_reader` and `ta_cbor_writer` in C, one token per call, and JavaScript makes the values; payloads of the native datamodel are never encoded (a row in `ta_table`, the value at its slot in a JavaScript array, as the addon) | "How values cross" |
-| One API | one `index.d.ts`; the test files unchanged, run against the wasm package by an export condition in node and bun and by an import map in Chromium; a parity check of the exports | "One API" |
+| One API | one `index.d.ts`; one source of tests, made runtime-neutral (harness and helpers), run against the wasm package by an export condition in node and bun and by an import map in Chromium, with a few documented exclusions; a parity check of the exports | "One API" |
+| Loading | top-level `await` in the entry by default, and an explicit `@tinyactors/wasm/init` (`await init(url?)`) for Service Workers and old bundlers; target es2022 | "Packaging and releases" |
 | Package | a sibling package `@tinyactors/wasm`, made from `tinyactors-napi/` at the same version, changelog and tag, released to `tinyactors-dev/tinyactors-napi` | "Packaging and releases" |
 | Node and Bun | the wasm package is supported there (its tests run there anyway), the way on Windows, which has no addon; no silent fallback in `@tinyactors/node`; whether one implementation can go is decided on measurements at p5-parity | "Node.js and Bun" |
 
@@ -80,9 +83,9 @@ Following [docs/roles.md](../../docs/roles.md):
     ns, so the JavaScript side may be cheaper than the addon's
     (unverified until p5-api's benchmark);
   - *per actor:* the same as the addon for a chart that declares nothing
-    (a scope object); 245 B for a chart that declares with `var` or
-    `function`, against the addon's 60 to 143 KB `node:vm` context; 608 KB
-    in a browser for a chart that declares with `let`, `const` or `class`;
+    (a scope object); about 634 B for a declaring chart's session (its
+    session function's call), against the addon's 60 to 143 KB `node:vm`
+    context;
   - *memory:* linear memory never shrinks, so a page keeps its peak
     (core's `allocator_wasm.c`; bindings.md section 11);
   - *API surface:* none: the same `index.d.ts`;
@@ -239,6 +242,32 @@ the renderer's resident set (`/proc`), divided by the count:
   catch's) are visible to chart code; an undeclared assignment in sloppy
   code lands on the realm's global. The same generator works in a
   `node:vm` context on node and bun (`vmgen.mjs`).
+- **The session function per chart** (`chartgen.mjs`, run in an
+  iframe's realm in Chromium and in a `node:vm` context on node and bun;
+  `drive4.mjs`, `chartgen-node.mjs`): the chart-level scripts' text,
+  joined, is the body of one sloppy function made with the realm's
+  `Function` at attach, the `<data>` ids its `var`s, and a generator
+  declared in it (hoisted, so it exists before a script can throw) runs
+  each later evaluation as a direct `eval`. In all three runtimes: `let`,
+  `const` and `class` are kept between scripts and are each session's
+  own; a function of an earlier script sees a `const` of a later one; a
+  `const` assignment throws; nothing lands on the realm's global; a `var`
+  a script of executable content declares persists in its session, and a
+  `let` there is its own at each run; a restore runs the function with a
+  `throw 0` ahead of the scripts, so its functions exist and close over
+  the `var`s set afterwards. Cost: 634 B of heap and 3.6 us a session in
+  Chromium (2.2 us bun, 7.9 us node); an evaluation of `count < 3` as a
+  direct `eval` 507 ns (Chromium), 485 ns (bun), 1,855 ns (node). It
+  differs from the addon (`addon-declaring.mjs` shows the addon's side)
+  in four places: a chart-level script that throws stops the later ones
+  of that session (the addon runs them); an undeclared sloppy assignment
+  lands on the host's realm (the addon's lands on the session's own
+  global and is hibernated); a declared `eval` shadows the loop's
+  (`var eval`, `function eval`), and `let __tinyactors_loop` is a
+  `SyntaxError` at attach; `arguments` is the function's (`object` on
+  node and Chromium). Counting the realm's global names to find a leaked
+  assignment costs 7 to 9 us on node and bun and 125 us in Chromium (an
+  iframe's window has many), too much per script.
 - An iframe removed from the document keeps running: its realm's
   functions, `eval` and constructors still work after `f.remove()`
   (`detach.mjs`, Chromium 141).
@@ -388,54 +417,81 @@ nothing at the top of their scripts (a scope object per session), a
 context per session for charts that declare (AGENTS.md, "The native
 "ecmascript" datamodel"). A browser has no `node:vm`.
 
-**The options for a realm** (a global of its own):
+**The host's shared realm** (decided, M3):
 
-| Option | A page | A Worker | node, bun | Cost | Verdict |
-|---|---|---|---|---|---|
-| a same-origin iframe | yes | no `document` | no | 608 KB resident, 3.6 ms | the host's realm on a page: one per host |
-| a Worker per realm | — | — | — | — | refused: the vtable is synchronous, and a page's thread cannot `Atomics.wait` |
-| `ShadowRealm` | absent (Chromium 141) | absent | node absent, bun present | — | refused: not there, and only primitives and callables cross it |
-| `new Function` in the application's realm | yes | yes | yes | nothing | the realm of a Worker, which has no other; not on a page, where the iframe costs one per host |
-| `node:vm` | no | no | yes | the addon's | the host's realm in node and bun (`process.getBuiltinModule`) |
+| Where | The shared realm | Why |
+|---|---|---|
+| a page | a hidden same-origin iframe, one per host (608 KB, 3.6 ms, once), removed at `close()` | its own globals and constructors, so `realm.js`'s copies behave as in the addon; a removed iframe keeps working |
+| a Worker | the worker's own global | a Worker has no `document`; an application that wants the charts apart from its own code gives tinyactors a dedicated worker, which the README says |
+| node, bun | a `node:vm` context (`process.getBuiltinModule`) | the addon's |
 
-**The options for a declaring chart's session** (its declarations kept
-between scripts):
+Not chosen: a Worker per realm (the vtable is synchronous and a page's
+thread cannot `Atomics.wait`); `ShadowRealm` (absent from Chromium 141
+and node 22, and only primitives and callables cross it).
 
-| Option | Bytes a session | Semantics against the addon | Verdict |
-|---|---|---|---|
-| a realm per session (iframe; `node:vm` in node and bun) | 608 KB (iframe), 60 to 143 KB (`node:vm`) | the same: global code of its own | for charts whose top-level scripts declare with `let`, `const` or `class`, or start with `'use strict'` |
-| a generator per session in the host's realm | 245 B | `var` and `function` the same, `throw 0;` instantiation the same, hibernation by name (`eval(name)`, as the addon's `(0, eval)(name)`); differs: two reserved names, and an undeclared sloppy assignment lands on the host's realm, shared by its sessions and not hibernated (the addon's shared charts already behave so) | for charts whose scripts declare with `var` or `function` only |
-| refuse declaring charts | — | the addon's tests of declaring charts fail | no |
+**Sessions** (decided, M2):
 
-**Recommended** (`for-maintainer`, choice M2 and M3 below): the host's
-realm is an iframe on a page, `node:vm` in node and bun, and the worker's
-own global in a Worker; a chart that declares nothing gets a scope per
-session, exactly the addon's code path; a chart that declares with `var`
-or `function` only gets a generator session in the host's realm; a chart
-that declares with `let`, `const` or `class`, or whose declaring script
-is strict, gets a realm per session. Which kind a chart is, is asked of
-the engine at `chart_attach` as the addon asks it (the scripts after
-`throw 0;` in a scratch realm: the global's new names, and a
-redeclaration error for lexical ones). The suite has one declaring chart,
-a `var` (`grep` of `tinyactors-test/suites`), and the addon's tests have
-`let` and `const` ones (`test/datamodel.test.mjs:148`,
-`test/hibernation.test.mjs:274`), so both paths are exercised.
+- **A chart that declares nothing:** a scope object per session in the
+  shared realm, the addon's code path (49 B).
+- **A declaring chart, whatever it declares:** one session function per
+  chart, made at `chart_attach` from the text of its chart-level scripts
+  with the realm's `Function` (no parser of ours: the engine compiles
+  it), called once per session; its generator runs the session's
+  evaluations as direct `eval`s that see the function's `let`, `const`,
+  `class`, `var` and `function` bindings ("Realms": 634 B and 3.6 us a
+  session in Chromium). No iframe per session, on a page or in a Worker.
+  Expressions are evaluated strict, as the addon's are, so an undeclared
+  assignment in one throws. Whether each distinct expression is compiled
+  once per session into a closure (faster: node's direct `eval` costs
+  1.9 us) or evaluated as a direct `eval` each time is measured in
+  p5-datamodel.
+- **Hibernation, migration and snapshots** as the addon: a `var` and
+  `function` chart's variables are read by name in the session and set
+  again after a restore that runs the function with `throw 0` ahead; a
+  chart that declares with `let`, `const` or `class` refuses hibernation
+  with the addon's message (its sessions stay resident: the addon does
+  the same, `addon-declaring.mjs`).
+- **Where it cannot match the addon, it says so; it never differs
+  silently:**
+  - a chart that declares `eval`, `arguments` or a name with the prefix
+    `__tinyactors_` is refused at attach, the message naming it (the
+    engine's `SyntaxError` for a lexical clash, a check of the scratch
+    session's `eval` and `arguments` for the rest); the function's own
+    `arguments` is shadowed by its prologue;
+  - a chart-level script that throws: the session's `error.execution`
+    says that the chart-level scripts after it did not run (the addon
+    runs them);
+  - an undeclared sloppy assignment in a script lands on the host's
+    shared realm, as it does for the addon's charts that declare nothing;
+    since that name is not the session's, `hibernate` and `snapshot`
+    compare the realm's global names with its baseline (one count, at
+    those calls only) and refuse with `TA_ERROR_UNSUPPORTED` naming the
+    new names, so no state is lost without a word. The README says to
+    declare variables.
 
-**CSP.** The native datamodel evaluates chart text, so it needs
-`'unsafe-eval'`; the module itself needs `'wasm-unsafe-eval'` (spike,
-"Scheduling, Workers and CSP"). A host on the native datamodel tries the
-realm's `Function` at creation and is refused with `TA_ERROR_UNSUPPORTED`
-when the policy forbids it, the message naming the policy;
+Which kind a chart is, is asked of the engine at `chart_attach` as the
+addon asks it (the scripts after `throw 0;` in a scratch realm). The
+suite has one declaring chart (a `var`), the addon's tests have `let` and
+`const` ones (`test/datamodel.test.mjs:148`,
+`test/hibernation.test.mjs:274`).
+
+**CSP** (decided, with M3). The native datamodel evaluates chart text,
+so it needs `'unsafe-eval'`; the module itself needs `'wasm-unsafe-eval'`
+(spike, "Scheduling, Workers and CSP"). A host on the native datamodel
+is refused at creation with `TA_ERROR_UNSUPPORTED` when the realm's
+`Function` is refused (no `'unsafe-eval'`), when the page runs under a
+CSP `sandbox` without `allow-same-origin`, or when Trusted Types are
+enforced (`require-trusted-types-for 'script'`, which guards string
+evaluation even with `'unsafe-eval'`), the message naming the directive.
 `compileCharts`'s syntax check of `"ecmascript"` charts
-(`l-p4-examples-iot-syntax-unchecked`) parses with the same `Function`
-constructor (nothing runs) and is skipped under such a policy, which the
-README says. quickjs (p5-quickjs) is the datamodel for a strict policy,
-in a second module that a page without it does not download (bindings.md
-section 11).
+(`l-p4-examples-iot-syntax-unchecked`) parses with the same constructor,
+nothing run, and is skipped under such a policy, which the README says.
+quickjs (p5-quickjs) is the datamodel for such a page, in a second module
+that a page without it does not download (bindings.md section 11).
 
 **Observation, out of scope:** the generator works in `node:vm` too, so
-the addon could give a `var`-declaring session 245 B instead of a
-context of 60 to 143 KB. It is not proposed here.
+the addon could give a declaring session a few hundred bytes instead of
+a context of 60 to 143 KB. It is not proposed here.
 
 ## Lifetimes
 
@@ -471,14 +527,23 @@ context of 60 to 143 KB. It is not proposed here.
   `#direct`, a subpath import each package's `package.json` maps to its
   direct layer (the addon's `lib/direct.mjs`, the wasm package's own),
   in place of `./direct.mjs`; the lint rule follows.
-- **The same test files.** They import `@tinyactors/node` by name and
-  their own harness (`test/harness.mjs`), never `node:test`. In node and
-  bun the wasm package answers that name under an export condition the
-  test task passes (`--conditions=tinyactors-wasm`, both runtimes take
-  it), which the staged package drops. In Chromium a page with an import
-  map runs each file, the harness reporting without `process`. A file or
-  case that needs `node:fs`, `node:child_process`, `node:worker_threads`,
-  quickjs or the collector's hooks is excluded with its reason.
+- **One source of tests, not unchanged ones** (the refutation): they
+  import `@tinyactors/node` by name and their own harness, never
+  `node:test`, but `test/charts.mjs` and `test/harness.mjs` read
+  `process.env`, call `setImmediate` and reach `node:v8` and `node:vm`
+  for the collector. Those two become runtime-neutral (the datamodel and
+  the package from a module the runner provides, a macrotask through the
+  scheduler the package uses, the collector through a hook each runner
+  supplies), a check for a `Buffer` becomes a check for a `Uint8Array`
+  (which the addon's `Buffer`s pass too), and the "memory never shrinks"
+  case gets a wasm variant (linear memory keeps its peak; the arena cap
+  still lets another host reuse it). In node and bun the wasm package
+  answers the name under an export condition the test task passes
+  (`--conditions=tinyactors-wasm`), which the staged package drops; in
+  Chromium a page with an import map runs each file. What stays excluded
+  (a file or case that needs `node:fs`, `node:child_process`,
+  `node:worker_threads`, or quickjs before p5-quickjs) is listed with its
+  reason, and the list is short.
 - **The suite** runs through an adapter speaking the driver protocol as
   `conform.mjs` does, in node and in Chromium (p5-datamodel).
 - **A parity check** (p5-parity): the two packages' exports compared
@@ -486,7 +551,7 @@ context of 60 to 143 KB. It is not proposed here.
 
 ## Packaging and releases
 
-**Recommended** (`for-maintainer`, choice M1): **a sibling package,
+**Decided** (M1, which the refutation upheld): **a sibling package,
 `@tinyactors/wasm`**, made from `tinyactors-napi/` as the platform
 packages already are (`mise/pack.rb` stages `@tinyactors/node-<platform>-<arch>`
 from this directory): the same version, the same `CHANGELOG.md` and tag
@@ -507,14 +572,18 @@ place it. Its sources live in `tinyactors-napi/wasm/` (`src/*.c`,
   and one changelog, and ADR 0016 would give it a release repository of
   its own for no reader.
 
-**Loading** (`for-maintainer`, choice M4): the entry awaits the module at
-the top level (`new URL('./tinyactors.wasm', import.meta.url)`,
+**Loading** (decided, M4): the default entry awaits the module at the
+top level (`new URL('./tinyactors.wasm', import.meta.url)`,
 `instantiateStreaming` in a page, `node:fs` for a `file:` URL), so
-`import { Host } from '@tinyactors/wasm'` is the same line as in Node,
-with no `load()` of our own. The old web binding did the same (its
-README: "top-level `await`, `instantiateStreaming`"); staticjs-js has an
-explicit `load()` instead, which this API would have to add to the
-addon's too.
+`import { Host } from '@tinyactors/wasm'` is the same line as in Node.
+The old web binding did the same (its README: "top-level `await`,
+`instantiateStreaming`"). A second entry, **`@tinyactors/wasm/init`**,
+exports the same names and **`await init(url?)`**, for a Service Worker
+(which refuses a module graph with top-level `await`) and for bundlers
+that do not handle it; a call before `init` settles throws
+`TA_ERROR_STATE`. The package targets es2022; esbuild does not follow
+`new URL(..., import.meta.url)`, so its users copy `tinyactors.wasm`
+beside the bundle or pass its URL to `init`, which the README says.
 
 ## Node.js and Bun
 
@@ -527,13 +596,62 @@ there (p5-api). So it serves them at no extra cost:
 - **No silent fallback** inside `@tinyactors/node`: an application would
   change its memory profile and lose quickjs (until p5-quickjs) without
   asking.
-- **Whether one implementation can go** (`for-maintainer`, choice M5):
-  after p5-parity, `mise run measure` and the per-event benchmark of
-  AGENTS.md run against both packages on node and bun side by side. If
-  the wasm package is within 1.5 times the addon per event and 1.25 times
-  its resident bytes per actor, propose retiring the addon (the work of
-  two implementations is the largest cost here); else keep both and
-  write it down.
+- **Whether one implementation can go** (`for-maintainer`, M5): decided
+  on p5-parity's numbers, not before: `mise run measure` and the
+  per-event benchmark against both packages on node and bun side by side,
+  on both datamodels once quickjs is in the wasm package, and the
+  resident memory after hibernation (linear memory never shrinks, where
+  the addon's `malloc` gives memory back). The criterion proposed, within
+  1.5 times the addon per event and 1.25 times its resident bytes per
+  actor, is the maintainer's to keep or change.
+
+## Exceptions, an unclosed host, the floor, the address space
+
+From the refutation, each decided:
+
+- **Exceptions never unwind through wasm.** A JavaScript exception that
+  crosses wasm frames skips C's cleanup (an arena mark, an ack, a
+  depth counter) and leaks the shadow stack: the refuter's spike threw
+  1,000 times through an import and leaked 256,000 B of stack, its C
+  depth counter left at 1,000. So every import catches everything and
+  returns a status, the error kept for the turn to report, as the addon
+  reports a handler's. A `WebAssembly.RuntimeError` (a trap: out of
+  bounds, the stack exhausted, `unreachable`) or anything else that
+  escapes into wasm poisons the instance: every host on it refuses each
+  later call with a fault naming the first cause (`TA_ERROR_STATE` and
+  the trap's message), and the application makes new hosts after loading
+  the module again. The stack size is set explicitly at link
+  (`-Wl,-z,stack-size=`), measured in p5-build against the deepest the
+  compiler and a run go, rather than the linker's default (the 16 MiB of
+  `l-p5-design-initial-memory`).
+- **A host nobody closed** is freed by a `FinalizationRegistry`: its
+  token frees the host in the module and removes its iframe. The realm
+  reaches the host only weakly (the datamodel's imports go through a
+  table of hosts the instance keeps by `WeakRef`), so a page's iframe and
+  its charts do not keep the host alive. `close()` stays the documented
+  way; the registry is a fallback, as the addon's finalizer is.
+- **The browser floor** follows from what the module and the layer use.
+  zig's default wasm CPU emits `bulk-memory-opt`, `call-indirect-overlong`,
+  `extended-const`, `multivalue`, `mutable-globals`,
+  `nontrapping-fptoint` and `sign-ext` (the module's `target_features`
+  section); `extended-const` is the newest of them, and the layer needs
+  es2022 (top-level `await`) and `String.prototype.isWellFormed`. By the
+  engines' release notes, that is Chrome and Edge 114, Firefox 119
+  (`isWellFormed`) and Safari 16.4 (unverified here: no other browser was
+  run). Recommended: keep zig's features, since turning `extended-const`
+  off would lower only Chrome's and Safari's floor by a few releases
+  while Firefox's stays at 119, unless p5-pack measures that the module
+  loses neither size nor speed without it.
+- **The address space.** wasm32 linear memory stops at 4 GiB. A region
+  that grows is copied into a new block before the old one is freed, so
+  at its peak a host needs about twice its region. The wasm scale gate
+  runs at two million actors; four million, the addon's `--full` size, is
+  beyond the address space with that copy, which the README says.
+  `memory64` is logged for the maintainer (`l-p5-design-memory64`).
+- **An `i64` crossing as a `BigInt`** costs 10 to 30 ns (the refuter's
+  `i64.mjs`), against 5 to 11 ns for an `i32`: sessions cross as
+  `BigInt`s at the API, as in the addon, and inside the layer as two
+  `i32`s where a call is hot.
 
 ## Not chosen
 
@@ -556,62 +674,86 @@ there (p5-api). So it serves them at no extra cost:
   not in node 22 or Chromium 141, and a shared memory needs cross-origin
   isolation.
 
-## Choices for the maintainer
+## Decisions and open choices
 
-Each is logged `for-maintainer` in docs/log.xml with this recommendation.
+Each is logged in docs/log.xml; the coordinator decided M1, M2, M3, M4
+and M6 on the refutation's verdicts, and M5 stays the maintainer's.
 
-- **M1, the package** (`l-p5-design-package`): a sibling
+- **M1, the package** (`l-p5-design-package`, decided): a sibling
   `@tinyactors/wasm` from `tinyactors-napi/`, same version, changelog,
-  tag and release repository. Alternatives: conditional exports of
-  `@tinyactors/node`; a component of its own.
-- **M2, declaring charts** (`l-p5-design-declaring`): a generator session
-  for `var` and `function` (245 B), a realm per session for `let`,
-  `const`, `class` or a strict script (608 KB in a browser).
-  Alternatives: a realm per session for every declaring chart (exact,
-  608 KB each); refusing lexical ones.
-- **M3, the host's realm** (`l-p5-design-realm`): an iframe on a page,
-  `node:vm` in node and bun, the worker's own global in a Worker.
-  Alternative: refuse the native datamodel in a Worker until quickjs.
-- **M4, loading** (`l-p5-design-loading`): top-level `await` in the
-  entry. Alternative: an explicit `load()`, in both packages.
-- **M5, two implementations** (`l-p5-design-retire`): decide at
-  p5-parity on the measured ratios above.
-- **M6, size against speed** (`l-p5-design-optimize`): `-O2`, the
-  release's flags, now; `-Oz` (19 % smaller) measured for speed in
-  p5-pack before choosing.
+  tag and release repository.
+- **M2, declaring charts** (`l-p5-design-declaring`, decided): one
+  session function per chart for every declaring chart, `var` or
+  lexical; refusals at attach and explicit reports where it cannot match
+  ("The native datamodel without node:vm").
+- **M3, the shared realm and the policy** (`l-p5-design-realm`,
+  decided): an iframe on a page, `node:vm` in node and bun, the worker's
+  global in a Worker; the native datamodel refused at creation without
+  `'unsafe-eval'`, under a CSP `sandbox` or with Trusted Types enforced.
+- **M4, loading** (`l-p5-design-loading`, decided): top-level `await` by
+  default, `@tinyactors/wasm/init` for Service Workers and old bundlers,
+  es2022.
+- **M5, two implementations** (`l-p5-design-retire`, for the
+  maintainer): decided on p5-parity's numbers, quickjs and resident
+  memory after hibernation included.
+- **M6, size against speed** (`l-p5-design-optimize`, decided): `-O2`
+  now, `-Oz` measured in p5-pack.
+- **The floor** (`l-p5-design-floor`, for the maintainer): keep zig's
+  wasm features (Chrome 114, Firefox 119, Safari 16.4), unless p5-pack
+  shows that dropping `extended-const` costs nothing.
+- **memory64** (`l-p5-design-memory64`, for the maintainer): beyond
+  about two million actors a host needs more than wasm32's 4 GiB.
 
 ## Refutation
 
-Pending. This step had no way to spawn a fresh agent (no Agent tool in
-its session), so the coordinator dispatches the refuter. Its verdicts,
-each recommendation marked confirmed, plausible or dropped, go here, and
-only then the plan's next steps are refined.
+A fresh agent tried to break the recommendations, with spikes of its own
+(the coordinator's session scratchpad, `refute-browser/`); the
+coordinator decided on each verdict. The verdicts, and the change each
+led to:
+
+| # | Claim | Verdict | Change |
+|---|---|---|---|
+| 1 | imports may throw into wasm | **refuted**: 1,000 throws leaked 256 KB of shadow stack and skipped C's cleanup | every import catches and returns a status; an escape or a trap poisons the instance; the stack size is set ("Exceptions, ...") |
+| 2 | the test files run unchanged | **refuted**: `charts.mjs` and `harness.mjs` use `process.env`, `setImmediate`, `node:v8`, `node:vm`; checks of `Buffer` | the helpers made runtime-neutral, `Uint8Array` checks, a wasm variant of the memory case, documented exclusions ("One API") |
+| 3 | a host is freed at `close()` | **plausible gap**: a host never closed, and its iframe, would live for the page | a `FinalizationRegistry`, the realm holding the host weakly |
+| 4 | M2, a generator per session for `var`, a realm per session for lexical charts | **refuted as recommended**: the generator differs from the addon, and lexical charts are the common case, so most charts would pay 608 KB | the session function per chart, spiked (`chartgen.mjs`): it keeps lexical bindings at 634 B a session; refusals and reports where it differs |
+| 5 | M3, the Worker and the policy | **confirmed, with gaps**: CSP `sandbox` and Trusted Types not covered | the worker's own global documented with a dedicated worker; refusal at creation for `sandbox`, no `'unsafe-eval'`, Trusted Types |
+| 6 | M4, top-level `await` | **confirmed for pages, refuted for Service Workers and some bundlers** | `@tinyactors/wasm/init`, es2022, esbuild's copy documented |
+| 7 | the browser floor | **unstated** | stated from the module's features ("Exceptions, ...") |
+| 8 | memory | **confirmed, with a limit**: four million actors exceed 4 GiB with the region's copy | the gate at two million, the limit documented, memory64 logged |
+| 9 | M5, retire on two ratios | **premature** | decided on p5-parity's numbers, quickjs and memory after hibernation included |
+| 10 | M1 and M6 | **confirmed** | none; an `i64` as a `BigInt` costs 10 to 30 ns, noted |
 
 ## The steps after this one
 
-Proposed refinement of plan.xml, applied after the refutation:
+plan.xml's p5-build to p5-quickjs, refined from this document:
 
-- **p5-build:** `wasm/src/` (the C layer: the host and its arenas, inputs,
-  `ta_web_turn` with the drain, effect accessors, the CBOR token calls,
-  the vtable's forwarding, txml's tree record), compiled with core's and
-  txml's amalgamations by `Toolchain::Target` (zig, wasm32-wasi reactor),
-  its imports and exports checked; its lint rules (the prefix, three
-  parameters, buffers, no mutable globals); the loader for a page and for
-  node and bun; the initial memory set and measured; the size reported.
-  Done when a host is made, runs a null-datamodel chart and is freed in
-  Chromium and node.
-- **p5-api:** the direct layer in JavaScript over it, every item of
-  docs/api-map.md with the addon's names, shapes, errors and lifetimes,
-  `datamodel: "quickjs"` refused with `TA_ERROR_UNSUPPORTED`; `#direct`
-  for the shared convenience layer; the test files run against the wasm
-  package in node, bun and Chromium, exclusions with reasons; the
-  per-event benchmark beside the addon's.
-- **p5-datamodel:** the realms and sessions as M2 and M3 decide, with
-  `realm.js` shared; XML content through txml; the CSP refusal; the
-  compile check; hibernation, migration and snapshots; the suite through
-  an adapter in node and Chromium.
-- **p5-parity, p5-pack, p5-quickjs:** as planned, with M1, M4, M5 and M6
-  applied; p5-quickjs as a second module.
+- **p5-build:** `wasm/src/` (the C layer: the host and its arenas, input
+  records, `ta_web_turn` with the drain, effect accessors, CBOR token
+  calls, the vtable's forwarding, txml's tree record, the poisoned
+  state), compiled with core's and txml's amalgamations by
+  `Toolchain::Target` (zig, wasm32-wasi reactor, `-O2`, custom sections
+  stripped, the stack size set and measured), its imports and exports
+  checked; its lint rules; the loaders (top-level `await` and
+  `init(url?)`) for a page, a Worker, node and bun; an import that throws
+  and a trap tested; the size and the features reported.
+- **p5-api:** the direct layer in JavaScript, every item of
+  docs/api-map.md, `datamodel: "quickjs"` refused; `#direct`; the
+  `FinalizationRegistry`; the test helpers made runtime-neutral and the
+  test files run against the wasm package in node, bun and Chromium,
+  exclusions listed; the per-event benchmark beside the addon's.
+- **p5-datamodel:** the shared realms (M3), the session function per
+  declaring chart (M2) with its refusals and reports, `realm.js` shared,
+  XML content through txml, the CSP, `sandbox` and Trusted Types
+  refusals, the compile check; hibernation, migration and snapshots; the
+  suite in node and Chromium.
+- **p5-parity:** the parity check, the documentation and examples in
+  Chromium, and the measurements for M5 (both datamodels, memory after
+  hibernation).
+- **p5-pack:** `@tinyactors/wasm` packed with both entries, `-Oz` and the
+  floor measured, smoke-tested from a fresh project in Chromium, node and
+  bun and with a bundler.
+- **p5-quickjs:** quickjs as a second module, as planned.
 
 ## Reproducing
 
@@ -627,4 +769,6 @@ zig cc -O2 -std=c11 -w -I$D perevent.c $D/tinyactors.c $D/tinyactors_runtime.c $
 zig cc -target wasm32-wasi -O2 -std=c11 -w -I$D perevent.c $D/tinyactors.c $D/tinyactors_runtime.c $D/tinyactors_runtime_wasm.c -o perevent.wasm
 ./perevent; node --no-warnings runwasi.mjs perevent.wasm; bun runwasi.mjs perevent.wasm
 node sections.mjs <module.wasm>; node strip.mjs <in.wasm> <out.wasm>
+node chartgen-node.mjs; bun chartgen-node.mjs; node drive4.mjs  # the session function per chart
+node addon-declaring.mjs  # what the addon does with a declaring chart (needs mise run build)
 ```
