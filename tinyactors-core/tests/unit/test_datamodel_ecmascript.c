@@ -163,6 +163,15 @@ static void test_error_execution_says_why(void) {
          "why=fuel::;"},
         {WHY("<script>let a = []; while (true) a.push(new Array(100000).fill(1));</script>"),
          {sizeof(ta_datamodel_ecmascript_config), 0, 8u << 20, 0, 0, NULL}, "why=memory::;"},
+        /* nothing threw: the datamodel says why, and a dropped exception
+         * (plain <content> is not JSON) is not taken for one */
+        {WHY("<foreach array='5' item='it'/>"), {0}, "why=exception:TypeError: <foreach> array is not an array:;"},
+        {WHY("<send event='x'><content>plain text</content></send><foreach array='5' item='it'/>"), {0},
+         "why=exception:TypeError: <foreach> array is not an array:;"},
+        /* a lone surrogate is U+FFFD in the message; a pair is its character */
+        {WHY("<script>throw '\\uD800 lone'</script>"), {0}, "why=exception:\xEF\xBF\xBD lone:;"},
+        {WHY("<script>throw 'x\\uDC00'</script>"), {0}, "why=exception:x\xEF\xBF\xBD:;"},
+        {WHY("<script>throw '\\uD83D\\uDE00'</script>"), {0}, "why=exception:\xF0\x9F\x98\x80:;"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         ecmascript_system t;
@@ -1027,6 +1036,7 @@ static void test_deep_value_not_stored(void) {
 }
 
 int main(void) {
+
     RUN(test_expressions_and_script);
     RUN(test_errors_and_readonly);
     RUN(test_runaway_script_interrupted);

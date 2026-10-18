@@ -158,10 +158,29 @@ static int interrupt(JSRuntime *rt, void *opaque) {
     return ++ecmascript->operations > ecmascript->max_ops;
 }
 
+/* A lone surrogate in a thrown string comes out of JS_ToCStringLen as the
+ * three bytes ED A0..BF xx, which are not UTF-8, and a message that is not
+ * UTF-8 gives the event no data: each becomes U+FFFD (EF BF BD), the same
+ * length. The message is a diagnostic, not a value. */
+static void failure_without_surrogates(ta_datamodel_ecmascript *ecmascript) {
+    unsigned char *m = (unsigned char *)ecmascript->failure_message;
+    for (uint32_t i = 0; i + 2 < ecmascript->failure_length; i++)
+        if (m[i] == 0xEDu && m[i + 1] >= 0xA0u && m[i + 1] <= 0xBFu) {
+            m[i] = 0xEFu;
+            m[i + 1] = 0xBFu;
+            m[i + 2] = 0xBDu;
+            i += 2;
+        }
+    /* a cut at the end may leave the first two of the three */
+    uint32_t n = ecmascript->failure_length;
+    if (n >= 2 && m[n - 2] == 0xEDu && m[n - 1] >= 0xA0u && m[n - 1] <= 0xBFu) ecmascript->failure_length -= 2;
+}
+
 /* What an exception says about the evaluation it ends (ecmascript_failure):
  * past max_ops is fuel, the engine's out of memory is memory, anything else
  * the exception, with its text. On the error path only. */
 static void failure_note(ta_datamodel_ecmascript *ecmascript, JSContext *context, JSValueConst exception) {
+    if (JS_IsUninitialized(exception)) return; /* none was pending: nothing to say */
     ecmascript->failure_length = 0;
     if (ecmascript->operations > ecmascript->max_ops) {
         ecmascript->failure = TA_DATAMODEL_FAILURE_FUEL;
@@ -181,10 +200,18 @@ static void failure_note(ta_datamodel_ecmascript *ecmascript, JSContext *context
         }
         memcpy(ecmascript->failure_message, text, length);
         ecmascript->failure_length = (uint32_t)length;
+        failure_without_surrogates(ecmascript);
     }
     if (text) JS_FreeCString(context, text);
 }
 
+/* An exception a success path expects and goes on from (the JSON that
+ * plain <content> is not): dropped, nothing noted, no text made. */
+static void drop_exception(JSContext *context) {
+    JS_FreeValue(context, JS_GetException(context));
+}
+
+/* An exception that ends the call with an error: noted for `failure`. */
 static void clear_exception(JSContext *context) {
     JSValue exception = JS_GetException(context);
     ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)JS_GetRuntimeOpaque(JS_GetRuntime(context));
@@ -401,16 +428,24 @@ static JSValue content_value(JSContext *context, ta_string_view source) {
     if (!buffer) return JS_ThrowOutOfMemory(context);
     if (source.length) memcpy(buffer, source.pointer, source.length);
     buffer[source.length] = 0;
-    JSValue v = JS_ParseJSON(context, buffer, source.length, "<content>");
+    /* JSON starts with one of these: text that does not is not parsed (the
+     * SyntaxError a parse would make is most of plain text's cost) */
+    uint32_t first = 0;
+    while (first < source.length && is_whitespace(source.pointer[first]))
+        first++;
+    char c = first < source.length ? source.pointer[first] : 0;
+    int json = c == '{' || c == '[' || c == '"' || c == '-' || (c >= '0' && c <= '9') || c == 't' ||
+               c == 'f' || c == 'n';
+    JSValue v = json ? JS_ParseJSON(context, buffer, source.length, "<content>") : JS_EXCEPTION;
     if (JS_IsException(v)) {
-        clear_exception(context);
+        if (json) drop_exception(context); /* not JSON: XML or text, no failure */
         uint32_t i = 0;
         while (i < source.length && is_whitespace(source.pointer[i]))
             i++;
         if (i < source.length && source.pointer[i] == '<') {
             v = xml_value(context, source);
             if (JS_IsException(v))
-                clear_exception(context);
+                drop_exception(context);
             else {
                 free(buffer);
                 return v;
@@ -579,7 +614,7 @@ static ta_status to_string_out(ecmascript_instance *instance, JSValue v, int jso
         s = JS_JSONStringify(instance->context, v, JS_UNDEFINED, JS_UNDEFINED);
         free_s = 1;
         if (JS_IsException(s)) {
-            clear_exception(instance->context);
+            drop_exception(instance->context); /* not JSON (a cycle): its text, then */
             s = v;
             free_s = 0;
         }
@@ -1097,7 +1132,6 @@ static ta_status chart_analyze(ta_datamodel_ecmascript *ecmascript, ecmascript_c
         }
         ecmascript->operations = 0;
         ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
-    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
         int r = analyze_script(ecmascript, chart, &shared, e, info.source);
         if (r == 2) { /* alone, then */
             ecmascript_scratch fresh;
@@ -1605,6 +1639,12 @@ static ta_status ecmascript_foreach_begin_(void *datamodel, uint64_t handle,
     if (!JS_IsArray(a) || JS_GetLength(instance->context, a, &length) < 0 || length < 0 ||
         length > 0x7FFFFFFF) {
         clear_exception(instance->context);
+        if (ecmascript->failure == TA_DATAMODEL_FAILURE_NONE) { /* nothing threw: say why */
+            static const char why[] = "TypeError: <foreach> array is not an array";
+            ecmascript->failure = TA_DATAMODEL_FAILURE_EXCEPTION;
+            memcpy(ecmascript->failure_message, why, sizeof why - 1);
+            ecmascript->failure_length = sizeof why - 1;
+        }
         JS_FreeValue(instance->context, a);
         return TA_ERROR_EXECUTION;
     }
@@ -1855,7 +1895,6 @@ static int explain_var(ta_datamodel_ecmascript *ecmascript, JSContext *context,
     if (JS_IsUndefined(ecmascript->explain)) {
         ecmascript->operations = 0;
         ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
-    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
         ecmascript->explain = JS_Eval(ecmascript->auxiliary, EXPLAIN_JS, sizeof EXPLAIN_JS - 1,
                                       "<explain>", JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(ecmascript->explain)) {
@@ -1867,7 +1906,6 @@ static int explain_var(ta_datamodel_ecmascript *ecmascript, JSContext *context,
     if (!JS_IsUndefined(ecmascript->explain)) {
         ecmascript->operations = 0;
         ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
-    ecmascript->failure = TA_DATAMODEL_FAILURE_NONE;
         JSValue args[2] = {JS_DupValue(ecmascript->auxiliary, v),
                            JS_NewString(ecmascript->auxiliary, name)};
         hit = JS_Call(ecmascript->auxiliary, ecmascript->explain, JS_UNDEFINED, 2, args);
