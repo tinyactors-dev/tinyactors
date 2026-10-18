@@ -19,7 +19,7 @@
 # trips through the echo setup on each datamodel), the basics scenario, and
 # the outcome canaries, so an adapter that answers pass for everything fails.
 M1 protocol requests config values
-M1 scenarios basics outcome-compile outcome-fail outcome-timeout
+M1 scenarios basics parallel-history outcome-compile outcome-fail outcome-timeout
 
 # M2, W3C in each language: the IRP suite, but the skip lists (skip.txt,
 # skip-<language>.txt), with BasicHTTP's sends.

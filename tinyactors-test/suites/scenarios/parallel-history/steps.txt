@@ -1,0 +1,17 @@
+# parallel-history: done.state of a parallel state comes only when every
+# region is in a final state, also while a transition enters its regions one
+# after another: one region's history holds its final state and the other's
+# a state that is not final, re-entered through both shallow history states
+# at once and then through a deep history state
+# (tinyactors-napi/docs/log.xml, l-p4-examples-approval-done-early).
+
+image review
+spawn r review
+send r go
+send r leave
+send r back
+send r check
+send r leave
+send r resume
+send r check
+send r finish

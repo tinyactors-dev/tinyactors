@@ -818,22 +818,34 @@ static int compute_entry(kernel_context *kernel) {
     return 1;
 }
 
-/* isInFinalState for a parallel state p, without recursion: every active atomic
- * descendant must be a final state whose parent is compound and whose path up
- * to p consists only of parallel states. */
+/* isInFinalState for a parallel state p, without recursion: every region
+ * reached from p through parallel states only must be in a final state. A
+ * compound region is when one of its children is an active final state (a
+ * region not entered yet is not: done.state.p waits for every region while
+ * the configuration is being entered, region by region in document order); a
+ * parallel region is when its own regions are, which the walk visits next;
+ * anything else is not. History states are no regions. */
 static int parallel_in_final(kernel_context *kernel, uint32_t p) {
     const uint32_t *config = configuration_words(kernel);
     int any = 0;
-    for (uint32_t x = ta_bitset_next(config, kernel->states[p].end, p + 1); x != TA_NIL;
-         x = ta_bitset_next(config, kernel->states[p].end, x + 1)) {
-        if (!leaf(kernel, x)) continue;
+    for (uint32_t x = p + 1; x < kernel->states[p].end;) {
+        uint32_t kind = kernel->states[x].kind;
+        if (kind >= TA_STATE_HISTORY_SHALLOW) {
+            x = kernel->states[x].end;
+            continue;
+        }
         any = 1;
-        uint32_t par = kernel->states[x].parent;
-        if (kernel->states[x].kind != TA_STATE_FINAL ||
-            kernel->states[par].kind != TA_STATE_COMPOUND)
-            return 0;
-        for (uint32_t a = kernel->states[par].parent; a != p; a = kernel->states[a].parent)
-            if (kernel->states[a].kind != TA_STATE_PARALLEL) return 0;
+        if (kind == TA_STATE_PARALLEL) { /* its regions follow it */
+            x++;
+            continue;
+        }
+        if (kind != TA_STATE_COMPOUND) return 0;
+        int final = 0;
+        for (uint32_t c = ta_bitset_next(config, kernel->states[x].end, x + 1); c != TA_NIL && !final;
+             c = ta_bitset_next(config, kernel->states[x].end, kernel->states[c].end))
+            final = kernel->states[c].parent == x && kernel->states[c].kind == TA_STATE_FINAL;
+        if (!final) return 0;
+        x = kernel->states[x].end;
     }
     return any;
 }

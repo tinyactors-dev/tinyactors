@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<!-- The judge of parallel-history. A parallel state is done only when every
+region is in a final state, also while its regions are entered one after
+another (SCXML's isInFinalState). "go" takes a to its final af and b to b2,
+which is not final; "leave" exits p, "back" re-enters it through both
+regions' shallow history states at once (target="ah bh"): af and b2 again.
+"leave" and "resume" exit and re-enter review through its deep history: af
+and b2 again. No done.state.p may come before "finish" takes b to its final
+bf; the checks count Var1 up, and done.state.p passes only after both. -->
+<scxml initial="top" conf:datamodel="" version="1.0" name="review"
+       xmlns="http://www.w3.org/2005/07/scxml" xmlns:conf="http://www.w3.org/2005/scxml-conformance">
+  <datamodel>
+    <data conf:id="1" conf:expr="0"/>
+  </datamodel>
+
+  <state id="top" initial="review">
+    <state id="review" initial="p">
+      <history id="rh" type="deep">
+        <transition target="p"/>
+      </history>
+      <transition event="done.state.p" conf:idVal="1=2" conf:targetpass=""/>
+      <transition event="done.state.p" conf:targetfail=""/>
+      <transition event="leave" target="outside"/>
+      <parallel id="p">
+        <transition event="check" conf:inState="b2">
+          <conf:incrementID id="1"/>
+        </transition>
+        <transition event="check" conf:targetfail=""/>
+        <state id="a" initial="a1">
+          <history id="ah" type="shallow">
+            <transition target="a1"/>
+          </history>
+          <state id="a1">
+            <transition event="go" target="af"/>
+          </state>
+          <final id="af"/>
+        </state>
+        <state id="b" initial="b1">
+          <history id="bh" type="shallow">
+            <transition target="b1"/>
+          </history>
+          <state id="b1">
+            <transition event="go" target="b2"/>
+          </state>
+          <state id="b2">
+            <transition event="finish" target="bf"/>
+          </state>
+          <final id="bf"/>
+        </state>
+      </parallel>
+    </state>
+    <state id="outside">
+      <transition event="back" target="ah bh"/>
+      <transition event="resume" target="rh"/>
+    </state>
+  </state>
+
+  <conf:pass/>
+  <conf:fail/>
+</scxml>

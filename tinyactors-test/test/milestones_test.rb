@@ -52,7 +52,7 @@ class MilestonesTest < Minitest::Test
     m1 = Milestones.select('M1')
     assert_equal %w[protocol scenarios], m1.suites
     assert_equal %w[requests config values], m1.protocol
-    assert_equal %w[basics outcome-compile outcome-fail outcome-timeout], m1.scenarios
+    assert_equal %w[basics parallel-history outcome-compile outcome-fail outcome-timeout], m1.scenarios
     assert_includes Milestones.select('M2').suites, 'w3c'
   end
 
