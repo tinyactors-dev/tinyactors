@@ -547,7 +547,7 @@
     </phase>
     <phase id="p4" title="End to end: two languages, ten applications">
       <goal>The binding proven in use: a Python system and a Node system talking through their transports, then ten real applications that model their domain logic in tinyactors and exercise every feature in tricky cases, with every surprise they meet catalogued and fixed.</goal>
-      <step id="p4-remote" status="todo" after="p2-pack" decision="d-address">
+      <step id="p4-remote" status="done" after="p2-pack" decision="d-address" commit="e573c996">
         <title>A Python system and a Node system talking to each other</title>
         <does>The coordinator's definition of done (the maintainer, 2026-10-16): one Python host (tinyactors-cpython) and one Node host (this binding), separate processes, each with a transport handler that moves send.message to the other over a socket, the wire being the JSON-RPC 2.0 shape or its CBOR form (each side's encode/decode), and the other side calling host.send(message) unchanged, host.fail for a send it could not deliver. Charts on both sides address each other by tinyactors:// addresses (Address on both), exchange events with data both ways, answer, and observe error.communication when the peer is down. Kept as examples/remote-python/ with a test that starts both processes and checks the conversation, run by mise run test.</does>
         <done-when>The test passes under node and bun against the Python binding built from tinyactors-cpython; the README of the example says how to run it.</done-when>
