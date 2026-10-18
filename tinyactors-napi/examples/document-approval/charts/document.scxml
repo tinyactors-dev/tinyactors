@@ -265,9 +265,9 @@
     <!-- Approved: the archive takes the record, as XML, before the
          document ends. A failed archive is retried every second.
          The record is XML text that metadataXML() writes, not an inline
-         XML <content>: inline XML reaches an I/O processor as the native
-         datamodel's DOM, and on quickjs its data cannot be read at all
-         (docs/log.xml, l-p4-examples-approval-xml-content). -->
+         XML <content>: inline XML would reach the I/O processor as its
+         text on both datamodels, but it is fixed in the chart, and the
+         record holds the document's variables. -->
     <state id="archiving">
       <onentry>
         <assign location="archiveAttempts" expr="archiveAttempts + 1"/>

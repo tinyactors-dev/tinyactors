@@ -183,6 +183,29 @@ static void test_error_execution_says_why(void) {
     }
 }
 
+/* An XML DOM leaves the chart as its XML text (to_wire, so a send's data
+ * read by the application, actor.context, JSON.stringify): a document is
+ * the text it was read from, another node is written out
+ * (tinyactors-napi/docs/log.xml, l-p4-surprises-quickjs-xml). */
+static void test_xml_to_wire(void) {
+    ecmascript_system t;
+    CHECK(ecmascript_open(
+        &t,
+        SC("initial='a'><datamodel><data id='doc'><r k='a&amp;&quot;b'>x&lt;y<e/><![CDATA[c<d]]></r></data>"
+           "</datamodel><state id='a'/>"),
+        NULL));
+    ecmascript_run(&t);
+    const char *text = ecmascript_eval(&t, "doc");
+    CHECK(strstr(text, "<r k='a&amp;&quot;b'>x&lt;y<e/><![CDATA[c<d]]></r>") != NULL);
+    if (!strstr(text, "<r k=")) fprintf(stderr, "  doc: %s\n", text);
+    text = ecmascript_eval(&t, "doc.documentElement");
+    CHECK(strcmp(text, "\"<r k=\\\"a&amp;&quot;b\\\">x&lt;y<e/><![CDATA[c<d]]></r>\"") == 0);
+    if (strcmp(text, "\"<r k=\\\"a&amp;&quot;b\\\">x&lt;y<e/><![CDATA[c<d]]></r>\"")) fprintf(stderr, "  element: %s\n", text);
+    CHECK(strcmp(ecmascript_eval(&t, "[doc.documentElement.firstChild]"), "[\"x&lt;y\"]") == 0);
+    CHECK(strcmp(ecmascript_eval(&t, "typeof JSON.stringify(doc)"), "\"string\"") == 0);
+    ecmascript_close(&t);
+}
+
 static void test_events_payloads_xml(void) {
     ecmascript_system t;
     CHECK(ecmascript_open(
@@ -1042,6 +1065,7 @@ int main(void) {
     RUN(test_runaway_script_interrupted);
     RUN(test_error_execution_says_why);
     RUN(test_events_payloads_xml);
+    RUN(test_xml_to_wire);
     RUN(test_heap_bytes);
     RUN(test_traced_values_are_let_go);
     RUN(test_shared_realm);

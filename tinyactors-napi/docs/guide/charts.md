@@ -278,8 +278,7 @@ An actor whose variable holds a DOM stays in memory: hibernation and
 snapshots refuse it. A DOM that leaves the chart for your program (the
 `<content>` of a `<send>` to an I/O processor, a value `actorContext`
 reads) reaches it as its XML text, a string: the text a document was read
-from, or a node written out. On the quickjs datamodel such a send's
-`send.data` cannot be read yet (`TA_ERROR_INVALID`).
+from, or a node written out, on both datamodels.
 
 ## Several charts in one image
 

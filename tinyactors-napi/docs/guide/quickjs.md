@@ -22,10 +22,9 @@ import { compileCharts, Host } from '@tinyactors/node';
 const compiled = compileCharts([{ name: 'uploaded.scxml', text: `
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="uploaded" initial="s">
-  <datamodel><data id="hoard"/></datamodel>
   <state id="s">
     <transition event="spin"><script>while (true) {}</script></transition>
-    <transition event="hog"><script>hoard = []; for (;;) hoard.push(new Array(1000).fill(1));</script></transition>
+    <transition event="hog"><script>const hoard = []; for (;;) hoard.push(new Array(1000).fill(1));</script></transition>
     <transition event="peek"><log expr="typeof process + ' ' + typeof require + ' ' + typeof setTimeout"/></transition>
     <transition event="error.execution"><log expr="'stopped: error.execution'"/></transition>
   </state>

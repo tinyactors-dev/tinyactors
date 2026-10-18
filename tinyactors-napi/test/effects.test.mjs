@@ -424,12 +424,7 @@ test('send.data is the application\'s: its arrays are Arrays here, and XML conte
   equal(Object.getPrototypeOf(got.values), Object.prototype, 'a plain object of this realm');
   equal(bytes instanceof Uint8Array && bytes.length === 2, true, 'bytes are this realm\'s Uint8Array');
   equal(JSON.stringify(got.values), '{"items":[1,{"k":"v"}],"bytes":{"0":1,"1":2}}', 'the values');
-  if (ENGINE.datamodel === 'quickjs') {
-    // quickjs's DOM is not a neutral value to core (l-p4-surprises-quickjs-xml)
-    equal(got.xml, 'TA_ERROR_INVALID', 'quickjs refuses the XML for now');
-    return;
-  }
-  equal(typeof got.xml, 'string', 'XML content is text');
+  equal(typeof got.xml, 'string', 'XML content is text, on both datamodels');
   if (!got.xml.includes('<metadata xmlns="" id="doc-1"><title>Budget &amp; plan</title></metadata>')) throw new Error(got.xml);
 });
 

@@ -114,7 +114,9 @@ datamodel once core knows which session that is. The ECMAScript datamodel writes
 `JSON.stringify` keeps, with numbers, BigInts and bytes exact: an integer
 within ±(2^53-1) as an integer and any other number as a float, a BigInt as
 an integer (past 64 bits it is not a neutral value), and an `ArrayBuffer`, a
-typed array or a `DataView` as bytes; it reads integers past 2^53 as BigInts,
+typed array or a `DataView` as bytes, and a node of an XML DOM (SCXML's XML
+`<content>` and `<data>`) as its XML text: a document as the text it was
+read from, another node written out; it reads integers past 2^53 as BigInts,
 bytes as a `Uint8Array` and a reference as its address. `ta_cbor_diagnostic`
 writes a value as text, for logs and traces.
 
