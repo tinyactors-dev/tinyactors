@@ -523,6 +523,45 @@ static void check_store_state(ecmascript_system *t, const char *total, const cha
     CHECK_JS(t, "typeof dead", "<error>"); /* still uninitialized */
 }
 
+/* A script in executable content runs in a block: a function it declares is
+ * still the session's (Annex B), and the session can be stored with it; its
+ * 'use strict' applies to the whole script */
+static void test_executable_script_functions_and_strict(void) {
+    static const char *const declares = "function f() { return n * 7; } n = n + 1;";
+    static const char *const strict = "'use strict'; w = 1; n = n + 1;";
+    static const char *const strict_function = "'use strict'; function g() { return 1; } n = n + g();";
+    for (uint32_t realm = 0; realm < 2; realm++) {
+        ta_datamodel_ecmascript_config config = {sizeof config, 0, 0, 0, realm, NULL};
+        ecmascript_system t;
+        char chart[1024];
+        snprintf(chart, sizeof chart, RERUN("", "%s"), declares);
+        CHECK(ecmascript_open(&t, chart, &config));
+        ecmascript_run(&t);
+        CHECK_JS(&t, "n", "3");
+        CHECK_JS(&t, "errors", "0");
+        CHECK_JS(&t, "f()", "21");
+        CHECK_EQUAL(ecmascript_store(&t), TA_OK);
+        CHECK_JS(&t, "f()", "21");
+        CHECK_JS(&t, "n", "3");
+        ecmascript_close(&t);
+        snprintf(chart, sizeof chart, RERUN("", "%s"), strict);
+        CHECK(ecmascript_open(&t, chart, &config));
+        ecmascript_run(&t);
+        CHECK_JS(&t, "n", "0"); /* an undeclared name: a ReferenceError at each run */
+        CHECK_JS(&t, "errors", "3");
+        CHECK_JS(&t, "typeof w", "\"undefined\"");
+        ecmascript_close(&t);
+        snprintf(chart, sizeof chart, RERUN("", "%s"), strict_function);
+        CHECK(ecmascript_open(&t, chart, &config));
+        ecmascript_run(&t);
+        CHECK_JS(&t, "n", "3");
+        CHECK_JS(&t, "errors", "0");
+        CHECK_JS(&t, "typeof g", "\"undefined\""); /* strict: the block's own */
+        CHECK_EQUAL(ecmascript_store(&t), TA_OK);
+        ecmascript_close(&t);
+    }
+}
+
 static void test_store_declarations(void) {
     ecmascript_system t;
     CHECK(ecmascript_open(&t, STORE_CHART, NULL));
@@ -999,6 +1038,7 @@ int main(void) {
     RUN(test_eval_variables);
     RUN(test_toplevel_declarations_isolate);
     RUN(test_executable_scripts_run_again);
+    RUN(test_executable_script_functions_and_strict);
     RUN(test_store_declarations);
     RUN(test_store_refuses_precisely);
     RUN(test_snapshot_isolated);

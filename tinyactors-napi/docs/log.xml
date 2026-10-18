@@ -1485,4 +1485,9 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <what>examples/job-scheduler 'drift: a fixed-rate job keeps its cadence under load' failed once in a full mise run test (23 runs, not 25, within its window) and passed 6 times alone under node and bun: a real-clock timing test that loses under the suite's load.</what>
     <evidence>scratchpad t2.log: AssertionError 23 !== 25 at examples/job-scheduler/test.mjs:196</evidence>
   </entry>
+  <entry id="l-core-followup-napi-block-function" date="2026-10-18" step="core-followup" kind="request-to-core" status="open">
+    <what>The native datamodel: a function declared in a &lt;script&gt; in executable content stops its session from hibernating ("variable 'f' cannot be stored: a function ..."), and export and snapshot with it. The script runs in a block since fa0f761b, so the function is a global var by Annex B, but ta_napi_realm_declares instantiates "throw 0;{\n" + source + "\n}", where the var is undefined, so the kit's "functions" never records it as a declaration to re-create. Core's quickjs did the same and now instantiates a sloppy script in executable content at the top level for its analysis ("throw 0;\n" + source), where its functions have values, and a strict one in its block. The 'use strict' half of the same refutation does not apply to the native datamodel: an undeclared assignment there is a ReferenceError already.</what>
+    <why>A refuter's spike of the core batch (d907f4c2..53cfebf7); a request to the napi binding, which this session may not edit.</why>
+    <evidence>scratchpad core-batch-followup/napi/spike.mjs: native "hibernate: variable 'f' cannot be stored", quickjs ok; tinyactors-napi/src/datamodel/realms.c ta_napi_realm_declares (ahead_block); core's fix in tinyactors-core/src/datamodel_ecmascript/datamodel_ecmascript.c analyze_script, test_datamodel_ecmascript's test_executable_script_functions_and_strict</evidence>
+  </entry>
 </log>

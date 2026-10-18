@@ -59,6 +59,9 @@ typedef struct ecmascript_chart {
     JSAtom *lexical_names; /* let/const/class names: the global lexical scope */
     ecmascript_function_declaration *functions;
     uint32_t variable_count, lexical_name_count, function_count;
+    /* per expression, 1: a script in executable content that is strict code
+     * (its "use strict" goes before the block it runs in); NULL: none is */
+    unsigned char *strict_blocks;
 } ecmascript_chart;
 
 typedef struct ecmascript_instance {
@@ -281,8 +284,11 @@ static JSValue get_getter(ecmascript_instance *instance, ta_expression expressio
              * in executable content in a block, so it runs again */
             char file[32];
             int block = kind == TA_EXPRESSION_SCRIPT;
+            const unsigned char *strict = instance->chart_context->strict_blocks;
             snprintf(file, sizeof file, "<script:%u>", (unsigned)expression);
-            f = eval_file(instance->context, block ? "{\n" : "\n", source, block ? "\n}" : "", file,
+            f = eval_file(instance->context,
+                          !block ? "\n" : strict && strict[expression] ? "'use strict';{\n" : "{\n",
+                          source, block ? "\n}" : "", file,
                           JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
         } else {
             f = eval_expression(instance->context, "(function(){return (\n",
@@ -953,11 +959,17 @@ static int analyze_script(ta_datamodel_ecmascript *ecmascript, ecmascript_chart 
     /* strict code (a "use strict" directive) cannot have a with statement */
     c = eval_file(sc, "", source, "\n;with({}){}", file,
                   JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-    int strict = !block && JS_IsException(c); /* a directive in a block is none */
+    int strict = JS_IsException(c), strict_block = block && strict;
     JS_FreeValue(sc, c);
     clear_exception(sc);
-    JSValue r = eval_file(sc, block ? "throw 0;{\n" : strict ? "'use strict';throw 0;\n" : "throw 0;\n", source,
-                          block ? "\n}" : "", file, JS_EVAL_TYPE_GLOBAL);
+    /* instantiated, not run. A strict script in executable content in its
+     * block, as the session runs it: its functions are the block's. A sloppy
+     * one at the top level: its functions are the global's there, as Annex B
+     * makes them when the block runs, and so they have values to record */
+    JSValue r = eval_file(sc, strict_block ? "'use strict';throw 0;{\n"
+                              : strict && !block ? "'use strict';throw 0;\n"
+                                                 : "throw 0;\n",
+                          source, strict_block ? "\n}" : "", file, JS_EVAL_TYPE_GLOBAL);
     JS_FreeValue(sc, r);
     JSValue x = JS_GetException(sc);
     int hoisted = JS_VALUE_GET_TAG(x) == JS_TAG_INT && JS_VALUE_GET_INT(x) == 0;
@@ -1024,6 +1036,42 @@ static int may_declare(ta_string_view s) {
     return 0;
 }
 
+/* a "use strict" directive needs the words, literally (a directive has no escapes) */
+static int mentions_strict(ta_string_view s) {
+    for (uint32_t i = 0; i + 10 <= s.length; i++)
+        if (!memcmp(s.pointer + i, "use strict", 10)) return 1;
+    return 0;
+}
+
+/* Is script e strict code? 1 or 0, -1 if out of memory. Strict code cannot
+ * have a with statement. */
+static int script_strict(ta_datamodel_ecmascript *ecmascript, ecmascript_scratch *scratch,
+                         uint32_t e, ta_string_view source) {
+    if (!scratch->context && !scratch_new(ecmascript, scratch)) return -1;
+    char file[32];
+    snprintf(file, sizeof file, "<script:%u>", (unsigned)e);
+    JSValue c = eval_file(scratch->context, "", source, "", file,
+                          JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    int compiles = !JS_IsException(c);
+    JS_FreeValue(scratch->context, c);
+    clear_exception(scratch->context);
+    if (!compiles) return 0; /* its error is the session's to raise */
+    c = eval_file(scratch->context, "", source, "\n;with({}){}", file,
+                  JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    int strict = JS_IsException(c);
+    JS_FreeValue(scratch->context, c);
+    clear_exception(scratch->context);
+    return strict;
+}
+
+static int strict_block_add(ecmascript_chart *chart, uint32_t e) {
+    if (!chart->strict_blocks)
+        chart->strict_blocks = (unsigned char *)calloc(chart->expression_count, 1);
+    if (!chart->strict_blocks) return 0;
+    chart->strict_blocks[e] = 1;
+    return 1;
+}
+
 /* *declares: does any <script> of the chart declare top-level names? */
 static ta_status chart_analyze(ta_datamodel_ecmascript *ecmascript, ecmascript_chart *chart,
                                int *declares) {
@@ -1033,8 +1081,16 @@ static ta_status chart_analyze(ta_datamodel_ecmascript *ecmascript, ecmascript_c
     for (uint32_t e = 0; e < chart->expression_count && status == TA_OK; e++) {
         ta_expression_info info;
         if (ta_image_expression(chart->image, (ta_chart_item){chart->chart, e}, &info) != TA_OK ||
-            !is_script(info.kind) || !may_declare(info.source))
+            !is_script(info.kind))
             continue;
+        if (info.kind == TA_EXPRESSION_SCRIPT && mentions_strict(info.source)) {
+            int strict = script_strict(ecmascript, &shared, e, info.source);
+            if (strict < 0 || (strict && !strict_block_add(chart, e))) {
+                status = TA_ERROR_NO_MEMORY;
+                break;
+            }
+        }
+        if (!may_declare(info.source)) continue;
         if (!base_names(ecmascript) || (!shared.context && !scratch_new(ecmascript, &shared))) {
             status = TA_ERROR_NO_MEMORY;
             break;
@@ -1127,6 +1183,7 @@ static void chart_free(ta_datamodel_ecmascript *ecmascript, ecmascript_chart *ch
     free(chart->variables);
     free(chart->lexical_names);
     free(chart->functions);
+    free(chart->strict_blocks);
     free(chart);
 }
 
