@@ -1088,6 +1088,50 @@ static int hibernated(host_world *e, uint64_t session) {
                   "<transition event='alarm'><log expr=\"'alarm after ' + hits\"/></transition>"   \
                   "</state>")
 
+/* A wake takes only the session's latest blob: an older one, which a store
+ * that fell behind hands back, is refused (TA_ERROR_STALE) and the actor
+ * stays hibernated, then wakes from the latest; another session's blob is
+ * not its blob (TA_ERROR_INVALID) (tinyactors-napi/docs/log.xml,
+ * l-p4-examples-chat-stale-blob). */
+static void test_wake_refuses_an_older_blob(void) {
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    world_add(&e, SLEEPER);
+    uint64_t s = spawn(&e, "sleeper"), other = spawn(&e, "sleeper");
+    run(&e);
+    static unsigned char older[1 << 16], latest[1 << 16], others[1 << 16];
+    ta_bytes written;
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    size_t older_length = output_copy(written, older, sizeof older);
+    ta_host_effects_ack(e.host);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){older, older_length}), TA_OK);
+    CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
+    run(&e);
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    size_t latest_length = output_copy(written, latest, sizeof latest);
+    ta_host_effects_ack(e.host);
+    CHECK_EQUAL(ta_host_hibernate(e.host, other, &written), TA_OK);
+    size_t others_length = output_copy(written, others, sizeof others);
+    ta_host_effects_ack(e.host);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){older, older_length}), TA_ERROR_STALE);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){others, others_length}), TA_ERROR_INVALID);
+    CHECK_EQUAL(hibernated(&e, s), 1);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){latest, latest_length}), TA_OK);
+    e.log[0] = 0;
+    CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "touched 2;") == 0); /* the latest state: one touch before */
+    /* a hibernation with no step since the last one holds the same state: its blob is the latest too */
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    size_t again_length = output_copy(written, latest, sizeof latest);
+    ta_host_effects_ack(e.host);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){latest, again_length}), TA_OK);
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    ta_host_effects_ack(e.host);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){latest, again_length}), TA_OK);
+    world_close(&e);
+}
+
 static void test_hibernate_and_wake(void) {
     host_world e;
     world_open(&e, 8, NULL, 0);
@@ -1577,6 +1621,7 @@ int main(void) {
     RUN(test_restore_after_images_freed);
     RUN(test_snapshot_pack);
     RUN(test_hibernate_and_wake);
+    RUN(test_wake_refuses_an_older_blob);
     RUN(test_request_answered_with_an_error);
     RUN(test_state_value);
     RUN(test_snapshot_restore);

@@ -85,7 +85,7 @@ default filled in.
 Growing costs a copy of the region each time, and a grown region keeps
 its size, so a host that will hold a known population is better sized for
 it. A hibernated actor keeps its slot and its record in the host (about
-60 bytes), so `maxActors` counts every actor, while the instance and
+64 bytes), so `maxActors` counts every actor, while the instance and
 string memory are needed for the resident ones only. For `R` actors
 resident out of `N` on a counter chart of a few variables, the
 repository's hibernation gate uses:

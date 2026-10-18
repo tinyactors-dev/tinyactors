@@ -521,6 +521,8 @@ ta_status ta_actor_write_hibernation(ta_system *system, uint32_t actor, ta_outpu
     if (status == TA_OK) status = write_hib(system, index, out);
     if (status != TA_OK) return status;
     if (!ta_output_fits(out)) return TA_ERROR_NO_MEMORY; /* nothing changed */
+    ta_system_actor_links(system)[index].hibernation =
+        (uint32_t)ta_actor_instance(system, ta_actor_at(system, index))->macrostep;
     unload(system, index); /* the datamodel's state was copied before destroy */
     system->stats_hibernations++;
     return TA_OK;
@@ -760,6 +762,9 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes bytes) {
         view.serial != actor_record->serial || view.image_hash != core->image_view.hash ||
         view.instance_bytes != ta_core_chart_instance_size(core, chart))
         return TA_ERROR_INVALID;
+    uint64_t macrostep; /* its blob's, against its latest hibernation's */
+    ta_memcpy(&macrostep, view.instance + offsetof(ta_instance, macrostep), sizeof macrostep);
+    if ((uint32_t)macrostep != ta_system_actor_links(system)[index].hibernation) return TA_ERROR_STALE;
     ta_status status = restore(system, index, chart, &view, &off);
     if (status != TA_OK) return status;
     ta_instance *instance = (ta_instance *)ta_slab_pointer(&system->slab, off);

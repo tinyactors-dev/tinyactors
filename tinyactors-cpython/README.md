@@ -509,6 +509,10 @@ program's job.
   is `None`), or a migration that asks for it (`migration` is its id;
   below, "Migration"). The events wait in the mailbox while your handler
   loads the blob and calls **`host.wake(session, blob)`**, then or later.
+  It takes the session's latest blob only: one of an earlier hibernation
+  (a store that fell behind) raises `TinyactorsError` with
+  `TA_ERROR_STALE`, another session's `TA_ERROR_INVALID`, and the actor
+  stays hibernated.
   The handler is called once per hibernation, however many events come.
   Without a `wake` handler the host does not ask: the actor stays
   hibernated, and its events wait, until you call `host.wake`.
@@ -533,7 +537,7 @@ def evict(host):                          # after a turn: the cold actors leave
 ```
 
 **Plan the capacity up front.** A hibernated actor keeps its slot and its
-session's record in the host (about 60 B), so `system.maxActors` counts
+session's record in the host (about 64 B), so `system.maxActors` counts
 every actor. Instance and string memory are needed for the resident ones
 only. Left to grow, a segment grows the pool that ran out, by a quarter of its
 region when that is at most 16 times the pool, and its instance memory

@@ -1200,7 +1200,8 @@ static napi_value ta_napi_host_wake(napi_env env, napi_callback_info info) {
             ta_status status = ta_host_wake(call.host->host, session, blob.view);
             if (status == TA_OK) ta_napi_schedule(env, call.host); /* its mailbox runs at the next turn */
             result = ta_napi_input_status(env, &(ta_napi_refusal){status, "the wake was refused (TA_ERROR_STATE: the session "
-                                                                          "is not hibernated; TA_ERROR_INVALID: not its blob)"});
+                                                                          "is not hibernated; TA_ERROR_INVALID: not its blob; "
+                                                                          "TA_ERROR_STALE: not its latest blob)"});
         }
     }
     ta_napi_leave(&call);

@@ -1076,7 +1076,9 @@ export class Host implements Disposable, AsyncDisposable {
    * in memory then. */
   hibernate(session: Session): Uint8Array;
   /** Puts a hibernated actor back from the blob `hibernate` gave; its
-   * waiting events run at the next turn. */
+   * waiting events run at the next turn. Only its latest blob: one of an
+   * earlier hibernation (a store that fell behind) throws `TA_ERROR_STALE`,
+   * another session's `TA_ERROR_INVALID`, and the actor stays hibernated. */
   wake(session: Session, blob: Uint8Array | ArrayBuffer): void;
   /** Starts moving running actors (every chart's, `chart`'s, or one
    * `session`) to the current version of their chart, in later turns; each

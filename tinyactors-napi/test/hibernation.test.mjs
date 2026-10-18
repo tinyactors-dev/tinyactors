@@ -294,6 +294,24 @@ test('a chart whose scripts declare with let: native keeps it resident, quickjs 
   host.close();
 });
 
+test('wake refuses an older blob of the session: a store that fell behind loses no state', async () => {
+  const logs = new Logs();
+  const host = hostWith({ counter: counter() }, { log: logs.handler });
+  const session = host.spawn(host.chart('counter'));
+  await host.idle();
+  const older = host.hibernate(session);
+  host.wake(session, older);
+  host.send(session, 'inc', 1);
+  await host.idle();
+  const latest = host.hibernate(session);
+  throws(() => host.wake(session, older), status('TA_ERROR_STALE'), 'an earlier blob');
+  host.wake(session, latest);
+  host.send(session, 'report');
+  await host.idle();
+  equal(logs.labelled('n').join('|'), '1 [1] report', 'woken from the latest');
+  host.close();
+});
+
 test('wake refuses a blob it cannot read, and a session that is not hibernated', async () => {
   const host = hostWith({ counter: counter() });
   const session = host.spawn(host.chart('counter'));

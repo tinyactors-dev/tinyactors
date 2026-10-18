@@ -68,6 +68,11 @@ typedef struct ta_actor_links {
         uint32_t wake_prev; /* in the wake queue (hibernated: no request is live, so `requests`
                                is 0, and it is 0 again once the actor leaves the queue) */
     };
+    /* hibernated: the low 32 bits of its instance's macrostep when it was
+     * hibernated last, which its latest blob holds; ta_actor_wake refuses a
+     * blob of an earlier hibernation (TA_ERROR_STALE). A blob of the same
+     * macrostep holds the same state: nothing changes it outside one. */
+    uint32_t hibernation;
 } ta_actor_links;
 
 typedef struct ta_timer {

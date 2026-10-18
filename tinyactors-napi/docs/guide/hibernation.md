@@ -92,7 +92,11 @@ A blob is the actor's whole state: its active states, its variables, its
 `_event`, its place in the host. Wake it in the host that
 hibernated it, or in one [restored](snapshots.md) from that host's
 snapshot. It lives in your store until the wake; the host keeps nothing
-of it.
+of it but which hibernation it was. A wake takes the session's latest blob
+only: a blob of an earlier hibernation, which a store that fell behind
+hands back (an overwrite that failed, a replica, a cache), throws
+`TA_ERROR_STALE` and the actor stays hibernated, so no state is lost
+without an error.
 
 On the native datamodel the variables are written as values of the
 value table ([README](../../README.md#values)): numbers, `bigint`s,

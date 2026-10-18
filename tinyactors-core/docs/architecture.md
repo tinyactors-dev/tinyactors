@@ -301,9 +301,10 @@ typedef struct ta_actor {
 
 Actor (48 B) + instance (~64 B) ≈ **112 bytes per idle actor**, plus
 whatever the datamodel keeps. Beside the actor pool, per actor of
-`max_actors`: its links (12 B: its place in the ring of actors of its
-name, and how many of its requests are live, a word that holds the actor
-before it in the wake queue while it is hibernated there) and the index of names (a
+`max_actors`: its links (16 B: its place in the ring of actors of its
+name, how many of its requests are live, a word that holds the actor
+before it in the wake queue while it is hibernated there, and which
+hibernation its latest blob is, so a wake refuses an older one) and the index of names (a
 slot per name, 4 B, at most 4/5 full: 5–10 B). The index answers
 `ta_system_actor_by_name` with the oldest live actor of a name in O(1)
 expected; the count of requests lets hibernation and export check a stable

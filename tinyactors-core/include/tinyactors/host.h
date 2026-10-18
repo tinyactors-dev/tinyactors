@@ -406,6 +406,10 @@ TA_API uint32_t ta_host_sweep(ta_host *h, uint32_t max_scan, ta_uint64_array out
  * one pass, the datamodel's serialize called
  * once. TA_ERROR_NO_MEMORY: the allocator refused room, and the actor stays. */
 TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, ta_bytes *out);
+/* The hibernated `session` back from `blob`, read during the call: its
+ * latest blob only. TA_ERROR_STALE for a blob of an earlier hibernation of
+ * it (a store that fell behind), TA_ERROR_INVALID for one that is not its
+ * own; the actor stays hibernated then. */
 TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);
 
 /* ---- snapshot / restore -------------------------------------------------------------

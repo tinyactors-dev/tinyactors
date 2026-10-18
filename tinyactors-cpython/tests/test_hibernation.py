@@ -161,6 +161,29 @@ class Hibernation(unittest.TestCase):
                 host.hibernate(session)
             self.assertEqual(instances(), 1)
 
+    def test_wake_refuses_an_older_blob(self):
+        """A store that fell behind hands back an earlier blob: the wake
+        refuses it with TA_ERROR_STALE and the actor stays hibernated, then
+        wakes from the latest one with its state."""
+        for datamodel in ("python", "ecmascript"):
+            with self.subTest(datamodel=datamodel):
+                logs = Logs()
+                with host_with([("counter.scxml", COUNTER[datamodel])], log=logs) as host:
+                    session = host.spawn(host.chart("counter"))
+                    host.run_until_idle()
+                    older = host.hibernate(session)
+                    host.wake(session, older)
+                    host.send(session, "inc", 1)
+                    host.run_until_idle()
+                    latest = host.hibernate(session)
+                    with self.assertRaises(tinyactors.TinyactorsError) as raised:
+                        host.wake(session, older)
+                    self.assertEqual(raised.exception.status, "TA_ERROR_STALE")
+                    host.wake(session, latest)
+                    host.send(session, "report")
+                    host.run_until_idle()
+                self.assertEqual(logs.labelled("n")[0].split(" ")[0], "1")
+
     def test_wake_refuses_a_blob_it_cannot_read(self):
         with host_with([("counter.scxml", COUNTER["python"])]) as host:
             session = host.spawn(host.chart("counter"))
