@@ -333,13 +333,17 @@ test('actor.context: each variable as a neutral value (to_wire)', async () => {
     </datamodel>
     <state id="s"/>`);
   const host = hostWith({ c: chart });
-  const session = host.spawn(host.chart('c'));
-  await host.idle();
+  const session = host.spawn(host.chart('c'), { params: { n: 7 } });
+  // asked before the first turn: no <data> is initialized, the params neither
+  const before = await host.actorContextAsync({ session });
+  same(Object.keys(before.variables), ['n', 'nothing', 'mixed'], 'keys');
+  equal(Object.values(before.variables).every((v) => v === undefined), true, 'every variable undefined before the first turn');
   let result;
   host.actorContext({ session }, (h, answer) => { result = answer; });
   await host.idle();
   host.close();
-  same(result, { variables: { n: 2, nothing: null, mixed: { b: [null, 1], d: '1970-01-01T00:00:00.000Z' } } }, 'variables');
+  same(result, { variables: { n: 7, mixed: { b: [null, 1], d: '1970-01-01T00:00:00.000Z' } } }, 'variables');
+  equal('nothing' in result.variables && result.variables.nothing === undefined, true, 'undefined stays undefined, apart from null');
 });
 
 test('the native datamodel: a value that cannot cross is refused at the input, the Host included', async () => {

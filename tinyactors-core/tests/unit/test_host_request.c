@@ -169,13 +169,16 @@ static void test_spans_and_metrics(void) {
 static void test_actor_context(void) {
     world w;
     world_open(&w, 0, NULL);
-    settle(&w);
     static host_ask a;
     ta_cbor_writer *writer = ask_begin(&a, "actor.context", 1);
     ta_cbor_write_text(writer, ta_string("session"));
     ta_cbor_write_uint(writer, w.session);
+    /* before its first macrostep the actor's <data> are not initialized */
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":1,\"who\":\"bob\",\"nothing\":null}}")));
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":undefined,\"who\":undefined,\"nothing\":undefined}}")));
+    settle(&w);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":1,\"who\":\"bob\",\"nothing\":undefined}}")));
     ta_event_in event;
     memset(&event, 0, sizeof event);
     event.size = sizeof event;
@@ -184,7 +187,7 @@ static void test_actor_context(void) {
     CHECK_EQUAL(ta_host_send(w.host, &event), TA_OK);
     settle(&w);
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":null}}")));
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":undefined}}")));
     /* hibernated: wake it first */
     static unsigned char blob[1 << 16];
     ta_bytes hibernated; /* the host's, until the ack */
@@ -198,7 +201,22 @@ static void test_actor_context(void) {
     CHECK(reply_is(a.text, ERROR("-32002", "state", "params.session", "the actor is hibernated: wake it first")));
     CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":null}}")));
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":2,\"who\":\"bob\",\"nothing\":undefined}}")));
+    world_close(&w);
+
+    /* null stays null, apart from undefined */
+    world_open(&w, 0, NULL);
+    settle(&w);
+    event.name = (ta_string_view){"set", 3};
+    event.session = w.session;
+    event.data = ta_datamodel_ecmascript_payload_eval(w.ecmascript, 0, ta_string("{n: null}"));
+    CHECK_EQUAL(ta_host_send(w.host, &event), TA_OK);
+    settle(&w);
+    writer = ask_begin(&a, "actor.context", 1);
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, w.session);
+    CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":null,\"who\":undefined,\"nothing\":undefined}}")));
     world_close(&w);
 
     /* a datamodel that does not show its variables (no `variable` entry) */
@@ -291,7 +309,7 @@ static void test_actor_send(void) {
     ta_cbor_write_text(writer, ta_string("session"));
     ta_cbor_write_uint(writer, w.session);
     CHECK_EQUAL(ask_send(w.host, &a), TA_OK);
-    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":7,\"who\":\"tinyactors://b/@x\",\"nothing\":null}}")));
+    CHECK(reply_is(a.text, RESULT("{\"variables\":{\"n\":7,\"who\":\"tinyactors://b/@x\",\"nothing\":undefined}}")));
     CHECK_EQUAL(send_ask(&w, &a, ping_by_address, 2), TA_OK);
     CHECK(reply_is(a.text, RESULT("{}")));
     settle(&w);

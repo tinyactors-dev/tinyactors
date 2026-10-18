@@ -507,8 +507,8 @@ request actor.context
 setup pinged
 send a362696401666d6574686f646d6163746f722e636f6e7465787466706172616d73a16773657373696f6e01
 diag {"id":1,"method":"actor.context","params":{"session":1}}
-reply a26269640166726573756c74a1697661726961626c6573a3616e016377686f63626f62676e6f7468696e67f6
-diag {"id":1,"result":{"variables":{"n":1,"who":"bob","nothing":null}}}
+reply a26269640166726573756c74a1697661726961626c6573a3616e016377686f63626f62676e6f7468696e67f7
+diag {"id":1,"result":{"variables":{"n":1,"who":"bob","nothing":undefined}}}
 
 request actor.context: session
 setup pinged
@@ -558,8 +558,8 @@ diag {"id":1,"result":{}}
 run
 send a362696402666d6574686f646d6163746f722e636f6e7465787466706172616d73a16773657373696f6e01
 diag {"id":2,"method":"actor.context","params":{"session":1}}
-reply a26269640266726573756c74a1697661726961626c6573a3616e026377686f63626f62676e6f7468696e67f6
-diag {"id":2,"result":{"variables":{"n":2,"who":"bob","nothing":null}}}
+reply a26269640266726573756c74a1697661726961626c6573a3616e026377686f63626f62676e6f7468696e67f7
+diag {"id":2,"result":{"variables":{"n":2,"who":"bob","nothing":undefined}}}
 
 request actor.send: by address, with data and an origin
 only reference

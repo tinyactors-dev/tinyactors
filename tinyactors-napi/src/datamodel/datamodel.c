@@ -1086,10 +1086,14 @@ static ta_status ta_napi_variable(const ta_datamodel_call *call, ta_string_view 
                    info.id.length == name.length && memcmp(info.id.pointer, name.pointer, name.length) == 0;
     }
     napi_value key, value;
+    napi_valuetype type = napi_undefined;
     ta_status status = declared && napi_create_string_utf8(env, name.pointer, name.length, &key) == napi_ok &&
-                               napi_get_property(env, evaluation->scope, key, &value) == napi_ok
-                           ? ta_napi_native_add(evaluation->native, value, out)
+                               napi_get_property(env, evaluation->scope, key, &value) == napi_ok &&
+                               napi_typeof(env, value, &type) == napi_ok
+                           ? TA_OK
                            : TA_ERROR_INVALID;
+    *out = 0; /* undefined: no payload, which core writes as CBOR undefined (datamodel.h) */
+    if (status == TA_OK && type != napi_undefined) status = ta_napi_native_add(evaluation->native, value, out);
     if (status != TA_OK) ta_napi_failed(env);
     ta_napi_frame_close(&entry.frame);
     return status;

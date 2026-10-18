@@ -250,8 +250,11 @@ typedef struct ta_datamodel_vtable {
 
     /* A variable for inspection (optional; the actor.context request,
      * docs/requests.md): the value of the location `name` (a <data> id) in
-     * `instance`, as a new payload (one reference). It must have no effect the
-     * chart can see. TA_ERROR_INVALID when the instance has no such value. */
+     * `instance`, as a new payload (one reference), or TA_OK with *out 0 when
+     * the location holds the language's undefined (a <data> not yet
+     * initialized, or one without a value), which core writes as CBOR
+     * undefined. It must have no effect the chart can see. TA_ERROR_INVALID
+     * when the instance has no such value. */
     ta_status (*variable)(const ta_datamodel_call *call, ta_string_view name, ta_payload *out);
 
     /* Why the instance's last call failed (optional): core asks on the

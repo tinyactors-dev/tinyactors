@@ -296,8 +296,14 @@ A session's variables: each `<data>` of its chart, in the order the chart
 declares them, as neutral values (the datamodel's `to_wire`;
 docs/protocol.md, "Values"). Param: `session` (uint, required).
 
-Result: `{"variables": {<data id>: <value>, ...}}`. A variable the datamodel
-cannot read or write as a neutral value is `undefined` or `null`.
+Result: `{"variables": {<data id>: <value>, ...}}`. A variable that holds
+undefined (a `<data>` with no value) is `undefined`, apart from one that
+holds `null`; a variable the datamodel cannot read, or cannot write as a
+neutral value, is `undefined` or `null`. A `<data>` is initialized at the
+actor's first macrostep (early binding; with late binding, at the first
+entry of its state), which runs in the first `ta_host_run` after the spawn,
+and the spawn's params are bound then too: asked before it, every variable
+is `undefined`.
 
 Errors: `missing`, `type`, `stale`; `state` (-32002) when the actor is
 hibernated, or its datamodel does not show variables (no `variable` entry in
@@ -305,7 +311,7 @@ its vtable, as with a binding's own datamodel, which keeps its scope).
 
 ```
 {"id": 1, "method": "actor.context", "params": {"session": 1}}
-→ {"id": 1, "result": {"variables": {"n": 2, "who": "bob", "nothing": null}}}
+→ {"id": 1, "result": {"variables": {"n": 2, "who": "bob", "nothing": undefined}}}
 ```
 
 ### `actor.send`

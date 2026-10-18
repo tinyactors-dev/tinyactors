@@ -1044,7 +1044,9 @@ export class Host implements Disposable, AsyncDisposable {
    * later turn; `close()` drops them uncalled. */
   actorState(params: SessionParams, onResult: OnResult<ActorStateResult>, onError?: OnError | null): void;
   /** An actor's variables, `{ variables }`. Params `{ session }`; refused
-   * for a hibernated actor. */
+   * for a hibernated actor. A variable that holds `undefined` reads
+   * `undefined`, apart from `null`; before the actor's first turn every
+   * variable is `undefined`, its spawn params included. */
   actorContext(params: SessionParams, onResult: OnResult<ActorContextResult>, onError?: OnError | null): void;
   /** The host's sessions a page at a time, `{ sessions, cursor }`, `cursor`
    * `null` after the last page. Params `{ cursor?, limit? }` (1 to 512,

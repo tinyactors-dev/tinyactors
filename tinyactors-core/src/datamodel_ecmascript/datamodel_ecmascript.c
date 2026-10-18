@@ -3347,8 +3347,14 @@ static ta_status ecmascript_variable(const ta_datamodel_call *call, ta_string_vi
                                      ta_payload *out) {
     void *datamodel = call->datamodel;
     uint64_t handle = call->instance;
-    *out = ta_datamodel_ecmascript_payload_eval((ta_datamodel_ecmascript *)datamodel, handle, name);
-    return *out ? TA_OK : TA_ERROR_INVALID;
+    ta_datamodel_ecmascript *ecmascript = (ta_datamodel_ecmascript *)datamodel;
+    *out = ta_datamodel_ecmascript_payload_eval(ecmascript, handle, name);
+    if (!*out) return TA_ERROR_INVALID;
+    if (JS_IsUndefined(payload_get(ecmascript, *out))) { /* undefined: no payload (datamodel.h) */
+        ecmascript_release(ecmascript, *out);
+        *out = 0;
+    }
+    return TA_OK;
 }
 
 /* Why the last evaluation failed, once (datamodel.h). */

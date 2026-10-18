@@ -125,9 +125,9 @@ It cannot see:
   handled last (`_event`).
 - **Anything but `<data>`:** the functions and `var`s the chart's scripts
   declare are not variables to `actorContext`.
-- **A difference between `undefined` and `null`:** a variable that is
-  `undefined` reads `null`, and an actor asked about before its first turn
-  reads `null` for every variable, its spawn params included.
+- **A new document's data before its first turn:** an actor asked about
+  before it first runs reads `undefined` for every variable, its spawn
+  params included, since they are bound when it starts.
 - **Ended documents:** an actor that reached a final state is gone; the
   outcome is in the notifications and the archive, which are the
   application's. A document that ends between `actorList` and the calls
@@ -169,12 +169,14 @@ Recorded in [`docs/log.xml`](../../docs/log.xml):
   to its final state through history raised `done.state.review` while
   finance was still being entered. Fixed in core: the guard is gone.
 - `l-p4-examples-approval-xml-content`: inline XML `<content>` sent to an
-  I/O processor was an `XMLNode` on the native datamodel and cannot be
-  read on quickjs (`TA_ERROR_INVALID`). The native datamodel now gives its
-  XML text; quickjs waits for core, so the chart still sends its record as
-  text it writes.
-- `l-p4-examples-approval-context-null`: `actorContext` reads `null` for
-  an `undefined` variable, and for every variable before the first turn:
-  core's encoding, requested of core.
+  I/O processor was an `XMLNode` on the native datamodel and could not be
+  read on quickjs (`TA_ERROR_INVALID`). Fixed in the binding and in core:
+  both datamodels give its XML text. The chart still writes its record,
+  which holds the document's variables, as text.
+- `l-p4-examples-approval-context-null`: `actorContext` read `null` for
+  an `undefined` variable, and for every variable before the first turn.
+  Fixed in core: an `undefined` variable reads `undefined`, apart from
+  `null`; before the first turn every variable is `undefined`, since an
+  actor's data and its spawn params are bound when it first runs.
 - `l-p4-examples-approval-hidden-timers`: no method shows an actor's
   pending delayed sends or its history states.

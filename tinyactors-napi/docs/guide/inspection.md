@@ -45,8 +45,12 @@ actor: order mailbox 0
 ```
 
 Asked before the `await host.idle()`, the same methods would have found
-an actor that had not started yet: no active state, and its variables
-not yet set. An actor's state reads as nested objects, one key per
+an actor that had not started yet: no active state, and every variable
+`undefined`, the spawn's `params` included. An actor's `<data>` are
+given their values, from `expr` or from `params`, when it first runs, in
+the host's next turn after the spawn. A variable that holds `undefined`
+reads `undefined` and one that holds `null` reads `null`, on both
+datamodels. An actor's state reads as nested objects, one key per
 compound state: `{"open": "browsing"}` is the state `browsing` inside
 `open`, and a parallel state is `{"p": {"r1": ..., "r2": ...}}`, one
 key per region.

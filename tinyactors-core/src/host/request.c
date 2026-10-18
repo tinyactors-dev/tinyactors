@@ -741,7 +741,7 @@ static void request_run_actor_context(request *r, uint32_t map) {
         ta_status status = binding->vtable->variable(
             &(ta_datamodel_call){binding->datamodel, info.datamodel_instance, 0}, data.id, &payload);
         host_unguard(r->host, was);
-        if (status != TA_OK) {
+        if (status != TA_OK || !payload) { /* no value, or undefined (datamodel.h, variable) */
             cbor_output_simple(&r->out, TA_CBOR_UNDEFINED);
             continue;
         }
