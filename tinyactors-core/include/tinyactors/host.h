@@ -427,7 +427,9 @@ TA_API ta_status ta_host_hibernate(ta_host *h, uint64_t session, ta_bytes *out);
 /* The hibernated `session` back from `blob`, read during the call: its
  * latest blob only. TA_ERROR_STALE for a blob of an earlier hibernation of
  * it (a store that fell behind), TA_ERROR_INVALID for one that is not its
- * own; the actor stays hibernated then. */
+ * own; the actor stays hibernated then. After a restore, a blob of a
+ * hibernation made after the snapshot is accepted too, so a store that
+ * keeps one blob per session goes on working. */
 TA_API ta_status ta_host_wake(ta_host *h, uint64_t session, ta_bytes blob);
 
 /* ---- snapshot / restore -------------------------------------------------------------

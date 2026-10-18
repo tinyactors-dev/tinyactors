@@ -1171,6 +1171,70 @@ static void test_wake_refuses_an_older_blob(void) {
     world_close(&e);
 }
 
+/* After a restore, the system's note of a hibernation is the snapshot's, and
+ * the store may hold a blob of a later hibernation (one blob per session,
+ * overwritten): that blob wakes the session; an earlier one is still refused */
+static void test_wake_after_a_restore_takes_a_newer_blob(void) {
+    host_world e;
+    world_open(&e, 8, NULL, 0);
+    world_add(&e, SLEEPER);
+    uint64_t s = spawn(&e, "sleeper");
+    run(&e);
+    static unsigned char first[1 << 16], second[1 << 16];
+    ta_bytes written;
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    size_t first_length = output_copy(written, first, sizeof first);
+    ta_host_effects_ack(e.host);
+    /* the snapshot, taken while the session is hibernated in `first` */
+    ta_buffer out = {NULL, 0, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &out), TA_ERROR_NO_MEMORY);
+    void *hs = malloc(out.length);
+    out = (ta_buffer){hs, out.length, 0};
+    CHECK_EQUAL(ta_host_snapshot(e.host, &out), TA_OK);
+    size_t hl = out.length;
+    out = (ta_buffer){NULL, 0, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &out), TA_ERROR_NO_MEMORY);
+    void *ds = malloc(out.length);
+    out = (ta_buffer){ds, out.length, 0};
+    CHECK_EQUAL(ta_datamodel_ecmascript_snapshot(e.ecmascript, &out), TA_OK);
+    size_t dl = out.length;
+    /* the store goes on: woken, touched, hibernated again into `second` */
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){first, first_length}), TA_OK);
+    CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
+    run(&e);
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    size_t second_length = output_copy(written, second, sizeof second);
+    ta_host_effects_ack(e.host);
+    /* the process restarts from the snapshot */
+    ta_host_free(e.host);
+    ta_datamodel_ecmascript_free(e.ecmascript);
+    e.ecmascript = ta_datamodel_ecmascript_new(NULL);
+    e.binding = ta_datamodel_ecmascript_binding(e.ecmascript);
+    test_host_config config;
+    memset(&config, 0, sizeof config);
+    config.size = sizeof config;
+    config.system_id = (ta_string_view){"h", 1};
+    config.datamodels = &e.binding;
+    config.datamodel_count = 1;
+    config.allocator = ta_runtime_malloc();
+    ta_bytes images[1] = {ta_image_bytes(&e.image[0])};
+    CHECK_EQUAL(test_host_restore(&config, &(ta_host_snapshot_input){{0, 0}, {hs, hl}, images, 1, 0}, &e.host),
+                TA_OK);
+    CHECK_EQUAL(ta_datamodel_ecmascript_restore(e.ecmascript, (ta_bytes){ds, dl}), TA_OK);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){second, second_length}), TA_OK);
+    e.log[0] = 0;
+    CHECK_EQUAL(send(&e, s, "touch", NULL), TA_OK);
+    run(&e);
+    CHECK(strcmp(e.log, "touched 2;") == 0); /* the newer state: one touch before */
+    /* hibernated again, the note is that hibernation's: the snapshot's blob is older */
+    CHECK_EQUAL(ta_host_hibernate(e.host, s, &written), TA_OK);
+    ta_host_effects_ack(e.host);
+    CHECK_EQUAL(ta_host_wake(e.host, s, (ta_bytes){first, first_length}), TA_ERROR_STALE);
+    free(hs);
+    free(ds);
+    world_close(&e);
+}
+
 static void test_hibernate_and_wake(void) {
     host_world e;
     world_open(&e, 8, NULL, 0);
@@ -1661,6 +1725,7 @@ int main(void) {
     RUN(test_snapshot_pack);
     RUN(test_hibernate_and_wake);
     RUN(test_wake_refuses_an_older_blob);
+    RUN(test_wake_after_a_restore_takes_a_newer_blob);
     RUN(test_request_answered_with_an_error);
     RUN(test_state_value);
     RUN(test_snapshot_restore);

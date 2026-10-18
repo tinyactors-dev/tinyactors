@@ -16,9 +16,9 @@
  * (docs/adr/0006 in the repository root), 3 with the charts' counts, 4 since
  * an external invocation's request keeps its type and params, 5 with the queue
  * of parked spawns, 6 with the index of actor names, 7 with each actor's count
- * of requests, 8 with the wake queue linked both ways; a snapshot of another
- * is refused. */
-#define TA_SYSTEM_VERSION      8u
+ * of requests, 8 with the wake queue linked both ways, 9 with each actor's
+ * note of its last hibernation; a snapshot of another is refused. */
+#define TA_SYSTEM_VERSION      9u
 #define TA_MAX_DATAMODELS      8u
 #define TA_EXTERNAL_INVOKE_BIT (1u << 23) /* in a child handle: external invoke token */
 /* slab byte budgets stay below 4 GiB so page arithmetic cannot overflow u32 */
@@ -71,7 +71,9 @@ typedef struct ta_actor_links {
     /* hibernated: the low 32 bits of its instance's macrostep when it was
      * hibernated last, which its latest blob holds; ta_actor_wake refuses a
      * blob of an earlier hibernation (TA_ERROR_STALE). A blob of the same
-     * macrostep holds the same state: nothing changes it outside one. */
+     * macrostep holds the same state: nothing changes it outside one. A
+     * later one is accepted: after a restore the note is the snapshot's,
+     * and the store may hold a blob of a hibernation made after it. */
     uint32_t hibernation;
 } ta_actor_links;
 

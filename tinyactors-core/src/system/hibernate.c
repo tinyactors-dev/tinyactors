@@ -764,7 +764,10 @@ ta_status ta_actor_wake(ta_system *system, uint32_t actor, ta_bytes bytes) {
         return TA_ERROR_INVALID;
     uint64_t macrostep; /* its blob's, against its latest hibernation's */
     ta_memcpy(&macrostep, view.instance + offsetof(ta_instance, macrostep), sizeof macrostep);
-    if ((uint32_t)macrostep != ta_system_actor_links(system)[index].hibernation) return TA_ERROR_STALE;
+    /* earlier, modulo 2^32; a later one is a hibernation after a snapshot this
+     * system was restored from */
+    if ((int32_t)((uint32_t)macrostep - ta_system_actor_links(system)[index].hibernation) < 0)
+        return TA_ERROR_STALE;
     ta_status status = restore(system, index, chart, &view, &off);
     if (status != TA_OK) return status;
     ta_instance *instance = (ta_instance *)ta_slab_pointer(&system->slab, off);
