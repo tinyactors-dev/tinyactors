@@ -1,5 +1,6 @@
-// The admin view: every document's active states and variables, read
-// from the running host with the typed methods actorList, actorGet,
+// The admin view: every document's active states, where its history
+// states would return, when each stage's SLA is due, and its variables,
+// read from the running host with the typed methods actorList, actorGet,
 // actorState and actorContext. As a function (`documents`, `describe`),
 // as text for a terminal (`formatTable`), and as an HTTP endpoint
 // (`serveAdmin`).
@@ -12,6 +13,19 @@ export function leaves(value) {
   if (typeof value === 'string') return [value];
   if (value === null || typeof value !== 'object') return [];
   return Object.values(value).flatMap(leaves);
+}
+
+/** The SLAs running of a document, from its pending delayed sends
+ * (actorGet's `timers`): each stage's timer is the send with id
+ * `<stage>SLA` (charts/document.scxml), due at a time of `host.now()`'s
+ * clock. `{ legal: 172800000 }` is legal's SLA, due at 48 h. */
+export function slaDue(timers) {
+  const due = {};
+  for (const timer of timers) {
+    const stage = /^(\w+)SLA$/.exec(timer.sendid ?? '')?.[1];
+    if (stage) due[stage] = timer.due;
+  }
+  return due;
 }
 
 /** One actor as the admin sees it, or `undefined` when it ended before the
@@ -29,6 +43,10 @@ export async function describe(host, session) {
       mailbox: actor.mailbox,
       state: state.value,
       active: leaves(state.value),
+      // where each history state would return: a resume (resumePoint) or a resubmission (legalWasAt, financeWasAt)
+      history: state.history,
+      slaDue: slaDue(actor.timers),
+      now: host.now(),
       variables: context.variables,
     };
   } catch (error) {
@@ -56,16 +74,22 @@ export async function documentByID(host, id) {
   return session === undefined ? undefined : describe(host, session);
 }
 
+/** Milliseconds as hours, or seconds below one: `172800000` is `48h`. */
+function hours(ms) {
+  return ms >= 3_600_000 ? `${+(ms / 3_600_000).toFixed(1)}h` : `${+(ms / 1000).toFixed(1)}s`;
+}
+
 /** A row per document for a terminal. */
 export function formatTable(docs) {
   const rows = docs.map((d) => {
     const v = d.variables;
     const who = [v.legalReviewer && `legal ${v.legalReviewer}`, v.financeReviewer && `finance ${v.financeReviewer}`]
       .filter(Boolean).join(', ');
+    const sla = Object.entries(d.slaDue).map(([stage, due]) => `${stage} in ${hours(due - d.now)}`).join(', ');
     return [String(v.docID), `v${v.version}`, String(v.amount), d.active.join(' + '), who || '-',
-      Object.keys(v.approvals ?? {}).join(',') || '-', String(v.escalations?.length ?? 0)];
+      Object.keys(v.approvals ?? {}).join(',') || '-', String(v.escalations?.length ?? 0), sla || '-'];
   });
-  const head = ['document', 'ver', 'amount', 'active states', 'reviewers', 'approved by', 'escalations'];
+  const head = ['document', 'ver', 'amount', 'active states', 'reviewers', 'approved by', 'escalations', 'SLA due'];
   const widths = head.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
   return [head, ...rows].map((r) => r.map((cell, i) => cell.padEnd(widths[i])).join('  ').trimEnd()).join('\n');
 }

@@ -26,13 +26,21 @@
 typedef struct ta_napi_method {
     const char *js;   /* the Host's method */
     const char *core; /* the posted method */
+    bool timers;      /* its result's timers[].due are the host's ticks: converted to milliseconds */
 } ta_napi_method;
 
 static const ta_napi_method ta_napi_methods[] = {
-    {"actorState", "actor.state"},         {"actorContext", "actor.context"},     {"actorList", "actor.list"},
-    {"actorGet", "actor.get"},             {"hostStats", "host.stats"},           {"hostConfig", "host.config"},
-    {"traceConfigure", "trace.configure"}, {"traceWatch", "trace.watch"},         {"traceUnwatch", "trace.unwatch"},
-    {"traceEnd", "trace.end"},             {"traceSpansDecode", "trace.spans.decode"},
+    {"actorState", "actor.state", false},
+    {"actorContext", "actor.context", false},
+    {"actorList", "actor.list", false},
+    {"actorGet", "actor.get", true},
+    {"hostStats", "host.stats", false},
+    {"hostConfig", "host.config", false},
+    {"traceConfigure", "trace.configure", false},
+    {"traceWatch", "trace.watch", false},
+    {"traceUnwatch", "trace.unwatch", false},
+    {"traceEnd", "trace.end", false},
+    {"traceSpansDecode", "trace.spans.decode", false},
 };
 
 #define TA_NAPI_METHODS (sizeof ta_napi_methods / sizeof ta_napi_methods[0])
@@ -152,6 +160,7 @@ static napi_value ta_napi_typed(napi_env env, napi_callback_info info) {
     } else {
         ta_napi_pending_at at = {list, (uint32_t)(id & 0xFFFFFFFFu) - 1u}; /* the handle's slot + 1 */
         row->slot = at.slot;
+        row->method = (uint32_t)(method - ta_napi_methods);
         ta_napi_advance(env, host); /* trace.watch's end is a time of the host's clock */
         ta_napi_posting posting = {host, TA_OK};
         if (!ta_napi_pending_set(env, &at, handlers)) {
@@ -186,6 +195,36 @@ static bool ta_napi_reply_id(ta_bytes wire, uint64_t *id) {
     return true;
 }
 
+/* actor.get's result: each of its timers' `due`, the host's ticks, as
+ * milliseconds on the clock host.now() reads (bindings.md, section 3). */
+static bool ta_napi_timers_in_milliseconds(napi_env env, const ta_napi_host *host, napi_value result) {
+    napi_value timers, timer, due;
+    bool array = false;
+    uint32_t count = 0;
+    if (!ta_napi_methods_is(env, result, napi_object) || napi_get_named_property(env, result, "timers", &timers) != napi_ok ||
+        napi_is_array(env, timers, &array) != napi_ok || !array || napi_get_array_length(env, timers, &count) != napi_ok)
+        return false;
+    for (uint32_t i = 0; i < count; i++) {
+        if (napi_get_element(env, timers, i, &timer) != napi_ok || !ta_napi_methods_is(env, timer, napi_object) ||
+            napi_get_named_property(env, timer, "due", &due) != napi_ok)
+            return false;
+        uint64_t ticks = 0;
+        double number = 0;
+        bool lossless = false;
+        if (ta_napi_methods_is(env, due, napi_bigint)) {
+            if (napi_get_value_bigint_uint64(env, due, &ticks, &lossless) != napi_ok) return false;
+        } else if (napi_get_value_double(env, due, &number) == napi_ok) {
+            ticks = (uint64_t)number; /* a safe integer: exact */
+        } else {
+            return false;
+        }
+        if (napi_create_double(env, ta_napi_milliseconds(host, ticks), &due) != napi_ok ||
+            napi_set_named_property(env, timer, "due", due) != napi_ok)
+            return false;
+    }
+    return true;
+}
+
 /* A reply's `error` as a TinyactorsError (code, reason, path, message; no
  * status: it is no call's), or NULL with an exception pending. */
 static napi_value ta_napi_reply_error(napi_env env, napi_value error) {
@@ -209,6 +248,7 @@ napi_value ta_napi_reply(napi_env env, ta_napi_host *host, uint32_t index) {
     ta_napi_pending_row *row = (ta_napi_pending_row *)ta_table_get(&host->pending, id);
     if (row == NULL) return NULL; /* stale or unknown: dropped */
     ta_napi_pending_at at = {ta_napi_pending_list(env, ta_napi_self(env, host)), row->slot};
+    bool timers = row->method < TA_NAPI_METHODS && ta_napi_methods[row->method].timers;
     ta_table_remove(&host->pending, id);
     napi_value handlers[2] = {NULL, NULL}, wrapper = ta_napi_self(env, host);
     if (at.list == NULL || wrapper == NULL || napi_get_element(env, at.list, 2 * at.slot, &handlers[0]) != napi_ok ||
@@ -238,7 +278,8 @@ napi_value ta_napi_reply(napi_env env, ta_napi_host *host, uint32_t index) {
         else ta_napi_follow(env, host, called); /* idle() waits for a promise it returns */
         return NULL;
     }
-    if (napi_get_named_property(env, reply, "result", &value) != napi_ok) {
+    if (napi_get_named_property(env, reply, "result", &value) != napi_ok ||
+        (timers && !ta_napi_timers_in_milliseconds(env, host, value))) {
         ta_napi_keep_error(env, host);
         return NULL;
     }

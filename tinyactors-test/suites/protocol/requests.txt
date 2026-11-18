@@ -458,8 +458,24 @@ request actor.get
 setup pinged
 send a362696401666d6574686f64696163746f722e67657466706172616d73a16773657373696f6e01
 diag {"id":1,"method":"actor.get","params":{"session":1}}
-reply a26269640166726573756c74a66773657373696f6e01677365676d656e74006563686172746670696e67656466706172656e74f6676d61696c626f78006b696e766f636174696f6e7300
-diag {"id":1,"result":{"session":1,"segment":0,"chart":"pinged","parent":null,"mailbox":0,"invocations":0}}
+reply a26269640166726573756c74a86773657373696f6e01677365676d656e74006563686172746670696e67656466706172656e74f6676d61696c626f78006b696e766f636174696f6e73006674696d657273806d74696d65727350656e64696e6700
+diag {"id":1,"result":{"session":1,"segment":0,"chart":"pinged","parent":null,"mailbox":0,"invocations":0,"timers":[],"timersPending":0}}
+
+request actor.get: delayed sends
+setup timed
+send a362696401666d6574686f64696163746f722e67657466706172616d73a16773657373696f6e01
+diag {"id":1,"method":"actor.get","params":{"session":1}}
+reply a26269640166726573756c74a86773657373696f6e01677365676d656e74006563686172746574696d656466706172656e74f6676d61696c626f78006b696e766f636174696f6e73006674696d65727382a36673656e646964f6656576656e74647469636b63647565191388a36673656e64696463736c61656576656e74666272656163686364756519ea606d74696d65727350656e64696e6702
+diag {"id":1,"result":{"session":1,"segment":0,"chart":"timed","parent":null,"mailbox":0,"invocations":0,"timers":[{"sendid":null,"event":"tick","due":5000},{"sendid":"sla","event":"breach","due":60000}],"timersPending":2}}
+
+request actor.get: a cancelled send
+setup timed
+event cancel 1
+run
+send a362696401666d6574686f64696163746f722e67657466706172616d73a16773657373696f6e01
+diag {"id":1,"method":"actor.get","params":{"session":1}}
+reply a26269640166726573756c74a86773657373696f6e01677365676d656e74006563686172746574696d656466706172656e74f6676d61696c626f78006b696e766f636174696f6e73006674696d65727381a36673656e646964f6656576656e74647469636b636475651913886d74696d65727350656e64696e6701
+diag {"id":1,"result":{"session":1,"segment":0,"chart":"timed","parent":null,"mailbox":0,"invocations":0,"timers":[{"sendid":null,"event":"tick","due":5000}],"timersPending":1}}
 
 request actor.get: session
 setup pinged
@@ -486,8 +502,27 @@ request actor.state
 setup pinged
 send a362696401666d6574686f646b6163746f722e737461746566706172616d73a16773657373696f6e01
 diag {"id":1,"method":"actor.state","params":{"session":1}}
-reply a26269640166726573756c74a16576616c75656173
-diag {"id":1,"result":{"value":"s"}}
+reply a26269640166726573756c74a26576616c7565617367686973746f7279a0
+diag {"id":1,"result":{"value":"s","history":{}}}
+
+request actor.state: history
+setup timed
+event next 1
+event pause 1
+run
+send a362696401666d6574686f646b6163746f722e737461746566706172616d73a16773657373696f6e01
+diag {"id":1,"method":"actor.state","params":{"session":1}}
+reply a26269640166726573756c74a26576616c75656670617573656467686973746f7279a26168a164776f726ba16161626132626873a164776f726b6161
+diag {"id":1,"result":{"value":"paused","history":{"h":{"work":{"a":"a2"}},"hs":{"work":"a"}}}}
+
+request actor.state: nothing recorded
+setup timed
+event next 1
+run
+send a362696401666d6574686f646b6163746f722e737461746566706172616d73a16773657373696f6e01
+diag {"id":1,"method":"actor.state","params":{"session":1}}
+reply a26269640166726573756c74a26576616c7565a164776f726ba1616162613267686973746f7279a0
+diag {"id":1,"result":{"value":{"work":{"a":"a2"}},"history":{}}}
 
 request actor.state: session
 setup pinged

@@ -22,11 +22,30 @@
     "<assign location='n' expr='n + 1'/></transition></state><state id='t'>"                      \
     "<transition event='ping' target='u'/></state><state id='u'/></scxml>"
 
+/* A chart with delayed sends and history states: `work` sends `breach`
+ * (id `sla`, in 60 s) and `tick` (no id, in 5 s) as it is entered; `flood`
+ * sends 40 more (`f0`..`f39`, 100 s + i ms); `pause` leaves for `paused`,
+ * whose `resume` returns through the deep history `h`. */
+#define TIMED                                                                                      \
+    "<scxml xmlns='http://www.w3.org/2005/07/scxml' datamodel='ecmascript' name='timed' "          \
+    "initial='work'><state id='work' initial='a'><onentry><send id='sla' event='breach' "          \
+    "delay='60s'/><send event='tick' delay='5s'/></onentry><history id='h' type='deep'>"           \
+    "<transition target='a'/></history><history id='hs' type='shallow'><transition "             \
+    "target='a'/></history><state id='a' initial='a1'><state id='a1'>"                \
+    "<transition event='next' target='a2'/></state><state id='a2'/></state><state id='b'/>"      \
+    "<transition event='pause' target='paused'/><transition event='cancel'>"                      \
+    "<cancel sendid='sla'/></transition><transition event='flood'><foreach "                     \
+    "array='Array.from({length: 40}, (_, i) => i)' item='i'><send eventexpr=\"'f' + i\" "         \
+    "delayexpr=\"(100000 + i) + 'ms'\"/></foreach></transition></state><state id='paused'>"       \
+    "<transition event='resume' target='h'/></state></scxml>"
+
+static const char *world_chart = CHART;
+
 static void *compile_pinged(size_t *length) {
     ta_compile_options options;
     memset(&options, 0, sizeof options);
     options.size = sizeof options;
-    ta_source source = {{"pinged.scxml", 12}, {CHART, sizeof CHART - 1}};
+    ta_source source = {{"pinged.scxml", 12}, {world_chart, (uint32_t)strlen(world_chart)}};
     ta_compile_result *result = NULL;
     void *copy = NULL;
     if (ta_compile_charts(&options, (ta_source_list){&source, 1}, &result) == TA_OK) {
@@ -122,6 +141,125 @@ static int reply_is(const char *got, const char *expected) {
     "\"error\":{\"code\":" code ",\"message\":\"" message "\",\"data\":{\"reason\":\"" reason         \
     "\",\"path\":\"" path "\"}}}"
 #define ERROR(code, reason, path, message) "{\"id\":1," ERROR_BODY(code, reason, path, message)
+
+/* ta_host_send of an event without data. */
+static void world_send(world *w, const char *name) {
+    ta_event_in event;
+    memset(&event, 0, sizeof event);
+    event.size = sizeof event;
+    event.name = ta_string(name);
+    event.session = w->session;
+    CHECK_EQUAL(ta_host_send(w->host, &event), TA_OK);
+}
+
+/* `method` with {"session": the world's} into `a`. */
+static void world_ask(world *w, host_ask *a, const char *method) {
+    ta_cbor_writer *writer = ask_begin(a, method, 1);
+    ta_cbor_write_text(writer, ta_string("session"));
+    ta_cbor_write_uint(writer, w->session);
+    CHECK_EQUAL(ask_send(w->host, a), TA_OK);
+}
+
+/* settle at monotonic time `now` */
+static void settle_at(world *w, uint64_t now) {
+    ta_run result;
+    do {
+        ta_host_advance_time(w->host, (ta_host_time){now, 1700000000000000000ull});
+        result = ta_host_run(w->host, 1000000);
+        const ta_host_effect *effects;
+        ta_host_effects(w->host, &effects);
+        ta_host_effects_ack(w->host);
+    } while (result.status != TA_RUN_IDLE);
+}
+
+#define GET_HEAD "{\"session\":1,\"segment\":0,\"chart\":\"timed\",\"parent\":null,\"mailbox\":0,\"invocations\":0,"
+#define TIMER(sendid, event, due) "{\"sendid\":" sendid ",\"event\":\"" event "\",\"due\":" due "}"
+
+static void test_actor_timers(void) {
+    world w;
+    world_chart = TIMED;
+    world_open(&w, 0, NULL);
+    static host_ask a;
+    world_ask(&w, &a, "actor.get"); /* before its first macrostep: none */
+    CHECK(reply_is(a.text, RESULT(GET_HEAD "\"timers\":[],\"timersPending\":0}")));
+    settle(&w);
+    /* pending, in firing order; a send without an id has a null sendid */
+    world_ask(&w, &a, "actor.get");
+    CHECK(reply_is(a.text, RESULT(GET_HEAD "\"timers\":[" TIMER("null", "tick", "5000") ","
+                                  TIMER("\"sla\"", "breach", "60000") "],\"timersPending\":2}")));
+    /* fired: gone */
+    settle_at(&w, 5000);
+    world_ask(&w, &a, "actor.get");
+    CHECK(reply_is(a.text, RESULT(GET_HEAD "\"timers\":[" TIMER("\"sla\"", "breach", "60000")
+                                  "],\"timersPending\":1}")));
+    /* cancelled: gone */
+    world_send(&w, "cancel");
+    settle_at(&w, 5000);
+    world_ask(&w, &a, "actor.get");
+    CHECK(reply_is(a.text, RESULT(GET_HEAD "\"timers\":[],\"timersPending\":0}")));
+    /* the cap: the earliest 32 of 41, and the count of all */
+    world_send(&w, "pause");
+    world_send(&w, "resume"); /* enters work again: sla and tick once more */
+    world_send(&w, "flood");
+    settle_at(&w, 6000);
+    world_ask(&w, &a, "actor.get");
+    CHECK(a.result != TA_NIL);
+    uint32_t timers = ta_cbor_member(&a.document, a.result, ta_string("timers"));
+    CHECK(timers != TA_NIL && a.document.tokens[timers].count == 32);
+    CHECK(strstr(a.text, "\"timersPending\":42}") != NULL);
+    CHECK(strstr(a.text, "\"timers\":[" TIMER("null", "tick", "11000") "," TIMER("\"sla\"", "breach", "66000")
+                         "," TIMER("null", "f0", "106000") "," TIMER("null", "f1", "106001")) != NULL);
+    CHECK(strstr(a.text, TIMER("null", "f29", "106029") "]") != NULL);
+    CHECK(strstr(a.text, "\"f30\"") == NULL);
+    /* hibernated: its delayed sends stay in the host, and are listed */
+    ta_bytes hibernated;
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
+    ta_host_effects_ack(w.host);
+    world_ask(&w, &a, "actor.get");
+    CHECK(strstr(a.text, "\"timersPending\":42}") != NULL);
+    world_close(&w);
+    world_chart = CHART;
+}
+
+static void test_actor_history(void) {
+    world w;
+    world_chart = TIMED;
+    world_open(&w, 0, NULL);
+    static host_ask a;
+    settle(&w);
+    /* nothing recorded before the first exit */
+    world_ask(&w, &a, "actor.state");
+    CHECK(reply_is(a.text, RESULT("{\"value\":{\"work\":{\"a\":\"a1\"}},\"history\":{}}")));
+    world_send(&w, "next");
+    settle(&w);
+    world_ask(&w, &a, "actor.state");
+    CHECK(reply_is(a.text, RESULT("{\"value\":{\"work\":{\"a\":\"a2\"}},\"history\":{}}")));
+    /* recorded at the exit: the deep one down to a2, the shallow one a */
+    world_send(&w, "pause");
+    settle(&w);
+    world_ask(&w, &a, "actor.state");
+    CHECK(reply_is(a.text, RESULT("{\"value\":\"paused\",\"history\":{\"h\":{\"work\":{\"a\":\"a2\"}},"
+                                  "\"hs\":{\"work\":\"a\"}}}")));
+    /* where it returns, and the recording stays */
+    world_send(&w, "resume");
+    settle(&w);
+    world_ask(&w, &a, "actor.state");
+    CHECK(reply_is(a.text, RESULT("{\"value\":{\"work\":{\"a\":\"a2\"}},\"history\":{\"h\":{\"work\":"
+                                  "{\"a\":\"a2\"}},\"hs\":{\"work\":\"a\"}}}")));
+    /* hibernated: wake it first, as actor.context */
+    static unsigned char blob[1 << 16];
+    ta_bytes hibernated;
+    CHECK_EQUAL(ta_host_hibernate(w.host, w.session, &hibernated), TA_OK);
+    size_t length = output_copy(hibernated, blob, sizeof blob);
+    ta_host_effects_ack(w.host);
+    world_ask(&w, &a, "actor.state");
+    CHECK(reply_is(a.text, ERROR("-32002", "state", "params.session", "the actor is hibernated: wake it first")));
+    CHECK_EQUAL(ta_host_wake(w.host, w.session, (ta_bytes){blob, length}), TA_OK);
+    world_ask(&w, &a, "actor.state");
+    CHECK(strstr(a.text, "\"hs\":{\"work\":\"a\"}") != NULL);
+    world_close(&w);
+    world_chart = CHART;
+}
 
 static void test_spans_and_metrics(void) {
     world w;
@@ -431,14 +569,14 @@ static void test_post(void) {
     CHECK_EQUAL(effects[0].kind, TA_HOST_EFFECT_REPLY);
     CHECK_EQUAL(ta_host_effect_number(w.host, 0, TA_EFFECT_FIELD_SESSION), 0u);
     CHECK(reply_is(wire_text(w.host, 0), RESULT("{\"session\":1,\"segment\":0,\"chart\":\"pinged\","
-                                                "\"parent\":null,\"mailbox\":0,\"invocations\":0}")));
+                                                "\"parent\":null,\"mailbox\":0,\"invocations\":0,\"timers\":[],\"timersPending\":0}")));
     /* A post during dispatch leaves its reply for the next batch. */
     length = unwatch_message(bytes, sizeof bytes, 2, 1);
     CHECK_EQUAL(ta_host_post(w.host, (ta_bytes){bytes, length}), TA_OK);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
     CHECK_EQUAL(ta_host_effect_bytes(w.host, 1, TA_EFFECT_FIELD_WIRE).length, 0);
     CHECK(reply_is(wire_text(w.host, 0), RESULT("{\"session\":1,\"segment\":0,\"chart\":\"pinged\","
-                                                "\"parent\":null,\"mailbox\":0,\"invocations\":0}")));
+                                                "\"parent\":null,\"mailbox\":0,\"invocations\":0,\"timers\":[],\"timersPending\":0}")));
     ta_host_effects_ack(w.host);
     CHECK_EQUAL(ta_host_effects(w.host, &effects), 1u);
     CHECK(reply_is(wire_text(w.host, 0),
@@ -643,6 +781,8 @@ int main(void) {
     RUN(test_post);
     RUN(test_spans_and_metrics);
     RUN(test_actor_context);
+    RUN(test_actor_timers);
+    RUN(test_actor_history);
     RUN(test_actor_send);
     RUN(test_create);
     RUN(test_config_effective);

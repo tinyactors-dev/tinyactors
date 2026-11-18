@@ -313,6 +313,7 @@ typedef struct ta_napi_loop_row {
 
 typedef struct ta_napi_pending_row {
     uint32_t slot;
+    uint32_t method; /* its index in methods.c's table: a result to convert (actor.get's times) */
 } ta_napi_pending_row;
 
 /* The native "ecmascript" datamodel of a host (src/datamodel/; AGENTS.md,
@@ -602,6 +603,8 @@ void ta_napi_advance(napi_env env, ta_napi_host *host);
 /* A duration in nanoseconds as the host's ticks, rounded up (migrate's
  * timeout: never sooner than asked). */
 uint64_t ta_napi_ticks_after(const ta_napi_host *host, uint64_t nanoseconds);
+/* The host's ticks as milliseconds, on the clock host.now() reads. */
+double ta_napi_milliseconds(const ta_napi_host *host, uint64_t ticks);
 
 /* A restored host's clock goes on from `time`, its snapshot's: the ticks
  * the clock reads are offset to read `time` now, whatever the clock. */

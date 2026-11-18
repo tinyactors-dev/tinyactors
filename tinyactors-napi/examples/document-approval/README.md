@@ -94,8 +94,10 @@ version that was approved, and that no other document is.
   found.
 - **The typed methods, through their `Async` forms**, in `admin.mjs`:
   `actorListAsync` pages through the sessions, and for each one
-  `actorGetAsync` (its chart and mailbox), `actorStateAsync` (its active
-  states) and `actorContextAsync` (its variables). `documents(host)`
+  `actorGetAsync` (its chart, its mailbox, and its pending delayed sends,
+  from which `slaDue` reads when each stage's SLA is due), `actorStateAsync`
+  (its active states, and where each history state would return) and
+  `actorContextAsync` (its variables). `documents(host)`
   returns them all, `formatTable` prints them, and `serveAdmin(host)`
   serves `GET /documents`, `GET /documents/<id>` and `GET /stats`
   (`hostStatsAsync`) on a port of its own (0: a free one). The bots of
@@ -109,18 +111,18 @@ version that was approved, and that no other document is.
 The admin view shows, for each live document: its session, its chart, how
 many events wait in its mailbox, its active states (as a state value and
 as the list of atomic states, so a document in review shows one state per
-region), and every `<data>` variable with its value: the reviewers, the
-approvals so far, the change requests, the escalations, the version.
+region), where each of its history states would return (`history`: in
+`revising`, `legalWasAt` and `financeWasAt` say where a resubmission
+takes each reviewer; in `escalated`, `resumePoint` where a resume goes),
+when each running stage's SLA is due (`slaDue`, a time of `host.now()`'s
+clock, read from `actorGet`'s pending delayed sends: the table's "SLA
+due" column says how long is left), and every `<data>` variable with its
+value: the reviewers, the approvals so far, the change requests, the
+escalations, the version. The chart still keeps `pausedStage` in a
+variable, which names the stage that was breached in one word.
 
 It cannot see:
 
-- **Where a history state would return.** In `revising` or `escalated` the
-  state value says only that; where a resubmission or a resume will take
-  the document is recorded by the history states, which no method shows.
-  The chart keeps `pausedStage` in a variable so that the admin sees which
-  stage was breached.
-- **When an SLA is due.** No method lists an actor's pending delayed
-  sends; `host.nextDeadline` is the host's next deadline, of any actor.
 - **What is in the mailbox**, beyond the count, and the event the actor
   handled last (`_event`).
 - **Anything but `<data>`:** the functions and `var`s the chart's scripts

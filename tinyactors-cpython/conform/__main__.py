@@ -142,6 +142,9 @@ class Adapter:
             return {"status": status_of(error)}
         host.run_until_idle()
         result = {"status": 0, "notifications": []}
+        for timer in answered[0].get("result", {}).get("timers", []) if answered and \
+                message["method"] == "actor.get" else []:
+            timer["due"] = round(timer["due"] * host.ticks_per_second)  # seconds, back to core's ticks
         if answered and "id" in message:
             result["reply"] = tinyactors.encode(dict({"id": message["id"]}, **answered[0]))
         return result

@@ -196,6 +196,26 @@ class Methods(unittest.TestCase):
         self.assertEqual(raised.exception.reason, "stale")
         host.close()
 
+    def test_actor_get_lists_delayed_sends_due_in_seconds(self):
+        """actor.get's timers are due in seconds of the host's clock, the
+        API's unit of time; actor.state's history says where h returns."""
+        results = []
+        host = host_with([("timed.scxml", fixture("test_host/timed.python.scxml"))])
+        session = spawn(host, "timed")
+        host.run_until_idle()
+        host.actor_get(lambda host, result: results.append(result), session=session)
+        host.run_until_idle()
+        self.assertEqual(results[0]["timers"], [{"sendid": None, "event": "tick", "due": 1.5},
+                                                {"sendid": "sla", "event": "breach", "due": 60.0}])
+        self.assertEqual(results[0]["timersPending"], 2)
+        host.send(session, "next")
+        host.send(session, "pause")
+        host.run_until_idle()  # a typed method reads the host at its call
+        host.actor_state(lambda host, result: results.append(result), session=session)
+        host.run_until_idle()
+        self.assertEqual(results[1], {"value": "paused", "history": {"h": {"work": {"a": "a2"}}}})
+        host.close()
+
     def test_on_error_by_keyword_is_the_error_handler_not_a_param(self):
         errors = []
         host = host_with([("echo.scxml", ECHO)])

@@ -268,7 +268,11 @@ for (const datamodel of ['native', 'quickjs']) {
       assert.equal(a.chart, 'document');
       assert.equal(a.mailbox, 0);
       assert.deepEqual(a.state, { inFlight: { active: { review: { legal: 'legalApproved', finance: 'financeReviewing' } } } });
-      assert.match(formatTable(docs), /^A +v1 +100 +legalApproved \+ financeReviewing +legal lee, finance fay +legal +0$/m);
+      assert.match(formatTable(docs), /^A +v1 +100 +legalApproved \+ financeReviewing +legal lee, finance fay +legal +0 +finance in 48h$/m);
+      // when each running SLA is due (actorGet's pending sends), and where the histories would return
+      assert.deepEqual(a.slaDue, { finance: a.now + SLA.finance });
+      assert.deepEqual(docs[1].slaDue, {}, 'B is revising: no SLA runs');
+      assert.deepEqual(docs[1].history, { legalWasAt: { legal: 'legalReviewing' }, financeWasAt: { finance: 'financeQueued' } });
 
       // C ends after it was listed: describing it finds it stale.
       const session = docs[2].session;

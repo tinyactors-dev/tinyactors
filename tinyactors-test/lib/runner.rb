@@ -28,7 +28,7 @@ class Runner
   WALL_NS = 1_700_000_000_000_000_000
 
   # The setups' system ids (suites/protocol/README.md, "Setups").
-  SYSTEMS = { 'empty' => 'h', 'pinged' => 'h', 'pinged2' => 'h' }.freeze
+  SYSTEMS = { 'empty' => 'h', 'pinged' => 'h', 'pinged2' => 'h', 'timed' => 'h' }.freeze
 
   # The methods of docs/driver.md, and those each kind of implementation
   # must offer (docs/driver.md, "Kinds"): the reference all of them, a
@@ -383,6 +383,10 @@ class Runner
     when 'pinged', 'pinged2'
       chart('pinged')
       (name == 'pinged2' ? 2 : 1).times { spawn_actor('pinged') }
+      settle
+    when 'timed'
+      chart('timed')
+      spawn_actor('timed')
       settle
     end
   end

@@ -344,6 +344,12 @@ uint32_t host_actors(const ta_host *h, uint64_t *cursor, ta_uint64_array out);
 enum { HOST_STATE_VALUE_STATES = 1024 };
 struct ta_output;
 ta_status host_state_value(const ta_host *h, uint64_t session, struct ta_output *out);
+/* Where each history state of a session would return (actor.state's "history"). */
+ta_status host_state_history(const ta_host *h, uint64_t session, struct ta_output *out);
+/* An actor's pending delayed sends (actor.get's "timers"): the first
+ * HOST_ACTOR_TIMERS, earliest first; returns how many it has. */
+enum { HOST_ACTOR_TIMERS = 32 };
+uint32_t host_actor_timers(const ta_host *h, ta_host_location where, struct ta_output *out);
 
 /* telemetry.c: what the run loop asks of the encoder, chosen once at
  * ta_host_create (the OTLP encoder, or the null one: all of it does nothing) */

@@ -155,7 +155,13 @@ anything the method appended itself, before the reply).
 
 The host's notifications are `TA_HOST_EFFECT_NOTIFICATION` effects
 (`{"method", "params"}`); none is defined. Post `actor.state` for a
-session's state. Drop a notification whose method you do not know.
+session's state and where its history states would return, `actor.get`
+for its pending delayed sends. Drop a notification whose method you do
+not know.
+
+Times in a reply are the host's ticks, as `next_deadline` is: an
+`actor.get`'s `timers[].due` is converted with `system.ticksPerSecond`
+like any other time of the clock.
 [requests.md](requests.md) lists every method and notification.
 
 There is no synchronous request: post, then read the reply in a later

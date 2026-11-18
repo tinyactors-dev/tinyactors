@@ -278,7 +278,7 @@ Read an effect’s fields with `ta_host_effect_number`, `ta_host_effect_text` an
 
 ## 7 · Time
 
-- One monotonic clock in ticks, at the rate `host.config` answers as `system.ticksPerSecond` (a config without the key gets the system’s default, 1000000000: nanoseconds). Read it once, after creating the host, and convert the language’s clock with it, both ways: a time for `ta_host_advance_time`, and `next_deadline` back to the clock of the timer you arm. Never assume a rate of your own; a caller who wants milliseconds sets `ticksPerSecond` 1000 in the config. Advance the clock with the wall clock before every run and every input that depends on it (spawn, deliver).
+- One monotonic clock in ticks, at the rate `host.config` answers as `system.ticksPerSecond` (a config without the key gets the system’s default, 1000000000: nanoseconds). Read it once, after creating the host, and convert the language’s clock with it, both ways: a time for `ta_host_advance_time`, and `next_deadline` back to the clock of the timer you arm. Never assume a rate of your own; a caller who wants milliseconds sets `ticksPerSecond` 1000 in the config. A time in a typed method's result is in the same ticks (`actor.get`'s `timers[].due`): convert it to the language's unit of time as you convert `next_deadline`, so it reads on the clock the application sees. Advance the clock with the wall clock before every run and every input that depends on it (spawn, deliver).
 - A host restored from a snapshot (same build, while its actors were out of memory) resumes at the snapshot’s time: start the clock there.
 - Span times are wall-clock nanoseconds, interpolated between the `wall_ns` of two calls to `ta_host_advance_time`; 0 means unknown.
 

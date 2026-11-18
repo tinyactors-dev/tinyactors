@@ -783,6 +783,16 @@ export interface SessionParams {
 /** `actorState`'s result. */
 export interface ActorStateResult {
   readonly value: StateValue;
+  /**
+   * Where each history state the actor has recorded would return, by its
+   * id: its parent state as it would be entered again, in the shape of
+   * `value` (a deep history down to the atomic states it recorded; a
+   * shallow one names the child it recorded). A history state records when
+   * its parent is exited; one that has recorded nothing is absent, so this
+   * is `{}` before any exit. A hibernated actor's state is refused
+   * (`reason` `'state'`): wake it first.
+   */
+  readonly history: { readonly [history: string]: StateValue };
 }
 /** `actorContext`'s result: each `<data>`, in the chart's order. */
 export interface ActorContextResult {
@@ -813,6 +823,22 @@ export interface ActorGetResult {
   readonly mailbox: number;
   /** Services it runs. */
   readonly invocations: number;
+  /**
+   * Its pending delayed sends (`<send delay>` not yet due, not cancelled),
+   * earliest first, at most 32: `timersPending` says how many it has.
+   */
+  readonly timers: readonly PendingSend[];
+  /** How many delayed sends it has pending: more than `timers` holds when the list was cut. */
+  readonly timersPending: number;
+}
+/** A pending delayed send, in `actorGet`'s `timers`. */
+export interface PendingSend {
+  /** The send's id (its `id`, or the one `idlocation` was given); `null` when it has none. */
+  readonly sendid: string | null;
+  /** The event's name. */
+  readonly event: string;
+  /** When it fires: milliseconds on the clock `host.now()` reads. */
+  readonly due: number;
 }
 /** A pool of a segment: its size, what it holds, the most it held. */
 export interface Pool {

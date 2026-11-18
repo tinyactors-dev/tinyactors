@@ -164,6 +164,7 @@ enum { TA_PYTHON_DATAMODEL_PYTHON = 0, TA_PYTHON_DATAMODEL_ECMASCRIPT = 1, TA_PY
 typedef struct ta_python_pending_row {
     PyObject *handler;
     PyObject *on_error;
+    int timers; /* actor.get: its result's timers[].due are the host's ticks, given as seconds */
 } ta_python_pending_row;
 
 struct ta_python_host {

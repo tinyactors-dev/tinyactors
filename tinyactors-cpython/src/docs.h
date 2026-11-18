@@ -548,12 +548,16 @@ static const char ta_python_doc_typed_actor_state[] =
     "\n"
     "Ask which states the actor `session` is in now.\n"
     "\n"
-    "The result is {\"value\": <state value>} in xstate's shape: an atomic state\n"
-    "is its id (\"idle\"), a compound state {<its id>: <its active child>}, a\n"
-    "parallel state {<its id>: {<region id>: ..., ...}}. Use it to show\n"
-    "an actor in a debugger or dashboard, or in a test to assert where a chart\n"
-    "went after some events. Inside a chart, In(state) asks the same\n"
-    "question.\n"
+    "The result is {\"value\": <state value>, \"history\": {...}}, the value in\n"
+    "xstate's shape: an atomic state is its id (\"idle\"), a compound state\n"
+    "{<its id>: <its active child>}, a parallel state {<its id>: {<region id>:\n"
+    "..., ...}}. \"history\" maps each history state the actor has recorded (at\n"
+    "its parent's exit) to its parent as it would be entered again, in the\n"
+    "same shape: where a transition to it returns. One that recorded nothing\n"
+    "is absent. Use it to show an actor in a debugger or dashboard, or in a\n"
+    "test to assert where a chart went after some events. Inside a chart,\n"
+    "In(state) asks the same question. A hibernated actor is refused (reason\n"
+    "\"state\"): wake it first.\n"
     TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_actor_context[] =
@@ -596,9 +600,13 @@ static const char ta_python_doc_typed_actor_get[] =
     "\n"
     "The result is {\"session\", \"segment\", \"chart\" (its name), \"parent\" (the\n"
     "session that invoked it, or None for an actor you spawned), \"mailbox\"\n"
-    "(events waiting), \"invocations\" (services it runs)}. Use it to find\n"
-    "which version an actor runs (its segment), to walk from a child to its\n"
-    "parent, or to spot an actor whose mailbox grows.\n"
+    "(events waiting), \"invocations\" (services it runs), \"timers\" (its\n"
+    "pending delayed sends, earliest first, at most 32: each {\"sendid\" (None\n"
+    "when it has none), \"event\", \"due\" (seconds on the host's clock, a\n"
+    "float)}), \"timersPending\" (how many it has: more than \"timers\" holds\n"
+    "when the list was cut)}. Use it to find which version an actor runs (its\n"
+    "segment), to walk from a child to its parent, to spot an actor whose\n"
+    "mailbox grows, or to say when a timeout will fire.\n"
     TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_host_stats[] =

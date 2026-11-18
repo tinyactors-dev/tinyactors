@@ -228,6 +228,33 @@ typedef struct ta_system_variables_buffer {
 } ta_system_variables_buffer;
 void ta_system_actor_variables(ta_system *s, const ta_actor *a, ta_system_variables_buffer *b,
                                ta_datamodel_system_variables *sv);
+/* Inspection (docs/requests.md, actor.get and actor.state), called only by
+ * those requests: nothing per event.
+ *
+ * An actor's pending delayed sends: the earliest `timers.capacity` in
+ * firing order (due, then the order they were sent) into `timers`, by
+ * insertion while its chain (ta_actor.timers, owner_next) is walked once;
+ * returns how many it has. Views of region strings, valid until the system
+ * runs again; a send without an id has a sendid of {NULL, 0}. */
+typedef struct ta_actor_timer {
+    uint64_t due; /* in the system's ticks */
+    uint32_t sequence, pad;
+    ta_string_view event, sendid;
+} ta_actor_timer;
+typedef struct ta_actor_timer_array {
+    ta_actor_timer *pointer;
+    uint32_t capacity;
+} ta_actor_timer_array;
+uint32_t ta_system_actor_timers(const ta_system *s, uint32_t actor, ta_actor_timer_array timers);
+/* The states history state `ref.state` of actor `ref.actor` would return
+ * to: its parent, the states it recorded and every state between them, in
+ * document order. 0 when it has recorded nothing, is no history state or
+ * the actor is hibernated; a count above `states.capacity` is the room it
+ * needs. */
+typedef struct ta_actor_state_ref {
+    uint32_t actor, state;
+} ta_actor_state_ref;
+uint32_t ta_system_actor_history(const ta_system *s, ta_actor_state_ref ref, ta_uint32_array states);
 uint32_t ta_system_session_lookup(const ta_system *s, uint64_t serial);
 void ta_system_session_insert(ta_system *s, uint32_t index);
 /* The index of names: an actor enters it when it is created (spawned or

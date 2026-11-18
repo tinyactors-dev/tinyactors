@@ -4,7 +4,7 @@
 // later drain; params passed to core as given, so core checks them; an
 // error to onError, or without one to the turn (idle() rejects); pending
 // handlers dropped, never called, at close.
-import { Host, TinyactorsError } from '@tinyactors/node';
+import { Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
 import { equal, hostWith, scxml, status, throws, typeError, until, WAITER } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
@@ -57,6 +57,39 @@ test('each typed method is answered once, at a later drain, with the host and th
   equal(answers.traceUnwatch.error.reason, 'stale', 'trace.unwatch of no watch: stale');
   equal(answers.traceEnd.error.reason, 'state', 'trace.end without telemetry: state');
   equal(answers.traceSpansDecode.result.spans.length, 0, 'trace.spans.decode of nothing');
+  host.close();
+});
+
+const TIMED = scxml('timed', `
+  <state id="work" initial="a">
+    <onentry><send id="sla" event="breach" delay="60s"/><send event="tick" delay="1500ms"/></onentry>
+    <history id="h" type="deep"><transition target="a"/></history>
+    <state id="a" initial="a1"><state id="a1"><transition event="next" target="a2"/></state><state id="a2"/></state>
+    <transition event="pause" target="paused"/>
+  </state>
+  <state id="paused"><transition event="resume" target="h"/></state>`, { initial: 'work' });
+
+test('actorGet lists the pending delayed sends, due in milliseconds on host.now()\'s clock; actorState the history', async () => {
+  const clock = new SimulatedClock();
+  const host = hostWith({ timed: TIMED }, { clock });
+  const session = host.spawn(host.chart('timed'));
+  await host.idle();
+  equal(host.now(), 0, 'the clock starts at 0');
+  const got = ask(host, 'actorGet', { session });
+  await host.idle();
+  equal(JSON.stringify(got.result.timers),
+    '[{"sendid":null,"event":"tick","due":1500},{"sendid":"sla","event":"breach","due":60000}]', 'earliest first');
+  equal(got.result.timersPending, 2, 'all of them');
+  clock.increment(1500); // tick fires
+  const later = ask(host, 'actorGet', { session });
+  await host.idle();
+  equal(JSON.stringify(later.result.timers), '[{"sendid":"sla","event":"breach","due":60000}]', 'a fired send is gone');
+  host.send(session, 'next');
+  host.send(session, 'pause');
+  await host.idle(); // a typed method reads the host at its call
+  const state = ask(host, 'actorState', { session });
+  await host.idle();
+  equal(JSON.stringify(state.result), '{"value":"paused","history":{"h":{"work":{"a":"a2"}}}}', 'where h returns');
   host.close();
 });
 

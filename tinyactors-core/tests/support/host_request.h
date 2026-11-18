@@ -122,8 +122,8 @@ TEST_UNUSED static ta_status ask_state(ta_host *host, uint64_t session, char *te
     const char *value = a.text;
     if (strncmp(value, "{\"id\":1,\"result\":{\"value\":", 26) == 0) {
         value += 26;
-        size_t n = strlen(value);
-        if (n >= 2 && value[n - 1] == '}' && value[n - 2] == '}') n -= 2;
+        const char *history = strstr(value, ",\"history\":"); /* the value alone */
+        size_t n = history ? (size_t)(history - value) : strlen(value);
         if (n >= capacity) n = capacity ? capacity - 1 : 0;
         memcpy(text, value, n);
         if (capacity) text[n] = 0;

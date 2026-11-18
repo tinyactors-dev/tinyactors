@@ -659,7 +659,7 @@ static void request_run_actor_get(request *r, uint32_t map) {
     info.size = sizeof info;
     ta_actor_info_get(system, actor, &info);
     const ta_image *image = r->host->segments[segment].image;
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 6);
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 8);
     request_put_key(r, "session");
     cbor_output_uint(&r->out, session);
     request_put_key(r, "segment");
@@ -680,6 +680,10 @@ static void request_run_actor_get(request *r, uint32_t map) {
     cbor_output_uint(&r->out, info.mailbox_length);
     request_put_key(r, "invocations");
     cbor_output_uint(&r->out, info.invocations);
+    request_put_key(r, "timers"); /* its pending delayed sends, the first HOST_ACTOR_TIMERS */
+    uint32_t pending = host_actor_timers(r->host, (ta_host_location){segment, actor}, &r->out);
+    request_put_key(r, "timersPending");
+    cbor_output_uint(&r->out, pending);
 }
 
 static void request_run_actor_state(request *r, uint32_t map) {
@@ -688,12 +692,23 @@ static void request_run_actor_state(request *r, uint32_t map) {
     uint32_t segment, actor;
     if (!request_keys_known(r, map, NULL, 0, fields)) return;
     if (!request_read_session(r, map, &session, &segment, &actor)) return;
-    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 1);
+    ta_actor_info info;
+    info.size = sizeof info;
+    ta_actor_info_get(ta_host_system(r->host, segment), actor, &info);
+    request_path_set(r, NULL, 0, "session");
+    if (info.state == TA_ACTOR_HIBERNATED) {
+        request_refuse(r, "state", "the actor is hibernated: wake it first");
+        return;
+    }
+    cbor_output_head(&r->out, CBOR_MAJOR_MAP, 2);
     request_put_key(r, "value");
     if (host_state_value(r->host, session, &r->out) != TA_OK) {
-        request_path_set(r, NULL, 0, "session");
         request_refuse(r, "limit", "the configuration has more than 1024 states");
+        return;
     }
+    request_put_key(r, "history");
+    if (host_state_history(r->host, session, &r->out) != TA_OK)
+        request_refuse(r, "limit", "a history state recorded more than 1024 states");
 }
 
 /* A payload's neutral value (to_wire) straight into the reply; null when the

@@ -130,7 +130,7 @@ uint64_t ta_napi_ticks_after(const ta_napi_host *host, uint64_t nanoseconds) {
 }
 
 /* Ticks as milliseconds. */
-static double ta_napi_milliseconds(const ta_napi_host *host, uint64_t ticks) {
+double ta_napi_milliseconds(const ta_napi_host *host, uint64_t ticks) {
     return (double)ticks * 1000.0 / (double)host->ticks_per_second;
 }
 

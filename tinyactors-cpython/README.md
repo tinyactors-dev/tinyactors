@@ -215,6 +215,25 @@ The core's [requests.md](../tinyactors-core/docs/requests.md) describes
 each method's params and result. Its `actor.send` has no typed method,
 because `host.send` does the same.
 
+Two answers say what an actor will do next. `actor_get`'s `timers` lists
+its pending delayed sends (each `<send delay>` not yet due and not
+cancelled), earliest first, each `{"sendid", "event", "due"}`: `due` is
+in seconds on the host's clock (a `float`; on a `SimulatedClock`, the
+clock `SimulatedClock.now` reads), `sendid` is `None` for a send without an id. The
+list holds at most 32, and `timersPending` counts them all.
+`actor_state`'s `history` gives, for each history state the actor has
+recorded, its parent state as it would be entered again, in the shape of
+`value`; a history state records when its parent is exited, so it is
+absent before that. `actor_state` and `actor_context` refuse a
+hibernated actor (reason `"state"`): wake it first.
+
+```python
+host.actor_get(lambda host, actor: print(actor["timers"]), session=session)
+# [{'sendid': None, 'event': 'tick', 'due': 1.5}, {'sendid': 'sla', 'event': 'breach', 'due': 60.0}]
+host.actor_state(lambda host, state: print(state["history"]), session=session)
+# {'h': {'work': {'a': 'a2'}}}   after work was left from a2: h, a deep history, returns there
+```
+
 ### Leaving a host
 
 `with`, `async with` and `close()` free the host. Before that, the host

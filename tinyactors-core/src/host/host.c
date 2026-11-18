@@ -755,22 +755,74 @@ ta_status host_locate(const ta_host *host, uint64_t session, uint32_t *segment, 
 
 /* ---- state values ---------------------------------------------------------------------- */
 
-/* A session's configuration as a state value (docs/requests.md, "state"):
+/* States in document order as a state value (docs/requests.md,
+ * actor.state): each a child of the one open at the depth above it, the
+ * first one's parent acting compound. */
+typedef struct state_tree {
+    const ta_image *image;
+    uint32_t chart, count;
+    const uint32_t *states;
+    const uint8_t *depths, *kinds;
+} state_tree;
+
+static void state_tree_put(const state_tree *tree, ta_output *out) {
+    if (!tree->count) {
+        cbor_output_head(out, CBOR_MAJOR_MAP, 0);
+        return;
+    }
+    uint8_t parents[256]; /* the kind of the state open at each depth */
+    parents[tree->depths[0] - 1] = TA_STATE_COMPOUND;
+    for (uint32_t i = 0; i < tree->count; i++) {
+        ta_state_info state;
+        state.size = sizeof state;
+        ta_image_state_info(tree->image, (ta_chart_item){tree->chart, tree->states[i]}, &state);
+        uint32_t depth = tree->depths[i];
+        int in_parallel = parents[depth - 1] == TA_STATE_PARALLEL;
+        if (in_parallel) cbor_output_text(out, state.id);
+        uint32_t children = 0;
+        for (uint32_t j = i + 1; j < tree->count && tree->depths[j] > depth; j++)
+            children += tree->depths[j] == depth + 1;
+        /* a compound state without a child here (a shallow history's) is its
+         * id, as an atomic one: it is entered by its initial */
+        if (tree->kinds[i] == TA_STATE_PARALLEL || (tree->kinds[i] == TA_STATE_COMPOUND && (children || in_parallel))) {
+            if (!in_parallel) {
+                cbor_output_head(out, CBOR_MAJOR_MAP, 1);
+                cbor_output_text(out, state.id);
+            }
+            if (tree->kinds[i] == TA_STATE_PARALLEL) cbor_output_head(out, CBOR_MAJOR_MAP, children);
+            else if (!children) cbor_output_head(out, CBOR_MAJOR_MAP, 0);
+        } else if (in_parallel) {
+            cbor_output_head(out, CBOR_MAJOR_MAP, 0);
+        } else {
+            cbor_output_text(out, state.id);
+        }
+        parents[depth] = tree->kinds[i];
+    }
+}
+
+/* The room a state value is written from. */
+typedef struct state_room {
+    uint32_t states[HOST_STATE_VALUE_STATES];
+    uint8_t depths[HOST_STATE_VALUE_STATES], kinds[HOST_STATE_VALUE_STATES];
+} state_room;
+
+/* A session's configuration as a state value (docs/requests.md, actor.state):
  * the active states in document order, each written once its parent is,
  * so every map's count is known before its items. TA_ERROR_INVALID when
  * there is no such session or its configuration has more than
  * HOST_STATE_VALUE_STATES states. */
 ta_status host_state_value(const ta_host *host, uint64_t session, ta_output *out) {
-    uint32_t si = 0, actor = 0, states[HOST_STATE_VALUE_STATES];
-    uint8_t depths[HOST_STATE_VALUE_STATES], kinds[HOST_STATE_VALUE_STATES];
+    uint32_t si = 0, actor = 0;
+    state_room room;
     if (host_locate(host, session, &si, &actor) != TA_OK) return TA_ERROR_INVALID;
     const host_segment *segment_record = segment_of(host, si);
     ta_actor_info info;
     info.size = sizeof info;
     if (ta_actor_info_get(segment_record->system, actor, &info) != TA_OK) return TA_ERROR_INVALID;
     uint32_t count = ta_actor_config(segment_record->system, actor,
-                                     (ta_uint32_array){states, HOST_STATE_VALUE_STATES});
+                                     (ta_uint32_array){room.states, HOST_STATE_VALUE_STATES});
     if (count > HOST_STATE_VALUE_STATES) return TA_ERROR_INVALID;
+    uint32_t *states = room.states;
     for (uint32_t i = 1; i < count; i++) /* document order: a parent before its children */
         for (uint32_t j = i; j > 0 && states[j - 1] > states[j]; j--) {
             uint32_t t = states[j];
@@ -791,40 +843,78 @@ ta_status host_state_value(const ta_host *host, uint64_t session, ta_output *out
         if (state.depth > top + 1) continue; /* its parent is not active: not a configuration */
         top = state.depth;
         states[kept] = states[i];
-        depths[kept] = (uint8_t)state.depth;
-        kinds[kept++] = (uint8_t)state.kind;
+        room.depths[kept] = (uint8_t)state.depth;
+        room.kinds[kept++] = (uint8_t)state.kind;
     }
-    if (!kept) {
-        cbor_output_head(out, CBOR_MAJOR_MAP, 0);
-        return TA_OK;
-    }
-    uint8_t parents[256]; /* the kind of the state open at each depth; the root acts compound */
-    parents[0] = TA_STATE_COMPOUND;
-    for (uint32_t i = 0; i < kept; i++) {
-        ta_state_info state;
-        state.size = sizeof state;
-        ta_image_state_info(segment_record->image, (ta_chart_item){info.chart, states[i]}, &state);
-        uint32_t depth = depths[i];
-        int in_parallel = parents[depth - 1] == TA_STATE_PARALLEL;
-        if (in_parallel) cbor_output_text(out, state.id);
-        if (kinds[i] == TA_STATE_COMPOUND || kinds[i] == TA_STATE_PARALLEL) {
-            if (!in_parallel) {
-                cbor_output_head(out, CBOR_MAJOR_MAP, 1);
-                cbor_output_text(out, state.id);
-            }
-            uint32_t children = 0;
-            for (uint32_t j = i + 1; j < kept && depths[j] > depth; j++)
-                children += depths[j] == depth + 1;
-            if (kinds[i] == TA_STATE_PARALLEL) cbor_output_head(out, CBOR_MAJOR_MAP, children);
-            else if (!children) cbor_output_head(out, CBOR_MAJOR_MAP, 0);
-        } else if (in_parallel) {
-            cbor_output_head(out, CBOR_MAJOR_MAP, 0);
-        } else {
-            cbor_output_text(out, state.id);
+    state_tree tree = {segment_record->image, info.chart, kept, states, room.depths, room.kinds};
+    state_tree_put(&tree, out);
+    return TA_OK;
+}
+
+/* Where each history state of a session would return (docs/requests.md,
+ * actor.state): a map of each one that has recorded, by id, to the state
+ * value of its parent's subtree as it was recorded. TA_ERROR_INVALID when
+ * there is no such session or a recording has more than
+ * HOST_STATE_VALUE_STATES states. */
+ta_status host_state_history(const ta_host *host, uint64_t session, ta_output *out) {
+    uint32_t si = 0, actor = 0;
+    state_room room;
+    if (host_locate(host, session, &si, &actor) != TA_OK) return TA_ERROR_INVALID;
+    const host_segment *segment_record = segment_of(host, si);
+    ta_actor_info info;
+    info.size = sizeof info;
+    if (ta_actor_info_get(segment_record->system, actor, &info) != TA_OK) return TA_ERROR_INVALID;
+    uint32_t state_count = ta_image_state_count(segment_record->image, info.chart);
+    uint32_t recorded = 0;
+    for (uint32_t state = 1; state < state_count; state++)
+        recorded += ta_system_actor_history(segment_record->system, (ta_actor_state_ref){actor, state},
+                                            (ta_uint32_array){room.states, 0}) > 0;
+    cbor_output_head(out, CBOR_MAJOR_MAP, recorded);
+    for (uint32_t state = 1; state < state_count && recorded; state++) {
+        uint32_t count = ta_system_actor_history(segment_record->system, (ta_actor_state_ref){actor, state},
+                                                 (ta_uint32_array){room.states, HOST_STATE_VALUE_STATES});
+        if (!count) continue;
+        if (count > HOST_STATE_VALUE_STATES) return TA_ERROR_INVALID;
+        ta_state_info history;
+        history.size = sizeof history;
+        ta_image_state_info(segment_record->image, (ta_chart_item){info.chart, state}, &history);
+        cbor_output_text(out, history.id);
+        for (uint32_t i = 0; i < count; i++) {
+            ta_state_info item;
+            item.size = sizeof item;
+            ta_image_state_info(segment_record->image, (ta_chart_item){info.chart, room.states[i]}, &item);
+            if (item.depth == 0 || item.depth > 255) return TA_ERROR_INVALID;
+            room.depths[i] = (uint8_t)item.depth;
+            room.kinds[i] = (uint8_t)item.kind;
         }
-        parents[depth] = kinds[i];
+        state_tree tree = {segment_record->image, info.chart, count, room.states, room.depths, room.kinds};
+        state_tree_put(&tree, out);
+        recorded--;
     }
     return TA_OK;
+}
+
+/* An actor's pending delayed sends (docs/requests.md, actor.get): the first
+ * HOST_ACTOR_TIMERS in firing order as an array of {"sendid", "event",
+ * "due"}; returns how many it has. */
+uint32_t host_actor_timers(const ta_host *host, ta_host_location where, ta_output *out) {
+    ta_actor_timer timers[HOST_ACTOR_TIMERS];
+    const host_segment *segment_record = segment_of(host, where.segment);
+    uint32_t count = ta_system_actor_timers(segment_record->system, where.actor,
+                                            (ta_actor_timer_array){timers, HOST_ACTOR_TIMERS});
+    uint32_t listed = count < HOST_ACTOR_TIMERS ? count : HOST_ACTOR_TIMERS;
+    cbor_output_head(out, CBOR_MAJOR_ARRAY, listed);
+    for (uint32_t i = 0; i < listed; i++) {
+        cbor_output_head(out, CBOR_MAJOR_MAP, 3);
+        cbor_output_text(out, ta_string("sendid"));
+        if (timers[i].sendid.pointer) cbor_output_text(out, timers[i].sendid);
+        else cbor_output_simple(out, 22); /* null: no sendid */
+        cbor_output_text(out, ta_string("event"));
+        cbor_output_text(out, timers[i].event);
+        cbor_output_text(out, ta_string("due"));
+        cbor_output_uint(out, timers[i].due);
+    }
+    return count;
 }
 
 ta_status ta_host_spawn(ta_host *host, const ta_spawn *spawn, uint64_t *session) {

@@ -276,18 +276,36 @@ every session was listed. Errors: `type`, `range`.
 
 One session. Param: `session` (uint, required).
 
-Result: `{"session", "segment", "chart", "parent", "mailbox", "invocations"}`:
+Result: `{"session", "segment", "chart", "parent", "mailbox", "invocations",
+"timers", "timersPending"}`:
 - `chart`: the chart's name;
 - `parent`: the session that invoked it, or `null` for a root actor;
 - `mailbox`: events waiting for it;
-- `invocations`: services it runs.
+- `invocations`: services it runs;
+- `timers`: its pending delayed sends (`<send delay>` not yet due, not
+  cancelled), earliest first (by due time, then in the order they were
+  sent), at most 32. Each is `{"sendid", "event", "due"}`: `sendid` the
+  send's id (its `id`, or the one its `idlocation` was given), `null`
+  when it has none; `event` the event's name; `due` the host's time it
+  fires at, in ticks of `ticksPerSecond` on the clock of
+  `ta_host_advance_time` (a delay too long for 64 bits is due at 2^64 - 2:
+  never);
+- `timersPending`: how many it has, all of them: more than the list holds
+  when the list was cut at 32.
+
+A hibernated actor's delayed sends stay in the host, so they are listed
+too. Finding them walks the actor's own list of sends, never the host's
+timers.
 
 Errors: `missing`, `type`, `stale`.
 
 ```
 {"id": 1, "method": "actor.get", "params": {"session": 1}}
-→ {"id": 1, "result": {"session": 1, "segment": 0, "chart": "pinged", "parent": null,
-   "mailbox": 0, "invocations": 0}}
+→ {"id": 1, "result": {"session": 1, "segment": 0, "chart": "timed", "parent": null,
+   "mailbox": 0, "invocations": 0,
+   "timers": [{"sendid": null, "event": "tick", "due": 5000},
+              {"sendid": "sla", "event": "breach", "due": 60000}],
+   "timersPending": 2}}
 ```
 
 ### `actor.context`
@@ -348,14 +366,32 @@ A session's configuration as a nested state value, in the shape of xstate's
   an atomic region is `{}`;
 - no active state is `{}`.
 
-Param: `session` (uint, required). Result: `{"value": <state value>}`.
-Errors: `missing`, `type`, `stale`, `limit` (-32003: the configuration
-has more than 1024 active states, the room the host writes it in;
-`HOST_STATE_VALUE_STATES`, `src/host/host_internal.h:334`).
+Param: `session` (uint, required). Result: `{"value": <state value>,
+"history": {<history id>: <state value>, ...}}`.
+
+`history` holds where each history state the actor has recorded would
+return: a history state records when its parent state is exited, and
+keeps that recording until the next exit. Its value is its parent as it
+would be entered again, in the shape of `value`: the parent's id, then a
+deep history's recorded states down to the atomic ones, or the child a
+shallow history recorded, written as its id alone (a compound child is
+entered by its initial). A history state that has recorded nothing is
+absent, so the map is `{}` before any exit.
+
+Errors: `missing`, `type`, `stale`; `state` (-32002) when the actor is
+hibernated (its configuration is in the blob: wake it first); `limit`
+(-32003: the configuration, or a history's recording, has more than 1024
+states, the room the host writes it in; `HOST_STATE_VALUE_STATES`,
+`src/host/host_internal.h`).
 
 ```
 {"id": 1, "method": "actor.state", "params": {"session": 1}}
-→ {"id": 1, "result": {"value": {"top": {"p": {"r1": "x", "r2": {}, "r3": {"k": "k1"}}}}}}
+→ {"id": 1, "result": {"value": {"top": {"p": {"r1": "x", "r2": {}, "r3": {"k": "k1"}}}},
+   "history": {}}}
+
+{"id": 1, "method": "actor.state", "params": {"session": 1}}   (after work was left from a2)
+→ {"id": 1, "result": {"value": "paused",
+   "history": {"h": {"work": {"a": "a2"}}, "hs": {"work": "a"}}}}   (h deep, hs shallow)
 ```
 
 ### `trace.spans.decode`

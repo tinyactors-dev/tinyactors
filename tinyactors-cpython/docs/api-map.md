@@ -73,7 +73,7 @@ A core function no item uses is listed below the table: used internally
 | `Host.actor_state(handler, on_error=None, /, **params)` | `actor.state`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method: params passed through as keywords (`on_error` second or by keyword, never a param); the handler at the `REPLY`'s dispatch; the id is a pending row's handle (`ta_table`) |
 | `Host.actor_context(handler, on_error=None, /, **params)` | `actor.context`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | `Host.actor_list(handler, on_error=None, /, **params)` | `actor.list`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
-| `Host.actor_get(handler, on_error=None, /, **params)` | `actor.get`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
+| `Host.actor_get(handler, on_error=None, /, **params)` | `actor.get`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method; its result's `timers[].due`, core's host ticks, converted to seconds (a `float`, the API's unit of time) at the dispatch |
 | `Host.host_stats(handler, on_error=None, /, **params)` | `host.stats`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | `Host.host_config(handler, on_error=None, /, **params)` | `host.config`, `ta_host_post`, `TA_HOST_EFFECT_REPLY` | a typed method |
 | `Host.trace_configure(handler, on_error=None, /, **params)` | `trace.configure`, `ta_host_post` | a typed method |

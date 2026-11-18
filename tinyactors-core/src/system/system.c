@@ -1009,6 +1009,71 @@ uint32_t ta_actor_config(const ta_system *system, uint32_t actor, ta_uint32_arra
     return n;
 }
 
+/* ---- inspection: delayed sends and history ------------------------------------------------- */
+
+uint32_t ta_system_actor_timers(const ta_system *system, uint32_t actor, ta_actor_timer_array timers) {
+    uint32_t index = ta_system_resolve_actor(system, actor);
+    if (index == TA_NIL) return 0;
+    const ta_core *core = &system->core;
+    uint32_t count = 0, kept = 0;
+    for (uint32_t ti = ta_actor_at(system, index)->timers; ti != TA_NIL;
+         ti = ((const ta_timer *)ta_pool_at(&system->timers, ti))->owner_next) {
+        const ta_heap_node *node = ta_heap_find(&system->heap, ti);
+        if (!node) continue;
+        count++;
+        ta_heap_node at_node;
+        uint32_t at = kept;
+        for (; at > 0; at--) { /* from the latest kept: a later send stops at once */
+            at_node.due = timers.pointer[at - 1].due;
+            at_node.sequence = timers.pointer[at - 1].sequence;
+            if (!ta_heap_before(node, &at_node)) break;
+        }
+        if (at >= timers.capacity) continue;
+        uint32_t last = kept < timers.capacity ? kept : timers.capacity - 1;
+        for (uint32_t j = last; j > at; j--)
+            timers.pointer[j] = timers.pointer[j - 1];
+        const ta_event *event = ta_event_at(core, ((const ta_timer *)ta_pool_at(&system->timers, ti))->event);
+        ta_actor_timer *timer = &timers.pointer[at];
+        timer->due = node->due;
+        timer->sequence = node->sequence;
+        timer->pad = 0;
+        timer->event = ta_shared_string_get(core, event->name);
+        timer->sendid = event->sendid == TA_NIL ? (ta_string_view){(const char *)0, 0}
+                                                : ta_shared_string_get(core, event->sendid);
+        if (kept < timers.capacity) kept++;
+    }
+    return count;
+}
+
+uint32_t ta_system_actor_history(const ta_system *system, ta_actor_state_ref ref, ta_uint32_array states) {
+    uint32_t index = ta_system_resolve_actor(system, ref.actor);
+    if (index == TA_NIL) return 0;
+    const ta_actor *actor = ta_actor_at(system, index);
+    if (actor->state == TA_ACTOR_HIBERNATED) return 0; /* its history is in the blob */
+    ta_instance *instance = ta_actor_instance(system, actor);
+    const ta_chart_record *chart = &system->core.image_view.charts[instance->chart];
+    if (ref.state >= chart->state_count || !chart->history_word_count) return 0;
+    const ta_state_record *records = ta_chart_states(&system->core.image_view, chart);
+    const ta_state_record *history = &records[ref.state];
+    if (history->kind < TA_STATE_HISTORY_SHALLOW) return 0;
+    ta_instance_layout layout = ta_instance_layout_of(chart);
+    if (!ta_bitset_test(ta_instance_word(instance, layout.history_recorded), ref.state)) return 0;
+    /* bit b of the recording is state parent + 1 + b (core.c, record_history) */
+    const ta_bitset_word *recorded = ta_instance_word(instance, layout.history + history->history_offset);
+    uint32_t parent = history->parent, bits = records[parent].end - parent - 1, n = 0;
+    if (n < states.capacity) states.pointer[n] = parent;
+    n++;
+    for (uint32_t state = parent + 1; state < records[parent].end; state++) {
+        if (records[state].kind >= TA_STATE_HISTORY_SHALLOW) continue;
+        /* a recorded state or one of its ancestors */
+        uint32_t first = ta_bitset_next(recorded, bits, state - parent - 1);
+        if (first == TA_NIL || first >= records[state].end - parent - 1) continue;
+        if (n < states.capacity) states.pointer[n] = state;
+        n++;
+    }
+    return n;
+}
+
 /* ---- exhaustion ------------------------------------------------------------------------------ */
 
 uint32_t ta_system_exhausted(ta_system *system) {

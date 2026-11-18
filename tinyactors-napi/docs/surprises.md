@@ -21,9 +21,9 @@ A surprise that lived in two layers counts in both.
 
 | Outcome | Surprises |
 |---|---|
-| fixed | 19 |
+| fixed | 20 |
 | documented | 13 |
-| for the maintainer | 2 |
+| for the maintainer | 1 |
 
 ## order-fulfillment
 
@@ -236,8 +236,8 @@ A surprise that lived in two layers counts in both.
 
 - **What happened:** Missing API: an admin view cannot show when an actor's delayed sends are due, nor where its history states would return.
 - **Where:** core
-- **Outcome:** for the maintainer
-- **Why it is left:** Left for the maintainer (the coordinator's triage: an API for what SCXML does not expose is new semantics). Recommendation: a read-only typed method of core's control plane, actor.timers (or two fields of actor.get), listing an actor's pending delayed sends (sendid, event, due in the host's clock) and its history states' recordings; it costs nothing per event, only the call, and each binding adds one typed method. Until then a chart keeps in a variable what an admin needs (the example keeps pausedStage), and the example's README says what an admin cannot see.
+- **Outcome:** fixed
+- **Fix:** Built (the maintainer, 2026-11-18, l-maint-2026-11-18 decision 6, option B): core's actor.get answers timers, the actor's pending delayed sends earliest first ({sendid, event, due}, due in host ticks, at most 32), and timersPending, their count; actor.state answers history, where each recorded history state would return, in the shape of value (a hibernated actor's actor.state is refused, reason state).
 
 ## inventory-sync
 

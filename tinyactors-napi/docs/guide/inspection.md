@@ -59,9 +59,9 @@ key per region.
 
 | Method | Params | Result |
 |---|---|---|
-| `actorStateAsync` | `{ session }` | `{ value }`: the active states, as above |
+| `actorStateAsync` | `{ session }` | `{ value, history }`: the active states, as above, and where each history state would return ([below](#delayed-sends-and-history)) |
 | `actorContextAsync` | `{ session }` | `{ variables }`: each `<data>` and its value |
-| `actorGetAsync` | `{ session }` | `{ session, segment, chart, parent, mailbox, invocations }` |
+| `actorGetAsync` | `{ session }` | `{ session, segment, chart, parent, mailbox, invocations, timers, timersPending }`: `timers` its pending delayed sends ([below](#delayed-sends-and-history)) |
 | `actorListAsync` | `{ cursor, limit }`, both optional | `{ sessions, cursor }`: a page of sessions; `cursor` is `null` after the last page |
 | `hostStatsAsync` | none | `{ host, pools, charts }`: counters ([below](#the-hosts-counters)) |
 | `hostConfigAsync` | none | the config the host runs with, every default filled in |
@@ -87,8 +87,69 @@ An editor completes `stats.pools[0].actors.highWater`, and TypeScript, or
 a param a method does not take. Every example of these guides is checked
 that way against the package's types, the one below included.
 
-`actorContextAsync` is refused for a hibernated actor: wake it first
-([Hibernation](hibernation.md)).
+`actorContextAsync` and `actorStateAsync` are refused for a hibernated
+actor (`reason` `'state'`): wake it first ([Hibernation](hibernation.md)).
+
+## Delayed sends and history
+
+What an operator asks first about a waiting actor is when it will act
+next and where it will go back to. `actorGetAsync` answers the first:
+`timers` lists the actor's pending delayed sends (each `<send delay>`
+not yet due and not cancelled), earliest first, each `{ sendid, event,
+due }`, with `due` in milliseconds on the clock `host.now()` reads. The
+list holds at most 32; `timersPending` is how many there are, so a
+longer `timersPending` says the list was cut. A send without an `id` has
+a `sendid` of `null`. `actorStateAsync` answers the second: `history`
+holds, for each history state the actor has recorded, its parent state as
+it would be entered again, in the shape of `value`. A history state
+records when its parent is exited, so before the first exit it is absent
+and `history` is `{}`.
+
+```js
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'review.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="review" initial="reviewing">
+  <state id="reviewing" initial="draft">
+    <onentry><send id="sla" event="breach" delay="7200s"/></onentry>
+    <history id="back" type="deep"><transition target="draft"/></history>
+    <state id="draft"><transition event="submit" target="legal"/></state>
+    <state id="legal"/>
+    <transition event="hold" target="held"/>
+  </state>
+  <state id="held"><transition event="release" target="back"/></state>
+</scxml>` }]);
+const clock = new SimulatedClock();
+const host = new Host({ systemID: 'docs' }, { clock });
+host.addImage(compiled.image);
+compiled.close();
+
+const doc = host.spawn(host.chart('review'));
+host.send(doc, 'submit');
+host.send(doc, 'hold');
+await host.idle();
+clock.increment(60_000); // a minute later
+
+const { timers, timersPending } = await host.actorGetAsync({ session: doc });
+for (const { sendid, event, due } of timers) console.log(sendid, event, 'in', (due - host.now()) / 1000, 's');
+console.log('pending:', timersPending);
+const { value, history } = await host.actorStateAsync({ session: doc });
+console.log('state:', JSON.stringify(value), 'history:', JSON.stringify(history));
+host.close();
+```
+
+```output
+sla breach in 7140 s
+pending: 1
+state: "held" history: {"back":{"reviewing":"legal"}}
+```
+
+A deep history (`type="deep"`) returns to the atomic states it recorded,
+so its value goes down to them; a shallow one returns to the child of
+its parent it recorded, which enters its own initial state, and its
+value names that child alone. Neither costs anything per event: the
+host reads them only when asked.
 
 A page at a time, `actorListAsync` lists every actor:
 

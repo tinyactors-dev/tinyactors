@@ -138,13 +138,14 @@ language like the scenarios (`build/setups/<language>/`, checked by
 | `empty` | system `h`, no chart (the default) |
 | `pinged` | system `h`, the chart `pinged` (`<data>` `n` = 1, `who` = `"bob"`, `nothing`; states `s`, `t`) and one session, 1, run until idle |
 | `pinged2` | as `pinged`, with two sessions, 1 and 2 |
+| `timed` | system `h`, the chart `timed` and one session, 1, run until idle at monotonic time 0: entering `work` (its initial `a`, whose initial is `a1`) sends `breach` (id `sla`, in 60 s) and `tick` (no id, in 5 s); `work` holds a deep history `h` and a shallow one `hs`; `next` goes from `a1` to `a2`, `pause` from `work` to `paused`, `resume` back through `h`, `cancel` cancels `sla` |
 | `echo` | system `h` on the datamodel under test, with no I/O processor; the chart `echo` (each event `v` is sent back to its `_event.origin` as `back`, with `_event.data` as its content) and one session; a case sends it `v` with the value as `cbor` and the origin `tinyactors://p/#_scxml_9` (`actor.send`), runs the host once (`host.run`) and compares the data of the one send to the host's transport |
 
 ## What they leave to unit tests
 
 What bytes cannot show stays in `tinyactors-core/tests/unit`: a call during a run
 (`test_host_inputs.c`), an allocator that refuses (`test_host_memory.c`),
-`actor.context` of a hibernated actor or of a datamodel without variables,
+`actor.context` and `actor.state` of a hibernated actor, `actor.context` of a datamodel without variables, `actor.get`'s list of delayed sends cut at 32 and a send firing,
 a post's REPLY after its method's own effects (`test_host_request.c`),
 and sends to other systems through the host's transport
 (`test_remote.c`).

@@ -227,6 +227,10 @@ class Adapter {
     }
     await this.settle();
     const result = { status: 0, notifications: [] };
+    // actor.get's due times are milliseconds on host.now()'s clock: back to core's ticks
+    if (message.method === 'actor.get') {
+      for (const timer of answered[0]?.result?.timers ?? []) timer.due = Math.round((timer.due * host.ticksPerSecond) / 1000);
+    }
     if (answered.length > 0 && 'id' in message) result.reply = encode({ id: message.id, ...answered[0] });
     return result;
   }

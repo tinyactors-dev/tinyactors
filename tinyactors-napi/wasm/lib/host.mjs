@@ -569,6 +569,16 @@ class HostState {
     else if (result !== null && (typeof result === 'object' || typeof result === 'function')) this.endings.push(result);
   }
 
+  // actor.get's result with each timer's due, the host's ticks, as
+  // milliseconds on the clock now() reads (ta_web_host_milliseconds).
+  timesInMilliseconds(result) {
+    for (const timer of result?.timers ?? []) {
+      const ticks = BigInt(timer.due);
+      timer.due = this.fn.ta_web_host_milliseconds(this.pointer, Number(ticks & 0xFFFFFFFFn), Number(ticks >> 32n));
+    }
+    return result;
+  }
+
   // A typed method's REPLY: its pending row's handlers at `slot` (the row
   // found and removed in C), the reply read once.
   dispatchReply(index, slot) {
@@ -1988,7 +1998,8 @@ for (const [js, core] of METHODS) {
         if (slot === 0) throw refusal('TA_ERROR_NO_MEMORY', 'no memory for a pending method');
         const id = module.word64(0);
         const at = 2 * (slot - 1);
-        handlers.pending[at] = onResult;
+        // actor.get's timers[].due: the host's ticks as milliseconds on now()'s clock
+        handlers.pending[at] = core === 'actor.get' ? (host, result) => onResult(host, state.timesInMilliseconds(result)) : onResult;
         handlers.pending[at + 1] = failed;
         let posted = false;
         try {

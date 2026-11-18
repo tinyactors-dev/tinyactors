@@ -14,6 +14,7 @@ typedef struct ta_python_typed {
     const char *method;
     PyObject *arguments;
     PyObject *params;
+    int timers; /* its result's timers[].due are converted to seconds (actor.get) */
 } ta_python_typed;
 
 static int ta_python_post(ta_python_host *host, const ta_python_typed *typed, uint64_t id) {
@@ -77,6 +78,7 @@ static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typ
     else {
         row->handler = Py_NewRef(handler);
         row->on_error = Py_NewRef(on_error);
+        row->timers = typed->timers;
         ta_python_advance(host); /* trace.watch's end is a time of the host's clock */
         status = ta_python_post(host, typed, id);
         if (status < 0) { /* refused at the call: nothing was applied, no reply comes */
@@ -92,23 +94,49 @@ static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typ
     Py_RETURN_NONE;
 }
 
-#define TA_PYTHON_METHOD(function, name)                                                         \
+#define TA_PYTHON_METHOD(function, name, timers)                                                 \
     PyObject *ta_python_method_##function(PyObject *self, PyObject *arguments, PyObject *keywords) { \
-        ta_python_typed typed = {name, arguments, keywords};                                     \
+        ta_python_typed typed = {name, arguments, keywords, timers};                             \
         return ta_python_typed_call(self, &typed);                                               \
     }
 
-TA_PYTHON_METHOD(actor_state, "actor.state")
-TA_PYTHON_METHOD(actor_context, "actor.context")
-TA_PYTHON_METHOD(actor_list, "actor.list")
-TA_PYTHON_METHOD(actor_get, "actor.get")
-TA_PYTHON_METHOD(host_stats, "host.stats")
-TA_PYTHON_METHOD(host_config, "host.config")
-TA_PYTHON_METHOD(trace_configure, "trace.configure")
-TA_PYTHON_METHOD(trace_watch, "trace.watch")
-TA_PYTHON_METHOD(trace_unwatch, "trace.unwatch")
-TA_PYTHON_METHOD(trace_end, "trace.end")
-TA_PYTHON_METHOD(trace_spans_decode, "trace.spans.decode")
+TA_PYTHON_METHOD(actor_state, "actor.state", 0)
+TA_PYTHON_METHOD(actor_context, "actor.context", 0)
+TA_PYTHON_METHOD(actor_list, "actor.list", 0)
+TA_PYTHON_METHOD(actor_get, "actor.get", 1)
+TA_PYTHON_METHOD(host_stats, "host.stats", 0)
+TA_PYTHON_METHOD(host_config, "host.config", 0)
+TA_PYTHON_METHOD(trace_configure, "trace.configure", 0)
+TA_PYTHON_METHOD(trace_watch, "trace.watch", 0)
+TA_PYTHON_METHOD(trace_unwatch, "trace.unwatch", 0)
+TA_PYTHON_METHOD(trace_end, "trace.end", 0)
+TA_PYTHON_METHOD(trace_spans_decode, "trace.spans.decode", 0)
+
+/* actor.get's result: each of its timers' "due", the host's ticks, as
+ * seconds on the host's clock (a float, the API's unit of time;
+ * bindings.md, section 3). -1 with an exception. */
+static int ta_python_timers_in_seconds(ta_python_host *host, PyObject *result) {
+    PyObject *timers = NULL;
+    if (!PyDict_Check(result) || PyDict_GetItemStringRef(result, "timers", &timers) <= 0) return 0;
+    int status = 0;
+    Py_ssize_t count = PyList_Check(timers) ? PyList_Size(timers) : 0;
+    for (Py_ssize_t i = 0; i < count && status == 0; i++) {
+        PyObject *timer = PyList_GetItemRef(timers, i), *due = NULL, *seconds = NULL;
+        if (!timer) status = -1;
+        else if (PyDict_Check(timer) && PyDict_GetItemStringRef(timer, "due", &due) > 0 && PyLong_Check(due)) {
+            uint64_t ticks = PyLong_AsUnsignedLongLong(due);
+            if (PyErr_Occurred()) status = -1;
+            else if (!(seconds = PyFloat_FromDouble((double)ticks / (double)host->ticks_per_second)) ||
+                     PyDict_SetItemString(timer, "due", seconds) < 0)
+                status = -1;
+        } else if (PyErr_Occurred()) status = -1;
+        Py_XDECREF(seconds);
+        Py_XDECREF(due);
+        Py_XDECREF(timer);
+    }
+    Py_DECREF(timers);
+    return status;
+}
 
 /* A REPLY: its id names a pending row (a stale or unknown one is
  * dropped); the result, decoded once, goes to the handler, an error to
@@ -130,6 +158,7 @@ void ta_python_reply(ta_python_host *host, uint32_t index) {
     ta_python_pending_row *row = handle ? ta_table_get(&host->pending, handle) : NULL;
     if (row) {
         PyObject *handler = row->handler, *on_error = row->on_error;
+        int row_timers = row->timers;
         ta_table_remove(&host->pending, handle);
         PyObject *called = NULL;
         if (error) {
@@ -138,7 +167,8 @@ void ta_python_reply(ta_python_host *host, uint32_t index) {
                 called = PyObject_CallFunctionObjArgs(on_error, (PyObject *)host, exception, NULL);
             else if (exception) PyErr_SetObject(host->state->error, exception);
             Py_XDECREF(exception);
-        } else called = PyObject_CallFunctionObjArgs(handler, (PyObject *)host, result ? result : Py_None, NULL);
+        } else if (!(row_timers && result && ta_python_timers_in_seconds(host, result) < 0))
+            called = PyObject_CallFunctionObjArgs(handler, (PyObject *)host, result ? result : Py_None, NULL);
         if (!called) ta_python_host_keep_error(host);
         Py_XDECREF(called);
         Py_DECREF(handler);

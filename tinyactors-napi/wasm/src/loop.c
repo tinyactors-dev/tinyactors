@@ -78,6 +78,14 @@ TA_WEB_EXPORT double ta_web_host_now(ta_web_host *host) {
     return (double)now * 1000.0 / (double)host->ticks_per_second;
 }
 
+/* A time of the host's clock (ticks, `low` and `high` its two halves) as
+ * milliseconds on the clock ta_web_host_now reads: actor.get's
+ * timers[].due (bindings.md, section 3). */
+TA_WEB_EXPORT double ta_web_host_milliseconds(ta_web_host *host, uint32_t low, uint32_t high) {
+    uint64_t ticks = (uint64_t)low | (uint64_t)high << 32;
+    return (double)ticks * 1000.0 / (double)host->ticks_per_second;
+}
+
 /* Milliseconds from now to the host's deadline: 0 when it is due, -1 for
  * none (UINT64_MAX). */
 TA_WEB_EXPORT double ta_web_host_delay(ta_web_host *host) {
