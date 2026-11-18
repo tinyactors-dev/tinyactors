@@ -344,10 +344,10 @@ async function cdpPage(endpoint) {
   const send = (method, params = {}, sessionID) =>
     new Promise((resolve, reject) => {
       pending.set(++id, { resolve, reject });
-      ws.send(JSON.stringify({ id, method, params, sessionID }));
+      ws.send(JSON.stringify({ id, method, params, sessionId: sessionID })); // the DevTools protocol's names
     });
-  const { targetID } = await send('Target.createTarget', { url: 'about:blank' });
-  const { sessionID } = await send('Target.attachToTarget', { targetID, flatten: true });
+  const { targetId: targetID } = await send('Target.createTarget', { url: 'about:blank' });
+  const { sessionId: sessionID } = await send('Target.attachToTarget', { targetId: targetID, flatten: true });
   const page = (method, params) => send(method, params, sessionID);
   const evaluate = async (expression) => {
     const r = await page('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });

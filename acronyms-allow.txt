@@ -8,6 +8,11 @@
 # ast-grep's JSON output names a finding's rule `ruleId`.
 ruleId         mise/lib/build_scripts.rb                                 # ast-grep scan --json field
 
+# The Chrome DevTools Protocol names a target and a session `targetId` and
+# `sessionId`; the torture dashboard's layout test speaks it.
+targetId       tinyactors-core/tools/torture/test/server.test.mjs        # DevTools protocol field
+sessionId      tinyactors-core/tools/torture/test/server.test.mjs        # DevTools protocol field
+
 # `-Os`, the C compiler's optimize-for-size flag, not OS; tinyxml names
 # its freestanding tiers after the flags.
 Os             tinyxml/**/*                                                # compiler flag -Os
