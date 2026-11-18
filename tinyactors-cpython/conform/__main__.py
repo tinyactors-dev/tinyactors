@@ -32,20 +32,6 @@ TYPED = {"actor.state", "actor.context", "actor.list", "actor.get", "host.stats"
          "trace.configure", "trace.watch", "trace.unwatch", "trace.end", "trace.spans.decode"}
 
 
-def core_seed(config):
-    """A vectors' config as core reads it: the binding draws a random
-    system.traceSeed where the config gives none (the maintainer,
-    2026-11-18), and core's default is 0, which the vectors' effective
-    configs show; so a config that gives none gets core's 0, written out.
-    Anything else is passed as it is, for core to refuse."""
-    if not isinstance(config, dict):
-        return config
-    system = config.get("system", {})
-    if not isinstance(system, dict) or "traceSeed" in system:
-        return config
-    return dict(config, system=dict(system, traceSeed=0))
-
-
 class DriverError(Exception):
     """The protocol's own error (driver.md, "Errors are the protocol's own")."""
 
@@ -117,7 +103,7 @@ class Adapter:
         datamodel = params.get("datamodel", "quickjs")
         if datamodel not in DATAMODELS:
             raise DriverError(-32602, "range", "params.datamodel", "no such datamodel")
-        config = core_seed(tinyactors.decode(params["config"]))
+        config = tinyactors.decode(params["config"])
         self.clock = tinyactors.SimulatedClock()
         self.sends = []
         try:

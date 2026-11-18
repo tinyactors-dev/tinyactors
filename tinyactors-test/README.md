@@ -55,7 +55,8 @@ passed no case, or a method the command's kind must offer that it did not
 ([docs/driver.md](docs/driver.md), "Kinds"). A binding's run also skips
 the protocol suite's cases marked `only reference` in its file: requests
 and configs whose bytes no binding's API makes (not CBOR, not one request
-map, an id of the caller's, messages without an id, `actor.send`), which
+map, an id of the caller's, messages without an id, `actor.send`, a
+config with no `system.traceSeed`), which
 `ta-conform` runs ([suites/protocol/README.md](suites/protocol/README.md),
 "Reference-only cases").
 

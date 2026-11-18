@@ -102,8 +102,9 @@ C-level methods' cases and those with `refused`, the cases of
 [suites/protocol/README.md](../suites/protocol/README.md), "Reference-only
 cases"): bytes that are not CBOR or not one request map, a member or an id
 the binding's typed methods never write (a method that is not one of
-requests.md's, params that are not a map), notifications, and
-`actor.send`, which a binding offers as its `send`.
+requests.md's, params that are not a map), notifications,
+`actor.send`, which a binding offers as its `send`, and a config with no
+`system.traceSeed`, where a binding draws a random one.
 Since the binding writes the map and its id itself, its adapter answers
 `host.post` with a reply it builds from what its typed method's handlers
 got, with the message's `id`, and `host.run` with the

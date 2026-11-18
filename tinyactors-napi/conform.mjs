@@ -76,18 +76,6 @@ function statusOf(error) {
   return STATUS.TA_ERROR_INVALID;
 }
 
-// A vectors' config as core reads it: the binding draws a random
-// system.traceSeed where the config gives none (the maintainer, 2026-11-18),
-// and core's default is 0, which the vectors' effective configs show; so a
-// config that gives none gets core's 0, written out. Anything else is passed
-// as it is, for core to refuse.
-function coreSeed(config) {
-  if (config === null || typeof config !== 'object' || Array.isArray(config)) return config;
-  const system = config.system === undefined ? {} : config.system;
-  if (system === null || typeof system !== 'object' || Array.isArray(system) || system.traceSeed !== undefined) return config;
-  return { ...config, system: { ...system, traceSeed: 0 } };
-}
-
 // A TinyactorsError from a reply or a refused config, as core wrote it.
 function errorMap(error) {
   return { code: error.code, message: error.message ?? '', data: { reason: error.reason, path: error.path } };
@@ -184,7 +172,7 @@ class Adapter {
   'host.create'(params) {
     if (this.host !== null) throw new DriverError(-32002, 'state', '', 'a host already: call host.free first');
     const options = engine(params);
-    const config = coreSeed(decode(required(params, 'config')));
+    const config = decode(required(params, 'config'));
     const clock = new SimulatedClock();
     const sends = [];
     // A send to another system: kept for host.run, its data written for the
