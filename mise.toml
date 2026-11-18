@@ -31,6 +31,13 @@ node = "22"
 # (Toolchain::Target.release). It is LLVM too (21 in zig 0.16), and LLVM
 # 22's tools read what it builds.
 zig = "0.16.0"
+# Releases read their tokens (NPM_TOKEN, PYPI_TOKEN) with fnox, from
+# 1Password items its fnox.toml names, through the 1Password CLI and the
+# environment's service account (OP_SERVICE_ACCOUNT_TOKEN): no token is
+# kept in plain text. Releases run from cloud sessions, whose setup script
+# installs these with everything else.
+"github:jdx/fnox" = "1.48.0"
+1password = "2.42.0"
 
 [env]
 # Puts the workspace's shared task library (mise/lib/) on Ruby's load path so

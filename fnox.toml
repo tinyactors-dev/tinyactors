@@ -1,0 +1,20 @@
+# Secrets for releases, read by fnox (`fnox exec -- <command>`) from the
+# 1Password vault "Claude Code" with the environment's service account
+# (OP_SERVICE_ACCOUNT_TOKEN). This file holds references, never a value.
+# mise.toml pins fnox and the 1Password CLI.
+
+[providers.op]
+type = "1password"
+vault = "Claude Code"
+
+# npm's token for publishing @tinyactors packages (staged: the maintainer
+# approves each version on npmjs.com).
+[secrets.NPM_TOKEN]
+provider = "op"
+value = "npm-token/password"
+
+# Cloudflare's token for deploying the staticjs site
+# (staticjs/mise/tasks/site/deploy runs wrangler through fnox).
+[secrets.CLOUDFLARE_API_TOKEN]
+provider = "op"
+value = "tinyactors.dev Cloudflare API token/credential"

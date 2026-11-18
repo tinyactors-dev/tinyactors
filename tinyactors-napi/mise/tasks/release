@@ -75,7 +75,11 @@ publish_npm = lambda do |tarballs|
     Release.npm_published?(name, version).tap { |has| puts "release: npm has #{name}@#{version}; skipped" if has }
   end
   published, failed = Release.npm_publish!(left, dist_tag: dist_tag)
-  return true unless failed
+  unless failed
+    puts 'release: staged on npm; approve each package on npmjs.com (2FA) to make it public. ' \
+         "The release repository's workflow waits up to two hours for npm to serve them."
+    return true
+  end
 
   warn "release: npm publish #{failed.basename} failed; published: " \
        "#{published.empty? ? 'none' : published.map { |t| t.basename.to_s }.join(', ')}"

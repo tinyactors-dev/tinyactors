@@ -1121,7 +1121,9 @@ manages its development dependencies; the C toolchain is the root's.
   bun and in Chromium) and, with Docker, the addon in Node.js
   (Debian, Alpine) and Bun containers of each Linux architecture,
   `SHA256SUMS`, into `build/dist/<version>/`; with `--publish`, `npm
-  publish` with fnox's `NPM_TOKEN` (platform packages first), then the
+  stage publish` (npm 12, through `npx`) with fnox's `NPM_TOKEN`, read from
+  1Password (root `fnox.toml`), platform packages first, each public once the
+  maintainer approves it on npmjs.com, then the
   root's `Release.push_and_release!`: the push, a snapshot of
   `tinyactors-napi/` pushed to tinyactors-dev/tinyactors-napi tagged
   `v<version>`, and the GitHub release there (root `docs/adr/0016`).

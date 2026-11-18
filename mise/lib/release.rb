@@ -225,6 +225,13 @@ module Release
     fail!("npm view #{name}@#{version} failed:\n#{err}")
   end
 
+  # npm's version that publishes staged (`npm stage publish`): a staged
+  # version is public only once the maintainer approves it on npmjs.com with
+  # 2FA, so the release's token needs no 2FA bypass, which npm restricts
+  # (direct publishing with such tokens, from January 2027). Node 22 ships
+  # npm 10, which has no `stage`.
+  NPM_STAGE_VERSION = '12.2.3'
+
   # Publishes the tarballs in order. On a failure it stops and prints what
   # was published and what is left: npm cannot unpublish freely, so nothing
   # is retried.
@@ -237,9 +244,9 @@ module Release
     published = []
     with_npm_userconfig do |userconfig|
       tarballs.each do |tarball|
-        command = [*npm_secrets[0], 'npm', 'publish', tarball.to_s, '--access', 'public',
-                   '--tag', dist_tag, '--userconfig', userconfig]
-        puts "$ npm publish #{File.basename(tarball)} --access public --tag #{dist_tag}"
+        command = [*npm_secrets[0], 'npx', '--yes', "npm@#{NPM_STAGE_VERSION}", 'stage', 'publish', tarball.to_s,
+                   '--access', 'public', '--tag', dist_tag, '--userconfig', userconfig]
+        puts "$ npm stage publish #{File.basename(tarball)} --access public --tag #{dist_tag}"
         return [published, tarball] unless system(*command, chdir: REPO.to_s)
 
         published << tarball

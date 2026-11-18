@@ -78,6 +78,9 @@ repository's `<project>/.github/workflows/release.yml`, which the snapshot
 carries, tags the snapshot and makes the GitHub release from the same file
 and the packages the registry serves. The workflows write no notes. npm
 packages are published staged: the maintainer approves them on npmjs.com.
+Tokens come from 1Password: `fnox.toml` names the items, fnox and the
+1Password CLI are pinned in `mise.toml`, and the environment holds only
+the service account's `OP_SERVICE_ACCOUNT_TOKEN`.
 
 - **Commit subjects and scopes are the input.** Scope a commit with the
   component it changes (`feat(core)`, `fix(napi)`, `fix(cpython)`,
