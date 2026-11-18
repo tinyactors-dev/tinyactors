@@ -20,7 +20,7 @@
 # "Packaging and releases", for @tinyactors/wasm, a sibling package at the
 # same version, tag and changelog. The packages are built by
 # mise/pack.rb. The assets (the six tarballs, SHA256SUMS and notes.md)
-# land in build/dist/<version>/. npm's token is fnox's NPM_TOKEN; the push,
+# land in build/dist/<version>/. npm's token is fnox's NPM_TOKEN, else the environment's NPM_TOKEN or NPM_API_TOKEN; the push,
 # the snapshot of tinyactors-napi/ in tinyactors-dev/tinyactors-napi
 # (tagged v<version>) and its GitHub release are Release.push_and_release!.
 # A publish that stopped after its tag was pushed can also be finished by
@@ -98,7 +98,7 @@ if resume
     tagged = Release.git('rev-parse', '--quiet', '--verify', "#{tag}^{commit}").to_s.strip
     fail!("the tag #{tag} is not on HEAD; --resume finishes a publish of HEAD") unless tagged == Release.git('rev-parse', 'HEAD').to_s.strip
   end
-  fail!('fnox has no NPM_TOKEN (ADR 0001, decision 12)') unless Release.npm_token?
+  fail!('no npm token: fnox has no NPM_TOKEN, and the environment has neither NPM_TOKEN nor NPM_API_TOKEN (ADR 0001, decision 12)') unless Release.npm_token?
   fail!('npm publish failed again; run --resume once more') unless publish_npm.call(ordered.call(tarballs))
   if dev
     puts "release: published @tinyactors/node and @tinyactors/wasm #{version} under the #{dist_tag} dist-tag"
@@ -125,7 +125,7 @@ unless build_only
           "(a publish that stopped half way: --resume)")
   end
   if publish
-    fail!('fnox has no NPM_TOKEN (ADR 0001, decision 12)') unless Release.npm_token?
+    fail!('no npm token: fnox has no NPM_TOKEN, and the environment has neither NPM_TOKEN nor NPM_API_TOKEN (ADR 0001, decision 12)') unless Release.npm_token?
     fail!('the registry does not accept NPM_TOKEN (npm whoami failed)') unless Release.npm_authenticated?
   end
   NodeAPI.run('mise', 'run', 'test') if tests

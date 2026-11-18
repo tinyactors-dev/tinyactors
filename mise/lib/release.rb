@@ -182,19 +182,35 @@ module Release
     out
   end
 
-  # Whether fnox has a non-empty NPM_TOKEN. The token is never read here:
-  # the shell only tests it.
-  def npm_token?
-    system('fnox', 'exec', '--', 'sh', '-c', 'test -n "$NPM_TOKEN"', out: File::NULL, err: File::NULL)
+  # Where npm's token comes from, as [command prefix, variable name]:
+  # fnox's NPM_TOKEN where fnox has one (a maintainer's machine), else the
+  # environment's NPM_TOKEN or NPM_API_TOKEN (a cloud session whose
+  # environment holds it), as pypi_secrets does for PyPI. The shell only
+  # tests the variables; the value is never read here. Nil for the name
+  # when there is none.
+  def npm_secrets
+    @npm_secrets ||=
+      if system('fnox', 'exec', '--', 'sh', '-c', 'test -n "$NPM_TOKEN"', out: File::NULL, err: File::NULL)
+        [%w[fnox exec --], 'NPM_TOKEN']
+      else
+        name = %w[NPM_TOKEN NPM_API_TOKEN].find do |variable|
+          system('sh', '-c', "test -n \"$#{variable}\"", out: File::NULL, err: File::NULL)
+        end
+        [[], name]
+      end
   end
 
+  # Whether npm has a token, from fnox or the environment.
+  def npm_token? = !npm_secrets[1].nil?
+
   # Yields an npm userconfig outside the tree that names the token by
-  # reference, `${NPM_TOKEN}`, which npm expands from the environment fnox
-  # sets. The file never holds the token, and is deleted afterwards.
+  # reference, `${NPM_TOKEN}` (or `${NPM_API_TOKEN}`), which npm expands
+  # from its environment. The file never holds the token, and is deleted
+  # afterwards.
   def with_npm_userconfig
     Dir.mktmpdir('release-npmrc') do |dir|
       path = File.join(dir, 'npmrc')
-      File.write(path, "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n")
+      File.write(path, "//registry.npmjs.org/:_authToken=${#{npm_secrets[1]}}\n")
       yield path
     end
   end
@@ -221,7 +237,7 @@ module Release
     published = []
     with_npm_userconfig do |userconfig|
       tarballs.each do |tarball|
-        command = ['fnox', 'exec', '--', 'npm', 'publish', tarball.to_s, '--access', 'public',
+        command = [*npm_secrets[0], 'npm', 'publish', tarball.to_s, '--access', 'public',
                    '--tag', dist_tag, '--userconfig', userconfig]
         puts "$ npm publish #{File.basename(tarball)} --access public --tag #{dist_tag}"
         return [published, tarball] unless system(*command, chdir: REPO.to_s)
@@ -237,7 +253,7 @@ module Release
   # releases must bypass two-factor authentication (ADR 0001).
   def npm_authenticated?
     with_npm_userconfig do |userconfig|
-      system('fnox', 'exec', '--', 'npm', 'whoami', '--userconfig', userconfig, out: File::NULL, err: File::NULL)
+      system(*npm_secrets[0], 'npm', 'whoami', '--userconfig', userconfig, out: File::NULL, err: File::NULL)
     end
   end
 
