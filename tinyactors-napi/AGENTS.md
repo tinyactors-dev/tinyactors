@@ -1097,6 +1097,13 @@ manages its development dependencies; the C toolchain is the root's.
   and `tools/smoke-wasm-browser.mjs`, the npm project served to Chromium
   under the guide's policy, a page importing by the package's name
   through an import map and a module Worker by path.
+- `mise run status`: where the work stands after a cloud container was
+  rebuilt (the agents running in it stop; git, `docs/plan.xml` and
+  `docs/log.xml` survive): the checkout against `main`, the uncommitted
+  files by project (an agent's unfinished work), the plan's unfinished
+  steps and the log's open entries. It changes nothing. The cloud
+  environment's setup script installs mise and every project's tools in a
+  fresh container.
 - `mise run release -- <version> [--publish] | --dev [--publish]`: the
   checks (a clean tree, the version, the changelog, npm, the test task),
   the version committed and tagged `tinyactors-napi/v<version>`, every
