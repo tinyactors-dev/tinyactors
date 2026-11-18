@@ -55,6 +55,55 @@ class Asyncio(unittest.TestCase):
         asyncio.run(main())
         self.assertEqual(logs.labelled("failed"), ["yes"])
 
+    def test_an_answer_or_failure_to_an_ended_sender_is_dropped(self):
+        """answer() and fail() give True when delivered and False when the
+        sender ended meanwhile (the maintainer, 2026-11-18, as Node); a
+        closed host still raises."""
+        for reply in (lambda send: send.answer("ack", {"late": 1}), lambda send: send.fail()):
+            logs = Logs()
+            gate = asyncio.Event()
+            got, kept = [], []
+
+            async def processor(host, send):
+                kept.append(send)
+                await gate.wait()
+                got.append(reply(send))
+
+            async def main():
+                async with tinyactors.Host(CONFIG, {APP: processor}, log=logs) as host:
+                    host.add_image(image())
+                    session = host.spawn(host.chart("echo"))
+                    host.send(session, "go")
+                    await host.idle()
+                    self.assertEqual(len(kept), 1)
+                    host.terminate(session)
+                    await host.idle()
+                    gate.set()
+                    for _ in range(5):
+                        await asyncio.sleep(0)
+                    await host.idle()
+                with self.assertRaises(tinyactors.TinyactorsError):
+                    reply(kept[0])
+
+            asyncio.run(main())
+            self.assertEqual(got, [False], "not delivered: the sender ended")
+            self.assertEqual((logs.labelled("ack"), logs.labelled("failed")), ([], []), "nobody heard it")
+
+    def test_an_answer_delivered_returns_true(self):
+        got = []
+
+        def processor(host, send):
+            got.append(send.answer("ack"))
+
+        async def main():
+            async with tinyactors.Host(CONFIG, {APP: processor}) as host:
+                host.add_image(image())
+                host.send(host.spawn(host.chart("echo")), "go")
+                await host.idle()
+
+        asyncio.run(main())
+        self.assertEqual(got, [True])
+
     def test_the_timer_fires_a_delayed_send(self):
         logs = Logs()
 

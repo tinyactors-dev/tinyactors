@@ -102,7 +102,13 @@ Decided by the maintainer (2026-10-13); every item is in
   `logging.basicConfig`, no
   module-level handler, no default logger). The extension reads
   `host.config` once at creation for `system.ticksPerSecond` (bindings.md
-  section 3).
+  section 3). **The binding picks the trace seed** (the maintainer,
+  2026-11-18): a config whose `"system"` has no `"traceSeed"` is copied
+  with a random 64-bit one from `os.urandom(8)`, as the nonce is drawn,
+  before `ta_host_create` (`ta_python_config_seeded`), so hosts start
+  different trace ids; a seed the caller sets is kept and reproduces;
+  `Host.restore` passes its config as given, its segments keeping the
+  snapshot's generators. Core stays free of I/O.
 - **`with Host(...) as host`** (the synchronous driver) and **`async with
   Host(...) as host`** (asyncio) on the same class. Leaving either frees
   the host (`trace.end`, the last take of traces, `ta_host_free`); pending
@@ -194,12 +200,17 @@ Decided by the maintainer (2026-10-13); every item is in
     (decided 2026-10-13: an answer keeps the trace); passing
     `traceparent=None` starts a new trace. `origin` and `raw` are
     `ta_event_in`'s (2026-10-15, W3C's BasicHTTP: the location to reply
-    to and the message as read).
+    to and the message as read). It returns `True` when delivered and
+    `False` when the sender ended (`ta_host_locate` refuses its session,
+    or `ta_host_send` gives `TA_ERROR_STALE`): the answer is dropped, as
+    XState drops an event sent to a stopped actor, and nothing raises
+    (the maintainer, 2026-11-18, the same rule as Node's); any other
+    refusal raises.
   - `send.fail()`: `ta_host_send` with `TA_EVENT_IN_ERROR_COMMUNICATION`,
     the `sendid` and `send.traceparent`
     (`tinyactors-core/include/tinyactors/system.h:155-157`: core places
     `error.communication` in the sender's queue); the event name is not
-    repeated.
+    repeated. It returns `True` or `False` as `answer()` does.
   - An I/O processor that makes a request of its own carries the trace
     on:
 

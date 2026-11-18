@@ -332,6 +332,12 @@ The handler does the I/O and then does one of two things:
 - **`send.fail()`** reports that the send could not be delivered. The
   sending actor gets `error.communication`.
 
+Both return `True` when delivered and `False` when the sending actor
+ended meanwhile: an answer to an actor that is gone is dropped, as
+XState drops an event sent to a stopped actor, and nothing raises. Any
+other refusal (a second answer, a thin view read after its batch, a
+closed host) raises `TinyactorsError`.
+
 A handler may also do neither, when the send needs no reply. The sending
 actor waits while the handler runs, so a plain function's `answer()` or
 `fail()` reaches it before its next step, as SCXML has a `<send>`
@@ -489,6 +495,14 @@ A tracing backend then shows one trace. `POST /orders` is at the top, with
 the actors' macrosteps and microsteps below it. `warehouse.reserve` sits
 below the step that sent to the warehouse, and the macrostep its answer
 started sits below that.
+
+**Each host starts its own trace IDs.** A trace the host starts itself
+takes its ID from a generator seeded by `system.traceSeed`. When the
+config gives none, the extension draws a random seed for each new host
+(`os.urandom`), so two processes, or one process and its restart, do not
+collide at the collector. To reproduce a test's traces, set the seed:
+`{"system": {"traceSeed": 7}}` gives the same IDs every time.
+`Host.restore` keeps the generators of the snapshot.
 
 **Choosing what is traced.** `trace_configure` sets the policy, for
 example sampling. `trace_watch` adds rules in front of it for a while, on

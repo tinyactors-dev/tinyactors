@@ -171,8 +171,9 @@ static const char ta_python_doc_host[] =
     "\n"
     "`config` is the host's configuration as a dict (systemID, system limits\n"
     "such as maxActors and instanceBytes, ioProcessors, telemetry; see the\n"
-    "core's host-config documentation). Everything else is your side of the\n"
-    "host, all optional:\n"
+    "core's host-config documentation). Without system.traceSeed the host\n"
+    "draws a random one, so each host starts its own trace ids; set it to\n"
+    "reproduce them. Everything else is your side of the host, all optional:\n"
     "\n"
     "- io_processors: {type: handler(host, send)} for each I/O processor the\n"
     "  config declares; an actor's <send type=...> reaches it as a Send.\n"
@@ -786,7 +787,11 @@ static const char ta_python_doc_send_answer[] =
     "_event.origin, where the actor replies to. `raw` (a str) becomes\n"
     "_event.raw, the message as the transport carried it: an HTTP processor\n"
     "passes the request it read. To answer after the batch is acknowledged,\n"
-    "write the handler as async def, which gets a record.";
+    "write the handler as async def, which gets a record.\n"
+    "\n"
+    "Returns True when the reply was delivered, and False when the sending\n"
+    "actor ended meanwhile: nobody is told, and nothing raises. Any other\n"
+    "refusal raises TinyactorsError.";
 
 static const char ta_python_doc_send_fail[] =
     "fail()\n"
@@ -794,7 +799,10 @@ static const char ta_python_doc_send_fail[] =
     "\n"
     "Report that the send could not be delivered: the sending actor gets\n"
     "error.communication with this send's sendid. A handler that raises\n"
-    "before answering is failed this way for you.";
+    "before answering is failed this way for you.\n"
+    "\n"
+    "Returns True when the failure was delivered, and False when the sending\n"
+    "actor ended meanwhile, as answer() does.";
 
 static const char ta_python_doc_entry[] =
     "A <log> line of an actor, given to the log handler.\n"

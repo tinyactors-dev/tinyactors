@@ -219,6 +219,8 @@ typedef struct ta_python_answer {
     PyObject *origin, *raw; /* where to reply, the transport's message: NULL for none */
 } ta_python_answer;
 
+/* 1: delivered; 0: the sender ended, so nobody is told (as XState drops an
+ * event to a stopped actor); -1: refused, an exception set. */
 static int ta_python_send_answer_with(ta_python_view *view, const ta_python_answer *answer) {
     if (ta_python_view_live(view) < 0) return -1; /* a thin view answers before its ack, whatever was read */
     if (view->answered) {
@@ -237,6 +239,14 @@ static int ta_python_send_answer_with(ta_python_view *view, const ta_python_answ
         memset(&event, 0, sizeof event);
         event.size = sizeof event;
         event.session = PyLong_AsUnsignedLongLong(session);
+        ta_host_location location;
+        if (ta_host_locate(host->host, event.session, &location) != TA_OK) { /* the sender ended: nobody to tell */
+            ta_python_leave(&call);
+            Py_DECREF(session);
+            Py_DECREF(sendid);
+            Py_DECREF(type);
+            return 0;
+        }
         ta_python_payload_for payload = {event.session, {0, 0}, answer->data, 0, TA_NIL};
         if (ta_python_text(sendid, &event.sendid) < 0 || ta_python_text(answer->traceparent, &event.traceparent) < 0)
             status = -1;
@@ -248,13 +258,17 @@ static int ta_python_send_answer_with(ta_python_view *view, const ta_python_answ
         if (status == 0) {
             event.data = payload.payload;
             ta_status sent = ta_host_send(host->host, &event);
-            if (sent != TA_OK) {
+            if (sent == TA_ERROR_STALE) { /* the sender ended: nobody to tell */
+                ta_python_host_payload_release(host, payload.payload, payload.datamodel);
+                status = 0;
+            } else if (sent != TA_OK) {
                 ta_python_host_payload_release(host, payload.payload, payload.datamodel);
                 ta_python_raise_status(host->state, sent);
                 status = -1;
             } else {
                 view->answered = 1;
                 ta_python_loop_schedule(host);
+                status = 1;
             }
         }
         ta_python_leave(&call);
@@ -278,7 +292,7 @@ static PyObject *ta_python_send_answer(PyObject *self, PyObject *arguments, PyOb
     int status = ta_python_send_answer_with(view, &answer);
     Py_DECREF(kept);
     if (status < 0) return NULL;
-    Py_RETURN_NONE;
+    return PyBool_FromLong(status);
 }
 
 static PyObject *ta_python_send_fail(PyObject *self, PyObject *unused) {
@@ -290,7 +304,7 @@ static PyObject *ta_python_send_fail(PyObject *self, PyObject *unused) {
     int status = ta_python_send_answer_with(view, &answer);
     Py_DECREF(traceparent);
     if (status < 0) return NULL;
-    Py_RETURN_NONE;
+    return PyBool_FromLong(status);
 }
 
 /* A handler raised before answering: fail the send for it (ADR 0009: a
