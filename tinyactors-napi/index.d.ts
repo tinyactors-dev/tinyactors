@@ -698,8 +698,10 @@ export interface QuickJSOptions {
    * `error.execution` (default 1,000,000, which lets a busy loop run for
    * many seconds). */
   maxOps?: number;
-  /** Bytes for the whole engine, every actor together (default: none). An
-   * evaluation that needs more is stopped with `error.execution`. */
+  /** Bytes for the whole engine, every actor together (default 1 GiB,
+   * `2 ** 30`; `Number.MAX_SAFE_INTEGER` is as good as none). An
+   * evaluation that needs more is stopped with `error.execution`, reason
+   * `'memory'`. */
   memoryLimit?: number;
   /** Bytes of native stack for JavaScript. */
   stackLimit?: number;

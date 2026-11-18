@@ -163,6 +163,9 @@ static void test_error_execution_says_why(void) {
          "why=fuel::;"},
         {WHY("<script>let a = []; while (true) a.push(new Array(100000).fill(1));</script>"),
          {sizeof(ta_datamodel_ecmascript_config), 0, 8u << 20, 0, 0, NULL}, "why=memory::;"},
+        /* the default config: the default limit (1 GiB) stops it, the process goes on */
+        {WHY("<script>let a = []; while (true) a.push(new ArrayBuffer(16777216));</script>"), {0},
+         "why=memory::;"},
         /* nothing threw: the datamodel says why, and a dropped exception
          * (plain <content> is not JSON) is not taken for one */
         {WHY("<foreach array='5' item='it'/>"), {0}, "why=exception:TypeError: <foreach> array is not an array:;"},

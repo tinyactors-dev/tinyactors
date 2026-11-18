@@ -126,7 +126,11 @@ resident and idle, in bytes per actor.
 | bun, quickjs | 1195 | 24 | 287 | 1602 | 24 |
 
 The engine heap is what the JavaScript engine reports after a full
-collection; on quickjs the sandbox's own heap is in "resident" only. The
+collection; on quickjs the sandbox's own heap is in "resident" only, and
+it is bounded by `quickjs.memoryLimit`, 1 GiB unless the host sets
+another: about 2.8 KB an idle resident actor, so a host meant to keep
+hundreds of thousands of quickjs actors resident raises it
+([the quickjs sandbox](quickjs.md#the-limits)). The
 rest of resident is mostly the engine's fixed cost, which a larger
 population spreads thinner: at 40,000 actors the native datamodel is
 about 750 bytes resident on Node.js and 970 on Bun. The region here was

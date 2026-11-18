@@ -31,7 +31,7 @@
 // actor.
 
 import { compileCharts, Host } from '@tinyactors/node';
-import { BATCH, random } from './store.mjs';
+import { BATCH, engine, random } from './store.mjs';
 
 const COUNTER = 'urn:example:counter';
 
@@ -172,7 +172,7 @@ async function main() {
     systemID: 'services',
     system: { maxActors: room, maxRequests: room, maxEvents: events, instanceBytes: 128 * room, stringBytes: 16384 + 16 * room, tracing: false },
   };
-  const host = new Host(config, { datamodel: o.datamodel, log: world.log, services: { [COUNTER]: world.start } });
+  const host = new Host(config, { ...engine(o.datamodel), log: world.log, services: { [COUNTER]: world.start } });
   const compiled = compileCharts([{ name: 'client.scxml', text: CLIENT }]);
   host.addImage(compiled.image);
   compiled.close();

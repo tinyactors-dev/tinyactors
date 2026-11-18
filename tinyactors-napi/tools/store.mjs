@@ -6,6 +6,14 @@
 
 export const BATCH = 256;
 
+/** A gate's Host options for `datamodel`: on quickjs, no memory limit. A
+ * gate measures what a population costs, so the engine's heap is what it
+ * reads, not what it bounds: its full runs keep far more resident than
+ * quickjs's default limit (1 GiB) is sized for. */
+export function engine(datamodel) {
+  return datamodel === 'quickjs' ? { datamodel, quickjs: { memoryLimit: Number.MAX_SAFE_INTEGER } } : { datamodel };
+}
+
 // A seeded generator (mulberry32), so a run is the same run again.
 export function random(seed) {
   let state = seed >>> 0;

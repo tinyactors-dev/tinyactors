@@ -64,11 +64,18 @@ datamodel it is a `TypeError`):
 | Option | Default | What it bounds |
 |---|---|---|
 | `maxOps` | 1,000,000 | the engine's interrupt checks one evaluation may make before it is stopped |
-| `memoryLimit` | none | bytes for the whole engine, every actor of the host together |
+| `memoryLimit` | 1 GiB (`2 ** 30`) | bytes for the whole engine, every actor of the host together |
 | `stackLimit` | the engine's | bytes of native stack for JavaScript |
 | `realm` | `'auto'` | `'isolated'` gives every actor a context of its own (below) |
 
-Set both `maxOps` and `memoryLimit` for untrusted charts. `maxOps` is
+The default `memoryLimit` keeps a runaway allocation from taking the
+process: a loop that allocates ends in `error.execution` once the engine
+holds 1 GiB, where without a limit it would grow until the system killed
+the process. It is sized for a host of tens of thousands of resident
+actors (40,000 take about 112 MB of engine heap); a host meant to keep
+more resident sets a larger one, and `Number.MAX_SAFE_INTEGER` is as
+good as none. For untrusted charts set both `maxOps` and a
+`memoryLimit` of your own, as small as their real work allows. `maxOps` is
 not time: it counts the engine's interrupt checks, one for every 10,000
 jumps and calls QuickJS counts down, and how long a check takes depends
 on the code between them. The time a looping evaluation holds

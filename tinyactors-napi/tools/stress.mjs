@@ -29,7 +29,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { compileCharts, Host, TinyactorsError } from '@tinyactors/node';
-import { BATCH, random, Store } from './store.mjs';
+import { BATCH, engine, random, Store } from './store.mjs';
 
 // The counter of tinyactors-cpython/tools/charts/counter.ecmascript.scxml.
 const COUNTER = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="counter" initial="s">
@@ -136,7 +136,7 @@ async function main() {
     systemID: 'stress',
     system: { maxActors: o.actors + 4 * BATCH, maxEvents: 4096, instanceBytes: 128 * room, stringBytes: 16384 + 16 * room, tracing: false },
   };
-  const host = new Host(config, { datamodel: o.datamodel, wake, log });
+  const host = new Host(config, { ...engine(o.datamodel), wake, log });
   const compiled = compileCharts([{ name: 'counter.scxml', text: COUNTER }]);
   host.addImage(compiled.image);
   compiled.close();

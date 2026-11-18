@@ -49,7 +49,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Address, compileCharts, compileSystem, Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
-import { BATCH, random, Store } from './store.mjs';
+import { BATCH, engine, random, Store } from './store.mjs';
 
 /** The most the cost at 2N may be of the cost at N. */
 export const FACTOR = 1.5;
@@ -382,7 +382,7 @@ async function hibernated(o, results, failures) {
   let host;
   let returned = 0;
   const other = new Host({ systemID: 'other' }, {
-    datamodel: o.datamodel,
+    ...engine(o.datamodel),
     transport: (h, send) => {
       host.send(send.message);
       returned++;
@@ -398,7 +398,7 @@ async function hibernated(o, results, failures) {
 
   const simulated = new SimulatedClock();
   const handlers = {
-    datamodel: o.datamodel,
+    ...engine(o.datamodel),
     clock: simulated,
     telemetry: () => {}, // exported nowhere
     wake,
@@ -776,7 +776,7 @@ async function residentScenario(o, results, failures) {
   const N = o.actors;
   const migrationsDone = { count: 0, failed: 0, migrated: 0 };
   const handlers = {
-    datamodel: o.datamodel,
+    ...engine(o.datamodel),
     clock: new SimulatedClock(),
     migrationDone: (h, result) => { migrationsDone.count++; migrationsDone.failed += result.failed.length; migrationsDone.migrated += result.migrated; },
   };

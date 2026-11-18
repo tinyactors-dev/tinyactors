@@ -3469,8 +3469,7 @@ ta_datamodel_ecmascript *ta_datamodel_ecmascript_new(const ta_datamodel_ecmascri
         return NULL;
     }
     ecmascript->max_ops = config && config->max_ops ? config->max_ops : 1000000;
-    if (config && config->memory_limit)
-        JS_SetMemoryLimit(ecmascript->runtime, config->memory_limit);
+    ta_datamodel_ecmascript_set_memory_limit(ecmascript, config ? config->memory_limit : 0);
     ecmascript->stack_size =
         config && config->stack_limit ? config->stack_limit : JS_DEFAULT_STACK_SIZE;
     JS_SetMaxStackSize(ecmascript->runtime, ecmascript->stack_size);
@@ -3525,7 +3524,8 @@ ta_datamodel_binding ta_datamodel_ecmascript_binding(ta_datamodel_ecmascript *ec
 }
 
 void ta_datamodel_ecmascript_set_memory_limit(ta_datamodel_ecmascript *ecmascript, size_t bytes) {
-    JS_SetMemoryLimit(ecmascript->runtime, bytes);
+    /* quickjs reads SIZE_MAX as no limit, as it does 0 */
+    JS_SetMemoryLimit(ecmascript->runtime, bytes ? bytes : TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT);
 }
 
 void *ta_datamodel_ecmascript_js_runtime(ta_datamodel_ecmascript *ecmascript) {

@@ -170,6 +170,29 @@ sizes a host up front. Why the defaults are small:
   request (`service.name`, ...). None by default: only the application
   knows its name.
 
+## The datamodels' limits
+
+A datamodel is in the environment, made by the binding before the host,
+so its limits are not keys of the config. The ECMAScript datamodel,
+quickjs (`ta_datamodel_ecmascript_new`,
+`include/tinyactors/datamodel_ecmascript.h`), takes them in
+`ta_datamodel_ecmascript_config`, where 0 is the default:
+
+| Field | Default | What it bounds |
+|---|---|---|
+| `max_ops` | 1,000,000 | the engine's interrupt checks one evaluation may make |
+| `memory_limit` | `TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT`, 1 GiB; `SIZE_MAX`: none | bytes of the whole engine, every actor of the host together |
+| `stack_limit` | the engine's | bytes of native stack for JavaScript |
+
+An evaluation past `max_ops` or `memory_limit` fails with
+`error.execution`, its data's `reason` `"fuel"` or `"memory"`, and the
+actor goes on with its next event. The default `memory_limit` makes a
+loop that allocates end there instead of growing until the system kills
+the process; it is sized well above what the repository's tests,
+examples and suite cases use (the largest, 40,000 resident actors, peaks
+at 112 MB of engine heap). A host that keeps more resident sets a larger
+one.
+
 ## Errors
 
 `ta_host_create` returns `TA_ERROR_INVALID` for a config it does not take,

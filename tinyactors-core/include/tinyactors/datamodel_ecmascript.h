@@ -61,7 +61,8 @@ typedef struct ta_datamodel_ecmascript ta_datamodel_ecmascript;
 typedef struct ta_datamodel_ecmascript_config {
     uint32_t size;
     uint32_t max_ops;    /* interrupt checks per evaluation before abort; 0 = 1,000,000 */
-    size_t memory_limit; /* bytes for the whole JS runtime; 0 = unlimited */
+    size_t memory_limit; /* bytes for the whole JS runtime; 0 = the default,
+                            TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT; SIZE_MAX: none */
     size_t stack_limit;  /* bytes of native stack for JS; 0 = engine default */
     uint32_t
         realm; /* TA_DATAMODEL_ECMASCRIPT_REALM_* (fields from here on are checked against size) */
@@ -72,6 +73,13 @@ typedef struct ta_datamodel_ecmascript_config {
      * 100 operations), so the system's budget bounds it. */
     const volatile int *abort_flag;
 } ta_datamodel_ecmascript_config;
+
+/* The engine's memory limit when the config gives none: 1 GiB. An
+ * evaluation that allocates past it fails with error.execution (reason
+ * "memory") instead of growing until the process is killed. Every test,
+ * example and suite case of the repository fits in it with room: the
+ * largest peak measured was 112 MB (40,000 resident actors). */
+#define TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT ((size_t)1 << 30)
 
 #define TA_DATAMODEL_ECMASCRIPT_REALM_AUTO     0u
 #define TA_DATAMODEL_ECMASCRIPT_REALM_ISOLATED 1u
@@ -122,8 +130,9 @@ TA_API const char *ta_datamodel_ecmascript_last_error(const ta_datamodel_ecmascr
 /* Bytes the engine currently has allocated (all sessions, payloads, code),
  * maintained by the datamodel's allocator: O(1), cheap enough to sample. */
 TA_API size_t ta_datamodel_ecmascript_heap_bytes(const ta_datamodel_ecmascript *ecmascript);
-/* Change the engine's memory limit (bytes; 0 = unlimited), as memory_limit in
- * the config: allocations beyond it fail the evaluation (error.execution). */
+/* Change the engine's memory limit (bytes; 0 = the default, SIZE_MAX: none),
+ * as memory_limit in the config: allocations beyond it fail the evaluation
+ * (error.execution). */
 TA_API void ta_datamodel_ecmascript_set_memory_limit(ta_datamodel_ecmascript *ecmascript,
                                                      size_t bytes);
 /* The underlying JSRuntime* (for embedders adding their own globals). */

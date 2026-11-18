@@ -51,7 +51,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { compileCharts, Host, SimulatedClock, TinyactorsError } from '@tinyactors/node';
-import { BATCH, random, Store } from './store.mjs';
+import { BATCH, engine, random, Store } from './store.mjs';
 
 // tinyactors-cpython/tools/charts/order-v1.ecmascript.scxml and -v2.
 const PAYING = `
@@ -284,7 +284,7 @@ async function main() {
   const live = new Population('live', liveStore, o, failures);
   const real = new Payments(false);
   const liveClock = new SimulatedClock();
-  const host = new Host(config, { datamodel: o.datamodel, wake: live.wake, log: live.log, clock: liveClock, services: { [PAYMENT]: real.start } });
+  const host = new Host(config, { ...engine(o.datamodel), wake: live.wake, log: live.log, clock: liveClock, services: { [PAYMENT]: real.start } });
   add(host, ORDER(1));
   const chart = host.chart('order');
   const sessions = new BigUint64Array(o.actors);
@@ -367,7 +367,7 @@ async function main() {
   const copyClock = new SimulatedClock(); // a clock of its own: the copy's time is not the live host's
   started = performance.now();
   const rehearsal = Host.restore(blob, config, {
-    datamodel: o.datamodel,
+    ...engine(o.datamodel),
     wake: copy.wake,
     log: copy.log,
     migrated: copy.migrated,
