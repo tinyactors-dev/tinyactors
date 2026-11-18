@@ -66,6 +66,19 @@ its directory (`tinyactors-napi`, `tinyactors-cpython` for the bindings), and a 
 upgrading text, has them reviewed, and stops for the maintainer's approval.
 Do it at release time, not between releases.
 
+**Releases run from cloud sessions** (the maintainer develops only in
+remote environments). A session's git proxy pushes branches but not tags,
+and GitHub's API refuses its writes, so a release there pushes branches
+only (`Release.branches_only?`): its release commit, which commits the
+notes as the project's `RELEASE_NOTES.md`, to `main`, and the project's
+snapshot to its release repository's `main`. GitHub workflows do the
+rest with their own tokens: `.github/workflows/release-tags.yml` tags the
+release commit with that file (`mise run release:tags`), and the release
+repository's `<project>/.github/workflows/release.yml`, which the snapshot
+carries, tags the snapshot and makes the GitHub release from the same file
+and the packages the registry serves. The workflows write no notes. npm
+packages are published staged: the maintainer approves them on npmjs.com.
+
 - **Commit subjects and scopes are the input.** Scope a commit with the
   component it changes (`feat(core)`, `fix(napi)`, `fix(cpython)`,
   `feat(core,napi)`); a

@@ -2,7 +2,8 @@
   "autoMode": {
     "allow": [
       "$defaults",
-      "Staged npm publishes of this repo's packages are allowed: writing a temporary npm userconfig outside the repository whose only content is `//registry.npmjs.org/:_authToken=${NPM_API_TOKEN}` (the variable referenced by name, never its value), running `npx npm@<version> stage publish` / `stage list` / `stage view` with `--userconfig` pointing at it (with or without `--dry-run` and `--provenance=false`), and deleting that file afterwards. A staged version is not public until a maintainer approves it on npmjs.com with 2FA."
+      "Staged npm publishes of this repo's packages are allowed: writing a temporary npm userconfig outside the repository whose only content is `//registry.npmjs.org/:_authToken=${NPM_API_TOKEN}` (the variable referenced by name, never its value), running `npx npm@<version> stage publish` / `stage list` / `stage view` with `--userconfig` pointing at it (with or without `--dry-run` and `--provenance=false`), and deleting that file afterwards. A staged version is not public until a maintainer approves it on npmjs.com with 2FA.",
+      "Releases from cloud sessions are allowed (the maintainer, 2026-11-18): a cloud session's git proxy pushes branches but not tags, so a release pushes its release commit (`release(<scope>): v<version>`, with the project's committed RELEASE_NOTES.md) to main, and a project's snapshot to the main branch of its release repository (tinyactors-dev/<project>); and changing the GitHub workflows that finish releases from those pushes is allowed: .github/workflows/release-tags.yml (tags release commits with their committed RELEASE_NOTES.md) and <project>/.github/workflows/release.yml (in the release repository: tags the snapshot and makes its GitHub release from RELEASE_NOTES.md and the packages the registry serves). They write no notes of their own."
     ],
     "soft_deny": [
       "$defaults",

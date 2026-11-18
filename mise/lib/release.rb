@@ -304,8 +304,14 @@ module Release
   end
 
   # Commits `paths` as `subject` and tags the commit, annotated with `notes`.
+  # The notes are committed too, as the project's RELEASE_NOTES.md: where
+  # tags cannot be pushed (a cloud session, branches_only?), the workflows
+  # tag the release from that file, here and in the release repository.
   def commit_and_tag!(paths:, subject:, tag:, notes_file:)
-    run('git', 'add', '--', *paths.map(&:to_s))
+    directory, = split_tag(tag)
+    release_notes = REPO.join(directory, 'RELEASE_NOTES.md')
+    FileUtils.cp(notes_file.to_s, release_notes)
+    run('git', 'add', '--', *paths.map(&:to_s), release_notes.to_s)
     run('git', 'commit', '--quiet', '-m', subject, '-m', TRAILER)
     run('git', 'tag', '--annotate', '--cleanup=verbatim', tag, '--file', notes_file.to_s)
   end
@@ -317,12 +323,27 @@ module Release
     !remote.strip.empty?
   end
 
+  # Whether this session's git pushes branches only: a Claude Code cloud
+  # session, whose git proxy refuses tags and GitHub's API refuses writes.
+  # There the release pushes branches, and GitHub workflows make the tags
+  # and the GitHub release: .github/workflows/release-tags.yml here, and
+  # the release repository's own (<directory>/.github/workflows/release.yml),
+  # which its snapshot carries.
+  def branches_only? = ENV['CLAUDE_CODE_REMOTE'] == 'true'
+
   # Pushes `tag` to origin, with main when the tag's commit is not on
   # origin's main yet, in one atomic push: both refs or neither. When it is
   # (a publish run again after another session pushed to main), only the
   # tag goes, so a local main that is behind is not pushed.
   def push_to_origin!(tag)
     git('fetch', '--quiet', 'origin', 'main') or fail!('git fetch origin main failed')
+    if branches_only?
+      unless system('git', 'merge-base', '--is-ancestor', "#{tag}^{commit}", 'origin/main', chdir: REPO.to_s)
+        run('git', 'push', 'origin', "#{tag}^{commit}:refs/heads/main")
+      end
+      puts "release: #{tag} is tagged on origin by the workflow release-tags (.github/workflows/release-tags.yml)"
+      return
+    end
     if system('git', 'merge-base', '--is-ancestor', "#{tag}^{commit}", 'origin/main', chdir: REPO.to_s)
       run('git', 'push', 'origin', "refs/tags/#{tag}")
     else
@@ -442,7 +463,11 @@ module Release
                  commit_tree!(tree: tree, parent: parent, from: commit,
                               message: "#{directory} #{version}\n\n#{source}/ at #{tag} in #{MONOREPO} (#{commit}).\n")
                end
-    run('git', 'push', '--atomic', url, "#{snapshot}:refs/heads/main", "#{snapshot}:refs/tags/#{release_tag}")
+    if branches_only?
+      run('git', 'push', url, "#{snapshot}:refs/heads/main")
+    else
+      run('git', 'push', '--atomic', url, "#{snapshot}:refs/heads/main", "#{snapshot}:refs/tags/#{release_tag}")
+    end
     [repository, release_tag]
   end
 
@@ -467,6 +492,11 @@ module Release
   def push_and_release!(tag:, title:, notes_file:, assets:)
     push_to_origin!(tag)
     repository, release_tag = push_snapshot!(tag)
+    if branches_only?
+      puts "release: #{repository}'s workflow tags #{release_tag} and makes its GitHub release " \
+           "(https://github.com/#{repository}/actions)"
+      return
+    end
     if released?(repository, release_tag)
       puts "release: #{repository} has the release #{release_tag} already; left as it is"
       return

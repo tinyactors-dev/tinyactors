@@ -1,0 +1,37 @@
+# Tags the release commits on main that have no tag yet (mise/tasks/release/tags).
+#
+# A cloud session's git proxy pushes branches but not tags, so a release made
+# in one lands `release(<scope>): v<version>` on main without its tag. Here
+# the workflow's own token pushes the tag, annotated with the release's
+# committed <directory>/RELEASE_NOTES.md; nothing is written here.
+name: release-tags
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-tags
+  cancel-in-progress: false
+
+jobs:
+  tags:
+    runs-on: ubuntu-latest
+    env:
+      MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: ruby
+      - name: Tag the release commits that have no tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          ruby -I mise/lib mise/tasks/release/tags --push

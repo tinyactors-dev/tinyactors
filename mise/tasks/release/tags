@@ -1,0 +1,63 @@
+#!/usr/bin/env ruby
+#MISE description="Tag every release commit on main that has no tag yet: <directory>/v<version>, annotated with the release's committed RELEASE_NOTES.md"
+#USAGE flag "--push" help="Push the tags it makes to origin (without it, it only makes them here)"
+# vim:ft=ruby
+
+# A cloud session's git proxy pushes branches but not tags, so a release
+# made there lands its release commit (`release(<scope>): v<version>`) on
+# main without its tag. The workflow .github/workflows/release-tags.yml runs
+# this on GitHub, whose token may push tags. It writes nothing of its own:
+# the tag's message is <directory>/RELEASE_NOTES.md, which the release task
+# wrote from the changelog section an agent and the maintainer wrote, read
+# at the release commit (or at HEAD when the release commit predates the
+# file and HEAD's is that version's).
+
+require 'release'
+require 'changelog'
+
+push = ARGV.include?('--push') || ENV['usage_push'] == 'true'
+
+def directory_of(scope)
+  return scope if Release::REPO.join(scope).directory?
+
+  Changelog::COMPONENTS.find { |c| c.scopes.include?(scope) }&.dir
+end
+
+# The notes the release committed for `version`, from the first of `refs`
+# whose RELEASE_NOTES.md is that version's (its title ends with it).
+def notes(directory, version, refs)
+  refs.each do |ref|
+    text = Release.git('show', "#{ref}:#{directory}/RELEASE_NOTES.md")
+    return text if text && text.lines.first.to_s.chomp.end_with?(" #{version}")
+  end
+  nil
+end
+
+skipped = 0
+log = Release.git('log', '--format=%H %s', '--grep=^release(', 'HEAD').to_s
+made = log.lines.filter_map do |line|
+  sha, subject = line.chomp.split(' ', 2)
+  match = subject.match(/\Arelease\(([^)]+)\): v(\d+\.\d+\.\d+)\z/) or next
+  directory = directory_of(match[1]) or next
+  version = match[2]
+  tag = "#{directory}/v#{version}"
+  next if Release.git('rev-parse', '--verify', '--quiet', "refs/tags/#{tag}")
+
+  text = notes(directory, version, [sha, 'HEAD'])
+  unless text
+    skipped += 1
+    warn "release:tags: #{sha[0, 8]} has no #{directory}/RELEASE_NOTES.md for #{version}; not tagged"
+    next
+  end
+  Dir.mktmpdir('release-tags') do |tmp|
+    file = File.join(tmp, 'notes.md')
+    File.write(file, text)
+    Release.run('git', 'tag', '--annotate', '--cleanup=verbatim', tag, sha, '--file', file)
+  end
+  puts "release:tags: tagged #{sha[0, 8]} as #{tag}"
+  tag
+end
+
+puts 'release:tags: every release commit has its tag' if made.empty? && skipped.zero?
+made.each { |tag| Release.run('git', 'push', 'origin', "refs/tags/#{tag}") } if push
+exit 1 unless skipped.zero?
