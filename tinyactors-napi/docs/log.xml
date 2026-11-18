@@ -1934,4 +1934,14 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <why>@tinyactors/wasm's linear memory grows once to the peak of one such send (about 46 MB with quickjs's copy of 200,000 strings) and keeps it, so the 16-host reading was that fixed peak; and its resident set counts the linear memory's pages as later blocks touch them, plus the engine's heap, which made bun read 60.7 and 69.1 MB in two runs while the linear memory did not grow at all over the 15 hosts (46.2 to 46.3 MB). Without the cap each host would keep about 6.4 MB more linear memory, which the reading shows. The quickjs exclusion that kept it from the wasm package before is gone.</why>
     <evidence>spike, bun 1.4.1, the wasm package on quickjs: the linear memory 46.2 MB after the first send, 46.3 MB after each of the 15 others, the resident set 0.6 to 3.0 MB above where it was; earlier 1, 4 and 16 hosts grew 36.3, 59.0 and 43.6 MB resident (not with the hosts); mise run test, 2026-10-18: bun quickjs failed at 69.1 MB resident</evidence>
   </entry>
+  <entry id="l-maint-2026-11-18" date="2026-11-18" step="p4-surprises" kind="decision" status="resolved">
+    <what>The maintainer's decisions on docs/maintainer.md, 2026-11-18.</what>
+    <why>They settle the open choices before 0.3.0.</why>
+    <resolution>1: publish 0.3.0 now, without the container and Mac smoke tests; the changelog still goes through the release-changelog skill for approval.
+2: the direct typed method returns a promise when it is given no handler (host.actorState(params)); the ...Async names go.
+3: both bindings drop an answer or fail to a sender that ended, as XState drops an event sent to a stopped actor: Node returns false, Python returns False, and neither raises. "We have no users" (no deprecation needed).
+4: the language layer picks the trace seed. Core stays free of I/O, and each binding passes a random traceSeed when the config gives none.
+5: quickjs gets a default memoryLimit.
+6: B. actor.get gains the actor's pending delayed sends (sendid, event, due in ms on the host clock; capped, with a count), and actor.state gains where each history state would return. There is no separate actor.timers method. A host-wide list of what fires next waits until operators ask for it.</resolution>
+  </entry>
 </log>
