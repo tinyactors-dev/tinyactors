@@ -52,7 +52,6 @@ A surprise that lived in two layers counts in both.
 - **Outcome:** fixed
 - **Fix:** Fixed in napi: send.answer() and send.fail() return true when delivered and false when the sender ended meanwhile (ta\_host\_locate refuses the session, or ta\_host\_send gives TA\_ERROR\_STALE), delivering nothing; any other refusal still throws (a closed host TA\_ERROR\_STATE, an answer after another).
 - **Commits:** eec95150
-- **Left for the maintainer, `l-p4-surprises-answer-cpython`:** The two bindings now differ on an answer to an ended sender: Node's send.answer()/fail() return false, Python's send.answer()/fail() still raise TinyactorsError TA\_ERROR\_STALE.
 
 ### `l-p4-examples-gateway-flush-deadline`
 

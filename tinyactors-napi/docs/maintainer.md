@@ -45,26 +45,15 @@ left undone.
   found"). The `NPM_TOKEN` in fnox must be allowed to create packages in
   the `@tinyactors` scope.
 
-**Recommendation:** run `mise run release -- 0.3.0` once on a machine
-that has Docker, and run the smoke test on a Mac. Then write the
-changelog with the skill and publish.
+**Decided** (the maintainer, 2026-11-18): publish 0.3.0 now, without
+the container and Mac smoke tests. The changelog still goes through the
+release-changelog skill for the maintainer's approval.
 
 ### 2. The API shape
 
 **Question:** are the convenience layer's names and the cross-binding
 rules right before 0.3.0 makes them public?
 
-- **The promise forms** [l-p3-promises-shape]: the options are
-  `host.actorStateAsync(params)` beside the direct method (built), the
-  direct method returning a promise when it gets no handler, or a
-  `host.promises` namespace. Recommended: keep `<method>Async`. The direct
-  methods stay unchanged, and a rename touches one table
-  (`TYPED_METHODS` in `lib/convenience.mjs`).
-- **An answer to a sender that ended** [l-p4-surprises-answer-cpython]:
-  Node's `send.answer()` and `send.fail()` return `false`, while Python's
-  raise `TA_ERROR_STALE`. Recommended: use one rule, Node's, in both
-  bindings. That is a breaking change to tinyactors-cpython, with a
-  changelog line.
 - **A resolver that names its document** [l-p3-shapes-resolved-name]:
   `directoryResolver` cannot say which file it read, so a `src` inside
   `orders/payment.scxml` resolves against the root. Recommended: let a
@@ -81,17 +70,6 @@ rules right before 0.3.0 makes them public?
 **Question:** should core change defaults that every new user meets?
 [l-coord-p2-docs-maintainer]
 
-- **`traceSeed` defaults to 0** [l-p2-docs-review-trace-seed-default],
-  so every process starts the same trace IDs. Recommended: when the
-  config gives no seed, core mixes `ta_host_environment.nonce` into the
-  generator. Both packages already draw that nonce (934d62d1). An
-  explicit seed stays reproducible.
-- **`maxOps` and `memoryLimit`** [l-p2-docs-maxops-default]: with the
-  defaults, `while (true) {}` runs about 27 s on quickjs, and an
-  allocating loop is killed by the kernel. Recommended: keep `maxOps` as
-  it is. If quickjs is to be safe by default, give it a default
-  `memoryLimit`, because the unbounded allocation is the worse failure.
-  The guides tell users to set both.
 - **The null datamodel** [l-p2-docs-review-null-datamodel]: a chart
   without a `datamodel` attribute compiles and evaluates nothing, and
   `datamodel="xpath"` is refused at `addImage` without a reason.
@@ -102,11 +80,6 @@ rules right before 0.3.0 makes them public?
 
 **Question:** should core add semantics that SCXML does not have?
 
-- **Pending timers and history** [l-p4-examples-approval-hidden-timers]:
-  no typed method can say when an actor's delayed sends are due.
-  Recommended: add a read-only `actor.timers` request (sendid, event, due
-  time; the recorded histories). It costs nothing per event, and each
-  binding gets one typed method.
 - **A clock that a chart can read** [l-p4-examples-jobs-chart-clock]: a
   chained delayed send drifts by its latency. Recommended: keep SCXML's
   relative delays. If a clock is wanted, put it under `_x` (for example
@@ -153,6 +126,34 @@ behind the shared tests.
   reruns every project's tests, so make it at core's next release.
 
 ## Decided
+
+The maintainer's decisions of 2026-11-18 [l-maint-2026-11-18]:
+
+- **Typed methods return a promise when given no handler**
+  [l-maint-promises-built]: `await host.actorState({ session })`; with
+  handlers the call is the direct one and returns nothing. The `…Async`
+  names are gone. Built in the convenience layer, which wraps each direct
+  method on `Host.prototype` (a few nanoseconds per call with handlers,
+  within the noise of the post).
+- **An answer or a failure to a sender that ended is dropped** in both
+  bindings, as XState drops an event sent to a stopped actor
+  [l-p4-surprises-answer-cpython]: Node returns `false`, Python `False`,
+  and neither raises; any other refusal still raises. Breaking for
+  Python.
+- **The binding picks the trace seed** [l-p2-docs-review-trace-seed-default]:
+  a config with no `system.traceSeed` gets a random one
+  (`crypto.getRandomValues` in both packages, `os.urandom` in Python)
+  before `ta_host_create`; a seed the caller sets is kept and reproduces;
+  `Host.restore` keeps the snapshot's generators. Core stays free of I/O.
+- **quickjs has a default `memoryLimit`** of 1 GiB
+  [l-p2-docs-maxops-default]; `maxOps` keeps its default (7b19ec88).
+- **`actor.get` lists the pending delayed sends and `actor.state` the
+  history states** [l-p4-examples-approval-hidden-timers]: `timers`
+  (sendid, event, due in milliseconds on the host clock; capped, with
+  `timersPending`) and `history`. No `actor.timers` method; a host-wide
+  list of what fires next waits until operators ask for it (712305de).
+
+Earlier:
 
 - **Both packages are kept** (the maintainer, 2026-10-18):
   `@tinyactors/node` and `@tinyactors/wasm`, "because they will change
