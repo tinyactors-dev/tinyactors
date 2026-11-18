@@ -1899,11 +1899,11 @@ For the maintainer, not built: approval-hidden-timers and jobs-chart-clock (an A
     <evidence>tools/typecheck.mjs compiles test/types a fourth time with lib es2022 and dom (it failed with the six errors before the declarations); a scratchpad check with tsc 5.9.3 of lib es2022, es2022+dom, es2022+esnext.disposable(+dom), esnext(+dom), and es2022/esnext with @types/node: no error</evidence>
     <resolution>index.d.ts, tools/typecheck.mjs; both READMEs say which libs the types need</resolution>
   </entry>
-  <entry id="l-p5-parity-changelog-307db2f5" date="2026-10-18" step="p5-parity" kind="note" status="open">
+  <entry id="l-p5-parity-changelog-307db2f5" date="2026-10-18" step="p5-parity" kind="note" status="resolved">
     <what>Release-time changelog work for @tinyactors/node must mention what commit 307db2f5 changed in the addon under a test(napi) subject, which the changelog draft will not summarize as a change: every function of the addon now has the name and length index.d.ts declares (they were length 0, and module functions had an empty name), and the addon accessors (Host, Address, SimulatedClock, the views, Compiled.image) are non-enumerable, as class accessors are (they were enumerable, so for...in and Object.keys over a view listed them). On @tinyactors/wasm the same commit gave compileCharts, compileSystem and Host.prototype.send their declared lengths and made Compiled.prototype.image non-enumerable.</what>
     <why>The coordinator: nothing is added to a changelog by hand between releases (root AGENTS.md, Releases and changelogs); the release-changelog skill reads this log.</why>
     <evidence>git show 307db2f5; l-p5-parity-fixed</evidence>
-    <resolution>Closing review, 2026-10-18. Recommendation: leave open until the release: the release-changelog skill reads it when it writes the 0.3.0 section (docs/maintainer.md, "The first release").</resolution>
+    <resolution>The 0.3.0 changelog summary (release-changelog skill, 2026-11-18) names 307db2f and what it changed: the addon's functions have the names and lengths index.d.ts declares, and its accessors are not enumerable, as a class's are. The section waits for the maintainer's approval.</resolution>
   </entry>
   <entry id="l-p5-quickjs-module" date="2026-10-18" step="p5-quickjs" kind="decision" status="resolved">
     <what>quickjs is in the one module, tinyactors.wasm, not a second module loaded on demand: core's quickjs datamodel (tinyactors_datamodel_ecmascript.c) is linked beside core, the compiler, txml and the ta_web_* layer, and datamodel: "quickjs" works as in the addon with nothing new in the API (wasm/src/quickjs.c, wasm/lib/quickjs.mjs).</what>
