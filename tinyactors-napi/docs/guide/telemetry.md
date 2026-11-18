@@ -58,7 +58,7 @@ console.log('signals:', requests.map(([signal]) => signal).sort().join(', '));
 // Read the spans back (for a test; a collector does this for you).
 for (const [signal, data] of requests) {
   if (signal !== 'traces') continue;
-  const { spans } = await host.traceSpansDecodeAsync({ traces: data });
+  const { spans } = await host.traceSpansDecode({ traces: data });
   const ours = spans.filter((span) => span.trace === '0af7651916cd43dd8448eb211c80319c');
   console.log('spans in the caller\'s trace:', ours.map((span) => span.name).sort().join(', '));
   const step = ours.find((span) => span.name === 'scxml.macrostep pay');
@@ -185,13 +185,13 @@ the outgoing request continues trace 4bf92f3577b34da6a3ce929d0e0e4736
 Tracing is on by default (`system.tracing`), with or without an encoder,
 so trace context flows even when nothing is exported.
 
-**Trace IDs repeat unless you seed them.** A trace the host starts itself
-takes its ID from a generator seeded by `system.traceSeed`, 0 by default,
-and the same seed gives the same IDs: every process started with the
-default config makes the same first trace ID. That makes a test's traces
-reproducible, and makes the traces of two processes, or of one process
-and its restart, collide at the collector. Give each process its own
-seed:
+**Each host starts its own trace IDs.** A trace the host starts itself
+takes its ID from a generator seeded by `system.traceSeed`. When the
+config gives none, the package draws a random seed for each new host
+(`crypto.getRandomValues`), so two processes, or one process and its
+restart, do not collide at the collector. To reproduce a test's traces,
+set the seed: the same seed gives the same IDs. `Host.restore` keeps the
+generators of the snapshot.
 
 ```js
 import { compileCharts, Host } from '@tinyactors/node';
@@ -216,14 +216,13 @@ const firstTrace = async (system) => {
   return trace;
 };
 
-console.log('default seed, twice:', (await firstTrace({})) === (await firstTrace({})));
-const seed = () => ({ traceSeed: Math.floor(Math.random() * 2 ** 48) });
-console.log('a seed per process:', (await firstTrace(seed())) === (await firstTrace(seed())));
+console.log('no seed, twice:', (await firstTrace({})) === (await firstTrace({})));
+console.log('seed 7, twice:', (await firstTrace({ traceSeed: 7 })) === (await firstTrace({ traceSeed: 7 })));
 ```
 
 ```output
-default seed, twice: true
-a seed per process: false
+no seed, twice: false
+seed 7, twice: true
 ```
 
 ## Choosing what is traced
@@ -231,17 +230,17 @@ a seed per process: false
 Typed methods ([Inspecting a host](inspection.md)) set what the host
 records:
 
-- **`traceConfigureAsync(params)`** sets what every actor traces: `detail`
+- **`traceConfigure(params)`** sets what every actor traces: `detail`
   (`'summary'`, `'decisions'`, `'full'` or `'off'`), `values`, `sample`
   (the share of new traces sampled, 0 to 1) and `rules`. It replaces the
   previous configuration.
-- **`traceWatchAsync({ rules, seconds })`** adds rules in front of the
+- **`traceWatch({ rules, seconds })`** adds rules in front of the
   configured ones for a while (900 seconds by default), and answers `{ id
-  }`; **`traceUnwatchAsync({ id })`** ends a watch early. A watch is how an
+  }`; **`traceUnwatch({ id })`** ends a watch early. A watch is how an
   operator looks closely at one chart or one actor without tracing
   everything.
-- **`traceEndAsync()`** ends every open span now, as `close()` does.
-- **`traceSpansDecodeAsync({ traces })`** reads the spans of a traces request
+- **`traceEnd()`** ends every open span now, as `close()` does.
+- **`traceSpansDecode({ traces })`** reads the spans of a traces request
   back, as above.
 
 A rule matches by `chart`, `actor` (a trailing `*` makes it a prefix),
@@ -253,9 +252,9 @@ A rule matches by `chart`, `actor` (a trailing `*` makes it a prefix),
 import { Host } from '@tinyactors/node';
 
 const host = new Host({ systemID: 'shop', telemetry: {} });
-await host.traceConfigureAsync({ detail: 'summary', sample: 0.01 });
+await host.traceConfigure({ detail: 'summary', sample: 0.01 });
 console.log('1 trace in 100, summarized');
-const watch = await host.traceWatchAsync({ rules: [{ chart: 'checkout', sample: 'keep', detail: 'full' }], seconds: 60 });
+const watch = await host.traceWatch({ rules: [{ chart: 'checkout', sample: 'keep', detail: 'full' }], seconds: 60 });
 console.log(`watch ${watch.id}: every checkout in full for a minute`);
 host.close();
 ```

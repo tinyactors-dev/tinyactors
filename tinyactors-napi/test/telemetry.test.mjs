@@ -45,6 +45,38 @@ async function spanNames(host, requests) {
 /** A host that decodes, with no encoder of its own. */
 const decoder = () => new Host({ systemID: 'd' }, ENGINE);
 
+/** The trace id of the first send of a new host made with `system` (no
+ * `system` key when undefined), and its effective traceSeed. */
+async function firstTrace(system) {
+  let trace;
+  const chart = scxml('sender', '<state id="s"><onentry><send type="urn:t:out" target="x" event="out"/></onentry></state>');
+  const config = { systemID: 't', ioProcessors: [{ type: 'urn:t:out' }], ...(system === undefined ? {} : { system }) };
+  const given = JSON.stringify(config);
+  const host = hostWith({ sender: chart }, {
+    config,
+    ioProcessors: { 'urn:t:out': (h, send) => { trace = send.traceparent.split('-')[1]; } },
+  });
+  equal(JSON.stringify(config), given, 'the caller\'s config is not changed');
+  host.spawn(host.chart('sender'));
+  await host.idle();
+  const seed = (await host.hostConfig()).system.traceSeed;
+  host.close();
+  return { trace, seed };
+}
+
+test('the binding picks a random trace seed when the config gives none; a given seed reproduces', async () => {
+  const [a, b] = [await firstTrace(undefined), await firstTrace({ ticksPerSecond: 1000 })];
+  if (a.trace === b.trace) throw new Error(`two hosts without a seed started the same trace id ${a.trace}`);
+  if (a.seed === b.seed) throw new Error(`two hosts without a seed got the same seed ${a.seed}`);
+  const c = await firstTrace({ traceSeed: undefined });
+  if (c.trace === a.trace || c.trace === b.trace) throw new Error('traceSeed: undefined is no seed');
+  const [d, e] = [await firstTrace({ traceSeed: 7 }), await firstTrace({ traceSeed: 7 })];
+  equal(d.trace, e.trace, 'the same given seed, the same trace id');
+  equal(Number(d.seed), 7, 'the given seed is kept');
+  const [f, g] = [await firstTrace({ traceSeed: 0 }), await firstTrace({ traceSeed: 0 })];
+  equal(f.trace, g.trace, 'a given 0 is a seed too');
+});
+
 test('traces and logs reach the handler as Uint8Arrays, copied once, after flushInterval', async () => {
   const got = [];
   const clock = new SimulatedClock();

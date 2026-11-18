@@ -5,9 +5,11 @@ import asyncio
 import unittest
 
 import tinyactors
-from support import fixture, load, text
+from support import APP, fixture, load, text
 
 DOCUMENT = fixture("test_telemetry/log.python.scxml")
+# A chart that sends `out` to the application's processor at `go`.
+ECHO = fixture("test_telemetry/echo.python.scxml")
 
 
 def config(**telemetry):
@@ -120,6 +122,42 @@ class Telemetry(unittest.TestCase):
 
         asyncio.run(main())
         self.assertIn("traces", got)  # the last take, at the exit of async with
+
+
+class TraceSeed(unittest.TestCase):
+    """The binding picks a random trace seed when the config gives none (the
+    maintainer, 2026-11-18); a seed the caller sets is kept and reproduces."""
+
+    def first_trace(self, system):
+        config = {"systemID": "t", "ioProcessors": [{"type": APP}]}
+        if system is not None:
+            config["system"] = system
+        given = repr(config)
+        traces, seeds = [], []
+
+        def processor(host, send):
+            traces.append(send.traceparent.split("-")[1])
+
+        with tinyactors.Host(config, {APP: processor}, clock=tinyactors.SimulatedClock()) as host:
+            self.assertEqual(repr(config), given, "the caller's config is not changed")
+            with tinyactors.compile_charts([("echo.scxml", ECHO)]) as compiled:
+                host.add_image(compiled.image)
+            host.send(host.spawn(host.chart("echo")), "go")
+            host.host_config(lambda host, result: seeds.append(result["system"]["traceSeed"]))
+            host.run_until_idle()
+        return traces[0], seeds[0]
+
+    def test_hosts_without_a_seed_start_different_trace_ids(self):
+        a, b = self.first_trace(None), self.first_trace({"ticksPerSecond": 1000})
+        self.assertNotEqual(a[0], b[0])
+        self.assertNotEqual(a[1], b[1])
+
+    def test_a_given_seed_is_kept_and_reproduces(self):
+        a, b = self.first_trace({"traceSeed": 7}), self.first_trace({"traceSeed": 7})
+        self.assertEqual(a[0], b[0])
+        self.assertEqual(a[1], 7)
+        zero, again = self.first_trace({"traceSeed": 0}), self.first_trace({"traceSeed": 0})
+        self.assertEqual((zero[0], zero[1]), (again[0], 0), "a given 0 is a seed too")
 
 
 class ApplicationTraces(unittest.TestCase):

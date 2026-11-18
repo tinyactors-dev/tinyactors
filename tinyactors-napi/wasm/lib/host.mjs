@@ -1374,6 +1374,25 @@ function readEffective(state, handlers) {
   handlers.types = types;
 }
 
+// The config a new host is made with: the caller's, or, when it gives no
+// system.traceSeed, a copy with a random one (the language layer picks the
+// seed, the maintainer, 2026-11-18), so hosts start different trace ids; a
+// seed the caller sets is kept, and so reproduces. A config core will refuse
+// anyway (not an object, a `system` that is not one) and a runtime without
+// crypto.getRandomValues keep the config as it is. As the addon's
+// ta_napi_config_seeded (src/host.c).
+function seeded(config) {
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return config;
+  const system = config.system;
+  if (system !== undefined) {
+    if (system === null || typeof system !== 'object' || Array.isArray(system)) return config;
+    if (system.traceSeed !== undefined) return config; // the caller's
+  }
+  if (typeof globalThis.crypto?.getRandomValues !== 'function') return config;
+  const [low, high] = globalThis.crypto.getRandomValues(new Uint32Array(2));
+  return Object.assign({}, config, { system: Object.assign({}, system, { traceSeed: (BigInt(high) << 32n) | BigInt(low) }) });
+}
+
 // ta_web_host_new or ta_web_host_restore, with the config written into the
 // environment's arena and room for a refused config's error; then the
 // checks of a restore. Answers the host's pointer and, for a restore, the
@@ -1382,7 +1401,8 @@ function makeHost(state, config, pack, limits) {
   const module = state.module;
   const scratch = module.scratch;
   return module.scoped(scratch, () => {
-    const [at, length] = cbor.write(module, scratch, config);
+    // a restore keeps its config as given: its segments keep the snapshot's generators
+    const [at, length] = cbor.write(module, scratch, pack === null ? seeded(config) : config);
     const room = module.room(scratch, CONFIG_ERROR);
     // a new host: random bits for its identity, so its hibernation blobs wake
     // in no other host (a restore keeps its snapshot's)

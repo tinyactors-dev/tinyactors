@@ -481,27 +481,77 @@ static void ta_napi_host_refused(napi_env env, const ta_napi_refused_config *ref
     ta_napi_throw_core_error(env, &(ta_napi_core_error){error, refused->status});
 }
 
-/* 64 random bits for the host's identity (ta_host_environment.nonce), so
- * its hibernation blobs wake in no other host: globalThis.crypto's
- * getRandomValues, which Node.js and Bun have. 0 when it is missing or
- * throws (its exception cleared): the system id alone tells hosts apart. */
-static uint64_t ta_napi_host_nonce(napi_env env) {
+/* 64 random bits into `bits`: globalThis.crypto's getRandomValues, which
+ * Node.js and Bun have. False when it is missing or throws (its exception
+ * cleared). */
+static bool ta_napi_random(napi_env env, uint64_t *bits) {
     napi_value global, crypto, get, buffer, array, result;
     void *data = NULL;
-    uint64_t nonce = 0;
     bool ok = napi_get_global(env, &global) == napi_ok &&
               napi_get_named_property(env, global, "crypto", &crypto) == napi_ok &&
               napi_get_named_property(env, crypto, "getRandomValues", &get) == napi_ok &&
-              napi_create_arraybuffer(env, sizeof nonce, &data, &buffer) == napi_ok &&
-              napi_create_typedarray(env, napi_uint8_array, sizeof nonce, buffer, 0, &array) == napi_ok &&
+              napi_create_arraybuffer(env, sizeof *bits, &data, &buffer) == napi_ok &&
+              napi_create_typedarray(env, napi_uint8_array, sizeof *bits, buffer, 0, &array) == napi_ok &&
               napi_call_function(env, crypto, get, 1, &array, &result) == napi_ok;
     bool pending = false;
     if (!ok && napi_is_exception_pending(env, &pending) == napi_ok && pending) {
         napi_value error;
         napi_get_and_clear_last_exception(env, &error);
     }
-    if (ok) memcpy(&nonce, data, sizeof nonce);
-    return nonce;
+    if (ok) memcpy(bits, data, sizeof *bits);
+    return ok;
+}
+
+/* 64 random bits for the host's identity (ta_host_environment.nonce), so
+ * its hibernation blobs wake in no other host; 0 without a source: the
+ * system id alone tells hosts apart. */
+static uint64_t ta_napi_host_nonce(napi_env env) {
+    uint64_t nonce = 0;
+    return ta_napi_random(env, &nonce) ? nonce : 0;
+}
+
+/* Object.assign({}, `from`), or a new object for `from` undefined. */
+static bool ta_napi_shallow_copy(napi_env env, napi_value from, napi_value *out) {
+    napi_value global, object, assign, arguments[2];
+    if (napi_create_object(env, &arguments[0]) != napi_ok) return false;
+    *out = arguments[0];
+    if (ta_napi_is(env, from, napi_undefined)) return true;
+    arguments[1] = from;
+    return napi_get_global(env, &global) == napi_ok && napi_get_named_property(env, global, "Object", &object) == napi_ok &&
+           napi_get_named_property(env, object, "assign", &assign) == napi_ok &&
+           napi_call_function(env, object, assign, 2, arguments, out) == napi_ok;
+}
+
+/* The config ta_host_create gets: the caller's, or, when it gives no
+ * system.traceSeed, a copy with a random one (the language layer picks
+ * the seed, the maintainer, 2026-11-18), so hosts start different trace
+ * ids; a seed the caller sets is kept, and so reproduces. A config core
+ * will refuse anyway (not an object, a `system` that is not one) and a
+ * runtime without crypto.getRandomValues keep the config as it is. False
+ * with an exception pending. */
+static bool ta_napi_config_seeded(napi_env env, napi_value config, napi_value *out) {
+    napi_value system, seed, copy, system_copy, value;
+    bool array = false, has = false;
+    uint64_t bits = 0;
+    *out = config;
+    if (!ta_napi_is(env, config, napi_object) || napi_is_array(env, config, &array) != napi_ok || array) return true;
+    if (napi_get_named_property(env, config, "system", &system) != napi_ok) return false;
+    if (!ta_napi_is(env, system, napi_undefined)) {
+        if (!ta_napi_is(env, system, napi_object) || napi_is_array(env, system, &array) != napi_ok || array) return true;
+        if (napi_has_named_property(env, system, "traceSeed", &has) != napi_ok) return false;
+        if (has) {
+            if (napi_get_named_property(env, system, "traceSeed", &seed) != napi_ok) return false;
+            if (!ta_napi_is(env, seed, napi_undefined)) return true; /* the caller's */
+        }
+    }
+    if (!ta_napi_random(env, &bits)) return true;
+    if (!ta_napi_shallow_copy(env, config, &copy) || !ta_napi_shallow_copy(env, system, &system_copy) ||
+        napi_create_bigint_uint64(env, bits, &value) != napi_ok ||
+        napi_set_named_property(env, system_copy, "traceSeed", value) != napi_ok ||
+        napi_set_named_property(env, copy, "system", system_copy) != napi_ok)
+        return false;
+    *out = copy;
+    return true;
 }
 
 /* ta_host_create with the config as CBOR in the call's arena and the
@@ -510,7 +560,8 @@ static bool ta_napi_host_create(napi_env env, ta_napi_host *host, napi_value con
     ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
     ta_cbor_writer writer;
     ta_cbor_writer_init(&writer, (ta_buffer){NULL, 0, 0}, &host->arena_allocator);
-    bool ok = ta_napi_value_write(env, config, &(ta_napi_writing){&writer, &host->arena, false, NULL, false});
+    bool ok = ta_napi_config_seeded(env, config, &config) &&
+              ta_napi_value_write(env, config, &(ta_napi_writing){&writer, &host->arena, false, NULL, false});
     ta_bytes cbor = {NULL, 0};
     ta_status status = ok ? ta_cbor_writer_bytes(&writer, &cbor) : TA_OK;
     if (ok && status != TA_OK) {

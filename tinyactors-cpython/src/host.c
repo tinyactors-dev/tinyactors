@@ -428,19 +428,55 @@ static ta_status ta_python_host_restore_core(ta_python_host *host, ta_python_res
     return ok ? TA_OK : TA_ERROR_INVALID;
 }
 
-/* 64 random bits for the host's identity (ta_host_environment.nonce), so
- * its hibernation blobs wake in no other host: os.urandom(8), the operating
- * system's random source. -1 with the exception set when it fails. */
-static int ta_python_host_nonce(uint64_t *nonce) {
+/* 64 random bits: os.urandom(8), the operating system's random source,
+ * for the host's identity (ta_host_environment.nonce, so its hibernation
+ * blobs wake in no other host) and the trace seed. -1 with the exception
+ * set when it fails. */
+static int ta_python_random(uint64_t *bits) {
     PyObject *os = PyImport_ImportModule("os");
-    PyObject *bits = os ? PyObject_CallMethod(os, "urandom", "i", (int)sizeof *nonce) : NULL;
+    PyObject *drawn = os ? PyObject_CallMethod(os, "urandom", "i", (int)sizeof *bits) : NULL;
     Py_XDECREF(os);
-    if (!bits) return -1;
-    int ok = PyBytes_Check(bits) && PyBytes_Size(bits) == (Py_ssize_t)sizeof *nonce;
-    if (ok) memcpy(nonce, PyBytes_AsString(bits), sizeof *nonce);
+    if (!drawn) return -1;
+    int ok = PyBytes_Check(drawn) && PyBytes_Size(drawn) == (Py_ssize_t)sizeof *bits;
+    if (ok) memcpy(bits, PyBytes_AsString(drawn), sizeof *bits);
     else PyErr_SetString(PyExc_SystemError, "os.urandom gave no 8 bytes");
-    Py_DECREF(bits);
+    Py_DECREF(drawn);
     return ok ? 0 : -1;
+}
+
+/* The config ta_host_create gets, a new reference: the caller's, or, when
+ * its "system" gives no "traceSeed", a copy with a random one (the language
+ * layer picks the seed, the maintainer, 2026-11-18), so hosts start
+ * different trace ids; a seed the caller sets is kept, and so reproduces.
+ * A config core will refuse anyway (not a dict, a "system" that is not one)
+ * is kept as it is. NULL with the exception set. */
+static PyObject *ta_python_config_seeded(PyObject *config) {
+    if (!PyDict_CheckExact(config)) return Py_NewRef(config);
+    PyObject *system = NULL;
+    int has = PyDict_GetItemStringRef(config, "system", &system);
+    if (has < 0) return NULL;
+    if (has && !PyDict_CheckExact(system)) {
+        Py_DECREF(system);
+        return Py_NewRef(config);
+    }
+    PyObject *given = NULL;
+    int seeded = has ? PyDict_GetItemStringRef(system, "traceSeed", &given) : 0;
+    Py_XDECREF(given);
+    if (seeded != 0) { /* the caller's, or an error */
+        Py_XDECREF(system);
+        return seeded < 0 ? NULL : Py_NewRef(config);
+    }
+    uint64_t bits = 0;
+    PyObject *copy = ta_python_random(&bits) < 0 ? NULL : PyDict_Copy(config);
+    PyObject *system_copy = !copy ? NULL : has ? PyDict_Copy(system) : PyDict_New();
+    PyObject *seed = system_copy ? PyLong_FromUnsignedLongLong(bits) : NULL;
+    int ok = seed && PyDict_SetItemString(system_copy, "traceSeed", seed) == 0 &&
+             PyDict_SetItemString(copy, "system", system_copy) == 0;
+    Py_XDECREF(seed);
+    Py_XDECREF(system_copy);
+    Py_XDECREF(system);
+    if (!ok) Py_CLEAR(copy);
+    return copy;
 }
 
 static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build *build) {
@@ -533,12 +569,16 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_build 
 
     ta_bytes cbor;
     ta_growable_arena_mark mark = ta_growable_arena_position(&host->arena);
-    if (ta_python_host_cbor(host, config, &cbor) < 0) goto fail;
+    /* a restore keeps its config as given: its segments keep the snapshot's generators */
+    PyObject *given = build->pack ? Py_NewRef(config) : ta_python_config_seeded(config);
+    int written = given ? ta_python_host_cbor(host, given, &cbor) : -1;
+    Py_XDECREF(given);
+    if (written < 0) goto fail;
     ta_buffer refusal = {ta_growable_arena_alloc(&host->arena, 8192, 8), 8192, 0};
     ta_host_environment environment = {sizeof environment, TA_PYTHON_DATAMODELS, host->datamodels,
                                        host->allocator, NULL, refusal.pointer ? &refusal : NULL, 0};
     /* a restore keeps the snapshot's identity: ta_host_restore ignores the nonce */
-    if (!build->pack && ta_python_host_nonce(&environment.nonce) < 0) {
+    if (!build->pack && ta_python_random(&environment.nonce) < 0) {
         ta_growable_arena_release(&host->arena, mark);
         goto fail;
     }

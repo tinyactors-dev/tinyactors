@@ -30,9 +30,9 @@ export class Gateway {
    * @param {{ [plan: string]: object }} [options.plans] the limits of each plan
    * @param {import('@tinyactors/node').SimulatedClock} [options.clock]
    * @param {'native' | 'quickjs'} [options.datamodel]
-   * @param {number} [options.traceSeed] seeds the trace ids the gateway starts
+   * @param {number} [options.traceSeed] seeds the trace ids the gateway starts (random without one)
    */
-  constructor({ upstream, collector, keys, plans = PLANS, clock, datamodel, traceSeed = Math.floor(Math.random() * 2 ** 48) }) {
+  constructor({ upstream, collector, keys, plans = PLANS, clock, datamodel, traceSeed }) {
     this.upstream = upstream.replace(/\/$/, '');
     this.collector = collector?.replace(/\/$/, '');
     this.keys = keys;
