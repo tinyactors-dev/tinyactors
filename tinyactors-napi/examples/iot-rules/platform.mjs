@@ -18,7 +18,7 @@
 //   transport, which refuses it; an `<invoke>` has no service; a `src`
 //   has no resolver.
 // - What goes wrong is reported to the customer, in their inbox: compile
-//   diagnostics at upload, the rule's error counters (`hostStatsAsync`) at
+//   diagnostics at upload, the rule's error counters (`hostStats`) at
 //   each audit, each refused send. A rule that keeps failing, or keeps its
 //   host busy, is suspended: its host is closed, which frees everything it
 //   held.
@@ -244,7 +244,7 @@ export class Platform {
         if (rule.status !== 'active') continue;
         let stats;
         try {
-          stats = await rule.host.hostStatsAsync();
+          stats = await rule.host.hostStats();
         } catch (error) {
           if (rule.status !== 'active') continue; // suspended while we waited
           throw error;
@@ -299,7 +299,7 @@ export class Platform {
    * each), its region and the bytes its actors use in it. */
   async cost(customer, id) {
     const rule = this.customers.get(customer).rules.get(id);
-    const stats = await rule.host.hostStatsAsync();
+    const stats = await rule.host.hostStats();
     const pool = stats.pools[0];
     return {
       devices: stats.host.actors,

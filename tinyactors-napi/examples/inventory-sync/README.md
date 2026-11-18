@@ -116,7 +116,7 @@ frame waits for the delayed acknowledgement.
 - **I/O processors** (`urn:shop:customer`, `urn:warehouse:stock`): each
   step the customer sees, and each change of stock, reaches the
   application.
-- **Typed methods** (`actorListAsync`, `actorContextAsync`): the
+- **Typed methods** (`actorList`, `actorContext`): the
   warehouse reads its inventory from the SKU actors' variables.
 - **A `SimulatedClock` shared by two hosts** in the test: a 15-minute hold
   and the retries take no time, and the test steps to the next deadline of

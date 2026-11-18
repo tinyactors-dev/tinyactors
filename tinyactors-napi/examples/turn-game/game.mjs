@@ -339,14 +339,14 @@ export class GameServer {
     const session = this.host.actorByName(`player-${name}`);
     if (session === undefined) return undefined;
     const [{ variables }, { value }] = await Promise.all([
-      this.host.actorContextAsync({ session }), this.host.actorStateAsync({ session }),
+      this.host.actorContext({ session }), this.host.actorState({ session }),
     ]);
     return { session, state: value, ...variables };
   }
 
   /** The lobby's variables. */
   async lobby() {
-    const { variables } = await this.host.actorContextAsync({ session: this.host.actorByName('lobby') });
+    const { variables } = await this.host.actorContext({ session: this.host.actorByName('lobby') });
     return variables;
   }
 
@@ -354,7 +354,7 @@ export class GameServer {
   async match(name) {
     const session = this.host.actorByName(name);
     if (session === undefined) return undefined;
-    const { variables } = await this.host.actorContextAsync({ session });
+    const { variables } = await this.host.actorContext({ session });
     return { session, ...variables };
   }
 

@@ -57,7 +57,7 @@ function setup() {
 }
 
 /** The actor's state value, read with a typed method. */
-const state = async (host, session) => (await host.actorStateAsync({ session })).value;
+const state = async (host, session) => (await host.actorState({ session })).value;
 
 // It retries every 30 seconds and gives up after three attempts.
 {
@@ -252,7 +252,7 @@ whatever promise the test waits on.
 - **Await `idle()` after each input** that should have an effect before
   the next assertion. A host runs on the event loop, so nothing has run
   right after `host.send` returns.
-- **Read state with the typed methods** (`actorStateAsync`, `actorContextAsync`)
+- **Read state with the typed methods** (`actorState`, `actorContext`)
   after an `idle()`: they read the host as it is when called
   ([Inspecting a host](inspection.md)).
 - **Give actors names** to find them with `actorByName`, and to see that

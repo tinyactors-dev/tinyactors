@@ -156,7 +156,7 @@ await host.idle();
 host.addImage(v2);
 host.migrate();
 await host.idle();
-for (const session of [late, paused]) console.log(session, JSON.stringify((await host.actorStateAsync({ session })).value));
+for (const session of [late, paused]) console.log(session, JSON.stringify((await host.actorState({ session })).value));
 console.log('next deadline', host.nextDeadline);
 host.close();
 ```
@@ -285,7 +285,7 @@ host.migrate({ wake: true });
 while (done === undefined) {
   for (const session of asked.splice(0, 10)) host.wake(session, store.get(session));
   await host.idle();
-  const stats = await host.hostStatsAsync();
+  const stats = await host.hostStats();
   mostResident = Math.max(mostResident, stats.host.actors - stats.host.hibernated);
   evict();
   evict();

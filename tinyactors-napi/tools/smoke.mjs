@@ -38,8 +38,8 @@ async function count(datamodel) {
     host.send(session, 'report');
     await host.idle();
     // the convenience layer shipped with the main package (lib/)
-    const stats = await host.hostStatsAsync();
-    if (stats.host.actors !== 1) lines.push(`hostStatsAsync answered ${stats.host.actors} actors, not 1`);
+    const stats = await host.hostStats();
+    if (stats.host.actors !== 1) lines.push(`hostStats answered ${stats.host.actors} actors, not 1`);
   } finally {
     host.close();
   }

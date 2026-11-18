@@ -33,9 +33,9 @@ export function slaDue(timers) {
 export async function describe(host, session) {
   try {
     const [actor, state, context] = await Promise.all([
-      host.actorGetAsync({ session }),
-      host.actorStateAsync({ session }),
-      host.actorContextAsync({ session }),
+      host.actorGet({ session }),
+      host.actorState({ session }),
+      host.actorContext({ session }),
     ]);
     return {
       session: actor.session,
@@ -60,7 +60,7 @@ export async function documents(host, { limit = 64 } = {}) {
   const found = [];
   let cursor = 0;
   do {
-    const page = await host.actorListAsync({ cursor, limit });
+    const page = await host.actorList({ cursor, limit });
     const described = await Promise.all(page.sessions.map((session) => describe(host, session)));
     for (const actor of described) if (actor?.chart === 'document') found.push(actor);
     cursor = page.cursor;
@@ -115,7 +115,7 @@ export function serveAdmin(host, { port = 0, hostname = '127.0.0.1' } = {}) {
         const doc = await documentByID(host, decodeURIComponent(match[1]));
         return doc ? json(response, 200, doc) : json(response, 404, { error: 'no such document: it ended, or never was' });
       }
-      if (url.pathname === '/stats') return json(response, 200, (await host.hostStatsAsync()).charts);
+      if (url.pathname === '/stats') return json(response, 200, (await host.hostStats()).charts);
       return json(response, 404, { error: 'not found' });
     } catch (error) {
       return json(response, 500, { error: String(error) });

@@ -4,7 +4,7 @@ A running host answers questions about itself: which state an actor is
 in, what its variables hold, which actors exist, what the host has done
 so far. These are the **typed methods**, one per question. Each reads
 the host as it is when you call it and answers in a later turn, so each
-returns a promise: `await host.actorStateAsync({ session })`.
+returns a promise: `await host.actorState({ session })`.
 
 ```js
 import { compileCharts, Host } from '@tinyactors/node';
@@ -29,11 +29,11 @@ const order = host.spawn(host.chart('order'), { name: 'first' });
 host.send(order, 'add', 'tea');
 await host.idle(); // the actor has started and handled 'add'
 
-const { value } = await host.actorStateAsync({ session: order });
+const { value } = await host.actorState({ session: order });
 console.log('state:', JSON.stringify(value));
-const { variables } = await host.actorContextAsync({ session: order });
+const { variables } = await host.actorContext({ session: order });
 console.log('variables:', JSON.stringify(variables));
-const actor = await host.actorGetAsync({ session: order });
+const actor = await host.actorGet({ session: order });
 console.log('actor:', actor.chart, 'mailbox', actor.mailbox);
 host.close();
 ```
@@ -59,16 +59,16 @@ key per region.
 
 | Method | Params | Result |
 |---|---|---|
-| `actorStateAsync` | `{ session }` | `{ value, history }`: the active states, as above, and where each history state would return ([below](#delayed-sends-and-history)) |
-| `actorContextAsync` | `{ session }` | `{ variables }`: each `<data>` and its value |
-| `actorGetAsync` | `{ session }` | `{ session, segment, chart, parent, mailbox, invocations, timers, timersPending }`: `timers` its pending delayed sends ([below](#delayed-sends-and-history)) |
-| `actorListAsync` | `{ cursor, limit }`, both optional | `{ sessions, cursor }`: a page of sessions; `cursor` is `null` after the last page |
-| `hostStatsAsync` | none | `{ host, pools, charts }`: counters ([below](#the-hosts-counters)) |
-| `hostConfigAsync` | none | the config the host runs with, every default filled in |
-| `traceConfigureAsync`, `traceWatchAsync`, `traceUnwatchAsync`, `traceEndAsync`, `traceSpansDecodeAsync` | | [Telemetry](telemetry.md) |
+| `actorState` | `{ session }` | `{ value, history }`: the active states, as above, and where each history state would return ([below](#delayed-sends-and-history)) |
+| `actorContext` | `{ session }` | `{ variables }`: each `<data>` and its value |
+| `actorGet` | `{ session }` | `{ session, segment, chart, parent, mailbox, invocations, timers, timersPending }`: `timers` its pending delayed sends ([below](#delayed-sends-and-history)) |
+| `actorList` | `{ cursor, limit }`, both optional | `{ sessions, cursor }`: a page of sessions; `cursor` is `null` after the last page |
+| `hostStats` | none | `{ host, pools, charts }`: counters ([below](#the-hosts-counters)) |
+| `hostConfig` | none | the config the host runs with, every default filled in |
+| `traceConfigure`, `traceWatch`, `traceUnwatch`, `traceEnd`, `traceSpansDecode` | | [Telemetry](telemetry.md) |
 
 A method without params is called with none: `await
-host.hostStatsAsync()`. The host checks the params: one the method does
+host.hostStats()`. The host checks the params: one the method does
 not take, of the wrong type or out of range is an error, as is a session
 that names no actor (it ended, or never was). **Sessions in a result are
 numbers**, while `spawn`, `actorByName` and the views give `bigint`s, so
@@ -87,19 +87,19 @@ An editor completes `stats.pools[0].actors.highWater`, and TypeScript, or
 a param a method does not take. Every example of these guides is checked
 that way against the package's types, the one below included.
 
-`actorContextAsync` and `actorStateAsync` are refused for a hibernated
+`actorContext` and `actorState` are refused for a hibernated
 actor (`reason` `'state'`): wake it first ([Hibernation](hibernation.md)).
 
 ## Delayed sends and history
 
 What an operator asks first about a waiting actor is when it will act
-next and where it will go back to. `actorGetAsync` answers the first:
+next and where it will go back to. `actorGet` answers the first:
 `timers` lists the actor's pending delayed sends (each `<send delay>`
 not yet due and not cancelled), earliest first, each `{ sendid, event,
 due }`, with `due` in milliseconds on the clock `host.now()` reads. The
 list holds at most 32; `timersPending` is how many there are, so a
 longer `timersPending` says the list was cut. A send without an `id` has
-a `sendid` of `null`. `actorStateAsync` answers the second: `history`
+a `sendid` of `null`. `actorState` answers the second: `history`
 holds, for each history state the actor has recorded, its parent state as
 it would be entered again, in the shape of `value`. A history state
 records when its parent is exited, so before the first exit it is absent
@@ -131,10 +131,10 @@ host.send(doc, 'hold');
 await host.idle();
 clock.increment(60_000); // a minute later
 
-const { timers, timersPending } = await host.actorGetAsync({ session: doc });
+const { timers, timersPending } = await host.actorGet({ session: doc });
 for (const { sendid, event, due } of timers) console.log(sendid, event, 'in', (due - host.now()) / 1000, 's');
 console.log('pending:', timersPending);
-const { value, history } = await host.actorStateAsync({ session: doc });
+const { value, history } = await host.actorState({ session: doc });
 console.log('state:', JSON.stringify(value), 'history:', JSON.stringify(history));
 host.close();
 ```
@@ -151,7 +151,7 @@ its parent it recorded, which enters its own initial state, and its
 value names that child alone. Neither costs anything per event: the
 host reads them only when asked.
 
-A page at a time, `actorListAsync` lists every actor:
+A page at a time, `actorList` lists every actor:
 
 ```js
 import { compileCharts, Host } from '@tinyactors/node';
@@ -167,7 +167,7 @@ for (let i = 0; i < 5; i++) host.spawn(host.chart('idle'));
 const sessions = [];
 let cursor = 0;
 do {
-  const page = await host.actorListAsync({ cursor, limit: 2 });
+  const page = await host.actorList({ cursor, limit: 2 });
   sessions.push(...page.sessions);
   cursor = page.cursor;
 } while (cursor !== null);
@@ -191,12 +191,12 @@ import { Host } from '@tinyactors/node';
 
 const host = new Host({ systemID: 'shop' });
 try {
-  await host.actorStateAsync({ session: 99 });
+  await host.actorState({ session: 99 });
 } catch (error) {
   console.log(error.reason, error.path, error.code);
 }
 // @ts-expect-error: a param actorGet does not take, which the types refuse too
-await host.actorGetAsync({ name: 'first' }).catch((error) => console.log(error.reason, error.path));
+await host.actorGet({ name: 'first' }).catch((error) => console.log(error.reason, error.path));
 host.close();
 ```
 
@@ -212,12 +212,12 @@ their promises never settle.
 
 ## With handlers
 
-Each method also has a form that takes handlers instead of returning a
-promise: `host.actorState(params, onResult, onError)`, and so on, without
-`Async`. It returns nothing; `onResult(host, result)` is called in a
+Each method also takes handlers instead of returning a promise:
+`host.actorState(params, onResult, onError)`, and so on. Given handlers
+it returns nothing; `onResult(host, result)` is called in a
 later turn, or `onError(host, error)` with the same `TinyactorsError`.
-The promise forms are written over these, and a caller that passes
-handlers pays for no promise. A method without params takes `undefined`:
+The promise is made only when no handler is given, so a caller that
+passes handlers pays for no promise. A method without params takes `undefined`:
 `host.hostStats(undefined, onResult)`.
 
 ```js
@@ -253,7 +253,7 @@ uncaught exception, as a handler's error is.
 
 ## The host's counters
 
-`hostStatsAsync` answers three parts:
+`hostStats` answers three parts:
 
 - `host`: `segments` (live), `actors` and `hibernated` (now),
   `runnable` (actors with work waiting), `migrations` (running),
@@ -309,7 +309,7 @@ const jobs = [1, 2, 3].map(() => host.spawn(host.chart('job')));
 host.send(jobs[0], 'finish');
 host.send(jobs[1], 'break');
 await host.idle();
-const stats = await host.hostStatsAsync();
+const stats = await host.hostStats();
 const [job] = stats.charts;
 console.log(`${job.name}: ${job.spawned} spawned, ${job.ended} ended, ${job.actors} running, ${job.errorsExecution} execution error`);
 console.log(`${stats.host.segments} segment, ${stats.pools[0].actors.used} actors in its pool`);
@@ -353,9 +353,9 @@ const user = host.spawnChart('user');
 
 /** The charts whose actors kept working for `ms` with no input given. */
 async function busy(host, ms) {
-  const before = await host.hostStatsAsync();
+  const before = await host.hostStats();
   await new Promise((resolve) => setTimeout(resolve, ms));
-  const after = await host.hostStatsAsync();
+  const after = await host.hostStats();
   if (after.host.runnable === 0) return [];
   return after.charts
     .filter((chart) => chart.macrosteps - (before.charts.find((c) => c.name === chart.name)?.macrosteps ?? 0) > 1000)

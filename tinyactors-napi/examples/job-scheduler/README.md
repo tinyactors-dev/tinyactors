@@ -65,7 +65,7 @@ attempt or time out within a grace period, then closes the host and exits.
 - **Named actors and spawn params**: a job's actor is named by its id and
   given its schedule at spawn.
 - **`host.idle()`, `host.nextDeadline`, `host.close()`** for liveness and
-  shutdown, and the typed method `actorStateAsync` for a job's state.
+  shutdown, and the typed method `actorState` for a job's state.
 - **A `SimulatedClock`** in the test: retries, timeouts, deadlines and
   skipped ticks over seconds of schedule take a few milliseconds, stepping
   from deadline to deadline.
@@ -101,7 +101,7 @@ its signal are still running at the close:
   timeout before `close()` and `undefined` after, and the host's timer is
   cleared, so it holds the process no longer;
 - **a typed method pending at the close never settles** (the promise of
-  `actorStateAsync`) and keeps nothing alive;
+  `actorState`) and keeps nothing alive;
 - **an `idle()` waiting at the close rejects** with `TA_ERROR_STATE`;
 - **a worker that finishes after the close** finds a closed host
   (`send.answer()` would throw `TA_ERROR_STATE`), which the scheduler

@@ -238,7 +238,7 @@ export class Chat {
 
   /** Resident and hibernated actors, as the host counts them. */
   async counters() {
-    const { host } = await this.host.hostStatsAsync();
+    const { host } = await this.host.hostStats();
     return { actors: host.actors, hibernated: host.hibernated, resident: host.actors - host.hibernated };
   }
 

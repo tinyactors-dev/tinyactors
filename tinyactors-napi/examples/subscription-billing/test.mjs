@@ -26,8 +26,8 @@ function setup(datamodel) {
 
 const of = (billing, session, event) => billing.outbox.filter((m) => m.session === session && (event === undefined || m.event === event));
 const events = (billing, session) => of(billing, session).map((m) => m.event);
-const variables = async (billing, session) => (await billing.host.actorContextAsync({ session })).variables;
-const state = async (billing, session) => (await billing.host.actorStateAsync({ session })).value;
+const variables = async (billing, session) => (await billing.host.actorContext({ session })).variables;
+const state = async (billing, session) => (await billing.host.actorState({ session })).value;
 
 /** Runs `migration` to its end, waking what it asks for `batch` at a time
  * and moving the clock `stepMs` a round. */

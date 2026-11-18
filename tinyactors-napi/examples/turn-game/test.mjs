@@ -227,7 +227,7 @@ for (const datamodel of ['native', 'quickjs']) {
     try {
       await startMatch(world);
       const before = server.stats.checkpoints;
-      const pending = server.host.actorStateAsync({ session: server.host.actorByName('match-1') });
+      const pending = server.host.actorState({ session: server.host.actorByName('match-1') });
       assert.ok(await server.checkpoint() > 0);
       assert.equal(server.stats.refusals, 1);
       assert.equal(server.stats.checkpoints, before + 1);

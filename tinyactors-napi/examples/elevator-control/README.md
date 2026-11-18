@@ -90,9 +90,9 @@ The rules, each of them a state, a guard or a timer in the charts:
 - **A `SimulatedClock`, stepped deadline by deadline** with
   `host.nextDeadline`, so every timer fires at its own time and a scenario
   of four minutes plays in milliseconds.
-- **The typed methods:** `actorStateAsync` and `actorContextAsync` for a
+- **The typed methods:** `actorState` and `actorContext` for a
   car's active states and variables (the maintenance check),
-  `actorGetAsync` for how many door controllers a car runs.
+  `actorGet` for how many door controllers a car runs.
 - **Both datamodels:** every case and every scenario runs on the native
   datamodel and on quickjs, and a scenario must come out the same on both.
 

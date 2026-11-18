@@ -173,7 +173,7 @@ test('one engine for two rules: a rule that hoards memory makes its neighbour fa
     await host.idle();
     host.send(average, 'reading', reading);
     await host.idle();
-    const counters = Object.fromEntries((await host.hostStatsAsync()).charts.map((c) => [c.name, c.errorsExecution]));
+    const counters = Object.fromEntries((await host.hostStats()).charts.map((c) => [c.name, c.errorsExecution]));
     assert.deepEqual(counters, { hoard: 1, 'rolling-average': 1 }, 'the average failed on memory it did not take');
   } finally {
     host.close();

@@ -335,7 +335,7 @@ test('actor.context: each variable as a neutral value (to_wire)', async () => {
   const host = hostWith({ c: chart });
   const session = host.spawn(host.chart('c'), { params: { n: 7 } });
   // asked before the first turn: no <data> is initialized, the params neither
-  const before = await host.actorContextAsync({ session });
+  const before = await host.actorContext({ session });
   same(Object.keys(before.variables), ['n', 'nothing', 'mixed'], 'keys');
   equal(Object.values(before.variables).every((v) => v === undefined), true, 'every variable undefined before the first turn');
   let result;

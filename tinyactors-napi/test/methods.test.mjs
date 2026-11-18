@@ -189,7 +189,7 @@ test('params pass to core as given: core refuses a bad one in the reply', async 
 
 test('the arguments are checked at the call, and a refused call leaves nothing pending', async () => {
   const { host, session } = waiting();
-  throws(() => host.hostStats(undefined), typeError, 'no onResult');
+  throws(() => host.hostStats(undefined, undefined, () => {}), typeError, 'an onError without an onResult');
   throws(() => host.hostStats(undefined, 1), typeError, 'onResult not a function');
   throws(() => host.hostStats(undefined, () => {}, 'x'), typeError, 'onError not a function');
   let called = false;

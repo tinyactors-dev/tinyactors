@@ -519,7 +519,7 @@ export interface ChartRef {
  * a default (the host's, never the package's). A key the host does not
  * take, or a value of the wrong type, throws a `TinyactorsError`
  * (`TA_ERROR_INVALID`) at `new Host`, with the host's `reason` and the key
- * as `path` (`system.maxActors`). `host.hostConfigAsync()` answers the
+ * as `path` (`system.maxActors`). `host.hostConfig()` answers the
  * config with every default filled in, as {@link EffectiveHostConfig}.
  *
  * @example
@@ -581,8 +581,9 @@ export interface SystemConfig {
   traceContexts?: number;
   /** Default 16, at most 255. */
   traceRules?: number;
-  /** The seed of the trace IDs (default 0): the same seed gives the same
-   * IDs, so give each process its own. */
+  /** The seed of the trace IDs: the same seed gives the same IDs. Without
+   * one, each new host draws a random seed (`crypto.getRandomValues`);
+   * set it to reproduce a test's traces. */
   traceSeed?: number;
   /** Write trace records (default true), so export or a watch can be
    * turned on later. */
@@ -1097,75 +1098,75 @@ export class Host implements Disposable, AsyncDisposable {
    * and advances nothing; a closed host throws `TA_ERROR_STATE`. */
   now(): number;
 
-  /** An actor's active states, `{ value }`: a state id, or `{ parent:
-   * child }` for compound states. Params `{ session }`. The typed methods
-   * read the host when called, and call `onResult` or `onError` once, in a
-   * later turn; `close()` drops them uncalled. */
+  // The typed methods. Each has two forms. Given handlers, `onResult` or
+  // `onError` is called once, in a later turn, and the call returns
+  // nothing; an error with no `onError` is the turn's (`idle()` rejects
+  // with it). Given no handler, the call returns a promise that resolves
+  // with the result and rejects with the `TinyactorsError` (`code`,
+  // `reason`, `path`); a refusal at the call rejects too. A rejection is
+  // yours: without a `catch` it is an unhandled rejection, and `idle()`
+  // does not see it. Each reads the host when called; `close()` drops a
+  // pending method uncalled, and its promise never settles.
+
+  /** An actor's active states, `{ value, history }`: a state id, or `{
+   * parent: child }` for compound states. Params `{ session }`. `const {
+   * value } = await host.actorState({ session })`. */
   actorState(params: SessionParams, onResult: OnResult<ActorStateResult>, onError?: OnError | null): void;
+  /** `actorState` given no handler: a promise of `{ value, history }`. */
+  actorState(params: SessionParams): Promise<ActorStateResult>;
   /** An actor's variables, `{ variables }`. Params `{ session }`; refused
    * for a hibernated actor. A variable that holds `undefined` reads
    * `undefined`, apart from `null`; before the actor's first turn every
    * variable is `undefined`, its spawn params included. */
   actorContext(params: SessionParams, onResult: OnResult<ActorContextResult>, onError?: OnError | null): void;
+  /** `actorContext` given no handler: a promise of `{ variables }`. */
+  actorContext(params: SessionParams): Promise<ActorContextResult>;
   /** The host's sessions a page at a time, `{ sessions, cursor }`, `cursor`
    * `null` after the last page. Params `{ cursor?, limit? }` (1 to 512,
    * default 256). */
   actorList(params: ActorListParams | undefined, onResult: OnResult<ActorListResult>, onError?: OnError | null): void;
-  /** One actor, `{ session, segment, chart, parent, mailbox, invocations }`.
-   * Params `{ session }`. */
+  /** `actorList` given no handler: a promise of a page, `{ sessions, cursor }`. */
+  actorList(params?: ActorListParams): Promise<ActorListResult>;
+  /** One actor, `{ session, segment, chart, parent, mailbox, invocations,
+   * timers, timersPending }`. Params `{ session }`. */
   actorGet(params: SessionParams, onResult: OnResult<ActorGetResult>, onError?: OnError | null): void;
+  /** `actorGet` given no handler: a promise of the actor. */
+  actorGet(params: SessionParams): Promise<ActorGetResult>;
   /** The host's counters, `{ host, pools, charts }`: `pools` has one entry
    * per live segment with each pool's `capacity`, `used` and `highWater`.
-   * No params. */
+   * No params: `await host.hostStats()`. */
   hostStats(params: NoParams, onResult: OnResult<HostStatsResult>, onError?: OnError | null): void;
+  /** `hostStats` given no handler: a promise of the counters. */
+  hostStats(params?: NoParams): Promise<HostStatsResult>;
   /** The config the host runs with, every default filled in. No params. */
   hostConfig(params: NoParams, onResult: OnResult<EffectiveHostConfig>, onError?: OnError | null): void;
+  /** `hostConfig` given no handler: a promise of the effective config. */
+  hostConfig(params?: NoParams): Promise<EffectiveHostConfig>;
   /** Sets what every actor traces: `{ detail, values, sample, records,
    * rules }`. */
   traceConfigure(params: TraceConfigureParams | undefined, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
+  /** `traceConfigure` given no handler: a promise of `{}`. */
+  traceConfigure(params?: TraceConfigureParams): Promise<EmptyResult>;
   /** Adds trace rules for a while: `{ rules, seconds }` (default 900);
    * answers `{ id }`. */
   traceWatch(params: TraceWatchParams, onResult: OnResult<TraceWatchResult>, onError?: OnError | null): void;
+  /** `traceWatch` given no handler: a promise of `{ id }`. */
+  traceWatch(params: TraceWatchParams): Promise<TraceWatchResult>;
   /** Ends a watch early: `{ id }`. */
   traceUnwatch(params: TraceUnwatchParams, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
+  /** `traceUnwatch` given no handler: a promise of `{}`. */
+  traceUnwatch(params: TraceUnwatchParams): Promise<EmptyResult>;
   /** Ends every open span now, marked incomplete, for the telemetry handler.
    * Refused without `telemetry` in the config. */
   traceEnd(params: NoParams, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
+  /** `traceEnd` given no handler: a promise of `{}`. */
+  traceEnd(params?: NoParams): Promise<EmptyResult>;
   /** The spans of a traces request: `{ traces }` (the bytes) answers `{
    * spans }`, each with `trace`, `span`, `parent`, `name`, `start`, `end`,
    * `attributes`, ... */
   traceSpansDecode(params: TraceSpansDecodeParams, onResult: OnResult<TraceSpansDecodeResult>, onError?: OnError | null): void;
-
-  // The typed methods as promises (the convenience layer): each calls the
-  // method above of its name, resolving with its result and rejecting with
-  // its `TinyactorsError` (`code`, `reason`, `path`); a refusal at the call
-  // rejects too. A rejection is yours: without a `catch` it is an unhandled
-  // rejection, and `idle()` does not see it. A method still pending at
-  // `close()` never settles.
-
-  /** `actorState` as a promise: `const { value } = await
-   * host.actorStateAsync({ session })`. */
-  actorStateAsync(params: SessionParams): Promise<ActorStateResult>;
-  /** `actorContext` as a promise of `{ variables }`. */
-  actorContextAsync(params: SessionParams): Promise<ActorContextResult>;
-  /** `actorList` as a promise of a page, `{ sessions, cursor }`. */
-  actorListAsync(params?: ActorListParams): Promise<ActorListResult>;
-  /** `actorGet` as a promise of the actor. */
-  actorGetAsync(params: SessionParams): Promise<ActorGetResult>;
-  /** `hostStats` as a promise of the counters: `await host.hostStatsAsync()`. */
-  hostStatsAsync(params?: NoParams): Promise<HostStatsResult>;
-  /** `hostConfig` as a promise of the effective config. */
-  hostConfigAsync(params?: NoParams): Promise<EffectiveHostConfig>;
-  /** `traceConfigure` as a promise. */
-  traceConfigureAsync(params?: TraceConfigureParams): Promise<EmptyResult>;
-  /** `traceWatch` as a promise of `{ id }`. */
-  traceWatchAsync(params: TraceWatchParams): Promise<TraceWatchResult>;
-  /** `traceUnwatch` as a promise. */
-  traceUnwatchAsync(params: TraceUnwatchParams): Promise<EmptyResult>;
-  /** `traceEnd` as a promise. */
-  traceEndAsync(params?: NoParams): Promise<EmptyResult>;
-  /** `traceSpansDecode` as a promise of `{ spans }`. */
-  traceSpansDecodeAsync(params: TraceSpansDecodeParams): Promise<TraceSpansDecodeResult>;
+  /** `traceSpansDecode` given no handler: a promise of `{ spans }`. */
+  traceSpansDecode(params: TraceSpansDecodeParams): Promise<TraceSpansDecodeResult>;
 
   /** The host's counters now as an OTLP metrics request (a `Uint8Array`, for a
    * collector's `/v1/metrics`). `TA_ERROR_STATE` without `telemetry` in the

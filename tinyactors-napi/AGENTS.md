@@ -65,14 +65,16 @@ API"). Node's names and shapes (decided 2026-10-16, docs/plan.xml):
   and adds shapes, not behaviour. First the typed methods as promises
   (decided 2026-10-16: the direct layer keeps ADR 0012's response
   handlers, and a promise is what a JavaScript programmer would write over
-  them anyway): **`await host.actorStateAsync({session})`**, one method
-  of `Host.prototype` per typed method, beside the direct one, which it
-  calls with a handler that resolves and one that rejects with the same
-  `TinyactorsError` (a separate name, 2026-10-17, l-p3-promises-shape:
-  the direct methods stay as they are, so a caller passing handlers pays
-  nothing; a refusal at the call rejects; a rejection with no `catch` is
-  an unhandled rejection, never the turn's; pending at `close()`, it
-  never settles); then the shapes chosen in p3-shapes (2026-10-17):
+  them anyway): **`await host.actorState({session})`**, the typed method
+  given no handler (the maintainer, 2026-11-18, replacing the `…Async`
+  names of 2026-10-17): the convenience layer wraps each direct method on
+  `Host.prototype`, passes a call with a handler to it unchanged (one
+  argument check, a few nanoseconds against the post's microseconds,
+  l-maint-promises-built), and otherwise calls it with a handler that
+  resolves and one that rejects with the same `TinyactorsError` (a
+  refusal at the call rejects; a rejection with no `catch` is an
+  unhandled rejection, never the turn's; pending at `close()`, it never
+  settles); then the shapes chosen in p3-shapes (2026-10-17):
   **`host.addCharts({name: text}, {resolver}?)`** (compileCharts,
   addImage, close; returns the segment), **`host.spawnChart(name,
   options?)`** (chart, then spawn), **`directoryResolver(root)`** (reads
@@ -244,6 +246,13 @@ The rules the Python binding follows hold here too (bindings.md, sections
 
 - **Everything is per host:** handlers, the log handler and the clock are
   given to the `Host`; no global configuration.
+- **The binding picks the trace seed** (the maintainer, 2026-11-18): a
+  config with no `system.traceSeed` (absent or `undefined`) is copied with
+  a random 64-bit one from `crypto.getRandomValues` before
+  `ta_host_create` (`ta_napi_config_seeded`; the wasm package's `seeded`),
+  so hosts start different trace ids; a seed the caller sets is kept and
+  reproduces; `Host.restore` passes its config as given, its segments
+  keeping the snapshot's generators. Core stays free of I/O.
 - **`DONE` and `ERROR` are internal:** the addon releases its rows for the
   session; no application callback.
 - **An I/O processor's handler that throws before answering** (or whose
@@ -258,7 +267,8 @@ The rules the Python binding follows hold here too (bindings.md, sections
   2026-10-16): `params` an object passed to core as given (`undefined`
   for none), `onResult(host, result)` at the `REPLY`'s dispatch,
   `onError(host, error)` optional and never a param for core; it returns
-  nothing. Its promise form is the convenience layer's. The
+  nothing. Called with no handler it returns a promise instead (the
+  convenience layer, 2026-11-18). The
   message id is the handle of a row in a pending `ta_table` holding the
   handlers; the drain finds it in O(1), the generation refusing a stale
   id, and pending handlers are dropped, never called, at `ta_host_free`.

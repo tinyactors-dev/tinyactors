@@ -13,49 +13,48 @@
 // through process.getBuiltinModule when the resolver is made: a runtime
 // without them (a browser) refuses it there, with TA_ERROR_UNSUPPORTED.
 //
-// The typed methods as promises (docs/plan.xml, d-promises): beside each
-// direct method `host.actorState(params, onResult, onError)` a method
-// `host.actorStateAsync(params)` that calls it with a result handler that
-// resolves and an error handler that rejects with the same
-// TinyactorsError. The direct methods are left as they are, so a caller
-// that passes handlers pays nothing for this module. The promise settles
-// from the handler, in the drain; its continuation runs as a microtask
-// after the turn's native call returns, outside the drain, on a result
-// already converted. A refusal at the call (a closed host, a `this` that
-// is not a Host) rejects too, as an async function's throw would. A
-// method still pending at `close()` never settles: the direct layer drops
-// its handlers uncalled.
+// The typed methods return promises when given no handler (the
+// maintainer, 2026-11-18): `host.actorState(params)` returns a promise that
+// resolves with the result and rejects with the TinyactorsError, while
+// `host.actorState(params, onResult, onError?)` is the direct method's call
+// and returns nothing. Each direct method on Host.prototype is replaced by a
+// function that passes a call with a handler straight to it (one argument
+// check and one call more, measured in docs/log.xml,
+// l-maint-promises-built) and otherwise calls it with a result handler that
+// resolves and an error handler that rejects. The promise settles from the
+// handler, in the drain; its continuation runs as a microtask after the
+// turn's native call returns, outside the drain, on a result already
+// converted. A refusal at the call (a closed host, a `this` that is not a
+// Host, params the method cannot write) rejects too, as an async function's
+// throw would. A method still pending at `close()` never settles: the
+// direct layer drops its handlers uncalled. An `onError` without an
+// `onResult` is the direct method's TypeError.
 import { Address, compileCharts, Host, ResolveError, TinyactorsError } from '#direct';
 
-/** The direct method `direct` as a method of the same params returning a
- * promise of its result. */
-function promised(direct) {
-  return function (params) {
+/** The direct method `direct` as one that returns a promise of its result
+ * when it is given no handler. */
+function promising(direct) {
+  return function (params, onResult, onError) {
+    if (onResult !== undefined || (onError !== undefined && onError !== null)) return direct.call(this, params, onResult, onError);
     return new Promise((resolve, reject) => {
       direct.call(this, params, (host, result) => resolve(result), (host, error) => reject(error));
     });
   };
 }
 
-/** Each direct typed method of Host, by the name of its promise form. */
-const TYPED_METHODS = {
-  actorStateAsync: Host.prototype.actorState,
-  actorContextAsync: Host.prototype.actorContext,
-  actorListAsync: Host.prototype.actorList,
-  actorGetAsync: Host.prototype.actorGet,
-  hostStatsAsync: Host.prototype.hostStats,
-  hostConfigAsync: Host.prototype.hostConfig,
-  traceConfigureAsync: Host.prototype.traceConfigure,
-  traceWatchAsync: Host.prototype.traceWatch,
-  traceUnwatchAsync: Host.prototype.traceUnwatch,
-  traceEndAsync: Host.prototype.traceEnd,
-  traceSpansDecodeAsync: Host.prototype.traceSpansDecode,
-};
+/** The direct typed methods of Host. */
+const TYPED_METHODS = [
+  'actorState', 'actorContext', 'actorList', 'actorGet', 'hostStats', 'hostConfig',
+  'traceConfigure', 'traceWatch', 'traceUnwatch', 'traceEnd', 'traceSpansDecode',
+];
 
-for (const [name, direct] of Object.entries(TYPED_METHODS)) {
-  if (typeof direct !== 'function') throw new Error(`@tinyactors/node: the direct layer has no Host method for ${name}`);
-  const method = promised(direct);
+for (const name of TYPED_METHODS) {
+  const direct = Host.prototype[name];
+  if (typeof direct !== 'function') throw new Error(`@tinyactors/node: the direct layer has no Host method ${name}`);
+  const method = promising(direct);
+  // the direct method's name and length (index.d.ts declares them)
   Object.defineProperty(method, 'name', { value: name });
+  Object.defineProperty(method, 'length', { value: direct.length });
   // as a class's methods are: writable, configurable, not enumerable
   Object.defineProperty(Host.prototype, name, { value: method, writable: true, configurable: true, enumerable: false });
 }

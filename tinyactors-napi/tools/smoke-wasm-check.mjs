@@ -34,8 +34,8 @@ async function count({ compileCharts, Host }, datamodel) {
     for (const value of [1, 'two', { three: [3] }]) host.send(session, 'inc', value);
     host.send(session, 'report');
     await host.idle();
-    const stats = await host.hostStatsAsync();
-    if (stats.host.actors !== 1) lines.push(`hostStatsAsync answered ${stats.host.actors} actors, not 1`);
+    const stats = await host.hostStats();
+    if (stats.host.actors !== 1) lines.push(`hostStats answered ${stats.host.actors} actors, not 1`);
   } finally {
     host.close();
   }

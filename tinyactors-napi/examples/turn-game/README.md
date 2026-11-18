@@ -146,7 +146,7 @@ it out of the handler first, so the demo rarely sees one.
   matches by name, before and after a restore.
 - **A `SimulatedClock`** for the replay, to move time to each journaled
   input, and in the tests.
-- **Typed methods** (`actorContextAsync`, `actorStateAsync`) for the
+- **Typed methods** (`actorContext`, `actorState`) for the
   players' records.
 - **`host.now()`** for the journal's times: the host's clock, on which a
   snapshot's time is too.

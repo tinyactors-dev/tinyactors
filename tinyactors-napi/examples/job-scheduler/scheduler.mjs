@@ -143,7 +143,7 @@ export class Scheduler {
   async state(id) {
     const job = this.jobs.get(id);
     if (job === undefined) return 'ended';
-    return (await this.host.actorStateAsync({ session: job.session })).value;
+    return (await this.host.actorState({ session: job.session })).value;
   }
 
   /**

@@ -101,9 +101,9 @@ export class Warehouse {
     const sum = (map) => Object.values(map).reduce((total, entry) => total + (typeof entry === 'number' ? entry : entry.qty), 0);
     let cursor;
     do {
-      const page = await this.host.actorListAsync(cursor === undefined ? {} : { cursor });
+      const page = await this.host.actorList(cursor === undefined ? {} : { cursor });
       for (const session of page.sessions) {
-        const { variables } = await this.host.actorContextAsync({ session });
+        const { variables } = await this.host.actorContext({ session });
         levels[variables.sku] = { stock: variables.stock, held: sum(variables.holds), sold: sum(variables.sold) };
       }
       cursor = page.cursor ?? undefined;

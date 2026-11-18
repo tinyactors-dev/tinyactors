@@ -220,7 +220,7 @@ export async function play(scenario, { datamodel = 'native', charts } = {}) {
     }
     // The host's own counters: the macrosteps the charts ran, the door
     // controllers invoked, and the errors raised in any chart.
-    const { charts } = await host.hostStatsAsync();
+    const { charts } = await host.hostStats();
     for (const chart of charts) {
       result.macrosteps += chart.macrosteps;
       result.communicationErrors += chart.errorsCommunication;

@@ -288,7 +288,7 @@ for (const datamodel of ['native', 'quickjs']) {
     decoder = new Host({ systemID: 'decoder', telemetry: {} });
     try {
       const spans = [];
-      for (const traces of collector.bodies('traces')) spans.push(...(await decoder.traceSpansDecodeAsync({ traces })).spans);
+      for (const traces of collector.bodies('traces')) spans.push(...(await decoder.traceSpansDecode({ traces })).spans);
       const ours = spans.filter((span) => span.trace === TRACE);
       const names = new Set(ours.map((span) => span.name));
       assert.ok(names.has('scxml.macrostep request'), [...names].join(', '));

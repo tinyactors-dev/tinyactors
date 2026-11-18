@@ -72,7 +72,7 @@ eviction at rest no more than `maxResident` actors were in memory.
   recently used first, to bring the count down to the bound when the sweep
   finds too few, and because `hibernate` gives the same error for an actor
   that is busy and one that is not in memory at all.
-- **`hostStatsAsync`** answers `actors` and `hibernated`, the resident set
+- **`hostStats`** answers `actors` and `hibernated`, the resident set
   the demo and the test check after every eviction.
 - **Named actors and addresses** (`spawnChart(chart, { name })`,
   `host.actorByName`, `tinyactors://chat/@room-lobby`): a user's actor
@@ -134,6 +134,6 @@ The store takes hooks, so a test can hold a file read or a write until it
 says so, or make a write fail; a test waits for the host and for the
 store's reads and writes with `chat.settle()`, since `host.idle()` does
 not wait for the wake handler's promise. A load of 220 actors with 30 in
-memory checks the bound with `hostStatsAsync` after every eviction, and
+memory checks the bound with `hostStats` after every eviction, and
 the last case runs a small `main.mjs` evening on the real clock. All of it
 takes about two seconds.

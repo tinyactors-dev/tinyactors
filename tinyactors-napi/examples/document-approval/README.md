@@ -92,15 +92,15 @@ version that was approved, and that no other document is.
 - **Named actors:** a document is spawned with its id as its name, so the
   desk finds it with `host.actorByName`, and a document that ended is not
   found.
-- **The typed methods, through their `Async` forms**, in `admin.mjs`:
-  `actorListAsync` pages through the sessions, and for each one
-  `actorGetAsync` (its chart, its mailbox, and its pending delayed sends,
-  from which `slaDue` reads when each stage's SLA is due), `actorStateAsync`
+- **The typed methods, as promises** (no handler given), in `admin.mjs`:
+  `actorList` pages through the sessions, and for each one
+  `actorGet` (its chart, its mailbox, and its pending delayed sends,
+  from which `slaDue` reads when each stage's SLA is due), `actorState`
   (its active states, and where each history state would return) and
-  `actorContextAsync` (its variables). `documents(host)`
+  `actorContext` (its variables). `documents(host)`
   returns them all, `formatTable` prints them, and `serveAdmin(host)`
   serves `GET /documents`, `GET /documents/<id>` and `GET /stats`
-  (`hostStatsAsync`) on a port of its own (0: a free one). The bots of
+  (`hostStats`) on a port of its own (0: a free one). The bots of
   `main.mjs` read their work queue from the same view.
 - **A `SimulatedClock`** in the test, so 48-hour SLAs take no time.
 - **Both datamodels:** the test runs every case on the native datamodel

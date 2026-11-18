@@ -131,7 +131,7 @@ export class Billing {
    * undefined for a session that has ended. */
   async releaseOf(session) {
     try {
-      const { segment } = await this.host.actorGetAsync({ session });
+      const { segment } = await this.host.actorGet({ session });
       return this.releases.get(segment);
     } catch (error) {
       if (error instanceof TinyactorsError) return undefined;
@@ -145,8 +145,8 @@ export class Billing {
     const result = {};
     let cursor;
     do {
-      const page = await this.host.actorListAsync(cursor === undefined ? { limit: 512 } : { cursor, limit: 512 });
-      const actors = await Promise.all(page.sessions.map((session) => this.host.actorGetAsync({ session })));
+      const page = await this.host.actorList(cursor === undefined ? { limit: 512 } : { cursor, limit: 512 });
+      const actors = await Promise.all(page.sessions.map((session) => this.host.actorGet({ session })));
       for (const actor of actors) {
         const release = this.releases.get(actor.segment);
         ((result[actor.chart] ??= {})[release] ??= []).push(BigInt(actor.session));
@@ -359,7 +359,7 @@ export class Billing {
 
   /** Resident and hibernated actors, as the host counts them. */
   async counters() {
-    const { host } = await this.host.hostStatsAsync();
+    const { host } = await this.host.hostStats();
     return { actors: host.actors, hibernated: host.hibernated, resident: host.actors - host.hibernated, segments: host.segments, retired: host.retired };
   }
 

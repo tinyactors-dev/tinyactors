@@ -216,8 +216,8 @@ export class Building {
   async inspect(car) {
     const session = this.sessions.get(car);
     const [{ value }, { variables }] = await Promise.all([
-      this.host.actorStateAsync({ session }),
-      this.host.actorContextAsync({ session }),
+      this.host.actorState({ session }),
+      this.host.actorContext({ session }),
     ]);
     return { states: leaves(value).sort(), variables };
   }

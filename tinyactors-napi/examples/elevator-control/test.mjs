@@ -45,7 +45,7 @@ function setup(datamodel, spec = {}, charts) {
 
 /** The door controllers `car` runs now, by actorGet. */
 async function invocations(building, car) {
-  return (await building.host.actorGetAsync({ session: building.sessions.get(car) })).invocations;
+  return (await building.host.actorGet({ session: building.sessions.get(car) })).invocations;
 }
 
 for (const datamodel of DATAMODELS) {

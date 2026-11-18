@@ -30,7 +30,7 @@ export async function holdTimes(sandbox, runs = 3, { loop = 'spin' } = {}) {
     await host.idle();
     times.push(performance.now() - start);
   }
-  const stats = await host.hostStatsAsync();
+  const stats = await host.hostStats();
   host.close();
   return { times, errorsExecution: stats.charts[0].errorsExecution };
 }
@@ -78,20 +78,20 @@ export async function costPerDevice(datamodel, devices = 1000, { declaring = fal
   // the region of a host sized for one actor, against one sized for all
   const probe = ruleHost(1);
   probe.addCharts({ 'overheat.scxml': text });
-  const smallest = (await probe.hostStatsAsync()).host.regionBytes;
+  const smallest = (await probe.hostStats()).host.regionBytes;
   probe.close();
   const host = ruleHost(devices + 1);
   host.addCharts({ 'overheat.scxml': text });
   await host.idle();
   globalThis.gc?.();
-  const before = { stats: await host.hostStatsAsync(), rss: process.memoryUsage().rss };
+  const before = { stats: await host.hostStats(), rss: process.memoryUsage().rss };
   for (let i = 0; i < devices; i++) {
     const session = host.spawnChart('overheat', { name: `d${i}`, params: { device: `d${i}`, sustain: 2 } });
     host.send(session, 'reading', { device: `d${i}`, metric: 'temp', value: 50 + (i % 60), seq: 1 });
   }
   await host.idle();
   globalThis.gc?.();
-  const after = { stats: await host.hostStatsAsync(), rss: process.memoryUsage().rss };
+  const after = { stats: await host.hostStats(), rss: process.memoryUsage().rss };
   host.close();
   const per = (f) => Math.round((f(after) - f(before)) / devices);
   return {

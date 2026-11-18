@@ -134,9 +134,9 @@ test('typed methods: a result, an error to onError, and their promises', async (
   equal(typeof stats.host, 'object', 'host.stats');
   equal(state.value, 's', 'actor.state');
   equal(error instanceof TinyactorsError && error.status === undefined && typeof error.code, 'number', 'a reply\'s error');
-  const config = await host.hostConfigAsync();
+  const config = await host.hostConfig();
   equal(config.systemID, 't', 'the promise form');
-  const refused = await host.actorStateAsync({ session: 999 }).then(() => null, (e) => e);
+  const refused = await host.actorState({ session: 999 }).then(() => null, (e) => e);
   equal(refused instanceof TinyactorsError, true, 'a promise rejected');
   throws(() => host.hostStats(undefined, 1), typeError, 'onResult not a function');
   host.close();

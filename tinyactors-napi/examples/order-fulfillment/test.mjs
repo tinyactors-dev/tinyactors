@@ -57,7 +57,7 @@ const events = (shop) => shop.outbox.map((message) => message.event);
 
 /** The state the order's actor is in. */
 async function state(shop, id) {
-  const { value } = await shop.host.actorStateAsync({ session: shop.host.actorByName(id) });
+  const { value } = await shop.host.actorState({ session: shop.host.actorByName(id) });
   return JSON.stringify(value);
 }
 

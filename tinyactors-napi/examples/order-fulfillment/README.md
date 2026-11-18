@@ -72,7 +72,7 @@ gateway's ledger at the end of a run.
 - **A `SimulatedClock`** in the test: three 10 s timeouts and two backoffs
   take no time, and the test steps from deadline to deadline with
   `host.nextDeadline`.
-- **The typed method `actorStateAsync`** in the test, to check the state an
+- **The typed method `actorState`** in the test, to check the state an
   order is in between steps.
 - **Both datamodels:** the test runs every case on the native datamodel and
   on quickjs.

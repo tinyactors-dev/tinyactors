@@ -93,7 +93,7 @@ text in it, which does not parse either.
   unknown states and a `src` with no resolver are reported to the
   customer with their file, line and column, before anything runs. No
   resolver is given, so a chart can read no file.
-- **`hostStatsAsync` per chart counters**: `errorsExecution` and
+- **`hostStats` per chart counters**: `errorsExecution` and
   `errorsCommunication` are how the platform learns that a customer's
   chart failed, since an uploaded chart need not catch its errors, and
   `fuel` is how it finds a rule that keeps its host busy without breaking
@@ -136,7 +136,7 @@ reversed each ended in `error.execution` within 250 ms at `maxOps: 1000`
 and a 64 MB `memoryLimit` (a spike, not in the test).
 
 **What a rule costs per device**, one actor of the template rule per
-device, 2000 devices, from `hostStatsAsync` and the process:
+device, 2000 devices, from `hostStats` and the process:
 
 | Rule | region per device | of it, slab in use | resident per device (node, bun) |
 |---|---|---|---|
@@ -145,7 +145,7 @@ device, 2000 devices, from `hostStatsAsync` and the process:
 | native, the template | 283 B | 115 B | 1.0 to 2.2 KB, 4.1 to 4.6 KB |
 | native, plus the same script | 283 B | 115 B | 196 KB, 206 KB |
 
-The region is what `hostStatsAsync` counts (`regionBytes` of a host sized
+The region is what `hostStats` counts (`regionBytes` of a host sized
 for the devices, less one sized for one actor; `slabBytes.used`), and it
 is the same for both datamodels: the rule's state and strings in core.
 The engine's own heap is not in core's counters (`host.quickjsHeapBytes`

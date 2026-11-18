@@ -81,8 +81,8 @@ as spawn params, and the chart enforces them.
   `/v1/logs` with `fetch`, and returns the promise, so the gateway's
   `close()` (`host[Symbol.asyncDispose]()`) waits for the last ones. The
   chart's `<log>` lines (a timeout, a late answer, a retry) are log
-  records in the trace of the step that wrote them. Each process seeds its
-  own trace ids (`system.traceSeed`).
+  records in the trace of the step that wrote them. Each host draws its
+  own trace seed; the test sets `system.traceSeed` to reproduce its ids.
 - **A `SimulatedClock`** in the test: the 2 s timeouts, the 30 s expiry
   and the refills take no time, while the HTTP around them is real.
 - **Both datamodels:** the test runs every case on the native datamodel
@@ -122,5 +122,5 @@ bun test ./examples/http-gateway/test.mjs
 The test drives the upstream one request at a time (a request waits until
 the test answers it) and checks what the client, the upstream and the
 collector saw: the trace ids the collector's spans and log records carry,
-read back with `host.traceSpansDecodeAsync`. The last case runs
+read back with `host.traceSpansDecode`. The last case runs
 `main.mjs`'s demo on the real clock. All of it takes about a second.

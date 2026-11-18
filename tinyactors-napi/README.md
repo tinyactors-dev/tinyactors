@@ -286,7 +286,7 @@ const host = new Host({ systemID: 'demo' });
 host.addCharts({ 'idle.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
     datamodel="ecmascript" name="idle"><state id="s"/></scxml>` });
 const session = host.spawnChart('idle', { name: 'first' });
-const { sessions } = await host.actorListAsync();
+const { sessions } = await host.actorList();
 console.log(typeof session, typeof sessions[0]);
 console.log(sessions.includes(Number(session)), sessions.map(BigInt).includes(session));
 const byKey = new Map([[String(session), 'kept under its text']]);
@@ -592,7 +592,7 @@ TA_ERROR_INVALID - the host has no chart of that name
   rejects a waiting `host.idle()`; with none waiting it is thrown from the
   host's turn as an uncaught exception, and a handler's promise that
   rejects is an unhandled rejection, as is a typed method's promise
-  (`await host.actorStateAsync(...)`) that rejects with no `catch`. Either
+  (`await host.actorState(...)`) that rejects with no `catch`. Either
   ends a Node.js or Bun process unless the application handles
   `uncaughtException` and `unhandledRejection`. Only a turn's first error is reported; the others
   of that turn are lost.
