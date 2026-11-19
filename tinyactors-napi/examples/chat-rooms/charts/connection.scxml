@@ -6,11 +6,9 @@
      it ends.
 
      It sends to rooms and workspaces by name, by the naming convention of
-     connection.js, and to a room always by its name: a room keys its
-     members by the origin of their sends, and core writes one sender's
-     origin in two forms, tinyactors://chat/#_scxml_<session> for a send
-     to a name and #_scxml_<session> for a send to a session's address
-     (as an origin is), which would be two keys for one member.
+     connection.js. A room keys its members by the fragment of the
+     origin of their sends (#_scxml_<session>), so a send to it by name
+     or by session is one member.
 
      A join of a room that does not exist gets error.communication at
      once (the sender handles a miss), which the connection turns into an

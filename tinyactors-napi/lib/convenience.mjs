@@ -371,8 +371,10 @@ export class Actor {
     Object.freeze(this);
   }
 
-  /** tinyactors://<system>/#_scxml_<id>: what another system sends to,
-   * and what _event.origin holds for it. */
+  /** tinyactors://<system>/#_scxml_<id>, the full form: what another
+   * system sends to. A chart sees this actor's sends' _event.origin
+   * either in it or as its fragment, #_scxml_<id>, so compare by the
+   * fragment. */
   get address() { return Address.fromSession(this.host.system, this.id); }
 
   /** send(event, data?, options?): host.send to the actor. */

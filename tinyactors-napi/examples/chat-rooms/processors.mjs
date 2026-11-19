@@ -43,11 +43,11 @@ export class Gateway {
         return;
       }
       case 'broadcast': { // a room's message: one send, every member's socket
-        // a member is the address of its connection (tinyactors://chat/#_scxml_<session>)
+        // a member is its connection's address from the "#" on (#_scxml_<session>)
         const text = JSON.stringify([send.data.event, send.data.data]);
         const gone = [];
         for (const member of send.data.to) {
-          const socket = this.sockets.get(String(new Address(member).session));
+          const socket = this.sockets.get(String(new Address(`tinyactors://${send.host.system}/${member}`).session));
           if (socket === undefined) gone.push(member);
           else socket.send(text);
         }

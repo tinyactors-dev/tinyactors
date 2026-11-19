@@ -256,8 +256,87 @@ ids joined by `.`, each id of lowercase letters, digits and `-`
 that comes from a user before it becomes part of a name. The system's
 own id is stricter still: lowercase letters, digits, `-` and `.`.
 
-One more thing to know when an actor keys a table by `_event.origin`:
-the origin is the sender's address, written `tinyactors://chat/#_scxml_2`
-when the sender sent to a name and `#_scxml_2` when it sent to a
-session's address (as an origin is). Send to such an actor always by its
-name, or key the table by the session, so one sender is one key.
+## Keying a table by the sender
+
+An actor that keeps a table of the actors that send to it (a room's
+members, a workspace's pending requests) keys it by `_event.origin`, the
+sender's address. Core writes one sender's origin in two forms:
+
+- `#_scxml_2`, the address's fragment alone, when the send stayed in the
+  sender's segment of the host: a send to a session's address
+  (`#_scxml_<n>`, or the full address of a session of the same system),
+  to `#_parent`, to an invoked child, and a delayed send among them;
+- `tinyactors://chat/#_scxml_2`, the full address, when the host routed
+  the send: a send to a name (`@room.acme.general`), to a session in
+  another segment, or from another system (whatever origin its
+  transport passes, which is the full address when it passes the
+  sender's `origin` on).
+
+Both name the same sender, so **key a table by the origin's fragment**,
+from `#` on. A chart-level `<script>` holds the helper, and the
+expressions call it with the origin:
+
+```js
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([
+  { name: 'room.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+      datamodel="ecmascript" name="room" initial="open">
+    <script>
+      /** The sender's key: its address from the "#" on, whichever form the origin has. */
+      function sender(origin) { return origin.slice(origin.indexOf('#')); }
+    </script>
+    <datamodel><data id="members" expr="({})"/></datamodel>
+    <state id="open">
+      <transition event="join">
+        <assign location="members" expr="({ ...members, [sender(_event.origin)]: _event.data })"/>
+        <log expr="_event.origin + ' is ' + sender(_event.origin) + ': ' + Object.keys(members).length + ' member'"/>
+      </transition>
+    </state>
+  </scxml>` },
+  { name: 'member.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+      datamodel="ecmascript" name="member" initial="s">
+    <state id="s">
+      <transition event="join"><send event="join" targetexpr="_event.data"><content expr="'ada'"/></send></transition>
+    </state>
+  </scxml>` },
+]);
+const host = new Host(compiled, { system: 'chat', log: (entry) => console.log(entry.text) });
+compiled.close();
+
+const room = host.spawn('room', { name: 'room.acme.general' });
+const member = host.spawn('member');
+member.send('join', room.address.text);                   // by its session
+await host.idle();
+member.send('join', 'tinyactors://chat/@room.acme.general'); // by its name
+await host.idle();
+host.close();
+```
+
+```output
+#_scxml_2 is #_scxml_2: 1 member
+tinyactors://chat/#_scxml_2 is #_scxml_2: 1 member
+```
+
+The fragment is a key, and a target too: `<send targetexpr="key">`
+reaches the sender from any segment of the host.
+
+**Where the system matters, key by the full address.** A table that
+holds senders of other systems as well (a directory that answers
+several hosts) must keep the system, and an origin from another system
+always names it. There, complete a fragment with the actor's own
+system, which its own address, `_ioprocessors.scxml.location`, holds:
+
+```xml
+<script>
+  /** The sender's full address; `self` is _ioprocessors.scxml.location. */
+  function senderAddress(origin, self) {
+    return origin.startsWith('#_scxml_') ? self.slice(0, self.indexOf('#')) + origin : origin;
+  }
+</script>
+<assign location="members" expr="({ ...members, [senderAddress(_event.origin, _ioprocessors.scxml.location)]: _event.data })"/>
+```
+
+An event from a service your program runs (`invocation.sendBack`) has
+the origin `#_<invokeid>`, which names that invocation in this actor
+only: either helper leaves it as it is.

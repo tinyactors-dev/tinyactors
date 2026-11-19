@@ -623,8 +623,10 @@ export class Actor {
   readonly id: bigint;
   /** The host it runs in (not enumerable). */
   readonly host: Host;
-  /** `tinyactors://<system>/#_scxml_<id>`: what another system sends to,
-   * and what `_event.origin` holds for it. */
+  /** `tinyactors://<system>/#_scxml_<id>`, the full form: what another
+   * system sends to. A chart sees this actor's sends' `_event.origin`
+   * either in it or as its fragment, `#_scxml_<id>`, so compare by the
+   * fragment. */
   readonly address: Address;
   /** `host.send(actor, event, data, options)`. */
   send(event: string, data?: Value, options?: SendOptions): void;

@@ -6,8 +6,9 @@
      workspace's Spawner, or the application rebuilding the rooms from the
      database after a restart.
 
-     Its members are connections, keyed by their address (the origin of
-     their join). A post from a member goes into the history, into the
+     Its members are connections, keyed by the fragment of their address
+     (sender(_event.origin), room.js: one key whichever form the origin
+     of their join has). A post from a member goes into the history, into the
      database (chat:db, message.insert) and to every member's socket in
      one send to the gateway (chat:gateway, broadcast); the gateway answers
      members.gone with the members whose socket has gone away.
@@ -21,7 +22,7 @@
     <data id="workspace"/>                <!-- given at spawn -->
     <data id="name"/>                     <!-- given at spawn -->
     <data id="history" expr="[]"/>        <!-- the last messages; given at a restart -->
-    <data id="members" expr="({})"/>      <!-- connection address -> user -->
+    <data id="members" expr="({})"/>      <!-- #_scxml_<connection> -> user -->
   </datamodel>
   <state id="open">
     <onentry>
@@ -34,15 +35,15 @@
     </onentry>
 
     <transition event="join">
-      <assign location="members" expr="withEntry(members, _event.origin, _event.data.user)"/>
+      <assign location="members" expr="withEntry(members, sender(_event.origin), _event.data.user)"/>
       <send targetexpr="_event.origin" event="room.joined">
         <content expr="{ room: name, history: recent(history) }"/>
       </send>
     </transition>
     <transition event="leave">
-      <assign location="members" expr="withoutEntry(members, _event.origin)"/>
+      <assign location="members" expr="withoutEntry(members, sender(_event.origin))"/>
     </transition>
-    <transition event="post" cond="_event.origin in members">
+    <transition event="post" cond="sender(_event.origin) in members">
       <assign location="history" expr="remember(history, message(name, members, _event))"/>
       <send type="chat:db" event="message.insert">
         <content expr="stored(workspace, name, members, _event)"/>

@@ -92,6 +92,10 @@ name after `@` wherever a chart or the application writes it.
 - **`actor.ask`**: the application asks a workspace for its rooms
   (`rooms.list`), and an admin asks a room to kick a user (`kick`); the
   chart answers to `_event.origin`.
+- **Keying a table by the sender**: a room keys its members by the
+  fragment of `_event.origin` (`sender` in `room.js`), so one connection
+  is one member whichever form the origin has
+  ([Keying a table by the sender](../../docs/guide/missing-actors.md#keying-a-table-by-the-sender)).
 - **`onDone`**: a connection that ended (a missed heartbeat, a closed
   socket) leaves the gateway.
 - **A delayed send and `<cancel>`**: the heartbeat, a deadline that
