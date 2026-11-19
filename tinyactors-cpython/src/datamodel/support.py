@@ -419,10 +419,10 @@ class Spawner:
         segment)."""
         if name is None:
             return None
-        try:
-            holder = host.actor(name)  # ta_host_actor_by_name: newest segment first
-        except StaleError:
+        session = host._actor_by_name(name)  # ta_host_actor_by_name: newest segment first
+        if session is None:
             return None
+        holder = Actor(host, session)
         segment, _ = host.locate(holder)  # never the session's bits: a migrated actor moved
         if segment < ref.segment:
             return None  # an older version's: it finishes there

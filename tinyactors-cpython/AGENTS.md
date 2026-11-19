@@ -182,7 +182,8 @@ Decided by the maintainer (2026-10-13); every item is in
   the sendid), or fails the send. A name is held once per version (the
   maintainer, 2026-11-19: spawning a new version under a name is the
   update): with `ref = host.chart(chart)`, a live holder of `name`
-  (`host.actor`, `ta_host_actor_by_name`) whose segment
+  (`host._actor_by_name`, `ta_host_actor_by_name`, a name whatever it
+  looks like, as Node's hidden `actorByName`) whose segment
   (`host.locate`, `ta_host_locate`: a migrated actor lives in the
   segment that adopted it, so never the session's bits) is `ref`'s is
   answered, `created` `False`, nothing spawned (a hibernated one is not

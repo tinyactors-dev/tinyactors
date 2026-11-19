@@ -606,6 +606,20 @@ class Spawning(unittest.TestCase):
         self.assertEqual(logs.labelled("room"), ["lobby news"] * 2)
         host.close()
 
+    def test_a_name_that_looks_like_an_address_is_a_name(self):
+        logs = Logs()
+        host, workspace = self.host(logs)
+        odd = dict(self.LOBBY, name="tinyactors://elsewhere/@lobby")
+        workspace.send("make", odd)
+        host.run_until_idle()
+        workspace.send("make", odd)  # found by its name, as Node's Spawner finds it
+        host.run_until_idle()
+        session = host._actor_by_name(odd["name"])
+        address = tinyactors.Address.from_session(host.system, session).text
+        self.assertEqual(logs.labelled("spawned"), ["s1 %s %s True" % (odd["name"], address),
+                                                    "s1 %s %s False" % (odd["name"], address)])
+        host.close()
+
     def test_locate_gives_the_segment_and_the_actor(self):
         host, workspace = self.host(Logs())
         segment, actor = host.locate(workspace)

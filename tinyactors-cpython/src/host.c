@@ -1235,6 +1235,28 @@ static PyObject *ta_python_host_chart_of(PyObject *self, PyObject *value) {
     return result;
 }
 
+/* _actor_by_name(name) -> int or None: ta_host_actor_by_name, the name
+ * read as a name whatever it looks like (host.actor reads a string that
+ * starts with tinyactors:// as an address), for the Spawner, as Node's
+ * hidden actorByName. */
+static PyObject *ta_python_host_actor_by_name(PyObject *self, PyObject *value) {
+    ta_python_host *host = (ta_python_host *)self;
+    if (!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "_actor_by_name takes the actor's name, a str");
+        return NULL;
+    }
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    ta_string_view name;
+    PyObject *result = NULL;
+    if (ta_python_text(value, &name) == 0) {
+        uint64_t session = ta_host_actor_by_name(host->host, name);
+        result = session ? PyLong_FromUnsignedLongLong(session) : Py_NewRef(Py_None);
+    }
+    ta_python_leave(&call);
+    return result;
+}
+
 /* _done(session): the future Actor.done awaits, kept in a dict by session
  * while someone awaits it; settled at the actor's DONE or ERROR. */
 static PyObject *ta_python_host_done(PyObject *self, PyObject *value) {
@@ -2060,6 +2082,7 @@ static PyMethodDef ta_python_host_methods[] = {
     {"locate", ta_python_host_locate, METH_O, ta_python_doc_host_locate},
     {"actors", (PyCFunction)(void (*)(void))ta_python_host_actors, METH_VARARGS | METH_KEYWORDS, ta_python_doc_host_actors},
     {"_chart_of", ta_python_host_chart_of, METH_O, NULL},
+    {"_actor_by_name", ta_python_host_actor_by_name, METH_O, NULL},
     {"_done", ta_python_host_done, METH_O, NULL},
     {"_ask", ta_python_host_ask, METH_VARARGS, NULL},
     {"spawn", (PyCFunction)(void (*)(void))ta_python_host_spawn, METH_VARARGS | METH_KEYWORDS,

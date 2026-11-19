@@ -397,6 +397,20 @@ test('Spawner: two requests for one name in one batch give one actor and two ans
   host.close();
 });
 
+test('Spawner: a name that looks like an address is a name, as in Python', async () => {
+  const { log, of } = logged();
+  const name = 'tinyactors://elsewhere/@lobby';
+  const host = new Host(image({ workspace: WORKSPACE(`({ chart: 'room', name: '${name}', params: { topic: 'news' } })`), room: ROOM }),
+    { ...CONFIG, ...ENGINE, log, ioProcessors: { spawn: new Spawner() } });
+  host.spawn('workspace');
+  host.spawn('workspace');
+  await host.idle();
+  const room = host.actor(Address.fromName(host.system, name));
+  equal(of('spawned').join('|'), [true, false].map((created) => `{"name":${JSON.stringify(name)},"address":"${room.address.text}","created":${created}} ask-room`).join('|'),
+    'found by its name the second time');
+  host.close();
+});
+
 test('Spawner: a request after a deploy spawns the new version under the name; the old one finishes on its own', async () => {
   const { log, of } = logged();
   const host = spawning(log);
