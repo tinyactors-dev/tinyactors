@@ -72,14 +72,14 @@ not guess this from the bytes; the line says it. (The line is `only`, not
 | the other `actor.send` cases | a binding mirrors a method with a typed method only where its language has no direct call: a program sends with the binding's `send` (`ta_host_resolve` and `ta_host_send`); `actor.send` is for a client outside the process |
 | "method is not text", "no such method", "params is not a map" | a binding has no raw post (ADR 0012, decision 3): its typed methods, one per method of requests.md, write the method's name and the params map themselves |
 | `config.txt` "host.config: traceSeed's default" | a binding draws a random `system.traceSeed` where its config gives none, so no config a binding sends lacks one; "host.config: the defaults" gives one and checks every other default |
+| `config.txt` "not a map", "ioProcessors[0].type" | a binding's `Host` builds the config map itself from its arguments (the system id, the I/O processors as objects of a `type`, the other keys), so no config it sends is not a map, and no I/O processor entry lacks a `type` |
 
 A binding passes the caller's values through unchecked, so the cases of
 the method level stay a binding's: a param a method does not take
 (`params.x`, a keyword its typed method passes through), a param of the wrong type or out of range, the
 limits on params (`actor.list`'s 512, "more than 32 rules"), every
-method's results, `host.config`, and every config but "not CBOR" (a config
-that is not a map is the language's `1`) and "host.config: traceSeed's
-default".
+method's results, `host.config`, and every config but the reference-only
+ones above.
 
 ## Writing a case
 
