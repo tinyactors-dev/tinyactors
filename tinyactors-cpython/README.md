@@ -357,14 +357,15 @@ Read the fields inside the handler: a plain function gets a thin view
 | You see | When | What to do |
 |---|---|---|
 | `CompileError` | `compile_charts` or `compile_system` found an error | read `error.diagnostics`, each with `file`, `line`, `column`, `severity` and `message`; nothing was compiled |
-| `TinyactorsError` | the host refused a call, a thin view was read after its batch, a run faulted, or a typed method's reply was an error | branch on `error.status`, the core's name for the status (`"TA_ERROR_STALE"`, `"TA_ERROR_STATE"`, `"TA_ERROR_INVALID"`, ...) |
+| `StaleError`, `StateError`, `InvalidError`, `UnsupportedError` (each a `TinyactorsError`) | the host refused a call, a thin view was read after its batch, or a typed method's reply was an error: an actor or handle that is gone, a call the host cannot make now, an argument it refuses, a value it does not take | catch the class you handle; `error.status` is the core's name for the status (`"TA_ERROR_STALE"`, ...), and a typed method's error also has `code`, `reason` and `path` |
+| `TinyactorsError` | any other refusal, or a run that faulted | read `error.status` |
 | `MemoryError` naming a pool | the host ran out of a pool its config sized | the host stays usable, and the next run goes on where this one stopped; size the config (below, "Sizing the config") |
 | your handler's exception | a handler raised | the driver raises the first one after the turn |
 | `error.execution`, `error.communication` | inside a chart | handled by the chart, as SCXML defines; when the chart's code failed, `error.execution`'s `_event.data` is `{"reason", "message"}`: `"exception"` with the exception's type and text (`"NameError: name 'x' is not defined"`), `"memory"` for a `MemoryError` (on quickjs, past its memory limit, 1 GiB), and on quickjs `"fuel"` past its `maxOps`; see the core's documentation |
 
 `CompileError` and `ResolveError` are subclasses of `TinyactorsError`.
 For example, `host.send(12345, "hello")` to a session that does not exist
-raises `TinyactorsError` with `status == "TA_ERROR_STALE"`.
+raises `StaleError`, whose `status` is `"TA_ERROR_STALE"`.
 
 ## Invoked services
 

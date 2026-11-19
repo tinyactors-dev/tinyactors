@@ -24,13 +24,56 @@ class TinyactorsError(Exception):
     MemoryError is raised instead when the host ran out of a pool its
     config sized."""
 
+    def __new__(cls, message="", code=None, reason=None, path=None, status=None, *rest, **named):
+        if cls is TinyactorsError:  # the subclass of its status, or of a typed method's code
+            cls = _BY_STATUS.get(status) or (None if code is None else _by_code(code)) or cls
+        return super().__new__(cls, message)
+
     def __init__(self, message="", code=None, reason=None, path=None, status=None):
         super().__init__(message)
         self.message = message
         self.code = code
         self.reason = reason
         self.path = path
-        self.status = status
+        self.status = status if status is not None or code is not None else self._status
+
+
+class StaleError(TinyactorsError):
+    """An actor, session, view or handle that does not exist (any more): a
+    send to a session or name that ended, a thin view read after its batch
+    was acknowledged, a typed method's "stale" error. Its status is
+    "TA_ERROR_STALE"."""
+    _status = "TA_ERROR_STALE"
+
+
+class StateError(TinyactorsError):
+    """A call the host cannot make now: a closed host, a snapshot from a
+    handler or with a reply pending, a typed method's "state" error. Its
+    status is "TA_ERROR_STATE"."""
+    _status = "TA_ERROR_STATE"
+
+
+class InvalidError(TinyactorsError):
+    """An argument the host refused: a malformed config, image or address,
+    a typed method's param of the wrong type or out of range. Its status is
+    "TA_ERROR_INVALID"."""
+    _status = "TA_ERROR_INVALID"
+
+
+class UnsupportedError(TinyactorsError):
+    """A value or a feature the host does not take: a value outside the
+    value table, a session that cannot hibernate. Its status is
+    "TA_ERROR_UNSUPPORTED"."""
+    _status = "TA_ERROR_UNSUPPORTED"
+
+
+TinyactorsError._status = None
+_BY_STATUS = {"TA_ERROR_STALE": StaleError, "TA_ERROR_STATE": StateError,
+              "TA_ERROR_INVALID": InvalidError, "TA_ERROR_UNSUPPORTED": UnsupportedError}
+
+
+def _by_code(code):
+    return StaleError if code == -32001 else StateError if code == -32002 else InvalidError
 
 
 class CompileError(TinyactorsError):

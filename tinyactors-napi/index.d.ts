@@ -122,7 +122,7 @@ export type Status =
  *
  * @example
  * try { host.send(session, 'go'); }
- * catch (error) { if (error instanceof TinyactorsError && error.status === 'TA_ERROR_STALE') ... }
+ * catch (error) { if (error instanceof StaleError) ... } // the actor ended
  */
 export class TinyactorsError extends Error {
   constructor(
@@ -140,6 +140,25 @@ export class TinyactorsError extends Error {
   /** A refused call's reason. */
   readonly status: Status | undefined;
 }
+
+/** An actor, session, view or handle that does not exist (any more): a
+ * send to a session or name that ended, a thin view read after its batch, a
+ * typed method's `stale` error. Its `status` is `'TA_ERROR_STALE'`. */
+export class StaleError extends TinyactorsError {}
+
+/** A call the host cannot make now: a closed host, a snapshot from a
+ * handler, a typed method's `state` error. Its `status` is
+ * `'TA_ERROR_STATE'`. */
+export class StateError extends TinyactorsError {}
+
+/** An argument the host refused: a malformed config, image or address, a
+ * typed method's param. Its `status` is `'TA_ERROR_INVALID'`. */
+export class InvalidError extends TinyactorsError {}
+
+/** A value or a feature the host does not take: a value outside the value
+ * table, a chart that cannot hibernate. Its `status` is
+ * `'TA_ERROR_UNSUPPORTED'`. */
+export class UnsupportedError extends TinyactorsError {}
 
 // ---- compiling ----------------------------------------------------------
 

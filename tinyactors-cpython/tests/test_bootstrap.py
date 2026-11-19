@@ -19,6 +19,40 @@ import unittest
 import tinyactors
 
 
+class ErrorTests(unittest.TestCase):
+    """A TinyactorsError is the subclass of its status, or of a typed method's code."""
+
+    def test_the_subclass_of_a_status(self):
+        """Each status an application branches on has its class."""
+        classes = {"TA_ERROR_STALE": tinyactors.StaleError, "TA_ERROR_STATE": tinyactors.StateError,
+                   "TA_ERROR_INVALID": tinyactors.InvalidError, "TA_ERROR_UNSUPPORTED": tinyactors.UnsupportedError}
+        for status, subclass in classes.items():
+            error = tinyactors.TinyactorsError("m", status=status)
+            self.assertIs(type(error), subclass)
+            self.assertIsInstance(error, tinyactors.TinyactorsError)
+            self.assertEqual(error.status, status)
+            self.assertEqual(subclass("m").status, status)
+        self.assertIs(type(tinyactors.TinyactorsError("m")), tinyactors.TinyactorsError)
+        self.assertIs(type(tinyactors.TinyactorsError("m", status="TA_ERROR_FATAL")), tinyactors.TinyactorsError)
+
+    def test_the_subclass_of_a_typed_methods_code(self):
+        """-32001 is stale, -32002 state, any other code invalid."""
+        for code, subclass in [(-32001, tinyactors.StaleError), (-32002, tinyactors.StateError),
+                               (-32602, tinyactors.InvalidError), (-32601, tinyactors.InvalidError)]:
+            error = tinyactors.TinyactorsError("m", code=code, reason="r")
+            self.assertIs(type(error), subclass)
+            self.assertEqual((error.code, error.status), (code, None))
+
+    def test_a_refusal_raises_its_subclass(self):
+        """A closed host's input is a StateError, catchable as TinyactorsError."""
+        host = tinyactors.Host({"systemID": "errors"})
+        host.close()
+        with self.assertRaises(tinyactors.StateError) as raised:
+            host.send(1, "go")
+        self.assertEqual(raised.exception.status, "TA_ERROR_STATE")
+        self.assertIsInstance(raised.exception, tinyactors.TinyactorsError)
+
+
 class VersionTests(unittest.TestCase):
     """The module says which version it is."""
 

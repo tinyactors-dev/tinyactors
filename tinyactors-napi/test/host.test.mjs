@@ -4,7 +4,7 @@
 // collected with its memory freed. The inputs (p1-compile): addImage,
 // chart, spawn, send in both shapes, fail, sendMany, terminate,
 // actorByName, each with its refusals, and TA_EFFECT_REQUEST answered in C.
-import { Host, TinyactorsError } from '@tinyactors/node';
+import { Host, StaleError, StateError, TinyactorsError } from '@tinyactors/node';
 import { CONFIG, ENDER, ENGINE, WAITER, hostWith, image, scxml, status, until } from './charts.mjs';
 import { collect, run, test } from './harness.mjs';
 import { wasm } from './runtime.mjs';
@@ -415,8 +415,8 @@ test('terminate ends an actor; a session that is gone is refused', async () => {
   host.terminate(session);
   if (!(await gone(host, 'w'))) throw new Error('terminated');
   throws(() => host.terminate(session), (error) => {
-    if (!(error instanceof TinyactorsError)) throw error;
-  }, 'terminate again');
+    if (!(error instanceof StaleError) || error.status !== 'TA_ERROR_STALE') throw error;
+  }, 'terminate again: a StaleError');
   throws(() => host.terminate(1.5), typeError, 'a session that is not an integer');
   equal(host.actorByName('nobody'), undefined, 'no actor of that name');
   throws(() => host.actorByName(1n), typeError, 'a name that is not a string');
@@ -437,7 +437,10 @@ test('every input of a closed host is refused', () => {
     sendMany: () => host.sendMany([]),
     terminate: () => host.terminate(1n),
     actorByName: () => host.actorByName('w'),
-  })) throws(call, status('TA_ERROR_STATE'), name);
+  })) throws(call, (error) => {
+    status('TA_ERROR_STATE')(error);
+    if (!(error instanceof StateError)) throw new Error(`${name}: not a StateError: ${error.name}`);
+  }, name);
 });
 
 test('a run-time fetch (TA_EFFECT_REQUEST) is answered in C: the parent gets error.execution', async () => {

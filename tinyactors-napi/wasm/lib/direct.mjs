@@ -6,7 +6,9 @@
 // both. Nothing here touches the module before a call: an entry loads it.
 export { Address } from './address.mjs';
 export { compileCharts, compileSystem } from './compile.mjs';
-export { CompileError, ResolveError, TinyactorsError } from './errors.mjs';
+export {
+  CompileError, InvalidError, ResolveError, StaleError, StateError, TinyactorsError, UnsupportedError,
+} from './errors.mjs';
 export { Host, SimulatedClock } from './host.mjs';
 export { encodeHTTPPost, parseHTTPRequest } from './http.mjs';
 export { decode, encode } from './values.mjs';

@@ -66,7 +66,8 @@ int ta_python_support_init(PyObject *module, ta_python_module_state *state) {
             !state->check_file || !names || !state->builtins || !state->time_ns || !state->coroutine_function ||
             !state->event_kinds || !state->event_key)
             status = -1;
-        static const char *const exported[] = {"TinyactorsError", "CompileError", "ResolveError", "Diagnostic"};
+        static const char *const exported[] = {"TinyactorsError", "StaleError", "StateError", "InvalidError",
+                                               "UnsupportedError", "CompileError", "ResolveError", "Diagnostic"};
         for (size_t i = 0; status == 0 && i < sizeof exported / sizeof exported[0]; i++) {
             PyObject *value = ta_python_support_get(namespace, exported[i]);
             if (!value || PyModule_AddObjectRef(module, exported[i], value) < 0) status = -1;

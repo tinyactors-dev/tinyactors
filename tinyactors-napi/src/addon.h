@@ -82,7 +82,8 @@ typedef struct ta_napi_instance {
     napi_env env;
     ta_allocator allocator;
     ta_growable_arena arena;
-    napi_ref error;
+    napi_ref error;  /* TinyactorsError */
+    napi_ref errors; /* the error classes, TinyactorsError first (module.c) */
     napi_ref object;
     napi_ref keys;
     napi_ref turn;

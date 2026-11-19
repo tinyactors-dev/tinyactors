@@ -517,9 +517,13 @@ Errors surface in four places:
   message is the first error as `file:line:column: error: message`, and
   whose `diagnostics` holds them all.
 - **At a call,** the host throws a `TinyactorsError` for what it refuses
-  at once: a chart it does not have, a session that ended or never was, a
-  config it does not take. Branch on `error.status` (`'TA_ERROR_STALE'`,
-  `'TA_ERROR_INVALID'`, ...); the message is for people. A refused config
+  at once, as the subclass of its status: `StaleError` for a session that
+  ended or never was, `StateError` for a call the host cannot make now (a
+  closed host), `InvalidError` for an argument it refuses (a chart it does
+  not have, a config it does not take), `UnsupportedError` for a value it
+  does not take. Catch the class you handle; `error.status` is core's name
+  for the status (`'TA_ERROR_STALE'`, ...), and the message is for people.
+  A typed method's error is the subclass of its code too. A refused config
   also has `error.path`, the key it is about (`system.maxActors`), and
   `error.reason`. Arguments of the
   wrong JavaScript type throw a `TypeError`.
