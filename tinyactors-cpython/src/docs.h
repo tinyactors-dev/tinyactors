@@ -12,43 +12,47 @@ static const char ta_python_doc_module[] =
     "\n"
     "A Host holds actors and runs each one's chart when events reach it. It\n"
     "does no I/O: what an actor asks of the outside world reaches a handler\n"
-    "you give the host, and the handler does the work. The pieces:\n"
+    "you give the host, and the handler does the work.\n"
+    "\n"
+    "The application API:\n"
     "\n"
     "- Charts. compile_dir() compiles a directory of charts and their\n"
     "  helper files into an image; compile_charts() compiles SCXML documents\n"
-    "  (Compiled.image). compile_system() compiles a <system> manifest, which\n"
-    "  also names the actors an application starts with.\n"
+    "  (Compiled.image).\n"
     "- Host. Host(charts, system=...) creates one and runs each image as a\n"
-    "  segment, one actor system with its own memory. An image added later\n"
-    "  (Host.add_image) with a chart the host already runs holds a new\n"
-    "  version of it: Host.migrate() moves the running actors over.\n"
+    "  segment, one actor system with its own memory.\n"
     "- Actors. Host.spawn(chart) starts an actor and returns it as an Actor:\n"
-    "  send() it events, await its state() or done. Host.actor() finds a\n"
-    "  live one by session, name or address; Host.boot() spawns an image's\n"
-    "  boot actors.\n"
+    "  send() it events, ask() it and await the reply, await its state() or\n"
+    "  done. Host.actor() finds a live one by session, name or address.\n"
     "- Driving. Inputs (spawn, send, ...) apply at the call; the actors run\n"
     "  when the host turns. Use run_until_idle(), a SimulatedClock in tests,\n"
     "  or `async with Host(...)` and `await host.idle()` under asyncio.\n"
     "- Handlers. Host(...) takes io_processors for <send> (objects whose\n"
-    "  receive gets a Send), services for <invoke> (an Invocation), log for\n"
-    "  <log> (a LogEntry), on_done and on_error for actors that end,\n"
-    "  migrated and migration_done for migrations, and telemetry for OTLP\n"
-    "  bytes. A plain function handler\n"
-    "  gets a thin view, valid until its batch is acknowledged; an async def\n"
-    "  handler gets a record it can keep. transport gets every send to\n"
-    "  another system, as a Send: your transport, with no config.\n"
-    "- Questions. Typed methods (actor_state, host_stats, trace_watch, ...)\n"
-    "  take a handler that runs at a later turn with the answer.\n"
+    "  receive gets a Send; Spawner spawns for a chart), services for\n"
+    "  <invoke> (an Invocation), log for <log> (a LogEntry), on_done and\n"
+    "  on_error for actors that end. A plain function handler gets a thin\n"
+    "  view, valid until its batch is acknowledged; an async def handler\n"
+    "  gets a record it can keep.\n"
     "- Memory. Host(store=SQLiteStore(path), resident=N) keeps at most N\n"
-    "  actors in memory and the rest hibernated in the store; Host.sweep(),\n"
-    "  hibernate() and wake() run that cycle by hand. Host.snapshot() and\n"
-    "  Host.restore() copy a whole host. None of these is durability: keeping\n"
-    "  data is your database's job.\n"
+    "  actors in memory and the rest hibernated in the store, woken when an\n"
+    "  event comes for one. The store is not durability: keeping data is\n"
+    "  your database's job.\n"
     "- Values. Actors exchange int, float, str, bytes, list, dict with str\n"
-    "  keys, bool, None, UNDEFINED and Address. encode() and decode() give\n"
-    "  their CBOR form, for values that leave the process.\n"
-    "- Errors. The host raises TinyactorsError, whose status names the core's\n"
-    "  status. A failed compilation raises CompileError with every Diagnostic.";
+    "  keys, bool, None, UNDEFINED and Address, as Python objects.\n"
+    "- Errors. The host raises TinyactorsError (StaleError, StateError, ...),\n"
+    "  whose status names the core's status. A failed compilation raises\n"
+    "  CompileError with every Diagnostic.\n"
+    "\n"
+    "Operating a host (the README's part of that name): Host.add_image and\n"
+    "chart for new images and versions, compile_system and Host.boot,\n"
+    "telemetry= and metrics(), the typed methods trace_*, Host.sweep(),\n"
+    "hibernate() and wake() for a policy of your own, Host.migrate() with\n"
+    "migrated= and migration_done=, Host.snapshot() and Host.restore().\n"
+    "\n"
+    "Wire format (the README's part of that name): transport= and\n"
+    "send.message for other systems, Host.send(message) and Host.fail(),\n"
+    "Address, encode() and decode() for values that leave the process, and\n"
+    "decode_traces().";
 
 static const char ta_python_doc_compile_charts[] =
     "compile_charts(sources, resolver=None)\n"
@@ -91,7 +95,9 @@ static const char ta_python_doc_compile_system[] =
     "by name (Host.actor(\"first\"), or the address .../@first). Use\n"
     "compile_charts when your program spawns its actors itself, one per\n"
     "order or user. Returns a Compiled, as compile_charts does; an error\n"
-    "raises CompileError with every diagnostic.";
+    "raises CompileError with every diagnostic."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_encode[] =
     "encode($module, value, /)\n"
@@ -113,7 +119,9 @@ static const char ta_python_doc_encode[] =
     "Raises TypeError for unsupported types or non-str map keys,\n"
     "OverflowError for integers or text outside core's length range,\n"
     "UnicodeError for lone surrogates, ValueError for excessive nesting\n"
-    "(cycles included), and MemoryError on allocation failure.";
+    "(cycles included), and MemoryError on allocation failure."
+    "\n\n"
+    "Part of the wire format (the README's \"Wire format\").";
 
 static const char ta_python_doc_decode_traces[] =
     "decode_traces(data)\n"
@@ -128,7 +136,9 @@ static const char ta_python_doc_decode_traces[] =
     "{name, time, attributes}), links (each {trace, span, attributes}),\n"
     "resource (its attributes) and scope ({name, version, attributes}). Use\n"
     "it in tests and in a collector of your own; bytes that are not such a\n"
-    "request raise InvalidError.";
+    "request raise InvalidError."
+    "\n\n"
+    "Part of the wire format (the README's \"Wire format\").";
 
 static const char ta_python_doc_decode[] =
     "decode($module, data, /)\n"
@@ -143,7 +153,9 @@ static const char ta_python_doc_decode[] =
     "\n"
     "Raises TypeError for input other than bytes, ValueError for malformed,\n"
     "truncated, trailing or unsupported CBOR, and MemoryError on allocation\n"
-    "failure.";
+    "failure."
+    "\n\n"
+    "Part of the wire format (the README's \"Wire format\").";
 
 static const char ta_python_doc_compiled[] =
     "The result of compile_charts or compile_system: an image and the\n"
@@ -273,7 +285,9 @@ static const char ta_python_doc_host_add_image[] =
     "the same bytes. A chart whose name the host already runs gets a new\n"
     "current version here: new spawns run it, the running actors stay on the\n"
     "old one until Host.migrate moves them, and a segment left with no\n"
-    "actors and only older versions is freed.";
+    "actors and only older versions is freed."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_chart[] =
     "chart(name, /)\n"
@@ -286,7 +300,9 @@ static const char ta_python_doc_host_chart[] =
     "that has it): the reference pins the version that was current when you\n"
     "asked. Ask again after add_image of a new version, so new actors start\n"
     "on it; actors already running stay where they are until Host.migrate.\n"
-    "Raises TinyactorsError when no image added has a chart of that name.";
+    "Raises TinyactorsError when no image added has a chart of that name."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_spawn[] =
     "spawn(chart, name=None, params=None, traceparent=None)\n"
@@ -366,7 +382,9 @@ static const char ta_python_doc_host_fail[] =
     "target did not exist, the connection broke), and only for failures you\n"
     "decide to believe: a peer that can make you call it can give your\n"
     "actors any error. Inside a transport or I/O processor handler,\n"
-    "send.fail() does the same for that send.";
+    "send.fail() does the same for that send."
+    "\n\n"
+    "Part of the wire format (the README's \"Wire format\").";
 
 static const char ta_python_doc_host_send_many[] =
     "send_many(items, /)\n"
@@ -403,7 +421,9 @@ static const char ta_python_doc_host_boot[] =
     "(the first source given to compile_charts), each under its name, so\n"
     "Host.actor finds it. Use it to start an application from its image alone; spawn\n"
     "starts one actor of a chart you name. A boot that fails part way leaves\n"
-    "the actors already spawned; a second boot spawns them all again.";
+    "the actors already spawned; a second boot spawns them all again."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_metrics[] =
     "metrics()\n"
@@ -417,7 +437,9 @@ static const char ta_python_doc_host_metrics[] =
     "you, on your schedule. Call it when your exporter scrapes or on a timer,\n"
     "and post the bytes as you post the handler's. host_stats answers with\n"
     "the counters as Python values instead. Raises TinyactorsError\n"
-    "(TA_ERROR_STATE) when the config has no telemetry.";
+    "(TA_ERROR_STATE) when the config has no telemetry."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_sweep[] =
     "sweep(max_scan, limit, /)\n"
@@ -434,7 +456,9 @@ static const char ta_python_doc_host_sweep[] =
     "sweep, hibernate() each session it returns and save the blobs in the\n"
     "host's store, which the host loads from when an event comes for one.\n"
     "Calling sweep regularly is what makes \"did not run since the previous\n"
-    "sweep\" mean cold.";
+    "sweep\" mean cold."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_hibernate[] =
     "hibernate(session, /)\n"
@@ -448,7 +472,9 @@ static const char ta_python_doc_host_hibernate[] =
     "call Host.wake. Raises TinyactorsError\n"
     "(TA_ERROR_STATE) when it is not at a stable point or runs an\n"
     "invocation; it stays resident then. A blob wakes only in the host that\n"
-    "wrote it.";
+    "wrote it."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_wake[] =
     "wake(session, blob, /)\n"
@@ -461,7 +487,9 @@ static const char ta_python_doc_host_wake[] =
     "latest blob: one of an earlier hibernation raises TinyactorsError\n"
     "TA_ERROR_STALE, another session's or another Host's TA_ERROR_INVALID\n"
     "(each Host draws its identity from os.urandom; a restored one keeps\n"
-    "the snapshot's).";
+    "the snapshot's)."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_snapshot[] =
     "snapshot()\n"
@@ -481,7 +509,9 @@ static const char ta_python_doc_host_snapshot[] =
     "reply or other effect pending (run the host first), and not while a\n"
     "migration runs (TinyactorsError, TA_ERROR_STATE). The hibernated\n"
     "actors' blobs are not in it: they stay in your store. The services you\n"
-    "run are not in it either; Host.restore starts them again.";
+    "run are not in it either; Host.restore starts them again."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_restore[] =
     "restore(snapshot, charts, *, system, io_processors=None, config=None, clock=None, log=None, telemetry=None, services=None, transport=None, on_done=None, on_error=None, on_handler_error=None, migrated=None, migration_done=None, store=None, resident=None)\n"
@@ -498,7 +528,9 @@ static const char ta_python_doc_host_restore[] =
     "pass your real handlers to go on, stand-ins for a copy that must not\n"
     "reach the real services, or leave a type out and its invokers get\n"
     "error.communication. A copy that hibernates actors needs its own copy\n"
-    "of the store: it writes blobs too.";
+    "of the store: it writes blobs too."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_migrate[] =
     "migrate(*, chart=None, session=None, wake=False, timeout=0)\n"
@@ -522,7 +554,9 @@ static const char ta_python_doc_host_migrate[] =
     "{\"migration\", \"migrated\", \"failed\": [{\"session\", \"reason\"}, ...],\n"
     "\"pending\": [session, ...]}, failed naming the actors it could not move\n"
     "and why (core's status), pending those its timeout left behind; the\n"
-    "migrated handler sees each actor that moved.";
+    "migrated handler sees each actor that moved."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_host_run_until_idle[] =
     "run_until_idle()\n"
@@ -698,6 +732,8 @@ static const char ta_python_doc_typed_trace_configure[] =
     "again to turn tracing up or down while the host runs; trace_watch is for\n"
     "a closer look for a while. Refused (reason \"state\") when the config has\n"
     "no telemetry.\n"
+    "\n"
+    "Part of operating a host (the README's \"Operating a host\").\n"
     TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_watch[] =
@@ -713,6 +749,8 @@ static const char ta_python_doc_typed_trace_watch[] =
     "is {\"id\": int}, the watch's id for trace_unwatch. Use it to debug one\n"
     "chart or one kind of event in production without raising the detail for\n"
     "the whole host.\n"
+    "\n"
+    "Part of operating a host (the README's \"Operating a host\").\n"
     TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_unwatch[] =
@@ -724,6 +762,8 @@ static const char ta_python_doc_typed_trace_unwatch[] =
     "The result is {}. A watch that already ended, or never was, is an error\n"
     "with reason \"stale\". Use it when the closer look is done, so tracing\n"
     "falls back to the configured policy.\n"
+    "\n"
+    "Part of operating a host (the README's \"Operating a host\").\n"
     TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_end[] =
@@ -738,6 +778,8 @@ static const char ta_python_doc_typed_trace_end[] =
     "spans at a moment you choose, when your shutdown does other work before\n"
     "it closes the host. Refused (reason \"state\") when the config has no\n"
     "telemetry.\n"
+    "\n"
+    "Part of operating a host (the README's \"Operating a host\").\n"
     TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_typed_trace_spans_decode[] =
@@ -752,6 +794,8 @@ static const char ta_python_doc_typed_trace_spans_decode[] =
     "since the epoch), status, statusMessage, attributes and events. It reads\n"
     "only the bytes, not the host. Use it in tests and tools that check what\n"
     "an actor's steps traced without a collector or an OTLP library.\n"
+    "\n"
+    "Part of operating a host (the README's \"Operating a host\").\n"
     TA_PYTHON_DOC_TYPED_TAIL;
 
 static const char ta_python_doc_chart_ref[] =
@@ -816,7 +860,9 @@ static const char ta_python_doc_send_message[] =
     "(tinyactors.encode, or your own) and give it to the other host's\n"
     "Host.send(message) unchanged: no field is lost on the way, and the\n"
     "keys are the same in every binding. Read it inside the handler: a\n"
-    "thin view's fields end at the batch's ack, the dict does not.";
+    "thin view's fields end at the batch's ack, the dict does not."
+    "\n\n"
+    "Part of the wire format (the README's \"Wire format\").";
 
 static const char ta_python_doc_send_sender[] =
     "The sending actor, an Actor of send.session: answer it later with\n"
@@ -877,7 +923,9 @@ static const char ta_python_doc_migrated[] =
     "Use the handler to follow a deploy actor by actor (a progress count, a\n"
     "log of who moved) or to update what your application keeps about an\n"
     "actor's version; migration_done reports the whole migration's end. A\n"
-    "thin view, valid until the batch's ack (see Host.migrate).";
+    "thin view, valid until the batch's ack (see Host.migrate)."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
 
 static const char ta_python_doc_migrated_session[] =
     "The actor's session id (int); it is the same after the move.";
@@ -983,7 +1031,9 @@ static const char ta_python_doc_address[] =
     "`text` must be an exact str of valid UTF-8; the constructor does not\n"
     "check it. Use .text or str(value) to read it, and .system, .session and\n"
     ".name for its parts, which core's address parser reads. Equality and\n"
-    "hashing use the text, among Address values only; subclasses are refused.";
+    "hashing use the text, among Address values only; subclasses are refused."
+    "\n\n"
+    "Part of the wire format (the README's \"Wire format\").";
 
 static const char ta_python_doc_address_from_name[] =
     "from_name(system, name)\n"

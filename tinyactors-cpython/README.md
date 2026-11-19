@@ -22,6 +22,16 @@ A few items are built on those calls for applications: `Actor`, the
 stores, `compile_dir`, `ask` and `Spawner`.
 [GLOSSARY.md](../GLOSSARY.md) defines the terms these pages use.
 
+This page has three parts. The first is the API an application uses:
+`Host`, `Actor`, I/O processors, services, the store, and what to do
+when an actor is not there. **Operating a host** has the calls for
+whoever runs and watches it: images and versions, telemetry and
+tracing, hibernation by hand, migration, snapshots, memory. **Wire
+format** has what crosses a process boundary: other systems, addresses,
+the value table's encoding and decoded traces. An application can be
+written with the first part alone; [examples/chat](examples/chat/) is
+one.
+
 ## Installing
 
     pip install tinyactors
@@ -142,23 +152,12 @@ host has an `on_handler_error(error, effect)` hook (below, "Actors"). A host is
 used from the thread that created it; calls from other threads are
 refused.
 
-### Images, segments and versions
-
-`Host(charts, ...)` runs each image it is given as a **segment**, in
-order, and `add_image` runs another one later and returns the segment's
-number. A segment is one actor system with its own memory.
-A host can run many segments at once.
-
-When an image has a chart whose name the host already runs, that image
-holds a new **version** of the chart. `host.chart(name)` returns a
-`ChartRef` for the current version, and `host.spawn(name)` spawns on it.
-New actors start on it, and running
-actors stay on their version until a migration moves them (below,
-"Migration").
+### Compiling charts
 
 `compile_dir(path, *, resolver=None)` compiles every `*.scxml` file
-under a directory into one image, each chart named by its path under the
-directory (sorted: the first is the default boot chart). A `src` (a `.py`
+under a directory into one image, each document named by its path under
+the directory, in diagnostics and for a `src` between documents (sorted:
+the first is the default boot chart). A `src` (a `.py`
 helper a chart reads with `<script src>`, a chart it invokes) is read
 from under the directory, relative to the document that names it, and a
 path that leaves the directory, symbolic links included, is refused
@@ -170,12 +169,11 @@ with tinyactors.compile_dir("charts") as compiled:
     hosts = [tinyactors.Host(compiled, system="shop-%d" % i) for i in range(4)]
 ```
 
-`compile_system` compiles a `<system>` manifest instead of a list of
-charts. The manifest names the charts (`<chart name src>`) and the actors
-the application starts with (`<actor name chart>`). `host.boot(segment)`
-spawns those actors under their names, and `host.actor(name)` finds one
-again. For an image from `compile_charts`, `boot` spawns the
-first chart compiled.
+A chart is spawned by its `name` attribute, not its file:
+`host.spawn("order")` starts an actor of the current version of the
+chart whose `<scxml name="order">`. Adding images
+later, versions and boot actors are operator calls (below, "Operating a
+host").
 
 ### Drivers and time
 
@@ -219,10 +217,10 @@ one with a plain `with` raises `TypeError` naming the handler.
 ### Typed methods
 
 Questions about the host and its actors are **typed methods**:
-`actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`,
-`host_config`, `trace_configure`, `trace_watch`, `trace_unwatch`,
-`trace_end` and `trace_spans_decode`. The params are keywords, passed to
-the host as given, and the host checks them.
+`actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`
+and `host_config` here, and the tracing methods `trace_*` an operator
+uses (below, "Telemetry"). The params are keywords, passed to the host
+as given, and the host checks them.
 
 Under asyncio, await one: `state = await host.actor_state(session=s)`,
 or the `Actor`'s shorthand `await actor.state()`,
@@ -429,11 +427,10 @@ send's sendid, or `error.communication` when the host refuses the spawn
 
 The processor does the I/O and then does one of two things:
 
-- **`send.answer(event, data=None, *, traceparent=send.traceparent,
-  origin=None, raw=None)`** gives the sending actor an event in reply,
-  carrying the send's `sendid`. `origin` and `raw` become `_event.origin`
-  (where to reply) and `_event.raw` (the message as the transport read
-  it).
+- **`send.answer(event, data=None, *, traceparent=send.traceparent)`**
+  gives the sending actor an event in reply, carrying the send's
+  `sendid`. It also takes `origin` and `raw`, for a processor that speaks
+  a protocol (below, "Wire format").
 - **`send.fail()`** reports that the send could not be delivered. The
   sending actor gets `error.communication`.
 
@@ -458,20 +455,29 @@ Read the fields inside `receive`: a plain method gets a thin view
 (above, "How a host runs"). To answer later, write it as `async def`.
 Its record answers at any time while the host lives.
 
-## Errors
+## Sending to an actor that is not there
 
-| You see | When | What to do |
-|---|---|---|
-| `CompileError` | `compile_charts` or `compile_system` found an error | read `error.diagnostics`, each with `file`, `line`, `column`, `severity` and `message`; nothing was compiled |
-| `StaleError`, `StateError`, `InvalidError`, `UnsupportedError` (each a `TinyactorsError`) | the host refused a call, a thin view was read after its batch, or a typed method's reply was an error: an actor or handle that is gone, a call the host cannot make now, an argument it refuses, a value it does not take | catch the class you handle; `error.status` is the core's name for the status (`"TA_ERROR_STALE"`, ...), and a typed method's error also has `code`, `reason` and `path` |
-| `TinyactorsError` | any other refusal, or a run that faulted | read `error.status` |
-| `MemoryError` naming a pool | the host ran out of a pool its config sized | the host stays usable, and the next run goes on where this one stopped; size the config (below, "Sizing the config") |
-| your handler's exception | a handler raised | the host's `on_handler_error(error, effect)` gets it; without one, the driver raises the first one after the turn |
-| `error.execution`, `error.communication` | inside a chart | handled by the chart, as SCXML defines; when the chart's code failed, `error.execution`'s `_event.data` is `{"reason", "message"}`: `"exception"` with the exception's type and text (`"NameError: name 'x' is not defined"`), `"memory"` for a `MemoryError` (on quickjs, past its memory limit, 1 GiB), and on quickjs `"fuel"` past its `maxOps`; see the core's documentation |
+A `<send>` to a name no live actor has is common in an application with
+many actors: a room nobody has opened yet, a user who is offline, an
+order that ended. What should happen is application logic, chosen per
+kind of actor, and the library offers no policy of its own. There are
+three ways, often mixed in one application:
 
-`CompileError` and `ResolveError` are subclasses of `TinyactorsError`.
-For example, `host.send(12345, "hello")` to a session that does not exist
-raises `StaleError`, whose `status` is `"TA_ERROR_STALE"`.
+- **The actor never ends, and hibernates.** Core wakes a hibernated actor
+  when an event comes for its name, so with `store=` and `resident=` an
+  idle actor costs a blob in the store and a slot in the host.
+- **The application routes it.** The chart sends to an I/O processor,
+  which looks the actor up (or has one made) and forwards the event, or
+  does something else when there is none.
+- **The sender handles `error.communication`.** A send to a local name
+  that no actor has fails at once, with the send's `sendid`.
+
+Names of actors are part of their addresses, so use only characters
+that need no percent-encoding there: letters, digits, `-`, `.`, `_` and
+`~`, for example `room.<workspace>.<name>`.
+[docs/guide/missing-actors.md](docs/guide/missing-actors.md) shows each
+way with code, and the chat example (below, "Example applications") uses
+all three.
 
 ## Invoked services
 
@@ -535,7 +541,143 @@ host = tinyactors.Host(compiled, system="shop", services={"urn:example:counter":
 An invocation uses one of the core's requests; `system.maxRequests` is
 where the pool starts, and a segment grows it when it runs out.
 
-## Telemetry
+## Hibernation
+
+Most actors spend most of their time waiting. Hibernation lets a host
+keep millions of actors while only some of them are in memory: the rest
+are blobs in a **store**, and the host loads one back when it has work.
+The host does no I/O; the store is an object of yours, or one of the two
+this package ships.
+
+```python
+store = tinyactors.SQLiteStore("actors.db")      # one row per hibernated actor
+host = tinyactors.Host(compiled, system="shop", store=store, resident=1000)
+```
+
+- **`store`** is any object with `save(session, blob)`, `load(session)
+  -> bytes` and `delete(session)`. `tinyactors.SQLiteStore(path)` keeps
+  the blobs in one table of an SQLite file (`close()` it after the host);
+  `tinyactors.MemoryStore()` in a dict, for tests.
+- **`resident`** is the most actors kept in memory. After a turn that
+  left more, the host takes the coldest past the bound (the CLOCK sweep:
+  actors that did not run since the previous sweep), hibernates them and
+  saves their blobs. An actor that cannot hibernate now stays resident:
+  one not at rest (events waiting, in a macrostep, an invoked child, a
+  running invocation), or a `"python"` actor holding a value outside the
+  value table (a `set`, a `tuple`, an object). A pending delayed send
+  stays in the host and wakes its actor when it falls due.
+- **When an event comes for a hibernated actor** (or its delayed send
+  falls due), the host loads its blob from the store, wakes it, and
+  deletes the blob; the events wait in its mailbox meanwhile. Terminating
+  a hibernated actor wakes it to end it (its `<onexit>` runs), so its blob is loaded and deleted the same way. A `save` or `load` that raises
+  goes to `on_handler_error`, or the driver raises it after the turn; the
+  actor stays where it was (resident for a `save`, hibernated for a
+  `load`). Without a store, an event for a hibernated actor waits until
+  you call `host.wake`.
+
+A blob belongs to the host that made it: each `Host` draws random bits
+from `os.urandom` when it is created, so a blob of another host, even for
+a session of the same number running the same image, is refused
+(`TA_ERROR_INVALID`). A host made by `Host.restore` keeps the snapshot's
+identity and wakes the blobs its original hibernated. Only the latest
+blob of a session wakes it: one of an earlier hibernation (a store that
+fell behind) is refused with `TA_ERROR_STALE`.
+
+The capacity this needs, and the calls under the store for an
+application with a policy of its own, are below ("Hibernation by hand").
+
+## Errors
+
+| You see | When | What to do |
+|---|---|---|
+| `CompileError` | `compile_charts` or `compile_system` found an error | read `error.diagnostics`, each with `file`, `line`, `column`, `severity` and `message`; nothing was compiled |
+| `StaleError`, `StateError`, `InvalidError`, `UnsupportedError` (each a `TinyactorsError`) | the host refused a call, a thin view was read after its batch, or a typed method's reply was an error: an actor or handle that is gone, a call the host cannot make now, an argument it refuses, a value it does not take | catch the class you handle; `error.status` is the core's name for the status (`"TA_ERROR_STALE"`, ...), and a typed method's error also has `code`, `reason` and `path` |
+| `TinyactorsError` | any other refusal, or a run that faulted | read `error.status` |
+| `MemoryError` naming a pool | the host ran out of a pool its config sized | the host stays usable, and the next run goes on where this one stopped; size the config (below, "Sizing the config") |
+| your handler's exception | a handler raised | the host's `on_handler_error(error, effect)` gets it; without one, the driver raises the first one after the turn |
+| `error.execution`, `error.communication` | inside a chart | handled by the chart, as SCXML defines; when the chart's code failed, `error.execution`'s `_event.data` is `{"reason", "message"}`: `"exception"` with the exception's type and text (`"NameError: name 'x' is not defined"`), `"memory"` for a `MemoryError` (on quickjs, past its memory limit, 1 GiB), and on quickjs `"fuel"` past its `maxOps`; see the core's documentation |
+
+`CompileError` and `ResolveError` are subclasses of `TinyactorsError`.
+For example, `host.send(12345, "hello")` to a session that does not exist
+raises `StaleError`, whose `status` is `"TA_ERROR_STALE"`.
+
+## Values
+
+The values that cross between your program, the actors and other
+processes are those of the value table: `int` (from -2\*\*64 to 2\*\*64-1), `float`, `str`,
+`bytes`, `list`, `dict` with `str` keys, `True`, `False`, `None`,
+`tinyactors.UNDEFINED` (ECMAScript's undefined, distinct from `None`) and
+`tinyactors.Address` (an actor's address kept apart from plain text).
+Only exact built-in types are accepted: a subclass of `dict` or `list`,
+a tuple or a set is refused.
+
+Inside one process, values cross as Python objects, with no encoding.
+Data you give a `"python"` chart is copied (lists and dicts are copied,
+immutable values shared); data for an ECMAScript chart is converted for
+quickjs. `send.data` from a `"python"` chart is the value itself.
+Values that leave the process are encoded by your program (below,
+"Wire format"). [docs/values.md](docs/values.md) has the details.
+
+## Limits
+
+- **Charts are trusted code, and the rewrite is not a sandbox.** It keeps
+  a chart inside SCXML's scope rules and nothing more. A chart in Python
+  runs in your interpreter, cannot be preempted in the middle of an
+  expression, and nothing limits its memory. quickjs, by contrast, has an
+  operation limit (1,000,000 interrupt checks an evaluation) and its own
+  allocator, limited to 1 GiB for the host's engine, every actor
+  together: an evaluation that allocates past it ends in
+  `error.execution` with reason `"memory"`, and the process goes on.
+- **Python values lie outside the host's allocator.** The host, its
+  tables and its scratch memory are allocated with `PyMem_RawMalloc`. The
+  values of a Python chart's sessions and payloads are Python objects on
+  Python's heap.
+- **Nesting is limited to 64 levels.** That stops cycles, but not a value
+  that shares subtrees (`a = [a, a]` sixty times): another reason charts
+  are trusted code.
+- **A `"python"` actor hibernates and migrates** only while its
+  variables, and the data of its pending delayed sends, are values of the
+  value table.
+
+## Example applications
+
+[examples/chat](examples/chat/) is a chat server: workspaces, rooms and
+connections as actors, charts with `.py` helpers, one I/O processor per
+external system (the sockets, an SQLite database, direct messages) and a
+`Spawner`, with hibernated workspaces and rooms in a store. Its README
+says where each of the three ways of "Sending to an actor that is not
+there" appears. `mise run test` runs its tests.
+
+## Operating a host
+
+The calls in this part are for whoever runs a host and watches it (an
+operator, a deploy script, a capacity plan), not for the application's
+logic: adding images and versions, telemetry and tracing, hibernation by
+hand, migration, snapshots, and sizing the memory. An application that
+only spawns actors and handles their effects needs none of them.
+
+### Images, segments and versions
+
+`Host(charts, ...)` runs each image it is given as a **segment**, in
+order, and `add_image` runs another one later and returns the segment's
+number. A segment is one actor system with its own memory.
+A host can run many segments at once.
+
+When an image has a chart whose name the host already runs, that image
+holds a new **version** of the chart. `host.chart(name)` returns a
+`ChartRef` for the current version, and `host.spawn(name)` spawns on it.
+New actors start on it, and running
+actors stay on their version until a migration moves them (below,
+"Migration").
+
+`compile_system` compiles a `<system>` manifest instead of a list of
+charts. The manifest names the charts (`<chart name src>`) and the actors
+the application starts with (`<actor name chart>`). `host.boot(segment)`
+spawns those actors under their names, and `host.actor(name)` finds one
+again. For an image from `compile_charts`, `boot` spawns the
+first chart compiled.
+
+### Telemetry
 
 With `"telemetry"` in its config, the host traces its actors and writes
 OTLP requests (protobuf): spans of every macrostep, `<log>` lines and
@@ -610,13 +752,15 @@ collide at the collector. To reproduce a test's traces, set the seed:
 `{"system": {"traceSeed": 7}}` gives the same IDs every time.
 `Host.restore` keeps the generators of the snapshot.
 
-**Choosing what is traced.** `trace_configure` sets the policy, for
+**Choosing what is traced.** The typed methods `trace_*` (above,
+"Typed methods", for how they answer) control tracing while the host
+runs. `trace_configure` sets the policy, for
 example sampling. `trace_watch` adds rules in front of it for a while, on
 the host's clock: with tracing sampled down, it can trace one chart in
-full for a minute. `tinyactors.decode_traces(data)` decodes a traces
-request back into a list of spans without a host, in tests or in a
-collector of your own: each span's ids, name, times, status, attributes
-and events, and its `flags`, `links`, `resource` and `scope`.
+full for a minute. `trace_unwatch` ends a watch early, and `trace_end`
+ends every open span now (`close()` calls it). To read the spans back, in tests or in a collector of
+your own, use `tinyactors.decode_traces(data)` (below, "Decoding
+traces").
 
 ```python
 host.trace_configure(print, sample=0.01)                 # 1% of new traces
@@ -625,50 +769,10 @@ host.trace_watch(lambda result: print("watch", result["id"]),
                  seconds=60)                             # every checkout, for a minute
 ```
 
-## Hibernation
+### Hibernation by hand
 
-Most actors spend most of their time waiting. Hibernation lets a host
-keep millions of actors while only some of them are in memory: the rest
-are blobs in a **store**, and the host loads one back when it has work.
-The host does no I/O; the store is an object of yours, or one of the two
-this package ships.
-
-```python
-store = tinyactors.SQLiteStore("actors.db")      # one row per hibernated actor
-host = tinyactors.Host(compiled, system="shop", store=store, resident=1000)
-```
-
-- **`store`** is any object with `save(session, blob)`, `load(session)
-  -> bytes` and `delete(session)`. `tinyactors.SQLiteStore(path)` keeps
-  the blobs in one table of an SQLite file (`close()` it after the host);
-  `tinyactors.MemoryStore()` in a dict, for tests.
-- **`resident`** is the most actors kept in memory. After a turn that
-  left more, the host takes the coldest past the bound (the CLOCK sweep:
-  actors that did not run since the previous sweep), hibernates them and
-  saves their blobs. An actor that cannot hibernate now stays resident:
-  one not at rest (events waiting, in a macrostep, an invoked child, a
-  running invocation), or a `"python"` actor holding a value outside the
-  value table (a `set`, a `tuple`, an object). A pending delayed send
-  stays in the host and wakes its actor when it falls due.
-- **When an event comes for a hibernated actor** (or its delayed send
-  falls due), the host loads its blob from the store, wakes it, and
-  deletes the blob; the events wait in its mailbox meanwhile. Terminating
-  a hibernated actor wakes it to end it (its `<onexit>` runs), so its blob is loaded and deleted the same way. A `save` or `load` that raises
-  goes to `on_handler_error`, or the driver raises it after the turn; the
-  actor stays where it was (resident for a `save`, hibernated for a
-  `load`). Without a store, an event for a hibernated actor waits until
-  you call `host.wake`.
-
-A blob belongs to the host that made it: each `Host` draws random bits
-from `os.urandom` when it is created, so a blob of another host, even for
-a session of the same number running the same image, is refused
-(`TA_ERROR_INVALID`). A host made by `Host.restore` keeps the snapshot's
-identity and wakes the blobs its original hibernated. Only the latest
-blob of a session wakes it: one of an earlier hibernation (a store that
-fell behind) is refused with `TA_ERROR_STALE`.
-
-**Your own policy.** The host's calls under the store are there for an
-application that decides itself what to hibernate and when:
+The host's calls under the store are there for an application that
+decides itself what to hibernate and when:
 **`host.sweep(max_scan, limit) -> [session, ...]`** returns at most
 `limit` actors that have not run since the previous sweep and can be
 hibernated now (over at most `max_scan` slots);
@@ -694,7 +798,7 @@ config = {"system": {
 million actors, `resident=1000`, the rest in SQLite (below,
 "Performance").
 
-## Migration
+### Migration
 
 A new version of a chart (an image added with a chart of the same `name`)
 runs the actors spawned from then on. `host.migrate` moves the running
@@ -754,7 +858,7 @@ once, and the migration takes that one too.
 `tools/migration.py` (`mise run migration`) is this pattern at scale, on
 SQLite (below, "Performance").
 
-## Snapshots
+### Snapshots
 
 `host.snapshot() -> bytes` copies the whole host into one blob: every
 segment's memory (actors, queues, timers, the hibernated actors'
@@ -804,107 +908,7 @@ host = tinyactors.Host.restore(blob, compiled, system="shop", config=config, log
 - **Values are written through the value table**, so two variables of
   one session that share a list no longer share it after a restore.
 
-## Other systems
-
-How systems talk to each other (threads and a queue, a WebSocket to a
-browser, HTTP) is your program's choice. A chart addresses another system
-with an ordinary SCXML target, `tinyactors://<systemID>/#_scxml_<n>` or
-`tinyactors://<systemID>/@<name>`. The host delivers a target in its own
-system itself. Every other target goes to the host's transport, a
-handler you pass as `transport=`; it needs nothing in the config.
-
-A send between systems is one message in two halves. The sending host
-hands your transport the outgoing half as `send.message`, a dict of the
-target, event, data, sendid, origin and traceparent. The receiving host
-takes the same dict as its incoming half, `host.send(message)`. Your code
-only moves the dict:
-
-```python
-links = {}                                   # system id -> a connection of yours
-
-def transport(send):                         # the outgoing half
-    link = links.get(send.target.system)
-    if link is None:
-        send.fail()                          # no connection: error.communication
-    else:
-        link.write(tinyactors.encode(send.message))
-
-host = tinyactors.Host(compiled, system="a", transport=transport)
-
-def on_frame(link, frame):                   # the incoming half, on the other side
-    message = tinyactors.decode(frame)
-    if message["origin"].system != link.system:   # trust is yours: who may claim what
-        return
-    try:
-        host.send(message)                   # every field arrives, the sendid included
-    except tinyactors.TinyactorsError:       # no such actor here: tell the sender
-        link.write(tinyactors.encode({"failed": message["origin"], "sendid": message["sendid"]}))
-```
-
-A chart's reply to `_event.origin` goes back the same way. `send.target`
-and `send.origin` are `Address` values: `.system`, `.session` and `.name`
-give their parts, so neither you nor the binding parses an address.
-`Address.from_name(system, name)` and `Address.from_session(system,
-session)` write one, the name percent-encoded: a chart that targets the
-actor named `room/acme` writes the text `Address.from_name("chat",
-"room/acme")` gives, never the name as it is.
-`host.send(message)` ignores keys it does not know, so a newer peer can
-add one, and takes a `sendid`, `origin` or `traceparent` of `UNDEFINED`
-(what another binding's absent field decodes as) as absent, as `None`.
-
-A failure is never part of a message. When the other side reports one,
-and you decide to believe it, call `host.fail(address, sendid)`: the
-sending actor gets `error.communication` with that sendid. A peer whose
-reports you accept without checking can give your actors any error, so
-take failures only from the connection the send went out on. A send
-the transport accepted needs no answer, and inside the handler
-`send.fail()` reports a failure directly.
-
-The data is a Python value; encode the message for the wire as you like.
-`tinyactors.encode` gives the value table's CBOR, which every binding
-reads, `Address` values included. Without a transport, each send to
-another system fails, and its sender gets `error.communication`.
-
-## Values
-
-The values that cross between your program, the actors and other
-processes are those of the value table: `int` (from -2\*\*64 to 2\*\*64-1), `float`, `str`,
-`bytes`, `list`, `dict` with `str` keys, `True`, `False`, `None`,
-`tinyactors.UNDEFINED` (ECMAScript's undefined, distinct from `None`) and
-`tinyactors.Address` (an actor's address kept apart from plain text).
-Only exact built-in types are accepted: a subclass of `dict` or `list`,
-a tuple or a set is refused.
-
-Inside one process, values cross as Python objects, with no encoding.
-Data you give a `"python"` chart is copied (lists and dicts are copied,
-immutable values shared); data for an ECMAScript chart is converted for
-quickjs. `send.data` from a `"python"` chart is the value itself.
-`tinyactors.encode(value) -> bytes` and `tinyactors.decode(data)` give
-the value table's CBOR form, for values that leave the process.
-[docs/values.md](docs/values.md) has the details.
-
-## Limits
-
-- **Charts are trusted code, and the rewrite is not a sandbox.** It keeps
-  a chart inside SCXML's scope rules and nothing more. A chart in Python
-  runs in your interpreter, cannot be preempted in the middle of an
-  expression, and nothing limits its memory. quickjs, by contrast, has an
-  operation limit (1,000,000 interrupt checks an evaluation) and its own
-  allocator, limited to 1 GiB for the host's engine, every actor
-  together: an evaluation that allocates past it ends in
-  `error.execution` with reason `"memory"`, and the process goes on.
-- **Python values lie outside the host's allocator.** The host, its
-  tables and its scratch memory are allocated with `PyMem_RawMalloc`. The
-  values of a Python chart's sessions and payloads are Python objects on
-  Python's heap.
-- **Nesting is limited to 64 levels.** That stops cycles, but not a value
-  that shares subtrees (`a = [a, a]` sixty times): another reason charts
-  are trusted code.
-- **A `"python"` actor hibernates and migrates** only while its
-  variables, and the data of its pending delayed sends, are values of the
-  value table.
-
-## Memory
+### Memory
 
 Measured with `mise run measure`: 10,000 actors of one chart with three
 `<data>`, resident and idle, every pool sized for them and tracing off;
@@ -926,7 +930,7 @@ sized, the region does not grow after the events. Left at its default
 `maxEvents` (256), quickjs's region grows its event pool as the actors'
 last events fill it: an event and a trace context per actor.
 
-### Sizing the config
+#### Sizing the config
 
 Most of a host's memory is what its config reserves, not what its actors
 use: the core sets its pools up front and does not allocate after that.
@@ -955,7 +959,7 @@ these matter most:
   quarter of its region), copying the whole region into a new block, and
   never shrinks.
 
-## Performance
+### Performance
 
 Each benchmark below is a program in `tools/`, run with `mise run
 <name>`, that checks its own results. Every run here was one run, on
@@ -1031,39 +1035,162 @@ holds only the services still running.
 | `"python"` | 3.1 s (64,000 a second) | 38.3 s (26,000 a second) | 4.5 s | 408 MB (2041 B per actor and service) | 50 MB (251 B per actor) |
 | quickjs | 5.0 s (40,000 a second) | 62.6 s (16,000 a second) | 5.9 s | 711 MB (3553 B per actor and service) | 62 MB (309 B per actor) |
 
+## Wire format
+
+What crosses a process boundary: a send to another system, an address
+written as text, a value encoded for the wire, a traces request decoded
+back. An application in one process needs none of it.
+
+### Other systems
+
+How systems talk to each other (threads and a queue, a WebSocket to a
+browser, HTTP) is your program's choice. A chart addresses another system
+with an ordinary SCXML target, `tinyactors://<systemID>/#_scxml_<n>` or
+`tinyactors://<systemID>/@<name>`. The host delivers a target in its own
+system itself. Every other target goes to the host's transport, a
+handler you pass as `transport=`; it needs nothing in the config.
+
+A send between systems is one message in two halves. The sending host
+hands your transport the outgoing half as `send.message`, a dict of the
+target, event, data, sendid, origin and traceparent. The receiving host
+takes the same dict as its incoming half, `host.send(message)`. Your code
+only moves the dict:
+
+```python
+links = {}                                   # system id -> a connection of yours
+
+def transport(send):                         # the outgoing half
+    link = links.get(send.target.system)
+    if link is None:
+        send.fail()                          # no connection: error.communication
+    else:
+        link.write(tinyactors.encode(send.message))
+
+host = tinyactors.Host(compiled, system="a", transport=transport)
+
+def on_frame(link, frame):                   # the incoming half, on the other side
+    message = tinyactors.decode(frame)
+    if message["origin"].system != link.system:   # trust is yours: who may claim what
+        return
+    try:
+        host.send(message)                   # every field arrives, the sendid included
+    except tinyactors.TinyactorsError:       # no such actor here: tell the sender
+        link.write(tinyactors.encode({"failed": message["origin"], "sendid": message["sendid"]}))
+```
+
+A chart's reply to `_event.origin` goes back the same way. `send.target`
+and `send.origin` are `Address` values (below, "Addresses").
+`host.send(message)` ignores keys it does not know, so a newer peer can
+add one, and takes a `sendid`, `origin` or `traceparent` of `UNDEFINED`
+(what another binding's absent field decodes as) as absent, as `None`.
+
+A failure is never part of a message. When the other side reports one,
+and you decide to believe it, call `host.fail(address, sendid)`: the
+sending actor gets `error.communication` with that sendid. A peer whose
+reports you accept without checking can give your actors any error, so
+take failures only from the connection the send went out on. A send
+the transport accepted needs no answer, and inside the handler
+`send.fail()` reports a failure directly.
+
+The data is a Python value; encode the message for the wire as you like.
+`tinyactors.encode` gives the value table's CBOR, which every binding
+reads, `Address` values included. Without a transport, each send to
+another system fails, and its sender gets `error.communication`.
+
+**A processor that speaks a protocol.** An I/O processor that is a
+protocol's endpoint (SCXML's BasicHTTP processor, say) passes what the
+chart needs to answer on that protocol:
+`send.answer(event, data, origin=..., raw=...)` sets the reply's
+`_event.origin` (where the chart replies to, a `str`) and `_event.raw`
+(the message as the transport read it, a `str`: the HTTP request).
+`host.send(..., origin=...)` does the same for an event that is not an
+answer.
+
+### Addresses
+
+An address is text, `tinyactors://<system>/#_scxml_<session>` or
+`tinyactors://<system>/@<name>` (the core's
+[protocol.md](../tinyactors-core/docs/protocol.md), "Addresses").
+`tinyactors.Address(text)` holds one as a value, apart from plain text:
+`.system`, `.session` and `.name` give its parts, read by the core's
+parser, so neither you nor the binding parses an address.
+`Address.from_name(system, name)` and `Address.from_session(system,
+session)` write one. A name is percent-encoded: a chart that targets the
+actor named `room/acme` writes the text `Address.from_name("chat",
+"room/acme")` gives, `tinyactors://chat/@room%2Facme`, never the name as
+it is. Names that use only letters, digits, `-`, `.`, `_` and `~` are
+written as they are (above, "Sending to an actor that is not there").
+
+### Encoding values
+
+`tinyactors.encode(value) -> bytes` and `tinyactors.decode(data)` give
+the value table's CBOR form, which every binding reads and writes, for
+values that leave the process: a message for another system, a value
+another program reads. `Address` is tag 32, `UNDEFINED` CBOR's
+undefined. What they cannot read or write raises (`TypeError`,
+`ValueError`, `OverflowError`, `UnicodeError`), never turned into
+another value. Inside one process values cross as Python objects and
+need neither.
+
+### Decoding traces
+
+`tinyactors.decode_traces(data)` decodes an OTLP traces request (what
+the telemetry handler gets for `"traces"`, or any exporter's) into a
+list of spans without a host: each span's ids, name, times, status,
+attributes and events, and its `flags`, `links`, `resource` and
+`scope`. Use it in tests and in a collector of your own. The typed
+method `trace_spans_decode` reads the same bytes through a host.
+
 ## The API at a glance
 
 Every item has a docstring: `help(tinyactors.Host.migrate)` says when and
 how to use it.
 
+**The application API**
+
 | Item | What it does |
 |---|---|
-| `compile_charts(sources, resolver=None) -> Compiled` | compiles `(name, text)` pairs into one image; raises `CompileError` |
 | `compile_dir(path, *, resolver=None) -> Compiled` | compiles every `*.scxml` under a directory, its `src` files read from under it |
-| `compile_system(manifest, resolver=None) -> Compiled` | compiles a `<system>` manifest of charts and boot actors |
+| `compile_charts(sources, resolver=None) -> Compiled` | compiles `(name, text)` pairs into one image; raises `CompileError` |
 | `Compiled.image`, `.diagnostics`, `.close()` | the image's bytes, copied at the first read; the warnings and notes; a context manager |
 | `Host(charts, *, system, io_processors, config, clock, store, resident, log, telemetry, services, transport, on_done, on_error, on_handler_error, migrated, migration_done)` | a host running the images, with its processors and handlers; a context manager for `with` and `async with` |
 | `system` | the host's system id |
-| `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs another image (a new version); the current version of a chart |
 | `spawn(chart, name=None, params=None, traceparent=None) -> Actor` | starts an actor of a chart (a name, or a `ChartRef`) |
 | `actor(session, name or address) -> Actor`, `await actors(chart=None)` | a live actor; the live actors |
 | `Actor.id`, `.address`, `.send(...)`, `.terminate()`, `await .ask(event, data)`, `await .state()`, `.context()`, `.get()`, `await .done` | an actor's handle |
 | `Spawner()` | an I/O processor that spawns actors for charts |
-| `send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)`, `send(message)` | gives an actor an event; `target` is a session, an `Actor` or a local address; a message is another system's `send.message` |
-| `fail(target, sendid=None)` | reports a send that could not be delivered: `error.communication` for its sender |
+| `send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)` | gives an actor an event; `target` is a session, an `Actor` or a local address |
 | `send_many([(target, event, data, traceparent), ...]) -> accepted` | many sends in one call; returns how many were accepted |
-| `terminate(session)`, `boot(segment)` | ends an actor; spawns an image's boot actors |
+| `terminate(session)` | ends an actor |
 | `run_until_idle()`, `await idle()`, `next_deadline` | the drivers (above, "Drivers and time") |
-| `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`, `host_config`, `trace_*` | typed methods (above, "Typed methods") |
-| `metrics() -> bytes` | the host's counters as OTLP |
+| `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`, `host_config` | typed methods (above, "Typed methods") |
 | `MemoryStore()`, `SQLiteStore(path)` | stores of hibernated actors' blobs, for `store=` |
-| `sweep`, `hibernate`, `wake` | hibernation by hand |
-| `migrate(...) -> migration` | migration |
-| `snapshot() -> bytes`, `Host.restore(snapshot, charts, system=..., ...)` | snapshots |
 | `close()`, `closed` | frees the host |
 | `SimulatedClock()`, `.increment(seconds)`, `.now` | a clock for tests |
-| `encode(value) -> bytes`, `decode(data)`, `Address`, `UNDEFINED` | the value table |
-| `TinyactorsError`, `CompileError`, `ResolveError`, `Diagnostic` | errors |
+| `UNDEFINED` | the value table's undefined |
+| `TinyactorsError`, `StaleError`, `StateError`, `InvalidError`, `UnsupportedError`, `CompileError`, `ResolveError`, `Diagnostic` | errors |
+
+**Operating a host**
+
+| Item | What it does |
+|---|---|
+| `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs another image (a new version); the current version of a chart |
+| `compile_system(manifest, resolver=None) -> Compiled`, `boot(segment)` | compiles a `<system>` manifest of charts and boot actors; spawns an image's boot actors |
+| `telemetry=`, `metrics() -> bytes` | traces and logs pushed as OTLP; the host's counters as OTLP |
+| `trace_configure`, `trace_watch`, `trace_unwatch`, `trace_end`, `trace_spans_decode` | typed methods for tracing |
+| `sweep`, `hibernate`, `wake` | hibernation by hand |
+| `migrate(...) -> migration`, `migrated=`, `migration_done=` | migration |
+| `snapshot() -> bytes`, `Host.restore(snapshot, charts, system=..., ...)` | snapshots |
+
+**Wire format**
+
+| Item | What it does |
+|---|---|
+| `transport=`, `send.message`, `send(message)`, `fail(target, sendid=None)` | sends between systems: the outgoing half, the incoming half, a failure the other side reported |
+| `send.answer(..., origin=, raw=)`, `send(..., origin=)` | a protocol's reply address and raw message |
+| `Address(text)`, `.system`, `.session`, `.name`, `Address.from_name`, `Address.from_session` | addresses as values, read and written by the core's parser |
+| `encode(value) -> bytes`, `decode(data)` | the value table's CBOR |
+| `decode_traces(data)` | the spans of an OTLP traces request, without a host |
 
 ## Building from source
 
