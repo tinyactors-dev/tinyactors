@@ -112,6 +112,21 @@ static const char ta_python_doc_encode[] =
     "UnicodeError for lone surrogates, ValueError for excessive nesting\n"
     "(cycles included), and MemoryError on allocation failure.";
 
+static const char ta_python_doc_decode_traces[] =
+    "decode_traces(data)\n"
+    "--\n"
+    "\n"
+    "The spans of an OTLP ExportTraceServiceRequest, read without a host:\n"
+    "the bytes a telemetry handler gets for \"traces\", or any exporter's.\n"
+    "\n"
+    "Each span is a dict: trace, span and parent (lowercase hex; parent None\n"
+    "for a root span), name, kind, start and end (nanoseconds since the Unix\n"
+    "epoch), status, statusMessage, flags, attributes, events (each\n"
+    "{name, time, attributes}), links (each {trace, span, attributes}),\n"
+    "resource (its attributes) and scope ({name, version, attributes}). Use\n"
+    "it in tests and in a collector of your own; bytes that are not such a\n"
+    "request raise InvalidError.";
+
 static const char ta_python_doc_decode[] =
     "decode($module, data, /)\n"
     "--\n"

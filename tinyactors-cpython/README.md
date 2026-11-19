@@ -514,8 +514,10 @@ collide at the collector. To reproduce a test's traces, set the seed:
 **Choosing what is traced.** `trace_configure` sets the policy, for
 example sampling. `trace_watch` adds rules in front of it for a while, on
 the host's clock: with tracing sampled down, it can trace one chart in
-full for a minute. `trace_spans_decode(handler, traces=data)` decodes a
-traces request back into spans, which is useful in tests.
+full for a minute. `tinyactors.decode_traces(data)` decodes a traces
+request back into a list of spans without a host, in tests or in a
+collector of your own: each span's ids, name, times, status, attributes
+and events, and its `flags`, `links`, `resource` and `scope`.
 
 ```python
 host.trace_configure(print, sample=0.01)                 # 1% of new traces

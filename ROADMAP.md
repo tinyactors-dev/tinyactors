@@ -658,6 +658,13 @@ websockets) and decided the shape below, the same in both bindings.
   Python's `host.run()`, Node's `addCharts` and `spawnChart` (replaced),
   an OTLP encoder for application metrics, a debugger in the API.
 
+**Decided after the first items (the maintainer, 2026-11-19):**
+`Host` changes in place to the new shape, in both bindings, with every
+test, example and tool migrated (no second class, no second signature);
+item 12 walks core's decoder in each binding's C, core untouched; item 13
+is docs and types only (the calls stay where they are, grouped under
+"Operating a host" and "Wire format").
+
 The bindings' `AGENTS.md` change with the items that need it ("Layers",
 "What not to build", the API sections): the rules there hold for the
 direct layer; the items below are the API applications use.
@@ -673,10 +680,10 @@ direct layer; the items below are the API applications use.
 | 7 | `store=` (`SQLiteStore`, `MemoryStore`) and `resident=`: the sweep, hibernate and wake loop | both | `ta_host_sweep`, `ta_host_hibernate`, `TA_EFFECT_WAKE`, `ta_host_wake` | |
 | 8 | `on_done` and `on_error` per chart | both | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` | |
 | 9 | A handler-error hook on the host; without one, today's behaviour | both | — | |
-| 10 | Errors as classes (`NotFound`, `StaleError`, ...), the status name kept as an attribute | both | `ta_status_name` | done (`5529761e`) |
+| 10 | Errors as classes (`StaleError`, `StateError`, `InvalidError`, `UnsupportedError`), the status name kept as an attribute | both | `ta_status_name` | done (`5529761e`) |
 | 11 | `Address.from_name(system, name)` (Node's `fromName`), percent-encoding the name | both | `ta_address_parse` | done: Node had `Address.fromName`; Python `from_name` (`eedee0a0`) |
-| 12 | A span decoder that needs no host, at module level; whether core's decoder gives the resource, the scope and links is to be checked | both | `ta_otlp_next_span` | waits: core's decoder has resource, scope and links (`ta_otlp_next_span`); converting spans to values is C free of any language, so it belongs in core (`trace.spans.decode`'s writer made public), a change to core the maintainer decides |
-| 13 | Operator calls in their own namespace (trace, metrics, telemetry, sweep, hibernate and wake, migration, segments and images), wire-format calls in another (`encode`, `decode`, the BasicHTTP helpers) | both | — | |
+| 12 | A span decoder that needs no host, at module level, with the resource, the scope and the links | both | `ta_otlp_next_span` | |
+| 13 | Operator calls (trace, metrics, telemetry, sweep, hibernate and wake, migration, segments and images) and wire-format calls (`encode`, `decode`, the BasicHTTP helpers) grouped apart in the READMEs, guides and types | both | — | |
 | 14 | Guides: the three strategies for a send to an actor that is not there, with the chat as an example application; names use only characters that need no encoding | both | — | |
 | 15 | `version` export and `./package.json` in `exports` | Node | — | done (`2479be24`, `e815e12b`: the browser floor is JSON modules') |
 | 16 | The native datamodel refuses top-level declarations in scripts (a compile diagnostic pointing to `<data>`), and the per-session context goes | Node | — | |

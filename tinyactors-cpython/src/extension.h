@@ -83,6 +83,7 @@ void ta_python_cbor_init(ta_cbor_writer *writer, const ta_python_room *room);
 int ta_python_value_write(ta_python_module_state *state, ta_cbor_writer *writer, PyObject *value);
 /* One whole CBOR item as a Python value: a new reference or NULL. */
 PyObject *ta_python_value_read(ta_python_module_state *state, ta_bytes cbor);
+PyObject *ta_python_decode_traces(PyObject *module, PyObject *data);
 /* A copy of a value for another actor: mutable containers (list, dict)
  * copied, immutable values shared, anything outside the table refused
  * (TypeError) and nesting past 64 refused (ValueError). */

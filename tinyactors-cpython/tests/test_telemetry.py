@@ -47,6 +47,37 @@ class Telemetry(unittest.TestCase):
         self.assertIn("scxml.macrostep go", span_names(host, got))
         host.close()
 
+    def test_decode_traces_reads_spans_without_a_host(self):
+        """The same spans as the typed method, with flags, links, the resource and the scope."""
+        got = []
+        clock = tinyactors.SimulatedClock()
+        host = host_with(lambda host, signal, data: got.append((signal, data)), clock)
+        host.send(host.spawn(host.chart("c")), "go")
+        host.run_until_idle()
+        clock.increment(0.2)
+        traces = [data for signal, data in got if signal == "traces"]
+        self.assertTrue(traces)
+        typed = []
+        host.trace_spans_decode(lambda host, result: typed.extend(result["spans"]), traces=traces[0])
+        host.run_until_idle()
+        host.close()
+        spans = tinyactors.decode_traces(traces[0])
+        self.assertEqual(len(spans), len(typed))
+        for span, expected in zip(spans, typed):
+            for key, value in expected.items():
+                self.assertEqual(span[key], value, key)
+            self.assertEqual(span["links"], [])
+            self.assertIsInstance(span["flags"], int)
+            self.assertEqual(span["resource"], {})  # the config gives the resource no attributes
+            self.assertEqual(span["scope"]["name"], "tinyactors")
+            self.assertEqual(span["scope"]["attributes"]["tinyactors.chart.name"], "c")
+        self.assertEqual(tinyactors.decode_traces(memoryview(traces[0])), spans)
+        self.assertEqual(tinyactors.decode_traces(b""), [])
+        with self.assertRaises(tinyactors.InvalidError):
+            tinyactors.decode_traces(b"\xff\xff\xff")
+        with self.assertRaises(TypeError):
+            tinyactors.decode_traces("not bytes")
+
     def test_close_hands_over_the_last_take(self):
         got = []
         host = host_with(lambda host, signal, data: got.append((signal, data)), flushInterval=0)
