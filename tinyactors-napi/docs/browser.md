@@ -507,11 +507,11 @@ sessions instead (2026-11-19, "Sessions" above).
   subclass), and `HostOptions.datamodel`'s note names the realm per
   runtime; nothing else in it is Node's (`grep Buffer index.d.ts`: lines
   9, 176, 643, 1118, 1127, 1150).
-- **The same exports,** `directoryResolver` included: in the wasm package
-  it uses `node:fs` and `node:path` through `process.getBuiltinModule`
-  where they exist (node, bun) and throws `TinyactorsError` with
-  `TA_ERROR_UNSUPPORTED` at the call where they do not
-  (`l-p3-shapes-browser`).
+- **The same exports,** `compileDir` and `SQLiteStore` included: in the
+  wasm package they use `node:fs`, `node:path`, `node:url` and the
+  runtime's SQLite through `process.getBuiltinModule` where they exist
+  (node, bun) and throw `TinyactorsError` with `TA_ERROR_UNSUPPORTED` at
+  the call where they do not (`l-p3-shapes-browser`).
 - **The convenience layer is one file.** `lib/convenience.mjs` imports
   `#direct`, a subpath import each package's `package.json` maps to its
   direct layer (the addon's `lib/direct.mjs`, the wasm package's own),

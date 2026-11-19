@@ -564,30 +564,45 @@ static napi_value ta_napi_compile_throw(napi_env env, ta_napi_instance *instance
 static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, const ta_napi_compile_call *how) {
     ta_napi_instance *instance = ta_napi_instance_of(env);
     if (instance == NULL) return NULL;
-    size_t argc = 3;
+    size_t argc = 2;
+    /* argv[2]: the options' resolver, undefined when none */
     napi_value argv[3] = {NULL, NULL, NULL}, result = NULL, class, resolve_error;
     if (napi_get_cb_info(env, info, &argc, argv, NULL, NULL) != napi_ok) return NULL;
     for (size_t i = argc; i < 3; i++)
         if (napi_get_undefined(env, &argv[i]) != napi_ok) return NULL;
     bool werror = false;
     napi_valuetype options_type = napi_undefined;
-    if (napi_typeof(env, argv[2], &options_type) != napi_ok) return NULL;
+    if (napi_typeof(env, argv[1], &options_type) != napi_ok) return NULL;
     if (options_type == napi_object) {
-        napi_value value;
+        napi_value value, keys, key;
         napi_valuetype type = napi_undefined;
-        if (napi_get_named_property(env, argv[2], "warningsAsErrors", &value) != napi_ok || napi_typeof(env, value, &type) != napi_ok)
+        uint32_t count = 0;
+        if (napi_get_property_names(env, argv[1], &keys) != napi_ok || napi_get_array_length(env, keys, &count) != napi_ok) return NULL;
+        for (uint32_t i = 0; i < count; i++) {
+            char name[24];
+            size_t length = 0;
+            if (napi_get_element(env, keys, i, &key) != napi_ok ||
+                napi_get_value_string_utf8(env, key, name, sizeof name, &length) != napi_ok)
+                return NULL;
+            if (!(length == 8 && memcmp(name, "resolver", 8) == 0) && !(length == 16 && memcmp(name, "warningsAsErrors", 16) == 0)) {
+                napi_throw_type_error(env, NULL, "a compile call's options are {resolver, warningsAsErrors}");
+                return NULL;
+            }
+        }
+        if (napi_get_named_property(env, argv[1], "warningsAsErrors", &value) != napi_ok || napi_typeof(env, value, &type) != napi_ok)
             return NULL;
         if (type == napi_boolean && napi_get_value_bool(env, value, &werror) != napi_ok) return NULL;
         if (type != napi_boolean && type != napi_undefined) {
             napi_throw_type_error(env, NULL, "warningsAsErrors is a boolean");
             return NULL;
         }
+        if (napi_get_named_property(env, argv[1], "resolver", &argv[2]) != napi_ok) return NULL;
     } else if (options_type != napi_undefined) {
-        napi_throw_type_error(env, NULL, "a compile call's options are an object: {warningsAsErrors}");
+        napi_throw_type_error(env, NULL, "a compile call's options are an object: {resolver, warningsAsErrors}");
         return NULL;
     }
     napi_valuetype resolver = napi_undefined;
-    if (napi_typeof(env, argv[1], &resolver) != napi_ok) return NULL;
+    if (napi_typeof(env, argv[2], &resolver) != napi_ok) return NULL;
     if (resolver != napi_undefined && resolver != napi_null && resolver != napi_function) {
         napi_throw_type_error(env, NULL, "a resolver is a function (base, source) => string");
         return NULL;
@@ -600,7 +615,7 @@ static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, co
     ta_napi_sources sources = {&instance->arena, how, NULL};
     int64_t count = ta_napi_sources_of(env, argv[0], &sources);
     if (count >= 0) {
-        ta_napi_resolving resolving = {env, argv[1], resolve_error, NULL};
+        ta_napi_resolving resolving = {env, argv[2], resolve_error, NULL};
         ta_compile_options options;
         memset(&options, 0, sizeof options);
         options.size = sizeof options;
@@ -660,12 +675,12 @@ static napi_value ta_napi_compile_with(napi_env env, napi_callback_info info, co
 }
 
 static napi_value ta_napi_compile_charts(napi_env env, napi_callback_info info) {
-    static const ta_napi_compile_call how = {false, "compileCharts(sources, resolver?, options?): sources an array of {name, text} of strings"};
+    static const ta_napi_compile_call how = {false, "compileCharts(sources, options?): sources an array of {name, text} of strings"};
     return ta_napi_compile_with(env, info, &how);
 }
 
 static napi_value ta_napi_compile_system(napi_env env, napi_callback_info info) {
-    static const ta_napi_compile_call how = {true, "compileSystem(manifest, resolver?, options?): the manifest a {name, text} of strings"};
+    static const ta_napi_compile_call how = {true, "compileSystem(manifest, options?): the manifest a {name, text} of strings"};
     return ta_napi_compile_with(env, info, &how);
 }
 

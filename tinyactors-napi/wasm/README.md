@@ -18,10 +18,9 @@ const compiled = compileCharts([{ name: 'hello.scxml', text: `
        datamodel="ecmascript" name="hello" initial="s">
   <state id="s"><onentry><log expr="'hello from ' + _ioprocessors.scxml.location"/></onentry></state>
 </scxml>` }]);
-const host = new Host({ systemID: 'web' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'web', log: (entry) => console.log(entry.text) });
 compiled.close();
-host.spawn(host.chart('hello'));
+host.spawn('hello');
 await host.idle();
 host.close();
 ```

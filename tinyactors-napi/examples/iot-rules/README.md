@@ -102,7 +102,7 @@ text in it, which does not parse either.
   clock, so a process that shares its CPUs with others still finds it.
   The counters answer while the host is busy.
 - **Named actors and spawn params**: a rule's actor for a device is named
-  by the device, found with `actorByName`, and spawned at the device's
+  by the device, found with `host.actor(device)`, and spawned at the device's
   first reading with `{ device, sustain }`.
 - **Delayed sends and `<cancel>`** for the device's watchdog, re-armed by
   every sample; a `SimulatedClock` in the test moves 30 s at once.

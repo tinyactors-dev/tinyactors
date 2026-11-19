@@ -297,10 +297,14 @@ function checkImage(module, result, errors) {
   return found;
 }
 
-function compileWith(manifest, [given, resolver, options], usage) {
-  let flags = 0;
+function compileWith(manifest, [given, options], usage) {
+  let flags = 0, resolver;
   if (options !== undefined) {
-    if (options === null || typeof options !== 'object') throw new TypeError('a compile call\'s options are an object: {warningsAsErrors}');
+    if (options === null || typeof options !== 'object') throw new TypeError('a compile call\'s options are an object: {resolver, warningsAsErrors}');
+    for (const key of Object.keys(options)) {
+      if (key !== 'resolver' && key !== 'warningsAsErrors') throw new TypeError('a compile call\'s options are {resolver, warningsAsErrors}');
+    }
+    resolver = options.resolver;
     const werror = options.warningsAsErrors;
     if (werror !== undefined && typeof werror !== 'boolean') throw new TypeError('warningsAsErrors is a boolean');
     if (werror) flags |= WERROR;
@@ -374,13 +378,13 @@ function compileWith(manifest, [given, resolver, options], usage) {
   }
 }
 
-// each takes (sources or manifest, resolver?, options?): their lengths are 3
-export function compileCharts(sources, resolver, options) { // eslint-disable-line no-unused-vars
-  return compileWith(false, [...arguments], 'compileCharts(sources, resolver?, options?): sources an array of {name, text} of strings');
+// each takes (sources or manifest, options?): their lengths are 2
+export function compileCharts(sources, options) { // eslint-disable-line no-unused-vars
+  return compileWith(false, [...arguments], 'compileCharts(sources, options?): sources an array of {name, text} of strings');
 }
 
-export function compileSystem(manifest, resolver, options) { // eslint-disable-line no-unused-vars
-  return compileWith(true, [...arguments], 'compileSystem(manifest, resolver?, options?): the manifest a {name, text} of strings');
+export function compileSystem(manifest, options) { // eslint-disable-line no-unused-vars
+  return compileWith(true, [...arguments], 'compileSystem(manifest, options?): the manifest a {name, text} of strings');
 }
 
 export { TinyactorsError };

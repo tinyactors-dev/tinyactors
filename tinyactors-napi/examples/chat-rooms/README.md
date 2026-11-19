@@ -51,20 +51,23 @@ eviction at rest no more than `maxResident` actors were in memory.
 |---|---|
 | [`charts/room.scxml`](charts/room.scxml) | a room: membership, posting rules, numbering, history, the fan-out to members |
 | [`charts/user.scxml`](charts/user.scxml) | a user: their rooms, online and offline, the inbox and the digest timer |
-| [`chat.mjs`](chat.mjs) | the application: the host, its I/O processors and wake handler, the eviction |
+| [`chat.mjs`](chat.mjs) | the application: the host, its I/O processors and store, the eviction |
 | [`store.mjs`](store.mjs) | the file store: one file per hibernated session, written atomically, blobs kept in memory until written |
 | [`main.mjs`](main.mjs) | an evening of traffic on the real clock, checked at the end |
 | [`test.mjs`](test.mjs) | each tricky case on a `SimulatedClock` on both datamodels, a load of hundreds of actors, and the demo |
 
 ## The tinyactors features it uses, and why
 
-- **Hibernation** (`host.sweep`, `host.hibernate`, the `wake` handler,
-  `host.wake`): the service holds thousands of actors and keeps a few
-  hundred in memory. A room or a user spends most of its time waiting,
-  which is what hibernation is for; the host does no I/O, so the store is
-  the application's, files here. The wake handler takes the blob from the
-  store (from memory, or a file read that returns a promise) and calls
-  `host.wake`. Every variable of both charts is a plain value and neither
+- **Hibernation** (`host.sweep`, `host.hibernate`, the host's `store`):
+  the service holds thousands of actors and keeps a few hundred in memory.
+  A room or a user spends most of its time waiting, which is what
+  hibernation is for; the host does no I/O, so the store is the
+  application's, files here. It evicts with a policy of its own (the
+  sweep, then the least recently used), so it gives the host no
+  `resident` bound and writes the blobs itself; the host calls the
+  store's `load` when an event comes for a hibernated actor, and it
+  answers with the blob (from memory, or a file read that returns a
+  promise), which the host wakes. Every variable of both charts is a plain value and neither
   chart has a `<script>`, so every actor at rest can hibernate.
 - **The sweep** finds the cold actors without the application tracking
   what ran: a member woken by a fan-out ran, so the next sweep skips it.
@@ -74,8 +77,8 @@ eviction at rest no more than `maxResident` actors were in memory.
   that is busy and one that is not in memory at all.
 - **`hostStats`** answers `actors` and `hibernated`, the resident set
   the demo and the test check after every eviction.
-- **Named actors and addresses** (`spawnChart(chart, { name })`,
-  `host.actorByName`, `tinyactors://chat/@room-lobby`): a user's actor
+- **Named actors and addresses** (`host.spawn(chart, { name })`,
+  `host.actor(name)`, `tinyactors://chat/@room-lobby`): a user's actor
   sends to a room by its address, the room answers to `_event.origin` and
   sends each message to `tinyactors://chat/@user-<name>`. An address finds
   a hibernated actor too: the event waits in its queue and the host asks
@@ -133,7 +136,7 @@ bun test ./examples/chat-rooms/test.mjs
 The store takes hooks, so a test can hold a file read or a write until it
 says so, or make a write fail; a test waits for the host and for the
 store's reads and writes with `chat.settle()`, since `host.idle()` does
-not wait for the wake handler's promise. A load of 220 actors with 30 in
+not wait for the writes the application starts itself. A load of 220 actors with 30 in
 memory checks the bound with `hostStats` after every eviction, and
 the last case runs a small `main.mjs` evening on the real clock. All of it
 takes about two seconds.

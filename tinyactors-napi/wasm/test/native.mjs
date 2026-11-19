@@ -26,7 +26,7 @@ const frames = () => (typeof document === 'undefined' ? null : document.querySel
 export async function nativeScenario() {
   const logs = [];
   const before = frames();
-  const host = new Host({ systemID: 'web' }, { log: (h, entry) => logs.push(`${entry.label}=${entry.text}`) });
+  const host = new Host([], { system: 'web', log: (entry) => logs.push(`${entry.label}=${entry.text}`) });
   const compiled = compileCharts([{ name: 'shared', text: SHARED }, { name: 'helpers', text: HELPERS }]);
   host.addImage(compiled.image);
   compiled.close();
@@ -51,7 +51,7 @@ export async function droppedHost(gc) {
   const before = frames();
   let during;
   await (async () => {
-    const host = new Host({ systemID: 'web' });
+    const host = new Host([], { system: 'web' });
     const compiled = compileCharts([{ name: 'shared', text: SHARED }]);
     host.addImage(compiled.image);
     compiled.close();
@@ -72,7 +72,7 @@ export async function droppedHost(gc) {
 export async function underPolicy() {
   const out = {};
   try {
-    new Host({ systemID: 'web' }); // eslint-disable-line no-new
+    new Host([], { system: 'web' }); // eslint-disable-line no-new
     out.host = 'made';
   } catch (error) {
     out.host = [error.status, error.message];
@@ -83,7 +83,7 @@ export async function underPolicy() {
   // quickjs evaluates no chart text with the page's engine: it runs here
   const lines = [];
   try {
-    const host = new Host({ systemID: 'web' }, { datamodel: 'quickjs', log: (h, entry) => lines.push(entry.text) });
+    const host = new Host([], { system: 'web', datamodel: 'quickjs', log: (entry) => lines.push(entry.text) });
     const sandboxed = compileCharts([{ name: 'q', text: '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="q" initial="s"><datamodel><data id="n" expr="[1, 2, 3].map((x) => x * 2)"/></datamodel><state id="s"><onentry><log expr="JSON.stringify(n)"/></onentry></state></scxml>' }]);
     host.addImage(sandboxed.image);
     sandboxed.close();
@@ -103,11 +103,11 @@ export async function underPolicy() {
 export async function crossing(addonSnapshot) {
   let refused = null;
   try {
-    Host.restore(new Uint8Array(addonSnapshot), { systemID: 't' }).close();
+    Host.restore(new Uint8Array(addonSnapshot), [], { system: 't' }).close();
   } catch (error) {
     refused = [error.status, error.message];
   }
-  const host = new Host({ systemID: 't' });
+  const host = new Host([], { system: 't' });
   const compiled = compileCharts([{ name: 'c.scxml', text: '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="c" initial="s"><state id="s"/></scxml>' }]);
   host.addImage(compiled.image);
   compiled.close();

@@ -76,15 +76,67 @@ API"). Node's names and shapes (decided 2026-10-16, docs/plan.xml):
   resolves and one that rejects with the same `TinyactorsError` (a
   refusal at the call rejects; a rejection with no `catch` is an
   unhandled rejection, never the turn's; pending at `close()`, it never
-  settles); then the shapes chosen in p3-shapes (2026-10-17):
-  **`host.addCharts({name: text}, {resolver}?)`** (compileCharts,
-  addImage, close; returns the segment), **`host.spawnChart(name,
-  options?)`** (chart, then spawn), **`directoryResolver(root)`** (reads
-  `source` under `root` relative to `base`, refusing with `ResolveError` a
-  path that leaves it, symbolic links included; the one use of the
-  built-ins the layer may import, `node:fs` and `node:path`) and
-  **`Address.prototype.toJSON`** (its text). A chart builder waits for the
-  direct layer to expose `ta_xml_writer`.
+  settles); **`Address.prototype.toJSON`** (its text); and the
+  application API of ROADMAP.md step 8.6 (items 1 to 9 and 18, 2026-11-19,
+  as the Python binding's 9c84f1c4, 24190ca0, 48a46745 and 5f780d23 in
+  JavaScript's shapes), which replaced `host.addCharts`, `host.spawnChart`,
+  `directoryResolver` and `host.actorByName`:
+  - **`Host`** is the layer's `class Host extends` the direct layer's
+    (the addon's class, `(config, options)`, which `index.mjs` no longer
+    exports): **`new Host(charts, {system, ioProcessors, config, clock,
+    store, resident, log, telemetry, services, transport, onDone,
+    onError, onHandlerError, migrated, migrationDone, datamodel,
+    quickjs})`** makes the direct host's config from `system` (the
+    `systemID`; `"tinyactors-ask"` is reserved) and `ioProcessors` (each
+    an object with `receive(send)` and an optional `location`; a plain
+    function a `TypeError` naming its type), refuses `systemID` or
+    `ioProcessors` in `config`, and adds `charts` (a `Compiled`, image
+    bytes, or an array) in order; **`Host.restore(snapshot, charts,
+    options)`** adds only the images the snapshot does not hold (by
+    bytes, the direct layer's hidden `holdsImage`).
+  - **Handlers take no host**: `receive(send)`, `transport(send)`,
+    `log(entry)`, `telemetry(signal, data)`, a service's
+    `handler(invocation)`, `receive(send)` and `stop()`,
+    `migrated(migrated)`, `migrationDone(result)`, a typed method's
+    `onResult(result)` and `onError(error)`; the views and records have
+    `.host`, and **`send.sender`** is an `Actor`. The direct layer calls
+    them so (C and `wasm/lib/host.mjs`), so nothing is wrapped per event.
+  - **`host.spawn(chart, options?) → Actor`** (a chart's name or a
+    `ChartRef`), **`host.actor(which)`** (a session, an `Actor`, a name or
+    an address; `StaleError` for none), **`await host.actors({chart}?)`**;
+    every call that takes a session takes an **`Actor`** (`id`, `host`,
+    `address`, `send`, `terminate`, `state()`, `context()`, `get()`,
+    `ask`, `done`, `equals`).
+  - **`store: {save, load, delete}`** (each sync or returning a
+    promise), **`MemoryStore`**, **`SQLiteStore(path)`** (`node:sqlite`,
+    `bun:sqlite`) and **`resident: n`**, over the direct layer's hidden
+    `wake` and `idle` hooks: a WAKE's blob loaded, woken and deleted; after
+    a turn that went idle the actors past `resident` hibernated (CLOCK
+    sweeps) and saved, a save that fails waking the actor back; a
+    migration's WAKEs loaded as room allows. The `wake` option is gone;
+    `sweep`, `hibernate` and `wake` stay.
+  - **`onDone(actor, donedata)`**, **`onError(actor, error)`** and
+    `actor.done`, over the direct layer's `done` and `error` hooks
+    (`TA_EFFECT_DONE`, `TA_EFFECT_ERROR`); **`onHandlerError(error,
+    effect)`** receives what a handler threw, with its view, instead of
+    the turn.
+  - **`actor.ask(event, data?, {signal}?)`**: a row of the pending
+    `ta_table` (`TA_NAPI_METHOD_ASK`) holds the settle function, the
+    event's origin is `tinyactors://tinyactors-ask/@<handle>`, and the
+    reply, a send to that system, is taken before the application's
+    `transport`.
+  - **`Spawner`**, an I/O processor that spawns a chart a send names and
+    answers `spawned` with `{name, address}`, and **`compileDir(dir,
+    {resolver}?)`** (every `*.scxml` under `dir`, named by its path, sorted,
+    a `src` read by a resolver confined to `dir`); with `SQLiteStore`, the
+    layer's uses of the built-ins, reached by
+    `process.getBuiltinModule` of a literal name (`node:fs`, `node:path`,
+    `node:url`, `node:sqlite`, `bun:sqlite`), so a browser loads the layer
+    and refuses only those calls.
+
+  Both packages share the file (`#direct`), so `@tinyactors/wasm` has the
+  same API. A chart builder waits for the direct layer to expose
+  `ta_xml_writer`.
 - **A resolver is any callable** `(base, source) => text` (a function,
   an arrow, a bound method; decided 2026-10-16, as Python's API review
   did), given to the compile call only (a static `src`, at compile time;
@@ -154,8 +206,8 @@ the ack.
   says. **`await host.idle()`** is a promise that settles at the next idle
   turn with no handler's promise pending (2026-10-18,
   l-p4-examples-order-settle: every promise a handler returns, the I/O
-  processors', the services' and their `receive`'s, wake, telemetry, log,
-  migration and typed-method handlers', is followed with `then` and
+  processors', the services' and their `receive`'s, a store's, telemetry,
+  log, `onDone`, migration and typed-method handlers', is followed with `then` and
   counted on the host, and the count reaching zero with an `idle()`
   waiting schedules a turn; the last take's at close is `asyncDispose`'s
   instead): it observes, it drives nothing. On a closed host it returns a
@@ -238,7 +290,9 @@ The rules the Python binding follows hold here too (bindings.md, sections
 
 | JavaScript sees | Through | Core |
 |---|---|---|
-| an actor's output | an I/O processor's handler the application configures per host, given the send as a thin view; it may answer or fail it | `TA_EFFECT_SEND`; `ta_host_send` (with `TA_EVENT_IN_ERROR_COMMUNICATION` for a failure) |
+| an actor's output | an I/O processor's `receive` the application configures per host, given the send as a thin view; it may answer or fail it | `TA_EFFECT_SEND`; `ta_host_send` (with `TA_EVENT_IN_ERROR_COMMUNICATION` for a failure) |
+| an actor's end | `onDone(actor, donedata)`, `onError(actor, error)`, `actor.done` | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` |
+| a hibernated actor wanted again | the host's `store`, loaded and woken by the convenience layer | `TA_EFFECT_WAKE`; `ta_host_wake` |
 | services the charts invoke | a service registered by type | `TA_EFFECT_INVOKE`, `UNINVOKE`, sends with `IO_PROCESSOR` `TA_NIL` |
 | an actor's state | the typed method over `actor.state` (subscriptions are removed, ADR 0012 decision 4) | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
 | inspection and trace control | typed methods, each taking a response handler the drain calls when its `REPLY` is dispatched | `ta_host_post`, `TA_HOST_EFFECT_REPLY` |
@@ -255,20 +309,22 @@ The rules the Python binding follows hold here too (bindings.md, sections
   so hosts start different trace ids; a seed the caller sets is kept and
   reproduces; `Host.restore` passes its config as given, its segments
   keeping the snapshot's generators. Core stays free of I/O.
-- **`DONE` and `ERROR` are internal:** the addon releases its rows for the
-  session; no application callback.
+- **`DONE` and `ERROR`:** the addon releases its rows for the session,
+  then calls the direct layer's `done` or `error` hook, which the
+  convenience layer makes `actor.done`, `onDone` and `onError`
+  (2026-11-19, step 8.6, item 5: replacing "no application callback").
 - **An I/O processor's handler that throws before answering** (or whose
   promise rejects before an answer) has its send failed, as ADR 0009 has
   a runtime that cannot do what an effect asks answer with a failed
   completion (`error.communication` for the sender), and the error is
   reported as "The loop" says.
-- **A log entry is `(session, label, text)`**, no chart.
+- **A log entry is `(session, label, text)`**, no chart, and its `host`.
 - **No synchronous request and no raw `post`** (ADR 0012, decision 3): one typed method per method of
   `tinyactors-core/docs/requests.md` but `actor.send` (which is
   `host.send`), shaped `method(params, onResult, onError)` (decided
   2026-10-16): `params` an object passed to core as given (`undefined`
-  for none), `onResult(host, result)` at the `REPLY`'s dispatch,
-  `onError(host, error)` optional and never a param for core; it returns
+  for none), `onResult(result)` at the `REPLY`'s dispatch,
+  `onError(error)` optional and never a param for core; it returns
   nothing. Called with no handler it returns a promise instead (the
   convenience layer, 2026-11-18). The
   message id is the handle of a row in a pending `ta_table` holding the
@@ -277,10 +333,10 @@ The rules the Python binding follows hold here too (bindings.md, sections
 - **No notification is defined;** the addon drops a
   `TA_HOST_EFFECT_NOTIFICATION` whose method it does not know.
 - **Invoked services** (decided 2026-10-16, as Python's "Invoked
-  services"; docs/plan.xml, p2-services): `services: {[type]: (host,
-  invocation) => service}`. At a `TA_EFFECT_INVOKE` the handler of its
+  services"; docs/plan.xml, p2-services): `services: {[type]:
+  (invocation) => service}`. At a `TA_EFFECT_INVOKE` the handler of its
   type (`EVENT`) gets an **`Invocation`**, a record made before the ack (a
-  service outlives it): `session` (a `bigint`), `invokeid` (`SENDID`),
+  service outlives it): `host`, `session` (a `bigint`), `invokeid` (`SENDID`),
   `type`, `src` (`TARGET`), `data` (the payload's value), `traceparent`,
   `restored` (`TA_EFFECT_FLAG_RESTORED`) and `running`; its type, src and
   invokeid are the last invocation's strings when the text is the same,
@@ -294,9 +350,9 @@ The rules the Python binding follows hold here too (bindings.md, sections
   {traceparent}?)`** with `TA_EVENT_IN_INVOKE_DONE` (the entry goes); both
   keep the invoke's trace unless given one (`null`: a new trace) and throw
   `TA_ERROR_STALE` once it ended or the host closed. A `TA_EFFECT_SEND`
-  with `IO_PROCESSOR` `TA_NIL` goes to the service's **`receive(host,
-  send)`**, called on the service, with a thin `Send` whose `type` is
-  `undefined`; a `TA_EFFECT_UNINVOKE` to its **`stop(host)`**, then the
+  with `IO_PROCESSOR` `TA_NIL` goes to the service's **`receive(send)`**,
+  called on the service, with a thin `Send` whose `type` is
+  `undefined`; a `TA_EFFECT_UNINVOKE` to its **`stop()`**, then the
   entry goes; both optional. **A handler may return a thenable of the
   service** (decided 2026-10-17, l-p2-services-promise revised: async is
   the event loop's): the invocation is starting until it settles, its
@@ -923,6 +979,24 @@ file.
 - **Sweep and wake refuse numbers out of range**, never wrapped. Test:
   `test/hibernation.test.mjs: 'sweep, hibernate and wake refuse numbers out
   of range'`.
+- **An ask is a row of the pending table, and its reply never reaches
+  the application's transport;** an aborted or stale ask's reply is
+  dropped, and an ask pending at `close()` never settles. Test:
+  `test/actors.test.mjs: 'ask: the reply to _event.origin settles the
+  promise with [event, data], past the application's transport'`.
+- **The store never loses an actor:** a save that throws or rejects wakes
+  the actor back from its blob, and an actor terminated while hibernated
+  is woken to end, its blob deleted. (A load that comes while the
+  session's save is pending waits for it: `loaded` in
+  `lib/convenience.mjs`; no test makes the two meet.) Tests: `test/actors.test.mjs: 'a store whose save throws
+  wakes the actor back; one whose methods return promises is awaited'`
+  and `'a store and a resident bound: the surplus hibernated after a
+  turn, a WAKE loads, wakes and deletes'`.
+- **The application layer refuses what it replaced:** `wake`, a
+  `systemID` or `ioProcessors` in `config`, a processor that is a plain
+  function. Test: `test/actors.test.mjs: 'the options are the API's:
+  removed ones refused, config never holds the system id or the
+  processors'`.
 - **Pending handlers are dropped at `ta_host_free`**, never called.
   Tests: `test/methods.test.mjs: 'pending handlers are never called after
   close; a method on a closed host throws'`; `test/rules.test.mjs: 'a
@@ -942,7 +1016,7 @@ file.
   given, where a safe integer is CBOR's integer as a bigint is. 0, 0n, a
   negative, a fraction, a number past 2^53-1, a bigint past 64 bits or
   another type is a `TypeError`, and a value's bigint past 64 bits
-  `TA_ERROR_INVALID`. What the API gives back (`spawn`, `actorByName`,
+  `TA_ERROR_INVALID`. What the API gives back (`Actor.id`,
   `sweep`, a view's `session`) stays a bigint. Tests:
   `test/rules.test.mjs: 'sessions are bigints from 1 to 2^64-1 or safe
   integers from 1, never a number that saturates'` (a value's bigints
@@ -991,10 +1065,13 @@ file.
 - No handle table, status table, arena or image rows of our own
   (`ta_table`, `ta_status_name`, `ta_growable_arena`, `ta_host_add_image`
   copies).
-- No application callback for `DONE` or `ERROR`; no subscription.
-- No defaults, limits, methods, events or messages of our own (the one
-  exception, the maintainer's: a host that names no datamodel gets the
-  native one); nothing C
+- No subscription; `DONE` and `ERROR` reach the application only as an
+  actor's end (`onDone`, `onError`, `actor.done`).
+- No defaults, limits, methods, events or messages of our own (the
+  exceptions, the maintainer's: a host that names no datamodel gets the
+  native one; and step 8.6's, as the Python binding's: the reserved system
+  `tinyactors-ask` of `actor.ask`, the `Spawner`'s `spawned` answer, and
+  the resident trim's sweep of 1024 sessions at a time); nothing C
   does done again in JavaScript (bindings.md section 2); no JavaScript
   above the addon but the convenience layer, over the addon's exports
   only ("Layers and the resolver").
@@ -1045,8 +1122,8 @@ manages its development dependencies; the C toolchain is the root's.
 - `mise run migration [--actors N] [--resident R] [--events E]`: the
   migration gate (`tools/migration.mjs`): the same population of a
   counter's version 1, at most R resident, moved to version 2 with
-  `migrate({wake: true})` while E events come, the migration's WAKEs woken
-  a batch at a time; every sampled count and version checked, none left
+  `migrate({wake: true})` while E events come, the migration's WAKEs
+  loaded by the host as its `resident` bound allows; every sampled count and version checked, none left
   behind, version 1's segment retired. `mise run test` runs it as
   `stress`'s fast and full sizes.
 - `mise run snapshot [--actors N] [--resident R] [--events E]`: the

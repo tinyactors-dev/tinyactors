@@ -61,11 +61,10 @@ const chart = `
 </scxml>`;
 
 const compiled = compileCharts([{ name: 'thermostat.scxml', text: chart }]);
-const host = new Host({ systemID: 'home' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'home', log: (entry) => console.log(entry.text) });
 compiled.close();
 
-const thermostat = host.spawn(host.chart('thermostat'));
+const thermostat = host.spawn('thermostat');
 for (const celsius of [18, 19, 21]) host.send(thermostat, 'reading', { celsius });
 host.send(thermostat, 'typo');
 await host.idle();
@@ -140,11 +139,10 @@ const chart = `
 </scxml>`;
 
 const compiled = compileCharts([{ name: 'basket.scxml', text: chart }]);
-const host = new Host({ systemID: 'shop' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'shop', log: (entry) => console.log(entry.text) });
 compiled.close();
 
-const basket = host.spawn(host.chart('basket'));
+const basket = host.spawn('basket');
 for (const sku of ['tea', 'cake', 'tea']) host.send(basket, 'add', { sku });
 host.send(basket, 'checkout');
 await host.idle();
@@ -215,11 +213,10 @@ const receiver = `
 </scxml>`;
 
 const compiled = compileCharts([{ name: 'sender.scxml', text: sender }, { name: 'receiver.scxml', text: receiver }]);
-const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
 compiled.close();
-host.spawn(host.chart('sender'));
-host.spawn(host.chart('receiver'));
+host.spawn('sender');
+host.spawn('receiver');
 await host.idle();
 host.close();
 ```
@@ -265,10 +262,9 @@ const chart = `
 </scxml>`;
 
 const compiled = compileCharts([{ name: 'menu.scxml', text: chart }]);
-const host = new Host({ systemID: 'shop' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'shop', log: (entry) => console.log(entry.text) });
 compiled.close();
-host.spawn(host.chart('menu'));
+host.spawn('menu');
 await host.idle();
 host.close();
 ```
@@ -288,7 +284,8 @@ from, or a node written out, on both datamodels.
 
 `compileCharts` takes a list of documents, each `{ name, text }`, and
 compiles them into one image. Each chart is known by its `<scxml name>`;
-`host.chart(name)` finds it. The `name` of a document is what error
+`host.spawn(name)` starts one, and `host.chart(name)` finds its current
+version. The `name` of a document is what error
 messages and `src` attributes name.
 
 A chart may read another document through `src`: `<invoke
@@ -313,12 +310,12 @@ const parent = (src) => `<scxml xmlns="http://www.w3.org/2005/07/scxml" version=
   <state id="s"><invoke src="${src}"/></state>
 </scxml>`;
 
-const compiled = compileCharts([{ name: 'parent.scxml', text: parent('child.scxml') }], resolver);
+const compiled = compileCharts([{ name: 'parent.scxml', text: parent('child.scxml') }], { resolver });
 console.log('compiled', compiled.image.length > 0);
 compiled.close();
 
 try {
-  compileCharts([{ name: 'parent.scxml', text: parent('missing.scxml') }], resolver);
+  compileCharts([{ name: 'parent.scxml', text: parent('missing.scxml') }], { resolver });
 } catch (error) {
   if (!(error instanceof CompileError)) throw error;
   console.log(error.message);
@@ -335,89 +332,69 @@ from `compileCharts` as it is.
 
 **The compile result.** `compileCharts` returns an object whose `image`
 is a `Buffer`, yours from the first read, and whose `diagnostics` lists
-the compiler's warnings. `close()` frees the compiler's memory at once (the
-garbage collector does it otherwise); read `image` first. An image is
-plain bytes: write it to a file and load it in another process with
-`host.addImage(readFileSync(path))`. `addImage` copies it and returns the
-image's **segment**, a number the host uses for that image.
+the compiler's warnings. `new Host(compiled, options)` copies its image,
+so `close()` may free the compiler's memory at once (the garbage
+collector does it otherwise). An image is plain bytes: write it to a file
+and give it to a host in another process, `new Host(readFileSync(path),
+options)`, or add it to a running host with `host.addImage(bytes)`, which
+copies it and returns the image's **segment**, a number the host uses
+for that image. `new Host` takes one image or a list of them, compile
+results and bytes alike, each a segment in its order.
 
-**In one call.** `host.addCharts({ [name]: text }, { resolver })`
-compiles the documents of an object, adds the image and closes the
-compile result, and returns the segment: `compileCharts`, `addImage` and
-`close()` as you would write them. The object's first key is the boot
-chart (JavaScript keeps an object's keys in the order they were written,
-except keys that are integers, which come first). A compile error throws
-the same `CompileError`, with every diagnostic, and adds nothing.
-`host.spawnChart(name, options)` spawns the current version of chart
-`name`, as `host.spawn(host.chart(name), options)` does:
-
-```js
-import { Host } from '@tinyactors/node';
-
-const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
-const segment = host.addCharts({
-  'hello.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="hello">
-    <datamodel><data id="who" expr="'world'"/></datamodel>
-    <state id="s"><onentry><log expr="'hello, ' + who"/></onentry></state>
-  </scxml>`,
-});
-console.log('segment', segment);
-host.spawnChart('hello');
-host.spawnChart('hello', { params: { who: 'Ada' } });
-await host.idle();
-host.close();
-```
-
-```output
-segment 0
-hello, world
-hello, Ada
-```
-
-**Charts in a directory.** `directoryResolver(root)` is a resolver that
-reads each `src` as a file under `root`, relative to the directory of
-the document that names it: a document named `orders/order.scxml` that
-asks for `payment.scxml` reads `<root>/orders/payment.scxml`. It refuses,
-as a compile error, a path that leaves `root` (`..` past it, an absolute
-path, or a symbolic link that points outside), a file that does not
-exist, and a file that is not UTF-8; another error of the file system (a
-directory, no permission) is thrown as it is:
+**Charts in a directory.** `compileDir(dir)` compiles every `*.scxml`
+file under the directory `dir` (a path, or a `file:` URL such as
+`new URL('./charts/', import.meta.url)`) into one image. Each is named by
+its path under `dir`, `/`-separated, and the list is sorted by name, so
+the first is the image's default boot chart. A `src` that names no file
+of the list is read by a resolver confined to `dir`, relative to the
+directory of the document that names it: `orders/order.scxml` asking for
+`payment.scxml` reads `<dir>/orders/payment.scxml`. It refuses, as a
+compile error, a path that leaves `dir` (`..` past it, an absolute path,
+or a symbolic link that points outside), a file that does not exist, and
+a file that is not UTF-8; another error of the file system (no
+permission) is thrown as it is. A directory with no chart is refused
+with `InvalidError`. `compileDir(dir, { resolver })` reads `src` with
+your resolver instead.
 
 ```js
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CompileError, directoryResolver, Host } from '@tinyactors/node';
+import { CompileError, compileDir, Host } from '@tinyactors/node';
 
 const root = mkdtempSync(join(tmpdir(), 'charts-'));
 mkdirSync(join(root, 'orders'));
-writeFileSync(join(root, 'orders', 'payment.scxml'), `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+writeFileSync(join(root, 'orders', 'order.scxml'), `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+    datamodel="ecmascript" name="order">
+  <state id="s"><invoke src="payment.xml"/></state>
+</scxml>`);
+writeFileSync(join(root, 'orders', 'payment.xml'), `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
     datamodel="ecmascript" name="payment">
   <state id="s"><onentry><log expr="'paying'"/></onentry></state>
 </scxml>`);
-const order = (src) => `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="order">
-  <state id="s"><invoke src="${src}"/></state>
-</scxml>`;
 
-const resolver = directoryResolver(root);
-const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
-host.addCharts({ 'orders/order.scxml': order('payment.scxml') }, { resolver });
-host.spawnChart('order');
+const compiled = compileDir(root);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
+compiled.close();
+host.spawn('order');
 await host.idle();
+host.close();
 
+writeFileSync(join(root, 'orders', 'order.scxml'), `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" name="order">
+  <state id="s"><invoke src="../../etc/passwd"/></state>
+</scxml>`);
 try {
-  host.addCharts({ 'orders/order.scxml': order('../../etc/passwd') }, { resolver });
+  compileDir(root);
 } catch (error) {
   if (!(error instanceof CompileError)) throw error;
   console.log(error.diagnostics[0].message);
 }
-host.close();
 rmSync(root, { recursive: true });
 ```
 
 ```output
 paying
-../../etc/passwd (from orders/order.scxml) leaves the resolver's root
+../../etc/passwd (from orders/order.scxml) leaves the charts' directory
 ```
 
 A document the resolver read is named by its `src` as written, so a
@@ -463,10 +440,9 @@ const worker = `
 </scxml>`;
 
 const compiled = compileCharts([{ name: 'parent.scxml', text: parent }, { name: 'worker.scxml', text: worker }]);
-const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
 compiled.close();
-host.spawn(host.chart('parent'));
+host.spawn('parent');
 await host.idle();
 host.close();
 ```
@@ -517,10 +493,9 @@ const kid = `
 </scxml>`;
 
 const compiled = compileCharts([{ name: 'parent.scxml', text: parent }, { name: 'kid.scxml', text: kid }]);
-const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
 compiled.close();
-host.spawn(host.chart('parent'));
+host.spawn('parent');
 await host.idle();
 host.close();
 ```
@@ -536,7 +511,7 @@ the child got hello
 `compileSystem` compiles a **manifest**, a `<system>` document that lists
 its charts (`<chart name src>`, read through the resolver) and the actors
 to start (`<actor name chart>`). `host.boot(segment)` spawns those actors,
-each with its name:
+each with its name (the image `new Host` was given first is segment 0):
 
 ```js
 import { compileSystem, Host } from '@tinyactors/node';
@@ -556,15 +531,14 @@ const manifest = `<system>
   <actor name="right" chart="counter"/>
 </system>`;
 
-const compiled = compileSystem({ name: 'system.xml', text: manifest }, (base, source) => files[source]);
-const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
-const segment = host.addImage(compiled.image);
+const compiled = compileSystem({ name: 'system.xml', text: manifest }, { resolver: (base, source) => files[source] });
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
 compiled.close();
 
-host.boot(segment);
-host.send(host.actorByName('left'), 'tick');
-host.send(host.actorByName('right'), 'tick');
-host.send(host.actorByName('left'), 'tick');
+host.boot(0);
+host.actor('left').send('tick');
+host.actor('right').send('tick');
+host.actor('left').send('tick');
 await host.idle();
 host.close();
 ```

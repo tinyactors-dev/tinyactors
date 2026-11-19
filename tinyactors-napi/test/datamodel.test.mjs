@@ -4,7 +4,7 @@
 // cases), and what only the native one has (its contexts, its realm, its
 // copies). A chart reports through <log>, which the log handler collects.
 import { Host, TinyactorsError } from '@tinyactors/node';
-import { DATAMODEL, equal, hostWith, image, scxml, status, throws } from './charts.mjs';
+import { DATAMODEL, equal, hostWith, image, processor, scxml, status, throws } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
 const NATIVE = { datamodel: 'native' };
@@ -13,7 +13,7 @@ const NATIVE = { datamodel: 'native' };
  * as `label: text`. */
 function logging(charts, options = {}) {
   const lines = [];
-  const host = hostWith(charts, { ...options, log: (h, entry) => lines.push(`${entry.label}: ${entry.text}`) });
+  const host = hostWith(charts, { ...options, log: (entry) => lines.push(`${entry.label}: ${entry.text}`) });
   return { host, lines };
 }
 
@@ -223,7 +223,7 @@ test('a chart that declares nothing: its sessions\' variables are their own', as
   for (const session of [a, a, b]) host.send(session, 'inc');
   await host.idle();
   host.close();
-  same(logged.sort(), [`n: ${a}:1`, `n: ${a}:2`, `n: ${b}:1`].sort(), 'counts per session');
+  same(logged.sort(), [`n: ${a.id}:1`, `n: ${a.id}:2`, `n: ${b.id}:1`].sort(), 'counts per session');
 });
 
 test('the system variables are each session\'s own, _ioprocessors one object per session', async () => {
@@ -231,8 +231,7 @@ test('the system variables are each session\'s own, _ioprocessors one object per
     <state id="s"><onentry>
       <log label="sv" expr="JSON.stringify([_sessionid, _name, _ioprocessors, _ioprocessors === _ioprocessors, Object.isFrozen(_ioprocessors)])"/>
     </onentry></state>`);
-  const config = { systemID: 't', ioProcessors: [{ type: 'urn:out' }] };
-  const { host, lines: logged } = logging({ c: chart }, { config, ioProcessors: { 'urn:out': () => {} } });
+  const { host, lines: logged } = logging({ c: chart }, { ioProcessors: { 'urn:out': processor(() => {}) } });
   const a = host.spawn(host.chart('c'));
   const b = host.spawn(host.chart('c'), { name: 'named' });
   const c = host.spawn(host.chart('c'));
@@ -241,16 +240,16 @@ test('the system variables are each session\'s own, _ioprocessors one object per
   const seen = logged.map((line) => JSON.parse(line.slice('sv: '.length)));
   equal(seen.length, 3, 'three sessions');
   for (const [i, session] of [a, b, c].entries()) {
-    const [sessionid, , processors, same, frozen] = seen.find(([id]) => id === String(session));
-    equal(sessionid, String(session), `session ${i}: _sessionid`);
+    const [sessionid, , processors, same, frozen] = seen.find(([id]) => id === String(session.id));
+    equal(sessionid, String(session.id), `session ${i}: _sessionid`);
     const scxmlType = Object.keys(processors).find((type) => type.endsWith('#SCXMLEventProcessor'));
-    equal(processors[scxmlType].location.endsWith(`#_scxml_${session}`), true, `session ${i}: its own location`);
+    equal(processors[scxmlType].location.endsWith(`#_scxml_${session.id}`), true, `session ${i}: its own location`);
     equal(processors.scxml.location, processors[scxmlType].location, `session ${i}: the short name`);
     equal('urn:out' in processors, true, `session ${i}: the config's processor`);
     equal(same, true, `session ${i}: one object`);
     if (DATAMODEL === 'native') equal(frozen, true, `session ${i}: frozen`); // quickjs's is not
   }
-  equal(seen.find(([id]) => id === String(b))[1], 'named', 'the spawn\'s name');
+  equal(seen.find(([id]) => id === String(b.id))[1], 'named', 'the spawn\'s name');
 });
 
 test('XML content is a document: elements, attributes, text, and a copy of it in a send', async () => {
@@ -366,7 +365,7 @@ test('actor.context: each variable as a neutral value (to_wire)', async () => {
   same(Object.keys(before.variables), ['n', 'nothing', 'mixed'], 'keys');
   equal(Object.values(before.variables).every((v) => v === undefined), true, 'every variable undefined before the first turn');
   let result;
-  host.actorContext({ session }, (h, answer) => { result = answer; });
+  host.actorContext({ session }, (answer) => { result = answer; });
   await host.idle();
   host.close();
   same(result, { variables: { n: 7, mixed: { b: [null, 1], d: '1970-01-01T00:00:00.000Z' } } }, 'variables');
@@ -417,9 +416,10 @@ test('the native datamodel: a send\'s data is the payload\'s value copied into t
     <datamodel><data id="o" expr="({list: [1, 2]})"/></datamodel>
     <state id="s"><onentry><send event="out" type="urn:out" target="x" namelist="o"/></onentry></state>`);
   let seen;
-  const host = new Host({ systemID: 't', ioProcessors: [{ type: 'urn:out' }] }, {
+  const host = new Host([], {
+    system: 't',
     ...NATIVE,
-    ioProcessors: { 'urn:out': (h, send) => { seen = [send.data === send.data, Array.isArray(send.data.o.list), send.data.o.list instanceof Array]; } },
+    ioProcessors: { 'urn:out': processor((send) => { seen = [send.data === send.data, Array.isArray(send.data.o.list), send.data.o.list instanceof Array]; }) },
   });
   host.addImage(image({ c: chart }));
   host.spawn(host.chart('c'));

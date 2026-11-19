@@ -63,14 +63,14 @@ napi_status ta_napi_arities(napi_env env, napi_value object, const ta_napi_arity
  * prototype methods (the typed methods' are methods.c's), and of the
  * views' (effects.c). */
 static const ta_napi_arity ta_napi_exported_arities[] = {
-    {"encode", 1},         {"decode", 1}, {"decodeTraces", 1}, {"compileCharts", 3}, {"compileSystem", 3}, {"encodeHTTPPost", 1},
+    {"encode", 1},         {"decode", 1}, {"decodeTraces", 1}, {"compileCharts", 2}, {"compileSystem", 2}, {"encodeHTTPPost", 1},
     {"parseHTTPRequest", 1}, {"Host", 2},   {"Address", 1},       {NULL, 0},
 };
 static const ta_napi_arity ta_napi_host_static_arities[] = {{"restore", 3}, {NULL, 0}};
 static const ta_napi_arity ta_napi_host_arities[] = {
     {"addImage", 1}, {"chart", 1},     {"boot", 1},  {"spawn", 2},     {"send", 4},  {"fail", 2},
     {"sendMany", 1}, {"terminate", 1}, {"actorByName", 1}, {"sweep", 2}, {"hibernate", 1}, {"wake", 2},
-    {"migrate", 1},  {NULL, 0},
+    {"migrate", 1},  {"holdsImage", 1}, {"actorInfo", 1}, {"askOpen", 1}, {"askClose", 1}, {NULL, 0},
 };
 static const ta_napi_arity ta_napi_address_static_arities[] = {{"fromSession", 2}, {"fromName", 2}, {NULL, 0}};
 static const ta_napi_arity ta_napi_clock_arities[] = {{"increment", 1}, {NULL, 0}};

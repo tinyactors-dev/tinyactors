@@ -599,6 +599,20 @@ void ta_napi_drain(napi_env env, ta_napi_drain_state *state);
 
 /* Keeps the pending exception as the host's error, unless one is kept
  * already (the first is reported); the exception is cleared. */
+/* A handler's error: given to the host's handlerError hook, called with
+ * (error, effect) where `effect` is the view or record the handler got
+ * (NULL: undefined), or else kept for the turn (the first one kept). A
+ * throw of the hook's own is kept. ta_napi_handler_failed takes the
+ * pending exception (nothing when none is); ta_napi_handler_rejected a
+ * promise's rejection, answering whether a hook took it (the exception
+ * pending before it is cleared). ta_napi_keep_error is handler_failed with
+ * no effect. */
+typedef struct ta_napi_handler_error {
+    ta_napi_host *host;
+    napi_value effect;
+} ta_napi_handler_error;
+void ta_napi_handler_failed(napi_env env, const ta_napi_handler_error *failure);
+bool ta_napi_handler_rejected(napi_env env, const ta_napi_handler_error *failure, napi_value error);
 void ta_napi_keep_error(napi_env env, ta_napi_host *host);
 /* Throws the kept error, cleared; false when none was kept. */
 bool ta_napi_throw_kept(napi_env env, ta_napi_host *host);

@@ -48,19 +48,16 @@ async function hibernateAll(chat) {
 }
 
 /** Lets the host run and the store's unheld reads and writes finish until
- * `condition()` holds, without waiting for what a test holds (settle()
- * would); then a few more turns, for what the condition's change sets off. */
+ * `condition()` holds, without waiting for what a test holds (settle() and
+ * host.idle() would: the host waits for a load the test holds); then a few
+ * more turns, for what the condition's change sets off. */
 async function until(chat, condition, what) {
   const end = Date.now() + 5000;
   while (!condition()) {
     if (Date.now() > end) throw new Error(`timed out waiting until ${what}`);
-    await new Promise((resolve) => setTimeout(resolve, 1));
-    await chat.host.idle();
+    await new Promise((resolve) => setTimeout(resolve, 1)); // the host turns on its own
   }
-  for (let i = 0; i < 5; i++) {
-    await new Promise((resolve) => setImmediate(resolve));
-    await chat.host.idle();
-  }
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
 }
 
 const texts = (history) => history.filter((entry) => entry.kind === 'message').map((entry) => `${entry.user}: ${entry.text}`);

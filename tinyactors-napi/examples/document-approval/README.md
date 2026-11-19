@@ -89,8 +89,8 @@ version that was approved, and that no other document is.
   stays readable while it writes the file, and it calls `send.fail()` when
   the archive is down, which the chart turns into a retry.
 - **Named actors:** a document is spawned with its id as its name, so the
-  desk finds it with `host.actorByName`, and a document that ended is not
-  found.
+  desk finds it with `host.actor(id)`, and a document that ended is not
+  found (`StaleError`).
 - **The typed methods, as promises** (no handler given), in `admin.mjs`:
   `actorList` pages through the sessions, and for each one
   `actorGet` (its chart, its mailbox, and its pending delayed sends,

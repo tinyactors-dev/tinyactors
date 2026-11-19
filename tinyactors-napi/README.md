@@ -93,27 +93,26 @@ const chart = `
 // 2. Compile it into an image the host can load.
 const compiled = compileCharts([{ name: 'order.scxml', text: chart }]);
 
-// 3. A host, with a handler for what the chart sends to urn:payments.
-const host = new Host(
-  { systemID: 'shop', ioProcessors: [{ type: 'urn:payments' }] },
-  {
-    ioProcessors: {
-      'urn:payments': (host, send) => {
+// 3. A host of the image, with a processor for what the chart sends to urn:payments.
+const host = new Host(compiled, {
+  system: 'shop',
+  ioProcessors: {
+    'urn:payments': {
+      receive(send) {
         console.log(`charging ${send.data.amount} to ${send.target}`);
         send.answer('charged');
       },
     },
-    log: (host, entry) => console.log(`${entry.label}: ${entry.text}`),
   },
-);
-host.addImage(compiled.image);
+  log: (entry) => console.log(`${entry.label}: ${entry.text}`),
+});
 compiled.close();
 
 // 4. An actor of the chart, and three events for it.
-const order = host.spawn(host.chart('order'));
-host.send(order, 'add', { price: 4 });
-host.send(order, 'add', { price: 7 });
-host.send(order, 'checkout');
+const order = host.spawn('order');
+order.send('add', { price: 4 });
+order.send('add', { price: 7 });
+order.send('checkout');
 
 // 5. Let it run, then stop.
 await host.idle();
@@ -139,14 +138,15 @@ What happened, step by step:
    `CompileError` here, before anything runs. JavaScript that does not
    parse is a warning in `compiled.diagnostics` (SCXML makes it an
    `error.execution` when it runs), and an error with
-   `compileCharts(sources, undefined, { warningsAsErrors: true })`.
-3. **`new Host(config, options)`** makes a host. The config names this
-   system (`systemID`) and the I/O processors its charts may send to; the
-   options hold your handlers. The `urn:payments` handler gets each send
-   to that type: its data, its target, and `answer()`, which sends an
-   event back to the actor that sent it.
-4. **`host.spawn`** starts an actor of the chart and returns its session
-   id, a `bigint`. `host.send` puts an event in its queue.
+   `compileCharts(sources, { warningsAsErrors: true })`.
+3. **`new Host(charts, options)`** makes a host and adds the compiled
+   images to it, so the compile result can be closed at once. `system`
+   names this system; `ioProcessors` are the I/O processors its charts
+   may send to, each an object whose `receive(send)` gets each send to
+   that type: its data, its target, and `answer()`, which sends an event
+   back to the actor that sent it.
+4. **`host.spawn('order')`** starts an actor of the chart named `order`
+   and returns it, an `Actor`. `order.send` puts an event in its queue.
 5. **`await host.idle()`** waits until the host has nothing left to do.
    The actor runs on the event loop on its own; `idle()` only watches.
    `host.close()` frees the host.
@@ -194,8 +194,7 @@ for how such a loop shows in the host's counters.
 
 [Writing charts](docs/guide/charts.md) covers the JavaScript a chart may
 hold, `<script>`, XML data, several charts in one image (and
-`host.addCharts`, `host.spawnChart` and `directoryResolver`, which save
-the steps), and `<invoke>`.
+`compileDir`, which compiles a directory of them), and `<invoke>`.
 
 ### Starting an actor with data
 
@@ -219,13 +218,12 @@ const compiled = compileCharts([{ name: 'greeter.scxml', text: `
   </state>
 </scxml>` }]);
 
-const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
 compiled.close();
 
-host.spawn(host.chart('greeter'));
-host.spawn(host.chart('greeter'), { params: { who: 'Ada' } });
-host.spawn(host.chart('greeter'), { params: { greeting: 'Hi', who: 'Bob', mood: 'ignored' } });
+host.spawn('greeter');
+host.spawn('greeter', { params: { who: 'Ada' } });
+host.spawn('greeter', { params: { greeting: 'Hi', who: 'Bob', mood: 'ignored' } });
 await host.idle();
 host.close();
 ```
@@ -253,10 +251,11 @@ handler starts and does not return is not waited for). It is for tests, scripts 
 call it. A handler may call the host (send an event, spawn an actor): the
 input applies at once, and the actors run in the same or a later turn.
 
-Each `addImage` makes a **segment**: the host's memory for that image's
-actors, numbered from 0, which `addImage` returns. A host runs many
-segments as one; you need the number for `boot` and see it in the host's
-statistics.
+Each image the host is given makes a **segment**: the host's memory for
+that image's actors, numbered from 0 in the order of `new Host`'s charts
+(`host.addImage(image)` adds one later and returns its number). A host
+runs many segments as one; you need the number for `boot` and see it in
+the host's statistics.
 
 A host also keeps time. A delayed `<send>` or a timeout is a deadline,
 and an idle host arms one `setTimeout` for its next one. That timer keeps
@@ -268,29 +267,40 @@ frees the host, and drops every handler that was still waiting.
 
 ### Actors, sessions and addresses
 
-`spawn` returns the actor's **session**, a `bigint` unique in its host.
-Inputs take it back: `host.send(session, event, data)`,
-`host.terminate(session)`. They also take a number that is a safe
-integer, since that is what a database or JSON gives back. The calls and
-views return sessions as `bigint`s (`console.log` prints `1n`, and
+`spawn` returns an **`Actor`**: the host it lives in and its **session**,
+`actor.id`, a `bigint` unique in its host. The actor takes inputs itself
+(`actor.send(event, data)`, `actor.terminate()`), answers the typed
+methods as promises (`await actor.state()`, `actor.context()`,
+`actor.get()`), and `actor.done` settles with its donedata when it ends.
+`host.actor(which)` gives the `Actor` of a session (a `bigint`, or a
+number that is a safe integer, since that is what a database or JSON
+gives back), of a name or of an address, and throws `StaleError` for one
+that is not live; two `Actor`s of one session are `equals`, not `===`.
+The host's own inputs take an `Actor` or a session alike:
+`host.send(actor, event, data)`, `host.terminate(actor.id)`.
+
+The views a handler gets hold the session as a `bigint` (`send.session`,
+with `send.sender` its `Actor`; `console.log` prints `1n`, and
 `JSON.stringify` refuses one: convert with `String()` or `Number()`
 yourself), while the results of the typed methods
 ([Inspecting a host](docs/guide/inspection.md)) hold them as numbers. So
-compare with `Number(session) === listed`, never `===` across the two;
-either kind may be passed back to an input.
+compare with `Number(actor.id) === listed`, never `===` across the two,
+and `await host.actors()` gives the `Actor`s themselves.
 
 ```js
-import { Host } from '@tinyactors/node';
+import { compileCharts, Host } from '@tinyactors/node';
 
-const host = new Host({ systemID: 'demo' });
-host.addCharts({ 'idle.scxml': `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
-    datamodel="ecmascript" name="idle"><state id="s"/></scxml>` });
-const session = host.spawnChart('idle', { name: 'first' });
+const compiled = compileCharts([{ name: 'idle.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+    datamodel="ecmascript" name="idle"><state id="s"/></scxml>` }]);
+const host = new Host(compiled, { system: 'demo' });
+compiled.close();
+const actor = host.spawn('idle', { name: 'first' });
 const { sessions } = await host.actorList();
-console.log(typeof session, typeof sessions[0]);
-console.log(sessions.includes(Number(session)), sessions.map(BigInt).includes(session));
-const byKey = new Map([[String(session), 'kept under its text']]);
-console.log(byKey.get(String(sessions[0])), host.actorByName('first') === session);
+console.log(typeof actor.id, typeof sessions[0]);
+console.log(sessions.includes(Number(actor.id)), host.actor(sessions[0]).equals(actor));
+const byKey = new Map([[String(actor.id), 'kept under its text']]);
+console.log(byKey.get(String(sessions[0])), host.actor('first').equals(actor));
+console.log((await host.actors()).length, (await actor.state()).value);
 host.close();
 ```
 
@@ -298,27 +308,29 @@ host.close();
 bigint number
 true true
 kept under its text true
+1 s
 ```
 
-`sessions.includes(session)` would be `false` (TypeScript refuses it),
+`sessions.includes(actor.id)` would be `false` (TypeScript refuses it),
 and a `Map` keyed by the `bigint` misses the number: key it by
-`String(session)`, which is the same for both kinds.
+`String(actor.id)`, which is the same for both kinds.
 
 An actor may also have a **name**, given at spawn, and
-`host.actorByName(name)` finds it. An actor that reaches a `<final>`
+`host.actor(name)` finds it. An actor that reaches a `<final>`
 state, or is terminated, ends: its session is refused from then on with
 `TA_ERROR_STALE`, and its name finds nothing. The events still in its
 queue when it ends are dropped, as SCXML ends a session at its top-level
-`<final>`: a `host.send` that returned before the end is never handled,
+`<final>`: an `actor.send` that returned before the end is never handled,
 and nothing tells the application. A chart whose events stand for
 requests your program holds (an HTTP response, a promise) tells your
 program from its `<final>` first:
 [I/O processors](docs/guide/io-processors.md#when-the-sender-ends) has the
-pattern.
+pattern. `actor.done`, and the host's `onDone(actor, donedata)`, tell your
+program when an actor started with `spawn` ends.
 
-Actors find each other by **address**. Every system has its `systemID`,
-and an actor's address is `tinyactors://<systemID>/#_scxml_<session>`, or
-`tinyactors://<systemID>/@<name>` for a named one. A chart sends to
+Actors find each other by **address**. Every system has its name, the
+host's `system` option, and an actor's address is `tinyactors://<system>/#_scxml_<session>`, or
+`tinyactors://<system>/@<name>` for a named one. A chart sends to
 another actor with `<send target="tinyactors://shop/@pong" event="ping"/>`,
 and the receiver answers to `_event.origin`. The `Address` class reads
 and makes them:
@@ -347,20 +359,23 @@ const ping = `
 </scxml>`;
 
 const compiled = compileCharts([{ name: 'ping.scxml', text: ping }, { name: 'pong.scxml', text: pong }]);
-const host = new Host({ systemID: 'demo' }, { log: (host, entry) => console.log(entry.text) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'demo', log: (entry) => console.log(entry.text) });
 compiled.close();
 
-const pongSession = host.spawn(host.chart('pong'), { name: 'pong' });
-const pingSession = host.spawn(host.chart('ping'));
+const pongActor = host.spawn('pong', { name: 'pong' });
+const pingActor = host.spawn('ping');
 await host.idle();
 
-console.log(Address.fromSession('demo', pongSession).text);
+console.log(pongActor.address.text);
 console.log(new Address('tinyactors://demo/@pong').name);
-console.log(host.actorByName('pong') === pongSession);
-host.terminate(pongSession);
+console.log(host.actor('pong').equals(pongActor), host.actor(new Address('tinyactors://demo/@pong')).id);
+pongActor.terminate();
 await host.idle();
-console.log(host.actorByName('pong'), pingSession);
+try {
+  host.actor('pong');
+} catch (error) {
+  console.log(error.constructor.name, pingActor.id);
+}
 host.close();
 ```
 
@@ -369,8 +384,8 @@ pong got ping
 ping got pong
 tinyactors://demo/#_scxml_1
 pong
-true
-undefined 2n
+true 1n
+StaleError 2n
 ```
 
 ### Effects and handlers
@@ -380,18 +395,18 @@ a handler you give the host in its options:
 
 | The chart does | Your handler | Guide |
 |---|---|---|
-| `<send type="urn:x">` to an I/O processor the config lists | `ioProcessors: { 'urn:x': (host, send) => ... }` | [I/O processors](docs/guide/io-processors.md) |
-| `<send>` to an actor of another system | `transport: (host, send) => ...` | [Other systems](docs/guide/other-systems.md) |
-| `<invoke type="urn:y">` of a service you run | `services: { 'urn:y': (host, invocation) => service }` | [Invoked services](docs/guide/services.md) |
-| `<log>` | `log: (host, entry) => ...` | this README |
-| spans, logs and metrics as OpenTelemetry (OTLP) | `telemetry: (host, signal, data) => ...` | [Telemetry](docs/guide/telemetry.md) |
-| an event for an actor you took out of memory | `wake: (host, session, migration) => ...` | [Hibernation](docs/guide/hibernation.md) |
+| `<send type="urn:x">` to an I/O processor | `ioProcessors: { 'urn:x': { receive(send) { ... } } }` | [I/O processors](docs/guide/io-processors.md) |
+| `<send>` to an actor of another system | `transport: (send) => ...` | [Other systems](docs/guide/other-systems.md) |
+| `<invoke type="urn:y">` of a service you run | `services: { 'urn:y': (invocation) => service }` | [Invoked services](docs/guide/services.md) |
+| `<log>` | `log: (entry) => ...` | this README |
+| spans, logs and metrics as OpenTelemetry (OTLP) | `telemetry: (signal, data) => ...` | [Telemetry](docs/guide/telemetry.md) |
+| reaches a top-level `<final>` | `onDone: (actor, donedata) => ...`, or `await actor.done` | this README |
+| more actors than `resident` in memory | `store: { save, load, delete }` | [Hibernation](docs/guide/hibernation.md) |
 
-A send to an I/O processor the config lists but no handler serves is
-failed: the sender gets the event `error.communication`, so a chart can
-always react. A send to a type the config does not list at all raises
-`error.execution` in the chart. `<log>` lines without
-a `log` handler are dropped.
+A send to a type no I/O processor serves raises `error.execution` in the
+chart. `<log>` lines without a `log` handler are dropped. Each view a
+handler gets has its `host` (`send.host`, `entry.host`), so a handler
+needs no closure over the host it serves.
 
 **A handler's argument is a view, valid while the handler runs.** The
 `send` an I/O processor gets reads each field from the host's memory when
@@ -469,11 +484,10 @@ const compiled = compileCharts([{ name: 'door.scxml', text: `
 </scxml>` }]);
 
 const clock = new SimulatedClock();
-const host = new Host({ systemID: 'demo' }, { clock, log: (host, entry) => console.log(entry.text, 'at', clock.now) });
-host.addImage(compiled.image);
+const host = new Host(compiled, { system: 'demo', clock, log: (entry) => console.log(entry.text, 'at', clock.now) });
 compiled.close();
 
-host.spawn(host.chart('door'));
+host.spawn('door');
 await host.idle();
 console.log('next deadline in', host.nextDeadline, 'ms');
 clock.increment(29_999);
@@ -543,8 +557,10 @@ Errors surface in four places:
   action failed, turn on [telemetry](docs/guide/telemetry.md), whose spans
   and log records mark the failed action.
 - **In your handlers,** an error a handler throws is reported after its
-  turn: it rejects a waiting `host.idle()`, or, with none waiting, is
-  thrown as an uncaught exception (below).
+  turn: to the host's `onHandlerError(error, effect)` when you give one
+  (with the view the handler was given), else it rejects a waiting
+  `host.idle()`, or, with none waiting, is thrown as an uncaught
+  exception (below).
 
 ```js
 import { compileCharts, CompileError, Host, TinyactorsError } from '@tinyactors/node';
@@ -558,9 +574,9 @@ try {
   console.log(error.message);
 }
 
-const host = new Host({ systemID: 'demo' });
+const host = new Host([], { system: 'demo' });
 try {
-  host.chart('missing');
+  host.spawn('missing');
 } catch (error) {
   if (!(error instanceof TinyactorsError)) throw error;
   console.log(error.status, '-', error.message);
@@ -578,8 +594,8 @@ TA_ERROR_INVALID - the host has no chart of that name
 - **Chart code is trusted code.** On the native datamodel (the default)
   a chart's expressions and scripts run in `node:vm` contexts of your own
   engine, and a `vm` context is not a security boundary. Run charts you do
-  not trust on quickjs, the sandbox: `new Host(config, { datamodel:
-  'quickjs', quickjs: { maxOps, memoryLimit } })`
+  not trust on quickjs, the sandbox: `new Host(charts, { system,
+  datamodel: 'quickjs', quickjs: { maxOps, memoryLimit } })`
   ([the quickjs sandbox](docs/guide/quickjs.md)).
 - **An open host with a pending deadline keeps the process alive, and
   only then** (a delayed `<send>`, a timeout, the telemetry flush): the host arms one
@@ -593,7 +609,8 @@ TA_ERROR_INVALID - the host has no chart of that name
   a handler (an I/O processor's, the log handler, the result handler of
   a typed method, one of the host's queries in
   [Inspecting a host](docs/guide/inspection.md))
-  rejects a waiting `host.idle()`; with none waiting it is thrown from the
+  goes to the host's `onHandlerError` when it has one, else rejects a
+  waiting `host.idle()`; with none waiting it is thrown from the
   host's turn as an uncaught exception, and a handler's promise that
   rejects is an unhandled rejection, as is a typed method's promise
   (`await host.actorState(...)`) that rejects with no `catch`. Either

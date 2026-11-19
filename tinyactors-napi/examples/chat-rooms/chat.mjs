@@ -2,15 +2,15 @@
 // charts/room.scxml and charts/user.scxml. The charts decide who may join,
 // post and read; this file does the I/O they ask for (pushes to the users'
 // connections, digest emails, answers to the application's reads) and keeps
-// the resident set bounded: a sweep hibernates the cold actors into a
-// FileStore, and the host's wake handler brings one back when a message
-// comes for it.
+// the resident set bounded with a policy of its own: a sweep hibernates the
+// cold actors into a FileStore, and the host loads one back from it (the
+// host's store) when a message comes for it.
 import { readFileSync } from 'node:fs';
-import { Host, TinyactorsError } from '@tinyactors/node';
+import { compileCharts, Host, TinyactorsError } from '@tinyactors/node';
 import { FileStore } from './store.mjs';
 
-const CHARTS = Object.fromEntries(['room.scxml', 'user.scxml'].map(
-  (name) => [name, readFileSync(new URL(`./charts/${name}`, import.meta.url), 'utf8')]));
+const CHARTS = ['room.scxml', 'user.scxml'].map(
+  (name) => ({ name, text: readFileSync(new URL(`./charts/${name}`, import.meta.url), 'utf8') }));
 
 export class Chat {
   /**
@@ -52,30 +52,26 @@ export class Chat {
     // Sized for the population up front: every actor has a slot,
     // hibernated or not, and its delayed digest. The pools of events and
     // of variables and strings grow when a burst fills them.
-    this.host = new Host(
-      {
-        systemID: 'chat',
-        ioProcessors: [{ type: 'urn:chat:client' }, { type: 'urn:chat:mail' }, { type: 'urn:chat:reply' }],
-        system: {
-          maxActors: actors + 256, maxTimers: actors + 256,
-        },
-      },
-      {
+    const compiled = compileCharts(CHARTS);
+    this.host = new Host(compiled, {
+        system: 'chat',
+        config: { system: { maxActors: actors + 256, maxTimers: actors + 256 } },
         clock,
         datamodel,
-        wake: (host, session) => this.wake(session),
+        // the host loads a hibernated actor's blob from here when an event
+        // (or a due digest) comes for it; this class hibernates the actors
+        store: { save: () => {}, load: (session) => this.load(session), delete: () => {} },
         ioProcessors: {
-          'urn:chat:client': (host, send) => this.push(send.target, send.event, send.data),
-          'urn:chat:mail': (host, send) => { this.mail.push({ user: send.target, ...send.data }); },
-          'urn:chat:reply': (host, send) => {
+          'urn:chat:client': { receive: (send) => this.push(send.target, send.event, send.data) },
+          'urn:chat:mail': { receive: (send) => { this.mail.push({ user: send.target, ...send.data }); } },
+          'urn:chat:reply': { receive: (send) => {
             const { request, ...result } = send.data;
             this.requests.get(request)?.(result);
             this.requests.delete(request);
-          },
+          } },
         },
-      },
-    );
-    this.host.addCharts(CHARTS);
+      });
+    compiled.close();
   }
 
   // --- the users' side ---------------------------------------------------
@@ -118,19 +114,18 @@ export class Chat {
   }
 
   spawn(chart, name, params) {
-    const session = this.host.spawnChart(chart, { name, params });
+    const session = this.host.spawn(chart, { name, params }).id;
     this.resident.set(session, true);
     return session;
   }
 
   /** An event from the application for a named actor, which may be
-   * hibernated: the host keeps it in the actor's queue and asks the wake
-   * handler for the actor. */
+   * hibernated: the host keeps it in the actor's queue and loads the
+   * actor from the store. */
   input(name, event, data) {
-    const session = this.host.actorByName(name);
-    if (session === undefined) throw new Error(`no such actor: ${name}`);
-    this.touch(session);
-    this.host.send(session, event, data);
+    const actor = this.host.actor(name); // a StaleError for no such actor
+    this.touch(actor.id);
+    actor.send(event, data);
   }
 
   push(user, event, data) {
@@ -144,24 +139,21 @@ export class Chat {
 
   // --- hibernation -------------------------------------------------------
 
-  /** The host's wake handler: an event (or a due digest) came for a
+  /** The host's store's load: an event (or a due digest) came for a
    * hibernated actor. The blob comes from memory while its write is on the
-   * way, else from its file. The host asks once per hibernation; events
-   * that come before the wake is done wait in the actor's queue. */
-  wake(session) {
+   * way, else from its file (a promise, which the host waits for, and
+   * host.idle() with it). The host asks once per hibernation; events that
+   * come before the wake is done wait in the actor's queue. */
+  load(session) {
     this.wakes.set(session, (this.wakes.get(session) ?? 0) + 1);
     const blob = this.store.take(session);
     if (!(blob instanceof Promise)) {
-      this.host.wake(session, blob);
       this.woke(session);
-      return;
+      return blob;
     }
-    // The handler does not return the read's promise, which host.idle()
-    // would wait for: the tests hold a read to look at the host while it
-    // is on its way, and settle() tracks it.
-    this.track(blob.then((bytes) => {
-      this.host.wake(session, bytes);
+    return this.track(blob.then((bytes) => {
       this.woke(session);
+      return bytes;
     }));
   }
 
@@ -213,16 +205,17 @@ export class Chat {
     return went;
   }
 
+  /** Tracks `promise` for settle() (its failure kept), and answers it. */
   track(promise) {
     const tracked = promise.catch((error) => { this.failure ??= error; })
       .finally(() => this.inflight.delete(tracked));
     this.inflight.add(tracked);
-    return tracked;
+    return promise;
   }
 
   /** Waits until the host is idle and no wake or write is on the way:
-   * the wake handler's file reads and the writes after a sweep are
-   * promises this class starts and tracks itself. */
+   * the store's file reads and the writes after a sweep are promises this
+   * class starts and tracks itself. */
   async settle() {
     for (;;) {
       await this.host.idle();
