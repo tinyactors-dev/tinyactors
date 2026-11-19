@@ -29,15 +29,14 @@
 # browser, which has neither, loads the layer and refuses only that call.
 # Both names exactly, as before; no static import of a built-in.
 #
-# Widened again (ROADMAP.md, step 8.6, item 15): the package's own
-# package.json, as `../package.json` imported `with { type: 'json' }`, for
-# the `version` export. It is data, not code: the layer still calls nothing
-# an application could not, and in both packages lib/ sits beside the
-# package.json that names the version installed.
+# Widened again (ROADMAP.md, step 8.6, item 15): `./version.mjs`, the
+# package's version written at release and pack time, for the `version`
+# export. It holds one constant: the layer still calls nothing an
+# application could not, and both packages ship it beside the layer.
 id: convenience-imports-the-direct-layer
 language: javascript
 severity: error
-message: "the convenience layer imports only the direct layer's exports ('#direct') and the package's own '../package.json' as JSON and reaches only the built-ins 'node:fs' and 'node:path' (directoryResolver, through process.getBuiltinModule): no other module, path, package, built-in, .node file or computed import"
+message: "the convenience layer imports only the direct layer's exports ('#direct') and './version.mjs', the package's version and reaches only the built-ins 'node:fs' and 'node:path' (directoryResolver, through process.getBuiltinModule): no other module, path, package, built-in, .node file or computed import"
 files:
   - lib/**/*.mjs
 ignores:
@@ -50,14 +49,7 @@ rule:
         - any:
             - inside: {kind: import_statement}
             - inside: {kind: export_statement}
-        - not: {inside: {kind: import_attribute}}
-        - not: {regex: '^[''"]#direct[''"]$'}
-        - not:
-            all:
-              - regex: '^[''"]\.\./package\.json[''"]$'
-              - inside:
-                  kind: import_statement
-                  has: {kind: import_attribute, regex: 'type:\s*[''"]json[''"]'}
+        - not: {regex: '^[''"](#direct|\./version\.mjs)[''"]$'}
     # import('<specifier>') and require('<specifier>'), whatever the specifier
     - all:
         - kind: call_expression

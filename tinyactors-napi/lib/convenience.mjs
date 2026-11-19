@@ -30,11 +30,7 @@
 // direct layer drops its handlers uncalled. An `onError` without an
 // `onResult` is the direct method's TypeError.
 import { Address, compileCharts, Host, ResolveError, TinyactorsError } from '#direct';
-import packageJSON from '../package.json' with { type: 'json' };
-
-/** The version of the package installed: its package.json's, which a
- * development build packs as its own development version. */
-export const version = packageJSON.version;
+export { version } from './version.mjs';
 
 /** The direct method `direct` as one that returns a promise of its result
  * when it is given no handler. */

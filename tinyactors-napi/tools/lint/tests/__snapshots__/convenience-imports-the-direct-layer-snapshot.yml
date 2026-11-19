@@ -92,6 +92,26 @@ snapshots:
       style: secondary
       start: 0
       end: 42
+  export { version } from '../version.mjs';:
+    labels:
+    - source: '''../version.mjs'''
+      style: primary
+      start: 24
+      end: 40
+    - source: export { version } from '../version.mjs';
+      style: secondary
+      start: 0
+      end: 41
+  export { version } from './version.js';:
+    labels:
+    - source: '''./version.js'''
+      style: primary
+      start: 24
+      end: 38
+    - source: export { version } from './version.js';
+      style: secondary
+      start: 0
+      end: 39
   import addon from '../build/tinyactors.node';:
     labels:
     - source: '''../build/tinyactors.node'''
@@ -132,6 +152,16 @@ snapshots:
       style: secondary
       start: 0
       end: 59
+  'import pkg from ''../package.json'' with { type: ''json'' };':
+    labels:
+    - source: '''../package.json'''
+      style: primary
+      start: 16
+      end: 33
+    - source: 'import pkg from ''../package.json'' with { type: ''json'' };'
+      style: secondary
+      start: 0
+      end: 56
   import pkg from '../package.json';:
     labels:
     - source: '''../package.json'''

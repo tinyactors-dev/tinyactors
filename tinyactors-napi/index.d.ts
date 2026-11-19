@@ -286,8 +286,8 @@ export function compileSystem(manifest: Source, resolver?: Resolver, options?: C
 export function directoryResolver(root: string | URL): Resolver;
 
 /**
- * The version of the package installed, as its package.json gives it
- * (`'0.4.0'`, or a development build's `'0.4.0-dev.20261119.3.gabc1234'`).
+ * The version of the package installed (`'0.4.0'`, or a development
+ * build's `'0.4.0-dev.20261119.3.gabc1234'`), as its package.json says.
  * `@tinyactors/node/package.json` can be imported too.
  */
 export const version: string;
