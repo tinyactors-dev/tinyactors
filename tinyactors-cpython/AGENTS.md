@@ -198,7 +198,7 @@ Decided by the maintainer (2026-10-13); every item is in
   int`** (`ta_host_send_many`: each item carries the arguments of `send`,
   `traceparent` included; it returns the length of the accepted prefix,
   `host.h:192-195`), **`host.terminate(session)`**
-  (`ta_host_terminate`; a hibernated actor's blob deleted from the store),
+  (`ta_host_terminate`; a hibernated actor is woken to end it, its blob loaded from the store and deleted there),
   **`host.boot(segment)`** (`ta_host_boot`, the
   image's boot actors): applied at the call, read during it; a payload
   moves to core on success and is released on refusal. Under asyncio an

@@ -653,7 +653,7 @@ host = tinyactors.Host(compiled, system="shop", store=store, resident=1000)
 - **When an event comes for a hibernated actor** (or its delayed send
   falls due), the host loads its blob from the store, wakes it, and
   deletes the blob; the events wait in its mailbox meanwhile. Terminating
-  a hibernated actor deletes its blob too. A `save` or `load` that raises
+  a hibernated actor wakes it to end it (its `<onexit>` runs), so its blob is loaded and deleted the same way. A `save` or `load` that raises
   goes to `on_handler_error`, or the driver raises it after the turn; the
   actor stays where it was (resident for a `save`, hibernated for a
   `load`). Without a store, an event for a hibernated actor waits until

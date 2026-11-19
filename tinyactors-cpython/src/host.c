@@ -1443,18 +1443,9 @@ static PyObject *ta_python_host_terminate(PyObject *self, PyObject *value) {
     if (ta_python_session(host, value, &session) < 0) return NULL;
     ta_python_call call;
     if (ta_python_enter(host, &call) < 0) return NULL;
-    int stored = host->store != Py_None && ta_python_session_hibernated(host, session);
+    /* a hibernated actor is woken to end it (its <onexit> runs): core gives a WAKE, which loads its
+       blob from the store and deletes it there, so the blob is not deleted here */
     ta_status status = ta_host_terminate(host->host, session);
-    if (status == TA_OK && stored) { /* its blob in the store is spent */
-        PyObject *key = PyLong_FromUnsignedLongLong(session);
-        PyObject *deleted = key ? PyObject_CallMethod(host->store, "delete", "O", key) : NULL;
-        Py_XDECREF(key);
-        if (!deleted) {
-            ta_python_leave(&call);
-            return NULL;
-        }
-        Py_DECREF(deleted);
-    }
     if (status == TA_OK) ta_python_loop_schedule(host);
     PyObject *result = ta_python_host_status(host, status);
     ta_python_leave(&call);

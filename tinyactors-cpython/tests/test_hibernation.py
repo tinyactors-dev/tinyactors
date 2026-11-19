@@ -361,7 +361,9 @@ class Resident(unittest.TestCase):
             actor = host.spawn("counter")
             host.run_until_idle()
             store.save(actor.id, host.hibernate(actor))
-            actor.terminate()
+            actor.terminate()  # core wakes it to end it: the WAKE loads the blob, then deletes it
+            self.assertIn(actor.id, store.blobs)
+            host.run_until_idle()
             self.assertEqual(store.blobs, {})
 
     def test_a_save_that_raises_keeps_the_actor_resident(self):
