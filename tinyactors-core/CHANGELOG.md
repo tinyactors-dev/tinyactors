@@ -626,6 +626,7 @@ Running large populations is safer. A wake refuses a stale blob, or one from ano
 
 **Fixed**
 
+- the release allows the runtime library's memchr (7652056)
 - the torture dashboard's layout test speaks the DevTools protocol's targetId and sessionId (e50d4b4)
 - actor.context tells undefined from null (867b693)
 - quickjs gives an XML node to the application as its XML text (19e8812)
