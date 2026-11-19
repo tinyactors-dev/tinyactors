@@ -519,116 +519,46 @@ class Ask(unittest.TestCase):
 
 
 class Spawning(unittest.TestCase):
-    DOCUMENTS = [("workspace.scxml", fixture("test_host/workspace.python.scxml")),
-                 ("room.scxml", fixture("test_host/room.python.scxml"))]
-    LOBBY = {"chart": "room", "name": "lobby", "params": {"topic": "news"}}
-
-    def host(self, logs):
-        host = host_with(self.DOCUMENTS, {"spawn": tinyactors.Spawner()}, log=logs)
-        return host, host.spawn("workspace")
-
     def test_a_chart_spawns_through_a_spawner(self):
         logs = Logs()
-        host, workspace = self.host(logs)
-        workspace.send("make", self.LOBBY)
+        documents = [("workspace.scxml", fixture("test_host/workspace.python.scxml")),
+                     ("room.scxml", fixture("test_host/room.python.scxml"))]
+        host = host_with(documents, {"spawn": tinyactors.Spawner()}, log=logs)
+        workspace = host.spawn("workspace")
+        workspace.send("make", {"chart": "room", "name": "lobby", "params": {"topic": "news"}})
         host.run_until_idle()
         room = host.actor("lobby")
-        self.assertEqual(logs.labelled("spawned"), ["s1 lobby %s True" % room.address.text])
+        self.assertEqual(logs.labelled("spawned"), ["s1 lobby %s" % room.address.text])
         self.assertEqual(logs.labelled("room"), ["lobby news"])
-        for data in ({"chart": "nothing"}, ["room"], {"name": "x"}, {"chart": "room", "name": 7}):
+        for data in ({"chart": "nothing"}, ["room"], {"name": "x"}):
             workspace.send("make", data)
         host.run_until_idle()
-        self.assertEqual(logs.labelled("failed"), ["s1"] * 4)
+        self.assertEqual(logs.labelled("failed"), ["s1"] * 3)
         host.close()
 
-    def test_two_requests_for_one_name_give_one_actor(self):
+    def test_a_spawn_after_a_deploy_runs_the_new_version_under_the_name(self):
         logs = Logs()
-        host, workspace = self.host(logs)
-        other = host.spawn("workspace")
-        workspace.send("make", self.LOBBY)
-        other.send("make", self.LOBBY)  # both sends in one batch: two requests in flight
-        host.run_until_idle()
-        room = host.actor("lobby")
-        self.assertEqual(logs.labelled("spawned"), ["s1 lobby %s True" % room.address.text,
-                                                    "s1 lobby %s False" % room.address.text])
-        self.assertEqual(logs.labelled("room"), ["lobby news"] * 2)  # one actor, greeted by both
-        host.close()
-
-    def test_a_request_after_a_deploy_spawns_the_new_version(self):
-        logs = Logs()
-        host, workspace = self.host(logs)
-        workspace.send("make", self.LOBBY)
+        documents = [("workspace.scxml", fixture("test_host/workspace.python.scxml")),
+                     ("room.scxml", fixture("test_host/room.python.scxml"))]
+        host = host_with(documents, {"spawn": tinyactors.Spawner()}, log=logs)
+        workspace = host.spawn("workspace")
+        lobby = {"chart": "room", "name": "lobby", "params": {"topic": "news"}}
+        workspace.send("make", lobby)
         host.run_until_idle()
         old = host.actor("lobby")
         version2 = load("test_host/room.python.scxml")
         find(version2, ".//log").set("label", "room2")
         with tinyactors.compile_charts([("room.scxml", text(version2))]) as compiled:
-            segment = host.add_image(compiled.image)  # the deploy
-        self.assertEqual(host.chart("room").segment, segment)
-        workspace.send("make", self.LOBBY)
+            host.add_image(compiled.image)  # the deploy
+        workspace.send("make", lobby)  # the workspace, the name's one owner, spawns it again
         host.run_until_idle()
-        new = host.actor("lobby")
+        new = host.actor("lobby")  # names are looked up newest version first
         self.assertNotEqual(new, old)
-        self.assertEqual(host.locate(new)[0], segment)
-        self.assertEqual(logs.labelled("spawned")[1], "s1 lobby %s True" % new.address.text)
+        self.assertEqual(logs.labelled("spawned")[1], "s1 lobby %s" % new.address.text)
         self.assertEqual(logs.labelled("room2"), ["lobby news"])
-        old.send("hello")  # the old holder keeps its session and its version
+        old.send("hello")  # the old actor keeps its session and its version
         host.run_until_idle()
         self.assertEqual(logs.labelled("room"), ["lobby news"] * 2)
-        workspace.send("make", self.LOBBY)  # the name is the new version's now
-        host.run_until_idle()
-        self.assertEqual(logs.labelled("spawned")[2], "s1 lobby %s False" % new.address.text)
-        host.close()
-
-    def test_a_name_held_by_another_chart_fails_the_send(self):
-        logs = Logs()
-        host, workspace = self.host(logs)
-        host.spawn("workspace", name="lobby")
-        workspace.send("make", self.LOBBY)
-        host.run_until_idle()
-        self.assertEqual(logs.labelled("failed"), ["s1"])
-        self.assertEqual(logs.labelled("spawned"), [])
-        host.close()
-
-    def test_a_hibernated_holder_is_answered_without_waking_it(self):
-        logs = Logs()
-        host, workspace = self.host(logs)
-        workspace.send("make", self.LOBBY)
-        host.run_until_idle()
-        room = host.actor("lobby")
-        blob = host.hibernate(room)
-        workspace.send("make", self.LOBBY)
-        host.run_until_idle()
-        self.assertEqual(logs.labelled("spawned")[1], "s1 lobby %s False" % room.address.text)
-        self.assertEqual(logs.labelled("room"), ["lobby news"])  # its hello waits: no store wakes it
-        host.wake(room, blob)  # still hibernated: the Spawner did not wake it
-        host.run_until_idle()
-        self.assertEqual(logs.labelled("room"), ["lobby news"] * 2)
-        host.close()
-
-    def test_a_name_that_looks_like_an_address_is_a_name(self):
-        logs = Logs()
-        host, workspace = self.host(logs)
-        odd = dict(self.LOBBY, name="tinyactors://elsewhere/@lobby")
-        workspace.send("make", odd)
-        host.run_until_idle()
-        workspace.send("make", odd)  # found by its name, as Node's Spawner finds it
-        host.run_until_idle()
-        session = host._actor_by_name(odd["name"])
-        address = tinyactors.Address.from_session(host.system, session).text
-        self.assertEqual(logs.labelled("spawned"), ["s1 %s %s True" % (odd["name"], address),
-                                                    "s1 %s %s False" % (odd["name"], address)])
-        host.close()
-
-    def test_locate_gives_the_segment_and_the_actor(self):
-        host, workspace = self.host(Logs())
-        segment, actor = host.locate(workspace)
-        self.assertEqual(segment, host.chart("workspace").segment)
-        self.assertEqual(host.locate(workspace.id), (segment, actor))
-        workspace.terminate()
-        host.run_until_idle()
-        with self.assertRaises(tinyactors.StaleError):
-            host.locate(workspace)
         host.close()
 
 

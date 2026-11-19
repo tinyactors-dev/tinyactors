@@ -164,12 +164,28 @@ chosen, as the chat's workspace refuses a room name outside
 `a`-`z`, `0`-`9` and `-` (`valid_name` in `charts/workspace.py`).
 
 Two more reasons for names with parts. An actor spawned with no name is
-found by its chart's name (the core's `src/system/system.c:659-664`
-indexes it so), and an invoked child by its invoke id
-(`src/system/route.c:296-297`): a name `room` would find any unnamed
-actor of the chart `room`, and a name `cart` an invoked child whose
-`<invoke id="cart">`. `room.acme.general` equals neither a chart's name
-nor an invoke id.
+found by its chart's name (the core's `src/system/system.c` indexes an
+unnamed spawn under its chart's name), and an invoked child by its
+invoke id (`src/system/route.c`): a name `room` would find any unnamed
+actor of the chart `room`, and a name `cart` the child of an `<invoke
+id="cart">`. `room.acme.general` equals neither a chart's name nor an
+invoke id.
+
+## One owner per name
+
+The `Spawner` spawns; it does not look names up. A name has one owner:
+the collection actor that decides which actors of a kind exist (a
+workspace for its rooms) is the only one that spawns those names. It is
+one actor, so its requests come one at a time, and it records what it
+asked for (the chat's workspace keeps a `creating` table keyed by the
+spawn's sendid until `spawned` or `error.communication` answers it), so
+it never asks twice for a name.
+
+Two actors spawning one name is a design error in the application. The
+core's answer to it is defined but is not what the application meant:
+within one version the oldest holder keeps the name, and a newer
+version's holder wins (`ta_host_actor_by_name` in the core's
+`include/tinyactors/host.h`).
 
 ## Updating through names
 
@@ -178,33 +194,24 @@ A new version of a chart is a new image: compile it and add it with
 in the newest version, the running ones finish on theirs, and nothing
 moves unless asked; the two versions need not be compatible.
 
-An actor found by name through the `Spawner` updates the same way. When
-a request names an actor whose holder runs an older version, the
-`Spawner` spawns the current version under the name and answers
-`spawned` with the new actor's address and `created` `True`. From then
-on the name (`host.actor("room.acme.general")`, `@room.acme.general`)
-finds the new actor, since names are looked up newest version first.
-The old actor keeps its session: what holds its session address still
-reaches it, and it runs on its version until it ends. A request whose
-holder already runs the current version is answered with that holder,
-`created` `False`, and nothing is spawned, so two requests for one room
-in flight give one room.
+An actor found by name updates the same way: its owner spawns the new
+version under the existing name. From then on the name
+(`host.actor("room.acme.general")`, `@room.acme.general`) finds the new
+actor, since names are looked up newest version first. The old actor
+keeps its session: what holds its session address still reaches it, and
+it runs on its version until it ends.
 
 ```python
 with tinyactors.compile_dir("charts-v2") as compiled:
     host.add_image(compiled.image)   # the deploy: `room` is version 2 from now on
-# the next {"chart": "room", "name": "room.acme.general"} the workspace sends
-# spawns version 2; the version 1 room finishes its conversations
+# the next {"chart": "room", "name": "room.acme.general"} the workspace
+# sends spawns version 2; the version 1 room finishes its conversations
 ```
 
 An actor that must not wait for its end to change (a long-lived one
 that holds the state of a thing, like a workspace) is moved instead:
 `host.migrate(chart="workspace")` moves the running actors to the new
 version (the README's "Migration").
-
-One edge: an actor that was terminated but has not run since still
-holds its name (core has no "ending" state), so a request in that window
-is answered with it, and its `spawned` names an actor about to end.
 
 ## Keying a table by the sender
 

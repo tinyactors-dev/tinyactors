@@ -369,66 +369,33 @@ class Spawner:
     and a chart spawns with <send type="spawn" event="spawn"> whose data is
     {"chart": name, "name": name or None, "params": dict or None}.
 
-    A name is held once per version: when a live actor of that name runs
-    the chart's current version (Host.chart), the sender gets `spawned`
-    with {"name", "address", "created": False} and the address of that
-    actor, and nothing is spawned, so two requests for one name give one
-    actor (a hibernated holder is answered without waking it). When none
-    does, or the holder runs an older version, the new actor is spawned on
-    the current version under the name, {"created": True}: adding an
-    image with a new version of the chart and spawning under the name is
-    how an application updates, and the old holder keeps its session and
-    finishes on its version. A name held in the current version by an
-    actor of another chart (or by one in a newer image) is taken. The
-    answer keeps the send's sendid, so a <send id> matches it; an unknown
-    chart, data of another shape, a name taken or a spawn the host refuses
-    gives the sender error.communication instead. A type no processor
-    serves stays error.execution, as SCXML has it."""
+    The new actor runs the chart's current version (Host.spawn) under the
+    name. The sender gets `spawned` with {"name", "address"} (the new
+    actor's session address) and the send's sendid, so a <send id> matches
+    its answer; an unknown chart, data of another shape or a spawn the host
+    refuses gives the sender error.communication instead. A type no
+    processor serves stays error.execution, as SCXML has it.
+
+    It spawns; it does not look names up. A name has one owner, the
+    collection actor that decides which actors of a kind exist, and that
+    actor records the spawns it asked for, so it never asks twice for a
+    name. Spawning under a name an older version's actor holds, after
+    add_image of a new version, is how an application updates."""
 
     __slots__ = ()
 
     def receive(self, send):
-        """Answer `spawned` with the actor holding send.data's name in the
-        chart's current version, or spawn one; fail the send
-        (error.communication) when the name is taken or the host cannot
-        spawn."""
-        data, host = send.data, send.host
+        """Spawn what send.data asks for and answer `spawned`, or fail the
+        send (error.communication) when the host cannot."""
+        data = send.data
         try:
             if type(data) is not dict or type(data.get("chart")) is not str:
                 raise TypeError("a Spawner's data is {chart, name, params}")
-            name = data.get("name")
-            if name is not None and type(name) is not str:
-                raise TypeError("a Spawner's name is a str or None")
-            ref = host.chart(data["chart"])
-            # The look-up and the spawn are one call, with no await
-            # between them: no other input can take the name in between.
-            actor = self._holder(host, name, ref, data["chart"])
-            created = actor is None
-            if created:
-                actor = host.spawn(ref, name=name, params=data.get("params"))
+            actor = send.host.spawn(data["chart"], name=data.get("name"), params=data.get("params"))
         except (TinyactorsError, TypeError, ValueError, MemoryError):
             send.fail()
             return
-        send.answer("spawned", {"name": name, "address": actor.address, "created": created})
-
-    @staticmethod
-    def _holder(host, name, ref, chart):
-        """The live actor named `name` in ref's segment, None when there is
-        none or the holder runs an older version; InvalidError when the
-        name is taken (another chart in ref's segment, or a newer
-        segment)."""
-        if name is None:
-            return None
-        session = host._actor_by_name(name)  # ta_host_actor_by_name: newest segment first
-        if session is None:
-            return None
-        holder = Actor(host, session)
-        segment, _ = host.locate(holder)  # never the session's bits: a migrated actor moved
-        if segment < ref.segment:
-            return None  # an older version's: it finishes there
-        if segment > ref.segment or host._chart_of(holder) != chart:
-            raise InvalidError("the name %s is held by an actor of another chart" % name)
-        return holder
+        send.answer("spawned", {"name": data.get("name"), "address": actor.address})
 
 
 async def actors(host, chart):

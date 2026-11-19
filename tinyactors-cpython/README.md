@@ -421,18 +421,15 @@ under a type you name (`io_processors={"spawn": tinyactors.Spawner()}`).
 A chart sends it `{chart, name, params}` (`<send type="spawn"
 event="spawn" id="s1"><content expr="{'chart': 'room', 'name': room,
 'params': {...}}"/></send>`); the new actor runs the chart's current
-version, and the sender gets `spawned` with `{name, address, created}`
-and the send's sendid, or `error.communication` when the host refuses the
-spawn (an unknown chart, data of another shape, a name taken). A name is
-held once per version: when a live actor of that name already runs the
-chart's current version, the answer is that actor's address with
-`created` `False` and nothing is spawned, so two requests for one room
-in flight give one room (a hibernated holder is answered without waking
-it). When the holder runs an older version, the request spawns the
-current version under the name: that is how an application updates
-(`docs/guide/missing-actors.md`, "Updating through names"). A name held
-in the current version by an actor of another chart is taken. The
-look-up and the spawn are one call: nothing comes between them.
+version, and the sender gets `spawned` with `{name, address}` and the
+send's sendid, or `error.communication` when the host refuses the spawn
+(an unknown chart, data of another shape). It spawns; it does not look
+names up. A name has one owner, the collection actor that decides which
+actors of a kind exist (a workspace for its rooms), which records the
+spawns it asked for, so it never asks twice for a name; spawning a new
+version under an existing name is how an application updates
+(`docs/guide/missing-actors.md`, "One owner per name" and "Updating
+through names").
 
 The processor does the I/O and then does one of two things:
 
@@ -810,10 +807,7 @@ million actors, `resident=1000`, the rest in SQLite (below,
 ### Migration
 
 A new version of a chart (an image added with a chart of the same `name`)
-runs the actors spawned from then on: adding the image is a deploy, and
-the running actors finish on their version unless asked to move
-(`docs/guide/missing-actors.md`, "Updating through names", for actors
-found by name through `Spawner`). `host.migrate` moves the running
+runs the actors spawned from then on. `host.migrate` moves the running
 actors to it, each at a stable point, during the next runs. A moved
 actor keeps its session id, its state configuration (states are matched
 by id) and its delayed sends. It first gets `error.platform.upgrade`,
@@ -1170,7 +1164,7 @@ how to use it.
 | `spawn(chart, name=None, params=None, traceparent=None) -> Actor` | starts an actor of a chart (a name, or a `ChartRef`) |
 | `actor(session, name or address) -> Actor`, `await actors(chart=None)` | a live actor; the live actors |
 | `Actor.id`, `.address`, `.send(...)`, `.terminate()`, `await .ask(event, data)`, `await .state()`, `.context()`, `.get()`, `await .done` | an actor's handle |
-| `Spawner()` | an I/O processor that spawns actors for charts, one per name and version |
+| `Spawner()` | an I/O processor that spawns actors for charts |
 | `send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)` | gives an actor an event; `target` is a session, an `Actor` or a local address |
 | `send_many([(target, event, data, traceparent), ...]) -> accepted` | many sends in one call; returns how many were accepted |
 | `terminate(session)` | ends an actor |
@@ -1187,7 +1181,6 @@ how to use it.
 | Item | What it does |
 |---|---|
 | `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs another image (a new version); the current version of a chart |
-| `locate(session) -> (segment, actor)` | where a live actor runs now: its segment (its version) and its handle there |
 | `compile_system(manifest, resolver=None) -> Compiled`, `boot(segment)` | compiles a `<system>` manifest of charts and boot actors; spawns an image's boot actors |
 | `telemetry=`, `metrics() -> bytes` | traces and logs pushed as OTLP; the host's counters as OTLP |
 | `trace_configure`, `trace_watch`, `trace_unwatch`, `trace_end`, `trace_spans_decode` | typed methods for tracing |

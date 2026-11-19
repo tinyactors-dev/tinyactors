@@ -32,7 +32,10 @@ holds the functions its expressions call, each taking the session's
 values as arguments, so the chart reads as what happens and the helper
 as how. The processors do I/O and nothing else: they decide nothing
 about rooms or members. The binding's `Spawner`, configured under the
-type `spawn`, starts a room when its workspace sends it one.
+type `spawn`, starts a room when its workspace sends it one. A name has
+one owner: the workspace is the only actor that spawns its rooms' names,
+and it keeps the spawns it asked for in `creating` (keyed by the spawn's
+sendid), so it never asks twice for a name.
 
 The host keeps at most `--resident` actors in memory; the others are
 blobs in an SQLite store (`store=`, `resident=`), woken when an event

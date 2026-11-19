@@ -177,27 +177,21 @@ Decided by the maintainer (2026-10-13); every item is in
   rows left at close are dropped, never settled; no timeout of its own;
   `TypeError` under the synchronous driver.
 - **`tinyactors.Spawner()`** (support.py; step 8.6 item 4): an I/O
-  processor whose `receive` takes `send.data`'s `{chart, name, params}`
-  and answers `spawned` with `{name, address, created}` (the answer keeps
-  the sendid), or fails the send. A name is held once per version (the
-  maintainer, 2026-11-19: spawning a new version under a name is the
-  update): with `ref = host.chart(chart)`, a live holder of `name`
-  (`host._actor_by_name`, `ta_host_actor_by_name`, a name whatever it
-  looks like, as Node's hidden `actorByName`) whose segment
-  (`host.locate`, `ta_host_locate`: a migrated actor lives in the
-  segment that adopted it, so never the session's bits) is `ref`'s is
-  answered, `created` `False`, nothing spawned (a hibernated one is not
-  woken); one there of another chart (`_chart_of`), or in a newer
-  segment, fails the send as a name taken; otherwise (none, or the
-  holder in an older segment, which keeps its session and finishes on
-  its version) the current version is spawned under the name, `created`
-  `True`. `address` is the actor's session address. `receive` is a
-  plain function: the look-up and the spawn are one call. A holder
-  terminated but not yet run still holds its name (core has no
-  "ending" state), so a request in that window is answered with it.
-- **`host.locate(session) -> (segment, actor)`** (2026-11-19, for the
-  Spawner): `ta_host_locate`, one to one; `StaleError` for no live
-  session.
+  processor whose `receive` spawns `send.data`'s `{chart, name, params}`
+  (`host.spawn`, the chart's current version under the name) and answers
+  `spawned` with `{name, address}` (`address` the new actor's session
+  address; the answer keeps the sendid), or fails the send (an unknown
+  chart, data of another shape, a spawn core refuses). It spawns; it
+  does not look names up (the maintainer, 2026-11-19, replacing a
+  get-or-spawn per version). A name has one owner: the collection actor
+  that decides which actors of a kind exist spawns those names, one
+  request at a time, and records its spawns in flight (the chat's
+  `creating`, keyed by sendid). Two actors spawning one name is the
+  application's design error; core then keeps the oldest holder within a
+  version and lets a newer version's win (`ta_host_actor_by_name`). A
+  spawn under an existing name after `add_image` of a new version is the
+  update: new spawns run the newest version, running actors finish on
+  theirs, `migrate` moves those that must not wait.
 - **`on_done(actor, donedata)`** and **`on_error(actor, error)`**: every
   top-level actor that ends (`TA_EFFECT_DONE` with its donedata payload,
   `TA_EFFECT_ERROR` with the fault in `FLAGS`, a `TinyactorsError` of
