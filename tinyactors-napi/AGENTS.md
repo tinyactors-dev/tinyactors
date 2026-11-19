@@ -1315,7 +1315,9 @@ tools/smoke-wasm*.mjs  @tinyactors/wasm's: node and bun, and Chromium (a page, a
 examples/            applications over the package, each with a README and a test (mise run examples);
                      order-fulfillment/: payment and shipping as invoked services, timeouts, retries, cancels
                      http-gateway/: node:http sessions as actors, rate limits, an async I/O processor, OTLP export
-                     chat-rooms/: rooms and users as actors, most hibernated in a file store, a bounded resident set
+                     chat-rooms/: the chat the application API was designed against: workspaces, rooms and connections,
+                       a processor per external system, Spawner, a file store and a resident bound,
+                       the three ways of a send to an actor that is not there
                      subscription-billing/: a live population migrated to a new chart version while it bills
                      turn-game/: a game server snapshotted to disk, killed, restored, its journal replayed
                      iot-rules/: customers' alert rules in the quickjs sandbox, one host per rule, hostile uploads reported

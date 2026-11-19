@@ -29,7 +29,7 @@ export const BLOCKS = {
 
 // The example applications that do not run in a page, whole.
 export const APPLICATIONS = {
-  'chat-rooms': 'its hibernated users live in files (node:fs/promises), and its demo runs as a process',
+  'chat-rooms': 'it compiles its charts with compileDir and keeps its hibernated actors in files (node:fs), and its demo runs as a process',
   'document-approval': 'its admin view is a node:http server, and it keeps its records in files (node:fs)',
   'http-gateway': 'it is a node:http server',
   'inventory-sync': 'its two systems are two processes (node:child_process) over a node:net socket',
