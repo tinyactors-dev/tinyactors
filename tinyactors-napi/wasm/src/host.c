@@ -683,16 +683,11 @@ TA_WEB_EXPORT int32_t ta_web_host_quiescent(ta_web_host *host) {
 
 /* ---- lookups --------------------------------------------------------------------------- */
 
-/* Where `session` lives now (ta_host_locate, one to one; host.locate):
- * its segment and actor handle into record words 0-1; answers the status.
- * An answer to a send whose sender ended has nobody to tell. */
+/* Whether `session` lives (ta_host_locate): an answer to a send whose
+ * sender ended has nobody to tell. */
 TA_WEB_EXPORT int32_t ta_web_host_locate(ta_web_host *host, uint32_t low, uint32_t high) {
-    ta_web_record *record = &host->env->record;
-    ta_host_location location = {0, 0};
-    ta_status status = ta_host_locate(host->host, (uint64_t)low | (uint64_t)high << 32, &location);
-    record->word[0] = location.segment;
-    record->word[1] = location.actor;
-    return status;
+    ta_host_location location;
+    return ta_host_locate(host->host, (uint64_t)low | (uint64_t)high << 32, &location);
 }
 
 /* The chart a value would be a payload for, and whether its datamodel is

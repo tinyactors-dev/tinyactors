@@ -51,12 +51,6 @@ const ROOM_OF = (label) => scxml('room', `
     <transition event="hello"><log label="hello ${label}" expr="_name"/></transition>
   </state>`);
 const ROOM = ROOM_OF('room');
-const LOBBY = "({ chart: 'room', name: 'lobby', params: { topic: 'news' } })";
-
-/** A host of a workspace asking for the lobby and a room, with a Spawner. */
-function spawning(log) {
-  return new Host(image({ workspace: WORKSPACE(LOBBY), room: ROOM }), { ...CONFIG, ...ENGINE, log, ioProcessors: { spawn: new Spawner() } });
-}
 
 /** The log lines of a host, by label. */
 function logged() {
@@ -354,14 +348,16 @@ test('ask: the reply to _event.origin settles the promise with [event, data], pa
   equal(settled, false, 'an ask pending at close never settles');
 });
 
-test('Spawner: a chart spawns through it, answered spawned {name, address, created} with its sendid, or error.communication', async () => {
+test('Spawner: a chart spawns through it, answered spawned {name, address} with its sendid, or error.communication', async () => {
   const { log, of } = logged();
-  const host = spawning(log);
+  const host = new Host(image({ workspace: WORKSPACE("({ chart: 'room', name: 'lobby', params: { topic: 'news' } })"), room: ROOM }), {
+    ...CONFIG, ...ENGINE, log, ioProcessors: { spawn: new Spawner() },
+  });
   host.spawn('workspace');
   await host.idle();
   const lobby = host.actor('lobby');
   equal(of('room').join(), 'lobby news', 'the room ran its params');
-  equal(of('spawned').join(), `{"name":"lobby","address":"${lobby.address.text}","created":true} ask-room`, 'the answer, its sendid');
+  equal(of('spawned').join(), `{"name":"lobby","address":"${lobby.address.text}"} ask-room`, 'the answer, its sendid');
   host.close();
   const bad = new Host(image({ workspace: WORKSPACE("({ chart: 'nothing' })"), room: ROOM }), {
     ...CONFIG, ...ENGINE, log, ioProcessors: { spawn: new Spawner() },
@@ -384,98 +380,26 @@ test('Spawner: a chart spawns through it, answered spawned {name, address, creat
   undeclared.close();
 });
 
-test('Spawner: two requests for one name in one batch give one actor and two answers', async () => {
+test('Spawner: a spawn after a deploy runs the new version under the name; the old actor keeps its session', async () => {
   const { log, of } = logged();
-  const host = spawning(log);
-  host.spawn('workspace');
-  host.spawn('workspace'); // both ask at entry, in one run: one batch
-  await host.idle();
-  const lobby = host.actor('lobby');
-  equal(of('room').join(), 'lobby news', 'one room');
-  equal(of('spawned').join('|'), [true, false].map((created) => `{"name":"lobby","address":"${lobby.address.text}","created":${created}} ask-room`).join('|'),
-    'created, then the same actor');
-  host.close();
-});
-
-test('Spawner: a name that looks like an address is a name, as in Python', async () => {
-  const { log, of } = logged();
-  const name = 'tinyactors://elsewhere/@lobby';
-  const host = new Host(image({ workspace: WORKSPACE(`({ chart: 'room', name: '${name}', params: { topic: 'news' } })`), room: ROOM }),
-    { ...CONFIG, ...ENGINE, log, ioProcessors: { spawn: new Spawner() } });
-  host.spawn('workspace');
-  host.spawn('workspace');
-  await host.idle();
-  const room = host.actor(Address.fromName(host.system, name));
-  equal(of('spawned').join('|'), [true, false].map((created) => `{"name":${JSON.stringify(name)},"address":"${room.address.text}","created":${created}} ask-room`).join('|'),
-    'found by its name the second time');
-  host.close();
-});
-
-test('Spawner: a request after a deploy spawns the new version under the name; the old one finishes on its own', async () => {
-  const { log, of } = logged();
-  const host = spawning(log);
+  const host = new Host(image({ workspace: WORKSPACE("({ chart: 'room', name: 'lobby', params: { topic: 'news' } })"), room: ROOM }), {
+    ...CONFIG, ...ENGINE, log, ioProcessors: { spawn: new Spawner() },
+  });
   host.spawn('workspace');
   await host.idle();
   const old = host.actor('lobby');
-  const segment = host.addImage(image({ room: ROOM_OF('room2') })); // the deploy
-  equal(host.chart('room').segment, segment, 'the new version is current');
-  host.spawn('workspace');
+  host.addImage(image({ room: ROOM_OF('room2') })); // the deploy
+  host.spawn('workspace'); // a workspace asks for the lobby again
   await host.idle();
   const lobby = host.actor('lobby');
-  equal(lobby.equals(old), false, 'the name finds the new actor');
-  equal(host.locate(lobby).segment, segment, 'of the new version');
-  equal(host.locate(old).segment < segment, true, 'the old one on its own');
+  equal(lobby.equals(old), false, 'the name finds the new actor: newest version first');
   equal(of('room2').join(), 'lobby news', 'the new version ran');
-  equal(of('spawned')[1], `{"name":"lobby","address":"${lobby.address.text}","created":true} ask-room`, 'created');
+  equal(of('spawned')[1], `{"name":"lobby","address":"${lobby.address.text}"} ask-room`, 'answered with the new actor');
   old.send('hello');
   lobby.send('hello');
   await host.idle();
   equal(of('hello room').join(), 'lobby', 'the old actor answers at its session address, on its version');
   equal(of('hello room2').join(), 'lobby', 'the new one on the new version');
-  host.spawn('workspace');
-  await host.idle();
-  equal(of('spawned')[2], `{"name":"lobby","address":"${lobby.address.text}","created":false} ask-room`, 'the new version holds the name now');
-  host.close();
-});
-
-test('Spawner: a name held by another chart in the current version fails the send', async () => {
-  const { log, of } = logged();
-  const host = spawning(log);
-  host.spawn('workspace', { name: 'lobby' }); // asks for a room named as itself
-  await host.idle();
-  equal(of('refused').join(), 'ask-room', 'error.communication: the name is taken');
-  equal(of('spawned').length + of('room').length, 0, 'nothing spawned');
-  host.close();
-});
-
-test('Spawner: a hibernated holder in the current version is answered without waking it', async () => {
-  const { log, of } = logged();
-  const host = spawning(log);
-  host.spawn('workspace');
-  await host.idle();
-  const lobby = host.actor('lobby');
-  const blob = host.hibernate(lobby);
-  host.spawn('workspace');
-  await host.idle();
-  equal(of('spawned')[1], `{"name":"lobby","address":"${lobby.address.text}","created":false} ask-room`, 'answered with it');
-  host.wake(lobby, blob); // it was still hibernated: the Spawner did not wake it
-  lobby.send('hello');
-  await host.idle();
-  equal(of('hello room').join(), 'lobby', 'woken by the application');
-  host.close();
-});
-
-test('host.locate gives a live actor\'s segment and actor handle; StaleError for none', async () => {
-  const host = hostWith({ waiter: WAITER });
-  const actor = host.spawn('waiter');
-  const { segment, actor: handle } = host.locate(actor);
-  equal(segment, host.chart('waiter').segment, 'its segment');
-  equal(typeof handle, 'number', 'its handle');
-  equal(host.locate(actor.id).actor, handle, 'by session too');
-  actor.terminate();
-  await host.idle();
-  throws(() => host.locate(actor), status('TA_ERROR_STALE'), 'an actor that ended');
-  throws(() => host.locate(0n), typeError, 'session 0');
   host.close();
 });
 

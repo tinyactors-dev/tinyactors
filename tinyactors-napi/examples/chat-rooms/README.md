@@ -82,7 +82,9 @@ name after `@` wherever a chart or the application writes it.
   `receive` is `async`, as a database client's is.
 - **`Spawner`**: the workspace makes a room with `<send type="spawn">`
   and matches the answer, `spawned`, by the send's `sendid`
-  (`idlocation`).
+  (`idlocation`). A name has one owner: the workspace is the only actor
+  that spawns its rooms' names, and it keeps the spawns in flight in
+  `creating`, so it never asks twice for a name.
 - **`store` and `resident`**: the host hibernates the actors past the
   bound after each turn and wakes one when an event comes for it;
   `FileStore`'s methods return promises, which the host follows.

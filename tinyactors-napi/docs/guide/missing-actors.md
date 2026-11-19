@@ -262,8 +262,8 @@ unnamed spawn under its chart's name), and an invoked child by its
 invoke id (`src/system/route.c`): a name `room` would find any unnamed
 actor of the chart `room`, and a name `cart` the child of an `<invoke
 id="cart">`. `room.acme.general` equals neither a chart's name nor an
-invoke id. A name the `Spawner` holds is held once per version: [Updating
-through names](io-processors.md#updating-through-names).
+invoke id. A name has one owner, the collection actor that spawns it:
+[Spawning from a chart](io-processors.md#spawning-from-a-chart).
 
 ## Keying a table by the sender
 

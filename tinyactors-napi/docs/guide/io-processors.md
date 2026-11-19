@@ -294,21 +294,24 @@ SCXML has no element that starts an actor which outlives its state
 `Spawner` is an I/O processor that does it: give it to the host under a
 type you choose, and a chart sends it `{ chart, name, params }`. The
 host spawns an actor of `chart`, and the sender gets `spawned` with
-`{ name, address, created }` and the send's `sendid`, the address being
-what it sends to from then on; a chart the host does not have, or data
-that is not such an object, gives the sender `error.communication`
-instead. A name is held once per version: when a live actor of that
-name already runs the chart's current version, the sender is answered
-with its address, `created: false`, and nothing is spawned, so two
-requests for one room in flight give one room (a hibernated holder is
-answered without being woken). When the holder runs an older version,
-the current version is spawned under the name (below, "Updating
-through names"). A name held in the current version by an actor of
-another chart is taken: `error.communication`. The look-up and the spawn
-are one synchronous call, so nothing comes between them. Which actors
-may exist is decided before the Spawner, by a chart (a collection actor,
+`{ name, address }` and the send's `sendid`, the address being what it
+sends to from then on; a chart the host does not have, or data that is
+not such an object, gives the sender `error.communication` instead.
+The new actor runs the chart's current version under the name.
+
+The Spawner spawns; it does not look names up. A name has one owner:
+the collection actor that decides which actors of a kind exist (a
+workspace for its rooms,
 [When the actor is not there](missing-actors.md#the-application-routes-it))
-or by your program.
+is the only one that spawns those names. It is one actor, so its
+requests come one at a time, and it records what it asked for (the
+chat-rooms example's workspace keeps a `creating` table keyed by the
+spawn's `sendid` until `spawned` or `error.communication` answers it),
+so it never asks twice for a name. Two actors spawning one name is a
+design error in the application: the core's answer is defined (within
+one version the oldest holder keeps the name, and a newer version's
+holder wins; `ta_host_actor_by_name` in the core's
+`include/tinyactors/host.h`) but it is not what the application meant.
 
 ```js
 import { compileCharts, Host, Spawner } from '@tinyactors/node';
@@ -355,13 +358,13 @@ A new version of a chart is a new image: compile it and give it to
 `host.addImage`. Adding it is the deploy. New actors of the chart start
 in the newest version, the running ones finish on theirs, and nothing
 moves unless asked; the versions need not be compatible
-([Migration](migration.md#versions-and-segments)). An actor a chart
-finds by name through the Spawner updates the same way: a request whose
-holder runs an older version spawns the current version under the name,
-`created: true`, and from then on the name (`@lobby`, `host.actor('lobby')`)
-finds the new actor, since names are looked up newest version first. The
-old actor keeps its session: what holds its session address still
-reaches it, and it runs on its version until it ends.
+([Migration](migration.md#versions-and-segments)). An actor found by
+name updates the same way: its owner spawns the new version under the
+existing name, and from then on the name (`@room.acme.general`,
+`host.actor('room.acme.general')`) finds the new actor, since names are
+looked up newest version first. The old actor keeps its session: what
+holds its session address still reaches it, and it runs on its version
+until it ends.
 
 ```js
 import { compileCharts, Host, Spawner } from '@tinyactors/node';
@@ -380,27 +383,23 @@ const host = new Host(image([
   { name: 'lobby.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
       datamodel="ecmascript" name="lobby" initial="s">
     <state id="s">
-      <onentry>
+      <transition event="open">
         <send type="spawn" event="spawn">
           <param name="chart" expr="'room'"/>
           <param name="name" expr="'room.acme.general'"/>
         </send>
-      </onentry>
-      <transition event="spawned">
-        <log expr="'created ' + _event.data.created"/>
-        <send event="hello" targetexpr="_event.data.address"/>
       </transition>
+      <transition event="spawned"><send event="hello" targetexpr="_event.data.address"/></transition>
     </state>
   </scxml>` },
   { name: 'room.scxml', text: room(1) },
 ]), { system: 'demo', ioProcessors: { spawn: new Spawner() }, log: (entry) => console.log(entry.text) });
-host.spawn('lobby');
+const lobby = host.spawn('lobby');                    // the room's one owner
+lobby.send('open');
 await host.idle();
 const old = host.actor('room.acme.general');
-host.spawn('lobby');                                  // the same version holds the name
-await host.idle();
 host.addImage(image([{ name: 'room.scxml', text: room(2) }]));   // the deploy
-host.spawn('lobby');                                  // the holder is version 1's: version 2 starts
+lobby.send('open');                                   // version 2 starts under the name
 await host.idle();
 old.send('hello');                                    // the old room, at its session address
 await host.idle();
@@ -408,11 +407,7 @@ host.close();
 ```
 
 ```output
-created true
 room.acme.general runs version 1
-created false
-room.acme.general runs version 1
-created true
 room.acme.general runs version 2
 room.acme.general runs version 1
 ```
@@ -421,7 +416,3 @@ An actor that must not wait for its end to change (a long-lived one
 that holds the state of a thing, like a workspace) is moved instead:
 `host.migrate({ chart: 'workspace' })` moves the running actors to the
 new version ([Migration](migration.md)).
-
-One edge: an actor that was terminated but has not run since still
-holds its name (core has no "ending" state), so a request in that window
-is answered with it, and its `spawned` names an actor about to end.

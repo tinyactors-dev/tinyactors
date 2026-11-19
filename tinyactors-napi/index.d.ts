@@ -572,19 +572,13 @@ export class SQLiteStore implements Store {
 
 /** An I/O processor that spawns actors for charts: give it a type you
  * name, `ioProcessors: { spawn: new Spawner() }`, and a chart sends it
- * `{chart, name, params}` (`<send type="spawn" event="spawn">`). A name
- * is held once per version: when a live actor of that name runs the
- * chart's current version, the sender gets `spawned` with `{name,
- * address, created: false}` (that actor's address; a hibernated one is
- * not woken) and nothing is spawned, so two requests in flight give one
- * actor. When none does, or the holder runs an older version, the
- * current version is spawned under the name, `{created: true}`: adding an
- * image with a new version and spawning under the name is the update,
- * and the old holder keeps its session and finishes on its version. The
- * answer keeps the send's `sendid`; a chart the host does not have, data
- * of another shape, a name held in the current version by another
- * chart's actor, or a spawn the host refuses gives `error.communication`.
- * A type no processor serves stays `error.execution`. */
+ * `{chart, name, params}` (`<send type="spawn" event="spawn">`). The new
+ * actor runs the chart's current version; the sender gets `spawned` with
+ * `{name, address}` and the send's `sendid`, or `error.communication`
+ * when the host cannot spawn it (a chart it does not have, data of
+ * another shape). A type no processor serves stays `error.execution`.
+ * It does not look names up: a name has one owner, the collection actor
+ * that spawns it and records the spawns it asked for. */
 export class Spawner implements IOProcessor {
   constructor();
   receive(send: Send): void;
@@ -922,13 +916,6 @@ export class Host implements Disposable, AsyncDisposable {
   /** The current version of chart `name`, for `spawn`. Throws
    * `TA_ERROR_INVALID` when the host has no chart of that name. */
   chart(name: string): ChartRef;
-  /** Where a live actor runs now: `{segment, actor}`, the segment of the
-   * image whose version it runs and its actor handle there. Compare the
-   * segment with `chart(name).segment` to tell the current version from
-   * an older one: a migrated actor keeps its session but runs in the
-   * segment that adopted it. Throws `StaleError` for no live actor (a
-   * hibernated one is live). */
-  locate(session: Session | Actor): ActorLocation;
   /** Spawns the boot actors of the image of `segment`: a system manifest's
    * `<actor>`s, or an actor of `compileCharts`' first chart. */
   boot(segment: number): void;
@@ -1161,14 +1148,6 @@ export interface EffectiveHostConfig {
 }
 
 // ---- images, segments and migration -------------------------------------
-
-/** Where a live actor runs: `host.locate`'s answer. */
-export interface ActorLocation {
-  /** The segment that runs it. */
-  readonly segment: number;
-  /** Its actor handle in that segment. */
-  readonly actor: number;
-}
 
 /** A chart's current version in a host, from `host.chart(name)`, for
  * `host.spawn`. */
