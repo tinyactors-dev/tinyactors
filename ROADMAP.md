@@ -31,6 +31,13 @@ maintainer set a new order on 2026-10-13 (below, "Order of work"): the
 documents first, then core, then the whole loop in C, then a minimal
 Python binding, then Node.
 
+Where step 8 stands (2026-11-19): 8.1 to 8.6 are done. Both bindings pass
+the suite on every datamodel (W3C 191 of 191 on ECMAScript), with every
+effect, hibernation, migration, snapshots, services and other systems;
+the browser package, `@tinyactors/wasm`, shares Node's API; and 8.6 gave
+both bindings the application API. What remains is under "Decided
+later", "Requests to core" and "Deferred".
+
 ## Step 8: the bindings
 
 ### What changed from ADR 0009's sketches
@@ -1000,13 +1007,11 @@ free-threaded builds (abi3t, 3.15).
 
 ### Decided later
 
-- **The browser.** A wasm module's C cannot make JavaScript objects, so a
-  browser package needs either JavaScript doing what `host.c` and
-  `effects.c` do (a twin, which ADR 0008's web binding was) or the
-  Node-API addon compiled to wasm over an emulated Node-API (emnapi, which
-  ADR 0008 did not choose when the logic sat above the addon). Decide with
-  measurements (download size, call cost) after step 8.5's every-effect work; either way it passes
-  the suite.
+- **The browser** was decided on 2026-10-17: core compiled to
+  WebAssembly with a JavaScript layer over it, not the Node-API addon over
+  emnapi, with the same API as Node (one `index.d.ts`). It is
+  `@tinyactors/wasm`, built in `tinyactors-napi` (`cb72c783` and after;
+  `tinyactors-napi/docs/browser.md`), tested under node, bun and Chromium.
 - **PostgreSQL**, and other languages, after step 8.5.
 - **Run-time fetching (`<invoke srcexpr>`) through
   `TA_EFFECT_REQUEST`** (decided 2026-10-13: the REQUEST stays; ADR 0012,

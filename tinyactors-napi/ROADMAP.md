@@ -211,7 +211,7 @@ it into the root ROADMAP.md's "Requests to core" and answers there.
 
   The addon works around nothing: `tools/scale.mjs` lists the three
   operations in `KNOWN`, the README's "Scale" table records them as
-  failing, and the step stays open until they pass.
+  failing, and the step stayed open until they passed.
   **Answered 2026-10-17 (`e43239c1`, `fc8ff117`, `ae93a346`):** a system
   keeps an index of names (one slot per distinct name, holding its oldest
   live actor; the others in a ring beside the actor pool), each actor
