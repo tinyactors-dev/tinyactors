@@ -84,31 +84,40 @@ class Endpoint:
         send.fail()
 
 
+def config_error(code, reason, path, message):
+    return {"status": STATUS["TA_ERROR_INVALID"],
+            "error": tinyactors.encode({"error": {"code": code, "message": message,
+                                                  "data": {"reason": reason, "path": path}}})}
+
+
 def host_arguments(config):
     """A protocol vector's whole config as Host's arguments: (system,
-    io_processors, the rest of the config). Host takes the system id and
-    the I/O processors apart from the config (a dict of objects by type),
-    so a config whose shape those arguments cannot hold (not a map, an
-    ioProcessors that is not a list of maps with a type and at most a
-    location) is no config the binding can send: the suite marks such
-    vectors "only reference", and the adapter refuses one as the driver's
-    own error rather than writing core's (docs/driver.md, "Kinds")."""
-    def cannot(path):
-        return DriverError(-32602, "type", "params.config" + path,
-                           "a config Host's arguments cannot hold (a reference-only case)")
+    io_processors, the rest of the config), or the refusal of a config whose
+    shape Host's arguments cannot hold. Host takes the system id and the I/O
+    processors apart from the config (a dict of objects by type), so a
+    config that is not a map, an ioProcessors that is not a list, or an
+    entry that is not a map with a type and nothing but a location cannot
+    be given to it: the adapter answers those with the error core writes
+    for them (docs/host-config.md), and passes every other config through,
+    for core to judge."""
     if not isinstance(config, dict):
-        raise cannot("")
+        return config_error(-32600, "type", "", "a config is a map")
     rest = dict(config)
     system = rest.pop("systemID", None)
     entries = rest.pop("ioProcessors", None)
     if entries is None:
         return system, None, rest
     if not isinstance(entries, list):
-        raise cannot(".ioProcessors")
+        return config_error(-32602, "type", "ioProcessors", "ioProcessors is a list")
     processors = {}
     for index, entry in enumerate(entries):
-        if not isinstance(entry, dict) or "type" not in entry or set(entry) - {"type", "location"}:
-            raise cannot(".ioProcessors[%d]" % index)
+        if not isinstance(entry, dict):
+            return config_error(-32602, "type", "ioProcessors[%d]" % index, "an I/O processor is a map")
+        for key in entry:
+            if key not in ("type", "location"):
+                return config_error(-32602, "unknown", "ioProcessors[%d].%s" % (index, key), "unknown key")
+        if "type" not in entry:
+            return config_error(-32602, "missing", "ioProcessors[%d].type" % index, "type is the I/O processor's URI")
         processors[entry["type"]] = Endpoint(entry.get("location"))
     return system, processors, rest
 
@@ -145,7 +154,10 @@ class Adapter:
         datamodel = params.get("datamodel", "quickjs")
         if datamodel not in DATAMODELS:
             raise DriverError(-32602, "range", "params.datamodel", "no such datamodel")
-        system, processors, config = host_arguments(tinyactors.decode(params["config"]))
+        arguments = host_arguments(tinyactors.decode(params["config"]))
+        if isinstance(arguments, dict):
+            return arguments
+        system, processors, config = arguments
         self.clock = tinyactors.SimulatedClock()
         self.sends = []
         try:
