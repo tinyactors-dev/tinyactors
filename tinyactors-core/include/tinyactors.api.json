@@ -1,7 +1,7 @@
 {
   "format": "c-api/1",
   "header": "tinyactors.h",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "targets": [
     "x86_64",
     "aarch64",
@@ -934,7 +934,7 @@
     },
     {
       "name": "TA_VERSION_MINOR",
-      "value": 2
+      "value": 3
     },
     {
       "name": "TA_VERSION_PATCH",

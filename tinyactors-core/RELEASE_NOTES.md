@@ -1,0 +1,752 @@
+# tinyactors-core 0.3.0
+
+### Summary
+
+This release reshapes the host's C API around one loop, the way a language binding drives it: take the effects (`ta_host_effects`), handle them, acknowledge them (`ta_host_effects_ack`), and run again. Everything the host hands out about a batch (effect fields, traces, logs, metrics, hibernation blobs) stays valid until that ack. The rarely called operations, such as statistics, inspection and trace control, are CBOR messages posted with `ta_host_post` and answered by a REPLY effect. The host takes its config as CBOR (`ta_host_create`), gets all its memory from a `ta_allocator`, and now ships in libtinyactors, freestanding. Every public function takes at most three parameters, and bytes cross as `ta_bytes` and `ta_buffer`, so nearly every call that took a pointer and a length changed shape. Values between systems are CBOR, not JSON. The Node.js, browser and PostgreSQL bindings and the examples left this component (997706b); the Node.js binding is now tinyactors-napi, and the Python binding is tinyactors-cpython.
+
+Tracing is built in. Systems trace by default, with W3C trace contexts carried through sends, timers, invocations, hibernation and snapshots. A trace policy decides sampling and detail, per-chart counters cover turns, macrosteps, fuel and errors, and an OTLP encoder in libtinyactors writes OTLP requests: traces and logs, which the host announces with an effect, and metrics, which the caller pulls (`ta_host_metrics`).
+
+Running large populations is safer. A wake refuses a stale blob, or one from another host. A migration names the sessions it could not move, and why. Snapshots pack a whole host into one blob. A segment grows only the pool that ran out. Sends to other systems go to one transport I/O processor (index 0); the router, its peers and its envelopes are gone. A sender now waits until its send is decided, so the "sync" option of an I/O processor is gone. QuickJS now has a default memory limit of 1 GiB. Snapshots and hibernation blobs of earlier builds are refused, and compiled images should be compiled again.
+
+### Upgrading
+
+- **Creating a host.** `ta_host_new` and `struct ta_host_config` are removed. Write the config as one CBOR map and call `ta_host_create(config_bytes, &environment, &host)` (f081768). The `ta_host_environment` carries what cannot be data: the `ta_allocator` the host gets every block from, with no fallback to malloc (`ta_runtime_malloc` gives the old behaviour) (708bdf9); the datamodels; a trace policy; a buffer for the error reply; and a nonce, random bits that tell this host's hibernation blobs from another's (934d62d). A refused config answers `TA_ERROR_INVALID` with the path of the bad key. The host moved from libtinyactors_runtime to libtinyactors: link libtinyactors for it (a3730bb). The config key maxSubscriptions is refused (fec2203). A sender now waits until its send is decided, so drop "sync" from every I/O processor entry (`TA_IO_PROCESSOR_SYNC` is removed), and ack and run again after `TA_RUN_EFFECTS` (d7db9ad).
+- **The loop and lifetimes.** A published batch is frozen until `ta_host_effects_ack`, and `ta_host_run` refuses while one is open: drain, ack, then run (d2c02c3). Every host output stays valid until that ack, and an output taken with no batch open opens one, so ack it before the next take or run (c7abccf). The outputs are views of host memory, read through a `ta_bytes *` (633f79a). Inputs made while a run is going on (from a datamodel) are appended, not refused (5156ddc). `ta_host_advance_time` takes a `ta_host_time` with both clocks; call it before each run (e1a77dc).
+- **The control plane.** `ta_host_stats_get` and `ta_host_actors` are replaced by CBOR messages posted with `ta_host_post` and answered by `TA_HOST_EFFECT_REPLY`, whose bytes `ta_host_effect_bytes` reads (5296ab3, 42401f6, c950b41). Messages follow JSON-RPC 2.0 in CBOR: "method", "params" and an "id". A message without an id gets no reply. Errors carry integer codes (45b1ff5, cc0f193). Methods are named area.verb: host.stats, actor.list, actor.get, actor.state, actor.context (15afb08, d7c01cf). host.stats reports pools per segment, so read `result.pools[i]` (1291711). Subscriptions are gone: actor.subscribe and actor.changed, which briefly replaced the host-level CHANGED effect, are removed (db7d122, fec2203). Read state with actor.state, which now refuses a hibernated actor where it answered an empty map: wake it first (712305d). The conformance driver posts messages accordingly (770d94d).
+- **Calls take structs, bytes and lists** (3509db8, c84f941). Each of these changed in place: `ta_host_spawn` and `ta_system_spawn` take a `ta_spawn`. `ta_host_resume` and `ta_system_resume` take a `ta_resume`. `ta_host_send` and `ta_host_send_many` read the target from `ta_event_in.session`, so the struct `ta_event_in` gains session, traceparent and trace_flags. `ta_host_chart` fills a `ta_host_chart_ref`, `ta_host_locate` a `ta_host_location` and `ta_image_boot_actor` a `ta_boot_actor`. `ta_host_migrate` takes a `ta_host_migration`. `ta_system_init`, `ta_system_restore` and `ta_runtime_system_new` take a `ta_system_setup`; `ta_system_relocate` takes a `ta_memory` and updates the pointer it is given. Bytes in are `ta_bytes`: `ta_host_add_image`, which also copies the image (71f6547), `ta_host_wake`, `ta_actor_wake`, `ta_system_adopt`, `ta_image_open`, `ta_runtime_free_file`, `ta_datamodel_ecmascript_restore` and `ta_http_parse_request`, which now returns a `ta_status`; `ta_runtime_load_file` gives its bytes through a `ta_bytes *`. Bytes out go through a `ta_buffer *`, where `TA_ERROR_NO_MEMORY` reports the length needed: `ta_host_snapshot`, `ta_system_snapshot`, `ta_actor_export`, `ta_actor_hibernate`, `ta_blob_migrate` (now with a `ta_blob_migration`), `ta_datamodel_ecmascript_snapshot`, `ta_http_encode_post` (now with a `ta_http_post`, returning a `ta_status`), and `ta_address_format`, `ta_address_format_name` and `ta_address_name_decode`, which now return a `ta_status`. `ta_host_hibernate` gives a `ta_bytes *` view. Lists are `ta_uint32_array` or `ta_uint64_array`: `ta_actor_config`, `ta_system_actors`, `ta_host_sweep` and `ta_host_snapshot_segments`. `ta_system_cold_actors` takes a `ta_sweep` too. `ta_compile_charts` takes a `ta_source_list`. `ta_image_data`, `ta_image_expression` and `ta_image_state_info` take a `ta_chart_item`.
+- **Resolvers.** `ta_runtime_resolve` and a resolver callback (struct `ta_resolve_function`) take a `ta_resolve_request`, with base, source and the compiler's scratch arena. They fill a `ta_resolve_result`: its source on success, its error on refusal (56b6b47).
+- **Datamodel implementers.** The struct `ta_datamodel_vtable` changed: every per-instance entry takes a `ta_datamodel_call`, and create and deserialize take a `ta_datamodel_start` (54666e3). to_wire writes CBOR and from_wire reads it (b114102). to_wire, serialize and payload_serialize give views the datamodel owns until its next call (4c90a97). The entry variable serves actor.context (d7c01cf). The struct `ta_datamodel_chart`'s pad is now segment. The struct `ta_datamodel_compiler` and `ta_compile_options`' datamodel_compilers were never called, and are removed (54666e3). A `<script>` in executable content is `TA_EXPRESSION_SCRIPT` and runs in a block, so its let and const are its own at each run; a chart-level one is `TA_EXPRESSION_GLOBAL_SCRIPT`. Compile images again (fa0f761). A <foreach>'s item and index are the new kind `TA_EXPRESSION_ITEM`, to be handled as a location (cbae1c3). The struct `ta_event_view` gains invoke_slot and origintype_id, the event's invoke and I/O processor type by id (e9292da).
+- **Values are CBOR** (b114102, 4b5a423). `ta_datamodel_ecmascript_payload_from_json` and `ta_datamodel_ecmascript_payload_to_json` are replaced by `ta_datamodel_ecmascript_payload_from_cbor` and `ta_datamodel_ecmascript_payload_to_cbor`. `ta_datamodel_ecmascript_eval_json` is removed: `ta_datamodel_ecmascript_payload_eval` takes the instance. An actor reference is tag 32. The suite's value round trip, first moved onto envelopes (cc5f64f), now reaches an echo chart through actor.send and comes back through the transport (da814fb).
+- **Other systems.** The router is removed with its whole API (fc86d66, dbd8f97, da814fb): `ta_host_route`, `ta_host_route_begin`, `ta_host_route_step`, `ta_host_route_reason`, `ta_host_deliver`, `ta_host_envelope_json`, `ta_host_message_init`, `ta_host_error_event`, `ta_host_error_route`, `ta_host_export`, `ta_host_peer_add`, `ta_host_peer_remove`, `ta_host_peer_up`, `ta_host_peer_reach`, `ta_host_peer_status`, `ta_host_peer_error`, `ta_host_peer_round_trip_time`, the structs `ta_envelope`, `ta_host_message`, `ta_peer_config`, `ta_peer_status` and `ta_route_request`, the effects `TA_HOST_EFFECT_PEER` and `TA_HOST_EFFECT_PEER_ERROR`, and the constants `TA_PEER_CLOSED`, `TA_PEER_CONNECTING`, `TA_PEER_OPEN`, `TA_PEER_QUEUE`, `TA_PEER_RECONNECTING`, `TA_PEER_TRUSTED`, `TA_ROUTE_ASK_PEERS`, `TA_ROUTE_DEDUPLICATE`, `TA_ROUTE_DEDUPLICATE_HOST`, `TA_ROUTE_DELIVERED`, `TA_ROUTE_DUPLICATE`, `TA_ROUTE_DURABLE`, `TA_ROUTE_ERROR_DENIED`, `TA_ROUTE_ERROR_EXPIRED`, `TA_ROUTE_ERROR_HOPS`, `TA_ROUTE_ERROR_MALFORMED`, `TA_ROUTE_ERROR_UNKNOWN_TARGET`, `TA_ROUTE_ERROR_UNREACHABLE`, `TA_ROUTE_LOCAL`, `TA_ROUTE_LOCAL_ONLY`, `TA_ROUTE_LOOKUP`, `TA_ROUTE_MAX_HOPS`, `TA_ROUTE_PEER`, `TA_ROUTE_PEERS`, `TA_ROUTE_REFUSED` and `TA_ROUTE_RELAYED`. A send to another system's address is a `TA_EFFECT_SEND` with io_processor 0, the transport, which the application serves (f4c2819, bf0b8a1). An application with no transport fails such a send with `TA_EVENT_IN_ERROR_COMMUNICATION`. What arrives is resolved with `ta_host_resolve` and given to `ta_host_send` with its origin. I/O processors are numbered the same in every layer: the config's i-th is i + 1. The struct `ta_system_config` names its address base and `TA_SYSTEM_SHARED_BASE` instead of the removed `TA_IO_PROCESSOR_SCXML_REMOTE` and `TA_IO_PROCESSOR_SCXML_SHARED`, and lists `ta_io_processor_entry` instead of the removed struct `ta_io_processor_descriptor` (bf0b8a1). The link protocol added during the cycle (5bccb45) was removed again with framing: `ta_frame_header`, `ta_frame_read`, `ta_frame_reader_init`, the struct `ta_frame_reader`, `TA_FRAME_HEADER`, `TA_FRAME_MAX`, `TA_FRAME_MORE`, `TA_FRAME_READY` and `TA_FRAME_REFUSED` (997706b).
+- **Migration.** A migration job is a migration (f747354): `TA_HOST_EFFECT_JOB_DONE` is `TA_HOST_EFFECT_MIGRATION_DONE`, `ta_host_job_pending` is `ta_host_migration_pending`, and in the struct `ta_host_effect` job is migration; in the struct `ta_host_stats` jobs is migrations. A WAKE that no migration asked for carries 0 as its migration, where it carried `TA_NIL` (ca15e92). `ta_host_migrate` refuses at the call an unknown chart, an ended session and an invoked child, where it started a migration that moved nothing (0a231a5, e663f73). `ta_host_export_actor`, `ta_host_adopt` and `ta_blob_rebase` are removed: call `ta_host_migrate`, since moving actors between hosts is not offered (dbd8f97). `ta_host_migration_failed` names the sessions a migration could not move (43deb01). A migration without a timeout now fails an actor that runs invocations at once, instead of waiting for ever; pass a timeout to wait (79bb556).
+- **Hibernation.** A wake refuses, with `TA_ERROR_STALE`, a blob of an earlier hibernation than the actor's last one, so give it the latest blob (dcbe4f0). After a restore it takes a blob newer than the snapshot (9dc211c). It refuses another host's blob with `TA_ERROR_INVALID`, and blobs written by earlier builds are refused, as snapshots are (934d62d).
+- **Snapshots.** `ta_host_restore` takes a `ta_host_environment` and a `ta_host_snapshot_input` holding the config and the images as bytes. `ta_host_snapshot_pack` writes a whole host into one blob, which `ta_host_snapshot_unpack` and `ta_host_snapshot_image` read (2b810c6). Snapshots of earlier builds are refused: the region's layout is version 9 (9dc211c), the counters changed the format (e366bd6), and the trace contexts are carried (07e8073), and the identity and the request slots are kept (934d62d, 831102f). A restored host announces each external invocation that was running as an INVOKE flagged `TA_EFFECT_FLAG_RESTORED`: start the service again or fail it (831102f). Take a new snapshot after upgrading.
+- **Tracing.** Systems trace by default: the struct `ta_system_config` gains tracing, trace_bytes, trace_contexts, trace_rules, trace_policy and trace_seed, and `TA_TRACING_DISABLED` carves nothing (cac5ba6). Events carry the context of the step that made them (ceb8adb). A `ta_trace_policy` decides sampling and the detail class (360dfea, 59d54bc). Fill one from `ta_trace_policy_default`, or post trace.configure (309fb66). An unsampled trace keeps its context, and a delayed send from an unsampled step stays unsampled (a6aa883). The trace journal defaults to `TA_TRACE_BYTES_DEFAULT` and no longer grows with the events: set traceBytes to size it (5d5dc14). The struct `ta_effect` and the struct `ta_host_effect` gain the trace context. The struct `ta_system_stats` gains trace counters, and the per-chart counters come with `ta_system_chart_stats_get` (e366bd6). It also gains each pool's high-water mark (7adbb34). The struct `ta_host_stats` gains fuel_clock. tinyactors-otlp is replaced by the `ta_otlp` codec in libtinyactors (c20b8a7). Its batcher was removed again (997706b). The host runs the encoder: configure telemetry, take `TA_HOST_EFFECT_TRACES` and `TA_HOST_EFFECT_LOGS`, and read them with `ta_host_traces` and `ta_host_logs` (e1a77dc).
+- **Removed components.** The bindings and examples that lived in tinyactors-core are gone (997706b); they had been rebuilt over the host before that (3fc0b07, 31a56df). The conformance vectors and the W3C suite moved to tinyactors-test, run through ta-conform (47afc43, 1526c3d). Use tinyactors-napi for Node.js and tinyactors-cpython for Python. tinyactors-scxml is gone: compile SCXML with `ta_compile_charts` (bb603ff).
+- **Limits.** QuickJS has a default memory limit of 1 GiB: a memory_limit of 0, in the config or `ta_datamodel_ecmascript_set_memory_limit`, now means that default and `SIZE_MAX` means none. An evaluation past it is error.execution; raise it for large resident populations (7b19ec8). An input text longer than `TA_SYSTEM_MAX_STRING` is refused with `TA_ERROR_INVALID` by the send and spawn calls (269646f).
+- **Invoked services.** After `TA_EVENT_IN_INVOKE_DONE`, or a failure sent with `TA_EVENT_IN_FROM_INVOKE`, the invocation has ended, and later inputs with its token are refused with `TA_ERROR_STALE` (f58dcd1).
+
+### Breaking changes
+
+- a migration without a timeout fails an actor running invocations instead of waiting for ever (79bb556)
+- a wake takes a blob newer than the system's note; snapshots are version 9 (9dc211c)
+- a <script> in executable content runs again: its let and const are its own (fa0f761)
+- a migration names the sessions it could not move, and why (43deb01)
+- wake refuses a blob of an earlier hibernation (dcbe4f0)
+- the trace journal is sized for trace volume, not the event pool (5d5dc14)
+- host.stats reports each segment's pools apart (1291711)
+- one numbering of I/O processors in every layer (bf0b8a1)
+- a host's sends to other systems go to its transport (f4c2819)
+- a sender waits for its send; "sync" goes (d7db9ad)
+- the router goes; other systems are the remote I/O processor (fc86d66)
+- the suite and the Python binding leave peers for the remote processor (da814fb)
+- export and adopt are migration's internal steps (dbd8f97)
+- a migration job is a migration; its end goes to a handler of the host (f747354)
+- remove actor.subscribe, actor.unsubscribe and actor.changed (fec2203)
+- keep host outputs until the ack (c7abccf)
+- freeze effect batches until acknowledgement (d2c02c3)
+- lend resolver scratch and preserve source diagnostics (56b6b47)
+- the driver posts messages and answers notifications (770d94d)
+- ta_host_add_image takes bytes, and the host keeps a copy (71f6547)
+- actor.changed notifications replace the host-level CHANGED (db7d122)
+- ta_host_post answers a control message with a REPLY effect (42401f6)
+- CBOR streams: a writer into a growing room and a reader cursor (4b5a423)
+- the host's outputs are views of host-owned memory (633f79a)
+- a datamodel's outputs are views it owns until its next call (4c90a97)
+- values round trip through envelope.deliver and an echo chart (cc5f64f)
+- request methods are named area.verb (15afb08)
+- the datamodel vtable follows the buffer convention (54666e3)
+- an effect's wire bytes are ta_bytes (c950b41)
+- requests follow JSON-RPC 2.0 for ids and notifications (cc0f193)
+- ta_host_create takes its config as CBOR (ADR 0009 step 5e) (f081768)
+- actor.context, a session's variables as neutral values (ADR 0009 step 5e) (d7c01cf)
+- requests take the JSON-RPC shape (ADR 0009) (45b1ff5)
+- ta_host_request, the rarely called API as CBOR (ADR 0009 step 5d) (5296ab3)
+- the host owns the OTLP encoder (ADR 0009 step 5c) (e1a77dc)
+- inputs during a run are appended, not refused (ADR 0009 step 5b) (5156ddc)
+- lint the buffer convention; ta_image_open and ta_runtime_load_file take ta_bytes (ADR 0009) (c84f941)
+- at most three parameters, one buffer convention (ADR 0009 step 5a) (3509db8)
+- neutral values are CBOR (ADR 0009 step 4) (b114102)
+- delete the bindings, examples, link, JSON reader, framing and the batcher (ADR 0009 step 2) (997706b)
+- the link protocol is a core layer (5bccb45)
+- the host makes the trace policy from options and watches (309fb66)
+- the host packs a whole system into one snapshot (2b810c6)
+- the web binding is JavaScript over the core's C API (31a56df)
+- a thin JavaScript binding over a deep native one (3fc0b07)
+- unsampled traces keep their context; a step sampled at take starts a new trace (a6aa883)
+- trace rules decide at a trace's start and when an actor takes an event; watchTraces (59d54bc)
+- detail classes: a trace context's class chooses the kinds its steps write (360dfea)
+- count turns, macrosteps, fuel, errors, faults and actors per chart (e366bd6)
+- tinyactors-scxml is gone; its error cases test the compiler (bb603ff)
+- an OTLP codec in libtinyactors; tinyactors-otlp is gone (c20b8a7)
+- traces survive hibernation, moves and snapshots, and cross systems (07e8073)
+- systems trace by default: contexts, sampling, lifecycle records, draining (cac5ba6)
+- the kernel stamps causes on events and writes step facts (ceb8adb)
+- the host layer is freestanding and ships in libtinyactors (a3730bb)
+- the host gets its memory from a ta_allocator (708bdf9)
+
+### API changes
+
+**Removed**
+
+- constant `TA_FRAME_HEADER`
+- constant `TA_FRAME_MAX`
+- constant `TA_FRAME_MORE`
+- constant `TA_FRAME_READY`
+- constant `TA_FRAME_REFUSED`
+- constant `TA_IO_PROCESSOR_SCXML_REMOTE`
+- constant `TA_IO_PROCESSOR_SCXML_SHARED`
+- constant `TA_IO_PROCESSOR_SYNC`
+- function `ta_blob_rebase`
+- function `ta_frame_header`
+- function `ta_frame_read`
+- function `ta_frame_reader_init`
+- struct `ta_frame_reader`
+- struct `ta_io_processor_descriptor`
+- function `ta_datamodel_ecmascript_eval_json`
+- function `ta_datamodel_ecmascript_payload_from_json`
+- function `ta_datamodel_ecmascript_payload_to_json`
+- constant `TA_HOST_EFFECT_JOB_DONE`
+- constant `TA_HOST_EFFECT_PEER`
+- constant `TA_HOST_EFFECT_PEER_ERROR`
+- constant `TA_PEER_CLOSED`
+- constant `TA_PEER_CONNECTING`
+- constant `TA_PEER_OPEN`
+- constant `TA_PEER_QUEUE`
+- constant `TA_PEER_RECONNECTING`
+- constant `TA_PEER_TRUSTED`
+- constant `TA_ROUTE_ASK_PEERS`
+- constant `TA_ROUTE_DEDUPLICATE`
+- constant `TA_ROUTE_DEDUPLICATE_HOST`
+- constant `TA_ROUTE_DELIVERED`
+- constant `TA_ROUTE_DUPLICATE`
+- constant `TA_ROUTE_DURABLE`
+- constant `TA_ROUTE_ERROR_DENIED`
+- constant `TA_ROUTE_ERROR_EXPIRED`
+- constant `TA_ROUTE_ERROR_HOPS`
+- constant `TA_ROUTE_ERROR_MALFORMED`
+- constant `TA_ROUTE_ERROR_UNKNOWN_TARGET`
+- constant `TA_ROUTE_ERROR_UNREACHABLE`
+- constant `TA_ROUTE_LOCAL`
+- constant `TA_ROUTE_LOCAL_ONLY`
+- constant `TA_ROUTE_LOOKUP`
+- constant `TA_ROUTE_MAX_HOPS`
+- constant `TA_ROUTE_PEER`
+- constant `TA_ROUTE_PEERS`
+- constant `TA_ROUTE_REFUSED`
+- constant `TA_ROUTE_RELAYED`
+- function `ta_host_actors`
+- function `ta_host_adopt`
+- function `ta_host_deliver`
+- function `ta_host_envelope_json`
+- function `ta_host_error_event`
+- function `ta_host_error_route`
+- function `ta_host_export`
+- function `ta_host_export_actor`
+- function `ta_host_job_pending`
+- function `ta_host_message_init`
+- function `ta_host_new`
+- function `ta_host_peer_add`
+- function `ta_host_peer_error`
+- function `ta_host_peer_reach`
+- function `ta_host_peer_remove`
+- function `ta_host_peer_round_trip_time`
+- function `ta_host_peer_status`
+- function `ta_host_peer_up`
+- function `ta_host_route`
+- function `ta_host_route_begin`
+- function `ta_host_route_reason`
+- function `ta_host_route_step`
+- function `ta_host_stats_get`
+- struct `ta_datamodel_compiler`
+- struct `ta_envelope`
+- struct `ta_host_config`
+- struct `ta_host_message`
+- struct `ta_peer_config`
+- struct `ta_peer_status`
+- struct `ta_route_request`
+
+**Added**
+
+- alias `ta_span_id`
+- constant `TA_CAPTURE_VALUE`
+- constant `TA_CBOR_ARRAY`
+- constant `TA_CBOR_BYTES`
+- constant `TA_CBOR_COUNT_LATER`
+- constant `TA_CBOR_DEPTH_MAX`
+- constant `TA_CBOR_FALSE`
+- constant `TA_CBOR_FLOAT`
+- constant `TA_CBOR_MAP`
+- constant `TA_CBOR_NEGINT`
+- constant `TA_CBOR_NULL`
+- constant `TA_CBOR_SIMPLE`
+- constant `TA_CBOR_TAG`
+- constant `TA_CBOR_TAG_URI`
+- constant `TA_CBOR_TEXT`
+- constant `TA_CBOR_TRUE`
+- constant `TA_CBOR_UINT`
+- constant `TA_CBOR_UNDEFINED`
+- constant `TA_DATAMODEL_FAILURE_EXCEPTION`
+- constant `TA_DATAMODEL_FAILURE_FUEL`
+- constant `TA_DATAMODEL_FAILURE_MEMORY`
+- constant `TA_DATAMODEL_FAILURE_NONE`
+- constant `TA_EFFECT_CHANGED`
+- constant `TA_EFFECT_FIELD_ACTOR`
+- constant `TA_EFFECT_FIELD_AUXILIARY`
+- constant `TA_EFFECT_FIELD_CHART`
+- constant `TA_EFFECT_FIELD_DATAMODEL`
+- constant `TA_EFFECT_FIELD_DELAY_HINT`
+- constant `TA_EFFECT_FIELD_EVENT`
+- constant `TA_EFFECT_FIELD_FAILED`
+- constant `TA_EFFECT_FIELD_FLAGS`
+- constant `TA_EFFECT_FIELD_IO_PROCESSOR`
+- constant `TA_EFFECT_FIELD_KIND`
+- constant `TA_EFFECT_FIELD_MIGRATED`
+- constant `TA_EFFECT_FIELD_MIGRATION`
+- constant `TA_EFFECT_FIELD_ORIGIN`
+- constant `TA_EFFECT_FIELD_PAYLOAD`
+- constant `TA_EFFECT_FIELD_PENDING`
+- constant `TA_EFFECT_FIELD_ROOT`
+- constant `TA_EFFECT_FIELD_SEGMENT`
+- constant `TA_EFFECT_FIELD_SENDID`
+- constant `TA_EFFECT_FIELD_SESSION`
+- constant `TA_EFFECT_FIELD_TARGET`
+- constant `TA_EFFECT_FIELD_TOKEN`
+- constant `TA_EFFECT_FIELD_TRACEPARENT`
+- constant `TA_EFFECT_FIELD_WIRE`
+- constant `TA_EFFECT_FLAG_RESTORED`
+- constant `TA_EFFECT_FLAG_WAITING`
+- constant `TA_EXPRESSION_GLOBAL_SCRIPT`
+- constant `TA_EXPRESSION_ITEM`
+- constant `TA_HOST_EFFECT_LOGS`
+- constant `TA_HOST_EFFECT_MIGRATION_DONE`
+- constant `TA_HOST_EFFECT_NOTIFICATION`
+- constant `TA_HOST_EFFECT_REPLY`
+- constant `TA_HOST_EFFECT_TRACES`
+- constant `TA_HOST_REQUEST_TOKENS`
+- constant `TA_OTLP_FLUSH`
+- constant `TA_OTLP_GROW`
+- constant `TA_OTLP_LINK_PARENTS`
+- constant `TA_OTLP_METRIC_GAUGE`
+- constant `TA_OTLP_METRIC_HISTOGRAM`
+- constant `TA_OTLP_METRIC_SUM`
+- constant `TA_OTLP_NO_LOGS`
+- constant `TA_OTLP_POINT_DOUBLE`
+- constant `TA_OTLP_READ`
+- constant `TA_OTLP_SEVERITY_DEBUG`
+- constant `TA_OTLP_SEVERITY_INFO`
+- constant `TA_OTLP_SEVERITY_WARN`
+- constant `TA_OTLP_SPAN_CLIENT`
+- constant `TA_OTLP_SPAN_CONSUMER`
+- constant `TA_OTLP_SPAN_INTERNAL`
+- constant `TA_OTLP_SPAN_METRICS`
+- constant `TA_OTLP_SPAN_PRODUCER`
+- constant `TA_OTLP_SPAN_SERVER`
+- constant `TA_OTLP_SPAN_UNSPECIFIED`
+- constant `TA_OTLP_STAGING_BYTES_DEFAULT`
+- constant `TA_OTLP_STAGING_BYTES_MAX`
+- constant `TA_OTLP_STAGING_BYTES_MIN`
+- constant `TA_OTLP_STATUS_ERROR`
+- constant `TA_OTLP_STATUS_OK`
+- constant `TA_OTLP_STATUS_UNSET`
+- constant `TA_OTLP_VALUES`
+- constant `TA_OTLP_VALUE_ARRAY`
+- constant `TA_OTLP_VALUE_BOOL`
+- constant `TA_OTLP_VALUE_BYTES`
+- constant `TA_OTLP_VALUE_DOUBLE`
+- constant `TA_OTLP_VALUE_EMPTY`
+- constant `TA_OTLP_VALUE_INT`
+- constant `TA_OTLP_VALUE_LIST`
+- constant `TA_OTLP_VALUE_STRING`
+- constant `TA_SPAN_ID_TEXT_LENGTH`
+- constant `TA_SYSTEM_MAX_STRING`
+- constant `TA_SYSTEM_SHARED_BASE`
+- constant `TA_TRACEPARENT_LENGTH`
+- constant `TA_TRACE_ACTION_FAILED`
+- constant `TA_TRACE_ASSIGN`
+- constant `TA_TRACE_AT_START`
+- constant `TA_TRACE_AT_TAKE`
+- constant `TA_TRACE_BYTES_DEFAULT`
+- constant `TA_TRACE_BYTES_MIN`
+- constant `TA_TRACE_CANCELLED`
+- constant `TA_TRACE_CONDITION`
+- constant `TA_TRACE_DECISIONS`
+- constant `TA_TRACE_DESTROYED`
+- constant `TA_TRACE_DETAILS`
+- constant `TA_TRACE_DETAIL_SAMPLED`
+- constant `TA_TRACE_DETAIL_SHIFT`
+- constant `TA_TRACE_DETAIL_UNSAMPLED`
+- constant `TA_TRACE_DETAIL_WATCHED`
+- constant `TA_TRACE_DROP`
+- constant `TA_TRACE_DROPPED`
+- constant `TA_TRACE_FINISHED`
+- constant `TA_TRACE_FLAG_RANDOM`
+- constant `TA_TRACE_FLAG_SAMPLED`
+- constant `TA_TRACE_FROM_ACTOR`
+- constant `TA_TRACE_FROM_HOST`
+- constant `TA_TRACE_FROM_SAMPLED`
+- constant `TA_TRACE_FROM_SPAWN`
+- constant `TA_TRACE_FROM_TIMER`
+- constant `TA_TRACE_FROM_UNSAMPLED`
+- constant `TA_TRACE_FULL`
+- constant `TA_TRACE_ID_TEXT_LENGTH`
+- constant `TA_TRACE_INVOKED`
+- constant `TA_TRACE_KEEP`
+- constant `TA_TRACE_KIND_COUNT`
+- constant `TA_TRACE_LIFECYCLE`
+- constant `TA_TRACE_LOADED`
+- constant `TA_TRACE_LOG`
+- constant `TA_TRACE_MACROSTEP_BEGIN`
+- constant `TA_TRACE_MACROSTEP_END`
+- constant `TA_TRACE_MICROSTEP`
+- constant `TA_TRACE_NAME_RULES`
+- constant `TA_TRACE_RAISED`
+- constant `TA_TRACE_RATIO`
+- constant `TA_TRACE_SAMPLE`
+- constant `TA_TRACE_SENT`
+- constant `TA_TRACE_SPAWNED`
+- constant `TA_TRACE_STEP_DESTROYED`
+- constant `TA_TRACE_STEP_FINISHED`
+- constant `TA_TRACE_STEP_LOADED`
+- constant `TA_TRACE_STEP_SPAWNED`
+- constant `TA_TRACE_STEP_UNLOADED`
+- constant `TA_TRACE_STRING_DYNAMIC`
+- constant `TA_TRACE_SUMMARY`
+- constant `TA_TRACE_UNLOADED`
+- constant `TA_TRACE_VALUES`
+- constant `TA_TRACING_DISABLED`
+- constant `TA_TRACING_ENABLED`
+- function `ta_actor_watch`
+- function `ta_cbor_decode`
+- function `ta_cbor_diagnostic`
+- function `ta_cbor_member`
+- function `ta_cbor_next`
+- function `ta_cbor_read`
+- function `ta_cbor_reader_init`
+- function `ta_cbor_string`
+- function `ta_cbor_write_array`
+- function `ta_cbor_write_bytes`
+- function `ta_cbor_write_end`
+- function `ta_cbor_write_float`
+- function `ta_cbor_write_int`
+- function `ta_cbor_write_map`
+- function `ta_cbor_write_negative`
+- function `ta_cbor_write_simple`
+- function `ta_cbor_write_tag`
+- function `ta_cbor_write_text`
+- function `ta_cbor_write_uint`
+- function `ta_cbor_writer_bytes`
+- function `ta_cbor_writer_free`
+- function `ta_cbor_writer_init`
+- function `ta_growable_arena_alloc`
+- function `ta_growable_arena_allocator`
+- function `ta_growable_arena_free`
+- function `ta_growable_arena_init`
+- function `ta_growable_arena_position`
+- function `ta_growable_arena_release`
+- function `ta_host_create`
+- function `ta_host_effect_bytes`
+- function `ta_host_effect_number`
+- function `ta_host_effect_text`
+- function `ta_host_logs`
+- function `ta_host_metrics`
+- function `ta_host_migration_failed`
+- function `ta_host_migration_pending`
+- function `ta_host_post`
+- function `ta_host_resolve`
+- function `ta_host_snapshot_image`
+- function `ta_host_snapshot_pack`
+- function `ta_host_snapshot_unpack`
+- function `ta_host_traces`
+- function `ta_image_bytes`
+- function `ta_otlp_add_log`
+- function `ta_otlp_add_metric`
+- function `ta_otlp_add_span_metrics`
+- function `ta_otlp_add_stats`
+- function `ta_otlp_end_all`
+- function `ta_otlp_init`
+- function `ta_otlp_layout`
+- function `ta_otlp_mark`
+- function `ta_otlp_next_attribute`
+- function `ta_otlp_next_event`
+- function `ta_otlp_next_exemplar`
+- function `ta_otlp_next_link`
+- function `ta_otlp_next_metric`
+- function `ta_otlp_next_point`
+- function `ta_otlp_next_span`
+- function `ta_otlp_next_value`
+- function `ta_otlp_put_logs`
+- function `ta_otlp_put_metrics`
+- function `ta_otlp_put_traces`
+- function `ta_otlp_read`
+- function `ta_otlp_relocate`
+- function `ta_otlp_set_flags`
+- function `ta_otlp_set_resource`
+- function `ta_otlp_stats_get`
+- function `ta_span_id_format`
+- function `ta_status_name`
+- function `ta_step_key_span_id`
+- function `ta_system_chart_stats_get`
+- function `ta_system_trace`
+- function `ta_system_trace_ack`
+- function `ta_system_trace_clock`
+- function `ta_system_trace_set`
+- function `ta_table_add`
+- function `ta_table_at`
+- function `ta_table_free`
+- function `ta_table_get`
+- function `ta_table_handle`
+- function `ta_table_init`
+- function `ta_table_remove`
+- function `ta_table_restore`
+- function `ta_table_snapshot`
+- function `ta_trace_body`
+- function `ta_trace_body_size`
+- function `ta_trace_context_child`
+- function `ta_trace_detail_by_name`
+- function `ta_trace_dynamic_string`
+- function `ta_trace_generator_next`
+- function `ta_trace_generator_seed`
+- function `ta_trace_id_format`
+- function `ta_trace_kind_by_name`
+- function `ta_trace_kind_name`
+- function `ta_trace_list`
+- function `ta_trace_next`
+- function `ta_trace_policy_default`
+- function `ta_trace_ratio_threshold`
+- function `ta_trace_sampled`
+- function `ta_traceparent_format`
+- function `ta_traceparent_parse`
+- opaque `ta_growable_arena_chunk`
+- opaque `ta_otlp`
+- struct `ta_blob_migration`
+- struct `ta_boot_actor`
+- struct `ta_buffer`
+- struct `ta_bytes`
+- struct `ta_cbor_document`
+- struct `ta_cbor_item`
+- struct `ta_cbor_reader`
+- struct `ta_cbor_token`
+- struct `ta_cbor_writer`
+- struct `ta_chart_item`
+- struct `ta_chart_stats`
+- struct `ta_datamodel_call`
+- struct `ta_datamodel_failure`
+- struct `ta_datamodel_loop`
+- struct `ta_datamodel_start`
+- struct `ta_datamodel_state`
+- struct `ta_growable_arena`
+- struct `ta_growable_arena_config`
+- struct `ta_growable_arena_mark`
+- struct `ta_host_chart_ref`
+- struct `ta_host_environment`
+- struct `ta_host_location`
+- struct `ta_host_migration`
+- struct `ta_host_migration_failure`
+- struct `ta_host_migration_failures`
+- struct `ta_host_snapshot_contents`
+- struct `ta_host_snapshot_input`
+- struct `ta_host_time`
+- struct `ta_http_post`
+- struct `ta_memory`
+- struct `ta_otlp_attribute`
+- struct `ta_otlp_config`
+- struct `ta_otlp_cursor`
+- struct `ta_otlp_event`
+- struct `ta_otlp_exemplar`
+- struct `ta_otlp_fields`
+- struct `ta_otlp_input`
+- struct `ta_otlp_integer_attribute`
+- struct `ta_otlp_key_value`
+- struct `ta_otlp_link`
+- struct `ta_otlp_log`
+- struct `ta_otlp_metric`
+- struct `ta_otlp_metric_view`
+- struct `ta_otlp_point`
+- struct `ta_otlp_point_view`
+- struct `ta_otlp_span`
+- struct `ta_otlp_stats`
+- struct `ta_otlp_stats_input`
+- struct `ta_otlp_value`
+- struct `ta_resume`
+- struct `ta_spawn`
+- struct `ta_step_key`
+- struct `ta_string_list`
+- struct `ta_sweep`
+- struct `ta_system_setup`
+- struct `ta_table`
+- struct `ta_table_config`
+- struct `ta_trace_action_failed`
+- struct `ta_trace_assign`
+- struct `ta_trace_cancelled`
+- struct `ta_trace_condition`
+- struct `ta_trace_context`
+- struct `ta_trace_dropped`
+- struct `ta_trace_finished`
+- struct `ta_trace_generator`
+- struct `ta_trace_id`
+- struct `ta_trace_invoked`
+- struct `ta_trace_lifecycle`
+- struct `ta_trace_log`
+- struct `ta_trace_macrostep_begin`
+- struct `ta_trace_macrostep_end`
+- struct `ta_trace_microstep`
+- struct `ta_trace_policy`
+- struct `ta_trace_raised`
+- struct `ta_trace_record`
+- struct `ta_trace_rule`
+- struct `ta_trace_sent`
+- struct `ta_trace_spawned`
+- struct `ta_trace_view`
+- struct `ta_uint32_array`
+- struct `ta_uint64_array`
+- constant `TA_DATAMODEL_ECMASCRIPT_MEMORY_LIMIT_DEFAULT`
+- function `ta_datamodel_ecmascript_payload_from_cbor`
+- function `ta_datamodel_ecmascript_payload_to_cbor`
+- function `ta_xml_writer_attribute`
+- function `ta_xml_writer_close`
+- function `ta_xml_writer_finish`
+- function `ta_xml_writer_free`
+- function `ta_xml_writer_new`
+- function `ta_xml_writer_open`
+- function `ta_xml_writer_text`
+- opaque `ta_xml_writer`
+- struct `ta_resolve_error`
+- struct `ta_resolve_request`
+- struct `ta_resolve_result`
+- struct `ta_source_list`
+
+**Changed**
+
+- function `ta_actor_config`
+- function `ta_actor_export`
+- function `ta_actor_hibernate`
+- function `ta_actor_wake`
+- function `ta_address_format`
+- function `ta_address_format_name`
+- function `ta_address_name_decode`
+- function `ta_blob_migrate`
+- function `ta_host_add_image`
+- function `ta_host_advance_time`
+- function `ta_host_chart`
+- function `ta_host_hibernate`
+- function `ta_host_locate`
+- function `ta_host_migrate`
+- function `ta_host_restore`
+- function `ta_host_resume`
+- function `ta_host_send`
+- function `ta_host_send_many`
+- function `ta_host_snapshot`
+- function `ta_host_snapshot_segments`
+- function `ta_host_spawn`
+- function `ta_host_sweep`
+- function `ta_host_wake`
+- function `ta_http_encode_post`
+- function `ta_http_parse_request`
+- function `ta_image_boot_actor`
+- function `ta_image_data`
+- function `ta_image_expression`
+- function `ta_image_open`
+- function `ta_image_state_info`
+- function `ta_system_actors`
+- function `ta_system_adopt`
+- function `ta_system_cold_actors`
+- function `ta_system_init`
+- function `ta_system_relocate`
+- function `ta_system_restore`
+- function `ta_system_resume`
+- function `ta_system_snapshot`
+- function `ta_system_spawn`
+- struct `ta_datamodel_chart`
+- struct `ta_datamodel_vtable`
+- struct `ta_effect`
+- struct `ta_event_in`
+- struct `ta_event_view`
+- struct `ta_host_effect`
+- struct `ta_host_stats`
+- struct `ta_system_config`
+- struct `ta_system_stats`
+- function `ta_datamodel_ecmascript_payload_eval`
+- function `ta_datamodel_ecmascript_restore`
+- function `ta_datamodel_ecmascript_snapshot`
+- function `ta_compile_charts`
+- function `ta_runtime_free_file`
+- function `ta_runtime_load_file`
+- function `ta_runtime_resolve`
+- function `ta_runtime_system_new`
+- struct `ta_compile_options`
+- struct `ta_resolve_function`
+
+### Changes
+
+**Added**
+
+- quickjs has a default memory limit of 1 GiB (7b19ec8)
+- actor.get lists an actor's pending delayed sends, actor.state where its history states would return (712305d)
+- a hibernation blob carries its host's identity, and another host's is refused (934d62d)
+- error.execution says why in its data (6a5df83)
+- a segment grows only the pool that ran out; host.stats reports each pool (7adbb34)
+- each component's GitHub releases go to a release repository of its own (f468016)
+- actor.send, a posted method that gives an actor an event (e4e2a20)
+- sends to other systems go to the remote I/O processor (37d1d24)
+- <foreach> item and index are TA_EXPRESSION_ITEM (cbae1c3)
+- an event view names its invoke and origintype by id; a service's events have an origin (e9292da)
+- a restored host announces its external invocations again (831102f)
+- ta_table_snapshot and ta_table_restore save a table's handle namespace (c8fb9e7)
+- add tables and growable arenas (1cc5e32)
+- name status codes for diagnostics (3a1b358)
+- the host keeps its effective config, and host.config answers it (9bd33f0)
+- a run that proves nothing fails; the chart language comes from host.create (0bd0490)
+- scenario.run and w3c.run in ta-conform; W3C through the suite (7d860a0)
+- ta-conform, the C reference of the driver protocol (1526c3d)
+- definition logs when a chart version is linked, retired and freed (dbe8435)
+- a stopping host ends its open spans (32d6329)
+- envelopes cross a process boundary as CBOR (ADR 0009 step 5f) (ecc0f9a)
+- actor.subscribe and the CHANGED effect (ADR 0009 step 5e) (9bb7d02)
+- effect accessors; sends to invoked services keyed by token (ADR 0009 step 5e) (934eee4)
+- CBOR as token lists in caller memory (ADR 0009 step 3) (2a2c682)
+- the exporter's batching is core's (ta_otlp_batch) (3bce3ff)
+- synchronous I/O processors in the JavaScript bindings (57fcbbe)
+- span metrics: the encoder keeps macrostep durations per chart, with exemplars (22b6459)
+- metrics as OTLP: the otlp codec writes ExportMetricsServiceRequest; system.metrics(), metricsToOTLP and /v1/metrics (b1eeb70)
+- ta_xml_writer writes the SCXML of charts a binding builds (77f39f3)
+- JavaScript systems export traces as OTLP, to a sink or over HTTP (4fadf6c)
+- trace records name the actor and the event a microstep took (b71eda6)
+- the trace record schema and its reader (0c809a2)
+- a lossy journal of variable-size records in base (bc0a984)
+- trace values: span IDs, traceparent, the seeded generator and sampling (4c7e062)
+
+**Fixed**
+
+- the release allows the runtime library's memchr (7652056)
+- the torture dashboard's layout test speaks the DevTools protocol's targetId and sessionId (e50d4b4)
+- actor.context tells undefined from null (867b693)
+- quickjs gives an XML node to the application as its XML text (19e8812)
+- the release build links test_torture_loop with the math library (e9e38da)
+- migrate refuses an invoked child, and a session of another chart than the one named (e663f73)
+- an <invoke> or <send> waits for its pool before it evaluates anything (ac3c923)
+- error.execution's failure is noted on error paths only, says why for <foreach>, and replaces lone surrogates (35ad9d5)
+- a script in executable content keeps its functions storable and its 'use strict' (156f980)
+- migrate refuses an unknown chart and an ended session (0a231a5)
+- a pool grows at most 16 times at once, in proportion to itself (5b8c4f5)
+- an error a <send> raises at its own step carries its sendid (2fb7b01)
+- done.state of a parallel state waits for every region while they are entered (5a294b9)
+- the requests pool grows when an invoke finds it full (d907f4c)
+- a pool that fills while a segment's effects are routed grows, never crashes (111ab9f)
+- a pool's refusal is reported only while it has less room than was asked (afa732b)
+- a refusal that names no pool grows nothing (b626d5a)
+- the actors grow by at least a quarter of the region too (03eb3fc)
+- a segment adds workspaces when a run leaves actors waiting for one (9469cb1)
+- a pool other than the actors grows by at least a quarter of the region (5f2afad)
+- a <log> text past TA_SYSTEM_MAX_STRING is cut at a UTF-8 character, not emptied (02b6508)
+- refuse a text longer than TA_SYSTEM_MAX_STRING instead of growing without bound (269646f)
+- test_compile_scale compares timings of equal length (5287d19)
+- an invocation whose service said done or failed is not announced after a restore (f58dcd1)
+- a datamodel's snapshot names a chart by its segment, so one image in two segments restores (9e3d880)
+- a migration run costs its quantum, and a job takes back the actors it waits for (ca15e92)
+- make ta_host_free do nothing from datamodel code (ab3ed90)
+- keep TRACEPARENT text until the ack (62255a8)
+- calls that reach a datamodel outside a run are guarded (2eef3d2)
+- envelope data is decoded by the target's datamodel (93a9c04)
+- a relayed envelope keeps its dedup key and origintype (ea48fed)
+- actor.context and subscriptions across hibernation (ed943fd)
+- drain the exporter without marking posts in flight (d765317)
+- the API description reads a struct defined after its typedef (5208323)
+- ta_host_run stops at a send to a synchronous I/O processor (f7f4bc4)
+- test_host compares no bytes through a null pointer (7ab9f1d)
+- the examples run again with mise run example:* (67cd967)
+- the host's string pool is reclaimed while effects are pending (4e64c64)
+- published host effects stay valid until the ack or the next run (e5a7421)
+- test_host_memory builds on Linux (67f5740)
+- the PostgreSQL tests run on macOS (4540c98)
+- torture-bench reads the machine's memory on macOS (12a2291)
+
+**Performance**
+
+- an actor leaves the wake queue in O(1): the queue is linked both ways (ae93a34)
+- a stable point counts the actor's own requests, not every request (fc8ff11)
+- ta_system_actor_by_name answers from an index of names, not by walking every actor (e43239c)
+- a run retries the parked spawns from a queue, not by walking every request (dd29558)
+- to_wire resolves toJSON once per member; the writer writes in place (ef1fbd2)
+- trace records cost less to write and acknowledge; the torture chamber measures tracing (410eaa4)
+
+**Changed**
+
+- use shared arenas for compiler storage (9c543e3)
+- protocol vectors and the W3C suite move to tinyactors-test (bc11d88)
+- the torture bench drops traceBytesTotal (1c8c4fa)
+- the torture bench keeps its own host config builder (4f0b19d)
+- a null encoder instead of telemetry branches (b2f9b65)
+- the addon runs the loop; the host writes state values (b77c531)
+- the host calls no C library function (6322b4e)
+- ta_allocator in its own header; ta_memmove and formatting in base (44341f2)
+
+<details>
+<summary>Internal (64)</summary>
+
+- a resolver is any callable; the native datamodel is the default (4c73595)
+- a test that compares timings runs alone, after the parallel list (dd65c7b)
+- clear the step 8.2 marks (58775b0)
+- keep _event across detach_event; document partial boots (a3a4c3f)
+- keep ta_host_envelope's record address (9702e0c)
+- name the three kinds of ids in types.h (c3eefe7)
+- host outputs reach the application by one copy (2a60fcc)
+- cover booting named actors from a system image (0ee1549)
+- handle refusals in the memory sweep (f71de4d)
+- capacities are a segment's initial size; two defaults accepted (0a6bce5)
+- ADR 0012 consolidated: cross-references to its decisions (821276a)
+- only what SCXML.md mandates; no <data srcexpr> (69a57ad)
+- TA_EFFECT_REQUEST stays for run-time fetching; answered with TA_ERROR_INVALID until built (934ff50)
+- the resolver lives only at compile time; REQUEST answered from the segment's image (ccad425)
+- the resolver reports errors into a scratch arena; one chunked arena (7afb8ab)
+- the binding's arena, thin views and response handlers; subscriptions removed (a5357c6)
+- actor.changed carries a macrostep's changes (ADR 0012 decision 4, amended) (30fd4ad)
+- AGENTS.md rules for lifetimes and the control plane (ADR 0012) (4033e50)
+- embedding.md, and the guide for one drain at a time (ADR 0012) (94bc3cd)
+- the contract of every host call in boundary.md (ADR 0012) (7401222)
+- every byte is CBOR; JSON-RPC names only the shape (7f9de9e)
+- AGENTS.md names ta_host_post for the control plane (ADR 0011) (74cf904)
+- the control plane, notifications and image copies in the guide (2cb42d7)
+- ADR 0011 and the boundary reference (4819bd3)
+- the system layer writes outputs through the caller's allocator between runs (6f070ff)
+- replies, envelopes and blobs are views; ADR 0010 is in core (ad11e7e)
+- ADR 0010, outputs are views and values stream (e571c0b)
+- a binding allocates almost nothing (3efac6c)
+- the guide lets a binding expose its CBOR module as encode and decode (574e5b6)
+- amalgamate --out names the files it wrote relative to the caller's directory (4042a35)
+- the parameter and buffer lint rules are written with utility rules the bindings reuse (bc45794)
+- amalgamate --out <dir> writes the amalgamation into another directory (798a019)
+- sync sends in M2, quickjs sharing stays filed, Node's actor reference is a string (20189bd)
+- value vectors for surrogates, Python, and round trips outside ECMAScript (9ff8b2b)
+- W3C gates count the language's skip list; no oracle (6b22923)
+- simulated clock, the differential gate, M0 follow-ups, a request to core (7f53afd)
+- the guide's suite has scenarios, not transcripts (1ffb213)
+- core's conformance scenarios and vector files go; their checks move to unit tests (47afc43)
+- a binding is done when the whole suite passes (34443a5)
+- the suite's README and AGENTS.md; the guide tests through it (a754d4d)
+- at most three parameters for every C function we write (c6c84f1)
+- checked binding pitfalls in the roadmap and the guide (2203218)
+- the README describes the docs as they are (7282356)
+- host.h comments match the code (3a7e4e2)
+- the binding guide after ADR 0009 steps 2–6 (77b0ee7)
+- the binding guide, as drafted in the proposal (082f95a)
+- write the protocol vectors' CBOR from their diagnostic notation (4881cbd)
+- protocol vectors for requests, config and envelopes (ADR 0009 step 6) (b539dae)
+- why the host's config is CBOR (f07b4e4)
+- snapshots are not durability (9cd84ab)
+- the bindings after ADR 0008 (f2302d9)
+- bindings expose the core, nothing else (5d31937)
+- propose trace context on inputs as a struct, and replies that name their I/O processor (2076bed)
+- ADR 0007 records metrics and trace policy as built; the proposal is adopted (c06330f)
+- the SCXML-in-core proposal is adopted; docs name ta_xml_writer (701ebef)
+- mise run test checks the binding surface; check_surface.py is gone (484db8f)
+- the binding surface check is a mise task, linked with the pinned toolchain (f856165)
+- the roadmap and distribution.md describe what is released and what is left (ac4be28)
+- tracing in the architecture, the layer tables, the bindings' READMEs and the roadmap (dbc0c69)
+- decide how tracing becomes a core feature (ecd61de)
+- ignore the PostgreSQL extension's macOS build product (a83dd5c)
+- what the browser module and the PostgreSQL router allocate (97c0f71)
+- the host's memory: refusals, a fixed arena, accounting (0f16d87)
+- ADR 0005, a freestanding host layer (c081a84)
+
+</details>
