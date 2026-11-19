@@ -665,6 +665,60 @@ item 12 walks core's decoder in each binding's C, core untouched; item 13
 is docs and types only (the calls stay where they are, grouped under
 "Operating a host" and "Wire format").
 
+**The shape of items 1 to 9** (the maintainer, 2026-11-19: handlers
+drop the host parameter, processors are objects only, a store replaces
+`wake=`). Python's names; Node's are camelCase, with time in ms.
+
+- `compile_dir(path, *, resolver=None) -> Compiled`: every `*.scxml`
+  under `path`, a `src` read from under `path` (a resolver confined to
+  it, refusing what leaves it).
+- `Host(charts, *, system, io_processors=None, config=None, clock=None,
+  store=None, resident=None, log=None, telemetry=None, services=None,
+  transport=None, on_done=None, on_error=None, on_handler_error=None,
+  migrated=None, migration_done=None)`, and `Host.restore(snapshot,
+  charts, **the same)`:
+  - `charts`: a `Compiled`, image bytes, or a list of them, added in
+    order at creation (`ta_host_add_image`, a segment each);
+  - `system`: the `systemID`; `config`: the rest of the host config
+    (`system`, `migrateQuantum`, `telemetry`), never `systemID` or
+    `ioProcessors`;
+  - `io_processors`: `{type: processor}`, the config's `ioProcessors` in
+    that order; a processor is an object with `receive(send)` (async
+    allowed) and an optional `location` for its config entry;
+  - every handler drops the host: `receive(send)`, `log(entry)`,
+    `telemetry(signal, data)`, a service handler `(invocation)` and its
+    service's `receive(send)` and `stop()`, `transport(send)`,
+    `migrated(migrated)`, `migration_done(result)`; a view or record has
+    `.host`;
+  - `store`: an object with `save(session, blob)`, `load(session) ->
+    blob`, `delete(session)`; each binding ships `SQLiteStore(path)` and
+    `MemoryStore()`; `resident`: the most actors kept in memory, the
+    rest hibernated after a turn (`ta_host_sweep`, `ta_host_hibernate`,
+    `save`); a WAKE loads and wakes (`load`, `ta_host_wake`); an actor
+    that ends is deleted from the store. Without a store a WAKE is
+    dropped, as today without a handler. `wake=` goes; `sweep()`,
+    `hibernate()` and `wake()` stay, for an application with its own
+    policy;
+  - `on_done(actor, donedata)` and `on_error(actor, error)`: every
+    top-level actor that ends (`TA_EFFECT_DONE`, `TA_EFFECT_ERROR`), one
+    handler each, the actor's chart read while the effect is handed out
+    (whether core still has it then is to be checked: `TA_EFFECT_FIELD_CHART`
+    is `TA_NIL` on these effects);
+  - `on_handler_error(error, effect)`: a handler that raised; the send is
+    failed as today; without it, today's behaviour.
+- `Actor`: `id`, `address`, `send(event, data=None, ...)`,
+  `ask(event, data=None)` (awaitable, `(event, data)`), `terminate()`,
+  `state()`, `context()`, `get()` (awaitable typed methods), `done`
+  (awaitable donedata); compared and hashed by session; no table, made
+  where the API returns one. `host.spawn(chart, name=None, params=None,
+  traceparent=None) -> Actor` with `chart` a name or a `ChartRef` (a
+  version); `host.actor(session, name or address) -> Actor`;
+  `host.actors(chart=None)` (awaitable, `actor.list`); `send.sender` an
+  `Actor`.
+- `Spawner()`: a processor; a send's data `{chart, name, params}`, the
+  answer `spawned {name, address}` with its `sendid`, a refusal
+  `error.communication`.
+
 The bindings' `AGENTS.md` change with the items that need it ("Layers",
 "What not to build", the API sections): the rules there hold for the
 direct layer; the items below are the API applications use.
