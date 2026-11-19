@@ -254,6 +254,13 @@ export function compileSystem(manifest: Source, resolver?: Resolver, options?: C
  */
 export function directoryResolver(root: string | URL): Resolver;
 
+/**
+ * The version of the package installed, as its package.json gives it
+ * (`'0.4.0'`, or a development build's `'0.4.0-dev.20261119.3.gabc1234'`).
+ * `@tinyactors/node/package.json` can be imported too.
+ */
+export const version: string;
+
 // ---- addresses ----------------------------------------------------------
 
 /** An actor's address: `tinyactors://<system>/#_scxml_<session>`, or

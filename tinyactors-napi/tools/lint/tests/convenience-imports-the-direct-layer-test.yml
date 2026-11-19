@@ -8,6 +8,7 @@ valid:
   - "const fs = get.call(globalThis.process, 'node:fs');"
   - "const fs = process.getBuiltinModule('node:fs');"
   - "const path = globalThis.process.getBuiltinModule(\"node:path\");"
+  - "import pkg from '../package.json' with { type: 'json' };"
 invalid:
   - "import addon from '../build/tinyactors.node';"
   - "import { Host } from '../index.mjs';"
@@ -31,3 +32,8 @@ invalid:
   - "const os = process.getBuiltinModule('node:os');"
   - "const vm = process.getBuiltinModule(name);"
   - "const require = createRequire(import.meta.url);"
+  - "import pkg from '../package.json';"
+  - "import pkg from './package.json' with { type: 'json' };"
+  - "import pkg from '../../package.json' with { type: 'json' };"
+  - "import data from '../build/data.json' with { type: 'json' };"
+  - "export { default } from '../package.json';"

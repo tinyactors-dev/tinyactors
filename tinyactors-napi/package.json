@@ -30,7 +30,8 @@
       "types": "./index.d.ts",
       "tinyactors-wasm": "./wasm/index.mjs",
       "default": "./index.mjs"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "index.mjs",

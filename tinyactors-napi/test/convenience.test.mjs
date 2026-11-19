@@ -2,7 +2,7 @@
 // 2026-11-18): each typed method returns a promise when given no handler,
 // `host.<method>(params)`, resolving from onResult, rejecting from onError
 // with the same TinyactorsError; given handlers it is the direct call.
-import { Host, TinyactorsError } from '@tinyactors/node';
+import { Host, TinyactorsError, version } from '@tinyactors/node';
 import { equal, hostWith, status, until, WAITER } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
@@ -170,6 +170,14 @@ test('a method pending at close never settles', async () => {
   host.close();
   await until(() => false, 20);
   equal(settled, false, 'its handlers were dropped');
+});
+
+test('version is the package\'s, and its package.json can be imported by name', async () => {
+  equal(typeof version, 'string', 'a string');
+  equal(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version), true, `a semantic version: ${version}`);
+  if (globalThis.process?.versions?.node === undefined) return; // a page resolves no package.json by name
+  const { default: packageJSON } = await import('@tinyactors/node/package.json', { with: { type: 'json' } });
+  equal(version, packageJSON.version, 'the package.json the package resolves to');
 });
 
 await run();

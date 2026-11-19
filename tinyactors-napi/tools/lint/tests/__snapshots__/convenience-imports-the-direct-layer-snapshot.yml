@@ -82,6 +82,16 @@ snapshots:
       style: secondary
       start: 0
       end: 28
+  export { default } from '../package.json';:
+    labels:
+    - source: '''../package.json'''
+      style: primary
+      start: 24
+      end: 41
+    - source: export { default } from '../package.json';
+      style: secondary
+      start: 0
+      end: 42
   import addon from '../build/tinyactors.node';:
     labels:
     - source: '''../build/tinyactors.node'''
@@ -102,6 +112,46 @@ snapshots:
       style: secondary
       start: 0
       end: 26
+  'import data from ''../build/data.json'' with { type: ''json'' };':
+    labels:
+    - source: '''../build/data.json'''
+      style: primary
+      start: 17
+      end: 37
+    - source: 'import data from ''../build/data.json'' with { type: ''json'' };'
+      style: secondary
+      start: 0
+      end: 60
+  'import pkg from ''../../package.json'' with { type: ''json'' };':
+    labels:
+    - source: '''../../package.json'''
+      style: primary
+      start: 16
+      end: 36
+    - source: 'import pkg from ''../../package.json'' with { type: ''json'' };'
+      style: secondary
+      start: 0
+      end: 59
+  import pkg from '../package.json';:
+    labels:
+    - source: '''../package.json'''
+      style: primary
+      start: 16
+      end: 33
+    - source: import pkg from '../package.json';
+      style: secondary
+      start: 0
+      end: 34
+  'import pkg from ''./package.json'' with { type: ''json'' };':
+    labels:
+    - source: '''./package.json'''
+      style: primary
+      start: 16
+      end: 32
+    - source: 'import pkg from ''./package.json'' with { type: ''json'' };'
+      style: secondary
+      start: 0
+      end: 55
   import { Host } from '#direct?raw';:
     labels:
     - source: '''#direct?raw'''
