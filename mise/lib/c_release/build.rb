@@ -291,7 +291,11 @@ module CRelease
       'shared' => [build[:shared].to_s, "-Wl,-rpath,#{lib}",
                    *others.flat_map { |other| [other[:shared].to_s, "-Wl,-rpath,#{other[:shared].dirname}"] }] }.each do |kind, library|
       tests.each do |label, inputs, arguments|
-        binary = Toolchain::Target.host.program([*Array(inputs), *library], into: dir.join("#{label}-#{kind}"))
+        # The C library's own libraries (-lm) go after the packed ones: on
+        # glibc a library that leaves libm's IFUNCs (atan) undefined is
+        # relocated after libm only when libm comes after it.
+        system_libraries, objects = Array(inputs).partition { |input| input.to_s.start_with?('-l') }
+        binary = Toolchain::Target.host.program([*objects, *library, *system_libraries], into: dir.join("#{label}-#{kind}"))
         # A dependent's shared library names its dependencies; the loader
         # finds them on the library path, as it would installed ones.
         paths = [lib, *others.map { |other| other[:shared].dirname }].join(':')
