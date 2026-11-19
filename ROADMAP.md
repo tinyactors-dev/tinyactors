@@ -736,12 +736,12 @@ direct layer; the items below are the API applications use.
 | 9 | A handler-error hook on the host; without one, today's behaviour | both | — | Python done (`9c84f1c4`); Node done (`6a5e1d43`) |
 | 10 | Errors as classes (`StaleError`, `StateError`, `InvalidError`, `UnsupportedError`), the status name kept as an attribute | both | `ta_status_name` | done (`5529761e`) |
 | 11 | `Address.from_name(system, name)` (Node's `fromName`), percent-encoding the name | both | `ta_address_parse` | done: Node had `Address.fromName`; Python `from_name` (`eedee0a0`) |
-| 12 | A span decoder that needs no host, at module level, with the resource, the scope and the links | both | `ta_otlp_next_span` | |
+| 12 | A span decoder that needs no host, at module level, with the resource, the scope and the links | both | `ta_otlp_next_span` | done: Python `decode_traces` (`5e5b090f`), Node and wasm `decodeTraces` (`686dbb4a`) |
 | 13 | Operator calls (trace, metrics, telemetry, sweep, hibernate and wake, migration, segments and images) and wire-format calls (`encode`, `decode`, the BasicHTTP helpers) grouped apart in the READMEs, guides and types | both | — | |
 | 14 | Guides: the three strategies for a send to an actor that is not there, with the chat as an example application; names use only characters that need no encoding | both | — | |
 | 15 | `version` export and `./package.json` in `exports` | Node | — | done (`2479be24`, `e815e12b`: the browser floor is JSON modules') |
-| 16 | The native datamodel refuses top-level declarations in scripts (a compile diagnostic pointing to `<data>`), and the per-session context goes | Node | — || done (`2081069a`: `let`, `const` and `class` refused; a top-level `var` is a variable of the session, since W3C 302 to 304 declare one) |
-| 17 | A chart-level `<script src="*.js">` runs once per chart; its top-level functions are the chart's helpers | Node | — || done (`2081069a`) |
+| 16 | The native datamodel refuses top-level declarations in scripts (a compile diagnostic pointing to `<data>`), and the per-session context goes | Node | — | done (`2081069a`: `let`, `const` and `class` refused; a top-level `var` is a variable of the session, since W3C 302 to 304 declare one) |
+| 17 | A chart-level `<script src="*.js">` runs once per chart; its top-level functions are the chart's helpers | Node | — | done (`2081069a`) |
 | 18 | `addCharts` and `spawnChart` removed; compile options a named argument | Node | — | done (`6a5e1d43`: `compileDir` replaces `directoryResolver` too) |
 | 19 | `__version__` | Python | — | done (`ca00eff8`) |
 | 20 | Typed methods that can be awaited, in Node's shape | Python | `ta_host_post` | done (`12faafbe`) |
