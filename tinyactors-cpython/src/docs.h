@@ -1050,9 +1050,10 @@ static const char ta_python_doc_address_from_session[] =
     "--\n"
     "\n"
     "The Address of session `session` (an int from 1) in system `system`:\n"
-    "\"tinyactors://<system>/#_scxml_<session>\", the address a chart's\n"
-    "_event.origin holds for that session; ValueError for an invalid\n"
-    "system id.";
+    "\"tinyactors://<system>/#_scxml_<session>\", the full form (a chart\n"
+    "sees that session's _event.origin in it or as its fragment,\n"
+    "#_scxml_<session>, so compare by the fragment); ValueError for an\n"
+    "invalid system id.";
 
 static const char ta_python_doc_address_text[] =
     "The address text (read-only).";
@@ -1091,7 +1092,9 @@ static const char ta_python_doc_event_sendid[] =
 
 static const char ta_python_doc_event_origin[] =
     "The sender's address, or None: <send target=\"...\" targetexpr=\"_event.origin\">\n"
-    "replies to it, in this host or in another system.";
+    "replies to it, in this host or in another system. One sender of this\n"
+    "system comes full (tinyactors://<system>/#_scxml_<n>) or as its\n"
+    "fragment (#_scxml_<n>): key a table by the fragment.";
 
 static const char ta_python_doc_event_origintype[] =
     "The I/O processor type of the origin, or None: the type a reply uses\n"

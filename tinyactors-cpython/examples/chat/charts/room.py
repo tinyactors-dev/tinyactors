@@ -1,11 +1,19 @@
 # The room's helpers.
 
+def sender(origin):
+    """The sender's key: its address from the "#" on. Core writes one
+    sender's origin in two forms, #_scxml_<n> and
+    tinyactors://chat/#_scxml_<n> (docs/guide/missing-actors.md,
+    "Keying a table by the sender")."""
+    return origin[origin.find("#"):]
+
+
 def workspace_address(workspace):
     return "tinyactors://chat/@workspace." + workspace
 
 
 def message(room, members, event):
-    return {"room": room, "user": members[event.origin], "text": event.data["text"]}
+    return {"room": room, "user": members[sender(event.origin)], "text": event.data["text"]}
 
 
 def stored(workspace, room, members, event):

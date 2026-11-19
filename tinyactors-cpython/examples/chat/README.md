@@ -70,6 +70,11 @@ address as plain text (`room_address` in `connection.py`), and the
 workspace refuses a room name with any character outside `a`-`z`,
 `0`-`9` and `-` (`valid_name` in `workspace.py`).
 
+A room keys its members by the fragment of `_event.origin`
+(`sender` in `room.py`), so one connection is one member whichever form
+the origin has
+([Keying a table by the sender](../../docs/guide/missing-actors.md#keying-a-table-by-the-sender)).
+
 ## Asking an actor
 
 `workspace` answers `rooms` and `room` answers `members` and `kick` to

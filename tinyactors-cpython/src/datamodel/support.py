@@ -175,8 +175,10 @@ class Actor:
 
     @property
     def address(self):
-        """The actor's address, tinyactors://<system>/#_scxml_<id>: what
-        another system sends to, and what _event.origin holds for it."""
+        """The actor's address, tinyactors://<system>/#_scxml_<id>, the
+        full form: what another system sends to. A chart sees this actor's
+        sends' _event.origin either in it or as its fragment,
+        #_scxml_<id>, so compare by the fragment."""
         return _tinyactors.Address.from_session(self.host.system, self.id)
 
     def send(self, event, data=None, *, sendid=None, traceparent=None):

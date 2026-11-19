@@ -33,10 +33,11 @@ which the host hands to the store as a `TA_EFFECT_WAKE`
 <!-- room.scxml: no <final>; it waits for events as long as the host runs -->
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        name="room" datamodel="python" initial="open">
+  <script src="room.py"/>                <!-- def sender(origin): below -->
   <datamodel><data id="members" expr="{}"/></datamodel>
   <state id="open">
     <transition event="join">
-      <assign location="members" expr="{**members, _event.origin: _event.data['user']}"/>
+      <assign location="members" expr="{**members, sender(_event.origin): _event.data['user']}"/>
     </transition>
   </state>
 </scxml>
@@ -161,3 +162,62 @@ def room_address(workspace, room):
 and the application refuses a name with other characters where it is
 chosen, as the chat's workspace refuses a room name outside
 `a`-`z`, `0`-`9` and `-` (`valid_name` in `charts/workspace.py`).
+
+## Keying a table by the sender
+
+The room above keys its members by the sender of each `join`, and
+`_event.origin` is that sender's address. Core writes one sender's
+origin in two forms:
+
+- `#_scxml_2`, the address's fragment alone, when the send stayed in the
+  sender's segment of the host: a send to a session's address
+  (`#_scxml_<n>`, or the full address of a session of the same system),
+  to `#_parent`, to an invoked child, and a delayed send among them
+  (the core's `src/core/event_pool.c:199-207`, from the sender's
+  session);
+- `tinyactors://chat/#_scxml_2`, the full address, when the host routed
+  the send: a send to a name (`@room.acme.general`), to a session in
+  another segment (`local_send` in `src/host/host.c`, which formats the
+  sender's address), or from another system (whatever origin its
+  transport passes, which is the full address when it passes
+  `send.origin` on).
+
+Both name the same sender, so **key a table by the origin's fragment**,
+from `#` on. A `def` at the top level of the chart's script is the
+chart's helper, and the expressions call it with the origin:
+
+```python
+# room.py
+def sender(origin):
+    """The sender's key: its address from the "#" on, whichever form the origin has."""
+    return origin[origin.find("#"):]
+```
+
+A sender reached once by its session and once by its name
+(`tinyactors://chat/@room.acme.general`) is then one member, and the
+fragment is a target too: `<send targetexpr="key">` reaches the sender
+from any segment of the host.
+
+**Where the system matters, key by the full address.** A table that
+holds senders of other systems as well (a directory that answers
+several hosts) must keep the system, and an origin from another system
+always names it. There, complete a fragment with the actor's own
+system, which its own address, `_ioprocessors['scxml']['location']`,
+holds:
+
+```python
+def sender_address(origin, own):
+    """The sender's full address; `own` is _ioprocessors['scxml']['location']."""
+    if origin.startswith("#_scxml_"):
+        return own[:own.find("#")] + origin
+    return origin
+```
+
+```xml
+<assign location="members"
+        expr="{**members, sender_address(_event.origin, _ioprocessors['scxml']['location']): _event.data['user']}"/>
+```
+
+An event from a service your application runs (`invocation.send_back`)
+has the origin `#_<invokeid>`, which names that invocation in this
+actor only: either helper leaves it as it is.

@@ -8,7 +8,7 @@
     <data id="workspace"/>
     <data id="name"/>
     <data id="history" expr="[]"/>        <!-- recent messages; from the database after a restart -->
-    <data id="members" expr="{}"/>        <!-- connection address -> user -->
+    <data id="members" expr="{}"/>        <!-- #_scxml_<connection> -> user: sender(_event.origin) -->
   </datamodel>
   <state id="open">
     <onentry>
@@ -16,15 +16,15 @@
       <send targetexpr="workspace_address(workspace)" event="room.opened"><content expr="{'name': name}"/></send>
     </onentry>
     <transition event="join">
-      <assign location="members" expr="with_entry(members, _event.origin, _event.data['user'])"/>
+      <assign location="members" expr="with_entry(members, sender(_event.origin), _event.data['user'])"/>
       <send targetexpr="_event.origin" event="room.joined">
         <content expr="{'room': name, 'history': recent(history)}"/>
       </send>
     </transition>
     <transition event="leave">
-      <assign location="members" expr="without_entry(members, _event.origin)"/>
+      <assign location="members" expr="without_entry(members, sender(_event.origin))"/>
     </transition>
-    <transition event="post" cond="_event.origin in members">
+    <transition event="post" cond="sender(_event.origin) in members">
       <assign location="history" expr="remember(history, message(name, members, _event))"/>
       <send type="chat:db" event="message.insert">
         <content expr="stored(workspace, name, members, _event)"/>

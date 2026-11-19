@@ -41,10 +41,11 @@ class Gateway:
             case "broadcast":                  # a room's message: one send, many sockets
                 text = json.dumps([send.data["event"], send.data["data"]])
                 gone = []
-                for address in send.data["to"]:
-                    socket = self.sockets.get(tinyactors.Address(address).session)
+                for member in send.data["to"]:   # #_scxml_<connection>: a fragment of its address
+                    address = tinyactors.Address("tinyactors://%s/%s" % (send.host.system, member))
+                    socket = self.sockets.get(address.session)
                     if socket is None:
-                        gone.append(address)
+                        gone.append(member)
                     else:
                         socket.write(text)
                 if gone:                       # the room drops them
