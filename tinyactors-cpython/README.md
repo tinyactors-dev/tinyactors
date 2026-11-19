@@ -156,6 +156,20 @@ New actors start on it, and running
 actors stay on their version until a migration moves them (below,
 "Migration").
 
+`compile_dir(path, *, resolver=None)` compiles every `*.scxml` file
+under a directory into one image, each chart named by its path under the
+directory (sorted: the first is the default boot chart). A `src` (a `.py`
+helper a chart reads with `<script src>`, a chart it invokes) is read
+from under the directory, relative to the document that names it, and a
+path that leaves the directory, symbolic links included, is refused
+(`ResolveError`, so `CompileError`). Compile once, and give the result to
+any number of hosts:
+
+```python
+with tinyactors.compile_dir("charts") as compiled:
+    hosts = [tinyactors.Host(compiled, system="shop-%d" % i) for i in range(4)]
+```
+
 `compile_system` compiles a `<system>` manifest instead of a list of
 charts. The manifest names the charts (`<chart name src>`) and the actors
 the application starts with (`<actor name chart>`). `host.boot(segment)`
@@ -997,6 +1011,7 @@ how to use it.
 | Item | What it does |
 |---|---|
 | `compile_charts(sources, resolver=None) -> Compiled` | compiles `(name, text)` pairs into one image; raises `CompileError` |
+| `compile_dir(path, *, resolver=None) -> Compiled` | compiles every `*.scxml` under a directory, its `src` files read from under it |
 | `compile_system(manifest, resolver=None) -> Compiled` | compiles a `<system>` manifest of charts and boot actors |
 | `Compiled.image`, `.diagnostics`, `.close()` | the image's bytes, copied at the first read; the warnings and notes; a context manager |
 | `Host(charts, *, system, io_processors, config, clock, store, resident, log, telemetry, services, transport, on_done, on_error, on_handler_error, migrated, migration_done)` | a host running the images, with its processors and handlers; a context manager for `with` and `async with` |

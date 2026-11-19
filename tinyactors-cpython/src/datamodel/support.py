@@ -214,6 +214,58 @@ class Actor:
         return self.host._done(self.id)
 
 
+# ---- a directory of charts ----------------------------------------------------
+
+def compile_dir(path, *, resolver=None):
+    """Compile every *.scxml file under the directory `path` into one image,
+    and return the Compiled, as compile_charts does.
+
+    Keep an application's charts and their helper files (a .py file a
+    chart reads with <script src>, a chart it invokes with <invoke src>)
+    in one directory, compile it once at startup or in a build step, and
+    give the result to any number of hosts. The charts are named by their
+    path under `path` (sorted; the first is the image's default boot
+    chart), and a src is read from under `path`, relative to the document
+    that names it: a path that leaves `path`, symbolic links included, is
+    refused (ResolveError, so CompileError). Give `resolver` to read the
+    src files yourself instead. A chart file whose real path leaves `path`
+    raises ValueError; an error in a chart raises CompileError."""
+    import pathlib
+    root = pathlib.Path(path).resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError("compile_dir takes a directory: %s" % path)
+    sources = []
+    for file in sorted(root.rglob("*.scxml")):
+        if not file.is_file():
+            continue
+        if not file.resolve().is_relative_to(root):
+            raise ValueError("the chart %s leaves %s" % (file, root))
+        sources.append((file.relative_to(root).as_posix(), file.read_text(encoding="utf-8")))
+    if not sources:
+        raise ValueError("no *.scxml file under %s" % root)
+    return _tinyactors.compile_charts(sources, resolver if resolver is not None else _Directory(root))
+
+
+class _Directory:
+    """compile_dir's resolver: `source` read under `root`, relative to the
+    document `base` that names it, refused when it leaves `root`."""
+
+    def __init__(self, root):
+        self.root = root
+
+    def __call__(self, base, source):
+        import pathlib
+        target = (self.root / pathlib.PurePosixPath(base).parent / source).resolve()
+        if not target.is_relative_to(self.root):
+            raise ResolveError("%s leaves the charts' directory" % source)
+        try:
+            return target.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise ResolveError("no file %s under the charts' directory" % source) from None
+        except (IsADirectoryError, UnicodeDecodeError) as error:
+            raise ResolveError("%s cannot be read: %s" % (source, error)) from None
+
+
 # ---- stores: where hibernated actors' blobs go ---------------------------------
 
 class MemoryStore:
@@ -380,7 +432,7 @@ class Diagnostic:
         return "%s:%d:%d: %s: %s" % (self.file, self.line, self.column, self.severity, self.message)
 
 
-for _type in (TinyactorsError, CompileError, ResolveError, Diagnostic, Actor, MemoryStore, SQLiteStore):
+for _type in (TinyactorsError, CompileError, ResolveError, Diagnostic, Actor, MemoryStore, SQLiteStore, compile_dir):
     _type.__module__ = "tinyactors"
 
 # ---- the rewrite ---------------------------------------------------------

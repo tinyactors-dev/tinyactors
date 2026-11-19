@@ -45,10 +45,10 @@ layers"):
   use: `Host(charts, system=..., ...)` adds its images at creation;
   I/O processors are objects with `receive(send)`; handlers take no host
   (each view and record has `.host`); `Actor` handles; `store=` and
-  `resident=`; `on_done`, `on_error`, `on_handler_error`. It adds no
+  `resident=`; `on_done`, `on_error`, `on_handler_error`; `compile_dir`. It adds no
   request to core. Where it is plain Python over the public calls it
   lives in `src/datamodel/support.py` (`Actor`, `MemoryStore`,
-  `SQLiteStore`, `host_config`, `actors`), exported by the module; the
+  `SQLiteStore`, `compile_dir`, `host_config`, `actors`), exported by the module; the
   rest is C beside the direct layer's (`host.c`, `effects.c`). The
   direct layer's calls stay (`chart`, `add_image`, `sweep`, `hibernate`,
   `wake`, the typed methods), as operator calls for an application with
@@ -91,6 +91,12 @@ Decided by the maintainer (2026-10-13); every item is in
   resolver, and the `<actor name chart>`s `host.boot` spawns. The same
   path as `compile_charts` (`ta_python_compile` takes a
   `ta_python_compilation`), the same `Compiled` and `CompileError`.
+- **`tinyactors.compile_dir(path, *, resolver=None) -> Compiled`**
+  (2026-11-19, step 8.6 item 1; support.py): every `*.scxml` under
+  `path`, sorted, named by its path under it, given to `compile_charts`
+  with a resolver confined to `path` (a `src` relative to its document,
+  its real path refused with `ResolveError` when it leaves `path`,
+  symbolic links included), or the `resolver` given.
 - **`Compiled`** holds the compile result: **`compiled.image`** is
   `ta_compile_image`'s bytes as `bytes`, copied at the first read and kept
   (valid after `close` too; a first read after it raises

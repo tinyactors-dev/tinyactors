@@ -24,6 +24,7 @@ A core function no item uses is listed below the table: used internally
 | API item | Core | Notes |
 |---|---|---|
 | `tinyactors.compile_charts(sources, resolver=None) -> Compiled` | `ta_compile_charts`, `ta_compile_diagnostics`, `TA_DIAGNOSTIC_ERROR` | the compiler's call; `sources` (name, text) pairs, the first the default boot chart; `resolver` the compile-time resolver, the only place a resolver is given; an error raises `CompileError` with every diagnostic and frees the result |
+| `tinyactors.compile_dir(path, *, resolver=None) -> Compiled` | `ta_compile_charts`, `ta_compile_diagnostics` | every `*.scxml` under `path` (sorted, named by their path under it) as `compile_charts`' sources; the resolver (support.py's `_Directory`, or the one given) reads a `src` under `path`, relative to the naming document, and refuses with `ResolveError` a path whose real path leaves it |
 | `Compiled.image`, `Compiled.diagnostics` | `ta_compile_image`, `ta_compile_diagnostics` | `image` the image's `bytes`, copied at the first read and kept; a first read after `close` is `TA_ERROR_STALE`; `diagnostics` converted once |
 | `tinyactors.compile_system(manifest, resolver=None) -> Compiled` | `ta_compile_system`, `ta_compile_diagnostics` | a `<system>` manifest (a (name, text) pair): its charts, read through `resolver`, and the boot actors `Host.boot` spawns; the same `Compiled` and `CompileError` as `compile_charts` |
 | `with compile_charts(...) as compiled`, `Compiled.close()` | `ta_compile_free` | the collector as a fallback |

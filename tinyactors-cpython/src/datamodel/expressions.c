@@ -73,7 +73,7 @@ int ta_python_support_init(PyObject *module, ta_python_module_state *state) {
             status = -1;
         static const char *const exported[] = {"TinyactorsError", "StaleError", "StateError", "InvalidError",
                                                "UnsupportedError", "CompileError", "ResolveError", "Diagnostic", "Actor",
-                                               "MemoryStore", "SQLiteStore"};
+                                               "MemoryStore", "SQLiteStore", "compile_dir"};
         for (size_t i = 0; status == 0 && i < sizeof exported / sizeof exported[0]; i++) {
             PyObject *value = ta_python_support_get(namespace, exported[i]);
             if (!value || PyModule_AddObjectRef(module, exported[i], value) < 0) status = -1;
