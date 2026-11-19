@@ -60,7 +60,7 @@ end
 # signature in glibc and musl, so a Linux library that links no C library
 # binds to either (decision 10), and libSystem has them on macOS, where
 # Darwin's clang also calls bzero and the fortified __memcpy_chk.
-RUNTIME_LIBC = %w[calloc clock_gettime fclose fopen fread free fseek ftell malloc memmove qsort realloc snprintf strchr
+RUNTIME_LIBC = %w[calloc clock_gettime fclose fopen fread free fseek ftell malloc memchr memmove qsort realloc snprintf strchr
                   strcmp strlen strncmp vsnprintf].freeze
 DARWIN = %w[bzero __memcpy_chk].freeze
 libc = lambda do |list, linux_only: [], darwin_only: []|
