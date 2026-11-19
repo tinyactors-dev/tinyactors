@@ -19,7 +19,7 @@ the encoder wrote, as a `Buffer`, with its signal (`'traces'` or
 `'logs'`).
 
 ```js
-import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+import { compileCharts, decodeTraces, Host, SimulatedClock } from '@tinyactors/node';
 
 const compiled = compileCharts([{ name: 'order.scxml', text: `
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
@@ -58,7 +58,7 @@ console.log('signals:', requests.map(([signal]) => signal).sort().join(', '));
 // Read the spans back (for a test; a collector does this for you).
 for (const [signal, data] of requests) {
   if (signal !== 'traces') continue;
-  const { spans } = await host.traceSpansDecode({ traces: data });
+  const spans = decodeTraces(data);
   const ours = spans.filter((span) => span.trace === '0af7651916cd43dd8448eb211c80319c');
   console.log('spans in the caller\'s trace:', ours.map((span) => span.name).sort().join(', '));
   const step = ours.find((span) => span.name === 'scxml.macrostep pay');
@@ -241,7 +241,8 @@ records:
   everything.
 - **`traceEnd()`** ends every open span now, as `close()` does.
 - **`traceSpansDecode({ traces })`** reads the spans of a traces request
-  back, as above.
+  back through the host. `decodeTraces(bytes)`, used above, needs no host
+  and also gives each span's `flags`, `links`, `resource` and `scope`.
 
 A rule matches by `chart`, `actor` (a trailing `*` makes it a prefix),
 `event` (SCXML's prefix rule), `session` or `from` (`'host'`, `'actor'`,

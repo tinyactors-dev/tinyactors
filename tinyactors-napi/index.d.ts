@@ -91,6 +91,18 @@ export function encode(value: Encodable): Uint8Array;
  * bytes. */
 export function decode(bytes: Uint8Array | ArrayBuffer): ReceivedValue;
 
+/** The spans of an OTLP ExportTraceServiceRequest (the bytes a telemetry
+ * handler gets for `'traces'`, or any exporter's), read without a host:
+ * for tests and a collector of your own. Throws an `InvalidError` for bytes
+ * that are not such a request, a `TypeError` for an argument that is not
+ * bytes.
+ *
+ * @example
+ * const spans = decodeTraces(data);
+ * console.log(spans.map((span) => `${span.name} ${span.scope.attributes['tinyactors.chart.name']}`));
+ */
+export function decodeTraces(bytes: Uint8Array | ArrayBuffer): DecodedSpan[];
+
 // ---- errors -------------------------------------------------------------
 
 /** The reason a call was refused, as `TinyactorsError.status` names it:
@@ -1002,6 +1014,17 @@ export interface Span {
   readonly statusMessage: string;
   readonly attributes: { readonly [key: string]: ReceivedValue };
   readonly events: readonly SpanEvent[];
+}
+/** A span as {@link decodeTraces} gives it: a {@link Span} and more of
+ * what the request holds. */
+export interface DecodedSpan extends Span {
+  /** OTLP's Span.flags. */
+  readonly flags: number;
+  readonly links: readonly { readonly trace: string; readonly span: string; readonly attributes: { readonly [key: string]: ReceivedValue } }[];
+  /** Its resource's attributes (`service.name`, ...). */
+  readonly resource: { readonly [key: string]: ReceivedValue };
+  /** Its instrumentation scope. */
+  readonly scope: { readonly name: string; readonly version: string; readonly attributes: { readonly [key: string]: ReceivedValue } };
 }
 /** `traceSpansDecode`'s result. */
 export interface TraceSpansDecodeResult {

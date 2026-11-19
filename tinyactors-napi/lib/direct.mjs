@@ -52,6 +52,7 @@ const addon = load();
 export const {
   encode,
   decode,
+  decodeTraces,
   TinyactorsError,
   StaleError,
   StateError,

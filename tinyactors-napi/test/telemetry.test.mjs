@@ -6,7 +6,7 @@
 // once the host is freed, its promises awaited by [Symbol.asyncDispose]),
 // spans decoded back with traceSpansDecode, and watches on a simulated
 // clock and on the real one.
-import { Host, SimulatedClock } from '@tinyactors/node';
+import { decodeTraces, Host, InvalidError, SimulatedClock } from '@tinyactors/node';
 import { ENGINE, equal, hostWith, scxml, sleep, status, throws } from './charts.mjs';
 import { run, test } from './harness.mjs';
 
@@ -93,6 +93,38 @@ test('traces and logs reach the handler as Uint8Arrays, copied once, after flush
   }
   if (!(await spanNames(host, got)).includes('scxml.macrostep go')) throw new Error('no macrostep go');
   host.close();
+});
+
+test('decodeTraces reads spans without a host: the typed method\'s fields, flags, links, resource and scope', async () => {
+  const got = [];
+  const clock = new SimulatedClock();
+  const host = logging((h, signal, data) => got.push([signal, data]), { clock });
+  host.send(host.spawn(host.chart('c')), 'go');
+  await host.idle();
+  clock.increment(200);
+  await host.idle();
+  const traces = got.find(([signal]) => signal === 'traces')[1];
+  const typed = (await host.traceSpansDecode({ traces })).spans;
+  host.close();
+  const spans = decodeTraces(traces);
+  equal(spans.length, typed.length, 'as many spans');
+  spans.forEach((span, i) => {
+    for (const [key, value] of Object.entries(typed[i])) equal(JSON.stringify(span[key], (k, v) => (typeof v === 'bigint' ? String(v) : v)),
+      JSON.stringify(value, (k, v) => (typeof v === 'bigint' ? String(v) : v)), `span ${i}: ${key}`);
+    equal(Array.isArray(span.links) && span.links.length, 0, 'no links');
+    equal(typeof span.flags, 'number', 'flags');
+    equal(span.scope.name, 'tinyactors', 'the scope');
+    equal(span.scope.attributes['tinyactors.chart.name'], 'c', 'the scope\'s chart');
+    equal(typeof span.resource, 'object', 'the resource');
+  });
+  equal(decodeTraces(traces.buffer.slice(traces.byteOffset, traces.byteOffset + traces.byteLength)).length, spans.length, 'an ArrayBuffer');
+  equal(decodeTraces(new Uint8Array(0)).length, 0, 'no spans');
+  throws(() => decodeTraces(new Uint8Array([255, 255, 255])), (error) => {
+    if (!(error instanceof InvalidError)) throw error;
+  }, 'not a request');
+  throws(() => decodeTraces('bytes'), (error) => {
+    if (!(error instanceof TypeError)) throw error;
+  }, 'not bytes');
 });
 
 test('close hands over the last take: trace.end and what is staged', async () => {

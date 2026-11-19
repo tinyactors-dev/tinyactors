@@ -259,6 +259,7 @@ bool ta_napi_bytes_of(napi_env env, napi_value value, ta_napi_bytes *bytes);
 /* The exports encode(value) and decode(bytes). */
 napi_value ta_napi_encode(napi_env env, napi_callback_info info);
 napi_value ta_napi_decode(napi_env env, napi_callback_info info);
+napi_value ta_napi_decode_traces(napi_env env, napi_callback_info info);
 
 /* ---- host.c: the Host (AGENTS.md, "The binding's memory") ------------- */
 

@@ -63,7 +63,7 @@ napi_status ta_napi_arities(napi_env env, napi_value object, const ta_napi_arity
  * prototype methods (the typed methods' are methods.c's), and of the
  * views' (effects.c). */
 static const ta_napi_arity ta_napi_exported_arities[] = {
-    {"encode", 1},         {"decode", 1}, {"compileCharts", 3}, {"compileSystem", 3}, {"encodeHTTPPost", 1},
+    {"encode", 1},         {"decode", 1}, {"decodeTraces", 1}, {"compileCharts", 3}, {"compileSystem", 3}, {"encodeHTTPPost", 1},
     {"parseHTTPRequest", 1}, {"Host", 2},   {"Address", 1},       {NULL, 0},
 };
 static const ta_napi_arity ta_napi_host_static_arities[] = {{"restore", 3}, {NULL, 0}};
@@ -293,6 +293,7 @@ static napi_value ta_napi_module_init(napi_env env, napi_value exports) {
     napi_property_descriptor properties[] = {
         {"encode", NULL, ta_napi_encode, NULL, NULL, NULL, napi_enumerable, NULL},
         {"decode", NULL, ta_napi_decode, NULL, NULL, NULL, napi_enumerable, NULL},
+        {"decodeTraces", NULL, ta_napi_decode_traces, NULL, NULL, NULL, napi_enumerable, NULL},
     };
     for (uint32_t i = 0; i < sizeof ta_napi_error_names / sizeof ta_napi_error_names[0]; i++) {
         napi_value class;

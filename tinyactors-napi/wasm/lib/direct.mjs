@@ -10,5 +10,5 @@ export {
   CompileError, InvalidError, ResolveError, StaleError, StateError, TinyactorsError, UnsupportedError,
 } from './errors.mjs';
 export { Host, SimulatedClock } from './host.mjs';
-export { encodeHTTPPost, parseHTTPRequest } from './http.mjs';
+export { decodeTraces, encodeHTTPPost, parseHTTPRequest } from './http.mjs';
 export { decode, encode } from './values.mjs';
