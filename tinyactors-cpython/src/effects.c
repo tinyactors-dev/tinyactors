@@ -518,8 +518,43 @@ void ta_python_take(ta_python_host *host, int traces) {
 
 static void ta_python_dispatch_service_send(ta_python_host *host, uint32_t index);
 
+int ta_python_ask_reply(ta_python_host *host, uint32_t index) {
+    static const char prefix[] = TA_PYTHON_ASK_PREFIX;
+    ta_string_view target = ta_host_effect_text(host->host, index, TA_EFFECT_FIELD_TARGET);
+    if (target.length <= sizeof prefix - 1 || memcmp(target.pointer, prefix, sizeof prefix - 1) != 0) return 0;
+    uint64_t handle = 0;
+    for (size_t i = sizeof prefix - 1; i < target.length; i++) {
+        char digit = target.pointer[i];
+        if (digit < '0' || digit > '9' || handle > (UINT64_MAX - 9) / 10) return 1; /* no ask of ours: dropped */
+        handle = handle * 10 + (uint64_t)(digit - '0');
+    }
+    ta_python_ask_row *row = ta_table_get(&host->asks, handle);
+    if (!row) return 1; /* stale: answered, cancelled, or never ours */
+    PyObject *future = row->future;
+    ta_table_remove(&host->asks, handle);
+    ta_python_view *view = ta_python_view_new(host, host->state->send_type, index);
+    PyObject *event = view ? ta_python_send_read(view, TA_PYTHON_SEND_EVENT) : NULL;
+    PyObject *data = event ? ta_python_send_read(view, TA_PYTHON_SEND_DATA) : NULL;
+    PyObject *reply = data ? PyTuple_Pack(2, event, data) : NULL;
+    PyObject *settled = reply ? PyObject_CallMethod(future, "done", NULL) : NULL;
+    PyObject *method = settled && !PyObject_IsTrue(settled) ? PyUnicode_FromString("set_result") : NULL;
+    PyObject *set = method ? PyObject_CallMethodObjArgs(future, method, reply, NULL) /* the pair is one argument */
+                           : Py_NewRef(Py_None);
+    Py_XDECREF(method);
+    if (!set) ta_python_host_keep_error(host);
+    Py_XDECREF(set);
+    Py_XDECREF(settled);
+    Py_XDECREF(reply);
+    Py_XDECREF(data);
+    Py_XDECREF(event);
+    Py_XDECREF((PyObject *)view);
+    Py_DECREF(future);
+    return 1;
+}
+
 static void ta_python_dispatch_send(ta_python_host *host, uint32_t index) {
     uint32_t processor = (uint32_t)ta_host_effect_number(host->host, index, TA_EFFECT_FIELD_IO_PROCESSOR);
+    if (processor == 0 && ta_python_ask_reply(host, index)) return; /* an ask's reply, not the transport's */
     if (processor == TA_NIL) { /* a send to an invoked service: by (segment, token) */
         ta_python_dispatch_service_send(host, index);
         return;

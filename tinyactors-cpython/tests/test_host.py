@@ -456,6 +456,87 @@ class Actors(unittest.TestCase):
         host.close()
 
 
+class Ask(unittest.TestCase):
+    """ask(): a request and its reply, over a send whose origin is an
+    address of the host's own; the reply never reaches the transport."""
+
+    def run_asks(self, datamodel, main):
+        document = fixture("test_host/asked.%s.scxml" % datamodel)
+        transported = []
+
+        async def run():
+            with tinyactors.compile_charts([("asked.scxml", document)]) as compiled:
+                image = compiled.image
+            async with tinyactors.Host(image, system="t", transport=lambda send: transported.append(send.event)) as host:
+                return await main(host)
+
+        result = asyncio.run(run())
+        self.assertEqual(transported, [])
+        return result
+
+    def test_an_actor_answers_to_its_origin(self):
+        async def main(host):
+            actor = host.spawn("asked")
+            first = await actor.ask("question", {"n": 1})
+            both = await asyncio.gather(actor.ask("question", 2), actor.ask("question", "x"))
+            return first, both
+
+        for datamodel in ("python", "ecmascript"):
+            with self.subTest(datamodel=datamodel):
+                first, both = self.run_asks(datamodel, main)
+                self.assertEqual(first, ("answer", {"echo": {"n": 1}}))
+                self.assertEqual(both, [("answer", {"echo": 2}), ("answer", {"echo": "x"})])
+
+    def test_a_cancelled_ask_drops_its_row_and_a_closed_host_its_asks(self):
+        pending = []
+
+        async def main(host):
+            actor = host.spawn("asked")
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(actor.ask("silent"), 0.01)
+            pending.append(actor.ask("silent"))
+            return await actor.ask("question", 3)
+
+        self.assertEqual(self.run_asks("python", main), ("answer", {"echo": 3}))
+        self.assertFalse(pending[0].done())  # pending at close: it never completes
+
+    def test_ask_needs_asyncio_and_a_live_actor(self):
+        host = host_with([("asked.scxml", fixture("test_host/asked.python.scxml"))])
+        actor = host.spawn("asked")
+        with self.assertRaises(TypeError):
+            actor.ask("question")
+        host.close()
+
+        async def main(host):
+            actor = host.spawn("asked")
+            actor.terminate()
+            await host.idle()
+            with self.assertRaises(tinyactors.StaleError):
+                actor.ask("question")
+            return True
+
+        self.assertTrue(self.run_asks("python", main))
+
+
+class Spawning(unittest.TestCase):
+    def test_a_chart_spawns_through_a_spawner(self):
+        logs = Logs()
+        documents = [("workspace.scxml", fixture("test_host/workspace.python.scxml")),
+                     ("room.scxml", fixture("test_host/room.python.scxml"))]
+        host = host_with(documents, {"spawn": tinyactors.Spawner()}, log=logs)
+        workspace = host.spawn("workspace")
+        workspace.send("make", {"chart": "room", "name": "lobby", "params": {"topic": "news"}})
+        host.run_until_idle()
+        room = host.actor("lobby")
+        self.assertEqual(logs.labelled("spawned"), ["s1 lobby %s" % room.address.text])
+        self.assertEqual(logs.labelled("room"), ["lobby news"])
+        for data in ({"chart": "nothing"}, ["room"], {"name": "x"}):
+            workspace.send("make", data)
+        host.run_until_idle()
+        self.assertEqual(logs.labelled("failed"), ["s1"] * 3)
+        host.close()
+
+
 class HandlerErrors(unittest.TestCase):
     def test_on_handler_error_gets_the_error_and_its_effect(self):
         got, logs = [], Logs()

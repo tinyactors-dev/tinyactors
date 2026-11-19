@@ -206,6 +206,17 @@ class Actor:
         method actor_get): its chart, its state, its mailbox and timers."""
         return self.host.actor_get(session=self.id)
 
+    def ask(self, event, data=None):
+        """Send the actor `event` with `data` and return an awaitable of its
+        reply, an (event, data) pair: the chart answers with <send
+        targetexpr="_event.origin" event="..."/>. The event's origin is an
+        address of the host's own (system tinyactors-ask), so the reply
+        comes back here and never reaches your transport. There is no
+        timeout of its own: use asyncio.wait_for, whose cancel drops the
+        ask; asks pending when the host closes never complete. Needs the
+        asyncio driver (TypeError under `with`)."""
+        return self.host._ask(self.id, event, data)
+
     @property
     def done(self):
         """An awaitable of the actor's donedata, settled when it reaches a
@@ -349,6 +360,36 @@ def _signed(session):
     return session - (1 << 64) if session >= 1 << 63 else session
 
 
+class Spawner:
+    """An I/O processor that spawns actors for charts: give it to the host
+    under a type you name, io_processors={"spawn": tinyactors.Spawner()},
+    and a chart spawns with <send type="spawn" event="spawn"> whose data is
+    {"chart": name, "name": name or None, "params": dict or None}.
+
+    The new actor runs the chart's current version (Host.spawn). The
+    sender gets `spawned` with {"name", "address"} (the new actor's
+    address) and the send's sendid, so a <send id> matches its answer; an
+    unknown chart, data of another shape or a spawn the host refuses (a
+    name in use by a live actor, say) gives the sender error.communication
+    instead. A type no processor serves stays error.execution, as SCXML
+    has it."""
+
+    __slots__ = ()
+
+    def receive(self, send):
+        """Spawn what send.data asks for and answer `spawned`, or fail the
+        send (error.communication) when the host cannot."""
+        data = send.data
+        try:
+            if type(data) is not dict or type(data.get("chart")) is not str:
+                raise TypeError("a Spawner's data is {chart, name, params}")
+            actor = send.host.spawn(data["chart"], name=data.get("name"), params=data.get("params"))
+        except (TinyactorsError, TypeError, ValueError, MemoryError):
+            send.fail()
+            return
+        send.answer("spawned", {"name": data.get("name"), "address": actor.address})
+
+
 async def actors(host, chart):
     """Every live actor of the host (actor.list, a page at a time), or
     those of the chart named `chart`."""
@@ -432,7 +473,7 @@ class Diagnostic:
         return "%s:%d:%d: %s: %s" % (self.file, self.line, self.column, self.severity, self.message)
 
 
-for _type in (TinyactorsError, CompileError, ResolveError, Diagnostic, Actor, MemoryStore, SQLiteStore, compile_dir):
+for _type in (TinyactorsError, CompileError, ResolveError, Diagnostic, Actor, MemoryStore, SQLiteStore, Spawner, compile_dir):
     _type.__module__ = "tinyactors"
 
 # ---- the rewrite ---------------------------------------------------------

@@ -45,10 +45,11 @@ layers"):
   use: `Host(charts, system=..., ...)` adds its images at creation;
   I/O processors are objects with `receive(send)`; handlers take no host
   (each view and record has `.host`); `Actor` handles; `store=` and
-  `resident=`; `on_done`, `on_error`, `on_handler_error`; `compile_dir`. It adds no
+  `resident=`; `on_done`, `on_error`, `on_handler_error`; `compile_dir`;
+  `ask`; `Spawner`. It adds no
   request to core. Where it is plain Python over the public calls it
   lives in `src/datamodel/support.py` (`Actor`, `MemoryStore`,
-  `SQLiteStore`, `compile_dir`, `host_config`, `actors`), exported by the module; the
+  `SQLiteStore`, `Spawner`, `compile_dir`, `host_config`, `actors`), exported by the module; the
   rest is C beside the direct layer's (`host.c`, `effects.c`). The
   direct layer's calls stay (`chart`, `add_image`, `sweep`, `hibernate`,
   `wake`, the typed methods), as operator calls for an application with
@@ -164,6 +165,21 @@ Decided by the maintainer (2026-10-13); every item is in
   (`ta_host_resolve`); none: `StaleError`. **`await
   host.actors(chart=None)`**: `actor.list` a page at a time, a chart's
   name read for each with `ta_image_chart_name` (support.py's `actors`).
+- **`ask(event, data=None)`** (2026-11-19, step 8.6 item 6): request
+  and reply over existing calls. A row of the **asks** table (`ta_table`)
+  holds a future of the host's loop; the event goes with `origin`
+  `tinyactors://tinyactors-ask/@<the row's handle>` (a system id the
+  binding reserves: `Host` refuses it as its own); the chart answers
+  with `<send targetexpr="_event.origin">`, a send to another system, and
+  the drain takes it before the transport (`ta_python_ask_reply`): the
+  row found by the handle (a stale one: dropped) settles the future with
+  `(event, data)`. A cancelled future removes its row (a done callback);
+  rows left at close are dropped, never settled; no timeout of its own;
+  `TypeError` under the synchronous driver.
+- **`tinyactors.Spawner()`** (support.py; step 8.6 item 4): an I/O
+  processor whose `receive` spawns `send.data`'s `{chart, name, params}`
+  (`host.spawn`) and answers `spawned` with `{name, address}` (the
+  answer keeps the sendid), or fails the send.
 - **`on_done(actor, donedata)`** and **`on_error(actor, error)`**: every
   top-level actor that ends (`TA_EFFECT_DONE` with its donedata payload,
   `TA_EFFECT_ERROR` with the fault in `FLAGS`, a `TinyactorsError` of
@@ -693,6 +709,7 @@ APIs:
   | sessions | `{instance, chart, extra}`: the instance, its chart's row, the params until the first event or the old bindings after a `deserialize` | `create`, `deserialize` | `destroy` (after `serialize` too: a hibernated session is its blob) |
   | payloads | `{value, refcount}` | `capture`, `from_wire`, an input (`send`, `spawn`'s params, `answer`'s data), `migrate`'s bindings | refcount 0: the last reference is dropped after the outer call into core returns (deferred: dropping it can run Python code) |
   | pending | `{handler, on_error}` of a typed method | the method's call | its `REPLY`'s dispatch; `ta_host_free` (dropped, not called) |
+  | asks | `{future}` of an `ask` | `ask` | its reply's dispatch; its future's cancel; `ta_host_free` (dropped, never settled) |
 
 - **The datamodel's last output.** `to_wire`, `serialize` and
   `payload_serialize` write with a writer the datamodel keeps, overwritten

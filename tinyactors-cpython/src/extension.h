@@ -172,6 +172,15 @@ typedef struct ta_python_pending_row {
     int timers; /* actor.get: its result's timers[].due are the host's ticks, given as seconds */
 } ta_python_pending_row;
 
+/* An ask: a row of the asks table, whose handle names the reply's address
+ * (tinyactors://tinyactors-ask/@<handle>). */
+typedef struct ta_python_ask_row {
+    PyObject *future;
+} ta_python_ask_row;
+
+/* The system id of ask's reply addresses, and their prefix. */
+#define TA_PYTHON_ASK_PREFIX "tinyactors://tinyactors-ask/@"
+
 struct ta_python_host {
     PyObject_HEAD
     ta_python_module_state *state;
@@ -183,6 +192,7 @@ struct ta_python_host {
     ta_datamodel_ecmascript *ecmascript;
     ta_datamodel_binding datamodels[TA_PYTHON_DATAMODELS];
     ta_table pending;                  /* ta_python_pending_row */
+    ta_table asks;                     /* ta_python_ask_row: an ask waiting for its reply */
     uint64_t acks;                     /* batches acknowledged: a view's batch */
     uint64_t ticks_per_second;         /* host.config's system.ticksPerSecond */
     unsigned long thread;              /* the creating thread */
@@ -282,6 +292,12 @@ int ta_python_host_defer(ta_python_host *host, uint64_t session);
 /* A WAKE: the session's blob from the store (store.load), woken
  * (ta_host_wake) and deleted from the store; without a store, nothing. */
 void ta_python_host_load(ta_python_host *host, uint64_t session);
+/* A SEND for the transport whose target is an ask's reply address: the
+ * ask's future settled with (event, data), or a stale one dropped; 1 when
+ * it was one, 0 when the transport gets it. */
+int ta_python_ask_reply(ta_python_host *host, uint32_t index);
+/* Drop every ask: their futures never complete. */
+void ta_python_asks_drop(ta_python_host *host);
 /* An Actor of `session` (support.Actor): a new reference or NULL. */
 PyObject *ta_python_actor_new(ta_python_host *host, uint64_t session);
 /* A session from an int or an Actor of the host: 0, or -1 with an exception. */

@@ -278,7 +278,7 @@ close, but without the last telemetry, so close it.
 **`Actor`**, a small immutable value: `id` (its session), `address`
 (`tinyactors://<system>/#_scxml_<id>`), `host`, and the calls that talk to
 it: `send(event, data=None, *, sendid=None, traceparent=None)`,
-`terminate()`, and under asyncio `await state()`, `context()`, `get()`
+`terminate()`, and under asyncio `await ask(event, data=None)` (below), `await state()`, `context()`, `get()`
 (the typed methods) and `await done`, its donedata when it reaches a
 top-level final state. Two `Actor` values of one session are equal and
 hash alike; the host keeps no table of them, so one is made wherever the
@@ -286,6 +286,25 @@ API gives one. `host.actor(which)` gives the live actor of a session, a
 name it was spawned with, or a local address, and raises `StaleError`
 when none answers; `await host.actors(chart=None)` lists the live ones
 (of one chart). A `Send` names its sending actor as `send.sender`.
+
+**`await actor.ask(event, data=None)`** is a request and its reply: it
+sends the event with an `origin` of the host's own (an address in the
+system id `tinyactors-ask`, which the binding reserves), the chart
+answers with `<send targetexpr="_event.origin" event="...">`, and the
+reply comes back as an `(event, data)` pair, never reaching your
+transport. It has no timeout of its own: `await asyncio.wait_for(
+actor.ask("price"), 5)` cancels the ask, and an ask pending when the
+host closes never completes.
+
+```xml
+<transition event="price">
+  <send targetexpr="_event.origin" event="quote"><content expr="{'total': total}"/></send>
+</transition>
+```
+
+```python
+event, data = await order.ask("price")    # ("quote", {"total": 42})
+```
 
 The host tells you when a top-level actor ends:
 
@@ -398,6 +417,15 @@ class Database:
         else:
             send.fail()
 ```
+
+**Spawning from a chart** is an I/O processor too: `tinyactors.Spawner()`,
+under a type you name (`io_processors={"spawn": tinyactors.Spawner()}`).
+A chart sends it `{chart, name, params}` (`<send type="spawn"
+event="spawn" id="s1"><content expr="{'chart': 'room', 'name': room,
+'params': {...}}"/></send>`); the new actor runs the chart's current
+version, and the sender gets `spawned` with `{name, address}` and the
+send's sendid, or `error.communication` when the host refuses the spawn
+(an unknown chart, data of another shape).
 
 The processor does the I/O and then does one of two things:
 
@@ -1019,7 +1047,8 @@ how to use it.
 | `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs another image (a new version); the current version of a chart |
 | `spawn(chart, name=None, params=None, traceparent=None) -> Actor` | starts an actor of a chart (a name, or a `ChartRef`) |
 | `actor(session, name or address) -> Actor`, `await actors(chart=None)` | a live actor; the live actors |
-| `Actor.id`, `.address`, `.send(...)`, `.terminate()`, `await .state()`, `.context()`, `.get()`, `await .done` | an actor's handle |
+| `Actor.id`, `.address`, `.send(...)`, `.terminate()`, `await .ask(event, data)`, `await .state()`, `.context()`, `.get()`, `await .done` | an actor's handle |
+| `Spawner()` | an I/O processor that spawns actors for charts |
 | `send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)`, `send(message)` | gives an actor an event; `target` is a session, an `Actor` or a local address; a message is another system's `send.message` |
 | `fail(target, sendid=None)` | reports a send that could not be delivered: `error.communication` for its sender |
 | `send_many([(target, event, data, traceparent), ...]) -> accepted` | many sends in one call; returns how many were accepted |

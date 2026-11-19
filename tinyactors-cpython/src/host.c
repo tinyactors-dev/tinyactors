@@ -681,6 +681,8 @@ static PyObject *ta_python_host_build(PyTypeObject *type, const ta_python_option
     host->arena_allocator = ta_growable_arena_allocator(&host->arena);
     ta_table_config pending = {sizeof pending, sizeof(ta_python_pending_row), &host->allocator};
     ta_table_init(&host->pending, &pending);
+    ta_table_config asks = {sizeof asks, sizeof(ta_python_ask_row), &host->allocator};
+    ta_table_init(&host->asks, &asks);
     if (!host->waiters || !host->ending_tasks || !host->done || !host->asked || !host->services || !host->invocations ||
         ta_python_datamodel_init(&host->python, host) < 0) goto fail;
     ta_datamodel_ecmascript_config ecmascript;
@@ -831,6 +833,8 @@ static void ta_python_host_free(ta_python_host *host) {
     host->host = NULL;
     ta_python_pending_drop(host);
     ta_table_free(&host->pending);
+    ta_python_asks_drop(host);
+    ta_table_free(&host->asks);
     if (host->invocations) PyDict_Clear(host->invocations); /* the services are dropped, not stopped */
     if (host->done) PyDict_Clear(host->done);               /* Actor.done never settles */
     if (host->asked) PyDict_Clear(host->asked);
@@ -897,6 +901,10 @@ static int ta_python_host_traverse(PyObject *self, visitproc visit, void *arg) {
         if (!row) continue;
         Py_VISIT(row->handler);
         Py_VISIT(row->on_error);
+    }
+    for (uint32_t slot = 0; slot < host->asks.capacity; slot++) {
+        ta_python_ask_row *row = ta_table_at(&host->asks, slot);
+        if (row) Py_VISIT(row->future);
     }
     return ta_python_datamodel_traverse(&host->python, visit, arg);
 }
@@ -1084,6 +1092,82 @@ static PyObject *ta_python_host_actor(PyObject *self, PyObject *which) {
     PyObject *result = NULL;
     if (status == TA_OK) result = ta_python_actor_new(host, session);
     else if (!PyErr_Occurred()) ta_python_raise_status(host->state, status);
+    ta_python_leave(&call);
+    return result;
+}
+
+/* ---- ask: a request and its reply over a send ---------------------------------- */
+
+void ta_python_asks_drop(ta_python_host *host) {
+    for (uint32_t slot = 0; slot < host->asks.capacity; slot++) {
+        ta_python_ask_row *row = ta_table_at(&host->asks, slot);
+        if (!row) continue;
+        PyObject *future = row->future;
+        ta_table_remove(&host->asks, ta_table_handle(&host->asks, slot));
+        Py_XDECREF(future); /* never completes */
+    }
+}
+
+/* The ask's future is done (cancelled, by asyncio.wait_for say): its row
+ * goes, so a late reply finds a stale handle. `self` is (host, handle). */
+static PyObject *ta_python_ask_done(PyObject *self, PyObject *future) {
+    ta_python_host *host = (ta_python_host *)PyTuple_GetItem(self, 0);
+    uint64_t handle = PyLong_AsUnsignedLongLong(PyTuple_GetItem(self, 1));
+    ta_python_ask_row *row = host->host ? ta_table_get(&host->asks, handle) : NULL;
+    if (row && row->future == future) {
+        ta_table_remove(&host->asks, handle);
+        Py_DECREF(future);
+    }
+    PyErr_Clear();
+    Py_RETURN_NONE;
+}
+
+static PyMethodDef ta_python_ask_done_def = {"done", ta_python_ask_done, METH_O, "An ask's future is done."};
+
+/* _ask(session, event, data): Actor.ask. A row of the asks table holds
+ * the future; the event goes with origin tinyactors://tinyactors-ask/@<the
+ * row's handle>, so the chart's <send targetexpr="_event.origin"> reaches
+ * the transport, where the reply settles the future with (event, data). */
+static PyObject *ta_python_host_ask(PyObject *self, PyObject *arguments) {
+    ta_python_host *host = (ta_python_host *)self;
+    PyObject *session, *event, *data = Py_None;
+    if (!PyArg_ParseTuple(arguments, "OU|O:ask", &session, &event, &data)) return NULL;
+    if (host->loop == Py_None) {
+        PyErr_SetString(PyExc_TypeError, "ask() returns an awaitable, which needs the asyncio driver (async with Host(...))");
+        return NULL;
+    }
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    uint64_t handle = 0;
+    PyObject *future = PyObject_CallMethod(host->loop, "create_future", NULL), *result = NULL;
+    ta_python_ask_row *row = future ? ta_table_add(&host->asks, &handle) : NULL;
+    if (future && !row) PyErr_NoMemory();
+    if (row) {
+        row->future = Py_NewRef(future);
+        PyObject *origin = PyUnicode_FromFormat(TA_PYTHON_ASK_PREFIX "%llu", (unsigned long long)handle);
+        PyObject *send = origin ? PyObject_GetAttrString(self, "send") : NULL;
+        PyObject *positional = send ? PyTuple_Pack(3, session, event, data) : NULL;
+        PyObject *keywords = positional ? Py_BuildValue("{s:O}", "origin", origin) : NULL;
+        PyObject *sent = keywords ? PyObject_Call(send, positional, keywords) : NULL;
+        PyObject *key = sent ? Py_BuildValue("(OK)", self, (unsigned long long)handle) : NULL;
+        PyObject *done = key ? PyCFunction_New(&ta_python_ask_done_def, key) : NULL;
+        PyObject *added = done ? PyObject_CallMethod(future, "add_done_callback", "O", done) : NULL;
+        if (added) result = Py_NewRef(future);
+        else if ((row = ta_table_get(&host->asks, handle))) { /* refused: no reply comes */
+            PyObject *dropped = row->future;
+            ta_table_remove(&host->asks, handle);
+            Py_DECREF(dropped);
+        }
+        Py_XDECREF(added);
+        Py_XDECREF(done);
+        Py_XDECREF(key);
+        Py_XDECREF(sent);
+        Py_XDECREF(keywords);
+        Py_XDECREF(positional);
+        Py_XDECREF(send);
+        Py_XDECREF(origin);
+    }
+    Py_XDECREF(future);
     ta_python_leave(&call);
     return result;
 }
@@ -1966,6 +2050,7 @@ static PyMethodDef ta_python_host_methods[] = {
     {"actors", (PyCFunction)(void (*)(void))ta_python_host_actors, METH_VARARGS | METH_KEYWORDS, ta_python_doc_host_actors},
     {"_chart_of", ta_python_host_chart_of, METH_O, NULL},
     {"_done", ta_python_host_done, METH_O, NULL},
+    {"_ask", ta_python_host_ask, METH_VARARGS, NULL},
     {"spawn", (PyCFunction)(void (*)(void))ta_python_host_spawn, METH_VARARGS | METH_KEYWORDS,
      ta_python_doc_host_spawn},
     {"send", (PyCFunction)(void (*)(void))ta_python_host_send, METH_VARARGS | METH_KEYWORDS,
