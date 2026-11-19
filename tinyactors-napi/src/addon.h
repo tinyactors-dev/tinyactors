@@ -287,7 +287,6 @@ typedef struct ta_napi_chart_row {
     napi_ref functions;   /* its record (datamodel/datamodel.h) */
     const ta_image *image; /* the image it is attached from, until chart_detach */
     uint32_t chart;       /* its index in the image */
-    uint32_t flags;       /* TA_NAPI_CHART_* */
     uint32_t segment;     /* the segment that attached it (ta_datamodel_chart.segment): with
                              `chart`, what names a session's chart in a snapshot, since two
                              segments may run one image */
@@ -501,6 +500,11 @@ napi_value ta_napi_native_value(ta_napi_native *native, ta_payload payload);
  * node as its XML text; a primitive as it is. NULL with an exception
  * pending. */
 napi_value ta_napi_native_exported(ta_napi_native *native, ta_payload payload);
+/* The kit of the realm's script run in the application's realm, made once
+ * per environment: what it makes is the application's (instanceof Array
+ * holds there), and the compile call asks it what a script declares. NULL
+ * with an exception pending. */
+napi_value ta_napi_realm_application(napi_env env);
 /* The drops let go: after the outer call into core returns. */
 void ta_napi_native_flush(ta_napi_native *native);
 /* After ta_host_free: the datamodel's own references and output, with

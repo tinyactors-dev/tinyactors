@@ -250,7 +250,7 @@ test('an actor with a value outside the table fails and stays on version 1', asy
   equal(logs.labelled('n').join('|'), 'v1 1', 'still version 1');
 });
 
-test('native: a declaring chart migrates: its old names go, the new scripts\' are declared', async () => {
+test('native: a chart with a var and a helper migrates: its old names go, the new chart\'s var is declared', async () => {
   if (DATAMODEL !== 'native') return; // quickjs keeps its own globals
   const logs = new Logs();
   const v1 = scxml('counter', `
@@ -277,7 +277,7 @@ test('native: a declaring chart migrates: its old names go, the new scripts\' ar
   await host.idle();
   host.close();
   // fresh is declared (a bare read of it does not throw) and undefined: a
-  // migrated actor's new scripts are instantiated, not run
+  // migrated actor's chart-level scripts do not run again; twice was v1's helper
   equal(logs.labelled('n').join('|'), '9 undefined undefined undefined', 'the old bindings in the data, the old names gone');
 });
 

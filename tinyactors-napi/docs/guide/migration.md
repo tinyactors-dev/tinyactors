@@ -214,14 +214,13 @@ An actor that cannot be written out stays on its version and is in
 the result's `failed`, with its session and the reason,
 `'TA_ERROR_UNSUPPORTED'` for a state that cannot be written out (`host.hibernate`
 of the actor names the variable). On the native datamodel that is one whose variables hold a value
-outside the value table (a function, a `Map`, a `Date`, ...), or whose
-chart's scripts declare with `let`, `const` or `class`, the same actors
-[hibernation](hibernation.md) refuses.
+outside the value table (a function, a `Map`, a `Date`, ...), the same
+actors [hibernation](hibernation.md) refuses.
 
 On the native datamodel the upgrade event's data holds exactly the old
-version's variables. A chart whose scripts declare top-level names gets
-its new version's declarations (its scripts are instantiated, not run),
-and the old names the new version does not declare are gone.
+version's variables. The actor gets the new version's helpers, and the
+new version's `var`s are declared and `undefined` (a migration runs no
+script); the old names the new version does not declare are gone.
 
 ## Most actors hibernated: wake a batch at a time
 

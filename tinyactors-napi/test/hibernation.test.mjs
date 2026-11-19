@@ -248,33 +248,39 @@ test('native: a hibernated actor holds nothing in the engine; its values come ba
   host.close();
 });
 
-test('a chart whose scripts declare: its var and function come back after the wake', async () => {
-  const chart = scxml('declares', `
-    <script>var count = 10; function next() { count = count + 1; return count; }</script>
+test('a chart with helpers: its var comes back with the blob, its helpers with the chart', async () => {
+  const chart = scxml('helpers', `
+    <script>var count = 10; function next(n) { return n + 1; }</script>
     <state id="s">
-      <transition event="tick"><script>next();</script></transition>
-      <transition event="report"><log label="count" expr="String(next())"/></transition>
+      <transition event="tick"><script>count = next(count);</script></transition>
+      <transition event="report"><log label="count" expr="String(next(count))"/></transition>
     </state>`);
   const logs = new Logs();
   const store = new Store();
-  const host = hostWith({ declares: chart }, { log: logs.handler, wake: store.handler });
-  const session = host.spawn(host.chart('declares'));
+  const host = hostWith({ helpers: chart }, { log: logs.handler, wake: store.handler });
+  const session = host.spawn(host.chart('helpers'));
   host.send(session, 'tick');
-  host.send(session, 'tick'); // the var written by the function twice: its last value goes (bun's global is stale)
+  host.send(session, 'tick');
   await host.idle();
-  store.blobs.set(session, host.hibernate(session));
+  const blob = host.hibernate(session);
+  store.blobs.set(session, blob);
   host.send(session, 'report');
   await host.idle();
-  equal(logs.labelled('count').join('|'), '13', 'the var kept, the function made again');
+  equal(logs.labelled('count').join('|'), '13', 'the var kept, the helper the chart\'s');
   host.close();
+  if (DATAMODEL === 'native') {
+    const text = new TextDecoder().decode(blob);
+    if (text.includes('next')) throw new Error('the blob holds the helper');
+  }
 });
 
-test('a chart whose scripts declare with let: native keeps it resident, quickjs hibernates it', async () => {
+test('a script\'s let: native refuses the script and hibernates the actor, quickjs keeps the binding', async () => {
   const chart = scxml('lexical', `
     <script>let count = 10;</script>
     <state id="s">
       <transition event="tick"><script>count = count + 1;</script></transition>
-      <transition event="report"><log label="count" expr="String(count)"/></transition>
+      <transition event="report"><log label="count" expr="typeof count === 'number' ? String(count) : 'none'"/></transition>
+      <transition event="error.execution"><log label="error" expr="_event.name"/></transition>
     </state>`);
   const logs = new Logs();
   const store = new Store();
@@ -282,15 +288,11 @@ test('a chart whose scripts declare with let: native keeps it resident, quickjs 
   const session = host.spawn(host.chart('lexical'));
   host.send(session, 'tick');
   await host.idle();
-  if (DATAMODEL === 'native') {
-    throws(() => host.hibernate(session), (error) => {
-      status('TA_ERROR_UNSUPPORTED')(error);
-      if (!/let, const or class/.test(error.message)) throw new Error(`the message says nothing of let: ${error.message}`);
-    }, 'a let binding');
-  } else store.blobs.set(session, host.hibernate(session));
+  store.blobs.set(session, host.hibernate(session));
   host.send(session, 'report');
   await host.idle();
-  equal(logs.labelled('count').join('|'), '11', 'its binding kept');
+  if (DATAMODEL === 'native') equal(logs.lines.map(([label, text]) => `${label}: ${text}`).join('|'), 'error: error.execution|error: error.execution|count: none', 'refused');
+  else equal(logs.labelled('count').join('|'), '11', 'its binding kept');
   host.close();
 });
 
@@ -472,7 +474,7 @@ test('sweep, hibernate and wake refuse numbers out of range', async () => {
 });
 
 test('a function declared in a transition\'s script, and a \'use strict\' that starts one, hibernate and wake', async () => {
-  // a chart-level var makes the chart declaring: a context per session
+  // a chart-level var is a variable of the session; f is the script's at each run
   const chart = scxml('blocks', `
     <script>var n = 0;</script>
     <state id="s">

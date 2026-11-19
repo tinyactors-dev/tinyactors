@@ -107,10 +107,9 @@ value table ([README](../../README.md#values)): numbers, `bigint`s,
 strings, `Uint8Array`s, arrays, plain objects, `true`, `false`, `null`
 and `undefined`. A variable holding something else (a function, a `Map`,
 a `Date`, a class's instance, an XML document) keeps the actor in memory.
-A chart whose scripts declare top-level names gets a new context at the
-wake: its `var`s come back from the blob and its `function` declarations
-are made again from its scripts. One that declares with `let`, `const`
-or `class` keeps its actors in memory. On quickjs the engine writes its
+A script's top-level `var`s are variables of the actor and come back
+from the blob; a chart-level script's functions are the chart's helpers
+and come back with the chart, not the blob. On quickjs the engine writes its
 own values, so a `Date`, a `Map`, a `Set` or a typed array is stored too
 ([The quickjs sandbox](quickjs.md#what-differs-from-the-native-datamodel)).
 

@@ -294,7 +294,8 @@ test('the README says what no test can show: charts are trusted, deadlines keep 
     ['chart code is trusted, a vm context no boundary, quickjs the sandbox', /Chart code is trusted code\..*not a security boundary.*quickjs, the sandbox/],
     ['a pending deadline keeps the process alive until close()', /pending deadline keeps the process alive.*host\.close\(\)/],
     ['a handler\'s error ends the process by default', /A handler's error ends the process by default.*uncaughtException.*unhandledRejection/],
-    ['let, const or class keeps a chart\'s sessions resident', /let`, `const` or `class` keeps its sessions resident/],
+    ['a script\'s top-level let, const or class is refused, a var the session\'s, a function the chart\'s helper',
+      /chart-level `<script>`'s `function`s are the chart's helpers.*top-level `var` is a variable of the session.*top-level `let`, `const` or `class` is refused/],
     ['the charts of a host share builtins', /The charts of a host share the builtins of its shared context/],
     ['using needs a runtime that parses it', /`using host = new Host\(\.\.\.\)` needs a runtime that parses `using`:\*\* Bun 1\.4 does, Node\.js 22 does not/],
   ]) if (!said.test(readme)) throw new Error(`the README does not say: ${what}`);

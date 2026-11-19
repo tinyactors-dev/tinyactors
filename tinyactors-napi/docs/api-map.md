@@ -126,10 +126,8 @@ it differs today, it says so at the call, never silently:
   clock before each run (`ta_datamodel_ecmascript_wasm_set_time`);
 - the native `"ecmascript"` datamodel runs charts in one realm per host
   (a hidden iframe on a page, the worker's global in a Worker, a
-  `node:vm` context in node and bun), declaring charts in one session
-  function per chart, so an undeclared assignment in a chart-level script
-  lands on that realm and makes `hibernate` and `snapshot` refuse
-  declaring sessions, naming the variable; under a policy that refuses
+  `node:vm` context in node and bun), a scope per session as the addon's;
+  under a policy that refuses
   string evaluation a native host is refused at `new Host`
   (docs/guide/browser.md, "Where charts run" and "What a page needs");
 - a snapshot is labelled `tinyactors-wasm` (the addon's

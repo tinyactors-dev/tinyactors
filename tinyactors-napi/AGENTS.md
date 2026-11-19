@@ -51,8 +51,10 @@ API"). Node's names and shapes (decided 2026-10-16, docs/plan.xml):
   a compile call that also parses every expression and script of an
   `"ecmascript"` chart with the engine (`new vm.Script` in the native
   datamodel's shapes, nothing run; 2026-10-18,
-  l-p4-examples-iot-syntax-unchecked), each syntax error a warning
-  diagnostic at its element's line, an error with `{warningsAsErrors}`
+  l-p4-examples-iot-syntax-unchecked), each syntax error, and each
+  top-level declaration of a script ("The native "ecmascript"
+  datamodel"), a warning diagnostic at its element's line, an error with
+  `{warningsAsErrors}`
   (core's `TA_COMPILE_WERROR`), since SCXML makes such an expression an
   `error.execution` at its evaluation (W3C 156, 277, 309, 312, 344, 487,
   488, 528 have them); `addImage(image)` returning the segment
@@ -547,23 +549,51 @@ d-dom, d-separate):
   host holds one: `new Host(config, {datamodel: "native" | "quickjs"})`,
   and a host that names none gets `"native"`, the maintainer's exception
   to "no defaults of our own" ("it's what most people will expect").
-- **Charts evaluate in `node:vm` contexts, never the application's
-  realm.** One shared context per host's native datamodel holds the
-  charts that declare nothing at the top of their scripts; each of their
-  sessions is a scope object inside it. A chart whose scripts declare
-  top-level names (`var`, `function`, `let`, `const`, `class`) gets a
-  context per session, where a script runs as global code and closures
-  work (about 143 KB a session on node, 60 KB on bun). Which charts
-  declare is asked of the engine at `chart_attach` (the script after
-  `throw 0;` in a scratch context: the global's new names, and a
-  redeclaration error for lexical ones): the addon parses no JavaScript.
-  Pre-declaring names on a scope and copying bindings out is refused: a
-  script's functions close over its own `var`s.
+- **Charts evaluate in one `node:vm` context per host, never the
+  application's realm**, and each session is a scope object inside it,
+  whatever its chart's scripts declare (the maintainer, 2026-11-19: "cut
+  the declaring-chart context, keep native as default"; the context per
+  session of a declaring chart cost about 143 KB on node and 60 KB on
+  bun, and one that declared with `let`, `const` or `class` could never
+  hibernate). What a script declares at its top level is asked of the
+  engine, in the context, by the kit's `script` (`realm.js`; the addon
+  parses no JavaScript): a candidate name is declared when the script
+  followed by `let <name>` does not parse as a strict function body,
+  lexically when the script followed by `var <name>` does not either, and
+  a function when `typeof` reads one before any statement runs.
+  - A chart-level script's (`TA_EXPRESSION_GLOBAL_SCRIPT`'s) functions
+    are the chart's helpers, made once per chart at `chart_attach` from
+    the script's text (`'use strict';return {f, ...};` ahead of it, no
+    statement run) onto its scopes' prototype, so every expression of the
+    chart's sessions sees them through `with (scope)` and no other chart
+    does. A helper closes over the context's globals only: it takes the
+    session's variables as arguments. Its other statements run once per
+    session, as SCXML runs a chart-level script, the helpers visible.
+  - A script's top-level `var`s are variables of the session: on the
+    chart's shape, read from the scope before the script runs and written
+    back after (`try { ... } finally { ... }` around it), so W3C 302, 303
+    and 304 hold and a `var` hibernates as a `<data>` does.
+  - A top-level `let`, `const` or `class`, in any script, refuses the
+    script: each evaluation of it is `error.execution`, the message
+    naming the `<data id>` to declare instead. Inside a block or a
+    function they are the script's own.
+  - A function a script of executable content declares is that run's,
+    local to the strict function the script runs in.
+  - The compile call reports each top-level `let`, `const` or `class`,
+    and each top-level `var` (a variable of the session), as a warning at
+    the script's line, an error with `{warningsAsErrors}`, asked of the
+    application's kit (`advice`): it is not refused at compile time, since
+    the compile call cannot know which
+    datamodel will run the image, and quickjs runs a declaring script as
+    global code (refusing it there would refuse quickjs's charts too);
+    SCXML makes a bad script an `error.execution` at its evaluation.
 - **A scope is shaped once per chart:** a per-chart constructor whose
   properties are, from the start, the `<data>` ids, the names a
-  `<foreach>`'s item and index and a script's assignments bind, the
+  `<foreach>`'s item and index and a script's top-level `var`s bind, the
   session's link and `_event`, over a frozen prototype of null prototype
-  holding the system variables as read-only accessors (V8 makes an
+  holding the system variables as read-only accessors (and, for a chart
+  with helpers, a frozen prototype of the chart's own over it holding
+  them) (V8 makes an
   `Object.create(null)` object a dictionary: 280 B against 56 to 64 B).
   `_event` is a non-writable data property redefined at each
   `bind_event`.
@@ -598,26 +628,11 @@ d-dom, d-separate):
   next call; core puts the bytes in the blob and calls `destroy`, which
   removes the row, so a hibernated session holds nothing in the engine.
   The ids live in the session's row (set at `bind_event`), not on the
-  frozen `_event`. A shared chart's variables are its scope's own names
-  but `_event`; a declaring session's are the names its chart and scripts
-  put on its global (the realm's baseline and the system variables left
-  out), and a name the chart's scripts declare as a function is left out
-  while it holds a function: a top-level `function`, and one declared in a
-  script of executable content, which runs as a sloppy block and so makes
-  a var of the global (Annex B) that the script fills again at each run
-  (found at `chart_attach` as the names a strict instantiation of the
-  scripts, in a second scratch context, does not make). A script of
-  executable content that starts with a `'use strict'` directive runs as a
-  strict block (`'use strict';{ ... }`), since a block takes no
-  directive. `deserialize` makes a new scope, or for a
-  declaring chart a new context in which every script of the chart is
-  instantiated again without running a statement (`throw 0;` ahead, the
-  probe `chart_attach` already compiles, kept in the chart's record), so
-  its function declarations exist again before the variables are copied
-  in with the context's constructors. A chart whose scripts declare with
-  `let`, `const` or `class` refuses (`TA_ERROR_UNSUPPORTED`): a new
-  context cannot be given those bindings again (a binding instantiated
-  and never run stays in its TDZ). A value outside the table (a function,
+  frozen `_event`. A session's variables are its scope's own names but
+  `_event`; the chart's helpers are the chart's, on its prototype, and
+  never written. `deserialize` makes a new scope and copies the blob's
+  variables its chart declares into it with the context's constructors.
+  A value outside the table (a function,
   a `Map`, a `Date`, a class's instance, an XML document) refuses too, and
   the datamodel keeps why (the variable's name and the value table's
   message) for `host.hibernate`'s error, as quickjs's `last_error` does.
@@ -634,12 +649,10 @@ d-dom, d-separate):
   spawn's params wait, until the first event or `migrate` takes it, as
   Python's `row->extra` holds them (no field in the session's row: the
   link is the session's already). `migrate` answers them, exactly the old
-  chart's variables, as one payload copied into the shared context; on a
-  declaring session's global it also deletes the names the blob added
-  that the new chart's declarations did not make (`restore` keeps them on
-  the link as `added`). The new chart's scripts are instantiated in the
-  new context, not run: a `var` they declare is there, `undefined`, and
-  core initializes the new chart's added `<data>`.
+  chart's variables, as one payload copied into the shared context. The
+  new scope has the new chart's names and helpers; no script runs: a
+  `var` the new chart's scripts declare is there, `undefined`, and core
+  initializes the new chart's added `<data>`.
 - **Snapshots write every row out** (decided 2026-10-16, as the Python
   binding's "Snapshots of the datamodel"; docs/plan.xml, p2-snapshot).
   `host.snapshot()` checks quiescence first (`ta_host_snapshot` with an
@@ -654,7 +667,7 @@ d-dom, d-separate):
   (`ta_datamodel_chart.segment`, kept in the chart's row: two segments may
   run one image), its variables as hibernation writes them, its `_event`
   with core's ids, its link's `_sessionid`, `_name` and processors, its
-  params and the names a wake added, a payload's value and references, a
+  params, a payload's value and references, a
   `<foreach>`'s items, each value as CBOR bytes of its own so a value
   nests as deep as in a send. What hibernation refuses the snapshot
   refuses (`TA_ERROR_UNSUPPORTED`, the message naming the variable), and
@@ -672,10 +685,7 @@ d-dom, d-separate):
   effective config's `systemID` the pack's (`TA_ERROR_INVALID`). The
   clock goes on from the snapshot's time: the ticks it reads carry an
   offset (`ticks_offset`, mod 2^64) set at the restore, whatever clock
-  reads them. A declaring session's globals are read by their names
-  (`(0, eval)(name)` in its context), for hibernation, migration and
-  snapshots alike: bun's vm context leaves a global's property stale after
-  a function writes its `var` (spike, bun 1.4.1, 2026-10-16).
+  reads them.
 - **Measured cost per session** (`mise run measure`, 2026-10-17: x86_64
   Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3 with V8
   12.4, bun 1.4.1; 10,000 actors of a chart with three `<data>`, one of
@@ -762,6 +772,30 @@ file.
   Tests: `test/datamodel.test.mjs: 'the scope refuses an undeclared
   assignment, a system variable and _event'` and `'a syntax error is its
   own evaluation's error.execution: the chart's other expressions run'`.
+- **A script's top-level declarations are the session's or the chart's,
+  never a context of their own:** a chart-level script's functions are
+  its chart's helpers, made once and on its prototype only, seeing no
+  session variable by name; a top-level `var` is a variable of the
+  session, kept between runs and hibernated; a top-level `let`, `const` or
+  `class` is the script's `error.execution`, and the compile call reports
+  each at the script's line. Tests: `test/datamodel.test.mjs: 'a
+  chart-level script's functions are the chart's helpers (W3C 452), its
+  top-level var the session's'`, `'a script's top-level var is a variable
+  of the session, kept between its runs (W3C 303)'`, `'the native
+  datamodel refuses a script's top-level let, const and class:
+  error.execution, naming <data>'`, `'the native datamodel: helpers see no
+  session variable, and are their chart's alone'` and `'the native
+  datamodel: a function a script of executable content declares is that
+  run's'`; `test/compile.test.mjs: 'compileCharts reports a script's
+  top-level declarations at the script's line: let, const and class
+  refused, var a variable, both naming <data>'`;
+  `test/hibernation.test.mjs: 'a chart with helpers: its var comes back
+  with the blob, its helpers with the chart'` and `'a script's let: native
+  refuses the script and hibernates the actor, quickjs keeps the
+  binding'`; `test/snapshot.test.mjs: 'a chart with a var and a helper:
+  the var comes back with the snapshot, the helper with the chart'`;
+  `test/migration.test.mjs: 'native: a chart with a var and a helper
+  migrates: its old names go, the new chart's var is declared'`.
 - **One handle scope per vtable entry:** a run is one native call, so
   handles opened by the entries would pile up until it returns
   (`napi_open_handle_scope` around each entry). No test: handles live
@@ -929,10 +963,11 @@ file.
   deadline keeps the process alive while the host is open (bindings.md,
   section 11), that a handler's error ends the process by default, and
   that `using` needs a runtime that parses it (bun 1.4 does, node 22 does
-  not); and (decided 2026-10-17, l-coord-decisions) that a chart whose
-  scripts declare with `let`, `const` or `class` keeps its sessions
-  resident, that the charts of a host share the builtins of its shared
-  context; and its services guide (`docs/guide/services.md`) that a
+  not); and (decided 2026-10-17, l-coord-decisions; 2026-11-19) that a
+  chart-level script's functions are the chart's helpers, a script's
+  top-level `var` a variable of the session and its top-level `let`,
+  `const` or `class` refused, that the charts of a host share the builtins
+  of its shared context; and its services guide (`docs/guide/services.md`) that a
   service handler returns the service or a promise of it, with the
   pattern of a service whose methods await its own start.
   Tests: `test/rules.test.mjs: 'the README says what no test can

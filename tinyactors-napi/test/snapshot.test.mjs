@@ -297,13 +297,13 @@ test('restore refuses another system\'s config, another datamodel, another progr
   throws(() => restore(relabelled), status('TA_ERROR_INVALID'), "another program's label");
 });
 
-test('a declaring chart: its var and function come back after a restore', async () => {
+test('a chart with a var and a helper: the var comes back with the snapshot, the helper with the chart', async () => {
   const logs = new Logs();
   const declaring = scxml('decl', `
-  <script>var total = 0; function bump(k) { total += k; return total; }</script>
+  <script>var total = 0; function bump(t, k) { return t + k; }</script>
   <state id="s">
-    <transition event="add"><script>bump(_event.data)</script></transition>
-    <transition event="report"><log label="total" expr="total + ' ' + bump(0) + ' ' + _event.name"/></transition>
+    <transition event="add"><script>total = bump(total, _event.data)</script></transition>
+    <transition event="report"><log label="total" expr="total + ' ' + bump(total, 0) + ' ' + _event.name"/></transition>
   </state>`);
   let host = new Host(CONFIG, { ...ENGINE, clock: new SimulatedClock() });
   host.addImage(image({ decl: declaring }));
@@ -319,7 +319,7 @@ test('a declaring chart: its var and function come back after a restore', async 
   await host.idle();
   const again = host.snapshot();
   host.close();
-  equal(logs.labelled('total').join('|'), '9 9 report', 'its var and function');
+  equal(logs.labelled('total').join('|'), '9 9 report', 'its var and its helper');
   if (again.length === 0) throw new Error('no snapshot of the restored host');
 });
 

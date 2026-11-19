@@ -173,8 +173,7 @@ static const char ta_napi_checker_source[] =
 
 /* The shapes the native datamodel evaluates in (datamodel/expressions.c):
  * the source always starts on the shape's second line. A script is checked
- * as the sloppy global code or block a declaring chart runs it as, which
- * refuses no less than the parser does. */
+ * as the strict function body it runs as. */
 typedef struct ta_napi_shape {
     const char *prefix, *suffix;
     const char *what;
@@ -184,24 +183,15 @@ static const ta_napi_shape ta_napi_value_shape = {"(function(){'use strict';retu
 
 static bool ta_napi_shape_of(const ta_expression_info *info, ta_napi_shape *shape) {
     static const ta_napi_shape location = {"(function(__v){'use strict';(\n", "\n) = __v;})", "location"};
-    static const ta_napi_shape global = {"\n", "", "<script>"}, block = {"{\n", "\n}", "<script>"};
-    static const ta_napi_shape strict_block = {"'use strict';{\n", "\n}", "<script>"};
+    static const ta_napi_shape script = {"(function(){'use strict';\n", "\n})", "<script>"};
     switch (info->kind) {
     case TA_EXPRESSION_CONDITION: *shape = ta_napi_value_shape; shape->what = "cond"; return true;
     case TA_EXPRESSION_VALUE:
     case TA_EXPRESSION_STRING: *shape = ta_napi_value_shape; return true;
     case TA_EXPRESSION_LOCATION: *shape = location; return true;
     case TA_EXPRESSION_ITEM: *shape = location; shape->what = "item"; return true;
-    case TA_EXPRESSION_GLOBAL_SCRIPT: *shape = global; return true;
-    case TA_EXPRESSION_SCRIPT: {
-        uint32_t at = 0;
-        const char *p = info->source.pointer;
-        while (at < info->source.length && (p[at] == ' ' || p[at] == '\t' || p[at] == '\n' || p[at] == '\r')) at++;
-        bool directive = info->source.length - at >= 12 && (p[at] == '\'' || p[at] == '"') &&
-                         memcmp(p + at + 1, "use strict", 10) == 0 && p[at + 11] == p[at];
-        *shape = directive ? strict_block : block;
-        return true;
-    }
+    case TA_EXPRESSION_GLOBAL_SCRIPT:
+    case TA_EXPRESSION_SCRIPT: *shape = script; return true;
     default: return false; /* <content>: JSON, XML or text, not ECMAScript */
     }
 }
@@ -228,7 +218,8 @@ typedef struct ta_napi_checking {
 
 /* Where a diagnostic is: the chart's file, its expression. */
 typedef struct ta_napi_checked {
-    napi_value failure; /* the checker's [message, line, column] */
+    napi_value failure; /* the checker's [message, line, column], or [advice, 2, 1] */
+    bool syntax;        /* a SyntaxError (else the kit's advice on a declaration) */
     ta_string_view file;
     const ta_expression_info *info;
     const ta_napi_shape *shape;
@@ -266,8 +257,9 @@ static bool ta_napi_check_report(napi_env env, const ta_napi_checked *at, ta_nap
     }
     size_t used = strlen(at->shape->what);
     memcpy(written, at->shape->what, used);
-    memcpy(written + used, ": SyntaxError: ", 15);
-    used += 15;
+    const char *label = at->syntax ? ": SyntaxError: " : ": ";
+    memcpy(written + used, label, strlen(label));
+    used += strlen(label);
     if (text.view.length) memcpy(written + used, text.view.pointer, text.view.length);
     used += text.view.length;
     ta_diagnostic diagnostic = {checking->errors ? TA_DIAGNOSTIC_ERROR : TA_DIAGNOSTIC_WARNING, 0,
@@ -279,6 +271,27 @@ static bool ta_napi_check_report(napi_env env, const ta_napi_checked *at, ta_nap
         return false;
     return item != NULL && napi_get_array_length(env, checking->found, &length) == napi_ok &&
            napi_set_element(env, checking->found, length, item) == napi_ok;
+}
+
+/* A script's top-level declarations, asked of the application's kit (its
+ * `advice`): a let, const or class the native datamodel refuses, or a var
+ * it makes a variable of the session, reported at the script's line. */
+static bool ta_napi_check_declarations(napi_env env, const ta_napi_checked *at, ta_napi_checking *checking) {
+    napi_value kit = ta_napi_realm_application(env), function, source, advice, failure, number;
+    napi_valuetype type = napi_null;
+    if (kit == NULL || napi_get_named_property(env, kit, "advice", &function) != napi_ok ||
+        napi_create_string_utf8(env, at->info->source.pointer != NULL ? at->info->source.pointer : "", at->info->source.length,
+                                &source) != napi_ok ||
+        napi_call_function(env, kit, function, 1, &source, &advice) != napi_ok || napi_typeof(env, advice, &type) != napi_ok)
+        return false;
+    if (type != napi_string) return true;
+    if (napi_create_array_with_length(env, 3, &failure) != napi_ok || napi_set_element(env, failure, 0, advice) != napi_ok ||
+        napi_create_uint32(env, 2, &number) != napi_ok || napi_set_element(env, failure, 1, number) != napi_ok ||
+        napi_create_uint32(env, 1, &number) != napi_ok || napi_set_element(env, failure, 2, number) != napi_ok)
+        return false;
+    ta_napi_checked found = *at;
+    found.failure = failure;
+    return ta_napi_check_report(env, &found, checking);
 }
 
 /* Every expression and script of the image's "ecmascript" charts parsed
@@ -316,7 +329,11 @@ static bool ta_napi_check_image(napi_env env, ta_string_view bytes, ta_napi_chec
                       napi_call_function(env, undefined, checking->checker, 1, &argument, &failure) == napi_ok;
             napi_valuetype type = napi_null;
             if (ok && napi_typeof(env, failure, &type) == napi_ok && type == napi_object)
-                ok = ta_napi_check_report(env, &(ta_napi_checked){failure, ta_image_chart_source(&image, c), &info, &shape}, checking);
+                ok = ta_napi_check_report(env, &(ta_napi_checked){failure, true, ta_image_chart_source(&image, c), &info, &shape},
+                                          checking);
+            else if (ok && script) /* it parses: a top-level declaration the native datamodel refuses or keeps */
+                ok = ta_napi_check_declarations(env, &(ta_napi_checked){NULL, false, ta_image_chart_source(&image, c), &info, &shape},
+                                                checking);
             if (ok && checking->first != before && napi_escape_handle(env, scope, checking->first, &checking->first) != napi_ok)
                 ok = false;
             napi_close_escapable_handle_scope(env, scope);

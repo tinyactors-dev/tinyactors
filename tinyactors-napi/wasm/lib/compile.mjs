@@ -18,7 +18,10 @@
 // After a compilation that succeeded, every expression and script of an
 // "ecmascript" chart is parsed by the engine in the native datamodel's
 // shapes, nothing run (the addon's check): each syntax error a warning at
-// its line, an error with warningsAsErrors. The parser is node:vm's Script
+// its line, an error with warningsAsErrors, and so is a script's top-level
+// declaration the native datamodel refuses (let, const, class) or makes a
+// variable of the session (var), asked of the application's kit (realm.js,
+// `advice`). The parser is node:vm's Script
 // in node and bun (the addon's), the realm's Function in a browser, where
 // a page finds the error's line and column by a <script> element that
 // does not parse (it runs nothing: the source is inside a function
@@ -26,7 +29,7 @@
 // policy that refuses string evaluation (realms.mjs, policyRefusal) the
 // check is skipped: the native datamodel cannot run there either.
 import { CompileError, ResolveError, TinyactorsError, refusal } from './errors.mjs';
-import { policyRefusal } from './realms.mjs';
+import { application, policyRefusal } from './realms.mjs';
 import { instance } from './state.mjs';
 
 const SEVERITIES = ['note', 'warning', 'error'];
@@ -183,15 +186,15 @@ const VALUE_SHAPE = ["(function(){'use strict';return (\n", '\n);})', 'expr'];
 
 // The shape an expression is checked in (the datamodel's own), or null
 // for <content> (JSON, XML or text, not ECMAScript).
-function shapeOf(kind, source) {
+function shapeOf(kind) {
   switch (kind) {
   case KIND.CONDITION: return [VALUE_SHAPE[0], VALUE_SHAPE[1], 'cond'];
   case KIND.VALUE:
   case KIND.STRING: return VALUE_SHAPE;
   case KIND.LOCATION: return ["(function(__v){'use strict';(\n", '\n) = __v;})', 'location'];
   case KIND.ITEM: return ["(function(__v){'use strict';(\n", '\n) = __v;})', 'item'];
-  case KIND.GLOBAL_SCRIPT: return ['\n', '', '<script>'];
-  case KIND.SCRIPT: return /^[ \t\n\r]*(['"])use strict\1/.test(source) ? ["'use strict';{\n", '\n}', '<script>'] : ['{\n', '\n}', '<script>'];
+  case KIND.GLOBAL_SCRIPT:
+  case KIND.SCRIPT: return ["(function(){'use strict';\n", '\n})', '<script>'];
   default: return null;
   }
 }
@@ -263,11 +266,15 @@ function checkImage(module, result, errors) {
       if (module.call('ta_web_image_expression', module.env, image, e) !== 0) continue;
       const x = module.words().slice(module.record, module.record + 6);
       const info = { kind: x[1], line: x[2], column: x[3], source: module.string(x[4], x[5]) };
-      const shape = shapeOf(info.kind, info.source);
+      const shape = shapeOf(info.kind);
       if (shape === null) continue;
       const script = info.kind === KIND.SCRIPT || info.kind === KIND.GLOBAL_SCRIPT;
       const source = script ? info.source : info.source.replace(/[; \t\n\r]+$/, '');
-      const failure = checker(shape[0] + source + shape[1]);
+      let failure = checker(shape[0] + source + shape[1]), label = 'SyntaxError: ';
+      if (failure === null && script) { // it parses: a top-level declaration the native datamodel refuses or keeps
+        const advice = application().advice(info.source);
+        if (advice !== null) [failure, label] = [[advice, 2, 1], ''];
+      }
       if (failure === null) continue;
       const [message, inShape] = failure;
       let column = failure[2];
@@ -283,7 +290,7 @@ function checkImage(module, result, errors) {
         file,
         line: info.line + sourceLine - 1,
         column: sourceLine === 1 ? info.column : column,
-        message: `${shape[2]}: SyntaxError: ${message}`,
+        message: `${shape[2]}: ${label}${message}`,
       }));
     }
   }

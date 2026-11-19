@@ -172,25 +172,14 @@ sandbox. Its realm is the host's own, made at its first chart:
 | a Worker | the worker's own global (a Worker has no `document`) |
 | Node.js, Bun | a `node:vm` context, as in `@tinyactors/node` |
 
-A chart whose scripts declare nothing has a scope object per session in
-that realm, as in `@tinyactors/node`. A chart whose scripts declare
-(`var`, `function`, `let`, `const`, `class`) gets one function per chart,
-which each session calls: its declarations are the session's own and its
-functions close over them, for a few hundred bytes a session where
-`@tinyactors/node` makes a `vm` context of 60 to 143 KB. Two things differ
-from `@tinyactors/node`, and both are found, never silent:
-
-- **An assignment to a name nobody declared**, in a chart-level
-  `<script>` (`visits = 0` with no `var`), puts the name on the host's
-  realm, shared by every session and chart of the host, where
-  `@tinyactors/node` gives it to the session. The host then refuses to
-  hibernate or snapshot the sessions of declaring charts, naming the
-  variable, rather than lose it. Declare every variable: a `<data>`, or
-  `var` in a chart-level script.
-- **A function declared inside a block** of a transition's script (`if
-  (x) { function f() {} }`) is a variable of the session only once that
-  script ran, and hibernation does not keep it. Declare functions at the
-  top of a chart-level script.
+Each session is a scope object in that realm, as in `@tinyactors/node`,
+and a script's top-level declarations mean what they mean there
+([Writing charts](charts.md#scripts)): a chart-level script's
+`function`s are the chart's helpers, made once, a top-level `var` is a
+variable of the session, and `let`, `const` and `class` at a script's top
+level are refused. Scripts and expressions run as strict code, so an
+assignment to a name nobody declared is the script's `error.execution`,
+never a variable of the realm:
 
 ```js
 import { compileCharts, Host } from '@tinyactors/wasm';
@@ -199,11 +188,14 @@ const chart = (name, script) => `
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
        datamodel="ecmascript" name="${name}" initial="s">
   <script>${script}</script>
-  <state id="s"><transition event="visit"><script>visit()</script><log expr="'${name}: ' + visits"/></transition></state>
+  <state id="s">
+    <transition event="visit"><script>visits = next(visits)</script><log expr="'${name}: ' + visits"/></transition>
+    <transition event="error.execution"><log expr="'${name}: ' + _event.data.message.split(':')[0]"/></transition>
+  </state>
 </scxml>`;
 const compiled = compileCharts([
-  { name: 'declared.scxml', text: chart('declared', 'var visits = 0; function visit() { visits += 1; }') },
-  { name: 'undeclared.scxml', text: chart('undeclared', 'visits = 0; function visit() { visits += 1; }') },
+  { name: 'declared.scxml', text: chart('declared', 'var visits = 0; function next(n) { return n + 1; }') },
+  { name: 'undeclared.scxml', text: chart('undeclared', 'visits = 0; function next(n) { return n + 1; }') },
 ]);
 const host = new Host({ systemID: 'web' }, { log: (host, entry) => console.log(entry.text) });
 host.addImage(compiled.image);
@@ -216,31 +208,16 @@ host.wake(declared, host.hibernate(declared)); // out of memory and back, its vi
 host.send(declared, 'visit');
 await host.idle();
 
-const undeclared = host.spawn(host.chart('undeclared'));
-host.send(undeclared, 'visit');
+host.spawn(host.chart('undeclared'));
 await host.idle();
-try {
-  host.hibernate(undeclared);
-} catch (error) {
-  console.log('stays resident:', error.status, /'visits'.*declare it/.test(error.message));
-}
 host.close();
 ```
 
 ```output
 declared: 1
 declared: 2
-undeclared: 1
-stays resident: TA_ERROR_UNSUPPORTED true
+undeclared: ReferenceError
 ```
-
-The rest of [Writing charts](charts.md#scripts) holds as it is: a chart
-whose chart-level scripts declare with `let`, `const` or `class` keeps its
-sessions resident, and a chart-level script that starts with
-`'use strict'`, or a strict transition script that declares a `var`, is
-refused when the image is added (one function cannot keep it). A
-chart-level script that throws ends that session's chart-level scripts:
-its `error.execution` says the later ones did not run.
 
 ## A dedicated Worker
 

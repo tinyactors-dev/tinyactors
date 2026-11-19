@@ -60,7 +60,7 @@ test('the module in a Chromium page and a module Worker, through both entries', 
 // Worker's in its own global. Under a policy that refuses string
 // evaluation, a host on the native datamodel is refused at its creation,
 // naming the directive, and compileCharts skips its syntax check.
-const NATIVE_LOGS = ['count=1:1', 'count=2:1', 'realm=iframe', 't=12:2:2', 't=14:3:2'];
+const NATIVE_LOGS = ['count=1:1', 'count=2:1', 'realm=iframe', 't=12:6:function', 't=14:7:function'];
 
 test('the native datamodel in a page (an iframe per host) and a Worker (its own global)', async () => {
   const pw = playwright();

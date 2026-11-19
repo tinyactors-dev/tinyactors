@@ -222,4 +222,31 @@ test('compileCharts parses each expression and script: a syntax error is a warni
   equal(refused instanceof TypeError, true, 'options are an object');
 });
 
+test('compileCharts reports a script\'s top-level declarations at the script\'s line: let, const and class refused, var a variable, both naming <data>', () => {
+  const text = [
+    '<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="declares" initial="s">',
+    '  <script>',
+    '    function helper(x) { return x + 1; }',
+    '    var total = 0;',
+    '  </script>',
+    '  <state id="s">',
+    '    <transition event="go"><script>const LIMIT = 2; { let local = 1; }</script></transition>',
+    '    <transition event="fine"><script>function local() {} for (let i = 0; i &lt; 2; i++) total = helper(total);</script></transition>',
+    '  </state>',
+    '</scxml>'].join('\n');
+  const compiled = compileCharts([{ name: 'declares.scxml', text }]);
+  const found = compiled.diagnostics.filter((d) => /declares/.test(d.message)).sort((a, b) => a.line - b.line);
+  compiled.close();
+  equal(found.map((d) => [d.severity, d.line].join()).join('|'), 'warning,2|warning,7', 'the var, then the const, each at its script');
+  equal(found[0].message, '<script>: a <script> declares var total at its top level, which the native "ecmascript" datamodel ' +
+    'makes a variable of the session: declare it with <data id="total"/> instead', 'the var');
+  equal(found[1].message, '<script>: a <script> declares LIMIT with let, const or class at its top level, which the native ' +
+    '"ecmascript" datamodel refuses (the script is error.execution): declare it with <data id="LIMIT"/> instead', 'the const');
+  let error;
+  try { compileCharts([{ name: 'declares.scxml', text }], undefined, { warningsAsErrors: true }); } catch (caught) { error = caught; }
+  equal(error instanceof CompileError, true, 'a CompileError');
+  equal(error.diagnostics.filter((d) => d.severity === 'error' && /declares/.test(d.message)).length, 2, 'both, as errors');
+  if (!/^declares\.scxml:\d+:\d+: error: <script>: a <script> declares /.test(error.message)) throw new Error(error.message);
+});
+
 await run();

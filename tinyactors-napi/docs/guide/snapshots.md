@@ -109,8 +109,7 @@ The host must be quiescent. `snapshot()` throws a `TinyactorsError` with
 typed method's reply has not been handled yet (`await host.idle()`
 first), and while a migration runs. It throws `TA_ERROR_UNSUPPORTED` when
 an actor holds what hibernation cannot store (on the native datamodel a
-function, a `Map`, a `Date`, ..., or an actor of a chart whose scripts
-declare with `let`, `const` or `class`); the message names the variable.
+function, a `Map`, a `Date`, ...); the message names the variable.
 The host goes on either way.
 
 ```js

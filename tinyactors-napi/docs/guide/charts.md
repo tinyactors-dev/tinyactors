@@ -93,21 +93,30 @@ heater stays on: at 18°C the heater is turning on, and the recorder logs
 
 ## Scripts
 
-`<script>` runs statements: in a transition, in `<onentry>`, or at the top
-of the chart, once when an actor starts. A chart-level script is where a
-chart's helper functions go, and how it declares them decides what each
-actor costs.
+`<script>` runs statements: in a transition, in `<onentry>` or
+`<onexit>`, or at the top of the chart, once when an actor starts. On the
+native datamodel, every actor of a host runs in one context the host
+shares, as an object of its own, and what a script declares at its top
+level decides what it means:
 
-**A script in a transition, `<onentry>` or `<onexit>` runs in a block**,
-as a function body would: its top-level `let`, `const` and `class` are
-its own at each run, so it runs again and again, and they declare nothing
-for the chart. Its `var`s are the actor's, as a chart-level script's are.
+- **`function`, in a chart-level script, is a helper of the chart.** It
+  is made once for the chart, not per actor, and every expression and
+  script of the chart's actors can call it; another chart's cannot. A
+  helper sees no actor's variables by name: pass it what it reads.
+- **`function`, in a script of executable content,** is that run's own,
+  gone when the script ends.
+- **`var` declares a variable of the actor**, as a `<data>` does: it is
+  read before the script runs and written back after, so it keeps its
+  value between runs and is hibernated with the actor.
+- **`let`, `const` and `class` are refused:** the script is
+  `error.execution` each time it runs, and `compileCharts` warns of it at
+  the script's line. Inside a block or a function they are fine.
 
-**A script that declares nothing** (no top-level `var`, `function`,
-`let`, `const` or `class` in a chart-level script, no `var` or `function`
-in one in executable content) runs in a context the host shares between the
-actors of every such chart. Hold a helper function in a `<data>` and
-assign it:
+`compileCharts` warns of every top-level `var`, `let`, `const` and
+`class` (an error with `{warningsAsErrors: true}`), its message naming
+the `<data id>` to declare instead: a `<data>` is what other tools of
+SCXML read, and the warning is the same whichever datamodel a host runs
+the chart on.
 
 ```js
 import { compileCharts, Host } from '@tinyactors/node';
@@ -117,10 +126,9 @@ const chart = `
        datamodel="ecmascript" name="basket" initial="open">
   <datamodel>
     <data id="items" expr="[]"/>
-    <data id="price"/>
   </datamodel>
   <script>
-    price = (sku) => ({ tea: 4, cake: 7 })[sku] ?? 0;
+    function price(sku) { return ({ tea: 4, cake: 7 })[sku] ?? 0; }
   </script>
   <state id="open">
     <transition event="add"><script>items.push(_event.data.sku)</script></transition>
@@ -147,20 +155,16 @@ host.close();
 total 15
 ```
 
-**A script that declares top-level names** (`function price(sku) {...}`)
-gets a `vm` context for each actor, where the script runs as global code
-and its functions close over its own variables, as they would in a file.
-That costs about 143 KB an actor on Node.js and 60 KB on Bun, so keep it
-for charts with few actors. Such a chart's actors can still be
-hibernated, migrated and snapshotted when it declares with `var` and
-`function`; one that declares with `let`, `const` or `class` keeps its
-actors in memory, because a new context cannot be given those bindings
-back.
+The helpers are the chart's, so a hibernated, migrated or snapshotted
+actor gets them back from its chart, not from its blob. A function held
+in a variable is not a value, and keeps its actor in memory: hibernation
+stores the variables as values. Declare helpers with `function` in a
+chart-level script instead.
 
-A function held in a variable keeps its actor in memory too: hibernation
-stores the variables as values, and a function is not one. So the
-`basket` above cannot be hibernated, while a chart that declares its
-helpers with `function` in a script can, at the cost of its context.
+On quickjs (the sandbox), a chart-level script runs as global code in the
+actor's context: its declarations of every kind are the actor's own, and
+its functions see its variables (the [quickjs guide](quickjs.md) says
+what that context costs).
 
 ## Sending events
 

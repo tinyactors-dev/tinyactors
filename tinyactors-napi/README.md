@@ -603,25 +603,19 @@ TA_ERROR_INVALID - the host has no chart of that name
 - **`using host = new Host(...)` needs a runtime that parses `using`:**
   Bun 1.4 does, Node.js 22 does not. `Symbol.dispose` and
   `Symbol.asyncDispose` call `close()`, which works everywhere.
-- **A `<script>` that declares top-level names gives each session a
-  context of its own.** A chart whose scripts declare `var` or `function`,
-  or whose chart-level scripts declare `let`, `const` or `class`, at their
-  top level runs each of its sessions
-  in a `vm` context of its own (about 143 KB a session on Node.js, 60 KB
-  on Bun), so the script's functions close over its own variables. A
-  chart that declares nothing shares one context per host: declare the
-  function as a `<data>` and assign it in the script
-  (`<data id="price"/>`, `price = (sku) => ...`)
-  ([Writing charts](docs/guide/charts.md#scripts)).
-- **A chart whose chart-level scripts declare with `let`, `const` or
-  `class` keeps its sessions resident** (in a transition's script they
-  are the script's own, each run). Hibernation, migration and snapshots refuse its
-  sessions (`TA_ERROR_UNSUPPORTED`): a new context cannot be given those
-  bindings back. Declare with `var` and `function`, or hold the values in
-  `<data>`, for a chart whose sessions should hibernate.
+- **A script's top-level declarations are the session's or the
+  chart's, never a context of their own.** On the native datamodel every
+  session of a host is an object in the host's one `vm` context. A
+  chart-level `<script>`'s `function`s are the chart's helpers, made once
+  and seeing no session's variables by name (pass them what they read); a
+  top-level `var` is a variable of the session; a top-level `let`,
+  `const` or `class` is refused, the script's `error.execution`, and
+  `compileCharts` warns of each at its script's line, naming the
+  `<data id>` to declare instead
+  ([Writing charts](docs/guide/charts.md#scripts)). So every session can
+  be hibernated, migrated and snapshotted whatever its scripts declare.
 - **The charts of a host share the builtins of its shared context.** On
-  the native datamodel the charts that declare nothing run in one `vm`
-  context per host, so a chart that changes a builtin (`Math.random = ...`,
+  the native datamodel the charts run in one `vm` context per host, so a chart that changes a builtin (`Math.random = ...`,
   `Array.prototype.sum = ...`) changes it for the host's other charts
   there; its sessions' own variables stay apart. On quickjs the same holds,
   unless `quickjs: { realm: 'isolated' }` gives each session a context of

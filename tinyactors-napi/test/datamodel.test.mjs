@@ -111,25 +111,26 @@ test('<foreach> declares its item and index, and walks the items it began with',
   same(await lines(chart), ['sum: 63', 'declared: 3,2,6'], 'three items, the pushed ones not walked');
 });
 
-test('a script\'s top-level declarations are the session\'s, closures included (W3C 452)', async () => {
+test('a chart-level script\'s functions are the chart\'s helpers (W3C 452), its top-level var the session\'s', async () => {
   const chart = scxml('c', `
     <datamodel><data id="foo" expr="0"/></datamodel>
     <script>
       var count = 0;
-      function next() { return ++count; }
+      count = count + 5;
       function Thing() { this.bar = 0; }
-      let kept = 'lexical';
+      function twice(x) { return 2 * x; }
     </script>
     <state id="s">
       <onentry>
         <assign location="foo" expr="new Thing()"/>
-        <assign location="foo.bar" expr="next() + next()"/>
-        <log label="closure" expr="[count, foo.bar, kept].join()"/>
+        <assign location="foo.bar" expr="twice(3)"/>
+        <script>count = twice(count + 1)</script>
+        <log label="helpers" expr="[count, foo.bar, typeof Thing].join()"/>
       </onentry>
-      <transition event="again"><script>next()</script><log label="again" expr="count"/></transition>
+      <transition event="again"><script>count = twice(count)</script><log label="again" expr="count"/></transition>
     </state>`);
-  same(await lines(chart, [['again']]), ['closure: 2,3,lexical', 'again: 3'], 'one session');
-  // two sessions of a declaring chart share nothing
+  same(await lines(chart, [['again']]), ['helpers: 12,6,function', 'again: 24'], 'one session');
+  // the statements of a chart-level script run for each session; the helpers are the chart's
   const { host, lines: logged } = logging({ c: chart });
   const first = host.spawn(host.chart('c'));
   const second = host.spawn(host.chart('c'));
@@ -139,24 +140,67 @@ test('a script\'s top-level declarations are the session\'s, closures included (
   host.send(second, 'again');
   await host.idle();
   host.close();
-  same(logged.filter((line) => line.startsWith('again')), ['again: 3', 'again: 3'], 'two sessions, two counts');
+  same(logged, ['helpers: 12,6,function', 'helpers: 12,6,function', 'again: 24', 'again: 24'], 'two sessions, two counts');
 });
 
-test('a script in a transition runs again: its let, const and class are its own at each run', async () => {
+test('a script\'s top-level var is a variable of the session, kept between its runs (W3C 303)', async () => {
+  const chart = scxml('c', `
+    <datamodel><data id="n" expr="0"/></datamodel>
+    <state id="s">
+      <transition event="go"><script>var n = n + 1;
+        var seen = (typeof seen === 'number' ? seen : 0) + 1;</script><log label="n" expr="n + ' ' + seen"/></transition>
+    </state>`);
+  same(await lines(chart, [['go'], ['go'], ['go']]), ['n: 1 1', 'n: 2 2', 'n: 3 3'], 'three runs');
+});
+
+test('the native datamodel refuses a script\'s top-level let, const and class: error.execution, naming <data>', async () => {
   const chart = scxml('c', `
     <datamodel><data id="n" expr="0"/></datamodel>
     <script>const LIMIT = 2;</script>
     <state id="s">
-      <transition event="go"><script>let k = n + 1; const c = Math.min(k, LIMIT); class K {} n = c;
-        var seen = (typeof seen === 'number' ? seen : 0) + 1;</script><log label="n" expr="n + ' ' + seen"/></transition>
-      <transition event="error.execution"><log label="error" expr="_event.name"/></transition>
+      <transition event="go"><script>let k = n + 1; n = k;</script><log label="n" expr="n"/></transition>
+      <transition event="class"><script>class K {}</script></transition>
+      <transition event="block"><script>{ let k = n + 1; n = k; } for (const i of [1]) n += i;</script><log label="n" expr="n"/></transition>
+      <transition event="error.execution"><log label="error" expr="_event.data.message.replace(/^Error: /, '')"/></transition>
     </state>`);
-  same(await lines(chart, [['go'], ['go'], ['go']]), ['n: 1 1', 'n: 2 2', 'n: 2 3'], 'three runs, no redeclaration');
-  // without a declaration of its own at the top, such a chart declares nothing
-  const plain = scxml('c', `
+  const refusal = (name) => `error: a <script> declares ${name} with let, const or class at its top level, which the native ` +
+    `"ecmascript" datamodel refuses (the script is error.execution): declare it with <data id="${name}"/> instead`;
+  same(await lines(chart, [['go'], ['class'], ['block'], ['go']], NATIVE),
+    [refusal('LIMIT'), refusal('k'), refusal('K'), 'n: 2', refusal('k')], 'each refused, a block\'s own declarations not');
+});
+
+test('the native datamodel: helpers see no session variable, and are their chart\'s alone', async () => {
+  const one = scxml('one', `
+    <datamodel><data id="n" expr="1"/></datamodel>
+    <script>function whose() { return 'one'; } function reads() { return n; }</script>
+    <state id="s">
+      <onentry><log label="one" expr="whose() + ' ' + Object.keys(this ?? {}).length"/></onentry>
+      <transition event="read"><log label="read" expr="reads()"/></transition>
+      <transition event="error.execution"><log label="error" expr="_event.data.message"/></transition>
+    </state>`);
+  const two = scxml('two', `
+    <script>function whose() { return 'two'; }</script>
+    <state id="s"><onentry><log label="two" expr="whose()"/></onentry></state>`);
+  const three = scxml('three', `
+    <state id="s"><onentry><log label="three" expr="typeof whose"/></onentry></state>`);
+  const { host, lines: logged } = logging({ one, two, three }, NATIVE);
+  const session = host.spawn(host.chart('one'));
+  host.spawn(host.chart('two'));
+  host.spawn(host.chart('three'));
+  await host.idle();
+  host.send(session, 'read');
+  await host.idle();
+  host.close();
+  same(logged, ['one: one 0', 'two: two', 'three: undefined', 'error: ReferenceError: n is not defined'], 'three charts');
+});
+
+test('the native datamodel: a function a script of executable content declares is that run\'s', async () => {
+  const chart = scxml('c', `
     <datamodel><data id="n" expr="0"/></datamodel>
-    <state id="s"><transition event="go"><script>let k = n + 1; n = k;</script><log label="n" expr="n"/></transition></state>`);
-  same(await lines(plain, [['go'], ['go']]), ['n: 1', 'n: 2'], 'twice');
+    <state id="s">
+      <transition event="go"><script>function f() { return n + 1; } n = f();</script><log label="n" expr="n + ' ' + typeof f"/></transition>
+    </state>`);
+  same(await lines(chart, [['go'], ['go']], NATIVE), ['n: 1 undefined', 'n: 2 undefined'], 'sees the session, kept by none');
 });
 
 test('error.execution says why: the exception\'s text, or no data for a failure the host decides', async () => {
@@ -277,23 +321,6 @@ test('the native datamodel: data from the application is the chart\'s own, of it
     <datamodel><data id="p" expr="null"/></datamodel>
     <state id="s"><onentry><log label="params" expr="[p instanceof Array, p.length].join()"/></onentry></state>`);
   same(await lines(withParams, [], { ...NATIVE, params: { p: [1, 2] } }), ['params: true,2'], 'spawn params override <data>');
-});
-
-test('the native datamodel: a declaring chart\'s session gets its data and params copied into its own context', async () => {
-  const chart = scxml('c', `
-    <datamodel><data id="p" expr="null"/></datamodel>
-    <script>var seen = [];</script>
-    <state id="s">
-      <onentry><log label="params" expr="[p instanceof Array, p.join()].join()"/></onentry>
-      <transition event="go">
-        <script>seen.push(_event.data.list instanceof Array)</script>
-        <log label="data" expr="seen.join() + ' ' + (_event.data.doc === undefined)"/>
-        <send event="xml"><content><a><b/></a></content></send>
-      </transition>
-      <transition event="xml"><log label="xml" expr="_event.data.getElementsByTagName('b').length"/></transition>
-    </state>`);
-  same(await lines(chart, [['go', { list: [1] }]], { ...NATIVE, params: { p: [1, 2] } }),
-    ['params: true,1,2', 'data: true true', 'xml: 1'], 'of its own realm');
 });
 
 test('the native datamodel: _event is frozen, kept until the next event, its data the payload\'s value', async () => {

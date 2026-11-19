@@ -134,9 +134,10 @@ hundreds of thousands of quickjs actors resident raises it
 rest of resident is mostly the engine's fixed cost, which a larger
 population spreads thinner: at 40,000 actors the native datamodel is
 about 750 bytes resident on Node.js and 970 on Bun. The region here was
-sized up front (`maxActors`). A chart whose scripts declare top-level
-names costs a `vm` context per actor on top: about 143 KB on Node.js and
-60 KB on Bun ([Writing charts](charts.md#scripts)). A hibernated actor
+sized up front (`maxActors`). What a chart's scripts declare adds
+nothing per actor: its helpers are the chart's, made once, and a
+top-level `var` is one more variable ([Writing charts](charts.md#scripts)).
+A hibernated actor
 costs about 60 bytes in the host and its blob in your store.
 
 ## Work does not grow with the population

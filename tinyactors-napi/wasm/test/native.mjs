@@ -1,6 +1,6 @@
 // The native "ecmascript" datamodel through the package's API, runtime-
-// neutral, for a page and a Worker (browser.mjs): a chart that declares
-// nothing and one that declares, their logs, where the charts ran, and,
+// neutral, for a page and a Worker (browser.mjs): a chart with data only
+// and one whose chart-level script declares a var and a helper, their logs, where the charts ran, and,
 // on a page, the host's realm (a hidden iframe) made at its first chart
 // and removed at close().
 import { Host, compileCharts } from '../index.mjs';
@@ -13,11 +13,11 @@ const SHARED = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" dat
   </state>
 </scxml>`;
 
-const DECLARING = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="declaring" initial="a">
+const HELPERS = `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="helpers" initial="a">
   <datamodel><data id="n" expr="5"/></datamodel>
-  <script>const LIMIT = 2; var total = n; function twice() { return total * 2; } let k = 1;</script>
+  <script>var total = n; function twice(t) { return t * 2; }</script>
   <state id="a">
-    <transition event="go"><script>total = total + 1; k++;</script><log label="t" expr="twice() + ':' + k + ':' + LIMIT"/></transition>
+    <transition event="go"><script>total = total + 1;</script><log label="t" expr="twice(total) + ':' + total + ':' + typeof twice"/></transition>
   </state>
 </scxml>`;
 
@@ -27,17 +27,17 @@ export async function nativeScenario() {
   const logs = [];
   const before = frames();
   const host = new Host({ systemID: 'web' }, { log: (h, entry) => logs.push(`${entry.label}=${entry.text}`) });
-  const compiled = compileCharts([{ name: 'shared', text: SHARED }, { name: 'declaring', text: DECLARING }]);
+  const compiled = compileCharts([{ name: 'shared', text: SHARED }, { name: 'helpers', text: HELPERS }]);
   host.addImage(compiled.image);
   compiled.close();
   const during = frames();
   const shared = host.spawn(host.chart('shared'));
-  const declaring = host.spawn(host.chart('declaring'));
+  const helpers = host.spawn(host.chart('helpers'));
   host.send(shared, 'inc');
   host.send(shared, 'inc');
   host.send(shared, 'where');
-  host.send(declaring, 'go');
-  host.send(declaring, 'go');
+  host.send(helpers, 'go');
+  host.send(helpers, 'go');
   await host.idle();
   host.close();
   return { logs, frames: [before, during, frames()] };
