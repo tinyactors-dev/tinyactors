@@ -1763,6 +1763,17 @@ export class Host {
     });
   }
 
+  locate(session) {
+    const id = sessionOf(session);
+    const state = checked(this, true);
+    return state.call(() => {
+      const module = state.module;
+      const status = state.fn.ta_web_host_locate(state.pointer, Number(id & 0xFFFFFFFFn), Number(id >> 32n));
+      if (status !== TA_OK) throw refusal(module.statusName(status), 'no live actor has this session');
+      return { segment: module.word(0), actor: module.word(1) };
+    });
+  }
+
   // whether a live segment runs an image of these bytes: the application
   // layer adds a restored host only the images its snapshot lacks
   holdsImage(image) {

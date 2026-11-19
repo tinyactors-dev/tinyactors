@@ -1239,6 +1239,30 @@ static napi_value ta_napi_host_resident_count(napi_env env, napi_callback_info i
     return result;
 }
 
+/* host.locate(session) -> {segment, actor}: where a live session lives
+ * now (ta_host_locate, one to one): the segment that runs it (the one
+ * that adopted it, for a migrated actor, whatever its session's bits
+ * say) and its actor handle there; TA_ERROR_STALE for no live session. */
+static napi_value ta_napi_host_locate(napi_env env, napi_callback_info info) {
+    ta_napi_arguments arguments = {1, {NULL}, NULL};
+    ta_napi_call call;
+    uint64_t session = 0;
+    if (!ta_napi_arguments_of(env, info, &arguments) || !ta_napi_session_of(env, arguments.argv[0], &session) ||
+        !ta_napi_enter(env, arguments.self, &call))
+        return NULL;
+    napi_value result = NULL, segment, actor;
+    ta_host_location location;
+    ta_status status = ta_host_locate(call.host->host, session, &location);
+    if (status != TA_OK) ta_napi_throw(env, &(ta_napi_refusal){status, "no live actor has this session"});
+    else if (napi_create_object(env, &result) != napi_ok || napi_create_uint32(env, location.segment, &segment) != napi_ok ||
+             napi_create_uint32(env, location.actor, &actor) != napi_ok ||
+             napi_set_named_property(env, result, "segment", segment) != napi_ok ||
+             napi_set_named_property(env, result, "actor", actor) != napi_ok)
+        result = NULL;
+    ta_napi_leave(&call);
+    return result;
+}
+
 /* host.actorInfo(session) -> {chart, hibernated} | undefined: a live
  * actor's chart (its name, ta_image_chart_name) and whether it is
  * hibernated now (ta_host_locate, ta_actor_info_get); undefined when the
@@ -1896,6 +1920,7 @@ napi_status ta_napi_host_define(napi_env env, napi_value exports) {
         {"sendMany", NULL, ta_napi_host_send_many, NULL, NULL, NULL, napi_default_method, NULL},
         {"terminate", NULL, ta_napi_host_terminate, NULL, NULL, NULL, napi_default_method, NULL},
         {"actorByName", NULL, ta_napi_host_actor_by_name, NULL, NULL, NULL, napi_default_method, NULL},
+        {"locate", NULL, ta_napi_host_locate, NULL, NULL, NULL, napi_default_method, NULL},
         {"holdsImage", NULL, ta_napi_host_holds_image, NULL, NULL, NULL, napi_default_method, NULL},
         {"residentCount", NULL, ta_napi_host_resident_count, NULL, NULL, NULL, napi_default_method, NULL},
         {"actorInfo", NULL, ta_napi_host_actor_info, NULL, NULL, NULL, napi_default_method, NULL},

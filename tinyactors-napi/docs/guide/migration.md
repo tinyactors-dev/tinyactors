@@ -17,6 +17,11 @@ given, and each `host.addImage(image)` after. When an image holds a
 chart whose `name` is already in the host, that chart has a new version:
 `host.spawn(name)` spawns the newest (`host.chart(name)` returns it), so the actors spawned from then on
 are of the new version, and the running ones stay on theirs.
+Adding the image is a deploy on its own: an actor that may finish on its
+version needs no migration, and one a chart finds by name through the
+`Spawner` is replaced under its name by the next request ([Updating
+through names](io-processors.md#updating-through-names)). Migrate the
+actors that must not wait for their end.
 
 `host.migrate()` moves the running actors to the newest version of their
 chart, during the next turns. A moved actor keeps its session, its active

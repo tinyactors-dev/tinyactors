@@ -753,16 +753,35 @@ export class SQLiteStore {
 
 /** An I/O processor that spawns actors for charts: give it to the host
  * under a type you name, `ioProcessors: { spawn: new Spawner() }`, and a
- * chart sends `{chart, name, params}` with `<send type="spawn">`. The
- * sender gets `spawned` with `{name, address}` and the send's sendid, or
- * error.communication when the host cannot spawn it. */
+ * chart sends `{chart, name, params}` with `<send type="spawn">`. A name
+ * is held once per version: a live actor of that name running the
+ * chart's current version (`host.chart`) is answered, `spawned` with
+ * `{name, address, created: false}`, and nothing is spawned (a hibernated
+ * one is not woken); when there is none, or the holder runs an older
+ * version, the current version is spawned under the name, `{created:
+ * true}`, which is how an application updates: the old holder keeps its
+ * session and finishes on its version. A name held in the current
+ * version by another chart's actor (or in a newer image) is taken. The
+ * answer keeps the sendid; a name taken, or a spawn the host refuses,
+ * gives the sender error.communication. */
 export class Spawner {
   receive(send) {
     const data = send.data;
+    const host = send.host;
     let actor;
+    let created = false;
     try {
       if (!plain(data) || typeof data.chart !== 'string') throw new TypeError('a Spawner\'s data is {chart, name, params}');
-      actor = send.host.spawn(data.chart, { name: data.name ?? undefined, params: data.params ?? undefined });
+      const name = data.name ?? undefined;
+      if (name !== undefined && typeof name !== 'string') throw new TypeError('a Spawner\'s name is a string');
+      const ref = host.chart(data.chart);
+      // The look-up and the spawn are one synchronous call: nothing is
+      // awaited between them, so no other input takes the name meanwhile.
+      actor = holder(host, name, ref, data.chart);
+      if (actor === undefined) {
+        actor = host.spawn(ref, { name, params: data.params ?? undefined });
+        created = true;
+      }
     } catch (error) {
       if (error instanceof TinyactorsError || error instanceof TypeError || error instanceof RangeError) {
         send.fail();
@@ -770,8 +789,24 @@ export class Spawner {
       }
       throw error;
     }
-    send.answer('spawned', { name: data.name ?? null, address: actor.address });
+    send.answer('spawned', { name: data.name ?? null, address: actor.address, created });
   }
+}
+
+/** The live actor named `name` in ref's segment (the chart's current
+ * version), or undefined when there is none or the holder runs an older
+ * version; InvalidError when the name is taken there by another chart's
+ * actor, or by an actor in a newer segment. */
+function holder(host, name, ref, chart) {
+  if (name === undefined) return undefined;
+  const session = actorByName.call(host, name); // newest segment first
+  if (session === undefined) return undefined;
+  const { segment } = host.locate(session); // never the session's bits: a migrated actor moved
+  if (segment < ref.segment) return undefined; // an older version's: it finishes there
+  if (segment > ref.segment || actorInfo.call(host, session)?.chart !== chart) {
+    throw new InvalidError(`the name ${name} is held by an actor of another chart`);
+  }
+  return new Actor(host, session);
 }
 
 // ---- a directory of charts ---------------------------------------------------------

@@ -628,7 +628,7 @@ an admin endpoint; an application can do without them.
 | `host.hostStats()`, `host.hostConfig()`, `host.actorList()`, `host.actorGet()`; the `config` option's sizes, `host.quickjsHeapBytes` | the host's counters, its effective config, its actors page by page; sizing a host up front | [Inspecting a host](docs/guide/inspection.md), [Capacity and memory](docs/guide/capacity.md) |
 | the `telemetry` option, `host.metrics()`, `host.traceConfigure()`, `traceWatch()`, `traceUnwatch()`, `traceEnd()`, `traceSpansDecode()` | traces, logs and metrics as OpenTelemetry (OTLP), and what is traced | [Telemetry](docs/guide/telemetry.md) |
 | `host.sweep()`, `host.hibernate()`, `host.wake()` | hibernation by a policy of your own, in place of `resident` | [Hibernation](docs/guide/hibernation.md#a-policy-of-your-own) |
-| `host.addImage()`, `host.chart()`, `host.boot()`; `host.migrate()`, the `migrated` and `migrationDone` options | images and segments; moving running actors to a new version of their chart | [Migration](docs/guide/migration.md), [Writing charts](docs/guide/charts.md#a-system-that-starts-its-own-actors) |
+| `host.addImage()`, `host.chart()`, `host.locate()`, `host.boot()`; `host.migrate()`, the `migrated` and `migrationDone` options | images and segments, and the segment an actor runs in; moving running actors to a new version of their chart | [Migration](docs/guide/migration.md), [Writing charts](docs/guide/charts.md#a-system-that-starts-its-own-actors), [Updating through names](docs/guide/io-processors.md#updating-through-names) |
 | `host.snapshot()`, `Host.restore()` | the whole host as one blob, and a host restored from it | [Snapshots](docs/guide/snapshots.md) |
 
 Each image the host is given makes a **segment**: the host's memory for
@@ -636,7 +636,13 @@ that image's actors, numbered from 0 in the order of `new Host`'s charts
 (`host.addImage(image)` adds one later and returns its number). A host
 runs many segments as one; you need the number for `boot` and see it in
 the host's statistics. A new version of a chart is a new image, and
-`host.chart(name)` is its current version.
+`host.chart(name)` is its current version; `host.locate(actor)` gives
+the segment an actor runs in (`{segment, actor}`), so comparing it with
+`host.chart(name).segment` tells whether the actor runs the current
+version. Adding the image is the deploy: new actors start in the new
+version and running ones finish on theirs, and the `Spawner` spawns the
+new version under a name whose holder runs an older one ([Updating
+through names](docs/guide/io-processors.md#updating-through-names)).
 
 ## Wire format
 

@@ -256,6 +256,15 @@ ids joined by `.`, each id of lowercase letters, digits and `-`
 that comes from a user before it becomes part of a name. The system's
 own id is stricter still: lowercase letters, digits, `-` and `.`.
 
+Two more reasons for names with parts. An actor spawned with no name is
+found by its chart's name (core's `src/system/system.c` indexes an
+unnamed spawn under its chart's name), and an invoked child by its
+invoke id (`src/system/route.c`): a name `room` would find any unnamed
+actor of the chart `room`, and a name `cart` the child of an `<invoke
+id="cart">`. `room.acme.general` equals neither a chart's name nor an
+invoke id. A name the `Spawner` holds is held once per version: [Updating
+through names](io-processors.md#updating-through-names).
+
 ## Keying a table by the sender
 
 An actor that keeps a table of the actors that send to it (a room's

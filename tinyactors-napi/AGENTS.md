@@ -125,8 +125,24 @@ API"). Node's names and shapes (decided 2026-10-16, docs/plan.xml):
     event's origin is `tinyactors://tinyactors-ask/@<handle>`, and the
     reply, a send to that system, is taken before the application's
     `transport`.
-  - **`Spawner`**, an I/O processor that spawns a chart a send names and
-    answers `spawned` with `{name, address}`, and **`compileDir(dir,
+  - **`Spawner`**, an I/O processor that takes a send's `{chart, name,
+    params}` and answers `spawned` with `{name, address, created}`; a
+    name is held once per version (the maintainer, 2026-11-19: spawning
+    a new version under a name is the update): with `ref =
+    host.chart(chart)`, a live holder of `name` (`actorByName`) whose
+    segment (`host.locate`, `ta_host_locate`: a migrated actor lives in
+    the segment that adopted it, never read from its session's bits) is
+    `ref`'s is answered, `created: false`, nothing spawned (a hibernated
+    one not woken); one there of another chart (`actorInfo`), or in a
+    newer segment, fails the send as a name taken; otherwise (none, or
+    the holder in an older segment, which keeps its session and finishes
+    on its version) the current version is spawned under the name,
+    `created: true`. `address` is the actor's session address.
+    `receive` is synchronous: the look-up and the spawn are one call. A
+    holder terminated but not yet run still holds its name (core has no
+    "ending" state). The direct layer's **`host.locate(session) →
+    {segment, actor}`** (2026-11-19, for it) is `ta_host_locate` one to
+    one, `StaleError` for no live session. And **`compileDir(dir,
     {resolver}?)`** (every `*.scxml` under `dir`, named by its path, sorted,
     a `src` read by a resolver confined to `dir`); with `SQLiteStore`, the
     layer's uses of the built-ins, reached by
