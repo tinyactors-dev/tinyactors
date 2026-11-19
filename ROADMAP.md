@@ -641,7 +641,23 @@ websockets) and decided the shape below, the same in both bindings.
   the chart sends `{chart, name, params}`, the answer is `spawned` (a
   fixed name) with `{name, address}` and the send's `sendid`, a refusal
   `error.communication`. An undeclared type stays `error.execution`
-  (SCXML 6.2.5).
+  (SCXML 6.2.5). It is a plain spawn of the chart's current version
+  under the name (`address` the new actor's session address); it does
+  not look names up (the maintainer, 2026-11-19). A get-or-spawn ("one
+  holder per name per version", Python `b0e5ffd6` and `f0668195`, Node
+  `5caa15cc`; removed by Python `da0656f1` and Node `655fe3cb`) needed host policy rebuilt in each binding (a name
+  lookup, the holder's segment through a new `host.locate`, a chart
+  comparison) or a new flag in core. Neither is needed: a name has one
+  owner, the collection actor that decides which actors of a kind exist;
+  its requests come one at a time and it records its spawns in flight
+  (the chat's `creating`, keyed by sendid), so it never asks twice. Two
+  actors spawning one name is the application's design error, which core
+  answers by its rule (within a version the oldest holder keeps the
+  name; a newer version's wins). **Updating** is a spawn under an
+  existing name after adding an image with a new version of the chart:
+  new spawns run the newest version, running actors finish on theirs,
+  migration for those that must not wait
+  (`tinyactors-core/docs/architecture.md`, section 16.2).
 - **Logic stays in charts.** No logic in a processor that spawns: a
   collection actor (a workspace) decides what exists, a room saves
   itself and announces itself to its workspace when it starts. Chart
@@ -728,7 +744,7 @@ direct layer; the items below are the API applications use.
 | 1 | `compile_dir(path)` / `compileDir(url)`: a directory's charts and helper files compiled once, reused by any number of hosts | both | `ta_compile_charts`, the resolver | Python done (`24190ca0`); Node done (`6a5e1d43`: `compileDir(dir)`, a path or a `file:` URL) |
 | 2 | `Host(charts, system=, io_processors=, clock=, store=, resident=)` and `Host.restore(bytes, charts, ...)` | both | `ta_host_create`, `ta_host_add_image`, the snapshot calls | Python done (`9c84f1c4`); Node done (`6a5e1d43`: the convenience layer's `Host` extends the direct one, which is no longer exported) |
 | 3 | Processors as objects with `receive(send)`; `send.sender` an `Actor`, `send.host` | both | the send effect | Python done (`9c84f1c4`); Node done (`6a5e1d43`) |
-| 4 | `Spawner`, in C | both | `ta_host_chart`, `ta_host_spawn`, `ta_host_send` | Python done, in Python over the public calls (`48a46745`); Node done, in JavaScript over the public calls, shared by both packages (`6a5e1d43`). A name is held once per version (the maintainer, 2026-11-19): a live holder in the chart's current version (its segment by `ta_host_locate`) is answered `created: false` and nothing spawned, a holder of another chart there fails the send, a holder in an older version is replaced under the name by a spawn of the current one (`created: true`, the update); both bindings gained `host.locate` (Python `b0e5ffd6`, Node `5caa15cc`) |
+| 4 | `Spawner`, in C | both | `ta_host_chart`, `ta_host_spawn`, `ta_host_send` | Python done, in Python over the public calls (`48a46745`); Node done, in JavaScript over the public calls, shared by both packages (`6a5e1d43`). A get-or-spawn per version (Python `b0e5ffd6`, `f0668195`; Node `5caa15cc`, with `host.locate`) was undone on 2026-11-19 (the maintainer; Python `da0656f1`, Node `655fe3cb`): the Spawner is a plain spawn answered `{name, address}`, a name has one owner (the collection actor, which tracks its spawns in flight), and a spawn under an existing name after adding a new version is the update (above, "Spawning from a chart is an I/O processor") |
 | 5 | `Actor` handles (`id`, `address`, `send`, `ask`, `terminate`, `done`), no table; `host.spawn(chart, name=, params=)`, `host.actor(name or address)`, `await host.actors(chart=)` | both | sessions, `ta_host_actor_by_name`, `ta_host_resolve`, `actor.list` | Python done (`9c84f1c4`; `ask` `48a46745`); Node done (`6a5e1d43`) |
 | 6 | `ask` (above) | both | `ta_host_send` with `origin`, the transport effect, `ta_table` | Python done (`48a46745`); Node done (`6a5e1d43`: `ask(event, data, {signal})`, a row of the pending `ta_table`) |
 | 7 | `store=` (`SQLiteStore`, `MemoryStore`) and `resident=`: the sweep, hibernate and wake loop | both | `ta_host_sweep`, `ta_host_hibernate`, `TA_EFFECT_WAKE`, `ta_host_wake` | Python done (`9c84f1c4`); Node done (`6a5e1d43`: `save`, `load` and `delete` may return promises) |
