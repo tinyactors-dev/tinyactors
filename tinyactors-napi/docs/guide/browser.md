@@ -83,9 +83,11 @@ The package targets ES2022 and serves the module as
 
 **The browser floor** follows from what the module and the package use:
 WebAssembly's `extended-const`, `multivalue`, `bulk-memory` and
-`nontrapping-fptoint`, top-level `await` and
-`String.prototype.isWellFormed`. By the engines' release notes that is
-Chrome and Edge 114, Firefox 119 and Safari 16.4. Only Chromium (141) is
+`nontrapping-fptoint`, top-level `await`,
+`String.prototype.isWellFormed`, and JSON modules imported `with { type:
+'json' }` (the package reads its version from its own `package.json`, so
+a server must send it as `application/json`). By the engines' release
+notes that is Chrome and Edge 123, Firefox 138 and Safari 17.2. Only Chromium (141) is
 tested.
 
 **The Content Security Policy.** The module needs `'wasm-unsafe-eval'` in

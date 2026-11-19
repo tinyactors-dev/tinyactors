@@ -37,9 +37,11 @@ path.
 ## What it needs
 
 - **Engines:** WebAssembly with `extended-const`, `multivalue`,
-  `bulk-memory` and `nontrapping-fptoint`, top-level `await` and
-  `String.prototype.isWellFormed`: by the engines' release notes Chrome
-  and Edge 114, Firefox 119 and Safari 16.4 (only Chromium is tested);
+  `bulk-memory` and `nontrapping-fptoint`, top-level `await`,
+  `String.prototype.isWellFormed` and JSON modules (the package's
+  `package.json`, served as `application/json`): by the engines' release
+  notes Chrome and Edge 123, Firefox 138 and Safari 17.2 (only Chromium
+  is tested);
   Node.js 22.3 and Bun 1.4.
 - **A Content Security Policy** that allows the module and the charts'
   expressions: `script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'`
