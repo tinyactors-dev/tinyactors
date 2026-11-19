@@ -763,6 +763,10 @@ def on_frame(link, frame):                   # the incoming half, on the other s
 A chart's reply to `_event.origin` goes back the same way. `send.target`
 and `send.origin` are `Address` values: `.system`, `.session` and `.name`
 give their parts, so neither you nor the binding parses an address.
+`Address.from_name(system, name)` and `Address.from_session(system,
+session)` write one, the name percent-encoded: a chart that targets the
+actor named `room/acme` writes the text `Address.from_name("chat",
+"room/acme")` gives, never the name as it is.
 `host.send(message)` ignores keys it does not know, so a newer peer can
 add one, and takes a `sendid`, `origin` or `traceparent` of `UNDEFINED`
 (what another binding's absent field decodes as) as absent, as `None`.

@@ -923,6 +923,25 @@ static const char ta_python_doc_address[] =
     ".name for its parts, which core's address parser reads. Equality and\n"
     "hashing use the text, among Address values only; subclasses are refused.";
 
+static const char ta_python_doc_address_from_name[] =
+    "from_name(system, name)\n"
+    "--\n"
+    "\n"
+    "The Address of the actor named `name` in system `system`:\n"
+    "\"tinyactors://<system>/@<name>\", the name percent-encoded, so any name\n"
+    "(\"rooms/acme\", \"café\") is one address and .name gives it back. A chart\n"
+    "that targets the actor writes this text; ValueError for an invalid\n"
+    "system id or an empty name.";
+
+static const char ta_python_doc_address_from_session[] =
+    "from_session(system, session)\n"
+    "--\n"
+    "\n"
+    "The Address of session `session` (an int from 1) in system `system`:\n"
+    "\"tinyactors://<system>/#_scxml_<session>\", the address a chart's\n"
+    "_event.origin holds for that session; ValueError for an invalid\n"
+    "system id.";
+
 static const char ta_python_doc_address_text[] =
     "The address text (read-only).";
 

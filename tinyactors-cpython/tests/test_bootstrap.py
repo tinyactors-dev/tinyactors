@@ -53,6 +53,34 @@ class ErrorTests(unittest.TestCase):
         self.assertIsInstance(raised.exception, tinyactors.TinyactorsError)
 
 
+class AddressTests(unittest.TestCase):
+    """Address.from_name and Address.from_session write core's addresses."""
+
+    def test_a_name_is_percent_encoded_and_reads_back(self):
+        """Any name is one address, and .name gives it back."""
+        address = tinyactors.Address.from_name("chat", "room/acme/café")
+        self.assertEqual(address.text, "tinyactors://chat/@room%2Facme%2Fcaf%C3%A9")
+        self.assertEqual((address.system, address.name, address.session), ("chat", "room/acme/café", None))
+        self.assertEqual(tinyactors.Address.from_name("chat", "plain").text, "tinyactors://chat/@plain")
+
+    def test_a_session(self):
+        """The address a chart's _event.origin holds."""
+        address = tinyactors.Address.from_session("eu.orders", 2**64 - 1)
+        self.assertEqual(address.text, "tinyactors://eu.orders/#_scxml_18446744073709551615")
+        self.assertEqual(address.session, 2**64 - 1)
+
+    def test_refusals(self):
+        """An invalid system id, an empty name, a session that is not an int from 1."""
+        for call, error in [(lambda: tinyactors.Address.from_name("Not_A_System", "x"), ValueError),
+                            (lambda: tinyactors.Address.from_name("chat", ""), ValueError),
+                            (lambda: tinyactors.Address.from_session("chat", 0), ValueError),
+                            (lambda: tinyactors.Address.from_session("chat", 2**64), OverflowError),
+                            (lambda: tinyactors.Address.from_session("chat", True), TypeError),
+                            (lambda: tinyactors.Address.from_name("chat", 1), TypeError)]:
+            with self.assertRaises(error):
+                call()
+
+
 class VersionTests(unittest.TestCase):
     """The module says which version it is."""
 
