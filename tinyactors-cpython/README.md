@@ -161,7 +161,6 @@ first chart compiled.
 | Driver | What it does | Use it for |
 |---|---|---|
 | `host.run_until_idle()` | turns until no actor can run at the current time | scripts, tests, programs that run the host between other work |
-| `host.run()` | turns, and sleeps until each timer, until no timer is left | a program that is only the host |
 | `SimulatedClock.increment(seconds)` | moves a simulated clock forward and turns every host made with it until idle | tests and simulations: a 30-day timeout takes no time |
 | `await host.idle()` | under `async with`, the host turns on the event loop by itself; `idle()` completes when it is idle | programs that also serve other I/O |
 
@@ -955,7 +954,7 @@ how to use it.
 |---|---|
 | `compile_charts(sources, resolver=None) -> Compiled` | compiles `(name, text)` pairs into one image; raises `CompileError` |
 | `compile_system(manifest, resolver=None) -> Compiled` | compiles a `<system>` manifest of charts and boot actors |
-| `Compiled.image`, `.diagnostics`, `.close()` | the image as a read-only buffer, valid until `close()`; the warnings and notes; a context manager |
+| `Compiled.image`, `.diagnostics`, `.close()` | the image's bytes, copied at the first read; the warnings and notes; a context manager |
 | `Host(config, io_processors=None, *, log, clock, telemetry, wake, migrated, services, migration_done, transport)` | a host, with its handlers (`transport`: every send to another system); a context manager for `with` and `async with` |
 | `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs an image; the current version of a chart |
 | `spawn(ref, name=None, params=None, traceparent=None) -> session` | starts an actor |
@@ -963,7 +962,7 @@ how to use it.
 | `fail(target, sendid=None)` | reports a send that could not be delivered: `error.communication` for its sender |
 | `send_many([(target, event, data, traceparent), ...]) -> accepted` | many sends in one call; returns how many were accepted |
 | `terminate(session)`, `boot(segment)`, `actor_by_name(name)` | ends an actor; spawns an image's boot actors; finds a named actor (`None` when there is none) |
-| `run_until_idle()`, `run()`, `await idle()`, `next_deadline` | the drivers (above, "Drivers and time") |
+| `run_until_idle()`, `await idle()`, `next_deadline` | the drivers (above, "Drivers and time") |
 | `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`, `host_config`, `trace_*` | typed methods (above, "Typed methods") |
 | `metrics() -> bytes` | the host's counters as OTLP |
 | `sweep`, `hibernate`, `wake` | hibernation |

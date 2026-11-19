@@ -26,8 +26,8 @@ static const char ta_python_doc_module[] =
     "  Host.send() gives it events. Host.boot() spawns an image's boot actors\n"
     "  and Host.actor_by_name() finds a named one.\n"
     "- Driving. Inputs (spawn, send, ...) apply at the call; the actors run\n"
-    "  when the host turns. Use run_until_idle() or run(), a SimulatedClock in\n"
-    "  tests, or `async with Host(...)` and `await host.idle()` under asyncio.\n"
+    "  when the host turns. Use run_until_idle(), a SimulatedClock in tests,\n"
+    "  or `async with Host(...)` and `await host.idle()` under asyncio.\n"
     "- Handlers. Host(...) takes io_processors for <send> (each gets a Send),\n"
     "  services for <invoke> (an Invocation), log for <log> (a LogEntry),\n"
     "  wake for a hibernated actor that has work, migrated and migration_done\n"
@@ -134,15 +134,15 @@ static const char ta_python_doc_compiled[] =
     "Hold it only as long as you need the image: Host.add_image copies the\n"
     "bytes, so close it right after adding (a `with` block does), or keep it\n"
     "to add the same image to several hosts. To compile once and run many\n"
-    "times (at build time, in CI), write `bytes(compiled.image)` to a .tai\n"
+    "times (at build time, in CI), write `compiled.image` to a .tai\n"
     "file and give its bytes to add_image later: no compiler at run time.";
 
 static const char ta_python_doc_compiled_image[] =
-    "The image's bytes, as a read-only memoryview over the compile result.\n"
+    "The image's bytes, copied out of the compile result at the first read.\n"
     "\n"
-    "Pass it to Host.add_image or copy it with bytes(). It is valid until\n"
-    "close(): reading it later raises TinyactorsError (TA_ERROR_STALE), and\n"
-    "close() while a memoryview of it is held raises BufferError.";
+    "Pass them to Host.add_image or write them to a .tai file. Once read, they\n"
+    "stay valid after close(); a first read after close() raises\n"
+    "TinyactorsError (TA_ERROR_STALE), since the result is freed.";
 
 static const char ta_python_doc_compiled_diagnostics[] =
     "The warnings and notes of a compilation that succeeded, a list of\n"
@@ -205,7 +205,7 @@ static const char ta_python_doc_host[] =
     "host turn; your handlers do the I/O the actors ask for.\n"
     "\n"
     "Drive the host with run_until_idle() (until nothing is runnable now),\n"
-    "run() (sleeping to each timer), or `await host.idle()` under asyncio.\n"
+    "or `await host.idle()` under asyncio, where timers fire on the loop.\n"
     "Inputs (spawn, send, terminate, ...) apply at the call; their effects\n"
     "reach your handlers in the next turn. A host is used from the thread\n"
     "that created it.";
@@ -221,9 +221,9 @@ static const char ta_python_doc_host_ticks[] =
 static const char ta_python_doc_host_next_deadline[] =
     "Seconds from now to the host's next deadline (a delayed send, a\n"
     "migration's timeout), as the last turn that went idle left it: 0.0 when\n"
-    "it is due, None when there is none. The synchronous driver's run()\n"
-    "sleeps for it; with a SimulatedClock, which arms no timer, increment\n"
-    "the clock by it to move straight to the next thing that happens.";
+    "it is due, None when there is none. With a SimulatedClock, which arms\n"
+    "no timer, increment the clock by it to move straight to the next thing\n"
+    "that happens.";
 
 static const char ta_python_doc_host_add_image[] =
     "add_image(image, /)\n"
@@ -480,21 +480,8 @@ static const char ta_python_doc_host_run_until_idle[] =
     "work: give inputs, then run_until_idle() to let the actors react and\n"
     "your handlers run. Handlers run inside it; a handler's exception, or a\n"
     "failure of the host, is raised after the turn it happened in. Timers due\n"
-    "later stay pending: run() sleeps until them, and with a SimulatedClock,\n"
-    "increment() moves to them.";
-
-static const char ta_python_doc_host_run[] =
-    "run()\n"
-    "--\n"
-    "\n"
-    "Turn, and sleep to each timer, until the host is idle with no timer\n"
-    "left.\n"
-    "\n"
-    "The synchronous driver for a program that is the host, such as a worker\n"
-    "whose actors only answer their own timers and the events your handlers\n"
-    "add. A program that also serves other I/O uses asyncio instead\n"
-    "(`async with Host(...)`), where the host turns on the event loop. Ctrl-C\n"
-    "raises KeyboardInterrupt between turns.";
+    "later stay pending: under asyncio the loop fires them, and with a\n"
+    "SimulatedClock, increment() moves to them.";
 
 static const char ta_python_doc_host_idle[] =
     "idle()\n"

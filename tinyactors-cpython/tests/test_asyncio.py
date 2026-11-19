@@ -157,21 +157,13 @@ class Asyncio(unittest.TestCase):
 
 
 class Synchronous(unittest.TestCase):
-    def test_run_sleeps_to_the_deadline(self):
-        logs = Logs()
-        with tinyactors.Host(CONFIG, log=logs) as host:
-            host.add_image(image())
-            host.send(host.spawn(host.chart("echo")), "later")
-            host.run()
-        self.assertEqual(logs.labelled("tick"), ["yes"])
-
     def test_a_simulated_clock_moves_only_with_increment(self):
         logs = Logs()
         clock = tinyactors.SimulatedClock()
         with tinyactors.Host(CONFIG, log=logs, clock=clock) as host:
             host.add_image(image())
             host.send(host.spawn(host.chart("echo")), "later")
-            host.run()
+            host.run_until_idle()
             self.assertEqual(logs.labelled("tick"), [])
             clock.increment(0.019)
             self.assertEqual(logs.labelled("tick"), [])

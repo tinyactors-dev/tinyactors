@@ -61,10 +61,15 @@ static void ta_python_module_free(void *module) {
     ta_python_module_clear((PyObject *)module);
 }
 
+#ifndef TA_PYTHON_VERSION
+#error "TA_PYTHON_VERSION is the build's version (mise/cpython.rb, version_define)"
+#endif
+
 /* The types and objects, once per module instance. */
 static int ta_python_module_exec(PyObject *module) {
     ta_python_module_state *state = PyModule_GetState(module);
-    if (ta_python_value_types_init(module) < 0 || ta_python_support_init(module, state) < 0 ||
+    if (PyModule_AddStringConstant(module, "__version__", TA_PYTHON_VERSION) < 0 ||
+        ta_python_value_types_init(module) < 0 || ta_python_support_init(module, state) < 0 ||
         ta_python_host_init_type(module, state) < 0 || ta_python_clock_init_type(module, state) < 0 ||
         ta_python_compile_init_type(module, state) < 0 || ta_python_effects_init_types(module, state) < 0 ||
         ta_python_event_init_type(module, state) < 0)

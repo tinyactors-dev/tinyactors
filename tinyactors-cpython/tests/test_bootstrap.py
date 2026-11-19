@@ -7,13 +7,30 @@ mistakes that a round trip alone could hide; subprocess tests verify that
 adapter errors remain valid frames and clean EOF terminates the process.
 """
 
+import importlib.metadata
 import math
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import re
 import subprocess
 import sys
 import unittest
 
 import tinyactors
+
+
+class VersionTests(unittest.TestCase):
+    """The module says which version it is."""
+
+    def test_version_is_the_wheels_or_the_projects(self):
+        """An installed wheel's metadata, else pyproject.toml's (a build in the repository)."""
+        self.assertRegex(tinyactors.__version__, r"^[0-9]+(\.[0-9]+)*([a-z0-9.+-]*)$")
+        try:
+            expected = importlib.metadata.version("tinyactors")
+        except importlib.metadata.PackageNotFoundError:
+            pyproject = (Path(__file__).parent.parent / "pyproject.toml").read_text()
+            expected = re.search(r'^version = "([^"]+)"', pyproject, re.MULTILINE).group(1)
+        self.assertEqual(tinyactors.__version__, expected)
 
 
 class CodecTests(unittest.TestCase):

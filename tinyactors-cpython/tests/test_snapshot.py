@@ -1,5 +1,6 @@
 """Snapshots: Host.snapshot and Host.restore, on both datamodels."""
 
+import asyncio
 import unittest
 
 import tinyactors
@@ -161,10 +162,13 @@ class Snapshot(unittest.TestCase):
             host.send(session, "wait")
             host.run_until_idle()
             blob = host.snapshot()
-        with tinyactors.Host.restore(blob, CONFIG, log=logs) as host:
-            host.run_until_idle()
-            self.assertEqual(logs.labelled("late"), [])
-            host.run()  # sleeps to the deadline: about a second
+        async def restored():
+            async with tinyactors.Host.restore(blob, CONFIG, log=logs) as host:
+                await host.idle()
+                self.assertEqual(logs.labelled("late"), [])
+                await asyncio.sleep(host.next_deadline + 0.05)  # the loop's timer fires at the deadline
+                await host.idle()
+        asyncio.run(restored())
         self.assertEqual(logs.labelled("late"), ["{'k': 0}"])
 
     def test_a_value_nests_as_deep_in_a_snapshot_as_in_a_send(self):

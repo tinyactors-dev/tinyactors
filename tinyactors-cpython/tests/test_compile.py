@@ -32,16 +32,17 @@ class Compile(unittest.TestCase):
         self.assertEqual(diagnostics[0].file, "bad.scxml")
         self.assertIsInstance(raised.exception, tinyactors.TinyactorsError)
 
-    def test_image_is_stale_after_close_and_close_refuses_a_held_buffer(self):
+    def test_image_is_bytes_copied_once_and_a_first_read_after_close_is_stale(self):
         compiled = tinyactors.compile_charts([("c.scxml", GOOD)])
-        view = memoryview(compiled.image)
-        self.assertTrue(bytes(view))
-        with self.assertRaises(BufferError):
-            compiled.close()
-        view.release()
+        image = compiled.image
+        self.assertIsInstance(image, bytes)
+        self.assertIs(compiled.image, image)  # copied once
         compiled.close()
+        self.assertIs(compiled.image, image)  # what was read stays
+        unread = tinyactors.compile_charts([("c.scxml", GOOD)])
+        unread.close()
         with self.assertRaises(tinyactors.TinyactorsError) as raised:
-            compiled.image
+            unread.image
         self.assertEqual(raised.exception.status, "TA_ERROR_STALE")
 
     def test_a_resolver_reads_src_and_refuses_at_its_line(self):

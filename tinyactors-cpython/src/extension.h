@@ -278,7 +278,6 @@ void ta_python_clock_resume(ta_python_host *host, ta_time time);
  * says (MemoryError naming the pool, TinyactorsError for a fault): 0 or -1. */
 int ta_python_turn_raise(ta_python_host *host, ta_python_next next);
 PyObject *ta_python_host_run_until_idle(PyObject *self, PyObject *unused);
-PyObject *ta_python_host_run_forever(PyObject *self, PyObject *unused);
 PyObject *ta_python_host_idle(PyObject *self, PyObject *unused);
 /* An input made outside a turn under asyncio: schedule one turn. */
 void ta_python_loop_schedule(ta_python_host *host);

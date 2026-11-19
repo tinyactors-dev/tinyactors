@@ -85,10 +85,12 @@ Decided by the maintainer (2026-10-13); every item is in
   resolver, and the `<actor name chart>`s `host.boot` spawns. The same
   path as `compile_charts` (`ta_python_compile` takes a
   `ta_python_compilation`), the same `Compiled` and `CompileError`.
-- **`Compiled`** holds the compile result: **`compiled.image`** is a thin
-  view of `ta_compile_image`'s bytes (a read-only buffer, valid until
-  `close`; a read after it raises `TinyactorsError` with
-  `TA_ERROR_STALE`), **`compiled.diagnostics`** the warnings and notes
+- **`Compiled`** holds the compile result: **`compiled.image`** is
+  `ta_compile_image`'s bytes as `bytes`, copied at the first read and kept
+  (valid after `close` too; a first read after it raises
+  `TinyactorsError` with `TA_ERROR_STALE`; the maintainer, 2026-11-19,
+  replacing the buffer view, whose only gain was one copy of an image
+  read once), **`compiled.diagnostics`** the warnings and notes
   of a compilation that succeeded, converted once. It is a context
   manager, `with tinyactors.compile_charts(...) as compiled:`, whose exit
   and **`close()`** call `ta_compile_free`; the collector calls it as a
@@ -470,10 +472,10 @@ is open (`TA_RUN_FAULT`, detail `TA_ERROR_STATE`), which the drain before each r
 drain: Python code a handler runs may call the `Host` to add inputs, post
 or read views; it never takes or acks.
 
-| `ta_python_turn` returns | Synchronous driver (`run_until_idle()`, `run()`, `SimulatedClock.increment(seconds)`) | asyncio (`await host.idle()`) |
+| `ta_python_turn` returns | Synchronous driver (`run_until_idle()`, `SimulatedClock.increment(seconds)`) | asyncio (`await host.idle()`) |
 |---|---|---|
 | `TA_PYTHON_NEXT_YIELD` | check signals (`PyErr_CheckSignals`; a `KeyboardInterrupt` is raised between turns), then turn again | yield to the loop: `loop.call_soon(turn)` |
-| `TA_PYTHON_NEXT_IDLE` | `run_until_idle()` returns; `run()` sleeps to `deadline` (converted with `system.ticksPerSecond`) and turns again; `increment(seconds)` advances the simulated clock (`ta_host_advance_time`, the simulated time as the wall clock) and turns until idle, arming nothing | one `loop.call_at` timer at `deadline` (none at `UINT64_MAX`), replacing the last; `idle()` completes; an input from outside a turn schedules one turn with `loop.call_soon` |
+| `TA_PYTHON_NEXT_IDLE` | `run_until_idle()` returns; `increment(seconds)` advances the simulated clock (`ta_host_advance_time`, the simulated time as the wall clock) and turns until idle, arming nothing | one `loop.call_at` timer at `deadline` (none at `UINT64_MAX`), replacing the last; `idle()` completes; an input from outside a turn schedules one turn with `loop.call_soon` |
 | `TA_PYTHON_NEXT_EXHAUSTED` | raise `MemoryError` naming the pool; the host stays usable and the next turn goes on where the run stopped | the same, from the turn |
 | `TA_PYTHON_NEXT_FAULT` | raise `TinyactorsError` with `ta_status_name(fault)` (the detail); not retried | the same |
 | a handler raised, or a reply's error had no `on_error` | finish the turn (the ack comes anyway), then raise the first | the same |
@@ -487,8 +489,10 @@ or read views; it never takes or acks.
   `trace.watch` ends at a time of the host's clock), and with an encoder
   after every run too (the run's span records are stamped between the
   clocks around it; else they stretch over the handlers of the drain
-  after it, to the next advance), one timer (the sync driver's sleep or
-  one asyncio `TimerHandle`) at `next_deadline`. A host created with a
+  after it, to the next advance), one timer (an asyncio `TimerHandle`) at
+  `next_deadline`; the synchronous driver arms none (`host.run()`, which
+  slept to it, was removed on 2026-11-19: asyncio serves a program that
+  waits for timers). A host created with a
   `SimulatedClock` arms no timer.
 
 ## Lifetimes and thin views
@@ -549,7 +553,7 @@ pays nothing for a field it does not read.
 | send record | the task | dispatch, before scheduling an `async def` processor | every field, at once | the collector | the host's |
 | log `entry` (thin view) | the handler, borrowed | dispatch of a `TA_EFFECT_LOG` | `session`, `label` (`AUXILIARY`), `text` (`EVENT`) on first read | the ack; then stale | the host's |
 | `Compiled` | the application | `compile_charts` | — | `with` exit, `close()` (`ta_compile_free`), or the collector (a fallback) | the creating one |
-| `compiled.image` (thin view) | the `Compiled` | first read | none: a read-only buffer over `ta_compile_image`'s bytes | `close()`; then stale | the creating one |
+| `compiled.image` | the `Compiled`, then the application | first read | `ta_compile_image`'s bytes, copied once | the collector | the creating one |
 | `compiled.diagnostics`, a `CompileError`'s diagnostics | the application | `compile_charts` | every diagnostic, once (their strings live in the result's arena until `ta_compile_free`) | the collector | — |
 | a reply's `result` | the handler | dispatch of a `TA_HOST_EFFECT_REPLY` | the whole result, once | the collector | the host's |
 | `TinyactorsError` from a reply | `on_error`, or the driver | the same dispatch | `code`, `reason`, `path`, `message` | the collector | the host's |
@@ -645,15 +649,8 @@ APIs:
   (`request->scratch`, from the start of `ta_compile_charts` to its
   return), so the extension keeps nothing per `src` past the call.
 - **A `Compiled` holds a compile result** until its `close()`;
-  `compiled.image` is a buffer over it. **`close()` while a buffer
-  exported from `image` is held raises `BufferError`** (decided
-  2026-10-13), as CPython's `bytearray` does when resized with exports:
-  `mv = memoryview(compiled.image); compiled.close()` raises, and the
-  result stays alive until `mv.release()`; without it `bytes(mv)` would
-  read freed memory. The `Compiled` counts its exports in the buffer
-  slots (CPython's `Py_bf_getbuffer` and `Py_bf_releasebuffer`, filled
-  with our functions; in the limited API from 3.11 by CPython's
-  documentation, not yet in the abi3 spike below: unverified).
+  `compiled.image` is a copy of the image as `bytes`, made at its first
+  read, so no buffer refers to the result once it is freed.
 
 ## The "python" datamodel
 
@@ -918,9 +915,8 @@ Registered beside quickjs, first; matched by the chart's
   the turn, for a plain function and an `async def` task alike.
 - **`compile_charts` raises `CompileError` with every diagnostic**, a
   `.py` file's refused construct at its own line, a `ResolveError` at
-  the line and column it names; `compiled.image` read after `close()`
-  raises `TA_ERROR_STALE`, and `close()` while a `memoryview` of it is
-  held raises `BufferError`.
+  the line and column it names; `compiled.image` is `bytes` copied
+  once, and its first read after `close()` raises `TA_ERROR_STALE`.
 - **`TA_EFFECT_REQUEST` is answered in C with `TA_ERROR_INVALID`** (the
   parent's `error.execution`) until run-time fetching is built; no Python
   code runs.

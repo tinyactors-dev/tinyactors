@@ -1600,8 +1600,6 @@ static PyMethodDef ta_python_host_methods[] = {
      ta_python_doc_host_migrate},
     {"run_until_idle", ta_python_host_run_until_idle, METH_NOARGS,
      ta_python_doc_host_run_until_idle},
-    {"run", ta_python_host_run_forever, METH_NOARGS,
-     ta_python_doc_host_run},
     {"idle", ta_python_host_idle, METH_NOARGS, ta_python_doc_host_idle},
     {"close", ta_python_host_close_method, METH_NOARGS,
      ta_python_doc_host_close},

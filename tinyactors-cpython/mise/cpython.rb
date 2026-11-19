@@ -7,6 +7,7 @@
 require 'pathname'
 require 'cache'
 require 'toolchain'
+require 'json'
 
 module CPython
   ROOT = Pathname.new(__dir__).join('..').expand_path
@@ -130,10 +131,25 @@ module CPython
     objects = Dir[ROOT.join(SOURCES).to_s].sort.map do |source|
       relative = Pathname.new(source).relative_path_from(ROOT.join('src')).sub_ext('.o')
       compile(target, source, build.directory.join('objects', relative),
-              [*FLAGS, *includes, *build.defines.map { |define| "-D#{define}" }])
+              [*FLAGS, *includes, version_define(project.fetch('version')),
+               *build.defines.map { |define| "-D#{define}" }])
     end
     target.plugin([*objects, *core].map(&:to_s), into: build.extension.to_s)
     build.extension
+  end
+
+  # pyproject.toml's [project] table, read by the pinned python's tomllib
+  # (Ruby has no TOML reader).
+  def project
+    script = 'import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], "rb"))["project"]))'
+    JSON.parse(IO.popen([pinned('python'), '-c', script, ROOT.join('pyproject.toml').to_s], &:read))
+  end
+
+  # The flag that gives the extension its version, tinyactors.__version__:
+  # pyproject.toml's for a development build, the wheel's for a wheel.
+  def version_define(version)
+    abort "build: #{version.inspect} is not a version" unless version.match?(/\A[0-9A-Za-z.+-]+\z/)
+    "-DTA_PYTHON_VERSION=\"#{version}\""
   end
 
   # src/datamodel/support.py, the "python" datamodel's rewrite and the
