@@ -86,6 +86,26 @@ def reason(words):
     return None
 
 
+REDIRECTION = re.compile(r"^(\d*|&)(>>?|<)(&\d+|&-)?(.*)$")
+
+
+def without_redirections(words):
+    """The words of a command without its shell redirections (`2>&1`,
+    `>/dev/null`, `2> log`), which name no ref: a push to main written
+    `git push origin main 2>&1` pushes to main only."""
+    kept, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+            continue
+        match = REDIRECTION.match(word)
+        if match:
+            skip = not match.group(3) and not match.group(4)  # `>` alone: the file is the next word
+            continue
+        kept.append(word)
+    return kept
+
+
 cd = None  # the directory a `cd` earlier in the command moved to
 for part in re.split(r"&&|\|\||;|\|", command):
     try:
@@ -97,7 +117,7 @@ for part in re.split(r"&&|\|\||;|\|", command):
         continue
     while words and "=" in words[0] and not words[0].startswith("-"):
         words = words[1:]
-    found = reason(words)
+    found = reason(without_redirections(words))
     if found:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
