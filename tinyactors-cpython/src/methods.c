@@ -65,7 +65,7 @@ static PyObject *ta_python_typed_future(ta_python_host *host, const ta_python_ty
     }
     if (host->loop == Py_None) {
         PyErr_Format(PyExc_TypeError, "%s() with no handler returns an awaitable, which needs the asyncio driver "
-                     "(async with Host(...)); under `with`, give it a handler(host, result)", typed->method);
+                     "(async with Host(...)); under `with`, give it a handler(result)", typed->method);
         return NULL;
     }
     PyObject *future = PyObject_CallMethod(host->loop, "create_future", NULL);
@@ -102,7 +102,7 @@ static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typ
         }
     }
     if (!PyCallable_Check(handler) || (on_error != Py_None && !PyCallable_Check(on_error))) {
-        PyErr_Format(PyExc_TypeError, "%s takes a handler(host, result) and on_error(host, error) or None", typed->method);
+        PyErr_Format(PyExc_TypeError, "%s takes a handler(result) and on_error(error) or None", typed->method);
         return NULL;
     }
     ta_python_call call;
@@ -200,12 +200,13 @@ void ta_python_reply(ta_python_host *host, uint32_t index) {
         if (error) {
             PyObject *exception = ta_python_error_from_reply(host->state, error);
             if (exception && on_error != Py_None)
-                called = PyObject_CallFunctionObjArgs(on_error, (PyObject *)host, exception, NULL);
+                called = PyObject_CallFunctionObjArgs(on_error, exception, NULL);
             else if (exception) PyErr_SetObject(host->state->error, exception);
             Py_XDECREF(exception);
         } else if (!(row_timers && result && ta_python_timers_in_seconds(host, result) < 0))
-            called = PyObject_CallFunctionObjArgs(handler, (PyObject *)host, result ? result : Py_None, NULL);
-        if (!called) ta_python_host_keep_error(host);
+            called = PyObject_CallFunctionObjArgs(handler, result ? result : Py_None, NULL);
+        if (!called && error && on_error == Py_None) ta_python_host_keep_error(host); /* the reply's error, nobody to take it */
+        else if (!called) ta_python_handler_failed(host, NULL);
         Py_XDECREF(called);
         Py_DECREF(handler);
         Py_DECREF(on_error);

@@ -71,6 +71,57 @@ class Documents:
         return self.documents[source]
 
 
+class Endpoint:
+    """An I/O processor a protocol vector's config declares: every send to
+    it fails (error.communication), as the vectors expect of a processor
+    nobody serves."""
+
+    def __init__(self, location):
+        if location is not None:
+            self.location = location
+
+    def receive(self, send):
+        send.fail()
+
+
+def config_error(code, reason, path, message):
+    return {"status": STATUS["TA_ERROR_INVALID"],
+            "error": tinyactors.encode({"error": {"code": code, "message": message,
+                                                  "data": {"reason": reason, "path": path}}})}
+
+
+def host_arguments(config):
+    """A protocol vector's whole config as Host's arguments: (system,
+    io_processors, the rest of the config), or the refusal of a config whose
+    shape Host's arguments cannot hold. Host takes the system id and the I/O
+    processors apart from the config (a dict of objects by type), so a
+    config that is not a map, an ioProcessors that is not a list, or an
+    entry that is not a map with a type and nothing but a location cannot
+    be given to it: the adapter answers those with the error core writes
+    for them (docs/host-config.md), and passes every other config through,
+    for core to judge."""
+    if not isinstance(config, dict):
+        return config_error(-32600, "type", "", "a config is a map")
+    rest = dict(config)
+    system = rest.pop("systemID", None)
+    entries = rest.pop("ioProcessors", None)
+    if entries is None:
+        return system, None, rest
+    if not isinstance(entries, list):
+        return config_error(-32602, "type", "ioProcessors", "ioProcessors is a list")
+    processors = {}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            return config_error(-32602, "type", "ioProcessors[%d]" % index, "an I/O processor is a map")
+        for key in entry:
+            if key not in ("type", "location"):
+                return config_error(-32602, "unknown", "ioProcessors[%d].%s" % (index, key), "unknown key")
+        if "type" not in entry:
+            return config_error(-32602, "missing", "ioProcessors[%d].type" % index, "type is the I/O processor's URI")
+        processors[entry["type"]] = Endpoint(entry.get("location"))
+    return system, processors, rest
+
+
 def compile_image(host, charts, documents):
     """charts compiled into one image, added to the host: the segment."""
     sources = [(chart["name"], chart["text"]) for chart in charts]
@@ -84,7 +135,7 @@ class Adapter:
         self.clock = None
         self.sends = []
 
-    def transport(self, host, send):
+    def receive(self, send):
         """A send to another system: kept for host.run, its data written
         with the binding's own codec (no data reads as None, null's CBOR)."""
         self.sends.append({"target": send.target.text, "event": send.event, "origin": send.origin.text,
@@ -103,11 +154,15 @@ class Adapter:
         datamodel = params.get("datamodel", "quickjs")
         if datamodel not in DATAMODELS:
             raise DriverError(-32602, "range", "params.datamodel", "no such datamodel")
-        config = tinyactors.decode(params["config"])
+        arguments = host_arguments(tinyactors.decode(params["config"]))
+        if isinstance(arguments, dict):
+            return arguments
+        system, processors, config = arguments
         self.clock = tinyactors.SimulatedClock()
         self.sends = []
         try:
-            self.host = tinyactors.Host(config, clock=self.clock, transport=self.transport)
+            self.host = tinyactors.Host([], system=system, io_processors=processors, config=config,
+                                        clock=self.clock, transport=self.receive)
         except tinyactors.TinyactorsError as error:
             result = {"status": status_of(error)}
             if error.code is not None:
@@ -135,8 +190,8 @@ class Adapter:
         answered = []
         method = getattr(host, message["method"].replace(".", "_"))
         try:
-            method(lambda host, result: answered.append({"result": result}),
-                   lambda host, error: answered.append({"error": error_map(error)}),
+            method(lambda result: answered.append({"result": result}),
+                   lambda error: answered.append({"error": error_map(error)}),
                    **message.get("params", {}))
         except (tinyactors.TinyactorsError, MemoryError) as error:
             return {"status": status_of(error)}
@@ -161,7 +216,7 @@ class Adapter:
     def actor_spawn(self, params):
         host = self.need_host()
         try:
-            session = host.spawn(host.chart(params["chart"]), params=params.get("params"))
+            session = host.spawn(params["chart"], params=params.get("params")).id
         except (tinyactors.TinyactorsError, MemoryError) as error:
             return {"status": status_of(error)}
         return {"status": 0, "session": session}
@@ -227,19 +282,15 @@ class Scenario:
         self.aliases = {}
         self.outcome = None
         self.clock = tinyactors.SimulatedClock()
-        self.blobs = {}  # the implementation's store (driver.md): hibernated actors' blobs
+        self.store = tinyactors.MemoryStore()  # the implementation's store (driver.md): hibernated actors' blobs
         self.snapshots = {}
         self.migrations_done = []  # the results migration_done got
         self.host = None
 
-    def wake(self, host, session, migration):
-        """WAKE: the actor's blob from the store."""
-        host.wake(session, self.blobs.pop(session))
-
-    def migration_done(self, host, result):
+    def migration_done(self, result):
         self.migrations_done.append(result)
 
-    def log(self, host, entry):
+    def log(self, entry):
         if self.outcome is None and entry.label == "Outcome":
             self.outcome = "pass" if entry.text == "pass" else "fail"
 
@@ -253,10 +304,12 @@ class Scenario:
             return {key: self.value(item) for key, item in value.items()}
         return value
 
-    CONFIG = {"systemID": "conformance", "system": {"ticksPerSecond": 1000}}
+    SYSTEM = "conformance"
+    CONFIG = {"system": {"ticksPerSecond": 1000}}
 
     def run(self, steps):
-        self.host = tinyactors.Host(self.CONFIG, log=self.log, clock=self.clock, wake=self.wake,
+        self.host = tinyactors.Host([], system=self.SYSTEM, config=self.CONFIG, log=self.log, clock=self.clock,
+                                    store=self.store,
                                     migration_done=self.migration_done)
         try:
             for step in steps:
@@ -284,8 +337,8 @@ class Scenario:
                 raise Refused("image names documents the call does not have: %r" % missing)
             compile_image(host, [named[name] for name in step["image"]], self.documents)
         elif "spawn" in step:
-            self.aliases[step["spawn"]] = host.spawn(host.chart(step["chart"]), name=step["spawn"],
-                                                     params=self.value(step.get("params")))
+            self.aliases[step["spawn"]] = host.spawn(step["chart"], name=step["spawn"],
+                                                     params=self.value(step.get("params"))).id
         elif "send" in step:
             host.send(self.session(step["send"]), step["event"], self.value(step.get("data")))
         elif "sendMany" in step:
@@ -297,14 +350,15 @@ class Scenario:
             self.clock.increment(step["advance"] / 1000)  # ticksPerSecond 1000: ticks are milliseconds
         elif "hibernate" in step:
             session = self.session(step["hibernate"])
-            self.blobs[session] = host.hibernate(session)
+            self.store.save(session, host.hibernate(session))
         elif "snapshot" in step:
             self.snapshots[step["snapshot"]] = host.snapshot()
         elif "restore" in step:
             if step["restore"] not in self.snapshots:
                 raise Refused("a restore of a snapshot no step took: %s" % step["restore"])
-            restored = tinyactors.Host.restore(self.snapshots[step["restore"]], self.CONFIG, log=self.log,
-                                               clock=self.clock, wake=self.wake, migration_done=self.migration_done)
+            restored = tinyactors.Host.restore(self.snapshots[step["restore"]], [], system=self.SYSTEM,
+                                               config=self.CONFIG, log=self.log,
+                                               clock=self.clock, store=self.store, migration_done=self.migration_done)
             host.close()
             self.host = restored  # a restart: the restored host replaces the running one
         elif "migrate" in step:
@@ -332,20 +386,18 @@ class W3C:
 
     LOCATION = "http://localhost:8080/scxml"
     BASIC_HTTP = "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor"
-    CONFIG = {"systemID": "w3c",
-              "system": {"ticksPerSecond": 1000, "maxEvents": 1024, "maxActors": 64},
-              "ioProcessors": [{"type": BASIC_HTTP, "location": LOCATION}]}
+    CONFIG = {"system": {"ticksPerSecond": 1000, "maxEvents": 1024, "maxActors": 64}}
     ROUNDS = 200
 
     def __init__(self, documents):
         self.documents = documents
         self.outcome = None
 
-    def log(self, host, entry):
+    def log(self, entry):
         if self.outcome is None and entry.label == "Outcome":
             self.outcome = "pass" if entry.text == "pass" else "fail"
 
-    def post(self, host, send):
+    def receive(self, send):
         """A send to BasicHTTP: written as a POST, read back, and delivered to
         its sender, as an incoming request is; a send to another target
         cannot be written."""
@@ -360,8 +412,9 @@ class W3C:
         charts = [document for index, document in enumerate(self.documents)
                   if index == 0 or document["name"].endswith(".scxml")]
         clock = tinyactors.SimulatedClock()
-        host = tinyactors.Host(self.CONFIG, io_processors={self.BASIC_HTTP: self.post}, log=self.log,
-                               clock=clock)
+        self.location = self.LOCATION  # this object is the BasicHTTP processor: its location, its receive
+        host = tinyactors.Host([], system="w3c", config=self.CONFIG, io_processors={self.BASIC_HTTP: self},
+                               log=self.log, clock=clock)
         try:
             try:
                 host.boot(compile_image(host, charts, self.documents))

@@ -38,7 +38,8 @@ ta_python_module_state *ta_python_state_of_type(PyTypeObject *type) {
     apply(compiled_type) apply(chart_type) apply(send_type) apply(entry_type)               \
     apply(migrated_type) apply(invocation_type)                                                                \
     apply(event_type) apply(support) apply(error) apply(compile_error) apply(resolve_error) apply(diagnostic)    \
-    apply(builtins) apply(attach) apply(check_file) apply(settlers) apply(event_kinds) apply(event_key) apply(time_ns) apply(coroutine_function)
+    apply(builtins) apply(attach) apply(check_file) apply(settlers) apply(event_kinds) apply(event_key) apply(time_ns) apply(coroutine_function) \
+    apply(actor_type) apply(host_config) apply(host_actors)
 
 static int ta_python_module_traverse(PyObject *module, visitproc visit, void *arg) {
     ta_python_module_state *state = PyModule_GetState(module);

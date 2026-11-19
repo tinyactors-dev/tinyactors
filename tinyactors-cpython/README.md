@@ -11,14 +11,15 @@ it between them.
 tinyactors runs those statecharts as actors. A **host** holds the actors,
 up to millions of them, and runs each one's chart when events reach it.
 The host does no I/O. When an actor sends a message out, logs a line or
-starts a service, the host calls a Python function you gave it, and that
-function does the work. Charts can be written in Python (the `"python"`
+starts a service, the host calls an object or a function you gave it,
+and that does the work. Charts can be written in Python (the `"python"`
 datamodel) or in ECMAScript (run by quickjs), and the values actors
 exchange with your program are ordinary Python objects.
 
-This package is a direct binding of the C library: each function and
-method corresponds to one call of the library
-([docs/api-map.md](docs/api-map.md) lists them).
+This package binds the C library: each function and method corresponds
+to calls of the library ([docs/api-map.md](docs/api-map.md) lists them).
+A few items are built on those calls for applications: `Actor`, the
+stores, `compile_dir`, `ask` and `Spawner`.
 [GLOSSARY.md](../GLOSSARY.md) defines the terms these pages use.
 
 ## Installing
@@ -52,26 +53,26 @@ CHART = """<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
     <transition event="hello">
       <assign location="greeted" expr="greeted + 1"/>
       <log label="greeter" expr="f'hello, {_event.data[&quot;who&quot;]} ({greeted})'"/>
-      <send type="urn:example:app" target="out" event="greeted">
+      <send type="app" target="out" event="greeted">
         <content expr="{'count': greeted}"/>
       </send>
     </transition>
   </state>
 </scxml>"""
 
-def app(host, send):                      # an I/O processor: the actor's output
-    print("app got", send.event, send.data)
-    send.answer("thanks")                 # an event back to the sender
+class App:                                # an I/O processor: the actors' output
+    def receive(self, send):
+        print("app got", send.event, send.data)
+        send.answer("thanks")             # an event back to the sender
 
-config = {"systemID": "demo", "ioProcessors": [{"type": "urn:example:app"}]}
-with tinyactors.Host(config, {"urn:example:app": app},
-                     log=lambda host, entry: print("log:", entry.text)) as host:
-    with tinyactors.compile_charts([("greeter.scxml", CHART)]) as compiled:
-        host.add_image(compiled.image)    # the host copies the image
-    session = host.spawn(host.chart("greeter"))
-    host.send(session, "hello", {"who": "world"})
+with tinyactors.compile_charts([("greeter.scxml", CHART)]) as compiled:
+    host = tinyactors.Host(compiled, system="demo", io_processors={"app": App()},
+                           log=lambda entry: print("log:", entry.text))
+with host:
+    greeter = host.spawn("greeter")
+    greeter.send("hello", {"who": "world"})
     host.run_until_idle()
-    host.actor_context(lambda host, result: print(result["variables"]), session=session)
+    host.actor_context(lambda result: print(result["variables"]), session=greeter.id)
     host.run_until_idle()                 # the reply's handler runs at a later drain
 ```
 
@@ -85,24 +86,25 @@ app got greeted {'count': 1}
 
 Step by step:
 
-1. **The config** names the system (`systemID`) and declares one I/O
-   processor, `urn:example:app`. An I/O processor is a type of `<send>`
-   that your program handles. The dict passed after the config maps that
-   type to the function `app`.
-2. **`compile_charts`** turns the SCXML text into an **image**, the
-   compiled form a host runs. `add_image` copies the image into the host,
-   so the compile result can be closed as soon as it returns.
-3. **`spawn`** starts an actor of the chart and returns its **session**,
-   an `int` that identifies the actor from then on. **`send`** puts the
-   `hello` event in the actor's mailbox.
+1. **`compile_charts`** turns the SCXML text into an **image**, the
+   compiled form a host runs (`compile_dir(path)` compiles a directory of
+   charts). The host copies the image when it is created, so the compile
+   result can be closed as soon as `Host` returns.
+2. **`Host`** runs the image, under the system id `demo`, the authority
+   of its actors' addresses. `io_processors` maps each type of `<send>`
+   your program handles to an object whose `receive(send)` gets it.
+3. **`spawn`** starts an actor of the chart and returns it as an
+   **`Actor`**, whose `id` is its **session**, the number that identifies
+   it from then on. **`send`** puts the `hello` event in its mailbox.
 4. **Nothing has run yet.** `spawn` and `send` only record their input.
    `run_until_idle()` runs the actors until none has anything left to do,
    and calls your handlers along the way: `log` for the `<log>`, and
-   `app` for the `<send>`.
+   `App.receive` for the `<send>`.
 5. **`actor_context`** asks the host for the actor's variables. It returns
    `None` at once. The answer arrives as a reply, and the reply goes to
    its handler during a later run, which is why the program calls
-   `run_until_idle()` a second time.
+   `run_until_idle()` a second time. Under asyncio, `await
+   greeter.context()` gives it.
 
 ## How a host runs
 
@@ -110,7 +112,8 @@ A host never runs on its own. Your program drives it, and each run
 follows the same cycle:
 
 - **Inputs** are the calls that give the host work: `spawn`, `send`,
-  `send_many`, `terminate`, `boot`, `wake`. Each is checked and applied
+  `send_many`, `terminate`, `boot`, `wake`, and an `Actor`'s `send` and
+  `terminate`. Each is checked and applied
   when you call it, and raises at once when it is refused. The actors
   react later.
 - **A turn** is one pass of the driver. It runs the actors that have
@@ -120,6 +123,7 @@ follows the same cycle:
   **effects**.
 - **Handlers** receive the effects in batches. When every handler in a
   batch has returned, the host **acknowledges** the batch and moves on. A
+  handler gets no host argument: each view and record has `.host`. A
   handler may call the host again: an input it makes applies at once, and
   the effects that input causes arrive in a later batch.
 
@@ -133,27 +137,30 @@ every field is copied before the handler is scheduled, so it can answer
 after the batch is gone.
 
 When a handler raises, the host still finishes the turn and acknowledges
-the batch, and then the driver raises the first exception. A host is
+the batch, and then the driver raises the first exception, unless the
+host has an `on_handler_error(error, effect)` hook (below, "Actors"). A host is
 used from the thread that created it; calls from other threads are
 refused.
 
 ### Images, segments and versions
 
-`add_image` runs an image as a new **segment** of the host and returns
-the segment's number. A segment is one actor system with its own memory.
+`Host(charts, ...)` runs each image it is given as a **segment**, in
+order, and `add_image` runs another one later and returns the segment's
+number. A segment is one actor system with its own memory.
 A host can run many segments at once.
 
 When an image has a chart whose name the host already runs, that image
 holds a new **version** of the chart. `host.chart(name)` returns a
-`ChartRef` for the current version. New actors start on it, and running
+`ChartRef` for the current version, and `host.spawn(name)` spawns on it.
+New actors start on it, and running
 actors stay on their version until a migration moves them (below,
 "Migration").
 
 `compile_system` compiles a `<system>` manifest instead of a list of
 charts. The manifest names the charts (`<chart name src>`) and the actors
 the application starts with (`<actor name chart>`). `host.boot(segment)`
-spawns those actors under their names, and `host.actor_by_name(name)`
-finds one again. For an image from `compile_charts`, `boot` spawns the
+spawns those actors under their names, and `host.actor(name)` finds one
+again. For an image from `compile_charts`, `boot` spawns the
 first chart compiled.
 
 ### Drivers and time
@@ -177,15 +184,16 @@ await `idle()` when you need the effects before going on:
 ```python
 import asyncio
 
-async def app(host, send):                # async def: runs as a task, gets a record
-    await asyncio.sleep(0.01)             # your I/O
-    send.answer("thanks")
+class App:
+    async def receive(self, send):        # async def: runs as a task, gets a record
+        await asyncio.sleep(0.01)         # your I/O
+        send.answer("thanks")
 
 async def main():
-    async with tinyactors.Host(config, {"urn:example:app": app}) as host:
-        with tinyactors.compile_charts([("greeter.scxml", CHART)]) as compiled:
-            host.add_image(compiled.image)
-        host.send(host.spawn(host.chart("greeter")), "hello", {"who": "world"})
+    with tinyactors.compile_charts([("greeter.scxml", CHART)]) as compiled:
+        image = compiled.image
+    async with tinyactors.Host(image, system="demo", io_processors={"app": App()}) as host:
+        host.spawn("greeter").send("hello", {"who": "world"})
         await host.idle()
 
 asyncio.run(main())
@@ -202,15 +210,16 @@ Questions about the host and its actors are **typed methods**:
 `trace_end` and `trace_spans_decode`. The params are keywords, passed to
 the host as given, and the host checks them.
 
-Under asyncio, await one: `state = await host.actor_state(session=s)`
+Under asyncio, await one: `state = await host.actor_state(session=s)`,
+or the `Actor`'s shorthand `await actor.state()`,
 gives the result as Python values, and an error raises as the
 `TinyactorsError` subclass of its code (`StaleError` for a session that
 does not exist), whose `code`, `reason` and `path` say what was wrong. A
 method still pending when the host closes never completes.
 
 Each also takes `(handler, on_error=None, /, **params)`, which returns
-`None`: `handler(host, result)` runs when the reply is handled, in a
-later turn, and an error goes to `on_error(host, error)`. Without
+`None`: `handler(result)` runs when the reply is handled, in a
+later turn, and an error goes to `on_error(error)`. Without
 `on_error`, the driver raises it after the turn. This is the form for the
 synchronous driver, which has no event loop to complete an awaitable on:
 there, a method given no handler raises `TypeError`. There is no
@@ -234,9 +243,9 @@ absent before that. `actor_state` and `actor_context` refuse a
 hibernated actor (reason `"state"`): wake it first.
 
 ```python
-host.actor_get(lambda host, actor: print(actor["timers"]), session=session)
+host.actor_get(lambda actor: print(actor["timers"]), session=session)
 # [{'sendid': None, 'event': 'tick', 'due': 1.5}, {'sendid': 'sla', 'event': 'breach', 'due': 60.0}]
-host.actor_state(lambda host, state: print(state["history"]), session=session)
+host.actor_state(lambda state: print(state["history"]), session=session)
 # {'h': {'work': {'a': 'a2'}}}   after work was left from a2: h, a deep history, returns there
 ```
 
@@ -248,6 +257,37 @@ handler (below, "Telemetry"). Handlers of typed methods still waiting for
 a reply are dropped without being called, and running services are
 dropped without `stop`. The garbage collector frees a host you did not
 close, but without the last telemetry, so close it.
+
+## Actors
+
+`host.spawn(chart, name=None, params=None, traceparent=None)` returns an
+**`Actor`**, a small immutable value: `id` (its session), `address`
+(`tinyactors://<system>/#_scxml_<id>`), `host`, and the calls that talk to
+it: `send(event, data=None, *, sendid=None, traceparent=None)`,
+`terminate()`, and under asyncio `await state()`, `context()`, `get()`
+(the typed methods) and `await done`, its donedata when it reaches a
+top-level final state. Two `Actor` values of one session are equal and
+hash alike; the host keeps no table of them, so one is made wherever the
+API gives one. `host.actor(which)` gives the live actor of a session, a
+name it was spawned with, or a local address, and raises `StaleError`
+when none answers; `await host.actors(chart=None)` lists the live ones
+(of one chart). A `Send` names its sending actor as `send.sender`.
+
+The host tells you when a top-level actor ends:
+
+- **`on_done(actor, donedata)`**: it reached a top-level final state;
+  `donedata` is its `<donedata>`, as a value.
+- **`on_error(actor, error)`**: it faulted, and the host reclaimed it;
+  `error` is a `TinyactorsError`.
+
+And when one of your handlers raises: **`on_handler_error(error,
+effect)`** gets the exception and what the handler was handling (the
+`Send`, `LogEntry`, `Invocation` or `Migrated`, or `None` for a
+telemetry, store, migration or typed-method handler). A send whose
+processor raised is failed for it either way (`error.communication` for
+its sender). Without the hook, the driver raises the first exception
+after the turn. A `KeyboardInterrupt` or `SystemExit` always reaches the
+driver.
 
 ## Charts in Python
 
@@ -321,14 +361,31 @@ mutable value.
 
 ## I/O processors
 
-An I/O processor is how an actor's output reaches your program. The
-config declares the types (`"ioProcessors": [{"type": ...}]`), and
-`Host(config, io_processors)` maps each type to `handler(host, send)`.
-Every `<send>` of that type reaches the handler once, as a `Send`:
-`send.event`, `send.data`, `send.target`, `send.sendid`, `send.session`
-(the sender) and `send.traceparent`.
+An I/O processor is how an actor's output reaches your program: one
+object per external system your actors talk to (a database, the open
+websockets), each with a `receive(send)` method (it may be `async def`)
+that switches on `send.event`. `Host(..., io_processors={type:
+processor})` gives them to the host; the config's `ioProcessors` are
+made from it, in its order, each `{type, location}` with the location the
+processor's optional `location` attribute. A plain function is refused:
+a processor is an object. Types are plain names (`chat:db`). Every
+`<send type=...>` of that type reaches `receive` once, as a `Send`:
+`send.event`, `send.data`, `send.target`, `send.sendid`, `send.session`,
+`send.sender` (the sending `Actor`), `send.host` and `send.traceparent`.
 
-The handler does the I/O and then does one of two things:
+```python
+class Database:
+    location = "postgres://orders"        # optional: _ioprocessors' location
+
+    def receive(self, send):
+        if send.event == "save":
+            rows.append(send.data)
+            send.answer("saved")
+        else:
+            send.fail()
+```
+
+The processor does the I/O and then does one of two things:
 
 - **`send.answer(event, data=None, *, traceparent=send.traceparent,
   origin=None, raw=None)`** gives the sending actor an event in reply,
@@ -344,20 +401,20 @@ XState drops an event sent to a stopped actor, and nothing raises. Any
 other refusal (a second answer, a thin view read after its batch, a
 closed host) raises `TinyactorsError`.
 
-A handler may also do neither, when the send needs no reply. The sending
-actor waits while the handler runs, so a plain function's `answer()` or
-`fail()` reaches it before its next step, as SCXML has a `<send>`
+A processor may also do neither, when the send needs no reply. The
+sending actor waits while `receive` runs, so a plain method's `answer()`
+or `fail()` reaches it before its next step, as SCXML has a `<send>`
 behave; the other actors go on meanwhile. So hand the message to your
 transport and return: SCXML needs the send dispatched, not delivered,
-and a handler that waits for delivery (a request's response, a
+and a processor that waits for delivery (a request's response, a
 broker's confirmation) holds its sender that long. An `async def`
-handler answers after the sending actor has gone on. A handler that
-raises before answering has its send failed for it, and the driver
-raises the exception after the turn.
+`receive` answers after the sending actor has gone on. One that raises
+before answering has its send failed for it, and the exception goes to
+`on_handler_error`, or the driver raises it after the turn.
 
-Read the fields inside the handler: a plain function gets a thin view
-(above, "How a host runs"). To answer later, write the handler as
-`async def`. Its record answers at any time while the host lives.
+Read the fields inside `receive`: a plain method gets a thin view
+(above, "How a host runs"). To answer later, write it as `async def`.
+Its record answers at any time while the host lives.
 
 ## Errors
 
@@ -367,7 +424,7 @@ Read the fields inside the handler: a plain function gets a thin view
 | `StaleError`, `StateError`, `InvalidError`, `UnsupportedError` (each a `TinyactorsError`) | the host refused a call, a thin view was read after its batch, or a typed method's reply was an error: an actor or handle that is gone, a call the host cannot make now, an argument it refuses, a value it does not take | catch the class you handle; `error.status` is the core's name for the status (`"TA_ERROR_STALE"`, ...), and a typed method's error also has `code`, `reason` and `path` |
 | `TinyactorsError` | any other refusal, or a run that faulted | read `error.status` |
 | `MemoryError` naming a pool | the host ran out of a pool its config sized | the host stays usable, and the next run goes on where this one stopped; size the config (below, "Sizing the config") |
-| your handler's exception | a handler raised | the driver raises the first one after the turn |
+| your handler's exception | a handler raised | the host's `on_handler_error(error, effect)` gets it; without one, the driver raises the first one after the turn |
 | `error.execution`, `error.communication` | inside a chart | handled by the chart, as SCXML defines; when the chart's code failed, `error.execution`'s `_event.data` is `{"reason", "message"}`: `"exception"` with the exception's type and text (`"NameError: name 'x' is not defined"`), `"memory"` for a `MemoryError` (on quickjs, past its memory limit, 1 GiB), and on quickjs `"fuel"` past its `maxOps`; see the core's documentation |
 
 `CompileError` and `ResolveError` are subclasses of `TinyactorsError`.
@@ -398,29 +455,29 @@ class Counter:
     def __init__(self, invocation):
         self.invocation, self.count = invocation, 0
 
-    def receive(self, host, send):            # a <send target="#_counter">, or autoforwarded
+    def receive(self, send):                  # a <send target="#_counter">, or autoforwarded
         self.count += 1
         if send.event == "finish":
             self.invocation.done({"total": self.count})   # done.invoke.counter
         else:
             self.invocation.send_back("pong", {"n": self.count})
 
-    def stop(self, host):                     # the invoker cancelled it (left the state, ended)
+    def stop(self):                           # the invoker cancelled it (left the state, ended)
         ...
 
-host = tinyactors.Host(config, services={"urn:example:counter": lambda host, invocation: Counter(invocation)})
+host = tinyactors.Host(compiled, system="shop", services={"urn:example:counter": Counter})
 ```
 
 - **The invocation** has `session` (the invoker), `invokeid`, `type`,
   `src`, `data` (the params, or the content), `traceparent`, `running`
-  and `restored` (below, "Snapshots"). `send_back(event, data=None)`
+  and `restored` (below, "Snapshots"), and `host`. `send_back(event, data=None)`
   gives the invoker an event with its `invokeid` set. `done(data=None)`
   ends the service with `done.invoke.<invokeid>`. The invocation is a
   record, so you can keep it and answer while the service runs. After
   `done` or a cancel, these calls raise `TinyactorsError` with
   `TA_ERROR_STALE`.
-- **The service** may have `receive(host, send)`, which gets each send to
-  it as a thin view (`type` is `None`), and `stop(host)`, which gets the
+- **The service** may have `receive(send)`, which gets each send to
+  it as a thin view (`type` is `None`), and `stop()`, which gets the
   cancel. Both are optional. A service that ended with `done` is neither
   stopped nor kept, so a handler may call `done` and return at once.
 - **A failure** of any kind gives the invoker `error.communication`: no
@@ -442,24 +499,23 @@ With `"telemetry"` in its config, the host traces its actors and writes
 OTLP requests (protobuf): spans of every macrostep, `<log>` lines and
 failed actions as log records, and counters as metrics. Traces and logs
 are pushed: the host hands each request to
-`telemetry=handler(host, signal, data)` as `bytes`, with `signal`
+`telemetry=handler(signal, data)` as `bytes`, with `signal`
 `"traces"` or `"logs"`, and your handler posts them. Metrics are pulled:
 call `host.metrics()` when your exporter wants them.
 
 ```python
 import urllib.request
 
-def export(host, signal, data):           # OTLP/HTTP, to a collector or otel-tui
+def export(signal, data):                 # OTLP/HTTP, to a collector or otel-tui
     request = urllib.request.Request("http://localhost:4318/v1/" + signal, data,
                                      {"Content-Type": "application/x-protobuf"})
     urllib.request.urlopen(request, timeout=2).close()
 
-config = {"systemID": "shop",
-          "telemetry": {"flushInterval": 5_000_000_000,       # host clock: ns by default
+config = {"telemetry": {"flushInterval": 5_000_000_000,       # host clock: ns by default
                         "resource": {"service.name": "shop"}}}
-with tinyactors.Host(config, telemetry=export) as host:
+with tinyactors.Host(compiled, system="shop", config=config, telemetry=export) as host:
     ...
-    export(host, "metrics", host.metrics())
+    export("metrics", host.metrics())
 ```
 
 The handler runs inside the turn, so a slow post holds up the host (and,
@@ -484,12 +540,13 @@ from opentelemetry import propagate, trace
 
 tracer = trace.get_tracer("shop")
 
-def warehouse(host, send):                # continue the actor's trace in the application
-    with tracer.start_as_current_span("warehouse.reserve",
-                                      context=propagate.extract({"traceparent": send.traceparent})):
-        carrier = {}
-        propagate.inject(carrier)
-        send.answer("reserved", traceparent=carrier["traceparent"])
+class Warehouse:                          # continue the actor's trace in the application
+    def receive(self, send):
+        with tracer.start_as_current_span("warehouse.reserve",
+                                          context=propagate.extract({"traceparent": send.traceparent})):
+            carrier = {}
+            propagate.inject(carrier)
+            send.answer("reserved", traceparent=carrier["traceparent"])
 
 with tracer.start_as_current_span("POST /orders"):
     carrier = {}
@@ -521,7 +578,7 @@ and events, and its `flags`, `links`, `resource` and `scope`.
 
 ```python
 host.trace_configure(print, sample=0.01)                 # 1% of new traces
-host.trace_watch(lambda host, result: print("watch", result["id"]),
+host.trace_watch(lambda result: print("watch", result["id"]),
                  rules=[{"chart": "checkout", "sample": "sample", "detail": "full"}],
                  seconds=60)                             # every checkout, for a minute
 ```
@@ -530,58 +587,52 @@ host.trace_watch(lambda host, result: print("watch", result["id"]),
 
 Most actors spend most of their time waiting. Hibernation lets a host
 keep millions of actors while only some of them are in memory: the rest
-are blobs in your store, and the host asks for one back when it has work.
-The host does no I/O, so storing and loading the blobs is your
-program's job.
-
-- **`host.sweep(max_scan, limit) -> [session, ...]`** returns at most
-  `limit` actors that have not run since the previous sweep and can be
-  hibernated now (a CLOCK sweep over at most `max_scan` slots). Calling
-  it regularly is what makes "not run since the previous sweep" mean
-  cold.
-- **`host.hibernate(session) -> bytes`** takes the actor out of memory
-  and returns its blob for you to store. It raises `TinyactorsError` when
-  the actor is not at rest (events waiting, in a macrostep, an invoked
-  child), or when a `"python"` actor holds a value outside the value
-  table (a `set`, a `tuple`, an object). The actor stays resident then. A
-  pending delayed send stays in the host and wakes the actor when it
-  falls due.
-- **`wake=handler(host, session, migration)`** is called when a
-  hibernated actor has work: an event or a due delayed send (`migration`
-  is `None`), or a migration that asks for it (`migration` is its id;
-  below, "Migration"). The events wait in the mailbox while your handler
-  loads the blob and calls **`host.wake(session, blob)`**, then or later.
-  It takes the session's latest blob only: one of an earlier hibernation
-  (a store that fell behind) raises `TinyactorsError` with
-  `TA_ERROR_STALE`, another session's `TA_ERROR_INVALID`, and the actor
-  stays hibernated. A blob belongs to the host that made it: each `Host`
-  draws random bits from `os.urandom` when it is created, so a blob of
-  another host, even for a session of the same number running the same
-  image, raises `TA_ERROR_INVALID` too. A host made by `Host.restore`
-  keeps the snapshot's identity and wakes the blobs its original
-  hibernated.
-  The handler is called once per hibernation, however many events come.
-  Without a `wake` handler the host does not ask: the actor stays
-  hibernated, and its events wait, until you call `host.wake`.
+are blobs in a **store**, and the host loads one back when it has work.
+The host does no I/O; the store is an object of yours, or one of the two
+this package ships.
 
 ```python
-import sqlite3
-
-db = sqlite3.connect("actors.db", isolation_level=None)
-db.execute("CREATE TABLE IF NOT EXISTS blobs (session INTEGER PRIMARY KEY, blob BLOB)")
-
-def wake(host, session, migration):
-    (blob,) = db.execute("SELECT blob FROM blobs WHERE session = ?", (session,)).fetchone()
-    host.wake(session, blob)
-
-def evict(host):                          # after a turn: the cold actors leave
-    for session in host.sweep(1 << 20, 1024):
-        try:
-            blob = host.hibernate(session)
-        except tinyactors.TinyactorsError:    # not at rest, or a value outside the table
-            continue
-        db.execute("INSERT OR REPLACE INTO blobs VALUES (?, ?)", (session, blob))
+store = tinyactors.SQLiteStore("actors.db")      # one row per hibernated actor
+host = tinyactors.Host(compiled, system="shop", store=store, resident=1000)
 ```
+
+- **`store`** is any object with `save(session, blob)`, `load(session)
+  -> bytes` and `delete(session)`. `tinyactors.SQLiteStore(path)` keeps
+  the blobs in one table of an SQLite file (`close()` it after the host);
+  `tinyactors.MemoryStore()` in a dict, for tests.
+- **`resident`** is the most actors kept in memory. After a turn that
+  left more, the host takes the coldest past the bound (the CLOCK sweep:
+  actors that did not run since the previous sweep), hibernates them and
+  saves their blobs. An actor that cannot hibernate now stays resident:
+  one not at rest (events waiting, in a macrostep, an invoked child, a
+  running invocation), or a `"python"` actor holding a value outside the
+  value table (a `set`, a `tuple`, an object). A pending delayed send
+  stays in the host and wakes its actor when it falls due.
+- **When an event comes for a hibernated actor** (or its delayed send
+  falls due), the host loads its blob from the store, wakes it, and
+  deletes the blob; the events wait in its mailbox meanwhile. Terminating
+  a hibernated actor deletes its blob too. A `save` or `load` that raises
+  goes to `on_handler_error`, or the driver raises it after the turn; the
+  actor stays where it was (resident for a `save`, hibernated for a
+  `load`). Without a store, an event for a hibernated actor waits until
+  you call `host.wake`.
+
+A blob belongs to the host that made it: each `Host` draws random bits
+from `os.urandom` when it is created, so a blob of another host, even for
+a session of the same number running the same image, is refused
+(`TA_ERROR_INVALID`). A host made by `Host.restore` keeps the snapshot's
+identity and wakes the blobs its original hibernated. Only the latest
+blob of a session wakes it: one of an earlier hibernation (a store that
+fell behind) is refused with `TA_ERROR_STALE`.
+
+**Your own policy.** The host's calls under the store are there for an
+application that decides itself what to hibernate and when:
+**`host.sweep(max_scan, limit) -> [session, ...]`** returns at most
+`limit` actors that have not run since the previous sweep and can be
+hibernated now (over at most `max_scan` slots);
+**`host.hibernate(session) -> bytes`** takes one out of memory and
+returns its blob (save it in the host's store, which loads it when an
+event comes); **`host.wake(session, blob)`** brings one back.
 
 **Plan the capacity up front.** A hibernated actor keeps its slot and its
 session's record in the host (about 64 B), so `system.maxActors` counts
@@ -592,13 +643,13 @@ with `maxActors`,
 hibernated actors included. For `R` actors resident out of `N`:
 
 ```python
-config = {"systemID": "big", "system": {
+config = {"system": {
     "maxActors": N + room, "maxEvents": 4096,
     "instanceBytes": 2048 * (R + room), "stringBytes": 16384 + 64 * (R + room)}}
 ```
 
 `tools/stress.py` (`mise run stress`) is this pattern at scale: two
-million actors, at most 1000 resident, the rest in SQLite (below,
+million actors, `resident=1000`, the rest in SQLite (below,
 "Performance").
 
 ## Migration
@@ -623,21 +674,21 @@ version takes what it keeps from there:
   means none. A `chart` the host does not have raises `TinyactorsError`
   with `TA_ERROR_INVALID`, and a `session` that ended `TA_ERROR_STALE`: a
   migration that could move nothing is refused rather than reported done.
-- **`migration_done=handler(host, result)`** gets the end of each
+- **`migration_done=handler(result)`** gets the end of each
   migration, with `{"migration", "migrated", "failed": [{"session",
   "reason"}, ...], "pending": [session, ...]}`: `failed` the actors it
   could not move and why (core's status, by name), `pending` those its
   timeout left behind. It is a handler of the host, not of the call, so it
   also gets the end of a migration that a restored host goes on with.
-- **`migrated=handler(host, migrated)`** gets each actor moved, as a thin
+- **`migrated=handler(migrated)`** gets each actor moved, as a thin
   `Migrated` view of `session`, `segment`, `chart` (its name) and
   `migration`.
 
 **When a migration ends.** A migration ends when every actor it looks at
 has moved, or at its `timeout`. A hibernated actor moves once it is
-woken. With `wake=True` the migration asks for it through the `wake`
-handler, with the migration's id, and asks again if it finds the actor
-hibernated after a wake. Without `wake`, a hibernated actor that nobody
+woken. With `wake=True` the migration asks for it, and the host loads it
+from its store; it asks again if it finds the actor hibernated after a
+wake. Without `wake`, or without a store, a hibernated actor that nobody
 wakes holds the migration until its timeout, or forever without one, and
 `migration_done` is never called: give such a migration a `timeout`.
 Each run costs the migration one quantum of actors (`migrateQuantum` in
@@ -651,35 +702,12 @@ one whose variables or pending delayed sends hold a value outside the
 value table. An actor that is running an invocation waits until the
 invocation ends.
 
-**With most actors hibernated, wake them a batch at a time.** A
-migration with `wake=True` asks for every hibernated actor early. Wake
-them all and they are all resident at once. Instead, queue the
-migration's requests and wake a batch per round; the migration takes
-each woken actor in its next runs. An event's request (`migration` is
-`None`) still wakes its actor at once, and the migration takes that one
-too. Put actors back to sleep once they have moved. One put back before
-it moved is asked for again, which costs work but does not stall the
-migration.
-
-```python
-asked = collections.deque()
-
-def wake(host, session, migration):
-    if migration is not None:
-        asked.append(session)             # the migration's: a batch at a time
-    else:
-        host.wake(session, store.get(session))   # an event's: now
-
-host = tinyactors.Host(config, wake=wake, migration_done=on_done)
-...
-migration = host.migrate(wake=True)
-while not done:
-    for _ in range(min(256, len(asked))):
-        session = asked.popleft()
-        host.wake(session, store.get(session))
-    host.run_until_idle()
-    evict_moved(host)                     # the moved actors at rest go back to the store
-```
+**With most actors hibernated, the bound holds.** A migration with
+`wake=True` asks for every hibernated actor early. With `resident=R` the
+host loads them while fewer than `R` actors are in memory and keeps the
+rest for later turns, hibernating the moved actors at rest to make room,
+so the population moves `R` at a time. An event's actor is loaded at
+once, and the migration takes that one too.
 
 `tools/migration.py` (`mise run migration`) is this pattern at scale, on
 SQLite (below, "Performance").
@@ -689,10 +717,12 @@ SQLite (below, "Performance").
 `host.snapshot() -> bytes` copies the whole host into one blob: every
 segment's memory (actors, queues, timers, the hibernated actors'
 records), both datamodels' sessions and payloads, the images, the system
-id and the host's time. `tinyactors.Host.restore(snapshot, config, ...)`
-creates a new host running it. Pass the config the snapshot was taken
-with (its system id is checked; its I/O processors and tick rate are not
-in the snapshot) and the handlers `Host(...)` takes. Every session id
+id and the host's time. `tinyactors.Host.restore(snapshot, charts, system=..., ...)`
+creates a new host running it. Pass what `Host(...)` takes: the system
+the snapshot was taken with (its id is checked), its config (its I/O
+processors and tick rate are not in the snapshot), and the handlers.
+`charts` are the images you run now: those the snapshot holds are kept,
+and the others are added as new versions, ready for `host.migrate`. Every session id
 stays the same, and the host's clock goes on from the snapshot's time,
 whatever clock reads it: a new `SimulatedClock`, or the real clock in
 another process or on another machine.
@@ -701,7 +731,7 @@ another process or on another machine.
 blob = host.snapshot()                    # quiescent: not from a handler
 host.close()
 ...
-host = tinyactors.Host.restore(blob, config, log=log, wake=wake)
+host = tinyactors.Host.restore(blob, compiled, system="shop", config=config, log=log, store=store)
 ```
 
 - **A snapshot is valid only for the same build of the library.** It holds
@@ -720,8 +750,8 @@ host = tinyactors.Host.restore(blob, config, log=log, wake=wake)
   stand-ins for a copy that must not reach the real services. A type with
   no handler gives its invokers `error.communication`.
 - **Hibernated actors stay in your store.** The snapshot holds their
-  records, not their blobs, and the restored host asks for them through
-  `wake` as before. A copy that hibernates actors needs its own copy of
+  records, not their blobs, and the restored host loads them from the
+  store it is given, as before. A copy that hibernates actors needs its own copy of
   the store, since it writes blobs too.
 - **The host must be quiescent.** A snapshot is refused with
   `TA_ERROR_STATE` from a handler, while an effect or a typed method's
@@ -750,14 +780,14 @@ only moves the dict:
 ```python
 links = {}                                   # system id -> a connection of yours
 
-def transport(host, send):                   # the outgoing half
+def transport(send):                         # the outgoing half
     link = links.get(send.target.system)
     if link is None:
         send.fail()                          # no connection: error.communication
     else:
         link.write(tinyactors.encode(send.message))
 
-host = tinyactors.Host({"systemID": "a"}, transport=transport)
+host = tinyactors.Host(compiled, system="a", transport=transport)
 
 def on_frame(link, frame):                   # the incoming half, on the other side
     message = tinyactors.decode(frame)
@@ -969,19 +999,23 @@ how to use it.
 | `compile_charts(sources, resolver=None) -> Compiled` | compiles `(name, text)` pairs into one image; raises `CompileError` |
 | `compile_system(manifest, resolver=None) -> Compiled` | compiles a `<system>` manifest of charts and boot actors |
 | `Compiled.image`, `.diagnostics`, `.close()` | the image's bytes, copied at the first read; the warnings and notes; a context manager |
-| `Host(config, io_processors=None, *, log, clock, telemetry, wake, migrated, services, migration_done, transport)` | a host, with its handlers (`transport`: every send to another system); a context manager for `with` and `async with` |
-| `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs an image; the current version of a chart |
-| `spawn(ref, name=None, params=None, traceparent=None) -> session` | starts an actor |
-| `send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)`, `send(message)` | gives an actor an event; `target` is a session or a local address; a message is another system's `send.message` |
+| `Host(charts, *, system, io_processors, config, clock, store, resident, log, telemetry, services, transport, on_done, on_error, on_handler_error, migrated, migration_done)` | a host running the images, with its processors and handlers; a context manager for `with` and `async with` |
+| `system` | the host's system id |
+| `add_image(image) -> segment`, `chart(name) -> ChartRef` | runs another image (a new version); the current version of a chart |
+| `spawn(chart, name=None, params=None, traceparent=None) -> Actor` | starts an actor of a chart (a name, or a `ChartRef`) |
+| `actor(session, name or address) -> Actor`, `await actors(chart=None)` | a live actor; the live actors |
+| `Actor.id`, `.address`, `.send(...)`, `.terminate()`, `await .state()`, `.context()`, `.get()`, `await .done` | an actor's handle |
+| `send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)`, `send(message)` | gives an actor an event; `target` is a session, an `Actor` or a local address; a message is another system's `send.message` |
 | `fail(target, sendid=None)` | reports a send that could not be delivered: `error.communication` for its sender |
 | `send_many([(target, event, data, traceparent), ...]) -> accepted` | many sends in one call; returns how many were accepted |
-| `terminate(session)`, `boot(segment)`, `actor_by_name(name)` | ends an actor; spawns an image's boot actors; finds a named actor (`None` when there is none) |
+| `terminate(session)`, `boot(segment)` | ends an actor; spawns an image's boot actors |
 | `run_until_idle()`, `await idle()`, `next_deadline` | the drivers (above, "Drivers and time") |
 | `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`, `host_config`, `trace_*` | typed methods (above, "Typed methods") |
 | `metrics() -> bytes` | the host's counters as OTLP |
-| `sweep`, `hibernate`, `wake` | hibernation |
+| `MemoryStore()`, `SQLiteStore(path)` | stores of hibernated actors' blobs, for `store=` |
+| `sweep`, `hibernate`, `wake` | hibernation by hand |
 | `migrate(...) -> migration` | migration |
-| `snapshot() -> bytes`, `Host.restore(snapshot, config, ...)` | snapshots |
+| `snapshot() -> bytes`, `Host.restore(snapshot, charts, system=..., ...)` | snapshots |
 | `close()`, `closed` | frees the host |
 | `SimulatedClock()`, `.increment(seconds)`, `.now` | a clock for tests |
 | `encode(value) -> bytes`, `decode(data)`, `Address`, `UNDEFINED` | the value table |

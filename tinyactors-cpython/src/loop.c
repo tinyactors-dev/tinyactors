@@ -172,7 +172,8 @@ static ta_python_next ta_python_turn(ta_python_host *host) {
         case TA_RUN_EFFECTS:      /* senders waited for the batch the drain acked: they go on now */
         case TA_RUN_EFFECTS_FULL: continue; /* run again now */
         case TA_RUN_YIELDED:      return TA_PYTHON_NEXT_YIELD; /* budget spent, actors still runnable */
-        case TA_RUN_IDLE:         if (host->inputs) return TA_PYTHON_NEXT_YIELD; /* handlers fed inputs in the
+        case TA_RUN_IDLE:         ta_python_host_evict(host); /* store=, resident=: the surplus hibernated */
+                                  if (host->inputs) return TA_PYTHON_NEXT_YIELD; /* handlers fed inputs in the
                                                                                     drain: turn again for them */
                                   host->deadline = run.next_deadline; /* UINT64_MAX: none */
                                   return TA_PYTHON_NEXT_IDLE;

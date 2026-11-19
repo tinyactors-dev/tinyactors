@@ -29,12 +29,11 @@ class Scope(unittest.TestCase):
         """A <foreach>'s item and index and the names a <script> assigns
         outside its defs are the chart's variables, None until set (SCXML
         4.6), and hibernate with the rest."""
-        logs, blobs = Logs(), {}
-        with host_with([("c.scxml", fixture("test_datamodel/declared.python.scxml"))], log=logs,
-                       wake=lambda host, session, migration: host.wake(session, blobs.pop(session))) as host:
+        logs, store = Logs(), tinyactors.MemoryStore()
+        with host_with([("c.scxml", fixture("test_datamodel/declared.python.scxml"))], log=logs, store=store) as host:
             session = host.spawn(host.chart("c"))
             host.run_until_idle()
-            blobs[session] = host.hibernate(session)
+            store.save(session.id, host.hibernate(session))
             host.send(session, "report")
             host.run_until_idle()
         self.assertEqual(logs.labelled("before"), ["[None, None]"])
@@ -133,14 +132,14 @@ class Events(unittest.TestCase):
     def test_captured_data_is_a_copy(self):
         got = []
 
-        def processor(host, send):
+        def processor(send):
             got.append(send.data)
 
         run(fixture("test_datamodel/captured-data.python.scxml"), processors={APP: processor})
         self.assertEqual(got, [{"v": [1, 2, 3]}])  # the session's later change is not seen
 
     def test_a_value_outside_the_table_does_not_cross(self):
-        logs = run(fixture("test_datamodel/outside-table.python.scxml"), processors={APP: lambda host, send: None})
+        logs = run(fixture("test_datamodel/outside-table.python.scxml"), processors={APP: lambda send: None})
         self.assertEqual(logs.labelled("e"), ["refused"])
 
 

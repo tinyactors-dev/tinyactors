@@ -17,28 +17,30 @@ static const char ta_python_doc_module[] =
     "- Charts. compile_charts() compiles SCXML documents into an image\n"
     "  (Compiled.image). compile_system() compiles a <system> manifest, which\n"
     "  also names the actors an application starts with.\n"
-    "- Host. Host(config, ...) creates one. Host.add_image() runs an image as\n"
-    "  a new segment, one actor system with its own memory. An image with a\n"
-    "  chart the host already runs holds a new version of it: Host.migrate()\n"
-    "  moves the running actors over.\n"
-    "- Actors. Host.chart(name) gives the current version of a chart as a\n"
-    "  ChartRef, Host.spawn() starts an actor and returns its session id, and\n"
-    "  Host.send() gives it events. Host.boot() spawns an image's boot actors\n"
-    "  and Host.actor_by_name() finds a named one.\n"
+    "- Host. Host(charts, system=...) creates one and runs each image as a\n"
+    "  segment, one actor system with its own memory. An image added later\n"
+    "  (Host.add_image) with a chart the host already runs holds a new\n"
+    "  version of it: Host.migrate() moves the running actors over.\n"
+    "- Actors. Host.spawn(chart) starts an actor and returns it as an Actor:\n"
+    "  send() it events, await its state() or done. Host.actor() finds a\n"
+    "  live one by session, name or address; Host.boot() spawns an image's\n"
+    "  boot actors.\n"
     "- Driving. Inputs (spawn, send, ...) apply at the call; the actors run\n"
     "  when the host turns. Use run_until_idle(), a SimulatedClock in tests,\n"
     "  or `async with Host(...)` and `await host.idle()` under asyncio.\n"
-    "- Handlers. Host(...) takes io_processors for <send> (each gets a Send),\n"
-    "  services for <invoke> (an Invocation), log for <log> (a LogEntry),\n"
-    "  wake for a hibernated actor that has work, migrated and migration_done\n"
-    "  for migrations, and telemetry for OTLP bytes. A plain function handler\n"
+    "- Handlers. Host(...) takes io_processors for <send> (objects whose\n"
+    "  receive gets a Send), services for <invoke> (an Invocation), log for\n"
+    "  <log> (a LogEntry), on_done and on_error for actors that end,\n"
+    "  migrated and migration_done for migrations, and telemetry for OTLP\n"
+    "  bytes. A plain function handler\n"
     "  gets a thin view, valid until its batch is acknowledged; an async def\n"
     "  handler gets a record it can keep. transport gets every send to\n"
     "  another system, as a Send: your transport, with no config.\n"
     "- Questions. Typed methods (actor_state, host_stats, trace_watch, ...)\n"
     "  take a handler that runs at a later turn with the answer.\n"
-    "- Memory. Host.sweep() finds cold actors, Host.hibernate() writes one to\n"
-    "  bytes you store, and Host.wake() brings it back. Host.snapshot() and\n"
+    "- Memory. Host(store=SQLiteStore(path), resident=N) keeps at most N\n"
+    "  actors in memory and the rest hibernated in the store; Host.sweep(),\n"
+    "  hibernate() and wake() run that cycle by hand. Host.snapshot() and\n"
     "  Host.restore() copy a whole host. None of these is durability: keeping\n"
     "  data is your database's job.\n"
     "- Values. Actors exchange int, float, str, bytes, list, dict with str\n"
@@ -85,7 +87,7 @@ static const char ta_python_doc_compile_system[] =
     "Use it when an application is a fixed set of long-lived actors (a\n"
     "router, a scheduler, a few workers): the manifest says what runs, so a\n"
     "deploy is one image to add and boot, and your program finds each actor\n"
-    "by name (Host.actor_by_name, or the address .../@first). Use\n"
+    "by name (Host.actor(\"first\"), or the address .../@first). Use\n"
     "compile_charts when your program spawns its actors itself, one per\n"
     "order or user. Returns a Compiled, as compile_charts does; an error\n"
     "raises CompileError with every diagnostic.";
@@ -178,52 +180,71 @@ static const char ta_python_doc_compiled_close[] =
     "a fallback.";
 
 static const char ta_python_doc_host[] =
-    "Host(config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None, transport=None)\n"
+    "Host(charts, *, system, io_processors=None, config=None, clock=None, log=None, telemetry=None, services=None, transport=None, on_done=None, on_error=None, on_handler_error=None, migrated=None, migration_done=None, store=None, resident=None)\n"
     "--\n"
     "\n"
     "A host: the object that holds actors and runs their charts, many actor\n"
     "systems as one.\n"
     "\n"
-    "`config` is the host's configuration as a dict (systemID, system limits\n"
-    "such as maxActors and instanceBytes, ioProcessors, telemetry; see the\n"
-    "core's host-config documentation). Without system.traceSeed the host\n"
-    "draws a random one, so each host starts its own trace ids; set it to\n"
-    "reproduce them. Everything else is your side of the host, all optional:\n"
+    "`charts` is what it runs: a Compiled, an image's bytes, or a list of\n"
+    "them, each added as a segment in order (add_image adds a new version\n"
+    "later). `system` is the system id, the authority of its actors'\n"
+    "addresses (tinyactors://<system>/...). `config` is the rest of the\n"
+    "host's configuration as a dict (system limits such as maxActors and\n"
+    "instanceBytes, migrateQuantum, telemetry; see the core's host-config\n"
+    "documentation). Without system.traceSeed the host draws a random one, so\n"
+    "each host starts its own trace ids; set it to reproduce them. Everything\n"
+    "else is your side of the host, all optional:\n"
     "\n"
-    "- io_processors: {type: handler(host, send)} for each I/O processor the\n"
-    "  config declares; an actor's <send type=...> reaches it as a Send.\n"
-    "- transport: handler(host, send) for every send to another system's\n"
-    "  address (tinyactors://<other systemID>/...), as a Send: your transport,\n"
+    "- io_processors: {type: processor}, one object per external system an\n"
+    "  actor talks to with <send type=...>, each with receive(send) (an\n"
+    "  async def allowed) and an optional `location`; the config's\n"
+    "  ioProcessors are made from it, in its order.\n"
+    "- transport: handler(send) for every send to another system's\n"
+    "  address (tinyactors://<other system>/...), as a Send: your transport,\n"
     "  which needs no config. Without one, each such send fails\n"
     "  (error.communication).\n"
-    "- services: {type: handler(host, invocation)} for the services your\n"
+    "- services: {type: handler(invocation)} for the services your\n"
     "  application runs; an <invoke type=...> starts one with an Invocation,\n"
     "  and the handler returns the service object (see Invocation).\n"
-    "- log: handler(host, entry) for <log> lines (LogEntry).\n"
-    "- wake: handler(host, session, migration) when a hibernated actor has\n"
-    "  work (migration: the id of the migration that asks, or None); answer\n"
-    "  with Host.wake(session, blob).\n"
-    "- migrated: handler(host, migrated) for each actor a migration moved.\n"
-    "- migration_done: handler(host, result) when a migration (Host.migrate)\n"
+    "- log: handler(entry) for <log> lines (LogEntry).\n"
+    "- on_done: handler(actor, donedata) when a top-level actor reaches a\n"
+    "  final state; on_error: handler(actor, error) when one faults.\n"
+    "- on_handler_error: handler(error, effect) when one of your handlers\n"
+    "  raises (effect: the Send, LogEntry, Invocation or Migrated it\n"
+    "  handled, or None); without it the driver raises the error after the\n"
+    "  turn. A send whose processor raised is failed either way.\n"
+    "- store: an object with save(session, blob), load(session) and\n"
+    "  delete(session) (MemoryStore, SQLiteStore, or yours): where\n"
+    "  hibernated actors' blobs go. When an event comes for a hibernated\n"
+    "  actor the host loads its blob and wakes it, and deletes the blob.\n"
+    "- resident: with a store, the most actors kept in memory: after a turn\n"
+    "  the host hibernates the coldest ones past it into the store.\n"
+    "- migrated: handler(migrated) for each actor a migration moved.\n"
+    "- migration_done: handler(result) when a migration (Host.migrate)\n"
     "  ends, with its counts and the sessions it left behind.\n"
-    "- telemetry: handler(host, signal, data) with OTLP bytes, signal\n"
+    "- telemetry: handler(signal, data) with OTLP bytes, signal\n"
     "  \"traces\" or \"logs\".\n"
     "- clock: a SimulatedClock, for tests; the real clock otherwise.\n"
     "\n"
-    "A plain function handler gets a thin view, valid until the batch is\n"
+    "Handlers get no host: each view and record has `.host`. A plain\n"
+    "function handler gets a thin view, valid until the batch is\n"
     "acknowledged; an async def handler gets a record and needs the asyncio\n"
-    "driver (`async with`). A handler's exception is raised by the driver\n"
-    "after the turn.\n"
+    "driver (`async with`).\n"
     "\n"
-    "A typical program: compile_charts() the charts, add_image() the image,\n"
-    "spawn(host.chart(\"order\")) an actor, send() it events, and let the\n"
-    "host turn; your handlers do the I/O the actors ask for.\n"
+    "A typical program: compile_dir() the charts, Host(compiled,\n"
+    "system=\"shop\", io_processors={\"db\": Database()}), spawn(\"order\") an\n"
+    "actor, send() it events, and let the host turn; your processors do the\n"
+    "I/O the actors ask for.\n"
     "\n"
     "Drive the host with run_until_idle() (until nothing is runnable now),\n"
     "or `await host.idle()` under asyncio, where timers fire on the loop.\n"
     "Inputs (spawn, send, terminate, ...) apply at the call; their effects\n"
     "reach your handlers in the next turn. A host is used from the thread\n"
     "that created it.";
+
+static const char ta_python_doc_host_system[] =
+    "The host's system id (the config's systemID), the authority of its actors' addresses.";
 
 static const char ta_python_doc_host_closed[] =
     "True once the host was freed (close(), the end of a `with` block); every call refuses then.";
@@ -266,34 +287,46 @@ static const char ta_python_doc_host_chart[] =
     "on it; actors already running stay where they are until Host.migrate.\n"
     "Raises TinyactorsError when no image added has a chart of that name.";
 
-static const char ta_python_doc_host_actor_by_name[] =
-    "actor_by_name(name, /)\n"
+static const char ta_python_doc_host_spawn[] =
+    "spawn(chart, name=None, params=None, traceparent=None)\n"
     "--\n"
     "\n"
-    "The session of the live actor spawned with `name`, newest segment first;\n"
-    "None when there is none.\n"
+    "Start an actor of `chart` and return it as an Actor.\n"
+    "\n"
+    "`chart` is a chart's name (its current version, Host.chart) or a\n"
+    "ChartRef (a version you pinned). This is how your program creates\n"
+    "actors one at a time: one per order, per user, per device. `name`\n"
+    "registers it so it can be found again (Host.actor(name), the address\n"
+    "tinyactors://<system>/@<name>); `params` (a dict) sets its\n"
+    "<datamodel>'s data of the same ids, the way an <invoke>'s params do;\n"
+    "`traceparent` (W3C text) makes its first steps part of your caller's\n"
+    "trace. The actor enters its initial states in the next turn. To start\n"
+    "the actors an image declares, use Host.boot.";
+
+static const char ta_python_doc_host_actor[] =
+    "actor(which, /)\n"
+    "--\n"
+    "\n"
+    "A live actor of the host as an Actor: `which` is its session id (an\n"
+    "int), the name it was spawned with (newest segment first), or its\n"
+    "local address (an Address, or text starting tinyactors://).\n"
     "\n"
     "Names are how an application finds its long-lived actors again without\n"
-    "keeping their session ids: spawn(ref, name=\"orders\") registers one, and\n"
-    "Host.boot registers each actor a <system> manifest declares under its\n"
-    "name. Use it to terminate or inspect such an actor, or to give it an\n"
-    "input by session; to send it an event you can also skip the lookup and\n"
-    "send to the address tinyactors://<systemID>/@<name>, as charts do.";
+    "keeping their session ids: spawn(chart, name=\"orders\") registers one,\n"
+    "and Host.boot registers each actor a <system> manifest declares under\n"
+    "its name. Raises StaleError when no live actor answers to it.";
 
-static const char ta_python_doc_host_spawn[] =
-    "spawn(ref, name=None, params=None, traceparent=None)\n"
+static const char ta_python_doc_host_actors[] =
+    "actors(chart=None)\n"
     "--\n"
     "\n"
-    "Start an actor of the chart `ref` (a ChartRef from Host.chart) and\n"
-    "return its session id, an int unique in the host.\n"
+    "An awaitable of the host's live actors, as a list of Actor, or of\n"
+    "those whose chart is named `chart`.\n"
     "\n"
-    "This is how your program creates actors one at a time: one per order,\n"
-    "per user, per device. `name` registers it so it can be found again\n"
-    "(Host.actor_by_name, the address tinyactors://<systemID>/@<name>);\n"
-    "`params` (a dict) sets its <datamodel>'s data of the same ids, the way\n"
-    "an <invoke>'s params do; `traceparent` (W3C text) makes its first steps\n"
-    "part of your caller's trace. The actor enters its initial states in the\n"
-    "next turn. To start the actors an image declares, use Host.boot.";
+    "It reads the typed method actor_list a page at a time, so it needs the\n"
+    "asyncio driver (TypeError under `with`). Use it for an operator's view\n"
+    "or a shutdown that terminates a kind of actor; a program that needs its\n"
+    "actors often keeps their names instead.";
 
 static const char ta_python_doc_host_send[] =
     "send(target, event, data=None, *, sendid=None, traceparent=None, origin=None)\n"
@@ -311,7 +344,7 @@ static const char ta_python_doc_host_send[] =
     "as None is. A failure is never part of a message: see Host.fail.\n"
     "\n"
     "Applied at the call: the event waits in the actor's mailbox and runs in\n"
-    "the next turn; a hibernated actor's wake handler is called first.\n"
+    "the next turn; a hibernated actor is loaded from the store first.\n"
     "`sendid` becomes _event.sendid (the sender's <send id>).\n"
     "`traceparent` continues your caller's trace. `origin` is the sender's\n"
     "address when the event comes from another system (what its transport\n"
@@ -367,7 +400,7 @@ static const char ta_python_doc_host_boot[] =
     "Spawn the boot actors of a segment add_image returned: the image's\n"
     "<system><actor> entries (compile_system), or its default boot chart\n"
     "(the first source given to compile_charts), each under its name, so\n"
-    "actor_by_name finds it. Use it to start an application from its image alone; spawn\n"
+    "Host.actor finds it. Use it to start an application from its image alone; spawn\n"
     "starts one actor of a chart you name. A boot that fails part way leaves\n"
     "the actors already spawned; a second boot spawns them all again.";
 
@@ -394,12 +427,13 @@ static const char ta_python_doc_host_sweep[] =
     "most at `max_scan` slots.\n"
     "\n"
     "Hibernation keeps a large population in a small memory: most actors\n"
-    "wait most of the time. The cycle is yours to run: when host_stats shows\n"
-    "more actors resident than you want, sweep, hibernate() each session it\n"
-    "returns and store the blobs; when an event comes for one, the wake\n"
-    "handler asks for it and Host.wake brings it back. Calling sweep\n"
-    "regularly is what makes \"did not run since the previous sweep\" mean\n"
-    "cold.";
+    "wait most of the time. Host(store=..., resident=N) runs the cycle for\n"
+    "you; sweep, hibernate and wake are for an application with a policy of\n"
+    "its own: when host_stats shows more actors resident than you want,\n"
+    "sweep, hibernate() each session it returns and save the blobs in the\n"
+    "host's store, which the host loads from when an event comes for one.\n"
+    "Calling sweep regularly is what makes \"did not run since the previous\n"
+    "sweep\" mean cold.";
 
 static const char ta_python_doc_host_hibernate[] =
     "hibernate(session, /)\n"
@@ -409,7 +443,8 @@ static const char ta_python_doc_host_hibernate[] =
     "you to store, e.g. in a database keyed by session.\n"
     "\n"
     "The host keeps its record: events and timers for it still arrive, and\n"
-    "the wake handler asks for it back. Raises TinyactorsError\n"
+    "the host loads it back from its store (save the blob there), or you\n"
+    "call Host.wake. Raises TinyactorsError\n"
     "(TA_ERROR_STATE) when it is not at a stable point or runs an\n"
     "invocation; it stays resident then. A blob wakes only in the host that\n"
     "wrote it.";
@@ -418,9 +453,10 @@ static const char ta_python_doc_host_wake[] =
     "wake(session, blob, /)\n"
     "--\n"
     "\n"
-    "Bring the hibernated actor `session` back from its `blob`, usually from\n"
-    "the wake handler. Its waiting events run in the next turn. You may call\n"
-    "it later than the handler; the actor's events wait until then. Only its\n"
+    "Bring the hibernated actor `session` back from its `blob`: what the host\n"
+    "does with its store's blob when an event comes for the actor, and what\n"
+    "a host without a store leaves to you. Its waiting events run in the\n"
+    "next turn; until then they wait. Only its\n"
     "latest blob: one of an earlier hibernation raises TinyactorsError\n"
     "TA_ERROR_STALE, another session's or another Host's TA_ERROR_INVALID\n"
     "(each Host draws its identity from os.urandom; a restored one keeps\n"
@@ -447,13 +483,15 @@ static const char ta_python_doc_host_snapshot[] =
     "run are not in it either; Host.restore starts them again.";
 
 static const char ta_python_doc_host_restore[] =
-    "restore(snapshot, /, config, io_processors=None, *, log=None, clock=None, telemetry=None, wake=None, migrated=None, services=None, migration_done=None, transport=None)\n"
+    "restore(snapshot, charts, *, system, io_processors=None, config=None, clock=None, log=None, telemetry=None, services=None, transport=None, on_done=None, on_error=None, on_handler_error=None, migrated=None, migration_done=None, store=None, resident=None)\n"
     "--\n"
     "\n"
     "A new Host running a snapshot of Host.snapshot.\n"
     "\n"
-    "Pass the config the snapshot was taken with (its system id must match)\n"
-    "and the handlers Host() takes. Its clock goes on from the snapshot's\n"
+    "Pass what Host() takes: the system the snapshot was taken with (its\n"
+    "id must match), its config, and the handlers. `charts` are the images\n"
+    "you run now: those the snapshot holds already are kept, the others\n"
+    "are added as new versions (Host.migrate moves actors to them). Its clock goes on from the snapshot's\n"
     "time. At its first run each invocation of a service that was running\n"
     "reaches your services= handler again, with invocation.restored true:\n"
     "pass your real handlers to go on, stand-ins for a copy that must not\n"
@@ -473,8 +511,9 @@ static const char ta_python_doc_host_migrate[] =
     "its session id, its states (matched by id) and its timers, and gets\n"
     "error.platform.upgrade with its old variables first. A busy actor is\n"
     "retried; a hibernated one waits until something wakes it, or, with\n"
-    "`wake`, is asked for through the wake handler (with this migration's\n"
-    "id). `timeout` (seconds of the host's clock, 0 for none) ends the\n"
+    "`wake`, is loaded from the host's store (while fewer than `resident`\n"
+    "actors are in memory, so a population moves a bound at a time).\n"
+    "`timeout` (seconds of the host's clock, 0 for none) ends the\n"
     "migration anyway. A chart the host does not have raises\n"
     "TinyactorsError TA_ERROR_INVALID, a session that ended TA_ERROR_STALE.\n"
     "\n"
@@ -538,10 +577,10 @@ static const char ta_python_doc_host_aexit[] =
     "\n"                                                                              \
     "How it works, as for every typed method (Host.actor_state, host_stats,\n"        \
     "trace_watch, ...): pass the params as keywords; core checks them. The call\n"   \
-    "returns None at once and handler(host, result) runs at a later drain with\n"    \
+    "returns None at once and handler(result) runs at a later drain with\n"         \
     "the result as Python values, so a script drives the host once more\n"           \
     "(run_until_idle()) and asyncio code awaits host.idle(). An error goes to\n"     \
-    "on_error(host, error), given second or as on_error=, as a TinyactorsError\n"    \
+    "on_error(error), given second or as on_error=, as a TinyactorsError\n"    \
     "whose code, reason and path say what was wrong; without on_error the driver\n"  \
     "raises it after the turn. A closed or full host refuses at the call."
 
@@ -729,15 +768,15 @@ static const char ta_python_doc_chart_ref_chart[] =
     "one version of one chart.";
 
 static const char ta_python_doc_send[] =
-    "A <send> to one of your I/O processors, given to its handler.\n"
+    "A <send> to one of your I/O processors, given to its receive(send).\n"
     "\n"
     "Read what you need (event, data, target), do the I/O, and answer the\n"
-    "sending actor with answer(), or report a failure with fail(). A plain\n"
-    "function handler gets a thin view: its fields are read on first use and\n"
+    "sending actor with answer(), or report a failure with fail(); sender is\n"
+    "the sending Actor and host the Host. A plain function gets a thin view: its fields are read on first use and\n"
     "valid until the host acknowledges the batch, so answer before returning\n"
     "or copy what you need. An async def handler gets a record whose\n"
     "answer() and fail() work later. A send to an invoked service (to\n"
-    "#_<invokeid>) reaches the service's receive(host, send) as the same\n"
+    "#_<invokeid>) reaches the service's receive(send) as the same\n"
     "view, its type None.";
 
 static const char ta_python_doc_send_session[] =
@@ -777,6 +816,13 @@ static const char ta_python_doc_send_message[] =
     "Host.send(message) unchanged: no field is lost on the way, and the\n"
     "keys are the same in every binding. Read it inside the handler: a\n"
     "thin view's fields end at the batch's ack, the dict does not.";
+
+static const char ta_python_doc_send_sender[] =
+    "The sending actor, an Actor of send.session: answer it later with\n"
+    "sender.send(), or keep it to reach the actor again.";
+
+static const char ta_python_doc_view_host[] =
+    "The Host this came from: the handlers get no host, so use this one to make inputs.";
 
 static const char ta_python_doc_send_answer[] =
     "answer(event, data=None, *, traceparent=send.traceparent, origin=None,\n"
@@ -849,8 +895,8 @@ static const char ta_python_doc_invocation[] =
     "\n"
     "An <invoke type=T> in a state starts it: the services= handler for T\n"
     "gets this record and returns the service object, which may have\n"
-    "receive(host, send) for the sends to it (to #_<invokeid>, or\n"
-    "autoforwarded events) and stop(host) for when the invoker leaves the\n"
+    "receive(send) for the sends to it (to #_<invokeid>, or\n"
+    "autoforwarded events) and stop() for when the invoker leaves the\n"
     "state. Keep the record to answer: send_back() gives the invoker an\n"
     "event, done() ends the service with done.invoke.<invokeid>. Once it is\n"
     "done, cancelled or failed, answers raise TinyactorsError\n"

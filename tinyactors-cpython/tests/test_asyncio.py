@@ -4,10 +4,16 @@ import asyncio
 import unittest
 
 import tinyactors
-from support import APP, Logs, fixture
+from support import APP, Logs, fixture, processors_of
 
 DOCUMENT = fixture("test_asyncio/echo.python.scxml")
-CONFIG = {"systemID": "t", "ioProcessors": [{"type": APP}]}
+
+
+def make(processors=None, **options):
+    """A host of system "t" with an I/O processor of type APP (a function
+    given for it is its receive), running no image yet."""
+    return tinyactors.Host([], system="t", io_processors=processors_of(processors or {APP: lambda send: send.fail()}),
+                           **options)
 
 
 def image():
@@ -19,12 +25,12 @@ class Asyncio(unittest.TestCase):
     def test_an_async_processor_gets_a_record_that_answers_after_the_ack(self):
         logs = Logs()
 
-        async def processor(host, send):
+        async def processor(send):
             await asyncio.sleep(0)
             send.answer("ack", {"echo": send.data})
 
         async def main():
-            async with tinyactors.Host(CONFIG, {APP: processor}, log=logs) as host:
+            async with make({APP: processor}, log=logs) as host:
                 host.add_image(image())
                 host.send(host.spawn(host.chart("echo")), "go", [1])
                 await host.idle()
@@ -38,11 +44,11 @@ class Asyncio(unittest.TestCase):
     def test_an_async_processor_that_raises_fails_its_send(self):
         logs = Logs()
 
-        async def processor(host, send):
+        async def processor(send):
             raise ValueError("no")
 
         async def main():
-            async with tinyactors.Host(CONFIG, {APP: processor}, log=logs) as host:
+            async with make({APP: processor}, log=logs) as host:
                 host.add_image(image())
                 host.send(host.spawn(host.chart("echo")), "go")
                 await host.idle()
@@ -64,13 +70,13 @@ class Asyncio(unittest.TestCase):
             gate = asyncio.Event()
             got, kept = [], []
 
-            async def processor(host, send):
+            async def processor(send):
                 kept.append(send)
                 await gate.wait()
                 got.append(reply(send))
 
             async def main():
-                async with tinyactors.Host(CONFIG, {APP: processor}, log=logs) as host:
+                async with make({APP: processor}, log=logs) as host:
                     host.add_image(image())
                     session = host.spawn(host.chart("echo"))
                     host.send(session, "go")
@@ -92,11 +98,11 @@ class Asyncio(unittest.TestCase):
     def test_an_answer_delivered_returns_true(self):
         got = []
 
-        def processor(host, send):
+        def processor(send):
             got.append(send.answer("ack"))
 
         async def main():
-            async with tinyactors.Host(CONFIG, {APP: processor}) as host:
+            async with make({APP: processor}) as host:
                 host.add_image(image())
                 host.send(host.spawn(host.chart("echo")), "go")
                 await host.idle()
@@ -108,7 +114,7 @@ class Asyncio(unittest.TestCase):
         logs = Logs()
 
         async def main():
-            async with tinyactors.Host(CONFIG, log=logs) as host:
+            async with make(log=logs) as host:
                 host.add_image(image())
                 host.send(host.spawn(host.chart("echo")), "later")
                 await host.idle()
@@ -131,7 +137,7 @@ class Asyncio(unittest.TestCase):
                 await asyncio.sleep(0)
 
         async def main():
-            async with tinyactors.Host(CONFIG, {APP: lambda host, send: send.answer("ack")}) as host:
+            async with make({APP: lambda send: send.answer("ack")}) as host:
                 with tinyactors.compile_charts([("pong.scxml", pong)]) as compiled:
                     host.add_image(compiled.image)
                 task = asyncio.ensure_future(ticker())
@@ -148,8 +154,8 @@ class Asyncio(unittest.TestCase):
         got = []
 
         async def main():
-            async with tinyactors.Host(CONFIG) as host:
-                host.host_stats(lambda host, result: got.append(result["host"]["segments"]))
+            async with make() as host:
+                host.host_stats(lambda result: got.append(result["host"]["segments"]))
                 await host.idle()
 
         asyncio.run(main())
@@ -158,17 +164,17 @@ class Asyncio(unittest.TestCase):
     def test_a_typed_method_given_no_handler_is_awaited(self):
         """It resolves with the result, raises the reply's error as its class, and keeps the shape with a handler."""
         async def main():
-            async with tinyactors.Host(CONFIG) as host:
+            async with make() as host:
                 host.add_image(image())
                 session = host.spawn(host.chart("echo"))
                 stats = await host.host_stats()
-                state = await host.actor_state(session=session)
+                state = await host.actor_state(session=session.id)
                 with self.assertRaises(tinyactors.StaleError) as raised:
-                    await host.actor_state(session=session + 1000)
+                    await host.actor_state(session=session.id + 1000)
                 with self.assertRaises(tinyactors.InvalidError):
                     await host.actor_state(session="not a session")
                 with self.assertRaises(TypeError):
-                    host.actor_state(on_error=lambda host, error: None, session=session)
+                    host.actor_state(on_error=lambda error: None, session=session.id)
                 return stats["host"]["segments"], state, raised.exception.code
 
         segments, state, code = asyncio.run(main())
@@ -178,7 +184,7 @@ class Asyncio(unittest.TestCase):
 
     def test_a_method_pending_at_close_never_settles(self):
         async def main():
-            async with tinyactors.Host(CONFIG) as host:
+            async with make() as host:
                 future = host.host_stats()
             await asyncio.sleep(0)
             return future.done()
@@ -188,7 +194,7 @@ class Asyncio(unittest.TestCase):
 
 class Synchronous(unittest.TestCase):
     def test_a_typed_method_given_no_handler_needs_asyncio(self):
-        with tinyactors.Host(CONFIG) as host:
+        with make() as host:
             with self.assertRaises(TypeError) as raised:
                 host.host_stats()
         self.assertIn("asyncio", str(raised.exception))
@@ -196,7 +202,7 @@ class Synchronous(unittest.TestCase):
     def test_a_simulated_clock_moves_only_with_increment(self):
         logs = Logs()
         clock = tinyactors.SimulatedClock()
-        with tinyactors.Host(CONFIG, log=logs, clock=clock) as host:
+        with make(log=logs, clock=clock) as host:
             host.add_image(image())
             host.send(host.spawn(host.chart("echo")), "later")
             host.run_until_idle()

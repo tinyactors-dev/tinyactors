@@ -82,19 +82,26 @@ class Compile(unittest.TestCase):
         resolver = Resolver({"worker.scxml": fixture("test_compile/worker.python.scxml")})
         logs = Logs()
         with tinyactors.compile_system(("system.xml", fixture("test_compile/system.xml")), resolver) as compiled:
-            with tinyactors.Host({"systemID": "t"}, log=logs, clock=tinyactors.SimulatedClock()) as host:
+            with tinyactors.Host([], system="t", log=logs, clock=tinyactors.SimulatedClock()) as host:
                 segment = host.add_image(compiled.image)
-                self.assertIsNone(host.actor_by_name("first"))
+                with self.assertRaises(tinyactors.StaleError):
+                    host.actor("first")
                 host.boot(segment)
                 host.run_until_idle()
-                first, second = host.actor_by_name("first"), host.actor_by_name("second")
-                self.assertTrue(first and second and first != second)
+                first, second = host.actor("first"), host.actor("second")
+                self.assertNotEqual(first, second)
+                self.assertEqual(first, host.actor(first.address))
+                self.assertEqual(first, host.actor(first.id))
+                self.assertEqual(first, host.actor("tinyactors://t/@first"))
                 self.assertEqual(sorted(logs.labelled("boot")), ["first", "second"])
-                host.terminate(first)
+                first.terminate()
                 host.run_until_idle()
-                self.assertIsNone(host.actor_by_name("first"))
+                with self.assertRaises(tinyactors.StaleError):
+                    host.actor("first")
+                with self.assertRaises(tinyactors.StaleError):
+                    host.actor(first.id)
                 with self.assertRaises(TypeError):
-                    host.actor_by_name(1)
+                    host.actor(1.5)
         self.assertEqual(resolver.asked, [("system.xml", "worker.scxml")])
 
     def test_a_manifest_with_an_error_raises_compile_error(self):

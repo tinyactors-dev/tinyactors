@@ -45,7 +45,7 @@ class ErrorTests(unittest.TestCase):
 
     def test_a_refusal_raises_its_subclass(self):
         """A closed host's input is a StateError, catchable as TinyactorsError."""
-        host = tinyactors.Host({"systemID": "errors"})
+        host = tinyactors.Host([], system="errors")
         host.close()
         with self.assertRaises(tinyactors.StateError) as raised:
             host.send(1, "go")

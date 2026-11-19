@@ -79,14 +79,236 @@ def _by_code(code):
 def settlers(future):
     """The handler and on_error of a typed method given no handler: they
     settle `future`, unless it was cancelled."""
-    def result(host, value):
+    def result(value):
         if not future.done():
             future.set_result(value)
 
-    def error(host, exception):
+    def error(exception):
         if not future.done():
             future.set_exception(exception)
     return result, error
+
+
+# ---- the host's construction ----------------------------------------------
+
+# The system id the binding reserves for ask()'s reply addresses: a host
+# may not take it as its own.
+ASK_SYSTEM = "tinyactors-ask"
+
+
+def host_config(system, io_processors, config):
+    """The config ta_host_create gets, and the I/O processors' receive
+    methods by type: `system` as "systemID" (None: none, which core
+    refuses), `config` the rest, and "ioProcessors" made from
+    `io_processors` in its order, each {type, location} with the location
+    the processor's optional `location` attribute."""
+    if config is None:
+        full = {}
+    elif type(config) is not dict:
+        raise TypeError("config is a dict of the host config's system, migrateQuantum and telemetry")
+    else:
+        for key in ("systemID", "ioProcessors"):
+            if key in config:
+                raise TypeError("config has no %r: Host takes it as %s=" % (
+                    key, "system" if key == "systemID" else "io_processors"))
+        full = dict(config)
+    if system == ASK_SYSTEM:
+        raise ValueError("the system id %r is reserved for ask()'s replies" % ASK_SYSTEM)
+    if system is not None:
+        full = dict({"systemID": system}, **full)
+    receivers = {}
+    if io_processors is not None:
+        if type(io_processors) is not dict:
+            raise TypeError("io_processors is a dict of type -> processor")
+        entries = []
+        for kind, processor in io_processors.items():
+            receive = getattr(processor, "receive", None)
+            if isinstance(processor, type) or not callable(receive):
+                raise TypeError("the I/O processor %r is not an object with receive(send)" % (kind,))
+            entry = {"type": kind}
+            location = getattr(processor, "location", None)
+            if location is not None:
+                entry["location"] = location
+            entries.append(entry)
+            receivers[kind] = receive
+        if entries:
+            full["ioProcessors"] = entries
+    return full, receivers
+
+
+# ---- actors ------------------------------------------------------------------
+
+class Actor:
+    """An actor of a host: what Host.spawn and Host.actor return, what
+    send.sender and on_done get. It is a small immutable value made where
+    the API returns one, compared and hashed by its session; keeping one
+    keeps nothing alive in the host, and one whose actor ended refuses
+    what needs the actor (StaleError).
+
+    Use it to talk to the actor: send() an event, ask() a question and
+    await the reply, await state(), context() or get() to inspect it,
+    terminate() it, or await done for its donedata. The awaitable ones
+    need the asyncio driver (async with Host(...))."""
+
+    __slots__ = {
+        "host": "The Host the actor runs in.",
+        "id": "The actor's session id, an int (core's _sessionid).",
+    }
+
+    def __init__(self, host, id):
+        object.__setattr__(self, "host", host)
+        object.__setattr__(self, "id", id)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("an Actor is immutable")
+
+    def __eq__(self, other):
+        if type(other) is not Actor:
+            return NotImplemented
+        return self.id == other.id and self.host is other.host
+
+    def __hash__(self):
+        return hash(self.id)
+
+    def __repr__(self):
+        return "Actor(%d)" % self.id
+
+    @property
+    def address(self):
+        """The actor's address, tinyactors://<system>/#_scxml_<id>: what
+        another system sends to, and what _event.origin holds for it."""
+        return _tinyactors.Address.from_session(self.host.system, self.id)
+
+    def send(self, event, data=None, *, sendid=None, traceparent=None):
+        """Give the actor an event (Host.send to its session): applied at
+        the call, run at the host's next turn. `data` becomes _event.data;
+        `traceparent` continues a W3C trace."""
+        self.host.send(self.id, event, data, sendid=sendid, traceparent=traceparent)
+
+    def terminate(self):
+        """End the actor now (Host.terminate): it runs no exit handlers and
+        sends no done event; its blob, if it was hibernated in the host's
+        store, is deleted."""
+        self.host.terminate(self.id)
+
+    def state(self):
+        """An awaitable of the actor's active states (the typed method
+        actor_state): {"configuration": [...], ...} as core answers it."""
+        return self.host.actor_state(session=self.id)
+
+    def context(self):
+        """An awaitable of the actor's datamodel variables (the typed
+        method actor_context), as values of the value table."""
+        return self.host.actor_context(session=self.id)
+
+    def get(self):
+        """An awaitable of what the host knows about the actor (the typed
+        method actor_get): its chart, its state, its mailbox and timers."""
+        return self.host.actor_get(session=self.id)
+
+    @property
+    def done(self):
+        """An awaitable of the actor's donedata, settled when it reaches a
+        top-level final state (or raising the error it ended with). Await
+        it under asyncio; an actor that ended already raises StaleError."""
+        return self.host._done(self.id)
+
+
+# ---- stores: where hibernated actors' blobs go ---------------------------------
+
+class MemoryStore:
+    """A store of hibernated actors' blobs in a dict: Host(store=...)
+    saves an actor's blob here when it hibernates the actor, loads it when
+    an event comes for it, and deletes it once the actor is back or ended.
+
+    Use it in tests, and where the host's memory, not the process's, is
+    what must stay small: the blobs are bytes in this process. For blobs
+    that leave memory use SQLiteStore, or your own object with the same
+    three methods."""
+
+    __slots__ = {"blobs": "The blobs by session, a dict: what a test reads to see what was stored."}
+
+    def __init__(self):
+        self.blobs = {}
+
+    def save(self, session, blob):
+        """Keep `blob`, the hibernated actor `session`'s bytes, replacing an
+        earlier one."""
+        self.blobs[session] = blob
+
+    def load(self, session):
+        """The blob saved for `session`; KeyError when there is none (the
+        host reports it, and the actor stays hibernated)."""
+        return self.blobs[session]
+
+    def delete(self, session):
+        """Forget `session`'s blob: the actor was woken, or it ended. One
+        that is not there is nothing to do."""
+        self.blobs.pop(session, None)
+
+
+class SQLiteStore:
+    """A store of hibernated actors' blobs in an SQLite database file, one
+    row per actor in the table tinyactors_blobs (session, blob): what
+    Host(store=..., resident=N) uses to keep at most N actors in memory
+    and the rest on disk.
+
+    `path` is the database file (":memory:" for none). It is a cache of
+    the host's actors, not their durability: a host's blobs wake only in
+    that host or a host restored from its snapshot, so keep the file with
+    the snapshot when you keep one. Call close() when the host is closed."""
+
+    __slots__ = {"connection": "The sqlite3 connection, for an application that reads the table itself."}
+
+    def __init__(self, path):
+        import sqlite3
+        self.connection = sqlite3.connect(path, isolation_level=None)
+        self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("PRAGMA synchronous=NORMAL")
+        self.connection.execute("CREATE TABLE IF NOT EXISTS tinyactors_blobs "
+                                "(session INTEGER PRIMARY KEY, blob BLOB NOT NULL)")
+
+    def save(self, session, blob):
+        """Keep `blob`, the hibernated actor `session`'s bytes, replacing an
+        earlier one (one row per session)."""
+        self.connection.execute("INSERT OR REPLACE INTO tinyactors_blobs VALUES (?, ?)", (_signed(session), blob))
+
+    def load(self, session):
+        """The blob saved for `session`; KeyError when there is none (the
+        host reports it, and the actor stays hibernated)."""
+        row = self.connection.execute("SELECT blob FROM tinyactors_blobs WHERE session = ?",
+                                      (_signed(session),)).fetchone()
+        if row is None:
+            raise KeyError(session)
+        return row[0]
+
+    def delete(self, session):
+        """Forget `session`'s blob: the actor was woken, or it ended. One
+        that is not there is nothing to do."""
+        self.connection.execute("DELETE FROM tinyactors_blobs WHERE session = ?", (_signed(session),))
+
+    def close(self):
+        """Close the database connection; the file keeps the blobs saved."""
+        self.connection.close()
+
+
+def _signed(session):
+    """A session id (to 2^64 - 1) as SQLite's signed 64-bit integer."""
+    return session - (1 << 64) if session >= 1 << 63 else session
+
+
+async def actors(host, chart):
+    """Every live actor of the host (actor.list, a page at a time), or
+    those of the chart named `chart`."""
+    found, cursor = [], 0
+    while True:
+        page = await host.actor_list(cursor=cursor, limit=512)
+        for session in page["sessions"]:
+            if chart is None or host._chart_of(session) == chart:
+                found.append(Actor(host, session))
+        cursor = page["cursor"]
+        if cursor is None:
+            return found
 
 
 class CompileError(TinyactorsError):
@@ -158,7 +380,7 @@ class Diagnostic:
         return "%s:%d:%d: %s: %s" % (self.file, self.line, self.column, self.severity, self.message)
 
 
-for _type in (TinyactorsError, CompileError, ResolveError, Diagnostic):
+for _type in (TinyactorsError, CompileError, ResolveError, Diagnostic, Actor, MemoryStore, SQLiteStore):
     _type.__module__ = "tinyactors"
 
 # ---- the rewrite ---------------------------------------------------------

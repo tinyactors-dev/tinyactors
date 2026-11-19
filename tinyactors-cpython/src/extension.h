@@ -51,6 +51,9 @@ typedef struct ta_python_module_state {
     PyObject *event_key;      /* "_event", interned: bind_event makes no key per event */
     PyObject *time_ns;        /* time.time_ns: the wall clock */
     PyObject *coroutine_function; /* inspect.iscoroutinefunction */
+    PyObject *actor_type;     /* support.Actor: an actor of a host, made where the API returns one */
+    PyObject *host_config;    /* support.host_config: Host(...)'s config and I/O processors */
+    PyObject *host_actors;    /* support.actors: host.actors() */
 } ta_python_module_state;
 
 /* The state of the module that defined `type` (a method's defining class,
@@ -199,14 +202,20 @@ struct ta_python_host {
     PyObject *processors;              /* per ioProcessors index: (type, handler, async) */
     PyObject *transport;               /* (None, handler or None, async): sends to other systems */
     PyObject *log;                     /* log handler or None */
-    PyObject *telemetry;               /* telemetry handler(host, signal, data) or None */
-    PyObject *wake;                    /* wake handler(host, session, migration) or None */
-    PyObject *migrated;                /* migrated handler(host, migration) or None */
-    PyObject *services;                /* dict: an invoke's type -> handler(host, invocation) */
+    PyObject *telemetry;               /* telemetry handler(signal, data) or None */
+    PyObject *migrated;                /* migrated handler(migrated) or None */
+    PyObject *services;                /* dict: an invoke's type -> handler(invocation) */
     PyObject *invocations;             /* dict: segment << 32 | token -> (invocation, service), while it runs
                                           (core's keys: no table of ours) */
-    PyObject *migration_done;          /* migration_done handler(host, result) or None: every migration's end */
-    int wake_async;                    /* it is an async def */
+    PyObject *migration_done;          /* migration_done handler(result) or None: every migration's end */
+    PyObject *on_done;                 /* on_done(actor, donedata) or None: a top-level actor's TA_EFFECT_DONE */
+    PyObject *on_error;                /* on_error(actor, error) or None: a top-level actor's TA_EFFECT_ERROR */
+    PyObject *on_handler_error;        /* on_handler_error(error, effect) or None: a handler raised */
+    PyObject *done;                    /* dict: session -> future of Actor.done, only for actors someone awaits */
+    PyObject *system_id;               /* the effective config's systemID (a str) */
+    PyObject *store;                   /* save(session, blob), load(session), delete(session), or None */
+    uint64_t resident;                 /* the most actors kept in memory after a turn; 0: no bound */
+    PyObject *asked;                   /* dict: sessions a migration asked for, loaded when there is room */
     int telemetry_async;               /* it is an async def */
     int encoder;                       /* the config has "telemetry": the host stamps spans */
     int ending;                        /* the last take at close is running */
@@ -258,6 +267,25 @@ PyObject *ta_python_host_payload_value(ta_python_host *host, const ta_python_pay
 int ta_python_text(PyObject *text, ta_string_view *out);
 /* Record the first exception of a turn (the one set now), clearing it. */
 void ta_python_host_keep_error(ta_python_host *host);
+/* A handler raised (the exception set now) while it handled `effect` (a
+ * view, a record, or NULL): the host's on_handler_error gets an Exception
+ * (its own exception is kept), else it is kept as ta_python_host_keep_error
+ * keeps it. Clears it. */
+void ta_python_handler_failed(ta_python_host *host, PyObject *effect);
+/* After a turn that went idle: with a store and a resident bound, the
+ * actors past it hibernated into the store (ta_host_sweep's cold ones,
+ * ta_host_hibernate, store.save). */
+void ta_python_host_evict(ta_python_host *host);
+/* A migration's WAKE when the resident bound is reached: the session kept
+ * for a later turn with room (1), or 0: load it now. */
+int ta_python_host_defer(ta_python_host *host, uint64_t session);
+/* A WAKE: the session's blob from the store (store.load), woken
+ * (ta_host_wake) and deleted from the store; without a store, nothing. */
+void ta_python_host_load(ta_python_host *host, uint64_t session);
+/* An Actor of `session` (support.Actor): a new reference or NULL. */
+PyObject *ta_python_actor_new(ta_python_host *host, uint64_t session);
+/* A session from an int or an Actor of the host: 0, or -1 with an exception. */
+int ta_python_session(ta_python_host *host, PyObject *value, uint64_t *out);
 /* Free the host (ta_host_free) and drop every Python reference it holds;
  * `quiet`: no trace.end and no handler runs (the collector's path). */
 void ta_python_host_close(ta_python_host *host, int quiet);
