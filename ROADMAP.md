@@ -725,15 +725,15 @@ direct layer; the items below are the API applications use.
 
 | # | Item | Bindings | Built on | Status |
 |---|---|---|---|---|
-| 1 | `compile_dir(path)` / `compileDir(url)`: a directory's charts and helper files compiled once, reused by any number of hosts | both | `ta_compile_charts`, the resolver | Python done (`24190ca0`) |
-| 2 | `Host(charts, system=, io_processors=, clock=, store=, resident=)` and `Host.restore(bytes, charts, ...)` | both | `ta_host_create`, `ta_host_add_image`, the snapshot calls | Python done (`9c84f1c4`) |
-| 3 | Processors as objects with `receive(send)`; `send.sender` an `Actor`, `send.host` | both | the send effect | Python done (`9c84f1c4`) |
-| 4 | `Spawner`, in C | both | `ta_host_chart`, `ta_host_spawn`, `ta_host_send` | Python done, in Python over the public calls (`48a46745`) |
-| 5 | `Actor` handles (`id`, `address`, `send`, `ask`, `terminate`, `done`), no table; `host.spawn(chart, name=, params=)`, `host.actor(name or address)`, `await host.actors(chart=)` | both | sessions, `ta_host_actor_by_name`, `ta_host_resolve`, `actor.list` | Python done (`9c84f1c4`; `ask` `48a46745`) |
-| 6 | `ask` (above) | both | `ta_host_send` with `origin`, the transport effect, `ta_table` | Python done (`48a46745`) |
-| 7 | `store=` (`SQLiteStore`, `MemoryStore`) and `resident=`: the sweep, hibernate and wake loop | both | `ta_host_sweep`, `ta_host_hibernate`, `TA_EFFECT_WAKE`, `ta_host_wake` | Python done (`9c84f1c4`) |
-| 8 | `on_done` and `on_error` per chart | both | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` | Python done, one handler each, not per chart: core gives no chart on these effects (`9c84f1c4`) |
-| 9 | A handler-error hook on the host; without one, today's behaviour | both | — | Python done (`9c84f1c4`) |
+| 1 | `compile_dir(path)` / `compileDir(url)`: a directory's charts and helper files compiled once, reused by any number of hosts | both | `ta_compile_charts`, the resolver | Python done (`24190ca0`); Node done (`6a5e1d43`: `compileDir(dir)`, a path or a `file:` URL) |
+| 2 | `Host(charts, system=, io_processors=, clock=, store=, resident=)` and `Host.restore(bytes, charts, ...)` | both | `ta_host_create`, `ta_host_add_image`, the snapshot calls | Python done (`9c84f1c4`); Node done (`6a5e1d43`: the convenience layer's `Host` extends the direct one, which is no longer exported) |
+| 3 | Processors as objects with `receive(send)`; `send.sender` an `Actor`, `send.host` | both | the send effect | Python done (`9c84f1c4`); Node done (`6a5e1d43`) |
+| 4 | `Spawner`, in C | both | `ta_host_chart`, `ta_host_spawn`, `ta_host_send` | Python done, in Python over the public calls (`48a46745`); Node done, in JavaScript over the public calls, shared by both packages (`6a5e1d43`) |
+| 5 | `Actor` handles (`id`, `address`, `send`, `ask`, `terminate`, `done`), no table; `host.spawn(chart, name=, params=)`, `host.actor(name or address)`, `await host.actors(chart=)` | both | sessions, `ta_host_actor_by_name`, `ta_host_resolve`, `actor.list` | Python done (`9c84f1c4`; `ask` `48a46745`); Node done (`6a5e1d43`) |
+| 6 | `ask` (above) | both | `ta_host_send` with `origin`, the transport effect, `ta_table` | Python done (`48a46745`); Node done (`6a5e1d43`: `ask(event, data, {signal})`, a row of the pending `ta_table`) |
+| 7 | `store=` (`SQLiteStore`, `MemoryStore`) and `resident=`: the sweep, hibernate and wake loop | both | `ta_host_sweep`, `ta_host_hibernate`, `TA_EFFECT_WAKE`, `ta_host_wake` | Python done (`9c84f1c4`); Node done (`6a5e1d43`: `save`, `load` and `delete` may return promises) |
+| 8 | `on_done` and `on_error` per chart | both | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` | Python done, one handler each, not per chart: core gives no chart on these effects (`9c84f1c4`); Node done, the same, with `actor.done` (`6a5e1d43`) |
+| 9 | A handler-error hook on the host; without one, today's behaviour | both | — | Python done (`9c84f1c4`); Node done (`6a5e1d43`) |
 | 10 | Errors as classes (`StaleError`, `StateError`, `InvalidError`, `UnsupportedError`), the status name kept as an attribute | both | `ta_status_name` | done (`5529761e`) |
 | 11 | `Address.from_name(system, name)` (Node's `fromName`), percent-encoding the name | both | `ta_address_parse` | done: Node had `Address.fromName`; Python `from_name` (`eedee0a0`) |
 | 12 | A span decoder that needs no host, at module level, with the resource, the scope and the links | both | `ta_otlp_next_span` | |
@@ -742,7 +742,7 @@ direct layer; the items below are the API applications use.
 | 15 | `version` export and `./package.json` in `exports` | Node | — | done (`2479be24`, `e815e12b`: the browser floor is JSON modules') |
 | 16 | The native datamodel refuses top-level declarations in scripts (a compile diagnostic pointing to `<data>`), and the per-session context goes | Node | — || done (`2081069a`: `let`, `const` and `class` refused; a top-level `var` is a variable of the session, since W3C 302 to 304 declare one) |
 | 17 | A chart-level `<script src="*.js">` runs once per chart; its top-level functions are the chart's helpers | Node | — || done (`2081069a`) |
-| 18 | `addCharts` and `spawnChart` removed; compile options a named argument | Node | — | |
+| 18 | `addCharts` and `spawnChart` removed; compile options a named argument | Node | — | done (`6a5e1d43`: `compileDir` replaces `directoryResolver` too) |
 | 19 | `__version__` | Python | — | done (`ca00eff8`) |
 | 20 | Typed methods that can be awaited, in Node's shape | Python | `ta_host_post` | done (`12faafbe`) |
 | 21 | `Compiled.image` returns `bytes` | Python | `ta_compile_image` | done (`ca00eff8`) |
