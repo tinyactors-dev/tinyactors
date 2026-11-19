@@ -17,6 +17,13 @@ resolver's errors and scratch arena; and `detach_event` checked) and 8.3 (the fu
 C) done. The plan of both bindings is the root roadmap's step 8, which
 decides.
 
+## Step 8.6: the application API
+
+The API applications use, decided 2026-11-19: the root
+[ROADMAP.md](../ROADMAP.md), step 8, "8.6", holds the decisions and
+the items, with their status. Read it there; this binding's items
+are the ones marked "both" and its own.
+
 ## Step 8.4: a minimal Python binding
 
 From the root ROADMAP.md, step 8, "8.4"; read it there before changing

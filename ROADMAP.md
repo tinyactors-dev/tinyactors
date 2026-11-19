@@ -608,6 +608,91 @@ and across processes, a Python host and an ECMAScript host talking through
 it; the examples, release tasks and
 changelogs. The browser (below, "Decided later") after that.
 
+##### 8.6: the application API (both bindings)
+
+The bindings expose the core faithfully, but an application writes the
+same glue in each: compile, add, close, chart, spawn; callbacks for a
+question to an actor; a sweep loop; status strings compared by name. A
+project migrated to `@tinyactors/node` reported nine gaps (2026-11-19).
+The maintainer reviewed an application designed against the API (a
+multiplayer chat: workspaces, rooms, connections, a database and the
+websockets) and decided the shape below, the same in both bindings.
+
+**Decided (the maintainer, 2026-11-19):**
+
+- **No requests to core.** An undelivered hook, a single-session watch
+  for "send and wait until done", local `@name` targets, name patterns
+  with owners, and spawning through the SCXML Event I/O Processor were
+  each considered and declined. Everything below is built on calls core
+  has.
+- **What to do with a send to an actor that is not there is application
+  logic,** chosen per kind of actor: the actor never ends and hibernates
+  (core wakes a hibernated named actor, `src/system/system.c:759`,
+  `src/system/hibernate.c:508`); the application routes it through an
+  I/O processor; or the sender handles `error.communication`. The
+  library offers none of them, and the guides show all three.
+- **One I/O processor per external system** (the database, the open
+  websockets), an object with `receive(send)` that switches on
+  `send.event`, given to the host at creation. Types are plain
+  (`chat:db`), no `urn:` prefix. Custom I/O processors are how an
+  application does I/O, and are not a flaw.
+- **Spawning from a chart is an I/O processor**, `Spawner`, shipped by
+  the binding and configured by the application under a type it names:
+  the chart sends `{chart, name, params}`, the answer is `spawned` (a
+  fixed name) with `{name, address}` and the send's `sendid`, a refusal
+  `error.communication`. An undeclared type stays `error.execution`
+  (SCXML 6.2.5).
+- **Logic stays in charts.** No logic in a processor that spawns: a
+  collection actor (a workspace) decides what exists, a room saves
+  itself and announces itself to its workspace when it starts. Chart
+  helpers take the session's variables as arguments, so one chart works
+  on both native datamodels with a `.py` or a `.js` helper file.
+- **`ask(event, data)` is request and reply over existing calls:** the
+  reply address is in a system id the binding reserves, its name the
+  handle of a `ta_table` row, the chart answers to `_event.origin`, and
+  the answer comes back through the transport. No timeout of its own
+  (the caller's `wait_for` or `AbortSignal`).
+- **The native ECMAScript datamodel stays Node's default, without the
+  per-session context** of charts that declare top-level names.
+- **Cut:** Python's `Compiled.image` buffer view (bytes instead),
+  Python's `host.run()`, Node's `addCharts` and `spawnChart` (replaced),
+  an OTLP encoder for application metrics, a debugger in the API.
+
+The bindings' `AGENTS.md` change with the items that need it ("Layers",
+"What not to build", the API sections): the rules there hold for the
+direct layer; the items below are the API applications use.
+
+| # | Item | Bindings | Built on | Status |
+|---|---|---|---|---|
+| 1 | `compile_dir(path)` / `compileDir(url)`: a directory's charts and helper files compiled once, reused by any number of hosts | both | `ta_compile_charts`, the resolver | |
+| 2 | `Host(charts, system=, io_processors=, clock=, store=, resident=)` and `Host.restore(bytes, charts, ...)` | both | `ta_host_create`, `ta_host_add_image`, the snapshot calls | |
+| 3 | Processors as objects with `receive(send)`; `send.sender` an `Actor`, `send.host` | both | the send effect | |
+| 4 | `Spawner`, in C | both | `ta_host_chart`, `ta_host_spawn`, `ta_host_send` | |
+| 5 | `Actor` handles (`id`, `address`, `send`, `ask`, `terminate`, `done`), no table; `host.spawn(chart, name=, params=)`, `host.actor(name or address)`, `await host.actors(chart=)` | both | sessions, `ta_host_actor_by_name`, `ta_host_resolve`, `actor.list` | |
+| 6 | `ask` (above) | both | `ta_host_send` with `origin`, the transport effect, `ta_table` | |
+| 7 | `store=` (`SQLiteStore`, `MemoryStore`) and `resident=`: the sweep, hibernate and wake loop | both | `ta_host_sweep`, `ta_host_hibernate`, `TA_EFFECT_WAKE`, `ta_host_wake` | |
+| 8 | `on_done` and `on_error` per chart | both | `TA_EFFECT_DONE`, `TA_EFFECT_ERROR` | |
+| 9 | A handler-error hook on the host; without one, today's behaviour | both | — | |
+| 10 | Errors as classes (`NotFound`, `StaleError`, ...), the status name kept as an attribute | both | `ta_status_name` | |
+| 11 | `Address.for_name(system, name)`, percent-encoding the name | both | `ta_address_parse` | |
+| 12 | A span decoder that needs no host, at module level; whether core's decoder gives the resource, the scope and links is to be checked | both | `ta_otlp_next_span` | |
+| 13 | Operator calls in their own namespace (trace, metrics, telemetry, sweep, hibernate and wake, migration, segments and images), wire-format calls in another (`encode`, `decode`, the BasicHTTP helpers) | both | — | |
+| 14 | Guides: the three strategies for a send to an actor that is not there, with the chat as an example application; names use only characters that need no encoding | both | — | |
+| 15 | `version` export and `./package.json` in `exports` | Node | — | |
+| 16 | The native datamodel refuses top-level declarations in scripts (a compile diagnostic pointing to `<data>`), and the per-session context goes | Node | — | |
+| 17 | A chart-level `<script src="*.js">` runs once per chart; its top-level functions are the chart's helpers | Node | — | |
+| 18 | `addCharts` and `spawnChart` removed; compile options a named argument | Node | — | |
+| 19 | `__version__` | Python | — | |
+| 20 | Typed methods that can be awaited, in Node's shape | Python | `ta_host_post` | |
+| 21 | `Compiled.image` returns `bytes` | Python | `ta_compile_image` | |
+| 22 | `host.run()` removed | Python | — | |
+
+The order of work: the small, independent items first (15, 19, 21, 22,
+10, 11, 12), then the handles and the host (1, 2, 3, 5, 8, 9), then the
+pieces built on them (4, 6, 7, 20), the native datamodel (16, 17), the
+namespaces and removals (13, 18), and the guides with the chat example
+last (14). Each item is a commit with its tests, in each binding.
+
 #### Pitfalls each binding handles
 
 Found in the first pass (2026-10-12), each with a test of its own in the

@@ -10,6 +10,13 @@ session does nothing here. The binding's rules, true at every step, are
 in [AGENTS.md](AGENTS.md); the plan of both bindings is the root
 roadmap's step 8, which decides.
 
+## Step 8.6: the application API
+
+The API applications use, decided 2026-11-19: the root
+[ROADMAP.md](../ROADMAP.md), step 8, "8.6", holds the decisions and
+the items, with their status. Read it there; this binding's items
+are the ones marked "both" and its own.
+
 ## Step 8.5: Node, to the same "done means" as Python's 8.4
 
 From the root ROADMAP.md, step 8, "8.5"; read it there, and 8.4 with it,
