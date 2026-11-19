@@ -47,7 +47,10 @@ what is out of scope. A proposal or ADR states this near its start.
   on a `claude/...` branch. In a cloud session, `.claude/hooks/session-start.sh`
   moves the checkout to `main`, and `.claude/hooks/no-feature-branches.py`
   asks before a command creates a branch, pushes to one other than `main` or
-  deletes a remote ref; pushing tags needs no confirmation.
+  deletes a remote ref; pushing tags needs no confirmation. A session that
+  also attaches the release repositories starts outside this checkout and
+  reads no project settings, so the cloud environment's setup script
+  installs the same two hooks as user settings (`~/.claude/settings.json`).
 - **Integrate frequently.** Commit each small, working increment as you reach
   it, rather than accumulating a large change and landing it at the end. A
   commit is expected to build and pass the tests of the projects it
