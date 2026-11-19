@@ -1061,7 +1061,8 @@ build for) and uv; the C toolchain is the root's.
   `python -m conform`, with `--kind binding`, on the native datamodel and
   on quickjs (both must pass); `-- --milestone <M>` runs one of the
   suite's sets (`tinyactors-test/suites/milestones.txt`).
-- `mise run test`: lint, build, both interpreters, and the suite's set
+- `mise run test`: lint, build, both interpreters (`tests/`, then each
+  example's `test_*.py` from its own directory), and the suite's set
   named by `MILESTONE` in `mise/cpython.rb` once the adapter exists. Its
   `#MISE sources` list this project's files, core's and the suite's. An
   exhaustive test goes behind `--full` (root `AGENTS.md`).
@@ -1122,6 +1123,7 @@ README.md, CHANGELOG.md, mise.toml, pyproject.toml, sgconfig.yml
 ROADMAP.md           the work in progress: plan, progress, how it runs, requests to core
 docs/api-map.md      each API item → ta_* function, method or effect (checked)
 docs/values.md       the Python side of the value table
+docs/guide/          guides the README links: missing-actors.md (a send to an actor that is not there)
 src/                 extension.h, docs.h (every public docstring: when and how to use an item,
                      where it fits; tests/test_docs.py checks each item has one),
                      module.c, host.c (Host, inputs, the arena's marks),
@@ -1133,6 +1135,9 @@ src/                 extension.h, docs.h (every public docstring: when and how t
                      config; embedded, not shipped)}
 conform/             the suite's adapter, python -m conform; not in the wheel
 tests/               what the suite cannot see: threads, GC, asyncio, refusals, stale views
+examples/            applications over the package, each with a README and test_*.py (mise run test);
+                     chat/: workspaces, rooms and connections, a processor per external system,
+                     a store, and the three ways of a send to an actor that is not there
 tools/lint/          rules/, tests/, utils/ (ast-grep)
 mise/cpython.rb      what the tasks share
 mise/wheel.rb        the wheel: the release build per target, its checks, the zip, the smoke tests

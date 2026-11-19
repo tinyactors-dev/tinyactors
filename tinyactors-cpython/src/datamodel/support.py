@@ -186,9 +186,10 @@ class Actor:
         self.host.send(self.id, event, data, sendid=sendid, traceparent=traceparent)
 
     def terminate(self):
-        """End the actor now (Host.terminate): it runs no exit handlers and
-        sends no done event; its blob, if it was hibernated in the host's
-        store, is deleted."""
+        """End the actor (Host.terminate): it leaves its states, whose
+        <onexit> runs, in the next turn, and sends no done event; a
+        hibernated actor is woken from the host's store to end, and its
+        blob deleted."""
         self.host.terminate(self.id)
 
     def state(self):

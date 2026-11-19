@@ -66,6 +66,10 @@ module CPython
   # Whether tests/ holds tests of the extension.
   def tests? = !Dir[ROOT.join('tests/**/test_*.py').to_s].empty?
 
+  # The example applications that have tests (examples/<name>/test_*.py),
+  # each run from its own directory: README.md, "Example applications".
+  def examples = Dir[ROOT.join('examples/*/test_*.py').to_s].map { |path| Pathname.new(path).dirname }.uniq.sort
+
   # Runs a command in the project's directory; a failure ends the task with
   # its status.
   def run(*command, env: {})
