@@ -1,5 +1,9 @@
 # Telemetry
 
+This guide is part of operating a host (the README's [Operating a
+host](../../README.md#operating-a-host)); `decodeTraces`, which reads
+an export without a host, is the [wire format](../../README.md#wire-format)'s.
+
 Telemetry is optional: a host without it runs the same. Turn it on to see
 what your actors did in an OpenTelemetry backend.
 

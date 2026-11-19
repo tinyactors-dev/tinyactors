@@ -4,6 +4,11 @@
 // order, with examples. Each declaration is a row of docs/api-map.md,
 // which names the core behind it.
 //
+// The declarations come in three groups, as the README orders them: the
+// application API first, then what operating a host takes, then the wire
+// format. Every name is exported from the package's one entry; the groups
+// say where an item fits, not where it is imported from.
+//
 // Units: time is milliseconds (but telemetry.flushInterval, in the host's
 // clock ticks, and traceWatch's seconds); sessions are bigints (inputs also
 // take a safe integer from 1, and typed methods' results hold numbers);
@@ -28,6 +33,14 @@ declare global {
     [Symbol.asyncDispose](): PromiseLike<void>;
   }
 }
+
+// =========================================================================
+// THE APPLICATION API
+// =========================================================================
+//
+// Charts, a Host with its processors, store and handlers, Actors: what an
+// application writes against (README.md, from "A first program" to "Before
+// you use it").
 
 // ---- values -------------------------------------------------------------
 
@@ -60,48 +73,6 @@ export type Value =
  * result is: it holds whatever a chart put there, so you read its fields
  * without narrowing first. What it holds at run time is a `Value`. */
 export type ReceivedValue = any;
-
-/** What `encode` writes: a {@link Value}, or one holding `Address`es,
- * which it writes as CBOR's tag 32 (an actor reference). */
-export type Encodable =
-  | Value
-  | Address
-  | Encodable[]
-  | { [key: string]: Encodable };
-
-/** A value as CBOR bytes, the form to store or send it in. An `Address`
- * is tag 32 on its text.
- *
- * Throws a `TinyactorsError`: `TA_ERROR_UNSUPPORTED` for what is not a
- * {@link Value} (a function, a symbol, a `Date`, a `Map`, a class's
- * instance, a typed array other than `Uint8Array`), `TA_ERROR_INVALID` for
- * what a value cannot hold (a string with a lone surrogate, a `bigint` past
- * 64 bits, a cycle or nesting deeper than 64). A getter's exception passes
- * through.
- *
- * @example
- * const bytes = encode({ sku: 'tea', qty: 2 });
- * decode(bytes); // { sku: 'tea', qty: 2 }
- */
-export function encode(value: Encodable): Uint8Array;
-
-/** The value of the one CBOR item that fills `bytes`: the inverse of
- * {@link encode}, tag 32 an `Address`. Throws a `TinyactorsError` (`TA_ERROR_INVALID`) for bytes
- * that are not one such item, a `TypeError` for an argument that is not
- * bytes. */
-export function decode(bytes: Uint8Array | ArrayBuffer): ReceivedValue;
-
-/** The spans of an OTLP ExportTraceServiceRequest (the bytes a telemetry
- * handler gets for `'traces'`, or any exporter's), read without a host:
- * for tests and a collector of your own. Throws an `InvalidError` for bytes
- * that are not such a request, a `TypeError` for an argument that is not
- * bytes.
- *
- * @example
- * const spans = decodeTraces(data);
- * console.log(spans.map((span) => `${span.name} ${span.scope.attributes['tinyactors.chart.name']}`));
- */
-export function decodeTraces(bytes: Uint8Array | ArrayBuffer): DecodedSpan[];
 
 // ---- errors -------------------------------------------------------------
 
@@ -299,72 +270,6 @@ export function compileDir(dir: string | URL, options?: { readonly resolver?: Re
  */
 export const version: string;
 
-// ---- addresses ----------------------------------------------------------
-
-/** An actor's address: `tinyactors://<system>/#_scxml_<session>`, or
- * `tinyactors://<system>/@<name>` for a named actor. Immutable. Its parts
- * are read from the text on each access, `undefined` for a part the text
- * lacks (any text makes an `Address`; one that is not an address has no
- * parts). */
-export class Address {
-  constructor(text: string);
-  /** The address of a session of system `system`. */
-  static fromSession(system: string, session: Session): Address;
-  /** The address of the actor named `name` in system `system`; the name is
-   * percent-encoded. */
-  static fromName(system: string, name: string): Address;
-  readonly text: string;
-  /** The system id. */
-  readonly system: string | undefined;
-  readonly session: bigint | undefined;
-  /** The actor's name, decoded. */
-  readonly name: string | undefined;
-  /** The text. */
-  toString(): string;
-  /** The text, so `JSON.stringify` writes an address as a string, which
-   * `new Address(text)` and `host.send` read back. */
-  toJSON(): string;
-}
-
-// ---- BasicHTTP ----------------------------------------------------------
-
-/** A form field of a BasicHTTP message. */
-export interface HTTPField {
-  name: string;
-  value: string;
-}
-
-/** A BasicHTTP POST, the request SCXML's HTTP processor makes for a send. */
-export interface HTTPPost {
-  /** `http://host[:port]/path`. */
-  url: string;
-  /** Written as the `_scxmleventname` field. */
-  event?: string;
-  fields?: readonly HTTPField[];
-  /** The body, used when there are no fields; percent-encoded. */
-  body?: string;
-}
-
-/** An incoming BasicHTTP request, read. */
-export interface HTTPRequest {
-  readonly method: string;
-  readonly target: string;
-  /** The body as received. */
-  readonly body: string;
-  /** The `_scxmleventname` field, else `HTTP.<METHOD>`. */
-  readonly event: string;
-  /** The decoded form fields, but `_scxmleventname`. */
-  readonly fields: readonly HTTPField[];
-}
-
-/** The bytes of a BasicHTTP POST, to write to a socket. A URL that is not
- * `http://host[:port]/path` throws `TA_ERROR_INVALID`. */
-export function encodeHTTPPost(post: HTTPPost): Uint8Array;
-
-/** Reads an incoming BasicHTTP request: its event and form fields, for
- * `host.send`. A malformed request throws `TA_ERROR_INVALID`. */
-export function parseHTTPRequest(message: Uint8Array | ArrayBuffer): HTTPRequest;
-
 // ---- the clock ----------------------------------------------------------
 
 /** A clock for tests and simulations, which moves only when you move it.
@@ -387,7 +292,7 @@ export class SimulatedClock {
   increment(ms: number): void;
 }
 
-// ---- what handlers get ----------------------------------------------------
+// ---- what handlers get --------------------------------------------------
 
 /** One `<send>` of a chart, as an I/O processor's handler, the transport
  * or a service's `receive` gets it. A view of the host's memory: each
@@ -453,23 +358,6 @@ export interface AnswerOptions {
   raw?: string;
 }
 
-/** An event for `host.send(message)` and `host.sendMany(items)`, in the
- * shape `send.message` has. Keys it does not know are ignored. */
-export interface SendMessage {
-  /** A session, or an address (string or `Address`); a local address is
-   * resolved to its actor. */
-  target: Session | Actor | string | Address;
-  event: string;
-  data?: Value;
-  /** The event's `_event.sendid`. */
-  sendid?: string | null;
-  /** The event's `_event.origin`: where an answer goes. */
-  origin?: string | Address | null;
-  /** The trace the event continues, as W3C text; text that does not parse
-   * starts a new one. */
-  traceparent?: string | null;
-}
-
 /** A `<log>` line: a view, valid while the log handler runs. */
 export interface LogEntry {
   /** The host that handed it out. */
@@ -480,37 +368,6 @@ export interface LogEntry {
   readonly label: string;
   /** The value of `<log expr>`, as text. */
   readonly text: string;
-}
-
-/** An actor a migration moved: a view, valid while the handler runs. */
-export interface Migrated {
-  /** The host that handed it out. */
-  readonly host: Host;
-  readonly session: bigint;
-  /** The segment of its new version. */
-  readonly segment: number;
-  /** The chart's name. */
-  readonly chart: string;
-  /** The migration's id, as `host.migrate` returned it. */
-  readonly migration: number;
-}
-
-/** A session a migration could not move: it stays on its version.
- * `reason` names core's status, `'TA_ERROR_UNSUPPORTED'` when its state
- * cannot be written out (a value outside the value table). */
-export interface MigrationFailure {
-  readonly session: bigint;
-  readonly reason: string;
-}
-
-/** A migration's end: how many actors it moved, the ones it could not move
- * and why (they stay on their version), and the sessions its timeout left
- * behind. */
-export interface MigrationResult {
-  readonly migration: number;
-  readonly migrated: number;
-  readonly failed: readonly MigrationFailure[];
-  readonly pending: readonly bigint[];
 }
 
 /** An `<invoke>` of a service your program runs, as a service handler
@@ -559,40 +416,88 @@ export interface Service {
   stop?(): void;
 }
 
-// ---- the host -----------------------------------------------------------
+// ---- the host's options -------------------------------------------------
 
-/** A chart's current version in a host, from `host.chart(name)`, for
- * `host.spawn`. */
-export interface ChartRef {
-  /** The segment of the image that holds it. */
-  readonly segment: number;
-  /** Its index in that image. */
-  readonly chart: number;
+/** The handlers and choices of a host, `new Host(charts, options)`. A
+ * handler's error is reported after its turn: it goes to `onHandlerError`
+ * when there is one; else it rejects a waiting `host.idle()`, or is thrown
+ * as an uncaught exception. No handler takes the host: a view or record
+ * has `.host`. */
+export interface HostOptions {
+  /** Required: this system's id, part of every address it hands out
+   * (`tinyactors://<system>/...`). No two systems that talk may share one,
+   * and `'tinyactors-ask'` is the binding's (`TA_ERROR_INVALID`). */
+  system: string;
+  /** The I/O processors the charts may send to (`<send type>`): an
+   * object of each type's {@link IOProcessor}, the config's
+   * `ioProcessors` in this order. Sends to another system need none: they
+   * go to `transport`. */
+  ioProcessors?: { [type: string]: IOProcessor };
+  /** The rest of the host's config. */
+  config?: HostConfig;
+  /** A `SimulatedClock`; without one the host reads the runtime's clock
+   * and arms a timer at its next deadline. */
+  clock?: SimulatedClock;
+  /** Where hibernated actors' blobs go: a WAKE (an event, a due delayed
+   * send, a migration for a hibernated actor) loads its blob from here and
+   * wakes it. Without a store a WAKE is dropped: the actor stays
+   * hibernated, and its events wait, until `host.wake`. */
+  store?: Store;
+  /** The most actors kept in memory (an integer from 1; needs `store`):
+   * after a turn that goes idle the host hibernates the actors past it
+   * into the store, the coldest first (`host.sweep`, `host.hibernate`); a
+   * migration's WAKE waits while the bound is reached, and loads as room
+   * is made. An actor not at rest, or holding what its datamodel cannot
+   * write out, stays. */
+  resident?: number;
+  /** `<log>` lines; without one they are dropped. */
+  log?: (entry: LogEntry) => Handled;
+  /** Your exporter: each OTLP traces or logs request the encoder wrote
+   * (protobuf, for a collector's `/v1/traces` or `/v1/logs`), as a
+   * `Uint8Array`. Needs `telemetry` in the config; without a handler the
+   * requests are dropped. It runs in the host's turn: start the post and
+   * return. At `close()` it gets the last requests; the promises it
+   * returns then are awaited by `[Symbol.asyncDispose]`. */
+  telemetry?: (signal: 'traces' | 'logs', data: Uint8Array) => Handled;
+  /** The handler of each `<invoke type>` your program runs: it returns the
+   * service, or a promise of it. Until the promise settles the sends to
+   * the invocation wait, in order; a rejection is a failed start, and the
+   * invoker gets `error.communication`. */
+  services?: { [type: string]: (invocation: Invocation) => Service | void | PromiseLike<Service | void> };
+  /** Sends to another system's address. Pass `send.message` to the other
+   * side's `host.send`. Without one, each such send is failed. A reply to
+   * an `actor.ask` never reaches it. */
+  transport?: (send: Send) => Handled;
+  /** Each top-level actor that reaches a final state, with its donedata
+   * (`undefined` for none). */
+  onDone?: (actor: Actor, donedata: ReceivedValue) => Handled;
+  /** Each top-level actor that faulted and ended (a `TinyactorsError`,
+   * status `TA_ERROR_FATAL`). */
+  onError?: (actor: Actor, error: TinyactorsError) => Handled;
+  /** A handler's error (a throw, or its promise's rejection), with the
+   * view or record it was handling (`undefined` for none; a thin view is
+   * readable while the hook runs). The send is failed as without it.
+   * Without it, the error is the turn's. */
+  onHandlerError?: (error: unknown, effect: Send | LogEntry | Migrated | Invocation | undefined) => void;
+  /** Each actor a migration moved. */
+  migrated?: (migrated: Migrated) => Handled;
+  /** The end of each migration. */
+  migrationDone?: (result: MigrationResult) => Handled;
+  /** Where chart code runs: `'native'` (the default), your own engine
+   * (`node:vm` contexts in @tinyactors/node), for trusted charts; or
+   * `'quickjs'`, the sandbox, for charts you do not trust (in
+   * @tinyactors/wasm the datamodel for a page whose policy forbids
+   * `'unsafe-eval'`). */
+  datamodel?: 'native' | 'quickjs';
+  /** The sandbox's limits, with `datamodel: 'quickjs'` only (else a
+   * `TypeError`). */
+  quickjs?: QuickJSOptions;
 }
 
-/** The rest of the host's config, `options.config`: plain values, checked
- * by the host, every absent key a default (the host's, never the
- * package's). A key the host does not take, or a value of the wrong type,
- * throws a `TinyactorsError` (`TA_ERROR_INVALID`) at `new Host`, with the
- * host's `reason` and the key as `path` (`system.maxActors`). The system
- * id is `options.system` and the I/O processors `options.ioProcessors`:
- * a `systemID` or `ioProcessors` here is a `TypeError`.
- * `host.hostConfig()` answers the whole config with every default filled
- * in, as {@link EffectiveHostConfig}.
- *
- * @example
- * const config = { system: { maxActors: 10_000 }, telemetry: { resource: { 'service.name': 'orders' } } };
- */
-export interface HostConfig {
-  /** The capacities of each new segment, each its first size, not a cap
-   * (a pool that fills grows its segment). */
-  system?: SystemConfig;
-  /** Actors a migration looks at per run (default 256). */
-  migrateQuantum?: number;
-  /** Present: the host has an OTLP encoder, and `options.telemetry` gets
-   * its requests. Absent: none, and nothing is paid for it. */
-  telemetry?: TelemetryConfig;
-}
+/** What `new Host` and `Host.restore` take as charts: a compile result
+ * (its image is read), an image's bytes, or an array of them, each added
+ * in order as a segment. */
+export type Charts = Compiled | Uint8Array | ArrayBuffer | readonly (Compiled | Uint8Array | ArrayBuffer)[];
 
 /** An I/O processor: the object that serves one `<send type>`, given as
  * `options.ioProcessors[type]`. Its `receive` gets each send to the type,
@@ -677,6 +582,34 @@ export class Spawner implements IOProcessor {
   receive(send: Send): void;
 }
 
+/** What a handler returns: nothing, or a promise (typed `unknown`, so a
+ * handler that returns another value, as `(host, send) => sent.push(send)`
+ * does, is one too; the host ignores it). A send whose handler returns a
+ * promise is read in full before the host moves on, and may be answered
+ * when the promise gets there. */
+export type Handled = unknown;
+
+/** The quickjs sandbox's limits. Absent: the engine's default. */
+export interface QuickJSOptions {
+  /** Interrupt checks one evaluation may make before it is stopped with
+   * `error.execution` (default 1,000,000, which lets a busy loop run for
+   * many seconds). */
+  maxOps?: number;
+  /** Bytes for the whole engine, every actor together (default 1 GiB,
+   * `2 ** 30`; `Number.MAX_SAFE_INTEGER` is as good as none). An
+   * evaluation that needs more is stopped with `error.execution`, reason
+   * `'memory'`. */
+  memoryLimit?: number;
+  /** Bytes of native stack for JavaScript. */
+  stackLimit?: number;
+  /** `'auto'` (the default): the actors of a chart that declares no
+   * top-level names share one context and its builtins; `'isolated'`: a
+   * context per actor. */
+  realm?: 'auto' | 'isolated';
+}
+
+// ---- actors -------------------------------------------------------------
+
 /** An actor of a host: what `host.spawn` and `host.actor` return, and what
  * `send.sender` and `onDone` give. A small immutable value made where the
  * API returns one: keeping one keeps nothing alive in the host, two for
@@ -723,6 +656,405 @@ export class Actor {
   equals(other: unknown): boolean;
   /** `Actor(<id>)`. */
   toString(): string;
+}
+
+/** The options of `host.spawn`. */
+export interface SpawnOptions {
+  /** The actor's name: `host.actor(name)` finds it, `_name` holds it, and
+   * its address is `tinyactors://<system>/@<name>`. */
+  name?: string;
+  /** Initial values: each key that names a top-level `<data>` replaces that
+   * variable's initial value; keys that name none are left out. */
+  params?: Value;
+  /** The trace the actor's start continues, as W3C text. */
+  traceparent?: string;
+}
+
+/** The options of `host.send(target, event, data, options)`. */
+export interface SendOptions {
+  /** The event's `_event.sendid`. */
+  sendid?: string;
+  /** The trace the event continues, as W3C text; text that does not parse
+   * starts a new one. */
+  traceparent?: string;
+  /** The event's `_event.origin`. */
+  origin?: string | Address;
+}
+
+// ---- the typed methods: their shapes, and an actor's --------------------
+
+// As the host writes them (each method of the host's control plane). A
+// session or a count in a result is a number; an integer past 2^53 would
+// be a bigint, which only `trace.spans.decode`'s nanosecond times reach.
+
+/** A typed method's params, passed to the host as given (the host checks
+ * them); `undefined` for none. Each method has its own type below. */
+export type Params = { [key: string]: Value } | undefined;
+
+/** The params of a method that takes none: `undefined` or `{}`. */
+export type NoParams = undefined | { readonly [key: string]: never };
+
+/** A typed method's result handler, called once, in a later turn, with the
+ * method's result. */
+export type OnResult<R = Value> = (result: R) => void;
+
+/** A typed method's error handler. Without one, the error rejects a
+ * waiting `idle()` or is thrown as an uncaught exception. */
+export type OnError = (error: TinyactorsError) => void;
+
+/** An active configuration, as xstate's `value`: an atomic state is its
+ * id (`'s'`), a compound state `{ [state]: its active child }`, a parallel
+ * state `{ [state]: { [region]: ... } }`, an atomic region `{}`. */
+export type StateValue = string | { readonly [state: string]: StateValue };
+
+/** The params of `actorState`, `actorContext` and `actorGet`. */
+export interface SessionParams {
+  session: Session | Actor;
+}
+
+/** `actorState`'s result. */
+export interface ActorStateResult {
+  readonly value: StateValue;
+  /**
+   * Where each history state the actor has recorded would return, by its
+   * id: its parent state as it would be entered again, in the shape of
+   * `value` (a deep history down to the atomic states it recorded; a
+   * shallow one names the child it recorded). A history state records when
+   * its parent is exited; one that has recorded nothing is absent, so this
+   * is `{}` before any exit. A hibernated actor's state is refused
+   * (`reason` `'state'`): wake it first.
+   */
+  readonly history: { readonly [history: string]: StateValue };
+}
+
+/** `actorContext`'s result: each `<data>`, in the chart's order. */
+export interface ActorContextResult {
+  readonly variables: { readonly [id: string]: ReceivedValue };
+}
+
+/** `actorGet`'s result. */
+export interface ActorGetResult {
+  readonly session: number;
+  readonly segment: number;
+  /** The chart's name. */
+  readonly chart: string;
+  /** The session that invoked it; `null` for a root actor. */
+  readonly parent: number | null;
+  /** Events waiting for it. */
+  readonly mailbox: number;
+  /** Services it runs. */
+  readonly invocations: number;
+  /**
+   * Its pending delayed sends (`<send delay>` not yet due, not cancelled),
+   * earliest first, at most 32: `timersPending` says how many it has.
+   */
+  readonly timers: readonly PendingSend[];
+  /** How many delayed sends it has pending: more than `timers` holds when the list was cut. */
+  readonly timersPending: number;
+}
+
+/** A pending delayed send, in `actorGet`'s `timers`. */
+export interface PendingSend {
+  /** The send's id (its `id`, or the one `idlocation` was given); `null` when it has none. */
+  readonly sendid: string | null;
+  /** The event's name. */
+  readonly event: string;
+  /** When it fires: milliseconds on the clock `host.now()` reads. */
+  readonly due: number;
+}
+
+// ---- the host -----------------------------------------------------------
+
+/** Runs actors: many charts, many images, from a handful of actors to
+ * millions, on the runtime's event loop. Inputs (`spawn`, `send`, ...)
+ * apply at once and schedule a turn; in its turns the host runs the actors
+ * and calls your handlers with what they sent out. There is no `run()`:
+ * `await host.idle()` waits until there is nothing left to do.
+ *
+ * An open host with a pending deadline keeps the process alive, as a
+ * `setTimeout` does; `close()` ends it. With no deadline it keeps nothing
+ * alive: the process may exit with the host open and actors waiting, for
+ * an answer included.
+ *
+ * @example
+ * const compiled = compileCharts([{ name: 'order.scxml', text }]);
+ * const host = new Host(compiled, { system: 'shop', log: (entry) => console.log(entry.text) });
+ * compiled.close();
+ * const order = host.spawn('order');
+ * order.send('checkout');
+ * await host.idle();
+ * host.close();
+ */
+export class Host implements Disposable, AsyncDisposable {
+  // ---- the application API ----
+
+  /** A host of system `options.system` running `charts` (each image added
+   * in order, a segment each: `addImage`), with the handlers and choices
+   * of `options`. Throws `TinyactorsError` (`TA_ERROR_INVALID`) for a
+   * config the host does not take, `TypeError` for options it does not
+   * take. */
+  constructor(charts: Charts, options: HostOptions);
+  /** The system id, `options.system`. */
+  readonly system: string;
+  /** True once `close()` ran; every input of a closed host throws. */
+  readonly closed: boolean;
+  /** Milliseconds from the last idle turn to the next deadline (a delayed
+   * send, a timeout, or the telemetry encoder's flush once records are
+   * staged); `undefined` for none. An input given since that turn has not
+   * run yet, so its deadlines are not in it. */
+  readonly nextDeadline: number | undefined;
+
+  /** Starts an actor of `chart`, a chart's name (its current version) or a
+   * `ChartRef` (a version), and returns it. It runs in a later turn.
+   * Throws `TA_ERROR_INVALID` for a chart the host does not have. */
+  spawn(chart: string | ChartRef, options?: SpawnOptions): Actor;
+  /** The live actor `which` names: a session, an Actor, the name it was
+   * spawned with (newest segment first), or an address of this system
+   * (text or an `Address`). Throws `StaleError` for no live actor,
+   * `InvalidError` for another system's address. */
+  actor(which: Session | Actor | string | Address): Actor;
+  /** Every live actor of the host (`actorList`, a page at a time), or the
+   * actors of the chart named `options.chart`. */
+  actors(options?: { chart?: string }): Promise<Actor[]>;
+
+  /** Puts `event`, with `data`, in the queue of the actor `target` names (a
+   * session or an address). Throws `TA_ERROR_STALE` for an actor that
+   * ended. */
+  send(target: Session | Actor | string | Address, event: string, data?: Value, options?: SendOptions): void;
+  /** The same, from a `SendMessage` (the transport's `send.message`). */
+  send(message: SendMessage): void;
+  /** Ends the actor. Throws `TA_ERROR_STALE` for one that already ended. */
+  terminate(session: Session | Actor): void;
+
+  /** Resolves at the next turn that finds nothing to do while no promise a
+   * handler returned is pending (an I/O processor's, a service's or its
+   * `receive`'s, a wake, telemetry, log, migration or typed-method
+   * handler's): the same promise to every caller until then. A handler's
+   * promise that never settles keeps it pending, and so does a handler
+   * that awaits `idle()` itself. Rejects with the turn's first error (a
+   * handler's, a typed method's without `onError`), or with
+   * `TA_ERROR_STATE` when the host is closed first; on a closed host it
+   * returns a promise rejected so. It does not wait for promises your
+   * handlers start and do not return. */
+  idle(): Promise<void>;
+  /** The host's clock in milliseconds, read now: a `SimulatedClock`'s
+   * time, or the runtime's monotonic clock, on the scale the host's
+   * deadlines and `snapshot()` use, so a restored host's goes on from its
+   * snapshot's. A journal of inputs records it beside each input, and a
+   * replay on a restored host moves its clock to each reading. It reads
+   * and advances nothing; a closed host throws `TA_ERROR_STATE`. */
+  now(): number;
+
+  // The typed methods. Each has two forms. Given handlers, `onResult` or
+  // `onError` is called once, in a later turn, and the call returns
+  // nothing; an error with no `onError` is the turn's (`idle()` rejects
+  // with it). Given no handler, the call returns a promise that resolves
+  // with the result and rejects with the `TinyactorsError` (`code`,
+  // `reason`, `path`); a refusal at the call rejects too. A rejection is
+  // yours: without a `catch` it is an unhandled rejection, and `idle()`
+  // does not see it. Each reads the host when called; `close()` drops a
+  // pending method uncalled, and its promise never settles.
+
+  /** An actor's active states, `{ value, history }`: a state id, or `{
+   * parent: child }` for compound states. Params `{ session }`. `const {
+   * value } = await host.actorState({ session })`. */
+  actorState(params: SessionParams, onResult: OnResult<ActorStateResult>, onError?: OnError | null): void;
+  /** `actorState` given no handler: a promise of `{ value, history }`. */
+  actorState(params: SessionParams): Promise<ActorStateResult>;
+  /** An actor's variables, `{ variables }`. Params `{ session }`; refused
+   * for a hibernated actor. A variable that holds `undefined` reads
+   * `undefined`, apart from `null`; before the actor's first turn every
+   * variable is `undefined`, its spawn params included. */
+  actorContext(params: SessionParams, onResult: OnResult<ActorContextResult>, onError?: OnError | null): void;
+  /** `actorContext` given no handler: a promise of `{ variables }`. */
+  actorContext(params: SessionParams): Promise<ActorContextResult>;
+
+  /** Frees the host: the last telemetry requests go to the handler, the
+   * timer is cleared, pending typed methods and running services are
+   * dropped without being called. From a handler it waits for the end of
+   * the turn. Again: nothing. */
+  close(): void;
+  /** `close()`. */
+  [Symbol.dispose](): void;
+  /** `close()`, then the promises the telemetry handler returned at it. */
+  [Symbol.asyncDispose](): Promise<void>;
+
+
+  // ---- operating a host (README.md, "Operating a host") ----
+  //
+  // A snapshot and its restore; the clock's rate and quickjs's heap;
+  // images, segments and versions; the typed methods that inspect and
+  // trace the host (their two forms as above); metrics; hibernation by a
+  // policy of your own; migration.
+
+  /** A new host running a snapshot `host.snapshot()` gave, with the system
+   * it was taken with (checked) and the options `new Host` takes, its
+   * `datamodel` the snapshot's; of `charts`, the images the snapshot does
+   * not hold (compared by their bytes) are added after its own. Every
+   * session stays the same, and its clock goes on from the snapshot's
+   * time, whatever clock reads it. Invocations that were running are
+   * announced again to `services`, with `invocation.restored` true. A
+   * snapshot of a build whose layout differs throws `TA_ERROR_INVALID`. */
+  static restore(snapshot: Uint8Array | ArrayBuffer, charts: Charts, options: HostOptions): Host;
+
+  /** The host's clock rate, `system.ticksPerSecond`. */
+  readonly ticksPerSecond: number;
+  /** The quickjs engine's heap in bytes, every actor's together, read on
+   * each access (cheap): what `quickjs.memoryLimit` bounds. `undefined` on
+   * a native host and once closed. */
+  readonly quickjsHeapBytes: number | undefined;
+
+  /** Loads a compiled image, which it copies, and returns its segment, a
+   * number. A chart whose name the host already has gets a new version:
+   * new actors are of it, running ones stay on theirs until `migrate`.
+   * Throws `TA_ERROR_INVALID` for bytes that are not an image. */
+  addImage(image: Uint8Array | ArrayBuffer): number;
+  /** The current version of chart `name`, for `spawn`. Throws
+   * `TA_ERROR_INVALID` when the host has no chart of that name. */
+  chart(name: string): ChartRef;
+  /** Spawns the boot actors of the image of `segment`: a system manifest's
+   * `<actor>`s, or an actor of `compileCharts`' first chart. */
+  boot(segment: number): void;
+
+  /** The host's sessions a page at a time, `{ sessions, cursor }`, `cursor`
+   * `null` after the last page. Params `{ cursor?, limit? }` (1 to 512,
+   * default 256). */
+  actorList(params: ActorListParams | undefined, onResult: OnResult<ActorListResult>, onError?: OnError | null): void;
+  /** `actorList` given no handler: a promise of a page, `{ sessions, cursor }`. */
+  actorList(params?: ActorListParams): Promise<ActorListResult>;
+  /** One actor, `{ session, segment, chart, parent, mailbox, invocations,
+   * timers, timersPending }`. Params `{ session }`. */
+  actorGet(params: SessionParams, onResult: OnResult<ActorGetResult>, onError?: OnError | null): void;
+  /** `actorGet` given no handler: a promise of the actor. */
+  actorGet(params: SessionParams): Promise<ActorGetResult>;
+  /** The host's counters, `{ host, pools, charts }`: `pools` has one entry
+   * per live segment with each pool's `capacity`, `used` and `highWater`.
+   * No params: `await host.hostStats()`. */
+  hostStats(params: NoParams, onResult: OnResult<HostStatsResult>, onError?: OnError | null): void;
+  /** `hostStats` given no handler: a promise of the counters. */
+  hostStats(params?: NoParams): Promise<HostStatsResult>;
+  /** The config the host runs with, every default filled in. No params. */
+  hostConfig(params: NoParams, onResult: OnResult<EffectiveHostConfig>, onError?: OnError | null): void;
+  /** `hostConfig` given no handler: a promise of the effective config. */
+  hostConfig(params?: NoParams): Promise<EffectiveHostConfig>;
+
+  /** Sets what every actor traces: `{ detail, values, sample, records,
+   * rules }`. */
+  traceConfigure(params: TraceConfigureParams | undefined, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
+  /** `traceConfigure` given no handler: a promise of `{}`. */
+  traceConfigure(params?: TraceConfigureParams): Promise<EmptyResult>;
+  /** Adds trace rules for a while: `{ rules, seconds }` (default 900);
+   * answers `{ id }`. */
+  traceWatch(params: TraceWatchParams, onResult: OnResult<TraceWatchResult>, onError?: OnError | null): void;
+  /** `traceWatch` given no handler: a promise of `{ id }`. */
+  traceWatch(params: TraceWatchParams): Promise<TraceWatchResult>;
+  /** Ends a watch early: `{ id }`. */
+  traceUnwatch(params: TraceUnwatchParams, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
+  /** `traceUnwatch` given no handler: a promise of `{}`. */
+  traceUnwatch(params: TraceUnwatchParams): Promise<EmptyResult>;
+  /** Ends every open span now, marked incomplete, for the telemetry handler.
+   * Refused without `telemetry` in the config. */
+  traceEnd(params: NoParams, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
+  /** `traceEnd` given no handler: a promise of `{}`. */
+  traceEnd(params?: NoParams): Promise<EmptyResult>;
+  /** The spans of a traces request: `{ traces }` (the bytes) answers `{
+   * spans }`, each with `trace`, `span`, `parent`, `name`, `start`, `end`,
+   * `attributes`, ... */
+  traceSpansDecode(params: TraceSpansDecodeParams, onResult: OnResult<TraceSpansDecodeResult>, onError?: OnError | null): void;
+  /** `traceSpansDecode` given no handler: a promise of `{ spans }`. */
+  traceSpansDecode(params: TraceSpansDecodeParams): Promise<TraceSpansDecodeResult>;
+
+  /** The host's counters now as an OTLP metrics request (a `Uint8Array`, for a
+   * collector's `/v1/metrics`). `TA_ERROR_STATE` without `telemetry` in the
+   * config. */
+  metrics(): Uint8Array;
+
+  /** Finds cold actors: at most `limit` sessions that did not run since
+   * the previous sweep and can be hibernated now, looking at most at `maxScan`
+   * actors (each an integer from 0 to 2^32-1). The first sweep after an
+   * actor ran skips it. */
+  sweep(maxScan: number, limit: number): bigint[];
+  /** Takes the actor out of memory and returns its blob (a `Uint8Array`) for
+   * your store. `TA_ERROR_STATE` when it is not at rest (events waiting, a
+   * step not over, running an invoked child or service) and when it is not
+   * resident (already hibernated, its wake asked for and not given): the
+   * status does not tell the two apart. `TA_ERROR_STALE` for a session that
+   * ended or never was, `TA_ERROR_UNSUPPORTED` when a variable holds what
+   * the datamodel cannot store (the message names it); it stays where it
+   * is then. */
+  hibernate(session: Session | Actor): Uint8Array;
+  /** Puts a hibernated actor back from the blob `hibernate` gave; its
+   * waiting events run at the next turn. Only its latest blob: one of an
+   * earlier hibernation (a store that fell behind) throws `TA_ERROR_STALE`,
+   * another session's `TA_ERROR_INVALID`, and the actor stays hibernated.
+   * On a restored host a blob of a hibernation made after the snapshot is
+   * taken too. */
+  wake(session: Session | Actor, blob: Uint8Array | ArrayBuffer): void;
+
+  /** Starts moving running actors (every chart's, `chart`'s, or one
+   * `session`) to the current version of their chart, in later turns; each
+   * gets `error.platform.upgrade` with its old variables. Returns the
+   * migration's id, which `migrated` and `migrationDone` name. Throws `TA_ERROR_INVALID` for a chart the host does not have and
+   * `TA_ERROR_STALE` for a session that ended. */
+  migrate(options?: MigrateOptions): number;
+
+  /** The whole host as one `Uint8Array`: every segment, the images, the system
+   * id, the host's time (its clocks advanced first: the time of the call,
+   * as `now()` reads it) and the datamodel's state, for `Host.restore` on the
+   * same build of the package. Only when quiescent: from a handler, with an
+   * effect or a reply pending, or during a migration it throws
+   * `TA_ERROR_STATE`; a value outside the value table throws
+   * `TA_ERROR_UNSUPPORTED`. */
+  snapshot(): Uint8Array;
+
+  // ---- wire format (README.md, "Wire format") ----
+  //
+  // A transport's messages delivered and failed on the receiving side;
+  // `send(message)`, above, takes one too.
+
+  /** Tells a sender that its send could not be delivered: the actor
+   * `sender` (a session or its address, the send's `origin`) gets
+   * `error.communication` with `sendid`. */
+  fail(sender: Session | Actor | string | Address, sendid?: string): void;
+  /** Sends each of `items` in order, and returns how many were taken: the
+   * rest, from the first one refused, were not sent. */
+  sendMany(items: readonly SendMessage[]): number;
+}
+
+// =========================================================================
+// OPERATING A HOST
+// =========================================================================
+//
+// What an operator's tools, a deploy script or an admin endpoint use: the
+// host's config and sizes, inspection, telemetry, hibernation by a policy
+// of your own, images, segments and migration, snapshots (README.md,
+// "Operating a host"). The Host's own methods for them are grouped in the
+// class, under the same heading.
+
+// ---- config and sizes ---------------------------------------------------
+
+/** The rest of the host's config, `options.config`: plain values, checked
+ * by the host, every absent key a default (the host's, never the
+ * package's). A key the host does not take, or a value of the wrong type,
+ * throws a `TinyactorsError` (`TA_ERROR_INVALID`) at `new Host`, with the
+ * host's `reason` and the key as `path` (`system.maxActors`). The system
+ * id is `options.system` and the I/O processors `options.ioProcessors`:
+ * a `systemID` or `ioProcessors` here is a `TypeError`.
+ * `host.hostConfig()` answers the whole config with every default filled
+ * in, as {@link EffectiveHostConfig}.
+ *
+ * @example
+ * const config = { system: { maxActors: 10_000 }, telemetry: { resource: { 'service.name': 'orders' } } };
+ */
+export interface HostConfig {
+  /** The capacities of each new segment, each its first size, not a cap
+   * (a pool that fills grows its segment). */
+  system?: SystemConfig;
+  /** Actors a migration looks at per run (default 256). */
+  migrateQuantum?: number;
+  /** Present: the host has an OTLP encoder, and `options.telemetry` gets
+   * its requests. Absent: none, and nothing is paid for it. */
+  telemetry?: TelemetryConfig;
 }
 
 /** Each new segment's first sizes: unsigned integers, 0 or absent for the
@@ -811,134 +1143,15 @@ export interface EffectiveHostConfig {
   readonly telemetry?: Readonly<Required<TelemetryConfig>>;
 }
 
-/** What a handler returns: nothing, or a promise (typed `unknown`, so a
- * handler that returns another value, as `(host, send) => sent.push(send)`
- * does, is one too; the host ignores it). A send whose handler returns a
- * promise is read in full before the host moves on, and may be answered
- * when the promise gets there. */
-export type Handled = unknown;
+// ---- images, segments and migration -------------------------------------
 
-/** The handlers and choices of a host, `new Host(charts, options)`. A
- * handler's error is reported after its turn: it goes to `onHandlerError`
- * when there is one; else it rejects a waiting `host.idle()`, or is thrown
- * as an uncaught exception. No handler takes the host: a view or record
- * has `.host`. */
-export interface HostOptions {
-  /** Required: this system's id, part of every address it hands out
-   * (`tinyactors://<system>/...`). No two systems that talk may share one,
-   * and `'tinyactors-ask'` is the binding's (`TA_ERROR_INVALID`). */
-  system: string;
-  /** The I/O processors the charts may send to (`<send type>`): an
-   * object of each type's {@link IOProcessor}, the config's
-   * `ioProcessors` in this order. Sends to another system need none: they
-   * go to `transport`. */
-  ioProcessors?: { [type: string]: IOProcessor };
-  /** The rest of the host's config. */
-  config?: HostConfig;
-  /** A `SimulatedClock`; without one the host reads the runtime's clock
-   * and arms a timer at its next deadline. */
-  clock?: SimulatedClock;
-  /** Where hibernated actors' blobs go: a WAKE (an event, a due delayed
-   * send, a migration for a hibernated actor) loads its blob from here and
-   * wakes it. Without a store a WAKE is dropped: the actor stays
-   * hibernated, and its events wait, until `host.wake`. */
-  store?: Store;
-  /** The most actors kept in memory (an integer from 1; needs `store`):
-   * after a turn that goes idle the host hibernates the actors past it
-   * into the store, the coldest first (`host.sweep`, `host.hibernate`); a
-   * migration's WAKE waits while the bound is reached, and loads as room
-   * is made. An actor not at rest, or holding what its datamodel cannot
-   * write out, stays. */
-  resident?: number;
-  /** `<log>` lines; without one they are dropped. */
-  log?: (entry: LogEntry) => Handled;
-  /** Your exporter: each OTLP traces or logs request the encoder wrote
-   * (protobuf, for a collector's `/v1/traces` or `/v1/logs`), as a
-   * `Uint8Array`. Needs `telemetry` in the config; without a handler the
-   * requests are dropped. It runs in the host's turn: start the post and
-   * return. At `close()` it gets the last requests; the promises it
-   * returns then are awaited by `[Symbol.asyncDispose]`. */
-  telemetry?: (signal: 'traces' | 'logs', data: Uint8Array) => Handled;
-  /** The handler of each `<invoke type>` your program runs: it returns the
-   * service, or a promise of it. Until the promise settles the sends to
-   * the invocation wait, in order; a rejection is a failed start, and the
-   * invoker gets `error.communication`. */
-  services?: { [type: string]: (invocation: Invocation) => Service | void | PromiseLike<Service | void> };
-  /** Sends to another system's address. Pass `send.message` to the other
-   * side's `host.send`. Without one, each such send is failed. A reply to
-   * an `actor.ask` never reaches it. */
-  transport?: (send: Send) => Handled;
-  /** Each top-level actor that reaches a final state, with its donedata
-   * (`undefined` for none). */
-  onDone?: (actor: Actor, donedata: ReceivedValue) => Handled;
-  /** Each top-level actor that faulted and ended (a `TinyactorsError`,
-   * status `TA_ERROR_FATAL`). */
-  onError?: (actor: Actor, error: TinyactorsError) => Handled;
-  /** A handler's error (a throw, or its promise's rejection), with the
-   * view or record it was handling (`undefined` for none; a thin view is
-   * readable while the hook runs). The send is failed as without it.
-   * Without it, the error is the turn's. */
-  onHandlerError?: (error: unknown, effect: Send | LogEntry | Migrated | Invocation | undefined) => void;
-  /** Each actor a migration moved. */
-  migrated?: (migrated: Migrated) => Handled;
-  /** The end of each migration. */
-  migrationDone?: (result: MigrationResult) => Handled;
-  /** Where chart code runs: `'native'` (the default), your own engine
-   * (`node:vm` contexts in @tinyactors/node), for trusted charts; or
-   * `'quickjs'`, the sandbox, for charts you do not trust (in
-   * @tinyactors/wasm the datamodel for a page whose policy forbids
-   * `'unsafe-eval'`). */
-  datamodel?: 'native' | 'quickjs';
-  /** The sandbox's limits, with `datamodel: 'quickjs'` only (else a
-   * `TypeError`). */
-  quickjs?: QuickJSOptions;
-}
-
-/** What `new Host` and `Host.restore` take as charts: a compile result
- * (its image is read), an image's bytes, or an array of them, each added
- * in order as a segment. */
-export type Charts = Compiled | Uint8Array | ArrayBuffer | readonly (Compiled | Uint8Array | ArrayBuffer)[];
-
-/** The quickjs sandbox's limits. Absent: the engine's default. */
-export interface QuickJSOptions {
-  /** Interrupt checks one evaluation may make before it is stopped with
-   * `error.execution` (default 1,000,000, which lets a busy loop run for
-   * many seconds). */
-  maxOps?: number;
-  /** Bytes for the whole engine, every actor together (default 1 GiB,
-   * `2 ** 30`; `Number.MAX_SAFE_INTEGER` is as good as none). An
-   * evaluation that needs more is stopped with `error.execution`, reason
-   * `'memory'`. */
-  memoryLimit?: number;
-  /** Bytes of native stack for JavaScript. */
-  stackLimit?: number;
-  /** `'auto'` (the default): the actors of a chart that declares no
-   * top-level names share one context and its builtins; `'isolated'`: a
-   * context per actor. */
-  realm?: 'auto' | 'isolated';
-}
-
-/** The options of `host.spawn`. */
-export interface SpawnOptions {
-  /** The actor's name: `host.actor(name)` finds it, `_name` holds it, and
-   * its address is `tinyactors://<system>/@<name>`. */
-  name?: string;
-  /** Initial values: each key that names a top-level `<data>` replaces that
-   * variable's initial value; keys that name none are left out. */
-  params?: Value;
-  /** The trace the actor's start continues, as W3C text. */
-  traceparent?: string;
-}
-
-/** The options of `host.send(target, event, data, options)`. */
-export interface SendOptions {
-  /** The event's `_event.sendid`. */
-  sendid?: string;
-  /** The trace the event continues, as W3C text; text that does not parse
-   * starts a new one. */
-  traceparent?: string;
-  /** The event's `_event.origin`. */
-  origin?: string | Address;
+/** A chart's current version in a host, from `host.chart(name)`, for
+ * `host.spawn`. */
+export interface ChartRef {
+  /** The segment of the image that holds it. */
+  readonly segment: number;
+  /** Its index in that image. */
+  readonly chart: number;
 }
 
 /** The options of `host.migrate`. */
@@ -955,51 +1168,39 @@ export interface MigrateOptions {
   timeout?: number;
 }
 
-/** A typed method's params, passed to the host as given (the host checks
- * them); `undefined` for none. Each method has its own type below. */
-export type Params = { [key: string]: Value } | undefined;
-/** The params of a method that takes none: `undefined` or `{}`. */
-export type NoParams = undefined | { readonly [key: string]: never };
-/** A typed method's result handler, called once, in a later turn, with the
- * method's result. */
-export type OnResult<R = Value> = (result: R) => void;
-/** A typed method's error handler. Without one, the error rejects a
- * waiting `idle()` or is thrown as an uncaught exception. */
-export type OnError = (error: TinyactorsError) => void;
-
-// ---- the typed methods' params and results ---------------------------
-//
-// As the host writes them (each method of the host's control plane). A
-// session or a count in a result is a number; an integer past 2^53 would
-// be a bigint, which only `trace.spans.decode`'s nanosecond times reach.
-
-/** An active configuration, as xstate's `value`: an atomic state is its
- * id (`'s'`), a compound state `{ [state]: its active child }`, a parallel
- * state `{ [state]: { [region]: ... } }`, an atomic region `{}`. */
-export type StateValue = string | { readonly [state: string]: StateValue };
-
-/** The params of `actorState`, `actorContext` and `actorGet`. */
-export interface SessionParams {
-  session: Session | Actor;
+/** An actor a migration moved: a view, valid while the handler runs. */
+export interface Migrated {
+  /** The host that handed it out. */
+  readonly host: Host;
+  readonly session: bigint;
+  /** The segment of its new version. */
+  readonly segment: number;
+  /** The chart's name. */
+  readonly chart: string;
+  /** The migration's id, as `host.migrate` returned it. */
+  readonly migration: number;
 }
-/** `actorState`'s result. */
-export interface ActorStateResult {
-  readonly value: StateValue;
-  /**
-   * Where each history state the actor has recorded would return, by its
-   * id: its parent state as it would be entered again, in the shape of
-   * `value` (a deep history down to the atomic states it recorded; a
-   * shallow one names the child it recorded). A history state records when
-   * its parent is exited; one that has recorded nothing is absent, so this
-   * is `{}` before any exit. A hibernated actor's state is refused
-   * (`reason` `'state'`): wake it first.
-   */
-  readonly history: { readonly [history: string]: StateValue };
+
+/** A session a migration could not move: it stays on its version.
+ * `reason` names core's status, `'TA_ERROR_UNSUPPORTED'` when its state
+ * cannot be written out (a value outside the value table). */
+export interface MigrationFailure {
+  readonly session: bigint;
+  readonly reason: string;
 }
-/** `actorContext`'s result: each `<data>`, in the chart's order. */
-export interface ActorContextResult {
-  readonly variables: { readonly [id: string]: ReceivedValue };
+
+/** A migration's end: how many actors it moved, the ones it could not move
+ * and why (they stay on their version), and the sessions its timeout left
+ * behind. */
+export interface MigrationResult {
+  readonly migration: number;
+  readonly migrated: number;
+  readonly failed: readonly MigrationFailure[];
+  readonly pending: readonly bigint[];
 }
+
+// ---- inspection ---------------------------------------------------------
+
 /** The params of `actorList`. */
 export interface ActorListParams {
   /** From the previous page; absent: the first. */
@@ -1007,47 +1208,21 @@ export interface ActorListParams {
   /** 1 to 512, default 256. */
   limit?: number;
 }
+
 /** `actorList`'s result: a page of sessions. */
 export interface ActorListResult {
   readonly sessions: readonly number[];
   /** The next page's cursor, opaque; `null` after the last page. */
   readonly cursor: number | null;
 }
-/** `actorGet`'s result. */
-export interface ActorGetResult {
-  readonly session: number;
-  readonly segment: number;
-  /** The chart's name. */
-  readonly chart: string;
-  /** The session that invoked it; `null` for a root actor. */
-  readonly parent: number | null;
-  /** Events waiting for it. */
-  readonly mailbox: number;
-  /** Services it runs. */
-  readonly invocations: number;
-  /**
-   * Its pending delayed sends (`<send delay>` not yet due, not cancelled),
-   * earliest first, at most 32: `timersPending` says how many it has.
-   */
-  readonly timers: readonly PendingSend[];
-  /** How many delayed sends it has pending: more than `timers` holds when the list was cut. */
-  readonly timersPending: number;
-}
-/** A pending delayed send, in `actorGet`'s `timers`. */
-export interface PendingSend {
-  /** The send's id (its `id`, or the one `idlocation` was given); `null` when it has none. */
-  readonly sendid: string | null;
-  /** The event's name. */
-  readonly event: string;
-  /** When it fires: milliseconds on the clock `host.now()` reads. */
-  readonly due: number;
-}
+
 /** A pool of a segment: its size, what it holds, the most it held. */
 export interface Pool {
   readonly capacity: number;
   readonly used: number;
   readonly highWater: number;
 }
+
 /** One live segment's pools, in `host.stats`. */
 export interface SegmentPools {
   /** The segment, as `addImage` returned it. */
@@ -1060,6 +1235,7 @@ export interface SegmentPools {
   /** The slab of instances and strings, in bytes. */
   readonly slabBytes: Pool;
 }
+
 /** One chart's counters, summed over every segment, retired versions
  * included. */
 export interface ChartStats {
@@ -1076,6 +1252,7 @@ export interface ChartStats {
   readonly errorsPlatform: number;
   readonly faults: number;
 }
+
 /** `hostStats`'s result. */
 export interface HostStatsResult {
   readonly host: {
@@ -1097,6 +1274,9 @@ export interface HostStatsResult {
   readonly pools: readonly SegmentPools[];
   readonly charts: readonly ChartStats[];
 }
+
+// ---- tracing ------------------------------------------------------------
+
 /** A trace rule of `traceConfigure` and `traceWatch`: each absent field
  * matches anything. */
 export interface TraceRule {
@@ -1116,8 +1296,10 @@ export interface TraceRule {
   perSecond?: number;
   burst?: number;
 }
+
 /** How much a trace records. */
 export type TraceDetail = 'summary' | 'decisions' | 'full' | 'off';
+
 /** The params of `traceConfigure`, which replace the last ones. */
 export interface TraceConfigureParams {
   /** Default `'summary'`. */
@@ -1131,6 +1313,7 @@ export interface TraceConfigureParams {
   /** At most 32. */
   rules?: readonly TraceRule[];
 }
+
 /** The params of `traceWatch`. */
 export interface TraceWatchParams {
   /** At least one. */
@@ -1138,25 +1321,30 @@ export interface TraceWatchParams {
   /** On the host's clock; `null`: no end (default 900). */
   seconds?: number | null;
 }
+
 /** `traceWatch`'s result. */
 export interface TraceWatchResult {
   readonly id: number;
 }
+
 /** The params of `traceUnwatch`. */
 export interface TraceUnwatchParams {
   id: number;
 }
+
 /** The params of `traceSpansDecode`. */
 export interface TraceSpansDecodeParams {
   /** An OTLP traces request, as the telemetry handler gets it. */
   traces: Uint8Array;
 }
+
 /** A span event. */
 export interface SpanEvent {
   readonly name: string;
   readonly time: number | bigint;
   readonly attributes: { readonly [key: string]: ReceivedValue };
 }
+
 /** A span of `traceSpansDecode`. */
 export interface Span {
   /** Lowercase hex. */
@@ -1176,6 +1364,155 @@ export interface Span {
   readonly attributes: { readonly [key: string]: ReceivedValue };
   readonly events: readonly SpanEvent[];
 }
+
+/** `traceSpansDecode`'s result. */
+export interface TraceSpansDecodeResult {
+  readonly spans: readonly Span[];
+}
+
+/** The result of the methods that answer nothing: `{}`. */
+export type EmptyResult = { readonly [key: string]: never };
+
+// =========================================================================
+// WIRE FORMAT
+// =========================================================================
+//
+// What values, sends and addresses become when they leave the process:
+// CBOR, a transport's messages, addresses read into their parts, SCXML's
+// BasicHTTP, an OTLP export read back (README.md, "Wire format"). An
+// application of one host and its own store needs none of it.
+
+// ---- values as bytes ----------------------------------------------------
+
+/** What `encode` writes: a {@link Value}, or one holding `Address`es,
+ * which it writes as CBOR's tag 32 (an actor reference). */
+export type Encodable =
+  | Value
+  | Address
+  | Encodable[]
+  | { [key: string]: Encodable };
+
+/** A value as CBOR bytes, the form to store or send it in. An `Address`
+ * is tag 32 on its text.
+ *
+ * Throws a `TinyactorsError`: `TA_ERROR_UNSUPPORTED` for what is not a
+ * {@link Value} (a function, a symbol, a `Date`, a `Map`, a class's
+ * instance, a typed array other than `Uint8Array`), `TA_ERROR_INVALID` for
+ * what a value cannot hold (a string with a lone surrogate, a `bigint` past
+ * 64 bits, a cycle or nesting deeper than 64). A getter's exception passes
+ * through.
+ *
+ * @example
+ * const bytes = encode({ sku: 'tea', qty: 2 });
+ * decode(bytes); // { sku: 'tea', qty: 2 }
+ */
+export function encode(value: Encodable): Uint8Array;
+
+/** The value of the one CBOR item that fills `bytes`: the inverse of
+ * {@link encode}, tag 32 an `Address`. Throws a `TinyactorsError` (`TA_ERROR_INVALID`) for bytes
+ * that are not one such item, a `TypeError` for an argument that is not
+ * bytes. */
+export function decode(bytes: Uint8Array | ArrayBuffer): ReceivedValue;
+
+// ---- addresses ----------------------------------------------------------
+
+/** An actor's address: `tinyactors://<system>/#_scxml_<session>`, or
+ * `tinyactors://<system>/@<name>` for a named actor. Immutable. Its parts
+ * are read from the text on each access, `undefined` for a part the text
+ * lacks (any text makes an `Address`; one that is not an address has no
+ * parts). */
+export class Address {
+  constructor(text: string);
+  /** The address of a session of system `system`. */
+  static fromSession(system: string, session: Session): Address;
+  /** The address of the actor named `name` in system `system`; the name is
+   * percent-encoded. */
+  static fromName(system: string, name: string): Address;
+  readonly text: string;
+  /** The system id. */
+  readonly system: string | undefined;
+  readonly session: bigint | undefined;
+  /** The actor's name, decoded. */
+  readonly name: string | undefined;
+  /** The text. */
+  toString(): string;
+  /** The text, so `JSON.stringify` writes an address as a string, which
+   * `new Address(text)` and `host.send` read back. */
+  toJSON(): string;
+}
+
+// ---- other systems ------------------------------------------------------
+
+/** An event for `host.send(message)` and `host.sendMany(items)`, in the
+ * shape `send.message` has. Keys it does not know are ignored. */
+export interface SendMessage {
+  /** A session, or an address (string or `Address`); a local address is
+   * resolved to its actor. */
+  target: Session | Actor | string | Address;
+  event: string;
+  data?: Value;
+  /** The event's `_event.sendid`. */
+  sendid?: string | null;
+  /** The event's `_event.origin`: where an answer goes. */
+  origin?: string | Address | null;
+  /** The trace the event continues, as W3C text; text that does not parse
+   * starts a new one. */
+  traceparent?: string | null;
+}
+
+// ---- BasicHTTP ----------------------------------------------------------
+
+/** A form field of a BasicHTTP message. */
+export interface HTTPField {
+  name: string;
+  value: string;
+}
+
+/** A BasicHTTP POST, the request SCXML's HTTP processor makes for a send. */
+export interface HTTPPost {
+  /** `http://host[:port]/path`. */
+  url: string;
+  /** Written as the `_scxmleventname` field. */
+  event?: string;
+  fields?: readonly HTTPField[];
+  /** The body, used when there are no fields; percent-encoded. */
+  body?: string;
+}
+
+/** An incoming BasicHTTP request, read. */
+export interface HTTPRequest {
+  readonly method: string;
+  readonly target: string;
+  /** The body as received. */
+  readonly body: string;
+  /** The `_scxmleventname` field, else `HTTP.<METHOD>`. */
+  readonly event: string;
+  /** The decoded form fields, but `_scxmleventname`. */
+  readonly fields: readonly HTTPField[];
+}
+
+/** The bytes of a BasicHTTP POST, to write to a socket. A URL that is not
+ * `http://host[:port]/path` throws `TA_ERROR_INVALID`. */
+export function encodeHTTPPost(post: HTTPPost): Uint8Array;
+
+/** Reads an incoming BasicHTTP request: its event and form fields, for
+ * `host.send`. A malformed request throws `TA_ERROR_INVALID`. */
+export function parseHTTPRequest(message: Uint8Array | ArrayBuffer): HTTPRequest;
+
+// ---- an OTLP export, read back ------------------------------------------
+
+/** The spans of an OTLP ExportTraceServiceRequest (the bytes a telemetry
+ * handler gets for `'traces'`, or any exporter's), read without a host:
+ * for tests and a collector of your own. Throws an `InvalidError` for bytes
+ * that are not such a request, a `TypeError` for an argument that is not
+ * bytes.
+ *
+ * @example
+ * const spans = decodeTraces(data);
+ * console.log(spans.map((span) => `${span.name} ${span.scope.attributes['tinyactors.chart.name']}`));
+ */
+export function decodeTraces(bytes: Uint8Array | ArrayBuffer): DecodedSpan[];
+
 /** A span as {@link decodeTraces} gives it: a {@link Span} and more of
  * what the request holds. */
 export interface DecodedSpan extends Span {
@@ -1186,243 +1523,4 @@ export interface DecodedSpan extends Span {
   readonly resource: { readonly [key: string]: ReceivedValue };
   /** Its instrumentation scope. */
   readonly scope: { readonly name: string; readonly version: string; readonly attributes: { readonly [key: string]: ReceivedValue } };
-}
-/** `traceSpansDecode`'s result. */
-export interface TraceSpansDecodeResult {
-  readonly spans: readonly Span[];
-}
-/** The result of the methods that answer nothing: `{}`. */
-export type EmptyResult = { readonly [key: string]: never };
-
-/** Runs actors: many charts, many images, from a handful of actors to
- * millions, on the runtime's event loop. Inputs (`spawn`, `send`, ...)
- * apply at once and schedule a turn; in its turns the host runs the actors
- * and calls your handlers with what they sent out. There is no `run()`:
- * `await host.idle()` waits until there is nothing left to do.
- *
- * An open host with a pending deadline keeps the process alive, as a
- * `setTimeout` does; `close()` ends it. With no deadline it keeps nothing
- * alive: the process may exit with the host open and actors waiting, for
- * an answer included.
- *
- * @example
- * const compiled = compileCharts([{ name: 'order.scxml', text }]);
- * const host = new Host(compiled, { system: 'shop', log: (entry) => console.log(entry.text) });
- * compiled.close();
- * const order = host.spawn('order');
- * order.send('checkout');
- * await host.idle();
- * host.close();
- */
-export class Host implements Disposable, AsyncDisposable {
-  /** A host of system `options.system` running `charts` (each image added
-   * in order, a segment each: `addImage`), with the handlers and choices
-   * of `options`. Throws `TinyactorsError` (`TA_ERROR_INVALID`) for a
-   * config the host does not take, `TypeError` for options it does not
-   * take. */
-  constructor(charts: Charts, options: HostOptions);
-  /** A new host running a snapshot `host.snapshot()` gave, with the system
-   * it was taken with (checked) and the options `new Host` takes, its
-   * `datamodel` the snapshot's; of `charts`, the images the snapshot does
-   * not hold (compared by their bytes) are added after its own. Every
-   * session stays the same, and its clock goes on from the snapshot's
-   * time, whatever clock reads it. Invocations that were running are
-   * announced again to `services`, with `invocation.restored` true. A
-   * snapshot of a build whose layout differs throws `TA_ERROR_INVALID`. */
-  static restore(snapshot: Uint8Array | ArrayBuffer, charts: Charts, options: HostOptions): Host;
-
-  /** The system id, `options.system`. */
-  readonly system: string;
-
-  /** The host's clock rate, `system.ticksPerSecond`. */
-  readonly ticksPerSecond: number;
-  /** True once `close()` ran; every input of a closed host throws. */
-  readonly closed: boolean;
-  /** Milliseconds from the last idle turn to the next deadline (a delayed
-   * send, a timeout, or the telemetry encoder's flush once records are
-   * staged); `undefined` for none. An input given since that turn has not
-   * run yet, so its deadlines are not in it. */
-  readonly nextDeadline: number | undefined;
-  /** The quickjs engine's heap in bytes, every actor's together, read on
-   * each access (cheap): what `quickjs.memoryLimit` bounds. `undefined` on
-   * a native host and once closed. */
-  readonly quickjsHeapBytes: number | undefined;
-
-  /** Loads a compiled image, which it copies, and returns its segment, a
-   * number. A chart whose name the host already has gets a new version:
-   * new actors are of it, running ones stay on theirs until `migrate`.
-   * Throws `TA_ERROR_INVALID` for bytes that are not an image. */
-  addImage(image: Uint8Array | ArrayBuffer): number;
-  /** The current version of chart `name`, for `spawn`. Throws
-   * `TA_ERROR_INVALID` when the host has no chart of that name. */
-  chart(name: string): ChartRef;
-  /** Spawns the boot actors of the image of `segment`: a system manifest's
-   * `<actor>`s, or an actor of `compileCharts`' first chart. */
-  boot(segment: number): void;
-  /** Starts an actor of `chart`, a chart's name (its current version) or a
-   * `ChartRef` (a version), and returns it. It runs in a later turn.
-   * Throws `TA_ERROR_INVALID` for a chart the host does not have. */
-  spawn(chart: string | ChartRef, options?: SpawnOptions): Actor;
-  /** The live actor `which` names: a session, an Actor, the name it was
-   * spawned with (newest segment first), or an address of this system
-   * (text or an `Address`). Throws `StaleError` for no live actor,
-   * `InvalidError` for another system's address. */
-  actor(which: Session | Actor | string | Address): Actor;
-  /** Every live actor of the host (`actorList`, a page at a time), or the
-   * actors of the chart named `options.chart`. */
-  actors(options?: { chart?: string }): Promise<Actor[]>;
-  /** Puts `event`, with `data`, in the queue of the actor `target` names (a
-   * session or an address). Throws `TA_ERROR_STALE` for an actor that
-   * ended. */
-  send(target: Session | Actor | string | Address, event: string, data?: Value, options?: SendOptions): void;
-  /** The same, from a `SendMessage` (the transport's `send.message`). */
-  send(message: SendMessage): void;
-  /** Tells a sender that its send could not be delivered: the actor
-   * `sender` (a session or its address, the send's `origin`) gets
-   * `error.communication` with `sendid`. */
-  fail(sender: Session | Actor | string | Address, sendid?: string): void;
-  /** Sends each of `items` in order, and returns how many were taken: the
-   * rest, from the first one refused, were not sent. */
-  sendMany(items: readonly SendMessage[]): number;
-  /** Ends the actor. Throws `TA_ERROR_STALE` for one that already ended. */
-  terminate(session: Session | Actor): void;
-
-  /** Resolves at the next turn that finds nothing to do while no promise a
-   * handler returned is pending (an I/O processor's, a service's or its
-   * `receive`'s, a wake, telemetry, log, migration or typed-method
-   * handler's): the same promise to every caller until then. A handler's
-   * promise that never settles keeps it pending, and so does a handler
-   * that awaits `idle()` itself. Rejects with the turn's first error (a
-   * handler's, a typed method's without `onError`), or with
-   * `TA_ERROR_STATE` when the host is closed first; on a closed host it
-   * returns a promise rejected so. It does not wait for promises your
-   * handlers start and do not return. */
-  idle(): Promise<void>;
-  /** The host's clock in milliseconds, read now: a `SimulatedClock`'s
-   * time, or the runtime's monotonic clock, on the scale the host's
-   * deadlines and `snapshot()` use, so a restored host's goes on from its
-   * snapshot's. A journal of inputs records it beside each input, and a
-   * replay on a restored host moves its clock to each reading. It reads
-   * and advances nothing; a closed host throws `TA_ERROR_STATE`. */
-  now(): number;
-
-  // The typed methods. Each has two forms. Given handlers, `onResult` or
-  // `onError` is called once, in a later turn, and the call returns
-  // nothing; an error with no `onError` is the turn's (`idle()` rejects
-  // with it). Given no handler, the call returns a promise that resolves
-  // with the result and rejects with the `TinyactorsError` (`code`,
-  // `reason`, `path`); a refusal at the call rejects too. A rejection is
-  // yours: without a `catch` it is an unhandled rejection, and `idle()`
-  // does not see it. Each reads the host when called; `close()` drops a
-  // pending method uncalled, and its promise never settles.
-
-  /** An actor's active states, `{ value, history }`: a state id, or `{
-   * parent: child }` for compound states. Params `{ session }`. `const {
-   * value } = await host.actorState({ session })`. */
-  actorState(params: SessionParams, onResult: OnResult<ActorStateResult>, onError?: OnError | null): void;
-  /** `actorState` given no handler: a promise of `{ value, history }`. */
-  actorState(params: SessionParams): Promise<ActorStateResult>;
-  /** An actor's variables, `{ variables }`. Params `{ session }`; refused
-   * for a hibernated actor. A variable that holds `undefined` reads
-   * `undefined`, apart from `null`; before the actor's first turn every
-   * variable is `undefined`, its spawn params included. */
-  actorContext(params: SessionParams, onResult: OnResult<ActorContextResult>, onError?: OnError | null): void;
-  /** `actorContext` given no handler: a promise of `{ variables }`. */
-  actorContext(params: SessionParams): Promise<ActorContextResult>;
-  /** The host's sessions a page at a time, `{ sessions, cursor }`, `cursor`
-   * `null` after the last page. Params `{ cursor?, limit? }` (1 to 512,
-   * default 256). */
-  actorList(params: ActorListParams | undefined, onResult: OnResult<ActorListResult>, onError?: OnError | null): void;
-  /** `actorList` given no handler: a promise of a page, `{ sessions, cursor }`. */
-  actorList(params?: ActorListParams): Promise<ActorListResult>;
-  /** One actor, `{ session, segment, chart, parent, mailbox, invocations,
-   * timers, timersPending }`. Params `{ session }`. */
-  actorGet(params: SessionParams, onResult: OnResult<ActorGetResult>, onError?: OnError | null): void;
-  /** `actorGet` given no handler: a promise of the actor. */
-  actorGet(params: SessionParams): Promise<ActorGetResult>;
-  /** The host's counters, `{ host, pools, charts }`: `pools` has one entry
-   * per live segment with each pool's `capacity`, `used` and `highWater`.
-   * No params: `await host.hostStats()`. */
-  hostStats(params: NoParams, onResult: OnResult<HostStatsResult>, onError?: OnError | null): void;
-  /** `hostStats` given no handler: a promise of the counters. */
-  hostStats(params?: NoParams): Promise<HostStatsResult>;
-  /** The config the host runs with, every default filled in. No params. */
-  hostConfig(params: NoParams, onResult: OnResult<EffectiveHostConfig>, onError?: OnError | null): void;
-  /** `hostConfig` given no handler: a promise of the effective config. */
-  hostConfig(params?: NoParams): Promise<EffectiveHostConfig>;
-  /** Sets what every actor traces: `{ detail, values, sample, records,
-   * rules }`. */
-  traceConfigure(params: TraceConfigureParams | undefined, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
-  /** `traceConfigure` given no handler: a promise of `{}`. */
-  traceConfigure(params?: TraceConfigureParams): Promise<EmptyResult>;
-  /** Adds trace rules for a while: `{ rules, seconds }` (default 900);
-   * answers `{ id }`. */
-  traceWatch(params: TraceWatchParams, onResult: OnResult<TraceWatchResult>, onError?: OnError | null): void;
-  /** `traceWatch` given no handler: a promise of `{ id }`. */
-  traceWatch(params: TraceWatchParams): Promise<TraceWatchResult>;
-  /** Ends a watch early: `{ id }`. */
-  traceUnwatch(params: TraceUnwatchParams, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
-  /** `traceUnwatch` given no handler: a promise of `{}`. */
-  traceUnwatch(params: TraceUnwatchParams): Promise<EmptyResult>;
-  /** Ends every open span now, marked incomplete, for the telemetry handler.
-   * Refused without `telemetry` in the config. */
-  traceEnd(params: NoParams, onResult: OnResult<EmptyResult>, onError?: OnError | null): void;
-  /** `traceEnd` given no handler: a promise of `{}`. */
-  traceEnd(params?: NoParams): Promise<EmptyResult>;
-  /** The spans of a traces request: `{ traces }` (the bytes) answers `{
-   * spans }`, each with `trace`, `span`, `parent`, `name`, `start`, `end`,
-   * `attributes`, ... */
-  traceSpansDecode(params: TraceSpansDecodeParams, onResult: OnResult<TraceSpansDecodeResult>, onError?: OnError | null): void;
-  /** `traceSpansDecode` given no handler: a promise of `{ spans }`. */
-  traceSpansDecode(params: TraceSpansDecodeParams): Promise<TraceSpansDecodeResult>;
-
-  /** The host's counters now as an OTLP metrics request (a `Uint8Array`, for a
-   * collector's `/v1/metrics`). `TA_ERROR_STATE` without `telemetry` in the
-   * config. */
-  metrics(): Uint8Array;
-  /** Finds cold actors: at most `limit` sessions that did not run since
-   * the previous sweep and can be hibernated now, looking at most at `maxScan`
-   * actors (each an integer from 0 to 2^32-1). The first sweep after an
-   * actor ran skips it. */
-  sweep(maxScan: number, limit: number): bigint[];
-  /** Takes the actor out of memory and returns its blob (a `Uint8Array`) for
-   * your store. `TA_ERROR_STATE` when it is not at rest (events waiting, a
-   * step not over, running an invoked child or service) and when it is not
-   * resident (already hibernated, its wake asked for and not given): the
-   * status does not tell the two apart. `TA_ERROR_STALE` for a session that
-   * ended or never was, `TA_ERROR_UNSUPPORTED` when a variable holds what
-   * the datamodel cannot store (the message names it); it stays where it
-   * is then. */
-  hibernate(session: Session | Actor): Uint8Array;
-  /** Puts a hibernated actor back from the blob `hibernate` gave; its
-   * waiting events run at the next turn. Only its latest blob: one of an
-   * earlier hibernation (a store that fell behind) throws `TA_ERROR_STALE`,
-   * another session's `TA_ERROR_INVALID`, and the actor stays hibernated.
-   * On a restored host a blob of a hibernation made after the snapshot is
-   * taken too. */
-  wake(session: Session | Actor, blob: Uint8Array | ArrayBuffer): void;
-  /** Starts moving running actors (every chart's, `chart`'s, or one
-   * `session`) to the current version of their chart, in later turns; each
-   * gets `error.platform.upgrade` with its old variables. Returns the
-   * migration's id, which `migrated` and `migrationDone` name. Throws `TA_ERROR_INVALID` for a chart the host does not have and
-   * `TA_ERROR_STALE` for a session that ended. */
-  migrate(options?: MigrateOptions): number;
-  /** The whole host as one `Uint8Array`: every segment, the images, the system
-   * id, the host's time (its clocks advanced first: the time of the call,
-   * as `now()` reads it) and the datamodel's state, for `Host.restore` on the
-   * same build of the package. Only when quiescent: from a handler, with an
-   * effect or a reply pending, or during a migration it throws
-   * `TA_ERROR_STATE`; a value outside the value table throws
-   * `TA_ERROR_UNSUPPORTED`. */
-  snapshot(): Uint8Array;
-
-  /** Frees the host: the last telemetry requests go to the handler, the
-   * timer is cleared, pending typed methods and running services are
-   * dropped without being called. From a handler it waits for the end of
-   * the turn. Again: nothing. */
-  close(): void;
-  /** `close()`. */
-  [Symbol.dispose](): void;
-  /** `close()`, then the promises the telemetry handler returned at it. */
-  [Symbol.asyncDispose](): Promise<void>;
 }

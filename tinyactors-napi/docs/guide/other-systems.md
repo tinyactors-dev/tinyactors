@@ -1,5 +1,10 @@
 # Other systems
 
+This guide is the wire format's (the README's [Wire
+format](../../README.md#wire-format)): a send as a message your transport
+carries, addresses read into their parts, and SCXML's BasicHTTP. An
+application of one host needs none of it.
+
 A host is one **system**, named by its `system` option. An actor of one
 system can send to an actor of another (another host, in this process or
 on another machine) by its address, `tinyactors://<system>/...`. The host

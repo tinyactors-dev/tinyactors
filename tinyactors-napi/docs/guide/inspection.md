@@ -1,5 +1,10 @@
 # Inspecting a host
 
+This guide is part of operating a host (the README's [Operating a
+host](../../README.md#operating-a-host)): `actor.state()`, `actor.context()`
+and `actor.get()` are the application's, the methods on `host` an
+operator's.
+
 A running host answers questions about itself: which state an actor is
 in, what its variables hold, which actors exist, what the host has done
 so far. These are the **typed methods**, one per question. Each reads

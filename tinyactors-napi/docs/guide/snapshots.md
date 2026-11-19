@@ -1,5 +1,8 @@
 # Snapshots
 
+This guide is part of operating a host (the README's [Operating a
+host](../../README.md#operating-a-host)).
+
 `host.snapshot()` copies the whole host into one `Buffer`: every
 segment's memory (actors, queues, timers, the hibernated actors'
 records), the datamodel's sessions and values, the images, the system id

@@ -65,9 +65,19 @@ The guides are shared with `@tinyactors/node`:
 - [@tinyactors/node's README](https://github.com/tinyactors-dev/tinyactors-napi#readme):
   the concepts, from a first chart to hosts, actors, I/O processors and
   errors.
-- [The guides](https://github.com/tinyactors-dev/tinyactors-napi/tree/main/docs/guide):
-  charts, I/O processors, services, other systems, hibernation,
-  migration, snapshots, telemetry, inspection, capacity and testing.
+- [The guides](https://github.com/tinyactors-dev/tinyactors-napi/tree/main/docs/guide),
+  in three groups, as the README orders them:
+  - **writing an application:** charts, I/O processors, when the actor
+    is not there, services, hibernation with a store, testing, the
+    quickjs sandbox;
+  - **operating a host** (the README's
+    [Operating a host](https://github.com/tinyactors-dev/tinyactors-napi#operating-a-host)):
+    inspection, capacity, telemetry, hibernation by a policy of your own,
+    migration, snapshots;
+  - **the wire format** (the README's
+    [Wire format](https://github.com/tinyactors-dev/tinyactors-napi#wire-format)):
+    `encode` and `decode`, `decodeTraces`, addresses, other systems and
+    SCXML's BasicHTTP.
 
 Charts are trusted code: their expressions run as JavaScript in a realm
 of their own, which is not a security boundary.

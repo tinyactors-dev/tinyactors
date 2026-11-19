@@ -1,5 +1,8 @@
 # Capacity and memory
 
+This guide is part of operating a host (the README's [Operating a
+host](../../README.md#operating-a-host)).
+
 A host keeps its actors in blocks of memory it sizes from its `config`,
 one block (a **region**) per segment, that is per image. You can
 leave the sizes to the host, which grows a region when something in it

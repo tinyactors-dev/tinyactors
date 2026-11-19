@@ -23,7 +23,7 @@ export function needs(program) {
 // document:line -> why the block stays in node and bun
 export const BLOCKS = {
   'docs/guide/charts.md:359': 'compileDir reads charts from a temporary directory it writes with node:fs, node:os and node:path',
-  'docs/guide/other-systems.md:114': 'two systems over a node:net socket, framed with Buffer',
+  'docs/guide/other-systems.md:119': 'two systems over a node:net socket, framed with Buffer',
   'docs/guide/testing.md:21': 'a test written with node:assert/strict, as the guide recommends for node and bun',
 };
 

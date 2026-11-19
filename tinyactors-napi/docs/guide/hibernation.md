@@ -77,6 +77,13 @@ the same way, and the actor stays hibernated. A store's methods are
 called between the host's runs, never inside one, and a pending save is
 waited for before its session is loaded.
 
+## A policy of your own
+
+`store` and `resident` are the application's API. The calls below are
+for operating a host whose eviction is not "least recently run past a
+bound": by a schedule, by memory pressure, by what your program knows of
+its actors.
+
 **Without `resident`,** the host hibernates nothing itself, and loads
 from the store as above: your program chooses when, with three calls.
 

@@ -91,6 +91,12 @@ Then two methods, of which a handler calls at most one:
 - **`send.fail()`** gives the sender `error.communication` with this
   send's `sendid`, for a request that could not be done.
 
+`origin`, `message`, and the answer's options `origin` and `raw` are
+the [wire format](../../README.md#wire-format)'s, for a processor that
+carries sends out of the process or speaks SCXML's BasicHTTP ([Other
+systems](other-systems.md)); a processor that only answers its charts
+needs none of them.
+
 A second answer, or an answer after `fail()`, throws `TA_ERROR_STATE`. A
 handler may also answer nothing: the send was a notification, or the chart
 waits for a timeout of its own.
@@ -291,6 +297,10 @@ host spawns an actor of `chart`, and the sender gets `spawned` with
 `{ name, address }` and the send's `sendid`, the address being what it
 sends to from then on; a chart the host does not have, or data that is
 not such an object, gives the sender `error.communication` instead.
+The Spawner spawns whatever it is sent, a second actor of a name
+included: which actors may exist is decided before it, by a chart (a
+collection actor, [When the actor is not there](missing-actors.md#the-application-routes-it))
+or by your program.
 
 ```js
 import { compileCharts, Host, Spawner } from '@tinyactors/node';

@@ -251,12 +251,6 @@ handler starts and does not return is not waited for). It is for tests, scripts 
 call it. A handler may call the host (send an event, spawn an actor): the
 input applies at once, and the actors run in the same or a later turn.
 
-Each image the host is given makes a **segment**: the host's memory for
-that image's actors, numbered from 0 in the order of `new Host`'s charts
-(`host.addImage(image)` adds one later and returns its number). A host
-runs many segments as one; you need the number for `boot` and see it in
-the host's statistics.
-
 A host also keeps time. A delayed `<send>` or a timeout is a deadline,
 and an idle host arms one `setTimeout` for its next one. That timer keeps
 the process alive while the host is open, as any `setTimeout` does, and
@@ -332,11 +326,11 @@ Actors find each other by **address**. Every system has its name, the
 host's `system` option, and an actor's address is `tinyactors://<system>/#_scxml_<session>`, or
 `tinyactors://<system>/@<name>` for a named one. A chart sends to
 another actor with `<send target="tinyactors://shop/@pong" event="ping"/>`,
-and the receiver answers to `_event.origin`. The `Address` class reads
-and makes them:
+and the receiver answers to `_event.origin`. `actor.address` is an
+actor's address, and `host.actor` takes one:
 
 ```js
-import { compileCharts, Host, Address } from '@tinyactors/node';
+import { compileCharts, Host } from '@tinyactors/node';
 
 const pong = `
 <scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
@@ -367,8 +361,7 @@ const pingActor = host.spawn('ping');
 await host.idle();
 
 console.log(pongActor.address.text);
-console.log(new Address('tinyactors://demo/@pong').name);
-console.log(host.actor('pong').equals(pongActor), host.actor(new Address('tinyactors://demo/@pong')).id);
+console.log(host.actor('pong').equals(pongActor), host.actor('tinyactors://demo/@pong').id);
 pongActor.terminate();
 await host.idle();
 try {
@@ -383,10 +376,16 @@ host.close();
 pong got ping
 ping got pong
 tinyactors://demo/#_scxml_1
-pong
 true 1n
 StaleError 2n
 ```
+
+A send to an actor that is not there fails: the chart gets
+`error.communication`, your program a `StaleError`. What to do instead
+(keep the actor and let it hibernate, route the send through your code,
+or handle the failure) is your application's choice, per kind of actor:
+[When the actor is not there](docs/guide/missing-actors.md) shows all
+three, and how to choose names that an address holds as they are.
 
 ### Effects and handlers
 
@@ -428,30 +427,8 @@ chart never holds your object, and what a chart hands you (`send.data`,
 `instanceof Array`, and `assert.deepStrictEqual` compares it with a
 literal. `undefined` and `null` stay apart; a
 whole number past 2^53 comes back as a `bigint`.
-
-`encode(value)` and `decode(bytes)` give that table as CBOR bytes, the
-form a value takes when you store or send it:
-
-```js
-import { encode, decode } from '@tinyactors/node';
-
-const bytes = encode({ sku: 'tea', qty: 2, big: 2n ** 60n, gone: undefined });
-const value = decode(bytes);
-console.log(bytes.length, 'bytes');
-console.log(value.sku, value.qty, value.big, 'gone' in value, value.gone);
-```
-
-```output
-33 bytes
-tea 2 1152921504606846976n true undefined
-```
-
-`encode` also writes an `Address` (from "Actors, sessions and
-addresses"), as CBOR's tag 32, and `decode` reads one back as an
-`Address`: that is how a transport's message keeps its addresses
-([Other systems](docs/guide/other-systems.md)).
 [docs/values.md](docs/values.md) has every row of the table and every
-refusal.
+refusal, and "Wire format" (below) the table as bytes.
 
 ### Time and the SimulatedClock
 
@@ -638,38 +615,116 @@ TA_ERROR_INVALID - the host has no chart of that name
   unless `quickjs: { realm: 'isolated' }` gives each session a context of
   its own ([the quickjs sandbox](docs/guide/quickjs.md#realms)).
 
+## Operating a host
+
+Everything above is the application's API: charts, a `Host` with its
+processors, store and handlers, `Actor`s. A host also answers the people
+who run it: how big it is, what it traces, which version of a chart its
+actors run. These calls are for an operator's tools, a deploy script or
+an admin endpoint; an application can do without them.
+
+| Calls | What they do | Guide |
+|---|---|---|
+| `host.hostStats()`, `host.hostConfig()`, `host.actorList()`, `host.actorGet()`; the `config` option's sizes, `host.quickjsHeapBytes` | the host's counters, its effective config, its actors page by page; sizing a host up front | [Inspecting a host](docs/guide/inspection.md), [Capacity and memory](docs/guide/capacity.md) |
+| the `telemetry` option, `host.metrics()`, `host.traceConfigure()`, `traceWatch()`, `traceUnwatch()`, `traceEnd()`, `traceSpansDecode()` | traces, logs and metrics as OpenTelemetry (OTLP), and what is traced | [Telemetry](docs/guide/telemetry.md) |
+| `host.sweep()`, `host.hibernate()`, `host.wake()` | hibernation by a policy of your own, in place of `resident` | [Hibernation](docs/guide/hibernation.md#a-policy-of-your-own) |
+| `host.addImage()`, `host.chart()`, `host.boot()`; `host.migrate()`, the `migrated` and `migrationDone` options | images and segments; moving running actors to a new version of their chart | [Migration](docs/guide/migration.md), [Writing charts](docs/guide/charts.md#a-system-that-starts-its-own-actors) |
+| `host.snapshot()`, `Host.restore()` | the whole host as one blob, and a host restored from it | [Snapshots](docs/guide/snapshots.md) |
+
+Each image the host is given makes a **segment**: the host's memory for
+that image's actors, numbered from 0 in the order of `new Host`'s charts
+(`host.addImage(image)` adds one later and returns its number). A host
+runs many segments as one; you need the number for `boot` and see it in
+the host's statistics. A new version of a chart is a new image, and
+`host.chart(name)` is its current version.
+
+## Wire format
+
+When values, events and addresses leave the process (into a database, a
+socket, another system), they take the forms below. An application that
+keeps to one host and its own store never handles them.
+
+| Calls | What they do | Guide |
+|---|---|---|
+| `encode(value)`, `decode(bytes)` | a value as CBOR bytes, and back | [docs/values.md](docs/values.md) |
+| `new Address(text)`, `Address.fromSession()`, `Address.fromName()`; `.system`, `.session`, `.name` | an address read into its parts, and made from them | [Other systems](docs/guide/other-systems.md#addresses) |
+| the `transport` option, `send.message`, `host.send(message)`, `host.fail(target, sendid)`, `host.sendMany(messages)` | a send to another system, as a message your transport carries, and its delivery on the other side | [Other systems](docs/guide/other-systems.md) |
+| `send.origin`, `send.answer(event, data, { origin, raw })`, `encodeHTTPPost()`, `parseHTTPRequest()` | SCXML's BasicHTTP: a reply location and the message as read, and the form posts its events travel as | [Other systems](docs/guide/other-systems.md#scxmls-basichttp) |
+| `decodeTraces(bytes)` | the spans of a telemetry export, read without a host | [Telemetry](docs/guide/telemetry.md) |
+
+`encode(value)` and `decode(bytes)` give the value table as CBOR bytes,
+the form a value takes when you store or send it:
+
+```js
+import { encode, decode } from '@tinyactors/node';
+
+const bytes = encode({ sku: 'tea', qty: 2, big: 2n ** 60n, gone: undefined });
+const value = decode(bytes);
+console.log(bytes.length, 'bytes');
+console.log(value.sku, value.qty, value.big, 'gone' in value, value.gone);
+```
+
+```output
+33 bytes
+tea 2 1152921504606846976n true undefined
+```
+
+`encode` also writes an `Address` as CBOR's tag 32, and `decode` reads one back as an
+`Address`: that is how a transport's message keeps its addresses
+([Other systems](docs/guide/other-systems.md)).
+
+
 ## Guides
 
 One per feature, each with complete examples that run as written. They
 are in the package too, under `docs/guide/` in
-`node_modules/@tinyactors/node`, so these links work after an install:
+`node_modules/@tinyactors/node`, so these links work after an install.
+
+Writing an application:
 
 - [Writing charts](docs/guide/charts.md): JavaScript in charts, scripts,
   XML data, several charts, `<invoke>` of a chart, systems and `boot`.
 - [I/O processors](docs/guide/io-processors.md): your code as a chart's
-  output: answering, failing, answering later.
+  output: answering, failing, answering later, spawning from a chart.
+- [When the actor is not there](docs/guide/missing-actors.md): a send to
+  an actor that is hibernated, never was, or ended, the three ways to
+  handle it, and names that need no encoding.
 - [Invoked services](docs/guide/services.md): long-running things a chart
   starts and stops, such as a connection or a subprocess.
+- [Hibernation](docs/guide/hibernation.md): millions of actors, most of
+  them in your store, with `store` and `resident`.
+- [Testing your charts](docs/guide/testing.md): a simulated clock,
+  `idle()`, and asserting on an actor's state.
+- [The quickjs sandbox](docs/guide/quickjs.md): charts you do not trust.
+- [In the browser](docs/guide/browser.md): `@tinyactors/wasm`, the same
+  API in a page or a Worker: loading, the CSP, IndexedDB as the store,
+  liveness, memory, and what differs.
+
+Operating a host:
+
 - [Inspecting a host](docs/guide/inspection.md): an actor's state and
   variables, listing actors, the host's counters.
+- [Capacity and memory](docs/guide/capacity.md): sizing a host, how it
+  grows, and what an actor costs.
 - [Telemetry](docs/guide/telemetry.md): traces, logs and metrics as
   OpenTelemetry, and trace context across your services.
-- [Hibernation](docs/guide/hibernation.md): millions of actors, most of
-  them in your database.
+- [Hibernation](docs/guide/hibernation.md#a-policy-of-your-own):
+  sweeping, hibernating and waking by a policy of your own.
 - [Migration](docs/guide/migration.md): moving running actors to a new
   version of their chart.
 - [Snapshots](docs/guide/snapshots.md): the whole host as one blob, and a
   host restored from it.
+
+Wire format:
+
 - [Other systems](docs/guide/other-systems.md): actors of two hosts
-  talking through your transport, and SCXML's BasicHTTP.
-- [The quickjs sandbox](docs/guide/quickjs.md): charts you do not trust.
-- [Capacity and memory](docs/guide/capacity.md): sizing a host, how it
-  grows, and what an actor costs.
-- [Testing your charts](docs/guide/testing.md): a simulated clock,
-  `idle()`, and asserting on an actor's state.
-- [In the browser](docs/guide/browser.md): `@tinyactors/wasm`, the same
-  API in a page or a Worker: loading, the CSP, IndexedDB as the store,
-  liveness, memory, and what differs.
+  talking through your transport, addresses, and SCXML's BasicHTTP.
+- [docs/values.md](docs/values.md): every value as it crosses, and as
+  CBOR.
+
+The example applications in the repository (`examples/`) put these
+together; the chat (`examples/chat-rooms/`) is the one the application
+API was designed against.
 
 The reference is the doc comment of each export in
 [index.d.ts](index.d.ts), which an editor shows on hover. In TypeScript

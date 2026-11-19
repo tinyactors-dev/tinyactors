@@ -1,5 +1,9 @@
 # Migration
 
+This guide is part of operating a host (the README's [Operating a
+host](../../README.md#operating-a-host)): images, segments and versions,
+and moving actors between them.
+
 Charts change. A long-lived actor (an order that waits a week for its
 delivery) is still running when you deploy the chart's next version, and
 stopping it would lose its state. A migration moves running actors to the
