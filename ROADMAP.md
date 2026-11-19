@@ -740,8 +740,8 @@ direct layer; the items below are the API applications use.
 | 13 | Operator calls (trace, metrics, telemetry, sweep, hibernate and wake, migration, segments and images) and wire-format calls (`encode`, `decode`, the BasicHTTP helpers) grouped apart in the READMEs, guides and types | both | — | |
 | 14 | Guides: the three strategies for a send to an actor that is not there, with the chat as an example application; names use only characters that need no encoding | both | — | |
 | 15 | `version` export and `./package.json` in `exports` | Node | — | done (`2479be24`, `e815e12b`: the browser floor is JSON modules') |
-| 16 | The native datamodel refuses top-level declarations in scripts (a compile diagnostic pointing to `<data>`), and the per-session context goes | Node | — | |
-| 17 | A chart-level `<script src="*.js">` runs once per chart; its top-level functions are the chart's helpers | Node | — | |
+| 16 | The native datamodel refuses top-level declarations in scripts (a compile diagnostic pointing to `<data>`), and the per-session context goes | Node | — || done (`2081069a`: `let`, `const` and `class` refused; a top-level `var` is a variable of the session, since W3C 302 to 304 declare one) |
+| 17 | A chart-level `<script src="*.js">` runs once per chart; its top-level functions are the chart's helpers | Node | — || done (`2081069a`) |
 | 18 | `addCharts` and `spawnChart` removed; compile options a named argument | Node | — | |
 | 19 | `__version__` | Python | — | done (`ca00eff8`) |
 | 20 | Typed methods that can be awaited, in Node's shape | Python | `ta_host_post` | done (`12faafbe`) |
