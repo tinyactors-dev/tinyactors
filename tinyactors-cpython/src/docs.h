@@ -333,6 +333,22 @@ static const char ta_python_doc_host_actor[] =
     "and Host.boot registers each actor a <system> manifest declares under\n"
     "its name. Raises StaleError when no live actor answers to it.";
 
+static const char ta_python_doc_host_locate[] =
+    "locate(session, /)\n"
+    "--\n"
+    "\n"
+    "Where a live actor runs now, as (segment, actor): the segment of the\n"
+    "image whose version it runs, and its actor handle in that segment.\n"
+    "`session` is an int or an Actor.\n"
+    "\n"
+    "Compare the segment with Host.chart(name).segment to tell whether an\n"
+    "actor runs a chart's current version or an older one: a migrated actor\n"
+    "keeps its session id but runs in the segment that adopted it, so read\n"
+    "the segment here, never from the id. Raises StaleError when no live\n"
+    "actor has the session (a hibernated one is live)."
+    "\n\n"
+    "Part of operating a host (the README's \"Operating a host\").";
+
 static const char ta_python_doc_host_actors[] =
     "actors(chart=None)\n"
     "--\n"

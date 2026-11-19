@@ -6,7 +6,7 @@
       </send>
     </transition>
     <transition event="spawned">
-      <log label="spawned" expr="f'{_event.sendid} {_event.data[&quot;name&quot;]} {_event.data[&quot;address&quot;]}'" />
+      <log label="spawned" expr="f'{_event.sendid} {_event.data[&quot;name&quot;]} {_event.data[&quot;address&quot;]} {_event.data[&quot;created&quot;]}'" />
       <send targetexpr="str(_event.data['address'])" event="hello" />
     </transition>
     <transition event="error.communication">

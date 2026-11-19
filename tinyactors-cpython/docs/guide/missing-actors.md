@@ -163,6 +163,49 @@ and the application refuses a name with other characters where it is
 chosen, as the chat's workspace refuses a room name outside
 `a`-`z`, `0`-`9` and `-` (`valid_name` in `charts/workspace.py`).
 
+Two more reasons for names with parts. An actor spawned with no name is
+found by its chart's name (the core's `src/system/system.c:659-664`
+indexes it so), and an invoked child by its invoke id
+(`src/system/route.c:296-297`): a name `room` would find any unnamed
+actor of the chart `room`, and a name `cart` an invoked child whose
+`<invoke id="cart">`. `room.acme.general` equals neither a chart's name
+nor an invoke id.
+
+## Updating through names
+
+A new version of a chart is a new image: compile it and add it with
+`host.add_image`. Adding it is the deploy. New actors of the chart start
+in the newest version, the running ones finish on theirs, and nothing
+moves unless asked; the two versions need not be compatible.
+
+An actor found by name through the `Spawner` updates the same way. When
+a request names an actor whose holder runs an older version, the
+`Spawner` spawns the current version under the name and answers
+`spawned` with the new actor's address and `created` `True`. From then
+on the name (`host.actor("room.acme.general")`, `@room.acme.general`)
+finds the new actor, since names are looked up newest version first.
+The old actor keeps its session: what holds its session address still
+reaches it, and it runs on its version until it ends. A request whose
+holder already runs the current version is answered with that holder,
+`created` `False`, and nothing is spawned, so two requests for one room
+in flight give one room.
+
+```python
+with tinyactors.compile_dir("charts-v2") as compiled:
+    host.add_image(compiled.image)   # the deploy: `room` is version 2 from now on
+# the next {"chart": "room", "name": "room.acme.general"} the workspace sends
+# spawns version 2; the version 1 room finishes its conversations
+```
+
+An actor that must not wait for its end to change (a long-lived one
+that holds the state of a thing, like a workspace) is moved instead:
+`host.migrate(chart="workspace")` moves the running actors to the new
+version (the README's "Migration").
+
+One edge: an actor that was terminated but has not run since still
+holds its name (core has no "ending" state), so a request in that window
+is answered with it, and its `spawned` names an actor about to end.
+
 ## Keying a table by the sender
 
 The room above keys its members by the sender of each `join`, and

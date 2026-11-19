@@ -1190,6 +1190,25 @@ static PyObject *ta_python_host_actors(PyObject *self, PyObject *arguments, PyOb
     return PyObject_CallFunctionObjArgs(host->state->host_actors, self, chart, NULL);
 }
 
+/* locate(session) -> (segment, actor): where a live session lives now
+ * (ta_host_locate): the segment that runs it (the one that adopted it,
+ * for a migrated actor, whatever its session's bits say) and its actor
+ * handle there; no live session: TA_ERROR_STALE. */
+static PyObject *ta_python_host_locate(PyObject *self, PyObject *value) {
+    ta_python_host *host = (ta_python_host *)self;
+    uint64_t session;
+    if (ta_python_session(host, value, &session) < 0) return NULL;
+    ta_python_call call;
+    if (ta_python_enter(host, &call) < 0) return NULL;
+    PyObject *result = NULL;
+    ta_host_location location;
+    ta_status status = ta_host_locate(host->host, session, &location);
+    if (status == TA_OK) result = Py_BuildValue("(II)", (unsigned int)location.segment, (unsigned int)location.actor);
+    else ta_python_raise_status(host->state, status);
+    ta_python_leave(&call);
+    return result;
+}
+
 /* _chart_of(session) -> str or None: the name of the session's chart
  * (ta_host_locate, ta_actor_info_get, ta_image_chart_name), for actors(). */
 static PyObject *ta_python_host_chart_of(PyObject *self, PyObject *value) {
@@ -2038,6 +2057,7 @@ static PyMethodDef ta_python_host_methods[] = {
      ta_python_doc_host_add_image},
     {"chart", ta_python_host_chart, METH_O, ta_python_doc_host_chart},
     {"actor", ta_python_host_actor, METH_O, ta_python_doc_host_actor},
+    {"locate", ta_python_host_locate, METH_O, ta_python_doc_host_locate},
     {"actors", (PyCFunction)(void (*)(void))ta_python_host_actors, METH_VARARGS | METH_KEYWORDS, ta_python_doc_host_actors},
     {"_chart_of", ta_python_host_chart_of, METH_O, NULL},
     {"_done", ta_python_host_done, METH_O, NULL},
