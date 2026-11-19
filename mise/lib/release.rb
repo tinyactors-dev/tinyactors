@@ -335,8 +335,68 @@ module Release
   # There the release pushes branches, and GitHub workflows make the tags
   # and the GitHub release: .github/workflows/release-tags.yml here, and
   # the release repository's own (<directory>/.github/workflows/release.yml),
-  # which its snapshot carries.
+  # which its snapshot carries (snapshot_tree).
   def branches_only? = ENV['CLAUDE_CODE_REMOTE'] == 'true'
+
+  # The release workflow a snapshot carries when its directory has none of
+  # its own (tinyactors-napi's reads its packages from npm): it tags the
+  # snapshot and makes the GitHub release from the files a cloud session's
+  # release pushed to the branch release-assets/v<version> (push_assets!).
+  SHARED_WORKFLOW = 'mise/release-repository/release.yml'
+  WORKFLOW = '.github/workflows/release.yml'
+
+  # The snapshot's tree for `tree`, the directory at the release commit
+  # `commit`: `tree` itself when it has a release workflow, else `tree`
+  # with SHARED_WORKFLOW as it was at `commit` (none before that file
+  # existed, so a mirror of an earlier release holds the directory alone).
+  # Answers the tree and whether it carries the shared workflow.
+  def snapshot_tree(tree, commit)
+    return [tree, false] if object?("#{tree}:#{WORKFLOW}")
+
+    blob = git('rev-parse', '--verify', '--quiet', "#{commit}:#{SHARED_WORKFLOW}").to_s.strip
+    return [tree, false] if blob.empty?
+
+    github = subtree(tree, '.github')
+    workflows = with_entry(github && subtree(github, 'workflows'), 'release.yml', "100644 blob #{blob}")
+    github = with_entry(github, 'workflows', "040000 tree #{workflows}")
+    [with_entry(tree, '.github', "040000 tree #{github}"), true]
+  end
+
+  def object?(name) = !git('rev-parse', '--verify', '--quiet', name).to_s.strip.empty?
+
+  # The tree `name` in `tree`, or nil.
+  def subtree(tree, name)
+    sha = git('rev-parse', '--verify', '--quiet', "#{tree}:#{name}").to_s.strip
+    sha.empty? ? nil : sha
+  end
+
+  # `tree` (none: an empty one) with its entry `name` set to `entry`
+  # ("<mode> <type> <sha>"), written with git mktree.
+  def with_entry(tree, name, entry)
+    lines = tree ? git('ls-tree', tree).to_s.lines.map(&:chomp).reject { |line| line.split("\t", 2)[1] == name } : []
+    mktree([*lines, "#{entry}\t#{name}"])
+  end
+
+  def mktree(lines)
+    out, status = Open3.capture2('git', 'mktree', stdin_data: lines.map { |line| "#{line}\n" }.join, chdir: REPO.to_s)
+    fail!('git mktree failed') unless status.success?
+    out.strip
+  end
+
+  # Pushes `assets` to `url` as the branch release-assets/<release_tag>:
+  # one commit whose tree holds the files by their names, which the shared
+  # release workflow makes the GitHub release from, then deletes.
+  def push_assets!(url, release_tag, assets)
+    lines = assets.map do |file|
+      blob = git('hash-object', '-w', '--', file.to_s).to_s.strip
+      fail!("git hash-object #{file} failed") if blob.empty?
+      "100644 blob #{blob}\t#{File.basename(file)}"
+    end
+    tree = mktree(lines)
+    out, status = Open3.capture2('git', 'commit-tree', tree, '-m', "The files of #{release_tag}", chdir: REPO.to_s)
+    fail!('git commit-tree of the release files failed') unless status.success?
+    run('git', 'push', '--force', url, "#{out.strip}:refs/heads/release-assets/#{release_tag}")
+  end
 
   # Pushes `tag` to origin, with main when the tag's commit is not on
   # origin's main yet, in one atomic push: both refs or neither. When it is
@@ -431,8 +491,10 @@ module Release
   #
   # `source` is the directory the snapshot is taken from, when the project
   # lived elsewhere at that tag (tinyactors-napi/v0.2.0 in
-  # tinyactors-core/bindings/node).
-  def push_snapshot!(tag, source: nil)
+  # tinyactors-core/bindings/node). Its tree is snapshot_tree's. In a cloud
+  # session, `assets` go to the branch release-assets/v<version> before the
+  # snapshot goes to main, for the shared workflow to release them.
+  def push_snapshot!(tag, source: nil, assets: [])
     directory, version = split_tag(tag)
     source ||= directory
     repository = release_repository(directory)
@@ -441,6 +503,8 @@ module Release
     fail!("there is no tag #{tag}") if commit.empty?
     tree = git('rev-parse', '--verify', '--quiet', "#{commit}:#{source}").to_s.strip
     fail!("#{tag} has no directory #{source}/ (where was the project then? --directory)") if tree.empty?
+
+    tree, shared = snapshot_tree(tree, commit)
 
     ensure_release_repository!(repository, directory)
     url = repository_url(repository)
@@ -471,6 +535,7 @@ module Release
                               message: "#{directory} #{version}\n\n#{source}/ at #{tag} in #{MONOREPO} (#{commit}).\n")
                end
     if branches_only?
+      push_assets!(url, release_tag, assets) if shared && !assets.empty?
       run('git', 'push', url, "#{snapshot}:refs/heads/main")
     else
       run('git', 'push', '--atomic', url, "#{snapshot}:refs/heads/main", "#{snapshot}:refs/tags/#{release_tag}")
@@ -498,7 +563,7 @@ module Release
   # already, and a release that exists is left as it is.
   def push_and_release!(tag:, title:, notes_file:, assets:)
     push_to_origin!(tag)
-    repository, release_tag = push_snapshot!(tag)
+    repository, release_tag = push_snapshot!(tag, assets: assets)
     if branches_only?
       puts "release: #{repository}'s workflow tags #{release_tag} and makes its GitHub release " \
            "(https://github.com/#{repository}/actions)"

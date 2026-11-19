@@ -77,9 +77,13 @@ notes as the project's `RELEASE_NOTES.md`, to `main`, and the project's
 snapshot to its release repository's `main`. GitHub workflows do the
 rest with their own tokens: `.github/workflows/release-tags.yml` tags the
 release commit with that file (`mise run release:tags`), and the release
-repository's `<project>/.github/workflows/release.yml`, which the snapshot
-carries, tags the snapshot and makes the GitHub release from the same file
-and the packages the registry serves. The workflows write no notes. npm
+workflow the snapshot carries tags the snapshot and makes the GitHub
+release from the same file. A project with its own
+`<project>/.github/workflows/release.yml` (napi) takes the files from its
+registry; every other snapshot carries `mise/release-repository/release.yml`,
+and the release first pushes its files to the release repository's branch
+`release-assets/v<version>`, which that workflow releases, checks against
+`SHA256SUMS` and deletes. The workflows write no notes. npm
 packages are published staged: the maintainer approves them on npmjs.com.
 Tokens come from 1Password: `fnox.toml` names the items, fnox and the
 1Password CLI are pinned in `mise.toml`, and the environment holds only
