@@ -407,7 +407,12 @@ Decided by the maintainer (2026-10-13); every item is in
   `TinyactorsError(code, reason, path, message)`; an error with no
   `on_error` is raised by the driver after the turn. A refusal at the
   call (`ta_host_post`: `TA_ERROR_NO_MEMORY`, `TA_ERROR_STATE`) raises at
-  once. No synchronous request, no raw `post`, no reply object, no future.
+  once. **Given no handler** (the maintainer, 2026-11-19, Node's shape;
+  root ROADMAP.md, step 8.6, item 20), under asyncio a method returns a
+  future of the host's loop that its reply settles, the error raised as
+  its class; still pending at close it never completes; under the
+  synchronous driver it raises `TypeError`. No synchronous request, no
+  raw `post`, no reply object.
 - **The message id is the handle of a row in the pending table**
   (`ta_table`) holding `(handler, on_error)`: the drain reads the
   `REPLY`'s `id` in C, finds the row with `ta_table_get` (O(1); the
@@ -931,7 +936,8 @@ Registered beside quickjs, first; matched by the chart's
 ## What not to build
 
 - No synchronous request, no raw `post`, no request facade, no reply
-  object or future: typed methods take response handlers.
+  object: typed methods take response handlers, or under asyncio return a
+  future their reply settles.
 - No re-reading `ta_host_effects` until stable, no consumed marks, no
   nested drain, no ack inside a handler.
 - No eager conversion of an effect: a thin view, and a record only where

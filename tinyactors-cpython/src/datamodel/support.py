@@ -76,6 +76,19 @@ def _by_code(code):
     return StaleError if code == -32001 else StateError if code == -32002 else InvalidError
 
 
+def settlers(future):
+    """The handler and on_error of a typed method given no handler: they
+    settle `future`, unless it was cancelled."""
+    def result(host, value):
+        if not future.done():
+            future.set_result(value)
+
+    def error(host, exception):
+        if not future.done():
+            future.set_exception(exception)
+    return result, error
+
+
 class CompileError(TinyactorsError):
     """compile_charts or compile_system found an error in the documents.
 

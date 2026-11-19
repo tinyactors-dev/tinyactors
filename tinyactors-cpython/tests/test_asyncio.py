@@ -155,8 +155,44 @@ class Asyncio(unittest.TestCase):
         asyncio.run(main())
         self.assertEqual(got, [0])
 
+    def test_a_typed_method_given_no_handler_is_awaited(self):
+        """It resolves with the result, raises the reply's error as its class, and keeps the shape with a handler."""
+        async def main():
+            async with tinyactors.Host(CONFIG) as host:
+                host.add_image(image())
+                session = host.spawn(host.chart("echo"))
+                stats = await host.host_stats()
+                state = await host.actor_state(session=session)
+                with self.assertRaises(tinyactors.StaleError) as raised:
+                    await host.actor_state(session=session + 1000)
+                with self.assertRaises(tinyactors.InvalidError):
+                    await host.actor_state(session="not a session")
+                with self.assertRaises(TypeError):
+                    host.actor_state(on_error=lambda host, error: None, session=session)
+                return stats["host"]["segments"], state, raised.exception.code
+
+        segments, state, code = asyncio.run(main())
+        self.assertEqual(segments, 1)
+        self.assertEqual(state["value"], "s")
+        self.assertEqual(code, -32001)
+
+    def test_a_method_pending_at_close_never_settles(self):
+        async def main():
+            async with tinyactors.Host(CONFIG) as host:
+                future = host.host_stats()
+            await asyncio.sleep(0)
+            return future.done()
+
+        self.assertFalse(asyncio.run(main()))
+
 
 class Synchronous(unittest.TestCase):
+    def test_a_typed_method_given_no_handler_needs_asyncio(self):
+        with tinyactors.Host(CONFIG) as host:
+            with self.assertRaises(TypeError) as raised:
+                host.host_stats()
+        self.assertIn("asyncio", str(raised.exception))
+
     def test_a_simulated_clock_moves_only_with_increment(self):
         logs = Logs()
         clock = tinyactors.SimulatedClock()

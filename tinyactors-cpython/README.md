@@ -199,16 +199,23 @@ one with a plain `with` raises `TypeError` naming the handler.
 Questions about the host and its actors are **typed methods**:
 `actor_state`, `actor_context`, `actor_list`, `actor_get`, `host_stats`,
 `host_config`, `trace_configure`, `trace_watch`, `trace_unwatch`,
-`trace_end` and `trace_spans_decode`. Each takes
-`(handler, on_error=None, /, **params)`. The params are passed to the host
-as given, and the host checks them.
+`trace_end` and `trace_spans_decode`. The params are keywords, passed to
+the host as given, and the host checks them.
 
-A typed method returns `None`. `handler(host, result)` runs when the
-reply is handled, in a later run, with the result as Python values. An
-error goes to `on_error(host, error)` as a `TinyactorsError` whose `code`,
-`reason` and `path` say what was wrong. Without `on_error`, the driver
-raises it after the turn. There is no synchronous form: a host answers
-questions in the same cycle as everything else.
+Under asyncio, await one: `state = await host.actor_state(session=s)`
+gives the result as Python values, and an error raises as the
+`TinyactorsError` subclass of its code (`StaleError` for a session that
+does not exist), whose `code`, `reason` and `path` say what was wrong. A
+method still pending when the host closes never completes.
+
+Each also takes `(handler, on_error=None, /, **params)`, which returns
+`None`: `handler(host, result)` runs when the reply is handled, in a
+later turn, and an error goes to `on_error(host, error)`. Without
+`on_error`, the driver raises it after the turn. This is the form for the
+synchronous driver, which has no event loop to complete an awaitable on:
+there, a method given no handler raises `TypeError`. There is no
+synchronous answer: a host answers questions in the same cycle as
+everything else.
 
 The core's [requests.md](../tinyactors-core/docs/requests.md) describes
 each method's params and result. Its `actor.send` has no typed method,

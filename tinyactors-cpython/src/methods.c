@@ -51,10 +51,46 @@ static int ta_python_post(ta_python_host *host, const ta_python_typed *typed, ui
     return 0;
 }
 
+static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typed);
+
+/* A typed method given no handler: under asyncio, a future of the host's
+ * loop that its reply settles (support.py's settlers make the handler and
+ * on_error that resolve and reject it); a method still pending at close()
+ * never settles, as its handlers are dropped. Under the synchronous driver
+ * there is no loop to settle it on: TypeError. */
+static PyObject *ta_python_typed_future(ta_python_host *host, const ta_python_typed *typed) {
+    if (typed->params && PyDict_GetItemString(typed->params, "on_error")) {
+        PyErr_Format(PyExc_TypeError, "%s: on_error without a handler", typed->method);
+        return NULL;
+    }
+    if (host->loop == Py_None) {
+        PyErr_Format(PyExc_TypeError, "%s() with no handler returns an awaitable, which needs the asyncio driver "
+                     "(async with Host(...)); under `with`, give it a handler(host, result)", typed->method);
+        return NULL;
+    }
+    PyObject *future = PyObject_CallMethod(host->loop, "create_future", NULL);
+    PyObject *pair = future ? PyObject_CallFunctionObjArgs(host->state->settlers, future, NULL) : NULL;
+    PyObject *arguments = pair ? PySequence_Tuple(pair) : NULL;
+    Py_XDECREF(pair);
+    PyObject *done = NULL;
+    if (arguments) {
+        ta_python_typed handled = {typed->method, arguments, typed->params, typed->timers};
+        done = ta_python_typed_call((PyObject *)host, &handled);
+        Py_DECREF(arguments);
+    }
+    if (!done) {
+        Py_XDECREF(future);
+        return NULL;
+    }
+    Py_DECREF(done);
+    return future;
+}
+
 static PyObject *ta_python_typed_call(PyObject *self, const ta_python_typed *typed) {
     ta_python_host *host = (ta_python_host *)self;
-    PyObject *handler, *on_error = Py_None, *keyword = NULL;
-    if (!PyArg_ParseTuple(typed->arguments, "O|O", &handler, &on_error)) return NULL;
+    PyObject *handler = NULL, *on_error = Py_None, *keyword = NULL;
+    if (!PyArg_ParseTuple(typed->arguments, "|OO", &handler, &on_error)) return NULL;
+    if (!handler) return ta_python_typed_future(host, typed);
     if (typed->params && PyDict_GetItemStringRef(typed->params, "on_error", &keyword) < 0) return NULL;
     if (keyword) {
         int twice = PyTuple_Size(typed->arguments) > 1;

@@ -46,6 +46,7 @@ typedef struct ta_python_module_state {
     PyObject *builtins;       /* what a "python" chart's code may call */
     PyObject *attach;         /* support.attach: a chart's class and functions */
     PyObject *check_file;     /* support.check_file: a .py file a resolver read */
+    PyObject *settlers;       /* support.settlers: the handlers of a typed method given none */
     PyObject *event_kinds;    /* ("platform", "internal", "external") */
     PyObject *event_key;      /* "_event", interned: bind_event makes no key per event */
     PyObject *time_ns;        /* time.time_ns: the wall clock */

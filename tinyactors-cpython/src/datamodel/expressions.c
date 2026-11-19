@@ -50,6 +50,7 @@ int ta_python_support_init(PyObject *module, ta_python_module_state *state) {
         state->diagnostic = ta_python_support_get(namespace, "Diagnostic");
         state->attach = ta_python_support_get(namespace, "attach");
         state->check_file = ta_python_support_get(namespace, "check_file");
+        state->settlers = ta_python_support_get(namespace, "settlers");
         PyObject *names = ta_python_support_get(namespace, "BUILTINS");
         state->builtins = PyDict_New();
         for (Py_ssize_t i = 0; names && state->builtins && i < PyTuple_Size(names); i++) {
@@ -63,7 +64,7 @@ int ta_python_support_init(PyObject *module, ta_python_module_state *state) {
         state->event_kinds = Py_BuildValue("(sss)", "platform", "internal", "external");
         state->event_key = PyUnicode_InternFromString("_event");
         if (!state->error || !state->compile_error || !state->resolve_error || !state->diagnostic || !state->attach ||
-            !state->check_file || !names || !state->builtins || !state->time_ns || !state->coroutine_function ||
+            !state->check_file || !state->settlers || !names || !state->builtins || !state->time_ns || !state->coroutine_function ||
             !state->event_kinds || !state->event_key)
             status = -1;
         static const char *const exported[] = {"TinyactorsError", "StaleError", "StateError", "InvalidError",
