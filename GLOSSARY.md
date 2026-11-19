@@ -188,6 +188,22 @@ group, the words build on each other.
 - **Direct layer, convenience layer.** A binding's API that mirrors the
   C calls one to one, and a later layer in the language on top that adds
   shapes, never behaviour.
+- **Application API.** What applications use, built on the direct
+  layer's calls and adding no request to core: `Host(charts, system=...)`,
+  `Actor` handles, I/O processors as objects, a store with `resident`,
+  `ask`, `Spawner` ([ROADMAP.md](ROADMAP.md), step 8.6). The other calls
+  are grouped as *operating a host* (telemetry, sweep, hibernate and
+  wake, migration, snapshots, images) and *wire format* (`encode`,
+  `decode`, messages between systems, addresses).
+- **Store, resident.** The application's place for hibernation blobs
+  (`save`, `load`, `delete`), and the most actors a host keeps in memory;
+  the binding hibernates the rest after a turn and loads one when core
+  asks to wake it.
+- **Spawner.** The I/O processor a binding ships for spawning from a
+  chart: a send of `{chart, name, params}`, answered with `spawned`.
+- **Collection actor.** An application's actor that decides which actors
+  of a kind exist (a workspace for its rooms); it never ends, and
+  hibernates when idle.
 
 ## Working in the repository
 

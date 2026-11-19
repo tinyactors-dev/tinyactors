@@ -627,8 +627,8 @@ websockets) and decided the shape below, the same in both bindings.
   has.
 - **What to do with a send to an actor that is not there is application
   logic,** chosen per kind of actor: the actor never ends and hibernates
-  (core wakes a hibernated named actor, `src/system/system.c:759`,
-  `src/system/hibernate.c:508`); the application routes it through an
+  (core wakes a hibernated named actor, `src/system/system.c:553-555`,
+  `src/system/hibernate.c:1438`); the application routes it through an
   I/O processor; or the sender handles `error.communication`. The
   library offers none of them, and the guides show all three.
 - **One I/O processor per external system** (the database, the open
