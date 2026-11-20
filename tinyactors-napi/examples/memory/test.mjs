@@ -12,7 +12,11 @@ for (const datamodel of ['native', 'quickjs']) {
       assert.equal(results.message.waiting.region, tracing ? 106 : 57);
       assert.equal(results['delayed send'].pending.region, tracing ? 151 : 102);
       assert.ok(results.actor.started.region > 81, `an actor's region: ${results.actor.started.region} B`);
-      for (const row of [results.actor.started, results.actor.handled, results.message.waiting, results['delayed send'].pending]) {
+      // a hibernated actor keeps its records only: 81 B, up to 89 B as the indexes round up
+      const { hibernated } = results.hibernated;
+      assert.ok(hibernated.region >= 81 && hibernated.region <= 89, `a hibernated actor's region: ${hibernated.region} B`);
+      assert.ok(hibernated.blob > 0, `a hibernated actor's blob: ${hibernated.blob} B`);
+      for (const row of [results.actor.started, results.actor.handled, hibernated, results.message.waiting, results['delayed send'].pending]) {
         assert.ok(row.resident > 0, JSON.stringify(row));
       }
     });

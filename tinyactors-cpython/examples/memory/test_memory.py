@@ -16,7 +16,11 @@ class Memory(unittest.TestCase):
                     self.assertEqual(results["message"]["waiting"]["region"], 106 if tracing else 57)
                     self.assertEqual(results["delayed send"]["pending"]["region"], 151 if tracing else 102)
                     self.assertGreater(results["actor"]["started"]["region"], 81)
-                    rows = [results["actor"]["started"], results["actor"]["handled"],
+                    # a hibernated actor keeps its records only: 81 B, up to 89 B as the indexes round up
+                    hibernated = results["hibernated"]["hibernated"]
+                    self.assertTrue(81 <= hibernated["region"] <= 89, hibernated)
+                    self.assertGreater(hibernated["blob"], 0, hibernated)
+                    rows = [results["actor"]["started"], results["actor"]["handled"], hibernated,
                             results["message"]["waiting"], results["delayed send"]["pending"]]
                     for row in rows:
                         self.assertGreater(row["resident"], 0, row)
