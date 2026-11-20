@@ -299,8 +299,13 @@ typedef struct ta_actor {
 } ta_actor;
 ```
 
-Actor (48 B) + instance (~64 B) ≈ **112 bytes per idle actor**, plus
-whatever the datamodel keeps. Beside the actor pool, per actor of
+An actor costs **81 bytes of region** when `max_actors` is a power of
+two, and up to 89 B as the two indexes round up: its record (48 B), its
+links (16 B), the session and name indexes (8 B each) and its
+generation byte. A resident actor adds its instance, which its chart
+lays out, and its strings; the datamodel keeps its values.
+`mise run layout` prints each record and these costs from the debug
+information, checked against `ta_system_layout`. Beside the actor pool, per actor of
 `max_actors`: its links (16 B: its place in the ring of actors of its
 name, how many of its requests are live, a word that holds the actor
 before it in the wake queue while it is hibernated there, and which
