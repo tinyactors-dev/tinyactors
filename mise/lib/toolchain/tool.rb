@@ -23,6 +23,7 @@ module Toolchain
       zig: %w[zig zig],
       clang: %w[clang clang],
       llvm_ar: %w[llvm-ar conda:llvm-tools],
+      llvm_dwarfdump: %w[llvm-dwarfdump conda:llvm-tools],
       llvm_nm: %w[llvm-nm conda:llvm-tools],
       llvm_objcopy: %w[llvm-objcopy conda:llvm-tools],
       llvm_objdump: %w[llvm-objdump conda:llvm-tools],

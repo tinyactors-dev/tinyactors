@@ -45,6 +45,14 @@ programs and the builds (`dev`: ASan/UBSan at -O1; `release`; `wasi`).
   a change to a utility changes their lint too, so run their
   `mise run lint` with it.
 - `mise run torture` opens the torture chamber with its dashboard.
+- `mise run layout` prints the region's types as the compiler laid them
+  out (sizes, members, padding; `--members`), read from the debug
+  information of the `debuginfo` build (release flags, `-g
+  -fdebug-macro`), and what one more actor, event, delayed send, request
+  or outbox entry costs in a segment's region. It checks those costs
+  against `ta_system_layout` (`tools/layout/layout.c`) and fails when
+  they differ: a change to `carve()` (`src/system/system.c`) changes the
+  task's `UNITS` in the same commit.
 - `third_party/` is vendored (`mise run vendor-quickjs`): never edit or
   format it.
 

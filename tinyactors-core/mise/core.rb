@@ -233,7 +233,10 @@ module Core
     Program.new(name: 'torture-bench', uses: %w[host runtime compile otlp] + ECMASCRIPT,
                 sources: %w[bench.c net.c loop.c].map { |s| "tools/torture/#{s}" },
                 defines: { 'BENCH_SOURCE_DIR' => ROOT.join('tools/torture'), 'BENCH_WEB_DIR' => ROOT.join('web/torture'),
-                           'BENCH_REPO_DIR' => ROOT })
+                           'BENCH_REPO_DIR' => ROOT }),
+    # What each capacity adds to a segment's region, by ta_system_layout;
+    # `mise run layout` checks it against the types' debug information.
+    Program.new(name: 'ta-layout', uses: %w[system compile], sources: %w[tools/layout/layout.c], defines: {})
   ].freeze
 
   WARNINGS = %w[-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-sign-conversion -Wcast-align
@@ -252,6 +255,9 @@ module Core
     'dev' => { flags: %w[-g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all -DTA_DEBUG],
                link: %w[-fsanitize=address,undefined] },
     'release' => { flags: %w[-O2 -DNDEBUG], link: [] },
+    # The release build with debug information, macros included: `mise run
+    # layout` reads the region's types and constants from its DWARF.
+    'debuginfo' => { flags: %w[-O2 -DNDEBUG -g -fdebug-macro], link: [] },
     # The test programs as WebAssembly (wasm32-wasi, the pinned zig), run
     # under wasmtime (mise run check:wasm).
     'wasi' => { flags: %w[-Os], link: [], wasi: true }
