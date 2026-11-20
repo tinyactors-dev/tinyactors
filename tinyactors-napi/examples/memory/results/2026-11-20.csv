@@ -1,0 +1,86 @@
+runtime,datamodel,tracing,count,row,memory,heap,core_reserves,blob,machine,date
+node 22.23.5,native,on,10000,"per actor, started",1327,141,199,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,10000,"per actor, after an event",1956,283,199,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,10000,"per actor, hibernated",1147,24,83,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,10000,"per message waiting",1146,61,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,10000,"per delayed send pending",1296,63,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,100000,"per actor, started",774,138,195,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,100000,"per actor, after an event",920,274,195,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,100000,"per actor, hibernated",326,3,81,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,100000,"per message waiting",444,56,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,100000,"per delayed send pending",544,57,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,1000000,"per actor, started",531,138,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,1000000,"per actor, after an event",671,274,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,1000000,"per actor, hibernated",124,0,82,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,1000000,"per message waiting",315,56,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,1000000,"per delayed send pending",357,55,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,2000000,"per actor, started",519,139,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,2000000,"per actor, after an event",665,275,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,2000000,"per actor, hibernated",103,0,82,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,2000000,"per message waiting",296,56,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,2000000,"per delayed send pending",341,56,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,4000000,"per actor, started",501,137,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,4000000,"per actor, after an event",644,273,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,4000000,"per actor, hibernated",92,0,82,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,4000000,"per message waiting",286,56,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,native,on,4000000,"per delayed send pending",332,56,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,10000,"per actor, started",1831,146,199,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,10000,"per actor, after an event",2516,312,199,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,10000,"per actor, hibernated",1688,37,83,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,10000,"per message waiting",1601,87,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,10000,"per delayed send pending",2232,88,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,100000,"per actor, started",749,134,195,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,100000,"per actor, after an event",981,281,195,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,100000,"per actor, hibernated",240,4,81,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,100000,"per message waiting",554,67,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,100000,"per delayed send pending",649,66,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,1000000,"per actor, started",618,136,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,1000000,"per actor, after an event",800,280,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,1000000,"per actor, hibernated",101,0,82,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,1000000,"per message waiting",386,64,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,1000000,"per delayed send pending",456,64,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,2000000,"per actor, started",598,134,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,2000000,"per actor, after an event",800,278,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,2000000,"per actor, hibernated",90,0,82,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,2000000,"per message waiting",384,64,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,2000000,"per delayed send pending",440,64,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,4000000,"per actor, started",592,136,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,4000000,"per actor, after an event",746,279,196,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,4000000,"per actor, hibernated",87,0,82,145,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,4000000,"per message waiting",376,64,106,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,native,on,4000000,"per delayed send pending",437,64,151,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,10000,"per actor, started",1623,606,199,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,10000,"per actor, after an event",2362,1181,199,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,10000,"per actor, hibernated",1275,78,83,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,10000,"per message waiting",1087,187,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,10000,"per delayed send pending",1146,187,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,100000,"per actor, started",1008,599,195,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,100000,"per actor, after an event",1616,1172,195,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,100000,"per actor, hibernated",210,12,81,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,100000,"per message waiting",386,179,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,100000,"per delayed send pending",440,179,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,1000000,"per actor, started",1041,598,196,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,1000000,"per actor, after an event",1639,1172,196,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,1000000,"per actor, hibernated",97,1,82,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,1000000,"per message waiting",312,178,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,1000000,"per delayed send pending",364,178,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,2000000,"per actor, started",1037,598,196,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,2000000,"per actor, after an event",1634,1172,196,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,2000000,"per actor, hibernated",90,1,82,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,2000000,"per message waiting",309,178,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,2000000,"per delayed send pending",359,178,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,4000000,"per actor, started",1034,598,196,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,4000000,"per actor, after an event",1632,1172,196,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,4000000,"per actor, hibernated",86,0,82,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,4000000,"per message waiting",307,178,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+node 22.23.5,quickjs,on,4000000,"per delayed send pending",356,178,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,10000,"per actor, started",1941,606,199,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,10000,"per actor, after an event",2569,1181,199,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,10000,"per actor, hibernated",1420,78,83,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,10000,"per message waiting",1231,187,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,10000,"per delayed send pending",1014,187,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,100000,"per actor, started",1032,599,195,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,100000,"per actor, after an event",1650,1172,195,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,100000,"per actor, hibernated",219,12,81,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,100000,"per message waiting",410,179,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,100000,"per delayed send pending",417,179,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
