@@ -24,8 +24,9 @@ lifecycle (orders, sessions, devices, workflows), when you want timeouts
 and retries written as states rather than timers, or when the same logic
 must run in tests without the network.
 
-This README describes the package as it is built from `main`. The last
-version on npm, 0.2.0, is an earlier binding with another API.
+This README describes the package as it is built from `main`, which can
+be ahead of the latest release on npm; each release's notes say what it
+changed ([releases](https://github.com/tinyactors-dev/tinyactors-napi/releases)).
 
 ## Install
 

@@ -45,8 +45,8 @@ Wheels exist for these platforms:
 
 There is no source distribution, so other platforms and the free-threaded
 interpreters (3.13t, 3.14t) cannot install it yet. Development builds of
-`main` are published as prereleases; once a release is out,
-`pip install --pre tinyactors` installs the newest of them.
+`main` are published as prereleases: `pip install --pre tinyactors`
+installs the newest of them.
 
 ## A first program
 
