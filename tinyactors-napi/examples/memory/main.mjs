@@ -2,6 +2,7 @@
 //
 //   node main.mjs [--counts N,N,...] [--datamodel native|quickjs] [--no-tracing]
 //                 [--chart file.scxml] [--data JSON] [--csv file.csv]
+//                 [--quickjs-memory-limit BYTES]
 //
 // Each measurement runs in a process of its own. It sizes the host's pools
 // for the count up front, takes the memory, makes N of the thing, and takes
@@ -19,7 +20,9 @@
 // --counts measures each count in turn (default 100000), and --csv writes
 // every row to a file, one line each, for a chart. --chart measures an
 // actor of your chart (its first <scxml>). --data is the data each message
-// and each delayed send carries.
+// and each delayed send carries. --quickjs-memory-limit raises quickjs's
+// heap limit (1 GiB by default) for a population that needs more. A row
+// that fails says what stopped it.
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -84,7 +87,7 @@ class CountingStore {
   delete() {}
 }
 
-async function measure({ what, count, datamodel, tracing, chart, data }) {
+async function measure({ what, count, datamodel, tracing, chart, data, quickjsMemoryLimit }) {
   const { collect, heap } = await engine();
   const text = chart ?? CHART;
   const name = text.match(/<scxml[^>]*\sname="([^"]+)"/)?.[1];
@@ -92,7 +95,10 @@ async function measure({ what, count, datamodel, tracing, chart, data }) {
   const compiled = compileCharts([{ name: 'chart.scxml', text }]);
   const image = compiled.image;
   compiled.close();
-  const options = { system: 'memory', datamodel, clock: new SimulatedClock() };
+  const options = {
+    system: 'memory', datamodel, clock: new SimulatedClock(),
+    ...(quickjsMemoryLimit ? { quickjs: { memoryLimit: quickjsMemoryLimit } } : {}),
+  };
 
   // the pools, sized for `count` up front; the region of each thing is the
   // difference between a host sized for count and one sized for none of it
@@ -177,13 +183,21 @@ const ROWS = [
 ];
 
 /** Every row at `count`, each measurement in a process of its own. */
-export function run({ count = 100_000, datamodel = 'native', tracing = true, chart, data = { text: 'hello' } } = {}) {
+export function run({ count = 100_000, datamodel = 'native', tracing = true, chart, data = { text: 'hello' }, quickjsMemoryLimit } = {}) {
   const results = {};
   for (const what of ['actor', 'hibernated', 'message', 'delayed send']) {
-    const job = JSON.stringify({ what, count, datamodel, tracing, chart: what === 'actor' || what === 'hibernated' ? chart : undefined, data });
+    const job = JSON.stringify({
+      what, count, datamodel, tracing, chart: what === 'actor' || what === 'hibernated' ? chart : undefined, data, quickjsMemoryLimit,
+    });
     const child = spawnSync(process.execPath, [fileURLToPath(import.meta.url), '--job', job], { encoding: 'utf8' });
-    if (child.status !== 0) throw new Error(`measuring ${what} at ${count} failed:\n${child.stderr}`);
-    Object.assign(results, { [what]: JSON.parse(child.stdout) });
+    if (child.status === 0) {
+      Object.assign(results, { [what]: JSON.parse(child.stdout) });
+    } else {
+      // a measurement that failed is a row too: what stopped it (quickjs's memoryLimit, the machine's memory)
+      const reason = child.stderr.match(/^\w*Error: .*$/m)?.[0] ?? `exit ${child.status ?? child.signal}`;
+      const failed = { failed: reason };
+      Object.assign(results, { [what]: { started: failed, handled: failed, hibernated: failed, waiting: failed, pending: failed } });
+    }
   }
   return results;
 }
@@ -195,6 +209,10 @@ export function report(results, { count, datamodel, tracing }) {
   lines.push(`${''.padEnd(28)}${'memory'.padStart(10)}${'heap'.padStart(10)}${'core reserves'.padStart(15)}${'blob'.padStart(8)}`);
   for (const [label, what, key] of ROWS) {
     const row = results[what][key];
+    if (row.failed) {
+      lines.push(`${label.padEnd(28)}  failed: ${row.failed}`);
+      continue;
+    }
     lines.push(`${label.padEnd(28)}${`${row.resident} B`.padStart(10)}${`${row.heap} B`.padStart(10)}`
                + `${`${row.region} B`.padStart(15)}${(row.blob === undefined ? '' : `${row.blob} B`).padStart(8)}`);
   }
@@ -207,14 +225,14 @@ export function machine() {
   return `${cpus[0]?.model.trim() ?? 'unknown'}, ${cpus.length} CPUs, ${Math.round(os.totalmem() / 2 ** 30)} GiB, ${os.platform()} ${os.arch()}`;
 }
 
-const CSV_HEADER = 'runtime,datamodel,tracing,count,row,memory,heap,core_reserves,blob,machine,date\n';
+const CSV_HEADER = 'runtime,datamodel,tracing,count,row,memory,heap,core_reserves,blob,failed,machine,date\n';
 
 export function csv(results, { count, datamodel, tracing }) {
   const date = new Date().toISOString().slice(0, 10);
   return ROWS.map(([label, what, key]) => {
     const row = results[what][key];
-    return [runtime(), datamodel, tracing ? 'on' : 'off', count, `"${label}"`, row.resident, row.heap, row.region, row.blob ?? '',
-            `"${machine()}"`, date].join(',');
+    return [runtime(), datamodel, tracing ? 'on' : 'off', count, `"${label}"`, row.resident ?? '', row.heap ?? '', row.region ?? '',
+            row.blob ?? '', row.failed ? `"${row.failed.replaceAll('"', "'")}"` : '', `"${machine()}"`, date].join(',');
   }).join('\n') + '\n';
 }
 
@@ -224,7 +242,7 @@ if (main) {
     options: {
       job: { type: 'string' }, counts: { type: 'string', default: '100000' }, datamodel: { type: 'string', default: 'native' },
       'no-tracing': { type: 'boolean', default: false }, chart: { type: 'string' }, data: { type: 'string' },
-      csv: { type: 'string' },
+      csv: { type: 'string' }, 'quickjs-memory-limit': { type: 'string' },
     },
   });
   if (values.job) {
@@ -234,6 +252,7 @@ if (main) {
       datamodel: values.datamodel, tracing: !values['no-tracing'],
       chart: values.chart ? readFileSync(values.chart, 'utf8') : undefined,
       data: values.data ? JSON.parse(values.data) : undefined,
+      quickjsMemoryLimit: values['quickjs-memory-limit'] ? Number(values['quickjs-memory-limit']) : undefined,
     };
     if (values.csv && !existsSync(values.csv)) writeFileSync(values.csv, CSV_HEADER);
     console.log(machine());

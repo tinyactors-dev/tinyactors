@@ -181,7 +181,14 @@ def run(count=100_000, datamodel="python", tracing=True, chart=None, data=None):
             child = subprocess.run([sys.executable, __file__, "--job", job], capture_output=True, text=True,
                                    env=os.environ)
             if child.returncode != 0:
-                raise RuntimeError(f"measuring {what} at {count} failed:\n{child.stderr}")
+                # a measurement that failed is a row too: what stopped it (quickjs's memory, the machine's)
+                errors = re.findall(r"^\w*Error: .*$", child.stderr, re.M)
+                reason = errors[-1] if errors else f"exit {child.returncode}"
+                keys = {"actor": ["started", "handled"], "hibernated": ["hibernated"],
+                        "message": ["waiting"], "delayed send": ["pending"]}[what]
+                for key in keys:
+                    rows[key] = {"failed": reason}
+                break
             for row, value in json.loads(child.stdout).items():
                 entry = rows.setdefault(row, {"region": value["region"], "blob": value.get("blob")})
                 entry["heap" if traced else "resident"] = value["bytes"]
@@ -210,12 +217,15 @@ def report(results, count, datamodel, tracing):
              f"{'':28}{'memory':>10}{'Python heap':>13}{'core reserves':>15}{'blob':>8}"]
     for label, what, key in ROWS:
         row = results[what][key]
+        if "failed" in row:
+            lines.append(f"{label:28}  failed: {row['failed']}")
+            continue
         blob = "" if row["blob"] is None else f"{row['blob']} B"
         lines.append(f"{label:28}{row['resident']:>8} B{row['heap']:>11} B{row['region']:>13} B{blob:>8}")
     return lines
 
 
-CSV_HEADER = "runtime,datamodel,tracing,count,row,memory,heap,core_reserves,blob,machine,date\n"
+CSV_HEADER = "runtime,datamodel,tracing,count,row,memory,heap,core_reserves,blob,failed,machine,date\n"
 
 
 def csv(results, count, datamodel, tracing):
@@ -223,9 +233,10 @@ def csv(results, count, datamodel, tracing):
     lines = []
     for label, what, key in ROWS:
         row = results[what][key]
-        blob = "" if row["blob"] is None else row["blob"]
+        failed = '"' + row["failed"].replace('"', "'") + '"' if "failed" in row else ""
+        values = ["" if row.get(name) is None else row[name] for name in ("resident", "heap", "region", "blob")]
         lines.append(f'{runtime()},{datamodel},{"on" if tracing else "off"},{count},"{label}",'
-                     f'{row["resident"]},{row["heap"]},{row["region"]},{blob},"{machine()}",{date}')
+                     f'{",".join(str(v) for v in values)},{failed},"{machine()}",{date}')
     return "\n".join(lines) + "\n"
 
 
