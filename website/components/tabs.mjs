@@ -69,4 +69,4 @@ function read(group) {
   }
 }
 
-customElements.define('ta-tabs', Tabs);
+if (!customElements.get('ta-tabs')) customElements.define('ta-tabs', Tabs);

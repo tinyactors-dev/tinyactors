@@ -3,7 +3,8 @@
 // imports the module and calls the export `call`, which answers
 // { lines, spans? }. The lines show as the run's output; spans, when there
 // are any, in a <ta-trace-view>.
-import './trace-view.mjs';
+// With this module's ?v= query, as every component is loaded.
+await import(new URL(`./trace-view.mjs${new URL(import.meta.url).search}`, import.meta.url));
 
 class Live extends HTMLElement {
   connectedCallback() {
@@ -44,4 +45,4 @@ class Live extends HTMLElement {
   }
 }
 
-customElements.define('ta-live', Live);
+if (!customElements.get('ta-live')) customElements.define('ta-live', Live);

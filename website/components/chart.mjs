@@ -17,5 +17,6 @@ async function mount(panel) {
 }
 
 document.addEventListener('ta-panel-shown', (event) => mount(event.target));
-await import('./tabs.mjs');
+// The same URL as the page's <script> for tabs.mjs (its ?v= query), so one module defines <ta-tabs>.
+await import(new URL(`./tabs.mjs${new URL(import.meta.url).search}`, import.meta.url));
 for (const panel of document.querySelectorAll('.chart__diagram[data-src]:not([hidden])')) mount(panel);

@@ -262,4 +262,4 @@ function el(tag, attributes = {}, ...children) {
   return node;
 }
 
-customElements.define('ta-trace-view', TraceView);
+if (!customElements.get('ta-trace-view')) customElements.define('ta-trace-view', TraceView);

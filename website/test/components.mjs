@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 
 globalThis.HTMLElement = class {};
-globalThis.customElements = { define() {} };
+globalThis.customElements = { define() {}, get() {} };
 const { buildTree, flatten, formatTime, ticks } = await import('../components/trace-view.mjs');
 
 const span = (id, parent, start, end = start + 1) => ({ span: id, parent, start, end, name: id, attributes: {}, events: [], status: 0 });
