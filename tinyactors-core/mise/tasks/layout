@@ -1,32 +1,32 @@
 #!/usr/bin/env ruby
-#MISE description="The region's records as the compiler laid them out: each type's size, members and padding, read from the debug information of the debuginfo build, and what an actor, an event, a timer and a request cost"
-#USAGE flag "--members" help="Print each type's members and padding too"
+#MISE description="What an actor, a message and a delayed send cost in a segment's region, from the types' debug information, checked against ta_system_layout"
+#USAGE flag "--all" help="Every capacity: also requests, outbox entries, trace rules, charts, slab pages and the segment's fixed cost"
+#USAGE flag "--types" help="The region's types: each one's size and padding"
+#USAGE flag "--members" help="The region's types with their members (implies --types)"
 # vim:ft=ruby
 
 # It builds the layers with the release flags and debug information
-# (`debuginfo` in mise/core.rb), reads the types with the pinned
-# llvm-dwarfdump (mise/dwarf.rb), and prints:
-#
-# - each type the region holds, with its size and padding (and its members
-#   with --members);
-# - what one more of each capacity costs in a segment's region, following
-#   carve() in src/system/system.c, which this task mirrors: a change there
-#   changes UNITS below.
+# (`debuginfo` in mise/core.rb), and reads the types and constants with the
+# pinned llvm-dwarfdump (mise/dwarf.rb). From them it answers what one more
+# actor, message and delayed send costs in a segment's region. COSTS below
+# follows carve() in src/system/system.c: a change there changes COSTS.
 #
 # Then it checks itself: ta-layout (tools/layout/layout.c) asks
-# ta_system_layout what one more actor, event, timer, request and outbox
-# entry adds, and each must be what the types give. A difference fails the
-# task: carve() changed, and UNITS must follow it.
+# ta_system_layout what one more of each pool adds, and each must be what
+# the types give. A difference fails the task.
 #
-# It writes the same numbers to build/debuginfo/layout.json. The sizes are
-# this machine's (x86_64 and aarch64 have the same; wasm32 has 4-byte
-# pointers, which no region type holds).
+# It writes the numbers to build/debuginfo/layout.json. The sizes are this
+# machine's; x86_64 and aarch64 have the same, and no region type holds a
+# pointer, so wasm32 has them too.
 require 'json'
 require 'open3'
 require_relative '../core'
 require_relative '../dwarf'
 
-members = ENV['usage_members'] == 'true' || ARGV.include?('--members')
+flag = ->(name) { ENV["usage_#{name}"] == 'true' || ARGV.include?("--#{name}") }
+all = flag.('all')
+members = flag.('members')
+types = members || flag.('types')
 
 layers = %w[base trace core system host]
 Core.build_layers('debuginfo', (layers + %w[image compile]).uniq)
@@ -36,127 +36,121 @@ dwarf = Dwarf.read(layers.map { |layer| Core.archive_path('debuginfo', layer) })
 align = dwarf.macro('TA_ALIGN_MAX')
 page = dwarf.macro('TA_SLAB_PAGE')
 size = ->(name) { dwarf.struct(name).size }
-# ta_pool_stride (src/base/pool.h): the payload, at least 8, rounded up to TA_ALIGN_MAX
-stride = ->(name) { ([size.(name), 8].max + align - 1) / align * align }
+# ta_pool_stride (src/base/pool.h): a pool slot is its record rounded up to TA_ALIGN_MAX
+slot = ->(name) { ([size.(name), 8].max + align - 1) / align * align }
 
-# What one more of each capacity adds to a segment's region (carve(),
-# src/system/system.c). A part is [what, bytes, where]; a range is
-# [low, high] for a table whose capacity is a power of two.
-UNITS = {
-  'actor (maxActors)' => [
-    ['ta_actor, a pool slot', stride.('ta_actor'), 'actor_slots'],
-    ['its generation', 1, 'actor_generations'],
-    ['ta_actor_links', size.('ta_actor_links'), 'actor_links'],
-    ['the session index: 4 B a slot, the smallest power of two >= 2 x maxActors', [8, 16], 'sessions'],
-    ['the name index: 4 B a slot, the smallest power of two >= 1.25 x maxActors', [5, 10], 'names'],
-    ['strings: stringBytes by default (TA_STRING_BYTES_PER_ACTOR)', dwarf.macro('TA_STRING_BYTES_PER_ACTOR'), 'slab_pages'],
-    ["its instance: the chart's instance layout, in whole slab pages", nil, 'slab_pages (instanceBytes)']
-  ],
-  'event (maxEvents)' => [
-    ['ta_event, a pool slot', stride.('ta_event'), 'event_slots'],
-    ['its generation', 1, 'event_generations'],
-    ['with tracing: a trace context (traceContexts = maxEvents)', stride.('ta_trace_entry') + 1, 'context_slots, context_generations']
-  ],
-  'delayed send (maxTimers)' => [
-    ['ta_timer, a pool slot', stride.('ta_timer'), 'timer_slots'],
-    ['its generation', 1, 'timer_generations'],
-    ['ta_heap_node', size.('ta_heap_node'), 'heap_nodes'],
-    ['its heap position', 4, 'heap_positions']
-  ],
-  'request (maxRequests)' => [
-    ['ta_request, a pool slot', stride.('ta_request'), 'request_slots'],
-    ['its generation', 1, 'request_generations']
-  ],
-  'outbox entry (outbox)' => [
-    ['ta_effect_record', size.('ta_effect_record'), 'effects'],
-    ['ta_effect, its view', size.('ta_effect'), 'effect_views']
-  ],
-  'trace rule (traceRules)' => [
-    ['ta_trace_rule_compiled', size.('ta_trace_rule_compiled'), 'rules']
-  ],
-  'chart of the image' => [
-    ['its datamodel index', 1, 'chart_datamodels'],
-    ['its datamodel context', 8, 'chart_contexts'],
-    ['ta_chart_stats', size.('ta_chart_stats'), 'chart_stats'],
-    ['with trace rules: its point', 1, 'chart_points']
-  ],
-  'slab page (instanceBytes, stringBytes)' => [
-    ['the page', page, 'slab_pages'],
-    ['ta_slab_page, its metadata', size.('ta_slab_page'), 'slab_metadata']
-  ],
-  'segment, once' => [
-    ['ta_system, the header', size.('ta_system'), 'header'],
-    ['the trace journal (traceBytes, TA_TRACE_BYTES_DEFAULT)', dwarf.macro('TA_TRACE_BYTES_DEFAULT'), 'trace_storage'],
-    ['one page per slab class (TA_SLAB_CLASSES)', dwarf.macro('TA_SLAB_CLASSES') * (page + size.('ta_slab_page')), 'slab_pages, slab_metadata']
-  ]
+# The two indexes of actors are hash tables of 4-byte slots whose capacity
+# is a power of two: sessions at least 2 x maxActors, names at least
+# 1.25 x maxActors. At a power of two they cost 8 B an actor each; just
+# past one, the session index doubles: the most both cost an actor.
+index_bytes = lambda do |actors|
+  sessions = 16
+  sessions <<= 1 while sessions < actors * 2
+  names = 16
+  names <<= 1 while names < actors + actors / 4
+  4.0 * (sessions + names) / actors
+end
+index_most = (1 << 16..(1 << 17)).step(997).map { |n| index_bytes.(n) }.max.ceil
+generation = 1 # each pool keeps a byte per slot beside its records (ta_pool's generations)
+
+# What one more of each costs in a segment's region (carve()). A cost is a
+# list of [part, bytes]; the parts sum to the cost.
+message = [['event', slot.('ta_event')], ['trace context', slot.('ta_trace_entry')], ['generations', 2 * generation]]
+untraced_message = [['event', slot.('ta_event')], ['generation', generation]]
+timer = [['timer', slot.('ta_timer')], ['heap entry', size.('ta_heap_node') + 4], ['generation', generation]]
+COSTS = {
+  'actor' => [['record', slot.('ta_actor')], ['links', size.('ta_actor_links')], ['session index', 8],
+              ['name index', 8], ['generation', generation]],
+  'message' => message,
+  'delayed send' => timer + [['its message', message.sum { |_, bytes| bytes }]],
+  'request' => [['request', slot.('ta_request')], ['generation', generation]],
+  'outbox entry' => [['effect record', size.('ta_effect_record')], ['effect view', size.('ta_effect')]],
+  'trace rule' => [['compiled rule', size.('ta_trace_rule_compiled')]],
+  'chart of the image' => [['stats', size.('ta_chart_stats')], ['datamodel context', 8], ['datamodel index', 1],
+                           ['trace point', 1]],
+  'slab page' => [['page', page], ['page metadata', size.('ta_slab_page')]],
+  'segment, once' => [['header', size.('ta_system')], ['trace journal', dwarf.macro('TA_TRACE_BYTES_DEFAULT')],
+                      ['a first page per slab class', dwarf.macro('TA_SLAB_CLASSES') * (page + size.('ta_slab_page'))]]
 }.freeze
+total = ->(name) { COSTS.fetch(name).sum { |_, bytes| bytes } }
+parts = ->(name) { COSTS.fetch(name).map { |part, bytes| "#{part} #{bytes}" }.join(', ') }
+untraced = untraced_message.sum { |_, bytes| bytes }
+actor_most = total.('actor') - 16 + index_most
+strings = dwarf.macro('TA_STRING_BYTES_PER_ACTOR')
+
+puts "What one more of each costs in a segment's region, with tracing on (the default):"
+puts
+puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'actor', bytes: "#{total.('actor')} B", parts: parts.('actor'))
+puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '', note: "up to #{actor_most} B: the two indexes round up to a power of two")
+puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
+                                                 note: "in memory it also holds its chart's instance and #{strings} B of strings")
+puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'message', bytes: "#{total.('message')} B", parts: parts.('message'))
+puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '', note: "#{untraced} B with tracing off")
+puts format('  %-14<name>s %6<bytes>s  %<parts>s', name: 'delayed send', bytes: "#{total.('delayed send')} B", parts: parts.('delayed send'))
+puts format('  %-14<name>s %6<bytes>s  %<note>s', name: '', bytes: '',
+                                                 note: "#{total.('delayed send') - total.('message') + untraced} B with tracing off")
+puts
+puts "  A million of each: actors #{total.('actor')} MB, messages #{total.('message')} MB, " \
+     "delayed sends #{total.('delayed send')} MB."
+puts '  A message waits in a mailbox, and a delayed send in the timer heap, until it is handled.'
+
+if all
+  puts
+  %w[request outbox\ entry trace\ rule chart\ of\ the\ image slab\ page segment,\ once].each do |name|
+    puts format('  %-20<name>s %8<bytes>s  %<parts>s', name: name, bytes: "#{total.(name)} B", parts: parts.(name))
+  end
+end
 
 TYPES = %w[ta_actor ta_actor_links ta_event ta_trace_entry ta_timer ta_heap_node ta_request
            ta_effect_record ta_effect ta_trace_rule_compiled ta_chart_stats ta_slab_page ta_system].freeze
+if types
+  puts
+  puts "The region's types (#{Core.archive_path('debuginfo', 'system').dirname.relative_path_from(Core::ROOT)}):"
+  TYPES.each do |name|
+    type = dwarf.struct(name)
+    puts format('  %-24<name>s %6<size>d B  %4<padding>d B padding  %<declared>s', name: name, size: type.size,
+                                                                                padding: type.padding, declared: type.declared)
+    next unless members
 
-bytes = ->(value) { value.is_a?(Array) ? "#{value[0]}-#{value[1]}" : value.to_s }
-
-puts "the region's types (#{Core.archive_path('debuginfo', 'system').dirname.relative_path_from(Core::ROOT)}, release flags with -g)"
-TYPES.each do |name|
-  type = dwarf.struct(name)
-  puts format('  %-24<name>s %6<size>d B  %4<padding>d B padding  %<declared>s', name: name, size: type.size,
-                                                                              padding: type.padding, declared: type.declared)
-  next unless members
-
-  type.members.each do |member|
-    width = member.bits ? "#{member.bits} bits" : "#{member.size} B"
-    puts format('      %6<offset>d  %-10<width>s %-28<name>s %<type>s', offset: member.offset, width: width,
-                                                                       name: member.name, type: member.type)
-  end
-  type.holes.each { |offset, length| puts format('      %6<offset>d  %-10<width>s (padding)', offset: offset, width: "#{length} B") }
-end
-
-puts
-puts 'what one more of each costs in a segment\'s region (carve(), src/system/system.c)'
-UNITS.each do |unit, parts|
-  known = parts.map { |_, value, _| value }.compact
-  low = known.sum { |value| value.is_a?(Array) ? value[0] : value }
-  high = known.sum { |value| value.is_a?(Array) ? value[1] : value }
-  total = low == high ? "#{low} B" : "#{low}-#{high} B"
-  total += ' + the chart\'s' if parts.any? { |_, value, _| value.nil? }
-  puts "  #{unit}: #{total}"
-  parts.each do |what, value, where|
-    puts format('      %10<bytes>s  %<what>s  [%<where>s]', bytes: value.nil? ? 'chart' : "#{bytes.(value)} B", what: what, where: where)
+    type.members.each do |member|
+      width = member.bits ? "#{member.bits} bits" : "#{member.size} B"
+      puts format('      %6<offset>d  %-10<width>s %-28<name>s %<type>s', offset: member.offset, width: width,
+                                                                         name: member.name, type: member.type)
+    end
+    type.holes.each { |offset, length| puts format('      %6<offset>d  %-10<width>s (padding)', offset: offset, width: "#{length} B") }
   end
 end
 
-# The check. At a power of two the session index costs 8 B an actor (2 x 4 B)
-# and the name index 8 B (1.25 x rounds up to 2 x); the slabs are fixed, so
-# strings and the instance stay out.
+# The check, pool by pool. Between 2^16 and 2^17 actors both indexes cost
+# 8 B an actor, and the slabs are fixed, so strings and instances stay out.
 expected = {
-  'actor' => stride.('ta_actor') + 1 + size.('ta_actor_links') + 8 + 8,
-  'event' => UNITS['event (maxEvents)'].sum { |_, value, _| value },
-  'timer' => UNITS['delayed send (maxTimers)'].sum { |_, value, _| value },
-  'request' => UNITS['request (maxRequests)'].sum { |_, value, _| value },
-  'outbox' => UNITS['outbox entry (outbox)'].sum { |_, value, _| value }
+  'actor' => total.('actor'),
+  'event' => total.('message'),
+  'untraced-event' => untraced,
+  'timer' => timer.sum { |_, bytes| bytes },
+  'request' => total.('request'),
+  'outbox' => total.('outbox entry')
 }
 output, status = Open3.capture2(Core.program_path('debuginfo', 'ta-layout').to_s)
 abort 'layout: ta-layout failed' unless status.success?
 measured = output.lines.to_h { |line| name, value = line.split; [name, Integer(value)] }
+wrong = expected.reject { |name, bytes| measured[name] == bytes }
 puts
-puts 'checked against ta_system_layout (tools/layout/layout.c, from 2^16 to 2^17 of each)'
-wrong = expected.reject do |name, bytes|
-  puts format('  %-8<name>s %4<bytes>d B  %<verdict>s', name: name, bytes: measured[name] || 0,
-                                                       verdict: measured[name] == bytes ? 'as the types give' : "the types give #{bytes} B")
-  measured[name] == bytes
+if wrong.empty?
+  puts "Checked against ta_system_layout (tools/layout/layout.c): #{expected.map { |name, bytes| "#{name} #{bytes} B" }.join(', ')}."
+else
+  wrong.each { |name, bytes| puts "  #{name}: ta_system_layout gives #{measured[name].inspect} B, the types #{bytes} B" }
 end
 
 out = Core.directory('debuginfo').join('layout.json')
 File.write(out, JSON.pretty_generate(
+  'costs' => COSTS.to_h { |name, list| [name, { 'bytes' => total.(name), 'parts' => list.to_h }] }
+                  .merge('message, tracing off' => { 'bytes' => untraced, 'parts' => untraced_message.to_h },
+                         'actor, most' => { 'bytes' => actor_most }),
   'types' => TYPES.to_h do |name|
     type = dwarf.struct(name)
     [name, { 'size' => type.size, 'padding' => type.padding, 'declared' => type.declared,
              'members' => type.members.map { |m| m.to_h.compact.transform_keys(&:to_s) } }]
-  end,
-  'units' => UNITS.transform_values do |parts|
-    parts.map { |what, value, where| { 'what' => what, 'bytes' => value, 'where' => where } }
   end
 ))
-puts
-puts "wrote #{out.relative_path_from(Core::ROOT)}"
-abort "layout: #{wrong.keys.join(', ')} differ from ta_system_layout: carve() changed, and UNITS must follow it" if wrong.any?
+abort "layout: #{wrong.keys.join(', ')} differ from ta_system_layout: carve() changed, and COSTS must follow it" if wrong.any?

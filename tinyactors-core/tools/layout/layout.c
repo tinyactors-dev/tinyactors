@@ -1,7 +1,8 @@
 /* ta-layout: what one more of each capacity adds to a segment's region, as
  * ta_system_layout carves it. For each capacity it lays out a segment at
  * 2^16 and at 2^17 of it, everything else at its default, and prints the
- * difference per unit: "<capacity> <bytes>". `mise run layout` compares
+ * difference per unit: "<capacity> <bytes>" (an event also without
+ * tracing). `mise run layout` compares
  * these with what it computes from the types' sizes in the debug
  * information, so the two cannot drift apart unseen. */
 #include <stdio.h>
@@ -15,9 +16,10 @@ static const char chart[] = "<scxml xmlns='http://www.w3.org/2005/07/scxml' vers
 
 enum { SMALL = 1u << 16 };
 
-typedef enum capacity { ACTORS, EVENTS, TIMERS, REQUESTS, OUTBOX, CAPACITIES } capacity;
+typedef enum capacity { ACTORS, EVENTS, UNTRACED_EVENTS, TIMERS, REQUESTS, OUTBOX, CAPACITIES } capacity;
 
-static const char *const names[CAPACITIES] = {"actor", "event", "timer", "request", "outbox"};
+static const char *const names[CAPACITIES] = {"actor",   "event",   "untraced-event",
+                                              "timer",   "request", "outbox"};
 
 /* The region of a segment of `image` with `count` of `which`. The slabs are
  * fixed, so an actor's strings and instance stay out of its count. */
@@ -27,8 +29,9 @@ static size_t region(const ta_image *image, capacity which, uint32_t count) {
     config.size = sizeof config;
     config.instance_bytes = 4096;
     config.string_bytes = 16384;
-    uint32_t *fields[CAPACITIES] = {&config.max_actors, &config.max_events, &config.max_timers,
-                                    &config.max_requests, &config.outbox};
+    if (which == UNTRACED_EVENTS) config.tracing = TA_TRACING_DISABLED;
+    uint32_t *fields[CAPACITIES] = {&config.max_actors,   &config.max_events, &config.max_events,
+                                    &config.max_timers,   &config.max_requests, &config.outbox};
     *fields[which] = count;
     size_t bytes = 0;
     return ta_system_layout(image, &config, &bytes) == TA_OK ? bytes : 0;
