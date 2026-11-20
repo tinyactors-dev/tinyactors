@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the website: the content against its schema, the refusals the schema and the build must make, the build's internal links and anchors, and every example a page shows, run"
-#MISE sources=["content/**/*", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE sources=["content/**/*", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -59,7 +59,7 @@ resolve = lambda do |path|
 end
 links = 0
 pages.each do |file, html|
-  html.scan(/\s(?:href|src|srcset)="([^"]*)"/).flatten.each do |url|
+  html.scan(/\s(?:href|src|srcset|data-src)="([^"]*)"/).flatten.each do |url|
     next if url.match?(%r{\A[a-z]+:}) # another site's: not checked here
 
     links += 1

@@ -40,6 +40,12 @@ rules.
   several platforms (an install command per package manager or language)
   is one element whose alternatives the page shows behind tabs, never a
   list of all of them. The reader's choice holds across the page.
+- **Every piece of source code is highlighted, every chart can be seen.**
+  Highlighting and diagrams are the stylesheet's and the components' work,
+  never the content's: a `<code>` block names its language, and an SCXML
+  block read from a file gets its diagram. Browser dependencies are
+  vendored (`package.json`, `mise/website.rb` VENDOR), never loaded from a
+  CDN.
 - Name SCXML and actor terms exactly (state, event, transition, actor,
   host); the root `GLOSSARY.md` defines them. The product name is
   lowercase.

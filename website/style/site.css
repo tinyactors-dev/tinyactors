@@ -109,6 +109,28 @@ ol.items .items__term::before { counter-increment: item; content: counter(item) 
 .claim__sources { margin-top: auto; padding-top: var(--space-3); border-top: 1px solid var(--border-1); font: var(--type-body-sm); color: var(--fg-3); }
 .claim__label { margin-right: var(--space-1); }
 
+/* ---------------------------------------------------- charts and code */
+
+ta-tabs { display: block; }
+.chart .ta-code__head { height: auto; min-height: 40px; padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3); }
+.chart [role="tabpanel"][hidden] { display: none; }
+.chart pre { margin: 0; padding: var(--space-4); overflow: auto; }
+.chart pre code { font: var(--type-code); white-space: pre; }
+.chart__diagram { background: var(--surface-1); }
+.chart__diagram scxml-view { display: block; min-height: 180px; }
+:root:not([data-theme="dark"]) scxml-view { --scxml-color-scheme: light; }
+[data-theme="dark"] scxml-view { --scxml-color-scheme: dark; }
+
+/* syntax: the design system's text-safe colours, which follow its theme */
+.hljs-comment, .hljs-meta { color: var(--fg-3); font-style: italic; }
+.hljs-keyword, .hljs-built_in, .hljs-literal, .hljs-attr { color: var(--accent-fg); }
+.hljs-string, .hljs-regexp, .hljs-template-variable { color: var(--state-waiting); }
+.hljs-number, .hljs-name, .hljs-tag, .hljs-selector-tag { color: var(--state-done); }
+.hljs-title, .hljs-title.function_, .hljs-title.class_ { color: var(--fg-1); font-weight: var(--fw-medium); }
+.hljs-variable, .hljs-params, .hljs-property { color: var(--fg-1); }
+.hljs-punctuation, .hljs-operator { color: var(--fg-2); }
+.hljs-subst { color: inherit; }
+
 /* ---------------------------------------------------- live examples */
 
 .live { display: grid; gap: var(--space-3); }

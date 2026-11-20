@@ -24,6 +24,8 @@
 
   <xsl:output method="html" html-version="5" indent="no"/>
 
+  <xsl:variable name="importmap" as="xs:string" select="'{&quot;imports&quot;: {&quot;@tinyactors/wasm&quot;: &quot;/vendor/tinyactors-wasm/index.mjs&quot;, &quot;@tinyactors/scxmljs&quot;: &quot;/vendor/scxmljs/dist/index.js&quot;, &quot;@tinyactors/scxmljs/view&quot;: &quot;/vendor/scxmljs/dist/view.js&quot;, &quot;@tinyactors/scxmljs/trusted&quot;: &quot;/vendor/scxmljs/dist/trusted.js&quot;, &quot;quickjs-emscripten-core&quot;: &quot;/vendor/quickjs-emscripten-core/dist/index.mjs&quot;, &quot;@jitl/quickjs-singlefile-browser-release-sync&quot;: &quot;/vendor/quickjs-singlefile-browser-release-sync/dist/index.mjs&quot;, &quot;@jitl/quickjs-ffi-types&quot;: &quot;/vendor/quickjs-ffi-types/dist/index.mjs&quot;}}'"/>
+
   <xsl:variable name="site" select="/s:site"/>
   <xsl:variable name="origin" select="string($site/@origin)"/>
   <xsl:variable name="pages" as="element(s:page)*"
@@ -102,12 +104,19 @@
         <link rel="icon" href="/assets/brand/favicon.ico" sizes="any"/>
         <link rel="apple-touch-icon" href="/assets/brand/apple-touch-icon.png"/>
         <link rel="stylesheet" href="/assets/site.css"/>
+        <!-- The vendored packages by their names, as a reader's code imports them (mise/website.rb, VENDOR). -->
+        <script type="importmap">{$importmap}</script>
         <xsl:if test=".//s:install[count(s:command) gt 1]">
           <script type="module" src="/assets/components/tabs.mjs"></script>
         </xsl:if>
+        <xsl:if test=".//s:code[@language = 'scxml' and @src]">
+          <link rel="stylesheet" href="/vendor/scxmljs/dist/themes/tinyactors.css"/>
+          <script type="module" src="/assets/components/chart.mjs"></script>
+        </xsl:if>
+        <xsl:if test=".//s:code[not(@role = 'output') and not(@language = 'text')]">
+          <script type="module" src="/assets/components/highlight.mjs"></script>
+        </xsl:if>
         <xsl:if test=".//s:live">
-          <!-- The live examples import the package by its name, as a reader's code does. -->
-          <script type="importmap">{'{"imports": {"@tinyactors/wasm": "/vendor/tinyactors-wasm/index.mjs"}}'}</script>
           <script type="module" src="/assets/components/live.mjs"></script>
         </xsl:if>
         <!-- The design system's dark theme is [data-theme="dark"]; follow the reader's setting. -->
@@ -222,6 +231,26 @@
 
   <!-- Code, in the design system's code block: a head naming the file (or
        "output"), then the text as written. -->
+  <!-- A chart read from a file: its document, or the whole chart as an
+       interactive diagram (scxmljs's <scxml-view>, made when the tab is
+       first shown: components/chart.mjs). -->
+  <xsl:template match="s:code[@language = 'scxml' and @src][parent::s:section or parent::s:example]" priority="2">
+    <xsl:variable name="id" select="generate-id()"/>
+    <ta-tabs class="ta-code code chart">
+      <div class="ta-code__head">
+        <span>{(@file, @language)[1]}</span>
+        <div role="tablist" class="ta-tabs ta-tabs--segmented chart__views" aria-label="View">
+          <button type="button" role="tab" class="ta-tab" id="{$id}-tab-1" aria-controls="{$id}-panel-1" aria-selected="true" tabindex="0">Document</button>
+          <button type="button" role="tab" class="ta-tab" id="{$id}-tab-2" aria-controls="{$id}-panel-2" aria-selected="false" tabindex="-1">Diagram</button>
+        </div>
+      </div>
+      <div role="tabpanel" id="{$id}-panel-1" aria-labelledby="{$id}-tab-1">
+        <pre tabindex="0"><code data-language="{@language}">{f:code(.)}</code></pre>
+      </div>
+      <div role="tabpanel" id="{$id}-panel-2" aria-labelledby="{$id}-tab-2" class="chart__diagram" data-src="{f:url(@src)}" hidden="hidden"></div>
+    </ta-tabs>
+  </xsl:template>
+
   <xsl:template match="s:code[parent::s:section or parent::s:example]">
     <figure class="ta-code code{if (@role = 'output') then ' code--output' else ''}">
       <figcaption class="ta-code__head">
@@ -230,7 +259,7 @@
           <span class="code__language">{@language}</span>
         </xsl:if>
       </figcaption>
-      <pre tabindex="0"><code>{f:code(.)}</code></pre>
+      <pre tabindex="0"><code data-language="{@language}">{f:code(.)}</code></pre>
     </figure>
   </xsl:template>
 

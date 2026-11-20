@@ -27,7 +27,8 @@ content and runs the stylesheet. Node.js runs the examples and wrangler.
 | `render/site.xsl` | content to HTML, `sitemap.xml` and `llms.txt`; it stops at a link to a page or section that does not exist |
 | `style/site.css` | the layout, on the design system's tokens |
 | `examples/` | the programs pages show, each run by `mise run test` against its `output.txt`; `examples/property/` also runs in the page (`<live>`) |
-| `components/` | the custom elements the pages use: `<ta-live>` runs an example's export in the browser, `<ta-trace-view>` draws a run's spans as a tree on a timeline |
+| `components/` | the custom elements and scripts the pages use: `<ta-tabs>` (alternatives, one at a time), `chart.mjs` (a chart's diagram), `highlight.mjs` (syntax highlighting), `<ta-live>` (an example's export run in the browser) and `<ta-trace-view>` (a run's spans as a tree on a timeline) |
+| `package.json` | what the pages load in the browser, vendored by the build into `vendor/`: `@tinyactors/scxmljs` (`<scxml-view>`, with its QuickJS) and highlight.js's browser modules; one import map on every page names them |
 | `test/` | documents the schema must refuse, and a site the build must refuse |
 | `tools/serve.mjs` | the local server |
 | `wrangler.jsonc` | the Cloudflare Worker: `build/site` as static assets on www.tinyactors.dev |
@@ -65,6 +66,11 @@ A page is a hero and sections. Each section has a heading and blocks:
 - **Code that runs is a file.** `<code src>` names a file under
   `examples/`, and the test runs that example and compares what it prints
   with its `output.txt`. So the page shows exactly the code that ran.
+- **Code is highlighted; charts can be diagrams.** Every `<code>` block
+  but output and text is highlighted in the browser, in the design
+  system's colours. An SCXML block read from a file (`<code src>`) also
+  gets a Diagram tab: the whole chart that file holds, drawn and run by
+  scxmljs's `<scxml-view>`. The choice holds for every chart on the page.
 - **A live example runs in the browser.** `<live src call>` names an
   export of a module under `examples/`, run by a button whose `<label>` is
   the content's. The build serves the module with `@tinyactors/wasm` at

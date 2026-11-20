@@ -60,6 +60,7 @@ module Website
     FileUtils.mkdir_p(SITE)
     run('sxml', 'transform', "--result-directory=#{SITE}", STYLESHEET, CONTENT.join('site.xml'))
     assets!
+    vendor!
     live!
     puts "website: built #{SITE.relative_path_from(ROOT)} (#{SITE.glob('**/*').count(&:file?)} files)"
   end
@@ -92,6 +93,37 @@ module Website
       /assets/fonts/*
         Cache-Control: public, max-age=31536000, immutable
     HEADERS
+  end
+
+  # The browser dependencies the pages load, from package.json and its
+  # lockfile, each copied to vendor/<name>/: only what a browser loads (no
+  # source maps, no typings) and its licence. The pages' import map
+  # (render/site.xsl) names their entry points.
+  VENDOR = {
+    'scxmljs' => ['@tinyactors/scxmljs', %w[LICENSE THIRD_PARTY_NOTICES dist/**/*.js dist/themes/*.css]],
+    'quickjs-emscripten-core' => ['quickjs-emscripten-core', %w[LICENSE dist/*.mjs]],
+    'quickjs-singlefile-browser-release-sync' => ['@jitl/quickjs-singlefile-browser-release-sync', %w[LICENSE dist/*.mjs]],
+    'quickjs-ffi-types' => ['@jitl/quickjs-ffi-types', %w[LICENSE dist/*.mjs]],
+    'highlight.js' => ['@highlightjs/cdn-assets', %w[LICENSE es/core.min.js es/languages/{xml,javascript,typescript,python,c,bash}.min.js]]
+  }.freeze
+
+  def vendor!
+    run('npm', 'ci', '--no-audit', '--no-fund') unless ROOT.join('node_modules/.package-lock.json').file?
+    VENDOR.each do |name, (package, globs)|
+      source = ROOT.join('node_modules', package)
+      fail!("#{package} is not installed (npm ci in website/)") unless source.directory?
+      globs.flat_map { |glob| source.glob(glob) }.each do |file|
+        target = SITE.join('vendor', name, file.relative_path_from(source))
+        FileUtils.mkdir_p(target.dirname)
+        FileUtils.cp(file, target)
+      end
+    end
+    # The charts a page shows as a diagram are served beside their examples.
+    EXAMPLES.glob('**/*.scxml').reject { |file| file.to_s.include?('/node_modules/') }.each do |file|
+      target = SITE.join('examples', file.relative_path_from(EXAMPLES))
+      FileUtils.mkdir_p(target.dirname)
+      FileUtils.cp(file, target)
+    end
   end
 
   # What the live examples need in the browser: the components, each

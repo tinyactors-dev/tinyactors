@@ -1,11 +1,13 @@
 // <ta-tabs>: alternatives that say the same thing in different words (an
-// install command per platform), one shown at a time. The page renders the
-// tablist and panels, with the first panel shown; this makes the tabs work:
-// a click or the arrow keys select a tab, and the choice holds for every
-// <ta-tabs> on the page with a tab of the same name, and for the next page
-// (localStorage, when the browser keeps it).
+// install command per platform, a chart as a document or a diagram), one
+// shown at a time. The page renders the tablist and panels, with the first
+// panel shown; this makes the tabs work: a click or the arrow keys select a
+// tab, and the choice holds for every <ta-tabs> on the page whose tablist
+// has the same name (its aria-label), and for the next page (localStorage,
+// when the browser keeps it). Showing a panel dispatches `ta-panel-shown`
+// on it, so what a panel holds can load when it is first seen.
 
-const KEY = 'tinyactors.tab';
+const KEY = 'tinyactors.tab.';
 
 class Tabs extends HTMLElement {
   connectedCallback() {
@@ -13,21 +15,26 @@ class Tabs extends HTMLElement {
     if (tabs.length === 0 || this.dataset.ready) return;
     this.dataset.ready = 'true';
     tabs.forEach((tab, index) => {
-      tab.addEventListener('click', () => choose(tab.textContent));
+      tab.addEventListener('click', () => choose(this.group(), tab.textContent));
       tab.addEventListener('keydown', (event) => {
         const step = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
         if (!step) return;
         const next = tabs[(index + step + tabs.length) % tabs.length];
-        choose(next.textContent);
+        choose(this.group(), next.textContent);
         next.focus();
       });
     });
-    const saved = read();
+    const saved = read(this.group());
     if (saved) this.select(saved);
   }
 
   tabs() {
     return [...this.querySelectorAll('[role="tab"]')];
+  }
+
+  /** The name of the tablist: tabs of one name choose together. */
+  group() {
+    return this.querySelector('[role="tablist"]')?.getAttribute('aria-label') ?? '';
   }
 
   /** Shows the panel of the tab named `name`; nothing when there is none. */
@@ -38,23 +45,25 @@ class Tabs extends HTMLElement {
       const selected = tab.textContent === name;
       tab.setAttribute('aria-selected', String(selected));
       tab.tabIndex = selected ? 0 : -1;
-      this.querySelector(`#${CSS.escape(tab.getAttribute('aria-controls'))}`).hidden = !selected;
+      const panel = this.querySelector(`#${CSS.escape(tab.getAttribute('aria-controls'))}`);
+      panel.hidden = !selected;
+      if (selected) panel.dispatchEvent(new CustomEvent('ta-panel-shown', { bubbles: true }));
     }
   }
 }
 
-function choose(name) {
-  for (const tabs of document.querySelectorAll('ta-tabs')) tabs.select(name);
+function choose(group, name) {
+  for (const tabs of document.querySelectorAll('ta-tabs')) if (tabs.group() === group) tabs.select(name);
   try {
-    localStorage.setItem(KEY, name);
+    localStorage.setItem(KEY + group, name);
   } catch {
     // a private window, or storage turned off: the choice holds on this page
   }
 }
 
-function read() {
+function read(group) {
   try {
-    return localStorage.getItem(KEY);
+    return localStorage.getItem(KEY + group);
   } catch {
     return null;
   }
