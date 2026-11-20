@@ -1,0 +1,21 @@
+[//tinyactors-cpython:amalgamate] sources up-to-date, skipping
+[//tinyactors-cpython:build] $ /home/user/tinyactors/tinyactors-cpython/mise/tasks/build
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+build: build/abi3/tinyactors.abi3.so
+build: build/free-threaded/tinyactors.cpython-314t-x86_64-linux-gnu.so
+[//tinyactors-cpython:snapshot] $ /home/user/tinyactors/tinyactors-cpython/mise/tasks/snapshot --actors 100000 --resident 100000
+snapshot: python, 100000 actors, 100000 resident, 200000 events
+live: 100000 actors and 200000 events in 1.4 s; 100000 resident with a delayed send, 50000 of them paying; 0 hibernated
+snapshot: 60.1 MB in 0.46 s (601 B an actor); the store copied
+restore: in 0.30 s; 50000 payments in flight started again on the stand-in
+rehearse: 100000 actors to version 2 in 2.1 s, 200000 events meanwhile, 0 loaded from the copy's store
+verify: 25074 actors on each host, 0 wrong on the copy, 0 on the live host
+memory: peak resident 440 MB (4396 B an actor, both hosts); region 49.0 MB live, 49.0 MB the copy (490 B an actor); at most 100000 actors resident after a turn
+snapshot: ecmascript, 100000 actors, 100000 resident, 200000 events
+live: 100000 actors and 200000 events in 2.2 s; 100000 resident with a delayed send, 50000 of them paying; 0 hibernated
+snapshot: 63.7 MB in 1.10 s (637 B an actor); the store copied
+restore: in 0.74 s; 50000 payments in flight started again on the stand-in
+rehearse: 100000 actors to version 2 in 2.9 s, 200000 events meanwhile, 0 loaded from the copy's store
+verify: 25074 actors on each host, 0 wrong on the copy, 0 on the live host
+memory: peak resident 630 MB (6295 B an actor, both hosts); region 49.0 MB live, 49.0 MB the copy (490 B an actor); at most 100000 actors resident after a turn
+Finished in 22.04s

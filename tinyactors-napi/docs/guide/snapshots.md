@@ -165,28 +165,31 @@ events come and runs its clock past the delayed sends, while the live
 host goes on with events of its own and its payments still in flight. The
 copy never reaches the real service.
 
-One run of it (2026-10-16, x86_64 Linux 6.18, Intel Xeon @ 2.10GHz, 4
-CPUs, 16 GiB; node 22.23.3, bun 1.4.1), with two million actors, at most
-1000 resident, 200,000 events before the snapshot and 200,000 more on
-each host after it; then 100,000 actors all resident, so the datamodel's
-own state is most of the snapshot. Every run passed its checks: the
-copy's snapshot was the same bytes, and the copy migrated every actor to
-version 2 (2,018,400 wakes from its store at two million). All 25,000
-sampled actors had their counts, delayed sends and versions on both
-hosts, the live store held only the live host's blobs, and after every
-eviction at most R actors were resident.
+Two runs of it, each alone on the machine (2026-11-20; Intel Xeon @
+2.10GHz, 4 CPUs, 16 GiB, Linux; node 22.23.5, bun 1.4.1): two million
+actors, at most 1000 resident, 200,000 events before the snapshot and
+200,000 more on each host after it; then 100,000 actors all resident, so
+the datamodel's own state is a large part of the snapshot. Every run
+passed its checks: the copy's snapshot was the same bytes, and the copy
+migrated every actor to version 2 (3,688,631 loads from its store at two
+million). Every sampled actor had its count, delayed send and version on
+both hosts, the live store held only the live host's blobs, and after
+every turn at most R actors were resident.
 
 | runtime, datamodel | actors, resident | snapshot | taken | restored | migrate on the copy | peak resident (both hosts) |
 |---|---|---|---|---|---|---|
-| node, native | 2,000,000, 1000 | 116.2 MB (58 B per actor) | 0.11 s | 0.55 s | 172.4 s | 934 MB |
-| node, quickjs | 2,000,000, 1000 | 116.1 MB (58 B per actor) | 0.09 s | 0.09 s | 125.7 s | 851 MB |
-| bun, native | 2,000,000, 1000 | 116.2 MB (58 B per actor) | 0.10 s | 0.08 s | 144.9 s | 1018 MB |
-| bun, quickjs | 2,000,000, 1000 | 116.1 MB (58 B per actor) | 0.09 s | 0.07 s | 111.8 s | 937 MB |
-| node, native | 100,000, 100,000 | 65.9 MB (659 B per actor) | 0.76 s | 3.42 s | 5.0 s | 817 MB |
-| node, quickjs | 100,000, 100,000 | 60.9 MB (609 B per actor) | 0.90 s | 0.74 s | 3.6 s | 638 MB |
-| bun, native | 100,000, 100,000 | 65.9 MB (659 B per actor) | 0.62 s | 1.13 s | 4.6 s | 1106 MB |
-| bun, quickjs | 100,000, 100,000 | 60.9 MB (609 B per actor) | 0.86 s | 0.61 s | 3.3 s | 742 MB |
+| node, native | 2,000,000, 1000 | 165.0 MB (82 B per actor) | 0.14 s | 0.14 s | 244.9 s | 1261 MB |
+| node, quickjs | 2,000,000, 1000 | 164.9 MB (82 B per actor) | 0.14 s | 0.14 s | 205.7 s | 1177 MB |
+| bun, native | 2,000,000, 1000 | 165.0 MB (82 B per actor) | 0.12 s | 0.21 s | 208.1 s | 1534 MB |
+| bun, quickjs | 2,000,000, 1000 | 164.9 MB (82 B per actor) | 0.11 s | 0.19 s | 185.9 s | 1559 MB |
+| node, native | 100,000, 100,000 | 69.5 MB (695 B per actor) | 0.65 s | 2.00 s | 5.0 s | 522 MB |
+| node, quickjs | 100,000, 100,000 | 63.7 MB (637 B per actor) | 1.01 s | 0.67 s | 3.4 s | 724 MB |
+| bun, native | 100,000, 100,000 | 69.5 MB (695 B per actor) | 0.51 s | 1.05 s | 4.2 s | 941 MB |
+| bun, quickjs | 100,000, 100,000 | 63.7 MB (637 B per actor) | 1.06 s | 0.71 s | 3.5 s | 800 MB |
 
-Core's region is 58 B an actor with most of them hibernated and 469 B
-all resident; the native datamodel's rows take about 50 B an actor more
-than quickjs's state in a snapshot of resident actors.
+Core's region is 82 B an actor with most of them hibernated and 490 B
+all resident; the native datamodel's rows take about 58 B an actor more
+than quickjs's state in a snapshot of resident actors. The logs are in
+`tools/results/2026-11-20/` in the repository (`snapshot.log`,
+`snapshot-resident.log`), and the root `AGENTS.md` ("Published
+numbers") says when to run it again.

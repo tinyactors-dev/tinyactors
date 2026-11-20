@@ -1063,6 +1063,8 @@ service. Both hosts ran in one process.
 |---|---|---|---|---|---|---|---|---|
 | `"python"` | 2,000,000 | 1000 | 164.9 MB (82 B per actor) | 0.11 s | 0.11 s | 163.9 s | 843 MB | yes |
 | quickjs | 2,000,000 | 1000 | 164.9 MB (82 B per actor) | 0.11 s | 0.11 s | 172.5 s | 837 MB | yes |
+| `"python"` | 100,000 | all | 60.1 MB (601 B per actor) | 0.46 s | 0.30 s | 2.1 s | 440 MB | yes |
+| quickjs | 100,000 | all | 63.7 MB (637 B per actor) | 1.10 s | 0.74 s | 2.9 s | 630 MB | yes |
 
 A snapshot is mostly the region, as the config sized it. Migrating the
 copy is the store's work: each hibernated actor is loaded, moved and
