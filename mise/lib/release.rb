@@ -567,6 +567,11 @@ module Release
     if branches_only?
       puts "release: #{repository}'s workflow tags #{release_tag} and makes its GitHub release " \
            "(https://github.com/#{repository}/actions)"
+      # origin's tag is the workflow's, a tag object of its own: the local
+      # one, kept until here for the push, the snapshot and --resume, would
+      # make every later `git fetch --tags` refuse ("would clobber existing
+      # tag"), and with it the next release's check_tree!.
+      run('git', 'tag', '--delete', tag)
       return
     end
     if released?(repository, release_tag)

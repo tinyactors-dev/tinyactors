@@ -83,7 +83,9 @@ release from the same file. A project with its own
 registry; every other snapshot carries `mise/release-repository/release.yml`,
 and the release first pushes its files to the release repository's branch
 `release-assets/v<version>`, which that workflow releases, checks against
-`SHA256SUMS` and deletes. The workflows write no notes. npm
+`SHA256SUMS` and deletes. The workflows write no notes, and their
+tags are the ones that count: the release deletes its local tag once it
+has pushed, so a later `git fetch --tags` does not refuse it. npm
 packages are published staged: the maintainer approves them on npmjs.com.
 Tokens come from 1Password: `fnox.toml` names the items, fnox and the
 1Password CLI are pinned in `mise.toml`, and the environment holds only
