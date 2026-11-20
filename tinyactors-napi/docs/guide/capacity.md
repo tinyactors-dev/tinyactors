@@ -115,37 +115,59 @@ actor; read `slabBytes.highWater` under load to see.
 
 ## What an actor costs
 
-To measure your own case, run the [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory) from the
-repository. It prints what an actor, a message and a delayed send cost
-on your runtime and datamodel, for your chart and your data, in whole
-bytes.
+The [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory) measures what one more actor, message and
+delayed send costs in a process: its resident memory, the host
+included. Run it for your runtime, datamodel, chart and data:
 
-Measured with `mise run measure` in the repository (2026-10-17, x86_64
-Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3, bun
-1.4.1): 10,000 actors of a chart with three `<data>`, one of them a list,
-resident and idle, in bytes per actor.
+```sh
+node examples/memory/main.mjs --counts 1000000 --datamodel native
+```
 
-| runtime, datamodel | resident | engine heap | region | after one event: resident | heap |
+One run of it (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
+node 22.23.5, bun 1.4.1; a counter chart with one `<data>`, messages of
+`{"text": "hello"}`, tracing on). The hibernated row keeps at most 1000
+actors resident and the rest in a store.
+
+| runtime, datamodel | actor, started | actor, after an event | actor, hibernated | message waiting | delayed send pending |
 |---|---|---|---|---|---|
-| node, native | 1188 | 197 | 287 | 1589 | 281 |
-| node, quickjs | 891 | 10 | 287 | 1363 | 11 |
-| bun, native | 1632 | 255 | 287 | 2602 | 345 |
-| bun, quickjs | 1195 | 24 | 287 | 1602 | 24 |
+| node, native | 531 B | 671 B | 124 B | 315 B | 357 B |
+| bun, native | 618 B | 800 B | 101 B | 386 B | 456 B |
+| node, quickjs | 1041 B | 1639 B | 97 B | 312 B | 364 B |
+| bun, quickjs | 1049 B | 1653 B | 99 B | 318 B | 364 B |
 
-The engine heap is what the JavaScript engine reports after a full
-collection; on quickjs the sandbox's own heap is in "resident" only, and
-it is bounded by `quickjs.memoryLimit`, 1 GiB unless the host sets
-another: about 2.8 KB an idle resident actor, so a host meant to keep
-hundreds of thousands of quickjs actors resident raises it
-([the quickjs sandbox](quickjs.md#the-limits)). The
-rest of resident is mostly the engine's fixed cost, which a larger
-population spreads thinner: at 40,000 actors the native datamodel is
-about 750 bytes resident on Node.js and 970 on Bun. The region here was
-sized up front (`maxActors`). What a chart's scripts declare adds
-nothing per actor: its helpers are the chart's, made once, and a
-top-level `var` is one more variable ([Writing charts](charts.md#scripts)).
-A hibernated actor
-costs about 60 bytes in the host and its blob in your store.
+The fixed costs of a host and of the engine spread over the population,
+so an actor costs less in a larger one. Node on the native datamodel:
+
+| | 10,000 | 100,000 | 1,000,000 | 2,000,000 | 4,000,000 |
+|---|---|---|---|---|---|
+| per actor, started | 1327 B | 774 B | 531 B | 519 B | 501 B |
+| per actor, after an event | 1956 B | 920 B | 671 B | 665 B | 644 B |
+| per actor, hibernated | 1147 B | 326 B | 124 B | 103 B | 92 B |
+| per message waiting | 1146 B | 444 B | 315 B | 296 B | 286 B |
+| per delayed send pending | 1296 B | 544 B | 357 B | 341 B | 332 B |
+
+Each row's data, at every population and on every runtime, is in
+[the run's CSV](https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-20.csv), for a chart of your own.
+
+- **A started actor** holds its variables in the datamodel and its
+  records in the core: 196 B for this chart at a million (81 B, its
+  instance and its strings).
+- **After an event** an actor keeps that event as `_event` until the
+  next one.
+- **A hibernated actor** keeps its core records only, 81 B to 89 B, and
+  its blob is in your store (145 B on the native datamodel, 147 B on
+  quickjs, for this chart).
+- **A message** costs 106 B in the core (57 B with tracing off) and its
+  data in the datamodel. **A delayed send** holds its message until it
+  falls due: 151 B in the core (102 B with tracing off).
+- **quickjs** keeps every actor's variables in its own heap, bounded by
+  `quickjs.memoryLimit`, 1 GiB unless the host sets another. A million
+  resident actors after an event need about 1.2 GB of it, so the run
+  above sets 8 GiB ([the quickjs sandbox](quickjs.md#the-limits)).
+
+What a chart's scripts declare adds nothing per actor: its helpers are
+the chart's, made once, and a top-level `var` is one more variable
+([Writing charts](charts.md#scripts)).
 
 ## Work does not grow with the population
 
