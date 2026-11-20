@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A room. It keeps its members and sends each post to all of them. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="python" name="room" initial="open">
+  <datamodel>
+    <data id="members" expr="[]"/>
+  </datamodel>
+  <state id="open">
+    <transition event="join">
+      <assign location="members" expr="members + [_event.data['user']]"/>
+    </transition>
+    <transition event="post">
+      <send type="chat:client" event="message">
+        <content expr="{'to': members, 'from': _event.data['user'], 'text': _event.data['text']}"/>
+      </send>
+    </transition>
+  </state>
+</scxml>

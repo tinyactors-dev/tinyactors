@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A room. A user actor joins it, and it sends each post to each member. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="python" name="room" initial="open">
+  <datamodel>
+    <data id="name"/>
+    <data id="members" expr="[]"/>
+  </datamodel>
+  <state id="open">
+    <transition event="join">
+      <assign location="members" expr="members + [_event.data['user']]"/>
+      <send targetexpr="_event.origin" event="joined"><content expr="{'room': name}"/></send>
+    </transition>
+    <transition event="post">
+      <foreach array="members" item="member">
+        <send targetexpr="'tinyactors://chat/@user.' + member" event="message">
+          <content expr="{'room': name, 'from': _event.data['user'], 'text': _event.data['text']}"/>
+        </send>
+      </foreach>
+    </transition>
+  </state>
+</scxml>

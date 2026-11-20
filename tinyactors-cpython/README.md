@@ -116,6 +116,10 @@ Step by step:
    `run_until_idle()` a second time. Under asyncio, `await
    greeter.context()` gives it.
 
+The [chat tutorial](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-cpython/examples/chat-tutorial) goes on from here in five steps: a room,
+users with presence, a workspace that makes the rooms, a status roster,
+and hibernation.
+
 ## How a host runs
 
 A host never runs on its own. Your program drives it, and each run
@@ -646,6 +650,10 @@ Values that leave the process are encoded by your program (below,
   value table.
 
 ## Example applications
+
+[The chat tutorial](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-cpython/examples/chat-tutorial) builds a chat in
+five steps, each a program you can run: a room, users with presence, a
+workspace that makes the rooms, a status roster, and hibernation.
 
 [examples/chat](examples/chat/) is a chat server: workspaces, rooms and
 connections as actors, charts with `.py` helpers, one I/O processor per

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A user. It tracks presence: offline, active or away.
+     An active user turns away after 300 seconds without activity.
+     An online user shows each message on the user's screen. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="python" name="user" initial="offline">
+  <datamodel>
+    <data id="name"/>
+  </datamodel>
+  <state id="offline">
+    <onentry>
+      <send type="chat:client" event="status"><content expr="{'user': name, 'status': 'offline'}"/></send>
+    </onentry>
+    <transition event="connect" target="online"/>
+  </state>
+  <state id="online" initial="active">
+    <transition event="disconnect" target="offline"/>
+    <transition event="message">
+      <send type="chat:client" event="message">
+        <content expr="{'to': name, 'from': _event.data['from'], 'text': _event.data['text']}"/>
+      </send>
+    </transition>
+    <state id="active">
+      <onentry>
+        <send type="chat:client" event="status"><content expr="{'user': name, 'status': 'active'}"/></send>
+        <send id="idle" event="idle" delay="300s"/>
+      </onentry>
+      <onexit><cancel sendid="idle"/></onexit>
+      <transition event="activity">            <!-- no target: the state stays, the timer starts again -->
+        <cancel sendid="idle"/>
+        <send id="idle" event="idle" delay="300s"/>
+      </transition>
+      <transition event="idle" target="away"/>
+    </state>
+    <state id="away">
+      <onentry>
+        <send type="chat:client" event="status"><content expr="{'user': name, 'status': 'away'}"/></send>
+      </onentry>
+      <transition event="activity" target="active"/>
+    </state>
+  </state>
+</scxml>
