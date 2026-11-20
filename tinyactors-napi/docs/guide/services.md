@@ -298,8 +298,8 @@ keep theirs. It checks that every pong is counted once, every done datum
 is right, every cancelled service was stopped once and no other, and the
 ended services are collected.
 
-One run of it (2026-10-16, x86_64 Linux 6.18, Intel Xeon @ 2.10GHz, 4
-CPUs, 16 GiB; node 22.23.3, bun 1.4.1). 200,000 actors, each with a
+One run of it, alone on the machine (2026-11-20; Intel Xeon @ 2.10GHz,
+4 CPUs, 16 GiB, Linux; node 22.23.5, bun 1.4.1). 200,000 actors, each with a
 counter service, made 1,000,000 round trips (actor, service, actor); then
 a third finished with done data and a third were cancelled. In every run
 every pong and done datum was right, every cancelled service was stopped
@@ -308,10 +308,10 @@ still running.
 
 | runtime, datamodel | start 200,000 invocations | 1,000,000 round trips | end (done, cancel) | peak resident | core's region |
 |---|---|---|---|---|---|
-| node, native | 5.0 s (40,000 a second) | 27.2 s (37,000 a second) | 2.1 s | 575 MB (2875 B per actor and service) | 50.3 MB (251 B per actor) |
-| node, quickjs | 4.0 s (50,000 a second) | 22.4 s (45,000 a second) | 2.3 s | 698 MB (3491 B per actor and service) | 61.8 MB (309 B per actor) |
-| bun, native | 3.9 s (52,000 a second) | 20.7 s (48,000 a second) | 1.9 s | 843 MB (4214 B per actor and service) | 50.3 MB (251 B per actor) |
-| bun, quickjs | 3.1 s (64,000 a second) | 19.0 s (53,000 a second) | 1.6 s | 766 MB (3830 B per actor and service) | 61.8 MB (309 B per actor) |
+| node, native | 4.4 s (45,000 a second) | 23.0 s (43,000 a second) | 1.8 s | 516 MB (2578 B per actor and service) | 54.6 MB (273 B per actor) |
+| node, quickjs | 3.7 s (54,000 a second) | 22.3 s (45,000 a second) | 2.1 s | 712 MB (3560 B per actor and service) | 66.1 MB (330 B per actor) |
+| bun, native | 3.5 s (57,000 a second) | 19.0 s (53,000 a second) | 1.6 s | 767 MB (3834 B per actor and service) | 54.6 MB (273 B per actor) |
+| bun, quickjs | 2.7 s (73,000 a second) | 18.2 s (55,000 a second) | 1.8 s | 807 MB (4036 B per actor and service) | 66.1 MB (330 B per actor) |
 
 A round trip costs about what it costs with 10,000 actors: a run's work
 does not grow with the number of running invocations.
