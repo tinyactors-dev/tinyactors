@@ -1,0 +1,4 @@
+1000 worlds: every property held
+seed 10: [silence, silence, silence, silence, silence, answer] breaks never more than three charges, gives up only after three charges
+shrunk to []: 4 charges, failed
+its trace: bootstrap → timeout → timeout → timeout → timeout

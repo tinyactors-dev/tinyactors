@@ -5,6 +5,7 @@
 
   <nav>
     <link to="chat">Tutorial</link>
+    <link to="property-testing">Property testing</link>
     <link href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Node.js</link>
     <link href="https://github.com/tinyactors-dev/tinyactors-cpython#readme">Python</link>
     <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
@@ -13,6 +14,7 @@
   <pages>
     <page src="pages/home.xml"/>
     <page src="pages/chat.xml"/>
+    <page src="pages/property-testing.xml"/>
     <page src="pages/404.xml"/>
   </pages>
 

@@ -60,6 +60,7 @@ module Website
     FileUtils.mkdir_p(SITE)
     run('sxml', 'transform', "--result-directory=#{SITE}", STYLESHEET, CONTENT.join('site.xml'))
     assets!
+    live!
     puts "website: built #{SITE.relative_path_from(ROOT)} (#{SITE.glob('**/*').count(&:file?)} files)"
   end
 
@@ -91,6 +92,33 @@ module Website
       /assets/fonts/*
         Cache-Control: public, max-age=31536000, immutable
     HEADERS
+  end
+
+  # What the live examples need in the browser: the components, each
+  # example a page runs (its modules and charts), and the package they
+  # import, @tinyactors/wasm at the version the examples' lockfiles pin,
+  # which the pages' import map names.
+  def live!
+    FileUtils.mkdir_p(SITE.join('assets/components'))
+    ROOT.glob('components/*.mjs').each { |file| FileUtils.cp(file, SITE.join('assets/components')) }
+    examples = documents.flat_map { |document| document.read.scan(/<live\s[^>]*src="[^"]*examples\/([^\/"]+)\//).flatten }.uniq
+    vendored = nil
+    examples.each do |name|
+      dir = EXAMPLES.join(name)
+      run('npm', 'ci', '--no-audit', '--no-fund', chdir: dir) unless dir.join('node_modules/.package-lock.json').file?
+      FileUtils.mkdir_p(SITE.join('examples', name))
+      dir.glob('*.{mjs,scxml}').each { |file| FileUtils.cp(file, SITE.join('examples', name)) }
+      package = dir.join('node_modules/@tinyactors/wasm')
+      version = package.join('package.json').read[/"version":\s*"([^"]+)"/, 1]
+      fail!("examples/#{name} uses @tinyactors/wasm #{version}, another example #{vendored}") if vendored && vendored != version
+      next if vendored
+
+      vendored = version
+      target = SITE.join('vendor/tinyactors-wasm')
+      FileUtils.mkdir_p(target)
+      %w[index.mjs lib tinyactors.wasm LICENSE].each { |entry| FileUtils.cp_r(package.join(entry), target) }
+    end
+    puts "website: #{examples.size} live examples, @tinyactors/wasm #{vendored}" unless examples.empty?
   end
 
   # A deterministic .tar.gz of build/site as `website-<version>/`: sorted

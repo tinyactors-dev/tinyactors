@@ -35,6 +35,9 @@
       <code src="../../examples/simulate/output.txt" language="text" role="output"/>
       <caption>Change <code>attempts &lt; 3</code> to <code>attempts &lt; 4</code> and seed 10 fails: <code>charged 4 times</code>. The seed reproduces the run that found it.</caption>
     </example>
+    <actions>
+      <action to="property-testing">Property test a chart, step by step</action>
+    </actions>
   </section>
 
   <section id="why">

@@ -1,0 +1,9 @@
+{
+  "name": "tinyactors-website-example-property",
+  "private": true,
+  "type": "module",
+  "description": "The property testing guide: property.mjs runs the payment chart on @tinyactors/wasm, in Node.js (main.mjs, which test/examples runs against output.txt) and in the page (live.mjs).",
+  "dependencies": {
+    "@tinyactors/wasm": "0.4.0"
+  }
+}

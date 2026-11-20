@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the website: the content against its schema, the refusals the schema and the build must make, the build's internal links and anchors, and every example a page shows, run"
-#MISE sources=["content/**/*", "schema/**/*", "render/**/*", "style/**/*", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE sources=["content/**/*", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -16,6 +16,9 @@
 #    what it prints compared with its output.txt, which the page shows.
 #    A page's code is these files themselves (<code src>), so what a page
 #    shows is what ran here.
+# 5. test/components.mjs: the trace view's tree, time format and axis. The
+#    components' rendering, and the live examples in a page, run in a
+#    browser, which this task does not start.
 
 require_relative '../website'
 require 'tmpdir'
@@ -93,6 +96,11 @@ programs.each do |dir|
   end
 end
 puts "website: #{programs.size} example programs ran and printed their output.txt"
+
+# 5. The components' pure parts (their rendering runs in a browser).
+out, ok = Website.capture('node', Website::ROOT.join('test/components.mjs'))
+failures << "test/components.mjs failed:\n#{out}" unless ok
+puts "website: #{out.strip}" if ok
 
 unless failures.empty?
   warn failures.map { |failure| "website: #{failure}" }.join("\n")

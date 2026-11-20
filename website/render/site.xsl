@@ -102,6 +102,11 @@
         <link rel="icon" href="/assets/brand/favicon.ico" sizes="any"/>
         <link rel="apple-touch-icon" href="/assets/brand/apple-touch-icon.png"/>
         <link rel="stylesheet" href="/assets/site.css"/>
+        <xsl:if test=".//s:live">
+          <!-- The live examples import the package by its name, as a reader's code does. -->
+          <script type="importmap">{'{"imports": {"@tinyactors/wasm": "/vendor/tinyactors-wasm/index.mjs"}}'}</script>
+          <script type="module" src="/assets/components/live.mjs"></script>
+        </xsl:if>
         <!-- The design system's dark theme is [data-theme="dark"]; follow the reader's setting. -->
         <script>if (matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';</script>
       </head>
@@ -232,6 +237,21 @@
     </figure>
   </xsl:template>
 
+  <!-- A live example: the button runs the module's export; until the
+       components load, it stays disabled. -->
+  <xsl:template match="s:live">
+    <ta-live class="live" src="{f:url(@src)}" call="{@call}">
+      <p class="live__run">
+        <button type="button" class="ta-btn ta-btn--primary" disabled="disabled">{normalize-space(s:label)}</button>
+        <span class="live__status" aria-live="polite"></span>
+      </p>
+      <figure class="ta-code code code--output live__output" hidden="hidden">
+        <figcaption class="ta-code__head"><span>output</span><span class="code__language">in your browser</span></figcaption>
+        <pre tabindex="0"><code></code></pre>
+      </figure>
+    </ta-live>
+  </xsl:template>
+
   <xsl:template match="s:example">
     <div class="example">
       <xsl:apply-templates select="s:code"/>
@@ -310,6 +330,12 @@
   <xsl:function name="f:file" as="xs:string">
     <xsl:param name="path" as="xs:string"/>
     <xsl:sequence select="if (ends-with($path, '/')) then substring($path, 2) || 'index.html' else substring($path, 2) || '.html'"/>
+  </xsl:function>
+
+  <!-- Where the site serves a file of examples/. -->
+  <xsl:function name="f:url" as="xs:string">
+    <xsl:param name="src" as="xs:string"/>
+    <xsl:sequence select="replace($src, '^.*?examples/', '/examples/')"/>
   </xsl:function>
 
   <xsl:function name="f:href" as="xs:string">

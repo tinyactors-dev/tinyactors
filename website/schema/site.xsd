@@ -142,8 +142,29 @@
       <xs:element ref="claims"/>
       <xs:element ref="install"/>
       <xs:element ref="actions"/>
+      <xs:element ref="live"/>
     </xs:choice>
   </xs:group>
+
+  <xs:element name="live">
+    <xs:annotation><xs:documentation>
+      An example that runs in the reader's browser. `src` names a module
+      under examples/ (the build serves it with the packages it imports),
+      and `call` one of its exports, which a button runs: its label is the
+      `label`. What the export answers is shown as the run's output, and the
+      spans of a traced run as a trace view. The module's code is tested
+      like any example's: the same functions run in Node.js under
+      `mise run test`.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="label" type="plain"/>
+      </xs:sequence>
+      <xs:attribute name="src" type="path" use="required"/>
+      <xs:attribute name="call" type="xs:NCName" use="required"/>
+      <xs:assert test="contains(@src, 'examples/') and ends-with(@src, '.mjs')"/>
+    </xs:complexType>
+  </xs:element>
 
   <xs:element name="list">
     <xs:annotation><xs:documentation>

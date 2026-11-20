@@ -106,6 +106,53 @@ p code, li code, h1 code, h2 code, h3 code, figcaption code {
 .claim__sources { margin-top: auto; padding-top: var(--space-3); border-top: 1px solid var(--border-1); font: var(--type-body-sm); color: var(--fg-3); }
 .claim__label { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; margin-right: var(--space-2); }
 
+/* ---------------------------------------------------- live examples */
+
+.live { display: grid; gap: var(--space-3); }
+.live__run { display: flex; align-items: center; gap: var(--space-3); }
+.live__status { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--fg-3); }
+.live__output[hidden] { display: none; }
+
+/* <ta-trace-view>: a span tree on a timeline */
+.trace { display: block; border: 1px solid var(--border-1); border-radius: var(--radius-2); background: var(--surface-1); }
+.trace__scroll { overflow-x: auto; }
+.trace__table { min-width: 720px; font: var(--type-body-sm); }
+.trace__row { display: flex; border-bottom: 1px solid var(--border-1); min-height: 30px; }
+.trace__row:last-child { border-bottom: 0; }
+.trace__row--axis { position: sticky; top: 0; background: var(--surface-2); font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--fg-3); }
+.trace__row--axis .trace__name { padding: var(--space-2) var(--space-3); }
+.trace__row--selected { background: var(--accent-subtle); }
+.trace__row--error { box-shadow: inset 3px 0 0 var(--state-error); }
+.trace__name { width: 46%; min-width: 300px; flex: none; display: flex; align-items: center; gap: var(--space-1); padding-right: var(--space-2); }
+.trace__bars { position: relative; flex: 1; border-left: 1px solid var(--border-1); }
+.trace__tick { position: absolute; top: var(--space-2); transform: translateX(4px); white-space: nowrap; font: 400 11px/1 var(--font-mono); letter-spacing: 0; text-transform: none; }
+.trace__tick::before { content: ""; position: absolute; left: -4px; top: calc(-1 * var(--space-2)); height: 30px; border-left: 1px dashed var(--border-1); }
+.trace__grid { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--border-1); }
+.trace__toggle { width: 18px; flex: none; padding: 0; border: 0; background: none; color: var(--fg-3); cursor: pointer; font: 12px/1 var(--font-mono); }
+.trace__label { display: flex; align-items: center; gap: var(--space-2); min-width: 0; flex: 1; padding: var(--space-1) 0; border: 0; background: none; color: var(--fg-1); cursor: pointer; text-align: left; font: inherit; }
+.trace__label:hover .trace__span-name { text-decoration: underline; }
+.trace__swatch { width: 10px; height: 10px; border-radius: var(--radius-1); flex: none; }
+.trace__span-name { font: var(--type-code); white-space: nowrap; }
+.trace__actor { color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace__hint { color: var(--fg-3); font: var(--type-code); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace__count { font: 400 11px/1 var(--font-mono); background: var(--surface-2); border: 1px solid var(--border-1); padding: 2px 4px; border-radius: var(--radius-1); }
+.trace__missing { color: var(--fg-3); font-style: italic; }
+.trace__bar { position: absolute; top: 50%; height: 12px; min-width: 3px; transform: translateY(-50%); border-radius: var(--radius-1); }
+.trace__at { position: absolute; top: 50%; transform: translateY(-50%); font: 400 11px/1 var(--font-mono); color: var(--fg-3); white-space: nowrap; }
+.trace__detail { padding: var(--space-4); background: var(--surface-2); border-bottom: 1px solid var(--border-1); display: grid; gap: var(--space-3); }
+.trace__detail-head { font: var(--type-code); color: var(--fg-2); }
+.trace__detail-head strong { color: var(--fg-1); font-weight: var(--fw-medium); }
+.trace__ids { display: grid; grid-template-columns: auto 1fr; gap: var(--space-1) var(--space-3); margin: 0; font: var(--type-code); }
+.trace__ids dt { color: var(--fg-3); font: var(--type-body-sm); }
+.trace__ids dd { margin: 0; word-break: break-all; }
+.trace__link { padding: 0; border: 0; background: none; color: var(--text-link); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.trace__attributes { border-collapse: collapse; width: 100%; font: var(--type-code); }
+.trace__attributes caption { text-align: left; font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--fg-3); padding-bottom: var(--space-2); }
+.trace__attributes th { text-align: left; font-weight: var(--fw-regular); color: var(--fg-3); padding: 2px var(--space-3) 2px 0; white-space: nowrap; vertical-align: top; width: 1%; }
+.trace__attributes td { padding: 2px 0; word-break: break-all; }
+.trace__events { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-1); font: var(--type-code); color: var(--fg-2); }
+.trace__events strong { color: var(--fg-1); font-weight: var(--fw-medium); }
+
 /* ---------------------------------------------------- phones */
 
 @media (max-width: 720px) {

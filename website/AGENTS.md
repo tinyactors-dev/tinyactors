@@ -20,6 +20,13 @@ rules.
 - **Code on a page is code that ran.** A program a page shows lives under
   `examples/<name>/`, with a `package.json` whose `main` is the program, a
   `package-lock.json`, and `output.txt`. `mise run test` runs it.
+- **A live example's logic is tested in Node.js.** A `<live>` block runs
+  an export of a module in the reader's browser on `@tinyactors/wasm`.
+  Keep what it computes in a module that the example's `main.mjs` runs too
+  (`examples/property/property.mjs`), so `mise run test` checks it against
+  `output.txt`. `live.mjs` only adapts it for the page. After changing a
+  component or a live example, open the page in a browser (`mise run
+  serve`) and run each button: nothing in the test task does.
 - **The voice is the design system's** (`.agents/skills/tinyactors-design`,
   "Content fundamentals"): precise and calm, "you" for the reader, sentence
   case, the product name lowercase, exact numbers, no hype words, no emoji.
