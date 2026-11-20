@@ -237,18 +237,23 @@ of this guide at scale: two million actors, `resident: 1000`, the rest in
 a store over SQLite (`node:sqlite` under Node.js, `bun:sqlite` under
 Bun).
 
-One run of it (2026-10-16, x86_64 Linux 6.18, Intel Xeon @ 2.10GHz, 4
-CPUs, 16 GiB; node 22.23.3, bun 1.4.1; the tool then ran an eviction
-loop of its own, which `resident` does now in the same way): two million actors of a counter
-chart, at most 1000 resident, 200,000 events to actors drawn at random,
-so nearly every event wakes one from the store and the sweep sends
-another back (199,860 wakes in each run). Every sampled actor's count
-matched the events it was sent, and after every eviction at most 1000
-actors were resident.
+One run of it, alone on the machine (2026-11-20; Intel Xeon @ 2.10GHz,
+4 CPUs, 16 GiB, Linux; node 22.23.5, bun 1.4.1): two million actors of a
+counter chart, at most 1000 resident, 200,000 events to actors drawn at
+random, so nearly every event wakes one from the store and the sweep
+sends another back (199,870 wakes in each run). Every sampled actor's
+count matched the events it was sent, and after every eviction at most
+1000 actors were resident.
 
 | runtime, datamodel | populate (spawn and hibernate 2,000,000) | 200,000 events (woken, swept back) | peak resident | core's region | SQLite file |
 |---|---|---|---|---|---|
-| node, native | 26.1 s (76,700 a second) | 14.6 s (13,700 a second) | 253 MB (126 B per actor) | 115 MB (58 B per actor) | 378 MB |
-| node, quickjs | 17.1 s (116,900 a second) | 11.9 s (16,900 a second) | 262 MB (131 B per actor) | 115 MB (58 B per actor) | 409 MB |
-| bun, native | 19.5 s (102,600 a second) | 12.9 s (15,500 a second) | 236 MB (118 B per actor) | 115 MB (58 B per actor) | 378 MB |
-| bun, quickjs | 14.0 s (143,000 a second) | 11.9 s (16,900 a second) | 221 MB (111 B per actor) | 115 MB (58 B per actor) | 409 MB |
+| node, native | 48.2 s (41,500 a second) | 13.1 s (15,300 a second) | 307 MB (153 B per actor) | 164 MB (82 B per actor) | 378 MB |
+| node, quickjs | 35.9 s (55,800 a second) | 12.1 s (16,500 a second) | 319 MB (159 B per actor) | 164 MB (82 B per actor) | 409 MB |
+| bun, native | 39.6 s (50,600 a second) | 12.2 s (16,400 a second) | 300 MB (150 B per actor) | 164 MB (82 B per actor) | 378 MB |
+| bun, quickjs | 34.2 s (58,400 a second) | 12.3 s (16,300 a second) | 287 MB (143 B per actor) | 164 MB (82 B per actor) | 409 MB |
+
+Populating slows as the population grows: after each turn the host's
+sweep looks for the actors to hibernate over every actor's slot, the
+hibernated ones included. Events to a population that exists do not
+slow. The root `AGENTS.md` ("Published numbers") says when to run it
+again.
