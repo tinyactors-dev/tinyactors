@@ -150,8 +150,11 @@ def measure(what, count, datamodel, tracing, chart, data, traced):
                 sessions[i] = host.spawn(name).id
             host.run_until_idle()
             result["started"] = per(before, sample())
-            batches(lambda i: host.send(sessions[i], "message", data))
-            result["handled"] = per(before, sample())
+            try:
+                batches(lambda i: host.send(sessions[i], "message", data))
+                result["handled"] = per(before, sample())
+            except tinyactors.TinyactorsError as error:  # quickjs's heap full, say: the started row stands
+                result["handled"] = {"failed": f"{type(error).__name__}: {error}"}
         elif what == "hibernated":                # after each turn the host hibernates all but RESIDENT
             batches(lambda i: host.spawn(name))
             result["hibernated"] = {**per(before, sample()), "blob": round(store.bytes / store.saved)}
@@ -182,7 +185,7 @@ def run(count=100_000, datamodel="python", tracing=True, chart=None, data=None):
                                    env=os.environ)
             if child.returncode != 0:
                 # a measurement that failed is a row too: what stopped it (quickjs's memory, the machine's)
-                errors = re.findall(r"^\w*Error: .*$", child.stderr, re.M)
+                errors = re.findall(r"^[\w.]*Error: .*$", child.stderr, re.M)
                 reason = errors[-1] if errors else f"exit {child.returncode}"
                 keys = {"actor": ["started", "handled"], "hibernated": ["hibernated"],
                         "message": ["waiting"], "delayed send": ["pending"]}[what]
@@ -190,6 +193,9 @@ def run(count=100_000, datamodel="python", tracing=True, chart=None, data=None):
                     rows[key] = {"failed": reason}
                 break
             for row, value in json.loads(child.stdout).items():
+                if "failed" in value:
+                    rows[row] = {"failed": value["failed"]}
+                    continue
                 entry = rows.setdefault(row, {"region": value["region"], "blob": value.get("blob")})
                 entry["heap" if traced else "resident"] = value["bytes"]
         results[what] = rows

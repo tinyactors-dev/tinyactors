@@ -151,8 +151,12 @@ async function measure({ what, count, datamodel, tracing, chart, data, quickjsMe
     for (let i = 0; i < count; i++) ids[i] = host.spawn(name).id;
     await host.idle();
     result.started = per(sample());
-    await batches((i) => host.send(ids[i], 'message', data));
-    result.handled = per(sample());
+    try {
+      await batches((i) => host.send(ids[i], 'message', data));
+      result.handled = per(sample());
+    } catch (error) { // quickjs's heap full, say: the started row stands
+      result.handled = { failed: `${error.name}: ${error.message}` };
+    }
   } else if (what === 'hibernated') {
     await batches(() => host.spawn(name)); // after each turn the host hibernates all but RESIDENT
     result.hibernated = { ...per(sample()), blob: Math.round(store.bytes / store.saved) };
