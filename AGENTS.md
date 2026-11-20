@@ -352,6 +352,41 @@ signature, and compare builds side by side, never against numbers from
 another day or machine. The torture chamber (`mise run torture` in
 `tinyactors-core`) measures both.
 
+### Published numbers
+
+The documentation publishes memory and time numbers. Each table names
+the program that made it, the date, the machine and the versions.
+
+| Numbers | Where | Made by |
+|---|---|---|
+| the core's records per actor, message, delayed send | `tinyactors-core`: `mise run layout` | the debug information, checked against `ta_system_layout` |
+| memory per actor, message, delayed send, by population | `examples/memory/README.md` in both bindings, the Node capacity guide, the Python README's "Memory" | `examples/memory/main.mjs` and `main.py`; the data in `examples/memory/results/<date>.csv` |
+| 2 and 4 million actors: hibernation, migration, snapshots, services | the Node guides (hibernation, migration, snapshots), the Python README's "Performance" | `mise run stress`, `migration`, `snapshot`, `services` in each binding |
+| every operation at N and 2N actors | the Node capacity guide, "Work does not grow with the population" | `mise run scale` in `tinyactors-napi` |
+
+**Rerun them when** one of these changes:
+
+- `mise run layout` prints a different cost (a record, a pool or an
+  index of the region changed);
+- a binding's per-session or per-payload memory (its datamodel's rows,
+  its tables, how it converts values);
+- a pinned runtime (node, bun, python) moves a major version;
+- a release: before it, as part of `mise run test:full`'s run.
+
+**How:**
+
+1. Run the programs on one machine, one after another, with nothing else
+   running: the gates time work, and a timing taken beside other work is
+   wrong.
+2. Run the memory sweep at 10,000 to 4,000,000:
+   `main.mjs --counts 10000,100000,1000000,2000000,4000000 --csv
+   results/<date>.csv` under node and bun on both datamodels, and
+   `main.py` with the same counts on both datamodels. Commit the CSV;
+   keep the earlier ones, so a chart can show the numbers over time.
+3. Replace each table whole, with its date, machine and versions. Never
+   mix rows of two runs in one table.
+4. Say in the commit message which programs ran and on what machine.
+
 ## Design claims are checked
 
 Before answering a design question or proposing a change, load the
