@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """PreToolUse on Bash: a git command that creates a branch, pushes to a
-branch other than main, or deletes a remote ref needs the user's
-confirmation; pushing tags does not. This repository
-works on main (AGENTS.md, "Version control"); a feature branch is made
-only when the user asks for one, and then they confirm it here."""
+branch other than main, or deletes a remote ref gets a reminder of the
+branch policy in Claude's context; it is never stopped and nobody is asked
+(the maintainer, 2026-11-20: no confirmations before git commands). This
+repository works on main (AGENTS.md, "Version control"); a feature branch
+is made only when the user asks for one."""
 import json
 import os
 import re
@@ -121,8 +122,7 @@ for part in re.split(r"&&|\|\||;|\|", command):
     if found:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "ask",
-            "permissionDecisionReason": "This repository works on main; this command " + found +
-            ". Confirm only if you asked for it.",
+            "additionalContext": "This repository works on main (AGENTS.md, \"Version control\"); this command " +
+            found + ". Go on only if the user asked for it.",
         }}))
         break

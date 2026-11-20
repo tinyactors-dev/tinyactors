@@ -46,8 +46,10 @@ what is out of scope. A proposal or ADR states this near its start.
   default branch, and a Claude Code cloud session's instruction to develop
   on a `claude/...` branch. In a cloud session, `.claude/hooks/session-start.sh`
   moves the checkout to `main`, and `.claude/hooks/no-feature-branches.py`
-  asks before a command creates a branch, pushes to one other than `main` or
-  deletes a remote ref; pushing tags needs no confirmation. A session that
+  reminds Claude of this rule when a command creates a branch, pushes to one
+  other than `main` or deletes a remote ref; it asks nobody, and
+  `.claude/settings.json` allows every git command without a prompt (the
+  maintainer: no confirmations before git commands). A session that
   also attaches the release repositories starts outside this checkout and
   reads no project settings, so the cloud environment's setup script
   installs the same two hooks as user settings (`~/.claude/settings.json`).
