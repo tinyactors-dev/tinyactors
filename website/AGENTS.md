@@ -34,6 +34,11 @@ rules.
   prose and then the proof: code, output, a claim with its source. No
   metaphors, no adjectives that do not measure something, no hype words,
   no emoji. Actions are a verb and an object, 2 to 4 words.
+- **Every sentence says something.** Use the `copywriting` skill
+  (`.agents/skills/copywriting`) before writing or changing copy: a
+  headline states a benefit, a heading its finding, a lede the page's
+  strongest facts (never a list of what is coming), and a sentence before
+  a block what the block shows.
 - **No eyebrows.** Nothing sits above a heading: the schema has no
   element for it, and `test/invalid/eyebrow.xml` keeps it that way.
 - **Same thing, different words: tabs.** Content that says one thing for
