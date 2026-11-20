@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="chat" path="/chat/">
+  <title>Build a team chat, step by step</title>
+  <description>Build a team chat with tinyactors in five steps: rooms, presence, a workspace, a status roster, and a thousand users with fifty in memory.</description>
+
+  <hero>
+    <kicker>Tutorial</kicker>
+    <headline>Build a team chat, <em>step by step</em>.</headline>
+    <lede>A team chat is a system of things with lifecycles: workspaces that make rooms, rooms that fan out posts, people who connect, go idle and leave. This tutorial builds one in five steps. Each step is a program you can run, and each adds one idea to the step before. By the end, a thousand users run with fifty of them in memory.</lede>
+    <install>
+      <command for="Node.js and Bun">npm install @tinyactors/node</command>
+    </install>
+    <actions>
+      <action to="chat" section="room">Start with a room</action>
+      <action href="https://github.com/tinyactors-dev/tinyactors/tree/main/website/examples/chat">Get the code</action>
+    </actions>
+  </hero>
+
+  <section id="room">
+    <kicker>Step 1</kicker>
+    <heading>A room is <em>an actor</em>.</heading>
+    <p>A room keeps a list of members. Your program sends it events, and it sends each post out. Its chart has one state. A <code>join</code> adds a member, and a <code>post</code> sends the message to an I/O processor of type <code>chat:client</code>:</p>
+    <code src="../../examples/chat/1-room/charts/room.scxml" lines="8-17" language="scxml" file="charts/room.scxml"/>
+    <p>The program gives the host that processor: an object with <code>receive(send)</code>, standing in for the users' screens. Then it starts one room and sends it three events.</p>
+    <example>
+      <code src="../../examples/chat/1-room/main.mjs" lines="4-11" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/1-room/main.mjs" lines="19-23" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/1-room/output.txt" language="text" role="output"/>
+    </example>
+    <p>The room does no I/O. It decides who gets a message, and your program delivers it.</p>
+  </section>
+
+  <section id="presence">
+    <kicker>Step 2</kicker>
+    <heading>People <em>come and go</em>.</heading>
+    <p>Each user is now an actor too, offline, active or away. <code>online</code> holds <code>active</code> and <code>away</code>, so one <code>disconnect</code> leaves either. An active user turns away after 300 seconds without activity: entering <code>active</code> sends the actor an <code>idle</code> event, delayed, and activity cancels it and starts it again.</p>
+    <code src="../../examples/chat/2-presence/charts/user.scxml" lines="16-39" language="scxml" file="charts/user.scxml"/>
+    <p>The room no longer talks to your program. It sends each post to each member's user actor, by name, and a user shows a message only while it is online. An offline user has no transition for <code>message</code>, so the event is dropped.</p>
+    <code src="../../examples/chat/2-presence/charts/room.scxml" lines="12-18" language="scxml" file="charts/room.scxml"/>
+    <p>The program runs on a <code>SimulatedClock</code>, so 300 seconds take no time:</p>
+    <example>
+      <code src="../../examples/chat/2-presence/main.mjs" lines="27-35" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/2-presence/output.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="workspace">
+    <kicker>Step 3</kicker>
+    <heading>The workspace <em>makes the rooms</em>.</heading>
+    <p>In step 2 your program spawned the room. Now a workspace actor decides which rooms exist, and it alone spawns them. It sends a request to the package's <code>Spawner</code>, an I/O processor that spawns actors, and remembers who asked under the request's send id. The <code>Spawner</code> answers <code>spawned</code> with that id. A second request for one name finds it in <code>rooms</code> or in <code>creating</code>, so no room is made twice.</p>
+    <code src="../../examples/chat/3-workspace/charts/workspace.scxml" lines="20-40" language="scxml" file="charts/workspace.scxml"/>
+    <p>The user actor now joins rooms and posts to them, by name. A send to a name no actor has fails at once: the sender gets <code>error.communication</code> with the send's id, and tells its screen.</p>
+    <code src="../../examples/chat/3-workspace/charts/user.scxml" lines="18-29" language="scxml" file="charts/user.scxml"/>
+    <p>Your program asks the workspace with <code>actor.ask</code>. The workspace answers to <code>_event.origin</code>, and <code>ask</code> returns the answer.</p>
+    <example>
+      <code src="../../examples/chat/3-workspace/main.mjs" lines="30-39" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/3-workspace/output.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="roster">
+    <kicker>Step 4</kicker>
+    <heading>Everyone sees <em>who is here</em>.</heading>
+    <p>The workspace now keeps a roster of each user's status. Each state of a user reports itself to the workspace on entry, so a status is sent only when it changes. A user who comes online gets the whole roster, and the other online users get each change.</p>
+    <code src="../../examples/chat/4-roster/charts/workspace.scxml" lines="55-66" language="scxml" file="charts/workspace.scxml"/>
+    <p><code>cameOnline</code> and <code>online</code> are functions of the chart's <code>&lt;script&gt;</code>, which take the variables they read as arguments.</p>
+    <example>
+      <code src="../../examples/chat/4-roster/output.txt" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="hibernation">
+    <kicker>Step 5</kicker>
+    <heading>A thousand users, <em>fifty in memory</em>.</heading>
+    <p>Most users and rooms wait most of the time, so the host can keep them out of memory. The charts do not change in this step, only the host's options. <code>resident</code> is the most actors the host keeps in memory: after each turn it hibernates the rest into <code>store</code>, an object with <code>save</code>, <code>load</code> and <code>delete</code>.</p>
+    <example>
+      <code src="../../examples/chat/5-hibernation/main.mjs" lines="41-48" language="javascript" file="main.mjs"/>
+      <code src="../../examples/chat/5-hibernation/output.txt" language="text" role="output"/>
+    </example>
+    <p>An event for a hibernated actor wakes it: the host loads its blob, deletes it from the store and delivers the event. A user's <code>idle</code> timer stays in the host while the user is out of memory, and wakes the user when it is due. Your program never wakes an actor itself. The post reached a hundred users, most of them in the store, and the bound held throughout.</p>
+    <p>This store keeps the blobs in a <code>Map</code>. The package has <code>MemoryStore</code>, and <code>SQLiteStore</code> for blobs that outlive the process.</p>
+  </section>
+
+  <section id="next">
+    <kicker>Next</kicker>
+    <heading>From here to <em>production</em>.</heading>
+    <p>The charts stay as they are. What changes is what your program connects them to.</p>
+    <list>
+      <item><term>Connections</term><text>The <code>chat:client</code> processor writes to each user's socket instead of a list, and a socket's close sends <code>disconnect</code>.</text></item>
+      <item><term>Storage</term><text><code>SQLiteStore</code> keeps hibernated users and rooms on disk, and a snapshot keeps the whole host.</text></item>
+      <item><term>New versions</term><text>Add a new version of the user chart: new users start in it, and a migration moves the running ones while messages keep coming.</text></item>
+      <item><term>Telemetry</term><text>Every step an actor takes is a span, so a slow post shows which room and which users it went through.</text></item>
+    </list>
+    <actions>
+      <action href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Read the Node.js guide</action>
+      <action to="home" section="simulate">Simulate a chart</action>
+    </actions>
+  </section>
+</page>

@@ -65,7 +65,7 @@ A page is a hero and sections. Each section has a heading and blocks:
 - **Code that runs is a file.** `<code src>` names a file under
   `examples/`, and the test runs that example and compares what it prints
   with its `output.txt`. So the page shows exactly the code that ran.
-- **Links name pages, not paths.** `<link to="granary"/>` names a page by
+- **Links name pages, not paths.** `<link to="chat"/>` names a page by
   its id (`section` for an anchor), and the build refuses an id the site
   does not have. A link elsewhere is `href`, https only.
 - **No styling in content.** There is no class, colour or layout element.

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A room. It keeps its members and sends each post to each member's user actor. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="room" initial="open">
+  <datamodel>
+    <data id="members" expr="[]"/>
+  </datamodel>
+  <state id="open">
+    <transition event="join">
+      <assign location="members" expr="members.concat([_event.data.user])"/>
+    </transition>
+    <transition event="post">
+      <foreach array="members" item="member">
+        <send targetexpr="'tinyactors://chat/@user.' + member" event="message">
+          <content expr="({ from: _event.data.user, text: _event.data.text })"/>
+        </send>
+      </foreach>
+    </transition>
+  </state>
+</scxml>

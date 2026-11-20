@@ -1,0 +1,11 @@
+-- ada connects
+ada sees the roster: ada active, bob offline, cat offline
+-- bob connects
+bob sees the roster: ada active, bob active, cat offline
+ada sees bob is active
+-- 300 seconds pass
+bob sees ada is away
+ada sees bob is away
+-- bob closes the app
+ada sees bob is offline
+the workspace answers: {"ada":"away","bob":"offline","cat":"offline"}

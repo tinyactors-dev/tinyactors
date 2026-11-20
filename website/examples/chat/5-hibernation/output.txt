@@ -1,0 +1,8 @@
+1000 users spawned: 1002 actors, 50 in memory, 952 in the store
+100 users connect and join general: 1002 actors, 50 in memory, 952 in the store
+u0 posts: 1002 actors, 50 in memory, 952 in the store
+100 messages reached the screens
+300 seconds pass: 1002 actors, 50 in memory, 952 in the store
+14850 roster updates reached the screens
+the store saved 1156 blobs and loaded 204
+at most 50 actors were in memory at rest

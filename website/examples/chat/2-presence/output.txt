@@ -1,0 +1,11 @@
+ada is offline
+bob is offline
+ada is active
+bob is active
+-- 300 seconds pass
+ada is away
+bob is away
+-- bob types, ada closes the app
+bob is active
+ada is offline
+bob sees bob: anyone?

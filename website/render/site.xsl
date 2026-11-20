@@ -323,7 +323,13 @@
   <xsl:function name="f:code" as="xs:string">
     <xsl:param name="code" as="element(s:code)"/>
     <xsl:variable name="text" select="if ($code/@src) then unparsed-text(resolve-uri($code/@src, base-uri($code))) else string($code)"/>
-    <xsl:variable name="lines" select="tokenize(replace(replace($text, '^\s*\n', ''), '\n\s*$', ''), '\n')"/>
+    <xsl:variable name="all" select="tokenize(replace(replace($text, '^\s*\n', ''), '\n\s*$', ''), '\n')"/>
+    <xsl:variable name="first" select="if ($code/@lines) then xs:integer(substring-before($code/@lines, '-')) else 1"/>
+    <xsl:variable name="last" select="if ($code/@lines) then xs:integer(substring-after($code/@lines, '-')) else count($all)"/>
+    <xsl:if test="$last gt count($all)">
+      <xsl:message terminate="yes">site: {f:where($code)}: lines {$code/@lines} of {$code/@src}, which has {count($all)}</xsl:message>
+    </xsl:if>
+    <xsl:variable name="lines" select="$all[position() ge $first and position() le $last]"/>
     <xsl:variable name="indent" select="min($lines[normalize-space(.) != ''] ! string-length(replace(., '^( *).*$', '$1')))"/>
     <xsl:sequence select="string-join($lines ! substring(., $indent + 1), '&#10;')"/>
   </xsl:function>

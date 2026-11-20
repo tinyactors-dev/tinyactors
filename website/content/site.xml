@@ -4,7 +4,7 @@
   <tagline>Statecharts as actors: control flow you can simulate, test and run at scale.</tagline>
 
   <nav>
-    <link to="granary">Case study</link>
+    <link to="chat">Tutorial</link>
     <link href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Node.js</link>
     <link href="https://github.com/tinyactors-dev/tinyactors-cpython#readme">Python</link>
     <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
@@ -12,7 +12,7 @@
 
   <pages>
     <page src="pages/home.xml"/>
-    <page src="pages/granary.xml"/>
+    <page src="pages/chat.xml"/>
     <page src="pages/404.xml"/>
   </pages>
 
@@ -22,7 +22,6 @@
       <link href="https://github.com/tinyactors-dev/tinyactors">Source</link>
       <link href="https://www.npmjs.com/package/@tinyactors/node">npm</link>
       <link href="https://pypi.org/project/tinyactors/">PyPI</link>
-      <link href="https://github.com/tinyactors-dev/granary">granary</link>
     </links>
   </footer>
 </site>

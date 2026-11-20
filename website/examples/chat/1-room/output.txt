@@ -1,0 +1,2 @@
+ada sees ada: hi
+bob sees ada: hi

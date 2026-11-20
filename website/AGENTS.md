@@ -31,14 +31,21 @@ rules.
 Statecharts are control flow formal enough to simulate, test and fuzz.
 tinyactors makes them easy to use, scalable and available everywhere. Lead
 with what a reader can do with a chart (simulate it, assert on its states,
-model the world around it), and bring in the runtime's capacity as
-evidence. granary (tinyactors-dev/granary) is the reference application and
-the case study. Its decision records are the sources for what the site says
-about it.
+build a system out of them), and bring in the runtime's capacity as
+evidence.
 
-Do not claim a library feature that does not exist. Property testing and
-fuzzing are a pattern applications write (granary's load generator, the
-elevator example's scenario runner), not an API of tinyactors.
+- **Show how to build, not who built.** The site teaches with systems a
+  reader recognises (a team chat, step by step) and does not feature
+  specific applications, ours or anyone's.
+- **A tutorial step is a program that runs.** The chat tutorial's steps
+  are copies of `tinyactors-napi/examples/chat-tutorial` under
+  `examples/chat/`, run against the published package; a page shows
+  excerpts of them with `<code src lines>`. When the tutorial changes,
+  copy it again and check each excerpt's lines.
+- **Do not claim a library feature that does not exist.** Property testing
+  and fuzzing are a pattern an application writes (the elevator example's
+  scenario runner in `tinyactors-napi/examples`), not an API of
+  tinyactors.
 
 ## Tasks and tests
 

@@ -179,6 +179,17 @@
       <xs:simpleContent>
         <xs:extension base="xs:string">
           <xs:attribute name="src" type="path"/>
+          <xs:attribute name="lines">
+            <xs:annotation><xs:documentation>
+              With `src`: the lines of the file to show, "first-last",
+              counted from 1, for an excerpt of a program that runs whole.
+            </xs:documentation></xs:annotation>
+            <xs:simpleType>
+              <xs:restriction base="xs:token">
+                <xs:pattern value="[1-9][0-9]*-[1-9][0-9]*"/>
+              </xs:restriction>
+            </xs:simpleType>
+          </xs:attribute>
           <xs:attribute name="language" type="language" use="required"/>
           <xs:attribute name="file" type="xs:token"/>
           <xs:attribute name="role" default="source">
@@ -190,6 +201,7 @@
             </xs:simpleType>
           </xs:attribute>
           <xs:assert test="if (@src) then normalize-space(.) = '' else normalize-space(.) != ''"/>
+          <xs:assert test="not(@lines) or (@src and xs:integer(substring-before(@lines, '-')) le xs:integer(substring-after(@lines, '-')))"/>
         </xs:extension>
       </xs:simpleContent>
     </xs:complexType>

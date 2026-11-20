@@ -14,7 +14,7 @@
     </install>
     <actions>
       <action href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Get started</action>
-      <action to="granary">Read the case study</action>
+      <action to="chat">Build a team chat</action>
     </actions>
   </hero>
 
@@ -53,8 +53,8 @@
       </claim>
       <claim>
         <statement>Every transition is a fact you can assert on.</statement>
-        <p>Each step an actor takes is a trace span: the event it took, the transitions that fired, the states it entered. granary's integration tests assert on nothing else.</p>
-        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0007-testing-through-traces.md">granary, ADR 0007</source>
+        <p>Each step an actor takes is an OpenTelemetry span: the event it took, the transitions that fired, the states it left and entered. A test can wait for an actor to reach a state, and a dashboard can show why it did.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/telemetry.md">Telemetry</source>
       </claim>
       <claim>
         <statement>One actor per thing, even for <em>millions</em> of things.</statement>
@@ -64,18 +64,19 @@
     </claims>
   </section>
 
-  <section id="world">
-    <kicker>Model the world</kicker>
-    <heading>Statecharts <em>all the way down</em>.</heading>
-    <p>A lifecycle is not only in your product. The services it calls, the users who use it and the faults that hit it have lifecycles too, and they can be charts as well. granary, a GitHub app that closes issues opened by people not on an allowlist, is built this way.</p>
-    <list>
-      <item><term>The product</term><text>One actor per issue: <code>idle → checking → allowed | closing → closed | failed</code>, with its 10-second timeout in the chart.</text></item>
-      <item><term>The fakes</term><text>Its fake GitHub is an actor system, with an actor holding the faults a test injects.</text></item>
-      <item><term>The users</term><text>Its load generator's people are charts with a seed: a persistent contributor who reopens and stews, a bot that floods, a chaos monkey, a fuzzer.</text></item>
-      <item><term>The operations</term><text>Its watchdog is a control loop: <code>ok → suspect → healing → ok</code>.</text></item>
+  <section id="build">
+    <kicker>Build</kicker>
+    <heading>A team chat in <em>five steps</em>.</heading>
+    <p>Workspaces, rooms and people who come and go: a team chat is a system of lifecycles, and each one is a chart. The tutorial builds it one idea at a time, and every step is a program you can run.</p>
+    <list ordered="true">
+      <item><term><link to="chat" section="room">A room</link></term><text>One actor, events from your program, an I/O processor for the screens.</text></item>
+      <item><term><link to="chat" section="presence">Presence</link></term><text>An actor per person: offline, active or away, with a timer that costs nothing in a test.</text></item>
+      <item><term><link to="chat" section="workspace">The workspace</link></term><text>A collection actor that decides which rooms exist and alone makes them.</text></item>
+      <item><term><link to="chat" section="roster">The roster</link></term><text>Everyone online sees who else is, and each change as it happens.</text></item>
+      <item><term><link to="chat" section="hibernation">Hibernation</link></term><text>A thousand users with fifty in memory, the rest in a store.</text></item>
     </list>
     <actions>
-      <action to="granary">Read the case study</action>
+      <action to="chat">Build a team chat</action>
     </actions>
   </section>
 
