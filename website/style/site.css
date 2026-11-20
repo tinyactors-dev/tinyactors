@@ -167,7 +167,12 @@ ta-tabs { display: block; }
 .anthill__controls .ta-tab[aria-checked="true"] { color: var(--fg-1); background: var(--surface-1); }
 .anthill__stage { position: relative; aspect-ratio: 1000 / 600; border: 1px solid var(--border-1); border-radius: var(--radius-2); overflow: hidden; background: var(--surface-1); }
 .anthill__ants, .anthill__overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.anthill__overlay { cursor: crosshair; touch-action: manipulation; }
+.anthill__overlay { cursor: crosshair; touch-action: pan-y; } /* a swipe scrolls the page; a pinch zooms the field */
+.anthill__overlay--zoomed { touch-action: none; } /* zoomed in, a drag moves the view */
+.anthill__overlay--zoomed:active { cursor: grabbing; }
+.anthill__zoom { display: flex; align-items: center; gap: var(--space-2); }
+.anthill__zoom .ta-btn { min-width: var(--control-h-lg); justify-content: center; }
+.anthill__zoom-level { font: var(--type-code); color: var(--fg-2); min-width: 3em; text-align: center; font-variant-numeric: tabular-nums; }
 .anthill__costs { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); }
 .cost { margin: 0; display: grid; gap: var(--space-2); }
 .cost__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2); font: var(--type-body-sm); }

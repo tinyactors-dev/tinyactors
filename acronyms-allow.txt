@@ -65,3 +65,7 @@ calendarId     staticjs-js/index.mjs                                     # Tempo
 # scxmljs's IOSession names a session's id `sessionId`; the website's stand-in
 # I/O processors for its diagrams read it.
 sessionId      website/components/chart.mjs                              # @tinyactors/scxmljs IOSession field
+
+# The DOM's PointerEvent names a pointer's id `pointerId`; the anthill's
+# zoom and pan track pointers by it.
+pointerId      website/examples/anthill/page.mjs                         # DOM PointerEvent field

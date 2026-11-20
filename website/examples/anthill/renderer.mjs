@@ -1,8 +1,8 @@
 // Draws every ant on the GPU: one point per ant, which the fragment shader
 // turns into the rigged ant's sprite (sprites.mjs), rotated to the ant's
-// heading and stepping through its walk while it moves. The ants' legs live
+// heading and stepping through its walk while it moves. The ants' trips live
 // in two float textures, a texel per ant in each: (x0, y0, x1, y1) and
-// (t0, t1, look, -). A message from the worker uploads only the legs that
+// (t0, t1, look, -). A message from the worker uploads only the trips that
 // changed and scatters them into the textures in one draw of points; the
 // frame reads them by the ant's index. So drawing costs the CPU nothing per
 // ant, and an update costs what changed, not the population.
@@ -13,7 +13,7 @@
 import { WIDTH, HEIGHT } from './world.mjs';
 import { FRAMES } from './sprites.mjs';
 
-const SIDE = 2048; // texels a row of the leg textures
+const SIDE = 2048; // texels a row of the trip textures
 
 const SCATTER_VERTEX = `#version 300 es
 in float slot; in vec4 a; in vec3 b;
@@ -34,20 +34,21 @@ void main() { outA = va; outB = vb; }`;
 
 const DRAW_VERTEX = `#version 300 es
 precision highp float;
-uniform highp sampler2D legsA, legsB;
-uniform float time, size, unitPixels;
-uniform vec2 field;
+uniform highp sampler2D tripsA, tripsB;
+uniform float time, size, unitPixels, scale, maxPoint;
+uniform vec2 field, origin; // the view: its top left corner in the field, and its zoom
 out float angle; flat out int frame; flat out int colony;
 void main() {
   ivec2 texel = ivec2(gl_VertexID % ${SIDE}, gl_VertexID / ${SIDE});
-  vec4 a = texelFetch(legsA, texel, 0), b = texelFetch(legsB, texel, 0);
+  vec4 a = texelFetch(tripsA, texel, 0), b = texelFetch(tripsB, texel, 0);
   if (b.z < 0.5) { gl_Position = vec4(2.0, 2.0, 0.0, 1.0); gl_PointSize = 0.0; return; }
   vec2 from = a.xy, to = a.zw, way = to - from;
   float span = b.y - b.x;
   float f = span > 0.0 ? clamp((time - b.x) / span, 0.0, 1.0) : 1.0;
   vec2 at = from + way * f;
-  gl_Position = vec4(at.x / field.x * 2.0 - 1.0, 1.0 - at.y / field.y * 2.0, 0.0, 1.0);
-  gl_PointSize = size * unitPixels * 1.42;
+  vec2 seen = (at - origin) * scale;
+  gl_Position = vec4(seen.x / field.x * 2.0 - 1.0, 1.0 - seen.y / field.y * 2.0, 0.0, 1.0);
+  gl_PointSize = min(size * scale * unitPixels * 1.42, maxPoint);
   angle = atan(way.y, way.x);
   bool walking = f > 0.0 && f < 1.0 && length(way) > 0.5;
   float stride = length(way) * f / (size * 0.35) + float(gl_VertexID % 7);
@@ -60,7 +61,7 @@ uniform sampler2D atlas;
 in float angle; flat in int frame; flat in int colony;
 out vec4 color;
 void main() {
-  // The sprite faces up; turn the lookup so it faces along its leg.
+  // The sprite faces up; turn the lookup so it faces where it walks.
   vec2 p = (gl_PointCoord - 0.5) * 1.42;
   float turn = angle + 1.5707963;
   vec2 uv = vec2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) + 0.5;
@@ -74,7 +75,7 @@ export function createRenderer(canvas, population, atlasCanvas, ground) {
   if (!gl || !gl.getExtension('EXT_color_buffer_float') || software(gl)) return null;
   const rows = Math.ceil(population / SIDE);
 
-  const legs = [0, 1].map(() => {
+  const trips = [0, 1].map(() => {
     const texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, SIDE, rows);
@@ -84,8 +85,8 @@ export function createRenderer(canvas, population, atlasCanvas, ground) {
   });
   const framebuffer = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, legs[0], 0);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, legs[1], 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, trips[0], 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, trips[1], 0);
   gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
   if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) return null;
   gl.viewport(0, 0, SIDE, rows);
@@ -118,11 +119,12 @@ export function createRenderer(canvas, population, atlasCanvas, ground) {
   attribute('b', 3, 20); // t0, t1, look
   gl.bindVertexArray(null);
   const drawVAO = gl.createVertexArray();
+  const maxPoint = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(ground.slice(i, i + 2), 16) / 255);
 
   return {
     kind: 'webgl',
-    /** Writes the changed legs into the textures. */
+    /** Writes the changed trips into the textures. */
     apply(delta) {
       if (delta.length === 0) return;
       gl.bindBuffer(gl.ARRAY_BUFFER, deltaBuffer);
@@ -137,8 +139,8 @@ export function createRenderer(canvas, population, atlasCanvas, ground) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.bindVertexArray(null);
     },
-    /** Draws every ant at simulated time `time` (seconds). */
-    draw(time, antSize) {
+    /** Draws every ant at simulated time `time` (seconds), through `view` ({left, top, scale}). */
+    draw(time, antSize, view) {
       const width = canvas.width, height = canvas.height;
       gl.viewport(0, 0, width, height);
       gl.clearColor(r, g, b, 1);
@@ -147,16 +149,19 @@ export function createRenderer(canvas, population, atlasCanvas, ground) {
       gl.bindVertexArray(drawVAO);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, legs[0]);
-      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, legs[1]);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, trips[0]);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, trips[1]);
       gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, atlas);
-      gl.uniform1i(gl.getUniformLocation(draw, 'legsA'), 0);
-      gl.uniform1i(gl.getUniformLocation(draw, 'legsB'), 1);
+      gl.uniform1i(gl.getUniformLocation(draw, 'tripsA'), 0);
+      gl.uniform1i(gl.getUniformLocation(draw, 'tripsB'), 1);
       gl.uniform1i(gl.getUniformLocation(draw, 'atlas'), 2);
       gl.uniform1f(gl.getUniformLocation(draw, 'time'), time);
       gl.uniform1f(gl.getUniformLocation(draw, 'size'), antSize);
       gl.uniform1f(gl.getUniformLocation(draw, 'unitPixels'), width / WIDTH);
       gl.uniform2f(gl.getUniformLocation(draw, 'field'), WIDTH, HEIGHT);
+      gl.uniform2f(gl.getUniformLocation(draw, 'origin'), view.left, view.top);
+      gl.uniform1f(gl.getUniformLocation(draw, 'scale'), view.scale);
+      gl.uniform1f(gl.getUniformLocation(draw, 'maxPoint'), maxPoint);
       gl.drawArrays(gl.POINTS, 0, population);
       gl.bindVertexArray(null);
     },

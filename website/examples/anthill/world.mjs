@@ -1,12 +1,12 @@
 // Two anthills: every ant and both queens are actors (ant.scxml,
 // queen.scxml); the world is their I/O processor, urn:world. An ant decides
-// only when something happens to it: it asks the world for a leg (forage,
+// only when something happens to it: it asks the world for a trip (forage,
 // home, rest), and the world picks where it goes and how long it takes,
-// records the leg, and tells the ant when it arrives (arrive, or found when
+// records the trip, and tells the ant when it arrives (arrive, or found when
 // it reached food). The world also tells two ants of different colonies
-// that meet at the end of their legs to fight, and tells an old ant to die.
-// Between decisions nothing runs: a renderer draws each ant on its leg,
-// from the leg's two points and two times.
+// that arrive at one spot together to fight, and tells an old ant to die.
+// Between decisions nothing runs: a renderer draws each ant on its trip,
+// from the trip's two points and two times.
 //
 // The world takes the tinyactors package as an argument, so the same code
 // runs in Node.js (main.mjs, with @tinyactors/wasm from npm) and in a
@@ -19,9 +19,9 @@ export const HILLS = [{ x: 210, y: 300 }, { x: 790, y: 300 }];
 export const HILL_RADIUS = 26;
 
 const SPEED = 40; // world units per simulated second
-const LEG = { min: 2, max: 10 }; // simulated seconds a leg takes
+const TRIP = { min: 2, max: 10 }; // simulated seconds a trip takes
 const LIFE = { min: 120, max: 240 }; // a worker's life, simulated seconds
-const MEETING = 0.5; // seconds two enemies' legs may end apart and still meet
+const MEETING = 0.5; // seconds apart two enemies may arrive at one spot and still meet
 const CELL = 8; // the meeting grid's cell, world units
 const FOOD = { sources: 64, every: 10 }; // at most 64 sources; a new pair every 10 simulated seconds
 const EVENTS = ['arrive', 'found', 'die'];
@@ -54,7 +54,7 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
   const touch = (slot) => { if (!marked[slot]) { marked[slot] = 1; changed[changes++] = slot; } };
 
   // ---- arrivals, in buckets of one frame
-  const RING = Math.ceil((LEG.max * 1000) / FRAME) + 8;
+  const RING = Math.ceil((TRIP.max * 1000) / FRAME) + 8;
   const ring = Array.from({ length: RING }, () => []);
   const due = (slot, at, kind) => {
     pending[slot] = kind;
@@ -88,14 +88,14 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
   for (let i = 0; i < 4; i++) sprout();
 
   // ---- the world: what an ant asks for
-  function leg(slot, x, y, kind, seconds) {
+  function trip(slot, x, y, kind, seconds) {
     const t = now();
     x0[slot] = x1[slot]; y0[slot] = y1[slot]; x1[slot] = x; y1[slot] = y;
     t0[slot] = t; t1[slot] = t + seconds;
     touch(slot);
     due(slot, t + seconds, kind);
   }
-  const travel = (slot, x, y) => Math.min(LEG.max, Math.max(LEG.min, Math.hypot(x - x1[slot], y - y1[slot]) / SPEED));
+  const travel = (slot, x, y) => Math.min(TRIP.max, Math.max(TRIP.min, Math.hypot(x - x1[slot], y - y1[slot]) / SPEED));
 
   function forage(slot) {
     const colony = colonyOf[slot];
@@ -106,7 +106,7 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     }
     if (now() >= deathAt[slot]) { due(slot, now() + FRAME / 1000, DIE); return; }
     outside[slot] = 1;
-    // Most legs head for food the ant can see (within 260 units), the rest wander.
+    // Most trips head for food the ant can see (within 260 units), the rest wander.
     let best = -1, bestDistance = 260;
     if (random() < 0.8) {
       for (let i = 0; i < foods; i++) {
@@ -118,7 +118,7 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     if (best >= 0) {
       target[slot] = best;
       const x = foodX[best] + (random() - 0.5) * 16, y = foodY[best] + (random() - 0.5) * 16;
-      leg(slot, x, y, FOUND, travel(slot, x, y));
+      trip(slot, x, y, FOUND, travel(slot, x, y));
     } else {
       target[slot] = -1;
       // A wander drifts a fifth of the way back toward the middle of the
@@ -126,7 +126,7 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
       const angle = random() * Math.PI * 2, distance = 40 + random() * 120;
       const x = clamp(x1[slot] + Math.cos(angle) * distance + (WIDTH / 2 - x1[slot]) * 0.2, 12, WIDTH - 12);
       const y = clamp(y1[slot] + Math.sin(angle) * distance + (HEIGHT / 2 - y1[slot]) * 0.2, 12, HEIGHT - 12);
-      leg(slot, x, y, ARRIVE, travel(slot, x, y));
+      trip(slot, x, y, ARRIVE, travel(slot, x, y));
     }
   }
 
@@ -134,13 +134,13 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     const hill = HILLS[colonyOf[slot]];
     carrying[slot] = 1;
     const x = hill.x + (random() - 0.5) * 10, y = hill.y + (random() - 0.5) * 10;
-    leg(slot, x, y, ARRIVE, travel(slot, x, y));
+    trip(slot, x, y, ARRIVE, travel(slot, x, y));
   }
 
   function rest(slot) {
     outside[slot] = 0;
     const hill = HILLS[colonyOf[slot]];
-    leg(slot, hill.x, hill.y, ARRIVE, 6 + random() * 14); // a rest in the hill: 6 to 20 seconds
+    trip(slot, hill.x, hill.y, ARRIVE, 6 + random() * 14); // a rest in the hill: 6 to 20 seconds
   }
 
   function placeInHill(slot, colony) {
@@ -225,7 +225,7 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     }
   }
 
-  /** One frame: the clock moves on, the ants whose legs end hear of it. */
+  /** One frame: the clock moves on, and each ant that arrived hears of it. */
   async function step() {
     clock.increment(FRAME);
     const t = now();
@@ -255,8 +255,8 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     await host.idle();
   }
 
-  // Two ants of different colonies whose legs end in one cell within half
-  // a second of each other meet, and may fight.
+  // Two ants of different colonies that arrive in one cell within half a
+  // second of each other meet, and may fight.
   function meet(slot, t, items) {
     const cell = Math.floor(y1[slot] / CELL) * COLS + Math.floor(x1[slot] / CELL);
     const other = cellSlot[cell];
@@ -289,7 +289,7 @@ export async function createAnthill(tinyactors, { charts, population, seed = 1 }
     return [x0[slot] + (x1[slot] - x0[slot]) * f, y0[slot] + (y1[slot] - y0[slot]) * f];
   }
 
-  /** The legs that changed since the last call: [slot, x0, y0, x1, y1, t0, t1, look] each, look 0 hidden, 1 or 2 its colony. */
+  /** The trips that changed since the last call: [slot, x0, y0, x1, y1, t0, t1, look] each, look 0 hidden, 1 or 2 its colony. */
   function delta() {
     const out = new Float32Array(changes * 8);
     for (let i = 0; i < changes; i++) {
