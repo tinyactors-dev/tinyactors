@@ -2,7 +2,8 @@
 // minute (one point a second), so no two scales share an axis. A chart is
 // one line in the design system's accent, with its title and current value
 // in text ink, a baseline at zero and a labelled top line; hovering shows a
-// crosshair and the value at that second.
+// crosshair and the value at that second. A chart may draw a limit, a
+// dashed line with its value, which its scale always shows.
 
 const POINTS = 60;
 const WIDTH = 240, HEIGHT = 64, TOP = 4;
@@ -16,19 +17,28 @@ export function chart({ title, format, describe = format }) {
   const line = svgEl('polyline', { class: 'cost__line', fill: 'none' });
   const cross = svgEl('line', { class: 'cost__cross', y1: 0, y2: HEIGHT, visibility: 'hidden' });
   const dot = svgEl('circle', { class: 'cost__dot', r: 4, visibility: 'hidden' });
-  svg.append(top, base, line, cross, dot);
+  const limitLine = svgEl('line', { class: 'cost__limit', x1: 0, x2: WIDTH, visibility: 'hidden' });
+  svg.append(top, base, limitLine, line, cross, dot);
   const scale = el('span', { class: 'cost__scale' });
+  const limitLabel = el('span', { class: 'cost__limit-label', hidden: '' });
   const tip = el('span', { class: 'cost__tip', hidden: '' });
   const element = el('figure', { class: 'cost' },
     el('figcaption', { class: 'cost__head' }, el('span', { class: 'cost__title' }, title), current),
-    el('div', { class: 'cost__frame' }, svg, scale, tip));
+    el('div', { class: 'cost__frame' }, svg, scale, limitLabel, tip));
 
-  let max = 1;
+  let max = 1, limit = null;
   const x = (i) => (values.length < 2 ? WIDTH : (i / (POINTS - 1)) * WIDTH + (POINTS - values.length) * (WIDTH / (POINTS - 1)));
   const y = (v) => HEIGHT - 1 - (v / max) * (HEIGHT - 1 - TOP);
 
   function render() {
-    max = nice(Math.max(...values, 0) || 1);
+    max = nice(Math.max(...values, limit ?? 0, 0) || 1);
+    if (limit !== null) {
+      for (const k of ['y1', 'y2']) limitLine.setAttribute(k, y(limit).toFixed(1));
+      limitLine.setAttribute('visibility', 'visible');
+      limitLabel.textContent = `limit ${format(limit)}`;
+      limitLabel.style.top = `${(y(limit) / HEIGHT) * 100}%`;
+      limitLabel.hidden = false;
+    }
     line.setAttribute('points', values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' '));
     scale.textContent = format(max);
     const last = values.at(-1);
@@ -66,6 +76,8 @@ export function chart({ title, format, describe = format }) {
       render();
     },
     clear() { values.length = 0; render(); },
+    /** Draws `value` as the chart's limit. */
+    setLimit(value) { limit = value; render(); },
   };
 }
 

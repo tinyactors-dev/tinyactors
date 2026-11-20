@@ -188,6 +188,9 @@ ta-tabs { display: block; }
 .cost__scale { position: absolute; top: -2px; right: 0; font: 400 11px/1 var(--font-mono); color: var(--fg-3); background: var(--bg-app); padding-left: 4px; }
 .cost__tip { position: absolute; bottom: calc(100% + 4px); transform: translateX(-50%); white-space: nowrap; font: var(--type-code); font-size: var(--fs-12); color: var(--fg-1); background: var(--surface-1); border: 1px solid var(--border-2); border-radius: var(--radius-2); padding: 2px var(--space-2); box-shadow: var(--shadow-pop); pointer-events: none; }
 .cost__tip[hidden] { display: none; }
+.cost__limit { stroke: var(--fg-3); stroke-width: 1px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.cost__limit-label { position: absolute; left: 0; transform: translateY(-110%); font: 400 11px/1 var(--font-mono); color: var(--fg-3); background: var(--bg-app); padding-right: 4px; }
+.cost__limit-label[hidden] { display: none; }
 .anthill__hills { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); font: var(--type-body-sm); color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .anthill__hill::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: var(--space-2); vertical-align: -1px; }
 .anthill__hill--1::before { background: var(--accent); }

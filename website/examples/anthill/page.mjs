@@ -39,6 +39,7 @@ export async function mount(root) {
   const status = el('p', { class: 'anthill__status', 'aria-live': 'polite' });
   const hills = el('p', { class: 'anthill__hills' });
   const costs = {
+    actors: chart({ title: 'Actors', format: (v) => number.format(Math.round(v)) }),
     fps: chart({ title: 'Frames drawn a second', format: (v) => `${Math.round(v)} fps` }),
     speed: chart({ title: 'Simulation speed', format: (v) => `${v.toFixed(2)}×`, describe: (v) => `${v.toFixed(2)} times real time` }),
     memory: chart({ title: 'WebAssembly memory', format: megabytes }),
@@ -52,6 +53,9 @@ export async function mount(root) {
   const showCount = () => { count.textContent = number.format(POPULATIONS[slider.value]); };
   slider.addEventListener('input', showCount);
   showCount();
+  // The population applies when the slider is let go: a new colony of that
+  // many ants in a new Worker (Restart starts the same population again).
+  slider.addEventListener('change', () => { if (world) begin(); });
 
   const sprites = await atlas(await (await fetch('/assets/brand/ant.svg')).text(), colors.colony);
   const paint = overlay.getContext('2d');
@@ -63,6 +67,7 @@ export async function mount(root) {
     world?.canvas.remove();
     Object.values(costs).forEach((c) => c.clear());
     const population = POPULATIONS[slider.value];
+    costs.actors.setLimit(population);
     let canvas = el('canvas', { class: 'anthill__ants', width: WIDTH, height: HEIGHT, 'aria-hidden': 'true' });
     let renderer = createRenderer(canvas, population, sprites, colors.groundHex);
     if (!renderer) { // a canvas that tried WebGL takes no 2D context: the dots get a fresh one
@@ -198,6 +203,7 @@ export async function mount(root) {
   setInterval(() => {
     const state = world;
     if (!state?.ready) { frames = 0; return; }
+    costs.actors.push(state.stats.colonies.reduce((sum, c) => sum + c.workers + c.brood, 0) + 2);
     costs.fps.push(frames);
     costs.speed.push(state.speed);
     if (state.memory) costs.memory.push(state.memory);
