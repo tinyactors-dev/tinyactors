@@ -152,6 +152,10 @@ What happened, step by step:
    The actor runs on the event loop on its own; `idle()` only watches.
    `host.close()` frees the host.
 
+The [chat tutorial](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/chat-tutorial) goes on from here in five steps: a room,
+users with presence, a workspace that makes the rooms, a status roster,
+and hibernation.
+
 ## Concepts
 
 Read these in order the first time. Each builds on the one before.
@@ -686,6 +690,8 @@ are in the package too, under `docs/guide/` in
 
 Writing an application:
 
+- [Chat tutorial](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/chat-tutorial): a chat in five
+  steps, each a program you can run.
 - [Writing charts](docs/guide/charts.md): JavaScript in charts, scripts,
   XML data, several charts, `<invoke>` of a chart, systems and `boot`.
 - [I/O processors](docs/guide/io-processors.md): your code as a chart's
@@ -728,7 +734,8 @@ Wire format:
 
 The example applications in the repository (`examples/`) put these
 together; the chat (`examples/chat-rooms/`) is the one the application
-API was designed against.
+API was designed against, and the chat tutorial (`examples/chat-tutorial/`)
+builds up to it.
 
 The reference is the doc comment of each export in
 [index.d.ts](index.d.ts), which an editor shows on hover. In TypeScript

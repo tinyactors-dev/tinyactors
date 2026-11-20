@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A user. It tracks presence, joins rooms and posts to them.
+     A join or a post counts as activity.
+     A join of a room that does not exist fails with error.communication. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="user" initial="offline">
+  <datamodel>
+    <data id="name"/>
+  </datamodel>
+  <state id="offline">
+    <onentry>
+      <send type="chat:client" event="status"><content expr="({ user: name, status: 'offline' })"/></send>
+    </onentry>
+    <transition event="connect" target="online"/>
+  </state>
+  <state id="online" initial="active">
+    <transition event="disconnect" target="offline"/>
+    <transition event="join">
+      <send id="join" targetexpr="'tinyactors://chat/@room.' + _event.data.room" event="join">
+        <content expr="({ user: name })"/>
+      </send>
+      <raise event="activity"/>
+    </transition>
+    <transition event="joined">
+      <send type="chat:client" event="joined"><content expr="({ to: name, room: _event.data.room })"/></send>
+    </transition>
+    <transition event="error.communication" cond="_event.sendid === 'join'">
+      <send type="chat:client" event="error"><content expr="({ to: name, reason: 'no such room' })"/></send>
+    </transition>
+    <transition event="post">
+      <send targetexpr="'tinyactors://chat/@room.' + _event.data.room" event="post">
+        <content expr="({ user: name, text: _event.data.text })"/>
+      </send>
+      <raise event="activity"/>
+    </transition>
+    <transition event="message">
+      <send type="chat:client" event="message">
+        <content expr="({ to: name, room: _event.data.room, from: _event.data.from, text: _event.data.text })"/>
+      </send>
+    </transition>
+    <state id="active">
+      <onentry>
+        <send type="chat:client" event="status"><content expr="({ user: name, status: 'active' })"/></send>
+        <send id="idle" event="idle" delay="300s"/>
+      </onentry>
+      <onexit><cancel sendid="idle"/></onexit>
+      <transition event="activity">            <!-- no target: the state stays, the timer starts again -->
+        <cancel sendid="idle"/>
+        <send id="idle" event="idle" delay="300s"/>
+      </transition>
+      <transition event="idle" target="away"/>
+    </state>
+    <state id="away">
+      <onentry>
+        <send type="chat:client" event="status"><content expr="({ user: name, status: 'away' })"/></send>
+      </onentry>
+      <transition event="activity" target="active"/>
+    </state>
+  </state>
+</scxml>

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A workspace. It is the collection actor of its rooms: it decides
+     which rooms exist, and it alone spawns them. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="workspace" initial="ready">
+  <script>
+    // Why a new room is refused, or null.
+    function refusal(rooms, creating, name) {
+      if (!/^[a-z0-9-]{1,32}$/.test(name)) return 'invalid name';
+      if (rooms.includes(name)) return 'exists';
+      if (Object.values(creating).some((pending) => pending.name === name)) return 'exists';
+      return null;
+    }
+  </script>
+  <datamodel>
+    <data id="rooms" expr="[]"/>          <!-- the names of the rooms -->
+    <data id="creating" expr="({})"/>     <!-- spawn sendid -> { name, by } -->
+    <data id="sendid"/>
+  </datamodel>
+  <state id="ready">
+    <transition event="room.create" cond="refusal(rooms, creating, _event.data.name) === null">
+      <send type="spawn" event="spawn" idlocation="sendid">
+        <content expr="({ chart: 'room', name: 'room.' + _event.data.name, params: { name: _event.data.name } })"/>
+      </send>
+      <assign location="creating[sendid]" expr="({ name: _event.data.name, by: _event.origin })"/>
+    </transition>
+    <transition event="room.create">
+      <send targetexpr="_event.origin" event="room.refused">
+        <content expr="({ name: _event.data.name, reason: refusal(rooms, creating, _event.data.name) })"/>
+      </send>
+    </transition>
+
+    <!-- the Spawner answers by the sendid of the spawn -->
+    <transition event="spawned" cond="_event.sendid in creating">
+      <assign location="rooms" expr="rooms.concat([creating[_event.sendid].name])"/>
+      <send targetexpr="creating[_event.sendid].by" event="room.created">
+        <content expr="({ name: creating[_event.sendid].name })"/>
+      </send>
+      <script>delete creating[_event.sendid];</script>
+    </transition>
+
+    <transition event="rooms.list">
+      <send targetexpr="_event.origin" event="rooms"><content expr="({ rooms: rooms })"/></send>
+    </transition>
+  </state>
+</scxml>

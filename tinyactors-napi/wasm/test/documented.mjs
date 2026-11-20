@@ -29,6 +29,7 @@ export const BLOCKS = {
 
 // The example applications that do not run in a page, whole.
 export const APPLICATIONS = {
+  'chat-tutorial': 'each step compiles its charts with compileDir, which reads files (node:fs)',
   'chat-rooms': 'it compiles its charts with compileDir and keeps its hibernated actors in files (node:fs), and its demo runs as a process',
   'document-approval': 'its admin view is a node:http server, and it keeps its records in files (node:fs)',
   'http-gateway': 'it is a node:http server',
