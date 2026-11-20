@@ -18,8 +18,9 @@
   </hero>
 
   <section id="actors">
-    <heading>An actor is a statechart.</heading>
-    <p>States, events and timers, written in SCXML. This one charges a card and retries twice.</p>
+    <heading>HTML for control flow.</heading>
+    <p>A statechart is a state machine that scales: states nest inside states, regions run in parallel, and every change happens in response to an event. David Harel invented the notation, UML adopted it, and the W3C wrote it down as <link href="https://www.w3.org/TR/scxml/">SCXML</link>, a markup language with one precise meaning that any runtime runs the same way. SCXML is to control flow what HTML is to documents.</p>
+    <p>Each actor in tinyactors runs one chart. This one charges a card, retries twice, and gives up.</p>
     <code src="../../examples/simulate/payment.scxml" language="scxml" file="payment.scxml"/>
   </section>
 
@@ -29,17 +30,17 @@
       <claim>
         <statement>No server.</statement>
         <p>A host is a library. It runs your actors on your event loop, in Node.js, Bun, Python, the browser or C.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Node.js guide</source>
+        <source to="chat" section="room">Tutorial, step 1</source>
       </claim>
       <claim>
         <statement>Small actors.</statement>
-        <p>An idle actor takes about 1.2 KB in Node.js. The C core takes no memory you did not give it.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/capacity.md">Capacity and memory</source>
+        <p>A started actor takes about 530 bytes in Node.js, with a million of them in the process. The C core takes no memory you did not give it.</p>
+        <source to="performance" section="actors">What an actor costs</source>
       </claim>
       <claim>
         <statement>Millions, mostly asleep.</statement>
-        <p>Idle actors hibernate to your store and wake on their next event. Two million run with a thousand in memory.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-cpython#performance">Benchmarks</source>
+        <p>Idle actors hibernate to your store and wake on their next event. A hibernated actor keeps about 120 bytes in memory, and each operation costs about the same at four million actors as at two.</p>
+        <source to="performance" section="scale">Costs stay flat</source>
       </claim>
     </claims>
   </section>
@@ -56,7 +57,13 @@
 
   <section id="simulate">
     <heading>Simulate a thousand runs.</heading>
-    <p>A seed decides when the service answers. The clock jumps from timeout to timeout.</p>
+    <p>Does the payment ever charge a card four times? Does it give up too early? A test that waits 30 seconds per retry cannot ask that a thousand times. A simulation can.</p>
+    <list ordered="true">
+      <item><term>A fake service</term><text>An I/O processor stands in for the payment service. A seeded random number decides whether it answers each charge.</text></item>
+      <item><term>A fake clock</term><text>The host runs on a <code>SimulatedClock</code>, which jumps straight to the next timeout.</text></item>
+      <item><term>Two checks</term><text>After each run, the program asserts at most three charges, and no giving up before the third.</text></item>
+    </list>
+    <p>The whole program, a thousand runs in under a second:</p>
     <example>
       <code src="../../examples/simulate/simulate.mjs" language="javascript" file="simulate.mjs"/>
       <code src="../../examples/simulate/output.txt" language="text" role="output"/>
@@ -71,12 +78,12 @@
       <claim>
         <statement>A formal model.</statement>
         <p>SCXML defines what every transition does. tinyactors passes all 191 automatic tests of the W3C suite.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-core/blob/main/docs/architecture.md">Architecture</source>
+        <source to="performance" section="correctness">Correct by the standard</source>
       </claim>
       <claim>
         <statement>Every step is a span.</statement>
         <p>Each step an actor takes is traced: the event, the transitions, the states it entered.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/telemetry.md">Telemetry</source>
+        <source to="telemetry">Telemetry</source>
       </claim>
     </claims>
     <actions>

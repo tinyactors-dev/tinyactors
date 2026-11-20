@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="telemetry" path="/telemetry/">
+  <title>Telemetry: every step is a span</title>
+  <description>tinyactors reports what its actors do as OpenTelemetry: a span for each step, logs and metrics, with W3C trace context across actors and systems.</description>
+
+  <hero>
+    <headline>Every step is a <em>span</em>.</headline>
+    <lede>A host reports what its actors did as OpenTelemetry: a span for each step, logs, and metrics. It does no I/O itself. Your exporter sends the bytes.</lede>
+    <actions>
+      <action to="telemetry" section="read">See a trace</action>
+      <action to="telemetry" section="on">Turn it on</action>
+    </actions>
+  </hero>
+
+  <section id="read">
+    <heading>Read a trace.</heading>
+    <p>The payment chart, traced, while the service is silent once and then answers. Each row is a step, under the step that caused it. Select one to see its transitions and what it sent.</p>
+    <live src="../../examples/property/live.mjs" call="trace">
+      <label>Run it</label>
+    </live>
+  </section>
+
+  <section id="on">
+    <heading>Turn it on.</heading>
+    <p>Give the host an encoder in its config and a handler for the requests it writes. The handler gets OTLP bytes, ready to post to a collector. This one reads the spans back.</p>
+    <example>
+      <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Turning it on" fence="1" language="javascript" file="telemetry.mjs"/>
+      <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Turning it on" fence="2" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="options">
+    <heading>Tune the encoder.</heading>
+    <table src="../../../tinyactors-napi/docs/guide/telemetry.md" section="The encoder's options"/>
+  </section>
+
+  <section id="context">
+    <heading>Follow a request.</heading>
+    <p>A <code>traceparent</code> passed with an input is the parent of the step it starts. A send carries the sender's trace to the next actor, or to another system.</p>
+    <example>
+      <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Trace context" fence="1" language="javascript" file="context.mjs"/>
+      <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Trace context" fence="2" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="choose">
+    <heading>Choose what is traced.</heading>
+    <p>Set the detail for every actor, or watch one chart closely for a while.</p>
+    <example>
+      <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Choosing what is traced" fence="1" language="javascript" file="watch.mjs"/>
+      <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Choosing what is traced" fence="2" language="text" role="output"/>
+    </example>
+  </section>
+</page>

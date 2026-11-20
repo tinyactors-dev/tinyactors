@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the website: the content against its schema, the refusals the schema and the build must make, the build's internal links and anchors, and every example a page shows, run"
-#MISE sources=["content/**/*", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE sources=["content/**/*", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 
@@ -16,7 +16,8 @@
 #    what it prints compared with its output.txt, which the page shows.
 #    A page's code is these files themselves (<code src>), so what a page
 #    shows is what ran here.
-# 5. test/components.mjs: the trace view's tree, time format and axis. The
+# 5. The guides' examples a page transcludes, run (see below).
+# 6. test/components.mjs: the trace view's tree, time format and axis. The
 #    components' rendering, and the live examples in a page, run in a
 #    browser, which this task does not start.
 
@@ -98,7 +99,50 @@ programs.each do |dir|
 end
 puts "website: #{programs.size} example programs ran and printed their output.txt"
 
-# 5. The components' pure parts (their rendering runs in a browser).
+# 5. The guides' examples a page transcludes: in each <example>, a
+#    javascript <code src="...md" section fence> is run in examples/guides
+#    against the published package, and must print the output fence the
+#    example shows beside it. Sections and fences are read as
+#    render/site.xsl reads them.
+def markdown_section(file, heading)
+  lines = file.read.split(/\r?\n/, -1)
+  start = lines.index("## #{heading}") or Website.fail!("#{file}: no section \"## #{heading}\"")
+  after = lines[(start + 1)..]
+  after.take_while { |line| !line.start_with?('## ') }
+end
+
+def markdown_fence(file, heading, n)
+  lines = markdown_section(file, heading)
+  marks = lines.each_index.select { |i| lines[i].start_with?('```') }
+  Website.fail!("#{file}: \"## #{heading}\" has no fence #{n}") if marks.size < 2 * n
+  lines[(marks[2 * n - 2] + 1)...marks[2 * n - 1]].join("\n")
+end
+
+guides = Website::EXAMPLES.join('guides')
+Website.run('npm', 'ci', '--no-audit', '--no-fund', chdir: guides) unless guides.join('node_modules/.package-lock.json').file?
+transcluded = 0
+Website.documents.each do |document|
+  document.read.scan(%r{<example>(.*?)</example>}m).flatten.each do |example|
+    codes = example.scan(/<code\s([^>]*?)\/?>/).flatten.map { |attributes| attributes.scan(/([\w-]+)="([^"]*)"/).to_h }
+    program = codes.find { |code| code['src']&.end_with?('.md') && code['language'] == 'javascript' }
+    output = codes.find { |code| code['src']&.end_with?('.md') && code['role'] == 'output' }
+    next unless program && output
+
+    source = ->(code) { document.dirname.join(code['src']).expand_path }
+    file = guides.join("#{transcluded}.transcluded.mjs")
+    file.write("#{markdown_fence(source.call(program), program['section'], program['fence'].to_i)}\n")
+    want = markdown_fence(source.call(output), output['section'], output['fence'].to_i)
+    out, ok = Website.capture('node', file.basename, chdir: guides)
+    file.delete
+    name = "#{document.basename}: \"#{program['section']}\" fence #{program['fence']}"
+    failures << "#{name}: failed:\n#{out}" unless ok
+    failures << "#{name}: printed\n#{out}but the guide's output is\n#{want}" if ok && out.strip != want.strip
+    transcluded += 1
+  end
+end
+puts "website: #{transcluded} transcluded guide examples ran and printed their guide's output"
+
+# 6. The components' pure parts (their rendering runs in a browser).
 out, ok = Website.capture('node', Website::ROOT.join('test/components.mjs'))
 failures << "test/components.mjs failed:\n#{out}" unless ok
 puts "website: #{out.strip}" if ok

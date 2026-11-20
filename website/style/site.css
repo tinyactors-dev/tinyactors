@@ -60,13 +60,14 @@ p code, li code, h1 code, h2 code, h3 code, figcaption code {
 
 .install { display: grid; gap: var(--space-2); max-width: 36em; margin-top: var(--space-8); }
 .section__body .install { margin-top: 0; }
-.install__panel { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.install__panel { display: grid; gap: var(--space-2); justify-items: start; }
 .install__panel[hidden] { display: none; }
 .install__command {
-  flex: 1; min-width: 0; display: block; overflow-x: auto; white-space: nowrap; padding: var(--space-2) var(--space-3);
+  box-sizing: border-box; width: 100%; min-width: 0; display: block; overflow-x: auto; white-space: nowrap; padding: var(--space-2) var(--space-3);
   background: var(--surface-code); border: 1px solid var(--code-border); border-radius: var(--radius-2); color: var(--code-fg); font: var(--type-code);
 }
-.install__guide { font: var(--type-ui); white-space: nowrap; }
+.install__guide { font: var(--type-body-sm); }
+.install__guide::after { content: " →"; }
 .install__prompt { color: var(--code-muted); user-select: none; }
 
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-8); }
@@ -130,6 +131,17 @@ ta-tabs { display: block; }
 .hljs-variable, .hljs-params, .hljs-property { color: var(--fg-1); }
 .hljs-punctuation, .hljs-operator { color: var(--fg-2); }
 .hljs-subst { color: inherit; }
+
+/* tables transcluded from the guides: numbers read across a row */
+.table { margin: 0; display: grid; gap: var(--space-2); }
+.table__scroll { overflow-x: auto; border: 1px solid var(--border-1); border-radius: var(--radius-2); background: var(--surface-1); }
+.table table { border-collapse: collapse; width: 100%; font: var(--type-body-sm); font-variant-numeric: tabular-nums; }
+.table th, .table td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-1); text-align: left; vertical-align: top; }
+.table thead th { background: var(--surface-2); color: var(--fg-2); font-weight: var(--fw-medium); white-space: nowrap; }
+.table tbody th { font-weight: var(--fw-medium); color: var(--fg-1); }
+.table td { font-family: var(--font-mono); font-size: var(--fs-13); color: var(--fg-1); white-space: nowrap; }
+.table tbody tr:last-child > * { border-bottom: 0; }
+.table__caption { font: var(--type-body-sm); color: var(--fg-3); max-width: var(--prose-max); }
 
 /* ---------------------------------------------------- live examples */
 

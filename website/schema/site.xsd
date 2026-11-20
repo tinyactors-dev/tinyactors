@@ -141,8 +141,28 @@
       <xs:element ref="install"/>
       <xs:element ref="actions"/>
       <xs:element ref="live"/>
+      <xs:element ref="table"/>
     </xs:choice>
   </xs:group>
+
+  <xs:element name="table">
+    <xs:annotation><xs:documentation>
+      A table of measurements or options, transcluded from a guide of the
+      repository: the `index`-th table (counted from 1) in the section of
+      `src` headed `section`. The build reads it at every build, so the site
+      shows what the guide says now. `caption` says what was measured, when
+      and on what.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="caption" type="inline" minOccurs="0"/>
+      </xs:sequence>
+      <xs:attribute name="src" type="path" use="required"/>
+      <xs:attribute name="section" type="plain-attribute" use="required"/>
+      <xs:attribute name="index" type="xs:positiveInteger" default="1"/>
+      <xs:assert test="ends-with(@src, '.md')"/>
+    </xs:complexType>
+  </xs:element>
 
   <xs:element name="live">
     <xs:annotation><xs:documentation>
@@ -198,6 +218,15 @@
       <xs:simpleContent>
         <xs:extension base="xs:string">
           <xs:attribute name="src" type="path"/>
+          <xs:attribute name="section" type="plain-attribute">
+            <xs:annotation><xs:documentation>
+              With a Markdown `src` (a guide of the repository): the heading
+              of its section ("Turning it on", the text after "## "), whose
+              `fence`-th fenced block, counted from 1, this is. The guides'
+              examples are run by `mise run test` against their output.
+            </xs:documentation></xs:annotation>
+          </xs:attribute>
+          <xs:attribute name="fence" type="xs:positiveInteger"/>
           <xs:attribute name="lines">
             <xs:annotation><xs:documentation>
               With `src`: the lines of the file to show, "first-last",
@@ -221,6 +250,7 @@
           </xs:attribute>
           <xs:assert test="if (@src) then normalize-space(.) = '' else normalize-space(.) != ''"/>
           <xs:assert test="not(@lines) or (@src and xs:integer(substring-before(@lines, '-')) le xs:integer(substring-after(@lines, '-')))"/>
+          <xs:assert test="if (ends-with(@src, '.md')) then (@section and @fence and not(@lines)) else not(@section or @fence)"/>
         </xs:extension>
       </xs:simpleContent>
     </xs:complexType>
@@ -342,11 +372,20 @@
   </xs:complexType>
 
   <xs:complexType name="source" mixed="true">
-    <xs:annotation><xs:documentation>Where a claim can be checked: the text names it, `href` points at it.</xs:documentation></xs:annotation>
+    <xs:annotation><xs:documentation>
+      Where a claim can be checked: the text names it; `to` (and `section`)
+      a page of this site that shows the evidence, or `href` a primary
+      source elsewhere (a standard). A page of the site is the better one:
+      the reader stays here.
+    </xs:documentation></xs:annotation>
     <xs:choice minOccurs="0" maxOccurs="unbounded">
       <xs:element name="code" type="nonempty"/>
     </xs:choice>
-    <xs:attribute name="href" type="external" use="required"/>
+    <xs:attribute name="to" type="xs:NCName"/>
+    <xs:attribute name="section" type="xs:NCName"/>
+    <xs:attribute name="href" type="external"/>
+    <xs:assert test="count((@to, @href)) = 1"/>
+    <xs:assert test="not(@section) or @to"/>
     <xs:assert test="normalize-space(.) != ''"/>
   </xs:complexType>
 

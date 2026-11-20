@@ -1,0 +1,9 @@
+{
+  "name": "tinyactors-website-guides",
+  "private": true,
+  "type": "module",
+  "description": "Where test runs the guides' examples a page transcludes (<code src=\"...md\" section fence>), against the published @tinyactors/node, and compares each with the output fence that follows it.",
+  "dependencies": {
+    "@tinyactors/node": "0.4.0"
+  }
+}

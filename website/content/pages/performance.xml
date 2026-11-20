@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="performance" path="/performance/">
+  <title>Memory, capacity and performance</title>
+  <description>What a tinyactors actor costs in memory, how to size a host, how each operation's cost holds as the population doubles, and its conformance to SCXML.</description>
+
+  <hero>
+    <headline>Small actors, <em>flat</em> costs.</headline>
+    <lede>What an actor costs in memory, how to size a host, and how each operation's cost holds as the population doubles. Every number comes from a program in the repository that you can run.</lede>
+    <actions>
+      <action to="performance" section="actors">See the costs</action>
+      <action to="performance" section="scale">See the scaling</action>
+    </actions>
+  </hero>
+
+  <section id="actors">
+    <heading>What an actor costs.</heading>
+    <p>One more actor, message or delayed send, measured as resident memory in a process with a million of them.</p>
+    <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="1">
+      <caption>Measured 2026-11-20 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1. A counter chart with one variable, messages of <code>{"text": "hello"}</code>, tracing on.</caption>
+    </table>
+    <p>A host's fixed costs spread over its actors, so an actor costs less in a larger population.</p>
+    <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="2">
+      <caption>Node.js on the native datamodel.</caption>
+    </table>
+  </section>
+
+  <section id="sizing">
+    <heading>Size a host.</heading>
+    <p>A host grows on its own, but each growth copies its memory. A host that will hold a known population is better sized for it.</p>
+    <example>
+      <code src="../../../tinyactors-napi/docs/guide/capacity.md" section="Sizing a host up front" fence="1" language="javascript" file="size.mjs"/>
+      <code src="../../../tinyactors-napi/docs/guide/capacity.md" section="Sizing a host up front" fence="2" language="text" role="output"/>
+    </example>
+    <p>Read what a host uses at any time:</p>
+    <example>
+      <code src="../../../tinyactors-napi/docs/guide/capacity.md" section="Reading what a host uses" fence="1" language="javascript" file="stats.mjs"/>
+      <code src="../../../tinyactors-napi/docs/guide/capacity.md" section="Reading what a host uses" fence="2" language="text" role="output"/>
+    </example>
+  </section>
+
+  <section id="scale">
+    <heading>Costs stay flat.</heading>
+    <p>Every operation of the API, timed on a host of two million actors and on one of four million. Each cell is the cost at two million, then at four, and their ratio. A test fails when a ratio passes 1.5.</p>
+    <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="Work does not grow with the population" index="1">
+      <caption>Most actors hibernated in SQLite, at most 1000 resident. Measured 2026-10-17 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.3 and Bun 1.4.1. Microseconds.</caption>
+    </table>
+  </section>
+
+  <section id="correctness">
+    <heading>Correct by the standard.</heading>
+    <p>The core passes all 191 automatic tests of the <link href="https://www.w3.org/Voice/2013/scxml-irp/">W3C's SCXML test suite</link>. Every binding runs the same conformance suite, on each of its datamodels.</p>
+  </section>
+</page>

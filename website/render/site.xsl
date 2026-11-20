@@ -74,7 +74,7 @@
         <xsl:message terminate="yes">site: two pages have the path "{current-grouping-key()}"</xsl:message>
       </xsl:if>
     </xsl:for-each-group>
-    <xsl:for-each select="($site, $pages)//(s:link, s:action)[@to]">
+    <xsl:for-each select="($site, $pages)//(s:link, s:action, s:source)[@to]">
       <xsl:variable name="target" select="$pages[@id = current()/@to]"/>
       <xsl:if test="empty($target)">
         <xsl:message terminate="yes">site: {f:where(.)}: a link to the page "{@to}", which the site does not list</xsl:message>
@@ -281,6 +281,35 @@
     </ta-live>
   </xsl:template>
 
+  <!-- A table transcluded from a guide: its first row is the head. -->
+  <xsl:template match="s:table">
+    <xsl:variable name="rows" select="f:table(.)"/>
+    <figure class="table">
+      <div class="table__scroll" tabindex="0">
+        <table>
+          <thead>
+            <tr><xsl:for-each select="f:cells($rows[1])"><th scope="col"><xsl:sequence select="f:inline(.)"/></th></xsl:for-each></tr>
+          </thead>
+          <tbody>
+            <xsl:for-each select="$rows[position() gt 2]">
+              <tr>
+                <xsl:for-each select="f:cells(.)">
+                  <xsl:choose>
+                    <xsl:when test="position() = 1"><th scope="row"><xsl:sequence select="f:inline(.)"/></th></xsl:when>
+                    <xsl:otherwise><td><xsl:sequence select="f:inline(.)"/></td></xsl:otherwise>
+                  </xsl:choose>
+                </xsl:for-each>
+              </tr>
+            </xsl:for-each>
+          </tbody>
+        </table>
+      </div>
+      <xsl:if test="s:caption">
+        <figcaption class="table__caption"><xsl:apply-templates select="s:caption/node()"/></figcaption>
+      </xsl:if>
+    </figure>
+  </xsl:template>
+
   <xsl:template match="s:example">
     <div class="example">
       <xsl:apply-templates select="s:code"/>
@@ -304,7 +333,7 @@
               <span class="claim__label">Source:</span>
               <xsl:for-each select="s:source">
                 <xsl:if test="position() gt 1"><span class="claim__sep" aria-hidden="true"> · </span></xsl:if>
-                <a href="{@href}"><xsl:apply-templates/></a>
+                <a href="{f:href(.)}"><xsl:apply-templates/></a>
               </xsl:for-each>
             </p>
           </div>
@@ -394,7 +423,9 @@
        blank first and last lines and the common indentation removed. -->
   <xsl:function name="f:code" as="xs:string">
     <xsl:param name="code" as="element(s:code)"/>
-    <xsl:variable name="text" select="if ($code/@src) then unparsed-text(resolve-uri($code/@src, base-uri($code))) else string($code)"/>
+    <xsl:variable name="text" select="if ($code/@fence) then f:fence($code)
+                                      else if ($code/@src) then unparsed-text(resolve-uri($code/@src, base-uri($code)))
+                                      else string($code)"/>
     <xsl:variable name="all" select="tokenize(replace(replace($text, '^\s*\n', ''), '\n\s*$', ''), '\n')"/>
     <xsl:variable name="first" select="if ($code/@lines) then xs:integer(substring-before($code/@lines, '-')) else 1"/>
     <xsl:variable name="last" select="if ($code/@lines) then xs:integer(substring-after($code/@lines, '-')) else count($all)"/>
@@ -404,6 +435,70 @@
     <xsl:variable name="lines" select="$all[position() ge $first and position() le $last]"/>
     <xsl:variable name="indent" select="min($lines[normalize-space(.) != ''] ! string-length(replace(., '^( *).*$', '$1')))"/>
     <xsl:sequence select="string-join($lines ! substring(., $indent + 1), '&#10;')"/>
+  </xsl:function>
+
+  <!-- ===================================================== Markdown
+       What the site transcludes from the repository's guides. A section
+       runs from its "## heading" line to the next "## " line; a fence is
+       the lines between two "```" lines; a table is a run of lines that
+       start with "|". mise/tasks/test reads them the same way. -->
+
+  <xsl:function name="f:section" as="xs:string*">
+    <xsl:param name="node" as="element()"/>
+    <xsl:variable name="lines" select="tokenize(unparsed-text(resolve-uri($node/@src, base-uri($node))), '\r?\n')"/>
+    <xsl:variable name="start" select="index-of($lines, '## ' || $node/@section)[1]"/>
+    <xsl:if test="empty($start)">
+      <xsl:message terminate="yes">site: {f:where($node)}: {$node/@src} has no section "## {$node/@section}"</xsl:message>
+    </xsl:if>
+    <xsl:variable name="after" select="subsequence($lines, $start + 1)"/>
+    <xsl:variable name="end" select="(index-of($after ! starts-with(., '## '), true())[1], count($after) + 1)[1]"/>
+    <xsl:sequence select="subsequence($after, 1, $end - 1)"/>
+  </xsl:function>
+
+  <xsl:function name="f:fence" as="xs:string">
+    <xsl:param name="code" as="element(s:code)"/>
+    <xsl:variable name="lines" select="f:section($code)"/>
+    <xsl:variable name="marks" select="index-of($lines ! starts-with(., '```'), true())"/>
+    <xsl:variable name="n" select="xs:integer($code/@fence)"/>
+    <xsl:if test="count($marks) lt 2 * $n">
+      <xsl:message terminate="yes">site: {f:where($code)}: "## {$code/@section}" of {$code/@src} has no fence {$n}</xsl:message>
+    </xsl:if>
+    <xsl:sequence select="string-join(subsequence($lines, $marks[2 * $n - 1] + 1, $marks[2 * $n] - $marks[2 * $n - 1] - 1), '&#10;')"/>
+  </xsl:function>
+
+  <xsl:function name="f:table" as="xs:string*">
+    <xsl:param name="table" as="element(s:table)"/>
+    <xsl:variable name="lines" select="f:section($table)"/>
+    <xsl:variable name="row" select="$lines ! starts-with(., '|')"/>
+    <xsl:variable name="starts" select="for $i in 1 to count($lines) return (if ($row[$i] and ($i = 1 or not($row[$i - 1]))) then $i else ())"/>
+    <xsl:variable name="n" select="xs:integer(($table/@index, 1)[1])"/>
+    <xsl:if test="count($starts) lt $n">
+      <xsl:message terminate="yes">site: {f:where($table)}: "## {$table/@section}" of {$table/@src} has no table {$n}</xsl:message>
+    </xsl:if>
+    <xsl:variable name="from" select="$starts[$n]"/>
+    <xsl:variable name="rest" select="subsequence($row, $from)"/>
+    <xsl:variable name="length" select="(index-of($rest, false())[1] - 1, count($rest))[1]"/>
+    <xsl:sequence select="subsequence($lines, $from, $length)"/>
+  </xsl:function>
+
+  <xsl:function name="f:cells" as="xs:string*">
+    <xsl:param name="row" as="xs:string"/>
+    <xsl:sequence select="tokenize(replace($row, '^\s*\|\s*|\s*\|\s*$', ''), '\s*\|\s*')"/>
+  </xsl:function>
+
+  <!-- A cell's Markdown: `code` and **strong** kept, a link's text only. -->
+  <xsl:function name="f:inline" as="node()*">
+    <xsl:param name="text" as="xs:string"/>
+    <xsl:analyze-string select="$text" regex="`([^`]+)`|\*\*([^*]+)\*\*|\[([^\]]+)\]\([^)]+\)">
+      <xsl:matching-substring>
+        <xsl:choose>
+          <xsl:when test="regex-group(1)"><code>{regex-group(1)}</code></xsl:when>
+          <xsl:when test="regex-group(2)"><strong>{regex-group(2)}</strong></xsl:when>
+          <xsl:otherwise>{regex-group(3)}</xsl:otherwise>
+        </xsl:choose>
+      </xsl:matching-substring>
+      <xsl:non-matching-substring>{.}</xsl:non-matching-substring>
+    </xsl:analyze-string>
   </xsl:function>
 
   <xsl:function name="f:where" as="xs:string">
