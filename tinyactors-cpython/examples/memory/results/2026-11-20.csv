@@ -34,3 +34,18 @@ python 3.13.18,ecmascript,on,100000,"per actor, after an event",1521,0,195,,,"In
 python 3.13.18,ecmascript,on,100000,"per actor, hibernated",89,0,81,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
 python 3.13.18,ecmascript,on,100000,"per message waiting",303,0,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
 python 3.13.18,ecmascript,on,100000,"per delayed send pending",350,0,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,1000000,"per actor, started",,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,1000000,"per actor, after an event",,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,1000000,"per actor, hibernated",85,0,82,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,1000000,"per message waiting",305,0,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,1000000,"per delayed send pending",354,0,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,2000000,"per actor, started",,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,2000000,"per actor, after an event",,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,2000000,"per actor, hibernated",83,0,82,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,2000000,"per message waiting",305,0,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,2000000,"per delayed send pending",354,0,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,4000000,"per actor, started",,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,4000000,"per actor, after an event",,,,,"exit 1","Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,4000000,"per actor, hibernated",83,0,82,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,4000000,"per message waiting",305,0,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
+python 3.13.18,ecmascript,on,4000000,"per delayed send pending",354,0,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x86_64",2026-11-20
