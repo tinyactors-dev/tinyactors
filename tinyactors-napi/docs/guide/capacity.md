@@ -115,6 +115,11 @@ actor; read `slabBytes.highWater` under load to see.
 
 ## What an actor costs
 
+To measure your own case, run the [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory) from the
+repository. It prints what an actor, a message and a delayed send cost
+on your runtime and datamodel, for your chart and your data, in whole
+bytes.
+
 Measured with `mise run measure` in the repository (2026-10-17, x86_64
 Linux 6.18, Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB; node 22.23.3, bun
 1.4.1): 10,000 actors of a chart with three `<data>`, one of them a list,
