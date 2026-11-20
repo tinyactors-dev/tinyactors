@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+#MISE description="Validate the content against its schema and build the site into build/site: the pages, sitemap.xml, llms.txt and assets"
+#MISE sources=["content/**/*", "schema/**/*", "render/**/*", "style/**/*", "examples/**/*.{scxml,mjs,txt}", "mise/website.rb", "mise/tasks/build", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE outputs=["build/site/index.html"]
+# vim:ft=ruby
+
+# sxml validates every document of content/ against schema/site.xsd, then
+# runs render/site.xsl on content/site.xml, which writes a file per page and
+# stops at a link to a page or section that does not exist. The design
+# system's stylesheets go ahead of style/site.css in one assets/site.css.
+
+require_relative '../website'
+
+Website.build!

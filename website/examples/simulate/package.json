@@ -1,0 +1,10 @@
+{
+  "name": "tinyactors-website-example-simulate",
+  "private": true,
+  "type": "module",
+  "main": "simulate.mjs",
+  "description": "The home page's simulation: a payment chart, a thousand seeds, two invariants. test/examples runs it and compares what it prints with output.txt.",
+  "dependencies": {
+    "@tinyactors/node": "0.4.0"
+  }
+}

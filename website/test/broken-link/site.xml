@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A link to a page the site does not list: the schema sees one document
+     at a time, so the build refuses it. expect: a link to the page "missing" -->
+<site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev">
+  <name>t</name>
+  <tagline>A test site.</tagline>
+  <nav><link to="missing">Missing</link></nav>
+  <pages><page src="pages/home.xml"/></pages>
+  <footer><links><link href="https://example.com">Example</link></links></footer>
+</site>

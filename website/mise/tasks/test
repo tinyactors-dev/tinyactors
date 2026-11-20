@@ -1,0 +1,95 @@
+#!/usr/bin/env ruby
+#MISE description="Test the website: the content against its schema, the refusals the schema and the build must make, the build's internal links and anchors, and every example a page shows, run"
+#MISE sources=["content/**/*", "schema/**/*", "render/**/*", "style/**/*", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE outputs={auto=true}
+# vim:ft=ruby
+
+# 1. test/invalid/: each document must be refused by the schema, with the
+#    rule its comment names (`expect: <rule>`): what content must never
+#    say (a claim with no source, a styling attribute, ...).
+# 2. test/broken-link/: a site whose link names a page it does not list;
+#    the build must stop, naming it (`expect: <message>`).
+# 3. The build (validation first), then every link and asset a page names
+#    on this site resolves to a file, and every #anchor to an id there.
+# 4. Each directory of examples/: its packages installed from its
+#    package-lock.json (npm ci), its program (package.json's "main") run,
+#    and what it prints compared with its output.txt, which the page shows.
+#    A page's code is these files themselves (<code src>), so what a page
+#    shows is what ran here.
+
+require_relative '../website'
+require 'tmpdir'
+
+failures = []
+expected = ->(file) { file.read[/expect: (.+?)\s*-->/m, 1] or Website.fail!("#{file}: no `expect:` in its comment") }
+
+# 1. What the schema refuses.
+invalid = Website::ROOT.glob('test/invalid/*.xml').sort
+invalid.each do |file|
+  rule = expected.call(file)
+  out, ok = Website.capture('sxml', 'validate', "--schema=#{Website::SCHEMA}", file)
+  if ok
+    failures << "#{file.basename}: valid, but must be refused (#{rule})"
+  elsif !out.include?(" #{rule}:")
+    failures << "#{file.basename}: refused, but not by #{rule}:\n#{out}"
+  end
+end
+puts "website: the schema refuses #{invalid.size - failures.size} of #{invalid.size} invalid documents, each by its rule"
+
+# 2. What the build refuses.
+Dir.mktmpdir('website-test') do |dir|
+  site = Website::ROOT.join('test/broken-link/site.xml')
+  message = expected.call(site)
+  out, ok = Website.capture('sxml', 'transform', "--result-directory=#{dir}", Website::STYLESHEET, site)
+  failures << "broken-link: built, but must stop at #{message.inspect}" if ok
+  failures << "broken-link: stopped, but without #{message.inspect}:\n#{out}" if !ok && !out.include?(message)
+end
+puts 'website: the build refuses a link to a page the site does not list'
+
+# 3. The build, and its internal links.
+Website.build!
+pages = Website::SITE.glob('**/*.html').to_h { |file| [file, file.read] }
+ids = ->(file) { pages.fetch(file, '').scan(/\sid="([^"]+)"/).flatten }
+resolve = lambda do |path|
+  file = Website::SITE.join(path.delete_prefix('/'))
+  [path.end_with?('/') ? file.join('index.html') : file, file.join('index.html')].find(&:file?)
+end
+links = 0
+pages.each do |file, html|
+  html.scan(/\s(?:href|src|srcset)="([^"]*)"/).flatten.each do |url|
+    next if url.match?(%r{\A[a-z]+:}) # another site's: not checked here
+
+    links += 1
+    path, anchor = url.split('#', 2)
+    target = path.empty? ? file : resolve.call(path)
+    if target.nil?
+      failures << "#{file.relative_path_from(Website::SITE)}: #{url}: no such file in the build"
+    elsif anchor && !ids.call(target).include?(anchor)
+      failures << "#{file.relative_path_from(Website::SITE)}: #{url}: no id #{anchor.inspect} there"
+    end
+  end
+end
+puts "website: #{links} links and assets in #{pages.size} pages resolve"
+
+# 4. The examples, run.
+examples = Website::EXAMPLES.children.select(&:directory?).sort
+examples.each do |dir|
+  main = dir.join('package.json').read[/"main":\s*"([^"]+)"/, 1] or Website.fail!("#{dir}/package.json names no main")
+  unless dir.join('node_modules/.package-lock.json').file?
+    Website.run('npm', 'ci', '--no-audit', '--no-fund', chdir: dir)
+  end
+  out, ok = Website.capture('node', main, chdir: dir)
+  want = dir.join('output.txt').read
+  if !ok
+    failures << "examples/#{dir.basename}: #{main} failed:\n#{out}"
+  elsif out != want
+    failures << "examples/#{dir.basename}: #{main} printed\n#{out}but output.txt says\n#{want}"
+  end
+end
+puts "website: #{examples.size} examples ran and printed their output.txt"
+
+unless failures.empty?
+  warn failures.map { |failure| "website: #{failure}" }.join("\n")
+  exit 1
+end
+puts 'website: ok'

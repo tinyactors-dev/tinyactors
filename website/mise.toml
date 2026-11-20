@@ -1,0 +1,12 @@
+# The website, https://www.tinyactors.dev: content in XML (content/),
+# its schema (schema/site.xsd), the XSLT that renders it (render/site.xsl)
+# and the layout over the design system (style/site.css). Tasks are Ruby
+# file tasks in mise/tasks/ (the root AGENTS.md).
+
+[tools]
+# sxml validates the content against its XSD 1.1 schema and runs the XSLT
+# 4.0 stylesheet that writes the pages (https://sxml.tinyactors.dev).
+"github:tinyactors-dev/sxml" = "0.2.0"
+# Node.js runs the examples the pages show (examples/, with the packages
+# they import from npm), the local server and wrangler, which deploys.
+node = "22"

@@ -1,0 +1,19 @@
+#!/usr/bin/env ruby
+#MISE description="Build the site and deploy it to Cloudflare Workers at https://www.tinyactors.dev (wrangler.jsonc)"
+#MISE depends=["build"]
+#USAGE flag "--dry-run" help="Build and check the upload with wrangler, but deploy nothing"
+# vim:ft=ruby
+
+# The build is the Worker's static assets: no code runs in front of them
+# (wrangler.jsonc). Wrangler reads its credentials from CLOUDFLARE_API_TOKEN,
+# which fnox reads from 1Password (the root fnox.toml), or from
+# `wrangler login` where fnox is not installed. A release deploys too
+# (mise run release); this deploys the working tree, for a fix that needs
+# no release.
+
+require_relative '../website'
+
+dry = ENV['usage_dry_run'] == 'true'
+secrets = system('sh', '-c', 'command -v fnox', out: File::NULL) ? %w[fnox exec --] : []
+Website.run(*secrets, 'npx', '--yes', Website::WRANGLER, 'deploy', *(dry ? %w[--dry-run] : []))
+puts "website: deployed to #{Website::ORIGIN}" unless dry

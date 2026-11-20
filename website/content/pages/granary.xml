@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="granary" path="/granary/">
+  <title>granary: statecharts all the way down</title>
+  <description>How granary, a GitHub app, models its product, its fakes, its simulated users and its operations as statecharts, and tests all of them through their states.</description>
+
+  <hero>
+    <kicker>Case study</kicker>
+    <headline>A GitHub app that is statecharts <em>all the way down</em>.</headline>
+    <lede>granary listens to GitHub's issue webhooks and closes issues opened by people who are not on an allowlist. It runs in production at <link href="https://granary.tinyactors.dev">granary.tinyactors.dev</link>, on <code>@tinyactors/node</code>. Its source and its 182 decision records are public. This page follows the statecharts through it, with a record behind each step.</lede>
+    <actions>
+      <action href="https://github.com/tinyactors-dev/granary">Read the source</action>
+      <action href="https://github.com/tinyactors-dev/granary/tree/main/docs/adr">Read the decisions</action>
+    </actions>
+  </hero>
+
+  <section id="product">
+    <kicker>The product</kicker>
+    <heading>One chart <em>per issue</em>.</heading>
+    <p>Every issue is an actor of its own, named <code>issue/&lt;repository&gt;-&lt;number&gt;</code>. It is spawned with what SQLite knows about the issue, asks the allowlist actor for a verdict, and either leaves the issue open or asks GitHub to close it. The chart's own comment draws it:</p>
+    <code language="text" file="src/lib/server/actors/issue.ts">
+      restore ──(phase closing)──────────────────────────────▶ closing
+         └────(phase new | settled)──▶ idle
+      idle ──issue.opened (phase settled)──▶ settled
+      idle ──issue.opened──▶ checking
+      checking ──allowlist.verdict allowed──▶ allowed
+      checking ──allowlist.verdict not allowed──▶ closing
+      checking ──check.timeout (10 s, send id check-timeout)──▶ failed
+      closing (entry: &lt;send type="github"&gt; github.close)
+         ──github.closed──▶ closed   ──github.gave-up──▶ failed
+         issue.opened in closing is ignored (duplicate deliveries).
+    </code>
+    <p>Duplicate webhook deliveries, a verdict that never comes and a restart halfway through a close are states and transitions of this chart, not special cases scattered through handlers. The state is small and rebuilt from SQLite, so a crash test can kill the process and start it again.</p>
+  </section>
+
+  <section id="tests">
+    <kicker>The tests</kicker>
+    <heading>Tests assert on <em>states</em>.</heading>
+    <p>granary has no unit tests. Its tests start the built application with a fake GitHub and an OpenTelemetry collector, drive it only through its webhooks and HTTP, and assert on what the actors did: which final state an issue's actor reached, and how many times.</p>
+    <code language="typescript" file="tests/crash.test.ts">
+      const i = await openIssue(h(), 'mallory'); // resolves after the 202
+      await h().restartApp({ kill: 'SIGKILL' });
+      const issue = await waitClosedOnGithub(h(), i, 60_000);
+      // Give a possible duplicate run time to show up.
+      await Bun.sleep(1500);
+      expectClosedOnce(await fakeIssue(h(), i), i);
+      expect(issue.state_reason).toBe('not_planned');
+      await h().waitForSpan(actorFinished(i.address, 'closed'), { timeout: 10_000 });
+      expect(finalStates(h().index(), i.address).filter((s) => s === 'closed')).toHaveLength(1);
+    </code>
+    <p>A test that names states survives a refactor of the code behind them. It fails only when the behaviour changes.</p>
+    <claims>
+      <claim>
+        <statement>The trace is the test's oracle.</statement>
+        <p>Every step of every actor is a span: the event taken, the transitions, the states entered. The harness indexes the spans and waits for a predicate such as <code>actorFinished(address, 'closed')</code>.</p>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0007-testing-through-traces.md">ADR 0007, tests assert on traces</source>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0062-trace-vocabulary-and-predicates.md">ADR 0062, trace vocabulary and predicates</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="fakes">
+    <kicker>The fakes</kicker>
+    <heading>The world around it is <em>charts too</em>.</heading>
+    <p>granary's tests run against a fake GitHub and a fake object store. Both are actor systems of their own, so their behaviour, including how they fail, is written down the same way.</p>
+    <list>
+      <item><term><code>delivery/&lt;id&gt;</code></term><text>One webhook delivery: <code>sending → delivered | failed</code>, and back to <code>sending</code> when it is redelivered.</text></item>
+      <item><term><code>repository/&lt;id&gt;</code></term><text>One repository's issues and comments, answered in GitHub's shapes.</text></item>
+      <item><term><code>faults/main</code></term><text>The faults a test injects, each with a budget: a 503 on the next close, a 403 with <code>Retry-After</code>, a duplicate delivery.</text></item>
+      <item><term><code>bucket/&lt;name&gt;</code></term><text>The fake object store's buckets, with faults of their own: latency, a dropped connection, bytes flipped at rest.</text></item>
+    </list>
+    <claims>
+      <claim>
+        <statement>Faults are state, not mocks.</statement>
+        <p>A fault is consumed by the next matching request, so a test states how many failures the app must survive, and the relay's retries are tested against exactly that.</p>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0060-fake-github-architecture.md">ADR 0060, the fake GitHub</source>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0134-fake-infra-faults.md">ADR 0134, faults in the fake object store</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="users">
+    <kicker>The users</kicker>
+    <heading>Simulated people, <em>with a seed</em>.</heading>
+    <p>Load should look like people, not like a loop: people wait, react to what happened to their issue, escalate and give up. granary's load generator makes each simulated person an actor whose chart is its kind.</p>
+    <list>
+      <item><term>persistent-contributor</term><text><code>waiting → stewing → reopening → … → ragequitting → gaveUp</code>. Its tone escalates with each closure, and it gives up after two to four.</text></item>
+      <item><term>first-timer</term><text><code>hopeful → replying → waitingPatiently → movedOn</code>. It replies politely once after being closed.</text></item>
+      <item><term>bot</term><text><code>flooding ⇄ posting → sleeping</code>. It opens five to fifteen issues in quick succession.</text></item>
+      <item><term>chaos-monkey</term><text><code>lurking ⇄ striking → retired</code>. It injects server errors, rate limits and duplicate deliveries.</text></item>
+      <item><term>fuzzer</term><text><code>choosing ⇄ executing → cooling → exhausted</code>. It works through edge cases: 65,536-character bodies, forged markers, malformed webhooks.</text></item>
+    </list>
+    <p>Randomness is data. Each person's seed is derived from the scenario's seed, and its generator's state lives in the chart's data, so one scenario seed reproduces every choice every person makes.</p>
+    <claims>
+      <claim>
+        <statement>An oracle that does not trust the app.</statement>
+        <p>The load generator judges granary against the policy, not against granary's own records. Allowed people's issues stay open, every closed issue has exactly one comment, nothing is closed twice, and every issue that should close does, within a deadline. It would catch a granary whose bookkeeping agrees with a wrong decision.</p>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0071-personas-as-statecharts.md">ADR 0071, personas are statecharts</source>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0073-observation-metrics-and-invariants.md">ADR 0073, invariants</source>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0074-fuzzing-and-chaos.md">ADR 0074, fuzzing and chaos</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="operations">
+    <kicker>The operations</kicker>
+    <heading>A watchdog that is a <em>control loop</em>.</heading>
+    <p>granary backs itself up and exports its telemetry. Each thing it watches is a condition actor: <code>ok → suspect → healing → ok</code>, or <code>attention</code> when the remedies run out. In <code>healing</code> it asks a remediator for the next step on its ladder (truncating the write-ahead log, cleaning a spool, postponing a backup) and waits for the result. Each remedy is idempotent, so a crash halfway through one only means the next sample decides again.</p>
+    <claims>
+      <claim>
+        <statement>Alerts that fix themselves first.</statement>
+        <p>A condition with remedies reaches a person only after they ran out, and it returns to <code>ok</code> on its own when the cause clears.</p>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0101-ops-topology-revision-self-healing.md">ADR 0101, self-healing</source>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/src/lib/ops/actors/condition.ts">the condition chart</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="next">
+    <kicker>Try it</kicker>
+    <heading>Start with <em>one</em> lifecycle.</heading>
+    <p>Pick the lifecycle in your program that has the most flags and timers, write it as a chart, and test it on a simulated clock.</p>
+    <actions>
+      <action href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/testing.md">Testing your charts</action>
+      <action to="home" section="simulate">See a simulation</action>
+    </actions>
+  </section>
+</page>

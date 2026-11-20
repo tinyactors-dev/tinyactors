@@ -1,0 +1,16 @@
+// The website on Cloudflare Workers: build/site as static assets, with no
+// Worker code in front of them. A directory is served as its index.html
+// ("/granary/"), and a path the site does not have gets 404.html with a
+// 404. `mise run deploy`.
+{
+  "name": "tinyactors-website",
+  "compatibility_date": "2026-09-01",
+  "account_id": "a29df5518d09371e56d0d4e6bf522e48",
+  "assets": {
+    "directory": "build/site",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "routes": [{ "pattern": "www.tinyactors.dev", "custom_domain": true }],
+  "workers_dev": false
+}

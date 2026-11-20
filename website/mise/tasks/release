@@ -1,0 +1,57 @@
+#!/usr/bin/env ruby
+#MISE description="Release the website: check, test, build and pack it; with --publish, commit and tag website/v<version>, push its snapshot to tinyactors-dev/website, and deploy it"
+#USAGE arg "<version>" help="The version to release, MAJOR.MINOR.PATCH"
+#USAGE flag "--publish" help="Commit the release, tag website/v<version>, push, release, and deploy to https://www.tinyactors.dev"
+# vim:ft=ruby
+
+# A release of the website is a version of its content and of the pages
+# built from it, as every component of this repository is released
+# (docs/adr/0016-a-release-repository-per-component.md):
+#
+# - its section of website/CHANGELOG.md, written with the release-changelog
+#   skill and passing `mise run changelog:check website <version>`;
+# - the test task, then the build, packed as website-<version>.tar.gz (the
+#   same bytes for the same commit) with SHA256SUMS, in
+#   build/release/<version>/;
+# - with --publish: the release commit `release(website): v<version>`, the
+#   tag website/v<version>, main pushed, the snapshot of website/ pushed to
+#   tinyactors-dev/website with the tarball as its GitHub release's file,
+#   and the tagged build deployed (mise run deploy).
+#
+# From a cloud session, whose git pushes branches only, GitHub workflows
+# make the tags and the GitHub release (Release.branches_only?).
+
+require_relative '../website'
+require 'release'
+require 'tmpdir'
+
+version = ENV['usage_version'] || ARGV.find { |arg| !arg.start_with?('--') } or Website.fail!('which version?')
+publish = ENV['usage_publish'] == 'true' || ARGV.include?('--publish')
+prefix = 'website/'
+title = "website #{version}"
+
+Release.check_tree!(scope: ['website']) if publish
+tag = Release.check_version!(prefix, version)
+Release.check_changelog!(prefix: prefix, version: version)
+Release.run('mise', 'run', '--force', 'test', chdir: Website::ROOT)
+
+out = Website::BUILD.join('release', version)
+FileUtils.rm_rf(out)
+FileUtils.mkdir_p(out)
+epoch = Release.git('show', '-s', '--format=%ct', 'HEAD').to_s.strip
+tarball = Website.tarball!(version, out, epoch)
+sums = Release.write_sha256sums([tarball], out.join('SHA256SUMS'))
+notes = out.join('RELEASE_NOTES.md')
+notes.write(Release.notes(prefix: prefix, version: version, title: title))
+puts "release: #{tarball.relative_path_from(Website::ROOT)}, #{sums.relative_path_from(Website::ROOT)}"
+puts notes.read
+
+unless publish
+  puts "release: checked, built and packed #{title}; --publish releases and deploys it"
+  exit
+end
+
+subject = "release(website): v#{version}"
+Release.commit_and_tag!(paths: [Website::ROOT.join('CHANGELOG.md')], subject: subject, tag: tag, notes_file: notes)
+Release.push_and_release!(tag: tag, title: title, notes_file: notes, assets: [tarball, sums])
+Release.run('mise', 'run', 'deploy', chdir: Website::ROOT)

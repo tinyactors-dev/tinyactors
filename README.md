@@ -77,6 +77,8 @@ Two rules follow from the table:
   in, a streaming parser and a syntax tree out, or a generated C parser.
 - `staticjs/` is a pure, total subset of JavaScript: the language of a
   proposed data model (`docs/proposals/staticjs.md`).
+- `website/` is https://www.tinyactors.dev: its content in XML, checked
+  against a schema, rendered with XSLT over the design system.
 - `docs/proposals/` holds outlines of possible future work, such as new
   hosts. They are not plans or decisions; see its README.
 - `docs/research/` holds background research that informed the designs,

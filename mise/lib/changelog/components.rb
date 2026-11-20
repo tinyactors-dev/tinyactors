@@ -51,7 +51,11 @@ module Changelog
     Component.new(name: 'staticjs-js', dir: 'staticjs-js', scopes: %w[staticjs-js],
                   api_files: %w[index.d.ts], api_ignore: nil),
     Component.new(name: 'tinyxml', dir: 'tinyxml', scopes: %w[tinyxml txml],
-                  api_json: 'include/txml.api.json', api_ignore: VERSION_MACROS)
+                  api_json: 'include/txml.api.json', api_ignore: VERSION_MACROS),
+    # The website, https://www.tinyactors.dev: its content and the pages
+    # built from it. It has no API; a release is what readers see change.
+    Component.new(name: 'website', dir: 'website', scopes: %w[website],
+                  api_files: [], api_ignore: nil)
   ].freeze
 
   module_function

@@ -1,0 +1,372 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The website's content model: what a page says and in what order, never how
+  it looks. A document is either the site (site.xml: its name, navigation and
+  pages) or one page (pages/*.xml). render/site.xsl turns them into HTML; the
+  design system decides the rest.
+
+  The vocabulary is semantic on purpose. There is no element for a column, a
+  colour, a card or a button: a page has a hero, sections, prose, claims with
+  their sources, examples and actions, and the stylesheet decides how each one
+  looks. A claim cannot be written without its source.
+
+  XSD 1.1 (sxml validate). Links between documents (a link's or an action's
+  `to` naming a page, a section's anchor) are checked when the site is built,
+  since a schema sees one document at a time.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns="https://www.tinyactors.dev/ns/site"
+           targetNamespace="https://www.tinyactors.dev/ns/site"
+           elementFormDefault="qualified"
+           version="1.1">
+
+  <!-- ===================================================== the site -->
+
+  <xs:element name="site">
+    <xs:annotation><xs:documentation>
+      The site: its name, origin, navigation, the pages it is made of (in the
+      order the sitemap lists them) and its footer.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="name" type="plain"/>
+        <xs:element name="tagline" type="plain"/>
+        <xs:element name="nav" type="links"/>
+        <xs:element name="pages">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="page" maxOccurs="unbounded">
+                <xs:annotation><xs:documentation>A page file, relative to site.xml.</xs:documentation></xs:annotation>
+                <xs:complexType>
+                  <xs:attribute name="src" type="path" use="required"/>
+                </xs:complexType>
+              </xs:element>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="footer">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="note" type="inline" minOccurs="0"/>
+              <xs:element name="links" type="links"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="origin" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:anyURI">
+            <xs:pattern value="https://[a-z0-9.-]+"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+    <xs:unique name="page-files">
+      <xs:selector xpath="pages/page"/>
+      <xs:field xpath="@src"/>
+    </xs:unique>
+  </xs:element>
+
+  <xs:complexType name="links">
+    <xs:sequence>
+      <xs:element name="link" type="link" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <!-- ===================================================== a page -->
+
+  <xs:element name="page">
+    <xs:annotation><xs:documentation>
+      One page. `path` is where it is served: "/" or "/name/" for a
+      directory, "/404" for a file of its own (404.html). Its sections come
+      in reading order; each has an id, which is its anchor.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="title" type="plain">
+          <xs:annotation><xs:documentation>The document's title, as a browser tab and a search result show it.</xs:documentation></xs:annotation>
+        </xs:element>
+        <xs:element name="description" type="sentence">
+          <xs:annotation><xs:documentation>One or two sentences for search results, link previews and llms.txt.</xs:documentation></xs:annotation>
+        </xs:element>
+        <xs:element ref="hero"/>
+        <xs:element ref="section" minOccurs="0" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="id" type="xs:ID" use="required"/>
+      <xs:attribute name="path" use="required">
+        <xs:simpleType>
+          <xs:restriction base="xs:string">
+            <xs:pattern value="/([a-z0-9-]+/)*|/[a-z0-9-]+"/>
+          </xs:restriction>
+        </xs:simpleType>
+      </xs:attribute>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="hero">
+    <xs:annotation><xs:documentation>
+      What the page is about, said once: an optional kicker above the
+      headline, the headline, one lede paragraph, how to install, and what to
+      do next.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="kicker" type="plain" minOccurs="0"/>
+        <xs:element name="headline" type="emphasis"/>
+        <xs:element name="lede" type="inline"/>
+        <xs:element ref="install" minOccurs="0"/>
+        <xs:element ref="actions" minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="section">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="kicker" type="plain" minOccurs="0"/>
+        <xs:element name="heading" type="emphasis"/>
+        <xs:group ref="blocks" maxOccurs="unbounded"/>
+      </xs:sequence>
+      <xs:attribute name="id" type="xs:ID" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ===================================================== blocks -->
+
+  <xs:group name="blocks">
+    <xs:choice>
+      <xs:element name="p" type="inline"/>
+      <xs:element ref="list"/>
+      <xs:element ref="code"/>
+      <xs:element ref="example"/>
+      <xs:element ref="claims"/>
+      <xs:element ref="install"/>
+      <xs:element ref="actions"/>
+    </xs:choice>
+  </xs:group>
+
+  <xs:element name="list">
+    <xs:annotation><xs:documentation>
+      Items in no particular order, or in order with ordered="true". An item
+      may lead with a term: the thing the rest of the item is about.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="item" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="term" type="inline" minOccurs="0"/>
+              <xs:element name="text" type="inline"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="ordered" type="xs:boolean" default="false"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="code">
+    <xs:annotation><xs:documentation>
+      Code exactly as written, shown verbatim. Either its text is here (the
+      build removes the common leading indentation and blank first and last
+      lines), or `src` names a file, relative to this document, whose text it
+      is: an example under examples/, which the tests run, so the code a
+      page shows is code that ran. `file` names it as a reader would save
+      it; `language` is what it is written in; `role` is "output" for what a
+      program prints.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:extension base="xs:string">
+          <xs:attribute name="src" type="path"/>
+          <xs:attribute name="language" type="language" use="required"/>
+          <xs:attribute name="file" type="xs:token"/>
+          <xs:attribute name="role" default="source">
+            <xs:simpleType>
+              <xs:restriction base="xs:token">
+                <xs:enumeration value="source"/>
+                <xs:enumeration value="output"/>
+              </xs:restriction>
+            </xs:simpleType>
+          </xs:attribute>
+          <xs:assert test="if (@src) then normalize-space(.) = '' else normalize-space(.) != ''"/>
+        </xs:extension>
+      </xs:simpleContent>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="example">
+    <xs:annotation><xs:documentation>
+      Code that belongs together, read in order: a chart and the program that
+      runs it, then what it prints.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element ref="code" maxOccurs="unbounded"/>
+        <xs:element name="caption" type="inline" minOccurs="0"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="claims">
+    <xs:annotation><xs:documentation>
+      Statements a reader may doubt, each with what backs it. A claim says
+      one thing; its text says what makes it true; its sources are where a
+      reader checks it (a file in a repository, a decision record, a
+      measurement). A claim with no source does not validate.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="claim" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="statement" type="emphasis"/>
+              <xs:element name="p" type="inline" maxOccurs="unbounded"/>
+              <xs:element name="source" type="source" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="install">
+    <xs:annotation><xs:documentation>
+      How to install, one command per platform, each named for the reader
+      (`for`): "Node.js and Bun", "Python", "Browsers".
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="command" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:simpleContent>
+              <xs:extension base="nonempty">
+                <xs:attribute name="for" type="plain-attribute" use="required"/>
+              </xs:extension>
+            </xs:simpleContent>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="actions">
+    <xs:annotation><xs:documentation>
+      What to do next, most important first: the first action is the one
+      the page wants the reader to take.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="action" type="link" maxOccurs="3"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <!-- ===================================================== inline -->
+
+  <xs:complexType name="inline" mixed="true">
+    <xs:annotation><xs:documentation>
+      Running text: emphasis, a strong word, code, a link. No line breaks,
+      no styling.
+    </xs:documentation></xs:annotation>
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="em" type="emphasis"/>
+      <xs:element name="strong" type="emphasis"/>
+      <xs:element name="code" type="nonempty"/>
+      <xs:element name="link" type="link"/>
+    </xs:choice>
+    <xs:assert test="normalize-space(.) != ''"/>
+  </xs:complexType>
+
+  <xs:complexType name="emphasis" mixed="true">
+    <xs:annotation><xs:documentation>A heading's or a statement's text: words, one of them emphasised, or code.</xs:documentation></xs:annotation>
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="em" type="plain"/>
+      <xs:element name="code" type="nonempty"/>
+    </xs:choice>
+    <xs:assert test="normalize-space(.) != ''"/>
+  </xs:complexType>
+
+  <xs:complexType name="link" mixed="true">
+    <xs:annotation><xs:documentation>
+      A link names a page of the site (`to`, its id, with an optional
+      `section` for an anchor) or a location elsewhere (`href`), never both.
+      Its text is what the reader clicks; a link to a page may leave it
+      empty, and gets the page's title.
+    </xs:documentation></xs:annotation>
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="em" type="plain"/>
+      <xs:element name="code" type="nonempty"/>
+    </xs:choice>
+    <xs:attribute name="to" type="xs:NCName"/>
+    <xs:attribute name="section" type="xs:NCName"/>
+    <xs:attribute name="href" type="external"/>
+    <xs:assert test="count((@to, @href)) = 1"/>
+    <xs:assert test="not(@section) or @to"/>
+    <xs:assert test="@to or normalize-space(.) != ''"/>
+  </xs:complexType>
+
+  <xs:complexType name="source" mixed="true">
+    <xs:annotation><xs:documentation>Where a claim can be checked: the text names it, `href` points at it.</xs:documentation></xs:annotation>
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="code" type="nonempty"/>
+    </xs:choice>
+    <xs:attribute name="href" type="external" use="required"/>
+    <xs:assert test="normalize-space(.) != ''"/>
+  </xs:complexType>
+
+  <!-- ===================================================== simple types -->
+
+  <xs:simpleType name="nonempty">
+    <xs:restriction base="xs:string">
+      <xs:pattern value=".*\S.*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="plain">
+    <xs:annotation><xs:documentation>Text with no markup, on one line.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\s*\S[^\n]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="plain-attribute">
+    <xs:restriction base="xs:token">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="sentence">
+    <xs:annotation><xs:documentation>Plain text that ends as a sentence does, at most 200 characters.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\s*\S[\s\S]*[.!?]\s*"/>
+      <xs:maxLength value="200"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="external">
+    <xs:annotation><xs:documentation>An absolute https URL: links to pages of this site use `to`.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:anyURI">
+      <xs:pattern value="https://\S+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="path">
+    <xs:restriction base="xs:token">
+      <xs:pattern value="[a-z0-9._/-]+"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="language">
+    <xs:restriction base="xs:token">
+      <xs:enumeration value="xml"/>
+      <xs:enumeration value="scxml"/>
+      <xs:enumeration value="javascript"/>
+      <xs:enumeration value="typescript"/>
+      <xs:enumeration value="python"/>
+      <xs:enumeration value="c"/>
+      <xs:enumeration value="shell"/>
+      <xs:enumeration value="text"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

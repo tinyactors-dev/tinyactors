@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+#MISE description="Build the site, then serve build/site on http://localhost:4321 as Cloudflare serves it (directories as index.html, 404.html for what is missing)"
+#MISE depends=["build"]
+#USAGE flag "--port <port>" default="4321" help="The port to listen on"
+# vim:ft=ruby
+
+require_relative '../website'
+
+Website.run('node', Website::ROOT.join('tools/serve.mjs'), Website::SITE, ENV.fetch('usage_port', '4321'))

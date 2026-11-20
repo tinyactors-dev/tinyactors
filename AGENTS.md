@@ -62,7 +62,7 @@ what is out of scope. A proposal or ADR states this near its start.
 
 ## Releases and changelogs
 
-Each component (core, napi, cpython, staticjs, tinyxml) has a `CHANGELOG.md` in
+Each component (core, napi, cpython, staticjs, tinyxml, website) has a `CHANGELOG.md` in
 its directory (`tinyactors-napi`, `tinyactors-cpython` for the bindings), and a release of it needs a section there that passes
 `mise run changelog:check <component>`
 ([ADR 0002](docs/adr/0002-changelogs.md)). To prepare a release, use the
@@ -133,6 +133,7 @@ the service account's `OP_SERVICE_ACCOUNT_TOKEN`.
   | `tinyxml`                           | tinyxml, napi (the native datamodel compiles txml) |
   | `tinyparse`                         | tinyparse                                |
   | `staticjs`                          | staticjs                                 |
+  | `website`                           | website (the examples it runs import the npm packages, not the working tree) |
   | root `mise/lib`, `mise.toml`        | all of them                              |
   | docs, READMEs, ADRs only            | none (the acronym check still runs)      |
 

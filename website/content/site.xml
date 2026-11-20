@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev">
+  <name>tinyactors</name>
+  <tagline>Statecharts as actors: control flow you can simulate, test and run at scale.</tagline>
+
+  <nav>
+    <link to="granary">Case study</link>
+    <link href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Node.js</link>
+    <link href="https://github.com/tinyactors-dev/tinyactors-cpython#readme">Python</link>
+    <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
+  </nav>
+
+  <pages>
+    <page src="pages/home.xml"/>
+    <page src="pages/granary.xml"/>
+    <page src="pages/404.xml"/>
+  </pages>
+
+  <footer>
+    <note>MIT licensed. Semantics defined by <link href="https://www.w3.org/TR/scxml/">SCXML</link>, the W3C's language for statecharts.</note>
+    <links>
+      <link href="https://github.com/tinyactors-dev/tinyactors">Source</link>
+      <link href="https://www.npmjs.com/package/@tinyactors/node">npm</link>
+      <link href="https://pypi.org/project/tinyactors/">PyPI</link>
+      <link href="https://github.com/tinyactors-dev/granary">granary</link>
+    </links>
+  </footer>
+</site>

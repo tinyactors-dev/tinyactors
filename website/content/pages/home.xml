@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="home" path="/">
+  <title>tinyactors: control flow you can test</title>
+  <description>Write your program's lifecycles as statecharts, simulate them on a fake clock, check invariants on every run, and run them as millions of actors.</description>
+
+  <hero>
+    <kicker>Statecharts as actors</kicker>
+    <headline>Control flow you can <em>test</em>.</headline>
+    <lede>Write your program's lifecycles as statecharts: orders, connections, retries, even your test users. A statechart is formal, so you can simulate it on a fake clock, check invariants after every run, and search for the run that breaks them. tinyactors runs statecharts as actors, from a handful to millions, inside Node.js, Bun, Python, the browser or C.</lede>
+    <install>
+      <command for="Node.js and Bun">npm install @tinyactors/node</command>
+      <command for="Python">pip install tinyactors</command>
+      <command for="Browsers">npm install @tinyactors/wasm</command>
+    </install>
+    <actions>
+      <action href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Get started</action>
+      <action to="granary">Read the case study</action>
+    </actions>
+  </hero>
+
+  <section id="lifecycles">
+    <kicker>The problem</kicker>
+    <heading>Control flow hides in <em>flags and timers</em>.</heading>
+    <p>Much of a program is a lifecycle. An order is open, then paying, then paid or timed out. A connection is dialing, up, or backing off. Written as flags, callbacks and timers, a lifecycle spreads over a codebase, and the states it can be in are written down nowhere.</p>
+    <p>A statechart writes them down: the states, the events that move between them, and what happens on the way. This payment asks a service to charge a card, retries twice when no answer comes within 30 seconds, and then gives up.</p>
+    <code src="../../examples/simulate/payment.scxml" language="scxml" file="payment.scxml"/>
+  </section>
+
+  <section id="simulate">
+    <kicker>Simulate</kicker>
+    <heading>A thousand runs, <em>no waiting</em>.</heading>
+    <p>The chart talks to the world only through events, so a test can play the world. A <code>SimulatedClock</code> moves only when the test moves it, so a 30-second timeout costs nothing, and a seeded generator decides when the payment service answers and when it stays silent. This program runs a thousand seeds and checks two invariants in each.</p>
+    <example>
+      <code src="../../examples/simulate/simulate.mjs" language="javascript" file="simulate.mjs"/>
+      <code src="../../examples/simulate/output.txt" language="text" role="output"/>
+      <caption>Change <code>attempts &lt; 3</code> to <code>attempts &lt; 4</code> and seed 10 fails: <code>charged 4 times</code>. The seed reproduces the run that found it.</caption>
+    </example>
+  </section>
+
+  <section id="why">
+    <kicker>Why it works</kicker>
+    <heading>Formal enough to <em>check</em>.</heading>
+    <claims>
+      <claim>
+        <statement>The semantics are a W3C standard.</statement>
+        <p>Charts are written in SCXML, and the core passes all 191 automatic tests of the W3C's SCXML test suite. What a chart does is defined, not whatever the runtime happens to do.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-core/blob/main/docs/architecture.md">tinyactors-core, <code>docs/architecture.md</code></source>
+      </claim>
+      <claim>
+        <statement>Logic in charts, I/O in your handlers.</statement>
+        <p>The host does no I/O of its own. Everything an actor sends out goes to a handler you give it, which does the I/O and answers with an event. The same chart runs against the network in production and against a simulation in a test.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/testing.md">Testing your charts</source>
+      </claim>
+      <claim>
+        <statement>Every transition is a fact you can assert on.</statement>
+        <p>Each step an actor takes is a trace span: the event it took, the transitions that fired, the states it entered. granary's integration tests assert on nothing else.</p>
+        <source href="https://github.com/tinyactors-dev/granary/blob/main/docs/adr/0007-testing-through-traces.md">granary, ADR 0007</source>
+      </claim>
+      <claim>
+        <statement>One actor per thing, even for <em>millions</em> of things.</statement>
+        <p>With a store and a bound on resident actors, idle actors are hibernated and woken by their next event. A benchmark runs two million actors with a thousand in memory and checks every actor's count after 200,000 events.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-cpython#performance">tinyactors for Python, Performance</source>
+      </claim>
+    </claims>
+  </section>
+
+  <section id="world">
+    <kicker>Model the world</kicker>
+    <heading>Statecharts <em>all the way down</em>.</heading>
+    <p>A lifecycle is not only in your product. The services it calls, the users who use it and the faults that hit it have lifecycles too, and they can be charts as well. granary, a GitHub app that closes issues opened by people not on an allowlist, is built this way.</p>
+    <list>
+      <item><term>The product</term><text>One actor per issue: <code>idle → checking → allowed | closing → closed | failed</code>, with its 10-second timeout in the chart.</text></item>
+      <item><term>The fakes</term><text>Its fake GitHub is an actor system, with an actor holding the faults a test injects.</text></item>
+      <item><term>The users</term><text>Its load generator's people are charts with a seed: a persistent contributor who reopens and stews, a bot that floods, a chaos monkey, a fuzzer.</text></item>
+      <item><term>The operations</term><text>Its watchdog is a control loop: <code>ok → suspect → healing → ok</code>.</text></item>
+    </list>
+    <actions>
+      <action to="granary">Read the case study</action>
+    </actions>
+  </section>
+
+  <section id="production">
+    <kicker>Run it</kicker>
+    <heading>The same charts, <em>in production</em>.</heading>
+    <p>A host runs your actors on your program's event loop and gives the operator what a long-lived system needs.</p>
+    <list>
+      <item><term>Hibernation</term><text>Actors past a resident bound go to your store and come back on their next event.</text></item>
+      <item><term>Migration</term><text>Add a new version of a chart, and running actors move to it while events keep coming.</text></item>
+      <item><term>Snapshots</term><text>The whole host as one blob, restored with its clock, its timers and its actors.</text></item>
+      <item><term>Telemetry</term><text>Traces, logs and metrics as OpenTelemetry, with a trace that follows an event across actors and systems.</text></item>
+    </list>
+  </section>
+
+  <section id="platforms">
+    <kicker>Where it runs</kicker>
+    <heading>One core, <em>every runtime</em>.</heading>
+    <list>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Node.js and Bun</link></term><text><code>@tinyactors/node</code>: Node.js 22.3 or later and Bun, on macOS and Linux. Charts in JavaScript, or in the QuickJS sandbox for charts you do not trust.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-cpython#readme">Python</link></term><text><code>tinyactors</code>: CPython 3.13 or later. Charts in Python, synchronous or under asyncio.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/browser.md">Browsers</link></term><text><code>@tinyactors/wasm</code>: the same API as WebAssembly, for browsers and for platforms with no native addon.</text></item>
+      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-core">C</link></term><text>The core embeds anywhere: no C library, no I/O, no threads, and memory only from an allocator you give it.</text></item>
+    </list>
+  </section>
+</page>

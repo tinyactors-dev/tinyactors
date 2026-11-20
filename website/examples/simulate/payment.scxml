@@ -1,0 +1,16 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="payment" initial="charging">
+  <datamodel><data id="attempts" expr="0"/></datamodel>
+  <state id="charging">
+    <onentry>
+      <assign location="attempts" expr="attempts + 1"/>
+      <send type="urn:payments" event="charge" target="card"/>
+      <send event="timeout" delay="30s" id="timer"/>
+    </onentry>
+    <transition event="charged" target="paid"><cancel sendid="timer"/></transition>
+    <transition event="timeout" cond="attempts &lt; 3" target="charging"/>
+    <transition event="timeout" target="failed"/>
+  </state>
+  <final id="paid"><donedata><param name="outcome" expr="'paid'"/></donedata></final>
+  <final id="failed"><donedata><param name="outcome" expr="'failed'"/></donedata></final>
+</scxml>
