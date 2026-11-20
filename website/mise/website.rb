@@ -93,6 +93,7 @@ module Website
       'favicon.ico' => 'assets/brand/favicon/favicon.ico',
       'apple-touch-icon.png' => 'assets/brand/favicon/apple-touch-icon.png',
       'logo-mark.svg' => 'assets/logo-mark.svg',
+      'ant.svg' => 'assets/ant-resting.svg', # the anthill's sprites: rigged, legs pivot
       'logo-mark-dark.svg' => 'assets/brand/svg/tinyactors-symbol-parchment.svg'
     }.each { |name, source| FileUtils.cp(DESIGN.join(source), assets.join('brand', name)) }
     SITE.join('robots.txt').write("User-agent: *\nAllow: /\n\nSitemap: #{ORIGIN}/sitemap.xml\n")

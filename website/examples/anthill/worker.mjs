@@ -15,7 +15,24 @@ onmessage = ({ data }) => {
   else inbox.push(data);
 };
 
+// The size of tinyactors's WebAssembly memory, for the page's chart. The
+// package keeps its instance to itself, so the instance is watched as it is
+// made: this wraps the constructor before the package loads, and keeps the
+// first instance's memory.
+let memory = null;
+function watchMemory() {
+  const Instance = WebAssembly.Instance;
+  function Watched(module, imports) {
+    const instance = new Instance(module, imports);
+    memory ??= instance.exports.memory ?? null;
+    return instance;
+  }
+  Watched.prototype = Instance.prototype;
+  WebAssembly.Instance = Watched;
+}
+
 async function start(population, seed) {
+  watchMemory();
   const [tinyactors, { createAnthill }] = await Promise.all([import('/vendor/tinyactors-wasm/index.mjs'), import('./world.mjs')]);
   const charts = { ant: await text('ant'), queen: await text('queen') };
   anthill = await createAnthill(tinyactors, { charts, population, seed });
@@ -51,7 +68,7 @@ async function run() {
       window = { wall: now, simulated, decisions: stats.decisions };
     }
     const delta = anthill.delta();
-    postMessage({ delta, stats: anthill.stats(), speed, rate, wall: now }, [delta.buffer]);
+    postMessage({ delta, stats: anthill.stats(), speed, rate, wall: now, memory: memory?.buffer.byteLength ?? null }, [delta.buffer]);
     await new Promise((resolve) => setTimeout(resolve, simulated < performance.now() - wallStart ? 0 : 16));
   }
 }

@@ -1,18 +1,23 @@
-// The anthill's page: a canvas, a population slider and two tools. The
-// world runs in worker.mjs; this draws each ant on its current leg, at the
-// simulation's time, from the legs the worker sends when they change.
+// The anthill's page: the field, a population slider, two tools and the
+// live costs. The world runs in worker.mjs; renderer.mjs draws every ant
+// with the design system's rigged ant (sprites.mjs) on the GPU, and where
+// WebGL2 is missing, this draws a dot per ant on a 2D canvas instead.
+// Hills and food are drawn on a 2D canvas above the ants.
 import { WIDTH, HEIGHT, HILLS, HILL_RADIUS } from './world.mjs';
+import { atlas } from './sprites.mjs';
+import { createRenderer } from './renderer.mjs';
+import { chart } from './charts.mjs';
 
-const POPULATIONS = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000];
+const POPULATIONS = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000];
 const DEFAULT = 2; // 100,000
 const number = new Intl.NumberFormat('en');
+const megabytes = (bytes) => `${number.format(Math.round(bytes / 1048576))} MB`;
 
-export function mount(root) {
+export async function mount(root) {
   const colors = palette(root);
-  const canvas = el('canvas', { class: 'anthill__canvas', width: WIDTH, height: HEIGHT, 'aria-label': 'Two anthills; select to drop food or squash ants' });
   const slider = el('input', { type: 'range', min: 0, max: POPULATIONS.length - 1, step: 1, value: DEFAULT, 'aria-label': 'Population' });
   const count = el('output', { class: 'anthill__count' });
-  const start = el('button', { type: 'button', class: 'ta-btn ta-btn--primary' }, 'Restart');
+  const restart = el('button', { type: 'button', class: 'ta-btn ta-btn--primary' }, 'Restart');
   const tools = el('div', { role: 'radiogroup', class: 'ta-tabs ta-tabs--segmented', 'aria-label': 'Tool' });
   let tool = 'food';
   for (const [name, label] of [['food', 'Drop food'], ['squash', 'Squash ants']]) {
@@ -23,31 +28,46 @@ export function mount(root) {
     });
     tools.append(button);
   }
+  const overlay = el('canvas', { class: 'anthill__overlay', width: WIDTH, height: HEIGHT, 'aria-label': 'Two anthills; select to drop food or squash ants' });
+  const stage = el('div', { class: 'anthill__stage' }, overlay);
   const status = el('p', { class: 'anthill__status', 'aria-live': 'polite' });
   const hills = el('p', { class: 'anthill__hills' });
+  const costs = {
+    fps: chart({ title: 'Frames drawn a second', format: (v) => `${Math.round(v)} fps` }),
+    speed: chart({ title: 'Simulation speed', format: (v) => `${v.toFixed(2)}×`, describe: (v) => `${v.toFixed(2)} times real time` }),
+    memory: chart({ title: 'WebAssembly memory', format: megabytes }),
+    rate: chart({ title: 'Decisions a second', format: (v) => number.format(Math.round(v)) }),
+  };
   root.append(
-    el('div', { class: 'anthill__controls' }, el('label', { class: 'anthill__population' }, 'Ants ', slider, count), start, tools),
-    el('div', { class: 'anthill__stage' }, canvas),
-    hills, status,
+    el('div', { class: 'anthill__controls' }, el('label', { class: 'anthill__population' }, 'Ants ', slider, count), restart, tools),
+    stage, hills, status,
+    el('div', { class: 'anthill__costs' }, ...Object.values(costs).map((c) => c.element)),
   );
   const showCount = () => { count.textContent = number.format(POPULATIONS[slider.value]); };
   slider.addEventListener('input', showCount);
   showCount();
 
-  const context = canvas.getContext('2d');
-  const image = context.createImageData(WIDTH, HEIGHT);
-  const pixels = new Uint32Array(image.data.buffer);
+  const sprites = await atlas(await (await fetch('/assets/brand/ant.svg')).text(), colors.colony);
+  const paint = overlay.getContext('2d');
   let world = null;
 
   function begin() {
     world?.worker.terminate(); // its memory goes with it: a WebAssembly memory never shrinks
+    world?.renderer.destroy?.();
+    world?.canvas.remove();
+    Object.values(costs).forEach((c) => c.clear());
     const population = POPULATIONS[slider.value];
+    let canvas = el('canvas', { class: 'anthill__ants', width: WIDTH, height: HEIGHT, 'aria-hidden': 'true' });
+    let renderer = createRenderer(canvas, population, sprites, colors.groundHex);
+    if (!renderer) { // a canvas that tried WebGL takes no 2D context: the dots get a fresh one
+      canvas = el('canvas', { class: 'anthill__ants', width: WIDTH, height: HEIGHT, 'aria-hidden': 'true' });
+      renderer = dots(canvas, population, colors);
+    }
+    stage.prepend(canvas);
     const worker = new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' });
     world = {
-      worker, population, ready: false,
-      x0: new Float32Array(population), y0: new Float32Array(population), x1: new Float32Array(population),
-      y1: new Float32Array(population), t0: new Float32Array(population), t1: new Float32Array(population),
-      look: new Uint8Array(population), stats: null, speed: 1, rate: 0, sim: 0, wall: 0,
+      worker, canvas, renderer, population, ready: false, stats: null, speed: 1, rate: 0, sim: 0, wall: 0, memory: null,
+      antSize: Math.max(2.5, 16 * (1000 / population) ** 0.25),
     };
     const current = world;
     status.textContent = `Hatching ${number.format(population)} ants…`;
@@ -61,67 +81,60 @@ export function mount(root) {
     worker.onerror = (event) => { status.textContent = `The simulation stopped: ${event.message}`; };
     worker.postMessage({ start: true, population, seed: Math.floor(Math.random() * 2 ** 31) });
   }
-  start.addEventListener('click', begin);
+  restart.addEventListener('click', begin);
 
-  canvas.addEventListener('pointerdown', (event) => {
+  overlay.addEventListener('pointerdown', (event) => {
     if (!world?.ready) return;
-    const box = canvas.getBoundingClientRect();
+    const box = overlay.getBoundingClientRect();
     const x = ((event.clientX - box.left) / box.width) * WIDTH, y = ((event.clientY - box.top) / box.height) * HEIGHT;
     world.worker.postMessage(tool === 'food' ? { food: true, x, y } : { squash: true, x, y, radius: 16 });
   });
 
-  function apply(state, { delta, stats, speed, rate, wall }) {
-    for (let i = 0; i < delta.length; i += 8) {
-      const slot = delta[i];
-      state.x0[slot] = delta[i + 1]; state.y0[slot] = delta[i + 2]; state.x1[slot] = delta[i + 3]; state.y1[slot] = delta[i + 4];
-      state.t0[slot] = delta[i + 5]; state.t1[slot] = delta[i + 6]; state.look[slot] = delta[i + 7];
-    }
-    Object.assign(state, { stats, speed, rate, sim: stats.time, wall });
+  function apply(state, { delta, stats, speed, rate, wall, memory }) {
+    state.renderer.apply(delta);
+    Object.assign(state, { stats, speed, rate, sim: stats.time, wall, memory });
     if (!state.ready) return;
     const ants = stats.colonies.reduce((sum, c) => sum + c.workers + c.brood, 0);
     hills.replaceChildren(...stats.colonies.map((c, i) => el('span', { class: `anthill__hill anthill__hill--${i + 1}` },
       `Hill ${i + 1}: ${number.format(c.workers)} workers, ${number.format(c.brood)} brood, ${number.format(c.stored)} food home`)));
-    status.textContent = `${number.format(ants + 2)} actors (2 queens) · sim speed ${speed.toFixed(2)}× · ` +
-      `${number.format(Math.round(rate))} decisions a second · ${number.format(stats.fights)} fights · ${Math.floor(stats.time)} s`;
+    const perActor = memory ? ` · ${number.format(Math.round(memory / (ants + 2)))} bytes of WebAssembly memory an actor` : '';
+    status.textContent = `${number.format(ants + 2)} actors (2 queens) · ${number.format(stats.fights)} fights · ${Math.floor(stats.time)} s simulated${perActor}`;
   }
+
+  // Once a second, each cost chart takes its latest value.
+  let frames = 0;
+  setInterval(() => {
+    const state = world;
+    if (!state?.ready) { frames = 0; return; }
+    costs.fps.push(frames);
+    costs.speed.push(state.speed);
+    if (state.memory) costs.memory.push(state.memory);
+    costs.rate.push(state.rate);
+    frames = 0;
+  }, 1000);
 
   function draw() {
     requestAnimationFrame(draw);
-    pixels.fill(colors.ground);
+    frames++;
     const state = world;
     if (state?.ready) {
+      fit(state.canvas, state.renderer.kind === 'webgl');
       // The simulation's time now: the last frame's, moved on by the wall
       // clock at the simulation's speed, never past the next frame.
       const t = state.sim + Math.min(0.1, ((performance.now() - state.wall) / 1000) * state.speed);
-      // An ant is at least one screen pixel: a canvas shown narrower than
-      // the field (a phone) draws it as a block of field pixels.
-      const size = Math.min(4, Math.max(state.population <= 20_000 ? 2 : 1, Math.ceil(WIDTH / Math.max(1, canvas.clientWidth))));
-      const ants = [0, colors.colony[0], colors.colony[1]];
-      for (let slot = 0; slot < state.population; slot++) {
-        const look = state.look[slot];
-        if (!look) continue;
-        const span = state.t1[slot] - state.t0[slot];
-        const f = span > 0 ? Math.min(1, Math.max(0, (t - state.t0[slot]) / span)) : 1;
-        const x = (state.x0[slot] + (state.x1[slot] - state.x0[slot]) * f) | 0;
-        const y = (state.y0[slot] + (state.y1[slot] - state.y0[slot]) * f) | 0;
-        if (x < 0 || y < 0 || x > WIDTH - size || y > HEIGHT - size) continue;
-        const color = ants[look];
-        for (let dy = 0, at = y * WIDTH + x; dy < size; dy++, at += WIDTH) {
-          for (let dx = 0; dx < size; dx++) pixels[at + dx] = color;
-        }
-      }
+      state.renderer.draw(t, state.antSize);
     }
-    context.putImageData(image, 0, 0);
+    paint.clearRect(0, 0, WIDTH, HEIGHT);
     for (const [x, y, left] of state?.stats?.food ?? []) {
       if (left <= 0) continue;
-      context.fillStyle = colors.food;
-      context.beginPath(); context.arc(x, y, 3 + Math.min(9, Math.sqrt(left) / 6), 0, Math.PI * 2); context.fill();
+      paint.fillStyle = colors.food;
+      paint.beginPath(); paint.arc(x, y, 3 + Math.min(9, Math.sqrt(left) / 6), 0, Math.PI * 2); paint.fill();
     }
     HILLS.forEach((hill, i) => {
-      context.fillStyle = colors.hill[i];
-      context.strokeStyle = colors.ink;
-      context.lineWidth = 1.5;
-      context.beginPath(); context.arc(hill.x, hill.y, HILL_RADIUS, 0, Math.PI * 2); context.fill(); context.stroke();
+      paint.fillStyle = colors.hill[i];
+      paint.strokeStyle = colors.ink;
+      paint.lineWidth = 1.5;
+      paint.beginPath(); paint.arc(hill.x, hill.y, HILL_RADIUS, 0, Math.PI * 2); paint.fill(); paint.stroke();
     });
   }
   requestAnimationFrame(draw);
@@ -135,7 +148,52 @@ export function mount(root) {
   near.observe(root);
 }
 
-/** The design system's colours, as the canvas's 32-bit pixels. */
+/** A WebGL canvas draws at the screen's pixels; the 2D fallback at the field's. */
+function fit(canvas, sharp) {
+  if (!sharp) return;
+  const width = Math.round(canvas.clientWidth * devicePixelRatio), height = Math.round(canvas.clientHeight * devicePixelRatio);
+  if (width && (canvas.width !== width || canvas.height !== height)) { canvas.width = width; canvas.height = height; }
+}
+
+// Where WebGL2 is missing: a block of pixels per ant, at least one screen
+// pixel wide, on a 2D canvas at the field's resolution.
+function dots(canvas, population, colors) {
+  const context = canvas.getContext('2d');
+  const image = context.createImageData(WIDTH, HEIGHT);
+  const pixels = new Uint32Array(image.data.buffer);
+  const legs = { x0: new Float32Array(population), y0: new Float32Array(population), x1: new Float32Array(population),
+    y1: new Float32Array(population), t0: new Float32Array(population), t1: new Float32Array(population), look: new Uint8Array(population) };
+  const ants = [0, ...colors.colonyPixels];
+  return {
+    kind: '2d',
+    apply(delta) {
+      for (let i = 0; i < delta.length; i += 8) {
+        const slot = delta[i];
+        legs.x0[slot] = delta[i + 1]; legs.y0[slot] = delta[i + 2]; legs.x1[slot] = delta[i + 3]; legs.y1[slot] = delta[i + 4];
+        legs.t0[slot] = delta[i + 5]; legs.t1[slot] = delta[i + 6]; legs.look[slot] = delta[i + 7];
+      }
+    },
+    draw(t) {
+      pixels.fill(colors.groundPixel);
+      const size = Math.min(4, Math.max(population <= 20_000 ? 2 : 1, Math.ceil(WIDTH / Math.max(1, canvas.clientWidth))));
+      for (let slot = 0; slot < population; slot++) {
+        const look = legs.look[slot];
+        if (!look) continue;
+        const span = legs.t1[slot] - legs.t0[slot];
+        const f = span > 0 ? Math.min(1, Math.max(0, (t - legs.t0[slot]) / span)) : 1;
+        const x = (legs.x0[slot] + (legs.x1[slot] - legs.x0[slot]) * f) | 0;
+        const y = (legs.y0[slot] + (legs.y1[slot] - legs.y0[slot]) * f) | 0;
+        if (x < 0 || y < 0 || x > WIDTH - size || y > HEIGHT - size) continue;
+        for (let dy = 0, at = y * WIDTH + x; dy < size; dy++, at += WIDTH) {
+          for (let dx = 0; dx < size; dx++) pixels[at + dx] = ants[look];
+        }
+      }
+      context.putImageData(image, 0, 0);
+    },
+  };
+}
+
+/** The design system's colours, as CSS colours and as the 2D canvas's 32-bit pixels. */
 function palette(root) {
   const style = getComputedStyle(root);
   const probe = document.createElement('canvas').getContext('2d');
@@ -149,9 +207,12 @@ function palette(root) {
     return (255 << 24) | (b << 16) | (g << 8) | r; // little-endian RGBA
   };
   const colony = [css('--accent', '#1F5E4A'), css('--data-3', '#B8876A')];
+  const groundHex = css('--surface-1', '#FAF6EE');
   return {
-    ground: pixel(css('--surface-1', '#FAF6EE')),
-    colony: colony.map(pixel),
+    groundHex,
+    groundPixel: pixel(groundHex),
+    colony,
+    colonyPixels: colony.map(pixel),
     hill: colony,
     food: css('--data-1', '#D8A64E'),
     ink: css('--fg-1', '#2A2622'),

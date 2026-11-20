@@ -165,8 +165,24 @@ ta-tabs { display: block; }
 .anthill__population input { width: 200px; accent-color: var(--accent); }
 .anthill__count { font: var(--type-code); color: var(--fg-1); min-width: 6em; font-variant-numeric: tabular-nums; }
 .anthill__controls .ta-tab[aria-checked="true"] { color: var(--fg-1); background: var(--surface-1); }
-.anthill__stage { border: 1px solid var(--border-1); border-radius: var(--radius-2); overflow: hidden; background: var(--surface-1); }
-.anthill__canvas { display: block; width: 100%; height: auto; aspect-ratio: 1000 / 600; cursor: crosshair; touch-action: manipulation; }
+.anthill__stage { position: relative; aspect-ratio: 1000 / 600; border: 1px solid var(--border-1); border-radius: var(--radius-2); overflow: hidden; background: var(--surface-1); }
+.anthill__ants, .anthill__overlay { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.anthill__overlay { cursor: crosshair; touch-action: manipulation; }
+.anthill__costs { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); }
+.cost { margin: 0; display: grid; gap: var(--space-2); }
+.cost__head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-2); font: var(--type-body-sm); }
+.cost__title { color: var(--fg-2); }
+.cost__value { font: var(--type-code); color: var(--fg-1); font-variant-numeric: tabular-nums; }
+.cost__frame { position: relative; }
+.cost__plot { display: block; width: 100%; height: 64px; overflow: visible; }
+.cost__line { stroke: var(--accent); stroke-width: 2px; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.cost__axis { stroke: var(--border-2); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.cost__grid { stroke: var(--border-1); stroke-width: 1px; stroke-dasharray: 2 3; vector-effect: non-scaling-stroke; }
+.cost__cross { stroke: var(--fg-3); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.cost__dot { fill: var(--accent); stroke: var(--surface-1); stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.cost__scale { position: absolute; top: -2px; right: 0; font: 400 11px/1 var(--font-mono); color: var(--fg-3); background: var(--bg-app); padding-left: 4px; }
+.cost__tip { position: absolute; bottom: calc(100% + 4px); transform: translateX(-50%); white-space: nowrap; font: var(--type-code); font-size: var(--fs-12); color: var(--fg-1); background: var(--surface-1); border: 1px solid var(--border-2); border-radius: var(--radius-2); padding: 2px var(--space-2); box-shadow: var(--shadow-pop); pointer-events: none; }
+.cost__tip[hidden] { display: none; }
 .anthill__hills { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); font: var(--type-body-sm); color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .anthill__hill::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: var(--space-2); vertical-align: -1px; }
 .anthill__hill--1::before { background: var(--accent); }
