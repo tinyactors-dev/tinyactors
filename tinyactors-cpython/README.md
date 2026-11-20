@@ -795,7 +795,7 @@ returns its blob (save it in the host's store, which loads it when an
 event comes); **`host.wake(session, blob)`** brings one back.
 
 **Plan the capacity up front.** A hibernated actor keeps its slot and its
-session's record in the host (about 64 B), so `system.maxActors` counts
+session's record in the host (81 B to 89 B), so `system.maxActors` counts
 every actor. Instance and string memory are needed for the resident ones
 only. Left to grow, a segment grows the pool that ran out, by a quarter of its
 region when that is at most 16 times the pool, and its instance memory
@@ -924,30 +924,55 @@ host = tinyactors.Host.restore(blob, compiled, system="shop", config=config, log
 
 ### Memory
 
-To measure your own case, run the [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-cpython/examples/memory) from the
-repository. It prints what an actor, a message and a delayed send cost
-on your interpreter and datamodel, for your chart and your data, in
-whole bytes.
+The [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-cpython/examples/memory) measures what one more actor, message and
+delayed send costs in a process: its resident memory, the host
+included. Run it for your interpreter, datamodel, chart and data:
 
-Measured with `mise run measure`: 10,000 actors of one chart with three
-`<data>`, resident and idle, every pool sized for them and tracing off;
-then again after one event to each actor, which keeps its `_event` until
-the next one (2026-10-15; x86_64 Linux, 4 CPUs, CPython 3.13.16 with the
-GIL):
+```sh
+python examples/memory/main.py --counts 1000000 --datamodel python
+```
 
-| datamodel | resident per actor | traced per actor | core's region per actor | resident after one event | region after one event |
+One run of it (2026-11-20; Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB, Linux;
+CPython 3.13.18 with the GIL; a counter chart with one `<data>`,
+messages of `{"text": "hello"}`, tracing on). The hibernated row keeps
+at most 1000 actors resident and the rest in a store.
+
+| datamodel | actor, started | actor, after an event | actor, hibernated | message waiting | delayed send pending |
 |---|---|---|---|---|---|
-| `"python"` | 387 B | 188 B | 268 B | 571 B | 268 B |
-| quickjs | 1066 B | — | 268 B | 1500 B | 268 B |
+| `"python"` | 408 B | 714 B | 85 B | 325 B | 371 B |
+| quickjs | 1023 B | failed | 85 B | 305 B | 354 B |
 
-"Traced" is what tracemalloc sees: the sessions' Python objects and the
-binding's rows (including an 8 B array of the measuring harness). After
-an event, a `"python"` session keeps one more object, its `_event`
-(about 100 B). Its name, invoke id, origin and origin type are strings
-that the chart or the host holds once for every session. With the pools
-sized, the region does not grow after the events. Left at its default
-`maxEvents` (256), quickjs's region grows its event pool as the actors'
-last events fill it: an event and a trace context per actor.
+The `"python"` datamodel, by population:
+
+| | 10,000 | 100,000 | 1,000,000 | 2,000,000 | 4,000,000 |
+|---|---|---|---|---|---|
+| per actor, started | 341 B | 349 B | 408 B | 408 B | 408 B |
+| per actor, after an event | 646 B | 655 B | 714 B | 714 B | 714 B |
+| per actor, hibernated | 97 B | 82 B | 85 B | 83 B | 83 B |
+| per message waiting | 358 B | 360 B | 325 B | 325 B | 325 B |
+| per delayed send pending | 421 B | 407 B | 371 B | 370 B | 370 B |
+
+Each row's data, at every population and on both datamodels, is in
+[the run's CSV](https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-cpython/examples/memory/results/2026-11-20.csv), for a chart of your own.
+
+- **A started actor** holds its variables in Python's heap (on the
+  `"python"` datamodel) or in quickjs's, and its records in the core:
+  196 B for this chart at a million (81 B, its instance and its
+  strings).
+- **After an event** an actor keeps that event as `_event` until the
+  next one: on the `"python"` datamodel one more object with its data.
+- **A hibernated actor** keeps its core records only, 81 B to 89 B, and
+  its blob is in your store (145 B on the `"python"` datamodel, 147 B on
+  quickjs, for this chart).
+- **A message** costs 106 B in the core (57 B with tracing off) and its
+  data. **A delayed send** holds its message until it falls due: 151 B
+  in the core (102 B with tracing off).
+- **quickjs** keeps every actor's variables in its own heap, limited to
+  1 GiB for the host's engine, which the Python binding does not let you
+  change. It holds about a million started actors of this chart: at a
+  million, the events after them did not fit, and at two million the
+  actors did not. Keep a larger quickjs population hibernated, or use
+  the `"python"` datamodel.
 
 #### Sizing the config
 
@@ -961,7 +986,7 @@ services benchmark's 200,000 actors from 269 MB to 50 MB. The core's
 these matter most:
 
 - **`maxActors`:** every actor, resident or hibernated (a hibernated one
-  costs about 58 B of region), with some room.
+  costs 81 B to 89 B of region), with some room.
 - **`instanceBytes` and `stringBytes`:** for the resident actors only, at
   what their charts use (128 B and 16 B per actor for the benchmarks'
   charts). Left out, they are derived from `maxActors`, which counts the
