@@ -1,84 +1,74 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="property-testing" path="/property-testing/">
-  <title>Property testing a statechart, step by step</title>
-  <description>Property test a statechart in seven steps: a world as data, properties, a seeded search, a planted bug, a shrunk counterexample and its trace, all in your browser.</description>
+  <title>Property testing a statechart</title>
+  <description>Replace unit tests with properties: generate worlds from seeds, find the run that breaks the chart, shrink it, and read its trace. In your browser.</description>
 
   <hero>
-    <kicker>Guide</kicker>
-    <headline>Property testing a chart, <em>step by step</em>.</headline>
-    <lede>A test checks one run you thought of. A property test says what must hold for every run, generates runs from seeds, and when one breaks, shrinks it to the smallest run that still does. A chart makes this cheap: its world is a list of events, its time is simulated, and every run can be traced. The examples on this page run in your browser, on the WebAssembly build of tinyactors.</lede>
+    <headline>Test properties, <em>not runs</em>.</headline>
+    <lede>A unit test checks one run you thought of. A property holds for every run. Generate the runs, find the one that breaks, and shrink it. Everything on this page runs in your browser.</lede>
     <install>
-      <command for="Browsers">npm install @tinyactors/wasm</command>
-      <command for="Node.js and Bun">npm install @tinyactors/node</command>
+      <command for="Browsers" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/browser.md">npm install @tinyactors/wasm</command>
+      <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/testing.md">npm install @tinyactors/node</command>
     </install>
     <actions>
-      <action to="property-testing" section="chart">Start with the chart</action>
+      <action to="property-testing" section="chart">Start</action>
       <action href="https://github.com/tinyactors-dev/tinyactors/tree/main/website/examples/property">Get the code</action>
     </actions>
   </hero>
 
   <section id="chart">
-    <kicker>Step 1</kicker>
-    <heading>Start with <em>a chart</em>.</heading>
-    <p>A payment asks a service to charge a card. When no answer comes within 30 seconds it tries again, and after three attempts it gives up. It ends in <code>paid</code> or <code>failed</code>, and says which in its done data.</p>
+    <heading>1. Write the chart.</heading>
+    <p>A payment charges a card, retries after 30 seconds of silence, and gives up after three attempts.</p>
     <code src="../../examples/property/payment.scxml" language="scxml" file="payment.scxml"/>
   </section>
 
   <section id="world">
-    <kicker>Step 2</kicker>
-    <heading>Make the world <em>data</em>.</heading>
-    <p>The chart reaches the world only through events: a <code>charge</code> it sends, a <code>charged</code> it may get back, a <code>timeout</code> it sends itself. So a run's world can be a plain array, one entry per charge, saying whether the service answers it. A run spawns the chart on a <code>SimulatedClock</code>, answers as the array says, and jumps the clock from one timeout to the next until the payment ends.</p>
+    <heading>2. Make the world data.</heading>
+    <p>The chart only sees events. So a world is an array: does the service answer charge 1, charge 2, and so on.</p>
     <code src="../../examples/property/property.mjs" lines="10-41" language="javascript" file="property.mjs"/>
-    <p>With <code>trace</code> on, the host's telemetry is collected and decoded into spans. Run the world <code>[silence, answer]</code>: the first charge times out, the second is answered.</p>
+    <p>Run <code>[silence, answer]</code> with tracing on. Select a row to see its transitions.</p>
     <live src="../../examples/property/live.mjs" call="trace">
-      <label>Run it, traced</label>
+      <label>Run it</label>
     </live>
-    <p>Each row is a step the actor took, under the step that caused it. The <code>timeout</code> macrostep sits 30 seconds in, under the microstep whose delayed send it was. Select a row to read its transitions, the states it entered, and what it sent and cancelled.</p>
   </section>
 
   <section id="properties">
-    <kicker>Step 3</kicker>
-    <heading>Say what must <em>always</em> hold.</heading>
-    <p>A property is a function of a run that is true whatever the world did. These three come straight from the payment's description: it never charges more than three times, it gives up only after the third charge, and it is paid only when the service answered.</p>
+    <heading>3. State the properties.</heading>
+    <p>Three rules that must hold whatever the service does.</p>
     <code src="../../examples/property/property.mjs" lines="43-50" language="javascript" file="property.mjs"/>
   </section>
 
   <section id="search">
-    <kicker>Step 4</kicker>
-    <heading>Search <em>a thousand worlds</em>.</heading>
-    <p>A generator makes a world from a seed: three to eight answers, each a yes with probability 0.4. The search runs seed after seed until a run breaks a property. A seed reproduces its world, so a failure is never lost.</p>
+    <heading>4. Search a thousand worlds.</heading>
+    <p>A seed makes a world. The search runs seeds until one breaks a property, and the seed reproduces it.</p>
     <code src="../../examples/property/property.mjs" lines="52-66" language="javascript" file="property.mjs"/>
     <live src="../../examples/property/live.mjs" call="correct">
-      <label>Search 1,000 worlds</label>
+      <label>Search</label>
     </live>
-    <p>Every one of those runs has three 30-second timeouts at most, and none of them waits: the simulated clock jumps.</p>
   </section>
 
   <section id="bug">
-    <kicker>Step 5</kicker>
-    <heading>Plant a bug, and <em>find it</em>.</heading>
-    <p>Change one character of the chart: retry while <code>attempts &lt; 4</code> instead of <code>attempts &lt; 3</code>. The chart still compiles, still pays when the service answers, and an example-based test that answers the first charge still passes. The search finds a world where it breaks.</p>
+    <heading>5. Plant a bug.</heading>
+    <p>Retry while <code>attempts &lt; 4</code>. A unit test that answers the first charge still passes.</p>
     <code src="../../examples/property/main.mjs" lines="12-14" language="javascript" file="main.mjs"/>
     <live src="../../examples/property/live.mjs" call="find">
-      <label>Search the broken chart</label>
+      <label>Search</label>
     </live>
   </section>
 
   <section id="shrink">
-    <kicker>Step 6</kicker>
-    <heading>Shrink it to <em>the smallest</em> failure.</heading>
-    <p>The world the search found has answers that have nothing to do with the bug. The shrinker tries smaller worlds, one answer fewer or a yes turned into silence, and keeps any that still break a property, until none does. What is left is the failure and nothing else.</p>
+    <heading>6. Shrink the failure.</heading>
+    <p>Try smaller worlds until none still fails. What is left is the bug and nothing else.</p>
     <code src="../../examples/property/property.mjs" lines="68-89" language="javascript" file="property.mjs"/>
     <live src="../../examples/property/live.mjs" call="counterexample">
-      <label>Shrink it and trace it</label>
+      <label>Shrink and trace</label>
     </live>
-    <p>The smallest world is the empty one: the service never answers. The trace shows why that breaks the chart: three <code>timeout</code> steps re-enter <code>charging</code>, and each entry charges again, so the card is charged a fourth time, and only the fourth <code>timeout</code> gives up, at 120 seconds instead of 90.</p>
+    <p>The smallest world is empty: the service never answers. The trace shows a fourth charge at 90 seconds.</p>
   </section>
 
   <section id="ci">
-    <kicker>Step 7</kicker>
-    <heading>Run it in <em>your tests</em>.</heading>
-    <p>The same module runs in Node.js and Bun. <code>@tinyactors/wasm</code> works there too, and <code>@tinyactors/node</code> has the same API. A test runs the search on every commit, and a failure names its seed, which reproduces it on any machine.</p>
+    <heading>7. Run it in CI.</heading>
+    <p>The same module runs in Node.js and Bun. A failure names its seed.</p>
     <example>
       <code src="../../examples/property/main.mjs" language="javascript" file="main.mjs"/>
       <code src="../../examples/property/output.txt" language="text" role="output"/>
@@ -86,13 +76,12 @@
   </section>
 
   <section id="next">
-    <kicker>Next</kicker>
-    <heading>Larger worlds, <em>more actors</em>.</heading>
-    <p>Everything here is a pattern you write, not a library: a world as data, properties as functions, a generator, a search and a shrinker. It grows with the system under test.</p>
+    <heading>Go further.</heading>
+    <p>This is a pattern, not a library. It grows with your system.</p>
     <list>
-      <item><term>Richer worlds</term><text>Answers that come late, twice or out of order are entries in the same array, each a choice the generator makes and the shrinker can undo.</text></item>
-      <item><term>More actors</term><text>Generate the inputs to a whole system, such as the <link to="chat">team chat</link>'s connects, posts and idle users, and state properties across actors: every online member of a room sees every post.</text></item>
-      <item><term>Properties of traces</term><text>Spans are data too, so a property can ask how a run got there: no actor charged twice within one macrostep.</text></item>
+      <item><term>Richer worlds</term><text>Late, duplicate and reordered answers are more entries in the array.</text></item>
+      <item><term>More actors</term><text>Generate the <link to="chat">team chat</link>'s inputs. Every online member sees every post.</text></item>
+      <item><term>Trace properties</term><text>Spans are data. Assert on how a run got there, not only where it ended.</text></item>
     </list>
     <actions>
       <action href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/testing.md">Read the testing guide</action>

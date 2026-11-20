@@ -42,7 +42,6 @@ img, picture { display: block; }
 
 /* ---------------------------------------------------- type */
 
-.kicker { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--fg-3); margin-bottom: var(--space-4); }
 h1, h2 { font-weight: var(--fw-regular); letter-spacing: var(--tracking-display); color: var(--fg-1); }
 h1 em, h2 em, .claim__statement em { font-style: italic; }
 code { font: var(--type-code); font-size: 0.9em; }
@@ -59,14 +58,15 @@ p code, li code, h1 code, h2 code, h3 code, figcaption code {
 .hero__headline { font: var(--type-display); letter-spacing: var(--tracking-display); max-width: 14em; }
 .hero__lede { font: var(--type-prose); font-size: 20px; color: var(--fg-2); max-width: 36em; margin-top: var(--space-6); }
 
-.install { margin: var(--space-8) 0 0; display: grid; gap: var(--space-2); max-width: 36em; }
-.install__row { display: grid; grid-template-columns: 9.5em 1fr; align-items: center; gap: var(--space-4); }
-.install__for { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--fg-3); }
-.install__command { margin: 0; min-width: 0; }
-.install__command code {
-  display: block; overflow-x: auto; white-space: nowrap; padding: var(--space-2) var(--space-3);
-  background: var(--surface-code); border: 1px solid var(--code-border); border-radius: var(--radius-2); color: var(--code-fg);
+.install { display: grid; gap: var(--space-2); max-width: 36em; margin-top: var(--space-8); }
+.section__body .install { margin-top: 0; }
+.install__panel { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.install__panel[hidden] { display: none; }
+.install__command {
+  flex: 1; min-width: 0; display: block; overflow-x: auto; white-space: nowrap; padding: var(--space-2) var(--space-3);
+  background: var(--surface-code); border: 1px solid var(--code-border); border-radius: var(--radius-2); color: var(--code-fg); font: var(--type-code);
 }
+.install__guide { font: var(--type-ui); white-space: nowrap; }
 .install__prompt { color: var(--code-muted); user-select: none; }
 
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-8); }
@@ -87,6 +87,8 @@ p code, li code, h1 code, h2 code, h3 code, figcaption code {
 .items--terms li { display: grid; grid-template-columns: minmax(8em, 13em) 1fr; gap: var(--space-4); }
 .items__term { font: var(--type-h3); font-size: var(--fs-16); color: var(--fg-1); }
 .items__term a { color: inherit; }
+ol.items { counter-reset: item; }
+ol.items .items__term::before { counter-increment: item; content: counter(item) ". "; color: var(--fg-3); font-variant-numeric: tabular-nums; }
 
 /* code, in the design system's code block */
 .code { margin: 0; max-width: 100%; }
@@ -99,18 +101,19 @@ p code, li code, h1 code, h2 code, h3 code, figcaption code {
 .example__caption { font: var(--type-body); color: var(--fg-2); max-width: var(--prose-max); }
 
 /* claims: a statement, why it holds, and where to check */
-.claims { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: var(--space-4); }
+.claims { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-4); }
+.claims:has(> :nth-child(4)) { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
 .claim .ta-card__body { display: flex; flex-direction: column; gap: var(--space-3); height: 100%; padding: var(--space-6); }
 .claim__statement { font: var(--type-h2); font-size: 24px; letter-spacing: var(--tracking-tight); }
 .claim__text { font: var(--type-body); color: var(--fg-2); }
 .claim__sources { margin-top: auto; padding-top: var(--space-3); border-top: 1px solid var(--border-1); font: var(--type-body-sm); color: var(--fg-3); }
-.claim__label { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; margin-right: var(--space-2); }
+.claim__label { margin-right: var(--space-1); }
 
 /* ---------------------------------------------------- live examples */
 
 .live { display: grid; gap: var(--space-3); }
 .live__run { display: flex; align-items: center; gap: var(--space-3); }
-.live__status { font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--fg-3); }
+.live__status { font: var(--type-body-sm); color: var(--fg-3); }
 .live__output[hidden] { display: none; }
 
 /* <ta-trace-view>: a span tree on a timeline */
@@ -163,7 +166,6 @@ p code, li code, h1 code, h2 code, h3 code, figcaption code {
   .hero__body { padding: var(--space-10) var(--space-5) var(--space-8); }
   .hero__headline { font: var(--type-h1); font-size: 40px; letter-spacing: var(--tracking-display); }
   .hero__lede { font-size: 18px; }
-  .install__row { grid-template-columns: 1fr; gap: var(--space-1); }
   .section { padding-top: var(--space-12); }
   .section__head h2 { font: var(--type-h2); font-size: 28px; }
   .items--terms li { grid-template-columns: 1fr; gap: var(--space-1); }

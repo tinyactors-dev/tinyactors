@@ -44,7 +44,6 @@ A page is a hero and sections. Each section has a heading and blocks:
 
 ```xml
 <section id="simulate">
-  <kicker>Simulate</kicker>
   <heading>A thousand runs, <em>no waiting</em>.</heading>
   <p>The chart talks to the world only through events, ...</p>
   <example>

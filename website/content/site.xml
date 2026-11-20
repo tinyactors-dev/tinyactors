@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev">
   <name>tinyactors</name>
-  <tagline>Statecharts as actors: control flow you can simulate, test and run at scale.</tagline>
+  <tagline>Like SQLite, but for actors: statecharts that run in your process.</tagline>
 
   <nav>
     <link to="chat">Tutorial</link>
-    <link to="property-testing">Property testing</link>
+    <link to="property-testing">Testing</link>
     <link href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Node.js</link>
     <link href="https://github.com/tinyactors-dev/tinyactors-cpython#readme">Python</link>
     <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
@@ -19,7 +19,7 @@
   </pages>
 
   <footer>
-    <note>MIT licensed. Semantics defined by <link href="https://www.w3.org/TR/scxml/">SCXML</link>, the W3C's language for statecharts.</note>
+    <note>MIT licensed. Charts are <link href="https://www.w3.org/TR/scxml/">SCXML</link>.</note>
     <links>
       <link href="https://github.com/tinyactors-dev/tinyactors">Source</link>
       <link href="https://www.npmjs.com/package/@tinyactors/node">npm</link>

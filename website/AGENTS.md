@@ -27,19 +27,36 @@ rules.
   `output.txt`. `live.mjs` only adapts it for the page. After changing a
   component or a live example, open the page in a browser (`mise run
   serve`) and run each button: nothing in the test task does.
-- **The voice is the design system's** (`.agents/skills/tinyactors-design`,
-  "Content fundamentals"): precise and calm, "you" for the reader, sentence
-  case, the product name lowercase, exact numbers, no hype words, no emoji.
-  Name SCXML and actor terms exactly (state, event, transition, actor,
-  host); the root `GLOSSARY.md` defines them.
+- **The voice: short and literal.** Headings are 1 to 8 words, sentence
+  case, ending with a period ("Build a team chat.", "Kill your unit
+  tests."). A paragraph is one or two sentences of 8 to 15 words, with the
+  product or the reader's code as the subject. Each section is one line of
+  prose and then the proof: code, output, a claim with its source. No
+  metaphors, no adjectives that do not measure something, no hype words,
+  no emoji. Actions are a verb and an object, 2 to 4 words.
+- **No eyebrows.** Nothing sits above a heading: the schema has no
+  element for it, and `test/invalid/eyebrow.xml` keeps it that way.
+- **Same thing, different words: tabs.** Content that says one thing for
+  several platforms (an install command per package manager or language)
+  is one element whose alternatives the page shows behind tabs, never a
+  list of all of them. The reader's choice holds across the page.
+- Name SCXML and actor terms exactly (state, event, transition, actor,
+  host); the root `GLOSSARY.md` defines them. The product name is
+  lowercase.
 
 ## The pitch
 
-Statecharts are control flow formal enough to simulate, test and fuzz.
-tinyactors makes them easy to use, scalable and available everywhere. Lead
-with what a reader can do with a chart (simulate it, assert on its states,
-build a system out of them), and bring in the runtime's capacity as
-evidence.
+Three points, in this order:
+
+1. **Like SQLite, but for actors.** A library in your process: no server,
+   small actors, millions of them with most asleep.
+2. **Built for agents.** An actor's behavior is one chart (local
+   reasoning), charts do no I/O (isolated effects), and a simulated clock
+   runs any scenario (simulation).
+3. **Kill your unit tests.** Statecharts are a formal model with W3C
+   semantics: state properties over generated runs instead of examples.
+   Say "properties" and "generated runs", not "formal verification": there
+   is no model checker, and the site does not claim one.
 
 - **Show how to build, not who built.** The site teaches with systems a
   reader recognises (a team chat, step by step) and does not feature

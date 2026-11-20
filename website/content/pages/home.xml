@@ -1,82 +1,98 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="home" path="/">
-  <title>tinyactors: control flow you can test</title>
-  <description>Write your program's lifecycles as statecharts, simulate them on a fake clock, check invariants on every run, and run them as millions of actors.</description>
+  <title>tinyactors: like SQLite, but for actors</title>
+  <description>tinyactors runs statecharts as actors inside your process. Agents can read them, simulate them and check them.</description>
 
   <hero>
-    <kicker>Statecharts as actors</kicker>
-    <headline>Control flow you can <em>test</em>.</headline>
-    <lede>Write your program's lifecycles as statecharts: orders, connections, retries, even your test users. A statechart is formal, so you can simulate it on a fake clock, check invariants after every run, and search for the run that breaks them. tinyactors runs statecharts as actors, from a handful to millions, inside Node.js, Bun, Python, the browser or C.</lede>
+    <headline>Like SQLite, but for <em>actors</em>.</headline>
+    <lede>tinyactors is an actor runtime you link into your program. Each actor is a statechart. No server, no threads, no I/O of its own.</lede>
     <install>
-      <command for="Node.js and Bun">npm install @tinyactors/node</command>
-      <command for="Python">pip install tinyactors</command>
-      <command for="Browsers">npm install @tinyactors/wasm</command>
+      <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
+      <command for="Python" guide="https://github.com/tinyactors-dev/tinyactors-cpython#readme">pip install tinyactors</command>
+      <command for="Browsers" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/browser.md">npm install @tinyactors/wasm</command>
     </install>
     <actions>
-      <action href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Get started</action>
       <action to="chat">Build a team chat</action>
+      <action to="property-testing">Test a chart</action>
     </actions>
   </hero>
 
-  <section id="lifecycles">
-    <kicker>The problem</kicker>
-    <heading>Control flow hides in <em>flags and timers</em>.</heading>
-    <p>Much of a program is a lifecycle. An order is open, then paying, then paid or timed out. A connection is dialing, up, or backing off. Written as flags, callbacks and timers, a lifecycle spreads over a codebase, and the states it can be in are written down nowhere.</p>
-    <p>A statechart writes them down: the states, the events that move between them, and what happens on the way. This payment asks a service to charge a card, retries twice when no answer comes within 30 seconds, and then gives up.</p>
+  <section id="actors">
+    <heading>An actor is a statechart.</heading>
+    <p>States, events and timers, written in SCXML. This one charges a card and retries twice.</p>
     <code src="../../examples/simulate/payment.scxml" language="scxml" file="payment.scxml"/>
   </section>
 
-  <section id="simulate">
-    <kicker>Simulate</kicker>
-    <heading>A thousand runs, <em>no waiting</em>.</heading>
-    <p>The chart talks to the world only through events, so a test can play the world. A <code>SimulatedClock</code> moves only when the test moves it, so a 30-second timeout costs nothing, and a seeded generator decides when the payment service answers and when it stays silent. This program runs a thousand seeds and checks two invariants in each.</p>
-    <example>
-      <code src="../../examples/simulate/simulate.mjs" language="javascript" file="simulate.mjs"/>
-      <code src="../../examples/simulate/output.txt" language="text" role="output"/>
-      <caption>Change <code>attempts &lt; 3</code> to <code>attempts &lt; 4</code> and seed 10 fails: <code>charged 4 times</code>. The seed reproduces the run that found it.</caption>
-    </example>
-    <actions>
-      <action to="property-testing">Property test a chart, step by step</action>
-    </actions>
-  </section>
-
-  <section id="why">
-    <kicker>Why it works</kicker>
-    <heading>Formal enough to <em>check</em>.</heading>
+  <section id="process">
+    <heading>In your process.</heading>
     <claims>
       <claim>
-        <statement>The semantics are a W3C standard.</statement>
-        <p>Charts are written in SCXML, and the core passes all 191 automatic tests of the W3C's SCXML test suite. What a chart does is defined, not whatever the runtime happens to do.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-core/blob/main/docs/architecture.md">tinyactors-core, <code>docs/architecture.md</code></source>
+        <statement>No server.</statement>
+        <p>A host is a library. It runs your actors on your event loop, in Node.js, Bun, Python, the browser or C.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Node.js guide</source>
       </claim>
       <claim>
-        <statement>Logic in charts, I/O in your handlers.</statement>
-        <p>The host does no I/O of its own. Everything an actor sends out goes to a handler you give it, which does the I/O and answers with an event. The same chart runs against the network in production and against a simulation in a test.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/testing.md">Testing your charts</source>
+        <statement>Small actors.</statement>
+        <p>An idle actor takes about 1.2 KB in Node.js. The C core takes no memory you did not give it.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/capacity.md">Capacity and memory</source>
       </claim>
       <claim>
-        <statement>Every transition is a fact you can assert on.</statement>
-        <p>Each step an actor takes is an OpenTelemetry span: the event it took, the transitions that fired, the states it left and entered. A test can wait for an actor to reach a state, and a dashboard can show why it did.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/telemetry.md">Telemetry</source>
-      </claim>
-      <claim>
-        <statement>One actor per thing, even for <em>millions</em> of things.</statement>
-        <p>With a store and a bound on resident actors, idle actors are hibernated and woken by their next event. A benchmark runs two million actors with a thousand in memory and checks every actor's count after 200,000 events.</p>
-        <source href="https://github.com/tinyactors-dev/tinyactors-cpython#performance">tinyactors for Python, Performance</source>
+        <statement>Millions, mostly asleep.</statement>
+        <p>Idle actors hibernate to your store and wake on their next event. Two million run with a thousand in memory.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-cpython#performance">Benchmarks</source>
       </claim>
     </claims>
   </section>
 
+  <section id="agents">
+    <heading>Built for agents.</heading>
+    <p>A coding agent changes a chart the way it changes a function: with all of the behavior in view.</p>
+    <list>
+      <item><term>Local reasoning</term><text>An actor's behavior is one chart. An agent reads one file, not a call graph.</text></item>
+      <item><term>Isolated effects</term><text>Charts do no I/O. Every effect is an event to a handler you write.</text></item>
+      <item><term>Any scenario</term><text>Outages, retries and timeouts run on a simulated clock, in milliseconds.</text></item>
+    </list>
+  </section>
+
+  <section id="simulate">
+    <heading>Simulate a thousand runs.</heading>
+    <p>A seed decides when the service answers. The clock jumps from timeout to timeout.</p>
+    <example>
+      <code src="../../examples/simulate/simulate.mjs" language="javascript" file="simulate.mjs"/>
+      <code src="../../examples/simulate/output.txt" language="text" role="output"/>
+      <caption>Change <code>attempts &lt; 3</code> to <code>attempts &lt; 4</code> and seed 10 fails.</caption>
+    </example>
+  </section>
+
+  <section id="verify">
+    <heading>Kill your unit tests.</heading>
+    <p>A unit test checks one run. A property checks every run a generator can make, and a failure shrinks to the smallest run that breaks it.</p>
+    <claims>
+      <claim>
+        <statement>A formal model.</statement>
+        <p>SCXML defines what every transition does. tinyactors passes all 191 automatic tests of the W3C suite.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-core/blob/main/docs/architecture.md">Architecture</source>
+      </claim>
+      <claim>
+        <statement>Every step is a span.</statement>
+        <p>Each step an actor takes is traced: the event, the transitions, the states it entered.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/telemetry.md">Telemetry</source>
+      </claim>
+    </claims>
+    <actions>
+      <action to="property-testing">Test a chart</action>
+    </actions>
+  </section>
+
   <section id="build">
-    <kicker>Build</kicker>
-    <heading>A team chat in <em>five steps</em>.</heading>
-    <p>Workspaces, rooms and people who come and go: a team chat is a system of lifecycles, and each one is a chart. The tutorial builds it one idea at a time, and every step is a program you can run.</p>
+    <heading>Build a team chat.</heading>
+    <p>Five steps, each a program you can run.</p>
     <list ordered="true">
-      <item><term><link to="chat" section="room">A room</link></term><text>One actor, events from your program, an I/O processor for the screens.</text></item>
-      <item><term><link to="chat" section="presence">Presence</link></term><text>An actor per person: offline, active or away, with a timer that costs nothing in a test.</text></item>
-      <item><term><link to="chat" section="workspace">The workspace</link></term><text>A collection actor that decides which rooms exist and alone makes them.</text></item>
-      <item><term><link to="chat" section="roster">The roster</link></term><text>Everyone online sees who else is, and each change as it happens.</text></item>
-      <item><term><link to="chat" section="hibernation">Hibernation</link></term><text>A thousand users with fifty in memory, the rest in a store.</text></item>
+      <item><term><link to="chat" section="room">A room</link></term><text>One actor, and a handler for the screens.</text></item>
+      <item><term><link to="chat" section="presence">Presence</link></term><text>Each user is offline, active or away.</text></item>
+      <item><term><link to="chat" section="workspace">A workspace</link></term><text>One actor decides which rooms exist.</text></item>
+      <item><term><link to="chat" section="roster">A roster</link></term><text>Everyone sees who is online.</text></item>
+      <item><term><link to="chat" section="hibernation">Hibernation</link></term><text>A thousand users, fifty in memory.</text></item>
     </list>
     <actions>
       <action to="chat">Build a team chat</action>
@@ -84,25 +100,12 @@
   </section>
 
   <section id="production">
-    <kicker>Run it</kicker>
-    <heading>The same charts, <em>in production</em>.</heading>
-    <p>A host runs your actors on your program's event loop and gives the operator what a long-lived system needs.</p>
+    <heading>Run it in production.</heading>
     <list>
-      <item><term>Hibernation</term><text>Actors past a resident bound go to your store and come back on their next event.</text></item>
-      <item><term>Migration</term><text>Add a new version of a chart, and running actors move to it while events keep coming.</text></item>
-      <item><term>Snapshots</term><text>The whole host as one blob, restored with its clock, its timers and its actors.</text></item>
-      <item><term>Telemetry</term><text>Traces, logs and metrics as OpenTelemetry, with a trace that follows an event across actors and systems.</text></item>
-    </list>
-  </section>
-
-  <section id="platforms">
-    <kicker>Where it runs</kicker>
-    <heading>One core, <em>every runtime</em>.</heading>
-    <list>
-      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-napi#readme">Node.js and Bun</link></term><text><code>@tinyactors/node</code>: Node.js 22.3 or later and Bun, on macOS and Linux. Charts in JavaScript, or in the QuickJS sandbox for charts you do not trust.</text></item>
-      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-cpython#readme">Python</link></term><text><code>tinyactors</code>: CPython 3.13 or later. Charts in Python, synchronous or under asyncio.</text></item>
-      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/browser.md">Browsers</link></term><text><code>@tinyactors/wasm</code>: the same API as WebAssembly, for browsers and for platforms with no native addon.</text></item>
-      <item><term><link href="https://github.com/tinyactors-dev/tinyactors-core">C</link></term><text>The core embeds anywhere: no C library, no I/O, no threads, and memory only from an allocator you give it.</text></item>
+      <item><term>Hibernation</term><text>Idle actors go to your store and come back on their next event.</text></item>
+      <item><term>Migration</term><text>Running actors move to a new version of their chart.</text></item>
+      <item><term>Snapshots</term><text>The whole host as one blob: actors, timers and clock.</text></item>
+      <item><term>Telemetry</term><text>Traces, logs and metrics as OpenTelemetry.</text></item>
     </list>
   </section>
 </page>

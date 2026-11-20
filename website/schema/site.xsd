@@ -105,13 +105,12 @@
 
   <xs:element name="hero">
     <xs:annotation><xs:documentation>
-      What the page is about, said once: an optional kicker above the
-      headline, the headline, one lede paragraph, how to install, and what to
-      do next.
+      What the page is about, said once: the headline, one lede paragraph,
+      how to install, and what to do next. No label above the headline: the
+      headline says it.
     </xs:documentation></xs:annotation>
     <xs:complexType>
       <xs:sequence>
-        <xs:element name="kicker" type="plain" minOccurs="0"/>
         <xs:element name="headline" type="emphasis"/>
         <xs:element name="lede" type="inline"/>
         <xs:element ref="install" minOccurs="0"/>
@@ -123,7 +122,6 @@
   <xs:element name="section">
     <xs:complexType>
       <xs:sequence>
-        <xs:element name="kicker" type="plain" minOccurs="0"/>
         <xs:element name="heading" type="emphasis"/>
         <xs:group ref="blocks" maxOccurs="unbounded"/>
       </xs:sequence>
@@ -265,8 +263,11 @@
 
   <xs:element name="install">
     <xs:annotation><xs:documentation>
-      How to install, one command per platform, each named for the reader
-      (`for`): "Node.js and Bun", "Python", "Browsers".
+      How to install: one command per platform, each named for the reader
+      (`for`: "Node.js and Bun", "Python", "Browsers"), with the guide to
+      read next (`guide`). The commands do the same thing in different
+      words, so a page shows one at a time, behind tabs, and the reader's
+      choice holds for every install on the page.
     </xs:documentation></xs:annotation>
     <xs:complexType>
       <xs:sequence>
@@ -275,6 +276,7 @@
             <xs:simpleContent>
               <xs:extension base="nonempty">
                 <xs:attribute name="for" type="plain-attribute" use="required"/>
+                <xs:attribute name="guide" type="external"/>
               </xs:extension>
             </xs:simpleContent>
           </xs:complexType>

@@ -102,6 +102,9 @@
         <link rel="icon" href="/assets/brand/favicon.ico" sizes="any"/>
         <link rel="apple-touch-icon" href="/assets/brand/apple-touch-icon.png"/>
         <link rel="stylesheet" href="/assets/site.css"/>
+        <xsl:if test=".//s:install[count(s:command) gt 1]">
+          <script type="module" src="/assets/components/tabs.mjs"></script>
+        </xsl:if>
         <xsl:if test=".//s:live">
           <!-- The live examples import the package by its name, as a reader's code does. -->
           <script type="importmap">{'{"imports": {"@tinyactors/wasm": "/vendor/tinyactors-wasm/index.mjs"}}'}</script>
@@ -174,7 +177,6 @@
               <span class="ta-sheet__reg ta-sheet__reg--{.}" aria-hidden="true"><i/></span>
             </xsl:for-each>
             <div class="ta-sheet__body hero__body">
-              <xsl:apply-templates select="s:kicker"/>
               <h1 id="title" class="hero__headline"><xsl:apply-templates select="s:headline/node()"/></h1>
               <p class="hero__lede"><xsl:apply-templates select="s:lede/node()"/></p>
               <xsl:apply-templates select="s:install, s:actions"/>
@@ -185,21 +187,16 @@
     </section>
   </xsl:template>
 
-  <xsl:template match="s:kicker">
-    <p class="kicker">{normalize-space(.)}</p>
-  </xsl:template>
-
   <!-- ===================================================== sections -->
 
   <xsl:template match="s:section">
     <section id="{@id}" class="section" aria-labelledby="{@id}-heading">
       <div class="wrap">
         <header class="section__head">
-          <xsl:apply-templates select="s:kicker"/>
           <h2 id="{@id}-heading"><xsl:apply-templates select="s:heading/node()"/></h2>
         </header>
         <div class="section__body">
-          <xsl:apply-templates select="* except (s:kicker, s:heading)"/>
+          <xsl:apply-templates select="* except s:heading"/>
         </div>
       </div>
     </section>
@@ -272,7 +269,7 @@
               <p class="claim__text"><xsl:apply-templates/></p>
             </xsl:for-each>
             <p class="claim__sources">
-              <span class="claim__label">Source</span>
+              <span class="claim__label">Source:</span>
               <xsl:for-each select="s:source">
                 <xsl:if test="position() gt 1"><span class="claim__sep" aria-hidden="true"> · </span></xsl:if>
                 <a href="{@href}"><xsl:apply-templates/></a>
@@ -284,15 +281,32 @@
     </div>
   </xsl:template>
 
+  <!-- Install commands do one thing in different words: one shows at a
+       time, behind tabs (components/tabs.mjs); without its script the
+       first shows. A single command needs no tabs. -->
   <xsl:template match="s:install">
-    <dl class="install">
+    <xsl:variable name="id" select="generate-id()"/>
+    <ta-tabs class="install">
+      <xsl:if test="count(s:command) gt 1">
+        <div role="tablist" class="ta-tabs ta-tabs--segmented" aria-label="Install for">
+          <xsl:for-each select="s:command">
+            <button type="button" role="tab" class="ta-tab" id="{$id}-tab-{position()}" aria-controls="{$id}-panel-{position()}"
+                    aria-selected="{position() = 1}" tabindex="{if (position() = 1) then 0 else -1}">{@for}</button>
+          </xsl:for-each>
+        </div>
+      </xsl:if>
       <xsl:for-each select="s:command">
-        <div class="install__row">
-          <dt class="install__for">{@for}</dt>
-          <dd class="install__command"><code><span class="install__prompt" aria-hidden="true">$ </span>{normalize-space(.)}</code></dd>
+        <div class="install__panel" role="{if (count(../s:command) gt 1) then 'tabpanel' else 'group'}" id="{$id}-panel-{position()}"
+             aria-labelledby="{$id}-tab-{position()}">
+          <xsl:if test="count(../s:command) = 1"><xsl:attribute name="aria-label" select="'Install for ' || @for"/></xsl:if>
+          <xsl:if test="position() gt 1"><xsl:attribute name="hidden" select="'hidden'"/></xsl:if>
+          <code class="install__command"><span class="install__prompt" aria-hidden="true">$ </span>{normalize-space(.)}</code>
+          <xsl:if test="@guide">
+            <a class="install__guide" href="{@guide}">{@for} guide</a>
+          </xsl:if>
         </div>
       </xsl:for-each>
-    </dl>
+    </ta-tabs>
   </xsl:template>
 
   <!-- The first action is the one the page wants taken: the primary button. -->

@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="not-found" path="/404">
   <title>Not found</title>
-  <description>There is no page at this address.</description>
+  <description>No page has this address.</description>
 
   <hero>
-    <kicker>404</kicker>
-    <headline>No page <em>here</em>.</headline>
-    <lede>Nothing on this site has this address. It may have moved, or the link may be wrong.</lede>
+    <headline>Not found.</headline>
+    <lede>No page has this address.</lede>
     <actions>
-      <action to="home">Go to the home page</action>
+      <action to="home">Go home</action>
     </actions>
   </hero>
 </page>
