@@ -8,6 +8,7 @@
     <link to="property-testing">Testing</link>
     <link to="telemetry">Telemetry</link>
     <link to="performance">Performance</link>
+    <link to="anthill">Anthill</link>
     <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
   </nav>
 
@@ -17,6 +18,7 @@
     <page src="pages/property-testing.xml"/>
     <page src="pages/telemetry.xml"/>
     <page src="pages/performance.xml"/>
+    <page src="pages/anthill.xml"/>
     <page src="pages/404.xml"/>
   </pages>
 

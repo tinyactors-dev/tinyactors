@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A queen. Her colony's workers bring food home (harvest); once a second
+     she lays an egg for every two pieces of food she holds, and the world
+     hatches them as ants, while the colony has room. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="queen" initial="laying">
+  <datamodel>
+    <data id="colony" expr="0"/>
+    <data id="food" expr="0"/>
+  </datamodel>
+  <state id="laying">
+    <onentry><send event="tick" delay="1s"/></onentry>
+    <transition event="harvest">
+      <assign location="food" expr="food + _event.data.food"/>
+    </transition>
+    <transition event="tick" cond="food &gt;= 2" target="laying">
+      <send type="urn:world" event="lay">
+        <param name="eggs" expr="Math.floor(food / 2)"/>
+      </send>
+      <assign location="food" expr="food % 2"/>
+    </transition>
+    <transition event="tick" target="laying"/>
+  </state>
+</scxml>

@@ -144,7 +144,7 @@ module Website
   def live!
     FileUtils.mkdir_p(SITE.join('assets/components'))
     ROOT.glob('components/*.mjs').each { |file| FileUtils.cp(file, SITE.join('assets/components')) }
-    examples = documents.flat_map { |document| document.read.scan(/<live\s[^>]*src="[^"]*examples\/([^\/"]+)\//).flatten }.uniq
+    examples = documents.flat_map { |document| document.read.scan(/<(?:live|playground)\s[^>]*src="[^"]*examples\/([^\/"]+)\//).flatten }.uniq
     vendored = nil
     examples.each do |name|
       dir = EXAMPLES.join(name)

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="anthill" path="/anthill/">
+  <title>A million ants in your browser</title>
+  <description>Two anthills where every ant and queen is a tinyactors actor, up to a million of them, running in your browser on WebAssembly.</description>
+
+  <hero>
+    <headline>A million <em>ants</em>.</headline>
+    <lede>Two colonies, and every ant is an actor. Drop food, squash ants, and move the slider up to a million. It all runs in this tab.</lede>
+  </hero>
+
+  <section id="watch">
+    <heading>Watch them.</heading>
+    <p>An ant decides only when something happens: it leaves, finds food, comes home, meets an enemy. Between decisions your browser draws it, not tinyactors.</p>
+    <playground src="../../examples/anthill/page.mjs">
+      <description>Two anthills on a field. Each colony's workers fetch food for their queen, who lays eggs with it, and workers of the two colonies fight where they meet.</description>
+    </playground>
+  </section>
+
+  <section id="ant">
+    <heading>An ant is a statechart.</heading>
+    <p>An egg hatches, a larva grows, and a worker forages, carries food home and rests. Two fights kill it, and so does old age or your tap.</p>
+    <code src="../../examples/anthill/ant.scxml" language="scxml" file="ant.scxml"/>
+  </section>
+
+  <section id="queen">
+    <heading>So is a queen.</heading>
+    <p>Workers bring her food. Once a second she lays an egg for every two pieces.</p>
+    <code src="../../examples/anthill/queen.scxml" language="scxml" file="queen.scxml"/>
+  </section>
+
+  <section id="world">
+    <heading>The world is an I/O processor.</heading>
+    <p>When an ant asks to forage, the world picks its leg and records two points and two times. It knows when every leg ends.</p>
+    <code src="../../examples/anthill/world.mjs" lines="177-192" language="javascript" file="world.mjs"/>
+    <p>Each frame moves a simulated clock 50 milliseconds and tells the ants whose legs ended. Enemies whose legs end together may fight.</p>
+    <code src="../../examples/anthill/world.mjs" lines="228-256" language="javascript" file="world.mjs"/>
+  </section>
+
+  <section id="numbers">
+    <heading>What a million costs.</heading>
+    <p>Drawing is free for tinyactors, so the limit is decisions a second. Above half a million ants the simulation runs slower than real time, and the page says how fast.</p>
+    <table src="../../examples/anthill/README.md" section="Measured">
+      <caption>Measured 2026-11-20 in headless Chromium 157 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; @tinyactors/wasm 0.4.0. Sim speed and decisions a second are the mean of 30 readings after the first 30 seconds.</caption>
+    </table>
+  </section>
+</page>

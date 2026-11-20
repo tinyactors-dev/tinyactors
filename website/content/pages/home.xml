@@ -43,6 +43,9 @@
         <source to="performance" section="scale">Costs stay flat</source>
       </claim>
     </claims>
+    <actions>
+      <action to="anthill">Watch a million ants</action>
+    </actions>
   </section>
 
   <section id="agents">

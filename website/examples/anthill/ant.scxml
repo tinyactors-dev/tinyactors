@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- An ant. An egg hatches into a larva, the larva grows into a worker, and
+     the worker forages: out to look for food, home with what it found, a
+     rest in the hill, out again. It decides only when something happens;
+     the world (urn:world) picks each leg, says when it arrives, and says
+     when it meets an enemy. Two fights kill it, old age kills it, and so
+     does a reader's tap. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="ant" initial="alive">
+  <datamodel>
+    <data id="colony" expr="0"/>
+    <data id="stage" expr="'worker'"/>
+    <data id="hp" expr="2"/>
+  </datamodel>
+  <state id="alive" initial="start">
+    <transition event="kill" target="dead"/>
+    <transition event="die" target="dead"/>
+    <state id="start">
+      <transition cond="stage === 'egg'" target="egg"/>
+      <transition target="worker"/>
+    </state>
+    <state id="egg">
+      <onentry><send event="hatch" delay="20s"/></onentry>
+      <transition event="hatch" target="larva"/>
+    </state>
+    <state id="larva">
+      <onentry><send event="grow" delay="30s"/></onentry>
+      <transition event="grow" target="worker"/>
+    </state>
+    <state id="worker" initial="foraging">
+      <transition event="fight" cond="hp &lt;= 1" target="dead"/>
+      <transition event="fight"><assign location="hp" expr="hp - 1"/></transition>
+      <state id="foraging">
+        <onentry><send type="urn:world" event="forage"/></onentry>
+        <transition event="found" target="carrying"/>
+        <transition event="arrive" target="foraging"/>
+      </state>
+      <state id="carrying">
+        <onentry><send type="urn:world" event="home"/></onentry>
+        <transition event="arrive" target="resting"/>
+      </state>
+      <state id="resting">
+        <onentry><send type="urn:world" event="rest"/></onentry>
+        <transition event="arrive" target="foraging"/>
+      </state>
+    </state>
+  </state>
+  <final id="dead"/>
+</scxml>

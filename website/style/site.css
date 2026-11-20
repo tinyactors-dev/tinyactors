@@ -156,6 +156,23 @@ ta-tabs { display: block; }
 .table tbody tr:last-child > * { border-bottom: 0; }
 .table__caption { font: var(--type-body-sm); color: var(--fg-3); max-width: var(--prose-max); }
 
+/* ---------------------------------------------------- playgrounds */
+
+.playground { display: grid; gap: var(--space-3); }
+.playground__description--quiet { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.anthill__controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); }
+.anthill__population { display: flex; align-items: center; gap: var(--space-3); font: var(--type-ui); color: var(--fg-2); }
+.anthill__population input { width: 200px; accent-color: var(--accent); }
+.anthill__count { font: var(--type-code); color: var(--fg-1); min-width: 6em; font-variant-numeric: tabular-nums; }
+.anthill__controls .ta-tab[aria-checked="true"] { color: var(--fg-1); background: var(--surface-1); }
+.anthill__stage { border: 1px solid var(--border-1); border-radius: var(--radius-2); overflow: hidden; background: var(--surface-1); }
+.anthill__canvas { display: block; width: 100%; height: auto; aspect-ratio: 1000 / 600; cursor: crosshair; touch-action: manipulation; }
+.anthill__hills { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); font: var(--type-body-sm); color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.anthill__hill::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: var(--space-2); vertical-align: -1px; }
+.anthill__hill--1::before { background: var(--accent); }
+.anthill__hill--2::before { background: var(--data-3); }
+.anthill__status { font: var(--type-code); font-size: var(--fs-12); color: var(--fg-3); font-variant-numeric: tabular-nums; min-height: 1.6em; }
+
 /* ---------------------------------------------------- live examples */
 
 .live { display: grid; gap: var(--space-3); }

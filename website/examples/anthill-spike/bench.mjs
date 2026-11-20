@@ -17,7 +17,8 @@ const SECONDS = Number(arg('seconds', 10));
 const LEG = Number(arg('leg', 5000));       // mean leg, simulated ms
 const FRAME = Number(arg('frame', 50));     // simulated ms per step
 const tracing = arg('tracing', 'false') === 'true';
-const ids = arg('ids', 'session');          // session | data
+const ids = arg('ids', 'session');          // session | map
+const slots = new Map();
 
 const mb = (b) => (b / 1048576).toFixed(0);
 const mem = () => {
@@ -51,7 +52,7 @@ const world = {
     const a = performance.now();
     receives++;
     const session = send.session;
-    const slot = ids === 'data' ? send.data.i : Number(session);
+    const slot = ids === 'map' ? slots.get(session) : Number(session);
     const leg = LEG * (0.5 + rnd());
     switch (send.event) {
       case 'forage': schedule(session, slot, leg, rnd() < 0.3 ? 1 : 0); break;
@@ -72,11 +73,20 @@ compiled.close();
 
 const stage = mode === 'forage' ? 'worker' : mode;
 let t = performance.now();
-for (let i = 0; i < N; i++) host.spawn('ant', { params: { colony: i & 1, stage } });
-const spawnMs = performance.now() - t;
-t = performance.now();
-await host.idle();
-const startMs = performance.now() - t;
+// Spawned in chunks, each run to idle before the next: an ant's first step
+// sends to the world, and a sender holds a workspace until its batch is
+// acknowledged, so a million first steps in one run grow the workspaces
+// to about a million (1.7 KB each), never given back.
+const CHUNK = Number(arg('chunk', 4096));
+let spawnMs = 0, startMs = 0;
+for (let i = 0; i < N; i += CHUNK) {
+  let a = performance.now();
+  for (let j = i; j < Math.min(N, i + CHUNK); j++) { const actor = host.spawn('ant', { params: { colony: j & 1, stage } }); if (ids === 'map') slots.set(actor.id, j); }
+  spawnMs += performance.now() - a;
+  a = performance.now();
+  await host.idle();
+  startMs += performance.now() - a;
+}
 const m1 = mem();
 const out = {
   n: N, datamodel, mode, tracing,
@@ -85,6 +95,7 @@ const out = {
   rss_mb: +mb(m1.rss), rss_b_per_actor: Math.round((m1.rss - base.rss) / N),
   js_heap_b_per_actor: Math.round((m1.heap - base.heap) / N),
   wasm_mb: +mb(m1.wasm), wasm_b_per_actor: Math.round((m1.wasm - base.wasm) / N),
+  workspaces: (await host.hostStats()).pools[0].workspaces.capacity,
 };
 if (mode === 'forage') {
   const NAMES = ['arrive', 'found'];
@@ -117,6 +128,7 @@ if (mode === 'forage') {
     sendMany_us_per_event: +((sendManyMs * 1000) / events).toFixed(2),
     idle_us_per_event: +((idleMs * 1000) / events).toFixed(2),
     rss_after_mb: +mb(mem().rss), wasm_after_mb: +mb(wasmBytes()),
+    workspaces_after: (await host.hostStats()).pools[0].workspaces.capacity,
   });
 }
 host.close();

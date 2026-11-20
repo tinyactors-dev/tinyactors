@@ -142,8 +142,26 @@
       <xs:element ref="actions"/>
       <xs:element ref="live"/>
       <xs:element ref="table"/>
+      <xs:element ref="playground"/>
     </xs:choice>
   </xs:group>
+
+  <xs:element name="playground">
+    <xs:annotation><xs:documentation>
+      A program the reader plays with, in the browser, with controls of its
+      own: `src` names a module under examples/ that exports
+      `mount(element)`. Its logic is tested as any example's is (its
+      `main.mjs` runs the same code in Node.js); `description` says what a
+      reader without scripts would have seen.
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="description" type="inline"/>
+      </xs:sequence>
+      <xs:attribute name="src" type="path" use="required"/>
+      <xs:assert test="contains(@src, 'examples/') and ends-with(@src, '.mjs')"/>
+    </xs:complexType>
+  </xs:element>
 
   <xs:element name="table">
     <xs:annotation><xs:documentation>
@@ -427,7 +445,7 @@
 
   <xs:simpleType name="path">
     <xs:restriction base="xs:token">
-      <xs:pattern value="[a-z0-9._/-]+"/>
+      <xs:pattern value="[A-Za-z0-9._/-]+"/>
     </xs:restriction>
   </xs:simpleType>
 

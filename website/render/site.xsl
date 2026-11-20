@@ -119,6 +119,9 @@
         <xsl:if test=".//s:code[not(@role = 'output') and not(@language = 'text')]">
           <script type="module" src="/assets/components/highlight.mjs?v={$version}"></script>
         </xsl:if>
+        <xsl:if test=".//s:playground">
+          <script type="module" src="/assets/components/playground.mjs?v={$version}"></script>
+        </xsl:if>
         <xsl:if test=".//s:live">
           <!-- tinyactors's WebAssembly, fetched while the page loads: the live examples need it before their first run. -->
           <link rel="preload" href="/vendor/tinyactors-wasm/tinyactors.wasm" as="fetch" type="application/wasm" crossorigin="anonymous"/>
@@ -310,6 +313,14 @@
         <figcaption class="table__caption"><xsl:apply-templates select="s:caption/node()"/></figcaption>
       </xsl:if>
     </figure>
+  </xsl:template>
+
+  <!-- A playground: the module mounts itself into the element. Without
+       scripts, the description says what it shows. -->
+  <xsl:template match="s:playground">
+    <ta-playground class="playground" src="{f:url(@src)}">
+      <p class="playground__description"><xsl:apply-templates select="s:description/node()"/></p>
+    </ta-playground>
   </xsl:template>
 
   <xsl:template match="s:example">
