@@ -6,21 +6,16 @@
 // With this module's ?v= query, as every component is loaded.
 await import(new URL(`./trace-view.mjs${new URL(import.meta.url).search}`, import.meta.url));
 
-// A live example loads tinyactors (about 500 KB of WebAssembly) before its
-// first run. It starts as soon as the example scrolls near the screen, so a
-// click usually finds it ready; a click before then says it is loading.
+// A live example loads tinyactors (about 500 KB of WebAssembly, which the
+// page preloads) before its first run. Each example's module is loaded as
+// soon as the page is idle, so a click usually finds it ready; a click
+// before then says it is loading.
 const loading = new Map();
 function load(src) {
   if (!loading.has(src)) loading.set(src, import(new URL(src, document.baseURI).href));
   return loading.get(src);
 }
-const near = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (!entry.isIntersecting) continue;
-    near.unobserve(entry.target);
-    load(entry.target.getAttribute('src')).catch(() => {}); // a failure shows when the button runs it
-  }
-}, { rootMargin: '600px' });
+const idle = globalThis.requestIdleCallback ?? ((callback) => setTimeout(callback, 200));
 
 class Live extends HTMLElement {
   connectedCallback() {
@@ -29,7 +24,7 @@ class Live extends HTMLElement {
     button.dataset.ready = 'true';
     button.disabled = false;
     button.addEventListener('click', () => this.run(button));
-    near.observe(this);
+    idle(() => load(this.getAttribute('src')).catch(() => {})); // a failure shows when the button runs it
   }
 
   async run(button) {

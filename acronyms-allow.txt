@@ -61,3 +61,7 @@ creatorId      tinyparse/test/suite/jsfamily/inputs/expressions__56.js   # tree-
 
 # Temporal's property naming a value's calendar.
 calendarId     staticjs-js/index.mjs                                     # Temporal.PlainDate#calendarId
+
+# scxmljs's IOSession names a session's id `sessionId`; the website's stand-in
+# I/O processors for its diagrams read it.
+sessionId      website/components/chart.mjs                              # @tinyactors/scxmljs IOSession field
