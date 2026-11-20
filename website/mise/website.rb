@@ -58,11 +58,20 @@ module Website
     validate!
     FileUtils.rm_rf(SITE)
     FileUtils.mkdir_p(SITE)
-    run('sxml', 'transform', "--result-directory=#{SITE}", STYLESHEET, CONTENT.join('site.xml'))
+    run('sxml', 'transform', "--result-directory=#{SITE}", "--param=version=#{version}", STYLESHEET, CONTENT.join('site.xml'))
     assets!
     vendor!
     live!
     puts "website: built #{SITE.relative_path_from(ROOT)} (#{SITE.glob('**/*').count(&:file?)} files)"
+  end
+
+  # What the pages append to the URLs of the stylesheet and the scripts
+  # (`?v=`): a hash of what they are built from, so a deploy that changes
+  # one is fetched anew whatever a cache kept.
+  def version
+    inputs = [*ROOT.glob('components/*.mjs'), ROOT.join('style/site.css'), DESIGN.join('styles.css'),
+              *DESIGN.glob('tokens/*.css'), DESIGN.join('components/components.css')].sort
+    Digest::SHA256.hexdigest(inputs.map { |file| "#{file.basename}\0#{file.read}" }.join("\0"))[0, 12]
   end
 
   # One stylesheet: the design system's (styles.css's imports, in order)
@@ -87,9 +96,11 @@ module Website
       'logo-mark-dark.svg' => 'assets/brand/svg/tinyactors-symbol-parchment.svg'
     }.each { |name, source| FileUtils.cp(DESIGN.join(source), assets.join('brand', name)) }
     SITE.join('robots.txt').write("User-agent: *\nAllow: /\n\nSitemap: #{ORIGIN}/sitemap.xml\n")
+    # Only the fonts are cached long: their names never change content.
+    # Everything else keeps Cloudflare's default (revalidated by its ETag),
+    # so a deploy is seen at once, and a response from before it (a 404 of
+    # a file the deploy adds) is never kept.
     SITE.join('_headers').write(<<~HEADERS)
-      /assets/*
-        Cache-Control: public, max-age=86400
       /assets/fonts/*
         Cache-Control: public, max-age=31536000, immutable
     HEADERS

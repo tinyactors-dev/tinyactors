@@ -64,6 +64,7 @@ pages.each do |file, html|
 
     links += 1
     path, anchor = url.split('#', 2)
+    path = path.sub(/\?.*/, '') # a version query names the same file
     target = path.empty? ? file : resolve.call(path)
     if target.nil?
       failures << "#{file.relative_path_from(Website::SITE)}: #{url}: no such file in the build"
