@@ -179,54 +179,57 @@ on the whole population. Most of the actors are hibernated in SQLite and
 one in a hundred runs an invoked service; then the same with every actor
 resident.
 
-One run of it (2026-10-17, x86_64 Linux 6.18, Intel Xeon @ 2.10GHz, 4
-CPUs, 16 GiB, a virtual machine; node 22.23.3, bun 1.4.1). Each cell is
-the cost at N, then at 2N, in microseconds, and their ratio.
+One run of it, alone on the machine (2026-11-20; Intel Xeon @ 2.10GHz,
+4 CPUs, 16 GiB, Linux; node 22.23.5, bun 1.4.1). Each cell is the cost at
+N, then at 2N, in microseconds, and their ratio. Every operation passed.
 
 Hibernated: 2,000,000 and 4,000,000 actors, at most 1000 counters
 resident, 20,000 and 40,000 actors each running an invoked service.
 
 | operation | unit | node, native | node, quickjs | bun, native | bun, quickjs |
 |---|---|---|---|---|---|
-| populate (spawn and hibernate) | µs per actor | 11.71 → 11.62 (0.99) | 7.16 → 7.36 (1.03) | 8.64 → 8.51 (0.99) | 6.74 → 6.58 (0.98) |
-| spawn | µs per call | 5.47 → 5.43 (0.99) | 2.45 → 2.54 (1.04) | 4.82 → 5.59 (1.16) | 2.92 → 2.70 (0.92) |
-| terminate | µs per call | 0.755 → 0.733 (0.97) | 0.565 → 0.560 (0.99) | 0.925 → 0.889 (0.96) | 0.758 → 0.742 (0.98) |
-| send | µs per call | 4.44 → 4.41 (0.99) | 2.06 → 2.15 (1.04) | 3.71 → 3.61 (0.97) | 2.28 → 2.33 (1.02) |
-| sendMany | µs per event | 4.84 → 4.79 (0.99) | 2.38 → 2.29 (0.96) | 3.50 → 3.40 (0.97) | 2.38 → 2.13 (0.89) |
-| send (hibernated: woken from the store) | µs per call | 34.97 → 30.14 (0.86) | 33.20 → 40.71 (1.23) | 27.13 → 29.38 (1.08) | 34.26 → 35.97 (1.05) |
-| hibernate | µs per call | 5.94 → 5.78 (0.97) | 4.50 → 4.55 (1.01) | 4.22 → 4.20 (0.99) | 4.37 → 4.32 (0.99) |
-| wake | µs per call | 7.07 → 7.34 (1.04) | 3.84 → 4.02 (1.05) | 7.93 → 7.57 (0.95) | 4.85 → 4.75 (0.98) |
-| actor (by name; measured as actorByName, its direct call) | µs per call | 0.532 → 0.507 (0.95) | 0.415 → 0.426 (1.03) | 0.426 → 0.415 (0.98) | 0.304 → 0.300 (0.99) |
-| actorState | µs per call | 4.63 → 4.38 (0.95) | 4.34 → 4.80 (1.11) | 4.13 → 4.37 (1.06) | 3.95 → 4.20 (1.06) |
-| hostStats | µs per call | 19.28 → 19.47 (1.01) | 19.32 → 19.76 (1.02) | 19.45 → 16.84 (0.87) | 14.51 → 14.14 (0.97) |
-| I/O processor round trip | µs per call | 13.30 → 12.54 (0.94) | 8.47 → 8.33 (0.98) | 9.89 → 9.46 (0.96) | 7.88 → 6.48 (0.82) |
-| transport round trip | µs per call | 34.01 → 34.13 (1.00) | 25.85 → 28.06 (1.09) | 27.99 → 31.32 (1.12) | 22.87 → 22.52 (0.98) |
-| delayed send and its timer | µs per call | 7.19 → 7.48 (1.04) | 3.39 → 3.44 (1.02) | 5.93 → 5.97 (1.01) | 3.87 → 3.79 (0.98) |
-| invoked service round trip | µs per call | 14.28 → 15.49 (1.08) | 10.86 → 11.78 (1.08) | 11.54 → 13.32 (1.15) | 9.84 → 10.34 (1.05) |
-| sweep (every actor) | µs per actor | 0.008 → 0.007 (0.97) | 0.007 → 0.007 (0.98) | 0.008 → 0.007 (0.94) | 0.007 → 0.008 (1.03) |
-| migrate (one session) | µs per call | 32.02 → 28.74 (0.90) | 20.00 → 16.20 (0.81) | 24.48 → 24.95 (1.02) | 17.45 → 20.93 (1.20) |
-| snapshot | µs per actor | 0.110 → 0.105 (0.96) | 0.075 → 0.077 (1.04) | 0.090 → 0.080 (0.89) | 0.084 → 0.082 (0.97) |
-| restore (and its first turn) | µs per actor | 0.313 → 0.297 (0.95) | 0.200 → 0.200 (1.00) | 0.236 → 0.234 (0.99) | 0.193 → 0.199 (1.03) |
-| close | µs per actor | 0.081 → 0.102 (1.26) | 0.078 → 0.087 (1.11) | 0.079 → 0.106 (1.35) | 0.087 → 0.104 (1.19) |
+| populate (spawn and hibernate) | µs per actor | 10.88 → 10.56 (0.97) | 7.43 → 7.56 (1.02) | 7.52 → 7.81 (1.04) | 6.26 → 6.02 (0.96) |
+| spawn | µs per call | 5.25 → 5.19 (0.99) | 2.62 → 2.60 (0.99) | 4.11 → 4.16 (1.01) | 2.43 → 2.45 (1.01) |
+| terminate | µs per call | 0.867 → 0.786 (0.91) | 0.571 → 0.575 (1.01) | 0.952 → 0.893 (0.94) | 0.751 → 0.720 (0.96) |
+| send | µs per call | 3.79 → 3.64 (0.96) | 1.90 → 1.77 (0.93) | 3.19 → 3.00 (0.94) | 2.12 → 2.06 (0.97) |
+| sendMany | µs per event | 3.98 → 3.86 (0.97) | 2.18 → 2.04 (0.93) | 2.87 → 2.83 (0.99) | 2.01 → 1.85 (0.92) |
+| send (hibernated: woken from the store) | µs per call | 32.27 → 27.93 (0.87) | 28.29 → 27.92 (0.99) | 24.71 → 25.96 (1.05) | 33.43 → 33.10 (0.99) |
+| hibernate | µs per call | 5.41 → 4.93 (0.91) | 4.21 → 4.17 (0.99) | 3.56 → 3.44 (0.97) | 4.07 → 3.86 (0.95) |
+| wake | µs per call | 6.94 → 6.38 (0.92) | 3.90 → 3.69 (0.95) | 6.91 → 7.27 (1.05) | 4.19 → 4.43 (1.06) |
+| actor (by name) | µs per call | 3.96 → 4.01 (1.01) | 3.96 → 3.88 (0.98) | 1.32 → 1.20 (0.91) | 1.13 → 1.12 (0.99) |
+| actorState | µs per call | 4.26 → 4.01 (0.94) | 4.15 → 4.11 (0.99) | 3.90 → 3.73 (0.96) | 3.66 → 3.58 (0.98) |
+| hostStats | µs per call | 25.65 → 25.05 (0.98) | 24.49 → 23.49 (0.96) | 19.35 → 19.60 (1.01) | 18.96 → 18.23 (0.96) |
+| I/O processor round trip | µs per call | 10.11 → 10.16 (1.01) | 6.81 → 6.73 (0.99) | 7.09 → 6.87 (0.97) | 5.77 → 5.54 (0.96) |
+| transport round trip | µs per call | 30.55 → 31.31 (1.02) | 25.92 → 26.36 (1.02) | 25.19 → 26.15 (1.04) | 22.05 → 23.06 (1.05) |
+| delayed send and its timer | µs per call | 6.28 → 6.19 (0.98) | 3.09 → 3.01 (0.97) | 4.95 → 5.15 (1.04) | 3.35 → 3.37 (1.01) |
+| invoked service round trip | µs per call | 13.52 → 13.93 (1.03) | 10.33 → 10.12 (0.98) | 10.13 → 10.66 (1.05) | 9.15 → 9.79 (1.07) |
+| sweep (every actor) | µs per actor | 0.006 → 0.005 (0.87) | 0.006 → 0.005 (0.87) | 0.006 → 0.006 (0.95) | 0.006 → 0.006 (0.91) |
+| migrate (one session) | µs per call | 24.09 → 25.32 (1.05) | 16.51 → 16.95 (1.03) | 35.62 → 20.64 (0.58) | 16.90 → 16.30 (0.96) |
+| snapshot | µs per actor | 0.100 → 0.092 (0.92) | 0.079 → 0.084 (1.07) | 0.081 → 0.087 (1.08) | 0.101 → 0.092 (0.92) |
+| restore (and its first turn) | µs per actor | 0.291 → 0.298 (1.02) | 0.217 → 0.215 (0.99) | 0.223 → 0.217 (0.98) | 0.198 → 0.192 (0.97) |
+| close | µs per actor | 0.114 → 0.128 (1.13) | 0.120 → 0.157 (1.31) | 0.126 → 0.127 (1.01) | 0.120 → 0.139 (1.16) |
 
-All resident: 1,000,000 and 2,000,000 actors. Two million resident actors
-take up to 9.2 GB, so four million do not fit on this machine.
+All resident: 1,000,000 and 2,000,000 actors. Two million resident
+actors take up to 5.2 GiB on quickjs, so four million do not fit in 16
+GiB beside the scenario's other work.
 
 | operation | unit | node, native | node, quickjs | bun, native | bun, quickjs |
 |---|---|---|---|---|---|
-| populate (spawn, the segment growing) | µs per actor | 6.50 → 6.48 (1.00) | 4.49 → 4.17 (0.93) | 5.39 → 5.84 (1.08) | 4.55 → 4.37 (0.96) |
-| spawn | µs per call | 5.36 → 5.53 (1.03) | 2.59 → 3.18 (1.23) | 4.84 → 4.93 (1.02) | 2.86 → 2.71 (0.95) |
-| send | µs per call | 6.58 → 6.84 (1.04) | 4.35 → 4.88 (1.12) | 7.89 → 7.03 (0.89) | 4.55 → 4.64 (1.02) |
-| hibernate | µs per call | 7.75 → 7.64 (0.99) | 7.68 → 7.42 (0.97) | 6.35 → 6.93 (1.09) | 7.48 → 7.82 (1.04) |
-| wake | µs per call | 8.93 → 8.49 (0.95) | 3.05 → 3.27 (1.07) | 6.94 → 8.36 (1.20) | 3.93 → 3.57 (0.91) |
-| snapshot | µs per actor | 6.62 → 6.46 (0.98) | 5.60 → 6.32 (1.13) | 4.59 → 2.94 (0.64) | 6.12 → 6.51 (1.06) |
-| migrate (a chart, every actor) | µs per actor | 23.38 → 24.60 (1.05) | 12.26 → 14.03 (1.15) | 18.36 → 18.38 (1.00) | 12.01 → 13.27 (1.11) |
-| restore (and its first turn) | µs per actor | 16.41 → 15.45 (0.94) | 4.45 → 5.46 (1.23) | 9.08 → 9.01 (0.99) | 4.75 → 4.90 (1.03) |
-| close | µs per actor | 0.675 → 0.532 (0.79) | 1.78 → 1.47 (0.82) | 0.557 → 0.506 (0.91) | 1.70 → 1.40 (0.82) |
+| populate (spawn, the segment growing) | µs per actor | 5.42 → 5.52 (1.02) | 4.28 → 3.85 (0.90) | 4.23 → 4.14 (0.98) | 3.76 → 3.63 (0.97) |
+| spawn | µs per call | 4.84 → 4.86 (1.00) | 2.47 → 2.34 (0.95) | 4.06 → 4.14 (1.02) | 2.47 → 2.36 (0.95) |
+| send | µs per call | 5.82 → 5.89 (1.01) | 3.88 → 3.97 (1.02) | 4.88 → 4.90 (1.00) | 4.01 → 4.19 (1.05) |
+| hibernate | µs per call | 6.29 → 6.54 (1.04) | 6.89 → 6.31 (0.92) | 4.54 → 4.92 (1.09) | 6.78 → 6.85 (1.01) |
+| wake | µs per call | 7.48 → 7.37 (0.99) | 2.85 → 2.59 (0.91) | 5.08 → 5.45 (1.07) | 3.19 → 3.14 (0.98) |
+| snapshot | µs per actor | 4.49 → 4.23 (0.94) | 5.51 → 5.65 (1.03) | 3.50 → 3.20 (0.91) | 6.11 → 5.59 (0.92) |
+| migrate (a chart, every actor) | µs per actor | 17.99 → 17.80 (0.99) | 11.44 → 10.58 (0.93) | 14.38 → 14.06 (0.98) | 11.59 → 9.99 (0.86) |
+| restore (and its first turn) | µs per actor | 13.04 → 12.69 (0.97) | 4.35 → 4.96 (1.14) | 7.32 → 6.98 (0.95) | 4.57 → 4.79 (1.05) |
+| close | µs per actor | 0.310 → 0.309 (0.99) | 1.71 → 1.53 (0.90) | 0.296 → 0.323 (1.09) | 1.74 → 1.56 (0.90) |
 
-Peak resident memory, at N and 2N: hibernated node native 1718 / 3273
-MB; node quickjs 1763 / 3368 MB; bun native 1396 / 2605 MB; bun quickjs
-1358 / 2561 MB; all resident node native 3380 / 6493 MB; node quickjs
-4236 / 8289 MB; bun native 4175 / 8176 MB; bun quickjs 4673 / 9239 MB.
-The full run, with every operation, is in `build/scale-*.json` after
-`mise run scale`.
+Peak resident memory, at N and 2N: hibernated node native 1733 / 2579
+MiB; node quickjs 1773 / 3382 MiB; bun native 1680 / 3251 MiB; bun quickjs
+1345 / 2554 MiB; all resident node native 1706 / 3007 MiB; node quickjs
+2555 / 5274 MiB; bun native 2271 / 3828 MiB; bun quickjs 2517 / 5278 MiB.
+The run's files, every operation and sample, are in
+[tools/results/2026-11-20](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/tools/results/2026-11-20) in the repository; `mise run scale`
+writes them to `build/scale-*.json`. The root `AGENTS.md` ("Published
+numbers") says when to run it again.

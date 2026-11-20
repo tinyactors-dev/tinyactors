@@ -1,0 +1,19 @@
+[//tinyactors-cpython:amalgamate] sources up-to-date, skipping
+[//tinyactors-cpython:build] $ /home/user/tinyactors/tinyactors-cpython/mise/tasks/build
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+build: build/abi3/tinyactors.abi3.so
+build: build/free-threaded/tinyactors.cpython-314t-x86_64-linux-gnu.so
+[//tinyactors-cpython:migration] $ /home/user/tinyactors/tinyactors-cpython/mise/tasks/migration
+migration: python, 2000000 actors, 1000 resident, 200000 events
+populate: 2000000 actors of version 1 and 200000 events in 38.6 s, 1000 resident, 1999000 hibernated
+migrate: 2000000 actors to version 2 in 152.2 s (13137 a second), 200000 events meanwhile, 3688619 loaded from the store
+verify: 25000 actors' counts and versions in 1.4 s, 0 wrong
+store: 5912487 puts, 3913487 gets, 601.2 MB
+memory: peak resident 619 MB (310 B an actor); region 328.5 MB with both versions, 164.3 MB after (82 B an actor); at most 1000 actors resident after a turn
+migration: ecmascript, 2000000 actors, 1000 resident, 200000 events
+populate: 2000000 actors of version 1 and 200000 events in 46.7 s, 1000 resident, 1999000 hibernated
+migrate: 2000000 actors to version 2 in 169.3 s (11812 a second), 200000 events meanwhile, 3688619 loaded from the store
+verify: 25000 actors' counts and versions in 1.5 s, 0 wrong
+store: 5912487 puts, 3913487 gets, 806.9 MB
+memory: peak resident 620 MB (310 B an actor); region 328.5 MB with both versions, 164.3 MB after (82 B an actor); at most 1000 actors resident after a turn
+Finished in 415.76s

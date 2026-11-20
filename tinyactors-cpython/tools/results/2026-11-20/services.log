@@ -1,0 +1,19 @@
+[//tinyactors-cpython:amalgamate] sources up-to-date, skipping
+[//tinyactors-cpython:build] $ /home/user/tinyactors/tinyactors-cpython/mise/tasks/build
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+build: build/abi3/tinyactors.abi3.so
+build: build/free-threaded/tinyactors.cpython-314t-x86_64-linux-gnu.so
+[//tinyactors-cpython:services] $ /home/user/tinyactors/tinyactors-cpython/mise/tasks/services
+services: python, 200000 actors, all resident, 1000000 events
+start: 200000 actors, each with an invoked service, in 1.3 s (156205 a second)
+traffic: 1000000 round trips (actor -> service -> actor) in 7.9 s (127083 a second)
+end: 66667 finished with done data, 66667 cancelled, in 0.9 s
+verify: 200000 actors' pongs, done data and states, 0 wrong; 66666 services still running
+memory: peak resident 406 MB (2031 B an actor with its service); region 54.6 MB (273 B an actor)
+services: ecmascript, 200000 actors, all resident, 1000000 events
+start: 200000 actors, each with an invoked service, in 1.8 s (108450 a second)
+traffic: 1000000 round trips (actor -> service -> actor) in 12.8 s (78406 a second)
+end: 66667 finished with done data, 66667 cancelled, in 1.1 s
+verify: 200000 actors' pongs, done data and states, 0 wrong; 66666 services still running
+memory: peak resident 676 MB (3378 B an actor with its service); region 66.1 MB (330 B an actor)
+Finished in 33.67s

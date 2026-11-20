@@ -1,0 +1,42 @@
+[//tinyactors-napi:build] $ /home/user/tinyactors/tinyactors-napi/mise/tasks/build
+[//tinyactors-core:amalgamate] $ /home/user/tinyactors/tinyactors-core/mise/tasks/amalgamate --out /home/user/tinyactors/tinyactors-napi/build/core
+amalgamate: build/core/tinyactors.h, build/core/tinyactors.c, build/core/tinyactors_wasm.c, build/core/tinyactors_runtime.h, build/core/tinyactors_runtime.c, build/core/tinyactors_runtime_wasm.c, build/core/tinyactors_runtime_hosted.c, build/core/tinyactors_datamodel_ecmascript.h, build/core/tinyactors_datamodel_ecmascript_wasm.c, build/core/tinyactors_datamodel_ecmascript.c, each compiling on its own
+build: build/tinyactors.node
+[//tinyactors-napi:stress] $ /home/user/tinyactors/tinyactors-napi/mise/tasks/stress
+stress: node native, 2000000 actors, 1000 resident, 200000 events
+  populate: 500000 actors, 7.0 s
+  populate: 1000000 actors, 17.3 s
+  populate: 1500000 actors, 31.3 s
+populate: 2000000 actors in 48.2 s (41518 spawned and hibernated a second), 1000 resident, 1999000 hibernated
+traffic: 200000 events in 13.1 s (15282 a second): 199870 woken from the store
+verify: 10000 actors' counts in 0.7 s, 0 wrong
+store: 2208870 puts, 209870 gets, 378.1 MB (189 B an actor)
+memory: peak resident 307 MB (153 B an actor); region 164.2 MB (82 B an actor); at most 1000 actors resident after an eviction
+stress: node quickjs, 2000000 actors, 1000 resident, 200000 events
+  populate: 500000 actors, 5.0 s
+  populate: 1000000 actors, 12.1 s
+  populate: 1500000 actors, 21.8 s
+populate: 2000000 actors in 35.9 s (55760 spawned and hibernated a second), 1000 resident, 1999000 hibernated
+traffic: 200000 events in 12.1 s (16511 a second): 199870 woken from the store
+verify: 10000 actors' counts in 0.6 s, 0 wrong
+store: 2208870 puts, 209870 gets, 408.7 MB (204 B an actor)
+memory: peak resident 319 MB (159 B an actor); region 164.2 MB (82 B an actor); at most 1000 actors resident after an eviction
+stress: bun native, 2000000 actors, 1000 resident, 200000 events
+  populate: 500000 actors, 5.2 s
+  populate: 1000000 actors, 12.7 s
+  populate: 1500000 actors, 23.8 s
+populate: 2000000 actors in 39.6 s (50561 spawned and hibernated a second), 1000 resident, 1999000 hibernated
+traffic: 200000 events in 12.2 s (16350 a second): 199870 woken from the store
+verify: 10000 actors' counts in 0.6 s, 0 wrong
+store: 2208870 puts, 209870 gets, 378.1 MB (189 B an actor)
+memory: peak resident 300 MB (150 B an actor); region 164.2 MB (82 B an actor); at most 1000 actors resident after an eviction
+stress: bun quickjs, 2000000 actors, 1000 resident, 200000 events
+  populate: 500000 actors, 4.4 s
+  populate: 1000000 actors, 10.3 s
+  populate: 1500000 actors, 19.9 s
+populate: 2000000 actors in 34.2 s (58419 spawned and hibernated a second), 1000 resident, 1999000 hibernated
+traffic: 200000 events in 12.3 s (16261 a second): 199870 woken from the store
+verify: 10000 actors' counts in 0.6 s, 0 wrong
+store: 2208870 puts, 209870 gets, 408.7 MB (204 B an actor)
+memory: peak resident 287 MB (143 B an actor); region 164.2 MB (82 B an actor); at most 1000 actors resident after an eviction
+Finished in 217.89s

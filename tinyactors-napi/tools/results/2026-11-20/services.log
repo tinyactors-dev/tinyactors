@@ -1,0 +1,30 @@
+[//tinyactors-napi:build] $ /home/user/tinyactors/tinyactors-napi/mise/tasks/build
+[//tinyactors-core:amalgamate] $ /home/user/tinyactors/tinyactors-core/mise/tasks/amalgamate --out /home/user/tinyactors/tinyactors-napi/build/core
+amalgamate: build/core/tinyactors.h, build/core/tinyactors.c, build/core/tinyactors_wasm.c, build/core/tinyactors_runtime.h, build/core/tinyactors_runtime.c, build/core/tinyactors_runtime_wasm.c, build/core/tinyactors_runtime_hosted.c, build/core/tinyactors_datamodel_ecmascript.h, build/core/tinyactors_datamodel_ecmascript_wasm.c, build/core/tinyactors_datamodel_ecmascript.c, each compiling on its own
+build: build/tinyactors.node
+[//tinyactors-napi:services] $ /home/user/tinyactors/tinyactors-napi/mise/tasks/services
+services: node native, 200000 actors, 1000000 round trips
+start: 200000 actors, each with an invoked service, in 4.4 s (44979 a second)
+traffic: 1000000 round trips (actor -> service -> actor) in 23.0 s (43451 a second)
+end: 66667 finished with done data, 66667 cancelled, in 1.8 s
+verify: 200000 actors' pongs, done data and states, 0 wrong; 66666 services still running
+memory: peak resident 516 MB (2578 B an actor with its service); region 54.6 MB (273 B an actor)
+services: node quickjs, 200000 actors, 1000000 round trips
+start: 200000 actors, each with an invoked service, in 3.7 s (54184 a second)
+traffic: 1000000 round trips (actor -> service -> actor) in 22.3 s (44760 a second)
+end: 66667 finished with done data, 66667 cancelled, in 2.1 s
+verify: 200000 actors' pongs, done data and states, 0 wrong; 66666 services still running
+memory: peak resident 712 MB (3560 B an actor with its service); region 66.1 MB (330 B an actor)
+services: bun native, 200000 actors, 1000000 round trips
+start: 200000 actors, each with an invoked service, in 3.5 s (56777 a second)
+traffic: 1000000 round trips (actor -> service -> actor) in 19.0 s (52512 a second)
+end: 66667 finished with done data, 66667 cancelled, in 1.6 s
+verify: 200000 actors' pongs, done data and states, 0 wrong; 66666 services still running
+memory: peak resident 767 MB (3834 B an actor with its service); region 54.6 MB (273 B an actor)
+services: bun quickjs, 200000 actors, 1000000 round trips
+start: 200000 actors, each with an invoked service, in 2.7 s (73353 a second)
+traffic: 1000000 round trips (actor -> service -> actor) in 18.2 s (54881 a second)
+end: 66667 finished with done data, 66667 cancelled, in 1.8 s
+verify: 200000 actors' pongs, done data and states, 0 wrong; 66666 services still running
+memory: peak resident 807 MB (4036 B an actor with its service); region 66.1 MB (330 B an actor)
+Finished in 119.38s

@@ -1,0 +1,25 @@
+[//tinyactors-cpython:amalgamate] sources up-to-date, skipping
+[//tinyactors-cpython:build] $ /home/user/tinyactors/tinyactors-cpython/mise/tasks/build
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+build: build/abi3/tinyactors.abi3.so
+build: build/free-threaded/tinyactors.cpython-314t-x86_64-linux-gnu.so
+[//tinyactors-cpython:stress] $ /home/user/tinyactors/tinyactors-cpython/mise/tasks/stress
+stress: python, 2000000 actors, 1000 resident, 200000 events
+  populate: 500000 actors, 2.8 s
+  populate: 1000000 actors, 7.7 s
+  populate: 1500000 actors, 16.5 s
+populate: 2000000 actors in 30.1 s (66547 spawned and hibernated a second), 1000 resident, 1999000 hibernated
+traffic: 200000 events in 11.2 s (17913 a second): 199868 woken from the store
+verify: 10000 actors' counts in 0.6 s, 0 wrong
+store: 2208868 puts, 209868 gets, 378.3 MB (189 B an actor)
+memory: peak resident 215 MB (107 B an actor); region 164.2 MB (82 B an actor); at most 1000 actors resident after a turn
+stress: ecmascript, 2000000 actors, 1000 resident, 200000 events
+  populate: 500000 actors, 3.6 s
+  populate: 1000000 actors, 8.9 s
+  populate: 1500000 actors, 18.7 s
+populate: 2000000 actors in 32.5 s (61561 spawned and hibernated a second), 1000 resident, 1999000 hibernated
+traffic: 200000 events in 12.3 s (16239 a second): 199868 woken from the store
+verify: 10000 actors' counts in 0.5 s, 0 wrong
+store: 2208868 puts, 209868 gets, 408.9 MB (204 B an actor)
+memory: peak resident 216 MB (108 B an actor); region 164.2 MB (82 B an actor); at most 1000 actors resident after a turn
+Finished in 92.63s

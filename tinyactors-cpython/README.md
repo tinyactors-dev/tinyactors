@@ -1009,8 +1009,9 @@ Each benchmark below is a program in `tools/`, run with `mise run
 <name>`, that checks its own results. Every run here was one run, alone
 on the machine, on 2026-11-20 (Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB,
 Linux; CPython 3.13.18 with the GIL), with each config sized for its work
-("Sizing the config"). The root `AGENTS.md` ("Published numbers") says
-when to run them again.
+("Sizing the config"). Each run's log is in `tools/results/2026-11-20/`
+in the repository. The root `AGENTS.md` ("Published numbers") says when
+to run them again.
 
 **Hibernation** (`mise run stress`): two million actors of a counter
 chart, at most 1000 resident, the rest in SQLite. 200,000 events go to

@@ -1,0 +1,34 @@
+[//tinyactors-napi:build] $ /home/user/tinyactors/tinyactors-napi/mise/tasks/build
+[//tinyactors-core:amalgamate] $ /home/user/tinyactors/tinyactors-core/mise/tasks/amalgamate --out /home/user/tinyactors/tinyactors-napi/build/core
+amalgamate: build/core/tinyactors.h, build/core/tinyactors.c, build/core/tinyactors_wasm.c, build/core/tinyactors_runtime.h, build/core/tinyactors_runtime.c, build/core/tinyactors_runtime_wasm.c, build/core/tinyactors_runtime_hosted.c, build/core/tinyactors_datamodel_ecmascript.h, build/core/tinyactors_datamodel_ecmascript_wasm.c, build/core/tinyactors_datamodel_ecmascript.c, each compiling on its own
+build: build/tinyactors.node
+[//tinyactors-napi:snapshot] $ /home/user/tinyactors/tinyactors-napi/mise/tasks/snapshot
+snapshot: node native, 2000000 actors, 1000 resident, 200000 events
+live: 2000000 actors and 200000 events in 64.41 s; 1000 resident with a delayed send, 500 of them paying; 1999000 hibernated
+snapshot: 165.0 MB in 0.14 s (82 B an actor); the store copied
+restore: in 0.14 s; the copy's snapshot compared; 500 payments in flight started again on the stand-in
+rehearse: 2000000 actors to version 2 in 244.90 s, 200000 events meanwhile, 3688631 loaded from the copy's store
+verify: 25097 actors on each host, 0 wrong on the copy, 0 on the live host
+memory: peak resident 1261 MB (631 B an actor, both hosts); region 164.8 MB live, 164.8 MB the copy (82 B an actor); at most 1000 actors resident after a turn
+snapshot: node quickjs, 2000000 actors, 1000 resident, 200000 events
+live: 2000000 actors and 200000 events in 55.22 s; 1000 resident with a delayed send, 500 of them paying; 1999000 hibernated
+snapshot: 164.9 MB in 0.14 s (82 B an actor); the store copied
+restore: in 0.14 s; the copy's snapshot compared; 500 payments in flight started again on the stand-in
+rehearse: 2000000 actors to version 2 in 205.69 s, 200000 events meanwhile, 3688631 loaded from the copy's store
+verify: 25097 actors on each host, 0 wrong on the copy, 0 on the live host
+memory: peak resident 1177 MB (589 B an actor, both hosts); region 164.8 MB live, 164.8 MB the copy (82 B an actor); at most 1000 actors resident after a turn
+snapshot: bun native, 2000000 actors, 1000 resident, 200000 events
+live: 2000000 actors and 200000 events in 60.88 s; 1000 resident with a delayed send, 500 of them paying; 1999000 hibernated
+snapshot: 165.0 MB in 0.12 s (82 B an actor); the store copied
+restore: in 0.21 s; the copy's snapshot compared; 500 payments in flight started again on the stand-in
+rehearse: 2000000 actors to version 2 in 208.14 s, 200000 events meanwhile, 3688631 loaded from the copy's store
+verify: 25097 actors on each host, 0 wrong on the copy, 0 on the live host
+memory: peak resident 1534 MB (767 B an actor, both hosts); region 164.8 MB live, 164.8 MB the copy (82 B an actor); at most 1000 actors resident after a turn
+snapshot: bun quickjs, 2000000 actors, 1000 resident, 200000 events
+live: 2000000 actors and 200000 events in 49.00 s; 1000 resident with a delayed send, 500 of them paying; 1999000 hibernated
+snapshot: 164.9 MB in 0.11 s (82 B an actor); the store copied
+restore: in 0.19 s; the copy's snapshot compared; 500 payments in flight started again on the stand-in
+rehearse: 2000000 actors to version 2 in 185.93 s, 200000 events meanwhile, 3688631 loaded from the copy's store
+verify: 25097 actors on each host, 0 wrong on the copy, 0 on the live host
+memory: peak resident 1559 MB (779 B an actor, both hosts); region 164.8 MB live, 164.8 MB the copy (82 B an actor); at most 1000 actors resident after a turn
+Finished in 1192.51s
