@@ -230,7 +230,13 @@ function shape(charts, options, restoring) {
     store,
     resident,
     dones: new Map(), // session -> the waiter of actor.done
-    deferred: new Set(), // migrations' WAKEs waiting for room (resident)
+    // migrations' WAKEs waiting for room (resident): the sessions in the order
+    // they came, from `next` on, and which are waiting. Not one Set taken from
+    // its front: V8 keeps a Set's deleted entries until it shrinks, and reading
+    // its first entry walks past them, so a migration of millions was quadratic.
+    deferred: new Set(),
+    deferredQueue: [],
+    deferredNext: 0,
     saving: new Map(), // session -> its blob, while a save that returned a promise is pending
     unsaved: new Set(), // sessions whose last save failed: the next trim leaves them resident
   };
@@ -535,7 +541,10 @@ function thenable(value) {
 function woken(app, session, migration) {
   if (!actorInfo.call(app.host, session)?.hibernated) return undefined; // woken already by the application, or gone
   if (migration !== undefined && app.resident !== undefined && residentCount.call(app.host) >= app.resident) {
-    app.deferred.add(session);
+    if (!app.deferred.has(session)) {
+      app.deferred.add(session);
+      app.deferredQueue.push(session);
+    }
     return undefined;
   }
   return loaded(app, session);
@@ -586,8 +595,7 @@ function trimmed(app) {
   app.unsaved = new Set();
   hibernateSurplus(app, waiting < app.resident ? app.resident - waiting : 0, { pending, failed, skip });
   while (app.deferred.size > 0 && residentCount.call(host) < app.resident) {
-    const [session] = app.deferred;
-    app.deferred.delete(session);
+    const session = nextDeferred(app);
     if (!actorInfo.call(host, session)?.hibernated) continue;
     try {
       const result = loaded(app, session);
@@ -599,6 +607,18 @@ function trimmed(app) {
   if (first !== null) throw first[0];
   if (pending.length > 0) return Promise.all(pending).then(() => undefined);
   return undefined;
+}
+
+/** The oldest waiting WAKE, taken off the queue; the queue drops what it
+ * has given out once that is half of it. */
+function nextDeferred(app) {
+  const session = app.deferredQueue[app.deferredNext++];
+  app.deferred.delete(session);
+  if (app.deferredNext >= 1024 && app.deferredNext * 2 >= app.deferredQueue.length) {
+    app.deferredQueue = app.deferredQueue.slice(app.deferredNext);
+    app.deferredNext = 0;
+  }
+  return session;
 }
 
 /** Down to `target` resident actors: the CLOCK sweep takes the actors that
