@@ -1006,78 +1006,79 @@ these matter most:
 ### Performance
 
 Each benchmark below is a program in `tools/`, run with `mise run
-<name>`, that checks its own results. Every run here was one run, on
-2026-10-15, on x86_64 Linux with 4 CPUs and CPython 3.13.16 with the GIL,
-with each config sized for its work ("Sizing the config").
+<name>`, that checks its own results. Every run here was one run, alone
+on the machine, on 2026-11-20 (Intel Xeon @ 2.10GHz, 4 CPUs, 16 GiB,
+Linux; CPython 3.13.18 with the GIL), with each config sized for its work
+("Sizing the config"). The root `AGENTS.md` ("Published numbers") says
+when to run them again.
 
-**Hibernation** (`stress`): two million actors of a counter chart, at
-most 1000 resident, the rest in SQLite. 200,000 events go to actors drawn
-at random, so nearly every event wakes one from the store and the sweep
-sends another back. Every actor's count matched the events it was sent,
-and after every eviction at most 1000 actors were resident.
+**Hibernation** (`mise run stress`): two million actors of a counter
+chart, at most 1000 resident, the rest in SQLite. 200,000 events go to
+actors drawn at random, so nearly every event wakes one from the store
+and the sweep sends another back. Every sampled actor's count matched
+the events it was sent, and after every turn at most 1000 actors were
+resident.
 
 | datamodel | populate (spawn and hibernate 2,000,000) | 200,000 events (woken, swept back) | peak resident | core's region | SQLite file |
 |---|---|---|---|---|---|
-| `"python"` | 15.8 s (126,000 a second) | 14.7 s (13,600 a second; 199,869 wakes) | 164 MB (82 B per actor) | 115 MB (58 B per actor) | 355 MB |
-| quickjs | 25.9 s (77,000 a second) | 17.3 s (11,500 a second; 199,869 wakes) | 165 MB (82 B per actor) | 115 MB (58 B per actor) | 409 MB |
+| `"python"` | 30.1 s (66,500 a second) | 11.2 s (17,900 a second; 199,868 wakes) | 215 MB (107 B per actor) | 164 MB (82 B per actor) | 378 MB |
+| quickjs | 32.5 s (61,600 a second) | 12.3 s (16,200 a second; 199,868 wakes) | 216 MB (108 B per actor) | 164 MB (82 B per actor) | 409 MB |
 
-**Migration** (`migration`): 2,000,000 actors of a counter chart on
-SQLite, at most 1000 resident, moved to version 2 while 200,000 events
-go to actors drawn at random. It checks every sampled actor's count and
-version, that the migration left no actor behind, that version 1's
-segment retired, and the resident bound after every eviction.
+Populating slows as the population grows: each half million took longer
+than the one before (2.8 s, then 4.9 s, 8.8 s and 13.6 s on the
+`"python"` datamodel). After each turn the host's sweep looks for the
+actors to hibernate over every actor's slot, the hibernated ones
+included. Events to a population that exists do not slow.
 
-| datamodel | populate (2,000,000, 200,000 events) | migrate, live (200,000 events meanwhile) | woken from SQLite | peak resident | core's region (both versions, then after) | SQLite file |
+**Migration** (`mise run migration`): 2,000,000 actors of a counter
+chart on SQLite, at most 1000 resident, moved to version 2 while 200,000
+events go to actors drawn at random. It checks every sampled actor's
+count and version, that the migration left no actor behind, that version
+1's segment retired, and the resident bound after every turn.
+
+| datamodel | populate (2,000,000, 200,000 events) | migrate, live (200,000 events meanwhile) | loaded from SQLite | peak resident | core's region (both versions, then after) | SQLite file |
 |---|---|---|---|---|---|---|
-| `"python"` | 59.9 s | 129.7 s (15,400 actors a second) | 2,218,199 | 473 MB (237 B per actor) | 230.9 MB, then 115.5 MB (58 B per actor) | 556 MB |
-| quickjs | 71.1 s | 153.3 s (13,000 actors a second) | 2,218,199 | 475 MB (238 B per actor) | 230.9 MB, then 115.5 MB | 756 MB |
+| `"python"` | 38.6 s | 152.2 s (13,100 actors a second) | 3,688,619 | 619 MB (310 B per actor) | 328.5 MB, then 164.3 MB (82 B per actor) | 601 MB |
+| quickjs | 46.7 s | 169.3 s (11,800 actors a second) | 3,688,619 | 620 MB (310 B per actor) | 328.5 MB, then 164.3 MB | 807 MB |
 
 A run costs the migration one quantum of actors however many it waits
-for, so its time grows with the population. At 500,000 actors on the
-`"python"` datamodel it took 13.6 s, against 74.9 s when the migration
-went over everything it waited for in every run. The peak is the migration's: both
-versions' regions until version 1 retires, plus the migration's map of
-the sessions it waits for (at most a quarter full after it is rebuilt).
+for. The peak is the migration's: both versions' regions until version 1
+retires, plus the migration's map of the sessions it waits for.
 
-**Snapshots** (`snapshot`): a deploy rehearsed on a copy of a live host.
-The live host has its population on SQLite as in the hibernation
-benchmark, 200,000 events, a delayed send for every resident actor, and
-half of those paying through an invoked payment service that has not
-answered. Its snapshot is written to a file, its store copied, and a copy
-restored from the file with a stand-in payment service, which gets every
-payment in flight again (`restored`, with its amount) and declines it.
-The copy must snapshot to the same bytes before it runs. Then it adds
-version 2 and migrates every actor, waking the hibernated ones a batch at
-a time, with 200,000 events meanwhile, while the live host goes on with
-200,000 events of its own. Both hosts' sampled actors must hold every
-count, delayed send and payment: the copy's on version 2 and declined,
-the live host's on version 1 and still paying. The copy must never reach
-the real service. Both hosts ran in one process.
+**Snapshots** (`mise run snapshot`): a deploy rehearsed on a copy of a
+live host. The live host has its population on SQLite as in the
+hibernation benchmark, 200,000 events, a delayed send for every resident
+actor, and half of those paying through an invoked payment service that
+has not answered. Its snapshot is written to a file, its store copied,
+and a copy restored from the file with a stand-in payment service, which
+gets every payment in flight again (`restored`, with its amount) and
+declines it. Then the copy adds version 2 and migrates every actor with
+200,000 events meanwhile, while the live host goes on with 200,000
+events of its own. Both hosts' sampled actors must hold every count,
+delayed send and payment, and the copy must never reach the real
+service. Both hosts ran in one process.
 
 | datamodel | actors | resident | snapshot | snapshot time | restore time | migrating the copy | peak resident, both hosts | every actor right |
 |---|---|---|---|---|---|---|---|---|
-| `"python"` | 2,000,000 | 1000 | 116.1 MB (58 B per actor) | 0.14 s | 0.12 s | 145 s | 652 MB | yes |
-| quickjs | 2,000,000 | 1000 | 116.2 MB | 0.14 s | 0.13 s | 172 s | 654 MB | yes |
-| `"python"` | 100,000 | all | 56.6 MB (566 B per actor) | 0.66 s | 0.53 s | 22.3 s | 427 MB | yes |
-| quickjs | 100,000 | all | 64.0 MB (640 B per actor) | 3.43 s | 1.29 s | 21.6 s | 684 MB | yes |
+| `"python"` | 2,000,000 | 1000 | 164.9 MB (82 B per actor) | 0.11 s | 0.11 s | 163.9 s | 843 MB | yes |
+| quickjs | 2,000,000 | 1000 | 164.9 MB (82 B per actor) | 0.11 s | 0.11 s | 172.5 s | 837 MB | yes |
 
-A snapshot is mostly the region, as the config sized it: before the
-benchmark's config was sized for the work, the same 100,000 resident
-actors made a 372 MB snapshot and a 1761 MB peak. Migrating 2,000,000
-mostly hibernated actors is the store's work: each is woken, moved and
-hibernated again (2,018,332 wakes, events included).
+A snapshot is mostly the region, as the config sized it. Migrating the
+copy is the store's work: each hibernated actor is loaded, moved and
+hibernated again (3,688,619 loads from the copy's store, events
+included).
 
-**Invoked services** (`services`): 200,000 actors, each with a counter
-service, make 1,000,000 round trips (actor, service, actor). Then a third
-finish with done data, a third are cancelled, and the rest keep their
-service. It checks every pong and every done datum, that every cancelled
-service was stopped exactly once and no other was, and that the host
-holds only the services still running.
+**Invoked services** (`mise run services`): 200,000 actors, each with a
+counter service, make 1,000,000 round trips (actor, service, actor).
+Then a third finish with done data, a third are cancelled, and the rest
+keep their service. It checks every pong and every done datum, that
+every cancelled service was stopped exactly once and no other was, and
+that the host holds only the services still running.
 
 | datamodel | start 200,000 invocations | 1,000,000 round trips | end (done, cancel) | peak resident | core's region |
 |---|---|---|---|---|---|
-| `"python"` | 3.1 s (64,000 a second) | 38.3 s (26,000 a second) | 4.5 s | 408 MB (2041 B per actor and service) | 50 MB (251 B per actor) |
-| quickjs | 5.0 s (40,000 a second) | 62.6 s (16,000 a second) | 5.9 s | 711 MB (3553 B per actor and service) | 62 MB (309 B per actor) |
+| `"python"` | 1.3 s (156,000 a second) | 7.9 s (127,000 a second) | 0.9 s | 406 MB (2031 B per actor and service) | 54.6 MB (273 B per actor) |
+| quickjs | 1.8 s (108,000 a second) | 12.8 s (78,000 a second) | 1.1 s | 676 MB (3378 B per actor and service) | 66.1 MB (330 B per actor) |
 
 ## Wire format
 
