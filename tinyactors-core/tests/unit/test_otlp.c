@@ -756,13 +756,15 @@ static void test_fixed_bytes(void) {
     size_t size = room.length;
     unsigned char *request = malloc(size);
     CHECK_EQUAL(ta_otlp_put_traces(t.otlp, &(ta_buffer){request, size, 0}), TA_OK);
-    uint64_t hash = 0xcbf29ce484222325ull; /* FNV-1a of the request */
+    /* FNV-1a of the request. Its scope version is TA_VERSION_* (OTLP_VERSION
+     * in src/otlp/otlp.c), so a release that changes the version changes it. */
+    uint64_t hash = 0xcbf29ce484222325ull;
     for (size_t i = 0; i < size; i++)
         hash = (hash ^ request[i]) * 0x100000001b3ull;
-    if (hash != 0x5fd589c3f7712327ull)
+    if (hash != 0x1919b27e180b1886ull)
         fprintf(stderr, "  request: %zu bytes, FNV-1a %016llx\n", size, (unsigned long long)hash);
     CHECK_EQUAL(size, 984);
-    CHECK_EQUAL(hash, 0x5fd589c3f7712327ull);
+    CHECK_EQUAL(hash, 0x1919b27e180b1886ull);
     free(request);
     w.otlp = t.otlp;
     synthetic_close(&t, &w);
