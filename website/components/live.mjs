@@ -6,6 +6,22 @@
 // With this module's ?v= query, as every component is loaded.
 await import(new URL(`./trace-view.mjs${new URL(import.meta.url).search}`, import.meta.url));
 
+// A live example loads tinyactors (about 500 KB of WebAssembly) before its
+// first run. It starts as soon as the example scrolls near the screen, so a
+// click usually finds it ready; a click before then says it is loading.
+const loading = new Map();
+function load(src) {
+  if (!loading.has(src)) loading.set(src, import(new URL(src, document.baseURI).href));
+  return loading.get(src);
+}
+const near = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    near.unobserve(entry.target);
+    load(entry.target.getAttribute('src')).catch(() => {}); // a failure shows when the button runs it
+  }
+}, { rootMargin: '600px' });
+
 class Live extends HTMLElement {
   connectedCallback() {
     const button = this.querySelector('button');
@@ -13,6 +29,7 @@ class Live extends HTMLElement {
     button.dataset.ready = 'true';
     button.disabled = false;
     button.addEventListener('click', () => this.run(button));
+    near.observe(this);
   }
 
   async run(button) {
@@ -21,9 +38,14 @@ class Live extends HTMLElement {
     const status = this.querySelector('.live__status');
     let view = this.querySelector('ta-trace-view');
     button.disabled = true;
-    status.textContent = 'running…';
+    const pending = load(this.getAttribute('src'));
+    let ready = false;
+    pending.then(() => { ready = true; }, () => {});
+    await Promise.resolve();
+    status.textContent = ready ? 'Running…' : 'Loading tinyactors…';
     try {
-      const module = await import(new URL(this.getAttribute('src'), document.baseURI).href);
+      const module = await pending;
+      status.textContent = 'Running…';
       const result = await module[this.getAttribute('call')]();
       code.textContent = result.lines.join('\n');
       output.hidden = false;

@@ -117,8 +117,8 @@ ta-tabs { display: block; }
 .chart [role="tabpanel"][hidden] { display: none; }
 .chart pre { margin: 0; padding: var(--space-4); overflow: auto; }
 .chart pre code { font: var(--type-code); white-space: pre; }
-.chart__diagram { background: var(--surface-1); }
-.chart__diagram scxml-view { display: block; min-height: 180px; }
+.chart__diagram { --chart-height: 320px; background: var(--bg-app); }
+.chart__diagram scxml-view { display: block; }
 :root:not([data-theme="dark"]) scxml-view { --scxml-color-scheme: light; }
 [data-theme="dark"] scxml-view { --scxml-color-scheme: dark; }
 

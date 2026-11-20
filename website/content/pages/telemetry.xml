@@ -14,7 +14,9 @@
 
   <section id="read">
     <heading>Read a trace.</heading>
-    <p>The payment chart, traced, while the service is silent once and then answers. Each row is a step, under the step that caused it. Select one to see its transitions and what it sent.</p>
+    <p>This payment charges a card, retries after 30 seconds of silence, and gives up after three attempts.</p>
+    <code src="../../examples/property/payment.scxml" language="scxml" file="payment.scxml"/>
+    <p>Run it, traced, while the service is silent once and then answers. Each row is a step, under the step that caused it. Select one to see its transitions and what it sent.</p>
     <live src="../../examples/property/live.mjs" call="trace">
       <label>Run it</label>
     </live>

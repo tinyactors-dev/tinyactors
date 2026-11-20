@@ -120,6 +120,8 @@
           <script type="module" src="/assets/components/highlight.mjs?v={$version}"></script>
         </xsl:if>
         <xsl:if test=".//s:live">
+          <!-- tinyactors's WebAssembly, fetched while the page loads: the live examples need it before their first run. -->
+          <link rel="preload" href="/vendor/tinyactors-wasm/tinyactors.wasm" as="fetch" type="application/wasm" crossorigin="anonymous"/>
           <script type="module" src="/assets/components/live.mjs?v={$version}"></script>
         </xsl:if>
         <!-- The design system's dark theme is [data-theme="dark"]; follow the reader's setting. -->
