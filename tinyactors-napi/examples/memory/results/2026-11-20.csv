@@ -84,3 +84,8 @@ bun 1.4.1,quickjs,on,100000,"per actor, after an event",1650,1172,195,,,"Intel(R
 bun 1.4.1,quickjs,on,100000,"per actor, hibernated",219,12,81,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
 bun 1.4.1,quickjs,on,100000,"per message waiting",410,179,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
 bun 1.4.1,quickjs,on,100000,"per delayed send pending",417,179,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,1000000,"per actor, started",1049,598,196,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,1000000,"per actor, after an event",1653,1172,196,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,1000000,"per actor, hibernated",99,1,82,147,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,1000000,"per message waiting",318,178,106,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
+bun 1.4.1,quickjs,on,1000000,"per delayed send pending",364,178,151,,,"Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs, 16 GiB, linux x64",2026-11-20
