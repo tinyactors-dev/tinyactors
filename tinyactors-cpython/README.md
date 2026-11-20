@@ -924,6 +924,11 @@ host = tinyactors.Host.restore(blob, compiled, system="shop", config=config, log
 
 ### Memory
 
+To measure your own case, run the [memory program](https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-cpython/examples/memory) from the
+repository. It prints what an actor, a message and a delayed send cost
+on your interpreter and datamodel, for your chart and your data, in
+whole bytes.
+
 Measured with `mise run measure`: 10,000 actors of one chart with three
 `<data>`, resident and idle, every pool sized for them and tracing off;
 then again after one event to each actor, which keeps its `_event` until
