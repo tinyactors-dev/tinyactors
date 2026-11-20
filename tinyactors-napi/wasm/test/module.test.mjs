@@ -13,6 +13,24 @@ import * as scenario from './scenario.mjs';
 
 const WASM = new URL('../tinyactors.wasm', import.meta.url);
 
+// What the datamodel import answers the module, for every instance this
+// file makes: the close test reads it. The wrapper keeps the constructor's
+// prototype, so an instance is still a WebAssembly.Instance.
+const datamodelAnswers = [];
+const Instance = WebAssembly.Instance;
+function RecordingInstance(module, imports) {
+  const answer = imports?.ta_web?.datamodel;
+  if (answer === undefined) return new Instance(module, imports);
+  const recording = (...args) => {
+    const status = answer(...args);
+    datamodelAnswers.push(status);
+    return status;
+  };
+  return new Instance(module, { ...imports, ta_web: { ...imports.ta_web, datamodel: recording } });
+}
+RecordingInstance.prototype = Instance.prototype;
+WebAssembly.Instance = RecordingInstance;
+
 test('before init() the instance is refused with TA_ERROR_STATE; init.mjs loads it, from a URL too', async () => {
   const state = await import('../lib/state.mjs?before');
   assert.throws(() => state.instance(), { name: 'StateError', status: 'TA_ERROR_STATE' });
@@ -104,6 +122,28 @@ test('an arena gives its chunks back past its cap when the outermost call leaves
   assert.equal(module.call('ta_web_scratch_reserved', scratch), 0);
   module.scoped(scratch, () => module.room(scratch, 1000));
   assert.ok(module.call('ta_web_scratch_reserved', scratch) > 0, 'under the cap, the chunk stays');
+});
+
+test('a closed host answers the destroy of every session: no datamodel call fails while it is freed', async () => {
+  // Freeing a host destroys every session, and each destroy calls the
+  // native datamodel's import. The host stays registered until the module
+  // has freed it, so the import finds its owner and answers TA_OK; an owner
+  // gone first made every call throw (and swallow) an error and answer
+  // TA_ERROR_EXECUTION: a million of them for a million actors.
+  const { compileCharts, Host } = await import('../index.mjs');
+  const compiled = compileCharts([{ name: 'idle.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="idle" initial="s">
+  <datamodel><data id="n" expr="0"/></datamodel>
+  <state id="s"/>
+</scxml>` }]);
+  const host = new Host(compiled, { system: 'close', datamodel: 'native' });
+  compiled.close();
+  for (let i = 0; i < 1000; i++) host.spawn('idle');
+  await host.idle();
+  datamodelAnswers.length = 0;
+  host.close();
+  assert.ok(datamodelAnswers.length >= 1000, `freeing 1000 actors calls the datamodel for each (${datamodelAnswers.length} calls)`);
+  assert.deepEqual([...new Set(datamodelAnswers)], [0], 'every call answers TA_OK');
 });
 
 await run();

@@ -132,6 +132,7 @@ class HostState {
     this.fn = module.fn;
     this.self = new WeakRef(self);
     this.pointer = 0;
+    this.freeing = false; // release() is freeing the host in the module
     this.id = 0;
     this.scratch = 0;
     this.open = false;
@@ -274,7 +275,12 @@ class HostState {
   }
 
   // The native datamodel's entries (wasm/src/datamodel.c, datamodel.mjs).
-  datamodel(entry, slot) { return this.native === null ? TA_ERROR_UNSUPPORTED : this.native.entry(entry, slot); }
+  // While the host is freed, its sessions' destroys and its payloads'
+  // releases are answered at once: native.free() drops every row next.
+  datamodel(entry, slot) {
+    if (this.freeing) return TA_OK;
+    return this.native === null ? TA_ERROR_UNSUPPORTED : this.native.entry(entry, slot);
+  }
 
   // ---- effect fields ----
 
@@ -466,17 +472,21 @@ class HostState {
     if (host !== undefined) host[HANDLERS] = undefined;
   }
 
-  // The host freed in the module: by close(), or by the registry.
+  // The host freed in the module: by close(), or by the registry. It stays
+  // registered until the module has freed it: freeing destroys every
+  // session, and each destroy calls the native datamodel's import, which
+  // must find its owner (datamodel(), below, answers it at once).
   release() {
     if (this.pointer === 0) return;
     const pointer = this.pointer;
     this.pointer = 0;
     this.open = false;
+    this.freeing = true;
     unclosed.unregister(this);
-    this.module.unregister(this.id);
     try {
       if (!this.module.poisoned) this.module.call('ta_web_host_free', pointer);
     } finally {
+      this.module.unregister(this.id);
       this.native?.free(); // its realm: a page's iframe is removed
     }
   }
