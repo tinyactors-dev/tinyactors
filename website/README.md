@@ -71,6 +71,9 @@ A page is a hero and sections. Each section has a heading and blocks:
   system's colours. An SCXML block read from a file (`<code src>`) also
   gets a Diagram tab: the whole chart that file holds, drawn and run by
   scxmljs's `<scxml-view>`. The choice holds for every chart on the page.
+  Each I/O processor type the chart sends to gets a stand-in that lists
+  what it received under the diagram; the reader answers by clicking a
+  transition's label, and "Run again" restarts the run.
 - **A live example runs in the browser.** `<live src call>` names an
   export of a module under `examples/`, run by a button whose `<label>` is
   the content's. The build serves the module with `@tinyactors/wasm` at

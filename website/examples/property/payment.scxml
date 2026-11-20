@@ -4,7 +4,9 @@
   <state id="charging">
     <onentry>
       <assign location="attempts" expr="attempts + 1"/>
-      <send type="urn:payments" event="charge" target="card"/>
+      <send type="urn:payments" event="charge" target="card">
+        <param name="attempt" expr="attempts"/>
+      </send>
       <send event="timeout" delay="30s" id="timer"/>
     </onentry>
     <transition event="charged" target="paid"><cancel sendid="timer"/></transition>

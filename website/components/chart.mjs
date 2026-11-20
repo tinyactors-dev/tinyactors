@@ -8,11 +8,12 @@
 //
 // The view's session knows only SCXML's own I/O processor, and a chart that
 // sends to the world (<send type="urn:payments">) would fail there. So each
-// type a chart sends to gets a stand-in that takes the send and stays
-// silent: the reader plays the world, by clicking the label of the answer
-// (charged) on the diagram.
+// type a chart sends to gets a stand-in, which keeps what it receives and
+// shows it under the diagram: the reader sees what the payment service was
+// asked, and plays the service by clicking the answer's label (charged).
 
 const SCXML = new Set(['scxml', 'http://www.w3.org/TR/scxml/#SCXMLEventProcessor']);
+const KEEP = 20; // the newest messages a stand-in lists
 
 /** The I/O processor types a chart's <send type="..."> elements name. */
 function sendTypes(text) {
@@ -20,8 +21,62 @@ function sendTypes(text) {
   return [...new Set(types)].filter((type) => !SCXML.has(type));
 }
 
+/** A stand-in for the processor of `type`, and the panel that shows what it received. */
 function standIn(type) {
-  return { type, location: (session) => `${type}#${session.sessionId}`, send() {} };
+  const received = [];
+  let started = performance.now();
+  const count = el('span', { class: 'processor__count' });
+  const log = el('ol', { class: 'processor__log', 'aria-live': 'polite' });
+  const panel = el('section', { class: 'processor', 'aria-label': `What ${type} received` },
+    el('p', { class: 'processor__head' }, el('code', { class: 'processor__type' }, type), count), log);
+
+  function render() {
+    count.textContent = received.length === 1 ? '1 message received' : `${received.length} messages received`;
+    log.replaceChildren(...received.slice(-KEEP).reverse().map((message) => el('li', {},
+      el('span', { class: 'processor__at' }, clock(message.at)),
+      el('code', {}, message.event),
+      ...(message.target ? [' to ', el('code', {}, message.target)] : []),
+      ...(shown(message.data) ? [' ', el('code', { class: 'processor__data' }, shown(message.data))] : []))));
+    if (received.length === 0) log.append(el('li', { class: 'processor__empty' }, 'Nothing yet.'));
+  }
+  render();
+  return {
+    panel,
+    /** A new run of the chart: the stand-in starts empty. */
+    restart() {
+      received.length = 0;
+      started = performance.now();
+      render();
+    },
+    processor: {
+      type,
+      location: (session) => `${type}#${session.sessionId}`,
+      send(message) {
+        received.push({ at: performance.now() - started, event: message.event, target: message.target, data: message.data });
+        render();
+      },
+    },
+  };
+}
+
+/** Milliseconds as m:ss. */
+function clock(ms) {
+  const seconds = Math.floor(ms / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/** A message's data as JSON, or nothing when it has none. */
+function shown(data) {
+  if (data === undefined || data === null) return '';
+  const text = JSON.stringify(data);
+  return text === '{}' ? '' : text;
+}
+
+function el(tag, attributes = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+  node.append(...children);
+  return node;
 }
 
 async function mount(panel) {
@@ -30,12 +85,18 @@ async function mount(panel) {
   const [text] = await Promise.all([fetch(src).then((response) => response.text()), import('@tinyactors/scxmljs/view')]);
   if (panel.querySelector('scxml-view')) return;
   const view = document.createElement('scxml-view');
-  view.options = { ioprocessors: sendTypes(text).map(standIn) };
+  const standIns = sendTypes(text).map(standIn);
+  view.options = { ioprocessors: standIns.map((stand) => stand.processor) };
+  view.addEventListener('scxml-load', () => standIns.forEach((stand) => stand.restart()));
   view.setAttribute('src', src);
   view.setAttribute('fit', '');
   view.setAttribute('warnings', 'off');
   view.addEventListener('scxml-load', () => enlarge(view, panel), { once: true });
   panel.append(view);
+  const again = el('button', { type: 'button', class: 'ta-btn ta-btn--secondary ta-btn--sm' }, 'Run again');
+  again.addEventListener('click', () => view.reload());
+  if (standIns.length) panel.append(el('div', { class: 'processors' }, ...standIns.map((stand) => stand.panel)));
+  panel.append(el('p', { class: 'chart__controls' }, again));
 }
 
 // The view draws a chart at its natural size: a small chart is a few
