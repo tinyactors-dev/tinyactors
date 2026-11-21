@@ -47,8 +47,8 @@
     </links>
   </footer>
 
-  <!-- ants.www.tinyactors.dev once its DNS record exists (docs/presence.md, "Infrastructure"). -->
-  <presence server="wss://ta-presence.exe.xyz">
+  <!-- The presence server: the exe VM ta-presence (docs/presence.md, "Infrastructure"). -->
+  <presence server="wss://ants.www.tinyactors.dev">
     <label>Menu and ants</label>
     <switch>Your ant</switch>
     <greet>Greet an ant</greet>

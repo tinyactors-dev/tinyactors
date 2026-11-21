@@ -184,13 +184,8 @@ As of 2026-11-21:
 - **Live** on www.tinyactors.dev since 2026-11-21: the Worker issues
   tickets, and two Chromium tabs on the live site joined and greeted
   ("An ant from United States greets you.") with no console errors.
-- **Pending: the domain.** The CNAME `ants.www.tinyactors.dev` →
-  `ta-presence.exe.xyz` exists, DNS only, but exe answers it with 421
-  until `ssh exe.dev domain add ta-presence ants.www.tinyactors.dev`. The
-  API key in 1Password may not run `domain`. Until then
-  `content/site.xml` points the page at `wss://ta-presence.exe.xyz`. Then:
-  1. change `server` in `content/site.xml`;
-  2. deploy.
+- **The domain** `ants.www.tinyactors.dev` is registered on exe (DNS
+  only, exe's certificate) and the page connects to it.
 - **Order of a first deploy:** `mise run deploy` (the Worker answers 503
   for tickets until it has a key, and the page backs off), then `mise run
   presence:key`.

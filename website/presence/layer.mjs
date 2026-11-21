@@ -13,6 +13,7 @@ const FPS = 30;
 const INK = '#302B28', PINE = '#255E45', HIGHLIGHT = '#D5DCD7'; // the SVG's own colours
 const HIT = 22;                 // px around an ant that a tap reaches
 const VMAX = 70;                // px/s an ant may hurry to catch its trip
+const GREET_GAP = 1.15;         // body lengths between two greeting ants' centres: head to head, antennae crossed
 
 export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/flags/4x3/${cc.toLowerCase()}.svg`, onTap }) {
   const canvas = document.createElement('canvas');
@@ -85,7 +86,7 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
         if (ant) { ant.trip = message.trip; if (ant.body.target.greet && !message.trip[7]) ant.body.target.greet = 0; }
         break;
       }
-      case 'greet': for (const h of [message.a, message.b]) { const ant = ants.get(h); if (ant) { ant.greetUntil = performance.now() + 3000; ant.body.target.greet = 1; } } break;
+      case 'greet': greet(ants.get(message.a), ants.get(message.b)); break;
       case 'sleep': {
         const ant = ants.get(message.h);
         if (ant) { ant.asleep = message.asleep; ant.body.target.tuck = message.asleep ? 1 : 0; ant.body.target.alpha = message.asleep ? 0.45 : 1; }
@@ -95,6 +96,22 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
       case 'eat': { const ant = ants.get(message.h); if (ant) { ant.eatUntil = performance.now() + 2500; ant.body.target.eat = 1; } bite(message.food); break; }
       case 'food': if (field) field.food = message.food; else field = { food: message.food }; break;
     }
+  }
+
+  // ---- a greeting: the server stops both ants where they are, in fractions
+  // of the field, which each screen stretches its own way. Here, in this
+  // screen's pixels, the two take their places: head to head on the line
+  // between them, GREET_GAP body lengths apart, about their midpoint.
+  function greet(a, b) {
+    for (const ant of [a, b]) if (ant) { ant.greetUntil = performance.now() + 3000; ant.body.target.greet = 1; }
+    if (!a || !b) return;
+    const mx = (a.body.x + b.body.x) / 2, my = (a.body.y + b.body.y) / 2;
+    let dx = b.body.x - a.body.x, dy = b.body.y - a.body.y, d = Math.hypot(dx, dy);
+    if (d < 1) { const h = (a.body.heading * Math.PI) / 180; dx = Math.sin(h); dy = -Math.cos(h); d = 1; } // on top of each other: along a's heading
+    const half = (GREET_GAP * LENGTH) / 2, ux = dx / d, uy = dy / d;
+    a.spot = [mx - ux * half, my - uy * half];
+    b.spot = [mx + ux * half, my + uy * half];
+    a.faceAt = b.spot; b.faceAt = a.spot;
   }
 
   // ---- steering: after the point the ant's trip is at, now
@@ -107,7 +124,22 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
       a.target.alpha = 0;
     }
     const dx = tx - a.x, dy = ty - a.y, distance = Math.hypot(dx, dy);
-    if (ant.greetUntil && performance.now() > ant.greetUntil) { ant.greetUntil = 0; a.target.greet = 0; }
+    if (ant.greetUntil && performance.now() > ant.greetUntil) { ant.greetUntil = 0; a.target.greet = 0; ant.spot = ant.faceAt = null; }
+    if (ant.spot && !ant.asleep) { // greeting: face the other ant, and step forward or back onto its place
+      const [fx, fy] = ant.faceAt;
+      const wanted = (Math.atan2(fx - a.x, -(fy - a.y)) * 180) / Math.PI;
+      const error = ((wanted - a.heading + 540) % 360) - 180;
+      const h = (a.heading * Math.PI) / 180;
+      const along = (ant.spot[0] - a.x) * Math.sin(h) - (ant.spot[1] - a.y) * Math.cos(h);
+      a.target.w = Math.max(-160, Math.min(160, error * 4));
+      a.target.v = Math.abs(error) < 60 ? Math.max(-25, Math.min(40, along * 2.5)) : 0;
+      a.target.idle = 0;
+      // the rest of the offset, sideways, closes without walking
+      const side = Math.hypot(ant.spot[0] - a.x, ant.spot[1] - a.y);
+      if (side > 0.5 && Math.abs(error) < 20) { a.x += (ant.spot[0] - a.x) * Math.min(1, dt * 1.5) * 0.5; a.y += (ant.spot[1] - a.y) * Math.min(1, dt * 1.5) * 0.5; }
+      advance(a, dt);
+      return;
+    }
     if (ant.eatUntil && performance.now() > ant.eatUntil) { ant.eatUntil = 0; a.target.eat = 0; }
     const face = ant.trip[7];
     let wanted = null;
