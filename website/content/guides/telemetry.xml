@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-telemetry" path="/guides/telemetry/">
   <title>Telemetry</title>
-  <description>Export a span for each step an actor takes, a log record for each log line, and the host's metrics as OTLP requests your code sends.</description>
+  <description>Export each step an actor takes as an OpenTelemetry span, with its logs and metrics, as OTLP bytes your code sends to a collector.</description>
   <hero>
     <headline>See what your actors did in OpenTelemetry.</headline>
-    <lede>A host writes a span for each step an actor takes, a log record for each <code>&lt;log&gt;</code> and failed action, and metrics of its counters. Your code sends the OTLP bytes to the collector it chooses.</lede>
+    <lede>Each step an actor takes becomes a span with its event and the states it left and entered, in the caller's trace when it passes one. Your code sends the OTLP bytes to the collector it chooses.</lede>
   </hero>
 
   <section id="overview">
-    <heading>The host encodes and your code sends.</heading>
-    <p>A step's span holds the event, the transitions, and the states left and entered. A host without telemetry runs the same.</p>
-    <p>The host writes OTLP requests, the protobuf bytes a collector takes at <code>/v1/traces</code>, <code>/v1/logs</code> and <code>/v1/metrics</code>. The transport, the retries and the collector are yours.</p>
-    <p>Telemetry is part of <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#operating-a-host">operating a host</link>. <link to="telemetry"/> runs a traced payment in your browser and shows its spans.</p>
+    <heading>Decide where the OTLP bytes go.</heading>
+    <p>The host writes OTLP requests, the protobuf bytes a collector takes at <code>/v1/traces</code>, <code>/v1/logs</code> and <code>/v1/metrics</code>. Your code posts them where it chooses, and retries when it must (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#operating-a-host">operating a host</link>).</p>
+    <p>A step's span holds the event, the transitions, and the states left and entered. Each <code>&lt;log&gt;</code> and failed action becomes a log record, and the host's counters become metrics.</p>
+    <p>Turning telemetry on changes nothing an actor does. <link to="telemetry"/> runs a traced payment in your browser and shows its spans.</p>
   </section>
 
   <section id="turning-it-on">
-    <heading>Give the host an encoder and a handler.</heading>
-    <p>A <code>telemetry</code> map in the config gives the host its encoder. A <code>telemetry</code> handler in the options gets each request it wrote, as a <code>Buffer</code>, with its signal, <code>'traces'</code> or <code>'logs'</code>.</p>
+    <heading>Export spans to your collector.</heading>
+    <p>A <code>telemetry</code> map in the config makes the host write OTLP. A <code>telemetry</code> handler in the options gets each request it writes as a <code>Buffer</code>, with its signal, <code>'traces'</code> or <code>'logs'</code>.</p>
     <p>This order continues a caller's trace, and its spans come back with the caller's span as their parent:</p>
     <example>
       <code language="javascript" file="export.mjs"><![CDATA[
@@ -74,20 +74,13 @@ spans in the caller's trace: scxml.destroyed, scxml.finished, scxml.macrostep pa
 the step's parent is the caller's span: true
 </code>
     </example>
-    <p>The handler runs in the host's turn, so it starts the post and returns without waiting for the collector. <code>decodeTraces</code> reads an export without a host (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#wire-format">Wire format</link>).</p>
+    <p>The handler runs in the host's turn, so start the post there and return without waiting for the collector. <code>decodeTraces</code> reads an export without a host (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#wire-format">Wire format</link>).</p>
     <p>A handler's error is the turn's (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#errors">Errors</link>). The request it failed to send is not offered again, so retrying is the exporter's job.</p>
   </section>
 
-  <section id="metrics-and-close">
-    <heading>Pull metrics, and close to flush.</heading>
-    <p><code>host.metrics()</code> returns the metrics request for the host's counters now, a <code>Buffer</code> for <code>/v1/metrics</code>, on your own schedule. On a host without <code>telemetry</code> in its config it throws <code>TA_ERROR_STATE</code>.</p>
-    <p>At <code>host.close()</code> every open span ends, marked incomplete, and the handler gets the last requests before the host is freed.</p>
-    <p><code>await host[Symbol.asyncDispose]()</code> also awaits a promise the handler returns there. A host the garbage collector frees without <code>close()</code> skips all this, so close the hosts whose telemetry you want.</p>
-  </section>
-
   <section id="the-encoders-options">
-    <heading>Set the flush interval in host ticks.</heading>
-    <p>The config's <code>telemetry</code> map takes these keys, every one optional:</p>
+    <heading>Choose how soon records are sent.</heading>
+    <p>Every key of the config's <code>telemetry</code> map is optional, and <code>flushInterval</code> decides how soon a request is ready:</p>
     <table>
       <head><cell>Key</cell><cell>Default</cell><cell>What it does</cell></head>
       <row><cell><code>flushInterval</code></cell><cell>0</cell><cell>a request is ready this long after its first record, in the host's clock ticks (<code>system.ticksPerSecond</code>); 0 means only when the staging is full, or at close</cell></row>
@@ -98,8 +91,12 @@ the step's parent is the caller's span: true
       <row><cell><code>stagingBytes</code></cell><cell>1048576</cell><cell>the encoder's staging memory</cell></row>
     </table>
     <p>The host's clock runs at <code>system.ticksPerSecond</code>, a billion by default, so a <code>flushInterval</code> of 5000 is five microseconds. Most programs that export set <code>ticksPerSecond: 1000</code> and give the interval in milliseconds.</p>
-    <p>Once records are staged, a pending flush is one of the host's deadlines. <code>host.nextDeadline</code> reads it even when no actor has a delayed send left.</p>
-    <p>The host's timer is armed for it and keeps the process alive until then. A test that asserts no timer is left first steps its clock past the flush:</p>
+  </section>
+
+  <section id="flush-in-tests">
+    <heading>Step a test's clock past the flush.</heading>
+    <p>Once records wait to be sent, the flush is one of the host's deadlines. <code>host.nextDeadline</code> reads it even when no actor has a delayed send left.</p>
+    <p>The host arms its timer for it, which keeps the process alive until then. A test that asserts no timer is left steps its clock past the flush first:</p>
     <example>
       <code language="javascript" file="flush.mjs"><![CDATA[
 import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
@@ -132,11 +129,26 @@ flushed; nextDeadline undefined
     </example>
   </section>
 
+  <section id="metrics-and-close">
+    <heading>Read metrics on your own schedule.</heading>
+    <p><code>host.metrics()</code> returns the metrics request for the host's counters now, a <code>Buffer</code> for <code>/v1/metrics</code>. On a host without <code>telemetry</code> in its config it throws <code>TA_ERROR_STATE</code>.</p>
+  </section>
+
+  <section id="close-to-flush">
+    <heading>Close the host to send the last spans.</heading>
+    <p>At <code>host.close()</code> every open span ends, marked incomplete, and the handler gets the last requests before the host is freed.</p>
+    <p><code>await host[Symbol.asyncDispose]()</code> also awaits a promise the handler returns there. A host the garbage collector frees without <code>close()</code> sends none of it: close the hosts whose telemetry you want.</p>
+  </section>
+
   <section id="trace-context">
-    <heading>Carry W3C trace context in and out.</heading>
-    <p>An input may name the trace it continues with a <code>traceparent</code> header's text. Text that does not parse starts a new trace.</p>
-    <p><code>actor.send(event, data, { traceparent })</code>, <code>host.send(actor, event, data, { traceparent })</code> and <code>host.spawn(chart, { traceparent })</code> take it.</p>
-    <p>A send's <code>traceparent</code> is the sending step's context, for the header of the request your I/O processor makes. <code>send.answer()</code> continues it unless given another, and <code>null</code> starts a new trace:</p>
+    <heading>Continue a trace across requests.</heading>
+    <p>An input continues the trace a W3C <code>traceparent</code> header's text names, and text that does not parse starts a new trace. Pass it as an option:</p>
+    <list>
+      <item><text><code>actor.send(event, data, { traceparent })</code></text></item>
+      <item><text><code>host.send(actor, event, data, { traceparent })</code></text></item>
+      <item><text><code>host.spawn(chart, { traceparent })</code></text></item>
+    </list>
+    <p>A send's <code>traceparent</code> is the sending step's context: put it in the header of your request for that send. This handler reads the trace its request would carry:</p>
     <example>
       <code language="javascript" file="propagate.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -171,11 +183,12 @@ host.close();
 the outgoing request continues trace 4bf92f3577b34da6a3ce929d0e0e4736
 </code>
     </example>
-    <p>Tracing is on by default (<code>system.tracing</code>), with or without an encoder, so trace context flows even when nothing is exported.</p>
+    <p><code>send.answer()</code> continues the send's trace unless given another, and <code>null</code> starts a new one.</p>
+    <p>Tracing is on by default (<code>system.tracing</code>), with or without <code>telemetry</code> in the config, so trace context flows when nothing is exported.</p>
   </section>
 
   <section id="trace-ids">
-    <heading>Each host starts its own trace IDs.</heading>
+    <heading>Seed trace IDs to repeat a test's traces.</heading>
     <p>A trace the host starts takes its ID from a generator seeded by <code>system.traceSeed</code>. With none in the config, the package draws a random seed for each new host (<code>crypto.getRandomValues</code>).</p>
     <p>So two processes, or one process and its restart, do not collide at the collector. The same seed gives the same IDs, which reproduces a test's traces:</p>
     <example>
@@ -211,12 +224,12 @@ no seed, twice: false
 seed 7, twice: true
 </code>
     </example>
-    <p><code>Host.restore</code> keeps the generators of the snapshot.</p>
+    <p>A host made with <code>Host.restore</code> keeps the snapshot's generators, so its IDs go on from where the snapshot left them.</p>
   </section>
 
   <section id="choosing-what-is-traced">
-    <heading>Choose what is traced at run time.</heading>
-    <p>Typed methods (<link to="guide-inspection"/>) set what the host records:</p>
+    <heading>Change what is traced while the host runs.</heading>
+    <p>Call these methods on the host to change what it records while it runs (<link to="guide-inspection"/>):</p>
     <list>
       <item><term><code>traceConfigure(params)</code></term><text>sets what every actor traces: <code>detail</code> (<code>'summary'</code>, <code>'decisions'</code>, <code>'full'</code> or <code>'off'</code>), <code>values</code>, <code>sample</code> (the share of new traces sampled, 0 to 1) and <code>rules</code>. It replaces the previous configuration.</text></item>
       <item><term><code>traceWatch({ rules, seconds })</code></term><text>adds rules in front of the configured ones for a while (900 seconds by default) and answers <code>{ id }</code>. A watch is how an operator looks closely at one chart or one actor without tracing everything.</text></item>
@@ -224,8 +237,12 @@ seed 7, twice: true
       <item><term><code>traceEnd()</code></term><text>ends every open span now, as <code>close()</code> does.</text></item>
       <item><term><code>traceSpansDecode({ traces })</code></term><text>reads the spans of a traces request back through the host. <code>decodeTraces(bytes)</code> needs no host, and also gives each span's <code>flags</code>, <code>links</code>, <code>resource</code> and <code>scope</code>.</text></item>
     </list>
-    <p>A rule matches by <code>chart</code>, <code>actor</code> (a trailing <code>*</code> makes it a prefix), <code>event</code> (SCXML's prefix rule), <code>session</code> or <code>from</code>.</p>
-    <p><code>from</code> is <code>'host'</code>, <code>'actor'</code>, <code>'timer'</code>, <code>'spawn'</code> and so on. A rule decides <code>sample</code> (<code>'keep'</code>, <code>'sample'</code>, <code>'drop'</code> or a share) and <code>detail</code>, at most <code>perSecond</code> with a <code>burst</code>.</p>
+    <p>A rule picks the steps it applies to, then says how to trace them:</p>
+    <list>
+      <item><term>What it matches</term><text><code>chart</code>, <code>actor</code> (a trailing <code>*</code> makes it a prefix), <code>event</code> (SCXML's prefix rule), <code>session</code> or <code>from</code>, which is <code>'host'</code>, <code>'actor'</code>, <code>'timer'</code>, <code>'spawn'</code> and so on.</text></item>
+      <item><term>What it decides</term><text><code>sample</code> (<code>'keep'</code>, <code>'sample'</code>, <code>'drop'</code> or a share) and <code>detail</code>, at most <code>perSecond</code> with a <code>burst</code>.</text></item>
+    </list>
+    <p>This host samples 1 trace in 100 in summary, then traces every checkout in full for a minute:</p>
     <example>
       <code language="javascript" file="watch.mjs"><![CDATA[
 import { Host } from '@tinyactors/node';

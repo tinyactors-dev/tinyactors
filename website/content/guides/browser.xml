@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-browser" path="/guides/browser/">
   <title>In the browser</title>
-  <description>Run tinyactors in a page, a Worker, Node.js or Bun with @tinyactors/wasm: the same API as @tinyactors/node, with core compiled to WebAssembly.</description>
+  <description>Run the charts you run on Node.js in a page or a Worker with @tinyactors/wasm, the same API on core compiled to WebAssembly.</description>
   <hero>
-    <headline>Run the same API in a browser.</headline>
-    <lede><code>@tinyactors/wasm</code> is the API of <code>@tinyactors/node</code> with core compiled to WebAssembly. It runs in a page, in a Worker, and in Node.js and Bun on a platform with no addon, such as Windows.</lede>
+    <headline>Run your actors in a browser.</headline>
+    <lede>Change one import, and the charts you run on Node.js run in a page or a Worker, on tinyactors compiled to WebAssembly. The same package runs Node.js and Bun where no native addon is built, such as Windows.</lede>
   </hero>
 
   <section id="same-api">
-    <heading>Only the import changes.</heading>
-    <p>Every other guide holds for this package, with the same names, shapes and errors. This program logs the same line from a page as from Node.js:</p>
+    <heading>Import the WebAssembly package instead.</heading>
+    <p>Import <code>@tinyactors/wasm</code> in place of <code>@tinyactors/node</code>, and every other guide holds unchanged. This program logs the same line in a page as in Node.js:</p>
     <example>
       <code language="javascript" file="hello.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/wasm';
@@ -31,13 +31,34 @@ hello from tinyactors://web/#_scxml_1
     </example>
   </section>
 
+  <section id="bytes-are-uint8arrays">
+    <heading>Treat bytes as Uint8Arrays, not Buffers.</heading>
+    <p>Where <code>@tinyactors/node</code> gives a <code>Buffer</code>, this package gives a plain <code>Uint8Array</code>. A <code>Buffer</code> is a <code>Uint8Array</code> too, so code written against <code>Uint8Array</code> runs on both.</p>
+    <p>That covers every output in bytes: <code>compiled.image</code>, <code>host.hibernate()</code>, <code>host.snapshot()</code>, <code>host.metrics()</code>, telemetry and <code>encode()</code>.</p>
+    <p>Decode text with <code>TextDecoder</code> instead of <code>buf.toString()</code>, and copy or compare with the typed array's own methods. This program copies an encoded value and writes it as base64:</p>
+    <example>
+      <code language="javascript" file="bytes.mjs"><![CDATA[
+import { decode, encode } from '@tinyactors/wasm';
+
+const bytes = encode({ sku: 'tea', qty: 2 });
+console.log(bytes instanceof Uint8Array, bytes.length, 'bytes');
+const copy = bytes.slice(); // a Uint8Array again, on both packages
+console.log(decode(copy).sku, btoa(String.fromCharCode(...copy))); // base64, in a page as in Node.js
+]]></code>
+      <code language="text" role="output">
+true 14 bytes
+tea omNza3VjdGVhY3F0eQI=
+</code>
+    </example>
+    <p><code>index.d.ts</code>, which both packages share, types every one of them as <code>Uint8Array</code>.</p>
+  </section>
+
   <section id="loading-top-level-await-or-init">
-    <heading>Import it, or load it with init().</heading>
-    <p>The package's entry loads its module, <code>tinyactors.wasm</code> beside its files, with top-level <code>await</code>. Every name works once the import settles.</p>
-    <p>A browser loads it with <code>fetch</code> and <code>WebAssembly.compileStreaming</code>, and Node.js and Bun read the file.</p>
+    <heading>Call init() under a bundler or Service Worker.</heading>
+    <p>The package's entry loads its module, <code>tinyactors.wasm</code> beside its files, with top-level <code>await</code>. A browser fetches the file, Node.js and Bun read it, and every name works once the import settles.</p>
     <p>A Service Worker refuses a module graph with top-level <code>await</code>. Some bundlers neither handle it nor place <code>tinyactors.wasm</code> beside the bundle: esbuild does not follow <code>new URL(..., import.meta.url)</code>.</p>
-    <p>For them, <code>@tinyactors/wasm/init</code> exports the same names and <code>init(source?)</code>, which loads the module once. Until it settles, every call throws <code>TA_ERROR_STATE</code>.</p>
-    <p><code>source</code> is a URL, a <code>Response</code>, the bytes or a compiled <code>WebAssembly.Module</code>. Without one, <code>init</code> loads the package's own file.</p>
+    <p>There, import <code>@tinyactors/wasm/init</code>: it exports the same names and <code>init(source?)</code>, which loads the module once. Every call made before it settles throws <code>TA_ERROR_STATE</code>.</p>
+    <p>Give <code>init</code> a URL, a <code>Response</code>, the bytes or a compiled <code>WebAssembly.Module</code>, or nothing to load the package's own file. This program makes a host before and after <code>init()</code>:</p>
     <example>
       <code language="javascript" file="init.mjs"><![CDATA[
 import { Host, init } from '@tinyactors/wasm/init';
@@ -61,49 +82,31 @@ after init: closed false
   </section>
 
   <section id="what-a-page-needs-the-floor-and-the-csp">
-    <heading>Chrome 114, Firefox 119, Safari 16.4 run it.</heading>
-    <p>The module uses WebAssembly's <code>extended-const</code>, <code>multivalue</code>, <code>bulk-memory</code> and <code>nontrapping-fptoint</code>. The package uses top-level <code>await</code> and <code>String.prototype.isWellFormed</code>.</p>
-    <p>By the engines' release notes, that means Chrome and Edge 114, Firefox 119 and Safari 16.4. Only Chromium 141 is tested.</p>
+    <heading>Target Chrome 114, Firefox 119 and Safari 16.4.</heading>
+    <p>By the engines' release notes, Chrome and Edge 114, Firefox 119 and Safari 16.4 have every feature the package uses. Only Chromium 141 is tested.</p>
+    <list>
+      <item><term>WebAssembly</term><text><code>extended-const</code>, <code>multivalue</code>, <code>bulk-memory</code> and <code>nontrapping-fptoint</code>, in the module.</text></item>
+      <item><term>JavaScript</term><text>top-level <code>await</code> and <code>String.prototype.isWellFormed</code>, in the package.</text></item>
+    </list>
   </section>
 
   <section id="content-security-policy">
-    <heading>Allow <code>'wasm-unsafe-eval'</code>, and <code>'unsafe-eval'</code> for native.</heading>
-    <p>The module needs <code>'wasm-unsafe-eval'</code> in <code>script-src</code>. The native datamodel evaluates your charts' expressions and scripts as JavaScript, so it needs <code>'unsafe-eval'</code> too.</p>
+    <heading>Allow WebAssembly and eval in your CSP.</heading>
+    <p>The module needs <code>'wasm-unsafe-eval'</code> in <code>script-src</code>. The default engine, the native datamodel, runs your charts' expressions and scripts as JavaScript, so it needs <code>'unsafe-eval'</code> too.</p>
     <code language="text">Content-Security-Policy: script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'</code>
-    <p>Three policies make <code>new Host(...)</code> on the native datamodel throw <code>TinyactorsError</code> with <code>TA_ERROR_UNSUPPORTED</code>, its message naming the directive:</p>
+    <p>Under any of these policies, <code>new Host(...)</code> on the native datamodel throws <code>TinyactorsError</code> with <code>TA_ERROR_UNSUPPORTED</code>, its message naming the directive:</p>
     <list>
       <item><text>a <code>script-src</code> without <code>'unsafe-eval'</code>;</text></item>
       <item><text>a <code>sandbox</code> policy without <code>allow-same-origin</code>;</text></item>
       <item><text>Trusted Types enforced (<code>require-trusted-types-for 'script'</code>), which guards string evaluation even with <code>'unsafe-eval'</code>.</text></item>
     </list>
-    <p>Under them, <code>compileCharts</code> skips its check of the charts' JavaScript syntax, since it parses with the same constructor. Such a page runs its charts on <link to="guide-browser" section="the-quickjs-sandbox">quickjs</link>.</p>
-  </section>
-
-  <section id="bytes-are-uint8arrays">
-    <heading>Bytes are Uint8Arrays on both packages.</heading>
-    <p>What a host hands out as bytes is a <code>Uint8Array</code>: <code>compiled.image</code>, <code>host.hibernate()</code>, <code>host.snapshot()</code>, <code>host.metrics()</code>, telemetry and <code>encode()</code>.</p>
-    <p><code>@tinyactors/node</code> gives <code>Buffer</code>s, a subclass of <code>Uint8Array</code>, so code written against <code>Uint8Array</code> runs on both. Decode text with <code>TextDecoder</code>, not <code>buf.toString()</code>, and compare or copy with the typed array's own methods.</p>
-    <example>
-      <code language="javascript" file="bytes.mjs"><![CDATA[
-import { decode, encode } from '@tinyactors/wasm';
-
-const bytes = encode({ sku: 'tea', qty: 2 });
-console.log(bytes instanceof Uint8Array, bytes.length, 'bytes');
-const copy = bytes.slice(); // a Uint8Array again, on both packages
-console.log(decode(copy).sku, btoa(String.fromCharCode(...copy))); // base64, in a page as in Node.js
-]]></code>
-      <code language="text" role="output">
-true 14 bytes
-tea omNza3VjdGVhY3F0eQI=
-</code>
-    </example>
-    <p><code>index.d.ts</code>, which both packages share, says <code>Uint8Array</code> everywhere.</p>
+    <p>Under them, <code>compileCharts</code> also skips its check of the charts' JavaScript syntax, since it parses with the same constructor. Run such a page's charts on <link to="guide-browser" section="the-quickjs-sandbox">quickjs</link>.</p>
   </section>
 
   <section id="the-quickjs-sandbox">
-    <heading>quickjs needs only <code>'wasm-unsafe-eval'</code>.</heading>
-    <p><code>datamodel: 'quickjs'</code> runs the charts on quickjs-ng inside the package's module. It has the same limits, realms, hibernation, migration and snapshots as in <code>@tinyactors/node</code> (<link to="guide-quickjs"/>).</p>
-    <p>quickjs evaluates no chart text with your engine. It is the datamodel for a page whose policy forbids <code>'unsafe-eval'</code>, and for charts you do not trust.</p>
+    <heading>Run charts on quickjs under a strict policy.</heading>
+    <p>With <code>datamodel: 'quickjs'</code>, chart code runs on quickjs-ng inside the package's module, so the page's policy needs only <code>'wasm-unsafe-eval'</code>. Use it for charts you do not trust, too.</p>
+    <p>Every quickjs option and behaviour of <code>@tinyactors/node</code> holds here (<link to="guide-quickjs"/>). This host sets <code>maxOps</code> and reads the engine's heap size:</p>
     <example>
       <code language="javascript" file="quickjs.mjs"><![CDATA[
 import { Host } from '@tinyactors/wasm';
@@ -116,27 +119,15 @@ host.close();
 true
 </code>
     </example>
-    <p>Every page downloads quickjs in the one module: 378 KiB with brotli, against 137 KiB without quickjs. <code>mise run pack:wasm</code> reports the sizes.</p>
-    <p>Its engine's stack is the module's, at most 256 KiB whatever <code>quickjs.stackLimit</code> asks. A deeper recursion is its evaluation's <code>error.execution</code>, <code>RangeError: Maximum call stack size exceeded</code>.</p>
-    <p>Its <code>Date</code> reads the real clock, as in <code>@tinyactors/node</code>, whatever clock the host runs on.</p>
+    <p>Every page downloads quickjs, since the one module holds it: 378 KiB with brotli, against 137 KiB without it. <code>mise run pack:wasm</code> reports the sizes.</p>
+    <p>The engine's stack is the module's, at most 256 KiB whatever <code>quickjs.stackLimit</code> asks. A deeper recursion is its evaluation's <code>error.execution</code>, <code>RangeError: Maximum call stack size exceeded</code>.</p>
+    <p>Inside quickjs, <code>Date</code> reads the real clock, as in <code>@tinyactors/node</code>, whatever clock the host runs on.</p>
   </section>
 
   <section id="where-charts-run-declare-your-variables">
-    <heading>Charts run in the host's own realm.</heading>
-    <p>Chart code is trusted code here too: it runs in your engine, not in a sandbox. Its realm is the host's own, made at its first chart.</p>
-    <table>
-      <head><cell>Where</cell><cell>A host's charts run in</cell></head>
-      <row><cell>a page</cell><cell>a hidden iframe of the page's origin, one per host, removed at <code>close()</code></cell></row>
-      <row><cell>a Worker</cell><cell>the worker's own global (a Worker has no <code>document</code>)</cell></row>
-      <row><cell>Node.js, Bun</cell><cell>a <code>node:vm</code> context, as in <code>@tinyactors/node</code></cell></row>
-    </table>
-    <p>Each session is a scope object in that realm. A script's top-level declarations mean what they mean in <code>@tinyactors/node</code> (<link to="guide-charts" section="scripts">Writing charts</link>):</p>
-    <list>
-      <item><text>a chart-level script's <code>function</code>s are the chart's helpers, made once;</text></item>
-      <item><text>a top-level <code>var</code> is a variable of the session;</text></item>
-      <item><text><code>let</code>, <code>const</code> and <code>class</code> at a script's top level are refused.</text></item>
-    </list>
-    <p>Scripts and expressions run as strict code. An assignment to a name nobody declared is the script's <code>error.execution</code>, never a variable of the realm.</p>
+    <heading>Declare every variable your scripts assign.</heading>
+    <p>Scripts and expressions run as strict code, so an assignment to a name nobody declared is the script's <code>error.execution</code>. It never becomes a global.</p>
+    <p>Declare a variable with a top-level <code>var</code> or with <code>&lt;data&gt;</code>. Here the declared chart keeps <code>visits</code> through hibernation, and the undeclared one fails:</p>
     <example>
       <code language="javascript" file="declare.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/wasm';
@@ -174,13 +165,27 @@ declared: 2
 undeclared: ReferenceError
 </code>
     </example>
+    <p>Top-level declarations follow the rules of <code>@tinyactors/node</code> (<link to="guide-charts" section="scripts">Writing charts</link>):</p>
+    <list>
+      <item><text>a chart-level script's <code>function</code>s are the chart's helpers, made once;</text></item>
+      <item><text>a top-level <code>var</code> is a variable of the session;</text></item>
+      <item><text><code>let</code>, <code>const</code> and <code>class</code> at a script's top level are refused.</text></item>
+    </list>
+    <p>A host runs its charts in a realm of its own, a set of globals it makes at its first chart. Each actor's variables are a scope object there, and the realm differs by platform:</p>
+    <table>
+      <head><cell>Where</cell><cell>A host's charts run in</cell></head>
+      <row><cell>a page</cell><cell>a hidden iframe of the page's origin, one per host, removed at <code>close()</code></cell></row>
+      <row><cell>a Worker</cell><cell>the worker's own global (a Worker has no <code>document</code>)</cell></row>
+      <row><cell>Node.js, Bun</cell><cell>a <code>node:vm</code> context, as in <code>@tinyactors/node</code></cell></row>
+    </table>
+    <p>A hidden iframe looks like a sandbox but is not one: chart code runs in your engine and must be trusted.</p>
   </section>
 
   <section id="a-dedicated-worker">
-    <heading>Give the charts a Worker of their own.</heading>
-    <p>On a page the charts share the page's thread, so a long macrostep is a frame the page does not draw.</p>
+    <heading>Move the charts off the page's thread.</heading>
+    <p>On the page's thread, a chart step that runs long is a frame the page does not draw.</p>
     <p>In a dedicated Worker the page stays responsive, and the charts' realm holds none of the page's code. Only values cross <code>postMessage</code>, as between any two systems.</p>
-    <p>The page waits for the worker to say it listens, since a message sent before the worker's module ran is lost:</p>
+    <p>The page waits until the worker says it listens, since a message sent before the worker's module ran is lost. Then it asks for a counter and two visits:</p>
     <code language="javascript" file="page.mjs"><![CDATA[
 const worker = new Worker(new URL('./counters-worker.mjs', import.meta.url), { type: 'module' });
 // the worker says when it listens: a message sent before its module ran (it loads
@@ -200,7 +205,7 @@ spawned ada
 ada: 1
 ada: 2
 </code>
-    <p>The worker, <code>counters-worker.mjs</code> beside the page, answers each question through an I/O processor once its host is idle:</p>
+    <p>The worker, <code>counters-worker.mjs</code> beside the page, runs the host. It answers each question once the host is idle, with the count the counter sends to <code>urn:page</code>:</p>
     <code language="javascript" file="counters-worker.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/wasm';
 
@@ -238,9 +243,9 @@ postMessage('ready');
 
   <section id="the-store-indexeddb">
     <heading>Keep hibernated actors in IndexedDB.</heading>
-    <p>The host does no I/O in a browser either, so where hibernated actors and snapshots live is yours. A browser has no SQLite and refuses <code>SQLiteStore</code> (<link to="guide-hibernation"/>).</p>
-    <p>A page has IndexedDB, which stores a <code>Uint8Array</code> as it is. A store's methods may return promises, which the host follows, so IndexedDB serves as a host's <code>store</code> directly.</p>
-    <p>This counter is hibernated into IndexedDB, and loaded from it when its next event comes:</p>
+    <p>Your code chooses where a browser host's hibernated actors and snapshots live. A browser has no SQLite, so it refuses <code>SQLiteStore</code> (<link to="guide-hibernation"/>).</p>
+    <p>A page has IndexedDB, which stores a <code>Uint8Array</code> as it is. The host follows a store's promises, so IndexedDB can be a host's <code>store</code> directly.</p>
+    <p>This counter is hibernated into IndexedDB, then loaded from it when its next event comes:</p>
     <code language="javascript" file="store.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/wasm';
 
@@ -296,18 +301,18 @@ count 2
   </section>
 
   <section id="liveness-a-page-is-not-a-process">
-    <heading>Timers come late in a hidden tab.</heading>
-    <p>In Node.js an open host with a pending deadline keeps the process alive. A page has no such process: its hosts run while the page does.</p>
-    <p>A host runs its turns as <code>MessageChannel</code> messages and arms one <code>setTimeout</code> at its next deadline.</p>
-    <p>A browser throttles a hidden tab's timers. Chromium runs them about once a second, and once a minute after a few minutes hidden.</p>
-    <p>A delayed <code>&lt;send&gt;</code> or a timeout then comes late, but is never lost: it runs when the timer fires. A dedicated Worker is throttled less, but is not exempt.</p>
+    <heading>Expect late timers in a hidden tab.</heading>
+    <p>In Node.js an open host with a pending deadline keeps the process alive. A page's hosts run only while the page does.</p>
+    <p>A host runs its turns as <code>MessageChannel</code> messages and arms one <code>setTimeout</code> at its next deadline. A browser throttles that timer while the tab is hidden.</p>
+    <p>Chromium runs a hidden tab's timers about once a second, and once a minute after a few minutes hidden. A dedicated Worker is throttled less, but still throttled.</p>
+    <p>A delayed <code>&lt;send&gt;</code> or a timeout then comes late, when the timer fires, and is never lost.</p>
   </section>
 
   <section id="page-goes-away">
     <heading>Snapshot the host when the page hides.</heading>
-    <p>A tab can be closed, discarded or frozen without notice, and its actors go with it. Keep what must survive in your store.</p>
-    <p>Hibernate actors as they go cold, or snapshot the host on <code>visibilitychange</code>, the last event a page is sure to get. Restore it when the page loads again.</p>
-    <p>This cart is snapshotted into IndexedDB, then restored by a second load with its item kept:</p>
+    <p>A tab can be closed or discarded without notice, and its actors go with it. Keep what must survive in your store.</p>
+    <p>Hibernate actors as they go cold, or snapshot the host on <code>visibilitychange</code>, the last event a page is sure to get. Restore the snapshot when the page loads again.</p>
+    <p>This cart is snapshotted into IndexedDB, and a second load restores it with its item kept:</p>
     <code language="javascript" file="cart.mjs"><![CDATA[
 import { compileCharts, Host, SimulatedClock } from '@tinyactors/wasm';
 
@@ -369,23 +374,23 @@ cart: tea, cake
   </section>
 
   <section id="memory">
-    <heading>WebAssembly memory grows and never shrinks.</heading>
-    <p>The host's memory is the module's linear memory, which is never given back: a page keeps its peak.</p>
+    <heading>Size a page for its peak memory.</heading>
+    <p>The host's memory is the module's linear memory, which grows and is never given back: a page keeps its peak.</p>
     <list>
       <item><term>Hibernation makes room, not a smaller page.</term><text>Hibernating actors frees room for others in that memory. A snapshot is packed there before it is copied out, so a 100 MB snapshot leaves the memory 100 MB larger.</text></item>
       <item><term>4 GiB at most.</term><text>wasm32 addresses 4 GiB, and a region that grows is copied before the old one is freed. So one host holds about two million resident actors at most, where <code>@tinyactors/node</code> goes on.</text></item>
       <item><term>What the package hands out stays valid.</term><text>Bytes, values and views are never views of that memory, so they stay valid when it grows.</text></item>
     </list>
-    <p><link to="guide-capacity" section="what-an-actor-costs">Capacity and memory</link> gives what an actor costs.</p>
+    <p>What one actor costs in that memory is measured in <link to="guide-capacity" section="what-an-actor-costs">Capacity and memory</link>.</p>
   </section>
 
   <section id="one-store-two-packages">
-    <heading>Values cross between packages, snapshots do not.</heading>
-    <p>A server on <code>@tinyactors/node</code> and a browser client on <code>@tinyactors/wasm</code> can share a database. They cannot share the bytes a host packs.</p>
+    <heading>Share a database with a Node.js server.</heading>
+    <p>A server on <code>@tinyactors/node</code> and a browser client on <code>@tinyactors/wasm</code> can share a database, but not the bytes a host packs.</p>
     <list>
+      <item><term>Send values across.</term><text><code>encode</code> and <code>decode</code> are one format in both packages (<link to="guide-other-systems"/>): move work between the server and the client as events and their data, from one system to another.</text></item>
       <item><term>A snapshot does not cross.</term><text>It is the host's memory as the build that made it lays it out, and the addon is a 64-bit build where the module is a 32-bit one. Each package labels its snapshots with its own name and refuses the other's with <code>TA_ERROR_INVALID</code>, the message naming the package that made it.</text></item>
       <item><term>A hibernation blob belongs to its host.</term><text>It wakes in the host that hibernated it, or in one restored from that host's snapshot, which the other package cannot restore; another host's blob throws <code>TA_ERROR_INVALID</code>. Keep the server's blobs and the client's apart in the store, by host.</text></item>
-      <item><term>Values cross.</term><text><code>encode</code> and <code>decode</code> are one format in both packages (<link to="guide-other-systems"/>): move work between the server and the client as events and their data, from one system to another.</text></item>
     </list>
   </section>
 </page>
