@@ -1,21 +1,16 @@
-// The lab's page: pick a scenario, how the population moves, a peak and a
-// datamodel, and watch one host in a Worker (worker.mjs) follow it. The
-// timeline (components/timeline.mjs) charts the whole run, a point a
-// second, and a line under the controls says what the run has shown.
+// The lab's page: pick a scenario, a population and a datamodel, and watch
+// one host in a Worker (worker.mjs) run it. The timeline
+// (components/timeline.mjs) charts the whole run, a point a second, and a
+// line under the controls says what the run has shown.
 import { timeline } from '/assets/components/timeline.mjs';
 
 const SCENARIOS = [
+  ['cells', 'A living colony', 'Cells eat, share food with a neighbour, divide when full, and die of hunger or age.'],
   ['idle', 'Idle actors', 'Every actor waits for an event.'],
   ['events', 'Send events', 'Counters drawn at random get events and each adds one.'],
   ['rally', 'Actors message actors', 'Pairs of actors send a ball back and forth, a hundred hits a rally.'],
   ['sleep', 'Most asleep', '1,000 actors stay in memory and the rest sleep in a store; each event wakes one.'],
   ['timers', 'Timers', 'Every actor holds a delayed send to itself, due every 1 to 10 simulated seconds.'],
-];
-const PATTERNS = [
-  ['steady', 'Steady', 'The population fills to its peak and stays there.'],
-  ['ramp', 'Ramp', 'The population climbs from a tenth to its peak in a minute, then falls back.'],
-  ['waves', 'Waves', 'The population rises and falls once a minute, from a tenth to its peak.'],
-  ['bursts', 'Bursts', 'A fifth of the peak, and the whole peak for 10 seconds out of every 40.'],
 ];
 const POPULATIONS = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000];
 const DEFAULT = 2; // 100,000
@@ -23,23 +18,26 @@ const number = new Intl.NumberFormat('en');
 const count = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(2)} M` : v >= 1e4 ? `${number.format(Math.round(v / 1e3))} k` : number.format(Math.round(v)));
 const megabytes = (bytes) => `${number.format(Math.round(bytes / 1048576))} MB`;
 const micro = (v) => `${v < 10 ? v.toFixed(2) : v.toFixed(1)} µs`;
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 
 export function mount(root) {
   root.classList.add('lab');
-  let scenario = 'events', pattern = 'waves', datamodel = 'native';
+  let scenario = 'cells', datamodel = 'native';
   const about = el('p', { class: 'lab__about' });
+  const sizeLabel = el('span', { class: 'lab__label' });
   const describe = () => {
-    about.textContent = `${SCENARIOS.find(([name]) => name === scenario)[2]} ${PATTERNS.find(([name]) => name === pattern)[2]}`;
+    about.textContent = SCENARIOS.find(([name]) => name === scenario)[2]
+      + (scenario === 'cells' ? ' The light feeds as many cells as the slider says; the colony finds its own size.' : '');
+    sizeLabel.textContent = scenario === 'cells' ? 'Cells the light feeds' : 'Actors';
   };
   const scenarios = cards('Scenario', SCENARIOS, scenario, (name) => { scenario = name; describe(); });
-  const patterns = radios('Population over time', PATTERNS, pattern, (name) => { pattern = name; describe(); });
   const datamodels = radios('Datamodel', [['native', 'Native'], ['quickjs', 'quickjs']], datamodel, (name) => { datamodel = name; });
   describe();
-  const slider = el('input', { type: 'range', min: 0, max: POPULATIONS.length - 1, step: 1, value: DEFAULT, 'aria-label': 'Peak actors' });
-  const peak = el('output', { class: 'lab__count' });
-  const showPeak = () => { peak.textContent = number.format(POPULATIONS[slider.value]); };
-  slider.addEventListener('input', showPeak);
-  showPeak();
+  const slider = el('input', { type: 'range', min: 0, max: POPULATIONS.length - 1, step: 1, value: DEFAULT, 'aria-label': 'Population' });
+  const size = el('output', { class: 'lab__count' });
+  const showSize = () => { size.textContent = number.format(POPULATIONS[slider.value]); };
+  slider.addEventListener('input', showSize);
+  showSize();
   const run = el('button', { type: 'button', class: 'ta-btn ta-btn--primary lab__run' }, 'Start');
   const status = el('p', { class: 'lab__status', 'aria-live': 'polite' }, 'The host runs in a Worker on this device.');
   const found = el('p', { class: 'lab__found', 'aria-live': 'polite' });
@@ -48,9 +46,8 @@ export function mount(root) {
   root.append(
     scenarios,
     el('div', { class: 'lab__controls' },
-      el('div', { class: 'lab__field' }, el('span', { class: 'lab__label' }, 'Population over time'), patterns),
+      el('label', { class: 'lab__field lab__size' }, sizeLabel, el('span', { class: 'lab__slider' }, slider, size)),
       el('div', { class: 'lab__field' }, el('span', { class: 'lab__label' }, 'Datamodel'), datamodels),
-      el('label', { class: 'lab__field lab__peak' }, el('span', { class: 'lab__label' }, 'Peak actors'), el('span', { class: 'lab__slider' }, slider, peak)),
       run),
     about, status, found, charts,
   );
@@ -66,24 +63,26 @@ export function mount(root) {
 
   function begin() {
     const actors = POPULATIONS[slider.value];
-    const sleep = scenario === 'sleep';
-    const rate = scenario === 'timers' ? 'Timers fired a second' : 'Messages a second';
+    const sleep = scenario === 'sleep', cells = scenario === 'cells';
+    const rate = scenario === 'timers' ? 'Timers fired a second' : cells ? 'Events a second' : 'Messages a second';
+    const per = cells ? 'Time per event' : 'Time per message';
     const view = timeline({ panels: [
-      { id: 'actors', title: 'Actors', format: count,
+      { id: 'actors', title: cells ? 'Cells alive' : 'Actors', format: count,
         series: [{ key: 'actors', label: 'alive' }, ...(sleep ? [{ key: 'asleep', label: 'asleep in the store' }] : [])],
-        reference: { key: 'target', label: 'pattern' } },
-      { id: 'churn', title: 'Spawned and ended a second', format: count,
-        series: [{ key: 'spawns', label: 'spawned' }, { key: 'ends', label: 'ended' }] },
+        ...(cells ? { reference: { key: 'fed', label: 'the light feeds' } } : {}) },
+      cells
+        ? { id: 'churn', title: 'Born and died a second', format: count, series: [{ key: 'spawns', label: 'born' }, { key: 'ends', label: 'died' }] }
+        : { id: 'churn', title: 'Spawned a second', format: count, series: [{ key: 'spawns', label: 'Spawned a second' }] },
       ...(scenario === 'idle' ? [] : [
         { id: 'messages', title: rate, format: count, series: [{ key: 'messages', label: rate }] },
-        { id: 'perMessage', title: 'Time per message', format: micro, series: [{ key: 'perMessage', label: 'Time per message' }] },
+        { id: 'perMessage', title: per, format: micro, series: [{ key: 'perMessage', label: per }] },
       ]),
       { id: 'memory', title: 'Memory', format: megabytes,
         series: [{ key: 'memory', label: 'WebAssembly' }, ...(sleep ? [{ key: 'store', label: 'the store' }] : [])] },
     ] });
     charts.replaceChildren(view.element);
     const worker = new Worker(new URL('./worker.mjs', import.meta.url), { type: 'module' });
-    const current = (lab = { worker, view, scenario, datamodel, pattern, base: null, peak: null, best: null, last: null });
+    const current = (lab = { worker, view, scenario, datamodel, actors, base: null, peak: null, best: null, last: null });
     run.textContent = 'Stop';
     found.textContent = '';
     status.textContent = 'Loading tinyactors…';
@@ -94,14 +93,14 @@ export function mount(root) {
       show(current, data);
     };
     worker.onerror = (event) => stop(`The host stopped: ${event.message}`);
-    worker.postMessage({ start: true, scenario, actors, datamodel, pattern });
+    worker.postMessage({ start: true, scenario, actors, datamodel });
   }
 
   function show(current, data) {
     const { stats } = data;
     current.last = data;
     current.view.push(data.second, {
-      actors: stats.actors, target: data.target, asleep: stats.asleep,
+      actors: stats.actors, fed: current.actors, asleep: stats.asleep,
       spawns: data.spawns, ends: data.ends,
       messages: data.messages, perMessage: data.perMessage,
       memory: data.memory, store: stats.storeBytes,
@@ -109,8 +108,13 @@ export function mount(root) {
     const used = data.memory !== null && current.base !== null ? data.memory - current.base : null;
     if (stats.actors > 0 && (current.peak === null || stats.actors > current.peak.actors)) current.peak = { actors: stats.actors, used, of: stats.peak };
     if (data.perMessage !== null && (current.best === null || data.messages > current.best.messages)) current.best = data;
-    status.textContent = `${number.format(stats.actors)} actors alive. ${number.format(stats.spawned)} spawned and ${number.format(stats.ended)} ended in ${data.second} s`
-      + (current.scenario === 'idle' ? '.' : `; ${number.format(stats.messages)} ${current.scenario === 'timers' ? 'timers fired' : 'messages'}.`);
+    if (current.scenario === 'cells') {
+      status.textContent = `${number.format(stats.actors)} cells alive. ${number.format(stats.spawned)} born; ${number.format(stats.starved)} starved and ${number.format(stats.aged)} died of age`
+        + `${stats.refused ? `; ${number.format(stats.refused)} divisions found no room` : ''}. Simulated ${clock(stats.simulated)} in ${clock(data.wall)}.`;
+    } else {
+      status.textContent = `${number.format(stats.actors)} actors alive`
+        + (current.scenario === 'idle' ? '.' : `; ${number.format(stats.messages)} ${current.scenario === 'timers' ? 'timers fired' : 'messages'}.`);
+    }
     found.textContent = summary(current);
   }
 
@@ -123,9 +127,10 @@ export function mount(root) {
     const each = peak.used === null ? '' : peak.actors === peak.of
       ? ` in ${megabytes(peak.used)}, ${number.format(Math.round(peak.used / peak.actors))} B each`
       : ` in ${megabytes(peak.used)}, reserved for ${number.format(peak.of)}`;
-    parts.push(`Most at once: ${number.format(peak.actors)} actors${each}.`);
-    if (best) parts.push(`Best second: ${count(best.messages)} ${kind === 'timers' ? 'timers fired' : 'messages'}, ${micro(best.perMessage)} each.`);
-    parts.push('WebAssembly memory keeps its peak when actors end.');
+    parts.push(`Most at once: ${number.format(peak.actors)} ${kind === 'cells' ? 'cells' : 'actors'}${each}.`);
+    const unit = kind === 'timers' ? 'timers fired' : kind === 'cells' ? 'events' : 'messages';
+    if (best) parts.push(`Best second: ${count(best.messages)} ${unit}, ${micro(best.perMessage)} each.`);
+    if (kind === 'cells') parts.push('WebAssembly memory keeps its peak when cells die.');
     if (model === 'native') parts.push('On the native datamodel, actors’ variables live in the JavaScript heap, which this memory leaves out.');
     return parts.join(' ');
   }

@@ -1,13 +1,20 @@
-// The measurement lab: one host, one scenario, a population that follows a
-// pattern over time. The page runs it in a Worker (worker.mjs) and charts
-// what it reports; main.mjs runs every scenario small, seeded, in Node.js,
-// for the website's tests. The lab takes the tinyactors package as an
-// argument, so the same code runs in both.
+// The measurement lab: one host, one scenario. The page runs it in a
+// Worker (worker.mjs) and charts what it reports; main.mjs runs every
+// scenario small, seeded, in Node.js, for the website's tests. The lab
+// takes the tinyactors package as an argument, so the same code runs in
+// both.
 //
-// The population follows its pattern (PATTERNS): the lab spawns actors
-// when there are fewer than the pattern asks for and ends actors drawn at
-// random when there are more (adjust()). The scenario's work goes to the
-// actors alive (work()):
+// - cells: a colony (cell.scxml) whose population is the cells' own doing.
+//   Each cell burns a unit of energy a simulated second and ages; the
+//   light, the lab's I/O processor urn:lab, feeds cells drawn at random,
+//   as much food a second as `actors` cells burn, and names a neighbour
+//   to each; a cell with energy to spare gives some to its neighbour, one
+//   with a full store divides (the light spawns the daughter), and a cell
+//   dies of hunger or of age in a final state. The lab moves a simulated
+//   clock on by STEP at a time, as fast as the host keeps up.
+//
+// The other scenarios hold `actors` actors (adjust() spawns them), and
+// their work goes to the actors alive (work()):
 //
 // - idle: none. The actors wait for an event.
 // - events: batches of `add` to counters drawn at random; each adds one.
@@ -20,42 +27,28 @@
 //   seconds; the lab moves a simulated clock on by STEP at a time, as fast
 //   as the host keeps up, and each send that falls due is a tick.
 
-export const SCENARIOS = ['idle', 'events', 'rally', 'sleep', 'timers'];
+export const SCENARIOS = ['cells', 'idle', 'events', 'rally', 'sleep', 'timers'];
 export const BATCH = 1000; // events a unit of work sends
 export const HITS = 100; // hits a rally lasts
 export const STEP = 100; // simulated milliseconds a unit of timers moves the clock
 const PERIODS = 91; // a timer's period: 1 s to 10 s, in steps of STEP
-const CHUNK = 4096; // spawns or ends between runs to idle
+const CHUNK = 4096; // spawns between runs to idle
+const FOOD = 10; // energy a feed of the light carries
+const ROOM = 2; // a colony may grow to this many times the cells its light feeds
 
 /**
- * The share of the peak population a pattern asks for at `t` seconds into
- * a run:
- * - steady: all of them, all the time;
- * - ramp: from a tenth up to all of them over a minute, and down again;
- * - waves: a wave a minute, from a tenth to all of them;
- * - bursts: a fifth, and all of them for 10 seconds out of every 40.
- */
-export const PATTERNS = {
-  steady: () => 1,
-  ramp: (t) => { const phase = (t % 120) / 60; return 0.1 + 0.9 * (phase <= 1 ? phase : 2 - phase); },
-  waves: (t) => 0.55 - 0.45 * Math.cos((2 * Math.PI * t) / 60),
-  bursts: (t) => (t % 40 >= 20 && t % 40 < 30 ? 1 : 0.2),
-};
-export const target = (pattern, peak, t) => Math.round(peak * PATTERNS[pattern](t));
-
-/**
- * A lab of at most `actors` actors running `scenario` on `datamodel`
- * ('native' or 'quickjs'). `charts` holds the text of counter.scxml,
- * player.scxml and timer.scxml.
+ * A lab of `actors` actors (for cells: as many as its light feeds) running
+ * `scenario` on `datamodel` ('native' or 'quickjs'). `charts` holds the
+ * text of cell.scxml, counter.scxml, player.scxml and timer.scxml.
  */
 export function createLab(tinyactors, { scenario, actors, datamodel = 'native', charts, resident = 1000, seed = 1 }) {
   const { compileCharts, Host, SimulatedClock, MemoryStore } = tinyactors;
   if (!SCENARIOS.includes(scenario)) throw new TypeError(`scenario is one of ${SCENARIOS.join(', ')}`);
   const random = mulberry32(seed);
-  const rally = scenario === 'rally', timers = scenario === 'timers';
+  const rally = scenario === 'rally', timers = scenario === 'timers', cells = scenario === 'cells';
   const per = rally ? 2 : 1; // actors a unit of the population holds: a pair of players, or one actor
-  const peak = actors - (actors % per);
-  const counts = { spawned: 0, ended: 0, messages: 0, points: 0, wakes: 0 };
+  const peak = cells ? ROOM * actors : actors - (actors % per); // the most actors alive at once
+  const counts = { spawned: 0, ended: 0, messages: 0, points: 0, wakes: 0, starved: 0, aged: 0, refused: 0 };
 
   // The store of the sleep scenario counts what it holds, and its wakes.
   let store;
@@ -77,6 +70,7 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
   const clock = new SimulatedClock();
 
   const compiled = compileCharts([
+    { name: 'cell.scxml', text: charts.cell },
     { name: 'counter.scxml', text: charts.counter },
     { name: 'player.scxml', text: charts.player },
     { name: 'timer.scxml', text: charts.timer },
@@ -92,73 +86,107 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
     // the region, and WebAssembly memory keeps its peak. Every pending
     // delayed send holds a timer and an event, and a timer that falls due
     // holds a second event for a moment: about one timer in fifty falls
-    // due in each step. A chunk of new pairs of players queues a meet
-    // each. Actors in the middle of a step hold a workspace each, a sender
-    // until its send is handled.
+    // due in each step. A cell holds its tick, the same. A chunk of new
+    // pairs of players queues a meet each. Actors in the middle of a step
+    // hold a workspace each, a sender until its send is handled.
     config: { system: {
       maxActors: peak + 64,
-      maxEvents: 4 * BATCH + CHUNK + (timers ? peak + Math.ceil(peak / 16) : 0),
-      ...(timers ? { maxTimers: peak + 64 } : {}),
+      maxEvents: 4 * BATCH + CHUNK + (timers || cells ? peak + Math.ceil(peak / 16) : 0),
+      ...(timers || cells ? { maxTimers: peak + 64 } : {}),
       workspaces: 1024,
       tracing: false,
     } },
-    ioProcessors: { 'urn:lab': { receive() { counts.points++; } } },
+    ioProcessors: { 'urn:lab': { receive(send) {
+      if (send.event === 'point') counts.points++;
+      else if (send.event === 'divide') {
+        // The daughter, with half the mother's energy; none past the room.
+        if (alive >= peak) { counts.refused++; send.fail(); return; }
+        birth(send.data.energy);
+      }
+    } } },
+    // A cell's end: its final state's donedata names why.
+    ...(cells ? { onDone: (actor, why) => { death(Number(actor.id), why); } } : {}),
     ...(store ? { store, resident } : {}),
   });
   compiled.close();
 
   // The population alive: a counter's or a timer's session, or a pair's two
   // players, in slots 0 to alive - 1; an end moves the last into the gap.
-  const first = new Float64Array(peak / per), second = rally ? new Float64Array(peak / per) : null;
-  const residue = timers ? new Int32Array(peak) : null; // a timer's place in `due`
+  const sessions = new Float64Array(peak / per), partners = rally ? new Float64Array(peak / per) : null;
+  const slot = cells ? new Map() : null; // a cell's session -> its slot
   let alive = 0;
+
+  // A cell is born with `energy`, a life of 40 to 80 seconds and its first
+  // tick within a second, so the cells tick spread out.
+  function birth(energy) {
+    const life = 40 + Math.floor(random() * 41), tick = 100 + Math.floor(random() * 900);
+    const session = Number(host.spawn('cell', { params: { energy, life, first: `${tick}ms` } }).id);
+    sessions[alive] = session;
+    slot.set(session, alive++);
+    counts.spawned++;
+  }
+  function death(session, why) {
+    const i = slot.get(session);
+    if (i === undefined) return;
+    slot.delete(session);
+    alive--;
+    if (i !== alive) { sessions[i] = sessions[alive]; slot.set(sessions[i], i); }
+    counts.ended++;
+    if (why === 'starved') counts.starved++; else counts.aged++;
+  }
 
   function spawn() {
     if (rally) {
       const a = host.spawn('player');
       const b = host.spawn('player', { params: { peer: a.address.text } });
       host.send(a.id, 'meet', { peer: b.address.text });
-      first[alive] = Number(a.id); second[alive] = Number(b.id);
+      sessions[alive] = Number(a.id); partners[alive] = Number(b.id);
     } else if (timers) {
       // The first delay falls within the period, so the timers fall due spread out.
       const p = 10 + Math.floor(random() * PERIODS), delay = 1 + Math.floor(random() * p);
-      residue[alive] = offset(p) + ((clock.now / STEP + delay) % p);
-      due[residue[alive]]++;
-      first[alive] = Number(host.spawn('timer', { params: { period: `${p * STEP}ms`, first: `${delay * STEP}ms` } }).id);
-    } else first[alive] = Number(host.spawn('counter').id);
+      due[offset(p) + ((clock.now / STEP + delay) % p)]++;
+      sessions[alive] = Number(host.spawn('timer', { params: { period: `${p * STEP}ms`, first: `${delay * STEP}ms` } }).id);
+    } else sessions[alive] = Number(host.spawn('counter').id);
     alive++;
     counts.spawned += per;
   }
 
-  function end() {
-    const i = Math.floor(random() * alive);
-    host.terminate(first[i]);
-    if (rally) host.terminate(second[i]);
-    if (timers) due[residue[i]]--;
-    alive--;
-    first[i] = first[alive];
-    if (rally) second[i] = second[alive];
-    if (timers) residue[i] = residue[alive];
-    counts.ended += per;
-  }
-
   /**
-   * Spawns or ends actors toward `wanted`, at most a chunk of them, and
-   * runs the host until idle; answers how many actors it spawned (or,
-   * negative, ended).
+   * Spawns the population, a chunk at a time, and runs the host until idle;
+   * answers how many actors it spawned, 0 once there are all of them. A
+   * colony starts from a fiftieth of the cells its light feeds (at least
+   * 16), and grows on its own.
    */
-  async function adjust(wanted) {
-    const goal = Math.floor(Math.min(peak, wanted) / per);
-    const change = Math.max(-CHUNK, Math.min(CHUNK, goal - alive));
-    for (let i = 0; i < change; i++) spawn();
-    for (let i = 0; i < -change; i++) end();
-    if (change !== 0) await host.idle();
-    return change * per;
+  async function populate() {
+    let spawned = 0;
+    if (cells) {
+      if (counts.spawned > 0) return 0;
+      for (let i = 0; i < Math.max(16, Math.ceil(actors / 50)); i++) birth(20);
+      spawned = alive;
+    } else {
+      const change = Math.min(CHUNK, peak / per - alive);
+      for (let i = 0; i < change; i++) spawn();
+      spawned = change * per;
+    }
+    if (spawned > 0) await host.idle();
+    return spawned;
   }
 
   /** One unit of the scenario's work, run until the host is idle; answers the messages it handled. */
   async function work() {
     if (scenario === 'idle' || alive === 0) return 0;
+    if (cells) {
+      // The light: as much food in each step as `actors` cells burn in it,
+      // in feeds of FOOD to cells drawn at random, each naming a neighbour.
+      clock.increment(STEP);
+      const items = [];
+      for (let i = 0; i < Math.round((actors * STEP) / 1000 / FOOD); i++) {
+        items.push({ target: sessions[Math.floor(random() * alive)], event: 'feed', data: { food: FOOD, neighbour: sessions[Math.floor(random() * alive)] } });
+      }
+      host.sendMany(items);
+      await host.idle();
+      return items.length; // the feeds; refresh() counts every event the cells handled
+    }
     if (timers) {
       clock.increment(STEP);
       const step = clock.now / STEP;
@@ -170,9 +198,9 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
     }
     const items = [];
     if (rally) {
-      for (let i = 0; i < BATCH / 10; i++) items.push({ target: first[Math.floor(random() * alive)], event: 'serve', data: { hits: HITS } });
+      for (let i = 0; i < BATCH / 10; i++) items.push({ target: sessions[Math.floor(random() * alive)], event: 'serve', data: { hits: HITS } });
     } else {
-      for (let i = 0; i < BATCH; i++) items.push({ target: first[Math.floor(random() * alive)], event: 'add' });
+      for (let i = 0; i < BATCH; i++) items.push({ target: sessions[Math.floor(random() * alive)], event: 'add' });
     }
     const points = counts.points;
     host.sendMany(items);
@@ -181,6 +209,16 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
     const messages = rally ? (counts.points - points) * (HITS + 1) : items.length;
     counts.messages += messages;
     return messages;
+  }
+
+  /**
+   * For cells, the events they handled, from the core's counters: a cell
+   * takes a macrostep at its birth and one for each event it handles.
+   */
+  async function refresh() {
+    if (!cells) return;
+    const cell = (await host.hostStats()).charts.find((chart) => chart.name === 'cell');
+    counts.messages = cell.macrosteps - cell.spawned;
   }
 
   /** What the lab has done so far. */
@@ -193,6 +231,9 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
       messages: counts.messages,
       points: counts.points,
       wakes: counts.wakes,
+      starved: counts.starved,
+      aged: counts.aged,
+      refused: counts.refused,
       asleep: store ? store.blobs.size : 0,
       storeBytes: store ? store.bytes : 0,
       quickjsHeap: host.quickjsHeapBytes ?? null,
@@ -201,9 +242,9 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
   }
 
   /** The variables of the i-th actor alive (a pair's first player), for main.mjs's checks. */
-  const sample = (i) => host.actor(BigInt(first[i])).context();
+  const sample = (i) => host.actor(BigInt(sessions[i])).context();
 
-  return { adjust, work, stats, sample, host, close: () => host.close() };
+  return { populate, work, refresh, stats, sample, host, close: () => host.close() };
 }
 
 function mulberry32(seed) {

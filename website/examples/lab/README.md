@@ -1,10 +1,18 @@
 # The measurement lab
 
-One host on `@tinyactors/wasm`, its population following a pattern over
-time up to a peak the reader picks (`lab.mjs`): steady, a ramp, waves or
-bursts. The lab spawns actors when there are fewer than the pattern asks
-for and ends actors drawn at random when there are more, and the
-scenario's work goes to the actors alive:
+One host on `@tinyactors/wasm` running one scenario (`lab.mjs`):
+
+- **cells**: a colony whose population is the cells' own doing. Each cell
+  (`cell.scxml`) burns a unit of energy a simulated second and ages; the
+  light, the lab's I/O processor `urn:lab`, feeds cells drawn at random,
+  as much food a second as the cells the reader picked burn, and names a
+  neighbour to each; a cell with energy to spare gives some to its
+  neighbour (a send to `#_scxml_<session>`), one with a full store divides
+  (the light spawns the daughter), and a cell dies of hunger or of age in
+  a final state, which the host reports (`onDone`). Births, deaths and the
+  events handled are the core's own counts (`hostStats`).
+
+The other scenarios hold a fixed population:
 
 - **idle**: the actors (`counter.scxml`) wait for an event;
 - **events**: batches of `add` to counters drawn at random;
@@ -19,18 +27,18 @@ scenario's work goes to the actors alive:
 The website runs it in a Worker (`worker.mjs`) at
 https://www.tinyactors.dev/performance/#lab and charts the whole run, a
 point a second (`page.mjs`, on `components/timeline.mjs`): the actors
-alive against the pattern, spawned and ended a second, messages a second,
-time per message, and the WebAssembly memory (and the store). `main.mjs`
-runs every scenario on 2,000 actors, steady, on both datamodels, checked
-against what the actors counted, then each pattern for two minutes,
-seeded, for the website's tests.
+alive, born and died (or spawned) a second, events a second, time per
+event, and the WebAssembly memory (and the store). `main.mjs` runs a
+colony for two simulated minutes and every other scenario on 2,000
+actors, on both datamodels, seeded, checked against what the actors
+counted, for the website's tests.
 
 ```sh
 npm ci
 node main.mjs
 ```
 
-The host is sized for its peak up front (a pool that runs out grows by
+The host is sized for its population up front (a colony for twice the cells its light feeds) (a pool that runs out grows by
 copying the region, and WebAssembly memory keeps its peak) and runs with
 tracing off. On the native datamodel an actor's variables are in the
 JavaScript heap, which the WebAssembly memory leaves out.

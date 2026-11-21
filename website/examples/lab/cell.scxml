@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A cell. Every simulated second it ages and burns one unit of energy.
+     The light (urn:lab) feeds it now and then and names a neighbour. A
+     cell with energy to spare gives some to that neighbour; one that has
+     doubled its store divides, and the light spawns the daughter with half
+     the energy. A cell dies of hunger, or of age when its life is over:
+     both are final states, and the host removes it. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="cell" initial="alive">
+  <datamodel>
+    <data id="energy" expr="20"/>
+    <data id="age" expr="0"/>
+    <data id="life" expr="60"/>
+    <data id="first" expr="'1s'"/>
+    <data id="neighbour" expr="0"/>
+  </datamodel>
+  <state id="alive" initial="hungry">
+    <onentry>
+      <send event="tick" delayexpr="first"/>
+    </onentry>
+    <transition event="tick" cond="energy &lt;= 1" target="starved"/>
+    <transition event="tick" cond="age + 1 &gt;= life" target="aged"/>
+    <transition event="tick" type="internal">
+      <assign location="energy" expr="energy - 1"/>
+      <assign location="age" expr="age + 1"/>
+      <send event="tick" delay="1s"/>
+    </transition>
+    <transition event="feed" type="internal">
+      <assign location="energy" expr="energy + _event.data.food"/>
+      <assign location="neighbour" expr="_event.data.neighbour"/>
+    </transition>
+    <transition event="gift" type="internal">
+      <assign location="energy" expr="energy + _event.data.energy"/>
+    </transition>
+    <!-- A neighbour that has died: the gift is lost. -->
+    <transition event="error.communication" type="internal"/>
+
+    <state id="hungry">
+      <transition cond="energy &gt;= 30" target="thriving"/>
+    </state>
+    <state id="thriving">
+      <transition cond="energy &gt;= 40" target="dividing"/>
+      <transition cond="energy &lt; 30" target="hungry"/>
+      <!-- Fed while it has energy to spare: it gives a fifth of the meal on. -->
+      <transition event="feed" cond="_event.data.neighbour !== 0" type="internal">
+        <assign location="energy" expr="energy + _event.data.food - Math.ceil(_event.data.food / 5)"/>
+        <assign location="neighbour" expr="_event.data.neighbour"/>
+        <send event="gift" targetexpr="'#_scxml_' + neighbour">
+          <param name="energy" expr="Math.ceil(_event.data.food / 5)"/>
+        </send>
+      </transition>
+    </state>
+    <state id="dividing">
+      <onentry>
+        <send type="urn:lab" event="divide">
+          <param name="energy" expr="Math.floor(energy / 2)"/>
+        </send>
+        <assign location="energy" expr="energy - Math.floor(energy / 2)"/>
+      </onentry>
+      <transition target="hungry"/>
+    </state>
+  </state>
+  <final id="starved">
+    <donedata><content expr="'starved'"/></donedata>
+  </final>
+  <final id="aged">
+    <donedata><content expr="'aged'"/></donedata>
+  </final>
+</scxml>

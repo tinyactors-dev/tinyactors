@@ -221,7 +221,7 @@ ta-tabs { display: block; }
 .cost__limit { stroke: var(--fg-3); stroke-width: 1px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 .cost__limit-label { position: absolute; left: 0; transform: translateY(-110%); font: 400 11px/1 var(--font-mono); color: var(--fg-3); background: var(--bg-app); padding-right: 4px; }
 .cost__limit-label[hidden] { display: none; }
-.lab__scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
+.lab__scenarios { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
 .lab__scenario { display: grid; gap: var(--space-1); align-content: start; min-height: 88px; padding: var(--space-3) var(--space-4); text-align: left; font: inherit; color: var(--fg-2); background: var(--surface-1); border: 1px solid var(--border-1); border-radius: var(--radius-2); cursor: pointer; }
 .lab__scenario:hover { border-color: var(--border-2); }
 .lab__scenario:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

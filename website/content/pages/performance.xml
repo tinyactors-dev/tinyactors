@@ -15,12 +15,12 @@
 
   <section id="lab">
     <heading>Measure it on your device.</heading>
-    <p>Pick a scenario and how its population moves, and one host runs it in a Worker on this page.</p>
+    <p>Pick a scenario and a population, and one host runs it in a Worker on this page.</p>
     <playground src="../../examples/lab/page.mjs">
-      <description>A host on this device runs up to four million actors whose number follows a pattern over time: steady, a ramp, waves or bursts. They wait, get events, message each other, sleep in a store or hold timers. Charts follow the actors alive, spawns and ends, messages a second, time per message and memory over the whole run.</description>
+      <description>A host on this device runs a colony of cells that eat, give food to neighbours, divide and die, or a fixed population of up to four million actors that wait, get events, message each other, sleep in a store or hold timers. Charts follow the actors alive, births and deaths, events a second, time per event and memory over the whole run.</description>
     </playground>
-    <p>Every counter in the lab runs this chart: it waits for <code>add</code> and counts.</p>
-    <code src="../../examples/lab/counter.scxml" language="scxml" file="counter.scxml"/>
+    <p>Every cell in the colony runs this chart, and dies in one of its two final states.</p>
+    <code src="../../examples/lab/cell.scxml" language="scxml" file="cell.scxml"/>
   </section>
 
   <section id="actors">
