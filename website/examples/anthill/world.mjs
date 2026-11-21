@@ -350,7 +350,7 @@ export async function createColony(tinyactors, { charts, population, colony, see
       messages,
       colony: { workers, brood, out, stored, deaths, born },
       fights,
-      food: Array.from({ length: foods }, (_, i) => [foodX[i], foodY[i], foodLeft[i]]),
+      food: Array.from({ length: foods }, (_, i) => [foodX[i], foodY[i], foodLeft[i], AMOUNT]), // x, y, what is left, what it held
     };
   }
 

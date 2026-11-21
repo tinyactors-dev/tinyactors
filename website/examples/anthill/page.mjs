@@ -16,6 +16,7 @@ const RESTS = [5, 10, 30, 60, 120, 300];
 const REST = 3; // a minute
 const duration = (seconds) => (seconds < 60 ? `${seconds} s` : `${seconds / 60} min`);
 const number = new Intl.NumberFormat('en');
+const FOOD_RADIUS = 12; // a full source, in field units
 const megabytes = (bytes) => `${number.format(Math.round(bytes / 1048576))} MB`;
 
 export async function mount(root) {
@@ -297,16 +298,20 @@ export async function mount(root) {
     paint.setTransform(1, 0, 0, 1, 0, 0);
     paint.clearRect(0, 0, WIDTH, HEIGHT);
     paint.setTransform(view.scale, 0, 0, view.scale, -view.left * view.scale, -view.top * view.scale);
-    for (const [x, y, left] of state?.stats?.food ?? []) {
+    // A source's area is what is left of it, a hill's its colony against
+    // the colony's room: both shrink as they empty.
+    for (const [x, y, left, held] of state?.stats?.food ?? []) {
       if (left <= 0) continue;
       paint.fillStyle = colors.food;
-      paint.beginPath(); paint.arc(x, y, 3 + Math.min(9, Math.sqrt(left) / 6), 0, Math.PI * 2); paint.fill();
+      paint.beginPath(); paint.arc(x, y, Math.max(1.5, FOOD_RADIUS * Math.sqrt(left / held)), 0, Math.PI * 2); paint.fill();
     }
     HILLS.forEach((hill, i) => {
+      const colony = state?.stats?.colonies[i];
+      const share = colony && state.ready ? Math.min(1, (colony.workers + colony.brood) / (state.population / 2)) : 1;
       paint.fillStyle = colors.hill[i];
       paint.strokeStyle = colors.ink;
       paint.lineWidth = 1.5 / view.scale;
-      paint.beginPath(); paint.arc(hill.x, hill.y, HILL_RADIUS, 0, Math.PI * 2); paint.fill(); paint.stroke();
+      paint.beginPath(); paint.arc(hill.x, hill.y, Math.max(4, HILL_RADIUS * Math.sqrt(share)), 0, Math.PI * 2); paint.fill(); paint.stroke();
     });
   }
   requestAnimationFrame(draw);
