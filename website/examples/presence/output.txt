@@ -7,17 +7,17 @@ after 30 s: 4 countries have a trail, the food went from 120 to 88
   ants 3 and 2 touch antennae
   tab of ant 2 reads: an ant from US greets you
 ant 1 is tapped to greet ant 2:
-  ant 2 eats a bite of pile 3
-  ant 3 eats a bite of pile 5
   ants 1 and 2 touch antennae
   tab of ant 2 reads: an ant from EE greets you
-  ant 4 eats a bite of pile 5
-  ant 1 eats a bite of pile 3
+  ant 2 eats a bite of pile 3
+  ant 3 eats a bite of pile 5
+  ant 1 eats a bite of pile 5
+  ant 4 eats a bite of pile 3
   pile 3 is finished
 tab of ant 3 hidden: 1 asleep, hibernated actors: 1
 tab of ant 3 shown: 0 asleep, hibernated actors: 0, roaming again: true
 a reload finds tab-de's ant again: true
   ant 4 walked off
 left: 3 ants
-after two more minutes: 14 bites eaten, 5 piles left, 3 greetings
-messages to the tabs: 4 joins, 3 greetings, 3 greeted lines, 16 bites, 2 sleep changes, 1 leave
+after two more minutes: 16 bites eaten, 5 piles left, 5 greetings
+messages to the tabs: 4 joins, 5 greetings, 5 greeted lines, 18 bites, 2 sleep changes, 1 leave

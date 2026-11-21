@@ -12,7 +12,7 @@ const MAX = 60;                 // ants drawn; this tab's always among them
 const FPS = 30;
 const INK = '#302B28', PINE = '#255E45', HIGHLIGHT = '#D5DCD7'; // the SVG's own colours
 const HIT = 22;                 // px around an ant that a tap reaches
-const VMAX = 70;                // px/s an ant may hurry to catch its trip
+const VMAX = 130;               // px/s an ant may hurry to catch its trip (a greeting's walk is twice a stroll)
 const GREET_GAP = 1.15;         // body lengths between two greeting ants' centres: head to head, antennae crossed
 
 export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/flags/4x3/${cc.toLowerCase()}.svg`, onTap }) {

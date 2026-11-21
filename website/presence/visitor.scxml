@@ -59,7 +59,7 @@
       <state id="approaching">
         <onentry>
           <send type="urn:world" event="approach"><param name="target" expr="target"/></send>
-          <send id="give-up" event="give-up" delay="20s"/>
+          <send id="give-up" event="give-up" delay="45s"/>
         </onentry>
         <onexit><cancel sendid="give-up"/></onexit>
         <transition event="arrive" target="approaching"/>

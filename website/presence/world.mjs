@@ -23,6 +23,7 @@ const DEPOSIT = 0.35, EVAPORATE = 0.96; // per cell crossed; per second
 const FOOD = { sources: 5, amount: 24, bite: 8, spread: 0.12, smell: 0.28, full: 30_000, regrow: 20_000 };
 const BUMP = { reach: 0.03, rest: 30_000 }; // two roaming ants this close greet; then neither does for a while
 const MAX_HOP_TOWARD = 0.18;        // an approach is re-planned each leg
+const HURRY = 2;                    // an ant on its way to greet walks this many times faster
 
 /**
  * The world and its host. `emit(to, message)` sends a message to one tab
@@ -145,7 +146,7 @@ export function createWorld(tinyactors, { chart, clock, random = Math.random, em
     }
     // Stop FACE short of where the other is, at most a leg at a time.
     const step = Math.min(d - FACE, MAX_HOP_TOWARD);
-    trip(ant, x + ((ox - x) / d) * step, y + ((oy - y) / d) * step);
+    trip(ant, x + ((ox - x) / d) * step, y + ((oy - y) / d) * step, { seconds: step / (SPEED * HURRY) });
   }
 
   const tell = (ant, event, data) => due.push([now(), ant.session, event, data]);
