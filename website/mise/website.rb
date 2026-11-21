@@ -88,6 +88,8 @@ module Website
     end
     assets.join('site.css').write([*design, ROOT.join('style/site.css').read].join("\n"))
     FileUtils.cp_r(DESIGN.join('assets/fonts'), assets.join('fonts'))
+    # The content's images (an author's portrait), served at /assets/images/.
+    FileUtils.cp_r(CONTENT.join('images'), assets.join('images')) if CONTENT.join('images').directory?
     {
       'favicon.svg' => 'assets/brand/favicon/favicon.svg',
       'favicon.ico' => 'assets/brand/favicon/favicon.ico',

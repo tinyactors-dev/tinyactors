@@ -296,12 +296,22 @@
             <div class="ta-sheet__body hero__body">
               <h1 id="title" class="hero__headline"><xsl:apply-templates select="s:headline/node()"/></h1>
               <p class="hero__lede"><xsl:apply-templates select="s:lede/node()"/></p>
-              <xsl:apply-templates select="s:install, s:actions"/>
+              <xsl:apply-templates select="s:author, s:install, s:actions"/>
             </div>
           </div>
         </div>
       </div>
     </section>
+  </xsl:template>
+
+  <!-- Who wrote the page: the portrait beside the name, which links to
+       where to find them. The portrait's alt is empty: the name is next
+       to it. -->
+  <xsl:template match="s:author">
+    <p class="hero__author">
+      <img src="{replace(@src, '^\.\./images/', '/assets/images/')}" alt="" width="48" height="48"/>
+      <a href="{@href}">{normalize-space(.)}</a>
+    </p>
   </xsl:template>
 
   <!-- ===================================================== sections -->

@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- An author's portrait is the site's own image, from content/images. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}author' breaks the assertion '(: a portrait from content/images :) -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><hero><headline>T</headline><lede>Lede.</lede><author src="../../elsewhere/me.jpg" href="https://github.com/someone">Someone</author></hero><section id="s"><heading>S</heading><p>Text.</p></section></page>

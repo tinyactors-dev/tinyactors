@@ -6,6 +6,7 @@
   <hero>
     <headline>Model <em>every</em> system as a statechart</headline>
     <lede>I built tinyactors to use statecharts everywhere I write code: Node.js, Bun, Python, a browser and C.</lede>
+    <author src="../images/dhamidi.jpg" href="https://github.com/dhamidi">Dario Hamidi</author>
   </hero>
 
   <section id="statecharts">

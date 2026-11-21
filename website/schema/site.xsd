@@ -176,9 +176,31 @@
       <xs:sequence>
         <xs:element name="headline" type="title"/>
         <xs:element name="lede" type="inline"/>
+        <xs:element ref="author" minOccurs="0"/>
         <xs:element ref="install" minOccurs="0"/>
         <xs:element ref="actions" minOccurs="0"/>
       </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="author">
+    <xs:annotation><xs:documentation>
+      Who wrote a page that speaks in the first person: the name (the
+      element's text), a portrait (`src`, an image under content/images/,
+      served at /assets/images/) and where to find them (`href`, https).
+    </xs:documentation></xs:annotation>
+    <xs:complexType>
+      <xs:simpleContent>
+        <xs:extension base="plain-attribute">
+          <xs:attribute name="src" type="path" use="required"/>
+          <xs:attribute name="href" use="required">
+            <xs:simpleType>
+              <xs:restriction base="xs:string"><xs:pattern value="https://.+"/></xs:restriction>
+            </xs:simpleType>
+          </xs:attribute>
+          <xs:assert test="(: a portrait from content/images :) matches(@src, '^\.\./images/[a-z0-9-]+\.(jpg|png|webp)$')"/>
+        </xs:extension>
+      </xs:simpleContent>
     </xs:complexType>
   </xs:element>
 

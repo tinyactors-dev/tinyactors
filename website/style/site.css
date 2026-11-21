@@ -426,3 +426,9 @@ ta-tabs { display: block; }
   .claims { grid-template-columns: 1fr; }
   p code, li code { white-space: normal; }
 }
+
+/* ---------------------------------------------------- the hero's author */
+
+.hero__author { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-5); font: var(--type-body); }
+.hero__author img { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border-2); }
+.hero__author a { color: var(--fg-1); }
