@@ -174,13 +174,16 @@ As of 2026-11-21:
   - Three Chromium tabs against a local server join, greet (the greeted
     tab reads "An ant from Estonia greets you."), and switch off, with no
     console errors.
-- **Pending:** the DNS record `ants.www.tinyactors.dev`. The 1Password
-  Cloudflare token deploys Workers but cannot edit DNS. Until the record
-  exists, `content/site.xml` points the page at `wss://ta-presence.exe.xyz`.
-  Once it does:
-  1. `domain add ta-presence ants.www.tinyactors.dev` on exe;
-  2. change `server` in `content/site.xml`;
-  3. deploy.
+- **Live** on www.tinyactors.dev since 2026-11-21: the Worker issues
+  tickets, and two Chromium tabs on the live site joined and greeted
+  ("An ant from United States greets you.") with no console errors.
+- **Pending: the domain.** The CNAME `ants.www.tinyactors.dev` →
+  `ta-presence.exe.xyz` exists, DNS only, but exe answers it with 421
+  until `ssh exe.dev domain add ta-presence ants.www.tinyactors.dev`. The
+  API key in 1Password may not run `domain`. Until then
+  `content/site.xml` points the page at `wss://ta-presence.exe.xyz`. Then:
+  1. change `server` in `content/site.xml`;
+  2. deploy.
 - **Order of a first deploy:** `mise run deploy` (the Worker answers 503
   for tickets until it has a key, and the page backs off), then `mise run
   presence:key`.
