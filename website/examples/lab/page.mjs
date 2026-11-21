@@ -107,7 +107,7 @@ export function mount(root) {
       memory: data.memory, store: stats.storeBytes,
     });
     const used = data.memory !== null && current.base !== null ? data.memory - current.base : null;
-    if (stats.actors > 0 && (current.peak === null || stats.actors > current.peak.actors)) current.peak = { actors: stats.actors, used };
+    if (stats.actors > 0 && (current.peak === null || stats.actors > current.peak.actors)) current.peak = { actors: stats.actors, used, of: stats.peak };
     if (data.perMessage !== null && (current.best === null || data.messages > current.best.messages)) current.best = data;
     status.textContent = `${number.format(stats.actors)} actors alive. ${number.format(stats.spawned)} spawned and ${number.format(stats.ended)} ended in ${data.second} s`
       + (current.scenario === 'idle' ? '.' : `; ${number.format(stats.messages)} ${current.scenario === 'timers' ? 'timers fired' : 'messages'}.`);
@@ -118,7 +118,11 @@ export function mount(root) {
   function summary({ peak, best, datamodel: model, scenario: kind }) {
     if (!peak) return '';
     const parts = [];
-    const each = peak.used !== null ? ` in ${megabytes(peak.used)}, ${number.format(Math.round(peak.used / peak.actors))} B each` : '';
+    // Bytes each only at the peak: the host reserves its records for the
+    // whole peak up front, which fewer actors would make look larger.
+    const each = peak.used === null ? '' : peak.actors === peak.of
+      ? ` in ${megabytes(peak.used)}, ${number.format(Math.round(peak.used / peak.actors))} B each`
+      : ` in ${megabytes(peak.used)}, reserved for ${number.format(peak.of)}`;
     parts.push(`Most at once: ${number.format(peak.actors)} actors${each}.`);
     if (best) parts.push(`Best second: ${count(best.messages)} ${kind === 'timers' ? 'timers fired' : 'messages'}, ${micro(best.perMessage)} each.`);
     parts.push('WebAssembly memory keeps its peak when actors end.');
