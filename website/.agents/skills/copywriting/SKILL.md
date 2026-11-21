@@ -107,6 +107,16 @@ Each has examples in `references/patterns.md`.
     the page measures what its label says, at every setting the reader
     can choose.
 
+20. **A solution without its problem.** A sentence names the mechanism
+    ("A user at rest is saved to a store and woken by its next event")
+    or a topic ("Who is in which room") and goes straight to how
+    tinyactors handles it. The reader cannot weigh an answer to a
+    problem they were never shown. State the problem first, in the
+    reader's terms, then the answer: "Most users sit idle, but their
+    state must survive until they return. A user at rest is saved to a
+    store…". The maintainer has flagged this more than once: check every
+    list item and card that describes a feature for its problem.
+
 ## How a page is ordered
 
 - **A demo page** leads with the experience: the hero invites the reader

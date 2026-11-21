@@ -93,6 +93,16 @@ In a guide, a sentence that only joins two blocks ("This one reads the
 spans back.") still says what the block shows, and a section's last
 sentence says what the reader now has, not what comes next.
 
+## Problems before solutions
+
+A feature is worth reading about only after its problem (failure 20).
+
+| Before | After | Why |
+|---|---|---|
+| People who go idle: a user at rest is saved to a store and woken by its next event, so a thousand users run with fifty in memory. | People who go idle: most users sit idle, but their state must survive until they return. A user at rest is saved to a store… | 20: the mechanism and the result, without the problem they solve |
+| Who is in which room: each room is an actor that keeps its members and handles one join or post at a time. | Who is in which room: joins and posts arrive at the same time, and the member list must stay right. Each room is an actor… | 20: a topic in place of the problem |
+| Who is online: a timer turns an active user away after 300 seconds. | Who is online: a user who goes quiet must turn away, though no event says so. Each user's chart… | 20: why a timer is needed is the problem |
+
 ## Sentences before code
 
 The sentence says what the block shows, so a reader who skips the code

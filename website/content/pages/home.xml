@@ -69,13 +69,12 @@
 
   <section id="build">
     <heading>Build a team chat</heading>
-    <p>Five steps, each a program you can run, take one room to a thousand users.</p>
-    <list ordered="true">
-      <item><term><link to="chat" section="room">A room</link></term><text>One actor, and a handler for the screens.</text></item>
-      <item><term><link to="chat" section="presence">Presence</link></term><text>Each user is offline, active or away.</text></item>
-      <item><term><link to="chat" section="workspace">A workspace</link></term><text>One actor decides which rooms exist.</text></item>
-      <item><term><link to="chat" section="roster">A roster</link></term><text>Everyone sees who is online.</text></item>
-      <item><term><link to="chat" section="hibernation">Hibernation</link></term><text>A thousand users, fifty in memory.</text></item>
+    <p>A chat's hard part is its state: who is in which room, and who is online as people come and go.</p>
+    <p>In the tutorial's five steps, each part of that state lives in an actor:</p>
+    <list>
+      <item><term><link to="chat" section="room">Who is in which room</link></term><text>Joins and posts arrive at the same time, and the member list must stay right. Each room is an actor that keeps its members and handles one join or post at a time, in the order they arrive.</text></item>
+      <item><term><link to="chat" section="presence">Who is online</link></term><text>A user who goes quiet must turn away, though no event says so. Each user's chart is offline, active or away, and a timer turns an active user away after 300 seconds without activity.</text></item>
+      <item><term><link to="chat" section="hibernation">People who go idle</link></term><text>Most users sit idle, but their state must survive until they return. A user at rest is saved to a store and woken by its next event, so a thousand users run with fifty in memory.</text></item>
     </list>
   </section>
 
