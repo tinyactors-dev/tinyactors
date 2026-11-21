@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="home" path="/">
   <title>tinyactors: like SQLite, but for actors</title>
-  <description>tinyactors runs every order and every user session as its own statechart inside your process, and tests each one over thousands of simulated runs.</description>
+  <description>tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C: composable state machines that describe a reactive system formally.</description>
 
   <hero>
     <headline>Like SQLite, but for <em>actors</em></headline>
-    <lede>tinyactors runs each order or user session as its own small state machine, a few hundred bytes, inside your program.</lede>
+    <lede>tinyactors runs millions of statecharts inside your program, in Node.js, Python, a browser or C. A statechart is a composable state machine that describes a reactive system formally and is easy to verify.</lede>
     <install>
       <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
       <command for="Python" guide="https://github.com/tinyactors-dev/tinyactors-cpython#readme">pip install tinyactors</command>
@@ -19,8 +19,8 @@
 
   <section id="actors">
     <heading>Write each actor's behavior as one chart</heading>
-    <p>Each of those state machines is an actor: it keeps its own data and handles one event at a time.</p>
-    <p>Its behavior is a statechart, written in the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link>, so a chart means the same in every runtime.</p>
+    <p>Each statechart runs as an actor: it keeps its own data and handles one event at a time.</p>
+    <p>Charts are written in the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link>, so a chart means the same in every runtime.</p>
     <p>This payment charges a card and retries every 30 seconds until it is paid or has charged three times:</p>
     <code src="../../examples/simulate/payment.scxml" lines="4-15" language="scxml" file="payment.scxml"/>
   </section>
