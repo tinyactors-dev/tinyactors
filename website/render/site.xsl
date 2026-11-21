@@ -157,6 +157,7 @@
         <nav class="site-nav" aria-label="Site">
           <xsl:call-template name="nav-links">
             <xsl:with-param name="current" select="$current"/>
+            <xsl:with-param name="menu" select="false()"/>
           </xsl:call-template>
         </nav>
         <!-- On a phone the links do not fit beside the wordmark: they open
@@ -174,16 +175,55 @@
     </header>
   </xsl:template>
 
+  <!-- The navigation. The header's row (menu false) shows a group as one
+       link, its label to its first page; the menu shows it as a
+       disclosure that opens to the group's links in place, open already
+       on one of its pages. -->
   <xsl:template name="nav-links">
     <xsl:param name="current" as="element(s:page)"/>
-    <xsl:for-each select="$site/s:nav/s:link">
-      <a href="{f:href(.)}">
-        <xsl:if test="@to = $current/@id">
-          <xsl:attribute name="aria-current">page</xsl:attribute>
-        </xsl:if>
-        <xsl:apply-templates select="." mode="text"/>
-      </a>
+    <xsl:param name="menu" as="xs:boolean" select="true()"/>
+    <xsl:for-each select="$site/s:nav/*">
+      <xsl:choose>
+        <xsl:when test="self::s:link">
+          <xsl:call-template name="nav-link">
+            <xsl:with-param name="current" select="$current"/>
+          </xsl:call-template>
+        </xsl:when>
+        <xsl:when test="not($menu)">
+          <a href="{f:href(s:link[1])}">
+            <xsl:if test="s:link/@to = $current/@id">
+              <xsl:attribute name="aria-current">page</xsl:attribute>
+            </xsl:if>
+            {normalize-space(@label)}
+          </a>
+        </xsl:when>
+        <xsl:otherwise>
+          <details class="nav-group">
+            <xsl:if test="s:link/@to = $current/@id">
+              <xsl:attribute name="open" select="'open'"/>
+            </xsl:if>
+            <summary>{normalize-space(@label)}</summary>
+            <div class="nav-group__links">
+              <xsl:for-each select="s:link">
+                <xsl:call-template name="nav-link">
+                  <xsl:with-param name="current" select="$current"/>
+                </xsl:call-template>
+              </xsl:for-each>
+            </div>
+          </details>
+        </xsl:otherwise>
+      </xsl:choose>
     </xsl:for-each>
+  </xsl:template>
+
+  <xsl:template name="nav-link">
+    <xsl:param name="current" as="element(s:page)"/>
+    <a href="{f:href(.)}">
+      <xsl:if test="@to = $current/@id">
+        <xsl:attribute name="aria-current">page</xsl:attribute>
+      </xsl:if>
+      <xsl:apply-templates select="." mode="text"/>
+    </a>
   </xsl:template>
 
   <!-- Presence (docs/presence.md): the ant button, which opens the site's

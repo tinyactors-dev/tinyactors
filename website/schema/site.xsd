@@ -31,7 +31,7 @@
       <xs:sequence>
         <xs:element name="name" type="plain"/>
         <xs:element name="tagline" type="plain"/>
-        <xs:element name="nav" type="links"/>
+        <xs:element name="nav" type="navigation"/>
         <xs:element name="pages">
           <xs:complexType>
             <xs:sequence>
@@ -103,6 +103,31 @@
       <xs:field xpath="@src"/>
     </xs:unique>
   </xs:element>
+
+  <xs:complexType name="navigation">
+    <xs:annotation><xs:documentation>
+      The site's navigation, in order: links, and groups of links. The
+      header's row shows each link and each group's `label`; the site's
+      menu shows a group as its label, which opens to the group's links in
+      place.
+    </xs:documentation></xs:annotation>
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="link" type="link"/>
+      <xs:element name="group">
+        <xs:annotation><xs:documentation>
+          Pages that belong together, such as the guides: the first link
+          is the group's own page (the index), which the header's row links
+          the label to; the rest are the pages under it.
+        </xs:documentation></xs:annotation>
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="link" type="link" minOccurs="2" maxOccurs="unbounded"/>
+          </xs:sequence>
+          <xs:attribute name="label" type="plain-attribute" use="required"/>
+        </xs:complexType>
+      </xs:element>
+    </xs:choice>
+  </xs:complexType>
 
   <xs:complexType name="links">
     <xs:sequence>

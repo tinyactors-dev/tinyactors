@@ -9,7 +9,23 @@
     <link to="telemetry">Telemetry</link>
     <link to="performance">Performance</link>
     <link to="anthill">Anthill</link>
-    <link to="guides">Guides</link>
+    <group label="Guides">
+      <link to="guides">All guides</link>
+      <link to="guide-charts">Writing charts</link>
+      <link to="guide-testing">Testing your charts</link>
+      <link to="guide-quickjs">The quickjs sandbox</link>
+      <link to="guide-io-processors">I/O processors</link>
+      <link to="guide-services">Invoked services</link>
+      <link to="guide-other-systems">Other systems</link>
+      <link to="guide-missing-actors">When the actor is not there</link>
+      <link to="guide-capacity">Capacity and memory</link>
+      <link to="guide-hibernation">Hibernation</link>
+      <link to="guide-migration">Migration</link>
+      <link to="guide-snapshots">Snapshots</link>
+      <link to="guide-inspection">Inspecting a host</link>
+      <link to="guide-telemetry">Telemetry</link>
+      <link to="guide-browser">In the browser</link>
+    </group>
     <link href="https://github.com/tinyactors-dev/tinyactors">GitHub</link>
   </nav>
 

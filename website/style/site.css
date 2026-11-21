@@ -89,6 +89,26 @@ img, picture { display: block; }
   border-radius: var(--radius-3); box-shadow: var(--shadow-pop);
 }
 .presence__menu::backdrop { background: transparent; }
+.presence__menu { max-height: calc(100dvh - 2 * var(--space-5) - 64px); overflow-y: auto; overscroll-behavior: contain; }
+
+/* A group of the navigation in a menu (the guides): its label opens to
+   its links in place, indented under it. */
+.nav-group > summary {
+  list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+  padding: var(--space-3) var(--space-4); color: var(--fg-2);
+}
+.nav-group > summary::-webkit-details-marker { display: none; }
+.nav-group > summary::after {
+  content: ""; width: 7px; height: 7px; margin: -3px 2px 0 var(--space-3);
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg);
+}
+.nav-group[open] > summary { color: var(--fg-1); }
+.nav-group[open] > summary::after { transform: rotate(-135deg); margin-top: 4px; }
+.nav-group > summary:hover { color: var(--fg-1); background: var(--surface-2); }
+.nav-group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.nav-group__links { display: flex; flex-direction: column; padding-bottom: var(--space-2); }
+.nav-group__links a { padding: var(--space-2) var(--space-4) var(--space-2) var(--space-8); font-size: var(--fs-14); }
+.site-menu__links { max-height: calc(100dvh - var(--header-row) - 1px); overflow-y: auto; }
 .presence__links { display: flex; flex-direction: column; font: var(--fw-medium) var(--fs-16)/1.2 var(--font-sans); }
 .presence__links a { padding: var(--space-3) var(--space-4); color: var(--fg-2); text-decoration: none; }
 .presence__links a:hover { color: var(--fg-1); background: var(--surface-2); }

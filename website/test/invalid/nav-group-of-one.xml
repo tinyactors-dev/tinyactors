@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A group in the navigation is its page and the pages under it: two links at least. expect: cvc-complex-type.2.4 -->
+<site xmlns="https://www.tinyactors.dev/ns/site" origin="https://www.tinyactors.dev"><name>t</name><tagline>T.</tagline><nav><group label="Guides"><link to="guides">All guides</link></group></nav><pages><page src="pages/t.xml"/></pages><footer><links><link href="https://example.com">E</link></links></footer></site>
