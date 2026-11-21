@@ -1,26 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-other-systems" path="/guides/other-systems/">
   <title>Other systems</title>
-  <description>Send events between hosts in one process or many: a transport you write carries each send as a message, and the other host takes it.</description>
+  <description>Send events to actors in other processes and machines: a function you write carries each message, and the other host takes it unchanged.</description>
   <hero>
-    <headline>Connect hosts over any wire.</headline>
-    <lede>An actor sends to an actor of another host by its address. Your transport carries the message, over a socket, a queue, HTTP or <code>postMessage</code>.</lede>
+    <headline>Send events to actors in other processes.</headline>
+    <lede>An actor sends to an actor on another machine by its address. A function you write carries the message, and the other side's host takes it unchanged, a Python host included.</lede>
   </hero>
 
   <section id="systems">
-    <heading>A send to another system reaches your transport.</heading>
-    <p>A host is one system, named by its <code>system</code> option. An actor can send to an actor of another system, in this process or on another machine, by its address.</p>
-    <p>The address is <code>tinyactors://&lt;system&gt;/...</code>, and the host decides whether an address is its own.</p>
-    <p>A send to another system goes to your transport, a handler that carries it there. The other side gives it to its host with <code>host.send</code>.</p>
-    <p>The transport and the wire are yours. An application of one host needs none of this page (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#wire-format">Wire format</link>).</p>
+    <heading>Give each host a system name.</heading>
+    <p>The <code>system</code> option names a host's system, and every address starts with it: <code>tinyactors://&lt;system&gt;/...</code>. Actors of one system reach actors of another, in this process or on another machine, by address.</p>
+    <p>The host delivers a send to its own system's address itself. A send to any other system goes to your <code>transport</code> option, a handler that carries it there.</p>
+    <p>You choose the wire and its encoding. The other side gives each message to its host with <code>host.send</code> (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#wire-format">Wire format</link>).</p>
+  </section>
+
+  <section id="address-targets">
+    <heading>Send to an actor by its address.</heading>
+    <p><code>actor.address</code> gives an actor's address, and <code>host.actor(address)</code> finds the actor a local address names.</p>
+    <p><code>host.send</code> takes an <code>Actor</code>, a session, an address string or an <code>Address</code>. On the host named <code>shop</code>, <code>tinyactors://shop/@teller</code> reaches the actor spawned with the name <code>teller</code>.</p>
+    <p>A message's <code>origin</code> is the sender's address as the other side gave it. The receiving actor reads it as <code>_event.origin</code>.</p>
   </section>
 
   <section id="two-systems">
-    <heading>A message carries a send between hosts.</heading>
-    <p>Each send to another system reaches the <code>transport</code> handler as a <code>Send</code>, whose <code>target</code> and <code>origin</code> are <code>Address</code>es.</p>
-    <p>Its <code>message</code> is the outgoing half: <code>target</code>, <code>event</code>, <code>data</code>, <code>sendid</code>, <code>origin</code> and <code>traceparent</code>, <code>null</code> for a field the send lacks.</p>
-    <p>The receiving side passes it to <code>host.send(message)</code> as it is, in this process or in another binding's. A Python host takes it too.</p>
-    <p>On a wire, <code>encode</code> writes the message with its addresses as CBOR's tag 32, as a Python host's <code>encode</code> does. <code>decode</code> reads them back as <code>Address</code>es.</p>
+    <heading>Carry each send to the other host.</heading>
+    <p>The <code>transport</code> handler gets each send to another system as a <code>Send</code>. The other side passes its <code>send.message</code> to <code>host.send(message)</code> as it is.</p>
+    <list>
+      <item><term><code>send.message</code></term><text>The outgoing half: <code>target</code>, <code>event</code>, <code>data</code>, <code>sendid</code>, <code>origin</code> and <code>traceparent</code>, <code>null</code> for a field the send lacks. A Python host's <code>host.send</code> takes it too.</text></item>
+      <item><term><code>send.target</code>, <code>send.origin</code></term><text>The receiver's and the sender's addresses, as <code>Address</code> values.</text></item>
+      <item><term><code>encode</code>, <code>decode</code></term><text>Write the message as CBOR, its addresses as CBOR's tag 32, as a Python host's <code>encode</code> does, and read them back as <code>Address</code> values.</text></item>
+    </list>
+    <p>Here two hosts in one process pass encoded messages through a timer. The shop's checkout asks the bank's teller for a charge, and the teller approves it.</p>
     <example>
       <code language="javascript" file="two-systems.mjs"><![CDATA[
 import { Address, compileCharts, decode, encode, Host } from '@tinyactors/node';
@@ -81,28 +90,15 @@ charging 12 for tinyactors://shop/#_scxml_1
 approved by tinyactors://bank/#_scxml_1
 </code>
     </example>
-    <p>The teller answers to <code>_event.origin</code>, the sender's full address, so the answer goes back through the bank's transport.</p>
-  </section>
-
-  <section id="failed-delivery">
-    <heading>The transport reports what it cannot deliver.</heading>
-    <p>While the handler runs, <code>send.fail()</code> reports a send that cannot be delivered. Later, on the sending host, <code>host.fail(sender, sendid)</code> does.</p>
-    <p>There <code>sender</code> is the message's <code>origin</code>, the actor that sent it, not its target. The sender gets <code>error.communication</code> with that <code>sendid</code>.</p>
-    <p>Delivery that worked needs no answer. Without a <code>transport</code> handler, each send to another system is failed.</p>
-  </section>
-
-  <section id="address-targets">
-    <heading>An input's target may be an address.</heading>
-    <p>An actor's address is <code>actor.address</code>, and <code>host.actor(address)</code> finds the actor of a local one.</p>
-    <p><code>host.send</code> takes an <code>Actor</code>, a session, an address string or an <code>Address</code>. The host resolves a local address, <code>tinyactors://shop/@teller</code> on the host named <code>shop</code>, to its actor.</p>
-    <p>A message's <code>origin</code> is the sender's address as the other side gave it, and becomes the event's <code>_event.origin</code>.</p>
+    <p>The teller answers to <code>_event.origin</code>, the checkout's full address, so the approval goes back through the bank's transport.</p>
   </section>
 
   <section id="over-a-socket">
-    <heading>Turn off Nagle's algorithm on sockets.</heading>
-    <p>Across processes, a transport writes each message as a frame on a connection. Here a frame is four bytes of length and the message's CBOR.</p>
-    <p>Over TCP, call <code>socket.setNoDelay(true)</code> on both ends. The frames are small, and an answer is often a frame too.</p>
-    <p>With Nagle's algorithm on, Node.js's default, a second small write waits for the peer's delayed acknowledgement before it leaves. That wait is about 40 ms on Linux's loopback, and Python's asyncio turns the algorithm off by itself.</p>
+    <heading>Connect two processes over TCP.</heading>
+    <p>Between processes, the transport writes each message as a frame on a connection: four bytes of length, then the message's CBOR.</p>
+    <p>Call <code>socket.setNoDelay(true)</code> on both ends. Node.js turns on Nagle's algorithm by default, which holds a second small write until the peer acknowledges the first.</p>
+    <p>That wait is about 40 ms on Linux's loopback, and an answer is often a second small frame. Python's asyncio turns the algorithm off by itself.</p>
+    <p>In this program the bank listens on a port and the shop connects. The charge and the approval cross the connection as one frame each.</p>
     <example>
       <code language="javascript" file="socket.mjs"><![CDATA[
 import { connect, createServer } from 'node:net';
@@ -174,13 +170,19 @@ approved
 order 1n ended
 </code>
     </example>
-    <p>The transport reports a frame it cannot write, or a peer that is gone. It calls <code>send.fail()</code> while its handler runs, <code>host.fail(origin, sendid)</code> after.</p>
+  </section>
+
+  <section id="failed-delivery">
+    <heading>Tell the sender when delivery fails.</heading>
+    <p>When the transport cannot write a frame, or the peer is gone, it calls <code>send.fail()</code> while its handler runs. After the handler has returned, call <code>host.fail(sender, sendid)</code> on the sending host.</p>
+    <p>There <code>sender</code> is the message's <code>origin</code>, the actor that sent it, not the target it was for. That actor gets <code>error.communication</code> with that <code>sendid</code>.</p>
+    <p>Only a failure needs a call: a delivered send needs nothing more. A host without a <code>transport</code> handler fails every send to another system.</p>
   </section>
 
   <section id="addresses">
     <heading>Read an address into its parts.</heading>
     <p><code>new Address(text)</code> reads an address into its <code>system</code>, <code>session</code> (a <code>bigint</code>) and <code>name</code>, each <code>undefined</code> when the text lacks it.</p>
-    <p><code>Address.fromSession(system, session)</code> and <code>Address.fromName(system, name)</code> make one, and <code>toString()</code> gives its text.</p>
+    <p><code>Address.fromSession(system, session)</code> and <code>Address.fromName(system, name)</code> make one, and <code>toString()</code> gives its text. This program makes both kinds and reads text that is no address.</p>
     <example>
       <code language="javascript" file="address.mjs"><![CDATA[
 import { Address } from '@tinyactors/node';
@@ -200,8 +202,8 @@ undefined
   </section>
 
   <section id="json">
-    <heading>A message goes through JSON as it is.</heading>
-    <p><code>JSON.stringify</code> writes an address as its text (<code>address.toJSON()</code>), and <code>new Address(text)</code> reads it back. So the other side's <code>host.send</code> takes a <code>send.message</code> that went through JSON.</p>
+    <heading>Write messages as JSON.</heading>
+    <p><code>JSON.stringify</code> writes each address of a <code>send.message</code> as its text (<code>address.toJSON()</code>). The other side's <code>host.send</code> takes the parsed message, its addresses as strings, and <code>new Address(text)</code> reads one back.</p>
     <example>
       <code language="javascript" file="json.mjs"><![CDATA[
 import { Address, compileCharts, Host } from '@tinyactors/node';
@@ -240,8 +242,8 @@ charge 12 from tinyactors://shop/#_scxml_1
   </section>
 
   <section id="scxmls-basichttp">
-    <heading>Encode and parse SCXML's BasicHTTP.</heading>
-    <p>SCXML defines BasicHTTP, an HTTP processor whose events travel as form posts. The package has its codec, for an I/O processor or a server of your own.</p>
+    <heading>Read and write BasicHTTP requests.</heading>
+    <p>SCXML defines BasicHTTP, a way to send events as HTTP form posts. The package writes and reads those requests, for an I/O processor or a server of your own.</p>
     <list>
       <item><term><code>encodeHTTPPost({ url, event, fields, body })</code></term><text>Writes the request a send makes, as bytes for a socket.</text></item>
       <item><term><code>parseHTTPRequest(bytes)</code></term><text>Reads an incoming request's form fields and its event: the <code>_scxmleventname</code> field, or <code>HTTP.&lt;METHOD&gt;</code>.</text></item>
@@ -267,6 +269,6 @@ POST /scxml order.placed
 sku=tea qty=2
 </code>
     </example>
-    <p>The host does no HTTP itself: your program sends the bytes and serves the port.</p>
+    <p>The host hands each send to your I/O processor, and your program writes the bytes and serves the port.</p>
   </section>
 </page>
