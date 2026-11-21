@@ -1,8 +1,10 @@
 // One lab in a dedicated Worker: its host runs here, the page only charts.
-// It fills the host, then runs the scenario's work as fast as it goes, and
-// reports once a second: the actors, the rate and the time per spawn or
-// message, and the size of tinyactors's WebAssembly memory. The page ends
-// a lab by terminating its Worker, whose memory goes with it.
+// Each turn it brings the population to what its pattern asks for at this
+// second of the run (lab.mjs, adjust), then runs the scenario's work as
+// fast as it goes, and once a second it reports: the actors and their
+// target, spawns and ends, messages and the time per message, and the
+// size of tinyactors's WebAssembly memory. The page ends a lab by
+// terminating its Worker, whose memory goes with it.
 //
 // A module Worker has no import map, so it imports the package by the path
 // the website serves it at, inside start(): the package loads its
@@ -32,56 +34,46 @@ function watchMemory() {
 }
 const bytes = () => memory?.buffer.byteLength ?? null;
 
-async function start({ scenario, actors, datamodel }) {
+async function start({ scenario, actors, datamodel, pattern }) {
   watchMemory();
-  const [tinyactors, { createLab }] = await Promise.all([import('/vendor/tinyactors-wasm/index.mjs'), import('./lab.mjs')]);
+  const [tinyactors, { createLab, target }] = await Promise.all([import('/vendor/tinyactors-wasm/index.mjs'), import('./lab.mjs')]);
   const charts = { counter: await text('counter'), player: await text('player'), timer: await text('timer') };
   const base = bytes(); // the module before any host
   const lab = createLab(tinyactors, { scenario, actors, datamodel, charts, seed: Math.floor(Math.random() * 2 ** 31) });
-  const empty = bytes(); // and with an empty host, sized for the population
+  postMessage({ ready: true, base });
 
-  // A report a second: the rates over that second.
-  let window = { wall: performance.now(), spawned: 0, messages: 0, wakes: 0, busy: 0, spawnBusy: 0 };
-  let busy = 0, phase = 'fill', spawnBusy = 0;
-  const report = (force = false) => {
-    const now = performance.now();
-    if (!force && now - window.wall < 1000) return;
-    const stats = lab.stats();
-    const seconds = (now - window.wall) / 1000;
-    const spawned = stats.actors - window.spawned, messages = stats.messages - window.messages;
-    postMessage({
-      phase, stats, base, empty, memory: bytes(),
-      spawns: spawned / seconds,
-      perSpawn: spawned > 0 ? ((spawnBusy - window.spawnBusy) * 1000) / spawned : null, // microseconds
-      messages: messages / seconds,
-      perMessage: messages > 0 ? ((busy - window.busy) * 1000) / messages : null,
-      wakes: (stats.wakes - window.wakes) / seconds,
-    });
-    window = { wall: now, spawned: stats.actors, messages: stats.messages, wakes: stats.wakes, busy, spawnBusy };
-  };
-
-  // Filling: the time of each chunk is the host's (spawns and their first steps).
-  let chunkStart = performance.now();
-  await lab.populate(() => {
-    spawnBusy += performance.now() - chunkStart;
-    report();
-    chunkStart = performance.now();
-  });
-  report(true);
-  phase = scenario === 'fill' ? 'holding' : 'working';
-  postMessage({ phase, stats: lab.stats(), base, empty, memory: bytes(), filled: true });
-
-  // Working: units of work for up to 50 ms, then a turn of the Worker's
-  // event loop, so it stays responsive and its reports go out.
+  const began = performance.now();
+  const seconds = () => (performance.now() - began) / 1000;
+  let busy = 0; // milliseconds of work: the host's and the lab's, spawns and ends left out
+  let window = { wall: began, spawned: 0, ended: 0, messages: 0, wakes: 0, busy: 0 };
+  let second = 0;
   for (;;) {
-    const began = performance.now();
-    while (performance.now() - began < 50) {
+    const turn = performance.now();
+    while (performance.now() - turn < 50) {
+      // The population first: as many chunks as it takes, the work between them.
+      if ((await lab.adjust(target(pattern, lab.stats().peak, seconds()))) !== 0) continue;
+      if (scenario === 'idle') break;
       const unit = performance.now();
       await lab.work();
-      if (scenario === 'fill') break;
       busy += performance.now() - unit;
     }
-    report();
-    await new Promise((resolve) => setTimeout(resolve, scenario === 'fill' ? 250 : 0));
+    const now = performance.now();
+    if (now - window.wall >= 1000) {
+      const stats = lab.stats();
+      const elapsed = (now - window.wall) / 1000;
+      const messages = stats.messages - window.messages;
+      second++;
+      postMessage({
+        second, stats, base, memory: bytes(),
+        target: target(pattern, stats.peak, seconds()),
+        spawns: (stats.spawned - window.spawned) / elapsed,
+        ends: (stats.ended - window.ended) / elapsed,
+        messages: messages / elapsed,
+        perMessage: messages > 0 ? ((busy - window.busy) * 1000) / messages : null, // microseconds
+        wakes: (stats.wakes - window.wakes) / elapsed,
+      });
+      window = { wall: now, spawned: stats.spawned, ended: stats.ended, messages: stats.messages, wakes: stats.wakes, busy };
+    }
+    await new Promise((resolve) => setTimeout(resolve, scenario === 'idle' ? 100 : 0));
   }
 }

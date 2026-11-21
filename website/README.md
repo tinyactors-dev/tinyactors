@@ -27,7 +27,7 @@ content and runs the stylesheet. Node.js runs the examples and wrangler.
 | `render/site.xsl` | content to HTML, `sitemap.xml` and `llms.txt`; it stops at a link to a page or section that does not exist |
 | `style/site.css` | the layout, on the design system's tokens |
 | `examples/` | the programs pages show, each run by `mise run test` against its `output.txt`; `examples/property/` also runs in the page (`<live>`), `examples/anthill/` and `examples/lab/` are playgrounds |
-| `components/` | the custom elements and scripts the pages use: `<ta-tabs>` (alternatives, one at a time), `chart.mjs` (a chart's diagram), `highlight.mjs` (syntax highlighting), `<ta-live>` (an example's export run in the browser), `<ta-playground>` (an example's program with controls of its own: the anthill, the lab), `costs.mjs` (the playgrounds' live charts) and `<ta-trace-view>` (a run's spans as a tree on a timeline) |
+| `components/` | the custom elements and scripts the pages use: `<ta-tabs>` (alternatives, one at a time), `chart.mjs` (a chart's diagram), `highlight.mjs` (syntax highlighting), `<ta-live>` (an example's export run in the browser), `<ta-playground>` (an example's program with controls of its own: the anthill, the lab), `costs.mjs` (the anthill's live charts), `timeline.mjs` (the lab's charts of a whole run) and `<ta-trace-view>` (a run's spans as a tree on a timeline) |
 | `package.json` | what the pages load in the browser, vendored by the build into `vendor/`: `@tinyactors/scxmljs` (`<scxml-view>`, with its QuickJS) and highlight.js's browser modules; one import map on every page names them |
 | `test/` | documents the schema must refuse, and a site the build must refuse |
 | `tools/serve.mjs` | the local server |

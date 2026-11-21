@@ -221,17 +221,62 @@ ta-tabs { display: block; }
 .cost__limit { stroke: var(--fg-3); stroke-width: 1px; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
 .cost__limit-label { position: absolute; left: 0; transform: translateY(-110%); font: 400 11px/1 var(--font-mono); color: var(--fg-3); background: var(--bg-app); padding-right: 4px; }
 .cost__limit-label[hidden] { display: none; }
-.lab__controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5); }
-.lab__controls .ta-tabs { flex-wrap: wrap; width: auto; max-width: 100%; overflow: visible; }
+.lab__scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
+.lab__scenario { display: grid; gap: var(--space-1); align-content: start; min-height: 88px; padding: var(--space-3) var(--space-4); text-align: left; font: inherit; color: var(--fg-2); background: var(--surface-1); border: 1px solid var(--border-1); border-radius: var(--radius-2); cursor: pointer; }
+.lab__scenario:hover { border-color: var(--border-2); }
+.lab__scenario:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lab__scenario[aria-checked="true"] { color: var(--fg-1); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.lab__scenario-name { font: var(--type-ui); font-weight: 600; color: var(--fg-1); }
+.lab__scenario-about { font: var(--type-body-sm); }
+.lab__controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-4) var(--space-6); }
+.lab__field { display: grid; gap: var(--space-2); }
+.lab__label { font: var(--type-body-sm); color: var(--fg-2); }
+.lab__choices { flex-wrap: wrap; width: auto; max-width: 100%; }
+.lab__choices .ta-tab { min-height: 44px; height: auto; padding: 0 var(--space-4); }
 .lab__controls .ta-tab[aria-checked="true"] { color: var(--fg-1); background: var(--surface-1); }
-.lab__population { display: flex; align-items: center; gap: var(--space-3); font: var(--type-ui); color: var(--fg-2); }
-.lab__population input { width: 200px; max-width: 50vw; accent-color: var(--accent); }
+.lab__slider { display: flex; align-items: center; gap: var(--space-3); min-height: 44px; }
+.lab__slider input { width: 220px; max-width: 55vw; accent-color: var(--accent); }
 .lab__count { font: var(--type-code); color: var(--fg-1); min-width: 6em; font-variant-numeric: tabular-nums; }
+.lab__run { min-height: 44px; min-width: 96px; justify-content: center; }
 .lab__about { font: var(--type-body-sm); color: var(--fg-2); margin: 0; }
 .lab__status { font: var(--type-code); font-size: var(--fs-12); color: var(--fg-3); font-variant-numeric: tabular-nums; min-height: 1.6em; margin: 0; }
 .lab__found { font: var(--type-body); color: var(--fg-1); font-variant-numeric: tabular-nums; min-height: 1.6em; margin: 0; }
-.lab__costs { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); }
-.lab__costs .cost[hidden] { display: none; }
+/* The timeline: panels on one time axis; a second series is dashed as well as coloured. */
+.lab { --series-2: var(--ochre-600); }
+[data-theme="dark"] .lab { --series-2: var(--ochre-400); }
+.timeline { display: grid; gap: var(--space-4); }
+.timeline__head { min-height: 1.4em; font: var(--type-code); font-size: var(--fs-12); color: var(--fg-2); text-align: right; font-variant-numeric: tabular-nums; }
+.timeline__panel { margin: 0; display: grid; gap: var(--space-2); }
+.timeline__panel[hidden] { display: none; }
+.timeline__legend { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-4); font: var(--type-body-sm); color: var(--fg-2); }
+.timeline__title { color: var(--fg-1); font-weight: 600; margin-right: auto; }
+.timeline__item { display: inline-flex; align-items: baseline; gap: var(--space-2); }
+.timeline__value { font: var(--type-code); font-weight: 600; color: var(--fg-1); font-variant-numeric: tabular-nums; }
+.timeline__key { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--accent); transform: translateY(-3px); }
+.timeline__key--second { border-top: 2px dashed var(--series-2); }
+.timeline__key--reference { border-top: 1px dashed var(--fg-3); }
+.timeline__frame { position: relative; }
+.timeline__plot { display: block; width: 100%; height: 120px; overflow: visible; cursor: crosshair; }
+.timeline__plot:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.timeline__line { stroke-width: 2px; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.timeline__line--first { stroke: var(--accent); }
+.timeline__line--second { stroke: var(--series-2); stroke-dasharray: 6 3; }
+.timeline__reference { stroke: var(--fg-3); stroke-width: 1px; stroke-dasharray: 2 3; vector-effect: non-scaling-stroke; }
+.timeline__base { stroke: var(--border-2); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.timeline__grid { stroke: var(--border-1); stroke-width: 1px; stroke-dasharray: 2 3; vector-effect: non-scaling-stroke; }
+.timeline__cross { stroke: var(--fg-3); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.timeline__scale { position: absolute; top: -4px; right: 0; font: 400 11px/1 var(--font-mono); color: var(--fg-3); background: var(--bg-app); padding-left: 4px; }
+.timeline__axis { position: relative; height: 1.4em; margin-top: calc(-1 * var(--space-2)); font: 400 11px/1 var(--font-mono); color: var(--fg-3); }
+.timeline__tick { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.timeline__tick:first-child { transform: none; }
+.timeline__table summary { font: var(--type-body-sm); color: var(--fg-2); cursor: pointer; min-height: 44px; display: flex; align-items: center; }
+.timeline__table .table__scroll { max-height: 320px; overflow: auto; }
+@media (max-width: 600px) {
+  .timeline__plot { height: 96px; }
+  .lab__scenarios { grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+  .lab__scenario { min-height: 56px; align-content: center; padding: var(--space-2) var(--space-3); }
+  .lab__scenario-about { display: none; } /* the line under the controls says it */
+}
 .anthill__hills { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); font: var(--type-body-sm); color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .anthill__hill::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: var(--space-2); vertical-align: -1px; }
 .anthill__hill--1::before { background: var(--accent); }

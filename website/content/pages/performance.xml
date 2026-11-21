@@ -7,11 +7,21 @@
     <headline>Small enough to use <em>everywhere</em>.</headline>
     <lede>A started actor takes about 530 bytes and a hibernated one about 120. Four million fit in one process, and each operation costs about the same at four million actors as at two.</lede>
     <actions>
+      <action to="performance" section="lab">Measure your device</action>
       <action to="performance" section="actors">See the costs</action>
       <action to="performance" section="scale">See the scaling</action>
-      <action to="performance" section="lab">Measure your device</action>
     </actions>
   </hero>
+
+  <section id="lab">
+    <heading>Measure it on your device.</heading>
+    <p>Pick a scenario and how its population moves, and one host runs it in a Worker on this page.</p>
+    <playground src="../../examples/lab/page.mjs">
+      <description>A host on this device runs up to four million actors whose number follows a pattern over time: steady, a ramp, waves or bursts. They wait, get events, message each other, sleep in a store or hold timers. Charts follow the actors alive, spawns and ends, messages a second, time per message and memory over the whole run.</description>
+    </playground>
+    <p>Every counter in the lab runs this chart: it waits for <code>add</code> and counts.</p>
+    <code src="../../examples/lab/counter.scxml" language="scxml" file="counter.scxml"/>
+  </section>
 
   <section id="actors">
     <heading>An actor takes about 530 bytes.</heading>
@@ -45,17 +55,6 @@
     <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="Work does not grow with the population" index="1">
       <caption>Most actors hibernated in SQLite, at most 1000 resident. Measured 2026-11-20 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1. Microseconds.</caption>
     </table>
-  </section>
-
-  <section id="lab">
-    <heading>Measure it on your device.</heading>
-    <p>Pick a scenario and a population, and one host fills and works in a Worker on this page.</p>
-    <playground src="../../examples/lab/page.mjs">
-      <description>A host on this device fills with up to four million actors, then sends them events, lets them message each other, keeps most of them asleep in a store, or gives each a timer. Charts show its actors, memory, messages a second and time per message.</description>
-    </playground>
-    <p>The charts show how many actors this device holds and how many messages a second it handles.</p>
-    <p>Every counter in the lab runs this chart: it waits for <code>add</code> and counts.</p>
-    <code src="../../examples/lab/counter.scxml" language="scxml" file="counter.scxml"/>
   </section>
 
   <section id="correctness">

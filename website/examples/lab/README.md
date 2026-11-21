@@ -1,9 +1,12 @@
 # The measurement lab
 
-One host on `@tinyactors/wasm`, filled with as many actors as the reader
-picks, then running one scenario (`lab.mjs`):
+One host on `@tinyactors/wasm`, its population following a pattern over
+time up to a peak the reader picks (`lab.mjs`): steady, a ramp, waves or
+bursts. The lab spawns actors when there are fewer than the pattern asks
+for and ends actors drawn at random when there are more, and the
+scenario's work goes to the actors alive:
 
-- **fill**: the host holds its actors (`counter.scxml`), each waiting;
+- **idle**: the actors (`counter.scxml`) wait for an event;
 - **events**: batches of `add` to counters drawn at random;
 - **rally**: pairs of players (`player.scxml`) send a ball back and forth,
   a hundred hits a rally, with no JavaScript between hits;
@@ -14,17 +17,20 @@ picks, then running one scenario (`lab.mjs`):
   at a time, as fast as the host keeps up.
 
 The website runs it in a Worker (`worker.mjs`) at
-https://www.tinyactors.dev/performance/#lab and charts what it reports once
-a second (`page.mjs`): actors, spawns a second, the WebAssembly memory and
-memory per actor, messages a second and time per message. `main.mjs` runs
-every scenario on 2,000 actors on both datamodels, seeded, for the
-website's tests.
+https://www.tinyactors.dev/performance/#lab and charts the whole run, a
+point a second (`page.mjs`, on `components/timeline.mjs`): the actors
+alive against the pattern, spawned and ended a second, messages a second,
+time per message, and the WebAssembly memory (and the store). `main.mjs`
+runs every scenario on 2,000 actors, steady, on both datamodels, checked
+against what the actors counted, then each pattern for two minutes,
+seeded, for the website's tests.
 
 ```sh
 npm ci
 node main.mjs
 ```
 
-The host is sized for its population up front and runs with tracing off.
-On the native datamodel an actor's variables are in the JavaScript heap,
-which the WebAssembly memory leaves out.
+The host is sized for its peak up front (a pool that runs out grows by
+copying the region, and WebAssembly memory keeps its peak) and runs with
+tracing off. On the native datamodel an actor's variables are in the
+JavaScript heap, which the WebAssembly memory leaves out.

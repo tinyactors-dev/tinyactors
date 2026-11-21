@@ -1,10 +1,14 @@
-native fill: 2000 actors, 0 messages
+native idle: 2000 actors, 0 messages
 native events: 2000 actors, 5000 messages, counted 5000
 native rally: 2000 actors, 50500 messages, 500 rallies finished
 native sleep: 2000 actors, 5000 messages, 1900 asleep in the store, 3771 woken
-native timers: 2000 actors, 2647 ticks in 5 simulated seconds, counted 2647
-quickjs fill: 2000 actors, 0 messages
+native timers: 2000 actors, 2647 messages in 5 simulated seconds, counted 2647
+quickjs idle: 2000 actors, 0 messages
 quickjs events: 2000 actors, 5000 messages, counted 5000
 quickjs rally: 2000 actors, 50500 messages, 500 rallies finished
 quickjs sleep: 2000 actors, 5000 messages, 1900 asleep in the store, 3771 woken
-quickjs timers: 2000 actors, 2647 ticks in 5 simulated seconds, counted 2647
+quickjs timers: 2000 actors, 2647 messages in 5 simulated seconds, counted 2647
+steady: 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000 2000; 2000 spawned, 0 ended, 63783 ticks
+ramp: 200 500 800 1100 1400 1700 2000 1700 1400 1100 800 500; 2000 spawned, 1770 ended, 35226 ticks
+waves: 200 650 1550 2000 1550 650 200 650 1550 2000 1550 650; 3800 spawned, 3595 ended, 34672 ticks
+bursts: 400 400 2000 400 400 400 2000 400 400 400 2000 400; 5200 spawned, 4800 ended, 25113 ticks
