@@ -129,6 +129,13 @@ is running, a hidden tab hibernates, a closed tab is done.
   by reloading the page at the end.
 - **Tags near the bottom edge** collide with the chapter bar: put them
   above the ant there.
+- **Canvas flicker on mobile Safari.** Safari fires `resize` all through
+  a scroll as its address bar slides, and assigning `canvas.width` clears
+  the canvas even to the same size. A layer that draws at 30 fps then
+  paints blank frames: 61 of 120 in a reproduction in Chromium. Touch the
+  bitmap only when its size changes, and draw again in the same task. Size
+  a fixed canvas to `100lvh`, not `innerHeight`, so positions mapped onto
+  it hold still while the bar moves (website/presence/layer.mjs).
 - **A scene's `time` must stay a getter.** `Object.assign(scene, { get
   time() {...} })` copies the getter's value once, and the chapter never
   moves; define it with `Object.defineProperty`.

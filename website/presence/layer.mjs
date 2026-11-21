@@ -32,14 +32,26 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
   let you = 0, offset = 0, field = null, running = false, shown = false, last = 0, width = 0, height = 0, dpr = 1;
   const colors = { ink: INK, pine: PINE, trail: PINE };
 
+  // The field is the canvas's box: the large viewport (100lvh in the
+  // stylesheet), which keeps its size while a mobile browser's address bar
+  // slides in and out, so the ants do not jump when it does. Safari fires
+  // resize all through a scroll; assigning canvas.width clears the canvas
+  // even to the same size, so the bitmap is touched only when its size
+  // really changes, and then drawn again at once: a cleared canvas is never
+  // painted (a blank frame is a flicker).
   function resize() {
-    dpr = Math.min(2, devicePixelRatio || 1);
-    width = innerWidth; height = innerHeight;
-    canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+    const box = canvas.getBoundingClientRect();
+    const nextDpr = Math.min(2, devicePixelRatio || 1);
+    const w = Math.round(box.width * nextDpr), h = Math.round(box.height * nextDpr);
+    if (w === canvas.width && h === canvas.height && nextDpr === dpr) return;
+    if (width && height) for (const ant of ants.values()) { ant.body.x *= box.width / width; ant.body.y *= box.height / height; } // the same place on the new size
+    dpr = nextDpr; width = box.width; height = box.height;
+    canvas.width = w; canvas.height = h;
     const style = getComputedStyle(document.documentElement);
     colors.ink = style.getPropertyValue('--fg-1').trim() || INK;
     colors.pine = style.getPropertyValue('--accent').trim() || PINE;
     colors.trail = colors.pine;
+    if (running) render(performance.now(), 0);
   }
   addEventListener('resize', resize);
   resize();
@@ -163,6 +175,10 @@ export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/fla
     if (time - last < 1000 / FPS - 1) return;
     const dt = Math.min(0.1, (time - (last || time)) / 1000);
     last = time;
+    render(time, dt);
+  }
+
+  function render(time, dt) {
     const t = serverNow();
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, height);
