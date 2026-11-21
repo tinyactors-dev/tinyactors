@@ -3,12 +3,12 @@
   <title>Testing your charts</title>
   <description>Test a chart's retries and timeouts in milliseconds: your test answers each of its sends and moves a simulated clock.</description>
   <hero>
-    <headline>Test an hour of timeouts in milliseconds.</headline>
+    <headline>Test an hour of timeouts in milliseconds</headline>
     <lede>A payment that retries every 30 seconds runs all three attempts in a test that takes milliseconds. The test answers the chart's sends and moves its clock.</lede>
   </hero>
 
   <section id="three-tools">
-    <heading>Replace the chart's services and its clock.</heading>
+    <heading>Replace the chart's services and its clock</heading>
     <p>A chart reaches the world only through sends. The host passes each send to a handler you give it, an I/O processor.</p>
     <list>
       <item><term>The test's handlers stand in for the services.</term><text>They record what the chart sent and answer when the case needs it, with an error, or never.</text></item>
@@ -19,7 +19,7 @@
   </section>
 
   <section id="a-test">
-    <heading>Check each step of a retrying payment.</heading>
+    <heading>Check each step of a retrying payment</heading>
     <p>This chart charges a card, retries when no answer comes within 30 seconds, and gives up after the third attempt. Its test moves the clock 30 seconds at a time and checks each charge.</p>
     <example>
       <code language="javascript" file="payment.test.mjs"><![CDATA[
@@ -112,7 +112,7 @@ ok: an answer ends it
   </section>
 
   <section id="stepping-the-clock">
-    <heading>Step to each deadline to see every tick.</heading>
+    <heading>Step to each deadline to see every tick</heading>
     <p><code>clock.increment(ms)</code> moves the clock once. What is due by then runs once, at the new time, and a delay it starts counts from there.</p>
     <p>So a chart that ticks every second ticks once for an <code>increment(3500)</code>, and its next tick is due a second later. Stepping by <code>host.nextDeadline</code>, the milliseconds to the next deadline, logs every tick:</p>
     <example>
@@ -152,7 +152,7 @@ tick 4 at 6500
   </section>
 
   <section id="inputs-run-at-the-next-turn">
-    <heading>Await idle before you move the clock.</heading>
+    <heading>Await idle before you move the clock</heading>
     <p><code>actor.send</code> returns before the actor handles the event, which it does later, at the clock's time then. Until then <code>host.nextDeadline</code> holds no deadline the event starts.</p>
     <p>So an event sent just before an <code>increment</code> runs after the clock moved, and a delay it starts counts from there:</p>
     <example>
@@ -196,7 +196,7 @@ expired at 119000
   </section>
 
   <section id="waiting-for-something-to-happen">
-    <heading>On the real clock, await the actor's result.</heading>
+    <heading>On the real clock, await the actor's result</heading>
     <p>On the real clock, <code>await host.idle()</code> returns while a timeout is still pending. It waits only for work due now and for promises your handlers returned.</p>
     <p><code>await actor.done</code> waits instead for the actor's top-level final state, and settles with its <code>&lt;donedata&gt;</code>. <code>await actor.ask(event, data)</code> sends an event and settles with the chart's reply:</p>
     <example>
@@ -236,7 +236,7 @@ done: all done
   </section>
 
   <section id="until">
-    <heading>Wait until any condition holds.</heading>
+    <heading>Wait until any condition holds</heading>
     <p>This helper checks a condition every 10 ms of the real clock and awaits <code>host.idle()</code> between checks. Here it waits for a lamp to be lit:</p>
     <example>
       <code language="javascript" file="lamp.mjs"><![CDATA[
@@ -274,23 +274,23 @@ lit
   </section>
 
   <section id="prepared-world">
-    <heading>Start each test from a snapshot.</heading>
+    <heading>Start each test from a snapshot</heading>
     <p>Set up a host once and take <code>host.snapshot()</code>. Each test then starts with <code>Host.restore</code> of it, the same actors in the same states (<link to="guide-snapshots"/>).</p>
   </section>
 
   <section id="both-datamodels">
-    <heading>Run the tests in QuickJS too.</heading>
+    <heading>Run the tests in QuickJS too</heading>
     <p>When production runs your charts in QuickJS, run each test a second time with <code>datamodel: 'quickjs'</code> on the host (<link to="guide-quickjs"/>).</p>
   </section>
 
   <section id="habits-that-help">
-    <heading>Fail the test on a handler's error.</heading>
+    <heading>Fail the test on a handler's error</heading>
     <p>A handler that throws makes the next <code>await host.idle()</code> reject, which fails the test (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#errors">Errors</link>).</p>
     <p>A host given <code>onHandlerError</code> reports the error there instead. Collect what it receives and assert the list is empty.</p>
   </section>
 
   <section id="close-every-host">
-    <heading>Close every host in teardown.</heading>
+    <heading>Close every host in teardown</heading>
     <p>Call <code>host.close()</code> in a <code>finally</code> or the test framework's teardown. A forgotten host on a <code>SimulatedClock</code> lets the process exit, but holds its memory until collected.</p>
   </section>
 </page>

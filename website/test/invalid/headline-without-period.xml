@@ -1,3 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- A headline ends with a period. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}headline' breaks the assertion '(: ends with a period :) -->
-<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><hero><headline>Like SQLite, but for actors</headline><lede>Lede.</lede></hero><section id="s"><heading>S.</heading><p>Text.</p></section></page>

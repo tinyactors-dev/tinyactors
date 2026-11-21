@@ -3,18 +3,18 @@
   <title>Capacity and memory</title>
   <description>A tinyactors actor takes about 530 bytes started and 120 hibernated, and each operation costs about the same at four million actors as at two.</description>
   <hero>
-    <headline>Fit millions of actors in one process.</headline>
+    <headline>Fit millions of actors in one process</headline>
     <lede>On Node.js a started actor takes about 530 bytes and a hibernated one about 120, so four million fit in one process. Each operation costs about the same at four million actors as at two.</lede>
   </hero>
 
   <section id="regions">
-    <heading>Let the host grow its memory.</heading>
+    <heading>Let the host grow its memory</heading>
     <p>A host keeps the actors of each compiled image in one block of memory, its region. When one of its pools fills, actors or timers for instance, the host copies the region into a larger one.</p>
     <p>A host given no sizes starts with room for 64 actors, and grows as the population does.</p>
   </section>
 
   <section id="the-sizes">
-    <heading>Set where each pool starts.</heading>
+    <heading>Set where each pool starts</heading>
     <p>The <code>system</code> map of the <code>config</code> option gives each new region its first sizes, in whole numbers. An absent key, or 0, keeps the default.</p>
     <table>
       <head><cell>Key</cell><cell>Default</cell><cell>What it counts</cell></head>
@@ -36,7 +36,7 @@
   </section>
 
   <section id="reading-what-a-host-uses">
-    <heading>See how full each pool is.</heading>
+    <heading>See how full each pool is</heading>
     <p><code>await host.hostStats()</code> answers with <code>pools</code>, one entry per region still in use (<link to="guide-inspection"/>). An entry's <code>segment</code> is its image's place among <code>new Host</code>'s charts, or what <code>addImage</code> returned.</p>
     <p>Each pool reports its <code>capacity</code>, what it holds in <code>used</code>, and the most it held at once in <code>highWater</code>.</p>
     <p>The pools are <code>actors</code>, <code>events</code>, <code>timers</code>, <code>workspaces</code>, <code>requests</code> and <code>slabBytes</code>, the memory for the actors' variables and strings.</p>
@@ -75,7 +75,7 @@ segments reported: 0, 1
   </section>
 
   <section id="sizing-a-host-up-front">
-    <heading>Size a host for a known population.</heading>
+    <heading>Size a host for a known population</heading>
     <p>Run a realistic load, read the high-water marks, and give the next host those sizes. A host sized for its load makes no copies, and no pool grows past what the load needs.</p>
     <p>Count every actor in <code>maxActors</code>, since a hibernated one keeps its slot and its record, about 64 bytes. Size <code>instanceBytes</code> and <code>stringBytes</code> for the resident actors only.</p>
     <p>The repository's hibernation gate sizes a host this way for two million counters of a few variables, 1000 resident at most. <code>host.hostConfig()</code> answers the sizes, every default filled in.</p>
@@ -101,7 +101,7 @@ host.close();
   </section>
 
   <section id="pools-that-fill-together">
-    <heading>Leave room for pools that fill together.</heading>
+    <heading>Leave room for pools that fill together</heading>
     <p>A pending delayed send holds a timer and an event, and one falling due briefly holds a second event. So <code>N</code> actors that each wait on a delayed send need <code>maxTimers</code> of <code>N</code> and <code>maxEvents</code> above it.</p>
     <p>Actors that become runnable together each hold a workspace, against a default of 4. Timers due in the same tick do, and so do actors sending to each other.</p>
     <p>On <code>@tinyactors/wasm</code> a pool that runs out costs most: the region is copied inside WebAssembly memory, which keeps its peak.</p>
@@ -115,7 +115,7 @@ host.close();
   </section>
 
   <section id="what-an-actor-costs">
-    <heading>Measure what one actor costs.</heading>
+    <heading>Measure what one actor costs</heading>
     <p>The <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory">memory program</link> measures the resident memory that one more actor, message or delayed send adds to a process. Run it with your chart, on your runtime and datamodel, the engine chart code runs in: native or quickjs.</p>
     <code language="shell">node examples/memory/main.mjs --counts 1000000 --datamodel native</code>
     <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="1">
@@ -138,7 +138,7 @@ host.close();
   </section>
 
   <section id="work-does-not-grow-with-the-population">
-    <heading>Check that costs hold as actors double.</heading>
+    <heading>Check that costs hold as actors double</heading>
     <p>The scaling program, <code>tools/scale.mjs</code>, times every operation on N actors and on 2N, each host in its own process. It fails an operation that costs more than 1.5 times as much at 2N.</p>
     <p>An operation on one actor is timed per call, and one on the whole population per actor.</p>
     <p>In the first run most actors are hibernated in SQLite, and one in a hundred runs an invoked service. In the second every actor is resident.</p>

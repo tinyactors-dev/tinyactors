@@ -3,12 +3,12 @@
   <title>The quickjs sandbox</title>
   <description>Run charts your users upload in QuickJS, an engine inside the package that stops a runaway loop or allocation with an error.</description>
   <hero>
-    <headline>Run charts you did not write.</headline>
+    <headline>Run charts you did not write</headline>
     <lede>An uploaded chart runs in QuickJS, a separate engine inside the package, where a runaway loop ends in an error.</lede>
   </hero>
 
   <section id="datamodels">
-    <heading>Choose the engine for each host.</heading>
+    <heading>Choose the engine for each host</heading>
     <p>A host runs all its charts' code in one engine, its datamodel, which the <code>datamodel</code> option picks.</p>
     <list>
       <item><term><code>native</code>, the default</term><text>Chart code runs in a <code>node:vm</code> context of your own engine, fast and with your engine's values. A <code>vm</code> context looks like a sandbox but is not one: a chart in it can reach your process.</text></item>
@@ -18,7 +18,7 @@
   </section>
 
   <section id="stopped">
-    <heading>Stop a chart that loops forever.</heading>
+    <heading>Stop a chart that loops forever</heading>
     <p>This chart loops without end, allocates without end and looks for Node.js's globals. QuickJS stops both loops with <code>error.execution</code>, and finds no globals.</p>
     <example>
       <code language="javascript" file="sandbox.mjs"><![CDATA[
@@ -60,7 +60,7 @@ undefined undefined undefined
   </section>
 
   <section id="the-limits">
-    <heading>Limit memory for the whole engine.</heading>
+    <heading>Limit memory for the whole engine</heading>
     <p>The host's <code>quickjs</code> option sets the engine's limits. A host on the native datamodel refuses the option with a <code>TypeError</code>.</p>
     <table>
       <head><cell>Option</cell><cell>Default</cell><cell>What it bounds</cell></head>
@@ -74,7 +74,7 @@ undefined undefined undefined
   </section>
 
   <section id="fuel">
-    <heading>Limit how long one evaluation runs.</heading>
+    <heading>Limit how long one evaluation runs</heading>
     <p><code>maxOps</code> counts the engine's interrupt checks, one per 10,000 jumps and calls. How long one looping evaluation holds its thread at each setting:</p>
     <table>
       <caption>Every host on the thread waits that long. Measured 2026-10-18 on an Intel Xeon at 2.10 GHz, Linux; Node.js 22 and Bun 1.4.1 alike.</caption>
@@ -88,13 +88,13 @@ undefined undefined undefined
   </section>
 
   <section id="realms">
-    <heading>Give each actor its own builtins.</heading>
+    <heading>Give each actor its own builtins</heading>
     <p>The actors of one chart share a context, so a chart that changes <code>Array.prototype</code> changes it for all of them. A chart whose scripts declare top-level names gets a context per actor.</p>
     <p>With <code>realm: 'isolated'</code> every actor gets a context of its own, at the cost of its memory.</p>
   </section>
 
   <section id="what-differs-from-the-native-datamodel">
-    <heading>Expect hibernation and values to differ.</heading>
+    <heading>Expect hibernation and values to differ</heading>
     <p>A chart behaves the same on both engines. Two things around it differ:</p>
     <list>
       <item><term>A blob holds more.</term><text>QuickJS writes its own values into a hibernated actor's blob, so a <code>Date</code>, <code>Map</code>, <code>Set</code>, typed array or graph with cycles comes back. A class's instance comes back as a plain object, and a function in a variable keeps the actor in memory (<link to="guide-hibernation"/>).</text></item>

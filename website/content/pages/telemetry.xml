@@ -4,7 +4,7 @@
   <description>tinyactors reports what its actors do as OpenTelemetry: a span for each step, logs and metrics, with W3C trace context across actors and systems.</description>
 
   <hero>
-    <headline>Every step is a <em>span</em>.</headline>
+    <headline>Every step is a <em>span</em></headline>
     <lede>A host reports what its actors did as OpenTelemetry: a span for each step, logs, and metrics. It does no I/O itself. Your exporter sends the bytes.</lede>
     <actions>
       <action to="telemetry" section="read">See a trace</action>
@@ -13,7 +13,7 @@
   </hero>
 
   <section id="read">
-    <heading>Read a trace.</heading>
+    <heading>Read a trace</heading>
     <p>This payment charges a card, retries after 30 seconds of silence, and gives up after three attempts.</p>
     <code src="../../examples/property/payment.scxml" language="scxml" file="payment.scxml"/>
     <p>Run it, traced, while the service is silent once and then answers. Each row is a step under the step that caused it, and selecting one shows its transitions and sends.</p>
@@ -23,7 +23,7 @@
   </section>
 
   <section id="on">
-    <heading>Turn it on.</heading>
+    <heading>Turn it on</heading>
     <p>Give the host an encoder in its config and a handler for the requests it writes. The handler gets OTLP bytes to post to a collector, and this one reads the spans back.</p>
     <example>
       <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Turning it on" fence="1" language="javascript" file="telemetry.mjs"/>
@@ -32,12 +32,12 @@
   </section>
 
   <section id="options">
-    <heading>Tune the encoder.</heading>
+    <heading>Tune the encoder</heading>
     <table src="../../../tinyactors-napi/docs/guide/telemetry.md" section="The encoder's options"/>
   </section>
 
   <section id="context">
-    <heading>Follow a request.</heading>
+    <heading>Follow a request</heading>
     <p>A <code>traceparent</code> passed with an input is the parent of the step it starts. A send carries the sender's trace to the next actor, or to another system.</p>
     <example>
       <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Trace context" fence="1" language="javascript" file="context.mjs"/>
@@ -46,7 +46,7 @@
   </section>
 
   <section id="choose">
-    <heading>Choose what is traced.</heading>
+    <heading>Choose what is traced</heading>
     <p>Set the detail for every actor, or watch one chart closely for a while.</p>
     <example>
       <code src="../../../tinyactors-napi/docs/guide/telemetry.md" section="Choosing what is traced" fence="1" language="javascript" file="watch.mjs"/>

@@ -4,7 +4,7 @@
   <description>No page has this address.</description>
 
   <hero>
-    <headline>Not found.</headline>
+    <headline>Not found</headline>
     <lede>No page has this address.</lede>
     <actions>
       <action to="home">Go home</action>

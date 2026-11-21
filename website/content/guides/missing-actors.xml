@@ -3,12 +3,12 @@
   <title>When the actor is not there</title>
   <description>A send to a hibernated actor wakes it, and a send to no actor fails at once. Choose, for each kind of actor, how your application avoids or handles the failure.</description>
   <hero>
-    <headline>Decide what sends to missing actors do.</headline>
+    <headline>Decide what sends to missing actors do</headline>
     <lede>A send to an actor asleep in your store wakes it, and a send to no actor fails at once. Your application chooses, per kind of actor, whether to avoid that failure or handle it.</lede>
   </hero>
 
   <section id="three-cases">
-    <heading>Find out where the actor is.</heading>
+    <heading>Find out where the actor is</heading>
     <p>What a send does depends on where its actor is:</p>
     <list>
       <item><term>The actor is hibernated.</term><text>The host keeps the event in its queue and wakes the actor, loading its blob itself when the host has a <code>store</code>. The event runs as if the actor had never left, and a send to a name finds a hibernated actor as it finds a resident one.</text></item>
@@ -19,7 +19,7 @@
   </section>
 
   <section id="which-way-for-which-actor">
-    <heading>Choose by how long the actor lives.</heading>
+    <heading>Choose by how long the actor lives</heading>
     <p>Pick the way for each kind of actor in your application:</p>
     <table>
       <head><cell>The actor</cell><cell>The way</cell><cell>In the chat example</cell></head>
@@ -31,7 +31,7 @@
   </section>
 
   <section id="the-actor-never-ends-and-hibernates">
-    <heading>Keep long-lived actors and let them hibernate.</heading>
+    <heading>Keep long-lived actors and let them hibernate</heading>
     <p>An actor that stands for a room or an account has no top-level <code>&lt;final&gt;</code>, so it never ends. It is always there to send to by its name.</p>
     <p>A host with a <code>store</code> and a <code>resident</code> bound keeps it in memory only while it works. An idle actor costs its blob in your store (<link to="guide-hibernation"/>).</p>
     <example>
@@ -82,7 +82,7 @@ the room is in the store: true
   </section>
 
   <section id="the-application-routes-it">
-    <heading>Spawn the actor when a send finds none.</heading>
+    <heading>Spawn the actor when a send finds none</heading>
     <p>Send to an actor made on demand, such as a cart, through an I/O processor of your own. It looks the actor up with <code>send.host.actor</code> and spawns it when it is missing.</p>
     <p>It forwards the event with the sender's address as its <code>origin</code>, so the actor answers the sender directly:</p>
     <example>
@@ -148,7 +148,7 @@ the cart holds 2
   </section>
 
   <section id="the-sender-handles-errorcommunication">
-    <heading>Handle the failed send in the sending chart.</heading>
+    <heading>Handle the failed send in the sending chart</heading>
     <p>An actor that ends, such as a connection or a job, may get a send after its end. Its sender gets <code>error.communication</code> at once, with the send's <code>sendid</code>.</p>
     <p>A transition on that event, matched by <code>sendid</code>, decides what follows. This client tells its user the room does not exist:</p>
     <example>
@@ -183,7 +183,7 @@ no such room
   </section>
 
   <section id="names-that-need-no-encoding">
-    <heading>Name actors with letters, digits, dots and dashes.</heading>
+    <heading>Name actors with letters, digits, dots and dashes</heading>
     <p>A name is written into addresses, as <code>tinyactors://chat/@&lt;name&gt;</code> in a chart's <code>target</code> and in your logs. An address's name holds only the characters RFC 3986 calls unreserved.</p>
     <p>Those are <code>A</code>-<code>Z</code>, <code>a</code>-<code>z</code>, <code>0</code>-<code>9</code>, <code>-</code>, <code>.</code>, <code>_</code> and <code>~</code>, and any other byte is percent-encoded. The <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/src/base/address.c">address grammar</link> checks it.</p>
     <p><code>Address.fromName</code> encodes for you, but <code>room/general</code> is then <code>room%2Fgeneral</code> in every address. A chart that writes <code>room/general</code> unencoded reaches no actor and gets <code>error.communication</code>:</p>
@@ -228,7 +228,7 @@ tinyactors://chat/#_scxml_1
   </section>
 
   <section id="keying-a-table-by-the-sender">
-    <heading>Keep one table entry per sender.</heading>
+    <heading>Keep one table entry per sender</heading>
     <p>A room's members or a workspace's pending requests are tables keyed by <code>_event.origin</code>, the sender's address. One sender's origin comes in two forms:</p>
     <list>
       <item><term><code>#_scxml_2</code>, the fragment alone</term><text>when the send stayed in the sender's segment of the host: a send to a session's address (<code>#_scxml_&lt;n&gt;</code>, or the full address of a session of the same system), to <code>#_parent</code>, to an invoked child, and a delayed send among them;</text></item>
@@ -281,7 +281,7 @@ tinyactors://chat/#_scxml_2 is #_scxml_2: 1 member
   </section>
 
   <section id="full-address">
-    <heading>Keep the system when senders cross systems.</heading>
+    <heading>Keep the system when senders cross systems</heading>
     <p>A directory that answers several hosts holds senders of other systems, so its keys must keep the system. An origin from another system always names it.</p>
     <p>There, complete a fragment with the actor's own system, from its own address in <code>_ioprocessors.scxml.location</code>:</p>
     <code language="xml"><![CDATA[

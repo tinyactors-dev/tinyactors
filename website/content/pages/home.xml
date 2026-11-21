@@ -4,7 +4,7 @@
   <description>tinyactors runs statecharts as actors inside your process, millions with most of them asleep, and tests them over thousands of simulated runs.</description>
 
   <hero>
-    <headline>Like SQLite, but for <em>actors</em>.</headline>
+    <headline>Like SQLite, but for <em>actors</em></headline>
     <lede>tinyactors is a library that runs actors inside your program, each a statechart: about 530 bytes awake and 120 asleep.</lede>
     <install>
       <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
@@ -18,27 +18,27 @@
   </hero>
 
   <section id="actors">
-    <heading>Write each actor's behavior as one chart.</heading>
+    <heading>Write each actor's behavior as one chart</heading>
     <p>A statechart is a state machine whose states nest inside states and run side by side in parallel regions. The W3C wrote it down as <link href="https://www.w3.org/TR/scxml/">SCXML</link>, so a chart means the same in every runtime.</p>
     <p>This chart charges a card, waits 30 seconds for an answer, and retries until it has charged three times.</p>
     <code src="../../examples/simulate/payment.scxml" language="scxml" file="payment.scxml"/>
   </section>
 
   <section id="process">
-    <heading>Run millions of actors in your process.</heading>
+    <heading>Run millions of actors in your process</heading>
     <claims>
       <claim>
-        <statement>A host is a library.</statement>
+        <statement>A host is a library</statement>
         <p>It runs your actors on your own event loop, in Node.js, Bun, Python, a browser or C.</p>
         <source to="chat" section="room">Tutorial, step 1</source>
       </claim>
       <claim>
-        <statement>An actor takes about 530 bytes.</statement>
+        <statement>An actor takes about 530 bytes</statement>
         <p>That is a started actor in Node.js, measured with a million in one process. The C core allocates only from memory you give it.</p>
         <source to="performance" section="actors">An actor takes about 530 bytes</source>
       </claim>
       <claim>
-        <statement>A sleeping actor keeps about 120 bytes.</statement>
+        <statement>A sleeping actor keeps about 120 bytes</statement>
         <p>Idle actors hibernate to your store and wake on their next event. Each operation costs about the same at four million actors as at two.</p>
         <source to="performance" section="scale">Twice the actors, the same cost</source>
       </claim>
@@ -49,7 +49,7 @@
   </section>
 
   <section id="agents">
-    <heading>Hand a chart to a coding agent.</heading>
+    <heading>Hand a chart to a coding agent</heading>
     <p>A chart holds all of an actor's behavior, so an agent changes it as it would change one function.</p>
     <list>
       <item><term>One file per actor</term><text>An agent reads the chart, not a call graph spread over a codebase.</text></item>
@@ -59,7 +59,7 @@
   </section>
 
   <section id="simulate">
-    <heading>Simulate a thousand runs.</heading>
+    <heading>Simulate a thousand runs</heading>
     <p>Does the payment ever charge a card four times, or give up too early? A test that waits 30 seconds per retry cannot ask that a thousand times, but a simulation can.</p>
     <list ordered="true">
       <item><term>A fake service</term><text>A handler you write stands in for the payment service. A seeded random number decides whether it answers each charge.</text></item>
@@ -75,16 +75,16 @@
   </section>
 
   <section id="verify">
-    <heading>Kill your unit tests.</heading>
+    <heading>Kill your unit tests</heading>
     <p>A unit test checks one run. A property checks every run a generator can make, and a failure shrinks to the smallest run that breaks it.</p>
     <claims>
       <claim>
-        <statement>It passes the W3C's own tests.</statement>
+        <statement>It passes the W3C's own tests</statement>
         <p>SCXML defines what every transition does, and tinyactors passes all 191 automatic tests of the W3C suite.</p>
         <source to="performance" section="correctness">Correct by the standard</source>
       </claim>
       <claim>
-        <statement>Every step is a span.</statement>
+        <statement>Every step is a span</statement>
         <p>A failing run's trace shows each event the actor took and the states it entered.</p>
         <source to="telemetry">Telemetry</source>
       </claim>
@@ -95,7 +95,7 @@
   </section>
 
   <section id="build">
-    <heading>Build a team chat.</heading>
+    <heading>Build a team chat</heading>
     <p>Five steps, each a program you can run.</p>
     <list ordered="true">
       <item><term><link to="chat" section="room">A room</link></term><text>One actor, and a handler for the screens.</text></item>
@@ -110,7 +110,7 @@
   </section>
 
   <section id="production">
-    <heading>Run it in production.</heading>
+    <heading>Run it in production</heading>
     <list>
       <item><term><link to="guide-hibernation">Hibernation</link></term><text>Two million actors ran with at most 1000 in memory and the rest in a database.</text></item>
       <item><term><link to="guide-migration">Migration</link></term><text>Running actors move to their chart's next version and keep the state they reached.</text></item>

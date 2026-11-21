@@ -3,18 +3,18 @@
   <title>I/O processors</title>
   <description>Charts send events to I/O processors, objects of your own that do the I/O and send the answers back as events.</description>
   <hero>
-    <headline>Do a chart's I/O in your own code.</headline>
+    <headline>Do a chart's I/O in your own code</headline>
     <lede>A chart asks for a price or an email by sending an event. An object of yours does the work and answers with another event, at once or when its promise settles.</lede>
   </hero>
 
   <section id="charts-send-events">
-    <heading>Ask for outside work with a send.</heading>
+    <heading>Ask for outside work with a send</heading>
     <p>A chart that needs the network, a file or a database sends an event with <code>&lt;send type&gt;</code>. The type names an I/O processor, an object in your program.</p>
     <p>The processor does the work and sends any answer back as an event. The chart decides when to ask and what an answer changes.</p>
   </section>
 
   <section id="declaring-a-processor">
-    <heading>Register a processor for each type.</heading>
+    <heading>Register a processor for each type</heading>
     <p>List your processors in the host's <code>ioProcessors</code> option, each under a type: any URI you choose. The host calls a processor's <code>receive(send)</code> for each send to its type.</p>
     <p>This chart asks for the price of tea in euros, and the processor answers at once from a table:</p>
     <example>
@@ -69,7 +69,7 @@ tea costs 4 EUR (answer to ask-1)
   </section>
 
   <section id="the-send">
-    <heading>Read what the chart sent.</heading>
+    <heading>Read what the chart sent</heading>
     <p>The <code>send</code> that <code>receive</code> gets holds the attributes of one <code>&lt;send&gt;</code> and its sender, each read on first access.</p>
     <table>
       <head><cell>Field</cell><cell>What it holds</cell></head>
@@ -89,7 +89,7 @@ tea costs 4 EUR (answer to ask-1)
   </section>
 
   <section id="answer-or-fail">
-    <heading>Answer the sender, or fail the request.</heading>
+    <heading>Answer the sender, or fail the request</heading>
     <p>A handler calls one of the send's two methods, or neither. The processor above answers with <code>send.answer('price', …)</code>, and the chart reads the answer's <code>_event.sendid</code>.</p>
     <list>
       <item><term><code>send.answer(event, data, options)</code></term><text>Sends <code>event</code> back to the sender, with this send's <code>sendid</code> as its <code>_event.sendid</code>. The options are <code>traceparent</code> (the answer continues the send's trace unless you give another, or <code>null</code> for a new one), <code>origin</code> (the answer's <code>_event.origin</code>) and <code>raw</code> (the message as you read it, for a chart that wants it).</text></item>
@@ -101,7 +101,7 @@ tea costs 4 EUR (answer to ask-1)
   </section>
 
   <section id="answering-later">
-    <heading>Return a promise to answer later.</heading>
+    <heading>Return a promise to answer later</heading>
     <p>When <code>receive</code> returns a promise, the host copies every field of its send first. Its <code>answer()</code> and <code>fail()</code> then work whenever the promise gets there, while the host is open.</p>
     <p>The actor handles its other events meanwhile, and the answer reaches it as one more event. This processor awaits a stand-in for an SMTP client, then answers <code>delivered</code>:</p>
     <example>
@@ -163,7 +163,7 @@ delivered after 20 ms
   </section>
 
   <section id="when-the-sender-ends">
-    <heading>Settle open requests when an actor ends.</heading>
+    <heading>Settle open requests when an actor ends</heading>
     <p>An actor that reaches a top-level <code>&lt;final&gt;</code> ends at once, and SCXML drops the events still in its queue. A request sent with <code>actor.send</code> behind the event that ends it reaches no handler.</p>
     <p>Have the <code>&lt;final&gt;</code>'s <code>&lt;onentry&gt;</code> send to your processor, and settle there what you still hold for that session.</p>
     <p>Here each request waits for the actor's <code>response</code>. The one sent behind <code>logout</code> gets <code>401 logged out</code> from the <code>closed</code> handler:</p>
@@ -222,7 +222,7 @@ host.close();
   </section>
 
   <section id="when-a-handler-fails">
-    <heading>Catch what a processor throws.</heading>
+    <heading>Catch what a processor throws</heading>
     <p>A handler that throws, or whose promise rejects, before it answers fails its send: the sender gets <code>error.communication</code>. After an answer, the answer stands.</p>
     <p>Either way the host reports the error at the end of that event-loop turn, to the first of these:</p>
     <list ordered="true">
@@ -263,13 +263,13 @@ idle() rejected: connection refused
   </section>
 
   <section id="inputs-from-a-handler">
-    <heading>Send to other actors from a processor.</heading>
+    <heading>Send to other actors from a processor</heading>
     <p>Through <code>send.host</code> a handler can send an event to any actor, spawn one or terminate one. <code>send.sender.send(...)</code> sends a new event to the sender.</p>
     <p>Each call applies at once, and the actors it reaches run after the handler returns.</p>
   </section>
 
   <section id="spawning-from-a-chart">
-    <heading>Let a chart start lasting actors.</heading>
+    <heading>Let a chart start lasting actors</heading>
     <p><code>&lt;invoke&gt;</code> looks like the way, but it stops its child when the state is left. The package's <code>Spawner</code> is a processor that starts an actor which stays.</p>
     <p>Register it under a type you choose, and a chart sends it <code>{ chart, name, params }</code>. The host spawns the chart's current version under the name.</p>
     <p>The sender gets <code>spawned</code> with <code>{ name, address }</code> and the send's <code>sendid</code>, and sends to the <code>address</code> from then on. An unknown chart, or data of another shape, gives it <code>error.communication</code>.</p>
@@ -316,7 +316,7 @@ room about tea got hello
   </section>
 
   <section id="one-owner-per-name">
-    <heading>Give each name one owner.</heading>
+    <heading>Give each name one owner</heading>
     <p>The <code>Spawner</code> spawns each time it is asked, without looking the name up first. So let one collection actor decide which actors of a kind exist, and spawn only from it.</p>
     <p>A workspace spawns its rooms, for one (<link to="guide-missing-actors" section="the-application-routes-it">the application routes it</link>). It handles one request at a time and records each, so it never asks twice for a name.</p>
     <p>The <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/examples/chat-rooms/README.md">chat-rooms example</link>'s workspace keeps a <code>creating</code> table keyed by the spawn's <code>sendid</code>. An entry stays until <code>spawned</code> or <code>error.communication</code> answers it.</p>
@@ -325,7 +325,7 @@ room about tea got hello
   </section>
 
   <section id="updating-through-names">
-    <heading>Deploy a new version of a named actor.</heading>
+    <heading>Deploy a new version of a named actor</heading>
     <p>To deploy, compile the new chart and pass its <code>image</code> to <code>host.addImage</code>. New actors start in the newest version, and running ones stay on theirs until they end or you migrate them.</p>
     <p>The versions need not be compatible (<link to="guide-migration" section="versions-and-segments">versions and segments</link>). For a named actor, its owner then spawns the new version under the same name.</p>
     <p>Names are looked up newest version first, so the name finds the new actor: <code>@room.acme.general</code>, <code>host.actor('room.acme.general')</code>. The old actor runs its version at its session address until it ends.</p>

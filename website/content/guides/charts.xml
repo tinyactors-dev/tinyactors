@@ -3,12 +3,12 @@
   <title>Writing charts</title>
   <description>Write an actor's behaviour as an SCXML chart in JavaScript, and compile your charts into one image a host runs.</description>
   <hero>
-    <headline>Write chart logic in JavaScript.</headline>
+    <headline>Write chart logic in JavaScript</headline>
     <lede>A chart's conditions, data and scripts are plain JavaScript that reads the actor's variables by name. Your charts compile into one image: bytes a host runs, in this process or another.</lede>
   </hero>
 
   <section id="variables-and-expressions">
-    <heading>Declare variables and read the event.</heading>
+    <heading>Declare variables and read the event</heading>
     <p>Declare an actor's variables with <code>&lt;data></code>. Each <code>expr</code> is evaluated once, when the actor starts, unless <code>spawn</code>'s <code>params</code> give <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#starting-an-actor-with-data">another value</link>.</p>
     <p>Every <code>cond</code>, <code>expr</code>, <code>&lt;log expr></code> and <code>&lt;script></code> reads the variables by name, beside the names the host sets:</p>
     <table>
@@ -81,7 +81,7 @@ that was an error.execution
   </section>
 
   <section id="scripts">
-    <heading>Define helper functions once per chart.</heading>
+    <heading>Define helper functions once per chart</heading>
     <p>A <code>function</code> in a chart-level <code>&lt;script></code> is a helper, made once for the chart and callable from its actors' expressions. This basket prices its items with one:</p>
     <example>
       <code language="javascript" file="basket.mjs"><![CDATA[
@@ -136,7 +136,7 @@ total 15
   </section>
 
   <section id="sending-events">
-    <heading>Send an event to any actor.</heading>
+    <heading>Send an event to any actor</heading>
     <p><code>&lt;send></code> sends an event to the actor itself, to another actor, or out of the host to your program. Each attribute has an <code>...expr</code> form that computes it:</p>
     <table>
       <head><cell>Attribute</cell><cell>What it gives</cell><cell>Default</cell></head>
@@ -198,7 +198,7 @@ self.order (external) {"qty":2,"sku":"tea"}
   </section>
 
   <section id="xml-data">
-    <heading>Keep XML data in a variable.</heading>
+    <heading>Keep XML data in a variable</heading>
     <p>A <code>&lt;data></code> whose content is XML holds a document. Node.js and Bun have no <code>DOMParser</code>, so the package builds a small DOM of its own:</p>
     <list>
       <item><term>Every node</term><text>has <code>nodeType</code>, <code>nodeName</code>, <code>nodeValue</code>, <code>attributes</code>, <code>childNodes</code>, <code>firstChild</code>, <code>lastChild</code>, <code>parentNode</code> and <code>textContent</code>, and the methods <code>getElementsByTagName(name)</code> (an array, <code>'*'</code> for every element), <code>getAttribute(name)</code> and <code>hasAttribute(name)</code>.</text></item>
@@ -243,7 +243,7 @@ host.close();
   </section>
 
   <section id="a-chart-that-starts-another">
-    <heading>Start a child actor from a state.</heading>
+    <heading>Start a child actor from a state</heading>
     <p><code>&lt;invoke src></code> starts a child, an actor of another chart, when its state is entered. Leaving the state stops it.</p>
     <p>The <code>&lt;param></code>s set the child's variables, as <code>spawn</code>'s <code>params</code> do. The child sends to its parent with <code>target="#_parent"</code>.</p>
     <p>A child's events carry the invoke's <code>id</code> as <code>_event.invokeid</code>. When the child reaches a final state, the parent gets <code>done.invoke.&lt;id></code> with its <code>&lt;donedata></code>.</p>
@@ -294,7 +294,7 @@ the worker answered 42
   </section>
 
   <section id="when-the-child-exists">
-    <heading>Wait for the child before sending to it.</heading>
+    <heading>Wait for the child before sending to it</heading>
     <p>A child starts at the end of the macrostep that entered its state, once the actor settles, as SCXML starts invocations.</p>
     <p>Until then a send to the child gets <code>error.communication</code>. That covers the state's own <code>&lt;onentry></code>, and anything else in the same macrostep:</p>
     <list>
@@ -347,7 +347,7 @@ the child got hello
   </section>
 
   <section id="several-charts-in-one-image">
-    <heading>Put several charts in one image.</heading>
+    <heading>Put several charts in one image</heading>
     <p><code>compileCharts</code> takes a list of documents, each <code>{ name, text }</code>, and compiles them into one image.</p>
     <p>Each chart is known by its <code>&lt;scxml name></code>: <code>host.spawn(name)</code> starts one, and <code>host.chart(name)</code> finds its current version. A document's <code>name</code> is what error messages and <code>src</code> attributes name.</p>
     <p>A chart may read another document through <code>src</code>: <code>&lt;invoke src></code>, <code>&lt;script src></code> or <code>&lt;data src></code>. A document in the list answers a <code>src</code> with its name.</p>
@@ -387,7 +387,7 @@ missing.scxml:1:1: error: parent.scxml asks for missing.scxml, which is not in t
   </section>
 
   <section id="charts-in-a-directory">
-    <heading>Compile a whole directory of charts.</heading>
+    <heading>Compile a whole directory of charts</heading>
     <p><code>compileDir(dir)</code> compiles every <code>*.scxml</code> file under <code>dir</code> into one image. <code>dir</code> is a path, or a <code>file:</code> URL such as <code>new URL('./charts/', import.meta.url)</code>.</p>
     <p>Each chart is named by its path under <code>dir</code>, <code>/</code>-separated, and the list is sorted by name. So the first is the image's default boot chart.</p>
     <p>A <code>src</code> that names no file of the list is read relative to the directory of the document that names it. <code>orders/order.scxml</code> asking for <code>payment.scxml</code> reads <code>&lt;dir>/orders/payment.scxml</code>.</p>
@@ -445,7 +445,7 @@ paying
   </section>
 
   <section id="the-compile-result">
-    <heading>Save an image to run it elsewhere.</heading>
+    <heading>Save an image to run it elsewhere</heading>
     <p><code>compileCharts</code> returns an object whose <code>image</code> is a <code>Buffer</code>, copied out at its first read and then yours. Its <code>diagnostics</code> lists the compiler's warnings.</p>
     <p>Write the image to a file and give it to a host in another process: <code>new Host(readFileSync(path), options)</code>.</p>
     <p><code>new Host(compiled, options)</code> copies the image, so <code>close()</code> may free the compiler's memory at once. The garbage collector frees it otherwise.</p>
@@ -454,7 +454,7 @@ paying
   </section>
 
   <section id="a-system-that-starts-its-own-actors">
-    <heading>Boot named actors from a manifest.</heading>
+    <heading>Boot named actors from a manifest</heading>
     <p>When a system starts the same actors every time, list them in a manifest, so your program need not know which.</p>
     <p>A manifest is a <code>&lt;system></code> document. Its charts are <code>&lt;chart name src></code>, read through the resolver, and its actors <code>&lt;actor name chart></code>.</p>
     <p><code>compileSystem</code> compiles it, and <code>host.boot(segment)</code> spawns its actors, each with its name. The image <code>new Host</code> was given first is segment 0.</p>

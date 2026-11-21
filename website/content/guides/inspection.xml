@@ -3,12 +3,12 @@
   <title>Inspecting a host</title>
   <description>Read which state a running actor is in and what its variables hold, and count what each chart has done.</description>
   <hero>
-    <headline>Ask a running host what its actors do.</headline>
+    <headline>Ask a running host what its actors do</headline>
     <lede><code>await actor.state()</code> tells you which state a running actor is in, and <code>await host.hostStats()</code> counts what each chart has done.</lede>
   </hero>
 
   <section id="ask">
-    <heading>Read an actor's state and variables.</heading>
+    <heading>Read an actor's state and variables</heading>
     <p><code>actor.state()</code>, <code>actor.context()</code> and <code>actor.get()</code> each return a promise. Each reads the host as it is at the call, and settles on a later turn of the event loop.</p>
     <p>An application calls these on its <code>Actor</code>s. An operator asks the same of <code>host</code>, as in <code>await host.actorState({ session })</code> (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#operating-a-host">Operating a host</link>).</p>
     <p>This program adds tea to an order, then reads its state, its variables and its mailbox.</p>
@@ -55,7 +55,7 @@ actor: order mailbox 0
   </section>
 
   <section id="delayed-sends-and-history">
-    <heading>See when an actor acts next.</heading>
+    <heading>See when an actor acts next</heading>
     <p><code>actorGet</code> tells when a waiting actor acts next, and <code>actorState</code> which state it will go back to.</p>
     <list>
       <item><term><code>timers</code></term><text>The actor's pending delayed sends, each <code>&lt;send delay&gt;</code> not yet due and not cancelled, earliest first, as <code>{ sendid, event, due }</code>. <code>due</code> is in milliseconds on the clock <code>host.now()</code> reads, and a send without an <code>id</code> has a <code>sendid</code> of <code>null</code>.</text></item>
@@ -106,7 +106,7 @@ state: "held" history: {"back":{"reviewing":"legal"}}
   </section>
 
   <section id="the-methods">
-    <heading>Pick the method for your question.</heading>
+    <heading>Pick the method for your question</heading>
     <p>Each of these calls, the typed methods, takes one object of params and resolves with one result object:</p>
     <table>
       <head><cell>Method</cell><cell>Params</cell><cell>Result</cell></head>
@@ -124,7 +124,7 @@ state: "held" history: {"back":{"reviewing":"legal"}}
   </section>
 
   <section id="errors">
-    <heading>Catch a question the host refuses.</heading>
+    <heading>Catch a question the host refuses</heading>
     <p>A refused method rejects with a <code>TinyactorsError</code>. Its <code>reason</code> is a word such as <code>stale</code> or <code>unknown</code>, and its <code>path</code> names the param it is about.</p>
     <p>Its <code>code</code> is JSON-RPC's number and its message is for people. A call on a closed host rejects the same way.</p>
     <example>
@@ -151,7 +151,7 @@ unknown params.name
   </section>
 
   <section id="list-every-actor">
-    <heading>Page through every actor.</heading>
+    <heading>Page through every actor</heading>
     <p><code>actorList</code> answers a page of sessions and a <code>cursor</code> for the next, <code>null</code> after the last page. This loop reads five actors two at a time.</p>
     <example>
       <code language="javascript" file="list.mjs"><![CDATA[
@@ -181,14 +181,14 @@ sessions: 1 2 3 4 5
   </section>
 
   <section id="sessions-are-numbers">
-    <heading>Compare listed sessions as numbers.</heading>
+    <heading>Compare listed sessions as numbers</heading>
     <p>A result's sessions are numbers, while <code>actor.id</code> and the views give <code>bigint</code>s. So <code>result.sessions.includes(actor.id)</code> is false, and a <code>Map</code> keyed by one misses the other.</p>
     <p>Compare with <code>Number(actor.id) === listed</code>, or key by <code>String(actor.id)</code> (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#actors-sessions-and-addresses">Actors, sessions and addresses</link>).</p>
     <p>The inputs take either as it is, as in <code>host.send(result.sessions[0], ...)</code>, and <code>host.actor(result.sessions[0])</code> gives its <code>Actor</code>. <code>await host.actors({ chart })</code> reads every page and lists the live actors as <code>Actor</code>s.</p>
   </section>
 
   <section id="the-hosts-counters">
-    <heading>Count what the host has done.</heading>
+    <heading>Count what the host has done</heading>
     <p><code>await host.hostStats()</code> gives counters for the whole host, for each segment's pools and for each chart. Here one of three jobs finishes and one hits an error.</p>
     <list>
       <item><term><code>host</code></term><text><code>segments</code> (live), <code>actors</code> and <code>hibernated</code> (now), <code>runnable</code> (actors with work waiting), <code>migrations</code> (running), <code>regionBytes</code> (the memory of the live segments), <code>delivered</code> (events put in queues), <code>routed</code> (sends between the host's segments), <code>migrated</code> (actors moved), <code>retired</code> (segments freed after a migration) and <code>fuelClock</code> (the work the host has done, the clock its trace records are stamped with).</text></item>
@@ -236,7 +236,7 @@ job: 3 spawned, 1 ended, 2 running, 1 execution error
   </section>
 
   <section id="two-actors-that-never-rest">
-    <heading>Find actors that never rest.</heading>
+    <heading>Find actors that never rest</heading>
     <p>Actors that answer each other forever keep the host busy, and <code>await host.idle()</code> never resolves. Nothing is logged or thrown, since every step is legal.</p>
     <p>The usual cause is SCXML's prefix match (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#charts">Charts</link>): a transition on <code>join</code> also takes the answer <code>join.refused</code>, and asks again.</p>
     <p>Between two readings with no input, a loop's charts gain <code>macrosteps</code> and <code>fuel</code> without end, and <code>host.delivered</code> grows. <code>host.runnable</code> stays above zero, where a host that is only slow drains its queue.</p>
@@ -288,7 +288,7 @@ idle again; busy: 0
   </section>
 
   <section id="with-handlers">
-    <heading>Pass handlers instead of a promise.</heading>
+    <heading>Pass handlers instead of a promise</heading>
     <p>Each method also takes handlers, as <code>host.actorState(params, onResult, onError)</code>, and then returns nothing. A later turn calls <code>onResult(result)</code>, or <code>onError(error)</code> with the same <code>TinyactorsError</code>.</p>
     <p>The promise is made only when no handler is given, so a caller that passes handlers pays for none. A method without params takes <code>undefined</code>: <code>host.hostStats(undefined, onResult)</code>.</p>
     <example>
@@ -321,7 +321,7 @@ error: stale
   </section>
 
   <section id="typed-results">
-    <heading>Check params and results with TypeScript.</heading>
+    <heading>Check params and results with TypeScript</heading>
     <p><code>index.d.ts</code> types each method's params and result (<code>SessionParams</code>, <code>ActorStateResult</code>, <code>ActorListResult</code>, <code>HostStatsResult</code>, <code>EffectiveHostConfig</code>, ...), and the config as <code>HostConfig</code>.</p>
     <p>The types hold for the promises and the handlers' <code>result</code> alike. An editor completes <code>stats.pools[0].actors.highWater</code>, and <code>tsc</code> refuses a field a result lacks or a param a method does not take.</p>
   </section>

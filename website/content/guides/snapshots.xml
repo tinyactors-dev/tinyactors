@@ -3,12 +3,12 @@
   <title>Snapshots</title>
   <description>host.snapshot() copies a running tinyactors host into bytes, two million actors in 165 MB, and Host.restore runs the copy in this process or another.</description>
   <hero>
-    <headline>Copy a running application, and run the copy.</headline>
+    <headline>Copy a running application, and run the copy</headline>
     <lede>A host of two million actors makes a 165 MB snapshot in about a tenth of a second. Restore it in another process and rehearse a deploy on the copy.</lede>
   </hero>
 
   <section id="what-it-holds">
-    <heading>Copy every actor into one buffer.</heading>
+    <heading>Copy every actor into one buffer</heading>
     <p><code>host.snapshot()</code> returns one <code>Buffer</code> holding every actor of the host, with its variables, its queued events and its pending timers.</p>
     <p>The buffer also holds the hibernated actors' records, the compiled images, the system id and the host's time. <code>Host.restore</code> runs it again, in this process or another.</p>
     <p>On a copy, add a new image, migrate, run the clock ahead, and look. Or capture a host when something goes wrong, and step through it.</p>
@@ -16,7 +16,7 @@
   </section>
 
   <section id="when-a-snapshot-is-refused">
-    <heading>Take a snapshot when the host is idle.</heading>
+    <heading>Take a snapshot when the host is idle</heading>
     <p><code>snapshot()</code> throws a <code>TinyactorsError</code> with <code>TA_ERROR_STATE</code> from a handler, and during a migration.</p>
     <p>It throws the same while output or a typed method's reply waits for your handlers, so <code>await host.idle()</code> first.</p>
     <p>Here a snapshot from a log handler throws, and one after <code>idle()</code> succeeds. A refused snapshot leaves the host running.</p>
@@ -55,7 +55,7 @@ after idle(): true
   </section>
 
   <section id="time">
-    <heading>Run the copy on a new clock.</heading>
+    <heading>Run the copy on a new clock</heading>
     <p>This reminder is half an hour from ringing when its host is snapshotted. Restored on a new clock that reads 0, it rings 30 minutes later.</p>
     <example>
       <code language="javascript" file="reminder.mjs"><![CDATA[
@@ -111,7 +111,7 @@ reminder: water the plants
   </section>
 
   <section id="restoring">
-    <heading>Restore with the options the snapshot had.</heading>
+    <heading>Restore with the options the snapshot had</heading>
     <p>Pass <code>Host.restore</code> the charts and the options the snapshot was taken with. It checks <code>system</code> against the system id the snapshot holds.</p>
     <p>The snapshot holds the host, not the options you passed it: give the copy its handlers, I/O processors and tick rate. Pass <code>datamodel: 'quickjs'</code> again for a quickjs host.</p>
     <p>The snapshot holds its images, so pass only the charts it lacks. An image it holds is skipped, and a new version is added as <code>new Host</code> adds it.</p>
@@ -123,26 +123,26 @@ reminder: water the plants
   </section>
 
   <section id="restarting-services">
-    <heading>Start the invoked services again.</heading>
+    <heading>Start the invoked services again</heading>
     <p>The snapshot holds each running invocation, and the services you run stay in your program. The restored host's first turn announces each invocation that was running to the <code>services</code> handler you pass <code>Host.restore</code>.</p>
     <p>Each comes with <code>invocation.restored</code> true and the same <code>invokeid</code>, <code>src</code> and params. Pass your real handlers to go on, or stand-ins for a copy that must not reach the real services.</p>
     <p>A type with no handler gives its invokers <code>error.communication</code>, and nothing is thrown.</p>
   </section>
 
   <section id="the-store">
-    <heading>Give the copy its own store.</heading>
+    <heading>Give the copy its own store</heading>
     <p>The snapshot holds the hibernated actors' records, and their blobs stay in your store. The restored host loads them from the <code>store</code> you pass it.</p>
     <p>A copy that hibernates actors writes and deletes blobs too, so give it a copy of the store.</p>
   </section>
 
   <section id="replaying-inputs">
-    <heading>Replay the inputs that came after.</heading>
+    <heading>Replay the inputs that came after</heading>
     <p><code>host.now()</code> reads the host's clock, so a journal of the inputs that came after a snapshot records it with each.</p>
     <p>A replay on a restored host with a <code>SimulatedClock</code> moves the clock to each reading before the input: <code>clock.increment(entry.at - host.now())</code>.</p>
   </section>
 
   <section id="at-scale">
-    <heading>Rehearse a deploy on a copy.</heading>
+    <heading>Rehearse a deploy on a copy</heading>
     <p>The snapshot program, <code>tools/snapshot.mjs</code>, rehearses a deploy on a live host of two million actors. At most 1000 are resident, and the rest are in SQLite.</p>
     <p>Each resident actor has a delayed send pending, and half are paying through an invoked service that has not answered.</p>
     <list>

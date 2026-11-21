@@ -3,12 +3,12 @@
   <title>Guides · tinyactors</title>
   <description>Steps for each task with tinyactors, from writing a chart to running millions of actors, each with a program that runs.</description>
   <hero>
-    <headline>Steps for each task, with programs that run.</headline>
+    <headline>Steps for each task, with programs that run</headline>
     <lede>Each program shown with its output runs in the site's tests against the published package, and must print what the page shows.</lede>
   </hero>
 
   <section id="charts">
-    <heading>Write and test charts.</heading>
+    <heading>Write and test charts</heading>
     <list>
       <item><term><link to="guide-charts">Writing charts</link></term><text>A chart's code is JavaScript that reads the actor's variables by name, and your charts compile into one image.</text></item>
       <item><term><link to="guide-testing">Testing your charts</link></term><text>A payment that retries every 30 seconds runs all its attempts in a test that takes milliseconds.</text></item>
@@ -17,7 +17,7 @@
   </section>
 
   <section id="world">
-    <heading>Connect actors to your code and other hosts.</heading>
+    <heading>Connect actors to your code and other hosts</heading>
     <list>
       <item><term><link to="guide-io-processors">I/O processors</link></term><text>A chart asks for outside work by sending an event, and an object of yours answers with another.</text></item>
       <item><term><link to="guide-services">Invoked services</link></term><text>A connection opens when a chart enters a state and closes when it leaves.</text></item>
@@ -27,7 +27,7 @@
   </section>
 
   <section id="operate">
-    <heading>Run a host in production.</heading>
+    <heading>Run a host in production</heading>
     <list>
       <item><term><link to="guide-capacity">Capacity and memory</link></term><text>A started actor takes about 530 bytes on Node.js, and a hibernated one about 120.</text></item>
       <item><term><link to="guide-hibernation">Hibernation</link></term><text>Two million actors ran with at most 1000 in memory and the rest as bytes in a database.</text></item>
@@ -39,7 +39,7 @@
   </section>
 
   <section id="browser">
-    <heading>Run actors in a browser.</heading>
+    <heading>Run actors in a browser</heading>
     <list>
       <item><term><link to="guide-browser">In the browser</link></term><text>Change one import, and your charts run in a page or a Worker.</text></item>
     </list>

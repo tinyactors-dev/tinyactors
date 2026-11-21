@@ -3,19 +3,19 @@
   <title>Telemetry</title>
   <description>Export each step an actor takes as an OpenTelemetry span, with its logs and metrics, as OTLP bytes your code sends to a collector.</description>
   <hero>
-    <headline>See what your actors did in OpenTelemetry.</headline>
+    <headline>See what your actors did in OpenTelemetry</headline>
     <lede>Each step an actor takes becomes a span with its event and the states it left and entered, in the caller's trace when it passes one. Your code sends the OTLP bytes to the collector it chooses.</lede>
   </hero>
 
   <section id="overview">
-    <heading>Decide where the OTLP bytes go.</heading>
+    <heading>Decide where the OTLP bytes go</heading>
     <p>The host writes OTLP requests, the protobuf bytes a collector takes at <code>/v1/traces</code>, <code>/v1/logs</code> and <code>/v1/metrics</code>. Your code posts them where it chooses, and retries when it must (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#operating-a-host">operating a host</link>).</p>
     <p>A step's span holds the event, the transitions, and the states left and entered. Each <code>&lt;log&gt;</code> and failed action becomes a log record, and the host's counters become metrics.</p>
     <p>Turning telemetry on changes nothing an actor does. <link to="telemetry"/> runs a traced payment in your browser and shows its spans.</p>
   </section>
 
   <section id="turning-it-on">
-    <heading>Export spans to your collector.</heading>
+    <heading>Export spans to your collector</heading>
     <p>A <code>telemetry</code> map in the config makes the host write OTLP. A <code>telemetry</code> handler in the options gets each request it writes as a <code>Buffer</code>, with its signal, <code>'traces'</code> or <code>'logs'</code>.</p>
     <p>This order continues a caller's trace, and its spans come back with the caller's span as their parent:</p>
     <example>
@@ -79,7 +79,7 @@ the step's parent is the caller's span: true
   </section>
 
   <section id="the-encoders-options">
-    <heading>Choose how soon records are sent.</heading>
+    <heading>Choose how soon records are sent</heading>
     <p>Every key of the config's <code>telemetry</code> map is optional, and <code>flushInterval</code> decides how soon a request is ready:</p>
     <table>
       <head><cell>Key</cell><cell>Default</cell><cell>What it does</cell></head>
@@ -94,7 +94,7 @@ the step's parent is the caller's span: true
   </section>
 
   <section id="flush-in-tests">
-    <heading>Step a test's clock past the flush.</heading>
+    <heading>Step a test's clock past the flush</heading>
     <p>Once records wait to be sent, the flush is one of the host's deadlines. <code>host.nextDeadline</code> reads it even when no actor has a delayed send left.</p>
     <p>The host arms its timer for it, which keeps the process alive until then. A test that asserts no timer is left steps its clock past the flush first:</p>
     <example>
@@ -130,18 +130,18 @@ flushed; nextDeadline undefined
   </section>
 
   <section id="metrics-and-close">
-    <heading>Read metrics on your own schedule.</heading>
+    <heading>Read metrics on your own schedule</heading>
     <p><code>host.metrics()</code> returns the metrics request for the host's counters now, a <code>Buffer</code> for <code>/v1/metrics</code>. On a host without <code>telemetry</code> in its config it throws <code>TA_ERROR_STATE</code>.</p>
   </section>
 
   <section id="close-to-flush">
-    <heading>Close the host to send the last spans.</heading>
+    <heading>Close the host to send the last spans</heading>
     <p>At <code>host.close()</code> every open span ends, marked incomplete, and the handler gets the last requests before the host is freed.</p>
     <p><code>await host[Symbol.asyncDispose]()</code> also awaits a promise the handler returns there. A host the garbage collector frees without <code>close()</code> sends none of it: close the hosts whose telemetry you want.</p>
   </section>
 
   <section id="trace-context">
-    <heading>Continue a trace across requests.</heading>
+    <heading>Continue a trace across requests</heading>
     <p>An input continues the trace a W3C <code>traceparent</code> header's text names, and text that does not parse starts a new trace. Pass it as an option:</p>
     <list>
       <item><text><code>actor.send(event, data, { traceparent })</code></text></item>
@@ -188,7 +188,7 @@ the outgoing request continues trace 4bf92f3577b34da6a3ce929d0e0e4736
   </section>
 
   <section id="trace-ids">
-    <heading>Seed trace IDs to repeat a test's traces.</heading>
+    <heading>Seed trace IDs to repeat a test's traces</heading>
     <p>A trace the host starts takes its ID from a generator seeded by <code>system.traceSeed</code>. With none in the config, the package draws a random seed for each new host (<code>crypto.getRandomValues</code>).</p>
     <p>So two processes, or one process and its restart, do not collide at the collector. The same seed gives the same IDs, which reproduces a test's traces:</p>
     <example>
@@ -228,7 +228,7 @@ seed 7, twice: true
   </section>
 
   <section id="choosing-what-is-traced">
-    <heading>Change what is traced while the host runs.</heading>
+    <heading>Change what is traced while the host runs</heading>
     <p>Call these methods on the host to change what it records while it runs (<link to="guide-inspection"/>):</p>
     <list>
       <item><term><code>traceConfigure(params)</code></term><text>sets what every actor traces: <code>detail</code> (<code>'summary'</code>, <code>'decisions'</code>, <code>'full'</code> or <code>'off'</code>), <code>values</code>, <code>sample</code> (the share of new traces sampled, 0 to 1) and <code>rules</code>. It replaces the previous configuration.</text></item>

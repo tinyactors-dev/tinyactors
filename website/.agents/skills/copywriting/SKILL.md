@@ -16,6 +16,14 @@ real sentences from this site before and after review, by kind of
 element (headline, lede, heading, paragraph, demo page, component copy).
 Read the section for what you are writing before you write it.
 
+## Headings carry no period
+
+A headline, a section's heading and a claim's statement end without a
+period ("Build a team chat", "An actor takes about 530 bytes"); a
+question keeps its question mark. The schema refuses a final period.
+The before-and-after pairs in `references/patterns.md` were collected
+when headings ended with one: read their wording, not their punctuation.
+
 ## The test
 
 For each sentence, ask: **if I deleted it, would the reader know less

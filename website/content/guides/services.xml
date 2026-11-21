@@ -3,19 +3,19 @@
   <title>Invoked services</title>
   <description>Run a connection, a subprocess or a long computation for as long as a chart's state is active, with SCXML's invoke.</description>
   <hero>
-    <headline>Keep a connection open while a state lasts.</headline>
+    <headline>Keep a connection open while a state lasts</headline>
     <lede>A chart's <code>&lt;invoke&gt;</code> starts a connection or a subprocess in your program when the chart enters a state, and stops it when the chart leaves. 200,000 actors with one each made a million round trips in 18 to 23 seconds.</lede>
   </hero>
 
   <section id="invoke">
-    <heading>Choose invoke for work that outlives a request.</heading>
+    <heading>Choose invoke for work that outlives a request</heading>
     <p>An I/O processor answers one send at a time, while a connection or a subscription lives longer. SCXML's <code>&lt;invoke&gt;</code> starts it on entering a state and stops it on leaving.</p>
     <p>While the state is active, the chart and what it invoked exchange events. When your program runs it, it is a service, the subject of this guide.</p>
     <p>An invoked chart runs instead as a child actor of the host (<link to="guide-charts" section="a-chart-that-starts-another">A chart that starts another</link>).</p>
   </section>
 
   <section id="a-service">
-    <heading>Start a service when the state is entered.</heading>
+    <heading>Start a service when the state is entered</heading>
     <p>Register a handler per <code>&lt;invoke type&gt;</code> in the host's <code>services: { [type]: handler }</code>. At each start the handler gets an invocation and returns the service, any object.</p>
     <p>The host keeps the service until the invocation ends, and calls two methods on it if it has them:</p>
     <list>
@@ -88,13 +88,13 @@ done, total 13
   </section>
 
   <section id="when-it-starts">
-    <heading>Send to a service from a later event.</heading>
+    <heading>Send to a service from a later event</heading>
     <p>A service starts after the step that entered its state, raised and eventless transitions included, as a child chart does.</p>
     <p>A <code>&lt;send target="#_counter"&gt;</code> from that step, such as the state's own <code>&lt;onentry&gt;</code>, gets <code>error.communication</code>. Send from a later event, as <code>go</code> does above.</p>
   </section>
 
   <section id="the-invocation">
-    <heading>Answer from a timer or a promise.</heading>
+    <heading>Answer from a timer or a promise</heading>
     <p>The invocation stays valid after the start: a service may keep it and call <code>sendBack</code> from a timer or a promise. It carries the invoker and the invoke:</p>
     <list>
       <item><term><code>host</code></term><text>the host that started it;</text></item>
@@ -111,7 +111,7 @@ done, total 13
   </section>
 
   <section id="a-service-that-starts-asynchronously">
-    <heading>Queue sends until the service connects.</heading>
+    <heading>Queue sends until the service connects</heading>
     <p>A handler may return a promise of the service, while a connection opens or a process spawns. Until it settles the sends wait, and reach <code>receive</code> in order once it resolves.</p>
     <p>This handler reports <code>connecting</code> with <code>sendBack</code> while it waits. Both queries reach the service once the connection opens:</p>
     <example>
@@ -173,7 +173,7 @@ db://primary says yes to second
   </section>
 
   <section id="return-at-once">
-    <heading>Accept sends before the connection is ready.</heading>
+    <heading>Accept sends before the connection is ready</heading>
     <p>A service returned at once takes sends before it is ready, and decides itself what a send does while it connects.</p>
     <p>This one starts connecting in its constructor, and each <code>receive</code> awaits that start before it asks:</p>
     <example>
@@ -226,7 +226,7 @@ db://replica answers ping
   </section>
 
   <section id="failures">
-    <heading>Handle a service that fails.</heading>
+    <heading>Handle a service that fails</heading>
     <p>Each of these gives the invoker <code>error.communication</code>, and so does each later send until the invoker leaves the state:</p>
     <list>
       <item><text>no handler for the type, or none for a restored invocation;</text></item>
@@ -273,12 +273,12 @@ the mail service failed
   </section>
 
   <section id="closing">
-    <heading>Close a host with services running.</heading>
+    <heading>Close a host with services running</heading>
     <p><code>host.close()</code> drops the running services and calls no <code>stop</code>. The host keeps them on its own object, so a dropped host whose services refer back to it is still collected.</p>
   </section>
 
   <section id="at-scale">
-    <heading>Run 200,000 services in one host.</heading>
+    <heading>Run 200,000 services in one host</heading>
     <p><link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/tools/services.mjs"><code>tools/services.mjs</code></link> runs actors that each invoke a counter service, and sends pings and pongs to actors drawn at random. Then a third finish with done data, a third are cancelled, and the rest keep theirs.</p>
     <p>It checks that every pong is counted once and every done datum is right. Every cancelled service must be stopped exactly once, no other stopped, and the ended services collected.</p>
     <table>

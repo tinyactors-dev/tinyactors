@@ -4,7 +4,7 @@
   <description>Replace unit tests with properties: generate worlds from seeds, find the run that breaks the chart, shrink it, and read its trace. In your browser.</description>
 
   <hero>
-    <headline>Test properties, <em>not runs</em>.</headline>
+    <headline>Test properties, <em>not runs</em></headline>
     <lede>A unit test checks one run you thought of. A property holds for every run. Generate the runs, find the one that breaks, and shrink it. Everything on this page runs in your browser.</lede>
     <install>
       <command for="Browsers" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/browser.md">npm install @tinyactors/wasm</command>
@@ -17,13 +17,13 @@
   </hero>
 
   <section id="chart">
-    <heading>1. Write the chart.</heading>
+    <heading>1. Write the chart</heading>
     <p>A payment charges a card, retries after 30 seconds of silence, and gives up after three attempts.</p>
     <code src="../../examples/property/payment.scxml" language="scxml" file="payment.scxml"/>
   </section>
 
   <section id="world">
-    <heading>2. Make the world data.</heading>
+    <heading>2. Make the world data</heading>
     <p>The chart only sees events. So a world is an array: does the service answer charge 1, charge 2, and so on.</p>
     <code src="../../examples/property/property.mjs" lines="10-41" language="javascript" file="property.mjs"/>
     <p>Run <code>[silence, answer]</code> with tracing on. Select a row to see its transitions.</p>
@@ -33,13 +33,13 @@
   </section>
 
   <section id="properties">
-    <heading>3. State the properties.</heading>
+    <heading>3. State the properties</heading>
     <p>Whatever the service does, the payment charges at most three times and gives up only after the third charge. It is paid only when the service answered.</p>
     <code src="../../examples/property/property.mjs" lines="43-50" language="javascript" file="property.mjs"/>
   </section>
 
   <section id="search">
-    <heading>4. Search a thousand worlds.</heading>
+    <heading>4. Search a thousand worlds</heading>
     <p>A seed makes a world. The search runs seeds until one breaks a property, and the seed reproduces it.</p>
     <code src="../../examples/property/property.mjs" lines="52-66" language="javascript" file="property.mjs"/>
     <live src="../../examples/property/live.mjs" call="correct">
@@ -48,7 +48,7 @@
   </section>
 
   <section id="bug">
-    <heading>5. Plant a bug.</heading>
+    <heading>5. Plant a bug</heading>
     <p>Retry while <code>attempts &lt; 4</code>. A unit test that answers the first charge still passes.</p>
     <code src="../../examples/property/main.mjs" lines="12-14" language="javascript" file="main.mjs"/>
     <live src="../../examples/property/live.mjs" call="find">
@@ -57,7 +57,7 @@
   </section>
 
   <section id="shrink">
-    <heading>6. Shrink the failure.</heading>
+    <heading>6. Shrink the failure</heading>
     <p>Try smaller worlds until none still fails. What is left is the bug and nothing else.</p>
     <code src="../../examples/property/property.mjs" lines="68-89" language="javascript" file="property.mjs"/>
     <live src="../../examples/property/live.mjs" call="counterexample">
@@ -67,7 +67,7 @@
   </section>
 
   <section id="ci">
-    <heading>7. Run it in CI.</heading>
+    <heading>7. Run it in CI</heading>
     <p>The same module runs in Node.js and Bun. A failure names its seed.</p>
     <example>
       <code src="../../examples/property/main.mjs" language="javascript" file="main.mjs"/>
@@ -76,7 +76,7 @@
   </section>
 
   <section id="next">
-    <heading>Go further.</heading>
+    <heading>Go further</heading>
     <p>There is no library to install. The world, the properties, the generator, the search and the shrinker are 76 lines of your own code.</p>
     <list>
       <item><term>Richer worlds</term><text>Late, duplicate and reordered answers are more entries in the array.</text></item>

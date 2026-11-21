@@ -4,7 +4,7 @@
   <description>Build a team chat in five steps: a room, presence, a workspace, a roster, and a thousand users with fifty in memory.</description>
 
   <hero>
-    <headline>Build a team chat.</headline>
+    <headline>Build a team chat</headline>
     <lede>Rooms, people who come and go, and a workspace that holds them. Five steps, each a program you can run.</lede>
     <install>
       <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
@@ -16,7 +16,7 @@
   </hero>
 
   <section id="room">
-    <heading>1. Create a room.</heading>
+    <heading>1. Create a room</heading>
     <p>A room is an actor with a list of members. A <code>post</code> goes to every member, through a handler of type <code>chat:client</code>.</p>
     <code src="../../examples/chat/1-room/charts/room.scxml" lines="8-19" language="scxml" file="charts/room.scxml"/>
     <p>The handler stands in for the screens. The program starts a room and sends it three events.</p>
@@ -28,7 +28,7 @@
   </section>
 
   <section id="presence">
-    <heading>2. Add presence.</heading>
+    <heading>2. Add presence</heading>
     <p>Each user is an actor: offline, active or away. After 300 seconds without activity, a delayed <code>idle</code> event makes it away.</p>
     <code src="../../examples/chat/2-presence/charts/user.scxml" lines="19-52" language="scxml" file="charts/user.scxml"/>
     <p>The room now sends each post to each member's actor, by name. An offline user drops it.</p>
@@ -41,7 +41,7 @@
   </section>
 
   <section id="workspace">
-    <heading>3. Let the workspace make rooms.</heading>
+    <heading>3. Let the workspace make rooms</heading>
     <p>One actor decides which rooms exist and spawns them through the <code>Spawner</code>. It records a name when it asks, so a second request for it is refused.</p>
     <code src="../../examples/chat/3-workspace/charts/workspace.scxml" lines="19-44" language="scxml" file="charts/workspace.scxml"/>
     <p>A user joins rooms by name. Joining a room that does not exist fails with <code>error.communication</code>.</p>
@@ -54,7 +54,7 @@
   </section>
 
   <section id="roster">
-    <heading>4. Share a roster.</heading>
+    <heading>4. Share a roster</heading>
     <p>Each user reports its status to the workspace when it changes. A user who comes online gets the whole roster, and everyone else gets the change.</p>
     <code src="../../examples/chat/4-roster/charts/workspace.scxml" lines="59-72" language="scxml" file="charts/workspace.scxml"/>
     <example>
@@ -63,7 +63,7 @@
   </section>
 
   <section id="hibernation">
-    <heading>5. Hibernate idle users.</heading>
+    <heading>5. Hibernate idle users</heading>
     <p>The charts do not change. Give the host a store and a bound, and it keeps at most that many actors in memory.</p>
     <example>
       <code src="../../examples/chat/5-hibernation/main.mjs" lines="41-48" language="javascript" file="main.mjs"/>
@@ -73,7 +73,7 @@
   </section>
 
   <section id="next">
-    <heading>Take it to production.</heading>
+    <heading>Take it to production</heading>
     <p>The charts stay. What changes is what the handlers connect to.</p>
     <list>
       <item><term>Connections</term><text><code>chat:client</code> writes to sockets. A closed socket sends <code>disconnect</code>.</text></item>

@@ -385,7 +385,7 @@
         <xs:element name="claim" maxOccurs="unbounded">
           <xs:complexType>
             <xs:sequence>
-              <xs:element name="statement" type="emphasis"/>
+              <xs:element name="statement" type="title"/>
               <xs:element name="p" type="paragraph" maxOccurs="unbounded"/>
               <xs:element name="source" type="source" maxOccurs="unbounded"/>
             </xs:sequence>
@@ -464,13 +464,14 @@
 
   <xs:complexType name="title" mixed="true">
     <xs:annotation><xs:documentation>
-      A headline or a section's heading: one to eight words, in sentence
-      case, ending with a period ("Build a team chat.").
+      A headline, a section's heading or a claim's statement: one to eight
+      words, in sentence case, with no period at the end ("Build a team
+      chat"). A question keeps its question mark.
     </xs:documentation></xs:annotation>
     <xs:complexContent>
       <xs:extension base="emphasis">
         <xs:assert test="(: one to eight words :) count(tokenize(normalize-space(.), ' ')) le 8"/>
-        <xs:assert test="(: ends with a period :) ends-with(normalize-space(.), '.')"/>
+        <xs:assert test="(: no period at the end :) not(ends-with(normalize-space(.), '.'))"/>
       </xs:extension>
     </xs:complexContent>
   </xs:complexType>

@@ -3,19 +3,19 @@
   <title>Migration</title>
   <description>Move running actors to a chart's new version, each at rest, keeping its session, states and queue while the host goes on working.</description>
   <hero>
-    <headline>Upgrade running actors in place.</headline>
+    <headline>Upgrade running actors in place</headline>
     <lede>An order waiting a week for delivery can move to its chart's next version and keep the state it reached. Two million actors, most of them hibernated, moved while events kept coming.</lede>
   </hero>
 
   <section id="versions-and-segments">
-    <heading>Add the new version to the host.</heading>
+    <heading>Add the new version to the host</heading>
     <p><code>host.addImage(image)</code> adds a compiled image to a running host. A chart in it with a name the host already has becomes that chart's new version.</p>
     <p><code>host.spawn(name)</code> spawns the newest version, which <code>host.chart(name)</code> returns, and running actors stay on theirs.</p>
     <p>Each image becomes a segment of the host: those <code>new Host</code> was given, and each one added after.</p>
   </section>
 
   <section id="why-migrate">
-    <heading>Decide which actors must move.</heading>
+    <heading>Decide which actors must move</heading>
     <p>Adding the image is a deploy on its own: an actor that may finish on its version needs no migration.</p>
     <p>An order that waits a week for its delivery is still running when the next version ships. Stopping it would lose its state.</p>
     <p>A migration moves it instead, while the host goes on working, as part of <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#operating-a-host">operating a host</link>.</p>
@@ -23,7 +23,7 @@
   </section>
 
   <section id="moving-running-actors">
-    <heading>Move the actors and carry their variables.</heading>
+    <heading>Move the actors and carry their variables</heading>
     <p><code>host.migrate()</code> moves the running actors to the newest version of their chart, during the next turns.</p>
     <p>A moved actor keeps its session, its active states, its queue and its delayed sends with their data. Its states are matched by id (<link to="guide-migration" section="states-the-new-version-enters">below</link>).</p>
     <p>Its variables do not carry over by themselves, since the new version may name them differently. The actor first gets <code>error.platform.upgrade</code>, whose data holds the old version's variables.</p>
@@ -99,7 +99,7 @@ v2 counts 12
   </section>
 
   <section id="the-calls">
-    <heading>Choose what moves, and read the result.</heading>
+    <heading>Choose what moves, and read the result</heading>
     <p><code>host.migrate</code> picks the actors, and the <code>migrationDone</code> and <code>migrated</code> handlers in the host's options report on them:</p>
     <list>
       <item><term><code>host.migrate({ chart, session, wake, timeout })</code></term><text>starts a migration and returns its id, a number. With no options it moves the actors of every chart; <code>chart</code> names one chart, <code>session</code> one actor. <code>wake: true</code> asks for the hibernated actors. <code>timeout</code> is in milliseconds of the host's clock, rounded up to its next tick; 0 or none means none. A <code>chart</code> the host does not have throws <code>TA_ERROR_INVALID</code>, and a <code>session</code> that ended <code>TA_ERROR_STALE</code>: a migration that could move nothing is refused rather than reported done.</text></item>
@@ -109,7 +109,7 @@ v2 counts 12
   </section>
 
   <section id="states-the-new-version-enters">
-    <heading>Do <code>&lt;onentry></code> work in the upgrade transition.</heading>
+    <heading>Do <code>&lt;onentry></code> work in the upgrade transition</heading>
     <p>A migration enters the new version's states without running their <code>&lt;onentry></code>, and leaves the old ones without their <code>&lt;onexit></code>.</p>
     <p>It matches states by id, then completes the active states to a set the new version allows:</p>
     <list>
@@ -182,7 +182,7 @@ next deadline 7000
   </section>
 
   <section id="when-a-migration-ends">
-    <heading>Give a migration a timeout.</heading>
+    <heading>Give a migration a timeout</heading>
     <p>A migration ends when every actor it looks at has moved, or at its <code>timeout</code>.</p>
     <p>An actor running an invocation, an invoked chart or a service, moves once the invocation ends. With a <code>timeout</code>, the migration waits for the invocation to end, up to the timeout.</p>
     <p>Without a <code>timeout</code> it fails such an actor at once with <code>'TA_ERROR_STATE'</code>, since an invocation may never end.</p>
@@ -190,14 +190,14 @@ next deadline 7000
   </section>
 
   <section id="hibernated-actors">
-    <heading>Wake hibernated actors so they move.</heading>
+    <heading>Wake hibernated actors so they move</heading>
     <p>A hibernated actor moves once it is woken. With <code>wake: true</code> the migration asks the host for it, and the host loads it from its <link to="guide-hibernation">store</link>.</p>
     <p>The migration asks again if it finds the actor hibernated after a wake.</p>
     <p>Without <code>wake</code>, a hibernated actor that nothing wakes holds the migration until its timeout. Without a timeout it holds it forever, and <code>migrationDone</code> is never called.</p>
   </section>
 
   <section id="most-actors-hibernated">
-    <heading>Bound memory during a large migration.</heading>
+    <heading>Bound memory during a large migration</heading>
     <p>A migration with <code>wake: true</code> asks for every hibernated actor early. Woken all at once, they would all be in memory at once.</p>
     <p>A host with a <code>resident</code> bound loads a migration's requests only while it holds fewer actors than the bound. It hibernates actors again after each turn, so the migration moves the population a few at a time.</p>
     <p>An event for a hibernated actor still loads it at once.</p>
@@ -252,14 +252,14 @@ host.close();
   </section>
 
   <section id="actors-that-do-not-move">
-    <heading>Find the actors that could not move.</heading>
+    <heading>Find the actors that could not move</heading>
     <p>An actor whose variables cannot be stored stays on its version, in the result's <code>failed</code> with reason <code>'TA_ERROR_UNSUPPORTED'</code>.</p>
     <p>On the native datamodel, such a variable holds a value outside the value table, such as a function or a <code>Map</code>.</p>
     <p><link to="guide-hibernation" section="what-a-blob-stores">Hibernation</link> refuses the same actors: call <code>host.hibernate</code> on one, and its error names the variable.</p>
   </section>
 
   <section id="at-scale">
-    <heading>Migrate two million actors with 1000 in memory.</heading>
+    <heading>Migrate two million actors with 1000 in memory</heading>
     <p><link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/tools/migration.mjs"><code>tools/migration.mjs</code></link> (<code>mise run migration</code>) runs this pattern at scale, with the actors past the bound in SQLite.</p>
     <p>200,000 events came before the migration and 200,000 more during it. Every actor moved to version 2 with <code>wake: true</code>, in 3,688,635 loads from the store per run.</p>
     <p>Every actor migrated, none failed and none was left. All 25,000 sampled actors had their count and version 2, and version 1's segment was retired.</p>

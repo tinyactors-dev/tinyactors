@@ -27,16 +27,17 @@ rules.
   `output.txt`. `live.mjs` only adapts it for the page. After changing a
   component or a live example, open the page in a browser (`mise run
   serve`) and run each button: nothing in the test task does.
-- **The voice: short and literal.** Headlines and headings are 1 to 8
-  words, sentence case, ending with a period ("Build a team chat."). A
-  paragraph is one or two sentences of at most 21 words each, with the
-  product or the reader's code as the subject. The schema refuses a
-  heading or a paragraph outside these limits (the types `title` and
-  `paragraph`), and any text that says "formal verification". Each
-  section is one line of prose and then the proof: code, output, a claim
-  with its source. No
-  metaphors, no adjectives that do not measure something, no hype words,
-  no emoji. Actions are a verb and an object, 2 to 4 words.
+- **The voice: short and literal.** Headlines, headings and claims'
+  statements are 1 to 8 words, sentence case, with no period at the end
+  ("Build a team chat"; the maintainer, 2026-11-21, replacing "ending
+  with a period"). A paragraph is one or two sentences of at most 21
+  words each, with the product or the reader's code as the subject. The
+  schema refuses a heading or a paragraph outside these limits (the
+  types `title` and `paragraph`), and any text that says "formal
+  verification". Each section is one line of prose and then the proof:
+  code, output, a claim with its source. No metaphors, no adjectives that
+  do not measure something, no hype words, no emoji. Actions are a verb
+  and an object, 2 to 4 words.
 - **Every sentence says something.** Use the `copywriting` skill
   (`.agents/skills/copywriting`) before writing or changing copy: a
   headline states a benefit, a heading its finding, a lede the page's
