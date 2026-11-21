@@ -42,7 +42,7 @@
       </claim>
       <claim>
         <statement>One chart runs in JavaScript, Python and C</statement>
-        <p>Charts are written in the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link>. Each language's package wraps the same C core, so a chart behaves the same in all of them.</p>
+        <p>Each language's package wraps one C core, and that core passes all 191 automatic tests of the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link> suite.</p>
         <source to="performance" section="correctness">One test suite for every package</source>
       </claim>
       <claim>
@@ -58,21 +58,13 @@
 
   <section id="verify">
     <heading>Kill your unit tests</heading>
-    <p>A unit test checks the runs you thought of. A property is a rule that holds on every run a program generates.</p>
-    <p>Does this payment ever charge a card four times? This program asks a thousand times, with random answers, on a clock that jumps to each timeout:</p>
+    <p>A unit test checks one run you wrote down. A property is a rule, like "never charge a card more than three times", checked on runs a program generates.</p>
+    <p>This loop runs the payment a thousand times against a stand-in service that answers 40% of charges. After each run it checks two rules:</p>
     <example>
-      <code src="../../examples/simulate/simulate.mjs" lines="16-20" language="javascript" file="simulate.mjs"/>
       <code src="../../examples/simulate/simulate.mjs" lines="25-32" language="javascript" file="simulate.mjs"/>
       <code src="../../examples/simulate/output.txt" language="text" role="output"/>
-      <caption>Change <code>attempts &lt; 3</code> to <code>attempts &lt; 4</code> in the chart, and seed 10 fails. <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/website/examples/simulate/simulate.mjs">The whole program</link> is 44 lines.</caption>
     </example>
-    <claims>
-      <claim>
-        <statement>It passes the W3C's own tests</statement>
-        <p>SCXML defines what every transition does, and tinyactors passes all 191 automatic tests of the W3C suite.</p>
-        <source to="performance" section="correctness">The conformance results</source>
-      </claim>
-    </claims>
+    <p>With <code>attempts &lt; 4</code> in the chart, the loop stops at seed 10: it charged the card four times. <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/website/examples/simulate/simulate.mjs">The whole program</link> is 44 lines.</p>
   </section>
 
   <section id="build">
