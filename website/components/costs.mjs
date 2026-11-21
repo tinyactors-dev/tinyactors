@@ -1,9 +1,10 @@
-// The anthill's live costs: small multiples, one measure each over the last
-// minute (one point a second), so no two scales share an axis. A chart is
-// one line in the design system's accent, with its title and current value
-// in text ink, a baseline at zero and a labelled top line; hovering shows a
-// crosshair and the value at that second. A chart may draw a limit, a
-// dashed line with its name and value, which its scale always shows.
+// The live costs of a playground (the anthill, the lab): small multiples,
+// one measure each over the last minute (one point a second), so no two
+// scales share an axis. A chart is one line in the design system's accent,
+// with its title and current value in text ink, a baseline at zero and a
+// labelled top line; hovering shows a crosshair and the value at that
+// second. A chart may draw a limit, a dashed line with its name and value,
+// which its scale always shows.
 
 const POINTS = 60;
 const WIDTH = 240, HEIGHT = 64, TOP = 4;

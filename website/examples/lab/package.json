@@ -1,0 +1,10 @@
+{
+  "name": "tinyactors-website-example-lab",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "Two anthills, every ant an actor: world.mjs runs them on @tinyactors/wasm, in Node.js (main.mjs, which test/examples runs against output.txt) and in a browser Worker (worker.mjs, drawn by page.mjs).",
+  "dependencies": {
+    "@tinyactors/wasm": "0.4.0"
+  }
+}

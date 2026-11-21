@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A player of a rally: two players send one ball back and forth, with
+     no JavaScript between them. The serve says how many hits the rally
+     lasts; the player who takes the last hit tells the lab (urn:lab). -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="player" initial="playing">
+  <datamodel>
+    <data id="peer" expr="''"/>
+    <data id="hits" expr="0"/>
+  </datamodel>
+  <state id="playing">
+    <transition event="meet">
+      <assign location="peer" expr="_event.data.peer"/>
+    </transition>
+    <transition event="serve">
+      <send event="ball" targetexpr="peer"><param name="left" expr="_event.data.hits"/></send>
+    </transition>
+    <transition event="ball" cond="_event.data.left &gt; 1">
+      <assign location="hits" expr="hits + 1"/>
+      <send event="ball" targetexpr="peer"><param name="left" expr="_event.data.left - 1"/></send>
+    </transition>
+    <transition event="ball">
+      <assign location="hits" expr="hits + 1"/>
+      <send type="urn:lab" event="point"/>
+    </transition>
+  </state>
+</scxml>

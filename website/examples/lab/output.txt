@@ -1,0 +1,8 @@
+native fill: 2000 actors, 0 messages
+native events: 2000 actors, 5000 messages, counted 5000
+native rally: 2000 actors, 50500 messages, 500 rallies finished
+native sleep: 2000 actors, 5000 messages, 1900 asleep in the store, 3771 woken
+quickjs fill: 2000 actors, 0 messages
+quickjs events: 2000 actors, 5000 messages, counted 5000
+quickjs rally: 2000 actors, 50500 messages, 500 rallies finished
+quickjs sleep: 2000 actors, 5000 messages, 1900 asleep in the store, 3771 woken

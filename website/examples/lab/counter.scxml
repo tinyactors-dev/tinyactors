@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A counter: it waits for add and counts. The lab fills a host with
+     these, sends them events, and lets most of them sleep in a store. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="counter" initial="counting">
+  <datamodel>
+    <data id="count" expr="0"/>
+  </datamodel>
+  <state id="counting">
+    <transition event="add">
+      <assign location="count" expr="count + 1"/>
+    </transition>
+  </state>
+</scxml>

@@ -6,7 +6,7 @@
 import { WIDTH, HEIGHT, HILLS, HILL_RADIUS } from './world.mjs';
 import { atlas } from './sprites.mjs';
 import { createRenderer } from './renderer.mjs';
-import { chart } from './charts.mjs';
+import { chart } from '/assets/components/costs.mjs';
 
 const POPULATIONS = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000];
 const DEFAULT = 5; // 1,000,000
