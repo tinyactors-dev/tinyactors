@@ -51,7 +51,7 @@
     <heading>Measure it on your device.</heading>
     <p>Pick a scenario and a population, and one host fills and works in a Worker on this page.</p>
     <playground src="../../examples/lab/page.mjs">
-      <description>A host on this device fills with up to four million actors, then sends them events, lets them message each other, or keeps most of them asleep in a store. Charts show its actors, memory, messages a second and time per message.</description>
+      <description>A host on this device fills with up to four million actors, then sends them events, lets them message each other, keeps most of them asleep in a store, or gives each a timer. Charts show its actors, memory, messages a second and time per message.</description>
     </playground>
     <p>The charts show how many actors this device holds and how many messages a second it handles.</p>
     <p>Every counter in the lab runs this chart: it waits for <code>add</code> and counts.</p>
@@ -60,6 +60,18 @@
 
   <section id="correctness">
     <heading>Correct by the standard.</heading>
-    <p>The core passes all 191 automatic tests of the <link href="https://www.w3.org/Voice/2013/scxml-irp/">W3C's SCXML test suite</link>. Every binding runs the same conformance suite, on each of its datamodels.</p>
+    <p>The core passes the <link href="https://www.w3.org/Voice/2013/scxml-irp/">W3C's SCXML test suite</link>, and every binding runs it too.</p>
+    <claims>
+      <claim>
+        <statement>All 191 automatic W3C tests pass.</statement>
+        <p>That is 158 mandatory tests and 33 optional ones, BasicHTTP included.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/docs/architecture.md#15-implementation-status-and-deviations-from-this-design">tinyactors-core, <code>docs/architecture.md</code>, section 15</source>
+      </claim>
+      <claim>
+        <statement>Every binding runs the same suite.</statement>
+        <p>The conformance suite runs the W3C tests and its own scenarios against each binding, on each of its datamodels.</p>
+        <source href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-test/README.md">tinyactors-test, <code>README.md</code></source>
+      </claim>
+    </claims>
   </section>
 </page>

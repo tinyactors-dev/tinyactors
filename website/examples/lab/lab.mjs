@@ -14,10 +14,15 @@
 // - sleep: the host keeps at most `resident` actors in memory and the rest
 //   in a store; each event goes to a counter drawn at random, which is
 //   almost always asleep, so the host wakes it from the store first.
+// - timers: every actor holds a delayed send to itself, due every 1 to 10
+//   seconds; the lab moves a simulated clock on by STEP at a time, as fast
+//   as the host keeps up, and each send that falls due is a tick.
 
-export const SCENARIOS = ['fill', 'events', 'rally', 'sleep'];
+export const SCENARIOS = ['fill', 'events', 'rally', 'sleep', 'timers'];
 export const BATCH = 1000; // events a unit of work sends
 export const HITS = 100; // hits a rally lasts
+export const STEP = 100; // simulated milliseconds a unit of timers moves the clock
+const PERIODS = 91; // a timer's period: 1 s to 10 s, in steps of STEP
 const CHUNK = 4096; // spawns between runs to idle
 
 /**
@@ -31,6 +36,13 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
   const rally = scenario === 'rally';
   const total = rally ? actors - (actors % 2) : actors;
   const counts = { spawned: 0, messages: 0, points: 0, wakes: 0, saves: 0 };
+  // The timers, counted by period and by when in it they fall due: what
+  // falls due at each step, without a look at every timer. A timer of a
+  // period of p steps whose first delay is f steps (1 to p) falls due at
+  // every step s with s % p === f % p.
+  const offset = (p) => (p * (p - 1)) / 2 - 45; // where period p's residues start
+  const due = new Float64Array(offset(10 + PERIODS));
+  const clock = new SimulatedClock();
 
   // The store of the sleep scenario counts what it holds, and its wakes.
   let store;
@@ -46,16 +58,21 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
   const compiled = compileCharts([
     { name: 'counter.scxml', text: charts.counter },
     { name: 'player.scxml', text: charts.player },
+    { name: 'timer.scxml', text: charts.timer },
   ]);
   const host = new Host(compiled, {
     system: 'lab',
-    clock: new SimulatedClock(),
+    clock,
     datamodel,
     // quickjs keeps every actor's variables in its own heap, 1 GiB unless
     // a host sets more; WebAssembly addresses 4 GiB in all.
     ...(datamodel === 'quickjs' ? { quickjs: { memoryLimit: 3 * 2 ** 30 } } : {}),
     // Sized for the population up front: a host that grows copies its memory.
-    config: { system: { maxActors: total + 64, maxEvents: 4 * BATCH, tracing: false } },
+    // Every pending delayed send holds a timer and an event, and a timer
+    // that falls due holds a second event for a moment: about one timer
+    // in fifty falls due in each step. Actors in the middle of a step hold
+    // a workspace each, a sender until its send is handled.
+    config: { system: { maxActors: total + 64, maxEvents: 4 * BATCH + (scenario === 'timers' ? total + Math.ceil(total / 16) : 0), workspaces: 1024, ...(scenario === 'timers' ? { maxTimers: total + 64 } : {}), tracing: false } },
     ioProcessors: { 'urn:lab': { receive() { counts.points++; } } },
     ...(store ? { store, resident } : {}),
   });
@@ -73,6 +90,10 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
           const second = host.spawn('player', { params: { peer: first.address.text } });
           meets.push({ target: first.id, event: 'meet', data: { peer: second.address.text } });
           sessions[i] = Number(first.id);
+        } else if (scenario === 'timers') {
+          const p = 10 + Math.floor(random() * PERIODS), first = 1 + Math.floor(random() * p);
+          due[offset(p) + (first % p)]++;
+          sessions[i] = Number(host.spawn('timer', { params: { period: `${p * STEP}ms`, first: `${first * STEP}ms` } }).id);
         } else sessions[i] = Number(host.spawn('counter').id);
       }
       if (meets.length) host.sendMany(meets);
@@ -85,6 +106,15 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
   /** One unit of the scenario's work, run until the host is idle; answers the messages it handled. */
   async function work() {
     if (scenario === 'fill') return 0;
+    if (scenario === 'timers') {
+      clock.increment(STEP);
+      const step = clock.now / STEP;
+      let ticks = 0;
+      for (let p = 10; p < 10 + PERIODS; p++) ticks += due[offset(p) + (step % p)];
+      await host.idle();
+      counts.messages += ticks;
+      return ticks;
+    }
     const items = [];
     let messages;
     if (rally) {
@@ -115,6 +145,7 @@ export function createLab(tinyactors, { scenario, actors, datamodel = 'native', 
       stored: store ? store.blobs.size : 0,
       storeBytes: store ? store.bytes : 0,
       quickjsHeap: host.quickjsHeapBytes ?? null,
+      simulated: clock.now / 1000, // seconds
     };
   }
 

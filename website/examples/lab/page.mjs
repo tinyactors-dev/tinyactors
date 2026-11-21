@@ -9,6 +9,7 @@ const SCENARIOS = [
   ['events', 'Send events', 'Send events to counters drawn at random; each adds one.'],
   ['rally', 'Actors message actors', 'Pairs of actors send a ball back and forth, a hundred hits a rally.'],
   ['sleep', 'Most asleep', 'Keep 1,000 actors in memory and the rest in a store; each event wakes one.'],
+  ['timers', 'Timers', 'Each actor holds a delayed send to itself, due every 1 to 10 seconds of a simulated clock.'],
 ];
 const POPULATIONS = [1_000, 10_000, 100_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000];
 const DEFAULT = 2; // 100,000
@@ -104,7 +105,9 @@ export function mount(root) {
     }
     status.textContent = data.phase === 'holding'
       ? `Holding ${number.format(stats.actors)} actors, every one waiting for an event.`
-      : `Running: ${number.format(stats.messages)} messages so far${current.scenario === 'sleep' ? `, ${number.format(stats.wakes)} actors woken from the store` : ''}.`;
+      : current.scenario === 'timers'
+        ? `Running: ${number.format(stats.messages)} timers fired in ${number.format(Math.round(stats.simulated))} simulated seconds.`
+        : `Running: ${number.format(stats.messages)} messages so far${current.scenario === 'sleep' ? `, ${number.format(stats.wakes)} actors woken from the store` : ''}.`;
     found.textContent = summary(current);
   }
 

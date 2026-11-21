@@ -8,7 +8,10 @@ picks, then running one scenario (`lab.mjs`):
 - **rally**: pairs of players (`player.scxml`) send a ball back and forth,
   a hundred hits a rally, with no JavaScript between hits;
 - **sleep**: at most 1,000 actors in memory and the rest in a
-  `MemoryStore`; each event wakes a counter from the store.
+  `MemoryStore`; each event wakes a counter from the store;
+- **timers**: every actor (`timer.scxml`) holds a delayed send to itself,
+  due every 1 to 10 seconds, and the lab moves a simulated clock on, 100 ms
+  at a time, as fast as the host keeps up.
 
 The website runs it in a Worker (`worker.mjs`) at
 https://www.tinyactors.dev/performance/#lab and charts what it reports once

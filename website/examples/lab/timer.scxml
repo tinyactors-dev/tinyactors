@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A timer: it holds one delayed send to itself, and each time the send
+     falls due it counts the tick and sends the next. The lab gives each
+     timer a period between 1 and 10 seconds, and a first delay within
+     its period, so the timers fall due spread out. -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="timer" initial="starting">
+  <datamodel>
+    <data id="first" expr="'1s'"/>
+    <data id="period" expr="'1s'"/>
+    <data id="ticks" expr="0"/>
+  </datamodel>
+  <state id="starting">
+    <onentry>
+      <send event="tick" delayexpr="first"/>
+    </onentry>
+    <transition event="tick" target="waiting">
+      <assign location="ticks" expr="ticks + 1"/>
+    </transition>
+  </state>
+  <state id="waiting">
+    <onentry>
+      <send event="tick" delayexpr="period"/>
+    </onentry>
+    <transition event="tick" target="waiting">
+      <assign location="ticks" expr="ticks + 1"/>
+    </transition>
+  </state>
+</scxml>

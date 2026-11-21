@@ -35,7 +35,7 @@ const bytes = () => memory?.buffer.byteLength ?? null;
 async function start({ scenario, actors, datamodel }) {
   watchMemory();
   const [tinyactors, { createLab }] = await Promise.all([import('/vendor/tinyactors-wasm/index.mjs'), import('./lab.mjs')]);
-  const charts = { counter: await text('counter'), player: await text('player') };
+  const charts = { counter: await text('counter'), player: await text('player'), timer: await text('timer') };
   const base = bytes(); // the module before any host
   const lab = createLab(tinyactors, { scenario, actors, datamodel, charts, seed: Math.floor(Math.random() * 2 ** 31) });
   const empty = bytes(); // and with an empty host, sized for the population
@@ -77,7 +77,8 @@ async function start({ scenario, actors, datamodel }) {
     const began = performance.now();
     while (performance.now() - began < 50) {
       const unit = performance.now();
-      if ((await lab.work()) === 0) break;
+      await lab.work();
+      if (scenario === 'fill') break;
       busy += performance.now() - unit;
     }
     report();
