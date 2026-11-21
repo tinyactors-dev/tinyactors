@@ -4,19 +4,19 @@
   <description>Keep only the busy actors in memory: the host writes the others to blobs in your store and wakes them when they have work.</description>
   <hero>
     <headline>Keep waiting actors out of memory.</headline>
-    <lede>The host writes a cold actor to a blob your store keeps, and wakes it when an event comes. Two million actors ran with at most 1000 in memory and about 150 bytes of resident memory an actor.</lede>
+    <lede>An actor that waits days for its next event can wait as bytes in your database instead. Two million actors ran with at most 1000 in memory, about 150 bytes of memory each.</lede>
   </hero>
 
   <section id="a-store-and-a-bound">
-    <heading>Give the host a store and a bound.</heading>
+    <heading>Cap how many actors stay in memory.</heading>
     <p>Most actors spend most of their time waiting: an order for a payment, a session for its user. Hibernation turns a waiting actor into a blob, a <code>Buffer</code> your store keeps.</p>
-    <p>The host does no I/O, so your code decides where the blobs live: a database, files or a cache.</p>
+    <p>Give the host a store, which puts the blobs where you choose, and the most actors it may hold in memory.</p>
     <list>
       <item><term><code>store: { save, load, delete }</code></term><text>where the blobs go, keyed by the actor's session, a <code>bigint</code>: <code>save(session, blob)</code>, <code>load(session)</code> returning the blob, and <code>delete(session)</code>. Each may return a promise instead, which the host follows. The package has <code>MemoryStore</code>, a <code>Map</code> for tests, and <code>SQLiteStore(path)</code>, a table in a file through the runtime's own SQLite (<code>node:sqlite</code> under Node.js, <code>bun:sqlite</code> under Bun).</text></item>
       <item><term><code>resident: n</code></term><text>the most actors the host keeps in memory. After each turn the host hibernates the actors past the bound that ran least recently, and saves their blobs. It picks them with a CLOCK sweep: an actor that ran since the previous sweep is passed over once.</text></item>
-      <item><term>A wake</term><text>When an event comes for a hibernated actor, or one of its delayed sends falls due, the host loads its blob, wakes it and deletes the blob. The actor's events wait in its queue and run at the next turn. An actor terminated while hibernated is woken the same way to end, so its blob goes too.</text></item>
+      <item><term>Waking</term><text>When an event comes for a hibernated actor, or one of its delayed sends falls due, the host loads its blob, wakes it and deletes the blob. The actor's events wait in its queue and run at the next turn. An actor terminated while hibernated is woken the same way to end, so its blob goes too.</text></item>
     </list>
-    <p>Three counters with <code>resident: 1</code> leave two in the store, and two events to one of them load it once:</p>
+    <p>Of three counters with <code>resident: 1</code>, two go to the store, and two events to one of them load it once:</p>
     <example>
       <code language="javascript" file="resident.mjs"><![CDATA[
 import { compileCharts, Host, MemoryStore } from '@tinyactors/node';
@@ -61,17 +61,28 @@ counter 2 is at 10
     </example>
   </section>
 
+  <section id="what-a-blob-stores">
+    <heading>Keep variables to plain data.</heading>
+    <p>On the native datamodel, the default engine for chart code, variables are written as values of the <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#values">value table</link>:</p>
+    <list>
+      <item><term>Stored</term><text>numbers, <code>bigint</code>s, strings, <code>Uint8Array</code>s, arrays, plain objects, <code>true</code>, <code>false</code>, <code>null</code> and <code>undefined</code>.</text></item>
+      <item><term>Kept in memory</term><text>an actor whose variable holds anything else: a function, a <code>Map</code>, a <code>Date</code>, a class's instance, an XML document.</text></item>
+    </list>
+    <p>A script's top-level <code>var</code>s are variables of the actor and come back from the blob. A chart-level script's functions are the chart's helpers and come back with the chart.</p>
+    <p>On quickjs, the engine also stores a <code>Date</code>, <code>Map</code>, <code>Set</code> or typed array (<link to="guide-quickjs" section="what-differs-from-the-native-datamodel">what differs on quickjs</link>).</p>
+  </section>
+
   <section id="a-failed-save">
-    <heading>A failed save loses no state.</heading>
+    <heading>Recover from a failed save.</heading>
     <p>A save that throws, or whose promise rejects, wakes the actor back from its blob. The actor stays resident past the bound until a later turn.</p>
-    <p>The host reports the error as a handler's (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#errors">README, Errors</link>). A load that finds no blob is reported the same way, and the actor stays hibernated.</p>
-    <p>The host calls a store's methods between its runs, never inside one. It waits for a pending save before it loads that session.</p>
+    <p>The host reports the error the way it reports a handler's (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#errors">README, Errors</link>). A load that finds no blob is reported the same way, and the actor stays hibernated.</p>
+    <p>The host calls the store between its runs, never inside one, and loads a session only after its pending save.</p>
   </section>
 
   <section id="a-policy-of-your-own">
-    <heading>Evict by a policy of your own.</heading>
-    <p><code>store</code> and <code>resident</code> evict the least recently run actors past a bound. Three calls let your program evict by a schedule, by memory pressure or by what it knows of its actors.</p>
-    <p>Without <code>resident</code> the host hibernates nothing itself, and still loads from the store:</p>
+    <heading>Hibernate actors on your own schedule.</heading>
+    <p>Leave out <code>resident</code>, and your program picks which actors leave memory: on a timer, or when memory runs short.</p>
+    <p>Your program takes actors out with <code>sweep</code> and <code>hibernate</code>. The host still wakes them from the store when their events come.</p>
     <list>
       <item><term><code>host.sweep(maxScan, limit)</code></term><text>returns at most <code>limit</code> sessions that have not run since the previous sweep and can be hibernated now, looking at no more than <code>maxScan</code> actors. Calling it regularly is what makes "not run since the previous sweep" mean cold: the first sweep after an actor ran skips it.</text></item>
       <item><term><code>host.hibernate(actor)</code></term><text>takes the actor out of memory and returns its blob, for you to save in the store.</text></item>
@@ -123,31 +134,8 @@ counter 1 is at 2
     <p>In a server, run such a sweep on a timer or after a burst of work. Size <code>limit</code> so that one sweep does not hold the event loop for long.</p>
   </section>
 
-  <section id="what-a-blob-holds">
-    <heading>A blob holds the whole actor.</heading>
-    <p>A blob holds the actor's active states, its variables, its <code>_event</code> and its place in the host. It lives in your store until the wake, and the host keeps only which hibernation it was.</p>
-    <p>Wake a blob in the host that hibernated it, or in one <link to="guide-snapshots">restored</link> from that host's snapshot.</p>
-    <p>Every host draws a random identity when it is created, and every blob carries it. Another host's blob throws <code>TA_ERROR_INVALID</code>, even for the same session number and chart.</p>
-    <p>A wake takes the session's latest blob only. An earlier blob throws <code>TA_ERROR_STALE</code> and the actor stays hibernated, so no state is lost without an error.</p>
-    <p>A store that fell behind hands back such a blob: an overwrite that failed, a replica, a cache.</p>
-    <p>A restored host also accepts a blob of a hibernation made after the snapshot was taken. So a store that keeps one blob per session goes on working there.</p>
-  </section>
-
-  <section id="what-a-blob-stores">
-    <heading>Values of the value table hibernate.</heading>
-    <p>On the native datamodel the variables are written as values of the <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#values">value table</link>:</p>
-    <list>
-      <item><term>Stored</term><text>numbers, <code>bigint</code>s, strings, <code>Uint8Array</code>s, arrays, plain objects, <code>true</code>, <code>false</code>, <code>null</code> and <code>undefined</code>.</text></item>
-      <item><term>Kept in memory</term><text>an actor whose variable holds anything else: a function, a <code>Map</code>, a <code>Date</code>, a class's instance, an XML document.</text></item>
-    </list>
-    <p>A script's top-level <code>var</code>s are variables of the actor and come back from the blob. A chart-level script's functions are the chart's helpers and come back with the chart.</p>
-    <p>On quickjs the engine writes its own values, so a <code>Date</code>, <code>Map</code>, <code>Set</code> or typed array is stored too. The <link to="guide-quickjs" section="what-differs-from-the-native-datamodel">quickjs guide</link> lists what differs.</p>
-    <p>A hibernated actor keeps its core records in the host, 81 B to 89 B (<link to="guide-capacity" section="what-an-actor-costs">what an actor costs</link>).</p>
-    <p>The data of its pending delayed sends and of the events waiting in its queue stays in the host too. A pending delayed send wakes the actor when it falls due.</p>
-  </section>
-
   <section id="when-an-actor-cannot-hibernate">
-    <heading>A refused actor stays in memory.</heading>
+    <heading>Handle an actor that cannot hibernate.</heading>
     <p><code>hibernate</code> throws a <code>TinyactorsError</code> and the actor stays where it is:</p>
     <list>
       <item><term><code>TA_ERROR_STATE</code></term><text>not now. It has events waiting in its queue (an input you gave since its last turn, an event another actor sent, a delayed send that fell due); or its step is not over, as when called from the handler of a send it made in this turn; or it runs an invoked child chart or a service; or it is not resident: already hibernated, or its blob is loading from the store. Every case gives the same status, and only the message, which is for people, says which.</text></item>
@@ -155,7 +143,7 @@ counter 1 is at 2
       <item><term><code>TA_ERROR_UNSUPPORTED</code></term><text>a variable holds what its datamodel cannot store. The message names the variable.</text></item>
     </list>
     <p>The first three cases of <code>TA_ERROR_STATE</code> pass after a turn, and the last does not. The status cannot tell them apart.</p>
-    <p>So an eviction loop of your own hibernates only what <code>sweep</code> returns, which is resident. The host's own, with <code>resident</code>, leaves every such actor where it is and takes another.</p>
+    <p>So hibernate only what <code>sweep</code> returns, which is resident: a <code>TA_ERROR_STATE</code> there passes after a turn. With <code>resident</code>, the host skips each refused actor and hibernates another.</p>
     <p>A <code>Map</code> in a variable is outside the value table, and the message names the variable:</p>
     <example>
       <code language="javascript" file="unsupported.mjs"><![CDATA[
@@ -187,9 +175,25 @@ variable 'seen' cannot be stored: only plain objects, arrays and Uint8Arrays are
     </example>
   </section>
 
+  <section id="what-a-blob-holds">
+    <heading>Wake each blob where it was made.</heading>
+    <p>A blob holds the actor's active states, its variables, its <code>_event</code> and its place in the host. It lives in your store until the wake, and the host keeps only which hibernation it was.</p>
+    <p>A blob also wakes in a host <link to="guide-snapshots">restored</link> from its host's snapshot.</p>
+    <p>Every host draws a random identity when it is created, and every blob carries it. Another host's blob throws <code>TA_ERROR_INVALID</code>, even for the same session number and chart.</p>
+    <p>A wake takes the session's latest blob only. An earlier blob throws <code>TA_ERROR_STALE</code> and the actor stays hibernated, so no state is lost without an error.</p>
+    <p>A stale replica hands back such a blob, and so does a store whose overwrite failed.</p>
+    <p>A restored host also accepts a blob of a hibernation made after the snapshot was taken. So a store that keeps one blob per session goes on working there.</p>
+  </section>
+
+  <section id="size-the-host">
+    <heading>Count hibernated actors when you size a host.</heading>
+    <p>A hibernated actor still counts toward <code>system.maxActors</code>. It keeps 81 B to 89 B of records in the host (<link to="guide-capacity" section="what-an-actor-costs">what an actor costs</link>).</p>
+    <p>The data of its pending delayed sends and of the events waiting in its queue stays in the host too. A pending delayed send wakes the actor when it falls due.</p>
+    <p>The <link to="guide-capacity">capacity guide</link> says how many actors a host holds and how much memory it needs.</p>
+  </section>
+
   <section id="at-scale">
-    <heading>Two million actors ran with 1000 resident.</heading>
-    <p>A hibernated actor still counts toward <code>system.maxActors</code>. The <link to="guide-capacity">capacity guide</link> says how many actors a host holds and how much memory it needs.</p>
+    <heading>Run two million actors with 1000 in memory.</heading>
     <p><link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/tools/stress.mjs"><code>tools/stress.mjs</code></link> (<code>mise run stress</code>) runs this guide's pattern at scale, with the actors past the bound in SQLite.</p>
     <p>Its 200,000 events went to actors drawn at random, so nearly every event woke one and the sweep sent another back. Each run woke 199,870 actors from the store.</p>
     <p>Every sampled actor's count matched the events it was sent. After every eviction at most 1000 actors were resident.</p>

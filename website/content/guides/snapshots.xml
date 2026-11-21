@@ -1,21 +1,61 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-snapshots" path="/guides/snapshots/">
   <title>Snapshots</title>
-  <description>Copy a whole tinyactors host into bytes with host.snapshot(), and run it again, in this process or another, with Host.restore.</description>
+  <description>host.snapshot() copies a running tinyactors host into bytes, two million actors in 165 MB, and Host.restore runs the copy in this process or another.</description>
   <hero>
-    <headline>Copy a whole host, and run the copy.</headline>
-    <lede><code>host.snapshot()</code> copies every actor, queue, timer, value and image of a host into one <code>Buffer</code>. <code>Host.restore</code> runs it again, in this process or another.</lede>
+    <headline>Copy a running application, and run the copy.</headline>
+    <lede>A host of two million actors makes a 165 MB snapshot in about a tenth of a second. Restore it in another process and rehearse a deploy on the copy.</lede>
   </hero>
 
   <section id="what-it-holds">
-    <heading>A snapshot holds the whole host.</heading>
-    <p>It holds every segment's memory: the actors, queues, timers and the hibernated actors' records. It also holds the datamodel's sessions and values, the images, the system id and the host's time.</p>
-    <p>Rehearse a deploy on a copy: add the new image, migrate, run the clock ahead, and look.</p>
-    <p>Capture a host when something goes wrong and step through it. Start every test from one prepared world, or take a host out of the process for a while.</p>
+    <heading>Copy every actor into one buffer.</heading>
+    <p><code>host.snapshot()</code> returns one <code>Buffer</code> holding every actor of the host, with its variables, its queued events and its pending timers.</p>
+    <p>The buffer also holds the hibernated actors' records, the compiled images, the system id and the host's time. <code>Host.restore</code> runs it again, in this process or another.</p>
+    <p>On a copy, add a new image, migrate, run the clock ahead, and look. Or capture a host when something goes wrong, and step through it.</p>
+    <p>A test can start from one prepared world, and a host can leave the process for a while.</p>
+  </section>
+
+  <section id="when-a-snapshot-is-refused">
+    <heading>Take a snapshot when the host is idle.</heading>
+    <p><code>snapshot()</code> throws a <code>TinyactorsError</code> with <code>TA_ERROR_STATE</code> from a handler, and during a migration.</p>
+    <p>It throws the same while output or a typed method's reply waits for your handlers, so <code>await host.idle()</code> first.</p>
+    <p>Here a snapshot from a log handler throws, and one after <code>idle()</code> succeeds. A refused snapshot leaves the host running.</p>
+    <example>
+      <code language="javascript" file="refused.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'c.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="c" initial="s">
+  <state id="s"><onentry><log expr="'hello'"/></onentry></state>
+</scxml>` }]);
+const host = new Host(compiled, {
+  system: 'demo',
+  log: (entry) => {
+    try {
+      host.snapshot();
+    } catch (error) {
+      console.log('from a handler:', error.status);
+    }
+  },
+});
+compiled.close();
+
+host.spawn('c');
+await host.idle();
+console.log('after idle():', host.snapshot().length > 0);
+host.close();
+]]></code>
+      <code language="text" role="output">
+from a handler: TA_ERROR_STATE
+after idle(): true
+</code>
+    </example>
+    <p><code>snapshot()</code> throws <code>TA_ERROR_UNSUPPORTED</code> when an actor holds what hibernation cannot store: on native, a function, <code>Map</code> or <code>Date</code>. The message names the variable.</p>
   </section>
 
   <section id="time">
-    <heading>The clock goes on from the snapshot's time.</heading>
+    <heading>Run the copy on a new clock.</heading>
     <p>This reminder is half an hour from ringing when its host is snapshotted. Restored on a new clock that reads 0, it rings 30 minutes later.</p>
     <example>
       <code language="javascript" file="reminder.mjs"><![CDATA[
@@ -66,74 +106,53 @@ due in 30 minutes
 reminder: water the plants
 </code>
     </example>
-    <p>Every session id stays the same. The clock goes on from the snapshot's time, whatever reads it: a new <code>SimulatedClock</code>, or the runtime's clock on another machine.</p>
+    <p>The restored actor keeps its session id. The clock goes on from the snapshot's time, whatever reads it: a new <code>SimulatedClock</code>, or another machine's clock.</p>
     <p>The snapshot's time is that of the <code>snapshot()</code> call. A timer with 6 seconds left then has 6 seconds left after the restore, however long the host was idle before.</p>
-    <p><code>host.now()</code> reads that clock, so a journal of the inputs that came after a snapshot records it with each.</p>
-    <p>A replay on a restored host with a <code>SimulatedClock</code> moves the clock to each reading before the input: <code>clock.increment(entry.at - host.now())</code>.</p>
   </section>
 
   <section id="restoring">
     <heading>Restore with the options the snapshot had.</heading>
-    <p>Pass <code>Host.restore</code> the charts, and the options the snapshot was taken with. It checks <code>system</code>, since the snapshot holds the system id.</p>
-    <p>The snapshot does not hold the I/O processors, the config's tick rate or the <code>datamodel</code>. Pass <code>'quickjs'</code> again for a quickjs host.</p>
-    <p>The handlers are not in the snapshot either: give the restored host its own.</p>
-    <p>The snapshot holds its images, so pass only the charts it does not hold. An image already in it is not added again, and a new version is added as <code>new Host</code> adds it.</p>
+    <p>Pass <code>Host.restore</code> the charts and the options the snapshot was taken with. It checks <code>system</code> against the system id the snapshot holds.</p>
+    <p>The snapshot holds the host, not the options you passed it: give the copy its handlers, I/O processors and tick rate. Pass <code>datamodel: 'quickjs'</code> again for a quickjs host.</p>
+    <p>The snapshot holds its images, so pass only the charts it lacks. An image it holds is skipped, and a new version is added as <code>new Host</code> adds it.</p>
     <list>
-      <item><term>Only the same build restores it.</term><text>A snapshot holds raw memory, with a version of its layout. <code>Host.restore</code> refuses a snapshot of a build whose layout differs with <code>TA_ERROR_INVALID</code>: take a new one with the new build.</text></item>
-      <item><term>It is not a backup.</term><text>Durability is your database's job, and <link to="guide-hibernation">hibernation</link> is how a running process keeps actors out of memory. A snapshot is a copy of the whole application, every chart version at once.</text></item>
-      <item><term>Invoked services start again.</term><text>The services you run are not in the snapshot. The restored host's first turn announces each invocation that was running to the <code>services</code> handler you pass to <code>Host.restore</code>, with <code>invocation.restored</code> true and the same <code>invokeid</code>, <code>src</code> and params. Pass your real handlers to go on, or stand-ins for a copy that must not reach the real services. A type with no handler gives its invokers <code>error.communication</code>, and nothing is thrown.</text></item>
-      <item><term>Hibernated actors stay in your store.</term><text>The snapshot holds their records, not their blobs, and the restored host loads them from the <code>store</code> you pass it. A copy that hibernates actors needs its own copy of the store, since it writes and deletes blobs too.</text></item>
-      <item><term>Values go through the value table.</term><text>Two variables of one actor that shared one object no longer share it after a restore.</text></item>
+      <item><term>Restore with the same build.</term><text>A snapshot holds raw memory, with a version of its layout. <code>Host.restore</code> refuses a snapshot of a build whose layout differs with <code>TA_ERROR_INVALID</code>: take a new one with the new build.</text></item>
+      <item><term>Keep your backups in your database.</term><text>A snapshot looks like a backup, but durability is your database's job, and <link to="guide-hibernation">hibernation</link> is how a running process keeps actors out of memory. A snapshot is a copy of the whole application, every chart version at once.</text></item>
+      <item><term>Shared objects come back apart.</term><text>Values are written through the <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#values">value table</link>, so two variables of one actor that shared one object no longer share it after a restore.</text></item>
     </list>
   </section>
 
-  <section id="when-a-snapshot-is-refused">
-    <heading>Take a snapshot after <code>idle()</code>.</heading>
-    <p>The host must be quiescent. <code>snapshot()</code> throws a <code>TinyactorsError</code> with <code>TA_ERROR_STATE</code> from a handler, and during a migration.</p>
-    <p>It throws the same while an effect or a typed method's reply is unhandled, so <code>await host.idle()</code> first.</p>
-    <p>It throws <code>TA_ERROR_UNSUPPORTED</code> when an actor holds what hibernation cannot store, such as a function, <code>Map</code> or <code>Date</code> on native. The message names the variable.</p>
-    <p>Either way the host goes on. Here a log handler tries, and the program succeeds after <code>idle()</code>:</p>
-    <example>
-      <code language="javascript" file="refused.mjs"><![CDATA[
-import { compileCharts, Host } from '@tinyactors/node';
+  <section id="restarting-services">
+    <heading>Start the invoked services again.</heading>
+    <p>The snapshot holds each running invocation, and the services you run stay in your program. The restored host's first turn announces each invocation that was running to the <code>services</code> handler you pass <code>Host.restore</code>.</p>
+    <p>Each comes with <code>invocation.restored</code> true and the same <code>invokeid</code>, <code>src</code> and params. Pass your real handlers to go on, or stand-ins for a copy that must not reach the real services.</p>
+    <p>A type with no handler gives its invokers <code>error.communication</code>, and nothing is thrown.</p>
+  </section>
 
-const compiled = compileCharts([{ name: 'c.scxml', text: `
-<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
-       datamodel="ecmascript" name="c" initial="s">
-  <state id="s"><onentry><log expr="'hello'"/></onentry></state>
-</scxml>` }]);
-const host = new Host(compiled, {
-  system: 'demo',
-  log: (entry) => {
-    try {
-      host.snapshot();
-    } catch (error) {
-      console.log('from a handler:', error.status);
-    }
-  },
-});
-compiled.close();
+  <section id="the-store">
+    <heading>Give the copy its own store.</heading>
+    <p>The snapshot holds the hibernated actors' records, and their blobs stay in your store. The restored host loads them from the <code>store</code> you pass it.</p>
+    <p>A copy that hibernates actors writes and deletes blobs too, so give it a copy of the store.</p>
+  </section>
 
-host.spawn('c');
-await host.idle();
-console.log('after idle():', host.snapshot().length > 0);
-host.close();
-]]></code>
-      <code language="text" role="output">
-from a handler: TA_ERROR_STATE
-after idle(): true
-</code>
-    </example>
+  <section id="replaying-inputs">
+    <heading>Replay the inputs that came after.</heading>
+    <p><code>host.now()</code> reads the host's clock, so a journal of the inputs that came after a snapshot records it with each.</p>
+    <p>A replay on a restored host with a <code>SimulatedClock</code> moves the clock to each reading before the input: <code>clock.increment(entry.at - host.now())</code>.</p>
   </section>
 
   <section id="at-scale">
-    <heading>Two million actors make a 165 MB snapshot.</heading>
-    <p><code>tools/snapshot.mjs</code> rehearses a deploy on a copy of a live host of two million actors. At most 1000 are resident, and the rest are in a store over SQLite.</p>
+    <heading>Rehearse a deploy on a copy.</heading>
+    <p>The snapshot program, <code>tools/snapshot.mjs</code>, rehearses a deploy on a live host of two million actors. At most 1000 are resident, and the rest are in SQLite.</p>
     <p>Each resident actor has a delayed send pending, and half are paying through an invoked service that has not answered.</p>
-    <p>The tool writes the snapshot to a file, copies the store, and restores the copy with its own store and clock.</p>
-    <p>A stand-in payment service gets every payment in flight again, <code>restored</code> and with its amount, and declines it. The copy's own snapshot must be the same bytes.</p>
-    <p>The copy then migrates to a new version while events come, and runs its clock past the delayed sends.</p>
-    <p>Meanwhile the live host goes on with events of its own, its payments still in flight. The copy never reaches the real service.</p>
+    <list>
+      <item><text>It writes the snapshot to a file, copies the store, and restores a copy with its own store and clock.</text></item>
+      <item><text>A stand-in payment service gets each payment in flight again, <code>restored</code> and with its amount, and declines it.</text></item>
+      <item><text>The copy's own snapshot must be the same bytes.</text></item>
+      <item><text>The copy migrates to a new version while events come, and runs its clock past the delayed sends.</text></item>
+      <item><text>Meanwhile the live host goes on with events of its own, its payments still in flight. The copy never reaches the real service.</text></item>
+    </list>
+    <p>With most actors hibernated, the snapshot is 165 MB, 82 B an actor. It takes 0.11 to 0.14 s to make, and 0.14 to 0.21 s to restore.</p>
     <table>
       <caption>Two runs, each alone on the machine, 2026-11-20: an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1. Two million actors with 1000 resident, 200,000 events before the snapshot and 200,000 more on each host after it; then 100,000 actors all resident.</caption>
       <head><cell>runtime, datamodel</cell><cell>actors, resident</cell><cell>snapshot</cell><cell>taken</cell><cell>restored</cell><cell>migrate on the copy</cell><cell>peak resident (both hosts)</cell></head>
@@ -146,11 +165,14 @@ after idle(): true
       <row><cell>bun, native</cell><cell>100,000, 100,000</cell><cell>69.5 MB (695 B per actor)</cell><cell>0.51 s</cell><cell>1.05 s</cell><cell>4.2 s</cell><cell>941 MB</cell></row>
       <row><cell>bun, quickjs</cell><cell>100,000, 100,000</cell><cell>63.7 MB (637 B per actor)</cell><cell>1.06 s</cell><cell>0.71 s</cell><cell>3.5 s</cell><cell>800 MB</cell></row>
     </table>
-    <p>Every run passed its checks. The copy's snapshot was the same bytes, and the copy migrated every actor to version 2.</p>
-    <p>At two million, that migration made 3,688,631 loads from the copy's store.</p>
-    <p>Every sampled actor had its count, delayed send and version on both hosts. The live store held only the live host's blobs.</p>
-    <p>After every turn, no more actors were resident than the bound.</p>
-    <p>Core's region is 82 B an actor with most of them hibernated, and 490 B all resident. In a snapshot of resident actors, the native datamodel's rows take about 58 B an actor more than quickjs's state.</p>
-    <p>The logs are <code>snapshot.log</code> and <code>snapshot-resident.log</code> in <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/tools/results/2026-11-20">tools/results/2026-11-20</link>. The repository's <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/AGENTS.md#published-numbers">published numbers</link> rules say when to run it again.</p>
+    <p>Every run passed its checks:</p>
+    <list>
+      <item><text>The copy's snapshot was the same bytes, and the copy migrated every actor to version 2. At two million, that migration made 3,688,631 loads from the copy's store.</text></item>
+      <item><text>Every sampled actor had its count, delayed send and version on both hosts.</text></item>
+      <item><text>The live store held only the live host's blobs.</text></item>
+      <item><text>After every turn, no more actors were resident than the bound.</text></item>
+    </list>
+    <p>The host's region is 82 B an actor with most of them hibernated, and 490 B all resident. With all resident, the native datamodel's rows add about 58 B an actor over quickjs's state.</p>
+    <p>The logs are <code>snapshot.log</code> and <code>snapshot-resident.log</code> in <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/tools/results/2026-11-20">tools/results/2026-11-20</link>. The repository's rules for <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/AGENTS.md#published-numbers">published numbers</link> say when to run it again.</p>
   </section>
 </page>

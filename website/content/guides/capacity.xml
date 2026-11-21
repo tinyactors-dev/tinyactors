@@ -1,21 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-capacity" path="/guides/capacity/">
   <title>Capacity and memory</title>
-  <description>Size a tinyactors host, read what it uses, and see what an actor costs and how each operation's cost holds as the population doubles.</description>
+  <description>A tinyactors actor takes about 530 bytes started and 120 hibernated, and each operation costs about the same at four million actors as at two.</description>
   <hero>
-    <headline>Size a host for its population.</headline>
-    <lede>A started actor takes about 530 bytes on Node.js and a hibernated one about 120. Each operation costs about the same at four million actors as at two.</lede>
+    <headline>Fit millions of actors in one process.</headline>
+    <lede>On Node.js a started actor takes about 530 bytes and a hibernated one about 120, so four million fit in one process. Each operation costs about the same at four million actors as at two.</lede>
   </hero>
 
   <section id="regions">
-    <heading>A host grows one region per image.</heading>
-    <p>A host keeps its actors in blocks of memory, one region per segment, that is per image. It sizes each from its <code>config</code>, and grows one when something in it runs out.</p>
-    <p>Leave the sizes to the host, or size a host up front for the population you expect.</p>
+    <heading>Let the host grow its memory.</heading>
+    <p>A host keeps the actors of each compiled image in one block of memory, its region. When one of its pools fills, actors or timers for instance, the host copies the region into a larger one.</p>
+    <p>A host given no sizes starts with room for 64 actors, and grows as the population does.</p>
   </section>
 
   <section id="the-sizes">
-    <heading>Sizes are where pools start, not limits.</heading>
-    <p>The <code>config</code> option's <code>system</code> map gives each new segment its first sizes. Each key is a whole number, and an absent key or 0 is the default.</p>
+    <heading>Set where each pool starts.</heading>
+    <p>The <code>system</code> map of the <code>config</code> option gives each new region its first sizes, in whole numbers. An absent key, or 0, keeps the default.</p>
     <table>
       <head><cell>Key</cell><cell>Default</cell><cell>What it counts</cell></head>
       <row><cell><code>maxActors</code></cell><cell>64</cell><cell>actors, hibernated ones included</cell></row>
@@ -27,17 +27,20 @@
       <row><cell><code>stringBytes</code></cell><cell>16384 + 16 × <code>maxActors</code></cell><cell>strings the actors hold</cell></row>
       <row><cell><code>ticksPerSecond</code></cell><cell>1,000,000,000</cell><cell>the host's clock rate</cell></row>
     </table>
-    <p>When a pool fills, the host grows that segment between runs. The new region has more of what ran out, and the rest as it was.</p>
-    <p>A pool doubles, or grows up to 16 times at once if doubling adds under a quarter of the region. So a small pool beside a large region grows in a few copies, in proportion to itself.</p>
-    <p>A grown region never shrinks, and <code>maxActors</code> is at most 8,388,606.</p>
-    <p>A run or an input is refused with <code>TA_ERROR_NO_MEMORY</code> only at a pool's largest size, or when the allocator refuses memory.</p>
+    <p>A size is where a pool starts, and the host still grows it. A pool that fills grows between runs, and the other pools stay as they were.</p>
+    <list>
+      <item><text>A pool doubles, or grows up to 16 times at once when doubling would add under a quarter of the region. So a small pool beside a large region grows in a few copies.</text></item>
+      <item><text>A grown region never shrinks.</text></item>
+      <item><text><code>maxActors</code> is at most 8,388,606. A run or an input is refused with <code>TA_ERROR_NO_MEMORY</code> only at a pool's largest size, or when the allocator refuses memory.</text></item>
+    </list>
   </section>
 
   <section id="reading-what-a-host-uses">
-    <heading><code>hostStats</code> reports each pool's use and high water.</heading>
-    <p><code>host.hostStats</code> (<link to="guide-inspection"/>) answers with <code>pools</code>, one entry per live segment, in segment order. An entry's <code>segment</code> is its place among <code>new Host</code>'s charts, or what <code>addImage</code> returned.</p>
-    <p>For <code>actors</code>, <code>events</code>, <code>timers</code>, <code>workspaces</code>, <code>requests</code> and <code>slabBytes</code>, an entry gives the pool's <code>capacity</code>, its <code>used</code> and its <code>highWater</code>. <code>slabBytes</code> is the instance and string memory.</p>
-    <p>Each segment grows on its own, so two images, or a migration's old and new versions, are two entries.</p>
+    <heading>See how full each pool is.</heading>
+    <p><code>await host.hostStats()</code> answers with <code>pools</code>, one entry per region still in use (<link to="guide-inspection"/>). An entry's <code>segment</code> is its image's place among <code>new Host</code>'s charts, or what <code>addImage</code> returned.</p>
+    <p>Each pool reports its <code>capacity</code>, what it holds in <code>used</code>, and the most it held at once in <code>highWater</code>.</p>
+    <p>The pools are <code>actors</code>, <code>events</code>, <code>timers</code>, <code>workspaces</code>, <code>requests</code> and <code>slabBytes</code>, the memory for the actors' variables and strings.</p>
+    <p>A thousand idle actors grow a host that starts at the default 64, and fit in one sized for 1000. Each region grows on its own, so a second image is a second entry.</p>
     <example>
       <code language="javascript" file="stats.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -68,14 +71,14 @@ maxActors 1000: capacity 1000, then 1000 used, high water 1000, grown: false
 segments reported: 0, 1
 </code>
     </example>
-    <p>To size a host up front, run a realistic load, read the high-water marks, and give the next host those sizes. <code>host.hostConfig()</code> answers the sizes a host was made with, every default filled in.</p>
+    <p>A migration's old and new versions are two entries too, one per image.</p>
   </section>
 
   <section id="sizing-a-host-up-front">
-    <heading>Size a known population up front.</heading>
-    <p>Each growth copies the region, and a grown region keeps its size. A host that will hold a known population is better sized for it.</p>
-    <p>A hibernated actor keeps its slot and its record, about 64 bytes, so <code>maxActors</code> counts every actor. The instance and string memory are for the resident ones only.</p>
-    <p>The repository's hibernation gate sizes a host for <code>R</code> resident actors out of <code>N</code>, for a counter of a few variables:</p>
+    <heading>Size a host for a known population.</heading>
+    <p>Run a realistic load, read the high-water marks, and give the next host those sizes. A host sized for its load makes no copies, and no pool grows past what the load needs.</p>
+    <p>Count every actor in <code>maxActors</code>, since a hibernated one keeps its slot and its record, about 64 bytes. Size <code>instanceBytes</code> and <code>stringBytes</code> for the resident actors only.</p>
+    <p>The repository's hibernation gate sizes a host this way for two million counters of a few variables, 1000 resident at most. <code>host.hostConfig()</code> answers the sizes, every default filled in.</p>
     <example>
       <code language="javascript" file="size.mjs"><![CDATA[
 import { Host } from '@tinyactors/node';
@@ -94,45 +97,59 @@ host.close();
 2000064
 </code>
     </example>
-    <p>A chart with more variables or longer strings needs more per resident actor. Read <code>slabBytes.highWater</code> under load to see how much.</p>
+    <p>A chart with more variables or longer strings needs more per resident actor. <code>slabBytes.highWater</code> under load shows how much.</p>
+  </section>
+
+  <section id="pools-that-fill-together">
+    <heading>Leave room for pools that fill together.</heading>
+    <p>A pending delayed send holds a timer and an event, and one falling due briefly holds a second event. So <code>N</code> actors that each wait on a delayed send need <code>maxTimers</code> of <code>N</code> and <code>maxEvents</code> above it.</p>
+    <p>Actors that become runnable together each hold a workspace, against a default of 4. Timers due in the same tick do, and so do actors sending to each other.</p>
+    <p>On <code>@tinyactors/wasm</code> a pool that runs out costs most: the region is copied inside WebAssembly memory, which keeps its peak.</p>
+    <table>
+      <caption>A million actors on <code>@tinyactors/wasm</code> 0.4.0, each waiting on a delayed send, in the website's <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/website/examples/lab">measurement lab</link>. Measured 2026-11-21 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5.</caption>
+      <head><cell>Pools</cell><cell>Memory per actor</cell></head>
+      <row><cell><code>maxTimers</code> <code>N</code>, <code>maxEvents</code> <code>N</code> and a sixteenth, <code>workspaces</code> 1024</cell><cell>605 B</cell></row>
+      <row><cell>the default <code>workspaces</code>, room for 4,000 events beyond <code>N</code></cell><cell>1,142 B, grown within ten seconds</cell></row>
+    </table>
+    <p>That host reached 35 workspaces at once. A million actors sending to each other reached 92.</p>
   </section>
 
   <section id="what-an-actor-costs">
-    <heading>An actor takes about 530 bytes.</heading>
-    <p>The <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory">memory program</link> measures the resident memory one more actor, message and delayed send adds to a process, the host included. Run it with your runtime, datamodel, chart and data:</p>
+    <heading>Measure what one actor costs.</heading>
+    <p>The <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/examples/memory">memory program</link> measures the resident memory that one more actor, message or delayed send adds to a process. Run it with your chart, on your runtime and datamodel, the engine chart code runs in: native or quickjs.</p>
     <code language="shell">node examples/memory/main.mjs --counts 1000000 --datamodel native</code>
     <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="1">
       <caption>A million actors. Measured 2026-11-20 on an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1. A counter chart with one <code>&lt;data&gt;</code>, messages of <code>{"text": "hello"}</code>, tracing on; the hibernated column keeps at most 1000 actors resident and the rest in a store.</caption>
     </table>
-    <p>A host's and an engine's fixed costs spread over the population, so an actor costs less in a larger one.</p>
+    <p>On Node.js a started actor takes 531 B at a million, and a hibernated one 124 B. The host's and the engine's fixed costs spread over the population, so an actor costs less in a larger one.</p>
     <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="What an actor costs" index="2">
-      <caption>Node.js on the native datamodel, the same run.</caption>
+      <caption>Per actor at each population, Node.js on the native datamodel, the same run.</caption>
     </table>
-    <p><link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-20.csv">The run's CSV</link> holds each row at every population and on every runtime, to compare with a chart of your own.</p>
+    <p><link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-napi/examples/memory/results/2026-11-20.csv">The run's CSV</link> holds every row at every population and on every runtime, to compare with your own chart's.</p>
     <list>
-      <item><term>A started actor</term><text>holds its variables in the datamodel and its records in the core: 196 B for this chart at a million (81 B, its instance and its strings).</text></item>
+      <item><term>A started actor</term><text>holds its variables in the datamodel and its records in the region: 196 B for this chart at a million (81 B, its instance and its strings).</text></item>
       <item><term>After an event</term><text>an actor keeps that event as <code>_event</code> until the next one.</text></item>
-      <item><term>A hibernated actor</term><text>keeps its core records only, 81 B to 89 B, and its blob is in your store: 145 B on the native datamodel and 147 B on quickjs, for this chart.</text></item>
-      <item><term>A message</term><text>costs 106 B in the core (57 B with tracing off) and its data in the datamodel.</text></item>
-      <item><term>A delayed send</term><text>holds its message until it falls due: 151 B in the core (102 B with tracing off).</text></item>
-      <item><term>quickjs</term><text>keeps every actor's variables in its own heap, bounded by <code>quickjs.memoryLimit</code>, 1 GiB unless the host sets another. A million resident actors after an event need about 1.2 GB of it, so the run above sets 8 GiB (<link to="guide-quickjs" section="the-limits">the quickjs sandbox</link>).</text></item>
+      <item><term>A hibernated actor</term><text>keeps only its records in the region, 81 B to 89 B, and its blob is in your store: 145 B on the native datamodel and 147 B on quickjs, for this chart.</text></item>
+      <item><term>A message</term><text>costs 106 B in the region (57 B with tracing off) and its data in the datamodel.</text></item>
+      <item><term>A delayed send</term><text>holds its message until it falls due: 151 B in the region (102 B with tracing off).</text></item>
+      <item><term>On quickjs</term><text>the engine keeps every actor's variables in its own heap, bounded by <code>quickjs.memoryLimit</code>, 1 GiB unless the host sets another. A million resident actors after an event need about 1.2 GB of it, so the run above sets 8 GiB (<link to="guide-quickjs" section="the-limits">the quickjs sandbox</link>).</text></item>
     </list>
-    <p>What a chart's scripts declare adds nothing per actor. Its helpers are the chart's, made once, and a top-level <code>var</code> is one more variable (<link to="guide-charts" section="scripts">Writing charts</link>).</p>
+    <p>A chart's scripts add nothing per actor. Their functions are the chart's, made once, and a top-level <code>var</code> is one more variable (<link to="guide-charts" section="scripts">Writing charts</link>).</p>
   </section>
 
   <section id="work-does-not-grow-with-the-population">
-    <heading>Twice the actors, the same cost.</heading>
-    <p><code>tools/scale.mjs</code> times every operation of the API on N actors and on 2N, each host in its own process.</p>
-    <p>It fails when an operation costs more than 1.5 times as much at 2N. The cost is per call on one actor, and per actor on the whole population.</p>
-    <p>Most of the actors are hibernated in SQLite, and one in a hundred runs an invoked service. Then the same runs with every actor resident.</p>
-    <p>Each cell is the cost at N, then at 2N, in microseconds, and their ratio. Every operation passed.</p>
+    <heading>Check that costs hold as actors double.</heading>
+    <p>The scaling program, <code>tools/scale.mjs</code>, times every operation on N actors and on 2N, each host in its own process. It fails an operation that costs more than 1.5 times as much at 2N.</p>
+    <p>An operation on one actor is timed per call, and one on the whole population per actor.</p>
+    <p>In the first run most actors are hibernated in SQLite, and one in a hundred runs an invoked service. In the second every actor is resident.</p>
+    <p>Every operation passed. Each cell is the cost at N, then at 2N, in microseconds, and their ratio.</p>
     <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="Work does not grow with the population" index="1">
       <caption>Hibernated: 2,000,000 and 4,000,000 actors, at most 1000 counters resident, 20,000 and 40,000 actors each running an invoked service. One run, alone on the machine, 2026-11-20: an Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5 and Bun 1.4.1.</caption>
     </table>
     <table src="../../../tinyactors-napi/docs/guide/capacity.md" section="Work does not grow with the population" index="2">
       <caption>All resident: 1,000,000 and 2,000,000 actors, the same run.</caption>
     </table>
-    <p>Two million resident actors take up to 5.2 GiB on quickjs. So four million do not fit in 16 GiB beside the scenario's other work.</p>
+    <p>Two million resident actors take up to 5.2 GiB on quickjs, the most of any run. So four million resident do not fit in 16 GiB beside the scenario's other work.</p>
     <table>
       <caption>Peak resident memory at N and 2N, in MiB, the same run.</caption>
       <head><cell>runtime, datamodel</cell><cell>hibernated</cell><cell>all resident</cell></head>
@@ -141,7 +158,7 @@ host.close();
       <row><cell>bun, native</cell><cell>1680 / 3251</cell><cell>2271 / 3828</cell></row>
       <row><cell>bun, quickjs</cell><cell>1345 / 2554</cell><cell>2517 / 5278</cell></row>
     </table>
-    <p>The run's files, every operation and sample, are in <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/tools/results/2026-11-20">tools/results/2026-11-20</link>. <code>mise run scale</code> in <code>tinyactors-napi</code> writes them to <code>build/scale-*.json</code>.</p>
-    <p>The repository's <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/AGENTS.md#published-numbers">published numbers</link> rules say when to run it again.</p>
+    <p><code>mise run scale</code> in <code>tinyactors-napi</code> writes every operation and sample to <code>build/scale-*.json</code>. This run's files are in <link href="https://github.com/tinyactors-dev/tinyactors/tree/main/tinyactors-napi/tools/results/2026-11-20">tools/results/2026-11-20</link>.</p>
+    <p>The repository's rules for <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/AGENTS.md#published-numbers">published numbers</link> say when to run it again, before each release among them.</p>
   </section>
 </page>
