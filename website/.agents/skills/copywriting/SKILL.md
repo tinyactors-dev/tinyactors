@@ -1,18 +1,20 @@
 ---
 name: copywriting
-description: Write and review the copy of www.tinyactors.dev (website/content/). Use before writing or changing any headline, lede, heading, paragraph, claim, list item, caption or button label of the site, and to review copy someone else wrote. It holds the one test every sentence must pass (does it say something the reader did not know?), the failures to look for (labels instead of benefits, ledes that list what is coming, sentences that only point at the next block), how to fix each, and a command that prints a page's copy as plain text for review.
+description: Write and review the copy of www.tinyactors.dev (website/content/, and the words inside the site's components and live examples). Use before writing or changing any headline, lede, heading, paragraph, claim, list item, caption, button label, chart title or status line, before reordering a page's sections, and to review copy someone else wrote. It holds the test every sentence must pass, the failures found on this site with their fixes, how a page is ordered, and commands that print a page's copy for review; references/patterns.md holds the before-and-after pairs.
 ---
 
 # Copywriting for the website
 
 A reader gives the site a few seconds. Every sentence must tell them
 something: a fact about tinyactors, what it does for them, or what to do
-next. A sentence that only describes the page ("what X costs, how to Y")
-spends those seconds and tells them nothing.
+next. The voice rules are in `website/AGENTS.md` ("The voice: short and
+literal"). This skill is about substance: what a sentence says, whether
+it is true, and where it stands on the page.
 
-The voice rules are in `website/AGENTS.md` ("The voice: short and
-literal"). This skill is about **substance**: what a sentence says, not
-only how it sounds.
+**[references/patterns.md](references/patterns.md)** holds the patterns:
+real sentences from this site before and after review, by kind of
+element (headline, lede, heading, paragraph, demo page, component copy).
+Read the section for what you are writing before you write it.
 
 ## The test
 
@@ -20,126 +22,139 @@ For each sentence, ask: **if I deleted it, would the reader know less
 about tinyactors?** If not, delete it or replace it with the fact it was
 standing in for.
 
-## Failures, and their fixes
+Then ask: **is it true where the reader is?** On their device, in the code
+the sentence introduces, of the thing the sentence names as its subject.
 
-### 1. A label where a benefit should be
+## Failures
 
-A headline names the page's topics instead of saying what the reader gets.
+Each has examples in `references/patterns.md`.
 
-- Before: "Small actors, flat costs." (two labels, shaped like a slogan)
-- After: "Small enough to use everywhere." (what small actors let you do)
+1. **A label where a benefit or a finding should be.** A headline names
+   topics ("Small actors, flat costs."), a heading names a subject
+   ("Watch them.", "What an actor costs."). State what the reader gets,
+   or what the section found. An instruction is a good heading too
+   ("Drop food and squash ants.").
+2. **A lede that is a table of contents.** It lists what the sections
+   cover. Give the page's strongest facts instead, or on a demo page the
+   invitation to try it.
+3. **A sentence that only points at the next block** ("Read what a host
+   uses at any time:", "The charts under the field measure this tab.").
+   Say what the block shows, or delete the sentence.
+4. **A sentence with no content.** Adjectives about growth, power or ease
+   ("It grows with your system."). Replace them with the number or the
+   mechanism, or delete the sentence.
+5. **Three of everything.** A list of three by reflex ("it leaves, finds
+   food, comes home"). Keep the item that carries the point, or two when
+   both matter; give one example instead of a catalogue.
+6. **What it is not.** "No server", "costs no work", "not a framework"
+   make the reader picture the thing denied. Say what it is or does. Keep
+   a negative only when it corrects a belief the reader holds, and name
+   the belief.
+7. **A vague sentence where a fix removed something.** Taking out a
+   triad or a negation leaves a gap; filling it with something vaguer
+   ("An ant at rest takes memory and waits for its next event.") fails
+   failure 4. Put the fact the removed words stood for ("An ant uses the
+   CPU only while it handles a message.").
+8. **The wrong subject.** The grammatical subject must be what does the
+   thing: rests do not send messages, ants do. A loose subject is a
+   loose claim.
+9. **A claim the block below does not show.** A sentence before code
+   describes that code. "A worker forages for 6 to 14 trips" before a
+   chart that counts no trips sends the reader looking for something
+   that is not there.
+10. **A claim that depends on the reader's machine.** "Four million
+    actors in a browser tab", "Each colony gets a CPU core" hold on one
+    laptop. Claim what the page shows by default, and let the live
+    numbers show the rest.
+11. **Our pronouns.** "Your JavaScript" for code the reader did not
+    write. Say whose: "a JavaScript object on this page".
+12. **A term before it is explained.** "Host", "I/O processor" in a
+    heading or early sentence, before the page says what they are. Use
+    the reader's words first; introduce the term where its meaning is
+    shown.
+13. **A central claim with no proof on the page.** "Messages decide how
+    many ants keep up" needs something the reader can see hold: a live
+    chart of time per message, a table, an output. When nothing backs it,
+    build the proof or drop the claim.
+14. **Our plumbing instead of their use.** An excerpt of how the example
+    is wired (a 50-line frame step, how two Workers split a field)
+    teaches our simulation. Show what the reader would write or run.
+15. **Saying what the reader should think.** "How would you build it?
+    Picture where a million of those live." spells out the reaction the
+    page should cause. Order the page so the reader asks it: show, then
+    explain.
+16. **Emphasis by pattern.** Italics go on the one word that carries the
+    contrast. Copying the italic from the last headline ("in a *browser
+    tab*") stresses nothing.
+17. **Repeated shapes.** Several sentences in a row that open the same
+    way ("Every ant…", "Each ant…", "Each colony…"), a heading repeated
+    by the sentence under it, a lede that repeats the headline ("in this
+    tab… in your browser"). Vary the shape or cut the repeat.
+18. **Units the reader cannot read.** "1.00×", "Pace, % of real time"
+    leave the reader guessing what is measured against what. Name the
+    quantity in the reader's words ("Keeping up with real time", 99%)
+    and draw the reference (a line at 100%).
+19. **A number that misleads.** "2,071 bytes of WebAssembly memory an
+    actor" divided the module's fixed size among few actors. A number on
+    the page measures what its label says, at every setting the reader
+    can choose.
 
-A section heading names its finding, not its topic, when it has one:
+## How a page is ordered
 
-- Before: "What an actor costs." / After: "An actor takes about 530 bytes."
-- Before: "Costs stay flat." / After: "Twice the actors, the same cost."
-
-A heading that is an instruction ("Size a host.", "1. Create a room.") is
-fine: it says what the reader does there.
-
-### 2. A lede that is a table of contents
-
-The lede lists what the sections below will cover. The reader learns the
-page's outline, not one thing about the product.
-
-- Before: "What an actor costs in memory, how to size a host, and how each
-  operation's cost holds as the population doubles. Every number comes
-  from a program in the repository that you can run."
-- After: "A started actor takes about 530 bytes and a hibernated one about
-  120. Four million fit in one process, and each operation costs about the
-  same at four million actors as at two."
-
-Fix: take the most important facts the sections establish and state them.
-The lede is the page's conclusion, not its index.
-
-### 3. A sentence that only points at the next block
-
-- Before: "Three rules that must hold whatever the service does." (then
-  the code)
-- After: "Whatever the service does, the payment charges at most three
-  times, gives up only after the third charge, and is paid only when the
-  service answered."
-- Before: "Read what a host uses at any time:"
-- After: "`hostStats` reports each pool's capacity, what it uses and its
-  high water mark:"
-
-Fix: say what the block shows, so a reader who skips the code still knows.
-A colon before a code block is fine when the sentence carries a fact.
-
-### 4. A sentence with no content
-
-Vague claims about growth, power or flexibility: "It grows with your
-system.", "a powerful way to", "seamlessly", "out of the box".
-
-- Before: "This is a pattern, not a library. It grows with your system."
-- After: "There is no library to install: the world, the properties, the
-  generator, the search and the shrinker are 76 lines of your own code."
-
-Fix: replace the adjective with the number or the mechanism behind it.
-If there is none, delete the sentence.
-
-### 5. Three of everything
-
-A list of three qualities sounds complete, so it gets written by reflex:
-"efficient, in process, scalable", "it leaves, finds food, comes home".
-The reader weighs none of the three, and the rhythm gives the reflex away.
-
-- Before: "Two fights kill it, and so do old age, after 6 to 14 trips, and
-  your tap."
-- After: "An egg becomes a larva, then a worker that forages for 6 to 14
-  trips. Two fights or a tap end it sooner."
-
-Fix: keep the one item that carries the point, or two when both matter.
-Give an example ("such as arriving at food") instead of the catalogue.
-
-### 6. What it is not
-
-A sentence that defines something by what it is not ("no server", "costs
-memory and no work", "drawing costs tinyactors nothing", "not a
-framework") makes the reader think of the thing denied first.
-
-- Before: "A resting ant costs memory and no work."
-- After: "An ant at rest takes memory and waits for its next event."
-
-Fix: say what it is or does. Keep a negative only when the reader holds
-the belief it corrects and the sentence names that belief.
+- **A demo page** leads with the experience: the hero invites the reader
+  to watch or try ("Watch a million ants forage and fight."), the demo
+  follows at once, then how it works, piece by piece, then what it costs
+  (after the mechanics the cost depends on), then how to run it
+  yourself.
+- **A guide** is steps, each heading an instruction ("1. Create a
+  room."), each step a sentence and the code that does it.
+- **A measurement page** leads with its numbers: the lede states them,
+  the sections show the programs that made them.
+- On every page, a section is one or two sentences of prose and then the
+  proof: code, output, a table, a live chart.
 
 ## Facts are checked
 
 A number in copy comes from the repository: a transcluded table, a
-measurement in an example's README, a guide. Find it before writing it,
-and prefer showing the table on the page (`<table src>`) to quoting it.
-When a measurement is redone, change the copy that quotes it too.
+measurement in an example's README, a guide, or a live chart on the page
+itself. Find it before writing it. Where the page measures live (the
+anthill), the copy names what the reader will see and states no recorded
+numbers. When a measurement is redone, change the copy that quotes it.
+Keep the pitch's words (`website/AGENTS.md`, "The pitch"): properties
+and generated runs, never formal verification.
 
 ## Reviewing a page
 
 Print every headline, lede, heading, paragraph, claim, list item and
 caption of a page as plain text, and read it top to bottom without the
-code and tables. Each line should hold up on its own:
+code and tables:
 
 ```sh
 cd website
-sxml xpath --context-item=content/pages/performance.xml \
-  'for $e in //*:headline | //*:lede | //*:heading | //*:p | //*:statement | //*:item/*:text | //*:caption
+sxml xpath --context-item=content/pages/anthill.xml \
+  'for $e in //*:headline | //*:lede | //*:heading | //*:p | //*:statement | //*:item/*:text | //*:caption | //*:description
    return local-name($e) || ": " || normalize-space($e)'
 ```
 
 (`sxml` is pinned in `website/mise.toml`; outside a mise shell, prefix the
 command with `mise x --`.)
 
+Copy also lives in the components and live examples: chart titles,
+labels, buttons, status lines, progress messages. Print it too:
+
+```sh
+cd website
+rg -n "title: '|textContent = |'aria-label'|, '[A-Z][a-z]+ '|\`[A-Z][a-z].*\\$\\{" components examples/*/page.mjs
+```
+
 Then, for each line:
 
-1. Apply the test. Mark the lines that would leave the reader knowing no
-   less if deleted.
-2. For a headline or heading: is it a label (two nouns, a topic) where it
-   could state a benefit or a finding?
-3. For a lede: does it list topics? Replace it with the page's two or three
-   strongest facts.
-4. For a sentence before code or a table: does it say what the block
-   shows, or only that a block follows?
-5. Look for lists of three and for sentences that say what something is
-   not (failures 5 and 6).
-6. Check every number against its source.
+1. Apply both tests (says something, true where the reader is).
+2. Go down the failures above, and compare with the patterns for its kind
+   of element in `references/patterns.md`.
+3. Check every number against its source, and every sentence before a
+   block against the block.
+4. Read the page's order against "How a page is ordered".
 
 Fix what you marked, run `mise run test` in `website/`, and look at the
 page in a browser, phone width included.

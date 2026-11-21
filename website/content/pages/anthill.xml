@@ -16,11 +16,6 @@
     </playground>
   </section>
 
-  <section id="build">
-    <heading>How would you build it?</heading>
-    <p>Each ant keeps its own state and its own timers: a larva grows after 30 seconds, and a worker comes home when its trip ends. Picture where a million of those live and what runs while they wait.</p>
-  </section>
-
   <section id="ant">
     <heading>An ant is a statechart.</heading>
     <p>An egg becomes a larva and then a worker, which forages until an event ends it. The world sends <code>die</code> when the ant grows old.</p>
