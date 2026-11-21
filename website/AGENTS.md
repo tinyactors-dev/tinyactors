@@ -81,7 +81,7 @@ rules.
 
 Three points, in this order:
 
-1. **An in-process library** (the home page's section `actors`): no
+1. **An in-process library** (the home page's section `process`): no
    server, small actors, millions of them with most asleep.
 2. **Charts suit agents** (section `agents`): an actor's behavior is one
    chart (local reasoning), charts do no I/O (isolated effects), and a

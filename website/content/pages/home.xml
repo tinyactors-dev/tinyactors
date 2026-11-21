@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="home" path="/">
   <title>tinyactors: like SQLite, but for actors</title>
-  <description>tinyactors runs statecharts as actors inside your process. Agents can read them, simulate them and check them.</description>
+  <description>tinyactors runs statecharts as actors inside your process, millions with most of them asleep, and tests them over thousands of simulated runs.</description>
 
   <hero>
     <headline>Like SQLite, but for <em>actors</em>.</headline>
-    <lede>tinyactors is an actor runtime you link into your program. Each actor is a statechart. No server, no threads, no I/O of its own.</lede>
+    <lede>tinyactors is a library that runs actors inside your program, each a statechart: about 530 bytes awake and 120 asleep.</lede>
     <install>
       <command for="Node.js and Bun" guide="https://github.com/tinyactors-dev/tinyactors-napi#readme">npm install @tinyactors/node</command>
       <command for="Python" guide="https://github.com/tinyactors-dev/tinyactors-cpython#readme">pip install tinyactors</command>
-      <command for="Browsers" guide="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/docs/guide/browser.md">npm install @tinyactors/wasm</command>
+      <command for="Browsers" guide="https://www.tinyactors.dev/guides/browser/">npm install @tinyactors/wasm</command>
     </install>
     <actions>
       <action to="chat">Build a team chat</action>
@@ -18,29 +18,29 @@
   </hero>
 
   <section id="actors">
-    <heading>HTML for control flow.</heading>
-    <p>A statechart is a state machine whose states nest inside states and run side by side in parallel regions. The W3C wrote it down as <link href="https://www.w3.org/TR/scxml/">SCXML</link>: a chart means the same in every runtime, as HTML does in every browser.</p>
-    <p>Each actor in tinyactors runs one chart. This one charges a card, retries twice, and gives up.</p>
+    <heading>Write each actor's behavior as one chart.</heading>
+    <p>A statechart is a state machine whose states nest inside states and run side by side in parallel regions. The W3C wrote it down as <link href="https://www.w3.org/TR/scxml/">SCXML</link>, so a chart means the same in every runtime.</p>
+    <p>This chart charges a card, waits 30 seconds for an answer, and retries until it has charged three times.</p>
     <code src="../../examples/simulate/payment.scxml" language="scxml" file="payment.scxml"/>
   </section>
 
   <section id="process">
-    <heading>In your process.</heading>
+    <heading>Run millions of actors in your process.</heading>
     <claims>
       <claim>
-        <statement>No server.</statement>
-        <p>A host is a library. It runs your actors on your event loop, in Node.js, Bun, Python, the browser or C.</p>
+        <statement>A host is a library.</statement>
+        <p>It runs your actors on your own event loop, in Node.js, Bun, Python, a browser or C.</p>
         <source to="chat" section="room">Tutorial, step 1</source>
       </claim>
       <claim>
-        <statement>Small actors.</statement>
-        <p>A started actor takes about 530 bytes in Node.js, with a million of them in the process. The C core takes no memory you did not give it.</p>
-        <source to="performance" section="actors">What an actor costs</source>
+        <statement>An actor takes about 530 bytes.</statement>
+        <p>That is a started actor in Node.js, measured with a million in one process. The C core allocates only from memory you give it.</p>
+        <source to="performance" section="actors">An actor takes about 530 bytes</source>
       </claim>
       <claim>
-        <statement>Millions, mostly asleep.</statement>
-        <p>Idle actors hibernate to your store and wake on their next event, keeping about 120 bytes in memory meanwhile. Each operation costs about the same at four million actors as at two.</p>
-        <source to="performance" section="scale">Costs stay flat</source>
+        <statement>A sleeping actor keeps about 120 bytes.</statement>
+        <p>Idle actors hibernate to your store and wake on their next event. Each operation costs about the same at four million actors as at two.</p>
+        <source to="performance" section="scale">Twice the actors, the same cost</source>
       </claim>
     </claims>
     <actions>
@@ -49,12 +49,12 @@
   </section>
 
   <section id="agents">
-    <heading>Built for agents.</heading>
-    <p>A coding agent changes a chart the way it changes a function: with all of the behavior in view.</p>
+    <heading>Hand a chart to a coding agent.</heading>
+    <p>A chart holds all of an actor's behavior, so an agent changes it as it would change one function.</p>
     <list>
-      <item><term>Local reasoning</term><text>An actor's behavior is one chart. An agent reads one file, not a call graph.</text></item>
-      <item><term>Isolated effects</term><text>Charts do no I/O. Every effect is an event to a handler you write.</text></item>
-      <item><term>Any scenario</term><text>Outages, retries and timeouts run on a simulated clock, in milliseconds.</text></item>
+      <item><term>One file per actor</term><text>An agent reads the chart, not a call graph spread over a codebase.</text></item>
+      <item><term>Effects as events</term><text>A chart sends an event for each effect, and a handler you write performs it, so the agent's change touches no I/O.</text></item>
+      <item><term>Any scenario in milliseconds</term><text>Outages, retries and timeouts run on a simulated clock, so the agent checks its change against them at once.</text></item>
     </list>
   </section>
 
@@ -62,11 +62,11 @@
     <heading>Simulate a thousand runs.</heading>
     <p>Does the payment ever charge a card four times, or give up too early? A test that waits 30 seconds per retry cannot ask that a thousand times, but a simulation can.</p>
     <list ordered="true">
-      <item><term>A fake service</term><text>An I/O processor stands in for the payment service. A seeded random number decides whether it answers each charge.</text></item>
+      <item><term>A fake service</term><text>A handler you write stands in for the payment service. A seeded random number decides whether it answers each charge.</text></item>
       <item><term>A fake clock</term><text>The host runs on a <code>SimulatedClock</code>, which jumps straight to the next timeout.</text></item>
       <item><term>Two checks</term><text>After each run, the program asserts at most three charges, and no giving up before the third.</text></item>
     </list>
-    <p>The whole program, a thousand runs in under a second:</p>
+    <p>The program runs a thousand seeds and prints whether any run broke a rule:</p>
     <example>
       <code src="../../examples/simulate/simulate.mjs" language="javascript" file="simulate.mjs"/>
       <code src="../../examples/simulate/output.txt" language="text" role="output"/>
@@ -79,13 +79,13 @@
     <p>A unit test checks one run. A property checks every run a generator can make, and a failure shrinks to the smallest run that breaks it.</p>
     <claims>
       <claim>
-        <statement>A formal model.</statement>
-        <p>SCXML defines what every transition does. tinyactors passes all 191 automatic tests of the W3C suite.</p>
+        <statement>It passes the W3C's own tests.</statement>
+        <p>SCXML defines what every transition does, and tinyactors passes all 191 automatic tests of the W3C suite.</p>
         <source to="performance" section="correctness">Correct by the standard</source>
       </claim>
       <claim>
         <statement>Every step is a span.</statement>
-        <p>Each step an actor takes is traced: the event, the transitions, the states it entered.</p>
+        <p>A failing run's trace shows each event the actor took and the states it entered.</p>
         <source to="telemetry">Telemetry</source>
       </claim>
     </claims>
@@ -112,10 +112,10 @@
   <section id="production">
     <heading>Run it in production.</heading>
     <list>
-      <item><term>Hibernation</term><text>Idle actors go to your store and come back on their next event.</text></item>
-      <item><term>Migration</term><text>Running actors move to a new version of their chart.</text></item>
-      <item><term>Snapshots</term><text>The whole host as one blob: actors, timers and clock.</text></item>
-      <item><term>Telemetry</term><text>Traces, logs and metrics as OpenTelemetry.</text></item>
+      <item><term><link to="guide-hibernation">Hibernation</link></term><text>Two million actors ran with at most 1000 in memory and the rest in a database.</text></item>
+      <item><term><link to="guide-migration">Migration</link></term><text>Running actors move to their chart's next version and keep the state they reached.</text></item>
+      <item><term><link to="guide-snapshots">Snapshots</link></term><text>A host of two million actors copies into a 165 MB snapshot that another process restores.</text></item>
+      <item><term><link to="guide-telemetry">Telemetry</link></term><text>Each step an actor takes becomes a span in your OpenTelemetry collector.</text></item>
     </list>
   </section>
 </page>
