@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ant motion study</title>
+<link rel="stylesheet" href="ds/tokens/colors.css">
+<style>
+  @font-face { font-family: 'IBM Plex Mono'; font-weight: 500; src: url(ds/assets/fonts/IBMPlexMono-500.woff2) format('woff2'); }
+  @font-face { font-family: 'IBM Plex Sans'; font-weight: 400; src: url(ds/assets/fonts/IBMPlexSans-400.woff2) format('woff2'); }
+  @font-face { font-family: 'Newsreader'; font-weight: 400; src: url(ds/assets/fonts/Newsreader-400.woff2) format('woff2'); }
+  html, body { margin: 0; background: var(--vellum-100); }
+  #stage { position: relative; width: 1280px; height: 720px; overflow: hidden; background: var(--vellum-100); }
+  svg { position: absolute; inset: 0; }
+  .caption { position: absolute; left: 56px; top: 44px; width: 560px; }
+  .caption .num { font: 500 12px/1 'IBM Plex Mono', monospace; letter-spacing: .14em; color: var(--pine-500); text-transform: uppercase; }
+  .caption h1 { font: 400 40px/1.05 'Newsreader', serif; color: var(--graphite-900); margin: 10px 0 10px; letter-spacing: -.01em; }
+  .caption p { font: 400 16px/1.45 'IBM Plex Sans', sans-serif; color: var(--graphite-600); margin: 0; }
+  .chapters { position: absolute; left: 56px; bottom: 40px; display: flex; gap: 6px; }
+  .chapters span { width: 34px; height: 3px; background: var(--vellum-300); }
+  .chapters span.on { background: var(--graphite-900); }
+  .chapters span.done { background: var(--graphite-400); }
+  .mark { position: absolute; right: 56px; bottom: 34px; font: 500 12px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; color: var(--graphite-500); text-transform: uppercase; }
+  .tag { position: absolute; font: 500 11px/1 'IBM Plex Mono', monospace; letter-spacing: .04em; padding: 4px 7px 4px 18px; border-radius: 2px; white-space: nowrap; transform: translate(-50%, 0); }
+  .tag::before { content: ''; position: absolute; left: 7px; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: currentColor; }
+  .tag.running { color: var(--state-running); background: var(--state-running-bg); }
+  .tag.hibernated { color: var(--state-stopped); background: var(--state-stopped-bg); }
+  .tag.done { color: var(--state-done); background: var(--state-done-bg); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="svg" width="1280" height="720" viewBox="0 0 1280 720">
+    <defs>
+      <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <path d="M40 0H0V40" fill="none" stroke="var(--vellum-200)" stroke-width="1"/>
+      </pattern>
+      <pattern id="grid5" width="200" height="200" patternUnits="userSpaceOnUse">
+        <path d="M200 0H0V200" fill="none" stroke="var(--vellum-300)" stroke-width="1"/>
+      </pattern>
+      <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur in="SourceAlpha" stdDeviation="14"/>
+        <feOffset dx="10" dy="16"/>
+        <feComponentTransfer><feFuncA type="linear" slope="0.16"/></feComponentTransfer>
+        <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    <rect width="1280" height="720" fill="url(#grid)"/>
+    <rect width="1280" height="720" fill="url(#grid5)"/>
+    <g id="trails"></g>
+    <g id="ants"></g>
+  </svg>
+  <div id="tags"></div>
+  <div class="caption"><div class="num" id="num"></div><h1 id="title"></h1><p id="desc"></p></div>
+  <div class="chapters" id="chapters"></div>
+  <div class="mark">tinyactors · presence · motion study</div>
+</div>
+<script type="module">
+  import { rig, pose } from './rig.mjs';
+  import { makeScene, CHAPTERS } from './scene.mjs';
+  const NS = 'http://www.w3.org/2000/svg';
+  const SCALE = 0.21;
+  const text = await (await fetch('ds/assets/ant-resting.svg')).text();
+  const source = new DOMParser().parseFromString(text, 'image/svg+xml').querySelector('#ant');
+  const scene = makeScene();
+  const layer = document.getElementById('ants'), trails = document.getElementById('trails'), tags = document.getElementById('tags');
+  const views = {};
+  for (const [id, ant] of Object.entries(scene.ants)) {
+    const g = document.createElementNS(NS, 'g');
+    const inner = document.importNode(source, true);
+    g.setAttribute('filter', 'url(#shadow)');
+    g.appendChild(inner);
+    layer.appendChild(g);
+    const trail = document.createElementNS(NS, 'g');
+    trails.appendChild(trail);
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tags.appendChild(tag);
+    views[id] = { g, r: rig(inner), trail, tag, dots: [] };
+  }
+  const chapters = document.getElementById('chapters');
+  for (const _ of CHAPTERS) chapters.appendChild(document.createElement('span'));
+
+  function draw() {
+    const t = scene.time;
+    const [, num, title, desc] = scene.chapter(t);
+    document.getElementById('num').textContent = num + ' / ' + String(CHAPTERS.length).padStart(2, '0');
+    document.getElementById('title').textContent = title;
+    document.getElementById('desc').textContent = desc;
+    [...chapters.children].forEach((el, i) => {
+      el.className = CHAPTERS[i][1] === num ? 'on' : CHAPTERS[i][0] < t ? 'done' : '';
+    });
+    for (const [id, a] of Object.entries(scene.ants)) {
+      const v = views[id];
+      const show = !a.hidden;
+      v.g.style.display = v.tag.style.display = show ? '' : 'none';
+      if (!show) continue;
+      pose(v.r, a.pose);
+      v.g.setAttribute('transform', `translate(${a.x.toFixed(2)} ${a.y.toFixed(2)}) rotate(${(a.heading + a.sway).toFixed(3)}) scale(${a.scale}) translate(-512 -530)`);
+      v.g.setAttribute('opacity', a.alpha.toFixed(3));
+      v.g.style.filter = `saturate(${(1 - 0.85 * a.tuck).toFixed(3)})`;
+      const status = a.target.status ?? 'running';
+      v.tag.className = 'tag ' + status;
+      v.tag.textContent = `${a.name} · ${status}`;
+      v.tag.style.left = a.x + 'px';
+      v.tag.style.top = (a.y > 540 ? a.y - 104 : a.y + 82) + 'px';
+      // pheromone trail: dots that fade over six seconds
+      while (v.dots.length < a.trail.length) {
+        const c = document.createElementNS(NS, 'circle');
+        c.setAttribute('r', '2.2');
+        c.setAttribute('fill', a.trailColor);
+        v.trail.appendChild(c);
+        v.dots.push(c);
+      }
+      a.trail.forEach((p, i) => {
+        const c = v.dots[i];
+        c.setAttribute('cx', p.x.toFixed(1));
+        c.setAttribute('cy', p.y.toFixed(1));
+        c.setAttribute('opacity', (0.55 * Math.exp(-(a.time - p.t) / 4)).toFixed(3));
+      });
+    }
+  }
+  window.frame = (t) => { scene.advanceTo(t); draw(); };
+  await document.fonts.ready;
+  window.ready = true;
+  if (!location.search.includes('render')) {
+    const start = performance.now();
+    const loop = () => { const t = ((performance.now() - start) / 1000) % 31; if (t < scene.time) location.reload(); window.frame(t); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  }
+</script>
+</body>
+</html>
