@@ -27,30 +27,17 @@
 
   <section id="agents">
     <heading>Hand a chart to a coding agent</heading>
-    <p>Statecharts date from <link href="https://doi.org/10.1016/0167-6423(87)90035-9">1987</link>, but writing every state down by hand was more work than most teams would take on.</p>
-    <p>A coding agent does that work for you. In return it gets an actor's whole behavior in one file instead of a call graph.</p>
+    <p>Statecharts make behavior readable and checkable, but writing every state by hand cost more than most teams would pay. A coding agent does that writing for you, and that changes the trade.</p>
     <p>The chart sends an event for every effect, and your code performs it. A simulated clock runs its timeouts, so the agent tests each change in milliseconds.</p>
   </section>
 
   <section id="process">
     <heading>Run millions of actors in your process</heading>
-    <claims>
-      <claim>
-        <statement>It runs inside your program</statement>
-        <p>tinyactors is a library on your own event loop, so your actors deploy with your program.</p>
-        <source to="chat" section="room">The chat tutorial's first program</source>
-      </claim>
-      <claim>
-        <statement>One chart runs in JavaScript, Python and C</statement>
-        <p>Each language's package wraps one C core, and that core passes all 191 automatic tests of the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link> suite.</p>
-        <source to="performance" section="correctness">One test suite for every package</source>
-      </claim>
-      <claim>
-        <statement>Small enough for every part of a system</statement>
-        <p>An actor takes about 530 bytes in Node.js, and one saved to a database while idle keeps about 120.</p>
-        <source to="performance" section="actors">Memory per actor, by population</source>
-      </claim>
-    </claims>
+    <list>
+      <item><term>It runs inside your program</term><text>tinyactors is a library on your own event loop, so your actors deploy with your program.</text></item>
+      <item><term>One chart runs in JavaScript, Python and C</term><text>Each language's package wraps one C core, and that core passes all 191 automatic tests of the W3C's <link href="https://www.w3.org/TR/scxml/">SCXML</link> suite.</text></item>
+      <item><term>Small enough for every part of a system</term><text>An actor takes <link to="performance" section="actors">about 530 bytes</link> in Node.js, and one saved to a database while idle keeps about 120.</text></item>
+    </list>
     <actions>
       <action to="anthill">Watch a million ants</action>
     </actions>

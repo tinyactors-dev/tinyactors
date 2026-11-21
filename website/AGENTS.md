@@ -86,10 +86,11 @@ agents ahead of the in-process library):
 1. **Actors that run charts, written by agents** (the home page's
    sections `actors` and `agents`): an actor's behavior is one statechart,
    every state and transition written down, where an Erlang or Akka actor
-   runs any code. Statecharts are old (Harel, 1987) and were more work to
-   write by hand than most teams took on; a coding agent does that work,
-   and gets one file to read (local reasoning), effects as events for your
-   code (isolated effects), and a simulated clock (simulation).
+   runs any code. Statecharts make behavior readable and checkable, but
+   writing every state by hand cost more than most teams would pay; a
+   coding agent does that writing, which changes the trade. Its effects go
+   out as events for your code (isolated effects), and a simulated clock
+   runs its timeouts (simulation).
 2. **An in-process library** (section `process`): no server, one C core
    behind every language's package, small enough for every part of a
    system.
