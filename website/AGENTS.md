@@ -117,6 +117,11 @@ The wording of each point is the content's (`content/site.xml`,
   link and anchor, and runs the examples.
 - A new refusal the schema makes gets a document in `test/invalid/` with
   `expect: <rule>` in its first comment.
+- **Deploy every change you push** (the maintainer: "don't sit on
+  changes, always deploy"). After the push, deploy from a clean tree at
+  `origin/main` (rebase first, so another session's deployed work is not
+  rolled back; `npm ci` when `package-lock.json` moved), and check the
+  changed pages on www.tinyactors.dev.
 - Deploying: `mise run deploy` deploys the working tree (CLOUDFLARE_API_TOKEN
   through fnox). A release (`mise run release -- <version> --publish`)
   needs its section of `CHANGELOG.md` from the release-changelog skill, and
