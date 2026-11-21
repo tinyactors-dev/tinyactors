@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-quickjs" path="/guides/quickjs/">
+  <title>The quickjs sandbox · tinyactors guides</title>
+  <description>Run charts you did not write in QuickJS, a separate engine with no I/O and limits on time and memory.</description>
+  <hero>
+    <headline>Run charts you did not write.</headline>
+    <lede>The <code>quickjs</code> datamodel runs chart code in a separate engine, with no I/O and limits on time and memory.</lede>
+  </hero>
+
+  <section id="datamodels">
+    <heading>Pick a datamodel per host.</heading>
+    <p>A host runs all its charts on one of two datamodels, and both take the same charts.</p>
+    <list>
+      <item><term><code>native</code>, the default</term><text>Chart code runs in <code>node:vm</code> contexts of your own engine, fast and with your engine's values. A <code>vm</code> context is not a security boundary: a chart can reach the process it runs in.</text></item>
+      <item><term><code>quickjs</code></term><text>Chart code runs in QuickJS, an engine compiled into the package, with no modules, timers, files or network, and limits on how long an evaluation runs and how much memory it takes.</text></item>
+    </list>
+    <p>Use <code>quickjs</code> for charts you did not write: charts your users upload, or charts a program generates.</p>
+  </section>
+
+  <section id="stopped">
+    <heading>A runaway evaluation ends in an error.</heading>
+    <p>This chart loops forever, allocates forever and looks for Node.js. Each runaway evaluation ends in <code>error.execution</code>, and the actor goes on with its next event.</p>
+    <example>
+      <code language="javascript" file="sandbox.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'uploaded.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="uploaded" initial="s">
+  <state id="s">
+    <transition event="spin"><script>while (true) {}</script></transition>
+    <transition event="hog"><script>const hoard = []; for (;;) hoard.push(new Array(1000).fill(1));</script></transition>
+    <transition event="peek"><log expr="typeof process + ' ' + typeof require + ' ' + typeof setTimeout"/></transition>
+    <transition event="error.execution"><log expr="'stopped: error.execution'"/></transition>
+  </state>
+</scxml>` }]);
+
+const host = new Host(compiled, {
+  system: 'sandbox',
+  datamodel: 'quickjs',
+  quickjs: { maxOps: 1000, memoryLimit: 16 * 1024 * 1024 },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+
+const actor = host.spawn('uploaded');
+actor.send('spin');
+actor.send('hog');
+actor.send('peek');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+stopped: error.execution
+stopped: error.execution
+undefined undefined undefined
+</code>
+    </example>
+  </section>
+
+  <section id="the-limits">
+    <heading>Bound each evaluation's work and memory.</heading>
+    <p>The host's <code>quickjs</code> option sets the limits, with <code>datamodel: 'quickjs'</code> only. With the native datamodel the option is a <code>TypeError</code>.</p>
+    <table>
+      <head><cell>Option</cell><cell>Default</cell><cell>What it bounds</cell></head>
+      <row><cell><code>maxOps</code></cell><cell>1,000,000</cell><cell>the engine's interrupt checks one evaluation may make before it is stopped</cell></row>
+      <row><cell><code>memoryLimit</code></cell><cell>1 GiB (<code>2 ** 30</code>)</cell><cell>bytes for the whole engine, every actor of the host together</cell></row>
+      <row><cell><code>stackLimit</code></cell><cell>the engine's</cell><cell>bytes of native stack for JavaScript</cell></row>
+      <row><cell><code>realm</code></cell><cell><code>'auto'</code></cell><cell><code>'isolated'</code> gives every actor a context of its own (<link to="guide-quickjs" section="realms">Realms</link>)</cell></row>
+    </table>
+    <p>The default <code>memoryLimit</code> stops a runaway allocation at 1 GiB instead of letting it take the process. That fits tens of thousands of resident actors: 40,000 take about 112 MB of engine heap.</p>
+    <p>A host that keeps more actors resident sets a larger limit. For charts you did not write, set both limits as small as their real work allows.</p>
+    <p><code>maxOps</code> counts interrupt checks, one for every 10,000 jumps and calls, not time. How long a check takes depends on the code between checks:</p>
+    <table>
+      <caption>How long one looping evaluation holds the host, and every host of its thread. Measured 2026-10-18 on an Intel Xeon at 2.10 GHz, Linux; Node.js 22 and Bun 1.4.1 alike.</caption>
+      <head><cell>Loop</cell><cell><code>maxOps: 200</code></cell><cell><code>1000</code></cell><cell><code>10_000</code></cell><cell>the default, 1,000,000</cell></head>
+      <row><cell><code>while (true) {}</code></cell><cell>6 ms</cell><cell>27 to 39 ms</cell><cell>260 ms</cell><cell>26 s</cell></row>
+      <row><cell><code>while (_event.data.value !== null) {}</code></cell><cell>50 ms</cell><cell>240 to 250 ms</cell><cell>2.5 to 2.7 s</cell><cell>about 256 s</cell></row>
+    </table>
+    <p>With the default, one runaway evaluation stalls the thread's hosts for minutes. Choose <code>maxOps</code> by the longest stall your other actors can take:</p>
+    <list>
+      <item><text>a few hundred, 5 to 50 ms, for a service that answers requests;</text></item>
+      <item><text>about 1000, 25 to 250 ms, for background work;</text></item>
+      <item><text>never less than your charts' real work needs: an evaluation that needs more checks fails every time.</text></item>
+    </list>
+    <p>The actor's <code>error.execution</code> says which limit stopped it: <code>_event.data.reason</code> is <code>'fuel'</code> for <code>maxOps</code> and <code>'memory'</code> for <code>memoryLimit</code>.</p>
+    <p><code>host.quickjsHeapBytes</code> is the engine's heap, every actor's together, to watch against <code>memoryLimit</code>. It is <code>undefined</code> on a native host and once the host is closed.</p>
+  </section>
+
+  <section id="realms">
+    <heading>Shared builtins, or a realm each.</heading>
+    <p>By default the actors of a chart share one context, each a small scope object, as on the native datamodel. A chart whose scripts declare top-level names gives each actor a context instead.</p>
+    <p>The shared context's globals are frozen, but its builtins are shared: a chart that changes <code>Array.prototype</code> changes it for every actor. With <code>realm: 'isolated'</code> every actor gets its own context, at the cost of its memory.</p>
+  </section>
+
+  <section id="what-differs-from-the-native-datamodel">
+    <heading>Three edges differ from native.</heading>
+    <p>A chart observes the same SCXML on both datamodels. Only hibernation, values and costs differ:</p>
+    <list>
+      <item><term>Hibernation stores more.</term><text>QuickJS writes its own values into the blob, so a <code>Date</code>, <code>Map</code>, <code>Set</code>, typed array or graph with cycles comes back. A class's instance comes back as a plain object, and a function in a variable still keeps the actor in memory (<link to="guide-hibernation"/>).</text></item>
+      <item><term>Values cross by encoding.</term><text>Event data and spawn params convert to the engine's values and back through the <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#values">value table</link>. A key holding <code>undefined</code> is dropped and an array's <code>undefined</code> becomes <code>null</code>, where the native datamodel keeps both.</text></item>
+      <item><term>Costs differ.</term><text>Most operations cost less on quickjs, and an idle actor takes less memory (<link to="guide-capacity"/>).</text></item>
+    </list>
+  </section>
+</page>

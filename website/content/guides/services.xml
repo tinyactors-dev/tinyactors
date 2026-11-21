@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-services" path="/guides/services/">
+  <title>Invoked services · tinyactors guides</title>
+  <description>Run a connection, a subprocess or a long computation for as long as a chart's state is active, with SCXML's invoke.</description>
+  <hero>
+    <headline>Run a service while a state is active.</headline>
+    <lede>A chart's <code>&lt;invoke&gt;</code> starts a service your program runs when the state is entered and stops it when the state is left. 200,000 actors with a service each made a million round trips in 18 to 23 seconds.</lede>
+  </hero>
+
+  <section id="invoke">
+    <heading>Use invoke for what outlives one send.</heading>
+    <p>An I/O processor answers one send at a time. A connection, a subprocess, a long computation or a subscription lives longer.</p>
+    <p>SCXML's <code>&lt;invoke&gt;</code> starts it on entering a state and stops it on leaving. While the state is active, the chart and the service exchange events.</p>
+    <p>When the invoked thing is another chart, the host runs it as a child actor (<link to="guide-charts" section="a-chart-that-starts-another">A chart that starts another</link>). When your program runs it, it is a service, and this guide is about those.</p>
+  </section>
+
+  <section id="a-service">
+    <heading>Return a service from the type's handler.</heading>
+    <p>The host's options register a handler per <code>&lt;invoke type&gt;</code>: <code>services: { [type]: handler }</code>. At each start the handler gets an invocation and returns the service, any object.</p>
+    <p>The host keeps the service until the invocation ends and calls its two methods, both optional:</p>
+    <list>
+      <item><term><code>receive(send)</code></term><text>gets each <code>&lt;send target="#_&lt;invokeid&gt;"&gt;</code> of the invoker, and each event it forwards with <code>autoforward="true"</code>;</text></item>
+      <item><term><code>stop()</code></term><text>runs when the invoker leaves the state, which cancels the invocation.</text></item>
+    </list>
+    <p>The service talks back through the invocation. <code>invocation.sendBack(event, data)</code> sends the invoker an event whose <code>_event.invokeid</code> is the invoke's id.</p>
+    <p><code>invocation.done(data)</code> ends the service and gives the invoker <code>done.invoke.&lt;invokeid&gt;</code> with <code>data</code>:</p>
+    <example>
+      <code language="javascript" file="counter.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const chart = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="player" initial="playing">
+  <state id="playing">
+    <invoke id="counter" type="urn:example:counter" src="counter://local">
+      <param name="start" expr="10"/>
+    </invoke>
+    <transition event="go"><send target="#_counter" event="ping"/></transition>
+    <transition event="finish"><send target="#_counter" event="finish"/></transition>
+    <transition event="pong"><log expr="'pong ' + _event.data.n + ' from ' + _event.invokeid"/></transition>
+    <transition event="done.invoke.counter" target="finished">
+      <log expr="'done, total ' + _event.data.total"/>
+    </transition>
+  </state>
+  <final id="finished"/>
+</scxml>`;
+
+class Counter {
+  constructor(invocation) {
+    this.invocation = invocation;
+    this.count = invocation.data.start;
+    console.log(`started ${invocation.type} ${invocation.src} for session ${invocation.session}`);
+  }
+  receive(send) {
+    this.count++;
+    if (send.event === 'finish') this.invocation.done({ total: this.count });
+    else this.invocation.sendBack('pong', { n: this.count });
+  }
+  stop() {
+    console.log('stopped');
+  }
+}
+
+const compiled = compileCharts([{ name: 'player.scxml', text: chart }]);
+const host = new Host(compiled, {
+  system: 'demo',
+  services: { 'urn:example:counter': (invocation) => new Counter(invocation) },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+
+const player = host.spawn('player');
+player.send('go');
+player.send('go');
+player.send('finish');
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+started urn:example:counter counter://local for session 1
+pong 11 from counter
+pong 12 from counter
+done, total 13
+</code>
+    </example>
+    <p>A service that ended with <code>done</code> is not stopped: <code>stop</code> runs only for a cancel.</p>
+  </section>
+
+  <section id="when-it-starts">
+    <heading>Send to a service from a later event.</heading>
+    <p>An invocation starts at the end of the macrostep that entered its state, as a child chart does. Anything that macrostep sends to it comes before the service exists.</p>
+    <p>So a <code>&lt;send target="#_counter"&gt;</code> in the state's own <code>&lt;onentry&gt;</code>, a raised event's transition or an eventless one gets <code>error.communication</code>. Send from a later event, as <code>go</code> does above.</p>
+  </section>
+
+  <section id="the-invocation">
+    <heading>Keep the invocation while the service runs.</heading>
+    <p>The invocation is a record, so a service may keep it and call <code>sendBack</code> from a timer or a promise. It holds these fields:</p>
+    <list>
+      <item><term><code>host</code></term><text>the host that started it;</text></item>
+      <item><term><code>session</code></term><text>the invoker, a <code>bigint</code>;</text></item>
+      <item><term><code>invokeid</code>, <code>type</code>, <code>src</code></term><text>the invoke's attributes;</text></item>
+      <item><term><code>data</code></term><text>the <code>&lt;param&gt;</code>s as an object, or the <code>&lt;content&gt;</code>;</text></item>
+      <item><term><code>traceparent</code></term><text>the invoke's trace;</text></item>
+      <item><term><code>running</code></term><text>false once the invocation ended;</text></item>
+      <item><term><code>restored</code></term><text>true when a restored host starts it again (<link to="guide-snapshots"/>).</text></item>
+    </list>
+    <p><code>sendBack</code> and <code>done</code> continue the invoke's trace unless their last argument is <code>{ traceparent }</code>. A <code>null</code> traceparent starts a new trace.</p>
+    <p>After <code>done</code>, a cancel or <code>host.close()</code>, both throw a <code>TinyactorsError</code> with <code>TA_ERROR_STALE</code>.</p>
+    <p>The send <code>receive</code> gets is a view, as an I/O processor's is: read it during the call. A <code>receive</code> that returns a promise has its send filled first, so it may read it after an <code>await</code>.</p>
+  </section>
+
+  <section id="a-service-that-starts-asynchronously">
+    <heading>Return a promise while the service connects.</heading>
+    <p>A handler may return a promise of the service, while a connection opens or a process spawns. Until it settles the sends wait, and reach <code>receive</code> in order once it resolves.</p>
+    <p>The invocation may <code>sendBack</code> meanwhile, as this handler does with <code>status</code>:</p>
+    <example>
+      <code language="javascript" file="db.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+// A stand-in for a client library: a connection that opens after 20 ms.
+const connect = (url) => new Promise((resolve) => setTimeout(() => resolve({
+  ask: async (question) => `${url} says yes to ${question}`,
+}), 20));
+
+const chart = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="client" initial="connected">
+  <state id="connected">
+    <invoke id="db" type="urn:example:db" src="db://primary"/>
+    <transition event="query"><send target="#_db" event="query"><content expr="_event.data"/></send></transition>
+    <transition event="status"><log expr="'status ' + _event.data"/></transition>
+    <transition event="answer"><log expr="_event.data"/></transition>
+  </state>
+</scxml>`;
+
+const compiled = compileCharts([{ name: 'client.scxml', text: chart }]);
+const host = new Host(compiled, {
+  system: 'demo',
+  services: {
+    'urn:example:db': async (invocation) => {
+      invocation.sendBack('status', 'connecting');
+      const connection = await connect(invocation.src);
+      return {
+        async receive(send) {
+          invocation.sendBack('answer', await connection.ask(send.data));
+        },
+      };
+    },
+  },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+
+const client = host.spawn('client');
+client.send('query', 'first');  // both reach the service once it is connected
+client.send('query', 'second');
+await new Promise((resolve) => setTimeout(resolve, 100));
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+status connecting
+db://primary says yes to first
+db://primary says yes to second
+</code>
+    </example>
+    <list>
+      <item><term>A cancel before the promise settles</term><text>stops the service as soon as it resolves. The sends that waited are dropped, since the invoker has left and nothing could answer them.</text></item>
+      <item><term>A rejection</term><text>is a failed start: the invoker gets <code>error.communication</code>, once and once more for each send that waited. The rejection stays unhandled, as any handler's promise's does (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#before-you-use-it">Before you use it</link>).</text></item>
+      <item><term>After <code>host.close()</code></term><text>a promise that settles is ignored.</text></item>
+    </list>
+  </section>
+
+  <section id="return-at-once">
+    <heading>Or return it at once and await inside.</heading>
+    <p>A service returned at once takes sends before it is ready, and decides itself what a send does while it connects. Its methods await its own start:</p>
+    <example>
+      <code language="javascript" file="replica.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const connect = (url) => new Promise((resolve) => setTimeout(() => resolve({
+  ask: async (question) => `${url} answers ${question}`,
+}), 20));
+
+class Connection {
+  constructor(invocation) {
+    this.invocation = invocation;
+    this.ready = connect(invocation.src); // a promise, started now
+    this.ready.catch(() => {});           // its failure is answered in receive
+  }
+  async receive(send) {             // send was filled before the host moved on
+    const connection = await this.ready;
+    this.invocation.sendBack('answer', await connection.ask(send.data));
+  }
+}
+
+const compiled = compileCharts([{ name: 'client.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="client" initial="s">
+  <state id="s">
+    <invoke id="db" type="urn:example:db" src="db://replica"/>
+    <transition event="query"><send target="#_db" event="query"><content expr="_event.data"/></send></transition>
+    <transition event="answer"><log expr="_event.data"/></transition>
+  </state>
+</scxml>` }]);
+const host = new Host(compiled, {
+  system: 'demo',
+  services: { 'urn:example:db': (invocation) => new Connection(invocation) },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+
+host.spawn('client').send('query', 'ping');
+await new Promise((resolve) => setTimeout(resolve, 100));
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+db://replica answers ping
+</code>
+    </example>
+    <p><code>await host.idle()</code> waits for the promises your handlers return, a service handler's or a <code>receive</code>'s. It does not wait for one a service starts on its own.</p>
+    <p>Both examples open the connection in the background, so they wait on a timer first.</p>
+  </section>
+
+  <section id="failures">
+    <heading>Every failure reaches the invoker.</heading>
+    <p>Each of these gives the invoker <code>error.communication</code>, and so does each later send until the invoker leaves the state:</p>
+    <list>
+      <item><text>no handler for the type, or none for a restored invocation;</text></item>
+      <item><text>a handler that throws or whose promise rejects;</text></item>
+      <item><text>a <code>receive</code> that throws or whose promise rejects: the service crashed, and is dropped without <code>stop</code>.</text></item>
+    </list>
+    <p>The invoker gets none when it cancelled the invocation in the same step that started it.</p>
+    <p>A handler's error is reported after the turn, to <code>onHandlerError(error, invocation)</code> or out of <code>idle()</code>. A type with no handler throws nothing.</p>
+    <p>The chart chose the type, and naming one you do not serve must not let a chart end your process. An untrusted chart on quickjs could do that otherwise.</p>
+    <example>
+      <code language="javascript" file="mail.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'c.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="c" initial="s">
+  <state id="s">
+    <invoke id="mail" type="urn:example:mail" src="smtp://localhost"/>
+    <transition event="error.communication"><log expr="'the mail service failed'"/></transition>
+  </state>
+</scxml>` }]);
+const host = new Host(compiled, {
+  system: 'demo',
+  services: { 'urn:example:mail': () => { throw new Error('no SMTP server'); } },
+  log: (entry) => console.log(entry.text),
+});
+compiled.close();
+
+host.spawn('c');
+try {
+  await host.idle();
+} catch (error) {
+  console.log('idle() rejected:', error.message);
+}
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+idle() rejected: no SMTP server
+the mail service failed
+</code>
+    </example>
+    <p><code>host.close()</code> drops the running services without calling <code>stop</code>. The host keeps them on its own object, so a dropped host whose services refer back to it is still collected.</p>
+    <p>An invocation uses one of the host's requests. <code>system.maxRequests</code> is where the pool starts, and a segment grows it when it runs out (<link to="guide-capacity"/>).</p>
+  </section>
+
+  <section id="at-scale">
+    <heading>A round trip costs the same at 200,000.</heading>
+    <p><link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/tools/services.mjs"><code>tools/services.mjs</code></link> runs actors that each invoke a counter service, and sends pings and pongs to actors drawn at random. Then a third finish with done data, a third are cancelled, and the rest keep theirs.</p>
+    <p>It checks that every pong is counted once and every done datum is right. Every cancelled service must be stopped exactly once, no other stopped, and the ended services collected.</p>
+    <table>
+      <caption>200,000 actors, each with a counter service, making 1,000,000 round trips (actor, service, actor); then a third finished and a third cancelled. Every check passed, and the host held only the 66,666 services still running. One run, alone on the machine, 2026-11-20: Intel Xeon at 2.10 GHz, 4 CPUs, 16 GiB, Linux; Node.js 22.23.5, Bun 1.4.1.</caption>
+      <head><cell>runtime, datamodel</cell><cell>start 200,000 invocations</cell><cell>1,000,000 round trips</cell><cell>end (done, cancel)</cell><cell>peak resident</cell><cell>core's region</cell></head>
+      <row><cell>node, native</cell><cell>4.4 s (45,000 a second)</cell><cell>23.0 s (43,000 a second)</cell><cell>1.8 s</cell><cell>516 MB (2578 B per actor and service)</cell><cell>54.6 MB (273 B per actor)</cell></row>
+      <row><cell>node, quickjs</cell><cell>3.7 s (54,000 a second)</cell><cell>22.3 s (45,000 a second)</cell><cell>2.1 s</cell><cell>712 MB (3560 B per actor and service)</cell><cell>66.1 MB (330 B per actor)</cell></row>
+      <row><cell>bun, native</cell><cell>3.5 s (57,000 a second)</cell><cell>19.0 s (53,000 a second)</cell><cell>1.6 s</cell><cell>767 MB (3834 B per actor and service)</cell><cell>54.6 MB (273 B per actor)</cell></row>
+      <row><cell>bun, quickjs</cell><cell>2.7 s (73,000 a second)</cell><cell>18.2 s (55,000 a second)</cell><cell>1.8 s</cell><cell>807 MB (4036 B per actor and service)</cell><cell>66.1 MB (330 B per actor)</cell></row>
+    </table>
+    <p>A round trip costs about what it costs with 10,000 actors. A run's work does not grow with the running invocations.</p>
+    <p>In the repository, <code>mise run services</code> runs the program.</p>
+  </section>
+</page>

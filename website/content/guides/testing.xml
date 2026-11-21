@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-testing" path="/guides/testing/">
+  <title>Testing your charts · tinyactors guides</title>
+  <description>Test a chart's logic without its I/O and without waiting for its timeouts, with handlers your test writes and a simulated clock.</description>
+  <hero>
+    <headline>Test an hour of timeouts in milliseconds.</headline>
+    <lede>A test gives the host the I/O processors it wants and a clock that moves only when the test moves it. Then it reads a settled host after <code>await host.idle()</code>.</lede>
+  </hero>
+
+  <section id="three-tools">
+    <heading>Three parts of the API make charts testable.</heading>
+    <list>
+      <item><term>I/O processors are your handlers.</term><text>A test's handlers record what the chart sent and answer as the test decides: now, later, with an error, or never.</text></item>
+      <item><term>A <code>SimulatedClock</code> moves only when the test moves it.</term><text>A timeout of an hour takes no time.</text></item>
+      <item><term><code>await host.idle()</code> returns when the host has nothing left to do.</term><text>The test then looks at a settled host.</text></item>
+    </list>
+    <p>For properties checked over generated runs instead of single cases, see <link to="property-testing"/>.</p>
+  </section>
+
+  <section id="a-test">
+    <heading>Check each step of a retrying payment.</heading>
+    <p>This chart charges a card, retries when no answer comes within 30 seconds, and gives up after the third attempt. The test checks the sends, the state between them, and the end.</p>
+    <example>
+      <code language="javascript" file="payment.test.mjs"><![CDATA[
+import assert from 'node:assert/strict';
+import { compileCharts, Host, SimulatedClock, StaleError } from '@tinyactors/node';
+
+const chart = `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="payment" initial="charging">
+  <datamodel><data id="attempts" expr="0"/></datamodel>
+  <state id="charging">
+    <onentry>
+      <assign location="attempts" expr="attempts + 1"/>
+      <send type="urn:example:payments" event="charge" target="card"/>
+      <send event="timeout" delay="30s" id="timer"/>
+    </onentry>
+    <transition event="charged" target="paid"><cancel sendid="timer"/></transition>
+    <transition event="timeout" cond="attempts &lt; 3" target="charging"/>
+    <transition event="timeout" target="failed"/>
+  </state>
+  <final id="paid"/>
+  <final id="failed"><onentry><log label="payment" expr="'gave up after ' + attempts"/></onentry></final>
+</scxml>`;
+
+/** A host running the chart on a simulated clock, recording its charges. */
+function setup() {
+  const compiled = compileCharts([{ name: 'payment.scxml', text: chart }]);
+  const clock = new SimulatedClock();
+  const charges = [];
+  const logs = [];
+  const host = new Host(compiled, {
+    system: 'test',
+    clock,
+    ioProcessors: { 'urn:example:payments': { receive: (send) => charges.push({ at: clock.now, target: send.target }) } },
+    log: (entry) => logs.push(entry.text),
+  });
+  compiled.close();
+  return { host, clock, charges, logs };
+}
+
+/** The actor's state value, read with a typed method. */
+const state = async (actor) => (await actor.state()).value;
+
+// It retries every 30 seconds and gives up after three attempts.
+{
+  const { host, clock, charges, logs } = setup();
+  const payment = host.spawn('payment', { name: 'payment' });
+  await host.idle();
+  assert.deepEqual(charges, [{ at: 0, target: 'card' }]);
+  assert.equal(await state(payment), 'charging');
+
+  clock.increment(30_000);
+  await host.idle();
+  clock.increment(30_000);
+  await host.idle();
+  assert.deepEqual(charges.map((charge) => charge.at), [0, 30_000, 60_000]);
+
+  clock.increment(30_000);
+  await host.idle();
+  assert.deepEqual(logs, ['gave up after 3']);
+  assert.throws(() => host.actor('payment'), StaleError, 'a final state ends the actor');
+  host.close();
+  console.log('ok: retries, then gives up');
+}
+
+// An answer before the timeout ends it, and no timer is left.
+{
+  const { host, clock, charges } = setup();
+  const payment = host.spawn('payment', { name: 'payment' });
+  await host.idle();
+  payment.send('charged');
+  await host.idle();
+  assert.throws(() => host.actor('payment'), StaleError);
+  assert.equal(host.nextDeadline, undefined, 'the timer was cancelled');
+  clock.increment(60_000);
+  await host.idle();
+  assert.equal(charges.length, 1);
+  host.close();
+  console.log('ok: an answer ends it');
+}
+]]></code>
+      <code language="text" role="output">
+ok: retries, then gives up
+ok: an answer ends it
+</code>
+    </example>
+    <p>The test answered with <code>payment.send('charged')</code>, which is what the processor's <code>send.answer('charged')</code> does, without the <code>sendid</code>. A test may equally answer from the handler.</p>
+  </section>
+
+  <section id="stepping-the-clock">
+    <heading>Step to each deadline to see every tick.</heading>
+    <p><code>clock.increment(ms)</code> moves the clock once. What is due by then runs once, at the new time, and a delay it starts counts from the new time.</p>
+    <p>So a chart that ticks every second ticks once for an <code>increment(3500)</code>, and its next tick is due a second later. <code>host.nextDeadline</code> says how far the next deadline is:</p>
+    <example>
+      <code language="javascript" file="ticker.mjs"><![CDATA[
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'ticker.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="ticker" initial="ticking">
+  <datamodel><data id="n" expr="0"/></datamodel>
+  <state id="ticking">
+    <onentry><send event="tick" delay="1s"/></onentry>
+    <transition event="tick" target="ticking"><assign location="n" expr="n + 1"/><log expr="'tick ' + n"/></transition>
+  </state>
+</scxml>` }]);
+const clock = new SimulatedClock();
+const host = new Host(compiled, { system: 'test', clock, log: (entry) => console.log(entry.text, 'at', clock.now) });
+compiled.close();
+host.spawn('ticker');
+await host.idle();
+
+clock.increment(3500);             // one jump: one tick
+await host.idle();
+while (clock.now < 6500) {         // step deadline by deadline
+  clock.increment(host.nextDeadline);
+  await host.idle();
+}
+host.close();
+]]></code>
+      <code language="text" role="output">
+tick 1 at 3500
+tick 2 at 4500
+tick 3 at 5500
+tick 4 at 6500
+</code>
+    </example>
+  </section>
+
+  <section id="inputs-run-at-the-next-turn">
+    <heading>Await idle between an input and a step.</heading>
+    <p><code>host.send</code> queues the event at once, but the actor handles it in the host's next turn, at the clock's time then. <code>host.nextDeadline</code> still reads the last idle turn's.</p>
+    <p>So an input followed by an <code>increment</code> in the same tick runs after the clock moved. A delay it starts counts from then:</p>
+    <example>
+      <code language="javascript" file="hold.mjs"><![CDATA[
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'hold.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="hold" initial="s">
+  <state id="s">
+    <transition event="reserve"><log expr="'reserved'"/><send event="expire" delay="60s"/></transition>
+    <transition event="expire"><log expr="'expired'"/></transition>
+  </state>
+</scxml>` }]);
+const clock = new SimulatedClock();
+const host = new Host(compiled, { system: 'test', clock, log: (entry) => console.log(entry.text, 'at', clock.now) });
+compiled.close();
+const actor = host.spawn('hold');
+await host.idle();
+
+actor.send('reserve');
+console.log('nextDeadline right after the input:', host.nextDeadline);
+clock.increment(59_000);          // the input runs now, at 59000: the hold is due at 119000
+await host.idle();
+
+actor.send('reserve');
+await host.idle();                // the input runs at 59000, before the step
+clock.increment(60_000);
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+nextDeadline right after the input: undefined
+reserved at 59000
+reserved at 59000
+expired at 119000
+expired at 119000
+</code>
+    </example>
+    <p>Both holds came due at 119000, though the first was given at 0. Await <code>idle()</code> between the two when the input belongs before the step.</p>
+  </section>
+
+  <section id="waiting-for-something-to-happen">
+    <heading>On the real clock, wait for the assertion.</heading>
+    <p><code>await host.idle()</code> waits until the host has nothing to do now and no promise your handlers returned is pending. It waits for no deadline on the runtime's clock, nor a promise a handler starts without returning.</p>
+    <p><code>await actor.done</code> settles when the actor reaches a top-level final state, with its <code>&lt;donedata&gt;</code>. <code>await actor.ask(event, data)</code> sends an event and settles with the chart's reply.</p>
+    <example>
+      <code language="javascript" file="job.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'job.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="job" initial="working">
+  <datamodel><data id="progress" expr="0"/></datamodel>
+  <state id="working"><onentry><send event="finish" delay="50ms"/></onentry>
+    <transition event="how"><send event="progress" targetexpr="_event.origin"><content expr="progress"/></send></transition>
+    <transition event="finish" target="done"/>
+  </state>
+  <final id="done"><donedata><content expr="'all done'"/></donedata></final>
+</scxml>` }]);
+const host = new Host(compiled, { system: 'test' });
+compiled.close();
+
+const job = host.spawn('job');
+const [event, data] = await job.ask('how');
+console.log('asked:', event, data);
+await host.idle();
+console.log('after idle():', (await host.actors()).length === 0 ? 'ended' : 'still running');
+console.log('done:', await job.done);
+host.close();
+]]></code>
+      <code language="text" role="output">
+asked: progress 0
+after idle(): still running
+done: all done
+</code>
+    </example>
+    <p><code>ask</code> gives the event an origin the host answers itself. The chart replies with <code>&lt;send targetexpr="_event.origin"&gt;</code>, as to another actor, and the promise settles with the reply's event name and data.</p>
+    <p><code>ask(event, data, { signal })</code> takes an <code>AbortSignal</code>. An aborted ask rejects with the signal's reason, and its reply, should one come, is dropped.</p>
+    <p>A host closed while an ask waits leaves it pending for ever, as it does a typed method's promise.</p>
+  </section>
+
+  <section id="until">
+    <heading>Turn the host until a condition holds.</heading>
+    <p>For any other condition, a helper checks every 10 ms and turns the host between checks:</p>
+    <example>
+      <code language="javascript" file="lamp.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+/** Turns the host until `condition()` holds, checking every 10 ms. */
+async function until(host, condition, ms = 5000) {
+  for (const end = Date.now() + ms; !(await condition()); ) {
+    if (Date.now() > end) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await host.idle();
+  }
+}
+
+const compiled = compileCharts([{ name: 'lamp.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="lamp" initial="warming">
+  <state id="warming"><onentry><send event="warm" delay="50ms"/></onentry>
+    <transition event="warm" target="lit"/>
+  </state>
+  <state id="lit"/>
+</scxml>` }]);
+const host = new Host(compiled, { system: 'test' });
+compiled.close();
+
+const lamp = host.spawn('lamp');
+await until(host, async () => (await lamp.state()).value === 'lit');
+console.log('lit');
+host.close();
+]]></code>
+      <code language="text" role="output">
+lit
+</code>
+    </example>
+  </section>
+
+  <section id="habits-that-help">
+    <heading>Follow these habits in every test.</heading>
+    <list>
+      <item><term>Await <code>idle()</code> after each input</term><text>that should have an effect before the next assertion. A host runs on the event loop, so nothing has run right after <code>actor.send</code> returns.</text></item>
+      <item><term>Read state with the typed methods</term><text><code>actor.state()</code> and <code>actor.context()</code>, after an <code>idle()</code>: they read the host as it is when called (<link to="guide-inspection"/>).</text></item>
+      <item><term>Give actors names</term><text>to find them with <code>host.actor(name)</code>, and to see that one ended: a final state ends the actor and frees its name, so <code>host.actor(name)</code> throws <code>StaleError</code>.</text></item>
+      <item><term>Close every host</term><text>in a <code>finally</code> or the test framework's teardown. A host on a <code>SimulatedClock</code> arms no timer, so a forgotten one does not keep the process alive, but it holds its memory until collected.</text></item>
+      <item><term>Test against both datamodels</term><text>if the charts will run on quickjs in production: give the host <code>datamodel: 'quickjs'</code> in a second run (<link to="guide-quickjs"/>).</text></item>
+      <item><term>Start from a prepared world</term><text>with a snapshot: set a host up once, take <code>host.snapshot()</code>, and <code>Host.restore</code> it at the start of each test (<link to="guide-snapshots"/>).</text></item>
+      <item><term>Make an unhandled error fail the test.</term><text>A handler that throws is reported by the next <code>await host.idle()</code>, which rejects (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#errors">Errors</link>). A host given <code>onHandlerError</code> reports there instead: collect the errors and assert there are none.</text></item>
+    </list>
+  </section>
+</page>

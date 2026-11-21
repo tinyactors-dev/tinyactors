@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<page xmlns="https://www.tinyactors.dev/ns/site" id="guide-telemetry" path="/guides/telemetry/">
+  <title>Telemetry · tinyactors guides</title>
+  <description>Export a span for each step an actor takes, a log record for each log line, and the host's metrics as OTLP requests your code sends.</description>
+  <hero>
+    <headline>See what your actors did in OpenTelemetry.</headline>
+    <lede>A host writes a span for each step an actor takes, a log record for each <code>&lt;log&gt;</code> and failed action, and metrics of its counters. Your code sends the OTLP bytes to the collector it chooses.</lede>
+  </hero>
+
+  <section id="overview">
+    <heading>The host encodes and your code sends.</heading>
+    <p>A step's span holds the event, the transitions, and the states left and entered. A host without telemetry runs the same.</p>
+    <p>The host writes OTLP requests, the protobuf bytes a collector takes at <code>/v1/traces</code>, <code>/v1/logs</code> and <code>/v1/metrics</code>. The transport, the retries and the collector are yours.</p>
+    <p>Telemetry is part of <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#operating-a-host">operating a host</link>. <link to="telemetry"/> runs a traced payment in your browser and shows its spans.</p>
+  </section>
+
+  <section id="turning-it-on">
+    <heading>Give the host an encoder and a handler.</heading>
+    <p>A <code>telemetry</code> map in the config gives the host its encoder. A <code>telemetry</code> handler in the options gets each request it wrote, as a <code>Buffer</code>, with its signal, <code>'traces'</code> or <code>'logs'</code>.</p>
+    <p>This order continues a caller's trace, and its spans come back with the caller's span as their parent:</p>
+    <example>
+      <code language="javascript" file="export.mjs"><![CDATA[
+import { compileCharts, decodeTraces, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'order.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="order" initial="open">
+  <state id="open">
+    <transition event="pay" target="paid"><log label="order" expr="'paid'"/></transition>
+  </state>
+  <final id="paid"/>
+</scxml>` }]);
+
+const requests = [];
+const clock = new SimulatedClock();
+const host = new Host(compiled, {
+  system: 'shop',
+  config: {
+    system: { ticksPerSecond: 1000 },                                        // the host's clock in milliseconds
+    telemetry: { flushInterval: 1000, resource: { 'service.name': 'shop' } }, // a request at most a second after its first record
+  },
+  clock,
+  telemetry: (signal, data) => {
+    // A real exporter posts the bytes, from a promise so the host goes on:
+    // fetch(`${collector}/v1/${signal}`, { method: 'POST', headers: { 'content-type': 'application/x-protobuf' }, body: data })
+    requests.push([signal, data]);
+  },
+});
+compiled.close();
+
+const caller = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01'; // a W3C traceparent, from an HTTP header
+host.spawn('order').send('pay', undefined, { traceparent: caller });
+await host.idle();
+console.log('requests before the flush interval:', requests.length);
+clock.increment(1000);
+await host.idle();
+console.log('signals:', requests.map(([signal]) => signal).sort().join(', '));
+
+// Read the spans back (for a test; a collector does this for you).
+for (const [signal, data] of requests) {
+  if (signal !== 'traces') continue;
+  const spans = decodeTraces(data);
+  const ours = spans.filter((span) => span.trace === '0af7651916cd43dd8448eb211c80319c');
+  console.log('spans in the caller\'s trace:', ours.map((span) => span.name).sort().join(', '));
+  const step = ours.find((span) => span.name === 'scxml.macrostep pay');
+  console.log('the step\'s parent is the caller\'s span:', step.parent === 'b7ad6b7169203331');
+}
+host.close();
+]]></code>
+      <code language="text" role="output">
+requests before the flush interval: 0
+signals: logs, traces
+spans in the caller's trace: scxml.destroyed, scxml.finished, scxml.macrostep pay, scxml.microstep pay
+the step's parent is the caller's span: true
+</code>
+    </example>
+    <p>The handler runs in the host's turn, so it starts the post and returns without waiting for the collector. <code>decodeTraces</code> reads an export without a host (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#wire-format">Wire format</link>).</p>
+    <p>A handler's error is the turn's (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#errors">Errors</link>). The request it failed to send is not offered again, so retrying is the exporter's job.</p>
+  </section>
+
+  <section id="metrics-and-close">
+    <heading>Pull metrics, and close to flush.</heading>
+    <p><code>host.metrics()</code> returns the metrics request for the host's counters now, a <code>Buffer</code> for <code>/v1/metrics</code>, on your own schedule. On a host without <code>telemetry</code> in its config it throws <code>TA_ERROR_STATE</code>.</p>
+    <p>At <code>host.close()</code> every open span ends, marked incomplete, and the handler gets the last requests before the host is freed.</p>
+    <p><code>await host[Symbol.asyncDispose]()</code> also awaits a promise the handler returns there. A host the garbage collector frees without <code>close()</code> skips all this, so close the hosts whose telemetry you want.</p>
+  </section>
+
+  <section id="the-encoders-options">
+    <heading>Set the flush interval in host ticks.</heading>
+    <p>The config's <code>telemetry</code> map takes these keys, every one optional:</p>
+    <table>
+      <head><cell>Key</cell><cell>Default</cell><cell>What it does</cell></head>
+      <row><cell><code>flushInterval</code></cell><cell>0</cell><cell>a request is ready this long after its first record, in the host's clock ticks (<code>system.ticksPerSecond</code>); 0 means only when the staging is full, or at close</cell></row>
+      <row><cell><code>resource</code></cell><cell>none</cell><cell>attributes on every request, such as <code>service.name</code> (at most 32, text to text)</cell></row>
+      <row><cell><code>logs</code></cell><cell><code>true</code></cell><cell><code>&lt;log&gt;</code> lines and failed actions as log records</cell></row>
+      <row><cell><code>values</code></cell><cell><code>false</code></cell><cell>event data and assigned values in the spans; they may hold personal data, so turn this on knowingly</cell></row>
+      <row><cell><code>linkParents</code></cell><cell><code>false</code></cell><cell>an actor's step is a root span linked to its cause, instead of its child</cell></row>
+      <row><cell><code>stagingBytes</code></cell><cell>1048576</cell><cell>the encoder's staging memory</cell></row>
+    </table>
+    <p>The host's clock runs at <code>system.ticksPerSecond</code>, a billion by default, so a <code>flushInterval</code> of 5000 is five microseconds. Most programs that export set <code>ticksPerSecond: 1000</code> and give the interval in milliseconds.</p>
+    <p>Once records are staged, a pending flush is one of the host's deadlines. <code>host.nextDeadline</code> reads it even when no actor has a delayed send left.</p>
+    <p>The host's timer is armed for it and keeps the process alive until then. A test that asserts no timer is left first steps its clock past the flush:</p>
+    <example>
+      <code language="javascript" file="flush.mjs"><![CDATA[
+import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'job.scxml', text: `<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0" datamodel="ecmascript" name="job">
+  <final id="done"/>
+</scxml>` }]);
+const clock = new SimulatedClock();
+const host = new Host(compiled, {
+  system: 'shop',
+  config: { system: { ticksPerSecond: 1000 }, telemetry: { flushInterval: 1000 } },
+  clock,
+  telemetry: (signal) => console.log(signal, 'at', clock.now),
+});
+compiled.close();
+host.spawn('job');
+await host.idle();
+console.log('the job ended; nextDeadline', host.nextDeadline);
+clock.increment(host.nextDeadline ?? 0);
+await host.idle();
+console.log('flushed; nextDeadline', host.nextDeadline);
+host.close();
+]]></code>
+      <code language="text" role="output">
+the job ended; nextDeadline 1000
+traces at 1000
+logs at 1000
+flushed; nextDeadline undefined
+</code>
+    </example>
+  </section>
+
+  <section id="trace-context">
+    <heading>Carry W3C trace context in and out.</heading>
+    <p>An input may name the trace it continues with a <code>traceparent</code> header's text. Text that does not parse starts a new trace.</p>
+    <p><code>actor.send(event, data, { traceparent })</code>, <code>host.send(actor, event, data, { traceparent })</code> and <code>host.spawn(chart, { traceparent })</code> take it.</p>
+    <p>A send's <code>traceparent</code> is the sending step's context, for the header of the request your I/O processor makes. <code>send.answer()</code> continues it unless given another, and <code>null</code> starts a new trace:</p>
+    <example>
+      <code language="javascript" file="propagate.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'c.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="c" initial="s">
+  <state id="s">
+    <transition event="go"><send type="urn:example:api" event="call"/></transition>
+  </state>
+</scxml>` }]);
+const host = new Host(compiled, {
+  system: 'demo',
+  ioProcessors: {
+    'urn:example:api': {
+      receive(send) {
+        const [, trace] = send.traceparent.split('-');
+        console.log('the outgoing request continues trace', trace);
+        // fetch(url, { headers: { traceparent: send.traceparent } })
+      },
+    },
+  },
+});
+compiled.close();
+host.spawn('c').send('go', undefined, {
+  traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+});
+await host.idle();
+host.close();
+]]></code>
+      <code language="text" role="output">
+the outgoing request continues trace 4bf92f3577b34da6a3ce929d0e0e4736
+</code>
+    </example>
+    <p>Tracing is on by default (<code>system.tracing</code>), with or without an encoder, so trace context flows even when nothing is exported.</p>
+  </section>
+
+  <section id="trace-ids">
+    <heading>Each host starts its own trace IDs.</heading>
+    <p>A trace the host starts takes its ID from a generator seeded by <code>system.traceSeed</code>. With none in the config, the package draws a random seed for each new host (<code>crypto.getRandomValues</code>).</p>
+    <p>So two processes, or one process and its restart, do not collide at the collector. The same seed gives the same IDs, which reproduces a test's traces:</p>
+    <example>
+      <code language="javascript" file="seed.mjs"><![CDATA[
+import { compileCharts, Host } from '@tinyactors/node';
+
+const compiled = compileCharts([{ name: 'c.scxml', text: `
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="c" initial="s">
+  <state id="s"><onentry><send type="urn:example:api" event="call"/></onentry></state>
+</scxml>` }]);
+const image = compiled.image;
+compiled.close();
+
+const firstTrace = async (system) => {
+  let trace;
+  const host = new Host(image, {
+    system: 'demo',
+    config: { system },
+    ioProcessors: { 'urn:example:api': { receive: (send) => { trace = send.traceparent.split('-')[1]; } } },
+  });
+  host.spawn('c');
+  await host.idle();
+  host.close();
+  return trace;
+};
+
+console.log('no seed, twice:', (await firstTrace({})) === (await firstTrace({})));
+console.log('seed 7, twice:', (await firstTrace({ traceSeed: 7 })) === (await firstTrace({ traceSeed: 7 })));
+]]></code>
+      <code language="text" role="output">
+no seed, twice: false
+seed 7, twice: true
+</code>
+    </example>
+    <p><code>Host.restore</code> keeps the generators of the snapshot.</p>
+  </section>
+
+  <section id="choosing-what-is-traced">
+    <heading>Choose what is traced at run time.</heading>
+    <p>Typed methods (<link to="guide-inspection"/>) set what the host records:</p>
+    <list>
+      <item><term><code>traceConfigure(params)</code></term><text>sets what every actor traces: <code>detail</code> (<code>'summary'</code>, <code>'decisions'</code>, <code>'full'</code> or <code>'off'</code>), <code>values</code>, <code>sample</code> (the share of new traces sampled, 0 to 1) and <code>rules</code>. It replaces the previous configuration.</text></item>
+      <item><term><code>traceWatch({ rules, seconds })</code></term><text>adds rules in front of the configured ones for a while (900 seconds by default) and answers <code>{ id }</code>. A watch is how an operator looks closely at one chart or one actor without tracing everything.</text></item>
+      <item><term><code>traceUnwatch({ id })</code></term><text>ends a watch early.</text></item>
+      <item><term><code>traceEnd()</code></term><text>ends every open span now, as <code>close()</code> does.</text></item>
+      <item><term><code>traceSpansDecode({ traces })</code></term><text>reads the spans of a traces request back through the host. <code>decodeTraces(bytes)</code> needs no host, and also gives each span's <code>flags</code>, <code>links</code>, <code>resource</code> and <code>scope</code>.</text></item>
+    </list>
+    <p>A rule matches by <code>chart</code>, <code>actor</code> (a trailing <code>*</code> makes it a prefix), <code>event</code> (SCXML's prefix rule), <code>session</code> or <code>from</code>.</p>
+    <p><code>from</code> is <code>'host'</code>, <code>'actor'</code>, <code>'timer'</code>, <code>'spawn'</code> and so on. A rule decides <code>sample</code> (<code>'keep'</code>, <code>'sample'</code>, <code>'drop'</code> or a share) and <code>detail</code>, at most <code>perSecond</code> with a <code>burst</code>.</p>
+    <example>
+      <code language="javascript" file="watch.mjs"><![CDATA[
+import { Host } from '@tinyactors/node';
+
+const host = new Host([], { system: 'shop', config: { telemetry: {} } });
+await host.traceConfigure({ detail: 'summary', sample: 0.01 });
+console.log('1 trace in 100, summarized');
+const watch = await host.traceWatch({ rules: [{ chart: 'checkout', sample: 'keep', detail: 'full' }], seconds: 60 });
+console.log(`watch ${watch.id}: every checkout in full for a minute`);
+host.close();
+]]></code>
+      <code language="text" role="output">
+1 trace in 100, summarized
+watch 1: every checkout in full for a minute
+</code>
+    </example>
+  </section>
+</page>
