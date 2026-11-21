@@ -163,8 +163,26 @@ canvas layer: ant.mjs (planted feet), Path2D of the rig
   environment variable on the VM, set together by `mise run
   presence:key`. To rotate it, run that again.
 
-## Not yet verified
+## Status
 
-- How long exe's public proxy keeps an idle WebSocket open. The server
-  pings every 25 s, so the length only matters if it is shorter.
-- At the page's ant size, many flags will look alike (tricolours).
+As of 2026-11-21:
+
+- **Verified:**
+  - The server runs on the VM, passes `presence/smoke.mjs` through exe's
+    public proxy (`wss://ta-presence.exe.xyz`), and keeps an idle
+    WebSocket open (6 minutes held, 15 pings answered).
+  - Three Chromium tabs against a local server join, greet (the greeted
+    tab reads "An ant from Estonia greets you."), and switch off, with no
+    console errors.
+- **Pending:** the DNS record `ants.www.tinyactors.dev`. The 1Password
+  Cloudflare token deploys Workers but cannot edit DNS. Until the record
+  exists, `content/site.xml` points the page at `wss://ta-presence.exe.xyz`.
+  Once it does:
+  1. `domain add ta-presence ants.www.tinyactors.dev` on exe;
+  2. change `server` in `content/site.xml`;
+  3. deploy.
+- **Order of a first deploy:** `mise run deploy` (the Worker answers 503
+  for tickets until it has a key, and the page backs off), then `mise run
+  presence:key`.
+- **Not measured:** the cost of a busy field. At the page's ant size, many
+  flags look alike (tricolours).
