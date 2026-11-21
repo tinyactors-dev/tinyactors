@@ -4,17 +4,21 @@
   <description>Two anthills in a browser tab, where every ant and queen is a tinyactors actor running on WebAssembly.</description>
 
   <hero>
-    <headline>A million actors in this tab.</headline>
-    <lede>Every ant and queen is a statechart running on tinyactors in your browser. An ant uses the CPU only while it handles a message.</lede>
+    <headline>Watch a million ants forage and fight.</headline>
+    <lede>Two colonies share this field, and every ant and queen is an actor running in your browser.</lede>
   </hero>
 
   <section id="watch">
-    <heading>Messages decide how many ants keep up.</heading>
-    <p>The world tells an ant when it reaches food or home, and that message is the ant's next event. While the ant walks, it waits in memory and your GPU draws it.</p>
-    <p>Shorter rests mean more messages a second. The time per message stays level as you add ants, and the real-time chart shows whether your device keeps up.</p>
+    <heading>Drop food and squash ants.</heading>
+    <p>Tap the field to use the tool you picked, and pinch to zoom in on a fight.</p>
     <playground src="../../examples/anthill/page.mjs">
       <description>Two anthills on a field. Workers carry food home to their queen, and workers of the two colonies fight where they meet.</description>
     </playground>
+  </section>
+
+  <section id="build">
+    <heading>How would you build it?</heading>
+    <p>Each ant keeps its own state and its own timers: a larva grows after 30 seconds, and a worker comes home when its trip ends. Picture where a million of those live and what runs while they wait.</p>
   </section>
 
   <section id="ant">
@@ -34,6 +38,12 @@
     <p>The ant's chart sends <code>forage</code> to the world and waits for <code>arrive</code> or <code>found</code>. The world is a JavaScript object on this page that picks each destination.</p>
     <code src="../../examples/anthill/world.mjs" lines="194-208" language="javascript" file="world.mjs"/>
     <p>This page runs each colony as a host in its own Web Worker, so the browser can use two CPU cores.</p>
+  </section>
+
+  <section id="cost">
+    <heading>Messages decide how many ants keep up.</heading>
+    <p>An ant uses the CPU only while it handles a message. While it walks or rests, it waits in memory and your GPU draws it.</p>
+    <p>The rest slider sets how long ants stay in the hill between outings, so shorter rests mean more messages a second. The time per message stays level as you add ants, and the real-time chart shows whether your device keeps up.</p>
   </section>
 
   <section id="node">
