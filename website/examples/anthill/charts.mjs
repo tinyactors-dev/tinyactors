@@ -3,7 +3,7 @@
 // one line in the design system's accent, with its title and current value
 // in text ink, a baseline at zero and a labelled top line; hovering shows a
 // crosshair and the value at that second. A chart may draw a limit, a
-// dashed line with its value, which its scale always shows.
+// dashed line with its name and value, which its scale always shows.
 
 const POINTS = 60;
 const WIDTH = 240, HEIGHT = 64, TOP = 4;
@@ -26,7 +26,7 @@ export function chart({ title, format, describe = format }) {
     el('figcaption', { class: 'cost__head' }, el('span', { class: 'cost__title' }, title), current),
     el('div', { class: 'cost__frame' }, svg, scale, limitLabel, tip));
 
-  let max = 1, limit = null;
+  let max = 1, limit = null, limitName = 'limit';
   const x = (i) => (values.length < 2 ? WIDTH : (i / (POINTS - 1)) * WIDTH + (POINTS - values.length) * (WIDTH / (POINTS - 1)));
   const y = (v) => HEIGHT - 1 - (v / max) * (HEIGHT - 1 - TOP);
 
@@ -35,7 +35,7 @@ export function chart({ title, format, describe = format }) {
     if (limit !== null) {
       for (const k of ['y1', 'y2']) limitLine.setAttribute(k, y(limit).toFixed(1));
       limitLine.setAttribute('visibility', 'visible');
-      limitLabel.textContent = `limit ${format(limit)}`;
+      limitLabel.textContent = `${limitName} ${format(limit)}`;
       limitLabel.style.top = `${(y(limit) / HEIGHT) * 100}%`;
       limitLabel.hidden = false;
     }
@@ -76,8 +76,8 @@ export function chart({ title, format, describe = format }) {
       render();
     },
     clear() { values.length = 0; render(); },
-    /** Draws `value` as the chart's limit. */
-    setLimit(value) { limit = value; render(); },
+    /** Draws `value` as the chart's limit, labelled `name`. */
+    setLimit(value, name = 'limit') { limit = value; limitName = name; render(); },
   };
 }
 

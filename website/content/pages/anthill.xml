@@ -4,15 +4,15 @@
   <description>Two anthills where every ant and queen is a tinyactors actor, up to four million of them, running in your browser on WebAssembly.</description>
 
   <hero>
-    <headline>Four million <em>ants</em>.</headline>
-    <lede>Two colonies, and every ant and queen is an actor. A million ants run in this tab by default, and four million when they rest long enough.</lede>
+    <headline>Four million actors in a <em>browser tab</em>.</headline>
+    <lede>Every ant and queen is a statechart, run by tinyactors in this page's Workers. Raise the colony to four million ants, or shorten their rests until the tab falls behind.</lede>
   </hero>
 
   <section id="watch">
     <heading>Watch them.</heading>
     <p>An ant decides only when something happens: it leaves, finds food, comes home, meets an enemy. Between decisions your GPU draws it walking, and tinyactors does no work for it.</p>
     <p>A resting ant costs memory and no work, so the rest slider sets how many messages the hosts handle a second.</p>
-    <p>The charts under the field measure this tab. When the ants send more messages than the hosts answer, the simulation runs slower than real time, and the speed chart shows by how much.</p>
+    <p>The charts under the field measure this tab. When the ants send more messages than the hosts answer, the pace chart drops below real time.</p>
     <playground src="../../examples/anthill/page.mjs">
       <description>Two anthills on a field. Each colony's workers fetch food for their queen, who lays eggs with it, and workers of the two colonies fight where they meet.</description>
     </playground>

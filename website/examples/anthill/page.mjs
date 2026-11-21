@@ -48,7 +48,9 @@ export async function mount(root) {
   const costs = {
     actors: chart({ title: 'Actors', format: (v) => number.format(Math.round(v)) }),
     fps: chart({ title: 'Frames drawn a second', format: (v) => `${Math.round(v)} fps` }),
-    speed: chart({ title: 'Simulation speed', format: (v) => `${v.toFixed(2)}×`, describe: (v) => `${v.toFixed(2)} times real time` }),
+    // The simulated time that passed in each second of real time: 100% keeps
+    // up, 50% means a simulated second took two real ones.
+    speed: chart({ title: 'Pace, % of real time', format: (v) => `${Math.round(v * 100)}%`, describe: (v) => `${Math.round(v * 100)} percent of real time` }),
     memory: chart({ title: 'WebAssembly memory', format: megabytes }),
     rate: chart({ title: 'Decisions a second', format: (v) => number.format(Math.round(v)) }),
     messages: chart({ title: 'Messages a second', format: (v) => number.format(Math.round(v)) }),
@@ -59,6 +61,7 @@ export async function mount(root) {
     stage, hills, status,
     el('div', { class: 'anthill__costs' }, ...Object.values(costs).map((c) => c.element)),
   );
+  let world = null; // the running anthill: its Workers, renderer and latest numbers
   const showCount = () => { count.textContent = number.format(POPULATIONS[slider.value]); };
   slider.addEventListener('input', showCount);
   showCount();
@@ -73,7 +76,6 @@ export async function mount(root) {
 
   const sprites = await atlas(await (await fetch('/assets/brand/ant.svg')).text(), colors.colony);
   const paint = overlay.getContext('2d');
-  let world = null;
 
   function begin() {
     world?.workers.forEach((worker) => worker.terminate()); // their memory goes with them: a WebAssembly memory never shrinks
@@ -82,6 +84,7 @@ export async function mount(root) {
     Object.values(costs).forEach((c) => c.clear());
     const population = POPULATIONS[slider.value];
     costs.actors.setLimit(population);
+    costs.speed.setLimit(1, 'real time');
     let canvas = el('canvas', { class: 'anthill__ants', width: WIDTH, height: HEIGHT, 'aria-hidden': 'true' });
     let renderer = createRenderer(canvas, population, sprites, colors.groundHex);
     if (!renderer) { // a canvas that tried WebGL takes no 2D context: the dots get a fresh one
@@ -158,30 +161,20 @@ export async function mount(root) {
   settle();
 
   // A tap drops food or squashes ants; a drag moves the view when zoomed
-  // in; two fingers pinch; Ctrl or Cmd with the wheel zooms at the cursor
-  // (the wheel alone scrolls the page).
+  // in; two fingers pinch and move it (below); Ctrl or Cmd with the wheel
+  // zooms at the cursor (the wheel alone scrolls the page).
   const pointers = new Map();
-  let dragged = false, pinch = null;
+  let dragged = false;
   overlay.addEventListener('pointerdown', (event) => {
     overlay.setPointerCapture(event.pointerId);
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY });
     if (pointers.size === 1) dragged = false;
-    if (pointers.size === 2) pinch = null;
   });
   overlay.addEventListener('pointermove', (event) => {
     const pointer = pointers.get(event.pointerId);
     if (!pointer) return;
     const box = overlay.getBoundingClientRect();
-    if (pointers.size === 2) {
-      pointer.x = event.clientX; pointer.y = event.clientY;
-      const [a, b] = [...pointers.values()];
-      const distance = Math.hypot(a.x - b.x, a.y - b.y);
-      const [fx, fy] = toField((a.x + b.x) / 2, (a.y + b.y) / 2);
-      if (pinch) zoomTo(view.scale * (distance / pinch), fx, fy);
-      pinch = distance;
-      dragged = true;
-      return;
-    }
+    if (pointers.size > 1) { dragged = true; return; } // a pinch: the touch handlers have it
     if (!dragged && Math.hypot(event.clientX - pointer.startX, event.clientY - pointer.startY) < 5) return;
     dragged = true;
     if (view.scale > 1) panBy(-((event.clientX - pointer.x) / box.width) * (WIDTH / view.scale), -((event.clientY - pointer.y) / box.height) * (HEIGHT / view.scale));
@@ -196,10 +189,41 @@ export async function mount(root) {
       if (tool === 'food') world.workers[0].postMessage({ food: true, x, y });
       else world.workers.forEach((worker) => worker.postMessage({ squash: true, x, y, radius: Math.max(4, 16 / Math.sqrt(view.scale)) }));
     }
-    if (pointers.size < 2) pinch = null;
   };
   overlay.addEventListener('pointerup', release);
   overlay.addEventListener('pointercancel', release);
+  // Two fingers zoom and move the view. Touch events, not pointer events:
+  // only cancelling a touchmove keeps every phone's browser from zooming the
+  // page instead (Safari does not leave a pinch to the page for
+  // touch-action alone).
+  let pinch = null; // the last two-finger frame: {x, y, distance}
+  const twoFingers = (touches) => ({
+    x: (touches[0].clientX + touches[1].clientX) / 2, y: (touches[0].clientY + touches[1].clientY) / 2,
+    distance: Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY) || 1,
+  });
+  overlay.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 2) return;
+    event.preventDefault();
+    pinch = twoFingers(event.touches);
+    dragged = true;
+  }, { passive: false });
+  overlay.addEventListener('touchmove', (event) => {
+    if (event.touches.length !== 2) return;
+    event.preventDefault();
+    const now = twoFingers(event.touches);
+    if (pinch) {
+      const [fx, fy] = toField(pinch.x, pinch.y);
+      zoomTo(view.scale * (now.distance / pinch.distance), fx, fy); // the point between the fingers stays under them
+      const [gx, gy] = toField(now.x, now.y);
+      panBy(fx - gx, fy - gy); // and follows them as they move
+    }
+    pinch = now;
+  }, { passive: false });
+  const lift = (event) => { if (event.touches.length < 2) pinch = null; };
+  overlay.addEventListener('touchend', lift);
+  overlay.addEventListener('touchcancel', lift);
+  overlay.addEventListener('gesturestart', (event) => event.preventDefault()); // Safari's own pinch
+
   overlay.addEventListener('wheel', (event) => {
     if (!event.ctrlKey && !event.metaKey) return;
     event.preventDefault();
