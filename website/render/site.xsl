@@ -152,17 +152,34 @@
           <span>{$site/s:name}</span>
         </a>
         <nav class="site-nav" aria-label="Site">
-          <xsl:for-each select="$site/s:nav/s:link">
-            <a href="{f:href(.)}">
-              <xsl:if test="@to = $current/@id">
-                <xsl:attribute name="aria-current">page</xsl:attribute>
-              </xsl:if>
-              <xsl:apply-templates select="." mode="text"/>
-            </a>
-          </xsl:for-each>
+          <xsl:call-template name="nav-links">
+            <xsl:with-param name="current" select="$current"/>
+          </xsl:call-template>
         </nav>
+        <!-- On a phone the links do not fit beside the wordmark: they open
+             from a menu, so the sticky header stays one row. -->
+        <details class="site-menu">
+          <summary>Menu</summary>
+          <nav class="site-menu__links" aria-label="Site">
+            <xsl:call-template name="nav-links">
+              <xsl:with-param name="current" select="$current"/>
+            </xsl:call-template>
+          </nav>
+        </details>
       </div>
     </header>
+  </xsl:template>
+
+  <xsl:template name="nav-links">
+    <xsl:param name="current" as="element(s:page)"/>
+    <xsl:for-each select="$site/s:nav/s:link">
+      <a href="{f:href(.)}">
+        <xsl:if test="@to = $current/@id">
+          <xsl:attribute name="aria-current">page</xsl:attribute>
+        </xsl:if>
+        <xsl:apply-templates select="." mode="text"/>
+      </a>
+    </xsl:for-each>
   </xsl:template>
 
   <xsl:template name="footer">
