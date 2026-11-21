@@ -58,6 +58,25 @@ rules.
   host); the root `GLOSSARY.md` defines them. The product name is
   lowercase.
 
+## The guides
+
+- **The guides are the site's**, one page each in `content/guides/`
+  (`id="guide-<name>"`, served at `/guides/<name>/`), listed in
+  `site.xml` and on the index page `content/pages/guides.xml`. The
+  Markdown in `tinyactors-napi/docs/guide/` they were edited from is
+  notes for agents, not their source: change a guide here.
+- **A section's id is its anchor**, kept when the heading changes, so
+  links into a guide (`<link to="guide-x" section="y"/>`) stay valid.
+- **A program a guide shows with its output runs.** An `<example>` whose
+  javascript `<code>` and `<code role="output">` are written in the
+  content runs in `examples/guides` against the published packages, and
+  must print its output (`mise run test`). A fragment, or a program that
+  needs a browser, is a plain `<code>` outside an `<example>`: shown, not
+  run.
+- **Measurements keep one home.** A table of measured numbers that a
+  program in the repository writes (the capacity guide's) is transcluded
+  from the Markdown it writes, not copied.
+
 ## The pitch
 
 Three points, in this order:

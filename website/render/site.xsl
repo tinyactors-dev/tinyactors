@@ -302,6 +302,35 @@
   </xsl:template>
 
   <!-- A table transcluded from a guide: its first row is the head. -->
+  <!-- A table written in the content: the head, then each row, its
+       first cell naming it. -->
+  <xsl:template match="s:table[s:head]" priority="2">
+    <figure class="table">
+      <div class="table__scroll" tabindex="0">
+        <table>
+          <thead>
+            <tr><xsl:for-each select="s:head/s:cell"><th scope="col"><xsl:apply-templates/></th></xsl:for-each></tr>
+          </thead>
+          <tbody>
+            <xsl:for-each select="s:row">
+              <tr>
+                <xsl:for-each select="s:cell">
+                  <xsl:choose>
+                    <xsl:when test="position() = 1"><th scope="row"><xsl:apply-templates/></th></xsl:when>
+                    <xsl:otherwise><td><xsl:apply-templates/></td></xsl:otherwise>
+                  </xsl:choose>
+                </xsl:for-each>
+              </tr>
+            </xsl:for-each>
+          </tbody>
+        </table>
+      </div>
+      <xsl:if test="s:caption">
+        <figcaption class="table__caption"><xsl:apply-templates select="s:caption/node()"/></figcaption>
+      </xsl:if>
+    </figure>
+  </xsl:template>
+
   <xsl:template match="s:table">
     <xsl:variable name="rows" select="f:table(.)"/>
     <figure class="table">

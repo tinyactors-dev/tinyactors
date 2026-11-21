@@ -44,8 +44,8 @@ module Website
     [out, status.success?]
   end
 
-  # The content's documents: the site, then its pages.
-  def documents = [CONTENT.join('site.xml'), *CONTENT.glob('pages/*.xml').sort]
+  # The content's documents: the site, then its pages and its guides.
+  def documents = [CONTENT.join('site.xml'), *CONTENT.glob('pages/*.xml').sort, *CONTENT.glob('guides/*.xml').sort]
 
   def validate!
     run('sxml', 'validate', "--schema=#{SCHEMA}", *documents)

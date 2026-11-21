@@ -166,22 +166,45 @@
 
   <xs:element name="table">
     <xs:annotation><xs:documentation>
-      A table of measurements or options, transcluded from a guide of the
+      A table of measurements or options. Either written here, a `head` row
+      and then each `row`, every row as many `cell`s as the head (the first
+      cell of a row names it); or transcluded from a guide of the
       repository: the `index`-th table (counted from 1) in the section of
-      `src` headed `section`. The build reads it at every build, so the site
-      shows what the guide says now. `caption` says what was measured, when
-      and on what.
+      `src` headed `section`, read at every build, so the site shows what
+      the guide says now. `caption` says what was measured, when and on
+      what.
     </xs:documentation></xs:annotation>
     <xs:complexType>
       <xs:sequence>
         <xs:element name="caption" type="inline" minOccurs="0"/>
+        <xs:sequence minOccurs="0">
+          <xs:element name="head" type="cells"/>
+          <xs:element name="row" type="cells" maxOccurs="unbounded"/>
+        </xs:sequence>
       </xs:sequence>
-      <xs:attribute name="src" type="path" use="required"/>
-      <xs:attribute name="section" type="plain-attribute" use="required"/>
-      <xs:attribute name="index" type="xs:positiveInteger" default="1"/>
-      <xs:assert test="ends-with(@src, '.md')"/>
+      <xs:attribute name="src" type="path"/>
+      <xs:attribute name="section" type="plain-attribute"/>
+      <xs:attribute name="index" type="xs:positiveInteger"/>
+      <xs:assert test="(: transcluded or written, not both :) if (@src) then (ends-with(@src, '.md') and @section and not(*:head)) else (*:head and not(@section or @index))"/>
+      <xs:assert test="(: every row as wide as the head :) every $row in *:row satisfies count($row/*:cell) = count(*:head/*:cell)"/>
     </xs:complexType>
   </xs:element>
+
+  <xs:complexType name="cells">
+    <xs:sequence>
+      <xs:element name="cell" type="cell" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="cell" mixed="true">
+    <xs:annotation><xs:documentation>A table's cell: running text, which may be empty.</xs:documentation></xs:annotation>
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="em" type="emphasis"/>
+      <xs:element name="strong" type="emphasis"/>
+      <xs:element name="code" type="nonempty"/>
+      <xs:element name="link" type="link"/>
+    </xs:choice>
+  </xs:complexType>
 
   <xs:element name="live">
     <xs:annotation><xs:documentation>

@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A table is written or transcluded, not both. expect: cvc-assertion: element 'Q{https://www.tinyactors.dev/ns/site}table' breaks the assertion '(: transcluded or written, not both :) -->
+<page xmlns="https://www.tinyactors.dev/ns/site" id="t" path="/t/"><title>T</title><description>A test page.</description><hero><headline>T.</headline><lede>Lede.</lede></hero><section id="s"><heading>S.</heading><table src="../../x.md" section="S"><head><cell>a</cell></head><row><cell>1</cell></row></table></section></page>

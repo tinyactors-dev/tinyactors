@@ -24,6 +24,7 @@
 #    components' rendering, and the live examples in a page, run in a
 #    browser, which this task does not start.
 
+require 'json'
 require_relative '../website'
 require 'tmpdir'
 
@@ -144,6 +145,43 @@ Website.documents.each do |document|
   end
 end
 puts "website: #{transcluded} transcluded guide examples ran and printed their guide's output"
+
+# 5b. The examples written in the content: in each <example>, a javascript
+#     <code> whose text is the program and a <code role="output"> whose text
+#     is what it prints. Each runs in examples/guides against the published
+#     packages, its indentation removed as render/site.xsl removes it. Code
+#     shown outside an <example>, or without its output (a fragment, a
+#     program that needs a browser), is not run.
+EXAMPLES_QUERY = <<~XQUERY
+  array { for $example in //*:example
+          let $program := $example/*:code[@language = 'javascript'][not(@src)][normalize-space(.) != '']
+          let $output := $example/*:code[@role = 'output'][not(@src)][normalize-space(.) != '']
+          where exists($program) and exists($output)
+          return map { 'section': string($example/ancestor::*:section/@id),
+                       'program': string($program[1]), 'output': string($output[1]) } }
+XQUERY
+dedent = lambda do |text|
+  lines = text.sub(/\A\s*\n/, '').sub(/\n\s*\z/, '').split("\n", -1)
+  indent = lines.reject { |line| line.strip.empty? }.map { |line| line[/\A */].size }.min || 0
+  lines.map { |line| line[indent..] || '' }.join("\n")
+end
+written = 0
+Website.documents.each do |document|
+  out, ok = Website.capture('sxml', 'xquery', "--context-item=#{document}", '--method=json', "--expression=#{EXAMPLES_QUERY}")
+  Website.fail!("#{document}: reading its examples failed:\n#{out}") unless ok
+  JSON.parse(out).each_with_index do |example, i|
+    file = guides.join("#{written}.written.mjs")
+    file.write("#{dedent.call(example['program'])}\n")
+    out, ok = Website.capture('node', file.basename, chdir: guides)
+    file.delete
+    name = "#{document.relative_path_from(Website::CONTENT)}: section #{example['section']}, example #{i + 1}"
+    want = dedent.call(example['output'])
+    failures << "#{name}: failed:\n#{out}" unless ok
+    failures << "#{name}: printed\n#{out}but the page's output is\n#{want}" if ok && out.strip != want.strip
+    written += 1
+  end
+end
+puts "website: #{written} examples written in the content ran and printed their output"
 
 # 6. The components' pure parts (their rendering runs in a browser).
 out, ok = Website.capture('node', Website::ROOT.join('test/components.mjs'))

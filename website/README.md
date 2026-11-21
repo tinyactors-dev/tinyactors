@@ -23,6 +23,7 @@ content and runs the stylesheet. Node.js runs the examples and wrangler.
 |---|---|
 | `content/site.xml` | the site: its name, navigation, the pages in order, the footer |
 | `content/pages/*.xml` | one page each: a hero, then sections of prose, lists, code, claims and actions |
+| `content/guides/*.xml` | the guides, one page each, served at `/guides/<name>/`; their examples run in `examples/guides` against the published packages |
 | `schema/site.xsd` | what content may say, as XSD 1.1: every element is documented there |
 | `render/site.xsl` | content to HTML, `sitemap.xml` and `llms.txt`; it stops at a link to a page or section that does not exist |
 | `style/site.css` | the layout, on the design system's tokens |

@@ -2,8 +2,9 @@
   "name": "tinyactors-website-guides",
   "private": true,
   "type": "module",
-  "description": "Where test runs the guides' examples a page transcludes (<code src=\"...md\" section fence>), against the published @tinyactors/node, and compares each with the output fence that follows it.",
+  "description": "Where test runs the examples a page shows, against the published @tinyactors/node and @tinyactors/wasm: a program written in the content (<example> with a javascript <code> and its output), or transcluded from a guide (<code src=\"...md\" section fence>), each compared with the output beside it.",
   "dependencies": {
-    "@tinyactors/node": "0.4.0"
+    "@tinyactors/node": "0.4.0",
+    "@tinyactors/wasm": "0.4.0"
   }
 }
