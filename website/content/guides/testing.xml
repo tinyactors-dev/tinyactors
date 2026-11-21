@@ -1,25 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-testing" path="/guides/testing/">
   <title>Testing your charts</title>
-  <description>Test a chart's logic without its I/O and without waiting for its timeouts, with handlers your test writes and a simulated clock.</description>
+  <description>Test a chart's retries and timeouts in milliseconds: your test answers each of its sends and moves a simulated clock.</description>
   <hero>
     <headline>Test an hour of timeouts in milliseconds.</headline>
-    <lede>A test gives the host the I/O processors it wants and a clock that moves only when the test moves it. Then it reads a settled host after <code>await host.idle()</code>.</lede>
+    <lede>A payment that retries every 30 seconds runs all three attempts in a test that takes milliseconds. The test answers the chart's sends and moves its clock.</lede>
   </hero>
 
   <section id="three-tools">
-    <heading>Three parts of the API make charts testable.</heading>
+    <heading>Replace the chart's services and its clock.</heading>
+    <p>A chart reaches the world only through sends. The host passes each send to a handler you give it, an I/O processor.</p>
     <list>
-      <item><term>I/O processors are your handlers.</term><text>A test's handlers record what the chart sent and answer as the test decides: now, later, with an error, or never.</text></item>
+      <item><term>The test's handlers stand in for the services.</term><text>They record what the chart sent and answer when the case needs it, with an error, or never.</text></item>
       <item><term>A <code>SimulatedClock</code> moves only when the test moves it.</term><text>A timeout of an hour takes no time.</text></item>
-      <item><term><code>await host.idle()</code> returns when the host has nothing left to do.</term><text>The test then looks at a settled host.</text></item>
+      <item><term><code>await host.idle()</code> returns when the host has nothing left to do.</term><text>Assertions after it see everything the inputs before it did by the clock's time.</text></item>
     </list>
-    <p>For properties checked over generated runs instead of single cases, see <link to="property-testing"/>.</p>
+    <p>To check properties over generated runs instead of single cases, read <link to="property-testing"/>.</p>
   </section>
 
   <section id="a-test">
     <heading>Check each step of a retrying payment.</heading>
-    <p>This chart charges a card, retries when no answer comes within 30 seconds, and gives up after the third attempt. The test checks the sends, the state between them, and the end.</p>
+    <p>This chart charges a card, retries when no answer comes within 30 seconds, and gives up after the third attempt. Its test moves the clock 30 seconds at a time and checks each charge.</p>
     <example>
       <code language="javascript" file="payment.test.mjs"><![CDATA[
 import assert from 'node:assert/strict';
@@ -105,13 +106,15 @@ ok: retries, then gives up
 ok: an answer ends it
 </code>
     </example>
-    <p>The test answered with <code>payment.send('charged')</code>, which is what the processor's <code>send.answer('charged')</code> does, without the <code>sendid</code>. A test may equally answer from the handler.</p>
+    <p>The second case answers with <code>payment.send('charged')</code>, as the handler's <code>send.answer('charged')</code> would, without the <code>sendid</code>. A handler may answer just as well.</p>
+    <p>Read the actor's state with <code>actor.state()</code> after an <code>idle()</code>: it reads the host as it is when called (<link to="guide-inspection"/>).</p>
+    <p>Give the actor a name to see it end: a final state frees the name, so <code>host.actor(name)</code> throws <code>StaleError</code>.</p>
   </section>
 
   <section id="stepping-the-clock">
     <heading>Step to each deadline to see every tick.</heading>
-    <p><code>clock.increment(ms)</code> moves the clock once. What is due by then runs once, at the new time, and a delay it starts counts from the new time.</p>
-    <p>So a chart that ticks every second ticks once for an <code>increment(3500)</code>, and its next tick is due a second later. <code>host.nextDeadline</code> says how far the next deadline is:</p>
+    <p><code>clock.increment(ms)</code> moves the clock once. What is due by then runs once, at the new time, and a delay it starts counts from there.</p>
+    <p>So a chart that ticks every second ticks once for an <code>increment(3500)</code>, and its next tick is due a second later. Stepping by <code>host.nextDeadline</code>, the milliseconds to the next deadline, logs every tick:</p>
     <example>
       <code language="javascript" file="ticker.mjs"><![CDATA[
 import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
@@ -149,9 +152,9 @@ tick 4 at 6500
   </section>
 
   <section id="inputs-run-at-the-next-turn">
-    <heading>Await idle between an input and a step.</heading>
-    <p><code>host.send</code> queues the event at once, but the actor handles it in the host's next turn, at the clock's time then. <code>host.nextDeadline</code> still reads the last idle turn's.</p>
-    <p>So an input followed by an <code>increment</code> in the same tick runs after the clock moved. A delay it starts counts from then:</p>
+    <heading>Await idle before you move the clock.</heading>
+    <p><code>actor.send</code> returns before the actor handles the event, which it does later, at the clock's time then. Until then <code>host.nextDeadline</code> holds no deadline the event starts.</p>
+    <p>So an event sent just before an <code>increment</code> runs after the clock moved, and a delay it starts counts from there:</p>
     <example>
       <code language="javascript" file="hold.mjs"><![CDATA[
 import { compileCharts, Host, SimulatedClock } from '@tinyactors/node';
@@ -189,13 +192,13 @@ expired at 119000
 expired at 119000
 </code>
     </example>
-    <p>Both holds came due at 119000, though the first was given at 0. Await <code>idle()</code> between the two when the input belongs before the step.</p>
+    <p>Both holds came due at 119000, though the first was sent at 0. Await <code>idle()</code> after each event whose effect the next step or assertion needs.</p>
   </section>
 
   <section id="waiting-for-something-to-happen">
-    <heading>On the real clock, wait for the assertion.</heading>
-    <p><code>await host.idle()</code> waits until the host has nothing to do now and no promise your handlers returned is pending. It waits for no deadline on the runtime's clock, nor a promise a handler starts without returning.</p>
-    <p><code>await actor.done</code> settles when the actor reaches a top-level final state, with its <code>&lt;donedata&gt;</code>. <code>await actor.ask(event, data)</code> sends an event and settles with the chart's reply.</p>
+    <heading>On the real clock, await the actor's result.</heading>
+    <p>On the real clock, <code>await host.idle()</code> returns while a timeout is still pending. It waits only for work due now and for promises your handlers returned.</p>
+    <p><code>await actor.done</code> waits instead for the actor's top-level final state, and settles with its <code>&lt;donedata&gt;</code>. <code>await actor.ask(event, data)</code> sends an event and settles with the chart's reply:</p>
     <example>
       <code language="javascript" file="job.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -228,13 +231,13 @@ done: all done
 </code>
     </example>
     <p><code>ask</code> gives the event an origin the host answers itself. The chart replies with <code>&lt;send targetexpr="_event.origin"&gt;</code>, as to another actor, and the promise settles with the reply's event name and data.</p>
-    <p><code>ask(event, data, { signal })</code> takes an <code>AbortSignal</code>. An aborted ask rejects with the signal's reason, and its reply, should one come, is dropped.</p>
-    <p>A host closed while an ask waits leaves it pending for ever, as it does a typed method's promise.</p>
+    <p>To give up on an ask, pass an <code>AbortSignal</code> as <code>ask(event, data, { signal })</code>. The ask rejects with the signal's reason, and a later reply is dropped.</p>
+    <p>A host closed while an ask waits leaves it pending for ever, as it leaves the promise of <code>actor.state()</code>.</p>
   </section>
 
   <section id="until">
-    <heading>Turn the host until a condition holds.</heading>
-    <p>For any other condition, a helper checks every 10 ms and turns the host between checks:</p>
+    <heading>Wait until any condition holds.</heading>
+    <p>This helper checks a condition every 10 ms of the real clock and awaits <code>host.idle()</code> between checks. Here it waits for a lamp to be lit:</p>
     <example>
       <code language="javascript" file="lamp.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -270,16 +273,24 @@ lit
     </example>
   </section>
 
+  <section id="prepared-world">
+    <heading>Start each test from a snapshot.</heading>
+    <p>Set up a host once and take <code>host.snapshot()</code>. Each test then starts with <code>Host.restore</code> of it, the same actors in the same states (<link to="guide-snapshots"/>).</p>
+  </section>
+
+  <section id="both-datamodels">
+    <heading>Run the tests in QuickJS too.</heading>
+    <p>When production runs your charts in QuickJS, run each test a second time with <code>datamodel: 'quickjs'</code> on the host (<link to="guide-quickjs"/>).</p>
+  </section>
+
   <section id="habits-that-help">
-    <heading>Follow these habits in every test.</heading>
-    <list>
-      <item><term>Await <code>idle()</code> after each input</term><text>that should have an effect before the next assertion. A host runs on the event loop, so nothing has run right after <code>actor.send</code> returns.</text></item>
-      <item><term>Read state with the typed methods</term><text><code>actor.state()</code> and <code>actor.context()</code>, after an <code>idle()</code>: they read the host as it is when called (<link to="guide-inspection"/>).</text></item>
-      <item><term>Give actors names</term><text>to find them with <code>host.actor(name)</code>, and to see that one ended: a final state ends the actor and frees its name, so <code>host.actor(name)</code> throws <code>StaleError</code>.</text></item>
-      <item><term>Close every host</term><text>in a <code>finally</code> or the test framework's teardown. A host on a <code>SimulatedClock</code> arms no timer, so a forgotten one does not keep the process alive, but it holds its memory until collected.</text></item>
-      <item><term>Test against both datamodels</term><text>if the charts will run on quickjs in production: give the host <code>datamodel: 'quickjs'</code> in a second run (<link to="guide-quickjs"/>).</text></item>
-      <item><term>Start from a prepared world</term><text>with a snapshot: set a host up once, take <code>host.snapshot()</code>, and <code>Host.restore</code> it at the start of each test (<link to="guide-snapshots"/>).</text></item>
-      <item><term>Make an unhandled error fail the test.</term><text>A handler that throws is reported by the next <code>await host.idle()</code>, which rejects (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#errors">Errors</link>). A host given <code>onHandlerError</code> reports there instead: collect the errors and assert there are none.</text></item>
-    </list>
+    <heading>Fail the test on a handler's error.</heading>
+    <p>A handler that throws makes the next <code>await host.idle()</code> reject, which fails the test (<link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#errors">Errors</link>).</p>
+    <p>A host given <code>onHandlerError</code> reports the error there instead. Collect what it receives and assert the list is empty.</p>
+  </section>
+
+  <section id="close-every-host">
+    <heading>Close every host in teardown.</heading>
+    <p>Call <code>host.close()</code> in a <code>finally</code> or the test framework's teardown. A forgotten host on a <code>SimulatedClock</code> lets the process exit, but holds its memory until collected.</p>
   </section>
 </page>

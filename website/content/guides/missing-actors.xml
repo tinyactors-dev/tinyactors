@@ -1,26 +1,38 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <page xmlns="https://www.tinyactors.dev/ns/site" id="guide-missing-actors" path="/guides/missing-actors/">
   <title>When the actor is not there</title>
-  <description>What a send does when its actor is hibernated, ended or never spawned, and the three ways an application handles it.</description>
+  <description>A send to a hibernated actor wakes it, and a send to no actor fails at once. Choose, for each kind of actor, how your application avoids or handles the failure.</description>
   <hero>
-    <headline>Decide what a send to nobody does.</headline>
-    <lede>A send to a hibernated actor wakes it, and a send to no actor fails at once. What happens next is your application's choice, per kind of actor.</lede>
+    <headline>Decide what sends to missing actors do.</headline>
+    <lede>A send to an actor asleep in your store wakes it, and a send to no actor fails at once. Your application chooses, per kind of actor, whether to avoid that failure or handle it.</lede>
   </hero>
 
   <section id="three-cases">
-    <heading>The host handles three cases.</heading>
-    <p>A send names an actor that may not be in memory, or may not exist at all. The host's answer depends on which.</p>
+    <heading>Find out where the actor is.</heading>
+    <p>What a send does depends on where its actor is:</p>
     <list>
       <item><term>The actor is hibernated.</term><text>The host keeps the event in its queue and wakes the actor, loading its blob itself when the host has a <code>store</code>. The event runs as if the actor had never left, and a send to a name finds a hibernated actor as it finds a resident one.</text></item>
       <item><term>No actor has that name or session.</term><text>It was never spawned, or it ended. The sender gets <code>error.communication</code> at once, in the same run, with the send's <code>sendid</code>; an <code>actor.send</code> or <code>host.send</code> from your program throws <code>StaleError</code> instead.</text></item>
       <item><term>The address is another system's.</term><text>The send goes to your <code>transport</code> (<link to="guide-other-systems"/>), and whether it arrives is your transport's to say.</text></item>
     </list>
-    <p>The package has no fallback for the second case: no queue of undelivered events and no spawn on a miss. An application usually uses three ways, each for its own kind of actor.</p>
+    <p>Unlike a virtual actor, a missing actor is never spawned by a send, and its events wait in no queue. Your application decides what happens instead.</p>
+  </section>
+
+  <section id="which-way-for-which-actor">
+    <heading>Choose by how long the actor lives.</heading>
+    <p>Pick the way for each kind of actor in your application:</p>
+    <table>
+      <head><cell>The actor</cell><cell>The way</cell><cell>In the chat example</cell></head>
+      <row><cell>long-lived, a known set (a workspace, a room, an account)</cell><cell>it never ends and hibernates</cell><cell>workspaces and rooms</cell></row>
+      <row><cell>made on demand, or not an actor at all (a cart, a user who may be offline)</cell><cell>your I/O processor routes it</cell><cell>direct messages (<code>chat:inbox</code>), rooms made by their workspace</cell></row>
+      <row><cell>short-lived, ends on its own (a connection, a job)</cell><cell>the sender handles <code>error.communication</code></cell><cell>a join of a room that does not exist</cell></row>
+    </table>
+    <p>The <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/examples/chat-rooms/README.md">chat example</link> uses each of them, and its README says where.</p>
   </section>
 
   <section id="the-actor-never-ends-and-hibernates">
     <heading>Keep long-lived actors and let them hibernate.</heading>
-    <p>An actor that stands for a workspace, a room or an account has no top-level <code>&lt;final&gt;</code>, so it never ends. It is always there to send to by its name.</p>
+    <p>An actor that stands for a room or an account has no top-level <code>&lt;final&gt;</code>, so it never ends. It is always there to send to by its name.</p>
     <p>A host with a <code>store</code> and a <code>resident</code> bound keeps it in memory only while it works. An idle actor costs its blob in your store (<link to="guide-hibernation"/>).</p>
     <example>
       <code language="javascript" file="room.mjs"><![CDATA[
@@ -65,13 +77,13 @@ the room has had 2 messages
 the room is in the store: true
 </code>
     </example>
-    <p>The member never learns that the room was hibernated. The host loaded it for the first <code>post</code> and hibernated it again once the turn was done.</p>
-    <p>Use this way when the set of actors is known and each is worth keeping until it is deleted on purpose. Your program or a collection actor makes them.</p>
+    <p>The member never learns that the room was hibernated. The host loaded it for the first <code>post</code> and hibernated it again when the host went idle.</p>
+    <p>Use this way when the set of actors is known and each is worth keeping until it is deleted on purpose. Your program, or an actor that manages the set, spawns them.</p>
   </section>
 
   <section id="the-application-routes-it">
-    <heading>Route sends through an I/O processor.</heading>
-    <p>An actor made on demand, or a user who may be offline, gets its sends through an I/O processor instead. The processor looks the actor up with <code>send.host.actor</code> and makes it when it is missing.</p>
+    <heading>Spawn the actor when a send finds none.</heading>
+    <p>Send to an actor made on demand, such as a cart, through an I/O processor of your own. It looks the actor up with <code>send.host.actor</code> and spawns it when it is missing.</p>
     <p>It forwards the event with the sender's address as its <code>origin</code>, so the actor answers the sender directly:</p>
     <example>
       <code language="javascript" file="carts.mjs"><![CDATA[
@@ -128,7 +140,7 @@ the cart holds 1
 the cart holds 2
 </code>
     </example>
-    <p>The lookup, the spawn and the forward are your program's, so the policy is too. It may refuse instead of spawning, or read the actor's starting state from your database.</p>
+    <p>The processor is your code, so the policy is yours. It may refuse instead of spawning, or read the actor's starting state from your database.</p>
     <p>It may also queue the event while something else makes the actor.</p>
     <p>When rules decide which actors may exist, keep the decision in a chart. A collection actor that never ends checks each request and makes the actors with the package's <code>Spawner</code>.</p>
     <p>The processor then only forwards to the collection (<link to="guide-io-processors" section="spawning-from-a-chart">Spawning from a chart</link>).</p>
@@ -136,9 +148,9 @@ the cart holds 2
   </section>
 
   <section id="the-sender-handles-errorcommunication">
-    <heading>Let the sender handle error.communication.</heading>
-    <p>An actor that ends, such as a connection, a job or an order, may get a send after its end. The sender should see that, and gets <code>error.communication</code> with the send's <code>sendid</code> at once.</p>
-    <p>A transition on it decides what follows: tell the user, retry elsewhere, or give up.</p>
+    <heading>Handle the failed send in the sending chart.</heading>
+    <p>An actor that ends, such as a connection or a job, may get a send after its end. Its sender gets <code>error.communication</code> at once, with the send's <code>sendid</code>.</p>
+    <p>A transition on that event, matched by <code>sendid</code>, decides what follows. This client tells its user the room does not exist:</p>
     <example>
       <code language="javascript" file="client.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -170,22 +182,11 @@ no such room
     <p>The transport fails it, with <code>send.fail()</code> or with <code>host.fail</code> from the other side, when it learns the actor is not there.</p>
   </section>
 
-  <section id="which-way-for-which-actor">
-    <heading>Choose the way by the actor's lifetime.</heading>
-    <table>
-      <head><cell>The actor</cell><cell>The way</cell><cell>In the chat example</cell></head>
-      <row><cell>long-lived, a known set (a workspace, a room, an account)</cell><cell>it never ends and hibernates</cell><cell>workspaces and rooms</cell></row>
-      <row><cell>made on demand, or not an actor at all (a cart, a user who may be offline)</cell><cell>your I/O processor routes it</cell><cell>direct messages (<code>chat:inbox</code>), rooms made by their workspace</cell></row>
-      <row><cell>short-lived, ends on its own (a connection, a job)</cell><cell>the sender handles <code>error.communication</code></cell><cell>a join of a room that does not exist</cell></row>
-    </table>
-    <p>The <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/examples/chat-rooms/README.md">chat example</link> uses all three, and its README says where.</p>
-  </section>
-
   <section id="names-that-need-no-encoding">
-    <heading>Name actors with unreserved characters only.</heading>
-    <p>A name is written into addresses: <code>tinyactors://chat/@&lt;name&gt;</code> in a chart's <code>target</code>, in a processor's lookup, in your logs. An address's name holds only the characters RFC 3986 calls unreserved.</p>
-    <p>Those are <code>A</code>-<code>Z</code>, <code>a</code>-<code>z</code>, <code>0</code>-<code>9</code>, <code>-</code>, <code>.</code>, <code>_</code> and <code>~</code>, and any other byte is percent-encoded. Core's <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/src/base/address.c">address grammar</link> checks it.</p>
-    <p><code>Address.fromName</code> encodes for you, but <code>room/general</code> is then <code>room%2Fgeneral</code> in every address. A chart that writes the name as it reads is not sending to an address at all:</p>
+    <heading>Name actors with letters, digits, dots and dashes.</heading>
+    <p>A name is written into addresses, as <code>tinyactors://chat/@&lt;name&gt;</code> in a chart's <code>target</code> and in your logs. An address's name holds only the characters RFC 3986 calls unreserved.</p>
+    <p>Those are <code>A</code>-<code>Z</code>, <code>a</code>-<code>z</code>, <code>0</code>-<code>9</code>, <code>-</code>, <code>.</code>, <code>_</code> and <code>~</code>, and any other byte is percent-encoded. The <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/src/base/address.c">address grammar</link> checks it.</p>
+    <p><code>Address.fromName</code> encodes for you, but <code>room/general</code> is then <code>room%2Fgeneral</code> in every address. A chart that writes <code>room/general</code> unencoded reaches no actor and gets <code>error.communication</code>:</p>
     <example>
       <code language="javascript" file="names.mjs"><![CDATA[
 import { Address, compileCharts, Host } from '@tinyactors/node';
@@ -219,21 +220,21 @@ error.communication for raw
 tinyactors://chat/#_scxml_1
 </code>
     </example>
-    <p>Name an actor by its kind and its ids joined by <code>.</code>, each id of lowercase letters, digits and <code>-</code>. Examples are <code>room.acme.general</code>, <code>workspace.acme</code> and <code>cart.ada</code>.</p>
+    <p>Name an actor by its kind and its ids joined by <code>.</code>, each id of lowercase letters, digits and <code>-</code>. Examples are <code>room.acme.general</code> and <code>cart.ada</code>.</p>
     <p>Check an id that comes from a user before it becomes part of a name. The system's own id is stricter: lowercase letters, digits, <code>-</code> and <code>.</code>.</p>
-    <p>Names with parts also avoid two lookups by other keys. Core finds an unnamed actor by its chart's name, and an invoked child by its invoke id.</p>
+    <p>Names with parts also avoid two lookups by other keys. tinyactors finds an unnamed actor by its chart's name, and an invoked child by its invoke id.</p>
     <p>So a name <code>room</code> would find any unnamed actor of the chart <code>room</code>, and <code>cart</code> the child of an <code>&lt;invoke id="cart"&gt;</code>. <code>room.acme.general</code> equals neither.</p>
     <p>A name has one owner, the collection actor that spawns it (<link to="guide-io-processors" section="spawning-from-a-chart">Spawning from a chart</link>).</p>
   </section>
 
   <section id="keying-a-table-by-the-sender">
-    <heading>Key a table by the origin's fragment.</heading>
-    <p>A room's members or a workspace's pending requests are tables keyed by <code>_event.origin</code>, the sender's address. Core writes one sender's origin in two forms:</p>
+    <heading>Keep one table entry per sender.</heading>
+    <p>A room's members or a workspace's pending requests are tables keyed by <code>_event.origin</code>, the sender's address. One sender's origin comes in two forms:</p>
     <list>
       <item><term><code>#_scxml_2</code>, the fragment alone</term><text>when the send stayed in the sender's segment of the host: a send to a session's address (<code>#_scxml_&lt;n&gt;</code>, or the full address of a session of the same system), to <code>#_parent</code>, to an invoked child, and a delayed send among them;</text></item>
       <item><term><code>tinyactors://chat/#_scxml_2</code>, the full address</term><text>when the host routed the send: a send to a name (<code>@room.acme.general</code>), to a session in another segment, or from another system (whatever origin its transport passes, the full address when it passes the sender's <code>origin</code> on).</text></item>
     </list>
-    <p>Both name the same sender, so key the table by the origin from <code>#</code> on. A chart-level <code>&lt;script&gt;</code> holds the helper, and the expressions call it with the origin:</p>
+    <p>Both name the same sender, so key the table by the origin from <code>#</code> on. Here a helper in a chart-level <code>&lt;script&gt;</code> gives both forms one key:</p>
     <example>
       <code language="javascript" file="members.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';

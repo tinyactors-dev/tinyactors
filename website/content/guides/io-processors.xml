@@ -4,20 +4,19 @@
   <description>Charts send events to I/O processors, objects of your own that do the I/O and send the answers back as events.</description>
   <hero>
     <headline>Do a chart's I/O in your own code.</headline>
-    <lede>The host does no I/O. A chart sends an event to an I/O processor, an object of yours that does the work and answers with an event.</lede>
+    <lede>A chart asks for a price or an email by sending an event. An object of yours does the work and answers with another event, at once or when its promise settles.</lede>
   </hero>
 
   <section id="charts-send-events">
-    <heading>Charts send their requests as events.</heading>
-    <p>An actor cannot reach the network, a file or a database itself. When a chart needs something from outside, it sends an event to an I/O processor.</p>
-    <p>Your processor does the work and, if there is an answer, sends it back as an event. The chart says what happens, and your code decides how.</p>
+    <heading>Ask for outside work with a send.</heading>
+    <p>A chart that needs the network, a file or a database sends an event with <code>&lt;send type&gt;</code>. The type names an I/O processor, an object in your program.</p>
+    <p>The processor does the work and sends any answer back as an event. The chart decides when to ask and what an answer changes.</p>
   </section>
 
   <section id="declaring-a-processor">
-    <heading>Give each processor a type.</heading>
-    <p>The host's <code>ioProcessors</code> option names the processors its charts may send to, each under a type: any URI you choose.</p>
-    <p>A processor is an object whose <code>receive(send)</code> the host calls for each send to its type. Its optional <code>location</code> is what the chart reads in <code>_ioprocessors[type].location</code>.</p>
-    <p>A class instance serves as well as a literal: <code>receive</code> is called as its method, so <code>this</code> is the processor.</p>
+    <heading>Register a processor for each type.</heading>
+    <p>List your processors in the host's <code>ioProcessors</code> option, each under a type: any URI you choose. The host calls a processor's <code>receive(send)</code> for each send to its type.</p>
+    <p>This chart asks for the price of tea in euros, and the processor answers at once from a table:</p>
     <example>
       <code language="javascript" file="quote.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -61,12 +60,17 @@ urn:example:prices: lookup tea for session 1
 tea costs 4 EUR (answer to ask-1)
 </code>
     </example>
-    <p>A chart that sends to a type no processor serves gets <code>error.execution</code>. A plain function in place of the object is a <code>TypeError</code> at <code>new Host</code>, naming its type.</p>
+    <list>
+      <item><term>A class instance</term><text>serves as well as a literal: <code>receive</code> is called as its method, so <code>this</code> is the processor.</text></item>
+      <item><term><code>location</code></term><text>is optional, and is what the chart reads in <code>_ioprocessors[type].location</code>.</text></item>
+      <item><term>A type no processor serves</term><text>gives the sending chart <code>error.execution</code>.</text></item>
+      <item><term>A plain function</term><text>in place of the object is a <code>TypeError</code> at <code>new Host</code>, naming its type.</text></item>
+    </list>
   </section>
 
   <section id="the-send">
-    <heading>The send describes one <code>&lt;send&gt;</code>.</heading>
-    <p>The argument of <code>receive</code> holds the fields of one <code>&lt;send&gt;</code>, read on first access.</p>
+    <heading>Read what the chart sent.</heading>
+    <p>The <code>send</code> that <code>receive</code> gets holds the attributes of one <code>&lt;send&gt;</code> and its sender, each read on first access.</p>
     <table>
       <head><cell>Field</cell><cell>What it holds</cell></head>
       <row><cell><code>host</code></cell><cell>the host the send came from</cell></row>
@@ -81,22 +85,25 @@ tea costs 4 EUR (answer to ask-1)
       <row><cell><code>traceparent</code></cell><cell>the sending step's trace as W3C text, <code>undefined</code> when untraced (<link to="guide-telemetry"/>)</cell></row>
       <row><cell><code>message</code></cell><cell>the outgoing half, for a transport (<link to="guide-other-systems"/>)</cell></row>
     </table>
-    <p>A handler calls at most one of the send's two methods:</p>
+    <p>Copy what you keep for later. The send is valid while the handler runs, and a read after it returned throws <code>TA_ERROR_STALE</code>.</p>
+  </section>
+
+  <section id="answer-or-fail">
+    <heading>Answer the sender, or fail the request.</heading>
+    <p>A handler calls one of the send's two methods, or neither. The processor above answers with <code>send.answer('price', …)</code>, and the chart reads the answer's <code>_event.sendid</code>.</p>
     <list>
       <item><term><code>send.answer(event, data, options)</code></term><text>Sends <code>event</code> back to the sender, with this send's <code>sendid</code> as its <code>_event.sendid</code>. The options are <code>traceparent</code> (the answer continues the send's trace unless you give another, or <code>null</code> for a new one), <code>origin</code> (the answer's <code>_event.origin</code>) and <code>raw</code> (the message as you read it, for a chart that wants it).</text></item>
       <item><term><code>send.fail()</code></term><text>Gives the sender <code>error.communication</code> with this send's <code>sendid</code>, for a request that could not be done.</text></item>
+      <item><term>Neither</term><text>suits a notification, or a chart that waits for a timeout of its own.</text></item>
     </list>
-    <p>A second answer, or an answer after <code>fail()</code>, throws <code>TA_ERROR_STATE</code>. A handler may also answer nothing: the send was a notification, or the chart waits for a timeout of its own.</p>
-    <p>The fields <code>origin</code> and <code>message</code>, and the answer's <code>origin</code> and <code>raw</code>, follow the <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#wire-format">wire format</link>. They serve a processor that carries sends out of the process or speaks SCXML's BasicHTTP (<link to="guide-other-systems"/>).</p>
-    <p>The send is a view of the host's memory, valid while the handler runs. Read after the handler returned, it throws <code>TA_ERROR_STALE</code>, so copy what you keep for later.</p>
+    <p>A second answer, or an answer after <code>fail()</code>, throws <code>TA_ERROR_STATE</code>.</p>
+    <p>A processor that carries sends out of the process, or speaks SCXML's BasicHTTP, uses the fields <code>origin</code> and <code>message</code> (<link to="guide-other-systems"/>). They and the answer's <code>origin</code> and <code>raw</code> follow the <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#wire-format">wire format</link>.</p>
   </section>
 
   <section id="answering-later">
     <heading>Return a promise to answer later.</heading>
-    <p>A handler that returns a promise has its send filled with every field before the host moves on. Its <code>answer()</code> and <code>fail()</code> then work whenever the promise gets there, while the host is open.</p>
-    <p>Until then the actor goes on with its other events, and the answer arrives as an event like any other.</p>
-    <p>If the sender ended meanwhile, <code>answer()</code> and <code>fail()</code> deliver nothing and return <code>false</code>, and <code>true</code> when the sender gets the event.</p>
-    <p>Any other refusal still throws: a second answer or a closed host (<code>TA_ERROR_STATE</code>), or data the value table cannot hold.</p>
+    <p>When <code>receive</code> returns a promise, the host copies every field of its send first. Its <code>answer()</code> and <code>fail()</code> then work whenever the promise gets there, while the host is open.</p>
+    <p>The actor handles its other events meanwhile, and the answer reaches it as one more event. This processor awaits a stand-in for an SMTP client, then answers <code>delivered</code>:</p>
     <example>
       <code language="javascript" file="mailer.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -146,15 +153,20 @@ host.close();
 delivered after 20 ms
 </code>
     </example>
-    <p><code>await host.idle()</code> waits for the host and for the promise the handler returned, so it resolves once the answer ran. A promise the handler starts and does not return is not waited for.</p>
+    <p><code>await host.idle()</code> waits for the promise the handler returned, so it resolves after the answer. It waits only for a promise the handler returns, never for one it starts and drops.</p>
     <p>The pending <code>timeout</code> keeps the process alive until <code>host.close()</code>.</p>
+    <list>
+      <item><term><code>true</code></term><text>is what <code>answer()</code> and <code>fail()</code> return when the sender gets the event.</text></item>
+      <item><term><code>false</code></term><text>means the sender ended meanwhile, and nothing was delivered.</text></item>
+      <item><term>An exception</term><text>is any other refusal: a second answer or a closed host (<code>TA_ERROR_STATE</code>), or data outside the <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/README.md#values">value table</link>, such as a function.</text></item>
+    </list>
   </section>
 
   <section id="when-the-sender-ends">
-    <heading>Settle a session's requests when it ends.</heading>
-    <p>An actor that reaches a top-level <code>&lt;final&gt;</code> ends at once, and SCXML drops the events still in its queue.</p>
-    <p>So a request queued with <code>actor.send</code> behind the event that ends the actor is lost, and no handler is called.</p>
-    <p>Let the chart say so first: its <code>&lt;final&gt;</code>'s <code>&lt;onentry&gt;</code> sends to your processor. The handler then settles everything it still holds for that session.</p>
+    <heading>Settle open requests when an actor ends.</heading>
+    <p>An actor that reaches a top-level <code>&lt;final&gt;</code> ends at once, and SCXML drops the events still in its queue. A request sent with <code>actor.send</code> behind the event that ends it reaches no handler.</p>
+    <p>Have the <code>&lt;final&gt;</code>'s <code>&lt;onentry&gt;</code> send to your processor, and settle there what you still hold for that session.</p>
+    <p>Here each request waits for the actor's <code>response</code>. The one sent behind <code>logout</code> gets <code>401 logged out</code> from the <code>closed</code> handler:</p>
     <example>
       <code language="javascript" file="login.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -210,14 +222,15 @@ host.close();
   </section>
 
   <section id="when-a-handler-fails">
-    <heading>A handler that throws fails its send.</heading>
-    <p>A handler that throws before it answered, or whose promise rejects before it answered, has its send failed. The sender gets <code>error.communication</code>.</p>
-    <p>An error after the answer fails nothing, and the answer stands. The error itself is reported after the turn, to the first of these:</p>
+    <heading>Catch what a processor throws.</heading>
+    <p>A handler that throws, or whose promise rejects, before it answers fails its send: the sender gets <code>error.communication</code>. After an answer, the answer stands.</p>
+    <p>Either way the host reports the error at the end of that event-loop turn, to the first of these:</p>
     <list ordered="true">
       <item><text>the host's <code>onHandlerError(error, effect)</code>, when it has one, with the send as <code>effect</code>;</text></item>
       <item><text>a waiting <code>host.idle()</code>, which rejects with it;</text></item>
       <item><text>the runtime, as an uncaught exception, or as an unhandled rejection for a promise that rejected.</text></item>
     </list>
+    <p>This processor always throws. The chart handles <code>error.communication</code>, then <code>idle()</code> rejects with the error:</p>
     <example>
       <code language="javascript" file="flaky.mjs"><![CDATA[
 import { compileCharts, Host } from '@tinyactors/node';
@@ -247,22 +260,20 @@ the chart got error.communication for g1
 idle() rejected: connection refused
 </code>
     </example>
-    <p>The chart handled <code>error.communication</code> in the same turn, and the error came out of <code>idle()</code> at its end.</p>
   </section>
 
   <section id="inputs-from-a-handler">
-    <heading>A handler may call the host.</heading>
-    <p>Through <code>send.host</code> a handler may send an event to any actor, spawn one or terminate one. <code>send.sender.send(...)</code> sends to the sender.</p>
-    <p>The input applies at once, and the actors it concerns run in the same or a later turn.</p>
-    <p>A handler never takes the host's effects, so it has nothing to drain or acknowledge. When it returns, the host goes on.</p>
+    <heading>Send to other actors from a processor.</heading>
+    <p>Through <code>send.host</code> a handler can send an event to any actor, spawn one or terminate one. <code>send.sender.send(...)</code> sends a new event to the sender.</p>
+    <p>Each call applies at once, and the actors it reaches run after the handler returns.</p>
   </section>
 
   <section id="spawning-from-a-chart">
-    <heading>Start lasting actors with a <code>Spawner</code>.</heading>
-    <p>SCXML has no element that starts an actor which outlives its state: <code>&lt;invoke&gt;</code> stops its child when the state is left.</p>
-    <p>The package's <code>Spawner</code> is an I/O processor that does it. Give it to the host under a type you choose, and a chart sends it <code>{ chart, name, params }</code>.</p>
-    <p>The host spawns the chart's current version under the name. The sender gets <code>spawned</code> with <code>{ name, address }</code> and the send's <code>sendid</code>.</p>
-    <p>The <code>address</code> is what the sender sends to from then on. A chart the host does not have, or data of another shape, gives the sender <code>error.communication</code> instead.</p>
+    <heading>Let a chart start lasting actors.</heading>
+    <p><code>&lt;invoke&gt;</code> looks like the way, but it stops its child when the state is left. The package's <code>Spawner</code> is a processor that starts an actor which stays.</p>
+    <p>Register it under a type you choose, and a chart sends it <code>{ chart, name, params }</code>. The host spawns the chart's current version under the name.</p>
+    <p>The sender gets <code>spawned</code> with <code>{ name, address }</code> and the send's <code>sendid</code>, and sends to the <code>address</code> from then on. An unknown chart, or data of another shape, gives it <code>error.communication</code>.</p>
+    <p>Here a lobby spawns a room about tea and says hello at its address:</p>
     <example>
       <code language="javascript" file="spawner.mjs"><![CDATA[
 import { compileCharts, Host, Spawner } from '@tinyactors/node';
@@ -306,21 +317,19 @@ room about tea got hello
 
   <section id="one-owner-per-name">
     <heading>Give each name one owner.</heading>
-    <p>The <code>Spawner</code> spawns and does not look names up. One collection actor decides which actors of a kind exist, and only it spawns those names.</p>
-    <p>A workspace spawns its rooms, for one (<link to="guide-missing-actors" section="the-application-routes-it">the application routes it</link>).</p>
-    <p>As one actor, it makes one request at a time and records each, so it never asks twice for a name.</p>
+    <p>The <code>Spawner</code> spawns each time it is asked, without looking the name up first. So let one collection actor decide which actors of a kind exist, and spawn only from it.</p>
+    <p>A workspace spawns its rooms, for one (<link to="guide-missing-actors" section="the-application-routes-it">the application routes it</link>). It handles one request at a time and records each, so it never asks twice for a name.</p>
     <p>The <link href="https://github.com/tinyactors-dev/tinyactors-napi/blob/main/examples/chat-rooms/README.md">chat-rooms example</link>'s workspace keeps a <code>creating</code> table keyed by the spawn's <code>sendid</code>. An entry stays until <code>spawned</code> or <code>error.communication</code> answers it.</p>
-    <p>Two actors spawning one name is a design error in the application. The core's answer is defined, but it is not what the application meant.</p>
-    <p>Within one version the oldest holder keeps the name, and a newer version's holder wins (<code>ta_host_actor_by_name</code> in <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/include/tinyactors/host.h">the core's host.h</link>).</p>
+    <p>Two actors spawning one name is a design error in the application. Within one version the oldest holder keeps the name, and a newer version's holder wins.</p>
+    <p>That rule is <code>ta_host_actor_by_name</code>'s, in <link href="https://github.com/tinyactors-dev/tinyactors/blob/main/tinyactors-core/include/tinyactors/host.h">the core's host.h</link>.</p>
   </section>
 
   <section id="updating-through-names">
-    <heading>Deploy a version under an existing name.</heading>
-    <p>A new version of a chart is a new image: compile it and give it to <code>host.addImage</code>. Adding it is the deploy.</p>
-    <p>New actors of the chart start in the newest version, running ones finish on theirs, and nothing moves unless asked. The versions need not be compatible (<link to="guide-migration" section="versions-and-segments">versions and segments</link>).</p>
-    <p>An actor found by name updates the same way: its owner spawns the new version under the existing name.</p>
-    <p>From then on the name finds the new actor (<code>@room.acme.general</code>, <code>host.actor('room.acme.general')</code>), since names are looked up newest version first.</p>
-    <p>The old actor keeps its session, so its session address still reaches it. It runs on its version until it ends.</p>
+    <heading>Deploy a new version of a named actor.</heading>
+    <p>To deploy, compile the new chart and pass its <code>image</code> to <code>host.addImage</code>. New actors start in the newest version, and running ones stay on theirs until they end or you migrate them.</p>
+    <p>The versions need not be compatible (<link to="guide-migration" section="versions-and-segments">versions and segments</link>). For a named actor, its owner then spawns the new version under the same name.</p>
+    <p>Names are looked up newest version first, so the name finds the new actor: <code>@room.acme.general</code>, <code>host.actor('room.acme.general')</code>. The old actor runs its version at its session address until it ends.</p>
+    <p>Here the lobby opens room version 1, the deploy adds version 2, and the old room still answers at its address:</p>
     <example>
       <code language="javascript" file="names.mjs"><![CDATA[
 import { compileCharts, Host, Spawner } from '@tinyactors/node';
@@ -367,7 +376,6 @@ room.acme.general runs version 2
 room.acme.general runs version 1
 </code>
     </example>
-    <p>A long-lived actor that must not wait for its end to change, such as a workspace, is moved instead.</p>
-    <p><code>host.migrate({ chart: 'workspace' })</code> moves the running actors to the new version (<link to="guide-migration"/>).</p>
+    <p>A long-lived actor such as a workspace should change before it ends. Move it with <code>host.migrate({ chart: 'workspace' })</code> (<link to="guide-migration"/>).</p>
   </section>
 </page>
