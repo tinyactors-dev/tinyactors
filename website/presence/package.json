@@ -1,0 +1,12 @@
+{
+  "name": "tinyactors-website-presence",
+  "private": true,
+  "type": "module",
+  "main": "server.mjs",
+  "description": "The presence server: the website visitors' ants as actors on one tinyactors host, a WebSocket per tab (website/docs/presence.md). Runs on the exe VM ta-presence; smoke.mjs runs it here against two tabs.",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@tinyactors/node": "0.4.0",
+    "ws": "8.18.3"
+  }
+}

@@ -188,6 +188,14 @@ out, ok = Website.capture('node', Website::ROOT.join('test/components.mjs'))
 failures << "test/components.mjs failed:\n#{out}" unless ok
 puts "website: #{out.strip}" if ok
 
+# 7. The presence server (presence/server.mjs) on a free port against two
+#    tabs: origins, tickets, greetings, duplicated tabs, reloads.
+presence = Website::ROOT.join('presence')
+Website.run('npm', 'ci', '--no-audit', '--no-fund', chdir: presence) unless presence.join('node_modules/.package-lock.json').file?
+out, ok = Website.capture('node', 'smoke.mjs', chdir: presence)
+failures << "presence/smoke.mjs failed:\n#{out}" unless ok
+puts "website: the presence server passes its #{out.lines.count { |line| line.start_with?('ok: ') }} smoke checks" if ok
+
 unless failures.empty?
   warn failures.map { |failure| "website: #{failure}" }.join("\n")
   exit 1
