@@ -139,6 +139,9 @@
           <xsl:apply-templates select="s:hero, s:section"/>
         </main>
         <xsl:call-template name="footer"/>
+        <xsl:apply-templates select="$site/s:presence">
+          <xsl:with-param name="current" select="."/>
+        </xsl:apply-templates>
       </body>
     </html>
   </xsl:template>
@@ -157,13 +160,16 @@
           </xsl:call-template>
         </nav>
         <!-- On a phone the links do not fit beside the wordmark: they open
-             from a menu, so the sticky header stays one row. -->
-        <button class="site-menu" type="button" popovertarget="site-menu">Menu</button>
-        <nav class="site-menu__links" id="site-menu" popover="" aria-label="Site">
-          <xsl:call-template name="nav-links">
-            <xsl:with-param name="current" select="$current"/>
-          </xsl:call-template>
-        </nav>
+             from a menu, so the sticky header stays one row. With presence,
+             the ant button is that menu, at every width. -->
+        <xsl:if test="empty($site/s:presence)">
+          <button class="site-menu" type="button" popovertarget="site-menu">Menu</button>
+          <nav class="site-menu__links" id="site-menu" popover="" aria-label="Site">
+            <xsl:call-template name="nav-links">
+              <xsl:with-param name="current" select="$current"/>
+            </xsl:call-template>
+          </nav>
+        </xsl:if>
       </div>
     </header>
   </xsl:template>
@@ -178,6 +184,38 @@
         <xsl:apply-templates select="." mode="text"/>
       </a>
     </xsl:for-each>
+  </xsl:template>
+
+  <!-- Presence (docs/presence.md): the ant button, which opens the site's
+       navigation, the switch for this tab's ant and the greeting line;
+       presence/client.mjs runs it. Its words are the content's, handed to
+       the script as data attributes. -->
+  <xsl:template match="s:presence">
+    <xsl:param name="current" as="element(s:page)"/>
+    <div class="presence" data-server="{@server}" data-greeted="{normalize-space(s:greeted)}"
+         data-greeted-anonymous="{normalize-space(s:greeted-anonymous)}" data-count="{normalize-space(s:count)}">
+      <p class="presence__toast" role="status" hidden=""></p>
+      <button class="presence__button" type="button" popovertarget="presence-menu" aria-label="{normalize-space(s:label)}">
+        <picture><source srcset="/assets/brand/logo-mark-dark.svg" media="(prefers-color-scheme: dark)"/><img src="/assets/brand/logo-mark.svg" alt="" width="30" height="30"/></picture>
+      </button>
+      <div class="presence__menu" id="presence-menu" popover="">
+        <nav class="presence__links" aria-label="Site">
+          <xsl:call-template name="nav-links">
+            <xsl:with-param name="current" select="$current"/>
+          </xsl:call-template>
+        </nav>
+        <div class="presence__controls">
+          <button class="presence__switch" type="button" role="switch" aria-checked="true">
+            <span class="presence__pill" aria-hidden="true"></span>
+            <span>{normalize-space(s:switch)}</span>
+          </button>
+          <button class="presence__greet" type="button">{normalize-space(s:greet)}</button>
+          <p class="presence__count"></p>
+          <p class="presence__status"></p>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/assets/presence/client.mjs?v={$version}"></script>
   </xsl:template>
 
   <xsl:template name="footer">

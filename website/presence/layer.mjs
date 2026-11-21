@@ -1,0 +1,269 @@
+// The ants, drawn: one fixed canvas behind the page's content. Each ant
+// is the design system's rigged ant (ant.svg), its parts as Path2D objects,
+// posed by the ant-animation skill's gait (ant.mjs: the feet planted, the
+// stride from the speed). The server sends trips (two points, two times,
+// as fractions of the field); here each ant steers after the point its
+// trip is at, in this viewport's pixels, so no ant is ever stretched.
+// Also drawn, faintly: this visitor's country's trail and the food.
+import { makeAnt, advance } from './ant.mjs';
+
+const LENGTH = 26;              // an ant's body, px
+const MAX = 60;                 // ants drawn; this tab's always among them
+const FPS = 30;
+const INK = '#302B28', PINE = '#255E45', HIGHLIGHT = '#D5DCD7'; // the SVG's own colours
+const HIT = 22;                 // px around an ant that a tap reaches
+const VMAX = 70;                // px/s an ant may hurry to catch its trip
+
+export function createLayer({ svgText, flagURL = (cc) => `/vendor/flag-icons/flags/4x3/${cc.toLowerCase()}.svg`, onTap }) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'ants';
+  canvas.setAttribute('aria-hidden', 'true');
+  document.body.prepend(canvas);
+  const context = canvas.getContext('2d');
+  const rig = buildRig(svgText);
+  const scale = LENGTH / 633; // the rig's body, mandibles to gaster tip, is 633 units
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  const ants = new Map(); // handle -> {body, trip, country, asleep, leaving, greetUntil}
+  const flags = new Map(); // country -> Image | null
+  let you = 0, offset = 0, field = null, running = false, shown = false, last = 0, width = 0, height = 0, dpr = 1;
+  const colors = { ink: INK, pine: PINE, trail: PINE };
+
+  function resize() {
+    dpr = Math.min(2, devicePixelRatio || 1);
+    width = innerWidth; height = innerHeight;
+    canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+    const style = getComputedStyle(document.documentElement);
+    colors.ink = style.getPropertyValue('--fg-1').trim() || INK;
+    colors.pine = style.getPropertyValue('--accent').trim() || PINE;
+    colors.trail = colors.pine;
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  const serverNow = () => performance.now() + offset;
+  const px = (x, y) => [x * width, y * height];
+
+  function at(trip, t) {
+    const [, x0, y0, t0, x1, y1, t1] = trip;
+    const f = t1 > t0 ? Math.min(1, Math.max(0, (t - t0) / (t1 - t0))) : 1;
+    return px(x0 + (x1 - x0) * f, y0 + (y1 - y0) * f);
+  }
+
+  function add(handle, country, asleep, trip) {
+    const [x, y] = at(trip, serverNow());
+    const body = makeAnt({ x, y, heading: Math.random() * 360, scale, seed: handle });
+    body.alpha = body.target.alpha = 0; // fades in
+    body.target.alpha = 1;
+    if (asleep) { body.target.tuck = 1; body.tuck = 1; body.target.alpha = 0.45; }
+    advance(body, 0);
+    ants.set(handle, { body, trip, country, asleep, leaving: false, greetUntil: 0 });
+    if (country && !flags.has(country)) loadFlag(country);
+  }
+
+  function loadFlag(country) {
+    flags.set(country, null);
+    const image = new Image();
+    image.onload = () => flags.set(country, image);
+    image.src = flagURL(country);
+  }
+
+  // ---- what the server says
+  function welcome(message) {
+    offset = message.now - performance.now();
+    you = message.you;
+    ants.clear();
+    for (const [handle, country, asleep, trip] of message.ants) add(handle, country, asleep, trip);
+    field = message.field;
+  }
+  function apply(message) {
+    switch (message.t) {
+      case 'join': if (!ants.has(message.h)) add(message.h, message.country, false, [message.h, 0.5, 0.5, 0, 0.5, 0.5, 0]); break;
+      case 'trip': {
+        const ant = ants.get(message.trip[0]);
+        if (ant) { ant.trip = message.trip; if (ant.body.target.greet && !message.trip[7]) ant.body.target.greet = 0; }
+        break;
+      }
+      case 'greet': for (const h of [message.a, message.b]) { const ant = ants.get(h); if (ant) { ant.greetUntil = performance.now() + 3000; ant.body.target.greet = 1; } } break;
+      case 'sleep': {
+        const ant = ants.get(message.h);
+        if (ant) { ant.asleep = message.asleep; ant.body.target.tuck = message.asleep ? 1 : 0; ant.body.target.alpha = message.asleep ? 0.45 : 1; }
+        break;
+      }
+      case 'leave': { const ant = ants.get(message.h); if (ant) ant.leaving = true; break; }
+    }
+  }
+
+  // ---- steering: after the point the ant's trip is at, now
+  function steer(ant, dt, t) {
+    const a = ant.body;
+    let [tx, ty] = at(ant.trip, t);
+    if (ant.leaving) { // off the nearest edge
+      const edges = [[-60, a.y], [width + 60, a.y], [a.x, -60], [a.x, height + 60]];
+      [tx, ty] = edges.sort((p, q) => Math.hypot(p[0] - a.x, p[1] - a.y) - Math.hypot(q[0] - a.x, q[1] - a.y))[0];
+      a.target.alpha = 0;
+    }
+    const dx = tx - a.x, dy = ty - a.y, distance = Math.hypot(dx, dy);
+    if (ant.greetUntil && performance.now() > ant.greetUntil) { ant.greetUntil = 0; a.target.greet = 0; }
+    const face = ant.trip[7];
+    let wanted = null;
+    if (distance > 1.5 && !ant.asleep) wanted = (Math.atan2(dx, -dy) * 180) / Math.PI;
+    else if (face && !ant.asleep) { const [fx, fy] = px(face[0], face[1]); wanted = (Math.atan2(fx - a.x, -(fy - a.y)) * 180) / Math.PI; }
+    const error = wanted === null ? 0 : ((wanted - a.heading + 540) % 360) - 180;
+    a.target.w = ant.asleep ? 0 : Math.max(-140, Math.min(140, error * 3));
+    // Walk when roughly facing the point; turn in place when it is behind.
+    const speed = ant.leaving ? VMAX : Math.min(VMAX, distance * 1.8);
+    a.target.v = ant.asleep || distance < 1.5 ? 0 : speed * Math.max(0, Math.cos((error * Math.PI) / 180));
+    a.target.idle = !ant.asleep && distance < 1.5 && !ant.greetUntil ? 0.6 : 0;
+    advance(a, dt);
+  }
+
+  // ---- drawing
+  function frame(time) {
+    if (!running) return;
+    requestAnimationFrame(frame);
+    if (time - last < 1000 / FPS - 1) return;
+    const dt = Math.min(0.1, (time - (last || time)) / 1000);
+    last = time;
+    const t = serverNow();
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, width, height);
+    drawField();
+    let drawn = 0;
+    const order = [...ants.entries()].sort(([h]) => (h === you ? -1 : 0));
+    for (const [handle, ant] of order) {
+      if (reduced.matches) { const [x, y] = at(ant.trip, ant.trip[6]); ant.body.x = x; ant.body.y = y; advance(ant.body, 0); }
+      else steer(ant, dt, t);
+      if (ant.leaving && ant.body.alpha < 0.02) { ants.delete(handle); continue; }
+      if (drawn++ < MAX) draw(ant, handle === you);
+    }
+  }
+
+  function drawField() {
+    if (!field) return;
+    context.save();
+    context.globalAlpha = 1;
+    if (field.trail) {
+      context.fillStyle = colors.trail;
+      const cw = width / field.cols, ch = height / field.rows;
+      for (let i = 0; i < field.trail.length; i++) {
+        const v = field.trail[i];
+        if (v < 12) continue;
+        context.globalAlpha = Math.min(0.18, v / 255 * 0.25);
+        const x = (i % field.cols + 0.5) * cw, y = (Math.floor(i / field.cols) + 0.5) * ch;
+        context.beginPath(); context.arc(x, y, 1.6, 0, Math.PI * 2); context.fill();
+      }
+    }
+    for (const [fx, fy, left] of field.food) {
+      const [x, y] = px(fx, fy);
+      const gradient = context.createRadialGradient(x, y, 0, x, y, 70 * left + 10);
+      gradient.addColorStop(0, 'rgba(216, 166, 78, 0.16)');
+      gradient.addColorStop(1, 'rgba(216, 166, 78, 0)');
+      context.globalAlpha = 1;
+      context.fillStyle = gradient;
+      context.beginPath(); context.arc(x, y, 70 * left + 10, 0, Math.PI * 2); context.fill();
+      context.fillStyle = 'rgba(184, 134, 46, 0.55)';
+      for (let i = 0; i < 5; i++) { const a = i * 1.3; context.beginPath(); context.arc(x + Math.cos(a) * 3 * (i % 3), y + Math.sin(a) * 3 * (i % 2), 1.4, 0, Math.PI * 2); context.fill(); }
+    }
+    context.restore();
+  }
+
+  function draw(ant, mine) {
+    const a = ant.body;
+    context.save();
+    context.globalAlpha = a.alpha * (mine ? 0.78 : 0.42);
+    context.translate(a.x, a.y);
+    context.rotate(((a.heading + a.sway) * Math.PI) / 180);
+    context.scale(scale, scale);
+    context.translate(-512, -530);
+    const posed = joints(a.pose);
+    for (const part of rig.parts) {
+      context.save();
+      for (const joint of part.chain) transform(posed[joint]);
+      context.fillStyle = part.fill === INK ? colors.ink : part.fill === PINE ? colors.pine : part.fill;
+      context.fill(part.path);
+      if (part.gaster) flag(ant.country, part.path);
+      context.restore();
+    }
+    context.restore();
+  }
+  function flag(country, path) {
+    const image = country && flags.get(country);
+    if (!image) return;
+    context.save();
+    context.clip(path);
+    context.globalAlpha *= 0.85;
+    context.drawImage(image, 430, 560, 165, 270); // the gaster's box, in rig units
+    context.restore();
+  }
+  function transform(joint) {
+    if (!joint) return;
+    const [x, y] = joint.at;
+    context.translate(x, y);
+    context.rotate((joint.angle * Math.PI) / 180);
+    if (joint.scale !== 1) context.scale(joint.scale, joint.scale);
+    context.translate(-x, -y);
+  }
+  function joints(pose) {
+    const fold = -38 * pose.tuck, m = 9 * pose.mandible;
+    const j = {
+      head: { at: rig.pivots.head, angle: pose.headYaw, scale: 1 - 0.03 * pose.tuck },
+      gaster: { at: rig.pivots.gaster, angle: pose.gasterYaw, scale: 1 },
+      petiole: { at: rig.pivots.petiole, angle: pose.petioleYaw, scale: 1 },
+      'antenna-left': { at: rig.pivots['antenna-left'], angle: pose.antL + fold, scale: 1 },
+      'antenna-right': { at: rig.pivots['antenna-right'], angle: -(pose.antR + fold), scale: 1 },
+      'mandible-left': { at: rig.pivots['mandible-left'], angle: -m, scale: 1 },
+      'mandible-right': { at: rig.pivots['mandible-right'], angle: m, scale: 1 },
+    };
+    for (const [id, leg] of Object.entries(pose.legs)) j[id] = { at: rig.pivots[id], angle: leg.angle, scale: leg.scale };
+    return j;
+  }
+
+  // ---- a tap on another ant: outside links, buttons, fields and selected text
+  addEventListener('pointerup', (event) => {
+    if (!shown || event.button > 0) return;
+    if (event.target.closest?.('a, button, input, textarea, select, label, summary, [contenteditable], [popover], pre, code')) return;
+    if (String(getSelection?.() ?? '').length) return;
+    let best = 0, bestDistance = HIT;
+    for (const [handle, ant] of ants) {
+      if (handle === you || ant.asleep || ant.leaving) continue;
+      const d = Math.hypot(ant.body.x - event.clientX, ant.body.y - event.clientY);
+      if (d < bestDistance) { best = handle; bestDistance = d; }
+    }
+    if (best) onTap(best);
+  });
+
+  function start() { if (!running) { running = true; last = 0; requestAnimationFrame(frame); } }
+  function stop() { running = false; }
+  document.addEventListener('visibilitychange', () => (document.hidden ? stop() : shown && start()));
+
+  return {
+    welcome, apply,
+    batch(messages) { for (const message of messages) apply(message); },
+    field(message) { field = message; },
+    show() { shown = true; canvas.classList.add('ants--on'); if (!document.hidden) start(); },
+    hide() { shown = false; canvas.classList.remove('ants--on'); setTimeout(() => { if (!shown) { stop(); ants.clear(); } }, 600); },
+    /** Another ant, awake, for the menu's "Greet an ant". */
+    someone() {
+      const others = [...ants.entries()].filter(([h, ant]) => h !== you && !ant.asleep && !ant.leaving);
+      return others.length ? others[Math.floor(Math.random() * others.length)][0] : 0;
+    },
+    count: () => ants.size,
+  };
+}
+
+// The rig's parts as Path2D, each with the joints it hangs from, outermost
+// first (a leg; the head, then an antenna), as rig.mjs poses the SVG.
+function buildRig(svgText) {
+  const svg = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+  const pivots = {};
+  for (const el of svg.querySelectorAll('[data-pivot]')) pivots[el.id] = el.getAttribute('data-pivot').split(' ').map(Number);
+  const JOINTS = new Set(['head', 'gaster', 'petiole', 'antenna-left', 'antenna-right', 'mandible-left', 'mandible-right',
+    'leg-front-left', 'leg-front-right', 'leg-middle-left', 'leg-middle-right', 'leg-hind-left', 'leg-hind-right']);
+  const parts = [];
+  for (const path of svg.querySelectorAll('#ant path')) {
+    const chain = [];
+    for (let el = path; el && el.id !== 'ant'; el = el.parentElement) if (JOINTS.has(el.id)) chain.unshift(el.id);
+    parts.push({ path: new Path2D(path.getAttribute('d')), fill: path.getAttribute('fill'), chain, gaster: path.id === 'gaster' });
+  }
+  return { parts, pivots };
+}

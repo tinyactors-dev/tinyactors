@@ -1,6 +1,8 @@
 // Serves a built site as Cloudflare's static assets do (wrangler.jsonc): a
 // directory as its index.html, "/x" redirected to "/x/" when x/index.html
 // exists, and 404.html with a 404 for what is missing. No dependencies.
+// With TICKET_KEY set it also answers /presence/ticket as the Worker does
+// (worker.mjs), for a presence server run here (COUNTRY, default EE).
 //
 //   node tools/serve.mjs build/site 4321
 
@@ -29,6 +31,12 @@ const isFile = async (path) => (await stat(path).catch(() => null))?.isFile() ??
 
 createServer(async (request, response) => {
   const path = normalize(decodeURIComponent(new URL(request.url, 'http://localhost').pathname));
+  if (path === '/presence/ticket') {
+    if (!process.env.TICKET_KEY) return response.writeHead(503).end();
+    const { issue } = await import('../presence/ticket.mjs');
+    response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    return response.end(JSON.stringify({ ticket: await issue(process.env.TICKET_KEY, process.env.COUNTRY ?? 'EE') }));
+  }
   if (path.includes('..')) {
     response.writeHead(400).end();
     return;

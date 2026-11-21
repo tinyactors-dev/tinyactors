@@ -69,7 +69,7 @@ module Website
   # (`?v=`): a hash of what they are built from, so a deploy that changes
   # one is fetched anew whatever a cache kept.
   def version
-    inputs = [*ROOT.glob('components/*.mjs'), ROOT.join('style/site.css'), DESIGN.join('styles.css'),
+    inputs = [*ROOT.glob('components/*.mjs'), *PRESENCE_BROWSER, ROOT.join('style/site.css'), DESIGN.join('styles.css'),
               *DESIGN.glob('tokens/*.css'), DESIGN.join('components/components.css')].sort
     Digest::SHA256.hexdigest(inputs.map { |file| "#{file.basename}\0#{file.read}" }.join("\0"))[0, 12]
   end
@@ -116,8 +116,15 @@ module Website
     'quickjs-emscripten-core' => ['quickjs-emscripten-core', %w[LICENSE dist/*.mjs]],
     'quickjs-singlefile-browser-release-sync' => ['@jitl/quickjs-singlefile-browser-release-sync', %w[LICENSE dist/*.mjs]],
     'quickjs-ffi-types' => ['@jitl/quickjs-ffi-types', %w[LICENSE dist/*.mjs]],
-    'highlight.js' => ['@highlightjs/cdn-assets', %w[LICENSE es/core.min.js es/languages/{xml,javascript,typescript,python,c,bash}.min.js]]
+    'highlight.js' => ['@highlightjs/cdn-assets', %w[LICENSE es/core.min.js es/languages/{xml,javascript,typescript,python,c,bash}.min.js]],
+    # The presence ants' flags, one fetched per country seen (presence/layer.mjs).
+    'flag-icons' => ['flag-icons', %w[LICENSE flags/4x3/*.svg]]
   }.freeze
+  # Presence's browser side (docs/presence.md): its modules and chart, and
+  # the ant's gait from the ant-animation skill, its one copy.
+  PRESENCE = ROOT.join('presence')
+  PRESENCE_BROWSER = [PRESENCE.join('client.mjs'), PRESENCE.join('layer.mjs'), PRESENCE.join('link.scxml'),
+                      ROOT.join('.agents/skills/ant-animation/scripts/ant.mjs')].freeze
 
   def vendor!
     run('npm', 'ci', '--no-audit', '--no-fund') unless ROOT.join('node_modules/.package-lock.json').file?
@@ -163,6 +170,16 @@ module Website
       %w[index.mjs lib tinyactors.wasm LICENSE].each { |entry| FileUtils.cp_r(package.join(entry), target) }
     end
     puts "website: #{examples.size} live examples, @tinyactors/wasm #{vendored}" unless examples.empty?
+    presence!(vendored)
+  end
+
+  # Presence's browser side into assets/presence/, beside the
+  # @tinyactors/wasm the live examples vendor, which its chart runs on.
+  def presence!(vendored)
+    return unless CONTENT.join('site.xml').read.include?('<presence ')
+    fail!('presence needs @tinyactors/wasm, which only a live example vendors') unless vendored
+    FileUtils.mkdir_p(SITE.join('assets/presence'))
+    PRESENCE_BROWSER.each { |file| FileUtils.cp(file, SITE.join('assets/presence')) }
   end
 
   # A deterministic .tar.gz of build/site as `website-<version>/`: sorted

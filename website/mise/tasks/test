@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 #MISE description="Test the website: the content against its schema, the refusals the schema and the build must make, the build's internal links and anchors, and every example a page shows, run"
-#MISE sources=["content/**/*", "presence/**/*.{mjs,scxml,json}", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
+#MISE sources=["content/**/*", "presence/**/*.{mjs,scxml,json}", ".agents/skills/ant-animation/scripts/ant.mjs", "schema/**/*", "render/**/*", "style/**/*", "components/**/*", "../tinyactors-napi/docs/guide/*.md", "examples/**/*.{scxml,mjs,txt,json}", "test/**/*", "tools/**/*", "package.json", "package-lock.json", "mise/website.rb", "mise/tasks/*", "../.agents/skills/tinyactors-design/styles.css", "../.agents/skills/tinyactors-design/tokens/**/*", "../.agents/skills/tinyactors-design/components/components.css", "../.agents/skills/tinyactors-design/assets/**/*"]
 #MISE outputs={auto=true}
 # vim:ft=ruby
 

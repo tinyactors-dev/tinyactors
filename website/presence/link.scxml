@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The page's side of presence: this tab's link to the presence server,
+     run in the page on @tinyactors/wasm (client.mjs). A ticket from the
+     site's Worker, a WebSocket, welcome, and then the tab's visibility;
+     a lost connection waits (1 s, doubling to 60 s) and starts again from
+     a new ticket; the ants switch takes the tab out and back in. Its I/O
+     processors are the page's: urn:ticket (the Worker), urn:socket (the
+     WebSocket), urn:layer (the canvas), urn:status (the greeting line) and
+     urn:prefs (the switch, remembered). -->
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="ecmascript" name="link" initial="start">
+  <datamodel>
+    <data id="enabled" expr="true"/>
+    <data id="hidden" expr="false"/>
+    <data id="ticket" expr="''"/>
+    <data id="attempt" expr="0"/>
+  </datamodel>
+
+  <state id="start">
+    <transition cond="enabled" target="online"/>
+    <transition target="off"/>
+  </state>
+
+  <!-- The switch is off: no ant, no connection, nothing drawn. -->
+  <state id="off">
+    <onentry><send type="urn:layer" event="off"/></onentry>
+    <transition event="enable" target="online">
+      <send type="urn:prefs" event="enabled"/>
+    </transition>
+  </state>
+
+  <state id="online" initial="ticketing">
+    <transition event="disable" target="off">
+      <send type="urn:socket" event="leave"/>
+      <send type="urn:prefs" event="disabled"/>
+    </transition>
+    <!-- The tab's visibility, kept wherever the link is, so a tab hidden
+         while connecting starts asleep. -->
+    <transition event="hide"><assign location="hidden" expr="true"/></transition>
+    <transition event="show"><assign location="hidden" expr="false"/></transition>
+
+    <state id="ticketing">
+      <onentry><send type="urn:ticket" event="fetch"/></onentry>
+      <transition event="ticket" target="connecting">
+        <assign location="ticket" expr="_event.data.ticket"/>
+      </transition>
+      <transition event="error.communication" target="backoff"/>
+    </state>
+
+    <state id="connecting">
+      <onentry><send type="urn:socket" event="open"><param name="ticket" expr="ticket"/></send></onentry>
+      <transition event="welcome" target="joined">
+        <assign location="attempt" expr="0"/>
+      </transition>
+      <!-- 4009: this tab id is connected already (a duplicated tab copies
+           sessionStorage): the page makes a new id. -->
+      <transition event="closed" cond="_event.data.code === 4009" target="backoff">
+        <send type="urn:socket" event="renew"/>
+      </transition>
+      <transition event="closed error.communication" target="backoff"/>
+    </state>
+
+    <state id="joined" initial="decide">
+      <onentry><send type="urn:layer" event="joined"/></onentry>
+      <transition event="closed error.communication" target="backoff"/>
+      <!-- A tap on another ant, or the menu's greet: the server decides. -->
+      <transition event="tap">
+        <send type="urn:socket" event="greet"><param name="h" expr="_event.data.h"/></send>
+      </transition>
+      <transition event="greeted">
+        <send type="urn:status" event="greeted"><param name="country" expr="_event.data.country"/></send>
+      </transition>
+
+      <state id="decide">
+        <transition cond="hidden" target="asleep"/>
+        <transition target="visible"/>
+      </state>
+      <state id="visible">
+        <transition event="hide" target="asleep"><assign location="hidden" expr="true"/></transition>
+      </state>
+      <!-- The tab is hidden: the server hibernates this tab's actor. -->
+      <state id="asleep">
+        <onentry><send type="urn:socket" event="hide"/></onentry>
+        <onexit><send type="urn:socket" event="show"/></onexit>
+        <transition event="show" target="visible"><assign location="hidden" expr="false"/></transition>
+      </state>
+    </state>
+
+    <!-- Lost: wait, then start again from a new ticket. -->
+    <state id="backoff">
+      <onentry>
+        <assign location="attempt" expr="Math.min(attempt + 1, 7)"/>
+        <send type="urn:layer" event="offline"/>
+        <send id="retry" event="retry" delayexpr="Math.min(60, Math.pow(2, attempt - 1)) + 's'"/>
+      </onentry>
+      <onexit><cancel sendid="retry"/></onexit>
+      <transition event="retry" target="ticketing"/>
+    </state>
+  </state>
+</scxml>

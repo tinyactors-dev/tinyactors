@@ -62,6 +62,61 @@ img, picture { display: block; }
 .site-menu__links a:hover { color: var(--fg-1); background: var(--surface-2); }
 .site-menu__links a[aria-current="page"] { color: var(--fg-1); box-shadow: inset 2px 0 0 var(--accent); }
 
+/* ---------------------------------------------------- presence
+   The ants crawl on one fixed canvas behind the content (presence/layer.mjs);
+   the content sits above it, so they show only where the page is bare. */
+
+.ants { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none;
+  opacity: 0; transition: opacity var(--dur-slow, 400ms) var(--ease-out, ease-out); }
+.ants--on { opacity: 1; }
+.site-header, main, .site-footer { position: relative; z-index: 1; }
+.site-header { z-index: 10; }
+
+.presence { position: fixed; right: var(--space-5); bottom: var(--space-5); z-index: 20; }
+.presence__button {
+  display: grid; place-items: center; width: 52px; height: 52px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--border-1); cursor: pointer;
+  background: var(--surface-1); box-shadow: var(--shadow-pop);
+  transition: transform var(--dur-fast, 120ms) var(--ease-out, ease-out);
+}
+.presence__button:hover { transform: translateY(-1px); }
+.presence__button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.presence[data-state="off"] .presence__button img { opacity: 0.55; }
+.presence__menu {
+  position: fixed; inset: auto var(--space-5) calc(var(--space-5) + 64px) auto; margin: 0;
+  width: min(300px, calc(100vw - 2 * var(--space-5))); padding: var(--space-2) 0;
+  background: var(--surface-1); color: var(--fg-1); border: 1px solid var(--border-1);
+  border-radius: var(--radius-3); box-shadow: var(--shadow-pop);
+}
+.presence__menu::backdrop { background: transparent; }
+.presence__links { display: flex; flex-direction: column; font: var(--fw-medium) var(--fs-16)/1.2 var(--font-sans); }
+.presence__links a { padding: var(--space-3) var(--space-4); color: var(--fg-2); text-decoration: none; }
+.presence__links a:hover { color: var(--fg-1); background: var(--surface-2); }
+.presence__links a[aria-current="page"] { color: var(--fg-1); box-shadow: inset 2px 0 0 var(--accent); }
+.presence__controls { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2);
+  padding: var(--space-3) var(--space-4) var(--space-2); border-top: 1px solid var(--border-1); }
+.presence__switch, .presence__greet { display: flex; align-items: center; gap: var(--space-3); min-height: 36px; padding: 0;
+  background: none; border: 0; cursor: pointer; font: var(--type-ui); color: var(--fg-1); text-align: left; }
+.presence__greet { color: var(--accent-fg); }
+.presence[data-state="off"] .presence__greet, .presence[data-state="offline"] .presence__greet { display: none; }
+.presence__pill { position: relative; flex: none; width: 34px; height: 20px; border-radius: var(--radius-pill);
+  background: var(--border-2); transition: background var(--dur-fast, 120ms) var(--ease-out, ease-out); }
+.presence__pill::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--surface-1); box-shadow: var(--shadow-0, 0 1px 2px rgba(0, 0, 0, .2));
+  transition: transform var(--dur-fast, 120ms) var(--ease-out, ease-out); }
+.presence__switch[aria-checked="true"] .presence__pill { background: var(--accent); }
+.presence__switch[aria-checked="true"] .presence__pill::after { transform: translateX(14px); }
+.presence__switch:focus-visible, .presence__greet:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.presence__count, .presence__status { margin: 0; font: var(--type-body-sm); color: var(--fg-2); }
+.presence__count:empty, .presence__status:empty { display: none; }
+.presence__toast {
+  position: absolute; right: 0; bottom: 64px; width: max-content; max-width: min(280px, calc(100vw - 2 * var(--space-5)));
+  margin: 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-2);
+  background: var(--surface-inverse); color: var(--fg-inverse); font: var(--type-body-sm); box-shadow: var(--shadow-pop);
+}
+.presence:has(.presence__menu:popover-open) .presence__toast { display: none; }
+@media (prefers-reduced-motion: reduce) { .ants, .presence__button, .presence__pill, .presence__pill::after { transition: none; } }
+
 .site-footer { border-top: 1px solid var(--border-1); margin-top: var(--space-24); padding: var(--space-8) 0 var(--space-12); color: var(--fg-2); font: var(--type-body-sm); }
 .site-footer__row { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-6); flex-wrap: wrap; }
 .site-footer__note { display: flex; gap: var(--space-3); align-items: flex-start; max-width: var(--prose-max); }

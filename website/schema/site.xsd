@@ -52,6 +52,43 @@
             </xs:sequence>
           </xs:complexType>
         </xs:element>
+        <xs:element name="presence" minOccurs="0">
+          <xs:annotation><xs:documentation>
+            Presence: an ant for every open tab, crawling behind every page
+            (docs/presence.md). The words of its ant menu, the floating
+            button that opens the site's navigation, the ants switch and the
+            greeting line. `server` is the presence server's WebSocket.
+          </xs:documentation></xs:annotation>
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="label" type="plain">
+                <xs:annotation><xs:documentation>The ant button's accessible name: it opens the menu.</xs:documentation></xs:annotation>
+              </xs:element>
+              <xs:element name="switch" type="plain">
+                <xs:annotation><xs:documentation>The switch that takes this tab's ant in and out.</xs:documentation></xs:annotation>
+              </xs:element>
+              <xs:element name="greet" type="plain">
+                <xs:annotation><xs:documentation>The menu's action that greets an ant, for keyboards and screen readers.</xs:documentation></xs:annotation>
+              </xs:element>
+              <xs:element name="greeted" type="with-country">
+                <xs:annotation><xs:documentation>What a greeted tab reads; {country} is the greeter's country, named in the reader's language.</xs:documentation></xs:annotation>
+              </xs:element>
+              <xs:element name="greeted-anonymous" type="plain">
+                <xs:annotation><xs:documentation>What a greeted tab reads when the greeter's country is not known.</xs:documentation></xs:annotation>
+              </xs:element>
+              <xs:element name="count" type="with-ants">
+                <xs:annotation><xs:documentation>The menu's line about the field; {ants} is how many ants this tab sees.</xs:documentation></xs:annotation>
+              </xs:element>
+            </xs:sequence>
+            <xs:attribute name="server" use="required">
+              <xs:simpleType>
+                <xs:restriction base="xs:anyURI">
+                  <xs:pattern value="wss://[a-z0-9.-]+"/>
+                </xs:restriction>
+              </xs:simpleType>
+            </xs:attribute>
+          </xs:complexType>
+        </xs:element>
       </xs:sequence>
       <xs:attribute name="origin" use="required">
         <xs:simpleType>
@@ -471,6 +508,20 @@
     <xs:annotation><xs:documentation>Text with no markup, on one line.</xs:documentation></xs:annotation>
     <xs:restriction base="xs:string">
       <xs:pattern value="\s*\S[^\n]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="with-country">
+    <xs:annotation><xs:documentation>Plain text that names {country}, where the page puts a country's name.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^\n]*\{country\}[^\n]*"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="with-ants">
+    <xs:annotation><xs:documentation>Plain text that holds {ants}, where the page puts a number of ants.</xs:documentation></xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[^\n]*\{ants\}[^\n]*"/>
     </xs:restriction>
   </xs:simpleType>
 
